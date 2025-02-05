@@ -21,6 +21,7 @@ from typing import Literal, Optional
 from chromadb.api.models.Collection import Collection
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_core.documents import Document
+from numpy.random.mtrand import Sequence
 from sentence_transformers import SentenceTransformer
 from chromadb import Documents, EmbeddingFunction, Embeddings
 from langchain_community.document_loaders import PyPDFLoader
@@ -41,7 +42,11 @@ warnings.filterwarnings(
 )
 
 # Initialize Chroma client
+# http://localhost
 chroma_client = chromadb.HttpClient(host=c.chroma_host, port=c.chroma_port)
+
+
+# chroma_client = chromadb.HttpClient(host="http://localhost", port=c.chroma_port)
 
 
 def choose_model(model: Literal["distiluse", "sbert", "instructor", "default"] = "default",
@@ -86,25 +91,34 @@ class ChromaService:
         """
         print("Chroma current version: " + str(self.chroma_client.get_version()))
         print("Collections count: " + str(self.chroma_client.count_collections()))
-        print("Chroma heartbeat: " + str(round(self.chroma_client.heartbeat() / 3_600_000_000_000, 2)), " hours")
+        # print("Chroma heartbeat: " + str(round(self.chroma_client.heartbeat() / 3_600_000_000_000, 2)), " hours")
 
     def reset_chroma(self):
         self.chroma_client.reset()
         self.chroma_client.clear_system_cache()
 
-    def display_collections(self):
+    from typing import List
+
+    def display_collections(self, output_format: Literal["list", "str"] = "list") -> List[str] | str:
         """
         Display all collections stored in Chroma DB.
-        :return: List of collections on screen.
+
+        :param output_format: Format of the output - "list" for a list of collection names, "str" for a single string.
+        :return: List of collection names or a single string with names separated by new lines.
         """
         list_col = self.chroma_client.list_collections()
-        for col in list_col:
-            # Преобразуем объект в строку и находим значение name (не работает)
-            # name_part = str(col).split(", name=")[1].rstrip(")")
-            # print(name_part)
-            print(col)
-            print("=============")
+        collection_names = [col.name for col in list_col]
 
+        if output_format == "str":
+            result = "\n".join(collection_names)  # Соединяем имена в одну строку с переносами строк
+        else:
+            result = collection_names
+
+        print(result)  # Выводим результат в консоль
+
+        return result
+
+    # TODO: Проверить работоспособность
     def preconditioning(self, target_name: str):
         """
         Prepare the conditions for creating and using collections by removing an existing collection if found.
@@ -115,7 +129,7 @@ class ChromaService:
         found = False
         for col in list_col:
             # Convert the object to string and extract the name value
-            name_part = str(col).split(", name=")[1].rstrip(")")
+            name_part = col.name.rstrip(")")
 
             if name_part == target_name:
                 found = True
@@ -588,30 +602,40 @@ async def main_retrieve_async(search_type: Literal["vectorstore", "db"] = "vecto
 
 
 # ToDo: доделать!
-def main_upload(filename: str = "side_effects_guideline_for_RAG_paged.pdf",
-                collection: str = "25_01_2025_LaBSE-en-ru_pdf",
-                doc_type: Literal["URL", "PDF", "TXT"] = "PDF",
-                ) -> None:
+def main_add_to_chroma(
+        # filename: str = "side_effects_guideline_for_RAG_paged.pdf",
+        path_to_file: str = None,
+        collection: str = "25_01_2025_LaBSE-en-ru_pdf",
+        doc_type: Literal["URL", "PDF", "TXT"] = "PDF",
+) -> None:
     """
     Create collection and Upload the document in it.
 
-    :param filename:
-    :param collection: Name of the collection, that will be created in Chroma database.
+    :param path_to_file: String, path to uploaded PDF in memory. Mandatory.
+    :param collection: String, name of the collection, that will be created in Chroma database.
 
     :param doc_type: Choose one of supported types of the document to upload: "URL", "PDF", "TXT".
     :return: None
     """
-    chroma_service = ChromaService(c.chroma_host, c.chroma_port)
-    chroma_service.info_chroma()
-    # ToDo: Функция preconditioning требует доработки
-    chroma_service.preconditioning(collection)
 
-    path = path_handling.create_path(filename)
+    chroma_service = ChromaService(c.chroma_host, c.chroma_port)
+
+    chroma_service.info_chroma()
+
+    # ToDo: Функция preconditioning требует доработки
+    # chroma_service.preconditioning(collection)
+
+    # path = path_handling.create_path(filename) # Actual, if there is internal path only
+
     # Create collection:
-    create_collection(collection)
+    # if new_collection:
+    #     create_collection(collection)
+    # else:
+    #     collection = choose_last_collection()
+
     # Add web/pdf/txt data to collection...
     add_data(exist_collection_name=collection, upload_type=doc_type,
-             add_path=path, )
+             add_path=path_to_file, )
 
     return None
 
@@ -620,10 +644,13 @@ def main_upload(filename: str = "side_effects_guideline_for_RAG_paged.pdf",
 #
 if __name__ == '__main__':
     print(':: TESTING ::')
-    result = asyncio.run(main_retrieve_async(return_type="str"))
-    print("==============")
-    print(result)
-    print("==============")
+
+    # result = asyncio.run(main_retrieve_async(return_type="str"))
+    # print("==============")
+    # print(result)
+    # print("==============")
+
+    main_add_to_chroma()
 
 # PDF document to load pass
 # file_path = "pdf/taking_guidelines.pdf"

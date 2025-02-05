@@ -1,23 +1,35 @@
 import configparser
 import os
+from typing import Literal
 
 config = configparser.ConfigParser()
-config.read('../config.ini')
+
+
+def choose_exec_directory(dir: Literal["root", "sub"]):
+    if dir == "sub":
+        return config.read('../config.ini')
+
+    return config.read('config.ini')
+
+
+# config.read('config.ini')
 
 print("Current working directory:", os.getcwd())
 files_read = config.read('config.ini')
 print("Files read:", files_read)
 # print(config.sections())
 
-environment = 'PRODUCTION'  # OR 'DEVELOPMENT'
+environment = 'PRODUCTION'  # 'DEVELOPMENT' OR 'LOCAL'
+
+# print("environment:", environment)
 
 ollama_url = config[environment]['ollama_url']
 chroma_host = config[environment]['chroma_host']
 chroma_port = int(config[environment]['chroma_port'])
 
-emb_model = config['DEFAULT']['emb_model']
+# emb_model = config['DEFAULT']['emb_model']
 ll_model_big = config['DEFAULT']['ll_model_big']
-ll_model = config['DEFAULT']['ll_model']
+# ll_model = config['DEFAULT']['ll_model']
 ll_model_small = config['DEFAULT']['ll_model_small']
 
 # ll_model_large_ctx = config['DEFAULT']['ll_model_large_ctx']
