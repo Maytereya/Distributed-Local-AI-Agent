@@ -297,13 +297,22 @@ def create_collection(
             metadata={"hnsw:space": "cosine"})  # Use cosine similarity as the default metric.
 
         if chroma_collection:
-            print(f"Creating collection: {new_collection_name}")
+            print(f"Collection with name {new_collection_name} successfully created.")
             return chroma_collection
+
         else:
             print(f"Failed to create collection: {new_collection_name}")
             return None
     except Exception as e:
         print(f"An error occurred while creating the collection: {e}")
+        return None
+
+
+def remove_collection(collection_name: str, ):
+    try:
+        chroma_client.delete_collection(name=collection_name)
+    except Exception as e:
+        print(f"An error occurred while deleting the collection: {e}, stop |")
         return None
 
 
@@ -329,6 +338,9 @@ def add_data(
 
     print(f"Adding data to collection: {exist_collection_name}")
     docs = []
+    print(f"{add_path=}")
+    print(type(add_path))
+
     try:
         # Fetch documents
         if upload_type == "URL" and add_urls is not None:
@@ -672,7 +684,7 @@ if __name__ == '__main__':
 # Add web/pdf/txt data to collection...
 # add_data(exist_collection_name=collection_name, upload_type="PDF",
 #          add_path="/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/Upload/side_effects_guideline_for_RAG_paged.pdf", )
-
+# /private/var/folders/94/mhzbwczs0m51g36t3fdybd840000gn/T/gradio/0632e0b002d212a5b27b30886fc76c208c643f7897eee5a90ecd972a0a448fde/table-of-irregular-verbs.pdf
 # for doc in documents:
 #     print("##############")
 #     print(doc.page_content)
