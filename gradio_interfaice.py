@@ -6,42 +6,59 @@ from typing import List
 from agent_logic_pack import aretrieve3 as retrieve
 import config as c
 
+# Label constants
+COLLECTIONS_IN_CHROMA = "Коллекции документов векторной базы данных"
 
-async def echo(message: str, history: List[Dict], slider_value: float, slider_value_n_results: int, slider_value_k,
+
+async def echo(message: str, history: List[Dict], collection: str, threshold_value: float, slider_value_n_results: int,
+               slider_value_k,
                radio_value):
     """
     Main func. Its return the pieces of text from uploaded to chroma docs.
-    :param message: The users question.
+    :param collection: Str. Chosen collection name.
+    :param message: Str. The users question.
     :param history: Obligate parameter for correct gradio execute.
-    :param slider_value:
+    :param threshold_value:
     :param slider_value_n_results:
     :param slider_value_k:
-    :param radio_value:
+    :param radio_value: Type of search established.
     :return: String of filtrated text from ChromaDB.
     """
-    return await retrieve.main_retrieve_async(question=message, return_type="str", threshold=slider_value,
+    print(f"Echo {collection=}")
+    return await retrieve.main_retrieve_async(question=message, collection=collection, return_type="str",
+                                              threshold=threshold_value,
                                               n_results=slider_value_n_results,
                                               k=slider_value_k,
                                               search_type=radio_value)
 
 
-def echo_create_collection(c_name: str) -> tuple[str, gr.Dropdown]:
+def echo_create_collection(c_name: str) -> tuple[str, gr.Dropdown, gr.Dropdown,]:
     """
     Created collection and return its name in str.
+    Warning: in the next releases Chroma .name parameter will be removed!
     :param c_name: String, passed new name of the collection.
     :return: String, name of the collection.
     """
     result = retrieve.create_collection(c_name)
-    return result.name, gr.Dropdown(choices=existed_collections(), value=c_name,
-                                    label="Коллекции документов в ChromaDB")
+    return f"Коллекция {result.name} создана", gr.Dropdown(choices=existed_collections(), value=c_name,
+                                                           label=COLLECTIONS_IN_CHROMA), gr.Dropdown(
+        choices=existed_collections(), value=c_name,
+        label=COLLECTIONS_IN_CHROMA)
 
 
 def echo_remove_collection(c_name: str):
     retrieve.remove_collection(c_name)
-    return gr.Dropdown(choices=existed_collections(),
-                       label="Коллекции документов в ChromaDB"), gr.Textbox(label="Имя коллекции выбрать/добавить",
-                                                                            value="Коллекция удалена",
-                                                                            interactive=True, )
+    return (gr.Dropdown(choices=existed_collections(),
+                        label=COLLECTIONS_IN_CHROMA, value=None),
+            gr.Textbox(label="Информация о коллекции",
+                       value="Коллекция удалена",
+                       interactive=True, ), gr.Dropdown(
+        choices=existed_collections(), value=c_name,
+        label=COLLECTIONS_IN_CHROMA),
+            gr.Dropdown(
+                choices=existed_collections(),
+                value=c_name,
+                label=COLLECTIONS_IN_CHROMA))
 
 
 def existed_collections():
@@ -54,13 +71,21 @@ def existed_collections():
 
 
 # ?
-def select_collection(collection):
-    return f"Выбрано: {collection}"
+# def select_collection(collection):
+#     return f"Выбрана коллекция {collection}"
+
+
+# ?
+def txt_default():
+    return f"Ожидание действий..."
 
 
 def echo_add_to_collection(collection: str, file: str):
     retrieve.add_data(exist_collection_name=collection, upload_type="PDF", add_path=file, model="default")
-    return gr.Textbox(label="Имя коллекции выбрать/добавить", interactive=True, value="Файл добавлен в коллекцию")
+    return PDF(
+        value=None, label="Загрузить PDF", interactive=True, scale=80), gr.Textbox(label="Информация о коллекции",
+                                                                                   interactive=False,
+                                                                                   value="Файл добавлен в коллекцию"),
 
 
 def radio_change(choice) -> tuple[gr.Slider, gr.Slider, gr.Slider]:
@@ -86,39 +111,46 @@ with gr.Blocks() as blocks:
 
     with gr.Column():
         with gr.Row():
-            radio = gr.Radio(["vectorstore", "db", ],
-                             label="Способ первичного поиска", value="vectorstore", container=True)
+            radio = gr.Radio(["vectorstore", "db", "meilisearch"],
+                             label="Способ первичного поиска", value="db", container=True,
+                             info="Выберите доступный способ поиска")
+            collection_to_search_in = gr.Dropdown(choices=existed_collections(),
+                                                  # filterable=True,
+                                                  label=COLLECTIONS_IN_CHROMA,
+                                                  info="Выберите коллекцию для поиска информации")
 
     with gr.Row():
         slider3 = gr.Slider(value=5, minimum=1, maximum=20, step=1,
-                            label="Количество чанков текста, включенных в выдачу, vectorstore - поиск",
-                            info="Только в режиме поиска vectorstore",
+                            label="Количество фрагментов текста, включенных в выдачу, vectorstore - поиск",
+                            info="Доступно в режиме vectorstore",
                             interactive=True,
                             )
 
         slider1 = gr.Slider(value=0.005, minimum=0.0025, maximum=0.02, step=0.0025,
                             label="Пороговое значение косинусной фильтрации",
                             info="Выбрать в диапазоне между 0.0025 и 0.02. "
-                                 "Чем больше значение, тем больше чанков с меньшей "
-                                 "релевантностью будет в выдаче",
+                                 "Чем выше значение, тем больше текстовых фрагментов с меньшей "
+                                 "релевантностью появится в выдаче",
                             interactive=True
                             )
 
         slider2 = gr.Slider(value=2, minimum=1, maximum=20, step=1,
                             label="Количество документов, включенных в выдачу, db - поиск",
-                            info="Только в режиме поиска db",
+                            info="Доступно в режиме db",
                             interactive=False,
                             )
 
         # Upload PDF section
     gr.Markdown("### Загрузка и распределение документов по коллекциям")
     with gr.Row():
-        collection_dropdown = gr.Dropdown(choices=existed_collections(), value=None,
-                                          label="Коллекции документов в ChromaDB")
+        collection_dropdown = gr.Dropdown(choices=existed_collections(), value=None, allow_custom_value=True,
+                                          filterable=True,
+                                          label=COLLECTIONS_IN_CHROMA,
+                                          info="Коллекции - папки с документами, классифицированными по темам")
 
-        # Поле для ввода имени новой коллекции
-
-        collection_input_txt = gr.Textbox(label="Имя коллекции выбрать/добавить", interactive=True, )
+        # Поле для вывода текущего статуса работы с коллекциями
+        collection_input_txt = gr.Textbox(value=txt_default, every=10.0, label="Информация о статусе коллекции",
+                                          interactive=False, )
 
         # Кнопки для работы с коллекциями
         with gr.Column():
@@ -129,7 +161,7 @@ with gr.Blocks() as blocks:
         pdf = PDF(label="Загрузить PDF", interactive=True, scale=80)
 
         with gr.Column():
-            name = gr.Textbox(placeholder="Имя загруженного PDF в оперативной памяти")
+            # name = gr.Textbox(placeholder="Имя загруженного PDF в оперативной памяти")
             add_to_collection_button = gr.Button("Добавить в коллекцию")
 
     with gr.Column():
@@ -139,38 +171,36 @@ with gr.Blocks() as blocks:
 
                                 chatbot=chatbot,
                                 textbox=textbox,
-                                additional_inputs=[slider1,
-                                                   slider2,
-                                                   slider3,
-                                                   radio,
-
-                                                   ],
+                                additional_inputs=[
+                                    collection_to_search_in,
+                                    slider1,
+                                    slider2,
+                                    slider3,
+                                    radio,
+                                ],
                                 show_progress="full",
 
                                 )
 
     radio.change(fn=radio_change, inputs=radio, outputs=[slider3, slider1, slider2])
-    collection_dropdown.change(select_collection, inputs=collection_dropdown, outputs=[collection_input_txt])
-
-    pdf.upload(fn=type(pdf), inputs=pdf, outputs=name)
-    pdf.upload(fn=echo_add_to_collection, inputs=[collection_dropdown, pdf], outputs=collection_input_txt)
+    # ?
+    # collection_to_search_in.change(select_collection, inputs=collection_to_search_in, outputs=[collection_to_search_in])
 
     add_collection_button.click(
         echo_create_collection,
-        inputs=collection_input_txt,
-        outputs=[collection_input_txt, collection_dropdown]
+        inputs=collection_dropdown,
+        outputs=[collection_input_txt, collection_dropdown, collection_to_search_in]
     )
     rm_collection_button.click(
         echo_remove_collection,
         inputs=collection_dropdown,
-        outputs=[collection_dropdown, collection_input_txt]
+        outputs=[collection_dropdown, collection_input_txt, collection_to_search_in]
     )
     add_to_collection_button.click(
         echo_add_to_collection,
         inputs=[collection_dropdown, pdf],
-        outputs=[collection_input_txt]
+        outputs=[pdf, collection_input_txt, ]
     )
-# upload_docs = gr.Interface(fn=..., inputs=[])
 
 if __name__ == "__main__":
     blocks.launch()
