@@ -7,7 +7,7 @@ from agent_logic_pack import aretrieve3 as retrieve
 import config as c
 
 # Label constants
-COLLECTIONS_IN_CHROMA = "Коллекции документов векторной базы данных"
+COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
 
 
 async def echo(message: str, history: List[Dict], collection: str, threshold_value: float, slider_value_n_results: int,
@@ -114,6 +114,7 @@ with gr.Blocks() as blocks:
             radio = gr.Radio(["vectorstore", "db", "meilisearch"],
                              label="Способ первичного поиска", value="db", container=True,
                              info="Выберите доступный способ поиска")
+            meili_indexes = gr.Dropdown(label="Индекс Meilisearch", info="Выберите Индекс для поиска информации")
             collection_to_search_in = gr.Dropdown(choices=existed_collections(),
                                                   # filterable=True,
                                                   label=COLLECTIONS_IN_CHROMA,
