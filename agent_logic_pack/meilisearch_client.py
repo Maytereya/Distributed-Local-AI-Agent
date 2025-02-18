@@ -6,7 +6,6 @@ This module provides two ways to work with Meilisearch:
 2) Using raw HTTP requests for listing indexes, listing documents,
    and removing them (as well as deleting entire indexes).
 
-All docstrings and comments are in English for clarity.
 """
 
 import json
