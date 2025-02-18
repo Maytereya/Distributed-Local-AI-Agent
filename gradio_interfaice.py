@@ -4,6 +4,7 @@ from gradio_pdf import PDF
 from typing import Dict, Literal
 from typing import List
 from agent_logic_pack import aretrieve3 as retrieve
+from agent_logic_pack import meilisearch_client as meilisearch
 import config as c
 
 # Label constants
@@ -70,6 +71,14 @@ def existed_collections():
     return chroma_service.display_collections(output_format="list")
 
 
+def existed_indexes():
+    """
+
+    :return: List of existed Meilisearch indexes.
+    """
+    return meilisearch.show_list_indexes(detail_mode="uid")
+
+
 # ?
 # def select_collection(collection):
 #     return f"Выбрана коллекция {collection}"
@@ -114,7 +123,10 @@ with gr.Blocks() as blocks:
             radio = gr.Radio(["vectorstore", "db", "meilisearch"],
                              label="Способ первичного поиска", value="db", container=True,
                              info="Выберите доступный способ поиска")
-            meili_indexes = gr.Dropdown(label="Индекс Meilisearch", info="Выберите Индекс для поиска информации")
+
+            meili_indexes = gr.Dropdown(choices=existed_indexes(), label="Индекс Meilisearch",
+                                        info="Выберите Индекс для поиска информации")
+
             collection_to_search_in = gr.Dropdown(choices=existed_collections(),
                                                   # filterable=True,
                                                   label=COLLECTIONS_IN_CHROMA,

@@ -86,11 +86,16 @@ def search_meili(index_name: str, query: str, limit: int = 2,
 # Raw HTTP request operations
 # -----------------------------
 
-def show_list_indexes() -> list:
+def show_list_indexes(detail_mode: str = "full") -> list:
     """
     Sends a GET request to retrieve all indexes in Meilisearch.
 
-    :return: A list of index objects (dictionaries) if successful, or an empty list on failure.
+    :param detail_mode:
+        - "full": Print and return a list of index dictionaries
+                  (each containing 'uid', 'createdAt', 'updatedAt', 'primaryKey').
+        - "uid":  Print and return only a list of 'uid' values.
+    :return: A list of either index dictionaries or just 'uid' strings,
+             depending on 'detail_mode'. Returns an empty list on failure.
     """
     endpoint = f"{c.MEILI_URL}/indexes"
     headers = {"Authorization": f"Bearer {c.MASTER_KEY}"}
@@ -100,8 +105,16 @@ def show_list_indexes() -> list:
         if response.status_code == 200:
             data = response.json()
             indexes = data.get("results", [])
-            print("Indexes found:", indexes)
-            return indexes
+
+            if detail_mode == "uid":
+                # Extract just the 'uid' fields
+                uids = [idx.get("uid") for idx in indexes]
+                print("Index UIDs found:", uids)
+                return uids
+            else:
+                # detail_mode == "full" or any other unexpected value
+                print("Indexes found:", indexes)
+                return indexes
         else:
             print("Error listing indexes:", response.text)
             return []
@@ -187,23 +200,23 @@ def main():
     Example usage. Adjust as needed.
     """
     # Example: add documents to an index
-    path_to_doc = "/path/to/side_effects_guideline_list1.json"
-    add_doc_to_meili(path_to_doc, "side_effects_improved")
+    # path_to_doc = "/path/to/side_effects_guideline_list1.json"
+    # add_doc_to_meili(path_to_doc, "side_effects_improved")
 
     # List indexes
     indexes = show_list_indexes()
     print(indexes)
 
     # List documents (limit=2)
-    docs = list_documents("side_effects_improved", limit=2)
-    print(docs)
+    # docs = list_documents("side_effects_improved", limit=2)
+    # print(docs)
 
     # Search in Meilisearch
-    result = search_meili("side_effects_improved", "headache", limit=3)
-    print("Search result:", result)
+    # result = search_meili("side_effects_improved", "headache", limit=3)
+    # print("Search result:", result)
 
     # Delete a specific document
-    delete_document("side_effects_improved", "side_effects_guideline_for_RAG_paged_pdf_page_1")
+    # delete_document("side_effects_improved", "side_effects_guideline_for_RAG_paged_pdf_page_1")
 
     # Delete an entire index
     # delete_index("side_effects_improved")
