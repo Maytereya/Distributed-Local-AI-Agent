@@ -9,6 +9,8 @@ This module provides two ways to work with Meilisearch:
 """
 
 import json
+from typing import Any
+
 import requests
 import meilisearch
 import config as c
@@ -57,7 +59,7 @@ def get_task_info(task_number: int) -> dict:
 
 
 def search_meili(index_name: str, query: str, limit: int = 2,
-                 highlight: str = None, highlight_fields: str = '*') -> dict:
+                 highlight: str = None, highlight_fields: str = '*') -> str:
     """
     Performs a search on the given Meilisearch index using the Python client.
 
@@ -69,17 +71,33 @@ def search_meili(index_name: str, query: str, limit: int = 2,
     :return: A dictionary of search results, as returned by Meilisearch.
     """
     try:
-        result = client.index(index_name).search(query, {
+        search_result = client.index(index_name).search(query, {
             "limit": limit,
             # "highlightPreTag": highlight,
             # "highlightPostTag": highlight,
             "attributesToHighlight": [highlight_fields],
         })
         # print("Search results:", result)
-        return result
+
+        hits = search_result.get("hits", [])
+
+        # Собираем все куски контента:
+        contents = []
+        for doc in hits:
+            # doc['_formatted'] может не всегда быть, поэтому используем .get(...)
+            fmt = doc.get("_formatted", {})
+            content_str = fmt.get("content", "")
+            contents.append(content_str)
+
+        # Склеиваем их в итоговую строку
+        combined_text = "\n-----\n".join(contents)
+        if len(combined_text) == 0:
+            combined_text = "Совпадений не найдено, cформулируйте запрос иначе"
+        return combined_text
+
     except Exception as e:
         print(f"Error searching in index '{index_name}': {e}")
-        return {}
+        return "Ошибка поисковой системы meilisearch"
 
 
 # -----------------------------
