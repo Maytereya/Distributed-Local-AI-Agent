@@ -1,7 +1,7 @@
 import gradio as gr
 from gradio_pdf import PDF
 
-from typing import Dict, Literal
+from typing import Dict
 from typing import List
 from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
@@ -11,11 +11,19 @@ import config as c
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
 
 
-async def echo(message: str, history: List[Dict], collection: str, threshold_value: float, slider_value_n_results: int,
-               slider_value_k,
-               radio_value):
+# def what_to_use(choose: Literal["chroma", "meili"]):
+#     if choose == "chroma":
+#         ...
+#     elif choose == "meili":
+#         ...
+
+
+async def chroma_echo(message: str, history: List[Dict], collection: str, threshold_value: float,
+                      slider_value_n_results: int,
+                      slider_value_k,
+                      radio_value):
     """
-    Main func. Its return the pieces of text from uploaded to chroma docs.
+    Main chroma call func. Its return the pieces of text from uploaded to chroma docs.
     :param collection: Str. Chosen collection name.
     :param message: Str. The users question.
     :param history: Obligate parameter for correct gradio execute.
@@ -25,12 +33,76 @@ async def echo(message: str, history: List[Dict], collection: str, threshold_val
     :param radio_value: Type of search established.
     :return: String of filtrated text from ChromaDB.
     """
-    print(f"Echo {collection=}")
+    # print(f"Echo {collection=}")
     return await retrieve.main_retrieve_async(question=message, collection=collection, return_type="str",
                                               threshold=threshold_value,
                                               n_results=slider_value_n_results,
                                               k=slider_value_k,
                                               search_type=radio_value)
+
+
+async def meili_echo(
+        message: str,
+        history: List[Dict],
+        index: str,
+        limit: int
+) -> str:
+    """
+    Возвращаем контент из ключа _formatted -> content,
+    собранный в одну строку (или несколько, разделённых '-----').
+    """
+    search_result = meilisearch.search_meili(query=message, index_name=index, limit=limit)
+    # search_result – это словарь, содержащий среди прочего 'hits' (список документов).
+
+    hits = search_result.get("hits", [])
+
+    # Собираем все куски контента:
+    contents = []
+    for doc in hits:
+        # doc['_formatted'] может не всегда быть, поэтому используем .get(...)
+        fmt = doc.get("_formatted", {})
+        content_str = fmt.get("content", "")
+        contents.append(content_str)
+
+    # Склеиваем их в итоговую строку
+    combined_text = "\n-----\n".join(contents)
+    return combined_text
+
+
+# Универсальная функция, которая проверяет radio_value и вызывает либо chroma_echo, либо meili_echo.
+async def universal_echo(
+        message: str,
+        history: List[Dict],
+        collection: str,  # Dropdown (Chroma)
+        threshold_value: float,
+        slider_value_n_results: int,
+        slider_value_k: int,
+        radio_value: str,  # "vectorstore", "db", or "meilisearch"
+        meili_index: str  # Dropdown (Meilisearch)
+):
+    """
+    Если radio_value == "meilisearch", вызываем meili_echo,
+    иначе вызываем chroma_echo.
+    """
+    if radio_value == "meilisearch":
+        # Используем slider_value_k как limit
+        return await meili_echo(
+            message=message,
+            history=history,
+            index=meili_index,
+            limit=slider_value_k
+        )
+    else:
+        # Для "vectorstore" или "db" вызываем chroma_echo
+        return await chroma_echo(
+            message=message,
+            history=history,
+            collection=collection,
+            threshold_value=threshold_value,
+            slider_value_n_results=slider_value_n_results,
+            slider_value_k=slider_value_k,
+            radio_value=radio_value
+        )
 
 
 def echo_create_collection(c_name: str) -> tuple[str, gr.Dropdown, gr.Dropdown,]:
@@ -97,16 +169,21 @@ def echo_add_to_collection(collection: str, file: str):
                                                                                    value="Файл добавлен в коллекцию"),
 
 
-def radio_change(choice) -> tuple[gr.Slider, gr.Slider, gr.Slider]:
+def radio_change(choice) -> tuple[gr.Slider, gr.Slider, gr.Slider, gr.Dropdown, gr.Dropdown,]:
     """
     The search type selector that enables appropriated sliders.
     :param choice: Vectorstore search or Chroma DB Search.
     :return: Configurations of sliders that refine the search.
     """
     if choice == "vectorstore":
-        return gr.Slider(interactive=True), gr.Slider(interactive=True), gr.Slider(interactive=False),
+        return gr.Slider(interactive=True), gr.Slider(interactive=True), gr.Slider(interactive=False), gr.Dropdown(
+            interactive=False), gr.Dropdown(interactive=True),
+    elif choice == "db":
+        return gr.Slider(interactive=False), gr.Slider(interactive=False), gr.Slider(interactive=True), gr.Dropdown(
+            interactive=False), gr.Dropdown(interactive=True),
     else:
-        return gr.Slider(interactive=False), gr.Slider(interactive=False), gr.Slider(interactive=True),
+        return gr.Slider(interactive=False), gr.Slider(interactive=False), gr.Slider(interactive=True), gr.Dropdown(
+            interactive=True), gr.Dropdown(interactive=False),
 
 
 with gr.Blocks() as blocks:
@@ -148,8 +225,8 @@ with gr.Blocks() as blocks:
                             )
 
         slider2 = gr.Slider(value=2, minimum=1, maximum=20, step=1,
-                            label="Количество документов, включенных в выдачу, db - поиск",
-                            info="Доступно в режиме db",
+                            label="Количество документов, включенных в выдачу",
+                            info="Доступно в режимах db и meilisearch",
                             interactive=False,
                             )
 
@@ -178,7 +255,7 @@ with gr.Blocks() as blocks:
             add_to_collection_button = gr.Button("Добавить в коллекцию")
 
     with gr.Column():
-        demo = gr.ChatInterface(fn=echo, type="messages",
+        demo = gr.ChatInterface(fn=universal_echo, type="messages",
                                 examples=[["апатия, причины, лечение"], ["ангедония, причины, лечение"],
                                           ["акатизия, причины, лечение"], ["ЗНС, лечение"]],
 
@@ -190,14 +267,14 @@ with gr.Blocks() as blocks:
                                     slider2,
                                     slider3,
                                     radio,
+                                    meili_indexes
                                 ],
                                 show_progress="full",
 
                                 )
 
-    radio.change(fn=radio_change, inputs=radio, outputs=[slider3, slider1, slider2])
-    # ?
-    # collection_to_search_in.change(select_collection, inputs=collection_to_search_in, outputs=[collection_to_search_in])
+    radio.change(fn=radio_change, inputs=radio,
+                 outputs=[slider3, slider1, slider2, meili_indexes, collection_to_search_in, ])
 
     add_collection_button.click(
         echo_create_collection,

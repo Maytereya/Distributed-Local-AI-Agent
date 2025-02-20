@@ -65,17 +65,17 @@ def search_meili(index_name: str, query: str, limit: int = 2,
     :param query: The search query (keyword, phrase, etc.).
     :param limit: Maximum number of results to return.
     :param highlight: A tag to wrap around highlights (e.g. <em></em>).
-    :param highlight_fields: Which fields to highlight. By default '*'.
+    :param highlight_fields: Which fields to highlight. By default, '*'.
     :return: A dictionary of search results, as returned by Meilisearch.
     """
     try:
         result = client.index(index_name).search(query, {
             "limit": limit,
-            "highlightPreTag": highlight,
-            "highlightPostTag": highlight,
+            # "highlightPreTag": highlight,
+            # "highlightPostTag": highlight,
             "attributesToHighlight": [highlight_fields],
         })
-        print("Search results:", result)
+        # print("Search results:", result)
         return result
     except Exception as e:
         print(f"Error searching in index '{index_name}': {e}")
@@ -204,8 +204,8 @@ def main():
     # add_doc_to_meili(path_to_doc, "side_effects_improved")
 
     # List indexes
-    indexes = show_list_indexes()
-    print(indexes)
+    # indexes = show_list_indexes()
+    # print(indexes)
 
     # List documents (limit=2)
     # docs = list_documents("side_effects_improved", limit=2)
