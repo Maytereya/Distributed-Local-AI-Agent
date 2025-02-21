@@ -153,10 +153,10 @@ def delete_index(index_uid: str) -> None:
 
     try:
         response = requests.delete(endpoint, headers=headers, timeout=10)
-        if response.status_code == 204:
-            print(f"Index '{index_uid}' deleted successfully.")
-        else:
-            print(f"Error deleting index '{index_uid}': {response.text}")
+        # if response.status_code == 204:
+        #     print(f"Index '{index_uid}' deleted successfully.")
+        # else:
+        print(f"Info about deleting index '{index_uid}': {response.text}")
     except requests.exceptions.RequestException as e:
         print(f"Error deleting index '{index_uid}': {e}")
 

@@ -29,7 +29,7 @@ from pprint import pprint
 # from dotenv import load_dotenv
 from langgraph.graph import START, StateGraph, END
 from typing import TypedDict, Optional, List
-from langchain_core.documents import Document  # представляет документ.
+from langchain_core.documents import Document
 import warnings
 
 # agent logic pack modules:
