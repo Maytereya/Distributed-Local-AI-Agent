@@ -12,7 +12,7 @@ import time
 from ollama import AsyncClient, Options
 from langchain_ollama import \
     ChatOllama  # Used for managing temperature and JSONOutputParser
-import json_converter as j
+from converters import json_converter as j
 
 # Initialize Ollama async client
 ollama_aclient = AsyncClient(host=c.ollama_url)

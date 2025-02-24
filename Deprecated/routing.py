@@ -1,7 +1,7 @@
 from Deprecated import deprecated_config as c
 
 import time
-from agent_logic_pack import json_converter as j
+from converters import json_converter as j
 from ollama import AsyncClient
 
 

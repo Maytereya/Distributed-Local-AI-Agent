@@ -1,4 +1,4 @@
-from agent_logic_pack import json_converter as j
+from converters import json_converter as j
 import config as c
 import time
 from ollama import AsyncClient

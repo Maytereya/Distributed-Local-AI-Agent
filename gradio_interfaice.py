@@ -10,7 +10,7 @@ from typing import List
 from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
 import config as c
-from converters import pdf_to_json_meili as pdf2json
+from converters import pdf_to_json_txt_tables_meili as pdf2json
 
 # Label constants
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
