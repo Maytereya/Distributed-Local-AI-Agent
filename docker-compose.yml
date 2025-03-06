@@ -1,0 +1,6 @@
+version: "3.8"
+services:
+  bookworm-app:
+    build: .
+    ports:
+      - "7860:7860"
