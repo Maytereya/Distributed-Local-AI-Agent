@@ -78,7 +78,7 @@ langgraph-checkpoint==2.0.10
 langgraph-sdk==0.1.51
 langsmith==0.2.11
 markdown-it-py==3.0.0
-MarkupSafe==3.0.2
+MarkupSafe==2.0.0
 marshmallow==3.25.1
 matplotlib==3.10.0
 mdurl==0.1.2
