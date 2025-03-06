@@ -6,8 +6,8 @@ services:
     ports:
       - "7860:7860"
     networks:
-      - bridge  # Используем ту же сеть, что и существующие контейнеры
+      - bookworm_network  # Используем свою сеть
 
 networks:
-  bridge:
-    external: true  # Говорим, что сеть уже существует
+  bookworm_network:  # Создаем свою сеть
+    driver: bridge
