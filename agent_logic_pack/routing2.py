@@ -1,21 +1,41 @@
 from converters import json_converter as j
 import config as c
-import time
 from ollama import AsyncClient
 from datetime import datetime
 
+import time
+import logging
+from httpx import AsyncClient, ConnectError
+from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+@retry(stop=stop_after_attempt(10), wait=wait_fixed(4))
+async def connect_to_ollama():
+    logger.info("🔄 Подключение к Ollama...")
+    return AsyncClient(base_url=c.ollama_url)
+
+
 # Выбираем модель, которая будет использоваться {быстрая ll_model или медленная, но точная ll_model_big}
-llm = c.ll_model
+llm = c.ll_model_big
+
 
 async def route(question: str):
-    ollama_aclient = AsyncClient(host=c.ollama_url)
+    try:
+        ollama_aclient = await connect_to_ollama()
+        logger.info("✅ Успешное подключение к Ollama!")
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения к Ollama: {e}")
+
+    # ollama_aclient = AsyncClient(host=c.ollama_url)
     # options make Ollama slow so far.
     # opt = Options(temperature=0, num_gpu=2, num_thread=24)
     # Получение текущей даты и времени
     current_datetime = datetime.now()
 
-
-    formatted_datetime = current_datetime.strftime("%d %B %Y, %H:%M:%S") # Пример: 12 сентября 2024, 14:30:25
+    formatted_datetime = current_datetime.strftime("%d %B %Y, %H:%M:%S")  # Пример: 12 сентября 2024, 14:30:25
 
     prompt = (f'<|begin_of_text|><|start_header_id|>system<|end_header_id|> '
               f'Today\'s date and time: {formatted_datetime}. '

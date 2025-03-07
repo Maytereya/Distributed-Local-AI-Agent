@@ -13,9 +13,34 @@ from typing import Any
 
 import requests
 import meilisearch
+# Retry section
+import time
+import logging
+from httpx import AsyncClient, ConnectError
+from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
+#
 import config as c
 
-client = meilisearch.Client(c.MEILI_URL, c.MASTER_KEY)
+#  Initialize logging for connection tries
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+# Функция для ретраев при подключении
+@retry(stop=stop_after_attempt(10), wait=wait_fixed(6))  # 10 попыток, ожидание 6 секунд
+def connect_to_meilisearch():
+    logger.info("🔄 Подключение к MeiliSearch...")
+    return meilisearch.Client(c.MEILI_URL, c.MASTER_KEY)
+
+
+try:
+    client = connect_to_meilisearch()
+    logger.info("✅ Успешное подключение к MeiliSearch!")
+except Exception as e:
+    logger.error(f"❌ Ошибка подключения к MeiliSearch: {e}")
+
+
+# client = meilisearch.Client(c.MEILI_URL, c.MASTER_KEY)
 
 
 def add_doc_to_meili(doc_path: str, index_name: str) -> None:

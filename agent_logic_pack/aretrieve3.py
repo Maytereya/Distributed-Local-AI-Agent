@@ -27,6 +27,13 @@ from chromadb import Documents, EmbeddingFunction, Embeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.document_loaders import TextLoader, DirectoryLoader
 
+# Connection section
+import time
+import logging
+from httpx import AsyncClient, ConnectError
+from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
+#
+
 import chromadb
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
@@ -40,12 +47,27 @@ import config as c
 warnings.filterwarnings(
     "ignore", category=FutureWarning, module="transformers.tokenization_utils_base"
 )
+#  Initialize logging for connection tries
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+# Retry Decorator
+@retry(stop=stop_after_attempt(10), wait=wait_fixed(6))
+def connect_to_chroma():
+    logger.info("🔄 Подключение к ChromaDB...")
+    return chromadb.HttpClient(host=c.chroma_host, port=c.chroma_port)
+
 
 # Initialize Chroma client
-# http://localhost
-chroma_client = chromadb.HttpClient(host=c.chroma_host, port=c.chroma_port)
+try:
+    chroma_client = connect_to_chroma()
+    logger.info("✅ Успешное подключение к ChromaDB!")
+except Exception as e:
+    logger.error(f"❌ Ошибка подключения к ChromaDB: {e}")
 
 
+# chroma_client = chromadb.HttpClient(host=c.chroma_host, port=c.chroma_port)
 # chroma_client = chromadb.HttpClient(host="http://localhost", port=c.chroma_port)
 
 
