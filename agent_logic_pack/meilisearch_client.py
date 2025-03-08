@@ -152,7 +152,7 @@ def show_list_indexes(detail_mode: str = "full") -> list:
             if detail_mode == "uid":
                 # Extract just the 'uid' fields
                 uids = [idx.get("uid") for idx in indexes]
-                print("Index UIDs found:", uids)
+                # print("Index UIDs found:", uids)
                 return uids
             else:
                 # detail_mode == "full" or any other unexpected value

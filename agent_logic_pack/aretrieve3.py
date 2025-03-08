@@ -63,6 +63,7 @@ def connect_to_chroma():
 try:
     chroma_client = connect_to_chroma()
     logger.info("✅ Успешное подключение к ChromaDB!")
+    print(f"Chroma host: {c.chroma_host}, Chroma port: {c.chroma_port}")
 except Exception as e:
     logger.error(f"❌ Ошибка подключения к ChromaDB: {e}")
 
@@ -129,14 +130,13 @@ class ChromaService:
         :return: List of collection names or a single string with names separated by new lines.
         """
         list_col = self.chroma_client.list_collections()
-        collection_names = [col.name for col in list_col]
 
         if output_format == "str":
-            result = "\n".join(collection_names)  # Соединяем имена в одну строку с переносами строк
+            result = "\n".join(list_col)  # Соединяем имена в одну строку с переносами строк
         else:
-            result = collection_names
+            result = list_col
 
-        print(result)  # Выводим результат в консоль
+        # print(result)  # Выводим результат в консоль
 
         return result
 
