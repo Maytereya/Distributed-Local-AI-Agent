@@ -22,12 +22,12 @@ services:
       - bookworm-agent
     network_mode: bridge
 
-    certbot:
-      image: certbot/certbot
-      container_name: certbot
-      volumes:
-        - ./letsencrypt:/etc/letsencrypt
-        - /var/www/html:/var/www/html  # <== Проброс для certbot
-      depends_on:
-        - nginx
-      command: certonly --webroot --webroot-path=/var/www/html --email rakhmanov-v@ya.ru --agree-tos --no-eff-email -d ontheflyai.ru
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    volumes:
+      - ./letsencrypt:/etc/letsencrypt
+      - /var/www/html:/var/www/html  # <== Проброс для certbot
+    depends_on:
+      - nginx
+    command: certonly --webroot --webroot-path=/var/www/html --email rakhmanov-v@ya.ru --agree-tos --no-eff-email -d ontheflyai.ru
