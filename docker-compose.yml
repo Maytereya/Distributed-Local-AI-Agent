@@ -1,12 +1,12 @@
 version: "3.8"
+
 services:
   bookworm-agent:
     build: .
     container_name: bookworm-agent
     ports:
       - "7860:7860"
-    networks:
-      - bookworm_network  # Используем свою сеть
+    network_mode: bridge
 
   nginx:
     image: nginx:latest
@@ -17,9 +17,4 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro  # Пробрасываем конфиг
     depends_on:
       - bookworm-agent
-    networks:
-      - bookworm_network
-
-networks:
-  bookworm_network: # Создаем свою сеть
-    driver: bridge
+    network_mode: bridge  # Запускаем в той же сети bridge
