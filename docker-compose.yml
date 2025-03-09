@@ -18,7 +18,7 @@ services:
       - /etc/letsencrypt:/etc/letsencrypt
       - /var/www/html:/var/www/html
     depends_on:
-      - certbot
+      - bookworm-agent
     network_mode: bridge
 
   certbot:
@@ -28,9 +28,5 @@ services:
       - /etc/letsencrypt:/etc/letsencrypt
       - /var/www/html:/var/www/html
     depends_on:
-      - nginx
+      - nginx  # Certbot запускается после Nginx
     command: certonly --webroot --webroot-path=/var/www/html --email rakhmanov-v@ya.ru --agree-tos --no-eff-email -d ontheflyai.ru
-
-
-
-
