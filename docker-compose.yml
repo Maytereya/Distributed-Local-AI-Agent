@@ -8,6 +8,18 @@ services:
     networks:
       - bookworm_network  # Используем свою сеть
 
+  nginx:
+    image: nginx:latest
+    container_name: nginx_proxy
+    ports:
+      - "80:80"  # Проксируем внешний 80-й порт
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro  # Пробрасываем конфиг
+    depends_on:
+      - bookworm-agent
+    networks:
+      - bookworm_network
+
 networks:
-  bookworm_network:  # Создаем свою сеть
+  bookworm_network: # Создаем свою сеть
     driver: bridge
