@@ -16,7 +16,7 @@ services:
       - "443:443"
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt
-      - /var/www/html:/var/www/html
+      - /home/vl/bookworm_app/Distributed-Local-AI-Agent/nginx/html:/var/www/certbot/html
     depends_on:
       - bookworm-agent
     network_mode: bridge
@@ -26,7 +26,17 @@ services:
     container_name: certbot
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt
-      - /var/www/html:/var/www/html
+      - /home/vl/bookworm_app/Distributed-Local-AI-Agent/nginx/html:/var/www/certbot/html
     depends_on:
-      - nginx  # Certbot запускается после Nginx
-    command: certonly --webroot --webroot-path=/var/www/html --email rakhmanov-v@ya.ru --agree-tos --no-eff-email -d ontheflyai.ru
+      - nginx
+    command:
+      - certonly
+      - --webroot
+      - -w
+      - /var/www/certbot/html
+      - --email=rakhmanov-v@ya.ru
+      - --agree-tos
+      - --no-eff-email
+      - --dry-run
+      - -d
+      - ontheflyai.ru
