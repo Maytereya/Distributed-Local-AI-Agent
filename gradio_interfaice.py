@@ -17,6 +17,16 @@ COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
 INDEXES_IN_MEILI = "Индексы документов Meilisearch"
 EXAMPLES = [["апатия, причины, лечение"], ["ангедония, причины, лечение"], ["акатизия, причины, лечение"],
             ["ЗНС, лечение"]]
+# -------------------
+# SECURITY
+# -------------------
+
+USERNAME = c.AUTH_NAME
+PASSWORD = c.AUTH_PASS
+
+
+def check_auth(username, password):
+    return username == USERNAME and password == PASSWORD
 
 
 # -------------------
@@ -457,5 +467,4 @@ with gr.Blocks() as blocks:
     )
 
 if __name__ == "__main__":
-    blocks.launch(server_name="0.0.0.0", server_port=7860)
-    # upload_docs.launch()
+    blocks.launch(server_name="0.0.0.0", server_port=7860, auth=check_auth)

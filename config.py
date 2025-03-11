@@ -29,5 +29,8 @@ chroma_port = int(config[environment]['chroma_port'])
 MEILI_URL = config[environment]['MEILI_URL']
 
 MASTER_KEY = config['DEFAULT']['MASTER_KEY']
+AUTH_NAME = config['DEFAULT']['AUTH_NAME']
+AUTH_PASS = config['DEFAULT']['AUTH_PASS']
+
 ll_model_big = config['DEFAULT']['ll_model_big']
 ll_model_small = config['DEFAULT']['ll_model_small']
