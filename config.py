@@ -20,7 +20,7 @@ print("Current working directory:", os.getcwd())
 files_read = config.read(config_path)
 print("Files read:", files_read)
 
-environment = 'DOCKER_PRODUCTION'  # | 'PRODUCTION' | 'LOCAL'
+environment = 'PRODUCTION'  # | 'PRODUCTION' | 'LOCAL'
 print("environment:", environment)
 
 ollama_url = config[environment]['ollama_url']

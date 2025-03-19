@@ -1,3 +1,5 @@
+import shutil
+
 import gradio as gr
 from gradio_pdf import PDF
 
@@ -23,6 +25,8 @@ EXAMPLES = [["апатия, причины, лечение"], ["ангедони
 
 USERNAME = c.AUTH_NAME
 PASSWORD = c.AUTH_PASS
+# Пока не срабатывает.
+os.environ["USER_AGENT"] = "NEIRY.Agent/1.0"
 
 
 def check_auth(username, password):
@@ -31,6 +35,60 @@ def check_auth(username, password):
 
 # -------------------
 # ECHOES PART
+# -------------------
+
+# -------------------
+# Сносит футер полностью.
+# Не факт, что это хорошо.
+# -------------------
+custom_css = """
+/* Располагаем всё в футере по центру в одну строку */
+footer {
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+    gap: 1rem;
+    padding: 0.5rem 1rem !important;
+}
+
+/* Убираем фон и рамки у футера, если нужно */
+footer .wrap {
+    box-shadow: none !important;
+    border: none !important;
+    background: transparent !important;
+}
+
+/* Прячем лишние переносы и точки, если вдруг появятся */
+footer ul {
+    list-style: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+}
+
+/* Важно: наш дополнительный блок (div#custom-footer) располагаем наравне с остальными элементами. */
+#custom-footer {
+    margin: 0 !important;
+    display: inline-block !important;
+    padding: 0 !important;
+}
+
+/* Немного отступа */
+#custom-footer a {
+    text-decoration: none;
+    color: #ccc; /* или ваш цвет */
+}
+
+footer button, footer .wrap a {
+    /* Кнопка Settings и ссылка "Built with Gradio" */
+    display: inline-block !important;
+    margin: 0 0.5rem !important;
+}
+
+"""
+
+
 # -------------------
 
 async def chroma_echo(message: str, history: List[Dict], collection: str, threshold_value: float,
@@ -174,54 +232,93 @@ def gr_existed_indexes():
     return meilisearch.show_list_indexes(detail_mode="uid")
 
 
-def gr_add_to_index(index: str, file_path: str):
+def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_type: str):
     """
-    pdf, status_bar, upload_indices_dropdown, meili_search_indexes_dropdown
-
-    Принимает имя индекса Meilisearch (index) и путь к загруженному PDF (file_path).
-    Преобразует PDF в JSON, записывает в поддиректорию 'Upload',
-    затем загружает полученный JSON в Meilisearch.
+    Универсальная функция для добавления в Meilisearch либо PDF-файла (через конвертацию),
+    либо JSON-файла напрямую.
     """
-
-    if not file_path:
-        # Возвращаем сообщение об ошибке, не «падая»
+    if not index:
         return (
-            # Первый output — это PDF-компонент. Оставим как есть (не сбрасываем)
-            gr.update(),
-            # Второй output — статусная строка
-            "Ошибка: PDF не загружен, загрузите документ.",
-            # Третий и четвёртый — обновлять выпадающий список не нужно (или обновляем тем же)
+            gr.update(value=None),  # PDF
+            gr.update(value=None),  # JSON
+            "Ошибка: не выбран индекс. Укажите индекс Meilisearch.",
             gr.update(),
             gr.update()
         )
 
-    # Извлекаем чистое имя файла (без пути)
-    base_name = os.path.basename(file_path)  # "some_document.pdf"
-    # Отделяем расширение
-    base_no_ext, _ = os.path.splitext(base_name)  # "some_document", ".pdf"
-    # Убираем из имени любые неподходящие символы (например, пробелы, скобки и т.д.)
-    base_no_ext_clean = re.sub(r'[^a-zA-Z0-9-_]', '_', base_no_ext)
+    if doc_type == "PDF":
+        # Обработка PDF
+        if not pdf_path:
+            return (
+                gr.update(value=None),
+                gr.update(value=None),
+                "Ошибка: PDF не загружен, загрузите документ.",
+                gr.update(),
+                gr.update()
+            )
 
-    # Генерируем путь для JSON-файла
-    json_path = f"Upload/{base_no_ext_clean}.json"  # "Upload/some_document.json"
+        base_name = os.path.basename(pdf_path)
+        base_no_ext, _ = os.path.splitext(base_name)
+        base_no_ext_clean = re.sub(r'[^a-zA-Z0-9-_]', '_', base_no_ext)
 
-    # Вызываем конвертер PDF -> Meili JSON
-    pdf2json.pdf_to_meili_json(file_path, json_path)
+        json_path = f"Upload/{base_no_ext_clean}.json"
+        pdf2json.pdf_to_meili_json(pdf_path, json_path)
+        meilisearch.add_doc_to_meili(json_path, index)
+        time.sleep(5)
+        new_list = gr_existed_indexes()
 
-    # Загружаем полученный JSON в Meilisearch
-    meilisearch.add_doc_to_meili(json_path, index)
-    #
-    time.sleep(5)
-    #
-    new_list = gr_existed_indexes()
+        return (
+            PDF(value=None, label="Загрузить PDF", interactive=True, scale=80),
+            gr.update(value=None),  # сбрасываем JSON
+            "Файл (PDF) добавлен в индекс",
+            gr.update(choices=new_list),
+            gr.update(choices=new_list),
+        )
 
-    # Возвращаем «очищенный» PDF-компонент (обнулённое значение) и инфо
-    return (
-        PDF(value=None, label="Загрузить PDF", interactive=True, scale=80),
-        "Файл добавлен в индекс",
-        gr.update(choices=new_list),
-        gr.update(choices=new_list),
-    )
+
+    elif doc_type == "JSON":
+
+        # Обработка JSON
+
+        if not json_file:
+            return (
+                gr.update(value=None),
+                gr.update(value=None),
+                "Ошибка: JSON не загружен, загрузите документ.",
+                gr.update(),
+                gr.update()
+            )
+
+        base_name = os.path.basename(json_file)  # "file.json"
+        base_no_ext, _ = os.path.splitext(base_name)
+        base_no_ext_clean = re.sub(r'[^a-zA-Z0-9-_]', '_', base_no_ext)
+        local_json_path = f"Upload/{base_no_ext_clean}.json"
+        # Копируем загруженный временный файл в свою папку
+        # (import shutil в начале файла)
+        shutil.copyfile(json_file, local_json_path)
+
+        # Индексируем в Meilisearch
+
+        meilisearch.add_doc_to_meili(local_json_path, index)
+        time.sleep(1)
+        new_list = gr_existed_indexes()
+        return (
+            gr.update(value=None),  # сбрасываем PDF
+            gr.update(value=None),  # сбрасываем JSON
+            f"Файл (JSON) '{os.path.basename(json_file)}' добавлен в индекс '{index}'.",
+            gr.update(choices=new_list),
+            gr.update(choices=new_list),
+        )
+
+
+    else:
+        return (
+            gr.update(value=None),
+            gr.update(value=None),
+            "Неподдерживаемый тип документа.",
+            gr.update(),
+            gr.update()
+        )
 
 
 def gr_remove_index(index: str):
@@ -241,6 +338,20 @@ def gr_remove_index(index: str):
         gr.update(choices=new_list, value=None),
         gr.update(choices=new_list, value=None),
         "Индекс удален",
+    )
+
+
+def gr_create_index(index_name: str):
+    """
+    Создаёт индекс в Meilisearch
+    """
+    meilisearch.create_index(index_name)
+    time.sleep(5)
+    new_list = gr_existed_indexes()
+    return (
+        f"Индекс {index_name} создан",
+        gr.update(choices=new_list, value=index_name),
+        gr.update(choices=new_list, value=index_name),
     )
 
 
@@ -290,6 +401,7 @@ def radio_search_engine_change(choice):
             gr.update(visible=True),
             gr.update(visible=False),
             gr.update(visible=True),
+            gr.update(visible=True),
         )
     else:
         return (
@@ -301,6 +413,28 @@ def radio_search_engine_change(choice):
             # gr.Button(visible=False),
             gr.update(visible=True),
             gr.update(visible=False),
+            gr.update(visible=False),
+        )
+
+
+def radio_type_of_upl_file_change(choice):
+    """
+    Конфигурирует интерфейс таким образом, чтобы загружать в MEILI либо PDF, либо JSON
+
+
+    :param choice:
+    :return:
+    """
+    if choice == "JSON":
+        return (
+            gr.update(visible=False),
+            gr.update(visible=True),
+
+        )
+    else:
+        return (
+            gr.update(visible=True),
+            gr.update(visible=False),
         )
 
 
@@ -309,6 +443,7 @@ def radio_search_engine_change(choice):
 # _________________
 
 with gr.Blocks() as blocks:
+    # with gr.Blocks(css=custom_css) as blocks:
     gr.Markdown("## NEIRY.AI **bookworm**")
 
     chatbot = gr.Chatbot(type="messages", autoscroll=True,
@@ -361,23 +496,33 @@ with gr.Blocks() as blocks:
 
     with gr.Row():
         radio_type_of_db = gr.Radio(["ChromaDB", "Meilisearch"],
-                                    label="Тип базы данных", value="ChromaDB", container=True,
-                                    info="Выберите тип базы данных для добавления документа")
+                                    label="Тип базы данных",
+                                    value="ChromaDB",
+                                    container=True,
+                                    info="для добавления документа")
+
+        radio_type_of_upl_data = gr.Radio(["PDF", "JSON"],
+                                          label="Тип документа",
+                                          value="PDF",
+                                          container=True,
+                                          info="для загрузки в MEILISEARCH",
+                                          visible=False)
 
         upload_collections_dropdown = gr.Dropdown(choices=gr_existed_collections(), value=None, allow_custom_value=True,
                                                   filterable=True,
                                                   label=COLLECTIONS_IN_CHROMA,
-                                                  info="Коллекции документов, классифицированные по темам",
+                                                  info="Коллекции документов по темам",
                                                   visible=True, )
 
         upload_indices_dropdown = gr.Dropdown(choices=gr_existed_indexes(), value=None, allow_custom_value=True,
                                               filterable=True,
                                               label=INDEXES_IN_MEILI,
-                                              info="Индексы документов, классифицированные по темам",
+                                              info="Индексы документов по темам",
                                               visible=False)
 
         # Поле для вывода текущего статуса работы с коллекциями
         status_bar = gr.Textbox(value=txt_default, every=10.0, label="Информация о статусе операции",
+                                info="Только вывод",
                                 interactive=False, )
 
         # Кнопки для работы с коллекциями или индексами
@@ -390,6 +535,15 @@ with gr.Blocks() as blocks:
 
     with gr.Row():
         pdf = PDF(label="Загрузить PDF", interactive=True, scale=80)
+
+        # Загрузка JSON (по умолчанию невидим)
+        json_file = gr.File(
+            label="Загрузить JSON",
+            visible=False,
+            scale=80,
+            file_types=[".json"],  # или можно просто ["json"]
+            type="filepath"
+        )
 
         with gr.Column():
             add_to_collection_button = gr.Button("Добавить документ в коллекцию", visible=True)
@@ -413,14 +567,35 @@ with gr.Blocks() as blocks:
                                 )
 
     radio_type_of_search.change(fn=radio_sliders_change, inputs=radio_type_of_search,
-                                outputs=[slider3, slider1, slider2, meili_search_indexes_dropdown,
-                                         chroma_search_collection_dropdown, ])
+                                outputs=[
+                                    slider3,
+                                    slider1,
+                                    slider2,
+                                    meili_search_indexes_dropdown,
+                                    chroma_search_collection_dropdown,
+                                ]
+                                )
 
     radio_type_of_db.change(fn=radio_search_engine_change, inputs=radio_type_of_db,
-                            outputs=[upload_collections_dropdown, upload_indices_dropdown, add_collection_button,
-                                     rm_collection_button,
-                                     # add_index_button,
-                                     rm_index_button, add_to_collection_button, add_to_index_button])
+                            outputs=[
+                                upload_collections_dropdown,
+                                upload_indices_dropdown,
+                                add_collection_button,
+                                rm_collection_button,
+                                # add_index_button,
+                                rm_index_button,
+                                add_to_collection_button,
+                                add_to_index_button,
+                                radio_type_of_upl_data,
+                            ]
+                            )
+
+    radio_type_of_upl_data.change(fn=radio_type_of_upl_file_change, inputs=radio_type_of_upl_data,
+                                  outputs=[
+                                      pdf,
+                                      json_file,
+                                  ]
+                                  )
 
     # --------------------------------------
     # Кнопки работы с коллекциями ChromaDB
@@ -460,11 +635,21 @@ with gr.Blocks() as blocks:
         outputs=[upload_indices_dropdown, meili_search_indexes_dropdown, status_bar, ]
     )
 
+    # Универсальная кнопка для индексации (PDF или JSON)
     add_to_index_button.click(
-        gr_add_to_index,
-        inputs=[upload_indices_dropdown, pdf],
-        outputs=[pdf, status_bar, upload_indices_dropdown, meili_search_indexes_dropdown]
+        gr_add_to_index_universal,
+        inputs=[upload_indices_dropdown, pdf, json_file, radio_type_of_upl_data],
+        outputs=[pdf, json_file, status_bar, upload_indices_dropdown, meili_search_indexes_dropdown]
+    )
+
+    gr.HTML(
+        """
+        <div id="custom-footer" align="center">
+            <a href="https://neiry-ai.ru" target="_blank">neiry-ai.ru</a>
+        </div>
+        """,
+        visible=True
     )
 
 if __name__ == "__main__":
-    blocks.launch(server_name="0.0.0.0", server_port=7860, auth=check_auth)
+    blocks.launch(server_name="0.0.0.0", server_port=7860, auth=check_auth, show_api=False)
