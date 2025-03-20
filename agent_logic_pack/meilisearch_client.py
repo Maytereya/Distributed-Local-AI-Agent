@@ -101,7 +101,7 @@ def search_meili(index_name: str, query: str, limit: int = 2,
             # "highlightPostTag": highlight,
             "attributesToHighlight": [highlight_fields],
         })
-        print("Search results:", search_result)
+        # print("Search results:", search_result)
 
         hits = search_result.get("hits", [])
 

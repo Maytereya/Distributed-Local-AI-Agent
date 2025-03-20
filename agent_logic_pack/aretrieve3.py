@@ -135,8 +135,6 @@ class ChromaService:
         else:
             result = list_col
 
-        # print(result)  # Выводим результат в консоль
-
         return result
 
     # TODO: Проверить работоспособность
@@ -252,7 +250,7 @@ def txt_loader(path: str = "Upload/") -> List[Document]:
         split_docs = text_splitter.split_documents(docs)
         print("Text document splitting done.")
     else:
-        print("No text documents found in the specified path.")
+        print("No text documents for splitting found in the specified path.")
 
     return split_docs
 
@@ -277,7 +275,7 @@ def pdf_loader(path: str) -> List[Document]:
         print(f"\rStep {step}: Processing page...", end='', flush=True)
         docs.append(doc)
 
-    print("\nAll pages have been processed.")
+    print("\nAll PDF pages have been processed.")
 
     return docs
 
@@ -425,7 +423,10 @@ def add_data(
         print(f"An error occurred while adding data: {e}")
 
 
+# ------------------
 # :: Chroma DB ::
+# ------------------
+
 def query_collection(
         existed_collection: str,
         question: str,
@@ -474,7 +475,10 @@ def query_collection(
     return documents
 
 
+# --------------------------
 # :: Chroma Vector Store ::
+# --------------------------
+
 def vs_query(
         existed_collection: str,
         question: str,
@@ -572,7 +576,10 @@ def vs_query(
     return documents
 
 
+# ------------------------------------
 # Main retrieve function, include all
+# ------------------------------------
+
 async def main_retrieve_async(search_type: Literal["vectorstore", "db"] = "vectorstore",
                               return_type: Literal["list", "str"] = "list",
                               k: int = 5,
@@ -592,7 +599,7 @@ async def main_retrieve_async(search_type: Literal["vectorstore", "db"] = "vecto
     :param question: Вопрос заданный пользователем.
     :return: Список документов для ответа Агента.
     """
-    print("Preparing an environment for working with collections...")
+    print("Current info about Chroma:")
     chr_service = ChromaService(c.chroma_host, c.chroma_port)
     chr_service.info_chroma()
     print(f"Query to collection: {collection}")
@@ -614,7 +621,8 @@ async def main_retrieve_async(search_type: Literal["vectorstore", "db"] = "vecto
         filtrated_docs = query_collection(collection, question, contains=keyword, n_results=n_results,
                                           model="default")
 
-    print(f'{filtrated_docs=}')
+    # не удалять этот вывод для отладки
+    # print(f'{filtrated_docs=}')
 
     if len(filtrated_docs) == 0:
         filtrated_docs = [
