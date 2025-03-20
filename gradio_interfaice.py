@@ -42,50 +42,46 @@ def check_auth(username, password):
 # Не факт, что это хорошо.
 # -------------------
 custom_css = """
-/* Располагаем всё в футере по центру в одну строку */
+/* 
+   Общие стили для футера: расположим элементы 
+   вертикально (flex-direction: column), 
+   без лишних отступов (gap, margin, padding).
+*/
 footer {
-    display: flex !important;
+    display: flex !important;           /* Чтобы мы могли управлять расположением */
+    /* flex-direction: column !important;   Расположим элементы сверху вниз */
+    align-items: center !important;     /* Центрируем по горизонтали */
     justify-content: center !important;
-    align-items: center !important;
-    gap: 1rem;
-    padding: 0.5rem 1rem !important;
+    text-align: center !important;
+    gap: 0.25rem !important;            /* Небольшой зазор между строками */
+    margin: 0 !important;
+    padding: 3px 0 !important;          /* Можно подвинуть значение для плотности */
 }
 
-/* Убираем фон и рамки у футера, если нужно */
-footer .wrap {
-    box-shadow: none !important;
-    border: none !important;
-    background: transparent !important;
-}
-
-/* Прячем лишние переносы и точки, если вдруг появятся */
-footer ul {
+/* Убираем потенциальные точки/буллеты у "Built with Gradio" */
+/* footer ul {
     list-style: none !important;
     margin: 0 !important;
     padding: 0 !important;
-    display: flex !important;
-    align-items: center !important;
-}
+}*/
 
-/* Важно: наш дополнительный блок (div#custom-footer) располагаем наравне с остальными элементами. */
+/* Это сам блок, где вы размещаете свою ссылку и копирайт */
 #custom-footer {
-    margin: 0 !important;
-    display: inline-block !important;
-    padding: 0 !important;
+    text-align: center;
+    margin: 0 auto;
+    padding: 0;
+    color: #ccc;              /* Светло-серый цвет для текста (можно поменять) */
+    font-size: 14px;
+    line-height: 1.2;         /* Чуть плотнее строки */
 }
 
-/* Немного отступа */
+/* Если хотите, чтобы только ссылка была #ccc, а текст — другим цветом,
+   перенесите color в #custom-footer a { ... } */
 #custom-footer a {
     text-decoration: none;
-    color: #ccc; /* или ваш цвет */
+    color: #ccc;              /* Цвет ссылки */
+    margin-left: 0.5rem;      /* Отступ между текстом и ссылкой */
 }
-
-footer button, footer .wrap a {
-    /* Кнопка Settings и ссылка "Built with Gradio" */
-    display: inline-block !important;
-    margin: 0 0.5rem !important;
-}
-
 """
 
 
@@ -442,8 +438,8 @@ def radio_type_of_upl_file_change(choice):
 # Chat Interface
 # _________________
 
-with gr.Blocks() as blocks:
-    # with gr.Blocks(css=custom_css) as blocks:
+# with gr.Blocks() as blocks:
+with gr.Blocks(css=custom_css) as blocks:
     gr.Markdown("## NEIRY.AI **bookworm**")
 
     chatbot = gr.Chatbot(type="messages", autoscroll=True,
@@ -644,7 +640,8 @@ with gr.Blocks() as blocks:
 
     gr.HTML(
         """
-        <div id="custom-footer" align="center">
+        <div id="custom-footer">
+            &copy; ООО "Нейри" 2025
             <a href="https://neiry-ai.ru" target="_blank">neiry-ai.ru</a>
         </div>
         """,

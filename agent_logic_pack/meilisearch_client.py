@@ -9,14 +9,13 @@ This module provides two ways to work with Meilisearch:
 """
 
 import json
-from typing import Any
 
 import requests
 import meilisearch
 # Retry section
-import time
+# import time
 import logging
-from httpx import AsyncClient, ConnectError
+# from httpx import AsyncClient, ConnectError
 from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
 #
 import config as c
@@ -102,7 +101,7 @@ def search_meili(index_name: str, query: str, limit: int = 2,
             # "highlightPostTag": highlight,
             "attributesToHighlight": [highlight_fields],
         })
-        # print("Search results:", result)
+        print("Search results:", search_result)
 
         hits = search_result.get("hits", [])
 
@@ -165,6 +164,25 @@ def show_list_indexes(detail_mode: str = "full") -> list:
         print(f"Error requesting indexes: {e}")
         return []
 
+def create_index(index_uid: str) -> None:
+    """
+    Создаёт индекс в Meilisearch по обозначенному UID.
+
+    :param index_uid: Уникальный идентификатор (UID) для нового индекса.
+    :return: None
+    """
+    endpoint = f"{c.MEILI_URL}/indexes"
+    headers = {"Authorization": f"Bearer {c.MASTER_KEY}"}
+    payload = {
+        "uid": index_uid
+    }
+    try:
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=10)
+        # Можно обработать статус ответа — например, 201 говорит о создании,
+        # но в любом случае выведем результат (или при необходимости вернём)
+        print(f"Info about creating index '{index_uid}': {response.text}")
+    except requests.exceptions.RequestException as e:
+        print(f"Error creating index '{index_uid}': {e}")
 
 def delete_index(index_uid: str) -> None:
     """

@@ -4,7 +4,10 @@ from transformers import AutoTokenizer, AutoModel
 import torch
 
 # Загрузка предобученной модели и токенизатора
-tokenizer = AutoTokenizer.from_pretrained("cointegrated/rubert-tiny2")
+# TODO: Решить вопрос с кешированием модели, чтобы она не загружалась с huggingface.co каждый раз.
+# cache_dir="/app/cache"
+# По умолчанию выдает ошибку, нужно городить эту системную папку в контейнере и делать монтирование в хостовую систему.
+tokenizer = AutoTokenizer.from_pretrained("cointegrated/rubert-tiny2", )
 model = AutoModel.from_pretrained("cointegrated/rubert-tiny2")
 
 

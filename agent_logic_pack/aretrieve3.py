@@ -68,10 +68,6 @@ except Exception as e:
     logger.error(f"❌ Ошибка подключения к ChromaDB: {e}")
 
 
-# chroma_client = chromadb.HttpClient(host=c.chroma_host, port=c.chroma_port)
-# chroma_client = chromadb.HttpClient(host="http://localhost", port=c.chroma_port)
-
-
 def choose_model(model: Literal["distiluse", "sbert", "instructor", "default"] = "default",
                  return_type: Literal["model", "name"] = "model") -> SentenceTransformer | str:
     """
@@ -97,7 +93,10 @@ def choose_model(model: Literal["distiluse", "sbert", "instructor", "default"] =
 
     else:
         # Return the model object
-        return SentenceTransformer(selected_model_name)
+        # TODO: Выяснить, работает ли кэш правильно.
+        # cache_folder="/app/st-cache"
+        # Пока не подключил, так как надо правильно смонтировать папку и вообще выяснить как это работает.
+        return SentenceTransformer(selected_model_name, )
 
 
 class ChromaService:
