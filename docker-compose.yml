@@ -47,4 +47,4 @@ services:
       - local_net
 networks:
   local_net:
-    driver: bridge
+    external: true
