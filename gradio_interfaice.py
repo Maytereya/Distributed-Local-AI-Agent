@@ -361,37 +361,47 @@ def txt_default():
     return f"Ожидание действий..."
 
 
-def radio_sliders_change(choice) -> tuple[gr.Slider, gr.Slider, gr.Slider, gr.Dropdown, gr.Dropdown,]:
+def radio_sliders_change(choice):
     """
+    slider3,
+    slider1,
+    slider2,
+    meili_search_indexes_dropdown,
+    chroma_search_collection_dropdown,
+
     The search type selector that enables appropriated sliders.
     :param choice: Vectorstore search or Chroma DB Search.
     :return: Configurations of sliders that refine the search.
     """
     if choice == "vectorstore":
-        return (gr.Slider(interactive=True),
-                gr.Slider(interactive=True),
-                gr.Slider(interactive=False),
-                gr.Dropdown(interactive=False),
-                gr.Dropdown(interactive=True),
+        return (gr.update(interactive=True),
+                gr.update(interactive=True),
+                gr.update(interactive=False),
+
+                gr.update(interactive=False),
+                gr.update(interactive=True),
                 )
     elif choice == "db":
-        return (gr.Slider(interactive=False),
-                gr.Slider(interactive=False),
-                gr.Slider(interactive=True),
-                gr.Dropdown(interactive=False, value=None),
-                gr.Dropdown(interactive=True),
+        return (gr.update(interactive=False),
+                gr.update(interactive=False),
+                gr.update(interactive=True),
+
+                gr.update(interactive=False, ),
+                gr.update(interactive=True),
                 )
     else:
-        return (gr.Slider(interactive=False),
-                gr.Slider(interactive=False),
-                gr.Slider(interactive=True),
-                gr.Dropdown(interactive=True),
-                gr.Dropdown(interactive=False, value=None),
+        return (gr.update(interactive=False),
+                gr.update(interactive=False),
+                gr.update(interactive=True),
+
+                gr.update(interactive=True),
+                gr.update(interactive=False, ),
                 )
 
 
 def radio_search_engine_change(choice):
     """
+
     collections_dropdown, index_dropdown, add_collection_button, rm_collection_button,
     add_index_button, rm_index_button, add_to_collection_button, add_to_index_button
     :param choice:
@@ -482,7 +492,7 @@ with gr.Blocks(css=custom_css) as blocks:
                                                             # filterable=True,
                                                             label=COLLECTIONS_IN_CHROMA,
                                                             info="Выберите Коллекцию для поиска информации",
-                                                            interactive=False,
+                                                            interactive=True,
                                                             # value=None
                                                             )
 
@@ -527,20 +537,26 @@ with gr.Blocks(css=custom_css) as blocks:
                                           info="для загрузки в MEILISEARCH",
                                           visible=False)
 
-        upload_collections_dropdown = gr.Dropdown(choices=gr_existed_collections(), value=None, allow_custom_value=True,
+        upload_collections_dropdown = gr.Dropdown(choices=gr_existed_collections(),
+                                                  value=None,
+                                                  allow_custom_value=True,
                                                   filterable=True,
                                                   label=COLLECTIONS_IN_CHROMA,
                                                   info="Коллекции документов по темам",
                                                   visible=True, )
 
-        upload_indices_dropdown = gr.Dropdown(choices=gr_existed_indexes(), value=None, allow_custom_value=True,
+        upload_indices_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
+                                              value=None,
+                                              allow_custom_value=True,
                                               filterable=True,
                                               label=INDEXES_IN_MEILI,
                                               info="Индексы документов по темам",
                                               visible=False)
 
         # Поле для вывода текущего статуса работы с коллекциями
-        status_bar = gr.Textbox(value=txt_default, every=10.0, label="Информация о статусе операции",
+        status_bar = gr.Textbox(value=txt_default,
+                                every=10.0,
+                                label="Информация о статусе операции",
                                 info="Только вывод",
                                 interactive=False, )
 
