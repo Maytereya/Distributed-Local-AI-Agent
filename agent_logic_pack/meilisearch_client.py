@@ -94,6 +94,11 @@ def search_meili(index_name: str, query: str, limit: int = 2,
     :param highlight_fields: Which fields to highlight. By default, '*'.
     :return: A dictionary of search results, as returned by Meilisearch.
     """
+    if not index_name:
+        return (
+            "Ошибка: не выбран индекс, в котором следует осуществлять поиск"
+        )
+
     try:
         search_result = client.index(index_name).search(query, {
             "limit": limit,
@@ -121,7 +126,7 @@ def search_meili(index_name: str, query: str, limit: int = 2,
 
     except Exception as e:
         print(f"Error searching in index '{index_name}': {e}")
-        return "Ошибка поисковой системы meilisearch"
+        return f"Ошибка поисковой системы Meilisearch: {e}"
 
 
 # -----------------------------
@@ -164,6 +169,7 @@ def show_list_indexes(detail_mode: str = "full") -> list:
         print(f"Error requesting indexes: {e}")
         return []
 
+
 def create_index(index_uid: str) -> None:
     """
     Создаёт индекс в Meilisearch по обозначенному UID.
@@ -183,6 +189,7 @@ def create_index(index_uid: str) -> None:
         print(f"Info about creating index '{index_uid}': {response.text}")
     except requests.exceptions.RequestException as e:
         print(f"Error creating index '{index_uid}': {e}")
+
 
 def delete_index(index_uid: str) -> None:
     """

@@ -580,13 +580,13 @@ def vs_query(
 # Main retrieve function, include all
 # ------------------------------------
 
-async def main_retrieve_async(search_type: Literal["vectorstore", "db"] = "vectorstore",
+async def main_retrieve_async(collection: str,
+                              question: str,
+                              search_type: Literal["vectorstore", "db"] = "vectorstore",
                               return_type: Literal["list", "str"] = "list",
                               k: int = 5,
                               n_results: int = 2,
                               threshold: float = 0.005,
-                              collection: str = "25_01_2025_LaBSE-en-ru_pdf",
-                              question: str = "причины апатии, коррекция",
                               ) -> List[Document] | str:
     """
 
@@ -599,6 +599,10 @@ async def main_retrieve_async(search_type: Literal["vectorstore", "db"] = "vecto
     :param question: Вопрос заданный пользователем.
     :return: Список документов для ответа Агента.
     """
+    if not collection:
+        return (
+            "Ошибка: не выбрана коллекция, в которой следует осуществлять поиск"
+        )
     print("Current info about Chroma:")
     chr_service = ChromaService(c.chroma_host, c.chroma_port)
     chr_service.info_chroma()

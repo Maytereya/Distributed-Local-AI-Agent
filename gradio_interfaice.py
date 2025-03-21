@@ -34,12 +34,7 @@ def check_auth(username, password):
 
 
 # -------------------
-# ECHOES PART
-# -------------------
-
-# -------------------
-# Сносит футер полностью.
-# Не факт, что это хорошо.
+# Footer!
 # -------------------
 custom_css = """
 /* 
@@ -85,6 +80,8 @@ footer {
 """
 
 
+# -------------------
+# ECHOES PART
 # -------------------
 
 async def chroma_echo(message: str, history: List[Dict], collection: str, threshold_value: float,
@@ -146,6 +143,7 @@ async def universal_echo(
     """
     if radio_value == "meilisearch":
         # Используем slider_value_k как limit
+        # Сюда добавить код про то, что нет индекса
         return await meili_echo(
             message=message,
             history=history,
@@ -370,14 +368,26 @@ def radio_sliders_change(choice) -> tuple[gr.Slider, gr.Slider, gr.Slider, gr.Dr
     :return: Configurations of sliders that refine the search.
     """
     if choice == "vectorstore":
-        return gr.Slider(interactive=True), gr.Slider(interactive=True), gr.Slider(interactive=False), gr.Dropdown(
-            interactive=False), gr.Dropdown(interactive=True),
+        return (gr.Slider(interactive=True),
+                gr.Slider(interactive=True),
+                gr.Slider(interactive=False),
+                gr.Dropdown(interactive=False),
+                gr.Dropdown(interactive=True),
+                )
     elif choice == "db":
-        return gr.Slider(interactive=False), gr.Slider(interactive=False), gr.Slider(interactive=True), gr.Dropdown(
-            interactive=False, value=None), gr.Dropdown(interactive=True),
+        return (gr.Slider(interactive=False),
+                gr.Slider(interactive=False),
+                gr.Slider(interactive=True),
+                gr.Dropdown(interactive=False, value=None),
+                gr.Dropdown(interactive=True),
+                )
     else:
-        return gr.Slider(interactive=False), gr.Slider(interactive=False), gr.Slider(interactive=True), gr.Dropdown(
-            interactive=True), gr.Dropdown(interactive=False, value=None),
+        return (gr.Slider(interactive=False),
+                gr.Slider(interactive=False),
+                gr.Slider(interactive=True),
+                gr.Dropdown(interactive=True),
+                gr.Dropdown(interactive=False, value=None),
+                )
 
 
 def radio_search_engine_change(choice):
@@ -442,26 +452,39 @@ def radio_type_of_upl_file_change(choice):
 with gr.Blocks(css=custom_css) as blocks:
     gr.Markdown("## NEIRY.AI **bookworm**")
 
-    chatbot = gr.Chatbot(type="messages", autoscroll=True,
+    chatbot = gr.Chatbot(type="messages",
+                         autoscroll=True,
                          placeholder="<strong>Поиск по документам</strong><br>Задайте вопрос")
 
-    textbox = gr.Textbox(lines=1, placeholder="напишите вопрос", submit_btn=True, container=True, autoscroll=True,
+    textbox = gr.Textbox(lines=1,
+                         placeholder="Напишите вопрос",
+                         submit_btn=True,
+                         container=True,
+                         autoscroll=True,
                          autofocus=True)
 
     with gr.Column():
         with gr.Row():
             radio_type_of_search = gr.Radio(["vectorstore", "db", "meilisearch"],
-                                            label="Способы поиска в базе знаний", value="db", container=True,
+                                            label="Способы поиска в базе знаний",
+                                            value="db",
+                                            container=True,
                                             info="Выберите алгоритм поиска")
 
-            meili_search_indexes_dropdown = gr.Dropdown(choices=gr_existed_indexes(), label=INDEXES_IN_MEILI,
-                                                        info="Выберите Индекс для поиска информации", interactive=False,
-                                                        value=None)
+            meili_search_indexes_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
+                                                        label=INDEXES_IN_MEILI,
+                                                        info="Выберите Индекс для поиска информации",
+                                                        interactive=False,
+                                                        # value=None,
+                                                        )
 
             chroma_search_collection_dropdown = gr.Dropdown(choices=gr_existed_collections(),
                                                             # filterable=True,
                                                             label=COLLECTIONS_IN_CHROMA,
-                                                            info="Выберите Коллекцию для поиска информации")
+                                                            info="Выберите Коллекцию для поиска информации",
+                                                            interactive=False,
+                                                            # value=None
+                                                            )
 
     with gr.Row():
         slider3 = gr.Slider(value=5, minimum=1, maximum=20, step=1,
