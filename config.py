@@ -20,7 +20,7 @@ print("Current working directory:", os.getcwd())
 files_read = config.read(config_path)
 print("Files read:", files_read)
 
-environment = 'DOCKER_PRODUCTION'  # | 'PRODUCTION' | 'LOCAL'
+environment = 'PRODUCTION'  # | 'PRODUCTION' | 'LOCAL'
 print("environment:", environment)
 
 ollama_url = config[environment]['ollama_url']
@@ -31,6 +31,9 @@ MEILI_URL = config[environment]['MEILI_URL']
 MASTER_KEY = config['DEFAULT']['MASTER_KEY']
 AUTH_NAME = config['DEFAULT']['AUTH_NAME']
 AUTH_PASS = config['DEFAULT']['AUTH_PASS']
+nayka_base_url = config['DEFAULT']['base_url']
+nayka_login = config['DEFAULT']['nayka_login']
+nayka_pass = config['DEFAULT']['nayka_pass']
 
 ll_model_big = config['DEFAULT']['ll_model_big']
 ll_model_small = config['DEFAULT']['ll_model_small']
