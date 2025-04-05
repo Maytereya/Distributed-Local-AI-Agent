@@ -104,9 +104,9 @@ def find_doctor_schedule(
 
 if __name__ == "__main__":
     doctors = find_doctor_schedule(
-        last_name="Калашни",
+        last_name="Пасисниченко Лилия",
         # specialty="Врач ультразвуковой диагностики",
-        region_name="Ленина 5"
+        region_name="Чкалова 51/1 пом 6"
     )
 
     pprint(doctors, width=150)

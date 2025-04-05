@@ -20,7 +20,7 @@ def print_doctor_cards(
     doctors = requests.get(doctors_url, auth=auth, verify=False).json()
     doctor_dict = {doc['id']: doc for doc in doctors}
 
-    # Получаем связи врачей с отделениями
+    # Получаем связи врачей с направлениями работы
     dc_url = f"{base_url}/doctorCompanyUnits"
     doctor_company = requests.get(dc_url, auth=auth, verify=False).json()
 
@@ -30,11 +30,14 @@ def print_doctor_cards(
     region_names = requests.get(f"{base_url}/regions", auth=auth, verify=False).json()
     for r in region_names:
         region_map[r["id"]] = r["name"]
+    # print(f"{region_map=}")
 
     # Индекс: врач → регионы
     worker_regions = {}
     for r in regions:
         worker_regions.setdefault(r["worker"], set()).add(region_map.get(r["region"], f"[ID {r['region']}]"))
+
+    # print(f"{worker_regions=}")
 
     # Получаем названия направлений
     units = requests.get(f"{base_url}/companyUnits", auth=auth, verify=False).json()
@@ -78,7 +81,7 @@ def print_doctor_cards(
 
 if __name__ == "__main__":
     print_doctor_cards(
-        show_specialization=False,
-        filter_by_unit="Врач ультразвуковой диагностики",  # <- Укажи нужное направление или None
-        filter_by_region="Ленина 5"  # <- Укажи нужный регион или None
+        show_specialization=True,
+        # filter_by_unit="Врач ультразвуковой диагностики",  # <- Укажи нужное направление или None
+        # filter_by_region="Ленина 5"  # <- Укажи нужный регион или None
     )
