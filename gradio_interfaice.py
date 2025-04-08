@@ -216,6 +216,18 @@ def existed_docs_in_selected_collection(selected_collection: str):
 
 
 def gr_add_to_collection(collection: str, file_path: str):
+    if not collection:
+        return (
+            gr.update(value=None),
+            "Ошибка: не выбрана Коллекция. Создайте или определите Коллекцию для ChromaDB.",
+        )
+
+    if not file_path:
+        return (
+            gr.update(value=None),
+            "Ошибка: PDF не загружен, загрузите документ."
+        )
+
     retrieve.add_data(exist_collection_name=collection, upload_type="PDF", add_path=file_path, model="default")
     return (
         PDF(
@@ -596,8 +608,8 @@ with gr.Blocks(css=custom_css) as blocks:
         # Поле для вывода текущего статуса работы с коллекциями
         status_bar = gr.Textbox(value=txt_default,
                                 every=10.0,
-                                label="Информация о статусе операции",
-                                info="Только вывод",
+                                label="Монитор текущего статуса операции",
+                                # info="Только вывод",
                                 interactive=False, )
 
         # Кнопки для работы с коллекциями или индексами
