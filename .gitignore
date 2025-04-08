@@ -167,5 +167,4 @@ cython_debug/
 
 #Project py files
 all_reqs.txt
-gradio_test.py
 local_chroma_test.py

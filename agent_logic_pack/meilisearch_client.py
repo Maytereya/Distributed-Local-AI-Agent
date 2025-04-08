@@ -9,7 +9,7 @@ This module provides two ways to work with Meilisearch:
 """
 
 import json
-
+from typing import List
 import requests
 import meilisearch
 # Retry section
@@ -19,6 +19,10 @@ import logging
 from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
 #
 import config as c
+
+# --------------------------------------
+# Секция загрузки и ретраев для отладки
+# --------------------------------------
 
 #  Initialize logging for connection tries
 logging.basicConfig(level=logging.INFO)
@@ -77,9 +81,23 @@ def get_task_info(task_number: int) -> dict:
         task = client.get_task(task_number)
         print("Task info:", task)
         return task
-    except Exception as e:
-        print(f"Error retrieving info for task #{task_number}: {e}")
+    except Exception as gte:
+        print(f"Error retrieving info for task #{task_number}: {gte}")
         return {}
+
+
+def meili_list_documents(index_name: str) -> List[str]:
+    """
+    Retrieves documents from a Meilisearch index (Python version. httpx GET version also exists.)
+    :param index_name: Name of the target Meilisearch index.
+    :return: List of documents names.
+    """
+
+    data = client.index(index_name).get_documents({})
+    array_of_docs = data.results
+    meili_docs = [doc.id for doc in array_of_docs]
+
+    return meili_docs
 
 
 def search_meili(index_name: str, query: str, limit: int = 2,
@@ -211,7 +229,7 @@ def delete_index(index_uid: str) -> None:
         print(f"Error deleting index '{index_uid}': {e}")
 
 
-def list_documents(index_uid: str, limit: int = 20, offset: int = 0) -> list:
+def get_meili_list_documents(index_uid: str, limit: int = 20, offset: int = 0) -> list:
     """
     Sends a GET request to retrieve documents from a specific index, using pagination.
 
@@ -227,20 +245,23 @@ def list_documents(index_uid: str, limit: int = 20, offset: int = 0) -> list:
     try:
         response = requests.get(endpoint, headers=headers, params=params, timeout=10)
         if response.status_code == 200:
+            # print("Response status code:", str(response.status_code))
             data = response.json()
             documents = data.get("results", [])
-            print(f"Documents in index '{index_uid}':")
-            print(json.dumps(data, indent=2, ensure_ascii=False))
+
+            # print(f"Documents in index '{index_uid}':")
+            # print(json.dumps(data, indent=2, ensure_ascii=False))
+
             return documents
         else:
-            print(f"Error listing documents for index '{index_uid}': {response.text}")
+            print(f"Error listing documents for index (without rising an exception) '{index_uid}': {response.text}")
             return []
-    except requests.exceptions.RequestException as e:
-        print(f"Error listing documents for index '{index_uid}': {e}")
+    except requests.exceptions.RequestException as glde:
+        print(f"Error listing documents for index (risen exception) '{index_uid}': {glde}")
         return []
 
 
-def delete_document(index_uid: str, doc_id: str) -> None:
+def delete_meili_document(index_uid: str, doc_id: str) -> None:
     """
     Deletes a specific document from an index by its document ID.
 
@@ -288,6 +309,15 @@ def main():
 
     # Delete an entire index
     # delete_index("side_effects_improved")
+    res = meili_list_documents("max_ten_index")
+    for doc in res:
+        print(doc)
+
+    print("=======")
+
+    res_https = get_meili_list_documents("max_ten_index")
+    for doc in res_https:
+        print(doc)
 
 
 if __name__ == '__main__':

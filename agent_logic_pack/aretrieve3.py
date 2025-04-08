@@ -1,5 +1,6 @@
-# Async Retriever for Chroma DB v 3.0
+# Async Retriever for Chroma DB v 3.1
 import asyncio
+import os
 # Model loading for embeddings
 # from InstructorEmbedding import INSTRUCTOR
 # i_model = INSTRUCTOR('hkunlp/instructor-large')
@@ -17,7 +18,7 @@ import asyncio
 # ==== Russian models =====
 # model_only = "ai-forever/sbert_large_nlu_ru"
 
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 from chromadb.api.models.Collection import Collection
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_core.documents import Document
@@ -44,9 +45,19 @@ import warnings
 from agent_logic_pack import formulate, embedding_filtration, path_handling
 import config as c
 
-warnings.filterwarnings(
-    "ignore", category=FutureWarning, module="transformers.tokenization_utils_base"
-)
+# --------------------------------------
+# Отключение предупреждений о грядущем
+# --------------------------------------
+# warnings.filterwarnings(
+#     "ignore", category=FutureWarning, module="transformers.tokenization_utils_base"
+# )
+
+# --------------------------------------
+# Функционал подключения к
+# Chroma server c логами и задержкой на 10 сек.
+# Для того чтобы успеть понять и отладить
+# --------------------------------------
+
 #  Initialize logging for connection tries
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -67,6 +78,10 @@ try:
 except Exception as e:
     logger.error(f"❌ Ошибка подключения к ChromaDB: {e}")
 
+
+# -----------------------------
+# Выбор модели для эмбеддинга
+# -----------------------------
 
 def choose_model(model: Literal["distiluse", "sbert", "instructor", "default"] = "default",
                  return_type: Literal["model", "name"] = "model") -> SentenceTransformer | str:
@@ -99,6 +114,10 @@ def choose_model(model: Literal["distiluse", "sbert", "instructor", "default"] =
         return SentenceTransformer(selected_model_name, )
 
 
+# -----------------------------------
+# Класс сервисных функций для Chroma
+# -----------------------------------
+
 class ChromaService:
     """
     A service class for managing Chroma DB operations.
@@ -118,8 +137,6 @@ class ChromaService:
     def reset_chroma(self):
         self.chroma_client.reset()
         self.chroma_client.clear_system_cache()
-
-    from typing import List
 
     def display_collections(self, output_format: Literal["list", "str"] = "list") -> List[str] | str:
         """
@@ -161,6 +178,10 @@ class ChromaService:
             print(f"Collection name '{target_name}' does not exist, we'll create it on the next step.")
 
 
+# --------------------------------------------------------
+# Альтернативная эмбеддинговая функция для русского языка
+# --------------------------------------------------------
+
 class HuggingFaceEmbeddingFunction(EmbeddingFunction[Documents]):
     """
     A custom embedding function for Chroma server database.
@@ -193,6 +214,10 @@ class HuggingFaceEmbeddingFunction(EmbeddingFunction[Documents]):
         # Convert numpy array to Python list
         return self._model.encode(input, show_progress_bar=True, ).tolist()
 
+
+# ----------------------------------
+# Загрузчики и сплиттер
+# ----------------------------------
 
 def web_txt_splitter(add_urls) -> List[Document]:
     """
@@ -280,7 +305,11 @@ def pdf_loader(path: str) -> List[Document]:
     return docs
 
 
-def handle_collection(existed_collection: str):
+# -----------------------------------
+# Работа с коллекциями
+# -----------------------------------
+
+def handle_collection(existed_collection: str) -> List[str]:
     """
         Retrieve and display details of an existing Chroma DB collection.
 
@@ -288,11 +317,34 @@ def handle_collection(existed_collection: str):
     """
     collection = chroma_client.get_collection(name=existed_collection,
                                               embedding_function=HuggingFaceEmbeddingFunction())
-    print("Common collection info:")
-    # peek = collection.peek()  # returns a list of the first 10 items in the collection
-    # count =   # Get the number of items in the collection
-    # print(f"list of the first 10 items in the collection: {collection.peek()}")
-    print(f'the number of items in the collection: {collection.count()}')
+
+    # print("Common collection info:")
+    peek = collection.peek(limit=1000)  # returns a list of the first 10 items in the collection
+
+    # Only get documents and ids
+    # collection_info = collection.get(
+    #     include=["uris"],
+    # )
+
+    documents_metadata = peek["metadatas"]
+
+    # for metadata in documents_metadata:
+    # print(documents_metadata)
+
+    file_list = []
+    for item in documents_metadata:
+        page_num = item["page"]
+        file_path = item["source"]
+        file_name = os.path.basename(file_path)  # doc005_cystoscopy.pdf
+        file_list.append(f"{file_name}, p.{page_num}")
+
+    # print(file_list)
+
+    # print(f"list of the items in the collection: {peek}")
+    # print(f"collection_info: {collection_info}")
+    # print(f'the number of items in the collection: {collection.count()}')
+
+    return file_list
 
 
 def create_collection(
@@ -322,16 +374,16 @@ def create_collection(
         else:
             print(f"Failed to create collection: {new_collection_name}")
             return None
-    except Exception as e:
-        print(f"An error occurred while creating the collection: {e}")
+    except Exception as ecc:
+        print(f"An error occurred while creating the collection: {ecc}")
         return None
 
 
 def remove_collection(collection_name: str, ):
     try:
         chroma_client.delete_collection(name=collection_name)
-    except Exception as e:
-        print(f"An error occurred while deleting the collection: {e}, stop |")
+    except Exception as erc:
+        print(f"An error occurred while deleting the collection: {erc}, stop |")
         return None
 
 
@@ -471,7 +523,6 @@ def query_collection(
         for meta in sub_metadata
     ]
     # Но можно возвращать List[str], str или Document при необходимости.
-    # TODO: check return format!
     return documents
 
 
@@ -695,8 +746,6 @@ if __name__ == '__main__':
     # print(result)
     # print("==============")
 
-    main_add_to_chroma()
-
 # PDF document to load pass
 # file_path = "pdf/taking_guidelines.pdf"
 # txt document directory pass
@@ -730,3 +779,5 @@ if __name__ == '__main__':
 #     print(doc.page_content)
 #     print(doc.metadata)
 #     print("###############")
+
+handle_collection("algo_collection")

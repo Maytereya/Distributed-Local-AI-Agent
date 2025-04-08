@@ -205,6 +205,16 @@ def gr_existed_collections():
     return chroma_service.display_collections(output_format="list")
 
 
+def existed_docs_in_selected_collection(selected_collection: str):
+    """
+    Через функционал collection.peek["metadatas"] получение названия загруженных документов и их страниц
+    :return: List of strings.
+    """
+    if not selected_collection:
+        return ["Коллекция не выбрана"]
+    return retrieve.handle_collection(selected_collection)
+
+
 def gr_add_to_collection(collection: str, file_path: str):
     retrieve.add_data(exist_collection_name=collection, upload_type="PDF", add_path=file_path, model="default")
     return (
@@ -224,6 +234,16 @@ def gr_existed_indexes():
     :return: List of existed Meilisearch indexes.
     """
     return meilisearch.show_list_indexes(detail_mode="uid")
+
+
+def existed_docs_in_selected_index(selected_index: str):
+    """
+
+    :return:
+    """
+    if not selected_index:
+        return ["Индекс не выбран"]
+    return meilisearch.meili_list_documents(selected_index)
 
 
 def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_type: str):
@@ -324,7 +344,7 @@ def gr_remove_index(index: str):
     """
     meilisearch.delete_index(index)
     #
-    time.sleep(5)
+    time.sleep(10)
     #
     new_list = gr_existed_indexes()
 
@@ -340,7 +360,7 @@ def gr_create_index(index_name: str):
     Создаёт индекс в Meilisearch
     """
     meilisearch.create_index(index_name)
-    time.sleep(5)
+    time.sleep(10)  #
     new_list = gr_existed_indexes()
     return (
         f"Индекс {index_name} создан",
@@ -353,9 +373,29 @@ def gr_rm_doc_from_index():
     return None
 
 
-# -------------------------
-# GRADIO WRAPPING section
-# -------------------------
+# ------------------------------------
+# GRADIO WRAPPING functions section
+# ------------------------------------
+
+def update_docs_in_meili_index(index_name: str):
+    """
+    Функция-обработчик для .change события:
+    При выборе индекса возвращает обновлённый список документов в этом индексе
+    для выпадающего списка документов (meili_content_of_index_dropdown).
+    """
+    meili_doc_list = existed_docs_in_selected_index(index_name)
+
+    return gr.update(choices=meili_doc_list, )
+
+
+def update_docs_in_chroma_collection(collection_name: str):
+    """
+    Аналогичная функция для Chroma:
+    При выборе коллекции возвращаем список документов в ней.
+    """
+    chroma_doc_list = retrieve.handle_collection(collection_name)
+    return gr.update(choices=chroma_doc_list, )
+
 
 def txt_default():
     return f"Ожидание действий..."
@@ -581,8 +621,67 @@ with gr.Blocks(css=custom_css) as blocks:
         )
 
         with gr.Column():
-            add_to_collection_button = gr.Button("Добавить документ в коллекцию", visible=True)
-            add_to_index_button = gr.Button("Индексировать документ", visible=False)
+            add_to_collection_button = gr.Button("Добавить документ в коллекцию",
+                                                 visible=True)
+            add_to_index_button = gr.Button("Индексировать документ",
+                                            visible=False)
+
+    # ---------------------------------------------------
+    # Секция просмотра содержимого коллекций и индексов
+    # ---------------------------------------------------
+
+    gr.Markdown("### Содержание Индексов и Коллекций")
+
+    with gr.Row():
+        with gr.Column():
+            meili_ind_for_cont_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
+                                                      filterable=True,
+                                                      interactive=True,
+                                                      label=INDEXES_IN_MEILI,
+                                                      info="Выберите Индекс для просмотра содержимого",
+                                                      visible=True,
+                                                      )
+            meili_content_of_index_dropdown = gr.Dropdown(
+                # choices=[],
+                choices=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value),
+                # value=None,
+                allow_custom_value=False,
+                label="Документы в Индексе",
+                visible=True,
+                interactive=True,
+            )
+
+            rm_doc_from_index_button = gr.Button("Удалить выбранный документ из Индекса",
+                                                 visible=True,
+                                                 interactive=False, )
+
+        with gr.Column():
+            chroma_coll_for_cont_dropdown = gr.Dropdown(choices=gr_existed_collections(),
+                                                        filterable=True,
+                                                        label=COLLECTIONS_IN_CHROMA,
+                                                        interactive=True,
+                                                        info="Выберите Коллекцию для просмотра содержимого",
+                                                        visible=True,
+                                                        )
+
+            chroma_collection_content = gr.Dropdown(
+                # choices=[],
+                choices=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
+                # value=None,
+                allow_custom_value=False,
+                label="Документы в Коллекции",
+                visible=True,
+                interactive=True,
+            )
+
+            rm_doc_from_collection_button = gr.Button("Удалить выбранный документ из Коллекции",
+                                                      visible=True,
+                                                      interactive=False,
+                                                      )
+
+    # ----------------------------
+    # Секция интерфейса чата
+    # ----------------------------
 
     with gr.Column():
         demo = gr.ChatInterface(fn=universal_echo, type="messages",
@@ -600,6 +699,10 @@ with gr.Blocks(css=custom_css) as blocks:
                                 show_progress="full",
 
                                 )
+
+    # ----------------------------
+    # Секция переключателей
+    # ----------------------------
 
     radio_type_of_search.change(fn=radio_sliders_change, inputs=radio_type_of_search,
                                 outputs=[
@@ -676,6 +779,28 @@ with gr.Blocks(css=custom_css) as blocks:
         inputs=[upload_indices_dropdown, pdf, json_file, radio_type_of_upl_data],
         outputs=[pdf, json_file, status_bar, upload_indices_dropdown, meili_search_indexes_dropdown]
     )
+
+    # ----------------------------------------------------------------
+    # ЛОГИКА ОБНОВЛЕНИЯ при выборе индекса/коллекции
+    # для показа документов
+    # ----------------------------------------------------------------
+
+    # При смене выбранного индекса -> обновить список документов
+    meili_ind_for_cont_dropdown.change(
+        fn=update_docs_in_meili_index,
+        inputs=meili_ind_for_cont_dropdown,
+        outputs=meili_content_of_index_dropdown
+    )
+
+    # При смене выбранной коллекции -> обновить список документов
+    chroma_coll_for_cont_dropdown.change(
+        fn=update_docs_in_chroma_collection,
+        inputs=chroma_coll_for_cont_dropdown,
+        outputs=chroma_collection_content
+    )
+    # -------------------------
+    # Footer html realization
+    # -------------------------
 
     gr.HTML(
         """

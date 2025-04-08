@@ -45,6 +45,7 @@ services:
       - ontheflyai.ru
     networks:
       - local_net
+
 networks:
   local_net:
     external: true
