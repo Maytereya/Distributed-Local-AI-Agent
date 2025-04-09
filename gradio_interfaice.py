@@ -397,7 +397,10 @@ def update_docs_in_meili_index(index_name: str):
     """
     meili_doc_list = existed_docs_in_selected_index(index_name)
 
-    return gr.update(choices=meili_doc_list, )
+    return (
+        gr.update(choices=meili_doc_list, ),
+        gr.update(value=meili_doc_list, ),
+    )
 
 
 def update_docs_in_chroma_collection(collection_name: str):
@@ -406,7 +409,10 @@ def update_docs_in_chroma_collection(collection_name: str):
     При выборе коллекции возвращаем список документов в ней.
     """
     chroma_doc_list = retrieve.handle_collection(collection_name)
-    return gr.update(choices=chroma_doc_list, )
+    return (
+        gr.update(choices=chroma_doc_list, ),
+        gr.update(value=chroma_doc_list)
+    )
 
 
 def txt_default():
@@ -614,11 +620,20 @@ with gr.Blocks(css=custom_css) as blocks:
 
         # Кнопки для работы с коллекциями или индексами
         with gr.Column():
-            add_collection_button = gr.Button("Добавить коллекцию", visible=True)
-            rm_collection_button = gr.Button("Удалить коллекцию", visible=True)
+            add_collection_button = gr.Button("Добавить коллекцию",
+                                              visible=True,
+                                              size="md",
+                                               )
+            rm_collection_button = gr.Button("Удалить коллекцию",
+                                             visible=True,
+                                             size="md",
+                                              )
 
             # add_index_button = gr.Button("Добавить индекс", visible=False)
-            rm_index_button = gr.Button("Удалить индекс", visible=False)
+            rm_index_button = gr.Button("Удалить индекс",
+                                        visible=False,
+                                        size="md",
+                                        )
 
     with gr.Row():
         pdf = PDF(label="Загрузить PDF", interactive=True, scale=80)
@@ -633,10 +648,14 @@ with gr.Blocks(css=custom_css) as blocks:
         )
 
         with gr.Column():
-            add_to_collection_button = gr.Button("Добавить документ в коллекцию",
-                                                 visible=True)
-            add_to_index_button = gr.Button("Индексировать документ",
-                                            visible=False)
+            add_to_collection_button = gr.Button("Добавить в коллекцию",
+                                                 visible=True,
+                                                 size="md",
+                                                  )
+            add_to_index_button = gr.Button("Индексировать",
+                                            visible=False,
+                                            size="md",
+                                             )
 
     # ---------------------------------------------------
     # Секция просмотра содержимого коллекций и индексов
@@ -653,19 +672,33 @@ with gr.Blocks(css=custom_css) as blocks:
                                                       info="Выберите Индекс для просмотра содержимого",
                                                       visible=True,
                                                       )
-            meili_content_of_index_dropdown = gr.Dropdown(
-                # choices=[],
-                choices=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value),
-                # value=None,
-                allow_custom_value=False,
-                label="Документы в Индексе",
-                visible=True,
-                interactive=True,
-            )
 
-            rm_doc_from_index_button = gr.Button("Удалить выбранный документ из Индекса",
-                                                 visible=True,
-                                                 interactive=False, )
+            meili_indices_table = gr.DataFrame(
+                value=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value),
+                label="Содержание выбранного Индекса",
+                headers=["Имя файла", ],
+                row_count=(15, "dynamic"),
+                col_count=(1, "fixed"),
+                datatype="str",
+                interactive=False
+            )
+            with gr.Row():
+                meili_content_of_index_dropdown = gr.Dropdown(
+                    # choices=[],
+                    choices=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value),
+                    # value=None,
+                    allow_custom_value=False,
+                    label="Выбрать документ для удаления",
+                    visible=True,
+                    interactive=True,
+                    scale=80
+
+                )
+
+                rm_doc_from_index_button = gr.Button("Удалить из Индекса",
+                                                     size="md",
+                                                     visible=True,
+                                                     interactive=False, )
 
         with gr.Column():
             chroma_coll_for_cont_dropdown = gr.Dropdown(choices=gr_existed_collections(),
@@ -675,21 +708,32 @@ with gr.Blocks(css=custom_css) as blocks:
                                                         info="Выберите Коллекцию для просмотра содержимого",
                                                         visible=True,
                                                         )
-
-            chroma_collection_content = gr.Dropdown(
-                # choices=[],
-                choices=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
-                # value=None,
-                allow_custom_value=False,
-                label="Документы в Коллекции",
-                visible=True,
-                interactive=True,
+            chroma_collection_table = gr.DataFrame(
+                value=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
+                label="Содержание выбранной Коллекции",
+                headers=["Имя файла и страница", ],
+                row_count=(15, "dynamic"),
+                col_count=(1, "fixed"),
+                datatype="str",
+                interactive=False
             )
+            with gr.Row():
+                chroma_collection_content = gr.Dropdown(
+                    # choices=[],
+                    choices=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
+                    # value=None,
+                    allow_custom_value=False,
+                    label="Выбрать документ для удаления",
+                    visible=True,
+                    interactive=True,
+                    scale=80,
+                )
 
-            rm_doc_from_collection_button = gr.Button("Удалить выбранный документ из Коллекции",
-                                                      visible=True,
-                                                      interactive=False,
-                                                      )
+                rm_doc_from_collection_button = gr.Button("Удалить из Коллекции",
+                                                          size="md",
+                                                          visible=True,
+                                                          interactive=False,
+                                                          )
 
     # ----------------------------
     # Секция интерфейса чата
@@ -801,14 +845,16 @@ with gr.Blocks(css=custom_css) as blocks:
     meili_ind_for_cont_dropdown.change(
         fn=update_docs_in_meili_index,
         inputs=meili_ind_for_cont_dropdown,
-        outputs=meili_content_of_index_dropdown
+        outputs=[meili_content_of_index_dropdown,
+                 meili_indices_table]
     )
 
     # При смене выбранной коллекции -> обновить список документов
     chroma_coll_for_cont_dropdown.change(
         fn=update_docs_in_chroma_collection,
         inputs=chroma_coll_for_cont_dropdown,
-        outputs=chroma_collection_content
+        outputs=[chroma_collection_content,
+                 chroma_collection_table]
     )
     # -------------------------
     # Footer html realization
