@@ -1,14 +1,22 @@
+import json
 import logging
-
+from dataclasses import dataclass
+from functools import lru_cache
+from pprint import pprint
+from typing import Dict, List, Set
 
 from requests import Session
 from requests.adapters import HTTPAdapter, Retry
-from functools import lru_cache
-from typing import Dict, List, Set
-from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
+
+
+@dataclass
+class ShortDoctorRecord:
+    fio: str
+    specialization: str
+    addresses: List[str]
 
 
 @dataclass
@@ -44,7 +52,9 @@ class NaykaClient:
 
 def build_registry(client: NaykaClient,
                    filter_by_unit: str = None,
-                   filter_by_region: str = None) -> List[DoctorRecord]:
+                   filter_by_region: str = None,
+                   need_specialization: bool = False,
+                   ) -> List[DoctorRecord]:
     # 1. Загрузить справочники
     doctors = {d['id']: d for d in client.get_json("/doctors")}
     units = {u['id']: u['name'] for u in client.get_json("/companyUnits")}
@@ -55,11 +65,18 @@ def build_registry(client: NaykaClient,
 
     # 2. Построить worker→regions map
     worker_regions: Dict[int, Set[int]] = {}
+
     for dr in doc_regions:
         worker_regions.setdefault(dr['worker'], set()).add(dr['region'])
 
     registry = []
-    for entry in doc_companies:
+
+    doc_companies_sorted = sorted(
+        doc_companies,
+        key=lambda e: doctors.get(e['worker'], {}).get('fio', '')
+    )
+
+    for entry in doc_companies_sorted:
         wid = entry['worker']
         if filter_by_unit and entry['companyUnit'] != filter_by_unit:
             continue
@@ -68,15 +85,15 @@ def build_registry(client: NaykaClient,
         if filter_by_region and int(filter_by_region) not in regions_ids:
             continue
 
-        addresses = set()
-        for rid in regions_ids:
+        addresses = list()
+        for rid in sorted(regions_ids):
             info = client.get_region_info(rid)
             name = info.get("name") or "не указан"
             addr = info.get("addressForSite") or "не указан"
             if "на дом" in name.lower():
-                addresses.add("Этого врача можно вызвать на дом")
+                addresses.append("Этого врача можно вызвать на дом")
             else:
-                addresses.add(f"Короткий адрес: {name} | полный адрес: {addr}")  # Было .append пока это был list
+                addresses.append(f"Короткий адрес: {name} | полный адрес: {addr}")  # Было .append пока это был list
         addresses = sorted(set(addresses))
 
         raw_spec = entry.get("specialization") or ""
@@ -86,26 +103,43 @@ def build_registry(client: NaykaClient,
         else:
             first_line = ""
         spec = first_line or "Не указано"
-
-        registry.append(DoctorRecord(
-            fio=doctors.get(wid, {}).get("fio", "Неизвестный"),
-            specialization=units.get(entry["companyUnit"], "–"),
-            addresses=addresses,
-            short_description=spec,
-        ))
+        if need_specialization:
+            registry.append(DoctorRecord(
+                fio=doctors.get(wid, {}).get("fio", "Неизвестный"),
+                specialization=units.get(entry["companyUnit"], "–"),
+                addresses=addresses,
+                short_description=spec,
+            ))
+        else:
+            registry.append(ShortDoctorRecord(
+                fio=doctors.get(wid, {}).get("fio", "Неизвестный"),
+                specialization=units.get(entry["companyUnit"], "–"),
+                addresses=addresses,
+            ))
 
     return registry
+
+
+def create_doc_json(client: NaykaClient, ):
+    registry = build_registry(client)
+    pprint([r.__dict__ for r in registry], width=160, sort_dicts=False)
+
+    with open("apidata/doctors.jsonl", "w", encoding="utf-8") as f:
+        for doc in registry:
+            f.write(json.dumps({
+                "fio": doc.fio,
+                "specialization": doc.specialization,
+                "addresses": doc.addresses
+            }, ensure_ascii=False) + "\n")
 
 
 if __name__ == "__main__":
     import config as c
     import urllib3
-    from pprint import pprint
 
     urllib3.disable_warnings()
 
     client = NaykaClient(c.nayka_base_url,
                          auth=(c.nayka_login, c.nayka_pass))
 
-    reg = build_registry(client)
-    pprint([r.__dict__ for r in reg], width=160)
+    create_doc_json(client)
