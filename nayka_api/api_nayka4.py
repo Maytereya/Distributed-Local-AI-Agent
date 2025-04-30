@@ -33,8 +33,8 @@ def find_doctor_schedule(
 
     region_map = {r["id"]: r["name"] for r in regions}
 
-    # print("Регионы: ")
-    # print(region_map)
+    print("Регионы: ")
+    print(region_map)
 
     region_id = None
     if region_name:
@@ -184,7 +184,7 @@ def find_doctor_schedule(
             })
 
     # -------------------------------------------------------------
-    # Мерджинг карточек врача, если он работает в разных регионах.
+    # Мерджинг карточек врача, если он ведет прием в разных клиниках.
     # ------------------------------------------------------------
 
     merged = {}
@@ -221,10 +221,7 @@ def find_doctor_schedule(
 
 if __name__ == "__main__":
     doctors = find_doctor_schedule(
-        last_name="Ким"
-
-        ,
-        # region_name="Чкалова 51/1 пом 6"  # теперь можно опустить
+        last_name="Белохвостикова"
     )
 
     pprint(doctors, width=150)

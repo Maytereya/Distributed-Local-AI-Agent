@@ -65,7 +65,6 @@ async def route(question: str):
     elapsed_time = end_time - start_time
 
     print(f"Async request timing client-server is: {elapsed_time:.2f} sec")
-    # print('Предыдущий результат: 3.56 секунд (LTE, MSK)')
     print(f"Eval_duration: {aresult['eval_duration'] / 1_000_000_000}")
 
     json_result = j.str_to_json(aresult['response'])  # Carefully check the format
