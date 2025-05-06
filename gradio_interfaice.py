@@ -1,17 +1,16 @@
+import os
+import re
 import shutil
+import time
+from typing import Dict
+from typing import List
 
 import gradio as gr
 from gradio_pdf import PDF
 
-import os
-import re
-import time
-
-from typing import Dict
-from typing import List
+from agent_logic_2 import config as c
 from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
-import config as c
 from converters import pdf_to_json_txt_tables_meili as pdf2json
 
 # Label constants
@@ -356,11 +355,12 @@ def gr_remove_index(index: str):
     """
     meilisearch.delete_index(index)
     #
-    time.sleep(10)
+    time.sleep(15)
     #
     new_list = gr_existed_indexes()
 
     return (
+        gr.update(choices=new_list, value=None),
         gr.update(choices=new_list, value=None),
         gr.update(choices=new_list, value=None),
         "Индекс удален",
@@ -623,11 +623,11 @@ with gr.Blocks(css=custom_css) as blocks:
             add_collection_button = gr.Button("Добавить коллекцию",
                                               visible=True,
                                               size="md",
-                                               )
+                                              )
             rm_collection_button = gr.Button("Удалить коллекцию",
                                              visible=True,
                                              size="md",
-                                              )
+                                             )
 
             # add_index_button = gr.Button("Добавить индекс", visible=False)
             rm_index_button = gr.Button("Удалить индекс",
@@ -651,11 +651,11 @@ with gr.Blocks(css=custom_css) as blocks:
             add_to_collection_button = gr.Button("Добавить в коллекцию",
                                                  visible=True,
                                                  size="md",
-                                                  )
+                                                 )
             add_to_index_button = gr.Button("Индексировать",
                                             visible=False,
                                             size="md",
-                                             )
+                                            )
 
     # ---------------------------------------------------
     # Секция просмотра содержимого коллекций и индексов
@@ -826,7 +826,12 @@ with gr.Blocks(css=custom_css) as blocks:
     rm_index_button.click(
         gr_remove_index,
         inputs=upload_indices_dropdown,
-        outputs=[upload_indices_dropdown, meili_search_indexes_dropdown, status_bar, ]
+        outputs=[
+            upload_indices_dropdown,
+            meili_search_indexes_dropdown,
+            meili_ind_for_cont_dropdown,
+            status_bar,
+        ]
     )
 
     # Универсальная кнопка для индексации (PDF или JSON)
