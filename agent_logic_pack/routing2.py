@@ -1,11 +1,11 @@
 from converters import json_converter as j
-import config as c
+from agent_logic_2 import config as c
 from ollama import AsyncClient
 from datetime import datetime
 
 import time
 import logging
-from httpx import AsyncClient, ConnectError
+from httpx import AsyncClient
 from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
 
 logging.basicConfig(level=logging.INFO)

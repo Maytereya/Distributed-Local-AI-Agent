@@ -1,6 +1,6 @@
 import asyncio
 
-import config as c
+from agent_logic_2 import config as c
 from ollama import AsyncClient, Options
 
 ollama_aclient = AsyncClient(host=c.ollama_url)

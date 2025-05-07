@@ -6,7 +6,7 @@ from typing import Dict, Optional
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import PromptTemplate
 
-import config as c
+from agent_logic_2 import config as c
 
 import time
 from ollama import AsyncClient, Options

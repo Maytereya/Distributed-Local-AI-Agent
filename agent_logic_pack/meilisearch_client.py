@@ -18,7 +18,7 @@ import logging
 # from httpx import AsyncClient, ConnectError
 from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
 #
-import config as c
+from agent_logic_2 import config as c
 
 # --------------------------------------
 # Секция загрузки и ретраев для отладки

@@ -1,5 +1,4 @@
 # Async Retriever for Chroma DB v 3.1
-import asyncio
 import os
 # Model loading for embeddings
 # from InstructorEmbedding import INSTRUCTOR
@@ -18,20 +17,17 @@ import os
 # ==== Russian models =====
 # model_only = "ai-forever/sbert_large_nlu_ru"
 
-from typing import Literal, Optional, List
+from typing import Literal, Optional
 from chromadb.api.models.Collection import Collection
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_core.documents import Document
-from numpy.random.mtrand import Sequence
 from sentence_transformers import SentenceTransformer
 from chromadb import Documents, EmbeddingFunction, Embeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.document_loaders import TextLoader, DirectoryLoader
 
 # Connection section
-import time
 import logging
-from httpx import AsyncClient, ConnectError
 from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
 #
 
@@ -41,9 +37,8 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 import uuid
 from typing import List
-import warnings
-from agent_logic_pack import formulate, embedding_filtration, path_handling
-import config as c
+from agent_logic_pack import formulate, embedding_filtration
+from agent_logic_2 import config as c
 
 # --------------------------------------
 # Отключение предупреждений о грядущем
