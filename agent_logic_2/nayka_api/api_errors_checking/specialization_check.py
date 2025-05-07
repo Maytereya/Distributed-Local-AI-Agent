@@ -3,7 +3,7 @@ import urllib3
 from pprint import pprint
 import pandas as pd
 from datetime import datetime
-import config as c
+from agent_logic_2 import config as c
 
 base_url = c.nayka_base_url
 auth = requests.auth.HTTPBasicAuth(c.nayka_login, c.nayka_pass)

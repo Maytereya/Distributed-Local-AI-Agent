@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from pprint import pprint
 
-import config as c  # если нужен auth
+from agent_logic_2 import config as c
 
 url = "https://tc.naykalab.ru:444/H8PdIkzEjteo5ZPvVwt29t4TVjf0XN1K/medserver-test/api/v1/site/serviceInfoAll"
 auth = requests.auth.HTTPBasicAuth(c.nayka_login, c.nayka_pass)  # или None, если доступ без авторизации

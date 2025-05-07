@@ -134,7 +134,7 @@ def create_doc_json(client: NaykaClient, ):
 
 
 if __name__ == "__main__":
-    import config as c
+    from agent_logic_2 import config as c
     import urllib3
 
     urllib3.disable_warnings()

@@ -7,8 +7,7 @@ from typing import Any, Dict, List, Tuple
 
 from ollama import AsyncClient, Options
 
-import config as c
-from agent_logic_2 import llama_func_call as doctor_info
+from agent_logic_2 import llama_func_call as doctor_info, config as c
 
 # LLM‑клиент для классификации
 ollama = AsyncClient(c.ollama_url)

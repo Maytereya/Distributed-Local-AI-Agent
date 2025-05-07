@@ -1,5 +1,5 @@
 import config as c
-from nayka_api import api_nayka4 as api_call
+from nayka_api import api_nayka4_1 as api_call
 from nayka_api import nayka_doc_registry2 as doc_reg
 import asyncio
 import re
@@ -26,7 +26,8 @@ options = Options(
 )
 
 # Выбор LLM
-llm = "llama3.3:latest"
+# llm = "llama3.3:latest"
+llm = "llama4:scout"
 
 # Параметры генерации
 generation_options = Options(

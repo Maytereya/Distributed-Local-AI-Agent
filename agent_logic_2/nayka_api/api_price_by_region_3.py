@@ -8,7 +8,7 @@ from typing import List, Dict
 import requests
 from rapidfuzz import fuzz
 
-import config as c
+from agent_logic_2 import config as c
 
 base_url = c.nayka_base_url
 auth = requests.auth.HTTPBasicAuth(c.nayka_login, c.nayka_pass)

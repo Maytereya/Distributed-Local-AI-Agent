@@ -1,7 +1,7 @@
 import time
 from langdetect import detect
 from ollama import Client, Options
-import config as c
+from agent_logic_2 import config as c
 
 ollama = Client(c.ollama_url)
 

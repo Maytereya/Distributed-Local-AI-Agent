@@ -1,13 +1,195 @@
-import requests
-from datetime import date, timedelta
-import urllib3
-from pprint import pprint
+import os
+import sys
 from collections import defaultdict
+from datetime import date, timedelta
+from pprint import pprint
+from typing import Dict, List, Set, Union
 
-import config as c
+from agent_logic_2 import config as c
+import requests
+import urllib3
+
+# Добавляем корневую директорию в PYTHONPATH
+root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(root_dir)
 
 base_url = c.nayka_base_url
 auth = requests.auth.HTTPBasicAuth(c.nayka_login, c.nayka_pass)
+
+
+def _units_tree() -> Dict[int, Set[int]]:
+    """Строит дерево подразделений."""
+    units = site_company_units()
+    tree = {}
+    for unit in units:
+        parent_id = unit.get("parentId")
+        if parent_id:
+            if parent_id not in tree:
+                tree[parent_id] = set()
+            tree[parent_id].add(unit["id"])
+    return tree
+
+
+def _descendants(unit_ids: Set[int], tree: Dict[int, Set[int]]) -> Set[int]:
+    """Находит все дочерние подразделения."""
+    result = unit_ids.copy()
+    to_process = unit_ids.copy()
+
+    while to_process:
+        current = to_process.pop()
+        children = tree.get(current, set())
+        new_children = children - result
+        result.update(new_children)
+        to_process.update(new_children)
+
+    return result
+
+
+def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
+    """
+    Ищем по:
+      • тексту specialization («кардиолог», «ультразвук»)
+    Возвращаем краткий список врачей.
+    """
+    kw = keyword.lower()
+    print(f"\nИщем врачей по ключевому слову: {kw}")
+
+    # 1. Грузим все нужные таблицы
+    units = site_company_units()  # дерево подразделений
+    unit_name_by_id = {u["id"]: u["name"] for u in units}
+
+    links = site_doctor_company_units()
+    doctors = {d["id"]: d["fio"] for d in site_doctors()}
+
+    # 2. Собираем id-врачей по специализации
+    matched_workers = set()
+
+    print("\nПроверяем специализации врачей:")
+    for link in links:
+        spec = link.get("specialization", "") or ""
+        spec_lower = spec.lower()
+        unit = unit_name_by_id.get(link["companyUnit"], "").lower()
+
+        print(f"\nВрач {doctors.get(link['worker'], 'Неизвестный')}:")
+        print(f"Специализация: {spec}")
+        print(f"Подразделение: {unit_name_by_id.get(link['companyUnit'], '-')}")
+
+        is_match = False
+
+        # Проверяем подразделение
+        if kw in unit:
+            is_match = True
+        # Проверяем специализацию
+        elif kw in spec_lower:
+            # Проверяем, что это не упоминание в контексте других специальностей
+            if not any(other in spec_lower for other in [
+                "ультразвуковая", "функциональная", "терапевт",
+                "в ревматологии", "по ревматологии", "ревматологический"
+            ]):
+                is_match = True
+
+        if is_match:
+            print("✓ Найдено совпадение")
+            matched_workers.add(link["worker"])
+        else:
+            print("✗ Нет совпадения")
+
+    if not matched_workers:
+        return f"Врачей по ключу «{keyword}» не найдено."
+
+    result = [
+        {
+            "id": wid,
+            "fio": doctors.get(wid, f"[id {wid}]"),
+            "unit": unit_name_by_id.get(
+                next(
+                    (link["companyUnit"] for link in links
+                     if link["worker"] == wid),
+                    None
+                ),
+                "-"
+            ),
+            "specialization": next(
+                (link.get("specialization", "") or "" for link in links
+                 if link["worker"] == wid),
+                "-"
+            )
+        }
+        for wid in matched_workers
+    ]
+
+    print("\nИтоговый результат:")
+    for doc in result:
+        print(f"\nВрач: {doc['fio']}")
+        print(f"Подразделение: {doc['unit']}")
+        print(f"Специализация: {doc['specialization']}")
+
+    return result
+
+
+def site_company_units():
+    """Получить список подразделений."""
+    response = requests.get(f"{base_url}/companyUnits", auth=auth, verify=False)
+    if not response.ok:
+        print(f"Ошибка при получении списка подразделений: {response.status_code}")
+        return []
+    try:
+        return response.json()
+    except Exception as e:
+        print(f"Ошибка при разборе JSON: {e}")
+        return []
+
+
+def site_doctors():
+    """Получить список врачей."""
+    response = requests.get(f"{base_url}/doctors", auth=auth, verify=False)
+    if not response.ok:
+        print(f"Ошибка при получении списка врачей: {response.status_code}")
+        return []
+    try:
+        return response.json()
+    except Exception as e:
+        print(f"Ошибка при разборе JSON: {e}")
+        return []
+
+
+def site_doctor_company_units():
+    """Получить связи врачей с подразделениями."""
+    response = requests.get(f"{base_url}/doctorCompanyUnits", auth=auth, verify=False)
+    if not response.ok:
+        print(f"Ошибка при получении связей: {response.status_code}")
+        return []
+    try:
+        return response.json()
+    except Exception as e:
+        print(f"Ошибка при разборе JSON: {e}")
+        return []
+
+
+def site_doctor_regions():
+    """Получить связи врачей с регионами."""
+    response = requests.get(f"{base_url}/doctorRegions", auth=auth, verify=False)
+    if not response.ok:
+        print(f"Ошибка при получении связей: {response.status_code}")
+        return []
+    try:
+        return response.json()
+    except Exception as e:
+        print(f"Ошибка при разборе JSON: {e}")
+        return []
+
+
+def site_regions():
+    """Получить список регионов."""
+    response = requests.get(f"{base_url}/regions", auth=auth, verify=False)
+    if not response.ok:
+        print(f"Ошибка при получении списка регионов: {response.status_code}")
+        return []
+    try:
+        return response.json()
+    except Exception as e:
+        print(f"Ошибка при разборе JSON: {e}")
+        return []
 
 
 def find_doctor_schedule(
