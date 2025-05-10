@@ -1,7 +1,9 @@
+import json
 import os
 import re
 import shutil
 import time
+import uuid
 from typing import Dict
 from typing import List
 
@@ -168,7 +170,7 @@ async def universal_echo(
 
 def gr_create_collection(c_name: str):
     """
-    Created collection and return its name in str.
+    Created a collection and return its name in str.
     Warning: in the next releases Chroma .name parameter will be removed!
     :param c_name: String, passed new name of the collection.
     :return: String, name of the collection.
@@ -247,7 +249,7 @@ def gr_existed_indexes():
     return meilisearch.show_list_indexes(detail_mode="uid")
 
 
-def existed_docs_in_selected_index(selected_index: str):
+def existed_docs_in_selected_index(selected_index: str) -> list[str]:
     """
 
     :return:
@@ -495,7 +497,6 @@ def radio_type_of_upl_file_change(choice):
     """
     Конфигурирует интерфейс таким образом, чтобы загружать в MEILI либо PDF, либо JSON
 
-
     :param choice:
     :return:
     """
@@ -512,355 +513,531 @@ def radio_type_of_upl_file_change(choice):
         )
 
 
-# -----------------
-# Chat Interface
-# _________________
-
-# with gr.Blocks() as blocks:
 with gr.Blocks(css=custom_css) as blocks:
-    gr.Markdown("## NEIRY.AI **bookworm**")
+    gr.Markdown(
+        """<h2>📚 NEIRY.AI <b>bookworm</b> <span style='font-size: 0.7em; font-style: italic;'>tabbed edition</span></h2>"""
+    )
+    with gr.Tabs():
+        # --------------------------------------------------
+        # Вкладка 1 — основной интерфейс
+        # --------------------------------------------------
 
-    chatbot = gr.Chatbot(type="messages",
-                         autoscroll=True,
-                         placeholder="<strong>Поиск по документам</strong><br>Задайте вопрос")
+        with gr.Tab("\U0001F4D6 Поиск по документам"):
+            chatbot = gr.Chatbot(type="messages",
+                                 autoscroll=True,
+                                 placeholder="<strong>Поиск по документам</strong><br>Задайте вопрос",
 
-    textbox = gr.Textbox(lines=1,
-                         placeholder="Напишите вопрос",
-                         submit_btn=True,
-                         container=True,
-                         autoscroll=True,
-                         autofocus=True)
+                                 height=600, )
 
-    with gr.Column():
-        with gr.Row():
-            radio_type_of_search = gr.Radio(["vectorstore", "db", "meilisearch"],
-                                            label="Способы поиска в базе знаний",
-                                            value="db",
+            textbox = gr.Textbox(lines=1,
+                                 placeholder="Напишите вопрос",
+                                 submit_btn=True,
+                                 container=True,
+                                 autoscroll=True,
+                                 autofocus=True)
+
+            with gr.Column():
+                with gr.Row():
+                    radio_type_of_search = gr.Radio(["vectorstore", "db", "meilisearch"],
+                                                    label="Способы поиска в базе знаний",
+                                                    value="db",
+                                                    container=True,
+                                                    info="Выберите алгоритм поиска")
+
+                    meili_search_indexes_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
+                                                                label=INDEXES_IN_MEILI,
+                                                                info="Выберите Индекс для поиска информации",
+                                                                interactive=False,
+                                                                # value=None,
+                                                                )
+
+                    chroma_search_collection_dropdown = gr.Dropdown(choices=gr_existed_collections(),
+                                                                    # filterable=True,
+                                                                    label=COLLECTIONS_IN_CHROMA,
+                                                                    info="Выберите Коллекцию для поиска информации",
+                                                                    interactive=True,
+                                                                    # value=None
+                                                                    )
+
+            with gr.Row():
+                slider3 = gr.Slider(value=5, minimum=1, maximum=20, step=1,
+                                    label="Количество документов, включенных в выдачу",
+                                    info="Только в режиме vectorstore",
+                                    interactive=True,
+                                    )
+
+                slider1 = gr.Slider(value=0.005, minimum=0.0025, maximum=0.02, step=0.0025,
+                                    label="Порог косинусной фильтрации",
+                                    info="Только в режиме vectorstore."
+                                         "Чем выше значение, тем больше текстовых фрагментов с меньшей "
+                                         "релевантностью появится в выдаче",
+                                    interactive=True
+                                    )
+
+                slider2 = gr.Slider(value=2, minimum=1, maximum=20, step=1,
+                                    label="Количество документов, включенных в выдачу",
+                                    info="Только в режимах db и meilisearch",
+                                    interactive=False,
+                                    )
+
+        # --------------------------------------------------
+        # Вкладка 2 - Upload PDF to MEILI or CHROMA DB
+        # --------------------------------------------------
+
+        with gr.Tab("\U0001F4E4 Загрузка готовых PDF/JSON"):
+            gr.Markdown("### Загрузка и распределение документов по коллекциям ChromaDB или индексам Meilisearch")
+            with gr.Row():
+                radio_type_of_db = gr.Radio(["ChromaDB", "Meilisearch"],
+                                            label="Тип базы данных",
+                                            value="ChromaDB",
                                             container=True,
-                                            info="Выберите алгоритм поиска")
+                                            info="для добавления документа")
 
-            meili_search_indexes_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
-                                                        label=INDEXES_IN_MEILI,
-                                                        info="Выберите Индекс для поиска информации",
-                                                        interactive=False,
-                                                        # value=None,
-                                                        )
+                radio_type_of_upl_data = gr.Radio(["PDF", "JSON"],
+                                                  label="Тип документа",
+                                                  value="PDF",
+                                                  container=True,
+                                                  info="для загрузки в MEILISEARCH",
+                                                  visible=False)
 
-            chroma_search_collection_dropdown = gr.Dropdown(choices=gr_existed_collections(),
-                                                            # filterable=True,
-                                                            label=COLLECTIONS_IN_CHROMA,
-                                                            info="Выберите Коллекцию для поиска информации",
-                                                            interactive=True,
-                                                            # value=None
-                                                            )
+                upload_collections_dropdown = gr.Dropdown(choices=gr_existed_collections(),
+                                                          value=None,
+                                                          allow_custom_value=True,
+                                                          filterable=True,
+                                                          label=COLLECTIONS_IN_CHROMA,
+                                                          info="Коллекции документов по темам",
+                                                          visible=True, )
 
-    with gr.Row():
-        slider3 = gr.Slider(value=5, minimum=1, maximum=20, step=1,
-                            label="Количество документов, включенных в выдачу",
-                            info="Только в режиме vectorstore",
+                upload_indices_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
+                                                      value=None,
+                                                      allow_custom_value=True,
+                                                      filterable=True,
+                                                      label=INDEXES_IN_MEILI,
+                                                      info="Индексы документов по темам",
+                                                      visible=False)
+
+                # Поле для вывода текущего статуса работы с коллекциями
+                status_bar = gr.Textbox(value=txt_default,
+                                        every=10.0,
+                                        label="Монитор текущего статуса операции",
+                                        # info="Только вывод",
+                                        interactive=False, )
+
+                # Кнопки для работы с коллекциями или индексами
+                with gr.Column():
+                    add_collection_button = gr.Button("Добавить коллекцию",
+                                                      visible=True,
+                                                      size="md",
+                                                      )
+                    rm_collection_button = gr.Button("Удалить коллекцию",
+                                                     visible=True,
+                                                     size="md",
+                                                     )
+
+                    # add_index_button = gr.Button("Добавить индекс", visible=False)
+                    rm_index_button = gr.Button("Удалить индекс",
+                                                visible=False,
+                                                size="md",
+                                                )
+
+            with gr.Row():
+                pdf = PDF(label="Загрузить PDF", interactive=True, scale=80)
+
+                # Загрузка JSON (по умолчанию невидим)
+                json_file = gr.File(
+                    label="Загрузить JSON",
+                    visible=False,
+                    scale=80,
+                    file_types=[".json"],  # или можно просто ["json"]
+                    type="filepath"
+                )
+
+                with gr.Column():
+                    add_to_collection_button = gr.Button("Добавить в коллекцию",
+                                                         visible=True,
+                                                         size="md",
+                                                         )
+                    add_to_index_button = gr.Button("Индексировать",
+                                                    visible=False,
+                                                    size="md",
+                                                    )
+
+            # ---------------------------------------------------
+            # Секция просмотра содержимого коллекций и индексов
+            # ---------------------------------------------------
+
+            gr.Markdown("### Содержание Индексов и Коллекций")
+
+            with gr.Row():
+                with gr.Column():
+                    meili_ind_for_cont_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
+                                                              filterable=True,
+                                                              interactive=True,
+                                                              label=INDEXES_IN_MEILI,
+                                                              info="Выберите Индекс для просмотра содержимого",
+                                                              visible=True,
+                                                              )
+
+                    meili_indices_table = gr.DataFrame(
+                        value=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value),
+                        label="Содержание выбранного Индекса",
+                        headers=["Имя файла", ],
+                        row_count=(15, "dynamic"),
+                        col_count=(1, "fixed"),
+                        datatype="str",
+                        interactive=False
+                    )
+                    with gr.Row():
+                        meili_content_of_index_dropdown = gr.Dropdown(
+                            # choices=[],
+                            choices=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value),
+                            # value=None,
+                            allow_custom_value=False,
+                            label="Выбрать документ для удаления",
+                            visible=True,
                             interactive=True,
-                            )
+                            scale=80
 
-        slider1 = gr.Slider(value=0.005, minimum=0.0025, maximum=0.02, step=0.0025,
-                            label="Порог косинусной фильтрации",
-                            info="Только в режиме vectorstore."
-                                 "Чем выше значение, тем больше текстовых фрагментов с меньшей "
-                                 "релевантностью появится в выдаче",
-                            interactive=True
-                            )
+                        )
 
-        slider2 = gr.Slider(value=2, minimum=1, maximum=20, step=1,
-                            label="Количество документов, включенных в выдачу",
-                            info="Только в режимах db и meilisearch",
-                            interactive=False,
-                            )
+                        rm_doc_from_index_button = gr.Button("Удалить из Индекса",
+                                                             size="md",
+                                                             visible=True,
+                                                             interactive=False, )
 
-    # ------------------------------------------
-    # Upload PDF to MEILI or CHROMA DB section
-    # ------------------------------------------
+                with gr.Column():
+                    chroma_coll_for_cont_dropdown = gr.Dropdown(choices=gr_existed_collections(),
+                                                                filterable=True,
+                                                                label=COLLECTIONS_IN_CHROMA,
+                                                                interactive=True,
+                                                                info="Выберите Коллекцию для просмотра содержимого",
+                                                                visible=True,
+                                                                )
+                    chroma_collection_table = gr.DataFrame(
+                        value=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
+                        label="Содержание выбранной Коллекции",
+                        headers=["Имя файла и страница", ],
+                        row_count=(15, "dynamic"),
+                        col_count=(1, "fixed"),
+                        datatype="str",
+                        interactive=False
+                    )
+                    with gr.Row():
+                        chroma_collection_content = gr.Dropdown(
+                            # choices=[],
+                            choices=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
+                            # value=None,
+                            allow_custom_value=False,
+                            label="Выбрать документ для удаления",
+                            visible=True,
+                            interactive=True,
+                            scale=80,
+                        )
 
-    gr.Markdown("### Загрузка и распределение документов по коллекциям ChromaDB или индексам Meilisearch")
+                        rm_doc_from_collection_button = gr.Button("Удалить из Коллекции",
+                                                                  size="md",
+                                                                  visible=True,
+                                                                  interactive=False,
+                                                                  )
 
-    with gr.Row():
-        radio_type_of_db = gr.Radio(["ChromaDB", "Meilisearch"],
-                                    label="Тип базы данных",
-                                    value="ChromaDB",
-                                    container=True,
-                                    info="для добавления документа")
+            # ------------------------------------
+            # Секция интерфейса чата - лишний код
+            # Оформление и дизайн
+            # ------------------------------------
 
-        radio_type_of_upl_data = gr.Radio(["PDF", "JSON"],
-                                          label="Тип документа",
-                                          value="PDF",
-                                          container=True,
-                                          info="для загрузки в MEILISEARCH",
-                                          visible=False)
+            with gr.Column():
+                demo = gr.ChatInterface(fn=universal_echo, type="messages",
+                                        examples=EXAMPLES,
+                                        chatbot=chatbot,
+                                        textbox=textbox,
+                                        additional_inputs=[
+                                            chroma_search_collection_dropdown,
+                                            slider1,
+                                            slider2,
+                                            slider3,
+                                            radio_type_of_search,
+                                            meili_search_indexes_dropdown
+                                        ],
+                                        show_progress="full",
 
-        upload_collections_dropdown = gr.Dropdown(choices=gr_existed_collections(),
-                                                  value=None,
-                                                  allow_custom_value=True,
-                                                  filterable=True,
-                                                  label=COLLECTIONS_IN_CHROMA,
-                                                  info="Коллекции документов по темам",
-                                                  visible=True, )
-
-        upload_indices_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
-                                              value=None,
-                                              allow_custom_value=True,
-                                              filterable=True,
-                                              label=INDEXES_IN_MEILI,
-                                              info="Индексы документов по темам",
-                                              visible=False)
-
-        # Поле для вывода текущего статуса работы с коллекциями
-        status_bar = gr.Textbox(value=txt_default,
-                                every=10.0,
-                                label="Монитор текущего статуса операции",
-                                # info="Только вывод",
-                                interactive=False, )
-
-        # Кнопки для работы с коллекциями или индексами
-        with gr.Column():
-            add_collection_button = gr.Button("Добавить коллекцию",
-                                              visible=True,
-                                              size="md",
-                                              )
-            rm_collection_button = gr.Button("Удалить коллекцию",
-                                             visible=True,
-                                             size="md",
-                                             )
-
-            # add_index_button = gr.Button("Добавить индекс", visible=False)
-            rm_index_button = gr.Button("Удалить индекс",
-                                        visible=False,
-                                        size="md",
                                         )
 
-    with gr.Row():
-        pdf = PDF(label="Загрузить PDF", interactive=True, scale=80)
+            # ---------------------------------
+            # Event handlers of chat interface
+            # ---------------------------------
 
-        # Загрузка JSON (по умолчанию невидим)
-        json_file = gr.File(
-            label="Загрузить JSON",
-            visible=False,
-            scale=80,
-            file_types=[".json"],  # или можно просто ["json"]
-            type="filepath"
-        )
+            radio_type_of_search.change(fn=radio_sliders_change, inputs=radio_type_of_search,
+                                        outputs=[
+                                            slider3,
+                                            slider1,
+                                            slider2,
+                                            meili_search_indexes_dropdown,
+                                            chroma_search_collection_dropdown,
+                                        ]
+                                        )
 
-        with gr.Column():
-            add_to_collection_button = gr.Button("Добавить в коллекцию",
-                                                 visible=True,
-                                                 size="md",
-                                                 )
-            add_to_index_button = gr.Button("Индексировать",
-                                            visible=False,
-                                            size="md",
-                                            )
+            radio_type_of_db.change(fn=radio_search_engine_change, inputs=radio_type_of_db,
+                                    outputs=[
+                                        upload_collections_dropdown,
+                                        upload_indices_dropdown,
+                                        add_collection_button,
+                                        rm_collection_button,
+                                        # add_index_button,
+                                        rm_index_button,
+                                        add_to_collection_button,
+                                        add_to_index_button,
+                                        radio_type_of_upl_data,
+                                    ]
+                                    )
 
-    # ---------------------------------------------------
-    # Секция просмотра содержимого коллекций и индексов
-    # ---------------------------------------------------
+            radio_type_of_upl_data.change(fn=radio_type_of_upl_file_change, inputs=radio_type_of_upl_data,
+                                          outputs=[
+                                              pdf,
+                                              json_file,
+                                          ]
+                                          )
 
-    gr.Markdown("### Содержание Индексов и Коллекций")
+            # --------------------------------------
+            # Event handlers of ChromaDB
+            # --------------------------------------
 
-    with gr.Row():
-        with gr.Column():
-            meili_ind_for_cont_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
-                                                      filterable=True,
-                                                      interactive=True,
-                                                      label=INDEXES_IN_MEILI,
-                                                      info="Выберите Индекс для просмотра содержимого",
-                                                      visible=True,
-                                                      )
-
-            meili_indices_table = gr.DataFrame(
-                value=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value),
-                label="Содержание выбранного Индекса",
-                headers=["Имя файла", ],
-                row_count=(15, "dynamic"),
-                col_count=(1, "fixed"),
-                datatype="str",
-                interactive=False
+            add_collection_button.click(
+                gr_create_collection,
+                inputs=upload_collections_dropdown,
+                outputs=[status_bar, upload_collections_dropdown, chroma_search_collection_dropdown]
             )
-            with gr.Row():
-                meili_content_of_index_dropdown = gr.Dropdown(
-                    # choices=[],
-                    choices=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value),
-                    # value=None,
-                    allow_custom_value=False,
-                    label="Выбрать документ для удаления",
-                    visible=True,
-                    interactive=True,
-                    scale=80
 
+            rm_collection_button.click(
+                gr_remove_collection,
+                inputs=upload_collections_dropdown,
+                outputs=[upload_collections_dropdown, chroma_search_collection_dropdown, status_bar, ]
+            )
+
+            add_to_collection_button.click(
+                gr_add_to_collection,
+                inputs=[upload_collections_dropdown, pdf],
+                outputs=[pdf, status_bar, ]
+            )
+
+            # --------------------------------------
+            # Event handlers of Meilisearch
+            # --------------------------------------
+
+            # add_index_button.click(
+            #     gr_create_collection,
+            #     inputs=indices_dropdown,
+            #     outputs=[data_upload_status, indices_dropdown, meili_search_indexes_dropdown]
+            # )
+
+            rm_index_button.click(
+                gr_remove_index,
+                inputs=upload_indices_dropdown,
+                outputs=[
+                    upload_indices_dropdown,
+                    meili_search_indexes_dropdown,
+                    meili_ind_for_cont_dropdown,
+                    status_bar,
+                ]
+            )
+
+            # Event handlers of universal indexation button
+            # Универсальная кнопка для индексации (PDF или JSON)
+            add_to_index_button.click(
+                gr_add_to_index_universal,
+                inputs=[upload_indices_dropdown, pdf, json_file, radio_type_of_upl_data],
+                outputs=[pdf, json_file, status_bar, upload_indices_dropdown, meili_search_indexes_dropdown]
+            )
+
+            # ----------------------------------------------------------------
+            # ЛОГИКА ОБНОВЛЕНИЯ при выборе индекса/коллекции
+            # для показа документов
+            # ----------------------------------------------------------------
+
+            # При смене выбранного индекса -> обновить список документов
+            meili_ind_for_cont_dropdown.change(
+                fn=update_docs_in_meili_index,
+                inputs=meili_ind_for_cont_dropdown,
+                outputs=[meili_content_of_index_dropdown,
+                         meili_indices_table]
+            )
+
+            # При смене выбранной коллекции -> обновить список документов
+            chroma_coll_for_cont_dropdown.change(
+                fn=update_docs_in_chroma_collection,
+                inputs=chroma_coll_for_cont_dropdown,
+                outputs=[chroma_collection_content,
+                         chroma_collection_table]
+            )
+
+        # --------------------------------------------------
+        # Вкладка 3 — конструктор документа для загрузки
+        # --------------------------------------------------
+
+        with gr.Tab("\U0001F4C4 Добавить документ в Meilisearch"):
+            gr.Markdown("### Заполните форму для добавления документа в индекс Meilisearch")
+
+            with gr.Column():
+                doc_id = str(uuid.uuid4())  # Генератор названия документа
+
+                def generate_new_id():
+                    return str(uuid.uuid4())
+
+
+                # ----------------------------------------------------
+                # Секция оформления страницы - конструктора документа
+                # ----------------------------------------------------
+                with gr.Row():
+                    index_dropdown = gr.Dropdown(
+                        choices=gr_existed_indexes(),
+                        label="Выберите индекс Meilisearch",
+                        interactive=True,
+                        scale=30,
+                    )
+                    id_input = gr.Textbox(label="ID документа (генерируется по умолчанию, но можно менять вручную)",
+                                          value=generate_new_id,
+                                          scale=50
+                                          )
+                    generate_id_button = gr.Button("🔄 Сгенерировать новый ID", scale=20, size="md")
+
+
+
+                title_input = gr.Textbox(label="Заголовок, title")
+                content_input = gr.Textbox(label="Основной текст, content", lines=20, max_lines=80)
+                keywords_input = gr.Textbox(label="Ключевые слова, keywords (через запятую)")
+                status_output = gr.Textbox(label="Статус операции", interactive=False, value=txt_default, every=10.0, container=False)
+                preview_button = gr.Button("Посмотреть получившийся JSON")
+                preview_json = gr.JSON(label="Предпросмотр JSON", visible=False)
+                save_button = gr.Button("Сохранить и отправить в индекс")
+
+
+
+
+            # -----------------------------------------------------
+
+            def new_doc_fulfilling():  # Пока не работает
+
+                return (
+                    gr.update(interactive=True),
+                    gr.update(interactive=True),
                 )
 
-                rm_doc_from_index_button = gr.Button("Удалить из Индекса",
-                                                     size="md",
-                                                     visible=True,
-                                                     interactive=False, )
 
-        with gr.Column():
-            chroma_coll_for_cont_dropdown = gr.Dropdown(choices=gr_existed_collections(),
-                                                        filterable=True,
-                                                        label=COLLECTIONS_IN_CHROMA,
-                                                        interactive=True,
-                                                        info="Выберите Коллекцию для просмотра содержимого",
-                                                        visible=True,
-                                                        )
-            chroma_collection_table = gr.DataFrame(
-                value=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
-                label="Содержание выбранной Коллекции",
-                headers=["Имя файла и страница", ],
-                row_count=(15, "dynamic"),
-                col_count=(1, "fixed"),
-                datatype="str",
-                interactive=False
-            )
-            with gr.Row():
-                chroma_collection_content = gr.Dropdown(
-                    # choices=[],
-                    choices=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
-                    # value=None,
-                    allow_custom_value=False,
-                    label="Выбрать документ для удаления",
-                    visible=True,
-                    interactive=True,
-                    scale=80,
-                )
 
-                rm_doc_from_collection_button = gr.Button("Удалить из Коллекции",
-                                                          size="md",
-                                                          visible=True,
-                                                          interactive=False,
-                                                          )
 
-    # ----------------------------
-    # Секция интерфейса чата
-    # ----------------------------
+            def fn_preview_json(current_doc_id, title, content, keywords, selected_index):
 
-    with gr.Column():
-        demo = gr.ChatInterface(fn=universal_echo, type="messages",
-                                examples=EXAMPLES,
-                                chatbot=chatbot,
-                                textbox=textbox,
-                                additional_inputs=[
-                                    chroma_search_collection_dropdown,
-                                    slider1,
-                                    slider2,
-                                    slider3,
-                                    radio_type_of_search,
-                                    meili_search_indexes_dropdown
-                                ],
-                                show_progress="full",
+                if not content.strip():
+                    return gr.update(visible=False), "Ошибка: поле 'content' не может быть пустым"
 
+                if not selected_index:
+                    return gr.update(visible=False), "Ошибка: не выбран индекс"
+
+                if not current_doc_id:
+                    current_doc_id = generate_new_id()
+                    id_input.value = current_doc_id
+
+                # Проверка уникальности ID
+                json_path = os.path.join("Upload", f"{current_doc_id}.json")
+                if os.path.exists(json_path):
+                    return gr.update(visible=False), f"Ошибка: документ с ID '{current_doc_id}' уже существует."
+
+                doc = {
+                    "id": current_doc_id,
+                    "title": title or "(без заголовка)",
+                    "content": content,
+                    "keywords": [kw.strip() for kw in keywords.split(",") if kw.strip()],
+                    "Indexes_meili": selected_index,
+                }
+
+                return (gr.update(visible=True,
+                                  value=doc),
+                        f"\u2705 Документ '{current_doc_id}' для индекса '{selected_index}' просматривается..."
+                        )
+
+
+            def save_and_send_to_meilisearch(current_doc_id, temporary_json, selected_index):
+
+                if not current_doc_id:
+                    current_doc_id = generate_new_id()
+                    id_input.value = current_doc_id
+
+                # Проверка уникальности ID
+                json_path = os.path.join("Upload", f"{current_doc_id}.json")
+                if os.path.exists(json_path):
+                    return gr.update(visible=False), f"Ошибка: документ с ID '{current_doc_id}' уже существует."
+
+                if temporary_json:
+                    with open(json_path, "w", encoding="utf-8") as f:
+                        json.dump(temporary_json, f, ensure_ascii=False, indent=2)
+
+                    try:
+                        meilisearch.add_doc_to_meili(json_path, selected_index)
+                    except Exception as e:
+                        return (gr.update(),
+                                gr.update(),
+                                gr.update(),
+                                gr.update(),
+                                gr.update(),
+                                f"Ошибка загрузки в Meilisearch: {e}",
+                                gr.update(),
+                                gr.update(),
                                 )
 
-    # ----------------------------
-    # Секция переключателей
-    # ----------------------------
-
-    radio_type_of_search.change(fn=radio_sliders_change, inputs=radio_type_of_search,
-                                outputs=[
-                                    slider3,
-                                    slider1,
-                                    slider2,
-                                    meili_search_indexes_dropdown,
-                                    chroma_search_collection_dropdown,
-                                ]
-                                )
-
-    radio_type_of_db.change(fn=radio_search_engine_change, inputs=radio_type_of_db,
-                            outputs=[
-                                upload_collections_dropdown,
-                                upload_indices_dropdown,
-                                add_collection_button,
-                                rm_collection_button,
-                                # add_index_button,
-                                rm_index_button,
-                                add_to_collection_button,
-                                add_to_index_button,
-                                radio_type_of_upl_data,
-                            ]
+                    return (gr.update(value=None),
+                            gr.update(value=str(uuid.uuid4())),
+                            gr.update(value=None),
+                            gr.update(value=None),
+                            gr.update(value=None),
+                            f"\u2705 Документ успешно добавлен в индекс '{selected_index}'.",
+                            gr.update(interactive=False),
+                            gr.update(interactive=False),
                             )
+                else:
+                    return (
+                        gr.update(visible=True, ),
+                        gr.update(visible=True, ),
+                        gr.update(visible=True, ),
+                        gr.update(visible=True, ),
+                        gr.update(visible=True, ),
+                        "\u274C Ошибка: документ для сохранения не передан. Сначала используйте 'Посмотреть получившийся JSON'.",
+                        gr.update(visible=True, interactive=True),
+                        gr.update(visible=True, interactive=True),
+                    )
 
-    radio_type_of_upl_data.change(fn=radio_type_of_upl_file_change, inputs=radio_type_of_upl_data,
-                                  outputs=[
-                                      pdf,
-                                      json_file,
-                                  ]
-                                  )
 
-    # --------------------------------------
-    # Кнопки работы с коллекциями ChromaDB
-    # --------------------------------------
+            # ----------------------
+            # Event handlers
+            # ----------------------
 
-    add_collection_button.click(
-        gr_create_collection,
-        inputs=upload_collections_dropdown,
-        outputs=[status_bar, upload_collections_dropdown, chroma_search_collection_dropdown]
-    )
+            generate_id_button.click(fn=generate_new_id, inputs=[], outputs=[id_input])
 
-    rm_collection_button.click(
-        gr_remove_collection,
-        inputs=upload_collections_dropdown,
-        outputs=[upload_collections_dropdown, chroma_search_collection_dropdown, status_bar, ]
-    )
+            preview_button.click(
+                fn=fn_preview_json,
+                inputs=[id_input, title_input, content_input, keywords_input, index_dropdown],
+                outputs=[preview_json,
+                         status_output, ]
+            )
 
-    add_to_collection_button.click(
-        gr_add_to_collection,
-        inputs=[upload_collections_dropdown, pdf],
-        outputs=[pdf, status_bar, ]
-    )
+            save_button.click(
+                fn=save_and_send_to_meilisearch,
+                inputs=[id_input, preview_json, index_dropdown],
+                outputs=[preview_json,
+                         id_input,
+                         title_input,
+                         content_input,
+                         keywords_input,
+                         status_output,
+                         preview_button,
+                         save_button, ]
+            )
+            # Пока не работает
+            # content_input.change(
+            #     fn=new_doc_fulfilling,
+            #     inputs=[],
+            #     outputs=[preview_button,
+            #              save_button, ]
+            # )
 
-    # --------------------------------------
-    # Кнопки работы с индексами Meilisearch
-    # --------------------------------------
-
-    # add_index_button.click(
-    #     gr_create_collection,
-    #     inputs=indices_dropdown,
-    #     outputs=[data_upload_status, indices_dropdown, meili_search_indexes_dropdown]
-    # )
-
-    rm_index_button.click(
-        gr_remove_index,
-        inputs=upload_indices_dropdown,
-        outputs=[
-            upload_indices_dropdown,
-            meili_search_indexes_dropdown,
-            meili_ind_for_cont_dropdown,
-            status_bar,
-        ]
-    )
-
-    # Универсальная кнопка для индексации (PDF или JSON)
-    add_to_index_button.click(
-        gr_add_to_index_universal,
-        inputs=[upload_indices_dropdown, pdf, json_file, radio_type_of_upl_data],
-        outputs=[pdf, json_file, status_bar, upload_indices_dropdown, meili_search_indexes_dropdown]
-    )
-
-    # ----------------------------------------------------------------
-    # ЛОГИКА ОБНОВЛЕНИЯ при выборе индекса/коллекции
-    # для показа документов
-    # ----------------------------------------------------------------
-
-    # При смене выбранного индекса -> обновить список документов
-    meili_ind_for_cont_dropdown.change(
-        fn=update_docs_in_meili_index,
-        inputs=meili_ind_for_cont_dropdown,
-        outputs=[meili_content_of_index_dropdown,
-                 meili_indices_table]
-    )
-
-    # При смене выбранной коллекции -> обновить список документов
-    chroma_coll_for_cont_dropdown.change(
-        fn=update_docs_in_chroma_collection,
-        inputs=chroma_coll_for_cont_dropdown,
-        outputs=[chroma_collection_content,
-                 chroma_collection_table]
-    )
     # -------------------------
     # Footer html realization
     # -------------------------
