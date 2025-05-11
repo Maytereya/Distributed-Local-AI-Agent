@@ -290,14 +290,24 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
 
         json_path = f"Upload/{base_no_ext_clean}.json"
         pdf2json.pdf_to_meili_json(pdf_path, json_path)
-        meilisearch.add_doc_to_meili(json_path, index)
+        meili_msg = ''  # Переменная, которая сообщает об ошибках Meili
+        try:
+            meili_msg = meilisearch.add_doc_to_meili(json_path, index)
+        except Exception as e:
+            return (
+                PDF(value=None, label="Загрузить PDF", interactive=True, scale=80),
+                gr.update(value=None),  # сбрасываем JSON
+                f"{meili_msg}. {e}",  # Возможно, это дублирование одного и того же сообщения об ошибке
+                gr.update(),
+                gr.update(),
+            )
         time.sleep(5)
         new_list = gr_existed_indexes()
 
         return (
             PDF(value=None, label="Загрузить PDF", interactive=True, scale=80),
             gr.update(value=None),  # сбрасываем JSON
-            "Файл (PDF) добавлен в индекс",
+            f"Файл (PDF) добавлен в индекс. {meili_msg}",
             gr.update(choices=new_list),
             gr.update(choices=new_list),
         )
@@ -321,18 +331,30 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
         base_no_ext_clean = re.sub(r'[^a-zA-Z0-9-_]', '_', base_no_ext)
         local_json_path = f"Upload/{base_no_ext_clean}.json"
         # Копируем загруженный временный файл в свою папку
-        # (import shutil в начале файла)
+        # (import shutil)
         shutil.copyfile(json_file, local_json_path)
 
-        # Индексируем в Meilisearch
+        meili_msg = ''  # Переменная, которая сообщает об ошибках Meili
 
-        meilisearch.add_doc_to_meili(local_json_path, index)
-        time.sleep(1)
+        # Индексируем в Meilisearch
+        try:
+            meili_msg = meilisearch.add_doc_to_meili(local_json_path, index)
+        except Exception as e:
+            return (
+                gr.update(value=None),  # сбрасываем PDF
+                gr.update(value=None),  # сбрасываем JSON
+                f"{meili_msg}, {e}",  # Возможно, это дублирование одного и того же сообщения об ошибке
+                gr.update(),
+                gr.update(),
+            )
+        time.sleep(5)
+
         new_list = gr_existed_indexes()
+
         return (
             gr.update(value=None),  # сбрасываем PDF
             gr.update(value=None),  # сбрасываем JSON
-            f"Файл (JSON) '{os.path.basename(json_file)}' добавлен в индекс '{index}'.",
+            f"{meili_msg}",
             gr.update(choices=new_list),
             gr.update(choices=new_list),
         )
@@ -618,7 +640,7 @@ with gr.Blocks(css=custom_css) as blocks:
 
                 # Поле для вывода текущего статуса работы с коллекциями
                 status_bar = gr.Textbox(value=txt_default,
-                                        every=10.0,
+                                        every=20.0,
                                         label="Монитор текущего статуса операции",
                                         # info="Только вывод",
                                         interactive=False, )
@@ -879,6 +901,7 @@ with gr.Blocks(css=custom_css) as blocks:
             with gr.Column():
                 doc_id = str(uuid.uuid4())  # Генератор названия документа
 
+
                 def generate_new_id():
                     return str(uuid.uuid4())
 
@@ -899,17 +922,14 @@ with gr.Blocks(css=custom_css) as blocks:
                                           )
                     generate_id_button = gr.Button("🔄 Сгенерировать новый ID", scale=20, size="md")
 
-
-
                 title_input = gr.Textbox(label="Заголовок, title")
                 content_input = gr.Textbox(label="Основной текст, content", lines=20, max_lines=80)
                 keywords_input = gr.Textbox(label="Ключевые слова, keywords (через запятую)")
-                status_output = gr.Textbox(label="Статус операции", interactive=False, value=txt_default, every=10.0, container=False)
+                status_output = gr.Textbox(label="Статус операции", interactive=False, value=txt_default, every=10.0,
+                                           container=False)
                 preview_button = gr.Button("Посмотреть получившийся JSON")
                 preview_json = gr.JSON(label="Предпросмотр JSON", visible=False)
                 save_button = gr.Button("Сохранить и отправить в индекс")
-
-
 
 
             # -----------------------------------------------------
@@ -920,8 +940,6 @@ with gr.Blocks(css=custom_css) as blocks:
                     gr.update(interactive=True),
                     gr.update(interactive=True),
                 )
-
-
 
 
             def fn_preview_json(current_doc_id, title, content, keywords, selected_index):
