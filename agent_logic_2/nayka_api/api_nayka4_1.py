@@ -290,20 +290,20 @@ def find_doctor_schedule(
 
     if not regions_response.ok:
         print(f"Ошибка при загрузке адресов больниц: {regions_response.status_code}")
-        print(regions_response.text)
+        # print(regions_response.text)
         return f"Ошибка загрузки адресов больниц с сервера."
 
     try:
         regions = regions_response.json()
     except Exception as e:
         print("Ошибка при разборе JSON с адресами больниц:", e)
-        print("Ответ сервера:", regions_response.text)
+        # print("Ответ сервера:", regions_response.text)
         return f"Ошибка при обработке данных об адресах."
 
     region_map = {r["id"]: r["name"] for r in regions}
 
-    print("Регионы: ")
-    print(region_map)
+    # print("Регионы: ")
+    # print(region_map)
 
     region_id = None
     if region_name:

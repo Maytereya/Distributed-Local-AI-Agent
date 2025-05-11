@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Tuple
 
 from ollama import AsyncClient, Options
 
-from agent_logic_2 import llama_func_call as doctor_info, config as c
+from agent_logic_2 import llama_func_call1 as doctor_info, config as c
 
 # LLM‑клиент для классификации
 ollama = AsyncClient(c.ollama_url)
@@ -56,25 +56,38 @@ OUTPUT: {\"labels\":[\"INFO\"]}
 """
 
 
-def _prompt(user: str) -> str:
+def _history_reveal(user: str, sess: Dict[str, Any]) -> str:
+    history = sess.get("history", [])
+    # Отбрасываем последний элемент, если это {"user": text}
+    if history and history[-1].get("user") == user:
+        history = history[:-1]
+
+    return "\n".join(
+        f"{'User:' if 'user' in turn else 'Assistant:'} {turn.get('user') or turn.get('bot')}"
+        for turn in sess.get("history", [])
+    )
+
+
+def _prompt(user: str, sess: Dict[str, Any]) -> str:
     today = datetime.now().strftime("%d %B %Y, %H:%M:%S")
     compilation = f"""
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
-Сегодня: {today}. 
+Сегодня: {today}.
 Ты – ассистент клиники «Наука».
 Верни **только JSON** вида {{\"labels\":[…]}} (можно несколько label‑ов).
 Допустимые label‑ы:\n{LABEL_DOC}\n
 [EXAMPLES]\n{EXAMPLES}\n
 [USER] {user}
+История диалога: {_history_reveal(user, sess)}
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>
 """
     print("----------------- COMPILATION -----------------------")
-    print(f"FIRST_prompt_function about LABELS: {compilation}")
+    print(f"_prompt about LABELS: {compilation}")
     print("-----------------------------------------------------")
     return compilation
 
 
-def _split_prompt(text: str) -> str:
+def _split_prompt(text: str, sess: Dict[str, Any]) -> str:
     compilation = f"""
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
 1. Сначала переформулируй запрос, привязывая все упоминания услуг/вопросов к фамилии врача.
@@ -100,17 +113,18 @@ def _split_prompt(text: str) -> str:
 ВАЖНО: Верни только JSON с полем segments, содержащим массив строк!
 
 USER: {text}
+История диалога: {_history_reveal(text, sess)}
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>
 """
     print("----------------- COMPILATION -----------------------")
-    print(f"SECOND compilation_split_prompt about reformulate and splitting into segments: {compilation}")
+    print(f"_split_prompt reformulation and splitting into segments: {compilation}")
     print("-----------------------------------------------------")
     return compilation
 
 
-async def classify(text: str) -> List[str]:
+async def classify(text: str, sess: Dict[str, Any]) -> List[str]:
     res = await ollama.generate(model=llm,
-                                prompt=_prompt(text),
+                                prompt=_prompt(text, sess),  # Добавить sess
                                 options=options,
                                 format="json",
                                 keep_alive=-1)
@@ -124,28 +138,28 @@ async def classify(text: str) -> List[str]:
         return ["UNDEFINED"]
 
 
-async def split_into_segments(text: str) -> List[str]:
-    print("\n================= SPLIT PROCESS START =================")
-    print(f"Original input: '{text}'")
+async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
+    # print("\n================= SPLIT PROCESS START =================")
+    # print(f"Original input: '{text}'")
 
     res = await ollama.generate(model=llm,
-                                prompt=_split_prompt(text),
+                                prompt=_split_prompt(text, sess),  # Добавить sess
                                 options=options,
                                 format="json",
                                 keep_alive=-1)
 
     try:
-        print(f"\nRaw model response: {res['response']}")
+        # print(f"\nRaw model response: {res['response']}")
 
         segments = json.loads(res["response"]).get("segments", [])
-        print(f"Raw segments: {segments}")
+        # print(f"Raw segments: {segments}")
 
         splitted_segments = [s.strip() for s in segments if s.strip()]
 
-        print("\nProcessing results:")
-        print(f"• Segments count: {len(splitted_segments)}")
-        print(f"• Final segments: {splitted_segments}")
-        print("================= SPLIT PROCESS END =================\n")
+        # print("\nProcessing results:")
+        # print(f"• Segments count: {len(splitted_segments)}")
+        # print(f"• Final segments: {splitted_segments}")
+        # print("================= SPLIT PROCESS END =================\n")
 
         return splitted_segments
 
@@ -211,31 +225,35 @@ MODULES = {
 
 
 async def routing(text: str, sess: Dict[str, Any] | None = None) -> Tuple[str, Dict[str, Any]]:
+    """
+    Главная точка входа в роутинг.
+    :param text: Сообщение пользователя
+    :param sess: словарь состояния сессии, хранит pending-модуль и историю
+    :return: ответ, обновлённая сессия
+    """
+    # 1. Инициализируем состояние
+    sess = sess or {}
+    sess.setdefault("pending", None)
+    sess.setdefault("history", [])
 
-    sess = sess or {}  # Если сессия (sess) не передана — создаётся пустая
-
-    # Если в сессии есть "pending" — значит, предыдущий модуль запросил продолжение.
-    # Тогда имидиэтли отправляем текущий текст в соответствующий модуль, не классифицируя заново.
-
-    # pending = sess.get("pending")
-    if (pending := sess.get("pending")) and pending in MODULES:  # тут присвоение и условный оператор в одном
+    # 2. Если ждём продолжения от модуля — сразу обрабатываем
+    if (pending := sess.get("pending")) and pending in MODULES:
         ans, need = await MODULES[pending](text, session=sess)
         sess["pending"] = pending if need else None
+
+        # Записываем в историю запрос и ответ
+        sess["history"].append({"user": text})
+        sess["history"].append({"bot": ans})
         return ans, sess
 
-    # Разбиваем текст на смысловые сегменты
-    segments = await split_into_segments(text)
-    print("\nСегменты:", segments)
-
+    # 3. Иначе — разбиваем на сегменты и классифицируем
+    segments = await split_into_segments(text, sess)
     replies: List[str] = []
-    # Для каждого сегмента:
+
     for part in segments:
-        # 	1.	Вызываем classify — получаем метки.
-        labels = await classify(part)
-        print(f"\nМетки для сегмента '{part}':", labels)
-        # 	2.	Сортируем их по приоритету (INFO, PREP, …).
+        labels = await classify(part, sess)
         labels.sort(key=LABEL_PRIORITY.index)
-        # 	3.	Отправляем сегмент в соответствующий модуль:
+
         for lab in labels:
             rep, need = await MODULES[lab](part, session=sess)
             replies.append(rep)
@@ -243,8 +261,12 @@ async def routing(text: str, sess: Dict[str, Any] | None = None) -> Tuple[str, D
                 sess["pending"] = lab
                 break
 
+    # 4. Собираем итоговый ответ и обновляем историю
     result = "\n\n— — —\n\n".join(replies)
-    print("\nИтоговый ответ:", result)
+    sess["history"].append({"user": text})
+    sess["history"].append({"bot": result})
+
+    # 5. Возвращаем ответ и состояние
     return result, sess
 
 
@@ -255,7 +277,3 @@ if __name__ == "__main__":
         как подготовиться к УЗИ, если к нему вообще надо готовиться, 
         и ещё скажите, сколько стоит приём у Белохвостиковой и сколько стоит УЗИ печени
         """))
-
-#  Условный БАГ: если передать по INFO запрос "Сколько стоит узи печени",
-#  то LLama может найти рандомного УЗИста в картотеке врачей
-#  и запросить информацию из Базы данных по нему.

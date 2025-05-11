@@ -11,6 +11,7 @@ import gradio as gr
 from gradio_pdf import PDF
 
 from agent_logic_2 import config as c
+from agent_logic_2.router_preprocessor2 import routing
 from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import pdf_to_json_txt_tables_meili as pdf2json
@@ -18,8 +19,12 @@ from converters import pdf_to_json_txt_tables_meili as pdf2json
 # Label constants
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
 INDEXES_IN_MEILI = "Индексы документов Meilisearch"
-EXAMPLES = [["апатия, причины, лечение"], ["ангедония, причины, лечение"], ["акатизия, причины, лечение"],
-            ["ЗНС, лечение"]]
+EXAMPLES = [
+    ["Запишите на прием к Дразнину", {}],
+    ["Порекомендуйте уролога", {}],
+    ["Запишите на УЗИ", {}],
+    ["Куда обратиться с жалобой: стало плохо после операции!", {}]
+]
 # -------------------
 # SECURITY
 # -------------------
@@ -80,10 +85,35 @@ footer {
 }
 """
 
-
 # -------------------
 # ECHOES PART
 # -------------------
+# Представляю функцию universal_echo_router_edition!
+
+# Глобальная сессия (Gradio поддерживает per-user state)
+state = gr.State({})  # будет передаваться как дополнительный input/output
+
+
+# ------------------------------------------------------------------------
+
+async def universal_echo_router_version(message, history, session_state):
+    """
+    Обновлённая версия universal_echo — подключает роутер, обрабатывает память.
+    :param session_state:
+    :param message: текст запроса пользователя
+    :param history: история сообщений
+    :return: строка-ответ
+    """
+    # global session_state
+
+    try:
+        answer, session_state = await routing(text=message, sess=session_state or {})
+        return answer, session_state
+    except Exception as e:
+        error_msg = f"⚠️ Ошибка обработки запроса: {e}"
+        # Гарантируем, что возвращаем и ответ, и текущее/пустое состояние
+        return error_msg, session_state or {}
+
 
 async def chroma_echo(message: str, history: List[Dict], collection: str, threshold_value: float,
                       slider_value_n_results: int,
@@ -762,23 +792,40 @@ with gr.Blocks(css=custom_css) as blocks:
                                                                   interactive=False,
                                                                   )
 
-            # ------------------------------------
-            # Секция интерфейса чата - лишний код
+            # ---------------------------------------------
+            # Секция интерфейса чата, немного излишний код
             # Оформление и дизайн
-            # ------------------------------------
+            # ---------------------------------------------
 
             with gr.Column():
-                demo = gr.ChatInterface(fn=universal_echo, type="messages",
+                #  Старая версия, которая поддерживала лишь вывод поиска в базах данных
+                # demo = gr.ChatInterface(fn=universal_echo_router_version,
+                #                         type="messages",
+                #                         examples=EXAMPLES,
+                #                         chatbot=chatbot,
+                #                         textbox=textbox,
+                #                         additional_inputs=[
+                #                             chroma_search_collection_dropdown,
+                #                             slider1,
+                #                             slider2,
+                #                             slider3,
+                #                             radio_type_of_search,
+                #                             meili_search_indexes_dropdown
+                #                         ],
+                #                         show_progress="full",
+                #
+                #                         )
+
+                demo = gr.ChatInterface(fn=universal_echo_router_version,
+                                        type="messages",
                                         examples=EXAMPLES,
                                         chatbot=chatbot,
                                         textbox=textbox,
                                         additional_inputs=[
-                                            chroma_search_collection_dropdown,
-                                            slider1,
-                                            slider2,
-                                            slider3,
-                                            radio_type_of_search,
-                                            meili_search_indexes_dropdown
+                                            state,
+                                        ],
+                                        additional_outputs=[
+                                            state,
                                         ],
                                         show_progress="full",
 

@@ -1,15 +1,16 @@
-import config as c
-from nayka_api import api_nayka4_1 as api_call
-from nayka_api import nayka_doc_registry2 as doc_reg
 import asyncio
-import re
-import urllib3
-from ollama import AsyncClient, Options
-import sys
-import os
 import json
 import logging
-from typing import List, Dict
+import os
+import re
+import sys
+
+import urllib3
+from ollama import AsyncClient, Options
+
+from agent_logic_2 import config as c
+from agent_logic_2.nayka_api import api_nayka4_1 as api_call
+from agent_logic_2.nayka_api import nayka_doc_registry2 as doc_reg
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +40,7 @@ generation_options = Options(
     mirostat_eta=0.1
 )
 
+
 async def ollama_call(prompt: str, *, max_tokens: int = 512, tries: int = 2):
     """Универсальная обертка для вызовов Ollama с повторными попытками."""
     for n in range(tries):
@@ -50,7 +52,7 @@ async def ollama_call(prompt: str, *, max_tokens: int = 512, tries: int = 2):
                 keep_alive=-1,
             )
         except TimeoutError:
-            logger.warning(f"Попытка {n+1}/{tries} истекла")
+            logger.warning(f"Попытка {n + 1}/{tries} истекла")
         except Exception as e:
             logger.error(f"Ошибка при вызове Ollama: {e}")
             if n == tries - 1:
@@ -171,7 +173,7 @@ def re_capture(model_response):
     func_call_pattern = r"\[([a-zA-Z0-9_]+)\((.*)\)\]"
     match = re.match(func_call_pattern, model_response)
     if not match:
-        return model_response        # обычный текст
+        return model_response  # обычный текст
 
     func_name, args_str = match.groups()
     item_match = re.match(r"item\s*=\s*'([^']+)'", args_str)
@@ -185,16 +187,16 @@ def re_capture(model_response):
     elif func_name == "get_doctors_by_keyword":
         result = get_doctors_by_keyword(item_value)
     else:
-        result = model_response       # на всякий случай 
+        result = model_response  # на всякий случай
 
     print("\nРезультат функции:", result)
     print("Тип результата:", type(result))
-    
+
     if isinstance(result, list):
         print("\nСписок врачей:")
         for doc in result:
             print(f"- {doc}")
-    
+
     return result
 
 
@@ -291,13 +293,13 @@ OUTPUT:
 
     # Собираем итоговый prompt
     system_message = (
-        system_base
-        + normalization_hint
-        + few_shot
-        + cot
-        + "<|eot_id|><|start_header_id|>user<|end_header_id|>\n"
-        f"Вопрос: {question}\n"
-        "<|start_header_id|>assistant<|end_header_id|>"
+            system_base
+            + normalization_hint
+            + few_shot
+            + cot
+            + "<|eot_id|><|start_header_id|>user<|end_header_id|>\n"
+              f"Вопрос: {question}\n"
+              "<|start_header_id|>assistant<|end_header_id|>"
     )
 
     print("\nСистемный промпт:", system_message)
