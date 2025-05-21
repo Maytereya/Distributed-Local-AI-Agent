@@ -9,14 +9,16 @@ This module provides two ways to work with Meilisearch:
 """
 
 import json
-from typing import List
-import requests
-import meilisearch
 # Retry section
 # import time
 import logging
+from typing import List
+
+import meilisearch
+import requests
 # from httpx import AsyncClient, ConnectError
 from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
+
 #
 from agent_logic_2 import config as c
 
@@ -46,7 +48,7 @@ except Exception as e:
 # client = meilisearch.Client(c.MEILI_URL, c.MASTER_KEY)
 
 
-def add_doc_to_meili(doc_path: str, index_name: str) -> None:
+def add_doc_to_meili(doc_path: str, index_name: str) -> str or None:
     """
     Adds JSON documents from a local file to a Meilisearch index.
     If the index does not exist, it will be created automatically.
@@ -59,14 +61,19 @@ def add_doc_to_meili(doc_path: str, index_name: str) -> None:
         with open(doc_path, mode="r", encoding="utf-8") as json_file:
             documents = json.load(json_file)
     except (IOError, json.JSONDecodeError) as e:
-        print(f"Error reading/parsing JSON file '{doc_path}': {e}")
-        return
+        msg = f"Ошибка чтения или парсинга JSON файла '{doc_path}': {e}"
+        print(msg)
+        return msg
 
     try:
         task_info = client.index(index_name).add_documents(documents)
-        print(f"Documents have been enqueued for addition to index '{index_name}': {task_info}")
+        msg = f"Документ успешно поставлен в очередь на добавление в индекс '{index_name}': {task_info}"
+        print(msg)
+        return msg
     except Exception as e:
-        print(f"Error adding documents to index '{index_name}': {e}")
+        msg = f"Ошибка добавления документа в индекс '{index_name}': {e}"
+        print(msg)
+        return msg
 
 
 def get_task_info(task_number: int) -> dict:
@@ -309,13 +316,13 @@ def main():
 
     # Delete an entire index
     # delete_index("side_effects_improved")
-    res = meili_list_documents("max_ten_index")
-    for doc in res:
-        print(doc)
+    # res = meili_list_documents("preparation_docs")
+    # for doc in res:
+    #     print(doc)
 
     print("=======")
 
-    res_https = get_meili_list_documents("max_ten_index")
+    res_https = get_meili_list_documents("algo_docs")  # preparation_docs
     for doc in res_https:
         print(doc)
 

@@ -1,4 +1,4 @@
-import config as c
+from agent_logic_2 import config as c
 from nayka_api import api_nayka4 as api_call
 from nayka_api import nayka_doc_registry2 as doc_reg
 import asyncio
@@ -303,7 +303,7 @@ OUTPUT:
 
     # Генерируем ответ
     aresult = await ollama_call(system_message, max_tokens=512)
-    print(f"\nОтвет LLM: {aresult}")
+    # print(f"\nОтвет LLM: {aresult}")
 
     # лог времени
     if "eval_duration" in aresult:

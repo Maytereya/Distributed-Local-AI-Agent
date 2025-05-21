@@ -11,6 +11,8 @@ import gradio as gr
 from gradio_pdf import PDF
 
 from agent_logic_2 import config as c
+from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
+from agent_logic_2.benchmark_tab import ollama_client as ollama
 from agent_logic_2.router_preprocessor2 import routing
 from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
@@ -33,6 +35,8 @@ USERNAME = c.AUTH_NAME
 PASSWORD = c.AUTH_PASS
 # Пока не срабатывает.
 os.environ["USER_AGENT"] = "NEIRY.Agent/1.0"
+
+ALL_MODELS = []
 
 
 def check_auth(username, password):
@@ -565,7 +569,14 @@ def radio_type_of_upl_file_change(choice):
         )
 
 
+# Загрузка моделей Ollama с сортировкой
+async def load_models():
+    models_response = await ollama.list()
+    return sorted([model['model'] for model in models_response['models']])
+
+
 with gr.Blocks(css=custom_css) as blocks:
+    model_state = gr.State()  # Нужно для однократной загрузки моделей из Ollama
     gr.Markdown(
         """<h2>📚 NEIRY.AI <b>bookworm</b> <span style='font-size: 0.7em; font-style: italic;'>tabbed edition</span></h2>"""
     )
@@ -715,7 +726,8 @@ with gr.Blocks(css=custom_css) as blocks:
                                                     )
 
             # ---------------------------------------------------
-            # Секция просмотра содержимого коллекций и индексов
+            # Секция просмотра содержимого коллекций
+            # и индексов
             # ---------------------------------------------------
 
             gr.Markdown("### Содержание Индексов и Коллекций")
@@ -1069,10 +1081,85 @@ with gr.Blocks(css=custom_css) as blocks:
                         gr.update(visible=True, interactive=True),
                     )
 
+        # ---------------------------------------
+        # Вкладка 4 -- Benchmarking
+        # ---------------------------------------
 
-            # ----------------------
-            # Event handlers
-            # ----------------------
+        with gr.Tab("⚙️ Ollama Benchmarking"):
+            gr.Markdown("""<h3>⚙️ Тестирование производительности генеративных моделей и сервера Ollama</h3>
+                        <p style='font-size: 0.9em;'>Вы можете запустить сравнение моделей на разных типах задач и отследить wall time, eval, TPS.</p>""")
+            with gr.Row():
+                model_selector = gr.Dropdown(
+                    multiselect=True,
+                    label="Выберите модели для тестирования",
+                    interactive=True
+                )
+
+                laps_slider = gr.Slider(value=2, minimum=1, maximum=10, step=1,
+                                        label="Количество прогонов",
+                                        interactive=True,
+                                        )
+                with gr.Column():
+                    # Отдельная кнопка обновления моделей
+                    refresh_models_btn = gr.Button("🔄 Загрузить/обновить список моделей", scale=20, size="md")
+                    start_benchmark_btn = gr.Button("🚀 Запустить тестирование", scale=20, size="md")
+
+            with gr.Column():
+                progress = gr.Progress(track_tqdm=True)
+
+
+                # Запуск benchmark с прогресс-индикатором и проверкой выбора моделей
+                async def wrapped_benchmark(models, laps):
+                    if not models:
+                        return (
+                            "🟡 Сначала загрузите и выберите модели для тестирования.",
+                            []
+                        )
+                    return await benchmark(models, laps)
+
+
+                log_output = gr.Textbox(
+                    label="Ход выполнения",
+                    lines=8,
+                    interactive=False,
+                    autoscroll=True,
+                    show_copy_button=True,
+                )
+            gr.Markdown("""### ℹ️ Пояснение к метрикам
+                       - ** Wall Avg(s) ** – среднее полное время ответа(что видит пользователь).
+                       - ** Eval Avg(s) ** – среднее время генерации без учета задержек.
+                       - ** TPS Avg ** – скорость генерации текста (Tokens Per Second).
+                       - ** σ ** означает стандартное отклонение — насколько метрика колеблется от теста к тесту.
+                       """)
+            result_table = gr.DataFrame(
+                headers=["Модель", "Тип", "Wall Avg (s)", "Wall σ", "Eval Avg (s)", "Eval σ", "TPS Avg", "TPS σ"],
+                row_count=(6, "dynamic"),
+                interactive=False,
+                label="Результаты замеров"
+            )
+
+
+            # Обновление списка моделей по кнопке
+            async def update_dropdown():
+                models = await load_models()
+                return gr.update(choices=models, value=models[:1] if models else [])
+
+
+            refresh_models_btn.click(
+                fn=update_dropdown,
+                inputs=[],
+                outputs=model_selector
+            )
+
+            start_benchmark_btn.click(
+                fn=wrapped_benchmark,
+                inputs=[model_selector, laps_slider],
+                outputs=[log_output, result_table]
+            )
+
+            # ----------------------------------
+            # Event handlers for upper sections
+            # ----------------------------------
 
             generate_id_button.click(fn=generate_new_id, inputs=[], outputs=[id_input])
 

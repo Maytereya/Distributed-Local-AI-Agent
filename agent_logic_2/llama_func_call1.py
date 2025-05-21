@@ -41,12 +41,12 @@ generation_options = Options(
 )
 
 
-async def ollama_call(prompt: str, *, max_tokens: int = 512, tries: int = 2):
+async def ollama_call(prompt: str, *, max_tokens: int = 512, tries: int = 2, llm_in: str):
     """Универсальная обертка для вызовов Ollama с повторными попытками."""
     for n in range(tries):
         try:
             return await ollama_async_client.generate(
-                model=llm,
+                model=llm_in,
                 prompt=prompt,
                 options=generation_options,
                 keep_alive=-1,
@@ -60,12 +60,20 @@ async def ollama_call(prompt: str, *, max_tokens: int = 512, tries: int = 2):
     raise TimeoutError("Ollama не ответила после всех попыток")
 
 
-async def formulate(llm_output: str) -> str:
+async def formulate(llm_output: str or list) -> str:
     """
     Сформировать человеко‑читабельный ответ (Markdown) по данным врача.
     """
     # Если это вызов функции - возвращаем как есть
-    if llm_output.startswith("[") and llm_output.endswith("]"):
+    # if llm_output.startswith("[") and llm_output.endswith("]"):
+    #     return llm_output
+
+    # If llm_output is already a list, convert it to string
+    if isinstance(llm_output, list):
+        return json.dumps(llm_output, ensure_ascii=False)
+
+    # If this is a function call - return as is
+    if isinstance(llm_output, str) and llm_output.startswith("[") and llm_output.endswith("]"):
         return llm_output
 
     system_message_for_formulation = f"""
@@ -139,7 +147,7 @@ async def formulate(llm_output: str) -> str:
     formatted_prompt = system_message_for_formulation.replace(
         "{llm_output}", compact_json
     )
-    aresult = await ollama_call(formatted_prompt, max_tokens=250)
+    aresult = await ollama_call(formatted_prompt, max_tokens=250, llm_in=llm)
     # max_tokens=250 → короче ответ и быстрее генерация
 
     # Опционально выводим время генерации
@@ -189,13 +197,13 @@ def re_capture(model_response):
     else:
         result = model_response  # на всякий случай
 
-    print("\nРезультат функции:", result)
-    print("Тип результата:", type(result))
+    # print("\nРезультат функции:", result)
+    # print("Тип результата:", type(result))
 
-    if isinstance(result, list):
-        print("\nСписок врачей:")
-        for doc in result:
-            print(f"- {doc}")
+    # if isinstance(result, list):
+    #     print("\nСписок врачей:")
+    #     for doc in result:
+    #         print(f"- {doc}")
 
     return result
 
@@ -208,7 +216,7 @@ client = doc_reg.NaykaClient(
 urllib3.disable_warnings()
 
 
-async def investigate(question: str):
+async def investigate(question: str, model: str):
     """
     Zero‑shot function calling + few‑shot + скрытый chain‑of‑thought.
     Модель может вызвать [get_doc_info(item='…')] или дать прямой 
@@ -302,33 +310,44 @@ OUTPUT:
               "<|start_header_id|>assistant<|end_header_id|>"
     )
 
-    print("\nСистемный промпт:", system_message)
+    # print("\nСистемный промпт:", system_message) ПОКА ОТКЛЮЧИМ ВСЮ ЭТУ БАЙДУ
 
     # Генерируем ответ
-    aresult = await ollama_call(system_message, max_tokens=512)
-    print(f"\nОтвет LLM: {aresult}")
+    aresult = await ollama_call(system_message, max_tokens=512, llm_in=model)  # Количество токенов вызывает подозрение
+    print(f"\nОтвет LLM (модель): {aresult.get('model', 'имя модели не прочиталось')}")
 
     # лог времени
     if "eval_duration" in aresult:
         print(f"Eval_duration: {aresult['eval_duration'] / 1e9:.3f}s")
 
     response = aresult.get("response", "")
-    print(f"\nИзвлеченный ответ: {response}")
+    # print(f"\nИзвлеченный ответ: {response}")
 
     # Форматируем ответ
     formatted = await formulate(response)
-    print(f"\nОтформатированный ответ: {formatted}")
+    # print(f"\nОтформатированный ответ: {formatted}")
 
     # Извлекаем данные
     result = re_capture(formatted)
-    print(f"\nРезультат re_capture: {result}")
+    # print(f"\nРезультат re_capture: {result}")
+
+    # Сохраняем метрики (если есть)
+    eval_duration = aresult.get("eval_duration", 0)
+    eval_count = aresult.get("eval_count", 0)
+
+    # Добавляем форматирование вывода для того, чтобы работал бенчмаркинг
+    final_payload = {
+        "response": response,
+        "eval_duration": eval_duration,
+        "eval_count": eval_count,
+    }
 
     # Форматируем финальный ответ
     if isinstance(result, list):
-        print("\nФорматируем список врачей:")
+        # print("\nФорматируем список врачей:")
         response = "Найдены следующие врачи:\n\n"
         for doc in result:
-            print(f"Обрабатываем врача: {doc}")
+            # print(f"Обрабатываем врача: {doc}")
             # Выводим только ФИО и специализацию
             specialization = doc.get('specialization', '-')
             if specialization and specialization != "-":
@@ -342,26 +361,28 @@ OUTPUT:
             else:
                 specialization = '-'
             response += f"• {doc['fio']} - {specialization}\n"
-        print(f"\nИтоговый ответ: {response}")
-        return response
+        # print(f"\nИтоговый ответ: {response}")
+        return final_payload
+
     elif isinstance(result, dict):
-        print("\nФорматируем информацию о враче:")
+        # print("\nФорматируем информацию о враче:")
         response = "Информация о враче:\n\n"
         response += f"• ФИО: {result['fio']}\n"
         response += f"• Специализация: {result.get('specialization', '-')}\n"
         response += f"• Регионы: {', '.join(result.get('regions', ['-']))}\n"
         print(f"\nИтоговый ответ: {response}")
-        return response
+        return final_payload
     else:
-        print(f"\nВозвращаем текстовый ответ: {result}")
-        return str(result)
+        # print(f"\nВозвращаем текстовый ответ: {result}")
+        # return str(result) # Поменяем cо str на dict неявно МОЖЕТ СЛОМАТЬ ЛОГИКУ ДАЛЕЕ ПО ЦЕПОЧКЕ!
+        return final_payload
 
 
 async def main(question: str):
     """Запрос → LLM → (опционально) API → форматирование."""
     try:
-        response_text = await investigate(question)
-        captured: str = re_capture(response_text)
+        response_text = await investigate(question, model=llm)
+        captured: str = re_capture(response_text["response"])
 
         # если LLM вернула простой текст — печатаем и завершаем
         if isinstance(captured, str):
