@@ -132,7 +132,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-config.ini
+agent_logic_2/config.ini
 
 # Spyder project settings
 .spyderproject
@@ -167,3 +167,5 @@ cython_debug/
 
 #Project py files
 all_reqs.txt
+config.py
+vllm_llama_func_call1.py
