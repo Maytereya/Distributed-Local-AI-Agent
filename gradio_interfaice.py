@@ -1086,8 +1086,7 @@ with gr.Blocks(css=custom_css) as blocks:
         # ---------------------------------------
 
         with gr.Tab("⚙️ Ollama Benchmarking"):
-            gr.Markdown("""<h3>⚙️ Тестирование производительности генеративных моделей и сервера Ollama</h3>
-                        <p style='font-size: 0.9em;'>Вы можете запустить сравнение моделей на разных типах задач и отследить wall time, eval, TPS.</p>""")
+            gr.Markdown("""<h3>⚙️ Тестирование производительности генеративных моделей и сервера Ollama</h3>""")
             with gr.Row():
                 model_selector = gr.Dropdown(
                     multiselect=True,
@@ -1135,7 +1134,8 @@ with gr.Blocks(css=custom_css) as blocks:
                 headers=["Модель", "Тип", "Wall Avg (s)", "Wall σ", "Eval Avg (s)", "Eval σ", "TPS Avg", "TPS σ"],
                 row_count=(6, "dynamic"),
                 interactive=False,
-                label="Результаты замеров"
+                label="Результаты замеров",
+                show_copy_button=True,
             )
 
 

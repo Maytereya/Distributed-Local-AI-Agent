@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import statistics
 import time
 from typing import Tuple
@@ -13,10 +12,6 @@ from agent_logic_2.config import ollama_url
 ollama_client = AsyncClient(ollama_url)
 orig_options = Options(temperature=0)
 
-# Модели для тестирования
-# MODELS = [
-#     "mistral-small3.1:24b-instruct-2503-q8_0",
-# ]
 
 FAST_TASKS = [
     "Назовите три языка программирования",
@@ -28,52 +23,19 @@ SLOW_TASKS = [
     "Сгенерируйте код ORM-слоя для сложной ER-модели из 10 таблиц",
 ]
 
-TEST_PROMPT = "test"
-
-
-async def check_model_availability(model: str) -> bool:
-    """
-        Check if the specified model is available and responding.
-
-        Args:
-            model: Name of the model to check
-
-        Returns:
-            bool: True if the model is available, False otherwise
-        """
-
-    try:
-        await ollama_client.generate(
-            model=model,
-            prompt=TEST_PROMPT,
-            options=orig_options,
-            keep_alive=-1,
-        )
-        return True
-    except (ConnectionError, TimeoutError) as e:
-        logging.warning(f"Model {model} is not available: {str(e)}")
-        return False
-    except Exception as e:
-        logging.error(f"Unexpected error checking model {model}: {str(e)}")
-        return False
-
 
 # ------------------------------------------
 # ГЛАВНАЯ ФУНКЦИЯ: тестирует список моделей
 # ------------------------------------------
 
-async def gradio_benchmark(models:list[str], laps: int = 3):
-
+async def gradio_benchmark(models: list[str], laps: int = 3):
     log_lines = []
     results_table = []
 
     for model in models:
-        # if not await check_model_availability(model):
-        #     log_lines.append(f"Модель {model} недоступна, пропущена.")
-        #     continue
 
         log_lines.append(f"\n▶️ Модель: {model}")
-        # await asyncio.sleep(20.0)
+
 
         async def measure(task: str) -> Tuple[float, float, float]:
             t0 = time.time()
@@ -104,7 +66,6 @@ async def gradio_benchmark(models:list[str], laps: int = 3):
             results_table.append(row)
 
     return "\n".join(log_lines), results_table
-
 
 
 if __name__ == "__main__":
