@@ -1,6 +1,9 @@
 import asyncio
+import json
+import os
 import statistics
 import time
+from datetime import datetime
 from typing import Tuple
 
 from ollama import AsyncClient, Options
@@ -12,7 +15,6 @@ from agent_logic_2.config import ollama_url
 ollama_client = AsyncClient(ollama_url)
 orig_options = Options(temperature=0)
 
-
 FAST_TASKS = [
     "Назовите три языка программирования",
     "Сколько дней в високосном году?",
@@ -23,19 +25,24 @@ SLOW_TASKS = [
     "Сгенерируйте код ORM-слоя для сложной ER-модели из 10 таблиц",
 ]
 
-
 # ------------------------------------------
 # ГЛАВНАЯ ФУНКЦИЯ: тестирует список моделей
 # ------------------------------------------
 
 async def gradio_benchmark(models: list[str], laps: int = 3):
+    from pathlib import Path
+
     log_lines = []
     results_table = []
+    all_results = []
+
+    # Создание директории и файла для лога
+    log_dir = Path("data")
+    log_dir.mkdir(exist_ok=True)
+    log_path = log_dir / f"benchmark_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
     for model in models:
-
         log_lines.append(f"\n▶️ Модель: {model}")
-
 
         async def measure(task: str) -> Tuple[float, float, float]:
             t0 = time.time()
@@ -56,17 +63,48 @@ async def gradio_benchmark(models: list[str], laps: int = 3):
                         f"[{model}] {task_type} '{task}': wall={wall:.2f}s, eval={eval_s:.2f}s, tps={tps:.1f}")
 
             walls, evals, tpss = zip(*stats)
-            row = [
-                model,
-                task_type,
-                round(statistics.mean(walls), 3), round(statistics.stdev(walls), 3) if len(walls) > 1 else 0,
-                round(statistics.mean(evals), 3), round(statistics.stdev(evals), 3) if len(evals) > 1 else 0,
-                round(statistics.mean(tpss), 1), round(statistics.stdev(tpss), 1) if len(tpss) > 1 else 0,
-            ]
-            results_table.append(row)
+            summary = {
+                "model": model,
+                "type": task_type,
+                "wall_avg": round(statistics.mean(walls), 3),
+                "wall_std": round(statistics.stdev(walls), 3) if len(walls) > 1 else 0,
+                "eval_avg": round(statistics.mean(evals), 3),
+                "eval_std": round(statistics.stdev(evals), 3) if len(evals) > 1 else 0,
+                "tps_avg": round(statistics.mean(tpss), 1),
+                "tps_std": round(statistics.stdev(tpss), 1) if len(tpss) > 1 else 0,
+            }
 
-    return "\n".join(log_lines), results_table
+            results_table.append([
+                summary["model"], summary["type"],
+                summary["wall_avg"], summary["wall_std"],
+                summary["eval_avg"], summary["eval_std"],
+                summary["tps_avg"], summary["tps_std"]
+            ])
+
+            all_results.append(summary)
+
+    try:
+        with open(log_path, "w", encoding="utf-8") as f:
+            json.dump(all_results, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log_lines.append(f"\n❌ Ошибка при сохранении лога: {e}")
+
+    return "\n".join(log_lines), results_table, all_results, str(log_path)
 
 
-if __name__ == "__main__":
-    asyncio.run(gradio_benchmark(["mistral-small3.1:24b-instruct-2503-q8_0"]))
+# ------------------------------------------------------
+# Загрузка предыдущего отчёта для отображения в таблице
+# ------------------------------------------------------
+
+def load_previous_log(path: str):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        table = [
+            [item["model"], item["type"], item["wall_avg"], item["wall_std"],
+             item["eval_avg"], item["eval_std"], item["tps_avg"], item["tps_std"]]
+            for item in data
+        ]
+        return table
+    except Exception as e:
+        return [["Ошибка при загрузке файла:", str(e)]]

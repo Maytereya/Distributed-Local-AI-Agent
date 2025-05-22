@@ -6,12 +6,13 @@ import time
 import uuid
 from typing import Dict
 from typing import List
-
+import orjson  # для быстрой загрузки JSON
 import gradio as gr
 from gradio_pdf import PDF
 
 from agent_logic_2 import config as c
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
+from agent_logic_2.benchmark_tab import load_previous_log
 from agent_logic_2.benchmark_tab import ollama_client as ollama
 from agent_logic_2.router_preprocessor2 import routing
 from agent_logic_pack import aretrieve3 as retrieve
@@ -1087,6 +1088,7 @@ with gr.Blocks(css=custom_css) as blocks:
 
         with gr.Tab("⚙️ Ollama Benchmarking"):
             gr.Markdown("""<h3>⚙️ Тестирование производительности генеративных моделей и сервера Ollama</h3>""")
+
             with gr.Row():
                 model_selector = gr.Dropdown(
                     multiselect=True,
@@ -1094,28 +1096,18 @@ with gr.Blocks(css=custom_css) as blocks:
                     interactive=True
                 )
 
-                laps_slider = gr.Slider(value=2, minimum=1, maximum=10, step=1,
-                                        label="Количество прогонов",
-                                        interactive=True,
-                                        )
+                laps_slider = gr.Slider(
+                    value=2, minimum=1, maximum=10, step=1,
+                    label="Количество прогонов",
+                    interactive=True,
+                )
+
                 with gr.Column():
-                    # Отдельная кнопка обновления моделей
                     refresh_models_btn = gr.Button("🔄 Загрузить/обновить список моделей", scale=20, size="md")
                     start_benchmark_btn = gr.Button("🚀 Запустить тестирование", scale=20, size="md")
 
             with gr.Column():
                 progress = gr.Progress(track_tqdm=True)
-
-
-                # Запуск benchmark с прогресс-индикатором и проверкой выбора моделей
-                async def wrapped_benchmark(models, laps):
-                    if not models:
-                        return (
-                            "🟡 Сначала загрузите и выберите модели для тестирования.",
-                            []
-                        )
-                    return await benchmark(models, laps)
-
 
                 log_output = gr.Textbox(
                     label="Ход выполнения",
@@ -1124,12 +1116,14 @@ with gr.Blocks(css=custom_css) as blocks:
                     autoscroll=True,
                     show_copy_button=True,
                 )
+
             gr.Markdown("""### ℹ️ Пояснение к метрикам
-                       - ** Wall Avg(s) ** – среднее полное время ответа(что видит пользователь).
-                       - ** Eval Avg(s) ** – среднее время генерации без учета задержек.
-                       - ** TPS Avg ** – скорость генерации текста (Tokens Per Second).
-                       - ** σ ** означает стандартное отклонение — насколько метрика колеблется от теста к тесту.
-                       """)
+            - **Wall Avg(s)** – среднее полное время ответа (что видит пользователь).
+            - **Eval Avg(s)** – среднее время генерации без задержек.
+            - **TPS Avg** – скорость генерации текста (Tokens Per Second).
+            - **σ** — стандартное отклонение (разброс значений).
+            """)
+
             result_table = gr.DataFrame(
                 headers=["Модель", "Тип", "Wall Avg (s)", "Wall σ", "Eval Avg (s)", "Eval σ", "TPS Avg", "TPS σ"],
                 row_count=(6, "dynamic"),
@@ -1138,23 +1132,65 @@ with gr.Blocks(css=custom_css) as blocks:
                 show_copy_button=True,
             )
 
+            json_view = gr.JSON(label="📄 JSON‑отчёт", visible=True)
 
-            # Обновление списка моделей по кнопке
+            previous_log_file = gr.File(label="📥 Загрузить старый отчёт (JSON)", file_types=[".json"])
+
+            with gr.Row():
+                load_prev_btn = gr.Button("📥 Загрузить старый отчёт", size="md")
+                download_log_btn = gr.File(label="📤 Скачать отчёт (JSON)", interactive=False)
+
+
+            # --- Функции ---
+
             async def update_dropdown():
-                models = await load_models()
-                return gr.update(choices=models, value=models[:1] if models else [])
+                models_response = await ollama.list()
+                models = sorted([m["model"] for m in models_response["models"]])
+                return gr.update(choices=models, value=models[-1] if models else [])
 
 
-            refresh_models_btn.click(
-                fn=update_dropdown,
-                inputs=[],
-                outputs=model_selector
-            )
+            async def wrapped_benchmark(models, laps):
+                if not models:
+                    return (
+                        "🟡 Сначала загрузите и выберите модели для тестирования.",
+                        [],
+                        {},
+                        None
+                    )
+                logs, table, json_data, path = await benchmark(models, laps)
+                return logs, table, json_data, path
+
+
+            def load_previous_json(file):
+                if file is None:
+                    return "Файл не выбран", [], {}, None
+                try:
+                    with open(file.name, "rb") as f:
+                        raw = f.read()
+                        json_data = orjson.loads(raw)
+                    table = load_previous_log(file.name)
+                    log_lines = [
+                        f"[{item['model']}] {item['type']}: wall={item['wall_avg']}s, eval={item['eval_avg']}s, tps={item['tps_avg']}"
+                        for item in json_data]
+                    return "\n".join(log_lines), table, json_data, file.name
+                except Exception as e:
+                    return f"Ошибка загрузки: {e}", [], {}, None
+
+
+            # --- Привязка кнопок ---
+
+            refresh_models_btn.click(fn=update_dropdown, inputs=[], outputs=model_selector)
 
             start_benchmark_btn.click(
                 fn=wrapped_benchmark,
                 inputs=[model_selector, laps_slider],
-                outputs=[log_output, result_table]
+                outputs=[log_output, result_table, json_view, download_log_btn]
+            )
+
+            load_prev_btn.click(
+                fn=load_previous_json,
+                inputs=[previous_log_file],
+                outputs=[log_output, result_table, json_view, download_log_btn]
             )
 
             # ----------------------------------
