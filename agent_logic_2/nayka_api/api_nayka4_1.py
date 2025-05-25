@@ -1,3 +1,4 @@
+# РЕАЛИЗОВАН БЫСТРЫЙ ПОИСК ВРАЧЕЙ ПО ФАМИЛИИ
 import requests
 from datetime import date, timedelta, datetime
 import urllib3
@@ -57,14 +58,19 @@ def save_doctors_data(data: dict):
     today = get_today_str()
     filename = DATA_DIR / f"doctors_{today}.jsonl"
     with open(filename, "w", encoding="utf-8") as f:
+        # Сохраняем все данные как один JSON-объект
         json.dump(data, f, ensure_ascii=False)
     print(f"✅ Данные о врачах сохранены: {filename}")
 
 
 def load_doctors_data(file: Path) -> dict:
     """Загружает данные о врачах из JSONL файла"""
+    doctors = []
     with open(file, "r", encoding="utf-8") as f:
-        return json.load(f)
+        for line in f:
+            if line.strip():  # Пропускаем пустые строки
+                doctors.append(json.loads(line))
+    return {"doctors": doctors}
 
 
 def cleanup_old_doctors_files():
@@ -283,207 +289,171 @@ def find_doctor_schedule(
         last_name: str,
         region_name: str = None  # теперь не обязательно
 ):
-    urllib3.disable_warnings()
+    """
+    Ищем по:
+      • тексту fio (фамилия, имя, отчество)  («Смирнова», «Иванов Иван»)
+    Возвращаем краткий список врачей.
+    """
+    print(f"\nИщем врача по фамилии: {last_name}")
+    if region_name:
+        print(f"В регионе: {region_name}")
 
-    # Загружаем регионы
-    regions_response = requests.get(f"{base_url}/regions", auth=auth, verify=False)
+    # Загружаем кэшированные данные
+    data = get_cached_doctors_data()
+    
+    # Распаковываем данные
+    units = data["units"]
+    unit_name_by_id = {u["id"]: u["name"] for u in units}
+    links = data["doctor_units"]
+    doctors = data["doctors"]
+    regions = data["regions"]
+    doctor_regions = data["doctor_regions"]
 
-    if not regions_response.ok:
-        print(f"Ошибка при загрузке адресов больниц: {regions_response.status_code}")
-        # print(regions_response.text)
-        return f"Ошибка загрузки адресов больниц с сервера."
-
-    try:
-        regions = regions_response.json()
-    except Exception as e:
-        print("Ошибка при разборе JSON с адресами больниц:", e)
-        # print("Ответ сервера:", regions_response.text)
-        return f"Ошибка при обработке данных об адресах."
-
-    region_map = {r["id"]: r["name"] for r in regions}
-
-    # print("Регионы: ")
-    # print(region_map)
-
+    # Получаем ID региона, если указан
     region_id = None
     if region_name:
-        region_id = next((r["id"] for r in regions if region_name.lower() in r["name"].lower()), None)
+        region_name = region_name.lower()
+        for r in regions:
+            if region_name in r["name"].lower():
+                region_id = r["id"]
+                print(f"Найден регион: {r['name']} (ID: {r['id']})")
+                break
         if not region_id:
-            return f"Регион '{region_name}' не найден."
+            print(f"Регион '{region_name}' не найден")
+            return f"Регион «{region_name}» не найден."
 
-    # Получаем врачей
-    # doctors = requests.get(f"{base_url}/doctors", auth=auth, verify=False).json() # не обрабатывает ошибку доступа
+    # Ищем врачей по фамилии
+    matched_workers = set()
+    last_name = last_name.lower()
+    
+    print(f"Ищем врачей с фамилией '{last_name}'...")
+    for doctor in doctors:
+        fio = doctor["fio"].lower()
+        if last_name in fio:
+            print(f"Найден врач: {doctor['fio']} (ID: {doctor['id']})")
+            matched_workers.add(doctor["id"])
+    
+    if not matched_workers:
+        print(f"Врачей с фамилией '{last_name}' не найдено")
+        return f"Врачей с фамилией «{last_name}» не найдено."
 
-    response = requests.get(f"{base_url}/doctors", auth=auth, verify=False)
-    if not response.ok:
-        print(f"Ошибка запроса: {response.status_code} {response.reason}")
-        print(f"Тело ответа: {response.text}")
-        return []
+    # Фильтруем по региону, если указан
+    if region_id:
+        print(f"Фильтруем врачей по региону {region_id}...")
+        filtered_workers = set()
+        for dr in doctor_regions:
+            if dr["worker"] in matched_workers and dr["region"] == region_id:
+                filtered_workers.add(dr["worker"])
+        if not filtered_workers:
+            print(f"В регионе {region_id} нет врачей с фамилией '{last_name}'")
+            return f"В регионе «{region_name}» нет врачей с фамилией «{last_name}»."
+        matched_workers = filtered_workers
 
-    try:
-        doctors = response.json()
-    except Exception as e:
-        print(f"Ошибка парсинга JSON: {e}")
-        print(f"Ответ сервера: {response.text}")
-        return []
-
-    doctor_dict = {doc["id"]: doc["fio"] for doc in doctors}
-
-    # Фильтрация врачей по фамилии или части ФИО
-    matched_doctors = {
-        doc_id: fio for doc_id, fio in doctor_dict.items()
-        if last_name.lower() in fio.lower()
-    }
-
-    if not matched_doctors:
-        return f"Врач с фамилией (или частью ФИО) '{last_name}' не найден."
-
-    # Загружаем остальные таблицы
-    mappings = requests.get(f"{base_url}/doctorCompanyUnits",
-                            auth=auth,
-                            verify=False)
-
-    if not mappings.ok:
-        print(f"Ошибка {mappings.status_code} при обращении к {base_url}/doctorCompanyUnits")
-        return []
-    try:
-        jsoned_mappings = mappings.json()
-    except Exception as e:
-        print("Ошибка при разборе JSON:", e)
-        print("Ответ сервера:", mappings.text)
-        return f"Ошибка при обработке данных о специализациях врачей."
-
-    dr_regions = requests.get(f"{base_url}/doctorRegions",
-                              auth=auth,
-                              verify=False)
-
-    if not dr_regions.ok:
-        print(f"Ошибка {dr_regions.status_code} при обращении к {base_url}/doctorRegions")
-        return []
-    try:
-        jsoned_dr_regions = dr_regions.json()
-    except Exception as e:
-        print("Ошибка при разборе JSON:", e)
-        print("Ответ сервера:", dr_regions.text)
-        return f"Ошибка при обработке данных о сопоставлении клиник и врачей."
-
-    start_date = date.today().isoformat()
-    end_date = (date.today() + timedelta(days=7)).isoformat()
-
+    # Собираем информацию о врачах
     result = []
-
-    for doctor_id in matched_doctors:
-        doctor_mappings = [m for m in jsoned_mappings if m["worker"] == doctor_id]
-        doctor_regions = [r for r in jsoned_dr_regions if r["worker"] == doctor_id]
-
-        if region_id:
-            doctor_regions = [r for r in doctor_regions if r["region"] == region_id]
-
-        if not doctor_regions:
+    for wid in matched_workers:
+        # Получаем все специализации врача
+        specs = [
+            link.get("specialization", "") or "" 
+            for link in links 
+            if link["worker"] == wid
+        ]
+        # Убираем дубликаты и пустые строки
+        specs = list(set(filter(None, specs)))
+        
+        # Получаем информацию о враче
+        doctor = next((d for d in doctors if d["id"] == wid), None)
+        if not doctor:
+            print(f"Не найдена информация о враче с ID {wid}")
             continue
 
-        for region_entry in doctor_regions:
-            company_unit = region_entry["companyUnit"]
-            reg_id = region_entry["region"]
+        if not specs:
+            result.append(f"{doctor['fio']} - Специализация не указана")
+            continue
 
-            schedule_url = (
-                f"{base_url}/doctorSchedule?doctor={doctor_id}&companyUnit={company_unit}&region={reg_id}"
-                f"&startDate={start_date}&endDate={end_date}"
-            )
-            # schedule = requests.get(schedule_url, auth=auth, verify=False).json()
-            schedule_response = requests.get(schedule_url, auth=auth, verify=False)
-
-            if not schedule_response.ok:
-                print(f"+ Ошибка при получении расписания: {schedule_response.status_code}")
-                return []
-            try:
-                schedule = schedule_response.json()
-            except Exception as e:
-                print("Ошибка при парсинге расписания:", e)
-                print("Тело ответа:", schedule_response.text)
-                continue
-
-            full_schedule = []
-
-            for day in schedule:
-
-                cells_url = f"{base_url}/doctorScheduleCells?doctorSchedule={day['id']}"
-
-                # response = requests.get(cells_url, auth=auth, verify=False) # Без проверки на ошибки
-
-                response = requests.get(cells_url, auth=auth, verify=False)
-
-                if not response.ok:
-                    print(f"⚠️ Ошибка загрузки слотов расписания врача. Код: {response.status_code}, URL: {cells_url}")
-                    free_slots = []
-                else:
-                    try:
-                        cells = response.json()
-                        free_slots = [cell["startTime"] for cell in cells if cell.get("free")]
-                    except Exception as e:
-                        print("+ Ошибка при разборе JSON +:", e)
-                        print("Ответ сервера:", response.text)
-                        free_slots = []
+        # Формируем вывод
+        doctor_info = [f"{doctor['fio']}"]
+        
+        # Добавляем основную специализацию
+        main_spec = specs[0].split(":")[0].split("-")[0].strip()
+        if main_spec:
+            doctor_info.append(f"Специализация: {main_spec}")
+            
+        # Добавляем направления работы, если есть
+        if len(specs) > 1:
+            directions = [s.split(":")[0].strip() for s in specs[1:3]]  # Берем максимум 2 направления
+            if directions:
+                doctor_info.append(f"Направления: {', '.join(directions)}")
+        
+        result.append("\n".join(doctor_info))
+    
+    return "\n\n".join(result)
 
 
-                full_schedule.append({
-                    "date": day["curDate"],
-                    "start": day["startTime"],
-                    "end": day["endTime"],
-                    "slots": free_slots
-                })
+def get_all_doctors() -> List[Dict]:
+    """
+    Получает список всех врачей с их данными.
+    Использует кэшированные данные, если они есть.
+    
+    Returns:
+        List[Dict]: Список словарей с данными о врачах
+    """
+    # Получаем все данные через API
+    doctors = site_doctors()
+    units = site_company_units()
+    doctor_units = site_doctor_company_units()
+    doctor_regions = site_doctor_regions()
+    regions = site_regions()
+    
+    # Создаем словари для быстрого поиска
+    units_dict = {u["id"]: u["name"] for u in units}
+    regions_dict = {r["id"]: r["name"] for r in regions}
+    
+    result = []
+    for doctor in doctors:
+        doctor_id = doctor["id"]
+        
+        # Получаем специализации врача
+        specs = [
+            link.get("specialization", "") or ""
+            for link in doctor_units
+            if link["worker"] == doctor_id
+        ]
+        specs = list(set(filter(None, specs)))
 
-            specialization = next(
-                (m.get("specialization", "") for m in doctor_mappings if m["companyUnit"] == company_unit), ""
-            )
+        # Получаем подразделения врача
+        doc_units = [
+            units_dict.get(link["companyUnit"], "")
+            for link in doctor_units
+            if link["worker"] == doctor_id
+        ]
+        doc_units = list(set(filter(None, doc_units)))
+        
+        # Получаем регионы врача
+        doc_regions = [
+            regions_dict.get(link["region"], "")
+            for link in doctor_regions
+            if link["worker"] == doctor_id
+        ]
+        doc_regions = list(set(filter(None, doc_regions)))
 
-            result.append({
-                "id": doctor_id,
-                "fio": doctor_dict[doctor_id],
-                "specialization": specialization,
-                "region": region_map.get(reg_id, f"[ID {reg_id}]"),
-                "schedule": full_schedule
-            })
+        # Формируем итоговый словарь
+        doctor_data = {
+            "id": doctor_id,
+            "fio": doctor["fio"],
+            "specialization": specs[0] if specs else None,
+            "regions": doc_regions,
+            "units": doc_units
+        }
+        
+        result.append(doctor_data)
 
-    # -------------------------------------------------------------
-    # Мерджинг карточек врача, если он ведет прием в разных клиниках.
-    # ------------------------------------------------------------
-
-    merged = {}
-
-    for doc in result:
-        doc_id = doc["id"]
-        region = doc["region"]
-
-        if doc_id not in merged:
-            merged[doc_id] = {
-                "id": doc["id"],
-                "fio": doc["fio"],
-                "specialization": doc["specialization"],
-                "regions": set(),
-                "schedules_by_region": defaultdict(list)
-            }
-
-        merged[doc_id]["regions"].add(region)
-        merged[doc_id]["schedules_by_region"][region].extend(doc["schedule"])
-
-    # Преобразуем в финальный вид
-    final_result = []
-    for item in merged.values():
-        final_result.append({
-            "id": item["id"],
-            "fio": item["fio"],
-            "specialization": item["specialization"],
-            "regions": list(item["regions"]),
-            "schedule": dict(item["schedules_by_region"])
-        })
-
-    return final_result or f"Врач с фамилией '{last_name}' не найден."
+    return result
 
 
 if __name__ == "__main__":
     doctors = find_doctor_schedule(
-        last_name="Свиридова Елена Александровна"
+        last_name="Смирнова"
     )
 
     pprint(doctors, width=150)
