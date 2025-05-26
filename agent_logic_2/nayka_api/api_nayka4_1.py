@@ -1,4 +1,3 @@
-# РЕАЛИЗОВАН БЫСТРЫЙ ПОИСК ВРАЧЕЙ ПО ФАМИЛИИ
 import requests
 from datetime import date, timedelta, datetime
 import urllib3
@@ -54,13 +53,33 @@ def get_date_from_filename(file: Path) -> str:
 
 
 def save_doctors_data(data: dict):
-    """Сохраняет данные о врачах в JSONL файл"""
+    """Сохраняет данные о врачах в JSONL файл, без полей фото."""
     today = get_today_str()
     filename = DATA_DIR / f"doctors_{today}.jsonl"
+
+    # 1) Убираем из каждого доктора всё, что связано с фото
+    clean_doctors = []
+    for doc in data.get("doctors", []):
+        # оставляем только те поля, которые точно нужны
+        allowed = {"id", "fio", "specialization", "regions", "units"}
+        clean = {k: v for k, v in doc.items() if k in allowed}
+        clean_doctors.append(clean)
+
+    # 2) Формируем «облегчённый» словарь для сохранения
+    data_to_save = {
+        "doctors": clean_doctors,
+        "units": data.get("units", []),
+        "doctor_units": data.get("doctor_units", []),
+        "doctor_regions": data.get("doctor_regions", []),
+        "regions": data.get("regions", []),
+    }
+
+    # 3) Сохраняем в файл
     with open(filename, "w", encoding="utf-8") as f:
-        # Сохраняем все данные как один JSON-объект
-        json.dump(data, f, ensure_ascii=False)
-    print(f"✅ Данные о врачах сохранены: {filename}")
+        json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+        f.write("\n")  # Добавляем перенос строки в конце
+
+    print(f"✅ Данные о врачах сохранены (без фото): {filename}")
 
 
 def load_doctors_data(file: Path) -> dict:
@@ -449,7 +468,6 @@ def get_all_doctors() -> List[Dict]:
         result.append(doctor_data)
 
     return result
-
 
 if __name__ == "__main__":
     doctors = find_doctor_schedule(
