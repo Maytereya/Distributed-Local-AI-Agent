@@ -1,24 +1,18 @@
-import requests
-from datetime import date, timedelta, datetime
-import urllib3
-from pprint import pprint
-from collections import defaultdict
-import sys
-import os
 import json
+import os
+import sys
+from datetime import timedelta, datetime
 from pathlib import Path
+from pprint import pprint
 from typing import Dict, List, Set, Union
+
+import requests
+
+from agent_logic_2 import config as c
 
 # Добавляем корневую директорию в PYTHONPATH
 root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(root_dir)
-
-try:
-    import config as c
-except ImportError as e:
-    print(f"Ошибка импорта конфигурации: {e}")
-    print("Убедитесь, что файл config.py находится в корневой директории")
-    sys.exit(1)
 
 base_url = c.nayka_base_url
 auth = requests.auth.HTTPBasicAuth(c.nayka_login, c.nayka_pass)
@@ -38,7 +32,7 @@ def get_yesterday_str() -> str:
     return (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
 
 
-def find_existing_doctors_file() -> Path | None:
+def find_existing_doctors_file() -> Path or None:
     """Находит самый свежий файл с данными о врачах"""
     pattern = "doctors_*.jsonl"
     files = list(DATA_DIR.glob(pattern))
@@ -64,12 +58,12 @@ def save_doctors_data(doctors: list):
 
 def load_doctors_data(file: Path) -> list:
     """Загружает врачей из JSONL файла."""
-    doctors = []
+    doctors_ = []
     with open(file, "r", encoding="utf-8") as f:
         for line in f:
             if line.strip():
-                doctors.append(json.loads(line))
-    return doctors
+                doctors_.append(json.loads(line))
+    return doctors_
 
 
 def cleanup_old_doctors_files():
@@ -87,11 +81,14 @@ def get_cached_doctors_data() -> list:
     cleanup_old_doctors_files()
     today = get_today_str()
     existing_file = find_existing_doctors_file()
+
     print(f"[DEBUG] Сегодня: {today}")
     print(f"[DEBUG] Найден файл: {existing_file}")
+
     if existing_file:
         file_date = get_date_from_filename(existing_file)
         print(f"[DEBUG] Дата файла: {file_date}")
+
         if file_date == today:
             print("✅ Нашли свежие данные о врачах на сегодня (используем кэш)")
             return load_doctors_data(existing_file)
@@ -164,14 +161,14 @@ def _descendants(unit_ids: Set[int], tree: Dict[int, Set[int]]) -> Set[int]:
     """Находит все дочерние подразделения."""
     result = unit_ids.copy()
     to_process = unit_ids.copy()
-    
+
     while to_process:
         current = to_process.pop()
         children = tree.get(current, set())
         new_children = children - result
         result.update(new_children)
         to_process.update(new_children)
-    
+
     return result
 
 
@@ -186,7 +183,7 @@ def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
 
     # Загружаем кэшированные данные
     data = get_cached_doctors_data()
-    
+
     # Распаковываем данные
     units = site_company_units()
     unit_name_by_id = {u["id"]: u["name"] for u in units}
@@ -200,9 +197,9 @@ def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
         spec = link.get("specialization", "") or ""
         spec_lower = spec.lower()
         unit = unit_name_by_id.get(link["companyUnit"], "").lower()
-        
+
         is_match = False
-        
+
         # Проверяем подразделение
         if kw in unit:
             is_match = True
@@ -214,10 +211,10 @@ def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
                 "в ревматологии", "по ревматологии", "ревматологический"
             ]):
                 is_match = True
-            
+
         if is_match:
             matched_workers.add(link["worker"])
-    
+
     if not matched_workers:
         return f"Врачей по ключу «{keyword}» не найдено."
 
@@ -225,33 +222,33 @@ def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
     for wid in matched_workers:
         # Получаем все специализации врача
         specs = [
-            link.get("specialization", "") or "" 
-            for link in links 
+            link.get("specialization", "") or ""
+            for link in links
             if link["worker"] == wid
         ]
         # Убираем дубликаты и пустые строки
         specs = list(set(filter(None, specs)))
-        
+
         if not specs:
             result.append(f"{doctors.get(wid, f'[id {wid}]')} - Специализация не указана")
             continue
-            
+
         # Формируем вывод
         doctor_info = [f"{doctors.get(wid, f'[id {wid}]')}"]
-        
+
         # Добавляем основную специализацию
         main_spec = specs[0].split(":")[0].split("-")[0].strip()
         if main_spec:
             doctor_info.append(f"Специализация: {main_spec}")
-            
+
         # Добавляем направления работы, если есть
         if len(specs) > 1:
             directions = [s.split(":")[0].strip() for s in specs[1:3]]  # Берем максимум 2 направления
             if directions:
                 doctor_info.append(f"Направления: {', '.join(directions)}")
-        
+
         result.append("\n".join(doctor_info))
-    
+
     return "\n\n".join(result)
 
 
@@ -335,7 +332,7 @@ def find_doctor_schedule(
 
     # Загружаем кэшированные данные
     data = get_cached_doctors_data()
-    
+
     # Распаковываем данные
     units = site_company_units()
     unit_name_by_id = {u["id"]: u["name"] for u in units}
@@ -360,14 +357,14 @@ def find_doctor_schedule(
     # Ищем врачей по фамилии
     matched_workers = set()
     last_name = last_name.lower()
-    
+
     print(f"Ищем врачей с фамилией '{last_name}'...")
     for doctor in doctors:
         fio = doctor["fio"].lower()
         if last_name in fio:
             print(f"Найден врач: {doctor['fio']} (ID: {doctor['id']})")
             matched_workers.add(doctor["id"])
-    
+
     if not matched_workers:
         print(f"Врачей с фамилией '{last_name}' не найдено")
         return f"Врачей с фамилией «{last_name}» не найдено."
@@ -389,13 +386,13 @@ def find_doctor_schedule(
     for wid in matched_workers:
         # Получаем все специализации врача
         specs = [
-            link.get("specialization", "") or "" 
-            for link in links 
+            link.get("specialization", "") or ""
+            for link in links
             if link["worker"] == wid
         ]
         # Убираем дубликаты и пустые строки
         specs = list(set(filter(None, specs)))
-        
+
         # Получаем информацию о враче
         doctor = next((d for d in doctors if d["id"] == wid), None)
         if not doctor:
@@ -408,20 +405,20 @@ def find_doctor_schedule(
 
         # Формируем вывод
         doctor_info = [f"{doctor['fio']}"]
-        
+
         # Добавляем основную специализацию
         main_spec = specs[0].split(":")[0].split("-")[0].strip()
         if main_spec:
             doctor_info.append(f"Специализация: {main_spec}")
-            
+
         # Добавляем направления работы, если есть
         if len(specs) > 1:
             directions = [s.split(":")[0].strip() for s in specs[1:3]]  # Берем максимум 2 направления
             if directions:
                 doctor_info.append(f"Направления: {', '.join(directions)}")
-        
+
         result.append("\n".join(doctor_info))
-    
+
     return "\n\n".join(result)
 
 
@@ -439,15 +436,15 @@ def get_all_doctors() -> List[Dict]:
     doctor_units = site_doctor_company_units()
     doctor_regions = site_doctor_regions()
     regions = site_regions()
-    
+
     # Создаем словари для быстрого поиска
     units_dict = {u["id"]: u["name"] for u in units}
     regions_dict = {r["id"]: r["name"] for r in regions}
-    
+
     result = []
     for doctor in doctors:
         doctor_id = doctor["id"]
-        
+
         # Получаем специализации врача
         specs = [
             link.get("specialization", "") or ""
@@ -463,7 +460,7 @@ def get_all_doctors() -> List[Dict]:
             if link["worker"] == doctor_id
         ]
         doc_units = list(set(filter(None, doc_units)))
-        
+
         # Получаем регионы врача
         doc_regions = [
             regions_dict.get(link["region"], "")
@@ -480,14 +477,15 @@ def get_all_doctors() -> List[Dict]:
             "regions": doc_regions,
             "units": doc_units
         }
-        
+
         result.append(doctor_data)
 
     return result
 
+
 if __name__ == "__main__":
     doctors = find_doctor_schedule(
-        last_name="Смирнова"
+        last_name="Дразнин"
     )
 
     pprint(doctors, width=150)
