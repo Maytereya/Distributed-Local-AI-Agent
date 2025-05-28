@@ -52,50 +52,30 @@ def get_date_from_filename(file: Path) -> str:
     return file.stem.split("_")[-1]
 
 
-def save_doctors_data(data: dict):
-    """Сохраняет данные о врачах в JSONL файл, без полей фото."""
+def save_doctors_data(doctors: list):
+    """Сохраняет список врачей в формате JSONL — по одному врачу на строку."""
     today = get_today_str()
     filename = DATA_DIR / f"doctors_{today}.jsonl"
-
-    # 1) Убираем из каждого доктора всё, что связано с фото
-    clean_doctors = []
-    for doc in data.get("doctors", []):
-        # оставляем только те поля, которые точно нужны
-        allowed = {"id", "fio", "specialization", "regions", "units"}
-        clean = {k: v for k, v in doc.items() if k in allowed}
-        clean_doctors.append(clean)
-
-    # 2) Формируем «облегчённый» словарь для сохранения
-    data_to_save = {
-        "doctors": clean_doctors,
-        "units": data.get("units", []),
-        "doctor_units": data.get("doctor_units", []),
-        "doctor_regions": data.get("doctor_regions", []),
-        "regions": data.get("regions", []),
-    }
-
-    # 3) Сохраняем в файл
     with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data_to_save, f, ensure_ascii=False, indent=2)
-        f.write("\n")  # Добавляем перенос строки в конце
+        for doc in doctors:
+            f.write(json.dumps(doc, ensure_ascii=False) + "\n")
+    print(f"✅ Врачи сохранены в формате JSONL: {filename}")
 
-    print(f"✅ Данные о врачах сохранены (без фото): {filename}")
 
-
-def load_doctors_data(file: Path) -> dict:
-    """Загружает данные о врачах из JSONL файла"""
+def load_doctors_data(file: Path) -> list:
+    """Загружает врачей из JSONL файла."""
     doctors = []
     with open(file, "r", encoding="utf-8") as f:
         for line in f:
-            if line.strip():  # Пропускаем пустые строки
+            if line.strip():
                 doctors.append(json.loads(line))
-    return {"doctors": doctors}
+    return doctors
 
 
 def cleanup_old_doctors_files():
     """Удаляет старые файлы с данными о врачах"""
     yesterday = get_yesterday_str()
-    pattern = "doctors_*.jsonl"
+    pattern = "doctors_*.json"
     for file in DATA_DIR.glob(pattern):
         file_date = get_date_from_filename(file)
         if file_date < yesterday:
@@ -103,32 +83,68 @@ def cleanup_old_doctors_files():
             file.unlink()
 
 
-def get_cached_doctors_data() -> dict:
-    """Получает актуальные данные о врачах (из файла или API)"""
+def get_cached_doctors_data() -> list:
     cleanup_old_doctors_files()
-    
     today = get_today_str()
     existing_file = find_existing_doctors_file()
-    
+    print(f"[DEBUG] Сегодня: {today}")
+    print(f"[DEBUG] Найден файл: {existing_file}")
     if existing_file:
         file_date = get_date_from_filename(existing_file)
+        print(f"[DEBUG] Дата файла: {file_date}")
         if file_date == today:
-            print("✅ Нашли свежие данные о врачах на сегодня")
+            print("✅ Нашли свежие данные о врачах на сегодня (используем кэш)")
             return load_doctors_data(existing_file)
         print(f"♻️ Данные найдены, но они от {file_date}. Скачиваем новые.")
-    
-    # Собираем все данные
-    data = {
-        "doctors": site_doctors(),
-        "units": site_company_units(),
-        "doctor_units": site_doctor_company_units(),
-        "doctor_regions": site_doctor_regions(),
-        "regions": site_regions()
-    }
-    
-    save_doctors_data(data)
+
+    # Собираем все данные с API и формируем список врачей с нужными полями
+    print("[DEBUG] Кэш не найден или устарел — обновляем через API!")
+    doctors_raw = site_doctors()
+    units = site_company_units()
+    doctor_units = site_doctor_company_units()
+    doctor_regions = site_doctor_regions()
+    regions = site_regions()
+
+    units_dict = {u["id"]: u["name"] for u in units}
+    regions_dict = {r["id"]: r["name"] for r in regions}
+
+    doctors = []
+    for doctor in doctors_raw:
+        doctor_id = doctor["id"]
+        # Получаем специализации врача
+        specs = [
+            link.get("specialization", "") or ""
+            for link in doctor_units
+            if link["worker"] == doctor_id
+        ]
+        specs = list(set(filter(None, specs)))
+        # Получаем подразделения врача
+        doc_units = [
+            units_dict.get(link["companyUnit"], "")
+            for link in doctor_units
+            if link["worker"] == doctor_id
+        ]
+        doc_units = list(set(filter(None, doc_units)))
+        # Получаем регионы врача
+        doc_regions = [
+            regions_dict.get(link["region"], "")
+            for link in doctor_regions
+            if link["worker"] == doctor_id
+        ]
+        doc_regions = list(set(filter(None, doc_regions)))
+        # Формируем итоговый словарь
+        doctor_data = {
+            "id": doctor_id,
+            "fio": doctor["fio"],
+            "specialization": specs[0] if specs else None,
+            "regions": doc_regions,
+            "units": doc_units
+        }
+        doctors.append(doctor_data)
+
+    save_doctors_data(doctors)
     print("✅ Новые данные о врачах успешно загружены")
-    return data
+    return doctors
 
 
 def _units_tree() -> Dict[int, Set[int]]:
@@ -172,10 +188,10 @@ def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
     data = get_cached_doctors_data()
     
     # Распаковываем данные
-    units = data["units"]
+    units = site_company_units()
     unit_name_by_id = {u["id"]: u["name"] for u in units}
-    links = data["doctor_units"]
-    doctors = {d["id"]: d["fio"] for d in data["doctors"]}
+    links = site_doctor_company_units()
+    doctors = {d["id"]: d["fio"] for d in data}
 
     # Остальная логика поиска остается без изменений
     matched_workers = set()
@@ -321,12 +337,12 @@ def find_doctor_schedule(
     data = get_cached_doctors_data()
     
     # Распаковываем данные
-    units = data["units"]
+    units = site_company_units()
     unit_name_by_id = {u["id"]: u["name"] for u in units}
-    links = data["doctor_units"]
-    doctors = data["doctors"]
-    regions = data["regions"]
-    doctor_regions = data["doctor_regions"]
+    links = site_doctor_company_units()
+    doctors = data
+    regions = site_regions()
+    doctor_regions = site_doctor_regions()
 
     # Получаем ID региона, если указан
     region_id = None
