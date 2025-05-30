@@ -1,6 +1,4 @@
-import asyncio
 import json
-import os
 import statistics
 import time
 from datetime import datetime
@@ -8,7 +6,7 @@ from typing import Tuple
 
 from ollama import AsyncClient, Options
 
-from agent_logic_2 import llama_func_call1 as func_mod
+from agent_logic_2 import llama_func_call2 as func_mod
 from agent_logic_2.config import ollama_url
 
 # Настройки клиента Ollama
@@ -24,6 +22,7 @@ SLOW_TASKS = [
     "Напишите развёрнутый конспект по принципам REST API",
     "Сгенерируйте код ORM-слоя для сложной ER-модели из 10 таблиц",
 ]
+
 
 # ------------------------------------------
 # ГЛАВНАЯ ФУНКЦИЯ: тестирует список моделей
@@ -46,7 +45,7 @@ async def gradio_benchmark(models: list[str], laps: int = 3):
 
         async def measure(task: str) -> Tuple[float, float, float]:
             t0 = time.time()
-            res = await func_mod.investigate(task, model=model)
+            res = await func_mod.investigate(task)
             wall = time.time() - t0
             eval_s = res.get("eval_duration", 0) / 1e9 if isinstance(res, dict) else 0
             tokens = res.get("eval_count", len(str(res).split())) if isinstance(res, dict) else len(str(res).split())

@@ -7,11 +7,11 @@ from typing import Any, Dict, List, Tuple
 
 from ollama import AsyncClient, Options
 
-from agent_logic_2 import llama_func_call1 as doctor_info, config as c
+from agent_logic_2 import llama_func_call2 as doctor_info, config as c
 
 # LLM‑клиент для классификации
 ollama = AsyncClient(c.ollama_url)
-llm = "llama3.3:70b-instruct-q8_0"
+llm = c.ll_model_big
 options = Options(temperature=0, top_k=1, top_p=0.1, stop=["<|eot_id|>"])
 
 # Label‑ы и порядок
@@ -177,16 +177,21 @@ async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
 
 
 # ──────────────────────────────────────────────────────
-# Подключаем doctor_info из llama_test_bench_func_call
+# Подключаем doctor_info из llama_func_call
 # ──────────────────────────────────────────────────────
 
-async def info_handle(text: str, **_) -> Tuple[str, bool]:
-    raw = await doctor_info.investigate(text)
-    captured = doctor_info.re_capture(raw)
-    if isinstance(captured, str):
-        return captured, False
-    formatted = await doctor_info.formulate(captured)
-    return formatted, False
+# async def info_handle(text: str, **_) -> Tuple[str, bool]:
+#     raw = await doctor_info.investigate(text)
+#     captured = doctor_info.re_capture(raw)
+#     if isinstance(captured, str):
+#         return captured, False
+#     formatted = await doctor_info.formulate(captured)
+#     return formatted, False
+
+
+async def get_doc_info_from_api(question: str, **_) -> Tuple[str, bool]:
+    result = await doctor_info.investigate(question)
+    return result, False
 
 
 # ────────────────────────────────────────────────
@@ -216,7 +221,7 @@ async def issues_stub(_text: str, **__) -> Tuple[str, bool]:
 
 # Ярлыки для вызова функций обработки данных после роутинга
 MODULES = {
-    "INFO": info_handle,
+    "INFO": get_doc_info_from_api,
     "PREP": prep_stub,
     "APPOINTMENT": appointment_stub,
     "ISSUES": issues_stub,
@@ -266,14 +271,21 @@ async def routing(text: str, sess: Dict[str, Any] | None = None) -> Tuple[str, D
     sess["history"].append({"user": text})
     sess["history"].append({"bot": result})
 
+    # print(result)
+
     # 5. Возвращаем ответ и состояние
     return result, sess
 
 
 if __name__ == "__main__":
-    asyncio.run(
+    re, sess = asyncio.run(
         routing("""
         Хочу записаться к доктору Смирновой на завтра и узнать, 
         как подготовиться к УЗИ, если к нему вообще надо готовиться, 
         и ещё скажите, сколько стоит приём у Белохвостиковой и сколько стоит УЗИ печени
         """))
+    print("Итоговый вывод: ________")
+    print(re)
+    print("sess: ___________")
+    print(sess)
+

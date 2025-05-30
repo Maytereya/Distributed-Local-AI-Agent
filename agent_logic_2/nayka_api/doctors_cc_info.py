@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 # Добавляем родительскую директорию в путь для импорта
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import config as c
+from agent_logic_2 import config as c
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)

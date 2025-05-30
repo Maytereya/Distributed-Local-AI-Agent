@@ -10,6 +10,8 @@ from functools import wraps
 from typing import Any, Callable, Dict, List, Optional
 
 from ollama import AsyncClient, Options
+from agent_logic_2.nayka_api.api_nayka4_1 import get_all_doctors
+from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
 from agent_logic_2 import config as c
 
 # ── Конфигурация ───────────────────────────────────────────────────────────
@@ -280,7 +282,6 @@ async def investigate(question: str) -> str:
 
     # 4) Если не нашли ни по одному, обновляем через API и ищем снова
     if not local:
-        from nayka_api.api_nayka4_1 import get_all_doctors
         await repo.update(get_all_doctors)
         if full_name:
             local = [d for d in repo.read_all() if d.get("fio", "").startswith(full_name)]
@@ -291,7 +292,7 @@ async def investigate(question: str) -> str:
 
     # 5) Обогащаем заметками call-центра
     if local:
-        from nayka_api.doctors_cc_info import get_doctors_cc_info
+
         print("Загружаем заметки call-центра...")
         cc_info = get_doctors_cc_info()
         for doctor in local:
