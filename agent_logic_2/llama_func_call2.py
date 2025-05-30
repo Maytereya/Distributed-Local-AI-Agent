@@ -10,9 +10,10 @@ from functools import wraps
 from typing import Any, Callable, Dict, List, Optional
 
 from ollama import AsyncClient, Options
+
+from agent_logic_2 import config as c
 from agent_logic_2.nayka_api.api_nayka4_1 import get_all_doctors
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
-from agent_logic_2 import config as c
 
 # ── Конфигурация ───────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
@@ -235,13 +236,15 @@ repo = DoctorsRepository(DATA_DIR)
 
 
 @with_retries(tries=2)
-async def ollama_call(prompt: str) -> Dict[str, Any]:
-    return await ollama_client.generate(
+async def ollama_call(prompt: str):  # -> Dict[str, Any]
+    call_result = await ollama_client.generate(
         model=OLLAMA_MODEL,
         prompt=prompt,
         options=OLLAMA_OPTIONS,
         keep_alive=-1,
     )
+
+    return call_result
 
 
 async def investigate(question: str) -> str:

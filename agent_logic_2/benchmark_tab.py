@@ -45,7 +45,7 @@ async def gradio_benchmark(models: list[str], laps: int = 3):
 
         async def measure(task: str) -> Tuple[float, float, float]:
             t0 = time.time()
-            res = await func_mod.investigate(task)
+            res = await func_mod.ollama_call(task)
             wall = time.time() - t0
             eval_s = res.get("eval_duration", 0) / 1e9 if isinstance(res, dict) else 0
             tokens = res.get("eval_count", len(str(res).split())) if isinstance(res, dict) else len(str(res).split())
