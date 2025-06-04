@@ -6,13 +6,12 @@ import time
 import uuid
 from typing import Dict
 from typing import List
-import orjson  # для быстрой загрузки JSON
+
 import gradio as gr
 from gradio_pdf import PDF
 
 from agent_logic_2 import config as c
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
-from agent_logic_2.benchmark_tab import load_previous_log
 from agent_logic_2.benchmark_tab import ollama_client as ollama
 from agent_logic_2.router_preprocessor2 import routing
 from agent_logic_pack import aretrieve3 as retrieve
@@ -23,10 +22,16 @@ from converters import pdf_to_json_txt_tables_meili as pdf2json
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
 INDEXES_IN_MEILI = "Индексы документов Meilisearch"
 EXAMPLES = [
-    ["Запишите на прием к Дразнину", {}],
-    ["Порекомендуйте уролога", {}],
-    ["Запишите на УЗИ", {}],
-    ["Куда обратиться с жалобой: стало плохо после операции!", {}]
+    [
+        "Запишите на прием к доктору Дразнину",  # message
+        "",  # chroma_search_collection_dropdown (не используется)
+        0.005,  # treshold_value_slider (заглушка)
+        5,  # value_n_results_slider (заглушка)
+        2,  # value_k_slider (заглушка)
+        "ai-router",  # radio_type_of_search
+        "",  # meili_search_indexes_dropdown (не используется)
+        {}  # state
+    ]
 ]
 # -------------------
 # SECURITY
@@ -93,7 +98,6 @@ footer {
 # -------------------
 # ECHOES PART
 # -------------------
-# Представляю функцию universal_echo_router_edition!
 
 # Глобальная сессия (Gradio поддерживает per-user state)
 state = gr.State({})  # будет передаваться как дополнительный input/output
@@ -101,7 +105,7 @@ state = gr.State({})  # будет передаваться как дополн�
 
 # ------------------------------------------------------------------------
 
-async def universal_echo_router_version(message, history, session_state):
+async def echo_ai_router(message, history, session_state):
     """
     Обновлённая версия universal_echo — подключает роутер, обрабатывает память.
     :param session_state:
@@ -115,7 +119,7 @@ async def universal_echo_router_version(message, history, session_state):
         answer, session_state = await routing(text=message, sess=session_state or {})
         return answer, session_state
     except Exception as e:
-        error_msg = f"⚠️ Ошибка обработки запроса: {e}"
+        error_msg = f"⚠️ Ошибка обработки запроса в ai router: {e}"
         # Гарантируем, что возвращаем и ответ, и текущее/пустое состояние
         return error_msg, session_state or {}
 
@@ -123,7 +127,7 @@ async def universal_echo_router_version(message, history, session_state):
 async def chroma_echo(message: str, history: List[Dict], collection: str, threshold_value: float,
                       slider_value_n_results: int,
                       slider_value_k,
-                      radio_value):
+                      radio_value) -> tuple[str, dict]:
     """
     Main chroma call func. Its return the pieces of text from uploaded to chroma docs.
     :param collection: Str. Chosen collection name.
@@ -140,7 +144,7 @@ async def chroma_echo(message: str, history: List[Dict], collection: str, thresh
                                               threshold=threshold_value,
                                               n_results=slider_value_n_results,
                                               k=slider_value_k,
-                                              search_type=radio_value)
+                                              search_type=radio_value), {}
 
 
 async def meili_echo(
@@ -148,7 +152,7 @@ async def meili_echo(
         history: List[Dict],
         index: str,
         limit: int
-) -> str:
+) -> tuple[str, dict]:
     """
 
     :param message:
@@ -159,35 +163,50 @@ async def meili_echo(
     """
     search_result = meilisearch.search_meili(query=message, index_name=index, limit=limit)
 
-    return search_result
+    return search_result, {}
 
 
-# Универсальная функция, которая проверяет radio_value и вызывает либо chroma_echo, либо meili_echo.
 async def universal_echo(
         message: str,
         history: List[Dict],
+
         collection: str,  # Dropdown (Chroma)
         threshold_value: float,
         slider_value_n_results: int,
         slider_value_k: int,
-        radio_value: str,  # "vectorstore", "db", or "meilisearch"
-        meili_index: str  # Dropdown (Meilisearch)
+        radio_value: str,  # "ai router", "meilisearch", "vectorstore", "db"
+        meili_index: str,  # Dropdown (Meilisearch)
+        session_state,
 ):
     """
-    Если radio_value == "meilisearch", вызываем meili_echo,
-    иначе вызываем chroma_echo.
+    Универсальная функция, которая проверяет radio_value и вызывает:
+
+    chroma_search_collection_dropdown,  # collection
+    treshold_value_slider,  # threshold_value
+    value_n_results_slider,  # slider_value_n_results
+    value_k_slider,  # slider_value_k
+    radio_type_of_search,  # radio_value
+    meili_search_indexes_dropdown,  # meili_index
+    state  # session_state
+
     """
+    if radio_value == "ai-router":
+        # Никаких adjustments не используется, зато передается параметр session_state
+        print("radio_value:", radio_value)
+        return await echo_ai_router(message, history, session_state)
+
     if radio_value == "meilisearch":
         # Используем slider_value_k как limit
-        # Сюда добавить код про то, что нет индекса
         return await meili_echo(
             message=message,
             history=history,
             index=meili_index,
             limit=slider_value_k
         )
+
     else:
         # Для "vectorstore" или "db" вызываем chroma_echo
+        print("radio_value:", radio_value)
         return await chroma_echo(
             message=message,
             history=history,
@@ -480,14 +499,14 @@ def txt_default():
 
 def radio_sliders_change(choice):
     """
-    slider3,
-    slider1,
-    slider2,
+    value_n_results_slider,
+    treshold_value_slider,
+    value_k_slider,
     meili_search_indexes_dropdown,
     chroma_search_collection_dropdown,
 
     The search type selector that enables appropriated sliders.
-    :param choice: Vectorstore search or Chroma DB Search.
+    :param choice: AI Router, Vectorstore search or Chroma DB Search.
     :return: Configurations of sliders that refine the search.
     """
     if choice == "vectorstore":
@@ -506,12 +525,21 @@ def radio_sliders_change(choice):
                 gr.update(interactive=False, ),
                 gr.update(interactive=True),
                 )
-    else:
+    elif choice == "meilisearch":
         return (gr.update(interactive=False),
                 gr.update(interactive=False),
                 gr.update(interactive=True),
 
-                gr.update(interactive=True),
+                gr.update(interactive=True, ),
+                gr.update(interactive=False),
+                )
+
+    else:
+        return (gr.update(interactive=False),
+                gr.update(interactive=False),
+                gr.update(interactive=False),
+
+                gr.update(interactive=False),
                 gr.update(interactive=False, ),
                 )
 
@@ -571,15 +599,15 @@ def radio_type_of_upl_file_change(choice):
 
 
 # Загрузка моделей Ollama с сортировкой
-async def load_models():
-    models_response = await ollama.list()
-    return sorted([model['model'] for model in models_response['models']])
+# async def load_models():
+#     models_response = await ollama.list()
+#     return sorted([model['model'] for model in models_response['models']])
 
 
 with gr.Blocks(css=custom_css) as blocks:
     model_state = gr.State()  # Нужно для однократной загрузки моделей из Ollama
     gr.Markdown(
-        """<h2>📚 NEIRY.AI <b>bookworm</b> <span style='font-size: 0.7em; font-style: italic;'>tabbed edition</span></h2>"""
+        """<h2>📚 МОЯ НАУКА <b> \U000000ABМедЦентр\U000000BB</b>"""
     )
     with gr.Tabs():
         # --------------------------------------------------
@@ -590,6 +618,7 @@ with gr.Blocks(css=custom_css) as blocks:
             chatbot = gr.Chatbot(type="messages",
                                  autoscroll=True,
                                  placeholder="<strong>Поиск по документам</strong><br>Задайте вопрос",
+                                 # examples=EXAMPLES,
 
                                  height=600, )
 
@@ -600,11 +629,13 @@ with gr.Blocks(css=custom_css) as blocks:
                                  autoscroll=True,
                                  autofocus=True)
 
+            # with gr.Column():
+
             with gr.Column():
                 with gr.Row():
-                    radio_type_of_search = gr.Radio(["vectorstore", "db", "meilisearch"],
+                    radio_type_of_search = gr.Radio(["ai-router", "meilisearch", "vectorstore", "db", ],
                                                     label="Способы поиска в базе знаний",
-                                                    value="db",
+                                                    value="ai-router",
                                                     container=True,
                                                     info="Выберите алгоритм поиска")
 
@@ -612,37 +643,62 @@ with gr.Blocks(css=custom_css) as blocks:
                                                                 label=INDEXES_IN_MEILI,
                                                                 info="Выберите Индекс для поиска информации",
                                                                 interactive=False,
-                                                                # value=None,
-                                                                )
 
+                                                                )
+                    # TODO: C какой-то стати в value передается {}
                     chroma_search_collection_dropdown = gr.Dropdown(choices=gr_existed_collections(),
                                                                     # filterable=True,
                                                                     label=COLLECTIONS_IN_CHROMA,
                                                                     info="Выберите Коллекцию для поиска информации",
-                                                                    interactive=True,
-                                                                    # value=None
+                                                                    interactive=False,
+                                                                    allow_custom_value=True,
+                                                                    # крайне желательно этого избежать
+
                                                                     )
 
             with gr.Row():
-                slider3 = gr.Slider(value=5, minimum=1, maximum=20, step=1,
-                                    label="Количество документов, включенных в выдачу",
-                                    info="Только в режиме vectorstore",
-                                    interactive=True,
-                                    )
+                value_n_results_slider = gr.Slider(value=5, minimum=1, maximum=20, step=1,
+                                                   label="Количество документов, включенных в выдачу",
+                                                   info="Только в режиме vectorstore",
+                                                   interactive=False,
+                                                   )
 
-                slider1 = gr.Slider(value=0.005, minimum=0.0025, maximum=0.02, step=0.0025,
-                                    label="Порог косинусной фильтрации",
-                                    info="Только в режиме vectorstore."
-                                         "Чем выше значение, тем больше текстовых фрагментов с меньшей "
-                                         "релевантностью появится в выдаче",
-                                    interactive=True
-                                    )
+                treshold_value_slider = gr.Slider(value=0.005, minimum=0.0025, maximum=0.02, step=0.0025,
+                                                  label="Порог косинусной фильтрации",
+                                                  info="Только в режиме vectorstore."
+                                                       "Чем выше значение, тем больше текстовых фрагментов с меньшей "
+                                                       "релевантностью появится в выдаче",
+                                                  interactive=False
+                                                  )
 
-                slider2 = gr.Slider(value=2, minimum=1, maximum=20, step=1,
-                                    label="Количество документов, включенных в выдачу",
-                                    info="Только в режимах db и meilisearch",
-                                    interactive=False,
-                                    )
+                value_k_slider = gr.Slider(value=2, minimum=1, maximum=20, step=1,
+                                           label="Количество документов, включенных в выдачу",
+                                           info="Только в режимах db и meilisearch",
+                                           interactive=False,
+                                           )
+
+            demo = gr.ChatInterface(
+                fn=universal_echo,
+                type="messages",
+                # examples=EXAMPLES,
+                chatbot=chatbot,  # без examples тут
+                textbox=textbox,
+                additional_inputs=[
+                    chroma_search_collection_dropdown,
+                    treshold_value_slider,
+                    value_n_results_slider,
+                    value_k_slider,
+                    radio_type_of_search,
+                    meili_search_indexes_dropdown,
+                    state
+                ],
+                additional_outputs=[
+                    state,
+                ],
+                additional_inputs_accordion=None,
+
+                show_progress="full",
+            )
 
         # --------------------------------------------------
         # Вкладка 2 - Upload PDF to MEILI or CHROMA DB
@@ -810,49 +866,15 @@ with gr.Blocks(css=custom_css) as blocks:
             # Оформление и дизайн
             # ---------------------------------------------
 
-            with gr.Column():
-                #  Старая версия, которая поддерживала лишь вывод поиска в базах данных
-                # demo = gr.ChatInterface(fn=universal_echo_router_version,
-                #                         type="messages",
-                #                         examples=EXAMPLES,
-                #                         chatbot=chatbot,
-                #                         textbox=textbox,
-                #                         additional_inputs=[
-                #                             chroma_search_collection_dropdown,
-                #                             slider1,
-                #                             slider2,
-                #                             slider3,
-                #                             radio_type_of_search,
-                #                             meili_search_indexes_dropdown
-                #                         ],
-                #                         show_progress="full",
-                #
-                #                         )
-
-                demo = gr.ChatInterface(fn=universal_echo_router_version,
-                                        type="messages",
-                                        examples=EXAMPLES,
-                                        chatbot=chatbot,
-                                        textbox=textbox,
-                                        additional_inputs=[
-                                            state,
-                                        ],
-                                        additional_outputs=[
-                                            state,
-                                        ],
-                                        show_progress="full",
-
-                                        )
-
             # ---------------------------------
             # Event handlers of chat interface
             # ---------------------------------
 
             radio_type_of_search.change(fn=radio_sliders_change, inputs=radio_type_of_search,
                                         outputs=[
-                                            slider3,
-                                            slider1,
-                                            slider2,
+                                            value_n_results_slider,
+                                            treshold_value_slider,
+                                            value_k_slider,
                                             meili_search_indexes_dropdown,
                                             chroma_search_collection_dropdown,
                                         ]
@@ -1132,13 +1154,12 @@ with gr.Blocks(css=custom_css) as blocks:
                 show_copy_button=True,
             )
 
-            json_view = gr.JSON(label="📄 JSON‑отчёт", visible=True)
-
-            previous_log_file = gr.File(label="📥 Загрузить старый отчёт (JSON)", file_types=[".json"])
+            # previous_log_file = gr.File(label="📥 Загрузить старый отчёт (JSON)", file_types=[".json"])
 
             with gr.Row():
-                load_prev_btn = gr.Button("📥 Загрузить старый отчёт", size="md")
-                download_log_btn = gr.File(label="📤 Скачать отчёт (JSON)", interactive=False)
+                # load_prev_btn = gr.Button("📥 Загрузить старый отчёт", size="md")
+                json_view = gr.JSON(label="📄 JSON‑отчёт", visible=True, scale=3)
+                download_log_btn = gr.File(label="📤 Скачать отчёт (JSON)", interactive=False, scale=1, height=10)
 
 
             # --- Функции ---
@@ -1161,21 +1182,20 @@ with gr.Blocks(css=custom_css) as blocks:
                 return logs, table, json_data, path
 
 
-            def load_previous_json(file):
-                if file is None:
-                    return "Файл не выбран", [], {}, None
-                try:
-                    with open(file.name, "rb") as f:
-                        raw = f.read()
-                        json_data = orjson.loads(raw)
-                    table = load_previous_log(file.name)
-                    log_lines = [
-                        f"[{item['model']}] {item['type']}: wall={item['wall_avg']}s, eval={item['eval_avg']}s, tps={item['tps_avg']}"
-                        for item in json_data]
-                    return "\n".join(log_lines), table, json_data, file.name
-                except Exception as e:
-                    return f"Ошибка загрузки: {e}", [], {}, None
-
+            # def load_previous_json(file):
+            #     if file is None:
+            #         return "Файл не выбран", [], {}, None
+            #     try:
+            #         with open(file.name, "rb") as f:
+            #             raw = f.read()
+            #             json_data = orjson.loads(raw)
+            #         table = load_previous_log(file.name)
+            #         log_lines = [
+            #             f"[{item['model']}] {item['type']}: wall={item['wall_avg']}s, eval={item['eval_avg']}s, tps={item['tps_avg']}"
+            #             for item in json_data]
+            #         return "\n".join(log_lines), table, json_data, file.name
+            #     except Exception as e:
+            #         return f"Ошибка загрузки: {e}", [], {}, None
 
             # --- Привязка кнопок ---
 
@@ -1187,11 +1207,11 @@ with gr.Blocks(css=custom_css) as blocks:
                 outputs=[log_output, result_table, json_view, download_log_btn]
             )
 
-            load_prev_btn.click(
-                fn=load_previous_json,
-                inputs=[previous_log_file],
-                outputs=[log_output, result_table, json_view, download_log_btn]
-            )
+            # load_prev_btn.click(
+            #     fn=load_previous_json,
+            #     inputs=[previous_log_file],
+            #     outputs=[log_output, result_table, json_view, download_log_btn]
+            # )
 
             # ----------------------------------
             # Event handlers for upper sections

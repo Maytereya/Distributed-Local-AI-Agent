@@ -106,7 +106,7 @@ class DoctorsRepository:
             logger.error("Fetch doctors returned no data")
             return False
         print(f"Получено {len(data)} врачей")
-        print(f"Первый врач: {data[0] if data else 'нет данных'}")
+        # print(f"Первый врач: {data[0] if data else 'нет данных'}")
         with open(today, "w", encoding="utf-8") as f:
             for item in data:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")

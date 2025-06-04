@@ -28,7 +28,7 @@ SLOW_TASKS = [
 # ГЛАВНАЯ ФУНКЦИЯ: тестирует список моделей
 # ------------------------------------------
 
-async def gradio_benchmark(models: list[str], laps: int = 3):
+async def gradio_benchmark(models: list[str], laps: int = 2):
     from pathlib import Path
 
     log_lines = []
