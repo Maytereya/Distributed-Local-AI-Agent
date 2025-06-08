@@ -340,10 +340,10 @@ def format_doctor_schedule(doc):
 
     # Call-центр (если есть)
     if cc and cc.strip() and cc != "Нет заметок":
-        lines.append("─────────────────────────────────")
+        lines.append("───────────────")
         lines.append("📞 Заметка call-центра:")
         lines.append(str(cc).strip())
-        lines.append("─────────────────────────────────")
+        lines.append("───────────────")
         lines.append("")  # Пробел после заметки
 
     # Расписание
