@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from agent_logic_2 import config as c
 from ollama import AsyncClient, Options
-from nayka_api.api_nayka4_1 import find_doctors_by_keyword, find_doctor_schedule
+from nayka_api.api_nayka4_3 import find_doctors_by_keyword, find_doctor_schedule
 
 # ── Конфигурация ───────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
@@ -340,10 +340,10 @@ def format_doctor_schedule(doc):
 
     # Call-центр (если есть)
     if cc and cc.strip() and cc != "Нет заметок":
-        lines.append("──────────────────────────────────────────────────")
+        lines.append("─────────────────────────────────")
         lines.append("📞 Заметка call-центра:")
         lines.append(str(cc).strip())
-        lines.append("──────────────────────────────────────────────────")
+        lines.append("─────────────────────────────────")
         lines.append("")  # Пробел после заметки
 
     # Расписание

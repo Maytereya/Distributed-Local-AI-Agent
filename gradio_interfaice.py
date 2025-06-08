@@ -624,7 +624,7 @@ with gr.Blocks(css=custom_css) as blocks:
             chatbot = gr.Chatbot(type="messages",
                                  autoscroll=True,
                                  placeholder="<strong>Поиск по документам</strong><br>Задайте вопрос",
-                                 height=500, )
+                                 height=700, )
 
             textbox = gr.Textbox(lines=1,
                                  placeholder="Напишите вопрос здесь",
