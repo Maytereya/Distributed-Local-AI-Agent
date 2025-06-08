@@ -20,7 +20,7 @@ print("Current working directory:", os.getcwd())
 files_read = config.read(config_path)
 print("Files read:", files_read)
 # -------------------------------------------------
-environment = 'PRODUCTION'
+environment = 'DOCKER_PRODUCTION'
 # | 'DEVELOPMENT' IP квартиры
 # | 'LOCAL' localhost
 # | 'PRODUCTION' внешний белый IP
