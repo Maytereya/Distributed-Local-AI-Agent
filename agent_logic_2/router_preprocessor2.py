@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Tuple
 
 from ollama import AsyncClient, Options
 
-from agent_logic_2 import llama_func_call2 as doctor_info, config as c
+from agent_logic_2 import llama_func_call_3 as doctor_info, config as c
 
 # LLM‑клиент для классификации
 ollama = AsyncClient(c.ollama_url)
@@ -31,6 +31,9 @@ LABEL_DOC = """
 
 EXAMPLES = """
 INPUT: Сколько стоит приём кардиолога?            
+OUTPUT: {\"labels\":[\"INFO\"]}
+
+INPUT: Какое расписание работы у гинеколога?            
 OUTPUT: {\"labels\":[\"INFO\"]}
 
 INPUT: Как подготовиться к анализу крови?        
@@ -82,8 +85,8 @@ def _prompt(user: str, sess: Dict[str, Any]) -> str:
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>
 """
     print("----------------- COMPILATION -----------------------")
-    print(f"_prompt about LABELS: {compilation}")
-    print("-----------------------------------------------------")
+    # print(f"_prompt about LABELS: {compilation}")
+    # print("-----------------------------------------------------")
     return compilation
 
 
@@ -117,8 +120,8 @@ USER: {text}
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>
 """
     print("----------------- COMPILATION -----------------------")
-    print(f"_split_prompt reformulation and splitting into segments: {compilation}")
-    print("-----------------------------------------------------")
+    # print(f"_split_prompt reformulation and splitting into segments: {compilation}")
+    # print("-----------------------------------------------------")
     return compilation
 
 
@@ -199,19 +202,19 @@ async def get_doc_info_from_api(question: str, **_) -> Tuple[str, bool]:
 # ────────────────────────────────────────────────
 
 async def prep_stub(_text: str, **__) -> Tuple[str, bool]:
-    return "prep_stub Правила подготовки пока в разработке.", False
+    return "Правила подготовки к процедурам и анализам пока в разработке.", False
 
 
 async def appointment_stub(_text: str, **__) -> Tuple[str, bool]:
-    return "appointment_stub Модуль записи к врачу скоро появится. Сообщите дату, и мы свяжемся!", False
+    return "Модуль записи к врачу скоро появится. ", False
 
 
 async def general_stub(_text: str, **__) -> Tuple[str, bool]:
-    return "general_stub Клиника \"Наука\" работает ежедневно с 8:00 до 20:00. Адреса: …", False
+    return f"Согласно вопросу:{_text} сообщаю, что клиника \"Наука\" работает ежедневно с 8:00 до 21:00. Адреса: …", False
 
 
 async def issues_stub(_text: str, **__) -> Tuple[str, bool]:
-    return "issues_stub Очень жаль, что возникла проблема. Ваше сообщение передано администратору.", False
+    return f"Очень жаль, что возникла проблема {_text}. Ваше сообщение передано старшему администратору.", False
 
 
 # ────────────────────────────────────────────────
@@ -287,5 +290,4 @@ if __name__ == "__main__":
     print("Итоговый вывод: ________")
     print(re)
     print("sess: ___________")
-    print(sess)
-
+    # print(sess)

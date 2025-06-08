@@ -19,9 +19,15 @@ config.read(config_path)
 print("Current working directory:", os.getcwd())
 files_read = config.read(config_path)
 print("Files read:", files_read)
+# -------------------------------------------------
+environment = 'PRODUCTION'
+# | 'DEVELOPMENT' IP квартиры
+# | 'LOCAL' localhost
+# | 'PRODUCTION' внешний белый IP
+# | 'DOCKER_PRODUCTION' под контейнеры
 
-environment = 'DOCKER_PRODUCTION'  # | 'DEVELOPMENT' | 'LOCAL'
 print("environment:", environment)
+# --------------------------------------------------
 
 ollama_url = config[environment]['ollama_url']
 chroma_host = config[environment]['chroma_host']
