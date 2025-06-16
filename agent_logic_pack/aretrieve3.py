@@ -633,7 +633,7 @@ async def main_retrieve_async(collection: str,
                               k: int = 5,
                               n_results: int = 2,
                               threshold: float = 0.005,
-                              ) -> List[Document] | str:
+                              ) -> List[Document] or str:
     """
 
     :param return_type: Определяет, в каком виде выдается итог поиска: [Document] или str, по умолчанию [Document].

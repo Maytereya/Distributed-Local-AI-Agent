@@ -9,9 +9,10 @@ from difflib import SequenceMatcher
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional
 
-from agent_logic_2 import config as c
 from ollama import AsyncClient, Options
-from nayka_api.api_nayka4_3 import find_doctors_by_keyword, find_doctor_schedule
+
+from agent_logic_2 import config as c
+from nayka_api.api_nayka4_3 import find_doctors_by_keyword, find_doctor_schedule, get_all_doctors
 
 # ── Конфигурация ───────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
@@ -139,7 +140,7 @@ async def extract_search_keyword_llm(question: str) -> tuple:
 Твоя задача: по вопросу пользователя выделить либо фамилию врача (в именительном падеже), либо специальность (например: "кардиолог", "эндокринолог", "педиатр" и т.п.).
 Если в вопросе есть только фамилия — верни: Surname: Иванов
 Если в вопросе только специальность — верни: Specialty: кардиолог
-Если вопрос про расписание (слова "расписание", "приём", "график работы" и т.п.):
+Если вопрос про расписание (слова "расписание работы", "время приёма", "график работы", "в какое время работает" и т.п.):
     - если указано ФИО, верни Timetable: Иванов
     - если указана специальность, верни Timetable: Specialty: кардиолог
 Если ничего не найдено — верни: NONE
@@ -206,6 +207,7 @@ def find_similar_surname(input_surname: str, doctors: List[Dict[str, Any]], thre
             best, br = s, r
     return best.capitalize() if br >= threshold else None
 
+
 # ── Обогащение ответа заметками колл-центра ────────────────────────────────────────────────────
 def enrich_with_cc_info(doctors: list):
     """
@@ -223,7 +225,13 @@ def enrich_with_cc_info(doctors: list):
     return doctors
 
 
-# ── Форматирование ответа ────────────────────────────────────────────────────
+# --------------------------------------
+# FORMAT SECTION
+# Важно для правильной подачи информации в
+# финальную функцию обработки накопленных данных
+# с помощью LLM
+# _______________________________________
+
 def format_doctor(item: Dict[str, Any]) -> str:
     lines: List[str] = [
         f"• ФИО: {item.get('fio', '-')}",
@@ -233,24 +241,24 @@ def format_doctor(item: Dict[str, Any]) -> str:
     specialization = item.get("specialization") or "-"
     # Обрезаем и чистим
     specialization = specialization.split("\n")[0].replace("-", "").strip() or "-"
-    lines.append(f"• Специализация: {specialization}")
+    lines.append(f"{{SPECIALIZATION_FULL}} • Специализация: {specialization}")
 
     # Регионы
     regions = item.get("regions", ['-'])
-    lines.append(f"• Регионы: {', '.join(regions)}")
+    lines.append(f"{{ADDRESS}} • Адрес/адреса: {', '.join(regions)}")
 
     # Заметка call-центра
     cc = item.get("callCenterInfo")
     if cc:
-        lines.append("─" * 50)
-        lines.append("📞 Заметка call-центра:")
+        lines.append("─" * 10)
+        lines.append("{{CALL-CENTER}} 📞Заметка колл-центра:")
         lines.append(str(cc))
-        lines.append("─" * 50)
+        lines.append("─" * 10)
 
     # Расписание
     schedule = item.get("schedule")
     if isinstance(schedule, dict):
-        lines.append("Расписание:")
+        lines.append("{{TIMETABLE}} Расписание:")
         for region, days in schedule.items():
             lines.append(f"{region}:")
             for day in days:
@@ -266,14 +274,15 @@ def format_doctor(item: Dict[str, Any]) -> str:
     cleaned = [str(line) for line in lines if line is not None]
     return "\n".join(cleaned)
 
+
 def format_doctor_list(docs):
     """
     Форматирует список врачей с нумерацией.
-    Регионы всегда на отдельной строке!
+    Адреса работы всегда на отдельной строке!
     """
     import re
     if not docs:
-        return "Врачи по вашей специальности не найдены."
+        return "Врачи по указанной специальности не найдены."
 
     if isinstance(docs, str):
         pattern = re.compile(r'(?=(?:^|\n)([А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+ [А-ЯЁ][а-яё]+))')
@@ -283,7 +292,7 @@ def format_doctor_list(docs):
         blocks = []
         for i, idx in enumerate(indices):
             next_idx = indices[i + 1] if i + 1 < len(indices) else len(docs)
-            blocks.append(f"{i+1}. " + docs[idx:next_idx].strip())
+            blocks.append(f"{i + 1}. " + docs[idx:next_idx].strip())
         return "\n\n---\n\n".join(blocks)
 
     if not isinstance(docs, list):
@@ -298,14 +307,14 @@ def format_doctor_list(docs):
             regions = doc.get("regions") or []
             cc = doc.get("callCenterInfo")
 
-            block = f"{idx}. {fio}\nСпециализация:\n\n{spec}"
+            block = f"{idx}. {fio}\n{{SPECIALIZATION_FULL}} Специализация:\n\n{spec}"
             # Только если описание реально отличается от специализации
             if desc and desc != spec:
                 block += f"\n{desc}"
             if regions:
-                block += f"\n\nРегионы: {', '.join(regions)}"
+                block += f"\n\n {{ADDRESS}} Адрес/адреса работы врача: {', '.join(regions)}"  # МЕТКА
             if cc and cc != "Нет заметок":
-                block += f"\n{'─'*50}\n📞 Заметка call-центра:\n{cc}\n{'─'*50}"
+                block += f"\n{'─' * 10}\n {{CALL-CENTER}} 📞Заметка колл-центра:\n{cc}\n{'─' * 10}"  # МЕТКА
             formatted.append(block.strip())
         else:
             formatted.append(f"{idx}. {str(doc).strip()}")
@@ -330,24 +339,26 @@ def format_doctor_schedule(doc):
 
     # Специализация
     if spec_full and spec_full != "-":
+        lines.append(f"{{SPECIALIZATION_FULL}} Специализация врача:")
         lines.append(spec_full)
         lines.append("")  # Пробел после специализации
 
-    # Регионы (адреса)
+    # Адреса работы
     if regions:
-        lines.append(f"Адреса: {', '.join(regions)}")
+        lines.append(f" {{ADDRESS}} Адрес/адреса: {', '.join(regions)}")
         lines.append("")  # Пробел после адреса
 
     # Call-центр (если есть)
     if cc and cc.strip() and cc != "Нет заметок":
         lines.append("───────────────")
-        lines.append("📞 Заметка call-центра:")
+        lines.append(" {{CALL-CENTER}} 📞Заметка колл-центра:")
         lines.append(str(cc).strip())
         lines.append("───────────────")
         lines.append("")  # Пробел после заметки
 
     # Расписание
     if schedule:
+        lines.append("{{TIMETABLE}} Расписание работы врача:")
         for region, days in schedule.items():
             lines.append(f"• {region}:")
             for day in days:
@@ -362,9 +373,10 @@ def format_doctor_schedule(doc):
                 slots = [slot[:5] for slot in day.get("slots", []) if slot and len(slot) >= 5]
                 lines.append(f"    {date}: {start}-{end}  Окна: {', '.join(slots)}")
     else:
-        lines.append("Расписание не указано.")
+        lines.append("{{TIMETABLE}} Расписание не указано.")
 
     return "\n".join(lines)
+
 
 # ── Основная логика ───────────────────────────────────────────────────────────
 repo = DoctorsRepository(DATA_DIR)
@@ -380,21 +392,21 @@ async def ollama_call(prompt: str) -> Dict[str, Any]:
     )
 
 
-
 async def investigate(question: str) -> str:
-    print("\n=== Начало обработки вопроса ===")
+    print("\n=== Обработка вопроса ===")
     print(f"Вопрос: {question}")
+    print("")
 
     key_type, value = await extract_search_keyword_llm(question)
     if not value:
-        print("LLM-парсер не смог выделить фамилию, специальность или намерение расписания.")
-        return "Не удалось выделить фамилию, специальность или намерение расписания из вашего запроса."
+        print("LLM-парсер не смог выделить фамилию, специальность или намерение получить расписание.")
+        return "Не удалось выделить фамилию, специальность или намерение получить расписание из вашего запроса."
 
     # Блок: поиск по фамилии
     if key_type == "surname":
         print(f"LLM-парсер определил фамилию: {value}")
         surname = value
-        # --- код поиска по фамилии (оставьте без изменений) ---
+        # --- код поиска по фамилии ---
         words = re.findall(r"[А-ЯЁ][а-яё]+", question)
         full_name = None
         if len(words) > 1:
@@ -414,7 +426,6 @@ async def investigate(question: str) -> str:
             print(f"Ищем по фамилии: {surname}")
             local = repo.find_by_surname(surname)
         if not local:
-            from nayka_api.api_nayka4_1 import get_all_doctors
             await repo.update(get_all_doctors)
             if full_name:
                 local = [d for d in repo.read_all() if d.get("fio", "").startswith(full_name)]
@@ -447,7 +458,7 @@ async def investigate(question: str) -> str:
         if docs:
             return format_doctor_list(docs)
         return f"Врачи по специальности '{value}' не найдены."
-    
+
     if key_type == "timetable":
         print(f"LLM-парсер определил запрос расписания по фамилии: {value}")
         docs = find_doctor_schedule(value)
@@ -463,8 +474,10 @@ async def investigate(question: str) -> str:
     # fallback — если LLM вернул просто текст
     return value
 
+
 def find_doctors_by_keyword_llm(question: str) -> str:
     return find_doctors_by_keyword(question)
+
 
 async def main():
     """Основная функция."""
