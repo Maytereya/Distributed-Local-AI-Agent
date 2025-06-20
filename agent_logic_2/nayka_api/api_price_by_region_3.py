@@ -212,6 +212,55 @@ def format_services(services: List[Dict]) -> str:
     return "\n".join(lines)
 
 
+# ———————————————————
+# функции для работы с регионом
+# ———————————————————
+def normalize_region_name(region_name: str) -> str:
+    name = region_name.lower()
+    name = re.sub(r'\(.*?\)', '', name)
+    name = name.replace('клиника', '')
+    name = name.replace('(', '').replace(')', '')
+    name = name.replace('"', '').replace("'", "")
+    name = re.sub(r'\s+', ' ', name)
+    name = name.strip()
+    return name
+
+
+def get_regions_dict() -> dict:
+    """
+    Возвращает словарь {region_name: region_id}
+    """
+    url = f"{base_url}/regions"
+    response = requests.get(url, auth=auth, verify=False)
+    if not response.ok:
+        print("Ошибка получения регионов:", response.status_code)
+        return {}
+    regions = response.json()
+    return {r["name"].strip().lower(): r["id"] for r in regions}
+
+
+def get_region_id_by_name(region_name: str) -> int | None:
+    regions_dict = get_regions_dict()
+    region_name_norm = normalize_region_name(region_name)
+    print(f"[DEBUG] Ищу region_id для '{region_name}' → нормализация: '{region_name_norm}'")
+    for real_name, reg_id in regions_dict.items():
+        real_norm = normalize_region_name(real_name)
+        print(f"  -> Сравниваю с '{real_name}' (нормализация: '{real_norm}')")
+        if region_name_norm == real_norm:
+            print(f"    [MATCH exact] region_id={reg_id}")
+            return reg_id
+        if region_name_norm in real_norm:
+            print(f"    [MATCH substr:region in dict] region_id={reg_id}")
+            return reg_id
+        if real_norm in region_name_norm:
+            print(f"    [MATCH substr:dict in region] region_id={reg_id}")
+            return reg_id
+    print(f"[WARN] Не найден region_id для: '{region_name}' (нормализация: '{region_name_norm}')")
+    print("[INFO] Вот все регионы в справочнике:")
+    for real_name, reg_id in regions_dict.items():
+        print(f"   - '{real_name}' (норм: '{normalize_region_name(real_name)}') id={reg_id}")
+    return None
+
 # if __name__ == "__main__":
 #     region_id = 8805
 #     price_list = get_price(region_id)

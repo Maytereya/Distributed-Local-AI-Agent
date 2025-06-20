@@ -70,15 +70,84 @@ def load_doctors_data(file: Path) -> list:
 def cleanup_old_doctors_files():
     """Удаляет старые файлы с данными о врачах"""
     yesterday = get_yesterday_str()
-    pattern = "doctors_*.json"
+    pattern = "doctors_*.jsonl"
     for file in DATA_DIR.glob(pattern):
         file_date = get_date_from_filename(file)
         if file_date < yesterday:
             print(f"🗑️ Удаляем старый файл с данными о врачах: {file.name}")
             file.unlink()
 
+def get_all_doctors() -> List[Dict]:
+    """
+    Получает список всех врачей с их данными, где regions и region_ids совпадают по позиции.
+    """
+    # Получаем все данные через API
+    doctors = site_doctors()
+    units = site_company_units()
+    doctor_units = site_doctor_company_units()
+    doctor_regions = site_doctor_regions()
+    regions = site_regions()
+
+    # Быстрый доступ к названиям регионов по id
+    regions_dict = {r["id"]: r["name"] for r in regions}
+    units_dict = {u["id"]: u["name"] for u in units}
+
+    result = []
+    for doctor in doctors:
+        doctor_id = doctor["id"]
+
+        # Все specialization
+        specs = [
+            link.get("specialization", "") or ""
+            for link in doctor_units
+            if link["worker"] == doctor_id
+        ]
+        specs = list(dict.fromkeys(filter(None, specs)))  # Сохраняем порядок, убираем дубли
+
+        # Все подразделения врача
+        doc_units = [
+            units_dict.get(link["companyUnit"], "")
+            for link in doctor_units
+            if link["worker"] == doctor_id
+        ]
+        doc_units = list(dict.fromkeys(filter(None, doc_units)))
+
+        # Готовим пары регионов (id, name) — без дублей, с сохранением порядка
+        seen_region_ids = set()
+        region_pairs = []
+        for link in doctor_regions:
+            if link["worker"] == doctor_id:
+                reg_id = link["region"]
+                if reg_id and reg_id not in seen_region_ids:
+                    seen_region_ids.add(reg_id)
+                    reg_name = regions_dict.get(reg_id)
+                    if reg_name:
+                        region_pairs.append((reg_id, reg_name))
+                    else:
+                        region_pairs.append((reg_id, f"ID {reg_id}"))
+
+
+        doc_region_ids = [r[0] for r in region_pairs]
+        doc_regions = [r[1] for r in region_pairs]
+
+        doctor_data = {
+            "id": doctor_id,
+            "fio": doctor["fio"],
+            "specialization": specs[0] if specs else None,
+            "regions": doc_regions,
+            "region_ids": doc_region_ids,
+            "units": doc_units
+        }
+
+        result.append(doctor_data)
+
+    return result
 
 def get_cached_doctors_data() -> list:
+    """
+    Возвращает кэшированные данные о врачах, если кэш свежий.
+    Если кэш устарел или отсутствует — загружает новые данные через API и сохраняет их в кэш.
+    """
     cleanup_old_doctors_files()
     today = get_today_str()
     existing_file = find_existing_doctors_file()
@@ -86,6 +155,7 @@ def get_cached_doctors_data() -> list:
     print(f"[DEBUG] Сегодня: {today}")
     print(f"[DEBUG] Найден файл: {existing_file}")
 
+    # Если есть актуальный кэш — используем его
     if existing_file:
         file_date = get_date_from_filename(existing_file)
         print(f"[DEBUG] Дата файла: {file_date}")
@@ -93,57 +163,15 @@ def get_cached_doctors_data() -> list:
         if file_date == today:
             print("✅ Нашли свежие данные о врачах на сегодня (используем кэш)")
             return load_doctors_data(existing_file)
-        print(f"♻️ Данные найдены, но они от {file_date}. Скачиваем новые.")
+        else:
+            print(f"♻️ Данные найдены, но они от {file_date}. Скачиваем новые.")
 
-    # Собираем все данные с API и формируем список врачей с нужными полями
+    # Если кэша нет или он устарел — обновляем через API
     print("[DEBUG] Кэш не найден или устарел — обновляем через API!")
-    doctors_raw = site_doctors()
-    units = site_company_units()
-    doctor_units = site_doctor_company_units()
-    doctor_regions = site_doctor_regions()
-    regions = site_regions()
-
-    units_dict = {u["id"]: u["name"] for u in units}
-    regions_dict = {r["id"]: r["name"] for r in regions}
-
-    doctors = []
-    for doctor in doctors_raw:
-        doctor_id = doctor["id"]
-        # Получаем специализации врача
-        specs = [
-            link.get("specialization", "") or ""
-            for link in doctor_units
-            if link["worker"] == doctor_id
-        ]
-        specs = list(set(filter(None, specs)))
-        # Получаем подразделения врача
-        doc_units = [
-            units_dict.get(link["companyUnit"], "")
-            for link in doctor_units
-            if link["worker"] == doctor_id
-        ]
-        doc_units = list(set(filter(None, doc_units)))
-        # Получаем регионы врача
-        doc_regions = [
-            regions_dict.get(link["region"], "")
-            for link in doctor_regions
-            if link["worker"] == doctor_id
-        ]
-        doc_regions = list(set(filter(None, doc_regions)))
-        # Формируем итоговый словарь
-        doctor_data = {
-            "id": doctor_id,
-            "fio": doctor["fio"],
-            "specialization": specs[0] if specs else None,
-            "regions": doc_regions,
-            "units": doc_units
-        }
-        doctors.append(doctor_data)
-
+    doctors = get_all_doctors()  # Собирает всё как надо (regions/region_ids и т.д.)
     save_doctors_data(doctors)
     print("✅ Новые данные о врачах успешно загружены")
     return doctors
-
 
 def _units_tree() -> Dict[int, Set[int]]:
     """Строит дерево подразделений."""
@@ -291,6 +319,7 @@ def site_regions():
     response = requests.get(f"{base_url}/regions", auth=auth, verify=False)
     if not response.ok:
         print(f"Ошибка при получении списка регионов: {response.status_code}")
+        print(f"Ответ: {response.text}")
         return []
     try:
         return response.json()
@@ -309,7 +338,7 @@ def find_doctor_schedule(
     Возвращаем краткий список врачей.
     """
     # --- Получаем регионы ---
-    regions = requests.get(f"{base_url}/regions", auth=auth, verify=False).json()
+    regions = site_regions()
     region_map = {r["id"]: r["name"] for r in regions}
     region_id = None
     if region_name:
@@ -400,70 +429,11 @@ def find_doctor_schedule(
     return result
 
 
-def get_all_doctors() -> List[Dict]:
-    """
-    Получает список всех врачей с их данными.
-    Использует кэшированные данные, если они есть.
-    
-    Returns:
-        List[Dict]: Список словарей с данными о врачах
-    """
-    # Получаем все данные через API
-    doctors = site_doctors()
-    units = site_company_units()
-    doctor_units = site_doctor_company_units()
-    doctor_regions = site_doctor_regions()
-    regions = site_regions()
-
-    # Создаем словари для быстрого поиска
-    units_dict = {u["id"]: u["name"] for u in units}
-    regions_dict = {r["id"]: r["name"] for r in regions}
-
-    result = []
-    for doctor in doctors:
-        doctor_id = doctor["id"]
-
-        # Получаем специализации врача
-        specs = [
-            link.get("specialization", "") or ""
-            for link in doctor_units
-            if link["worker"] == doctor_id
-        ]
-        specs = list(set(filter(None, specs)))
-
-        # Получаем подразделения врача
-        doc_units = [
-            units_dict.get(link["companyUnit"], "")
-            for link in doctor_units
-            if link["worker"] == doctor_id
-        ]
-        doc_units = list(set(filter(None, doc_units)))
-
-        # Получаем регионы врача
-        doc_regions = [
-            regions_dict.get(link["region"], "")
-            for link in doctor_regions
-            if link["worker"] == doctor_id
-        ]
-        doc_regions = list(set(filter(None, doc_regions)))
-
-        # Формируем итоговый словарь
-        doctor_data = {
-            "id": doctor_id,
-            "fio": doctor["fio"],
-            "specialization": specs[0] if specs else None,
-            "regions": doc_regions,
-            "units": doc_units
-        }
-
-        result.append(doctor_data)
-
-    return result
-
-
 if __name__ == "__main__":
     doctors = find_doctor_schedule(
         last_name="Дразнин"
     )
+    regions = site_regions()
+    print("Регионы:", regions)
 
     pprint(doctors, width=150)
