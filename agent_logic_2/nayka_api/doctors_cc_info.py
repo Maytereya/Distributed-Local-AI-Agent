@@ -5,18 +5,57 @@ import logging
 import sys
 import os
 from datetime import datetime, timedelta
+import glob
 
 # Добавляем родительскую директорию в путь для импорта
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent_logic_2 import config as c
+from agent_logic_2.nayka_api.api_nayka4_3 import get_today_str
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Константы для кэширования
-CACHE_FILE = os.path.join(os.path.dirname(__file__), 'apidata', 'zametka_button.json')
+CACHE_DIR = os.path.join(os.path.dirname(__file__), 'apidata')
 CACHE_EXPIRY = timedelta(hours=24)  # Кэш действителен 24 часа
+
+
+def get_cache_filename(date: str = None) -> str:
+    """Возвращает имя файла кэша с датой"""
+    if date is None:
+        date = get_today_str()
+    return os.path.join(CACHE_DIR, f'zametka_button_{date}.json')
+
+
+def find_latest_cache_file() -> Optional[str]:
+    """Находит самый свежий файл кэша заметок"""
+    pattern = os.path.join(CACHE_DIR, 'zametka_button_*.json')
+    files = glob.glob(pattern)
+    if not files:
+        return None
+    
+    # Сортируем по дате в имени файла (последний элемент после _)
+    files.sort(key=lambda x: x.split('_')[-1].replace('.json', ''), reverse=True)
+    return files[0] if files else None
+
+
+def cleanup_old_cache_files():
+    """Удаляет все старые файлы кэша заметок, кроме сегодняшнего"""
+    today = get_today_str()
+    pattern = os.path.join(CACHE_DIR, 'zametka_button_*.json')
+    
+    for file_path in glob.glob(pattern):
+        try:
+            # Извлекаем дату из имени файла
+            filename = os.path.basename(file_path)
+            file_date = filename.split('_')[-1].replace('.json', '')
+            
+            if file_date != today:
+                os.remove(file_path)
+                logger.info(f"🗑️ Удален старый файл кэша: {filename}")
+        except Exception as e:
+            logger.error(f"Ошибка при удалении файла {file_path}: {e}")
 
 
 def load_from_cache() -> Optional[List[Dict]]:
@@ -27,18 +66,20 @@ def load_from_cache() -> Optional[List[Dict]]:
         Optional[List[Dict]]: Данные из кэша или None, если кэш недействителен
     """
     try:
-        if not os.path.exists(CACHE_FILE):
+        # Ищем самый свежий файл кэша
+        cache_file = find_latest_cache_file()
+        if not cache_file:
             return None
             
         # Проверяем время последнего обновления файла
-        file_time = datetime.fromtimestamp(os.path.getmtime(CACHE_FILE))
+        file_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
         if datetime.now() - file_time > CACHE_EXPIRY:
             logger.info("Кэш устарел, требуется обновление")
             return None
             
-        with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+        with open(cache_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            logger.info(f"Загружены данные о {len(data)} врачах из кэша")
+            logger.info(f"Загружены данные о {len(data)} врачах из кэша: {os.path.basename(cache_file)}")
             return data
             
     except Exception as e:
@@ -48,18 +89,24 @@ def load_from_cache() -> Optional[List[Dict]]:
 
 def save_to_cache(data: List[Dict]) -> None:
     """
-    Сохраняет данные в кэш.
+    Сохраняет данные в кэш с датой в имени файла.
     
     Args:
         data (List[Dict]): Данные для сохранения
     """
     try:
         # Создаем директорию, если её нет
-        os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
+        os.makedirs(CACHE_DIR, exist_ok=True)
         
-        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+        # Очищаем старые файлы перед сохранением нового
+        cleanup_old_cache_files()
+        
+        # Создаем файл с датой в имени
+        cache_file = get_cache_filename()
+        
+        with open(cache_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info(f"Данные о {len(data)} врачах сохранены в кэш")
+            logger.info(f"Данные о {len(data)} врачах сохранены в кэш: {os.path.basename(cache_file)}")
             
     except Exception as e:
         logger.error(f"Ошибка при сохранении кэша: {e}")
