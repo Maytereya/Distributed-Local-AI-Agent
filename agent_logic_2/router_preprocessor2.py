@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, AsyncGenerator, TypeAlias
 
 from ollama import AsyncClient, Options
 
-from agent_logic_2 import llama_func_call_3_1 as doctor_info, config as c
+from agent_logic_2 import llama_func_call4 as doctor_info, config as c
 from agent_logic_pack import formulate
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
@@ -187,70 +187,110 @@ async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
         return [text]
 
 
-async def final_answering(primary_request: str, collected_info: str) -> str:
+async def final_answering(primary_request: str,
+                          collected_info: str):  # Пока неясно что за тип данных будет возвращаться
     prompt = f"""
-            <|begin_of_text|><|start_header_id|>system<|end_header_id|>
-            Ты – ассистент колл‑центра многопрофильной клиники «Наука».
-            Всегда отвечай на русском языке, выводя **все** строки из секций ниже.  
-            Ничего не резюмируй, не скрывай, не перефразируй – копируй дословно.
+    <|begin_of_text|><|start_header_id|>system<|end_header_id|>
+    Ты — ассистент колл‑центра многопрофильной клиники «Наука».  
+    Отвечай **всегда на русском языке**.
 
-            
-            Дано:
-            ◆ USER  – исходный запрос клиента.  
-            ◆ DATABASE – данные, найденные в БД.
-            
-            ТВОЯ ЗАДАЧА (выполняй последовательно):
-            1. Извлеки из DATABASE все нужные поля.  
-            2. Если поле присутствует – выведи его; если отсутствует – напиши «нет данных».  
-            3. Не придумывай информации, которой нет.  
-            4. Не предлагай позвонить, уточнить, проконсультироваться у врача – выводи всё, что доступно.
-    
-            
-            ### Формат ответа про врача (используй ровно его, не выдумывай новых полей!)
-            
-            **Информация о враче **
-            
-            **ФИО врача: {{NAME}}** ...
-            **Общая специализация:** {{SPECIALIZATION_BRIEFLY}} ... 
-            **Специализация подробно:** {{SPECIALIZATION_FULL}} ...
-            **Заметка колл‑центра:** {{CALL-CENTER}} ...
-            **Стоимость: ** {{PRICE}} ...
-            **График приёма:** {{TIMETABLE}}...
-            **Адрес/адреса работы:** {{ADDRESS}} ...
-            
-            ### Формат ответа про подготовку к исследованию или процедуре
-            
-            **Подготовка к исследованию/процедуре** {{PREPARATION}} … (полный текст, или применимый фрагмент, 
-            если предоставленная тебе информация содержит как прямой ответ, так и смежные темы, не имеющие отношения к запросу пользователя.)
-            Если в предоставленной информации нет ничего подходящего, сообщи, что релевантных данных не найдено.
-            
-            Учти!
-            — Жирный шрифт только для подписи полей.  
-            — Если в запросе упомянуты сразу несколько тем (врач + цена УЗИ + подготовка к УЗИ), выведи блоки один за другим.
-            
-            ### Примеры
-            
-            *Пример 1*  
-            USER: «Сколько стоит приём у Ивановой?»  
-            → см. формат выше.  
-            
-            *Пример 2*  
-            USER: «Как подготовиться к гастроскопии?»  
-            → выводится только блок «Подготовка…».
-            
-            ### Данные
-            USER: {primary_request}
-            
-            DATABASE: {collected_info}
-            <|eot_id|><|start_header_id|>assistant<|end_header_id|>
-            """
-    answer = await ollama.generate(
+    Твоя задача — **дословно** вывести данные из блока DATABASE.  
+    ❗ Ничего не резюмируй, не сокращай, не перефразируй. **Копируй всё строго как есть.**  
+    ❗ Особенно важно: **ФИО врачей, адреса, цены и график приёма** — без изменений.
+
+    ---
+
+    ## Что тебе дано:
+    - USER — исходный запрос клиента.  
+    - DATABASE — информация, найденная в БД.
+
+    ---
+
+    ## Что нужно сделать:
+    1. Найди в DATABASE все поля, которые **соответствуют запросу клиента**.
+    2. Для каждого поля:
+       - если оно есть — выведи его строго в формате ниже;
+       - если его нет — напиши «нет данных».
+    3. Ничего не придумывай, не добавляй от себя.
+    4. Поле {{📞Заметка колл-центра}} **иногда содержит цены и скидки**. Если такие есть — **дословно выведи всё**.
+    5. **Не предлагай позвонить, уточнить или проконсультироваться.** Просто выведи, что найдено.
+
+    ---
+
+    ## Формат ответа про врача:
+    (используй ровно его, не меняй и не добавляй новых полей)
+
+    **ФИО врача: {{• ФИО}}**  
+    **Специализация кратко:** {{SPECIALIZATION_SHORT}}  
+    **Специализация подробно:** {{• Специализация}}  
+    **Информация для колл‑центра и стоимость приёма:** {{• 📞Заметка колл-центра}}  
+    **Адрес/адреса работы:** {{• Адрес/Адреса}}  
+    **График приёма:** {{• Расписание}}
+
+    ---
+
+    ## Формат ответа на прочие запросы (из базы знаний), в том числе о том, как подготовиться к процедуре или исследованию:
+    **Информация из базы знаний:**  
+    {{KNOWLEDGE_SNIPPET}}  
+    (Выводи весь подходящий текст из DATABASE, если он отвечает на вопрос пользователя. Если ничего не подходит — напиши: «Релевантных данных не найдено.»)
+
+    ---
+
+    ## Важно:
+    - Жирным делай **только подписи полей**.
+    - Не используй никаких дополнительных слов или пояснений.
+    - Если найдено несколько врачей — **выведи каждый блок отдельно**.
+    - Если в запросе несколько тем, выводи блоки в следующем порядке:
+      1. Врач
+      2. Стоимость / скидки
+      3. Подготовка
+      4. Прочая информация из базы знаний
+
+    ---
+
+    ## Примеры:
+
+    *Пример 1*  
+    USER: «Сколько стоит приём Ивановой?»  
+    → выведи блок про врача по формату выше.
+
+    *Пример 2*  
+    USER: «Как подготовиться к гастроскопии?»  
+    → выведи блок "Информация из базы знаний".
+
+    *Пример 3*  
+    USER: «Выведи всех гастроэнтерологов на Ленина 5»  
+    → выведи по одному блоку на каждого врача, принимающего по этому адресу.
+
+    *Пример 4*  
+    DATABASE:
+    - Прием уролога со скидкой 25% с 01.04 по 30.06.25  
+    - Первичный приём уролога КМН вместо 3500 руб за 2625 руб.  
+    - [4.1.2.7] Повторный приём уролога, кмн — 2400 руб (30 минут).  
+    → выведи всё как есть в {{• 📞Заметка колл-центра}}.
+
+    *Пример 5*  
+    USER: «Что делать, если пациент жалуется?»  
+    → выведи блок "Информация из базы знаний".
+
+    ---
+
+    ## Данные:
+    USER: {primary_request}  
+    DATABASE: {collected_info}
+    <|eot_id|><|start_header_id|>assistant<|end_header_id|>
+    """
+    partial = ""  # накопитель
+    stream = await ollama.generate(
         model=llm,
         prompt=prompt,
         options=options,
-        keep_alive=-1
+        keep_alive=-1,
+        stream=True,
     )
-    return answer["response"]
+    async for chunk in stream:
+        partial += chunk["response"]
+        yield partial
 
 
 # ──────────────────────────────────────────────────────
@@ -339,83 +379,113 @@ MODULES = {
     "ESSENTIAL": essential_info,
     "SCRIPTS": instructions_scripts,
 }
+# Дополнительные обозначения типов для понимания вывода
+SessionType: TypeAlias = Dict[str, Any]
+RoutingResult: TypeAlias = Tuple[str, SessionType]
+
+# Чисто для удобства форматирования
+SEGMENT_SEPARATOR = "\n\n— — —\n\n"
 
 
-async def routing(text: str, sess: Dict[str, Any] | None = None) -> Tuple[str, Dict[str, Any]]:
+async def handle_pending_module(text: str, sess: SessionType) -> RoutingResult | None:
+    if (pending_module := sess.get("pending")) and pending_module in MODULES:
+        print("=" * 45)
+        print("pending view: ", pending_module or "Empty")
+        print("=" * 45)
+
+        response, continue_pending = await MODULES[pending_module](text, session=sess)
+        sess["pending"] = pending_module if continue_pending else None
+
+        # Record interaction in history
+        sess["history"].extend([
+            {"user": text},
+            {"bot": response}
+        ])
+
+        return response, sess
+    return None
+
+
+async def process_segments(text: str, sess: SessionType) -> str:
+    segments = await split_into_segments(text, sess)
+    responses: List[str] = []
+
+    for idx, segment in enumerate(segments, 1):
+        labels = await classify(segment, sess)
+        labels.sort(key=LABEL_PRIORITY.index)
+
+        print("=" * 45)
+        print(f"PART view #{idx}: ", segment or "Empty PART")
+        print("=" * 45)
+
+        for label in labels:
+            response, continue_pending = await MODULES[label](segment, session=sess)
+            responses.append(response)
+            if continue_pending:
+                sess["pending"] = label
+                print("=" * 45)
+                print("need pending view: ", sess["pending"] or "Empty need")
+                print("=" * 45)
+                break
+
+    return SEGMENT_SEPARATOR.join(responses)
+
+
+async def routing(text: str, sess: SessionType | None = None) -> AsyncGenerator[RoutingResult, None]:
     """
-    Главная точка входа в роутинг.
+
+    Here is variant of routing() that *yields* (partial_answer, session) pairs,
+        so that the outer UI can stream them.
+
     :param text: Сообщение пользователя
     :param sess: словарь состояния сессии, хранит pending-модуль и историю
     :return: ответ, обновлённая сессия
     """
     # 1. Инициализируем состояние сессии обработки входящего текстового блока
+
     sess = sess or {}
     sess.setdefault("pending", None)
     sess.setdefault("history", [])
 
-    print("Распечатка sess после .setdefault: ", sess)
+    # Handle pending module if exists
+    if pending_result := await handle_pending_module(text, sess):
+        yield pending_result
 
-    # 2. Если находим команду на продолжение — сразу обрабатываем
-    if (pending := sess.get("pending")) and pending in MODULES:
-        print("=============================================")
-        print("pending view: ", pending or "Empty")
-        print("=============================================")
-        answer, need = await MODULES[pending](text, session=sess)
-        sess["pending"] = pending if need else None
+    # Process text segments
+    result = await process_segments(text, sess)
 
-        # Записываем в историю запрос и ответ
-        sess["history"].append({"user": text})
-        sess["history"].append({"bot": answer})
+    # Update history
+    sess["history"].extend([
+        {"user": text},
+        {"bot": result}
+    ])
 
-        return answer, sess
+    # Stream final response
+    async for partial in final_answering(text, result):
+        yield partial, sess
 
-    # 3. Иначе — разбиваем на сегменты и классифицируем
-    segments = await split_into_segments(text, sess)
-    replies: List[str] = []
 
-    i = 0
-    for part in segments:
-        labels = await classify(part, sess)
-        labels.sort(key=LABEL_PRIORITY.index)
-        i += 1
-        print("=============================================")
-        print(f"PART view #{i}: ", part or "Empty PART")
-        print("=============================================")
+async def process_routing_request(query: str) -> Tuple[str, Dict[str, Any]]:
+    """
+    Запускает маршрутизацию и собирает все части ответа из async-генератора,
+    возвращая финальную строку и итоговую сессию. Нужно чисто для тестирования данного модуля
+    """
+    final_response: str = ""
+    final_session: dict[str, Any] = {}
 
-        for lab in labels:
-            rep, need = await MODULES[lab](part, session=sess)
-            replies.append(rep)
-            if need:
-                sess["pending"] = lab
-                print("=============================================")
-                print("need pending view: ", sess["pending"] or "Empty need")
-                print("=============================================")
-                break
+    # routing возвращает AsyncGenerator[(partial_response, session), None]
+    async for partial, sess in routing(query.strip()):
+        # на каждой итерации приходят (partial, sess)
+        final_response = partial  # перезаписываем — в итоге останется последний
+        final_session = sess
 
-    # 4. Собираем итоговый ответ и обновляем историю
-    result = "\n\n— — —\n\n".join(replies)
+    return final_response, final_session
 
-    sess["history"].append({"user": text})
-    sess["history"].append({"bot": result})
 
-    # print("Результат сборки итогового ответа: \r", result)
-
-    final = await final_answering(text, result)
-
-    # 5. Возвращаем ответ и состояние
-    return final, sess
+async def main():
+    async for partial, sess in routing("кардиологи клиники"):
+        print(partial)  # или обновлять UI
 
 
 if __name__ == "__main__":
-    re, sess = asyncio.run(
-        routing("""
-        
-        и ещё скажите, сколько стоит приём у Дразнина и в какое время он работает?
-        
-        """))
-    print("Итоговый вывод: ____________________________________________________________________")
-    print()
-    print(re)
-    print("sess['history']: ___________________________________________________________________")
-    print()
-    print(sess["history"])
+    asyncio.run(main())

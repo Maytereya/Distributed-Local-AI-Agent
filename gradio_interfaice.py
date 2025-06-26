@@ -106,26 +106,23 @@ footer {
 
 # ------------------------------------------------------------------------
 
-async def echo_ai_router(message,
-                         history,
-                         session_state,
-                         ):
+async def echo_ai_router(message, history, session_state):
     """
-    Обновлённая версия universal_echo — подключает роутер, обрабатывает память.
-    :param session_state:
+    Обновлённая версия universal_echo — подключает роутер и стримит ответ.
     :param message: Текст запроса пользователя
-    :param history: история сообщений
-    :return: строка-ответ
+    :param history: (не используется, можно убрать)
+    :param session_state: словарь сессии, хранит pending и history
+    :yields: два значения — текущий кусок ответа и обновлённый session_state
     """
-    # global session_state
-
+    session_state = session_state or {}
     try:
-        answer, session_state = await routing(text=message, sess=session_state or {})
-        return answer, session_state or {}
+        # routing возвращает AsyncGenerator[(partial_response, session), None]
+        async for partial, session_state in routing(message, sess=session_state):
+            # Каждая итерация — новое состояние и новый кусок ответа
+            yield partial, session_state
     except Exception as e:
-        error_msg = f"⚠️ Ошибка обработки запроса в ai router: {e}"
-        # Гарантируем, что возвращаем и ответ, и текущее/пустое состояние
-        return error_msg, session_state or {}
+        # При ошибке тоже стримим её сразу
+        yield f"⚠️ Ошибка обработки запроса в ai router: {e}", session_state
 
 
 async def chroma_echo(message: str, history: List[Dict], collection: str, threshold_value: float,
@@ -171,49 +168,36 @@ async def meili_echo(
 
 
 async def universal_echo(
-        message: str,
-        history: List[Dict],
-
-        radio_value: str,  # "ai router", "meilisearch", "vectorstore", "db"
-        threshold_value: float,
-        slider_value_n_results: int,
-        slider_value_k: int,
-        collection: str,  # Dropdown (Chroma)
-        meili_index: str,  # Dropdown (Meilisearch)
-        # session_state,
+    message: str,
+    history: List[Dict],
+    radio_value: str,      # "ai-router", "meilisearch", "vectorstore", "db"
+    threshold_value: float,
+    slider_value_n_results: int,
+    slider_value_k: int,
+    collection: str,
+    meili_index: str,
 ):
-    """
-    Универсальная функция, которая проверяет radio_value и вызывает:
-
-    chroma_search_collection_dropdown, collection
-    thresholdvalue_slider, threshold_value
-    value_n_results_slider,  slider_value_n_results
-    value_k_slider,  slider_value_k
-    radio_type_of_search, radio_value
-    meili_search_indexes_dropdown, meili_index
-    state session_state
-
-    """
     if radio_value == "ai-router":
-        # Никаких adjustments не используется, зато передается параметр session_state
-        answer, _ = await echo_ai_router(message,
-                                         history,
-                                         None)
-        return answer
+        session_state: dict = {}
+        # стримим
+        async for partial, session_state in echo_ai_router(message, history, session_state):
+            yield partial
+        # после завершения стрима — выходим
+        return
 
-    if radio_value == "meilisearch":
-        # Используем slider_value_k как limit
-        return await meili_echo(
+    elif radio_value == "meilisearch":
+        result = await meili_echo(
             message=message,
             history=history,
             index=meili_index,
             limit=slider_value_k
         )
+        yield result
+        return
 
     else:
-        # Для "vectorstore" или "db" вызываем chroma_echo
-        print("radio_value:", radio_value)
-        return await chroma_echo(
+        # сюда попадём только если radio_value == "vectorstore" или "db"
+        result = await chroma_echo(
             message=message,
             history=history,
             collection=collection,
@@ -222,7 +206,8 @@ async def universal_echo(
             slider_value_k=slider_value_k,
             radio_value=radio_value
         )
-
+        yield result
+        return
 
 # --------------------
 # CHROMA DB section
