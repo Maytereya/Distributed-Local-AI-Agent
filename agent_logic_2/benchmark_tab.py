@@ -1,3 +1,4 @@
+import asyncio
 import json
 import statistics
 import time
@@ -6,7 +7,7 @@ from typing import Tuple
 
 from ollama import AsyncClient, Options
 
-from agent_logic_2 import llama_func_call2 as func_mod
+from agent_logic_2 import llama_func_call
 from agent_logic_2.config import ollama_url
 
 # Настройки клиента Ollama
@@ -45,11 +46,12 @@ async def gradio_benchmark(models: list[str], laps: int = 2):
 
         async def measure(task: str) -> Tuple[float, float, float]:
             t0 = time.time()
-            res = await func_mod.ollama_call(task)
+            res0 = await llama_func_call.ollama_call(task)
+            res_dict = res0.__dict__  # конвертирование объекта в словарь
             wall = time.time() - t0
-            eval_s = res.get("eval_duration", 0) / 1e9 if isinstance(res, dict) else 0
-            tokens = res.get("eval_count", len(str(res).split())) if isinstance(res, dict) else len(str(res).split())
-            tps = tokens / eval_s if eval_s > 0 else 0
+            eval_s = res_dict.get("eval_duration", -1) / 1e9 if isinstance(res_dict, dict) else 0
+            tokens = res_dict.get("eval_count", len(str(res_dict).split())) if isinstance(res_dict, dict) else len(str(res_dict).split())
+            tps = tokens / eval_s if eval_s > 0 else -1
             return wall, eval_s, tps
 
         for task_type, task_list in {"fast": FAST_TASKS, "slow": SLOW_TASKS}.items():
@@ -107,3 +109,8 @@ def load_previous_log(path: str):
         return table
     except Exception as e:
         return [["Ошибка при загрузке файла:", str(e)]]
+
+
+if __name__ == "__main__":
+    rez = asyncio.run(llama_func_call.ollama_call("Почему небо голубое?"))
+    print(rez)

@@ -9,11 +9,16 @@ from difflib import SequenceMatcher
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional
 
-from agent_logic_2 import config as c
 from ollama import AsyncClient, Options
-from agent_logic_2.nayka_api.api_nayka4_3 import find_doctors_by_keyword, find_doctor_schedule
-from nayka_api.api_price_by_region_3 import get_price, format_services, get_region_id_by_name
-from nayka_api.api_price_all import update_price_all, load_price_all, get_region_id_by_name_all
+
+from agent_logic_2 import config as c
+from agent_logic_2.nayka_api.api_nayka import find_doctors_by_keyword, find_doctor_schedule, \
+    cleanup_old_doctors_files, get_all_doctors
+from nayka_api.api_price_all import update_price_all, load_price_all
+from nayka_api.doctors_cc_info import get_doctors_cc_info
+
+# Функция импорта прайса не используется ввиду несостоятельности последнего
+# from nayka_api.api_price_by_region_3 import get_price, format_services
 
 # ── Конфигурация ───────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
@@ -107,6 +112,8 @@ class DoctorsRepository:
             return False
         print(f"Получено {len(data)} врачей")
         print(f"Первый врач: {data[0] if data else 'нет данных'}")
+        # Очищаем старые файлы врачей перед записью нового
+        cleanup_old_doctors_files()
         with open(today, "w", encoding="utf-8") as f:
             for item in data:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
@@ -208,13 +215,14 @@ def find_similar_surname(input_surname: str, doctors: List[Dict[str, Any]], thre
             best, br = s, r
     return best.capitalize() if br >= threshold else None
 
+
 # ── Обогащение ответа заметками колл-центра ────────────────────────────────────────────────────
 def enrich_with_cc_info(doctors: list):
     """
     Обогащает каждый dict заметкой call-центра, если есть id.
     """
     try:
-        from nayka_api.doctors_cc_info import get_doctors_cc_info
+
         cc_info = get_doctors_cc_info()
         cc_by_id = {cc.get("id"): cc.get("callCenterInfo", "Нет заметок") for cc in cc_info}
         for doc in doctors:
@@ -236,48 +244,62 @@ def format_doctor(item: Dict[str, Any]) -> str:
     spec_lines = [s.strip().lstrip('-').strip() for s in specialization.splitlines() if s.strip()]
     specialization_full = "\n".join(dict.fromkeys(spec_lines)) if spec_lines else "-"
     lines.append(f"• Специализация:\n{specialization_full}")
-    # Регионы и region_ids
+    # Адреса работы и region_ids
     regions = item.get("regions", ['-'])
-    region_ids = item.get("region_ids", [])
-    lines.append(f"• Регионы: {', '.join(regions)}")
+    # region_ids = item.get("region_ids", [])
+    lines.append(f"• Адрес/Адреса: {', '.join(regions)}")
 
     # Загрузим прайс ДО debug print
-    price_all = load_price_all()  # Загружаем кэш всех прайсов
+    # Пока эту функцию отключим, так как не можем получить правильный прайс
+    # price_all = load_price_all()  # Загружаем кэш всех прайсов
 
     # Debug print после загрузки price_all
-    print("[DEBUG] regions врача:", regions)
-    print("[DEBUG] region_ids врача:", region_ids)
-    print("[DEBUG] regionIds в прайсе:", sorted(set(row['regionId'] for row in price_all)))
+    # print("[DEBUG] Адреса работы врача:", regions)
+    # print("[DEBUG] region_ids врача:", region_ids)
+    # print("[DEBUG] regionIds в прайсе:", sorted(set(row['regionId'] for row in price_all)))
+    #
+    # # Блок — Прайсы по region_id (у врача может быть несколько регионов)
+    # price_blocks = []
+    # for region, region_id in zip(regions, region_ids):
+    #     if not region_id or region == "-":
+    #         price_blocks.append(f"У Врача не указан regionId для '{region}'!")
+    #         continue
+    #
+    #
+    #     services = [s for s in price_all if s.get("regionId") == region_id]
+    #
+    #     if not services:
+    #         # Fallback: priceByRegion
+    #         try:
+    #             services = get_price(region_id)
+    #             if services:
+    #                 price_blocks.append(f"Прайс ({region}, через priceByRegion):\n" + format_services(services[:7]))
+    #             else:
+    #                 price_blocks.append(f"Для региона {region} прайс не найден даже через priceByRegion.")
+    #         except Exception as e:
+    #             price_blocks.append(f"Для региона {region} не удалось загрузить priceByRegion: {e}")
+    #         continue
+    #
+    #     price_blocks.append(f"{{PRICE}} • Прайс ({region}):\n" + format_services(services[:7]))
 
-    # Блок — Прайсы по region_id (у врача может быть несколько регионов)
-    price_blocks = []
-    for region, region_id in zip(regions, region_ids):
-        if not region_id or region == "-":
-            price_blocks.append(f"У Врача не указан regionId для '{region}'!")
-            continue
-
-        services = [s for s in price_all if s.get("regionId") == region_id]
-        if services:
-            price_blocks.append(f"Прайс ({region}):\n" + format_services(services[:7]))
-        else:
-            price_blocks.append(f"Для региона {region} прайс не найден.")
-
-    if price_blocks:
-        lines.append("")  # Пустая строка для отделения прайса
-        lines.append("\n".join(price_blocks))
+    #     добавляем значение прайса в основной список "lines"
+    # lines.append("")
+    # lines.append("─" * 10)
+    # lines.extend(price_blocks)
+    # lines.append("")
 
     # Заметка call-центра
     cc = item.get("callCenterInfo")
     if cc:
-        lines.append("─" * 50)
-        lines.append("📞 Заметка call-центра:")
+        lines.append("─" * 10)
+        lines.append("• 📞Заметка колл-центра:")
         lines.append(str(cc))
-        lines.append("─" * 50)
+        lines.append("─" * 10)
 
     # Расписание (если есть)
     schedule = item.get("schedule")
     if isinstance(schedule, dict):
-        lines.append("Расписание:")
+        lines.append("• Расписание:")
         for region, days in schedule.items():
             lines.append(f"{region}:")
             for day in days:
@@ -294,7 +316,6 @@ def format_doctor(item: Dict[str, Any]) -> str:
     return "\n".join(cleaned)
 
 
-
 def format_doctor_schedule(doc):
     fio = doc.get("fio", "-")
     spec = doc.get("specialization", "-")
@@ -308,7 +329,7 @@ def format_doctor_schedule(doc):
     lines = []
 
     # ФИО
-    lines.append(f"Расписание для {fio}:")
+    lines.append(f"{fio}:")
     lines.append("")  # Пробел после ФИО
 
     # Специализация
@@ -316,23 +337,24 @@ def format_doctor_schedule(doc):
         lines.append(spec_full)
         lines.append("")  # Пробел после специализации
 
-    # Регионы (адреса)
-    if regions:
-        lines.append(f"Адреса: {', '.join(regions)}")
-        lines.append("")  # Пробел после адреса
-
     # Call-центр (если есть)
     if cc and cc.strip() and cc != "Нет заметок":
-        lines.append("──────────────────────────────────────────────────")
-        lines.append("📞 Заметка call-центра:")
+        lines.append("─" * 10)
+        lines.append("{CALL-CENTER} 📞Заметка колл-центра:")
         lines.append(str(cc).strip())
-        lines.append("──────────────────────────────────────────────────")
+        lines.append("─" * 10)
         lines.append("")  # Пробел после заметки
+
+    # Адреса
+    if regions:
+        lines.append(f"Адрес/адреса: {', '.join(regions)}")
+        lines.append("")  # Пробел после адреса
 
     # Расписание
     if schedule:
+        lines.append("• Расписание: ")
         for region, days in schedule.items():
-            lines.append(f"• {region}:")
+            lines.append(f"• По адресу приема {region}:")
             for day in days:
                 date = day.get("date", "-")
                 start = day.get("start", "-")
@@ -349,19 +371,20 @@ def format_doctor_schedule(doc):
 
     return "\n".join(lines)
 
+
 # ── Основная логика ───────────────────────────────────────────────────────────
 repo = DoctorsRepository(DATA_DIR)
 
 
 @with_retries(tries=2)
 async def ollama_call(prompt: str) -> Dict[str, Any]:
-    return await ollama_client.generate(
+    res = await ollama_client.generate(
         model=OLLAMA_MODEL,
         prompt=prompt,
         options=OLLAMA_OPTIONS,
         keep_alive=-1,
     )
-
+    return res.__dict__
 
 
 async def investigate(question: str) -> str:
@@ -397,7 +420,6 @@ async def investigate(question: str) -> str:
             print(f"Ищем по фамилии: {surname}")
             local = repo.find_by_surname(surname)
         if not local:
-            from agent_logic_2.nayka_api.api_nayka4_3 import get_all_doctors
             await repo.update(get_all_doctors)
             if full_name:
                 local = [d for d in repo.read_all() if d.get("fio", "").startswith(full_name)]
@@ -414,12 +436,12 @@ async def investigate(question: str) -> str:
                 local = repo.find_by_surname(similar)
                 if local:
                     local = enrich_with_cc_info(local)
-                    doctors_text = "\n\n---\n\n".join(f"{i+1}. {format_doctor(d)}" for i, d in enumerate(local))
+                    doctors_text = "\n\n---\n\n".join(f"{i + 1}. {format_doctor(d)}" for i, d in enumerate(local))
                     return f"Похоже, опечатка: вы имели в виду '{similar}'?\n\n{doctors_text}"
         if not local:
             return f"Врач {surname} не найден в базе данных."
         print("Информация о враче получена!")
-        return "\n\n---\n\n".join(f"{i+1}. {format_doctor(d)}" for i, d in enumerate(local))
+        return "\n\n---\n\n".join(f"{i + 1}. {format_doctor_schedule(d)}" for i, d in enumerate(local))
 
     # Блок: поиск по специальности
     if key_type == "specialty":
@@ -428,9 +450,9 @@ async def investigate(question: str) -> str:
         if docs and isinstance(docs, list) and isinstance(docs[0], dict):
             docs = enrich_with_cc_info(docs)
         if docs:
-            return "\n\n---\n\n".join(f"{i+1}. {format_doctor(d)}" for i, d in enumerate(docs))
+            return "\n\n---\n\n".join(f"{i + 1}. {format_doctor(d)}" for i, d in enumerate(docs))
         return f"Врачи по специальности '{value}' не найдены."
-    
+
     if key_type == "timetable":
         print(f"LLM-парсер определил запрос расписания по фамилии: {value}")
         docs = find_doctor_schedule(value)
@@ -446,8 +468,10 @@ async def investigate(question: str) -> str:
     # fallback — если LLM вернул просто текст
     return value
 
+
 def find_doctors_by_keyword_llm(question: str) -> str:
     return find_doctors_by_keyword(question)
+
 
 def print_unique_priceall_regions():
     price_all = load_price_all()
@@ -460,7 +484,8 @@ def print_unique_priceall_regions():
             regions_in_priceall.add(name.strip())
     print("[DEBUG] regionName/region из priceAll (первые 20):")
     for idx, r in enumerate(list(regions_in_priceall)[:20]):
-        print(f"{idx+1}. '{r}'")
+        print(f"{idx + 1}. '{r}'")
+
 
 async def main():
     """Основная функция."""
@@ -472,5 +497,5 @@ async def main():
 
 
 if __name__ == "__main__":
-    print_unique_priceall_regions() 
+    print_unique_priceall_regions()
     asyncio.run(main())

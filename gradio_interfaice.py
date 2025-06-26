@@ -13,7 +13,7 @@ from gradio_pdf import PDF
 from agent_logic_2 import config as c
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
-from agent_logic_2.router_preprocessor2 import routing
+from agent_logic_2.router_preprocessor import routing
 from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import pdf_to_json_txt_tables_meili as pdf2json

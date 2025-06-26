@@ -50,8 +50,6 @@ async def extract_keyword(query: str, ) -> str:
     """
 
     prompt = (f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|> '
-              'Identify the main keyword in the user query, focusing on the noun that represents the core element of the query, 
-              such as the name of a medication, symptom, or syndrome. '
               Тебе поступает запрос от пользователя на тему медицинских услуг или медицинского сервиса,
               содержащий определенные ключевые слова, которые тебе следует извлечь. 
               Фокусируйся на существительном, которое является ключевым элементом запроса пользователя. Это может быть:

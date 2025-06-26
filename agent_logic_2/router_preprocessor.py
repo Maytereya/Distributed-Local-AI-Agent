@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Tuple, AsyncGenerator, TypeAlias
 
 from ollama import AsyncClient, Options
 
-from agent_logic_2 import llama_func_call4 as doctor_info, config as c
+from agent_logic_2 import llama_func_call as doctor_info, config as c
 from agent_logic_pack import formulate
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
@@ -21,32 +21,28 @@ options = Options(temperature=0.1, top_k=40, top_p=0.9, repeat_penalty=1.1, stop
 LABEL_PRIORITY = ["API_INFO",  # справка из API Мед.центра
                   "APPOINTMENT",  # назначение времени / запись на приём к врачу
                   "SCRIPTS"  # алгоритмы, скрипты, если - то...
-                  "ESSENTIAL",  # общая информация обо всем, справочники
-                  "PREPARE_FOR",  # Подготовка к анализам и прочим исследованиям
 
                   ]
 ALLOWED = set(LABEL_PRIORITY + ["UNDEFINED"])
 
 LABEL_DOC = """
 1. API_INFO – справка из API CRM клинки: врачи, услуги, цены, расписание
-2. PREPARE_FOR – правила подготовки к анализам и прочим медицинским исследованиям
-3. APPOINTMENT – запись на приём к врачу
-4. ESSENTIAL – общая справочная информация об услугах клиники
-5. SCRIPTS – инструкции и скрипты, последовательность действий для администраторов
-6. UNDEFINED – не распознан
+2. APPOINTMENT – запись на приём к врачу
+3. SCRIPTS – инструкции и скрипты, последовательность действий для администраторов
+4. UNDEFINED – не распознан
 
 ВАЖНО: Метка DOC_INFO недопустима! Используй API_INFO для запросов о врачах и услугах.
 """
 
 EXAMPLES = """
-INPUT: Сколько стоит приём кардиолога?            
+INPUT: Сколько стоит приём кардиолога Михлик?            
 OUTPUT: {\"labels\":[\"API_INFO\"]}
 
-INPUT: Какое расписание работы у гинеколога?            
+INPUT: Какое расписание работы у Пивоваровой?            
 OUTPUT: {\"labels\":[\"API_INFO\"]}
 
 INPUT: Как подготовиться к анализу крови?        
-OUTPUT: {\"labels\":[\"PREPARE_FOR\"]}
+OUTPUT: {\"labels\":[\"SCRIPTS\"]}
 
 INPUT: Запишите меня к терапевту завтра утром.    
 OUTPUT: {\"labels\":[\"APPOINTMENT\"]}
@@ -55,16 +51,14 @@ INPUT: Вы плохо взяли кровь, огромный синяк!
 OUTPUT: {\"labels\":[\"SCRIPTS\"]}
 
 INPUT: Как доехать до клиники на автобусе?           
-OUTPUT: {\"labels\":[\"ESSENTIAL\"]}
+OUTPUT: {\"labels\":[\"SCRIPTS\"]}
 
 INPUT: Подготовка к УЗИ и запишите к УЗИсту.      
-OUTPUT: {\"labels\":[\"PREPARE_FOR\",\"APPOINTMENT\"]}
+OUTPUT: {\"labels\":[\"SCRIPTS\",\"APPOINTMENT\"]}
 
-INPUT: Где принимает доктор Иванов?               
+INPUT: Где принимает Иванов?               
 OUTPUT: {\"labels\":[\"API_INFO\"]}
 
-INPUT: Какие услуги предоставляет клиника?        
-OUTPUT: {\"labels\":[\"ESSENTIAL\"]}
 """
 
 
@@ -167,9 +161,9 @@ async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
 
         splitted_segments = [s.strip() for s in segments if s.strip()]
 
-        # print("\nProcessing results:")
-        # print(f"• Segments count: {len(splitted_segments)}")
-        # print(f"• Final segments: {splitted_segments}")
+        print("\nProcessing results:")
+        print(f"• Segments count: {len(splitted_segments)}")
+        print(f"• Final segments: {splitted_segments}")
         # print("================= SPLIT PROCESS END =================\n")
 
         return splitted_segments
@@ -221,9 +215,9 @@ async def final_answering(primary_request: str,
     (используй ровно его, не меняй и не добавляй новых полей)
 
     **ФИО врача: {{• ФИО}}**  
-    **Специализация кратко:** {{SPECIALIZATION_SHORT}}  
+    **Специализация кратко:** - сделай компилляцию сам  
     **Специализация подробно:** {{• Специализация}}  
-    **Информация для колл‑центра и стоимость приёма:** {{• 📞Заметка колл-центра}}  
+    **Информация для колл‑центра:** {{• 📞Заметка колл-центра}}  
     **Адрес/адреса работы:** {{• Адрес/Адреса}}  
     **График приёма:** {{• Расписание}}
 
@@ -240,11 +234,6 @@ async def final_answering(primary_request: str,
     - Жирным делай **только подписи полей**.
     - Не используй никаких дополнительных слов или пояснений.
     - Если найдено несколько врачей — **выведи каждый блок отдельно**.
-    - Если в запросе несколько тем, выводи блоки в следующем порядке:
-      1. Врач
-      2. Стоимость / скидки
-      3. Подготовка
-      4. Прочая информация из базы знаний
 
     ---
 
@@ -258,18 +247,15 @@ async def final_answering(primary_request: str,
     USER: «Как подготовиться к гастроскопии?»  
     → выведи блок "Информация из базы знаний".
 
-    *Пример 3*  
-    USER: «Выведи всех гастроэнтерологов на Ленина 5»  
-    → выведи по одному блоку на каждого врача, принимающего по этому адресу.
 
-    *Пример 4*  
+    *Пример 3*  
     DATABASE:
     - Прием уролога со скидкой 25% с 01.04 по 30.06.25  
     - Первичный приём уролога КМН вместо 3500 руб за 2625 руб.  
     - [4.1.2.7] Повторный приём уролога, кмн — 2400 руб (30 минут).  
     → выведи всё как есть в {{• 📞Заметка колл-центра}}.
 
-    *Пример 5*  
+    *Пример 4*  
     USER: «Что делать, если пациент жалуется?»  
     → выведи блок "Информация из базы знаний".
 
@@ -307,28 +293,28 @@ async def get_doc_info_from_api(question: str, **_) -> Tuple[str, bool]:
 # ──────────────────────────────────────────────────────
 # ToDo: Объединить все в одну функцию с соответствующим вызовом
 
-async def preparation_for(_text: str, **__) -> Tuple[str, bool]:
-    """
-    Warning!
-    Index meilisearch hardcoded!
-    :param _text: Users' request.
-
-    :param __: For state
-    :return: Str of a text from meilisearch
-
-    """
-    extracted_keyword = await formulate.extract_keyword(_text)
-
-    print("=============================================")
-    print("Смотри, что экстрагировалось: ", extracted_keyword or "Empty")
-    print("=============================================")
-
-    collected_info = meilisearch.search_meili("preparation_docs", extracted_keyword, )
-
-    # Очистка HTML перед подстановкой в prompt
-    clean_info = html_cleaner.strip_html(collected_info)
-
-    return clean_info, False
+# async def preparation_for(_text: str, **__) -> Tuple[str, bool]:
+#     """
+#     Warning!
+#     Index meilisearch hardcoded!
+#     :param _text: Users' request.
+#
+#     :param __: For state
+#     :return: Str of a text from meilisearch
+#
+#     """
+#     extracted_keyword = await formulate.extract_keyword(_text)
+#
+#     print("=============================================")
+#     print("Смотри, что экстрагировалось: ", extracted_keyword or "Empty")
+#     print("=============================================")
+#
+#     collected_info = meilisearch.search_meili("preparation_docs", extracted_keyword, )
+#
+#     # Очистка HTML перед подстановкой в prompt
+#     clean_info = html_cleaner.strip_html(collected_info)
+#
+#     return clean_info, False
 
 
 async def appointment_stub(_text: str, **__) -> Tuple[str, bool]:
@@ -346,23 +332,23 @@ async def instructions_scripts(_text: str, **__) -> Tuple[str, bool]:
 
     # Очистка HTML перед подстановкой в prompt
     clean_info = html_cleaner.strip_html(collected_info)
+    marked_info = "{KNOWLEDGE_SNIPPET}" + "\n" + clean_info
+    return marked_info, False
 
-    return clean_info, False
 
-
-async def essential_info(_text: str, **__) -> Tuple[str, bool]:
-    extracted_keyword = await formulate.extract_keyword(_text)
-
-    print("=============================================")
-    print("Смотри, что экстрагировалось: ", extracted_keyword or "Empty")
-    print("=============================================")
-
-    collected_info = meilisearch.search_meili("spravka_docs", extracted_keyword, )
-
-    # Очистка HTML перед подстановкой в prompt
-    clean_info = html_cleaner.strip_html(collected_info)
-
-    return clean_info, False
+# async def essential_info(_text: str, **__) -> Tuple[str, bool]:
+#     extracted_keyword = await formulate.extract_keyword(_text)
+#
+#     print("=============================================")
+#     print("Смотри, что экстрагировалось: ", extracted_keyword or "Empty")
+#     print("=============================================")
+#
+#     collected_info = meilisearch.search_meili("spravka_docs", extracted_keyword, )
+#
+#     # Очистка HTML перед подстановкой в prompt
+#     clean_info = html_cleaner.strip_html(collected_info)
+#
+#     return clean_info, False
 
 
 # ────────────────────────────────────────────────
@@ -375,8 +361,6 @@ async def essential_info(_text: str, **__) -> Tuple[str, bool]:
 MODULES = {
     "API_INFO": get_doc_info_from_api,
     "APPOINTMENT": appointment_stub,
-    "PREPARE_FOR": preparation_for,
-    "ESSENTIAL": essential_info,
     "SCRIPTS": instructions_scripts,
 }
 # Дополнительные обозначения типов для понимания вывода

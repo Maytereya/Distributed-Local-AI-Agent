@@ -10,7 +10,7 @@ import glob
 # Добавляем родительскую директорию в путь для импорта
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent_logic_2 import config as c
-from agent_logic_2.nayka_api.api_nayka4_3 import get_today_str
+from agent_logic_2.nayka_api.api_nayka import get_today_str
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
