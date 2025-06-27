@@ -1,44 +1,39 @@
 # Async Retriever for Chroma DB v 3.1
+# Connection section
+import logging
 import os
+import uuid
+from typing import List, Optional
+from typing import Literal
+
+import chromadb
+from chromadb import Documents, EmbeddingFunction, Embeddings, Collection
+from langchain_chroma import Chroma
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import TextLoader, DirectoryLoader
+from langchain_community.document_loaders import WebBaseLoader
+from langchain_core.documents import Document
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from sentence_transformers import SentenceTransformer
+from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
+
+from agent_logic_2 import config as c
+from agent_logic_pack import formulate, embedding_filtration
+
 # Model loading for embeddings
 # from InstructorEmbedding import INSTRUCTOR
 # i_model = INSTRUCTOR('hkunlp/instructor-large')
-
 # model_only = "cointegrated/LaBSE-en-ru"
 # model_only = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2' # эффективность под вопросом
 # model_only = 'sentence-transformers/LaBSE'
 # model_only = "sentence-transformers/distiluse-base-multilingual-cased-v1"
-
-
 # ==== Medical models =====
 # model_only = "dmis-lab/biobert-v1.1"
 # model_only = "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb"
-
 # ==== Russian models =====
 # model_only = "ai-forever/sbert_large_nlu_ru"
-
-from typing import Literal, Optional
-from chromadb.api.models.Collection import Collection
-from langchain_community.document_loaders import WebBaseLoader
-from langchain_core.documents import Document
-from sentence_transformers import SentenceTransformer
-from chromadb import Documents, EmbeddingFunction, Embeddings
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.document_loaders import TextLoader, DirectoryLoader
-
-# Connection section
-import logging
-from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
 #
-
-import chromadb
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
-import uuid
-from typing import List
-from agent_logic_pack import formulate, embedding_filtration
-from agent_logic_2 import config as c
 
 # --------------------------------------
 # Отключение предупреждений о грядущем
@@ -133,7 +128,7 @@ class ChromaService:
         self.chroma_client.reset()
         self.chroma_client.clear_system_cache()
 
-    def display_collections(self, output_format: Literal["list", "str"] = "list") -> List[str] | str:
+    def display_collections(self, output_format: Literal["list", "str"] = "list") -> List[str] or str:
         """
         Display all collections stored in Chroma DB.
 
@@ -141,11 +136,12 @@ class ChromaService:
         :return: List of collection names or a single string with names separated by new lines.
         """
         list_col = self.chroma_client.list_collections()
+        names_list = [item.name for item in list_col]  # list comprehensive
 
         if output_format == "str":
-            result = "\n".join(list_col)  # Соединяем имена в одну строку с переносами строк
+            result = "\n".join(names_list)  # Соединяем имена в одну строку с переносами строк
         else:
-            result = list_col
+            result = names_list
 
         return result
 
@@ -304,42 +300,50 @@ def pdf_loader(path: str) -> List[Document]:
 # Работа с коллекциями
 # -----------------------------------
 
-def handle_collection(existed_collection: str) -> List[str]:
+def handle_collection(existed_collection: str) -> List[str] or str:
     """
         Retrieve and display details of an existing Chroma DB collection.
 
         :param existed_collection: The name of the existing collection to retrieve.
     """
-    collection = chroma_client.get_collection(name=existed_collection,
-                                              embedding_function=HuggingFaceEmbeddingFunction())
+    try:
+        collection = chroma_client.get_collection(name=existed_collection,
+                                                  embedding_function=HuggingFaceEmbeddingFunction())
+        if collection.count() == 0:
+            return ["Коллекция не содержит документов"]
 
-    # print("Common collection info:")
-    peek = collection.peek(limit=1000)  # returns a list of the first 10 items in the collection
+        # print("Common collection info:")
+        peek = collection.peek(limit=300)  # returns a list of the first 300 items in the collection
 
-    # Only get documents and ids
-    # collection_info = collection.get(
-    #     include=["uris"],
-    # )
+        # Only get documents and ids
+        # collection_info = collection.get(
+        #     include=["uris"],
+        # )
 
-    documents_metadata = peek["metadatas"]
+        documents_metadata = peek["metadatas"]
+        if not documents_metadata:
+            return ["Документы в коллекции не найдены"]
 
-    # for metadata in documents_metadata:
-    # print(documents_metadata)
+        # for metadata in documents_metadata:
+        # print(documents_metadata)
 
-    file_list = []
-    for item in documents_metadata:
-        page_num = item["page"]
-        file_path = item["source"]
-        file_name = os.path.basename(file_path)  # doc005_cystoscopy.pdf
-        file_list.append(f"{file_name}, p.{page_num}")
+        file_list = []
+        for item in documents_metadata:
+            page_num = item["page"]
+            file_path = item["source"]
+            file_name = os.path.basename(file_path)
+            file_list.append(f"{file_name}, p.{page_num}")
 
-    # print(file_list)
+        # print(file_list)
 
-    # print(f"list of the items in the collection: {peek}")
-    # print(f"collection_info: {collection_info}")
-    # print(f'the number of items in the collection: {collection.count()}')
+        # print(f"list of the items in the collection: {peek}")
+        # print(f"collection_info: {collection_info}")
+        # print(f'the number of items in the collection: {collection.count()}')
 
-    return file_list
+        return file_list if file_list else ["Не найдено подходящих документов"]
+
+    except Exception as e:
+        return ["Доступ к коллекции невозможен"]
 
 
 def create_collection(
@@ -741,38 +745,19 @@ if __name__ == '__main__':
     # print(result)
     # print("==============")
 
-# PDF document to load pass
-# file_path = "pdf/taking_guidelines.pdf"
-# txt document directory pass
-# file_path = "../Upload/"
+    # PDF document to load pass
+    # file_path = "pdf/taking_guidelines.pdf"
+    # txt document directory pass
+    # file_path = "../Upload/"
 
-# urls_rus = [
-#     "https://neiro-psy.ru/blog/monopobiya-kak-nazyvaetsya-strah-ostavatsya-odnomu-i-kak-s-nim-spravitsya",
-#     "https://neiro-psy.ru/blog/bipolyarnoe-rasstrojstvo-i-depressiya-ponimanie-razlichij",
-#     "https://neiro-psy.ru/blog/razdvoenie-lichnosti-kak-raspoznat-simptomy-i-obratitsya-za-pomoshchyu",
-# ]
+    # urls_rus = [
+    #     "https://neiro-psy.ru/blog/monopobiya-kak-nazyvaetsya-strah-ostavatsya-odnomu-i-kak-s-nim-spravitsya",
+    #     "https://neiro-psy.ru/blog/bipolyarnoe-rasstrojstvo-i-depressiya-ponimanie-razlichij",
+    #     "https://neiro-psy.ru/blog/razdvoenie-lichnosti-kak-raspoznat-simptomy-i-obratitsya-za-pomoshchyu",
+    # ]
 
-# chr_service.display_collections()
-#
-# chr_service.preconditioning(collection_name)
-
-# Create collection:
-# create_collection(collection_name)
-# Add web/pdf/txt data to collection...
-# add_data(exist_collection_name=collection_name, upload_type="PDF",
-#          add_path="/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/Upload/side_effects_guideline_for_RAG_paged.pdf", )
-# /private/var/folders/94/mhzbwczs0m51g36t3fdybd840000gn/T/gradio/0632e0b002d212a5b27b30886fc76c208c643f7897eee5a90ecd972a0a448fde/table-of-irregular-verbs.pdf
-# for doc in documents:
-#     print("##############")
-#     print(doc.page_content)
-#     print(doc.metadata)
-#     print("##############")
-# print(" ==== ==== ")
-
-# for doc in documents:
-#     print("###############")
-#     print(doc.page_content)
-#     print(doc.metadata)
-#     print("###############")
-
-handle_collection("algo_collection")
+    cs = ChromaService(c.chroma_host, c.chroma_port)
+    collections = cs.display_collections(output_format="list")
+    print(collections)
+    disp = handle_collection("25_01_2025_LaBSE-en-ru_pdf")
+    print(disp)
