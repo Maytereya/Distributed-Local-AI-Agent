@@ -148,7 +148,7 @@ async def extract_search_keyword_llm(question: str) -> tuple:
 Твоя задача: по вопросу пользователя выделить либо фамилию врача (в именительном падеже), либо специальность (например: "кардиолог", "эндокринолог", "педиатр" и т.п.).
 Если в вопросе есть только фамилия — верни: Surname: Иванов
 Если в вопросе только специальность — верни: Specialty: кардиолог
-Если вопрос про расписание (слова "расписание", "приём", "график работы" и т.п.):
+Если вопрос про расписание (слова "расписание", "приём", "график работы", "время работы" и т.п.):
     - если указано ФИО, верни Timetable: Иванов
     - если указана специальность, верни Timetable: Specialty: кардиолог
 Если ничего не найдено — верни: NONE
@@ -375,6 +375,8 @@ def format_doctor_schedule(doc):
 # ── Основная логика ───────────────────────────────────────────────────────────
 repo = DoctorsRepository(DATA_DIR)
 
+FORMATTER = "\n\n---\n\n"
+
 
 @with_retries(tries=2)
 async def ollama_call(prompt: str) -> Dict[str, Any]:
@@ -393,81 +395,112 @@ async def investigate(question: str) -> str:
 
     key_type, value = await extract_search_keyword_llm(question)
     if not value:
-        print("LLM-парсер не смог выделить фамилию, специальность или намерение расписания.")
-        return "Не удалось выделить фамилию, специальность или намерение расписания из вашего запроса."
-
-    # Блок: поиск по фамилии
-    if key_type == "surname":
-        print(f"LLM-парсер определил фамилию: {value}")
-        surname = value
-        # --- код поиска по фамилии (оставьте без изменений) ---
-        words = re.findall(r"[А-ЯЁ][а-яё]+", question)
-        full_name = None
-        if len(words) > 1:
-            try:
-                idx = next(i for i, w in enumerate(words) if w.lower() == surname.lower())
-                if idx + 1 < len(words):
-                    full_name = f"{words[idx]} {words[idx + 1]}"
-            except StopIteration:
-                full_name = None
-        if full_name:
-            print(f"Ищем по полному имени: {full_name}")
-            all_docs = repo.read_all()
-            local = [d for d in all_docs if d.get("fio", "").startswith(full_name)]
-            if len(local) > 1:
-                local = [local[0]]
-        else:
-            print(f"Ищем по фамилии: {surname}")
-            local = repo.find_by_surname(surname)
-        if not local:
-            await repo.update(get_all_doctors)
-            if full_name:
-                local = [d for d in repo.read_all() if d.get("fio", "").startswith(full_name)]
-                if len(local) > 1:
-                    local = [local[0]]
-            else:
-                local = repo.find_by_surname(surname)
-        if local:
-            local = enrich_with_cc_info(local)
-        if not local:
-            similar = find_similar_surname(surname, repo.read_all())
-            if similar:
-                print(f"Найдена похожая фамилия: {similar}")
-                local = repo.find_by_surname(similar)
-                if local:
-                    local = enrich_with_cc_info(local)
-                    doctors_text = "\n\n---\n\n".join(f"{i + 1}. {format_doctor(d)}" for i, d in enumerate(local))
-                    return f"Похоже, опечатка: вы имели в виду '{similar}'?\n\n{doctors_text}"
-        if not local:
-            return f"Врач {surname} не найден в базе данных."
-        print("Информация о враче получена!")
-        return "\n\n---\n\n".join(f"{i + 1}. {format_doctor_schedule(d)}" for i, d in enumerate(local))
-
-    # Блок: поиск по специальности
-    if key_type == "specialty":
-        print(f"LLM-парсер определил специальность: {value}")
-        docs = find_doctors_by_keyword(value)
-        if docs and isinstance(docs, list) and isinstance(docs[0], dict):
-            docs = enrich_with_cc_info(docs)
-        if docs:
-            return "\n\n---\n\n".join(f"{i + 1}. {format_doctor(d)}" for i, d in enumerate(docs))
-        return f"Врачи по специальности '{value}' не найдены."
-
-    if key_type == "timetable":
-        print(f"LLM-парсер определил запрос расписания по фамилии: {value}")
-        docs = find_doctor_schedule(value)
-        if isinstance(docs, str):
-            return docs
-        docs = enrich_with_cc_info(docs)
-        # Форматируем всю карточку врача, включая расписание
-        return "\n\n---\n\n".join(
-            f"{idx + 1}. {format_doctor_schedule(doc)}"
-            for idx, doc in enumerate(docs)
+        return (
+            "Не удалось выделить фамилию, специальность "
+            "или намерение расписания из вашего запроса."
         )
+    # Обращаемся к функциям через их словарь. Вроде бы удобнее.
+    handlers = {
+        "surname": handle_surname_search,
+        "specialty": handle_specialty_search,
+        "timetable": handle_timetable_search,
+    }
 
-    # fallback — если LLM вернул просто текст
+    handler = handlers.get(key_type)
+    if handler:
+        return await handler(value, question)
+
+    # Если LLM вернул просто текст
     return value
 
+async def handle_surname_search(surname: str, question: str) -> str:
+    print(f"LLM-парсер определил фамилию: {surname}")
+
+    words = re.findall(r"[А-ЯЁ][а-яё]+", question)
+    full_name = extract_full_name(words, surname)
+
+    docs = await search_with_fallback(full_name or surname, bool(full_name))
+    if docs:
+        docs = enrich_with_cc_info(docs)
+        return format_documents(docs)
+
+    similar = find_similar_surname(surname, repo.read_all())
+    if similar:
+        print(f"Найдена похожая фамилия: {similar}")
+        docs = repo.find_by_surname(similar)
+        if docs:
+            docs = enrich_with_cc_info(docs)
+            return (
+                f"Похоже, опечатка: вы имели в виду '{similar}'?{FORMATTER}"
+                f"{format_documents(docs)}"
+            )
+
+    return f"Врач с фамилией '{surname}' не найден в базе данных."
+
+async def search_with_fallback(name: str, is_full_name: bool) -> List[Dict[str, Any]]:
+    """
+    Попытка найти документы локально, затем обновление репозитория и повторный поиск.
+    """
+    docs = (
+        filter_docs(repo.read_all(), name)
+        if is_full_name
+        else repo.find_by_surname(name)
+    )
+    if docs:
+        return docs
+
+    await repo.update(get_all_doctors)
+
+    return (
+        filter_docs(repo.read_all(), name)
+        if is_full_name
+        else repo.find_by_surname(name)
+    )
+
+
+def extract_full_name(words: List[str], surname: str) -> Optional[str]:
+    """
+    Если после фамилии в списке слов есть имя, возвращаем 'Фамилия Имя'.
+    """
+    surname_lower = surname.lower()
+    for i, w in enumerate(words):
+        if w.lower() == surname_lower and i + 1 < len(words):
+            return f"{words[i]} {words[i + 1]}"
+    return None
+
+
+def filter_docs(docs: List[Dict[str, Any]], full_name: str) -> List[Dict[str, Any]]:
+    matches = [d for d in docs if d.get("fio", "").startswith(full_name)]
+    return matches[:1] if len(matches) > 1 else matches
+
+
+def format_documents(docs: List[Dict[str, Any]]) -> str:
+    return FORMATTER.join(
+        f"{i + 1}. {format_doctor(d)}" for i, d in enumerate(docs)
+    )
+
+async def handle_specialty_search(specialty: str, _: str) -> str:
+    print(f"LLM-парсер определил специальность: {specialty}")
+
+    docs = find_doctors_by_keyword(specialty)
+    if not docs:
+        return f"Врачи по специальности '{specialty}' не найдены."
+
+    if isinstance(docs, list):
+        docs = enrich_with_cc_info(docs)
+    return format_documents(docs)
+
+async def handle_timetable_search(surname: str, _: str) -> str:
+    print(f"LLM-парсер определил запрос расписания по фамилии: {surname}")
+
+    docs = find_doctor_schedule(surname)
+    if isinstance(docs, str):
+        return docs
+
+    return FORMATTER.join(
+        f"{i + 1}. {format_doctor_schedule(doc)}"
+        for i, doc in enumerate(docs)
+    )
 
 def find_doctors_by_keyword_llm(question: str) -> str:
     return find_doctors_by_keyword(question)
@@ -497,5 +530,5 @@ async def main():
 
 
 if __name__ == "__main__":
-    print_unique_priceall_regions()
+    # print_unique_priceall_regions()
     asyncio.run(main())

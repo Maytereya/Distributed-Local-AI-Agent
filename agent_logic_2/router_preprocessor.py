@@ -15,7 +15,7 @@ from converters import html_cleaner
 # LLM‑клиент для классификации входящих запросов
 ollama = AsyncClient(c.ollama_url)
 llm = c.ll_model_big
-options = Options(temperature=0.1, top_k=40, top_p=0.9, repeat_penalty=1.1, stop=["<|eot_id|>"])
+options = Options(temperature=0.1, top_k=60, top_p=0.9, repeat_penalty=1.1, stop=["<|eot_id|>"])
 
 # Label‑ы и порядок
 LABEL_PRIORITY = ["API_INFO",  # справка из API Мед.центра
@@ -62,6 +62,11 @@ OUTPUT: {\"labels\":[\"API_INFO\"]}
 """
 
 
+# ----------------------------------------------
+# Функция обработки истории запросов
+# и ответов на них
+# ----------------------------------------------
+
 def _history_reveal(user: str, sess: Dict[str, Any]) -> str:
     history = sess.get("history", [])
 
@@ -80,12 +85,16 @@ def _history_reveal(user: str, sess: Dict[str, Any]) -> str:
     return generator
 
 
+# ----------------------------------------------
+# Функции обработки входящих сообщений
+# ----------------------------------------------
+
 def classificator_prompt(user: str, sess: Dict[str, Any]) -> str:
     today = datetime.now().strftime("%d %B %Y, %H:%M:%S")
     return f"""
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
 Сегодня: {today}.
-Ты – ассистент многопрофильной клиники «Наука» с амбулаторией, операционными, лабораторией, множеством офисов в разных городах.
+Ты – ассистент многопрофильной клиники «Наука» с амбулаторией, операционными, лабораторией, офисами в разных городах.
 Верни **только JSON** вида {{\"labels\":[…]}} (можно несколько label‑ов).
 Допустимые label‑ы:\n{LABEL_DOC}\n
 [EXAMPLES]\n{EXAMPLES}\n
@@ -95,12 +104,13 @@ def classificator_prompt(user: str, sess: Dict[str, Any]) -> str:
 """
 
 
-def reformulator_prompt(text: str, sess: Dict[str, Any]) -> str:
+# TODO: Промпт требует переосмысления!
+
+def split_prompt(text: str, sess: Dict[str, Any]) -> str:
     return f"""
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
 1. Сначала переформулируй запрос, привязывая все упоминания услуг/вопросов к фамилии врача.
 2. Затем разбей на смысловые сегменты (JSON segments).
-
 
 Правила:
 - Если фамилия упомянута, все смежные вопросы (расписание, цена, подготовка) должны содержать ту же фамилию;
@@ -112,8 +122,8 @@ def reformulator_prompt(text: str, sess: Dict[str, Any]) -> str:
 
 Примеры переформулировки:
 Исходно: "У Мухопад окна и прайс на УЗИ"
-Этап 1: "Расписание приёмов УЗИ у Мухопад и стоимость услуг УЗИ"
-Этап 2: {{"segments": ["Расписание и стоимость УЗИ у Мухопад"]}}
+Этап 1: "Расписание приемов у Мухопад и стоимость услуг ультразвуковой диагностики"
+Этап 2: {{"segments": ["Расписание и стоимость ультразвуковой диагностики у Мухопад"]}}
 
 Исходно: "К Мухопад запись и как готовиться, а про Нурмагомедову график"
 Этап 1: "Запись к Мухопад и подготовка к приёму у Мухопад. Расписание Нурмагомедовой"
@@ -125,6 +135,38 @@ USER: {text}
 История диалога: {_history_reveal(text, sess)}
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>
 """
+
+
+async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
+    # print("\n================= SPLIT PROCESS START =================")
+    # print(f"Original input: '{text}'")
+
+    res = await ollama.generate(model=llm,
+                                prompt=split_prompt(text, sess),  # Добавить sess
+                                options=options,
+                                format="json",
+                                keep_alive=-1)
+
+    try:
+        segments = json.loads(res["response"]).get("segments", [])
+        splitted_segments = [s.strip() for s in segments if s.strip()]
+
+        print("\nProcessing results:")
+        print(f"• Segments count: {len(splitted_segments)}")
+        print(f"• Final segments: {splitted_segments}")
+        # print("================= SPLIT PROCESS END =================\n")
+
+        return splitted_segments
+
+    except json.JSONDecodeError as e:
+        print(f"\n⚠️ JSON decode error: {e}")
+        print("⚠️ Returned original text as single segment")
+        return [text]
+
+    except Exception as e:
+        print(f"\n⚠️ Unexpected error: {e}")
+        print("⚠️ Returned original text as single segment")
+        return [text]
 
 
 async def classify(text: str, sess: Dict[str, Any]) -> List[str]:
@@ -139,46 +181,9 @@ async def classify(text: str, sess: Dict[str, Any]) -> List[str]:
         print(f"Маркировано labels: ", labels)
         print("------------------------------------------------")
         return labels or ["UNDEFINED"]
-    except Exception:
-        return ["UNDEFINED"]
-
-
-async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
-    # print("\n================= SPLIT PROCESS START =================")
-    # print(f"Original input: '{text}'")
-
-    res = await ollama.generate(model=llm,
-                                prompt=reformulator_prompt(text, sess),  # Добавить sess
-                                options=options,
-                                format="json",
-                                keep_alive=-1)
-
-    try:
-        # print(f"\nRaw model response: {res['response']}")
-
-        segments = json.loads(res["response"]).get("segments", [])
-        # print(f"Raw segments: {segments}")
-
-        splitted_segments = [s.strip() for s in segments if s.strip()]
-
-        print("\nProcessing results:")
-        print(f"• Segments count: {len(splitted_segments)}")
-        print(f"• Final segments: {splitted_segments}")
-        # print("================= SPLIT PROCESS END =================\n")
-
-        return splitted_segments
-
-    except json.JSONDecodeError as e:
-        print(f"\n⚠️ JSON decode error: {e}")
-        print("⚠️ Returned original text as single segment")
-        print("================= SPLIT PROCESS END =================\n")
-        return [text]
-
     except Exception as e:
-        print(f"\n⚠️ Unexpected error: {e}")
-        print("⚠️ Returned original text as single segment")
-        print("================= SPLIT PROCESS END =================\n")
-        return [text]
+        print(f"\n<UNK> Classificator error: {e}")
+        return ["UNDEFINED"]
 
 
 async def final_answering(primary_request: str,
@@ -188,9 +193,15 @@ async def final_answering(primary_request: str,
     Ты — ассистент колл‑центра многопрофильной клиники «Наука».  
     Отвечай **всегда на русском языке**.
 
-    Твоя задача — **дословно** вывести данные из блока DATABASE.  
+    **Проверь, является ли предоставленная тебе
+    информация ответом на вопрос клиента.**
+    
+    Если да, то:
+    ❗ Твоя задача — **дословно** вывести данные из блока DATABASE.  
     ❗ Ничего не резюмируй, не сокращай, не перефразируй. **Копируй всё строго как есть.**  
     ❗ Особенно важно: **ФИО врачей, адреса, цены и график приёма** — без изменений.
+    
+    Если нет, то ответь: "Релевантной информации в базе данных Медцентра "Наука" не найдено, попробуйте сформулировать запрос иначе".
 
     ---
 
@@ -211,29 +222,48 @@ async def final_answering(primary_request: str,
 
     ---
 
-    ## Формат ответа про врача:
-    (используй ровно его, не меняй и не добавляй новых полей)
-
+    ## Формат ответа про врача (если клиент спрашивает про врача):
     **ФИО врача: {{• ФИО}}**  
-    **Специализация кратко:** - сделай компилляцию сам  
+    **Специализация кратко:** - сделай компилляцию сам на основе блока {{• Специализация}}
     **Специализация подробно:** {{• Специализация}}  
     **Информация для колл‑центра:** {{• 📞Заметка колл-центра}}  
     **Адрес/адреса работы:** {{• Адрес/Адреса}}  
-    **График приёма:** {{• Расписание}}
+
+    Используй ровно его, не меняй и не добавляй новых полей.
+
+    ---
+    
+    ## Формат ответа про график работы врача (если клиент спрашивает про график работы врача):
+    **ФИО врача: {{• ФИО}}**  
+    **Специализация кратко:** - сделай компилляцию сам на основе блока {{• Специализация}}
+    **График приёма с адресами работы:** {{• Расписание}}
+
+    Используй ровно его, не меняй и не добавляй новых полей.
+
+    ---
+    
+    ## Формат ответа про нескольких врачей (так происходит, если клиент спрашивает о специализации, например "кардиологи клиники"):
+    **ФИО врача: {{• ФИО}}**  
+    **Специализация кратко:** - сделай компилляцию сам на основе блока {{• Специализация}}  
+
+    Используй ровно его, не меняй и не добавляй новых полей.
 
     ---
 
-    ## Формат ответа на прочие запросы (из базы знаний), в том числе о том, как подготовиться к процедуре или исследованию:
+    ## Формат ответа на прочие запросы (в том числе о том, как подготовиться к процедуре, исследованию, отработать претензии и тд.):
+    
     **Информация из базы знаний:**  
     {{KNOWLEDGE_SNIPPET}}  
-    (Выводи весь подходящий текст из DATABASE, если он отвечает на вопрос пользователя. Если ничего не подходит — напиши: «Релевантных данных не найдено.»)
+    
+    Выводи весь подходящий текст из DATABASE, если он отвечает на вопрос пользователя. 
+    Если ничего не подходит — ответь: "Релевантной информации в базе данных Медцентра "Наука" не найдено, 
+    попробуйте сформулировать запрос иначе".
 
     ---
 
     ## Важно:
     - Жирным делай **только подписи полей**.
     - Не используй никаких дополнительных слов или пояснений.
-    - Если найдено несколько врачей — **выведи каждый блок отдельно**.
 
     ---
 
@@ -258,6 +288,10 @@ async def final_answering(primary_request: str,
     *Пример 4*  
     USER: «Что делать, если пациент жалуется?»  
     → выведи блок "Информация из базы знаний".
+    
+    *Пример 4*  
+    USER: «Урологи клиники»  
+    → выведи данные о врачах "Формат ответа про нескольких врачей".
 
     ---
 
@@ -288,93 +322,61 @@ async def get_doc_info_from_api(question: str, **_) -> Tuple[str, bool]:
     return result, False
 
 
-# ──────────────────────────────────────────────────────
-# Подключаем MEILISEARCH
-# ──────────────────────────────────────────────────────
-# ToDo: Объединить все в одну функцию с соответствующим вызовом
-
-# async def preparation_for(_text: str, **__) -> Tuple[str, bool]:
-#     """
-#     Warning!
-#     Index meilisearch hardcoded!
-#     :param _text: Users' request.
-#
-#     :param __: For state
-#     :return: Str of a text from meilisearch
-#
-#     """
-#     extracted_keyword = await formulate.extract_keyword(_text)
-#
-#     print("=============================================")
-#     print("Смотри, что экстрагировалось: ", extracted_keyword or "Empty")
-#     print("=============================================")
-#
-#     collected_info = meilisearch.search_meili("preparation_docs", extracted_keyword, )
-#
-#     # Очистка HTML перед подстановкой в prompt
-#     clean_info = html_cleaner.strip_html(collected_info)
-#
-#     return clean_info, False
-
-
+# ------------------------------------------------------
+# Подключаем заглушку функции записи пациента
+# ------------------------------------------------------
 async def appointment_stub(_text: str, **__) -> Tuple[str, bool]:
     return "Модуль записи к врачу скоро появится. ", False
 
 
-async def instructions_scripts(_text: str, **__) -> Tuple[str, bool]:
-    extracted_keyword = await formulate.extract_keyword(_text)
+# ──────────────────────────────────────────────────────
+# Search with MEILISEARCH function
+# ──────────────────────────────────────────────────────
+# ToDo: Объединить все запросы в одну функцию
+# TODO: Завернуть всю поисковую часть (MEILI) в одну функцию
+async def instructions_search(_text: str, **__) -> Tuple[str, bool]:
+    extracted_keyword = await formulate.extract_keyword(_text, extract_type="sentence")
 
-    print("=============================================")
-    print("Смотри, что экстрагировалось: ", extracted_keyword or "Empty")
-    print("=============================================")
+    print("=" * 45)
+    print("Экстрагировалось: ", extracted_keyword or "Empty")
+    print("=" * 45)
 
-    collected_info = meilisearch.search_meili("algo_docs", extracted_keyword, )
+    collected_info = meilisearch.search_meili("spravka_docs", extracted_keyword, )
 
     # Очистка HTML перед подстановкой в prompt
     clean_info = html_cleaner.strip_html(collected_info)
+    # Добавление маркера для лучшего распознавания LLM
     marked_info = "{KNOWLEDGE_SNIPPET}" + "\n" + clean_info
+    print("=" * 45)
+    print(marked_info)
+    print("=" * 45)
     return marked_info, False
 
 
-# async def essential_info(_text: str, **__) -> Tuple[str, bool]:
-#     extracted_keyword = await formulate.extract_keyword(_text)
-#
-#     print("=============================================")
-#     print("Смотри, что экстрагировалось: ", extracted_keyword or "Empty")
-#     print("=============================================")
-#
-#     collected_info = meilisearch.search_meili("spravka_docs", extracted_keyword, )
-#
-#     # Очистка HTML перед подстановкой в prompt
-#     clean_info = html_cleaner.strip_html(collected_info)
-#
-#     return clean_info, False
-
-
 # ────────────────────────────────────────────────
-# Собственно, роутер пошел. Со всеми наворотами.
-# Типа оператора присваивания морж ":=" и тд
+# Основная логика роутера / Router main logic
 # ────────────────────────────────────────────────
 
 # Ярлыки для вызова функций обработки данных после роутинга
-# TODO: Завернуть всю поисковую часть (MEILI) в одну функцию
+
 MODULES = {
     "API_INFO": get_doc_info_from_api,
     "APPOINTMENT": appointment_stub,
-    "SCRIPTS": instructions_scripts,
+    "SCRIPTS": instructions_search,
 }
+
 # Дополнительные обозначения типов для понимания вывода
 SessionType: TypeAlias = Dict[str, Any]
 RoutingResult: TypeAlias = Tuple[str, SessionType]
 
-# Чисто для удобства форматирования
+# Константа для удобства форматирования
 SEGMENT_SEPARATOR = "\n\n— — —\n\n"
 
 
 async def handle_pending_module(text: str, sess: SessionType) -> RoutingResult | None:
     if (pending_module := sess.get("pending")) and pending_module in MODULES:
         print("=" * 45)
-        print("pending view: ", pending_module or "Empty")
+        print("pending look up: ", pending_module or "Empty")
         print("=" * 45)
 
         response, continue_pending = await MODULES[pending_module](text, session=sess)
@@ -412,7 +414,11 @@ async def process_segments(text: str, sess: SessionType) -> str:
                 print("=" * 45)
                 break
 
-    return SEGMENT_SEPARATOR.join(responses)
+    final_answ = SEGMENT_SEPARATOR.join(responses)
+    print("=" * 45)
+    print(final_answ)
+    print("=" * 45)
+    return final_answ
 
 
 async def routing(text: str, sess: SessionType | None = None) -> AsyncGenerator[RoutingResult, None]:
