@@ -136,7 +136,8 @@ class ChromaService:
         :return: List of collection names or a single string with names separated by new lines.
         """
         list_col = self.chroma_client.list_collections()
-        names_list = [item.name for item in list_col]  # list comprehensive
+
+        names_list = [i.name for i in list_col]  # list comprehensive
 
         if output_format == "str":
             result = "\n".join(names_list)  # Соединяем имена в одну строку с переносами строк
@@ -739,11 +740,6 @@ def main_add_to_chroma(
 #
 if __name__ == '__main__':
     print(':: TESTING ::')
-
-    # result = asyncio.run(main_retrieve_async(return_type="str"))
-    # print("==============")
-    # print(result)
-    # print("==============")
 
     # PDF document to load pass
     # file_path = "pdf/taking_guidelines.pdf"
