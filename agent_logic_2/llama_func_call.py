@@ -145,16 +145,13 @@ async def extract_search_keyword_llm(question: str) -> tuple:
     system_base = """
 <|begin_of_text|><|start_header_id|>system<|end_header_id|>
 Ты — ассистент клиники «Наука». 
-Твоя задача: по вопросу пользователя выделить либо фамилию врача (в именительном падеже), либо специальность (например: "кардиолог", "эндокринолог", "педиатр" и т.п.).
-
-Если в вопросе встречаются слова: "узи", "узи врач", "узист", "ультразвуковая диагностика", "врач ультразвуковой диагностики", "врач узи", "уз-диагностика" — всегда возвращай Specialty: врач ультразвуковой диагностики.
-
-Если в вопросе есть только фамилия — верни: Surname: Иванов  
-Если в вопросе только специальность — верни: Specialty: кардиолог  
-Если вопрос про расписание (слова "расписание", "приём", "график работы" и т.п.):
+Твоя задача: по вопросу пользователя выделить либо фамилию врача (в именительном падеже), либо специальность (например: "кардиолог", "эндокринолог", "педиатр", "УЗИ" и т.п.).
+Если в вопросе есть только фамилия — верни: Surname: Иванов
+Если в вопросе только специальность — верни: Specialty: кардиолог
+Если вопрос про расписание (слова "расписание", "приём", "график работы", "время работы" и т.п.):
     - если указано ФИО, верни Timetable: Иванов
     - если указана специальность, верни Timetable: Specialty: кардиолог
-Если ничего не найдено — верни: NONE  
+Если ничего не найдено — верни: NONE
 Не добавляй других слов, никаких объяснений, только одну строку ответа!
 """
     user_part = f"\n<|start_header_id|>user<|end_header_id|>\nВопрос: {question}\n<|start_header_id|>assistant<|end_header_id|>"
@@ -219,7 +216,6 @@ def find_similar_surname(input_surname: str, doctors: List[Dict[str, Any]], thre
     return best.capitalize() if br >= threshold else None
 
 
-
 # ── Обогащение ответа заметками колл-центра ────────────────────────────────────────────────────
 def enrich_with_cc_info(doctors: list):
     """
@@ -240,7 +236,7 @@ def enrich_with_cc_info(doctors: list):
 # ── Форматирование ответа ────────────────────────────────────────────────────
 def format_doctor(item: Dict[str, Any]) -> str:
     lines: List[str] = [
-        f"{{NAME}} • ФИО: {item.get('fio', '-')}",
+        f"• ФИО: {item.get('fio', '-')}",
     ]
 
     # Специализация
@@ -299,7 +295,6 @@ def format_doctor(item: Dict[str, Any]) -> str:
         lines.append("• 📞Заметка колл-центра:")
         lines.append(str(cc))
         lines.append("─" * 10)
-        lines.append("─" * 10)
 
     # Расписание (если есть)
     schedule = item.get("schedule")
@@ -348,7 +343,6 @@ def format_doctor_schedule(doc):
         lines.append("• 📞Заметка колл-центра:")
         lines.append(str(cc).strip())
         lines.append("─" * 10)
-        lines.append("─" * 10)
         lines.append("")  # Пробел после заметки
 
     # Адреса
@@ -360,7 +354,6 @@ def format_doctor_schedule(doc):
     if schedule:
         lines.append("• Расписание: ")
         for region, days in schedule.items():
-            lines.append(f"• По адресу приема {region}:")
             lines.append(f"• По адресу приема {region}:")
             for day in days:
                 date = day.get("date", "-")
@@ -377,7 +370,6 @@ def format_doctor_schedule(doc):
         lines.append("Расписание не указано.")
 
     return "\n".join(lines)
-
 
 
 # ── Основная логика ───────────────────────────────────────────────────────────
@@ -514,7 +506,6 @@ def find_doctors_by_keyword_llm(question: str) -> str:
     return find_doctors_by_keyword(question)
 
 
-
 def print_unique_priceall_regions():
     price_all = load_price_all()
     regions_in_priceall = set()
@@ -526,8 +517,6 @@ def print_unique_priceall_regions():
             regions_in_priceall.add(name.strip())
     print("[DEBUG] regionName/region из priceAll (первые 20):")
     for idx, r in enumerate(list(regions_in_priceall)[:20]):
-        print(f"{idx + 1}. '{r}'")
-
         print(f"{idx + 1}. '{r}'")
 
 

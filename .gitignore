@@ -170,6 +170,3 @@ all_reqs.txt
 config.py
 vllm_llama_func_call1.py
 apidata/
-
-#ignore experiental MAX files
-MAX_folder/
