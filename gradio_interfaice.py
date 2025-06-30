@@ -168,14 +168,14 @@ async def meili_echo(
 
 
 async def universal_echo(
-    message: str,
-    history: List[Dict],
-    radio_value: str,      # "ai-router", "meilisearch", "vectorstore", "db"
-    threshold_value: float,
-    slider_value_n_results: int,
-    slider_value_k: int,
-    collection: str,
-    meili_index: str,
+        message: str,
+        history: List[Dict],
+        radio_value: str,  # "ai-router", "meilisearch", "vectorstore", "db"
+        threshold_value: float,
+        slider_value_n_results: int,
+        slider_value_k: int,
+        collection: str,
+        meili_index: str,
 ):
     if radio_value == "ai-router":
         session_state: dict = {}
@@ -208,6 +208,7 @@ async def universal_echo(
         )
         yield result
         return
+
 
 # --------------------
 # CHROMA DB section
@@ -258,7 +259,10 @@ def existed_docs_in_selected_collection(selected_collection: str):
     """
     if not selected_collection:
         return ["Коллекция не выбрана"]
-    return retrieve.handle_collection(selected_collection)
+    try:
+        return retrieve.handle_collection(selected_collection)
+    except Exception as e:
+        return ["Вероятно, коллекция отсутствует"]
 
 
 def gr_add_to_collection(collection: str, file_path: str):
