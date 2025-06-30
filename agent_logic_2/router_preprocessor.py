@@ -310,7 +310,7 @@ async def instructions_search(_text: str, **__) -> Tuple[str, bool]:
     print("Экстрагировалось: ", extracted_keyword or "Empty")
     print("=" * 45)
 
-    collected_info = meilisearch.search_meili("spravka_docs", extracted_keyword, )
+    collected_info = meilisearch.search_meili("spravka_collection", extracted_keyword, )
 
     # Очистка HTML перед подстановкой в prompt
     clean_info = html_cleaner.strip_html(collected_info)
