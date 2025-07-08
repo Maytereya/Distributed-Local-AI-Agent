@@ -21,18 +21,18 @@ from converters import pdf_to_json_txt_tables_meili as pdf2json
 # Label constants
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
 INDEXES_IN_MEILI = "Индексы документов Meilisearch"
-EXAMPLES = [
-    [
-        "Запишите на прием к доктору Дразнину",  # message
-        "",  # chroma_search_collection_dropdown (не используется)
-        0.005,  # thresholdvalue_slider (заглушка)
-        5,  # value_n_results_slider (заглушка)
-        2,  # value_k_slider (заглушка)
-        "ai-router",  # radio_type_of_search
-        "",  # meili_search_indexes_dropdown (не используется)
-        {}  # state
-    ]
-]
+# EXAMPLES = [
+#     [
+#         "Запишите на прием к доктору Дразнину",  # message
+#         "",  # chroma_search_collection_dropdown (не используется)
+#         0.005,  # thresholdvalue_slider (заглушка)
+#         5,  # value_n_results_slider (заглушка)
+#         2,  # value_k_slider (заглушка)
+#         "ai-router",  # radio_type_of_search
+#         "",  # meili_search_indexes_dropdown (не используется)
+#         {}  # state
+#     ]
+# ]
 # -------------------
 # SECURITY
 # -------------------
@@ -611,7 +611,7 @@ with gr.Blocks(css=custom_css) as blocks:
 
         with gr.Tab("\U0001F4D6 Поиск по документам"):
             chatbot = gr.Chatbot(type="messages",
-                                 autoscroll=True,
+                                 autoscroll=False,
                                  placeholder="<strong>Поиск по документам</strong><br>Задайте вопрос",
                                  height=700, )
 
@@ -619,7 +619,7 @@ with gr.Blocks(css=custom_css) as blocks:
                                  placeholder="Напишите вопрос здесь",
                                  submit_btn=True,
                                  container=True,
-                                 autoscroll=True,
+                                 autoscroll=False,
                                  autofocus=True)
 
             with gr.Column():

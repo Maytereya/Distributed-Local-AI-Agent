@@ -112,5 +112,5 @@ def load_previous_log(path: str):
 
 
 if __name__ == "__main__":
-    rez = asyncio.run(llama_func_call.ollama_call("Почему небо голубое?"))
-    print(rez)
+    rez = asyncio.run(llama_func_call.ollama_call("Какова правильная техника прыжка ollie на трюковом скейте? За счет чего райдер подлетает в воздух?"))
+    print(rez['response'])
