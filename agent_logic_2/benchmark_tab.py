@@ -1,3 +1,5 @@
+# TODO: Судя по коду, все таски применяются только к одной LLM, которая в дефолте.
+# Попросту нет механизма передачи новой модели.
 import asyncio
 import json
 import statistics
@@ -47,6 +49,7 @@ async def gradio_benchmark(models: list[str], laps: int = 2):
         async def measure(task: str) -> Tuple[float, float, float]:
             t0 = time.time()
             res0 = await llama_func_call.ollama_call(task)
+            # TODO: убрать повторную конвертацию в словать
             res_dict = res0.__dict__  # конвертирование объекта в словарь
             wall = time.time() - t0
             eval_s = res_dict.get("eval_duration", -1) / 1e9 if isinstance(res_dict, dict) else 0
@@ -58,6 +61,7 @@ async def gradio_benchmark(models: list[str], laps: int = 2):
             stats = []
             for task in task_list:
                 for i in range(laps):
+                    # TODO: Модель не передается в функцию, следовательно каждый раз одна и та же модель
                     wall, eval_s, tps = await measure(task)
                     stats.append((wall, eval_s, tps))
                     log_lines.append(

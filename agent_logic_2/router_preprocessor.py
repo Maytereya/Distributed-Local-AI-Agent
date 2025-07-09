@@ -5,52 +5,15 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, AsyncGenerator, TypeAlias, Literal
 
-from ollama import AsyncClient, Options
+from ollama import AsyncClient
 
 from agent_logic_2 import llama_func_call as doctor_info, config as c
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
+from ollama_settings import options_set, OLLAMA_MODEL
 
 # LLM‑клиент для классификации входящих запросов
 ollama = AsyncClient(c.ollama_url)
-llm = c.ll_model_small
-
-_OPTIONS = {
-    "conservative": {
-        "temperature": 0.1,
-        "top_k": 30,
-        "top_p": 0.9,
-        "repeat_penalty": 1,
-        "stop": ["<|eot_id|>"],
-    },
-    "expressive": {
-        "temperature": 0,
-        "top_p": 1,
-        "top_k": 20,
-        "repeat_penalty": 1,
-        "max_new_tokens": 256,
-        "stop": ["<|eot_id|>"],
-    },
-}
-
-
-# OPTIONS = {
-#     "temperature":       0.25,      # умеренная креативность
-#     "top_p":             0.88,      # жёстче отбрасываем хвост
-#     "repeat_penalty":    1.15,      # умеренное наказание за повтор
-#     "max_new_tokens":    256,       # ограничение длины
-#     "stop":             ["<|eot_id|>"]
-# }
-
-def options_set(level: Literal["conservative", "expressive"] = "expressive") -> Options:
-    """
-      Выбор из двух вариантов настроек генерации. Для удобства подбора.
-      :param level: Conservative - изначальный вариант, expressive - вариант с чуть большей свободой.
-      :return: Option for Ollama.
-      """
-    params = _OPTIONS.get(level, _OPTIONS["expressive"])
-    return Options(**params)
-
 
 # Label‑ы и порядок
 LABEL_PRIORITY = ["API_INFO",  # справка из API Мед.центра
@@ -61,10 +24,10 @@ LABEL_PRIORITY = ["API_INFO",  # справка из API Мед.центра
 ALLOWED = set(LABEL_PRIORITY + ["UNDEFINED"])
 
 LABEL_DOC = """
-1. API_INFO – справка из API CRM клинки: врачи, услуги, цены, расписание
-2. APPOINTMENT – запись на приём к врачу
-3. SCRIPTS – инструкции и скрипты, последовательность действий для администраторов
-4. UNDEFINED – не распознан
+1. API_INFO – справка из API CRM клинки: врачи, услуги, цены, расписание.
+2. APPOINTMENT – запись на приём к врачу.
+3. SCRIPTS – инструкции и скрипты для пациентов и администраторов, база знаний, справочная информация.
+4. UNDEFINED – не распознан.
 
 ВАЖНО: Метка DOC_INFO недопустима! Используй API_INFO для запросов о врачах и услугах.
 """
@@ -85,14 +48,17 @@ OUTPUT: {\"labels\":[\"APPOINTMENT\"]}
 INPUT: Вы плохо взяли кровь, огромный синяк!      
 OUTPUT: {\"labels\":[\"SCRIPTS\"]}
 
-INPUT: Как доехать до клиники на автобусе?           
-OUTPUT: {\"labels\":[\"SCRIPTS\"]}
-
 INPUT: Подготовка к УЗИ и запишите к УЗИсту.      
 OUTPUT: {\"labels\":[\"SCRIPTS\",\"APPOINTMENT\"]}
 
 INPUT: Где принимает Иванов?               
 OUTPUT: {\"labels\":[\"API_INFO\"]}
+
+INPUT: все про кольпоскопию               
+OUTPUT: {\"labels\":[\"SCRIPTS\"]}
+
+INPUT: подготовка к вульвоскопии               
+OUTPUT: {\"labels\":[\"SCRIPTS\"]}
 
 """
 
@@ -126,24 +92,24 @@ def _history_reveal(user: str, sess: Dict[str, Any]) -> str:
 
 def classificator_prompt(user: str, sess: Dict[str, Any]) -> str:
     today = datetime.now().strftime("%d %B %Y, %H:%M:%S")
+    # TODO: Есть история диалога!
     return f"""
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+SYSTEM:
 Сегодня: {today}.
 Ты – ассистент многопрофильной клиники «Наука» с амбулаторией, операционными, лабораторией и офисами в разных городах.
 Верни **только JSON** вида {{\"labels\":[…]}} (можно несколько label‑ов).
 Допустимые label‑ы:\n{LABEL_DOC}\n
-[EXAMPLES]\n{EXAMPLES}\n
-[USER] {user}
-История диалога: {_history_reveal(user, sess)}
-<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+EXAMPLES: \n{EXAMPLES}\n
+USER: \n{user}
+HISTORY: \n {_history_reveal(user, sess)}
+
 """
 
 
 # TODO: Промпт требует переосмысления!
-
 def split_prompt(text: str, sess: Dict[str, Any]) -> str:
     return f"""
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+SYSTEM:
 1. Сначала переформулируй запрос, привязывая все упоминания услуг/вопросов к фамилии врача.
 2. Затем разбей на смысловые сегменты (JSON segments).
 
@@ -157,6 +123,7 @@ def split_prompt(text: str, sess: Dict[str, Any]) -> str:
  • адресов клиник и времени работы клиник;
  • медицинской услуги или подготовки к анализу/исследованию;
  • если ответ на запрос предусматривает некий алгоритм действий;
+ • если ответ предусматривает информацию о медицинской процедуре, заболевании, исследовании;
 - Разделяй сегменты, когда меняется фамилия врача или начинается общая тема.
 
 Примеры переформулировки:
@@ -172,11 +139,15 @@ def split_prompt(text: str, sess: Dict[str, Any]) -> str:
 Этап 1: "Подготовка к вульвоскопии и кольпоскопии. Расписание Нурмагомедовой"
 Этап 2: {{"segments": ["Подготовка к вульвоскопии, кольпоскопии", "Расписание Нурмагомедовой"]}}
 
+Исходно: "все что известно про кольпоскопию"
+Этап 1: "кольпоскопия"
+Этап 2: {{"segments": ["кольпоскопия"]}}
+
+
 ВАЖНО: Верни только JSON с полем segments, содержащим массив строк!
 
-USER: {text}
-История диалога: {_history_reveal(text, sess)}
-<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+USER: \n{text}
+HISTORY: \n{_history_reveal(text, sess)}
 """
 
 
@@ -191,7 +162,7 @@ async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
     # print("\n================= SPLIT PROCESS START =================")
     # print(f"Original input: '{text}'")
 
-    res = await ollama.generate(model=llm,
+    res = await ollama.generate(model=OLLAMA_MODEL,
                                 prompt=split_prompt(text, sess),  # Добавить sess
                                 options=options_set(level="expressive"),
                                 format="json",
@@ -227,7 +198,7 @@ async def classify(text: str, sess: Dict[str, Any]) -> List[str]:
     :param sess:
     :return:
     """
-    res = await ollama.generate(model=llm,
+    res = await ollama.generate(model=OLLAMA_MODEL,
                                 prompt=classificator_prompt(text, sess),
                                 options=options_set(level="expressive"),
                                 format="json",
@@ -250,11 +221,16 @@ async def final_answering(primary_request: str,
     Ты — ассистент колл-центра клиники «Наука». Отвечай **только на русском** и **строго по шаблонам**.
         1) Определи тип запроса:
            - **Конкретный врач** — запрос содержит имя или «приём у <ФИО>».
-           - **Специализация** — запрос содержит профессиональное название (например, «кардиологи»).
+           - **Специализация** — запрос содержит профессиональное название (например, «кардиологи», "урологи").
            - **График работы** —  запрос содержит "график работы", "расписание", "время приема", "часы приема", "когда работает"
            - **Иное** — все остальные запросы.
         
         2) Если это запрос **по конкретному врачу**:
+        
+            - поля "Специализация_подробно" и "Прайс-лист" выводи дословно,
+            - если ответ из базы данных не содержит информации о враче, ответь "Врач не найден в базе данных".
+            
+            **Структура твоего ответа:**
             **ФИО врача:** {{ФИО}}  
             **Специализация кратко:** {{compose from Специализация}}  
             **Специализация подробно:** {{Специализация}}  
@@ -266,30 +242,35 @@ async def final_answering(primary_request: str,
             **ДМС:** {{(Да/Нет и условия compose from 📞Заметка)}}  
             **Прайс-лист:** {{(все пункты цен compose from 📞Заметка)}}  
             **Адрес/адреса работы:** {{Адрес/Адреса}}
-            
-           ❗ Поля "Специализация_подробно" и "Прайс-лист" выводи дословно, сохраняя все маркеры и переносы строк.
-            Если ответ из базы данных не содержит информации о враче, ответь "Врач не найден в базе данных".
+            — Конец списка —
         
-        3) Если это запрос **по врачебной специализации**:
-           Для каждого врача из DATABASE, у которого в {{Специализация}} есть нужное слово:
-           **ФИО врача:** {{ФИО}}  
-           **Специализация кратко:** {{составить самому}}
-           (каждый врач — новый блок; если таких нет — 
-           ответ: "Релевантной информации ... не найдено")
-           ЕСЛИ информации из базы данных не поступило, ничего не выдумывай! Сообщи, что информации не найдено.
+        3) Если это запрос по врачебной специализации и тебе передан список врачей:
+            Выведи полный список всех врачей, как передано. 
+            
+            **Структура твоего ответа:** 
+            **ФИО врача:** {{ФИО}} 
+            **Специализация кратко:** {{compose from Специализация, какие услуги оказывает, не более 10 слов!}}
+            **Адрес/адреса работы:** {{Адрес/Адреса}}
+            (каждый врач — отдельный блок; если не найдено — "Релевантной информации не найдено")
+            После последнего блока напиши — Конец списка — и НЕ начинай новую нумерацию.
            
         4) Если это запрос про **график работы врача**:
+        
+            **Структура твоего ответа:** 
             **ФИО врача:** {{ФИО}}  
             **Специализация кратко:** {{compose from Специализация}}  
-            **График приёма с адресами работы:**  
+            **График приёма с адресами работы:**{{Адрес/Адреса}}
             {{Расписание}}
             
             ❗ **Блок {{Расписание}} выводи дословно**, ровно как в DATABASE: 
             сохраняй «По адресу приёма…», «Окна:», отступы и переносы строк. 
             Никакой переработки или перелинковки временных слотов.
-            
+            Улучши отображение даты приема: вместо "2025-07-08: 08:30-13:45 * Окна: 10:00, 10:30, 12:30, 13:00, 13:30"
+            напиши "**08 июля:** работает с 08:30 по 13:45 * Окна: 10:00, 10:30, 12:30, 13:00, 13:30"            
         
         5) Если это **прочий запрос**:
+        
+           **Структура твоего ответа:** 
            **Информация из базы знаний:**  
            {{KNOWLEDGE_SNIPPET}} 
            ...
@@ -305,7 +286,7 @@ async def final_answering(primary_request: str,
     """
     partial = ""  # накопитель
     stream = await ollama.generate(
-        model=llm,
+        model=OLLAMA_MODEL,
         prompt=prompt,
         options=options_set(level="expressive"),
         keep_alive=-1,

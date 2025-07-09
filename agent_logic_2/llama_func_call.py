@@ -9,13 +9,14 @@ from difflib import SequenceMatcher
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional
 
-from ollama import AsyncClient, Options
+from ollama import AsyncClient
 
 from agent_logic_2 import config as c
 from agent_logic_2.nayka_api.api_nayka import find_doctors_by_keyword, find_doctor_schedule, \
     cleanup_old_doctors_files, get_all_doctors
 from nayka_api.api_price_all import update_price_all, load_price_all
 from nayka_api.doctors_cc_info import get_doctors_cc_info
+from ollama_settings import options_set, OLLAMA_MODEL
 
 # Функция импорта прайса не используется ввиду несостоятельности последнего
 # from nayka_api.api_price_by_region_3 import get_price, format_services
@@ -26,26 +27,6 @@ logger = logging.getLogger(__name__)
 
 # Путь к данным о врачах
 DATA_DIR = os.path.join(os.path.dirname(__file__), "nayka_api", "apidata")
-# Настройка Ollama
-# OLLAMA_MODEL = c.ll_model_big
-OLLAMA_MODEL = c.ll_model_small
-
-OLLAMA_OPTIONS = Options(
-    temperature=0.25,  # невысокая “творческая” температура
-    top_k=40,  # отсекаем маловероятные токены
-    top_p=0.9,  # оставляем токены общей суммой вероятности 0.9
-    mirostat=0  # Mirostat отключён
-    # mirostat_tau=5.0,
-    # mirostat_eta=0.1,
-)
-# Для максимального контроля и детерминированности (mirostat=2, tau=5, eta=0.1).
-# OLLAMA_OPTIONS = Options(
-#     mirostat=2,         # используем Mirostat v2
-#     mirostat_tau=5.0,   # целевая перплексия
-#     mirostat_eta=0.1    # скорость адаптации
-#     # temperature, top_k, top_p при mirostat!=0 не учитываются
-# )
-
 
 ollama_client = AsyncClient(c.ollama_url)
 
@@ -152,7 +133,7 @@ async def extract_search_keyword_llm(question: str) -> tuple:
     либо ("timetable", "Иванов"), либо ("timetable_specialty", "кардиолог"), либо (None, None)
     """
     system_base = """
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+SYSTEM:
 Ты — ассистент клиники «Наука». 
 Твоя задача: по вопросу пользователя выделить либо фамилию врача (в именительном падеже), либо специальность (например: 
 "кардиолог", "эндокринолог", "педиатр", и т.п.).
@@ -164,7 +145,7 @@ async def extract_search_keyword_llm(question: str) -> tuple:
 Если ничего не найдено — верни: NONE
 Не добавляй других слов, никаких объяснений, только одну строку ответа!
 """
-    user_part = f"\n<|start_header_id|>user<|end_header_id|>\nВопрос: {question}\n<|start_header_id|>assistant<|end_header_id|>"
+    user_part = f"\nUSER:\nВопрос: {question}\n"
     prompt = system_base + user_part
 
     resp = await ollama_call(prompt)
@@ -393,7 +374,7 @@ async def ollama_call(prompt: str) -> Dict[str, Any]:
     res = await ollama_client.generate(
         model=OLLAMA_MODEL,
         prompt=prompt,
-        options=OLLAMA_OPTIONS,
+        options=options_set(),
         keep_alive=-1,
     )
     return res.__dict__
@@ -498,9 +479,11 @@ async def handle_specialty_search(specialty: str, _: str) -> str:
     docs = find_doctors_by_keyword(specialty)
     if not docs:
         return f"Врачи по специальности '{specialty}' не найдены."
-
-    if isinstance(docs, list):
-        docs = enrich_with_cc_info(docs)
+    #
+    # Пока отключим обогащение заметками колл-центра списка врачей.
+    # if isinstance(docs, list):
+    #     docs = enrich_with_cc_info(docs)
+    #
     return format_documents(docs)
 
 
