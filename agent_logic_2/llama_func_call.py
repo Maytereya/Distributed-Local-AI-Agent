@@ -136,7 +136,9 @@ async def extract_search_keyword_llm(question: str) -> tuple:
 SYSTEM:
 Ты — ассистент клиники «Наука». 
 Твоя задача: по вопросу пользователя выделить либо фамилию врача (в именительном падеже), либо специальность (например: 
-"кардиолог", "эндокринолог", "педиатр", и т.п.).
+"кардиолог", "эндокринолог", "педиатр", "хирург" и т.п.).
+Если в вопросе встречаются слова вида "список <специальность во множественном числе>", 
+то определи специальность и верни её в единственном числе, например: Specialty: хирург
 Если в вопросе встречаются слова: "узи", "узи врач", "узист", "ультразвуковая диагностика", "врач ультразвуковой диагностики", 
 "врач узи", "узи-диагностика" — всегда возвращай Specialty: врач ультразвуковой диагностики.
 Если в вопросе есть только фамилия — верни: Surname: Иванов
@@ -479,10 +481,11 @@ async def handle_specialty_search(specialty: str, _: str) -> str:
     docs = find_doctors_by_keyword(specialty)
     if not docs:
         return f"Врачи по специальности '{specialty}' не найдены."
-    
-    if isinstance(docs, list):
-        docs = enrich_with_cc_info(docs)
-    
+    #
+    # Пока отключим обогащение заметками колл-центра списка врачей.
+    # if isinstance(docs, list):
+    #     docs = enrich_with_cc_info(docs)
+    #
     return format_documents(docs)
 
 
@@ -499,7 +502,7 @@ async def handle_timetable_search(surname: str, _: str) -> str:
     )
 
 
-def _llm(question: str) -> List[Dict[str, Any]]:
+def find_doctors_by_keyword_llm(question: str) -> str:
     return find_doctors_by_keyword(question)
 
 

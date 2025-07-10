@@ -258,7 +258,7 @@ def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
         doc = {
             "id": wid,
             "fio": doctors.get(wid, f"[id {wid}]"),
-            "specialization": "\n".join(specs) if specs else "Специализация не указана",
+            "specialization": specs[0] if specs else "Специализация не указана",
             "directions": [s for s in specs[1:]],
             "regions": base_doc.get("regions", ["-"]) if base_doc else ["-"],
         }
