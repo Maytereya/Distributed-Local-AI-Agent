@@ -243,10 +243,11 @@ def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
             matched_workers.add(link["worker"])
 
     if not matched_workers:
-        return f"Врачей по ключу «{keyword}» не найдено."
+        return []
 
     result = []
     for wid in matched_workers:
+        base_doc = next((d for d in data if d.get("id") == wid), None)
         specs = [
             link.get("specialization", "") or ""
             for link in links
@@ -257,8 +258,9 @@ def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
         doc = {
             "id": wid,
             "fio": doctors.get(wid, f"[id {wid}]"),
-            "specialization": specs[0] if specs else "Специализация не указана",
+            "specialization": "\n".join(specs) if specs else "Специализация не указана",
             "directions": [s for s in specs[1:]],
+            "regions": base_doc.get("regions", ["-"]) if base_doc else ["-"],
         }
         result.append(doc)
 

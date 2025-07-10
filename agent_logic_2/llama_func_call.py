@@ -9,13 +9,14 @@ from difflib import SequenceMatcher
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional
 
-from ollama import AsyncClient, Options
+from ollama import AsyncClient
 
 from agent_logic_2 import config as c
 from agent_logic_2.nayka_api.api_nayka import find_doctors_by_keyword, find_doctor_schedule, \
     cleanup_old_doctors_files, get_all_doctors
 from nayka_api.api_price_all import update_price_all, load_price_all
 from nayka_api.doctors_cc_info import get_doctors_cc_info
+from ollama_settings import options_set, OLLAMA_MODEL
 
 # Функция импорта прайса не используется ввиду несостоятельности последнего
 # from nayka_api.api_price_by_region_3 import get_price, format_services
@@ -26,17 +27,6 @@ logger = logging.getLogger(__name__)
 
 # Путь к данным о врачах
 DATA_DIR = os.path.join(os.path.dirname(__file__), "nayka_api", "apidata")
-# Настройка Ollama
-OLLAMA_MODEL = c.ll_model_big
-
-OLLAMA_OPTIONS = Options(
-    temperature=0.3,
-    top_k=40,
-    top_p=0.9,
-    mirostat=1,
-    mirostat_tau=5.0,
-    mirostat_eta=0.1,
-)
 
 ollama_client = AsyncClient(c.ollama_url)
 
@@ -143,18 +133,19 @@ async def extract_search_keyword_llm(question: str) -> tuple:
     либо ("timetable", "Иванов"), либо ("timetable_specialty", "кардиолог"), либо (None, None)
     """
     system_base = """
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+SYSTEM:
 Ты — ассистент клиники «Наука». 
-Твоя задача: по вопросу пользователя выделить либо фамилию врача (в именительном падеже), либо специальность (например: "кардиолог", "эндокринолог", "педиатр", "УЗИ" и т.п.).
+Твоя задача: по вопросу пользователя выделить либо фамилию врача (в именительном падеже), либо специальность (например: 
+"кардиолог", "эндокринолог", "педиатр", и т.п.).
+Если в вопросе встречаются слова: "узи", "узи врач", "узист", "ультразвуковая диагностика", "врач ультразвуковой диагностики", 
+"врач узи", "узи-диагностика" — всегда возвращай Specialty: врач ультразвуковой диагностики.
 Если в вопросе есть только фамилия — верни: Surname: Иванов
 Если в вопросе только специальность — верни: Specialty: кардиолог
-Если вопрос про расписание (слова "расписание", "приём", "график работы", "время работы" и т.п.):
-    - если указано ФИО, верни Timetable: Иванов
-    - если указана специальность, верни Timetable: Specialty: кардиолог
+Если вопрос про расписание (слова "расписание", "приём", "график работы", "время работы" и т.п.) и указано ФИО или фамилия, верни Timetable: Иванов
 Если ничего не найдено — верни: NONE
 Не добавляй других слов, никаких объяснений, только одну строку ответа!
 """
-    user_part = f"\n<|start_header_id|>user<|end_header_id|>\nВопрос: {question}\n<|start_header_id|>assistant<|end_header_id|>"
+    user_part = f"\nUSER:\nВопрос: {question}\n"
     prompt = system_base + user_part
 
     resp = await ollama_call(prompt)
@@ -294,7 +285,7 @@ def format_doctor(item: Dict[str, Any]) -> str:
         lines.append("─" * 10)
         lines.append("• 📞Заметка колл-центра:")
         lines.append(str(cc))
-        lines.append("─" * 10)
+        # lines.append("─" * 10)
 
     # Расписание (если есть)
     schedule = item.get("schedule")
@@ -342,7 +333,7 @@ def format_doctor_schedule(doc):
         lines.append("─" * 10)
         lines.append("• 📞Заметка колл-центра:")
         lines.append(str(cc).strip())
-        lines.append("─" * 10)
+        # lines.append("─" * 10)
         lines.append("")  # Пробел после заметки
 
     # Адреса
@@ -365,7 +356,7 @@ def format_doctor_schedule(doc):
                 if end and len(end) >= 5:
                     end = end[:5]
                 slots = [slot[:5] for slot in day.get("slots", []) if slot and len(slot) >= 5]
-                lines.append(f"    {date}: {start}-{end}  Окна: {', '.join(slots)}")
+                lines.append(f"    {date}: {start}-{end}  * Окна: {', '.join(slots)}")
     else:
         lines.append("Расписание не указано.")
 
@@ -383,7 +374,7 @@ async def ollama_call(prompt: str) -> Dict[str, Any]:
     res = await ollama_client.generate(
         model=OLLAMA_MODEL,
         prompt=prompt,
-        options=OLLAMA_OPTIONS,
+        options=options_set(),
         keep_alive=-1,
     )
     return res.__dict__
@@ -413,6 +404,7 @@ async def investigate(question: str) -> str:
     # Если LLM вернул просто текст
     return value
 
+
 async def handle_surname_search(surname: str, question: str) -> str:
     print(f"LLM-парсер определил фамилию: {surname}")
 
@@ -436,6 +428,7 @@ async def handle_surname_search(surname: str, question: str) -> str:
             )
 
     return f"Врач с фамилией '{surname}' не найден в базе данных."
+
 
 async def search_with_fallback(name: str, is_full_name: bool) -> List[Dict[str, Any]]:
     """
@@ -479,16 +472,19 @@ def format_documents(docs: List[Dict[str, Any]]) -> str:
         f"{i + 1}. {format_doctor(d)}" for i, d in enumerate(docs)
     )
 
+
 async def handle_specialty_search(specialty: str, _: str) -> str:
     print(f"LLM-парсер определил специальность: {specialty}")
 
     docs = find_doctors_by_keyword(specialty)
     if not docs:
         return f"Врачи по специальности '{specialty}' не найдены."
-
+    
     if isinstance(docs, list):
         docs = enrich_with_cc_info(docs)
+    
     return format_documents(docs)
+
 
 async def handle_timetable_search(surname: str, _: str) -> str:
     print(f"LLM-парсер определил запрос расписания по фамилии: {surname}")
@@ -502,7 +498,8 @@ async def handle_timetable_search(surname: str, _: str) -> str:
         for i, doc in enumerate(docs)
     )
 
-def find_doctors_by_keyword_llm(question: str) -> str:
+
+def _llm(question: str) -> List[Dict[str, Any]]:
     return find_doctors_by_keyword(question)
 
 
@@ -525,7 +522,7 @@ async def main():
     q = input("Введите вопрос: ")
     update_price_all()
     res = await investigate(q)
-    print("\n ======================= ")
+    print("\n" + "= " * 25)
     print(f"Ответ модели:\n\n{res}")
 
 
