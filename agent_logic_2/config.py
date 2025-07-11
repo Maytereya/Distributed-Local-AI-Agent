@@ -43,4 +43,4 @@ nayka_pass = config['DEFAULT']['nayka_pass']
 
 ll_model_big = config['DEFAULT']['ll_model_big']
 ll_model_small = config['DEFAULT']['ll_model_small']
-ll_model_alternative = config['DEFAULT']['ll_model_alternative']
+# ll_model_alternative = config['DEFAULT']['ll_model_alternative']
