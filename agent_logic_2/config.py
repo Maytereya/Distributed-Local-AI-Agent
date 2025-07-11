@@ -20,7 +20,7 @@ config.read(config_path)
 # files_read = config.read(config_path)
 # print("Files read:", files_read)
 # -------------------------------------------------
-environment = 'DEVELOPMENT'
+environment = 'DOCKER_PRODUCTION'
 # | 'DEVELOPMENT' IP квартиры
 # | 'LOCAL' localhost
 # | 'PRODUCTION' внешний белый IP
