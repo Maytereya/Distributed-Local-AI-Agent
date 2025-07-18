@@ -224,12 +224,12 @@ async def final_answering(primary_request: str,
            - **Специализация** — запрос содержит профессиональное название (например, «кардиологи», "урологи").
            - **График работы** —  запрос содержит "график работы", "расписание", "время приема", "часы приема", "когда работает"
            - **Иное** — все остальные запросы.
-
+        
         2) Если это запрос **по конкретному врачу**:
-
+        
             - поля "Специализация_подробно" и "Прайс-лист" выводи дословно,
             - если ответ из базы данных не содержит информации о враче, ответь "Врач не найден в базе данных".
-
+            
             **Структура твоего ответа:**
             **ФИО врача:** {{ФИО}}  
             **Специализация кратко:** {{compose from Специализация}}  
@@ -243,33 +243,33 @@ async def final_answering(primary_request: str,
             **Прайс-лист:** {{(все пункты цен compose from 📞Заметка)}}  
             **Адрес/адреса работы:** {{Адрес/Адреса}}
             — Конец списка —
-
+        
         3) Если это запрос по врачебной специализации и тебе передан список врачей:
             Выведи полный список всех врачей, как передано. 
-
+            
             **Структура твоего ответа:** 
             **ФИО врача:** {{ФИО}} 
             **Специализация кратко:** {{compose from Специализация, какие услуги оказывает, не более 10 слов!}}
             **Адрес/адреса работы:** {{Адрес/Адреса}}
             (каждый врач — отдельный блок; если не найдено — "Релевантной информации не найдено")
             После последнего блока напиши — Конец списка — и НЕ начинай новую нумерацию.
-
+           
         4) Если это запрос про **график работы врача**:
-
+        
             **Структура твоего ответа:** 
             **ФИО врача:** {{ФИО}}  
             **Специализация кратко:** {{compose from Специализация}}  
             **График приёма с адресами работы:**{{Адрес/Адреса}}
             {{Расписание}}
-
+            
             ❗ **Блок {{Расписание}} выводи дословно**, ровно как в DATABASE: 
             сохраняй «По адресу приёма…», «Окна:», отступы и переносы строк. 
             Никакой переработки или перелинковки временных слотов.
             Улучши отображение даты приема: вместо "2025-07-08: 08:30-13:45 * Окна: 10:00, 10:30, 12:30, 13:00, 13:30"
             напиши "**08 июля:** работает с 08:30 по 13:45 * Окна: 10:00, 10:30, 12:30, 13:00, 13:30"            
-
+        
         5) Если это **прочий запрос**:
-
+        
            **Структура твоего ответа:** 
            **Информация из базы знаний:**  
            {{KNOWLEDGE_SNIPPET}} 
@@ -278,11 +278,11 @@ async def final_answering(primary_request: str,
            "{{KNOWLEDGE_SNIPPET}} 
            Совпадений не найдено, cформулируйте запрос иначе", 
            то верни сообщение: "Подходящей информации в базе знаний не найдено".
-
+        
     DATABASE: {collected_info}
-
+    
     USER: {primary_request}  
-
+    
     """
     partial = ""  # накопитель
     stream = await ollama.generate(
@@ -391,52 +391,26 @@ async def handle_pending_module(text: str, sess: SessionType) -> RoutingResult |
     return None
 
 
-def is_possible_surname_or_specialty(segment: str) -> bool:
-    """
-    Возвращает True если сегмент похож на фамилию или спец-ность врача
-    (использует doctor_info.repo.read_all() для ФИО и specialties)
-    """
-    text = segment.strip()
-    if not text or len(text.split()) > 3:
-        return False
-    # Проверяем заглавную букву (Фамилия) или что в базе есть такая спец-ность
-    docs = doctor_info.repo.read_all()
-    # Проверка ФИО
-    for d in docs:
-        if text.lower() in d.get('fio', '').lower().split():
-            return True
-        if text.lower() == (d.get('specialization') or '').lower():
-            return True
-    return False
-
-
 async def process_segments(text: str, sess: SessionType) -> str:
+    """
+    Классификация сегментов для обработки соответствующими функциями извлечения информации.
+    :param text:
+    :param sess:
+    :return:
+    """
     segments = await split_into_segments(text, sess)
     responses: List[str] = []
 
     for idx, segment in enumerate(segments, 1):
+        # Классификация
         labels = await classify(segment, sess)
-        main_labels = [lbl for lbl in labels if lbl in LABEL_PRIORITY]
+        labels.sort(key=LABEL_PRIORITY.index)
 
         print("=" * 45)
         print(f"PART view #{idx}: ", segment or "Empty PART")
-        print("LABELS: ", labels)
         print("=" * 45)
 
-        # Fallback если это возможно фамилия или специальность
-        if is_possible_surname_or_specialty(segment):
-            print(f"  [Force doctor_info fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
-            response, continue_pending = await get_doc_info_from_api(segment, session=sess)
-            responses.append(response)
-            continue
-
-        if not main_labels:
-            print(f"  [Fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
-            response, continue_pending = await get_doc_info_from_api(segment, session=sess)
-            responses.append(response)
-            continue
-
-        for label in main_labels:
+        for label in labels:
             response, continue_pending = await MODULES[label](segment, session=sess)
             responses.append(response)
             if continue_pending:
@@ -520,7 +494,7 @@ async def process_routing_request(query: str) -> Tuple[str, Dict[str, Any]]:
 
 
 async def main():
-    async for partial, sess in routing("Смирнова"):
+    async for partial, sess in routing("кардиологи клиники"):
         print(partial)  # или обновлять UI
 
 
