@@ -164,7 +164,7 @@ async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
 
     res = await ollama.generate(model=OLLAMA_MODEL,
                                 prompt=split_prompt(text, sess),  # Добавить sess
-                                options=options_set(level="expressive"),
+                                options=options_set(),
                                 format="json",
                                 keep_alive=-1)
 
@@ -200,7 +200,7 @@ async def classify(text: str, sess: Dict[str, Any]) -> List[str]:
     """
     res = await ollama.generate(model=OLLAMA_MODEL,
                                 prompt=classificator_prompt(text, sess),
-                                options=options_set(level="expressive"),
+                                options=options_set(),
                                 format="json",
                                 keep_alive=-1)
     try:
@@ -288,7 +288,7 @@ async def final_answering(primary_request: str,
     stream = await ollama.generate(
         model=OLLAMA_MODEL,
         prompt=prompt,
-        options=options_set(level="expressive"),
+        options=options_set(),
         keep_alive=-1,
         stream=True,
     )

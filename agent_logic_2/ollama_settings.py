@@ -38,14 +38,6 @@ _OPTIONS = {
     },
 }
 
-
-def options_set() -> Options:
-    """
-      :return: Option for Ollama.
-      """
-    return Options(**load_settings())
-
-
 # Создание директории и файла для сохранения
 # 1. Берём директорию, в которой лежит этот скрипт
 BASE_DIR = Path(__file__).resolve().parent
@@ -55,21 +47,26 @@ settings_dir = BASE_DIR / "data" / "settings"
 settings_path = settings_dir / "ollama_request_settings.json"
 
 
-def load_settings(explain: bool = True) -> (str, str) | str:
+def load_settings(explain: bool = True, raw_mode: bool = False) -> (str, str) | str:
     """
     Загружает данные из сохраненного файла, если он существует.
     Returns:
         Dict: Данные для базовой настройки Ollama.
     """
-    default_options = json.dumps(_OPTIONS.get(OLLAMA_MODEL, _OPTIONS["expressive"]), ensure_ascii=False,
-                                 indent=4)
+    # На случай если настройки из файла получить не удалось:
+    raw_options: Dict = _OPTIONS["expressive"]
+    default_options: str = json.dumps(raw_options, ensure_ascii=False,
+                                      indent=4)
+
     if settings_path.exists():
         try:
             with open(settings_path, 'r', encoding='utf-8') as f:
                 raw: dict = json.load(f)
                 data = json.dumps(raw, ensure_ascii=False, indent=4)
-
                 logger.info("✅ Загружены данные о настройках Ollama")
+
+                if raw_mode:
+                    return raw
                 if explain:
                     return data, f"✅ Загружены данные о настройках Ollama для {OLLAMA_MODEL}"
                 return data
@@ -77,15 +74,30 @@ def load_settings(explain: bool = True) -> (str, str) | str:
         except Exception as e:
             logger.error(
                 f"\n❌ Ошибка при чтении файла с настройками Ollama: {e}, \nзагружены базовые настройки для {OLLAMA_MODEL}.")
+            if raw_mode:
+                return raw_options
             if explain:
                 return default_options, f"⚠️ Установлены дефолтные настройки Ollama для {OLLAMA_MODEL} в связи с ошибкой: {e}"
             return default_options  # Если пойдет не так, возвращаем базовый дефолт
     else:
         logger.error(
-            f"\n❌ Ошибка при чтении файла с настройками Ollama: нет пути к файлу настроек, \nзагружены базовые настройки для Mistral Small.")
+            f"\n❌ Ошибка при чтении файла с настройками Ollama: нет пути к файлу настроек, \nзагружены базовые настройки для {OLLAMA_MODEL}.")
+        if raw_mode:
+            return raw_options
         if explain:
             return default_options, f"⚠️ Установлены дефолтные настройки Ollama для {OLLAMA_MODEL} в связи с отсутствием пути к файлу настроек"
         return default_options  # Если все окончательно пойдет не так, возвращаем базовый дефолт
+
+
+# Кеширование для быстрой передачи, минуя загрузку из файла
+_cached_opts: Dict = load_settings(explain=False, raw_mode=True)
+
+
+def options_set() -> Options:
+    """
+      :return: Options set for Ollama.
+      """
+    return Options(**_cached_opts)  # важно, чтобы передался Dict, а не str.
 
 
 def write_settings(data: Dict) -> str:
@@ -93,6 +105,8 @@ def write_settings(data: Dict) -> str:
         settings_dir.mkdir(parents=True, exist_ok=True)
         with open(settings_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            global _cached_opts
+            _cached_opts = data  # обновляем кэш
             logger.info(f"✅ Данные о настройках Ollama сохранены")
             return f"✅ Данные о настройках Ollama для {OLLAMA_MODEL} сохранены"
     except Exception as e:
