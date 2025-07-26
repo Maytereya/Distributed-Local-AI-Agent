@@ -4,13 +4,13 @@ import re
 import shutil
 import time
 import uuid
-from typing import Dict
-from typing import List
+from typing import Dict, List
 
 import gradio as gr
 from gradio_pdf import PDF
 
 from agent_logic_2 import config as c
+from agent_logic_2 import ollama_settings
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
 from agent_logic_2.router_preprocessor import routing
@@ -122,7 +122,7 @@ async def echo_ai_router(message, history, session_state):
             yield partial, session_state
     except Exception as e:
         # При ошибке тоже стримим её сразу
-        yield f"⚠️ Ошибка обработки запроса в ai router: {e}", session_state
+        yield f"⚠️ Ошибка обработки запроса в AI-router: {e}", session_state
 
 
 async def chroma_echo(message: str, history: List[Dict], collection: str, threshold_value: float,
@@ -616,7 +616,7 @@ with gr.Blocks(css=custom_css) as blocks:
                                  height=700, )
 
             textbox = gr.Textbox(lines=1,
-                                 placeholder="Напишите вопрос здесь",
+                                 placeholder="Напишите свой вопрос",
                                  submit_btn=True,
                                  container=True,
                                  autoscroll=False,
@@ -1091,11 +1091,74 @@ with gr.Blocks(css=custom_css) as blocks:
                         gr.update(visible=True, interactive=True),
                     )
 
+
         # ---------------------------------------
-        # Вкладка 4 -- Benchmarking
+        # Вкладка 4 -- Settings & Adjustments
         # ---------------------------------------
 
-        with gr.Tab("⚙️ Ollama Benchmarking"):
+        # -------- FUNCTIONS SECTION ------------
+
+        def fn_load_options(explain: bool = True) -> (str, str):
+            """
+            Loads and serializes Ollama settings for requests into a JSON-formatted string with indentation.
+
+            :return: A JSON-formatted string representation of the loaded settings
+                with ensured ASCII disabled and proper indentation.
+            :rtype: Str
+            """
+            # return json.dumps(ollama_settings.load_settings(), ensure_ascii=False, indent=4)
+            return ollama_settings.load_settings(explain)
+
+
+        def fn_save_options(text: str) -> dict or str:
+            """
+            Saves the corrected Ollama settings to a JSON-formatted file.
+            """
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError as e:
+                return f"❌ Ошибка преобразования JSON на уровне интерфейса: {e}"
+            return ollama_settings.write_settings(data)
+
+
+        # -----------------------------------------
+
+        with gr.Tab("⚙️ Настройки"):
+            gr.Markdown("""<h3>⚙️ Настройки нейросетей и сервера Ollama</h3>""")
+
+            with gr.Column():
+                opt_textbox = gr.Textbox(lines=1,
+                                         label="Текущий статус",
+                                         submit_btn=False,
+                                         container=True,
+                                         autoscroll=False,
+                                         interactive=True,
+                                         autofocus=False,
+                                         every=10.0, )
+                with gr.Row():
+                    json_ollama_options = gr.Code(label="📄Ollama Options",
+                                                  value=fn_load_options(explain=False),
+                                                  language="json",
+                                                  visible=True,
+                                                  interactive=True,
+                                                  scale=3)
+                    with gr.Column():
+                        load_options_btn = gr.Button("🔄 Загрузить текущие Ollama options", scale=20, size="md")
+                        save_options_btn = gr.Button("💾 Сохранить новые Ollama options", scale=20, size="md")
+
+            load_options_btn.click(fn=fn_load_options,
+                                   inputs=[],
+                                   outputs=[
+                                       json_ollama_options,
+                                       opt_textbox
+                                   ],
+                                   )
+            save_options_btn.click(fn=fn_save_options, inputs=json_ollama_options, outputs=opt_textbox)
+        # ---------------------------------------
+        # Вкладка 5 -- Benchmarking
+        # ---------------------------------------
+
+        with gr.Tab("🚀️ Тестирование производительности"):
             gr.Markdown("""<h3>⚙️ Тестирование производительности генеративных моделей и сервера Ollama</h3>""")
 
             with gr.Row():
@@ -1116,7 +1179,7 @@ with gr.Blocks(css=custom_css) as blocks:
                     start_benchmark_btn = gr.Button("🚀 Запустить тестирование", scale=20, size="md")
 
             with gr.Column():
-                progress = gr.Progress(track_tqdm=True)
+                # progress = gr.Progress(track_tqdm=True)
 
                 log_output = gr.Textbox(
                     label="Ход выполнения",
@@ -1127,11 +1190,11 @@ with gr.Blocks(css=custom_css) as blocks:
                 )
 
             gr.Markdown("""### ℹ️ Пояснение к метрикам
-            - **Wall Avg(s)** – среднее полное время ответа (что видит пользователь).
-            - **Eval Avg(s)** – среднее время генерации без задержек.
-            - **TPS Avg** – скорость генерации текста (Tokens Per Second).
-            - **σ** — стандартное отклонение (разброс значений).
-            """)
+                - **Wall Avg(s)** – среднее полное время ответа (что видит пользователь).
+                - **Eval Avg(s)** – среднее время генерации без задержек.
+                - **TPS Avg** – скорость генерации текста (Tokens Per Second).
+                - **σ** — стандартное отклонение (разброс значений).
+                """)
 
             result_table = gr.DataFrame(
                 headers=["Модель", "Тип", "Wall Avg (s)", "Wall σ", "Eval Avg (s)", "Eval σ", "TPS Avg", "TPS σ"],
@@ -1146,7 +1209,7 @@ with gr.Blocks(css=custom_css) as blocks:
             with gr.Row():
                 # load_prev_btn = gr.Button("📥 Загрузить старый отчёт", size="md")
                 json_view = gr.JSON(label="📄 JSON‑отчёт", visible=True, scale=3)
-                download_log_btn = gr.File(label="📤 Скачать отчёт (JSON)", interactive=False, scale=1, height=10)
+                # download_log_btn = gr.File(label="📤 Скачать отчёт (JSON)", interactive=False, scale=1, height=10)
 
 
             # --- Функции ---
@@ -1176,48 +1239,52 @@ with gr.Blocks(css=custom_css) as blocks:
             start_benchmark_btn.click(
                 fn=wrapped_benchmark,
                 inputs=[model_selector, laps_slider],
-                outputs=[log_output, result_table, json_view, download_log_btn]
+                outputs=[log_output,
+                         result_table,
+                         json_view,
+                         # download_log_btn,
+                         ]
             )
 
-            # ----------------------------------
-            # Event handlers for upper sections
-            # ----------------------------------
+        # ----------------------------------
+        # Event handlers for upper sections
+        # ----------------------------------
 
-            generate_id_button.click(fn=generate_new_id, inputs=[], outputs=[id_input])
+        generate_id_button.click(fn=generate_new_id, inputs=[], outputs=[id_input])
 
-            preview_button.click(
-                fn=fn_preview_json,
-                inputs=[id_input, title_input, content_input, keywords_input, index_dropdown],
-                outputs=[preview_json,
-                         status_output, ]
-            )
+        preview_button.click(
+            fn=fn_preview_json,
+            inputs=[id_input, title_input, content_input, keywords_input, index_dropdown],
+            outputs=[preview_json,
+                     status_output, ]
+        )
 
-            save_button.click(
-                fn=save_and_send_to_meilisearch,
-                inputs=[id_input, preview_json, index_dropdown],
-                outputs=[preview_json,
-                         id_input,
-                         title_input,
-                         content_input,
-                         keywords_input,
-                         status_output,
-                         preview_button,
-                         save_button, ]
-            )
+        save_button.click(
+            fn=save_and_send_to_meilisearch,
+            inputs=[id_input, preview_json, index_dropdown],
+            outputs=[preview_json,
+                     id_input,
+                     title_input,
+                     content_input,
+                     keywords_input,
+                     status_output,
+                     preview_button,
+                     save_button, ]
+        )
 
-    # -------------------------
-    # Footer html realization
-    # -------------------------
+# -------------------------
+# Footer html realization
+# -------------------------
 
-    gr.HTML(
-        """
-        <div id="custom-footer">
-            &copy; ООО "Нейри" 2025
-            <a href="https://neiry-ai.ru" target="_blank">neiry-ai.ru</a>
-        </div>
-        """,
-        visible=True
-    )
+gr.HTML(
+    """
+    <div id="custom-footer">
+        &copy; ООО "Нейри" 2025
+        <a href="https://neiry-ai.ru" target="_blank">neiry-ai.ru</a>
+    </div>
+    """,
+    visible=True
+)
 
 if __name__ == "__main__":
     blocks.launch(server_name="0.0.0.0", server_port=7860, auth=check_auth, show_api=False)
