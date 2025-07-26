@@ -5,6 +5,7 @@ import json
 import statistics
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Tuple
 
 from ollama import AsyncClient, Options
@@ -43,8 +44,6 @@ async def measure(task: str, current_model: str) -> Tuple[float, float, float]:
 # ------------------------------------------
 
 async def gradio_benchmark(models: list[str], laps: int = 2):
-    from pathlib import Path
-
     log_lines = []
     results_table = []
     all_results = []
