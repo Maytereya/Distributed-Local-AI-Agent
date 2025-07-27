@@ -13,6 +13,7 @@ from agent_logic_2 import config as c
 from agent_logic_2 import ollama_settings
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
+from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
 from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
@@ -1121,20 +1122,36 @@ with gr.Blocks(css=custom_css) as blocks:
             return ollama_settings.write_settings(data)
 
 
+        def fn_load_prompt(name: str, inform: bool = True) -> (str, str):
+            text, info = load_prompt(name)
+            if inform:
+                return text, info
+            return text
+
+
+        def fn_save_prompt(name: str, text: str) -> str:
+
+            try:
+                info = write_prompt(name, text)
+                return info
+            except Exception as e:
+                return f"❌ Ошибка сохранения на уровне интерфейса: {e}"
+
+
         # -----------------------------------------
 
         with gr.Tab("⚙️ Настройки"):
             gr.Markdown("""<h3>⚙️ Настройки нейросетей и сервера Ollama</h3>""")
 
             with gr.Column():
-                opt_textbox = gr.Textbox(lines=1,
-                                         label="Текущий статус",
-                                         submit_btn=False,
-                                         container=True,
-                                         autoscroll=False,
-                                         interactive=True,
-                                         autofocus=False,
-                                         every=10.0, )
+                status = gr.Textbox(lines=1,
+                                    label="Текущий статус",
+                                    submit_btn=False,
+                                    container=True,
+                                    autoscroll=False,
+                                    interactive=True,
+                                    autofocus=False,
+                                    )
                 with gr.Row():
                     json_ollama_options = gr.Code(label="📄Ollama Options",
                                                   value=fn_load_options(explain=False),
@@ -1150,10 +1167,71 @@ with gr.Blocks(css=custom_css) as blocks:
                                    inputs=[],
                                    outputs=[
                                        json_ollama_options,
-                                       opt_textbox
+                                       status
                                    ],
                                    )
-            save_options_btn.click(fn=fn_save_options, inputs=json_ollama_options, outputs=opt_textbox)
+            save_options_btn.click(fn=fn_save_options, inputs=json_ollama_options, outputs=status)
+
+            # -----------------------------------------------------
+            # Final answering prompt section
+            # -----------------------------------------------------
+
+            prompt_code_1 = gr.Code(
+                value=fn_load_prompt("final_answer", False),
+                language=None,
+                label="Final Answering Prompt section",
+                interactive=True,
+                lines=20,
+            )
+            btn_load_1 = gr.Button("🔄 Загрузить", size="md")
+            btn_save_1 = gr.Button("💾 Сохранить", size="md")
+
+            btn_load_1.click(lambda: fn_load_prompt("final_answer"),
+                             [], [prompt_code_1, status])
+
+            btn_save_1.click(lambda txt: fn_save_prompt("final_answer", txt),
+                             prompt_code_1, status)
+
+            # --------------------------------------------------------
+            #  Split prompt section
+            # --------------------------------------------------------
+
+            prompt_code_2 = gr.Code(
+                value=fn_load_prompt("split_prompt", False),
+                language=None,
+                label="Split Prompt section",
+                interactive=True,
+                lines=20,
+            )
+            btn_load_2 = gr.Button("🔄 Загрузить", size="md")
+            btn_save_2 = gr.Button("💾 Сохранить", size="md")
+
+            btn_load_2.click(lambda: fn_load_prompt("split_prompt"),
+                             [], [prompt_code_2, status])
+
+            btn_save_2.click(lambda txt: fn_save_prompt("split_prompt", txt),
+                             prompt_code_2, status)
+
+            # --------------------------------------------------------
+            #  Classificator prompt section
+            # --------------------------------------------------------
+
+            prompt_code_3 = gr.Code(
+                value=fn_load_prompt("classificator_prompt", False),
+                language=None,
+                label="Classificator Prompt section",
+                interactive=True,
+                lines=10,
+            )
+            btn_load_3 = gr.Button("🔄 Загрузить", size="md")
+            btn_save_3 = gr.Button("💾 Сохранить", size="md")
+
+            btn_load_3.click(lambda: fn_load_prompt("classificator_prompt"),
+                             [], [prompt_code_3, status])
+
+            btn_save_3.click(lambda txt: fn_save_prompt("classificator_prompt", txt),
+                             prompt_code_3, status)
+
         # ---------------------------------------
         # Вкладка 5 -- Benchmarking
         # ---------------------------------------
