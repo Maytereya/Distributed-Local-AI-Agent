@@ -1122,11 +1122,8 @@ with gr.Blocks(css=custom_css) as blocks:
             return ollama_settings.write_settings(data)
 
 
-        def fn_load_prompt(name: str, inform: bool = True) -> (str, str):
-            text, info = load_prompt(name)
-            if inform:
-                return text, info
-            return text
+        def fn_load_prompt(name: str, inform: bool = True) -> (str, str) or str:
+            return load_prompt(name, inform)
 
 
         def fn_save_prompt(name: str, text: str) -> str:
@@ -1152,16 +1149,21 @@ with gr.Blocks(css=custom_css) as blocks:
                                     interactive=True,
                                     autofocus=False,
                                     )
+
+                # -----------------------------------------------------
+                # OLLAMA OPTIONS SECTION
+                # -----------------------------------------------------
+
                 with gr.Row():
                     json_ollama_options = gr.Code(label="📄Ollama Options",
                                                   value=fn_load_options(explain=False),
                                                   language="json",
                                                   visible=True,
                                                   interactive=True,
-                                                  scale=3)
+                                                  scale=4)
                     with gr.Column():
-                        load_options_btn = gr.Button("🔄 Загрузить текущие Ollama options", scale=20, size="md")
-                        save_options_btn = gr.Button("💾 Сохранить новые Ollama options", scale=20, size="md")
+                        load_options_btn = gr.Button("🔄 Загрузить текущие опции", scale=20, size="md")
+                        save_options_btn = gr.Button("💾 Сохранить новые опции", scale=20, size="md")
 
             load_options_btn.click(fn=fn_load_options,
                                    inputs=[],
@@ -1172,39 +1174,21 @@ with gr.Blocks(css=custom_css) as blocks:
                                    )
             save_options_btn.click(fn=fn_save_options, inputs=json_ollama_options, outputs=status)
 
-            # -----------------------------------------------------
-            # Final answering prompt section
-            # -----------------------------------------------------
-
-            prompt_code_1 = gr.Code(
-                value=fn_load_prompt("final_answer", False),
-                language=None,
-                label="Final Answering Prompt section",
-                interactive=True,
-                lines=20,
-            )
-            btn_load_1 = gr.Button("🔄 Загрузить", size="md")
-            btn_save_1 = gr.Button("💾 Сохранить", size="md")
-
-            btn_load_1.click(lambda: fn_load_prompt("final_answer"),
-                             [], [prompt_code_1, status])
-
-            btn_save_1.click(lambda txt: fn_save_prompt("final_answer", txt),
-                             prompt_code_1, status)
-
             # --------------------------------------------------------
             #  Split prompt section
             # --------------------------------------------------------
-
-            prompt_code_2 = gr.Code(
-                value=fn_load_prompt("split_prompt", False),
-                language=None,
-                label="Split Prompt section",
-                interactive=True,
-                lines=20,
-            )
-            btn_load_2 = gr.Button("🔄 Загрузить", size="md")
-            btn_save_2 = gr.Button("💾 Сохранить", size="md")
+            with gr.Row():
+                prompt_code_2 = gr.Code(
+                    value=fn_load_prompt("split_prompt", False),
+                    language=None,
+                    label="Split Prompt section",
+                    interactive=True,
+                    lines=20,
+                    scale=4,
+                )
+                with gr.Column():
+                    btn_load_2 = gr.Button("🔄 Загрузить", size="md")
+                    btn_save_2 = gr.Button("💾 Сохранить", size="md")
 
             btn_load_2.click(lambda: fn_load_prompt("split_prompt"),
                              [], [prompt_code_2, status])
@@ -1215,22 +1199,133 @@ with gr.Blocks(css=custom_css) as blocks:
             # --------------------------------------------------------
             #  Classificator prompt section
             # --------------------------------------------------------
-
-            prompt_code_3 = gr.Code(
-                value=fn_load_prompt("classificator_prompt", False),
-                language=None,
-                label="Classificator Prompt section",
-                interactive=True,
-                lines=10,
-            )
-            btn_load_3 = gr.Button("🔄 Загрузить", size="md")
-            btn_save_3 = gr.Button("💾 Сохранить", size="md")
+            with gr.Row():
+                prompt_code_3 = gr.Code(
+                    value=fn_load_prompt("classificator_prompt", False),
+                    language=None,
+                    label="Classificator Prompt section",
+                    interactive=True,
+                    lines=10,
+                    scale=4,
+                )
+                with gr.Column():
+                    btn_load_3 = gr.Button("🔄 Загрузить", size="md")
+                    btn_save_3 = gr.Button("💾 Сохранить", size="md")
 
             btn_load_3.click(lambda: fn_load_prompt("classificator_prompt"),
                              [], [prompt_code_3, status])
 
             btn_save_3.click(lambda txt: fn_save_prompt("classificator_prompt", txt),
                              prompt_code_3, status)
+
+            # -----------------------------------------------------
+            # Final answering prompt section
+            # -----------------------------------------------------
+            with gr.Row():
+                prompt_code_1 = gr.Code(
+                    value=fn_load_prompt("final_answer", False),
+                    language=None,
+                    label="Final Answering Prompt section",
+                    interactive=True,
+                    lines=20,
+                    scale=4,
+                )
+                with gr.Column():
+                    btn_load_1 = gr.Button("🔄 Загрузить", size="md")
+                    btn_save_1 = gr.Button("💾 Сохранить", size="md")
+
+            btn_load_1.click(lambda: fn_load_prompt("final_answer"),
+                             [], [prompt_code_1, status])
+
+            btn_save_1.click(lambda txt: fn_save_prompt("final_answer", txt),
+                             prompt_code_1, status)
+
+            # ---------------------------------------
+            #     CONSTANTS SECTION
+            # ---------------------------------------
+            # c1: EXAMPLES
+
+            with gr.Row():
+                prompt_code_c1 = gr.Code(
+                    value=fn_load_prompt("EXAMPLES", False),
+                    language=None,
+                    label="EXAMPLES section: примеры для классификации",
+                    interactive=True,
+                    lines=20,
+                    scale=4,
+                )
+                with gr.Column():
+                    btn_load_c1 = gr.Button("🔄 Загрузить", size="md")
+                    btn_save_c1 = gr.Button("💾 Сохранить", size="md")
+
+                btn_load_c1.click(lambda: fn_load_prompt("EXAMPLES"),
+                                  [], [prompt_code_c1, status])
+
+                btn_save_c1.click(lambda txt: fn_save_prompt("EXAMPLES", txt),
+                                  prompt_code_c1, status)
+
+            # c2: LABEL_DOC
+
+            with gr.Row():
+                prompt_code_c2 = gr.Code(
+                    value=fn_load_prompt("LABEL_DOC", False),
+                    language=None,
+                    label="LABEL_DOC section: образцы маркировки распознанных текстовых сегментов",
+                    interactive=True,
+                    lines=10,
+                    scale=4,
+                )
+                with gr.Column():
+                    btn_load_c2 = gr.Button("🔄 Загрузить", size="md")
+                    btn_save_c2 = gr.Button("💾 Сохранить", size="md")
+
+                btn_load_c2.click(lambda: fn_load_prompt("LABEL_DOC"),
+                                  [], [prompt_code_c2, status])
+
+                btn_save_c2.click(lambda txt: fn_save_prompt("LABEL_DOC", txt),
+                                  prompt_code_c2, status)
+
+            # с3: LABEL_PRIORITY
+
+            with gr.Row():
+                prompt_code_c3 = gr.Code(
+                    value=fn_load_prompt("LABEL_PRIORITY", False),
+                    language=None,
+                    label="LABEL_PRIORITY section: приоритет расположения текстовых сегментов после распознавания",
+                    interactive=True,
+                    lines=5,
+                    scale=4,
+                )
+                with gr.Column():
+                    btn_load_c3 = gr.Button("🔄 Загрузить", size="md")
+                    btn_save_c3 = gr.Button("💾 Сохранить", size="md")
+
+                btn_load_c3.click(lambda: fn_load_prompt("LABEL_PRIORITY"),
+                                  [], [prompt_code_c3, status])
+
+                btn_save_c3.click(lambda txt: fn_save_prompt("LABEL_PRIORITY", txt),
+                                  prompt_code_c3, status)
+
+            # с4: MODULES
+
+            with gr.Row():
+                prompt_code_c4 = gr.Code(
+                    value=fn_load_prompt("MODULES", False),
+                    language=None,
+                    label="MODULES section: имена агентских функций, ассоциированных с маркерами, только чтение",
+                    interactive=False,
+                    lines=5,
+                    scale=4,
+                )
+                with gr.Column():
+                    btn_load_c4 = gr.Button("🔄 Загрузить", size="md")
+                    # btn_save_c4 = gr.Button("💾 Сохранить", size="md")
+
+                btn_load_c4.click(lambda: fn_load_prompt("MODULES"),
+                                  [], [prompt_code_c3, status])
+
+                # btn_save_c4.click(lambda txt: fn_save_prompt("MODULES", txt),
+                #                   prompt_code_c3, status,)
 
         # ---------------------------------------
         # Вкладка 5 -- Benchmarking

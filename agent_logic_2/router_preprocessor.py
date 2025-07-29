@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import json
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, AsyncGenerator, TypeAlias, Literal
 
@@ -16,52 +16,20 @@ from ollama_settings import options_set, OLLAMA_MODEL
 # LLM‑клиент для классификации входящих запросов
 ollama = AsyncClient(c.ollama_url)
 
-# Label‑ы и порядок
-LABEL_PRIORITY = ["API_INFO",  # справка из API Мед.центра
-                  "APPOINTMENT",  # назначение времени / запись на приём к врачу
-                  "SCRIPTS"  # алгоритмы, скрипты, если - то...
+# -----------------------------------------------------
+# СЕКЦИЯ КОНСТАНТ ЛОГИКИ РАБОТЫ РОУТЕРА
+# -----------------------------------------------------
 
-                  ]
-ALLOWED = set(LABEL_PRIORITY + ["UNDEFINED"])
+# Label‑ы и порядок в LABEL_PRIORITY:
+#
+# "API_INFO" - справка из API Мед.центра
+# "APPOINTMENT" - назначение времени / запись на приём к врачу
+# "SCRIPTS" - алгоритмы, скрипты из серии "если - то..."
 
-LABEL_DOC = """
-1. API_INFO – справка из API CRM клинки: врачи, услуги, цены, расписание.
-2. APPOINTMENT – запись на приём к врачу.
-3. SCRIPTS – инструкции и скрипты для пациентов и администраторов, база знаний, справочная информация.
-4. UNDEFINED – не распознан.
-
-ВАЖНО: Метка DOC_INFO недопустима! Используй API_INFO для запросов о врачах и услугах.
-"""
-
-EXAMPLES = """
-INPUT: Сколько стоит приём кардиолога Михлик?            
-OUTPUT: {\"labels\":[\"API_INFO\"]}
-
-INPUT: Какое расписание работы у Пивоваровой?            
-OUTPUT: {\"labels\":[\"API_INFO\"]}
-
-INPUT: Как подготовиться к анализу крови?        
-OUTPUT: {\"labels\":[\"SCRIPTS\"]}
-
-INPUT: Запишите меня к терапевту завтра утром.    
-OUTPUT: {\"labels\":[\"APPOINTMENT\"]}
-
-INPUT: Вы плохо взяли кровь, огромный синяк!      
-OUTPUT: {\"labels\":[\"SCRIPTS\"]}
-
-INPUT: Подготовка к УЗИ и запишите к УЗИсту.      
-OUTPUT: {\"labels\":[\"SCRIPTS\",\"APPOINTMENT\"]}
-
-INPUT: Где принимает Иванов?               
-OUTPUT: {\"labels\":[\"API_INFO\"]}
-
-INPUT: все про кольпоскопию               
-OUTPUT: {\"labels\":[\"SCRIPTS\"]}
-
-INPUT: подготовка к вульвоскопии               
-OUTPUT: {\"labels\":[\"SCRIPTS\"]}
-
-"""
+LABEL_PRIORITY = load_prompt("LABEL_PRIORITY", False).split(",")
+ALLOWED = set(LABEL_PRIORITY + ["UNDEFINED"])  # TODO: разобраться, не совсем понятое добавление лейбла "снаружи".
+LABEL_DOC = load_prompt("LABEL_DOC", False)
+EXAMPLES = load_prompt("EXAMPLES", False)
 
 
 # ----------------------------------------------
@@ -70,6 +38,21 @@ OUTPUT: {\"labels\":[\"SCRIPTS\"]}
 # ----------------------------------------------
 
 def _history_reveal(user: str, sess: Dict[str, Any]) -> str:
+    """
+    Processes the session history to generate a formatted string for revealing the
+    interaction history. This function excludes the last user query in the history if it
+    matches the current user to avoid duplication and uses a specific format for
+    presentation.
+
+    :param user: The identifier for the current user.
+    :type user: str
+    :param sess: The session dictionary containing interaction history. The expected key
+        in the dictionary is "history" with a list of dialogue turns.
+    :type sess: Dict[str, Any]
+    :return: A formatted string representing the interaction history, where each turn
+        is labeled as either "User:" or "Assistant:" followed by the content.
+    :rtype: str
+    """
     history = sess.get("history", [])
 
     # Отбрасываем последний пользовательский запрос, чтобы он не дублировался в истории, передаваемой в запрос
@@ -93,23 +76,22 @@ def _history_reveal(user: str, sess: Dict[str, Any]) -> str:
 
 def classificator_prompt(user: str, sess: Dict[str, Any]) -> str:
     today = datetime.now().strftime("%d %B %Y, %H:%M:%S")
-    # TODO: Есть история диалога!
-    template = load_prompt("classificator_prompt")
+    template = load_prompt("classificator_prompt", False)
 
     return template.format(
         today=today,
         user=user,
-        sess=_history_reveal(user, sess),
+        sess=_history_reveal(user, sess),  # обрабатывается история диалога с пользователем
         LABEL_DOC=LABEL_DOC,
         EXAMPLES=EXAMPLES, )
 
 
 def split_prompt(text: str, sess: Dict[str, Any]) -> str:
-    template = load_prompt("final_answer")
+    template = load_prompt("split_prompt", False)
 
     return template.format(
         text=text,
-        sess=_history_reveal(text, sess),
+        sess=_history_reveal(text, sess),  # обрабатывается история диалога с пользователем
     )
 
 
@@ -121,11 +103,9 @@ async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
     :param sess:
     :return: Возвращает список запросов от пользователя.
     """
-    # print("\n================= SPLIT PROCESS START =================")
-    # print(f"Original input: '{text}'")
 
     res = await ollama.generate(model=OLLAMA_MODEL,
-                                prompt=split_prompt(text, sess),  # Добавить sess
+                                prompt=split_prompt(text, sess),  # Добавляется sess
                                 options=options_set(),
                                 format="json",
                                 keep_alive=-1)
@@ -137,7 +117,6 @@ async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
         print("\nProcessing results:")
         print(f"• Segments count: {len(splitted_segments)}")
         print(f"• Final segments: {splitted_segments}")
-        # print("================= SPLIT PROCESS END =================\n")
 
         return splitted_segments
 
@@ -179,7 +158,7 @@ async def classify(text: str, sess: Dict[str, Any]) -> List[str]:
 async def final_answering(primary_request: str,
                           collected_info: str):  # Пока неясно что за тип данных будет возвращаться
 
-    template = load_prompt("final_answer")
+    template = load_prompt("final_answer", False)
     prompt = template.format(
         primary_request=primary_request,
         collected_info=collected_info,
@@ -258,14 +237,30 @@ async def instructions_search(_text: str, **__) -> Tuple[str, bool]:
 # ────────────────────────────────────────────────
 
 # Ярлыки для вызова функций обработки данных после роутинга
+# дополнительная секция констант для работы логики (не может быть обозначена вверху модуля, так как содержит в себе
+# объявление функций для вызова
 
-MODULES = {
-    "API_INFO": get_doc_info_from_api,
-    "APPOINTMENT": appointment_stub,
-    "SCRIPTS": instructions_search,
+# MODULES = {
+#     "API_INFO": get_doc_info_from_api,
+#     "APPOINTMENT": appointment_stub,
+#     "SCRIPTS": instructions_search,
+# }
+
+# Нужно промежуточное извлечение, так как строка не может содержать вызова функции
+MODULES_str: str = load_prompt("MODULES", False)
+
+# Шаблон: "КЛЮЧ": ИМЯ_ФУНКЦИИ
+pattern = r'"(?P<key>[^"]+)":\s*(?P<name>\w+)'
+pairs = re.findall(pattern, MODULES_str)
+
+# Берём функции из globals() (или из MODULE) и тут уже обращение к функциям
+MODULES: Dict = {
+    key: globals()[name]
+    for key, name in pairs
 }
 
 # Дополнительные обозначения типов для понимания вывода
+# Данные по переменной sess:
 SessionType: TypeAlias = Dict[str, Any]
 RoutingResult: TypeAlias = Tuple[str, SessionType]
 
@@ -426,4 +421,10 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    print(classificator_prompt("-сообщение пользователя-",
+                               {"history": [{"user": "-содержимое памяти-",
+                                             "bot": "_невнятное сообщение ассистента_", }, ]}))
+    print()
+    print("ALLOWED: ", ALLOWED)
+    print()
+    print("MODULES: ", MODULES)
