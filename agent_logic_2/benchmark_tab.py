@@ -28,9 +28,9 @@ SLOW_TASKS = [
 ]
 
 
-async def measure(task: str, current_model: str) -> Tuple[float, float, float]:
+async def measure(task: str, current_model: str, think:bool = None) -> Tuple[float, float, float]:
     t0 = time.time()
-    res0 = await llama_func_call.ollama_call(task, current_model)
+    res0 = await llama_func_call.ollama_call(task, current_model, think)
     # res0 = res0.__dict__  # конвертирование объекта в словарь - более не требуется.
     wall = time.time() - t0
     eval_s = res0.get("eval_duration", -1) / 1e9 if isinstance(res0, dict) else 0
@@ -43,7 +43,7 @@ async def measure(task: str, current_model: str) -> Tuple[float, float, float]:
 # ГЛАВНАЯ ФУНКЦИЯ: тестирует список моделей
 # ------------------------------------------
 
-async def gradio_benchmark(models: list[str], laps: int = 2):
+async def gradio_benchmark(models: list[str], laps: int = 2, think: bool = None):
     log_lines = []
     results_table = []
     all_results = []
@@ -59,7 +59,7 @@ async def gradio_benchmark(models: list[str], laps: int = 2):
             stats = []
             for task in task_list:
                 for i in range(laps):
-                    wall, eval_s, tps = await measure(task, model)
+                    wall, eval_s, tps = await measure(task, model, think)
                     stats.append((wall, eval_s, tps))
                     log_lines.append(
                         f"[{model}] {task_type} '{task}': wall={wall:.2f}s, eval={eval_s:.2f}s, tps={tps:.1f}")
@@ -114,5 +114,6 @@ def load_previous_log(path: str):
 
 if __name__ == "__main__":
     rez = asyncio.run(llama_func_call.ollama_call(
-        "Какова правильная техника прыжка ollie на трюковом скейте? За счет чего райдер подлетает в воздух?"))
+        "Какова техника прыжка ollie на трюковом скейте?"))
+
     print(rez['response'])

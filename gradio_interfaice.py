@@ -13,6 +13,7 @@ from agent_logic_2 import config as c
 from agent_logic_2 import ollama_settings
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
+from agent_logic_2.ollama_settings import load_main_model_name, write_main_model_name
 from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
 from agent_logic_pack import aretrieve3 as retrieve
@@ -1135,7 +1136,30 @@ with gr.Blocks(css=custom_css) as blocks:
                 return f"❌ Ошибка сохранения на уровне интерфейса: {e}"
 
 
-        # -----------------------------------------
+        # ------------ ASSERT(VALIDATE) MAIN LLM ---------------
+
+        def fn_load_main_model() -> (str, str) or str:
+            return [load_main_model_name(False)]
+            # return ["test mess"]
+
+
+        def fn_assert_main_model(name: str, ) -> str:
+
+            try:
+                return write_main_model_name(name)
+            except Exception as e:
+                return f"❌ Ошибка сохранения на уровне интерфейса: {e}"
+
+
+        async def reassert_main_model_dropdown(only_list: bool = False) -> (str, str) or str:
+            models_response = await ollama.list()
+            models = sorted([m["model"] for m in models_response["models"]])
+            if only_list:
+                return models
+            return gr.update(choices=models, value=models[-1] if models else [])
+
+
+        # ------------------------------------------------------
 
         with gr.Tab("⚙️ Настройки"):
             gr.Markdown("""<h3>⚙️ Настройки нейросетей и сервера Ollama</h3>""")
@@ -1155,6 +1179,28 @@ with gr.Blocks(css=custom_css) as blocks:
                 # -----------------------------------------------------
 
                 with gr.Row():
+                    with gr.Column():
+                        main_model_selector = gr.Dropdown(
+                            choices=fn_load_main_model(),
+                            multiselect=False,
+                            label="Выбор главной LLM",
+                            interactive=True
+                        )
+                        reload_main_model_btn = gr.Button("🔄 Загрузить доступные модели", size="md")
+                        save_model_btn = gr.Button("💾 Утвердить выбранную модель", size="md")
+                        think_checkbox = gr.Checkbox(label="Активировать способность рассуждать",
+                                                        # info="Только для reasoning models, снижает скорость",
+                                                        value=False)
+
+                    reload_main_model_btn.click(
+                        fn=reassert_main_model_dropdown,
+                        inputs=[],
+                        outputs=main_model_selector)
+
+                    save_model_btn.click(fn=fn_assert_main_model,
+                                         inputs=[main_model_selector],
+                                         outputs=[status], )
+
                     json_ollama_options = gr.Code(label="📄Ollama Options",
                                                   value=fn_load_options(explain=False),
                                                   language="json",
@@ -1178,21 +1224,21 @@ with gr.Blocks(css=custom_css) as blocks:
             #  Split prompt section
             # --------------------------------------------------------
             with gr.Row():
-                prompt_code_2 = gr.Code(
-                    value=fn_load_prompt("split_prompt", False),
-                    language=None,
-                    label="Split Prompt section",
-                    interactive=True,
-                    lines=20,
-                    scale=4,
-                )
-                with gr.Column():
+                with gr.Accordion(label="Split Prompt", open=False):
+                    prompt_code_2 = gr.Code(
+                        value=fn_load_prompt("split_prompt", False),
+                        language=None,
+                        label="Split Prompt section",
+                        interactive=True,
+                        lines=20,
+                        scale=4,
+                    )
+
                     btn_load_2 = gr.Button("🔄 Загрузить", size="md")
                     btn_save_2 = gr.Button("💾 Сохранить", size="md")
 
             btn_load_2.click(lambda: fn_load_prompt("split_prompt"),
                              [], [prompt_code_2, status])
-
             btn_save_2.click(lambda txt: fn_save_prompt("split_prompt", txt),
                              prompt_code_2, status)
 
@@ -1200,21 +1246,21 @@ with gr.Blocks(css=custom_css) as blocks:
             #  Classificator prompt section
             # --------------------------------------------------------
             with gr.Row():
-                prompt_code_3 = gr.Code(
-                    value=fn_load_prompt("classificator_prompt", False),
-                    language=None,
-                    label="Classificator Prompt section",
-                    interactive=True,
-                    lines=10,
-                    scale=4,
-                )
-                with gr.Column():
+                with gr.Accordion(label="Classificator Prompt", open=False):
+                    prompt_code_3 = gr.Code(
+                        value=fn_load_prompt("classificator_prompt", False),
+                        language=None,
+                        label="Classificator Prompt section",
+                        interactive=True,
+                        lines=10,
+                        scale=4,
+                    )
+
                     btn_load_3 = gr.Button("🔄 Загрузить", size="md")
                     btn_save_3 = gr.Button("💾 Сохранить", size="md")
 
             btn_load_3.click(lambda: fn_load_prompt("classificator_prompt"),
                              [], [prompt_code_3, status])
-
             btn_save_3.click(lambda txt: fn_save_prompt("classificator_prompt", txt),
                              prompt_code_3, status)
 
@@ -1222,21 +1268,20 @@ with gr.Blocks(css=custom_css) as blocks:
             # Final answering prompt section
             # -----------------------------------------------------
             with gr.Row():
-                prompt_code_1 = gr.Code(
-                    value=fn_load_prompt("final_answer", False),
-                    language=None,
-                    label="Final Answering Prompt section",
-                    interactive=True,
-                    lines=20,
-                    scale=4,
-                )
-                with gr.Column():
+                with gr.Accordion(label="Final Answer Prompt", open=False):
+                    prompt_code_1 = gr.Code(
+                        value=fn_load_prompt("final_answer", False),
+                        language=None,
+                        label="Final Answering Prompt section",
+                        interactive=True,
+                        lines=20,
+                        scale=4,
+                    )
                     btn_load_1 = gr.Button("🔄 Загрузить", size="md")
                     btn_save_1 = gr.Button("💾 Сохранить", size="md")
 
             btn_load_1.click(lambda: fn_load_prompt("final_answer"),
                              [], [prompt_code_1, status])
-
             btn_save_1.click(lambda txt: fn_save_prompt("final_answer", txt),
                              prompt_code_1, status)
 
@@ -1246,36 +1291,38 @@ with gr.Blocks(css=custom_css) as blocks:
             # c1: EXAMPLES
 
             with gr.Row():
-                prompt_code_c1 = gr.Code(
-                    value=fn_load_prompt("EXAMPLES", False),
-                    language=None,
-                    label="EXAMPLES section: примеры для классификации",
-                    interactive=True,
-                    lines=20,
-                    scale=4,
-                )
-                with gr.Column():
+                with gr.Accordion(label="Examples for Classification", open=False):
+                    prompt_code_c1 = gr.Code(
+                        value=fn_load_prompt("EXAMPLES", False),
+                        language=None,
+                        label="EXAMPLES section: примеры для классификации",
+                        interactive=True,
+                        lines=20,
+                        scale=4,
+                    )
+
                     btn_load_c1 = gr.Button("🔄 Загрузить", size="md")
                     btn_save_c1 = gr.Button("💾 Сохранить", size="md")
 
-                btn_load_c1.click(lambda: fn_load_prompt("EXAMPLES"),
-                                  [], [prompt_code_c1, status])
+                    btn_load_c1.click(lambda: fn_load_prompt("EXAMPLES"),
+                                      [], [prompt_code_c1, status])
 
-                btn_save_c1.click(lambda txt: fn_save_prompt("EXAMPLES", txt),
-                                  prompt_code_c1, status)
+                    btn_save_c1.click(lambda txt: fn_save_prompt("EXAMPLES", txt),
+                                      prompt_code_c1, status)
 
             # c2: LABEL_DOC
 
             with gr.Row():
-                prompt_code_c2 = gr.Code(
-                    value=fn_load_prompt("LABEL_DOC", False),
-                    language=None,
-                    label="LABEL_DOC section: образцы маркировки распознанных текстовых сегментов",
-                    interactive=True,
-                    lines=10,
-                    scale=4,
-                )
-                with gr.Column():
+                with gr.Accordion(label="Markers for Text Chunks", open=False):
+                    prompt_code_c2 = gr.Code(
+                        value=fn_load_prompt("LABEL_DOC", False),
+                        language=None,
+                        label="LABEL_DOC section: образцы маркировки распознанных текстовых сегментов",
+                        interactive=True,
+                        lines=10,
+                        scale=4,
+                    )
+
                     btn_load_c2 = gr.Button("🔄 Загрузить", size="md")
                     btn_save_c2 = gr.Button("💾 Сохранить", size="md")
 
@@ -1288,15 +1335,16 @@ with gr.Blocks(css=custom_css) as blocks:
             # с3: LABEL_PRIORITY
 
             with gr.Row():
-                prompt_code_c3 = gr.Code(
-                    value=fn_load_prompt("LABEL_PRIORITY", False),
-                    language=None,
-                    label="LABEL_PRIORITY section: приоритет расположения текстовых сегментов после распознавания",
-                    interactive=True,
-                    lines=5,
-                    scale=4,
-                )
-                with gr.Column():
+                with gr.Accordion(label="Text Chunks Layout Priority", open=False):
+                    prompt_code_c3 = gr.Code(
+                        value=fn_load_prompt("LABEL_PRIORITY", False),
+                        language=None,
+                        label="LABEL_PRIORITY section: приоритет расположения текстовых сегментов после распознавания",
+                        interactive=True,
+                        lines=5,
+                        scale=4,
+                    )
+
                     btn_load_c3 = gr.Button("🔄 Загрузить", size="md")
                     btn_save_c3 = gr.Button("💾 Сохранить", size="md")
 
@@ -1309,15 +1357,16 @@ with gr.Blocks(css=custom_css) as blocks:
             # с4: MODULES
 
             with gr.Row():
-                prompt_code_c4 = gr.Code(
-                    value=fn_load_prompt("MODULES", False),
-                    language=None,
-                    label="MODULES section: имена агентских функций, ассоциированных с маркерами, только чтение",
-                    interactive=False,
-                    lines=5,
-                    scale=4,
-                )
-                with gr.Column():
+                with gr.Accordion(label="MODULES: The names of agents's functions", open=False):
+                    prompt_code_c4 = gr.Code(
+                        value=fn_load_prompt("MODULES", False),
+                        language=None,
+                        label="MODULES section: имена агентских функций, ассоциированных с маркерами, только чтение",
+                        interactive=False,
+                        lines=5,
+                        scale=4,
+                    )
+
                     btn_load_c4 = gr.Button("🔄 Загрузить", size="md")
                     # btn_save_c4 = gr.Button("💾 Сохранить", size="md")
 
@@ -1333,12 +1382,14 @@ with gr.Blocks(css=custom_css) as blocks:
 
         with gr.Tab("🚀️ Тестирование производительности"):
             gr.Markdown("""<h3>⚙️ Тестирование производительности генеративных моделей и сервера Ollama</h3>""")
-
+            # models_list = reassert_main_model_dropdown(True)
             with gr.Row():
                 model_selector = gr.Dropdown(
+                    choices=fn_load_main_model(),
                     multiselect=True,
                     label="Выберите модели для тестирования",
-                    interactive=True
+                    interactive=True,
+                    max_choices=2,
                 )
 
                 laps_slider = gr.Slider(
@@ -1352,8 +1403,6 @@ with gr.Blocks(css=custom_css) as blocks:
                     start_benchmark_btn = gr.Button("🚀 Запустить тестирование", scale=20, size="md")
 
             with gr.Column():
-                # progress = gr.Progress(track_tqdm=True)
-
                 log_output = gr.Textbox(
                     label="Ход выполнения",
                     lines=8,
@@ -1393,7 +1442,7 @@ with gr.Blocks(css=custom_css) as blocks:
                 return gr.update(choices=models, value=models[-1] if models else [])
 
 
-            async def wrapped_benchmark(models, laps):
+            async def wrapped_benchmark(models, laps, think):
                 if not models:
                     return (
                         "🟡 Сначала загрузите и выберите модели для тестирования.",
@@ -1401,7 +1450,7 @@ with gr.Blocks(css=custom_css) as blocks:
                         {},
                         None
                     )
-                logs, table, json_data, path = await benchmark(models, laps)
+                logs, table, json_data, path = await benchmark(models, laps, think)
                 return logs, table, json_data, path
 
 
@@ -1411,11 +1460,12 @@ with gr.Blocks(css=custom_css) as blocks:
 
             start_benchmark_btn.click(
                 fn=wrapped_benchmark,
-                inputs=[model_selector, laps_slider],
+                inputs=[model_selector, laps_slider, think_checkbox],
                 outputs=[log_output,
                          result_table,
                          json_view,
                          # download_log_btn,
+
                          ]
             )
 

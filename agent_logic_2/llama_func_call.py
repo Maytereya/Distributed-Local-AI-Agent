@@ -372,13 +372,15 @@ FORMATTER = "\n\n---\n\n"
 
 
 @with_retries(tries=2)
-async def ollama_call(prompt: str, model: str = OLLAMA_MODEL) -> Dict[str, Any]:
+async def ollama_call(prompt: str, model: str = OLLAMA_MODEL, think: bool = None, ) -> Dict[str, Any]:
     res = await ollama_client.generate(
         model=model,
         prompt=prompt,
         options=options_set(),
         keep_alive=-1,
+        think=think,
     )
+    print("think:", think)
     return res.__dict__
 
 
