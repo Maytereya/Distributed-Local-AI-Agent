@@ -11,12 +11,23 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ollama import AsyncClient
 
-from agent_logic_2 import config as c
+# Package-relative import to work reliably when this module is imported as part of agent_logic_2
+try:
+    from . import ollama_settings
+except ImportError:
+    # Fallback if ollama_settings.py is placed at the project root
+    import ollama_settings
+
+try:
+    from . import config as c
+except ImportError:
+    # Fallback if ollama_settings.py is placed at the project root
+    import config as c
+
 from agent_logic_2.nayka_api.api_nayka import find_doctors_by_keyword, find_doctor_schedule, \
     cleanup_old_doctors_files, get_all_doctors
 from nayka_api.api_price_all import update_price_all, load_price_all
 from nayka_api.doctors_cc_info import get_doctors_cc_info
-from ollama_settings import options_set, OLLAMA_MODEL
 
 # Функция импорта прайса не используется ввиду несостоятельности последнего
 # from nayka_api.api_price_by_region_3 import get_price, format_services
@@ -27,8 +38,11 @@ logger = logging.getLogger(__name__)
 
 # Путь к данным о врачах
 DATA_DIR = os.path.join(os.path.dirname(__file__), "nayka_api", "apidata")
-
+# Инициализация Ollama
 ollama_client = AsyncClient(c.ollama_url)
+# ollama_settings.init_model_name()
+ollama_settings.init_options()
+model: str = ollama_settings.init_model_name()
 
 # Расширенный список стоп-слов
 STOP_WORDS = {
@@ -150,7 +164,7 @@ SYSTEM:
     user_part = f"\nUSER:\nВопрос: {question}\n"
     prompt = system_base + user_part
 
-    resp = await ollama_call(prompt)
+    resp = await ollama_call(prompt=prompt, llm=ollama_settings.init_model_name(), think=False)
     text = resp.get("response", "").strip()
     if text.upper() == "NONE":
         return None, None
@@ -372,15 +386,23 @@ FORMATTER = "\n\n---\n\n"
 
 
 @with_retries(tries=2)
-async def ollama_call(prompt: str, model: str = OLLAMA_MODEL, think: bool = None, ) -> Dict[str, Any]:
+async def ollama_call(prompt: str, llm: str = model, think: bool = None, ) -> Dict[str, Any]:
+    if not llm:
+        raise ValueError("Model is not specified yet")
+    elif llm:
+        print("!!! ollama_call llm is: ", llm)
+        print("!!! ollama_call ollama_settings.OLLAMA_MODEL: ", ollama_settings.OLLAMA_MODEL)
+        print("!!! ollama_call Think status:", think)
+        print("!!! options: ", ollama_settings.options_set())
+
     res = await ollama_client.generate(
-        model=model,
+        model=llm,
         prompt=prompt,
-        options=options_set(),
+        options=ollama_settings.options_set(),
         keep_alive=-1,
         think=think,
     )
-    print("think:", think)
+
     return res.__dict__
 
 

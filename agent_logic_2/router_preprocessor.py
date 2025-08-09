@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import datetime
@@ -11,7 +12,7 @@ from agent_logic_2 import llama_func_call as doctor_info, config as c
 from agent_logic_2.prompts import load_prompt
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
-from ollama_settings import options_set, OLLAMA_MODEL
+import agent_logic_2.ollama_settings as ollama_settings
 
 # LLM‑клиент для классификации входящих запросов
 ollama = AsyncClient(c.ollama_url)
@@ -104,9 +105,15 @@ async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
     :return: Возвращает список запросов от пользователя.
     """
 
-    res = await ollama.generate(model=OLLAMA_MODEL,
+    ollama_settings.init_model_name()
+    # print("split_into_segments OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
+    # print("split_into_segments options: ", ollama_settings.options_set())
+    if not ollama_settings.OLLAMA_MODEL:
+        raise ValueError("split_into_segments OLLAMA_MODEL cannot be empty")
+
+    res = await ollama.generate(model=ollama_settings.OLLAMA_MODEL,
                                 prompt=split_prompt(text, sess),  # Добавляется sess
-                                options=options_set(),
+                                options=ollama_settings.options_set(),
                                 format="json",
                                 keep_alive=-1)
 
@@ -139,9 +146,16 @@ async def classify(text: str, sess: Dict[str, Any]) -> List[str]:
     :param sess:
     :return:
     """
-    res = await ollama.generate(model=OLLAMA_MODEL,
+
+    # print("classify OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
+    # print("classify options: ", ollama_settings.options_set())
+
+    if not ollama_settings.OLLAMA_MODEL:
+        raise ValueError("classify OLLAMA_MODEL cannot be empty")
+
+    res = await ollama.generate(model=ollama_settings.OLLAMA_MODEL,
                                 prompt=classificator_prompt(text, sess),
-                                options=options_set(),
+                                options=ollama_settings.options_set(),
                                 format="json",
                                 keep_alive=-1)
     try:
@@ -164,11 +178,17 @@ async def final_answering(primary_request: str,
         collected_info=collected_info,
     )
 
+    # print("final_answering OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
+    # print("final_answering options: ", ollama_settings.options_set())
+    if not ollama_settings.OLLAMA_MODEL:
+        raise ValueError("final_answering OLLAMA_MODEL cannot be empty")
+
+
     partial = ""  # накопитель
     stream = await ollama.generate(
-        model=OLLAMA_MODEL,
+        model=ollama_settings.OLLAMA_MODEL,
         prompt=prompt,
-        options=options_set(),
+        options=ollama_settings.options_set(),
         keep_alive=-1,
         stream=True,
     )
@@ -421,10 +441,11 @@ async def main():
 
 
 if __name__ == "__main__":
-    print(classificator_prompt("-сообщение пользователя-",
-                               {"history": [{"user": "-содержимое памяти-",
-                                             "bot": "_невнятное сообщение ассистента_", }, ]}))
-    print()
-    print("ALLOWED: ", ALLOWED)
-    print()
-    print("MODULES: ", MODULES)
+    asyncio.run(process_routing_request("Доктор Дразнин"))
+    # print(classificator_prompt("-сообщение пользователя-",
+    #                            {"history": [{"user": "-содержимое памяти-",
+    #                                          "bot": "_невнятное сообщение ассистента_", }, ]}))
+    # print()
+    # print("ALLOWED: ", ALLOWED)
+    # print()
+    # print("MODULES: ", MODULES)

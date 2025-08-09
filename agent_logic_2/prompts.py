@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Union
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -15,7 +15,7 @@ PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
 _PROMPT_CACHE: Dict[str, str] = {}
 
 
-def load_prompt(name: str, inform: bool = True) -> (str, str) or str:
+def load_prompt(name: str, inform: bool = True) -> Union[(str, str) or str]:
     """
     Loads a prompt from a file or the cache. If the specified prompt is found in
     the cache, returns it directly. Otherwise, attempts to read the prompt

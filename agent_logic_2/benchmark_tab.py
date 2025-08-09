@@ -1,5 +1,3 @@
-# TODO: Судя по коду, все таски применяются только к одной LLM, которая в дефолте.
-# Попросту нет механизма передачи новой модели.
 import asyncio
 import json
 import statistics
@@ -8,14 +6,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Tuple
 
-from ollama import AsyncClient, Options
+from ollama import AsyncClient
 
 from agent_logic_2 import llama_func_call
 from agent_logic_2.config import ollama_url
 
 # Настройки клиента Ollama
 ollama_client = AsyncClient(ollama_url)
-orig_options = Options(temperature=0)
 
 FAST_TASKS = [
     "Назовите три языка программирования",
@@ -31,7 +28,6 @@ SLOW_TASKS = [
 async def measure(task: str, current_model: str, think:bool = None) -> Tuple[float, float, float]:
     t0 = time.time()
     res0 = await llama_func_call.ollama_call(task, current_model, think)
-    # res0 = res0.__dict__  # конвертирование объекта в словарь - более не требуется.
     wall = time.time() - t0
     eval_s = res0.get("eval_duration", -1) / 1e9 if isinstance(res0, dict) else 0
     tokens = res0.get("eval_count", len(str(res0).split())) if isinstance(res0, dict) else len(str(res0).split())
