@@ -35,5 +35,5 @@ SYSTEM:
 
 ВАЖНО: Верни только JSON с полем segments, содержащим массив строк!
 
-USER: \n{text}
+USER: \n{user}
 HISTORY: \n{sess}
