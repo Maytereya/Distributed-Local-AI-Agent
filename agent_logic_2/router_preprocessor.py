@@ -8,11 +8,11 @@ from typing import Any, Dict, List, Tuple, AsyncGenerator, TypeAlias, Literal
 
 from ollama import AsyncClient
 
+import agent_logic_2.ollama_settings as ollama_settings
 from agent_logic_2 import llama_func_call as doctor_info, config as c
 from agent_logic_2.prompts import load_prompt
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
-import agent_logic_2.ollama_settings as ollama_settings
 
 # LLM‑клиент для классификации входящих запросов
 ollama = AsyncClient(c.ollama_url)
@@ -87,19 +87,21 @@ def classificator_prompt(user: str, sess: Dict[str, Any]) -> str:
         EXAMPLES=EXAMPLES, )
 
 
-def split_prompt(text: str, sess: Dict[str, Any]) -> str:
+def split_prompt(user: str, sess: Dict[str, Any]) -> str:
     template = load_prompt("split_prompt", False)
 
     return template.format(
-        text=text,
-        sess=_history_reveal(text, sess),  # обрабатывается история диалога с пользователем
+        user=user,
+        sess=_history_reveal(user, sess),  # обрабатывается история диалога с пользователем
     )
 
 
-async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
+async def split_into_segments(text: str, sess: Dict[str, Any], think: bool = None) -> List[str]:
     """
     Важно! Функция переформулирует запрос!
+    Это первая функция в каскаде обработки входящего сообщения пользователя.
 
+    :param think: Включать ли reasoning у поддерживающих моделей
     :param text: Входящий сырой запрос.
     :param sess:
     :return: Возвращает список запросов от пользователя.
@@ -115,7 +117,8 @@ async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
                                 prompt=split_prompt(text, sess),  # Добавляется sess
                                 options=ollama_settings.options_set(),
                                 format="json",
-                                keep_alive=-1)
+                                keep_alive=-1,
+                                think=think, )
 
     try:
         segments = json.loads(res["response"]).get("segments", [])
@@ -138,11 +141,13 @@ async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
         return [text]
 
 
-async def classify(text: str, sess: Dict[str, Any]) -> List[str]:
+async def classify(text: str, sess: Dict[str, Any], think: bool = None) -> List[str]:
     """
-    Классификатор сегментов входящего запроса пользователя
+    Классификатор сегментов входящего запроса пользователя,
+    второй этап обработки входящего сообщения пользователя.
 
-    :param text:
+    :param think: Включать ли reasoning у поддерживающих моделей
+    :param text: Фрагмент (выделенный предыдущей функцией) входящего текста для анализа и маркировки.
     :param sess:
     :return:
     """
@@ -157,7 +162,8 @@ async def classify(text: str, sess: Dict[str, Any]) -> List[str]:
                                 prompt=classificator_prompt(text, sess),
                                 options=ollama_settings.options_set(),
                                 format="json",
-                                keep_alive=-1)
+                                keep_alive=-1,
+                                think=think, )
     try:
         labels = [l.upper() for l in json.loads(res["response"]).get("labels", []) if l.upper() in ALLOWED]
         print("----------------- LABELS -----------------------")
@@ -170,19 +176,21 @@ async def classify(text: str, sess: Dict[str, Any]) -> List[str]:
 
 
 async def final_answering(primary_request: str,
-                          collected_info: str):  # Пока неясно что за тип данных будет возвращаться
+                          collected_info: str,
+                          think: bool = None,
+                          ):  # Пока неясно что за тип данных будет возвращаться
 
     template = load_prompt("final_answer", False)
     prompt = template.format(
         primary_request=primary_request,
         collected_info=collected_info,
+
     )
 
     # print("final_answering OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
     # print("final_answering options: ", ollama_settings.options_set())
     if not ollama_settings.OLLAMA_MODEL:
         raise ValueError("final_answering OLLAMA_MODEL cannot be empty")
-
 
     partial = ""  # накопитель
     stream = await ollama.generate(
@@ -191,6 +199,7 @@ async def final_answering(primary_request: str,
         options=ollama_settings.options_set(),
         keep_alive=-1,
         stream=True,
+        think=think,
     )
     async for chunk in stream:
         partial += chunk["response"]
@@ -201,15 +210,15 @@ async def final_answering(primary_request: str,
 # Подключаем doctor_info из llama_func_call
 # ──────────────────────────────────────────────────────
 
-async def get_doc_info_from_api(question: str, **_) -> Tuple[str, bool]:
-    result = await doctor_info.investigate(question)
+async def get_doc_info_from_api(question: str, think: bool = None, **_, ) -> Tuple[str, bool]:
+    result = await doctor_info.investigate(question, think=think)
     return result, False
 
 
 # ------------------------------------------------------
 # Подключаем заглушку функции записи пациента
 # ------------------------------------------------------
-async def appointment_stub(_text: str, **__) -> Tuple[str, bool]:
+async def appointment_stub(_text: str, think: bool = None, **__) -> Tuple[str, bool]:
     return "Модуль записи к врачу скоро появится. ", False
 
 
@@ -219,10 +228,11 @@ async def appointment_stub(_text: str, **__) -> Tuple[str, bool]:
 # ──────────────────────────────────────────────────────
 # ToDo: Объединить все запросы в одну функцию
 # TODO: Завернуть всю поисковую часть (MEILI) в одну функцию
-async def instructions_search(_text: str, **__) -> Tuple[str, bool]:
+async def instructions_search(_text: str, think: bool = None, **__) -> Tuple[str, bool]:
     """
     Для поиска нужной информации в индексе или коллекции используется переформулировка запроса пользователя
     Пока не ясно, следует ли ее делать.
+    :param think:
     :param _text:
     :param __:
     :return: Кортеж: результат поиска и стоп - паттерн для PENDING
@@ -288,7 +298,7 @@ RoutingResult: TypeAlias = Tuple[str, SessionType]
 SEGMENT_SEPARATOR = "\n\n— — —\n\n"
 
 
-async def handle_pending_module(text: str, sess: SessionType) -> RoutingResult | None:
+async def handle_pending_module(text: str, sess: SessionType, think: bool | None = None) -> RoutingResult | None:
     if (pending_module := sess.get("pending")) and pending_module in MODULES:
         print("=" * 45)
         print("pending_module content: ", pending_module or "Empty")
@@ -326,12 +336,12 @@ def is_possible_surname_or_specialty(segment: str) -> bool:
     return False
 
 
-async def process_segments(text: str, sess: SessionType) -> str:
-    segments = await split_into_segments(text, sess)
+async def process_segments(text: str, sess: SessionType, think: bool | None = None) -> str:
+    segments = await split_into_segments(text, sess, think)
     responses: List[str] = []
 
     for idx, segment in enumerate(segments, 1):
-        labels = await classify(segment, sess)
+        labels = await classify(segment, sess, think)
         main_labels = [lbl for lbl in labels if lbl in LABEL_PRIORITY]
 
         print("=" * 45)
@@ -342,18 +352,18 @@ async def process_segments(text: str, sess: SessionType) -> str:
         # Fallback если это возможно фамилия или специальность
         if is_possible_surname_or_specialty(segment):
             print(f"  [Force doctor_info fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
-            response, continue_pending = await get_doc_info_from_api(segment, session=sess)
+            response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
             responses.append(response)
             continue
 
         if not main_labels:
             print(f"  [Fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
-            response, continue_pending = await get_doc_info_from_api(segment, session=sess)
+            response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
             responses.append(response)
             continue
 
         for label in main_labels:
-            response, continue_pending = await MODULES[label](segment, session=sess)
+            response, continue_pending = await MODULES[label](segment, session=sess, think=think, )
             responses.append(response)
             if continue_pending:
                 sess["pending"] = label
@@ -369,9 +379,15 @@ async def process_segments(text: str, sess: SessionType) -> str:
     return final_answ
 
 
+#  Модуль - пример для сохранения единообразия:
+# async def _call_module(label: str, text: str, sess: SessionType, think: bool | None):
+#     return await MODULES[label](text, session=sess, think=think)
+#
+
 async def routing(text: str,
                   sess: SessionType | None = None,
                   extra_processing: Literal["direct", "processed"] = "processed",
+                  think: bool = None,
                   ) -> AsyncGenerator[RoutingResult, None]:
     """
     Обработка входящего запроса пользователя идет в следующем направлении:
@@ -383,6 +399,7 @@ async def routing(text: str,
     Here is variant of routing() that *yields* (partial_answer, session) pairs,
         so that the outer UI can stream them.
 
+    :param think: Включает Reasoning у поддерживающей его модели
     :param extra_processing: определяется, будет ли использоваться на выходе
     постобработка входящих данных с помощью функции final_answering либо же
     данные из БД будут выводиться напрямую
@@ -399,11 +416,11 @@ async def routing(text: str,
 
     # Handle pending module if exists
     # TODO: Понять зачем вообще это тут вызывается
-    if pending_result := await handle_pending_module(text, sess):
+    if pending_result := await handle_pending_module(text, sess, think=think):
         yield pending_result
 
     # Process text segments
-    result = await process_segments(text, sess)
+    result = await process_segments(text, sess, think=think, )
 
     # Update history
     sess["history"].extend([
@@ -412,7 +429,7 @@ async def routing(text: str,
     ])
 
     if extra_processing == "processed":
-        async for partial in final_answering(text, result):
+        async for partial in final_answering(text, result, think=think):
             yield partial, sess  # Stream final response V1 with processing by final_answering func.
     else:
         yield result, sess  # Stream final response V2 without handling by final_answering func.

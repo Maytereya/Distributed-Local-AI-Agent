@@ -141,7 +141,7 @@ class DoctorsRepository:
 
 
 # ── Извлечение фамилии ───────────────────────────────────────────────────────
-async def extract_search_keyword_llm(question: str) -> tuple:
+async def extract_search_keyword_llm(question: str, think: bool = None) -> tuple:
     """
     Возвращает tuple (тип, значение): ("surname", "Иванов") или ("specialty", "кардиолог"), 
     либо ("timetable", "Иванов"), либо ("timetable_specialty", "кардиолог"), либо (None, None)
@@ -164,7 +164,7 @@ SYSTEM:
     user_part = f"\nUSER:\nВопрос: {question}\n"
     prompt = system_base + user_part
 
-    resp = await ollama_call(prompt=prompt, llm=ollama_settings.init_model_name(), think=False)
+    resp = await ollama_call(prompt=prompt, llm=ollama_settings.init_model_name(), think=None)
     text = resp.get("response", "").strip()
     if text.upper() == "NONE":
         return None, None
@@ -389,11 +389,11 @@ FORMATTER = "\n\n---\n\n"
 async def ollama_call(prompt: str, llm: str = model, think: bool = None, ) -> Dict[str, Any]:
     if not llm:
         raise ValueError("Model is not specified yet")
-    elif llm:
-        print("!!! ollama_call llm is: ", llm)
-        print("!!! ollama_call ollama_settings.OLLAMA_MODEL: ", ollama_settings.OLLAMA_MODEL)
-        print("!!! ollama_call Think status:", think)
-        print("!!! options: ", ollama_settings.options_set())
+    # elif llm:
+    #     print("!!! ollama_call llm is: ", llm)
+    #     print("!!! ollama_call ollama_settings.OLLAMA_MODEL: ", ollama_settings.OLLAMA_MODEL)
+    #     print("!!! ollama_call Think status:", think)
+    #     print("!!! options: ", ollama_settings.options_set())
 
     res = await ollama_client.generate(
         model=llm,
@@ -406,11 +406,11 @@ async def ollama_call(prompt: str, llm: str = model, think: bool = None, ) -> Di
     return res.__dict__
 
 
-async def investigate(question: str) -> str:
+async def investigate(question: str, think: bool = None) -> str:
     print("\n=== Начало обработки вопроса ===")
     print(f"Вопрос: {question}")
 
-    key_type, value = await extract_search_keyword_llm(question)
+    key_type, value = await extract_search_keyword_llm(question, think=think)
     if not value:
         return (
             "Не удалось выделить фамилию, специальность "

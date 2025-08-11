@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import timedelta, datetime, date
 from pathlib import Path
 from pprint import pprint
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Union
 
 import requests
 
@@ -33,7 +33,7 @@ def get_yesterday_str() -> str:
     return (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
 
 
-def find_existing_doctors_file() -> Path or None:
+def find_existing_doctors_file() -> Union[Path, None]:
     """Находит самый свежий файл с данными о врачах"""
     pattern = "doctors_*.jsonl"
     files = list(DATA_DIR.glob(pattern))
@@ -206,10 +206,10 @@ def _descendants(unit_ids: Set[int], tree: Dict[int, Set[int]]) -> Set[int]:
     return result
 
 
-def find_doctors_by_keyword(keyword: str) -> List[Dict] | str:
+def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
     """
     Ищем по:
-      • тексту specialization    («кардиолог», «ультразвук»)  
+      • тексту specialization («кардиолог», «ультразвук»)
     Возвращаем краткий список врачей.
     """
     kw = keyword.lower()
