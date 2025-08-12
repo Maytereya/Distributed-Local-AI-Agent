@@ -1,4 +1,9 @@
 # РЕАЛИЗОВАН БЫСТРЫЙ ПОИСК ВРАЧЕЙ ПО ФАМИЛИИ
+
+# ЦЕПЬ ВЫЗОВОВ (вместе с модулем router_preprocessor.py):
+# routing(..., think) → get_doc_info_from_api(..., think) →
+# doctor_info.investigate(..., think) → extract_search_keyword_llm(..., think) → ollama_call(..., think).
+
 import asyncio
 import json
 import logging
@@ -141,7 +146,7 @@ class DoctorsRepository:
 
 
 # ── Извлечение фамилии ───────────────────────────────────────────────────────
-async def extract_search_keyword_llm(question: str, think: bool = None) -> tuple:
+async def extract_search_keyword_llm(question: str, think: bool | None = None) -> tuple:
     """
     Возвращает tuple (тип, значение): ("surname", "Иванов") или ("specialty", "кардиолог"), 
     либо ("timetable", "Иванов"), либо ("timetable_specialty", "кардиолог"), либо (None, None)
@@ -164,7 +169,7 @@ SYSTEM:
     user_part = f"\nUSER:\nВопрос: {question}\n"
     prompt = system_base + user_part
 
-    resp = await ollama_call(prompt=prompt, llm=ollama_settings.init_model_name(), think=None)
+    resp = await ollama_call(prompt=prompt, llm=ollama_settings.init_model_name(), think=think)
     text = resp.get("response", "").strip()
     if text.upper() == "NONE":
         return None, None
@@ -389,6 +394,8 @@ FORMATTER = "\n\n---\n\n"
 async def ollama_call(prompt: str, llm: str = model, think: bool = None, ) -> Dict[str, Any]:
     if not llm:
         raise ValueError("Model is not specified yet")
+    think = ollama_settings.resolve_think(think)
+    # print("!!!THINK:", think)
     # elif llm:
     #     print("!!! ollama_call llm is: ", llm)
     #     print("!!! ollama_call ollama_settings.OLLAMA_MODEL: ", ollama_settings.OLLAMA_MODEL)

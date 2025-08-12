@@ -75,24 +75,24 @@ def _history_reveal(user: str, sess: Dict[str, Any]) -> str:
 # Функции обработки входящих сообщений
 # ----------------------------------------------
 
-def classificator_prompt(user: str, sess: Dict[str, Any]) -> str:
+def classificator_prompt(text_user: str, sess: Dict[str, Any]) -> str:
     today = datetime.now().strftime("%d %B %Y, %H:%M:%S")
     template = load_prompt("classificator_prompt", False)
 
     return template.format(
         today=today,
-        user=user,
-        sess=_history_reveal(user, sess),  # обрабатывается история диалога с пользователем
+        user=text_user,
+        sess=_history_reveal(text_user, sess),  # обрабатывается история диалога с пользователем
         LABEL_DOC=LABEL_DOC,
         EXAMPLES=EXAMPLES, )
 
 
-def split_prompt(user: str, sess: Dict[str, Any]) -> str:
+def split_prompt(text_user: str, sess: Dict[str, Any]) -> str:
     template = load_prompt("split_prompt", False)
 
     return template.format(
-        user=user,
-        sess=_history_reveal(user, sess),  # обрабатывается история диалога с пользователем
+        user=text_user,
+        sess=_history_reveal(text_user, sess),  # обрабатывается история диалога с пользователем
     )
 
 
@@ -106,7 +106,8 @@ async def split_into_segments(text: str, sess: Dict[str, Any], think: bool = Non
     :param sess:
     :return: Возвращает список запросов от пользователя.
     """
-
+    think = ollama_settings.resolve_think(think)
+    print("!!!THINK:", think)
     ollama_settings.init_model_name()
     # print("split_into_segments OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
     # print("split_into_segments options: ", ollama_settings.options_set())
@@ -154,7 +155,8 @@ async def classify(text: str, sess: Dict[str, Any], think: bool = None) -> List[
 
     # print("classify OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
     # print("classify options: ", ollama_settings.options_set())
-
+    think = ollama_settings.resolve_think(think)
+    print("!!!THINK:", think)
     if not ollama_settings.OLLAMA_MODEL:
         raise ValueError("classify OLLAMA_MODEL cannot be empty")
 
@@ -191,6 +193,8 @@ async def final_answering(primary_request: str,
     # print("final_answering options: ", ollama_settings.options_set())
     if not ollama_settings.OLLAMA_MODEL:
         raise ValueError("final_answering OLLAMA_MODEL cannot be empty")
+    think = ollama_settings.resolve_think(think)
+    print("!!!THINK:", think)
 
     partial = ""  # накопитель
     stream = await ollama.generate(
@@ -211,6 +215,8 @@ async def final_answering(primary_request: str,
 # ──────────────────────────────────────────────────────
 
 async def get_doc_info_from_api(question: str, think: bool = None, **_, ) -> Tuple[str, bool]:
+    think = ollama_settings.resolve_think(think)
+    print("!!!THINK:", think)
     result = await doctor_info.investigate(question, think=think)
     return result, False
 
@@ -219,6 +225,8 @@ async def get_doc_info_from_api(question: str, think: bool = None, **_, ) -> Tup
 # Подключаем заглушку функции записи пациента
 # ------------------------------------------------------
 async def appointment_stub(_text: str, think: bool = None, **__) -> Tuple[str, bool]:
+    think = ollama_settings.resolve_think(think)
+    print("!!!THINK:", think)
     return "Модуль записи к врачу скоро появится. ", False
 
 
@@ -304,7 +312,7 @@ async def handle_pending_module(text: str, sess: SessionType, think: bool | None
         print("pending_module content: ", pending_module or "Empty")
         print("=" * 45)
 
-        response, continue_pending = await MODULES[pending_module](text, session=sess, )
+        response, continue_pending = await MODULES[pending_module](text, session=sess, think=think)
         sess["pending"] = pending_module if continue_pending else None
 
         # Record interaction in history
@@ -435,7 +443,7 @@ async def routing(text: str,
         yield result, sess  # Stream final response V2 without handling by final_answering func.
 
 
-async def process_routing_request(query: str) -> Tuple[str, Dict[str, Any]]:
+async def process_routing_request(query: str, think: bool | None = None) -> Tuple[str, Dict[str, Any]]:
     """
     Запускает маршрутизацию и собирает все части ответа из async-генератора,
     возвращая финальную строку и итоговую сессию. Нужно чисто для тестирования данного модуля
@@ -444,7 +452,7 @@ async def process_routing_request(query: str) -> Tuple[str, Dict[str, Any]]:
     final_session: dict[str, Any] = {}
 
     # routing возвращает AsyncGenerator[(partial_response, session), None]
-    async for partial, sess in routing(query.strip()):
+    async for partial, sess in routing(query.strip(), think=think, ):
         # на каждой итерации приходят (partial, sess)
         final_response = partial  # перезаписываем — в итоге останется последний
         final_session = sess
@@ -453,7 +461,7 @@ async def process_routing_request(query: str) -> Tuple[str, Dict[str, Any]]:
 
 
 async def main():
-    async for partial, sess in routing("Смирнова"):
+    async for partial, sess in routing("Смирнова", think=False, ):
         print(partial)  # или обновлять UI
 
 

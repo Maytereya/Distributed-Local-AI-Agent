@@ -40,6 +40,7 @@ AUTH_PASS = config['DEFAULT']['AUTH_PASS']
 nayka_base_url = config['DEFAULT']['base_url']
 nayka_login = config['DEFAULT']['nayka_login']
 nayka_pass = config['DEFAULT']['nayka_pass']
+think = config['DEFAULT']['think']
 
 ll_model_big = config['DEFAULT']['ll_model_big']
 ll_model_small = config['DEFAULT']['ll_model_small']

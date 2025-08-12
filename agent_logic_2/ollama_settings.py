@@ -1,6 +1,3 @@
-# Нет уверенности, что options меняются должным образом.
-# ToDo: Перепроверить options которые передаются способом, аналогичным для имени модели
-# Think влияет только на бенчмаркинг.
 # ToDo: Перепроверить данные, которые передаются в benchmark_tab
 # Не все модели имеют выдачу генерации, названную также как и у Mistral. Поэтому может быть пустое сообщение от модели.
 # Скорее всего это касается рассуждающих моделей. Перепроверить.
@@ -10,7 +7,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Union
+from typing import Dict, Union, Tuple
 
 from ollama import Options
 
@@ -49,6 +46,7 @@ BASE_DIR: Path = Path(__file__).resolve().parent
 settings_dir: Path = BASE_DIR / "data" / "settings"
 settings_path: Path = settings_dir / "ollama_request_settings.json"
 main_model_path: Path = settings_dir / "main_model.txt"
+think_path: Path = settings_dir / "think.txt"
 
 # Дополнительный узел синхронизации моделей,
 # Инициализация кешей
@@ -56,6 +54,86 @@ OLLAMA_MODEL: str
 OLLAMA_MODEL = ""
 _cached_opts: Dict
 _cached_opts = {}
+_think: bool
+_think = False
+
+
+# --------------------------------------------------
+# -----  OLLAMA THINK (REASONING) SECTION ----------
+# --------------------------------------------------
+
+# ---- THINK helpers -------------------------------
+def get_think() -> bool:
+    """Текущее значение think из кэша/файла."""
+    global _think
+    if "_think" not in globals() or _think is None:
+        init_thinking()
+    return _think
+
+
+def set_think(status: bool) -> None:
+    """Обновить и кэш, и файл (тонкая обёртка над write_think_status)."""
+    write_think_status(bool(status))
+
+
+def resolve_think(override: bool | None) -> bool | None:
+    """
+    Если override is None — вернуть текущее значение из настроек,
+    иначе вернуть override.
+    """
+    return get_think() if override is None else override
+
+
+# -----------------------------------------------------
+def init_thinking() -> bool:
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    global _think
+    if think_path.exists():
+        _think = bool(think_path.read_text(encoding="utf-8").strip())
+        if _think:
+            logger.info("✅ Инициализировано состояние параметра Think: %s из кэша", _think)
+    else:
+        _think = bool(c.think)
+        logger.info("✅ Инициализировано состояние параметра Think: %s из config.ini", _think)
+    return _think
+
+
+def write_think_status(status: bool, ) -> str:
+    """
+    Сохраняет статус параметра Think в файл и в кэш.
+    Кеш - строка с именем.
+    """
+    global _think
+    _think = bool(status)
+    if status:
+        try:
+            think_path.write_text(str(status), encoding="utf-8")
+            logger.info("✅ Статус параметра Think %s сохранен", status)
+            return f"✅ Статус параметра Think {status} сохранен"
+        except Exception as e:
+            logger.error("❌ Ошибка при сохранении статуса параметра Think %s: %s", status, str(e))
+            return f"❌ Ошибка при сохранении статуса параметра Think {status}: {str(e)}"
+    else:
+        try:
+            think_path.write_text("", encoding="utf-8")
+            logger.info("✅ Статус параметра Think %s сохранен", status)
+            return f"✅ Статус параметра Think {status} сохранен"
+        except Exception as e:
+            logger.error("❌ Ошибка при сохранении статуса параметра Think %s: %s", status, str(e))
+            return f"❌ Ошибка при сохранении статуса параметра Think {status}: {str(e)}"
+
+
+def read_think_status(inform: bool = True) -> Union[Tuple[bool, str], bool]:
+    status = init_thinking()
+
+    global _think
+    _think = status
+
+    logger.info("✅ Загружено состояние параметра Think: %s", str(status))
+    if inform:
+        return status, f"Загружено состояние параметра Think: {str(status)}"
+    else:
+        return status
 
 
 # --------------------------------------------------
@@ -135,7 +213,7 @@ def init_model_name():
     return OLLAMA_MODEL
 
 
-def load_main_model_name(inform: bool = True) -> Union[str, (str, str)]:
+def read_main_model_name(inform: bool = True) -> Union[str, (str, str)]:
     init_model_name()
     global OLLAMA_MODEL
     logger.info("✅ Загружено имя модели %s", OLLAMA_MODEL)
@@ -162,6 +240,7 @@ def write_main_model_name(name: str, ) -> str:
 
 
 if __name__ == "__main__":
-    print(write_main_model_name("gpt-4"))
-    print(load_main_model_name())
-    print(OLLAMA_MODEL)
+    # print(write_main_model_name("gpt-4"))
+    print(write_think_status(False))
+    print(read_think_status())
+    print(_think)

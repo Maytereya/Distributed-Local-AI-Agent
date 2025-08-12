@@ -598,6 +598,7 @@ def main():
     # Инициализация при загрузке приложения options и model name
     ollama_settings.init_model_name()
     ollama_settings.init_options()
+    ollama_settings.init_thinking()
     # print("✅ |||| Загружено имя базовой LLM OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL, "|||")
 
     with gr.Blocks(css=custom_css) as blocks:
@@ -1130,7 +1131,7 @@ def main():
             # ------------ ASSERT(VALIDATE) MAIN LLM ---------------
 
             def fn_load_main_model() -> List[str]:
-                return [ollama_settings.load_main_model_name(False)]
+                return [ollama_settings.read_main_model_name(False)]
 
             def fn_assert_main_model(name: str, ) -> str:
 
@@ -1178,7 +1179,7 @@ def main():
                             # TODO: Активация рассуждения пока не прокинута в router_preprocessor.
                             think_checkbox = gr.Checkbox(label="Активировать способность рассуждать",
                                                          # info="Только для reasoning models, снижает скорость",
-                                                         value=False)
+                                                         value=ollama_settings.init_thinking())
 
                         reload_main_model_btn.click(
                             fn=reassert_main_model_dropdown,
@@ -1188,6 +1189,9 @@ def main():
                         save_model_btn.click(fn=fn_assert_main_model,
                                              inputs=[main_model_selector],
                                              outputs=[status], )
+
+                        think_checkbox.change(ollama_settings.write_think_status, inputs=[think_checkbox],
+                                                outputs=[status])
 
                         json_ollama_options = gr.Code(label="📄Ollama Options",
                                                       value=fn_load_options(explain=False),
