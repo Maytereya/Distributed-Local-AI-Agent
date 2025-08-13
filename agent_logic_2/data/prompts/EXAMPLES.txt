@@ -1,6 +1,12 @@
 INPUT: Сколько стоит приём кардиолога Михлик?
 OUTPUT: {\"labels\":[\"API_INFO\"]}
 
+INPUT: Прайс Белохвостиковой
+OUTPUT: {\"labels\":[\"API_INFO\"]}
+
+INPUT: Стоимость приема у Дразнина
+OUTPUT: {\"labels\":[\"API_INFO\"]}
+
 INPUT: Какое расписание работы у Пивоваровой?
 OUTPUT: {\"labels\":[\"API_INFO\"]}
 
