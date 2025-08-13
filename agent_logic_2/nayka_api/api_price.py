@@ -15,7 +15,7 @@ from urllib3.util.retry import Retry
 from agent_logic_2 import config as c
 
 # -----------------------------------------------------------------------------
-# Конфигурация
+# Конфиг
 # -----------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).parent
 DATA_DIR = SCRIPT_DIR / "apidata"
