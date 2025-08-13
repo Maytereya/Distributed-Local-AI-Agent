@@ -1,5 +1,3 @@
-# РЕАЛИЗОВАН БЫСТРЫЙ ПОИСК ВРАЧЕЙ ПО ФАМИЛИИ
-
 # ЦЕПЬ ВЫЗОВОВ (вместе с модулем router_preprocessor.py):
 # routing(..., think) → get_doc_info_from_api(..., think) →
 # doctor_info.investigate(..., think) → extract_search_keyword_llm(..., think) → ollama_call(..., think).
@@ -12,9 +10,16 @@ import re
 from datetime import datetime
 from difflib import SequenceMatcher
 from functools import wraps
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from ollama import AsyncClient
+
+from agent_logic_2.nayka_api.api_nayka import find_doctors_by_keyword, find_doctor_schedule, \
+    cleanup_old_doctors_files, get_all_doctors
+from nayka_api.api_new_price import load_doctor_prices
+from nayka_api.api_price_all import update_price_all, load_price_all
+from nayka_api.doctors_cc_info import get_doctors_cc_info
 
 # Package-relative import to work reliably when this module is imported as part of agent_logic_2
 try:
@@ -28,14 +33,6 @@ try:
 except ImportError:
     # Fallback if ollama_settings.py is placed at the project root
     import config as c
-
-from agent_logic_2.nayka_api.api_nayka import find_doctors_by_keyword, find_doctor_schedule, \
-    cleanup_old_doctors_files, get_all_doctors
-from nayka_api.api_price_all import update_price_all, load_price_all
-from nayka_api.doctors_cc_info import get_doctors_cc_info
-
-# Функция импорта прайса не используется ввиду несостоятельности последнего
-# from nayka_api.api_price_by_region_3 import get_price, format_services
 
 # ── Конфигурация ───────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
@@ -261,45 +258,6 @@ def format_doctor(item: Dict[str, Any]) -> str:
     # region_ids = item.get("region_ids", [])
     lines.append(f"• Адрес/Адреса: {', '.join(regions)}")
 
-    # Загрузим прайс ДО debug print
-    # Пока эту функцию отключим, так как не можем получить правильный прайс
-    # price_all = load_price_all()  # Загружаем кэш всех прайсов
-
-    # Debug print после загрузки price_all
-    # print("[DEBUG] Адреса работы врача:", regions)
-    # print("[DEBUG] region_ids врача:", region_ids)
-    # print("[DEBUG] regionIds в прайсе:", sorted(set(row['regionId'] for row in price_all)))
-    #
-    # # Блок — Прайсы по region_id (у врача может быть несколько регионов)
-    # price_blocks = []
-    # for region, region_id in zip(regions, region_ids):
-    #     if not region_id or region == "-":
-    #         price_blocks.append(f"У Врача не указан regionId для '{region}'!")
-    #         continue
-    #
-    #
-    #     services = [s for s in price_all if s.get("regionId") == region_id]
-    #
-    #     if not services:
-    #         # Fallback: priceByRegion
-    #         try:
-    #             services = get_price(region_id)
-    #             if services:
-    #                 price_blocks.append(f"Прайс ({region}, через priceByRegion):\n" + format_services(services[:7]))
-    #             else:
-    #                 price_blocks.append(f"Для региона {region} прайс не найден даже через priceByRegion.")
-    #         except Exception as e:
-    #             price_blocks.append(f"Для региона {region} не удалось загрузить priceByRegion: {e}")
-    #         continue
-    #
-    #     price_blocks.append(f"{{PRICE}} • Прайс ({region}):\n" + format_services(services[:7]))
-
-    #     добавляем значение прайса в основной список "lines"
-    # lines.append("")
-    # lines.append("─" * 10)
-    # lines.extend(price_blocks)
-    # lines.append("")
-
     # Заметка call-центра
     cc = item.get("callCenterInfo")
     if cc:
@@ -326,6 +284,28 @@ def format_doctor(item: Dict[str, Any]) -> str:
     # Удаляем любые None и приводим всё к str
     cleaned = [str(line) for line in lines if line is not None]
     return "\n".join(cleaned)
+
+
+def format_doctor_prices(doctor_id, fio, region_map=None):
+    """Выводит список услуг с ценами по каждому филиалу для врача."""
+    prices = load_doctor_prices()
+    doc_prices = [p for p in prices if p.get("doctorId") == doctor_id]
+    if not doc_prices:
+        return "• Прайс не найден для этого врача."
+    blocks = []
+    region_groups = {}
+    for p in doc_prices:
+        reg = p.get("regionId")
+        reg_name = (region_map or {}).get(reg) or p.get("regionName") or f"Филиал (ID {reg})"
+        region_groups.setdefault(reg_name, []).append(p)
+    for region, services in region_groups.items():
+        lines = [f"— {region} —"]
+        for s in services:
+            name = s.get("serviceName", "-")
+            cost = s.get("cost", "-")
+            lines.append(f"• {name}: {cost} ₽")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def format_doctor_schedule(doc):
@@ -438,6 +418,45 @@ async def investigate(question: str, think: bool = None) -> str:
     return value
 
 
+def get_latest_doctors_file():
+    """Находит актуальный doctors_*.jsonl (сегодняшний, иначе самый свежий)"""
+    apidata = Path(DATA_DIR)
+    today = datetime.now().strftime("%Y%m%d")
+    today_file = apidata / f"doctors_{today}.jsonl"
+    if today_file.exists():
+        return str(today_file)
+    all_files = sorted(apidata.glob("doctors_*.jsonl"), reverse=True)
+    for f in all_files:
+        if f.exists():
+            return str(f)
+    raise FileNotFoundError("Файл doctors_*.jsonl не найден")
+
+
+def build_region_map():
+    region_map = {}
+    try:
+        doctors_file = get_latest_doctors_file()
+        with open(doctors_file, encoding="utf-8") as f:
+            for line in f:
+                doc = json.loads(line)
+                for reg_id, region in zip(doc.get("region_ids", []), doc.get("regions", [])):
+                    if reg_id and region:
+                        region_map[reg_id] = region
+    except Exception as e:
+        print(f"[REGION_MAP ERROR] {e}")
+    return region_map
+
+
+_region_map = None
+
+
+def get_region_map():
+    global _region_map
+    if _region_map is None:
+        _region_map = build_region_map()
+    return _region_map
+
+
 async def handle_surname_search(surname: str, question: str) -> str:
     print(f"LLM-парсер определил фамилию: {surname}")
 
@@ -447,7 +466,15 @@ async def handle_surname_search(surname: str, question: str) -> str:
     docs = await search_with_fallback(full_name or surname, bool(full_name))
     if docs:
         docs = enrich_with_cc_info(docs)
-        return format_documents(docs)
+        answer = format_documents(docs)
+        if re.search(r"\b(прайс|стоимость|услуги|цены?|цена)\b", question.lower()):
+            region_map = get_region_map()
+            for doc in docs:
+                doctor_id = doc.get("id")
+                fio = doc.get("fio")
+                price_block = format_doctor_prices(doctor_id, fio, region_map)
+                answer += f"\n\n[Прайс по филиалам для {fio}]\n{price_block}"
+        return answer
 
     similar = find_similar_surname(surname, repo.read_all())
     if similar:
