@@ -17,8 +17,8 @@ from ollama import AsyncClient
 
 from agent_logic_2.nayka_api.api_nayka import find_doctors_by_keyword, find_doctor_schedule, \
     cleanup_old_doctors_files, get_all_doctors
-from nayka_api.api_new_price import load_doctor_prices
-from nayka_api.api_price_all import update_price_all, load_price_all
+from nayka_api.api_price import load_doctor_prices, update_price_all, load_price_all
+# from nayka_api.api_price_all import update_price_all, load_price_all
 from nayka_api.doctors_cc_info import get_doctors_cc_info
 
 # Package-relative import to work reliably when this module is imported as part of agent_logic_2
