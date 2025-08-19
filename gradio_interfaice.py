@@ -5,6 +5,7 @@ import shutil
 import time
 import uuid
 from typing import Dict, List, Union, Tuple
+from pathlib import Path
 
 import gradio as gr
 from gradio_pdf import PDF
@@ -22,6 +23,9 @@ from converters import pdf_to_json_txt_tables_meili as pdf2json
 # Label constants
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
 INDEXES_IN_MEILI = "Индексы документов Meilisearch"
+# Static files config for Gradio
+STATIC_DIR = (Path(__file__).parent / "static").resolve()
+
 # EXAMPLES = [
 #     [
 #         "Запишите на прием к доктору Дразнину",  # message
@@ -95,21 +99,44 @@ footer {
     margin-left: 0.5rem;      /* Отступ между текстом и ссылкой */
 }
 
+/* Шапка с логотипом — без лишних отступов */
 #logo-bar {
   display: flex !important;
   align-items: center !important;
   gap: 10px !important;
-  padding: 8px 12px !important;
-  margin: 0 0 8px 0 !important;                 /* отступ вниз, как у старого заголовка */
-  border-bottom: 1px solid rgba(0,0,0,.06);     /* тонкая линия под шапкой, по вкусу */
+  padding: 0 !important;
+  margin: 0 !important;           /* убираем нижний отступ */
+  border-bottom: none !important;  /* если не нужна линия */
+  line-height: 0 !important;       /* убираем «подлипание» снизу из-за baseline */
 }
 
+/* Контейнер Row с логотипом — минимальный низ */
+#logo-row {
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* Само изображение: фикс. высота, без кликов, без baseline-отступа */
 #brand-logo {
-  height: 28px !important;  /* нужная высота логотипа */
+  height: 28px !important;
   width: auto !important;
-  display: block !important;
+  display: block !important;       /* убирает baseline-отступ под img */
   pointer-events: none !important; /* без взаимодействия */
   user-select: none !important;
+}
+
+/* У верхней кромки табов — убрать отступы */
+#main-tabs {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+}
+
+/* На некоторых версиях Gradio верхняя «полка» табов — отдельный блок */
+#main-tabs [data-testid="tab-nav"],
+#main-tabs .tab-nav,
+#main-tabs .tabs {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
 }
 """
 
@@ -618,17 +645,20 @@ def main():
     ollama_settings.init_thinking()
     # print("✅ |||| Загружено имя базовой LLM OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL, "|||")
 
+    # Allow serving local /static files via /gradio_api/file=...
+    gr.set_static_paths(paths=[STATIC_DIR])
+
     with gr.Blocks(css=custom_css) as blocks:
         model_state = gr.State()  # Нужно для однократной загрузки моделей из Ollama
 
-        with gr.Row():
+        with gr.Row(elem_id="logo-row"):
             gr.HTML(
                 "<div id='logo-bar'>"
                 "<img id='brand-logo' src='/gradio_api/file=static/logo.png' alt='Логотип'>"
                 "</div>"
             )
 
-        with gr.Tabs():
+        with gr.Tabs(elem_id="main-tabs"):
             # --------------------------------------------------
             # Вкладка 1 — основной интерфейс
             # --------------------------------------------------
@@ -1515,13 +1545,19 @@ def main():
         """
         <div id="custom-footer">
             &copy; ООО "Нейри" 2025
-            <a href="https://neiry-ai.ru" target="_blank">neiry-ai.ru</a>
+            <a href="https://neiry-ai.ru" target= "_blank">neiry-ai.ru</a>
         </div>
         """,
         visible=True
     )
-    blocks.launch(server_name="0.0.0.0", server_port=7860, auth=check_auth, show_api=False)
 
+    blocks.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        auth=check_auth,
+        show_api=False,
+        allowed_paths=[str(STATIC_DIR)]
+    )
 
 if __name__ == "__main__":
     main()
