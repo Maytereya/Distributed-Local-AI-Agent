@@ -94,6 +94,23 @@ footer {
     color: #ccc;              /* Цвет ссылки */
     margin-left: 0.5rem;      /* Отступ между текстом и ссылкой */
 }
+
+#logo-bar {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 8px 12px !important;
+  margin: 0 0 8px 0 !important;                 /* отступ вниз, как у старого заголовка */
+  border-bottom: 1px solid rgba(0,0,0,.06);     /* тонкая линия под шапкой, по вкусу */
+}
+
+#brand-logo {
+  height: 28px !important;  /* нужная высота логотипа */
+  width: auto !important;
+  display: block !important;
+  pointer-events: none !important; /* без взаимодействия */
+  user-select: none !important;
+}
 """
 
 
@@ -604,9 +621,13 @@ def main():
     with gr.Blocks(css=custom_css) as blocks:
         model_state = gr.State()  # Нужно для однократной загрузки моделей из Ollama
 
-        gr.Markdown(
-            """<h2>📚 МОЯ НАУКА <b> \U000000ABМедЦентр\U000000BB</b>"""
-        )
+        with gr.Row():
+            gr.HTML(
+                "<div id='logo-bar'>"
+                "<img id='brand-logo' src='/gradio_api/file=static/logo.png' alt='Логотип'>"
+                "</div>"
+            )
+
         with gr.Tabs():
             # --------------------------------------------------
             # Вкладка 1 — основной интерфейс
