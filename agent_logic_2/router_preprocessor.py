@@ -2,65 +2,35 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, AsyncGenerator, TypeAlias, Literal
 
 from ollama import AsyncClient
 
+import agent_logic_2.ollama_settings as ollama_settings
 from agent_logic_2 import llama_func_call as doctor_info, config as c
+from agent_logic_2.prompts import load_prompt
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
-from ollama_settings import options_set, OLLAMA_MODEL
 
 # LLM‑клиент для классификации входящих запросов
 ollama = AsyncClient(c.ollama_url)
 
-# Label‑ы и порядок
-LABEL_PRIORITY = ["API_INFO",  # справка из API Мед.центра
-                  "APPOINTMENT",  # назначение времени / запись на приём к врачу
-                  "SCRIPTS"  # алгоритмы, скрипты, если - то...
+# -----------------------------------------------------
+# СЕКЦИЯ КОНСТАНТ ЛОГИКИ РАБОТЫ РОУТЕРА
+# -----------------------------------------------------
 
-                  ]
-ALLOWED = set(LABEL_PRIORITY + ["UNDEFINED"])
+# Label‑ы и порядок в LABEL_PRIORITY:
+#
+# "API_INFO" - справка из API Мед.центра
+# "APPOINTMENT" - назначение времени / запись на приём к врачу
+# "SCRIPTS" - алгоритмы, скрипты из серии "если - то..."
 
-LABEL_DOC = """
-1. API_INFO – справка из API CRM клинки: врачи, услуги, цены, расписание.
-2. APPOINTMENT – запись на приём к врачу.
-3. SCRIPTS – инструкции и скрипты для пациентов и администраторов, база знаний, справочная информация.
-4. UNDEFINED – не распознан.
-
-ВАЖНО: Метка DOC_INFO недопустима! Используй API_INFO для запросов о врачах и услугах.
-"""
-
-EXAMPLES = """
-INPUT: Сколько стоит приём кардиолога Михлик?            
-OUTPUT: {\"labels\":[\"API_INFO\"]}
-
-INPUT: Какое расписание работы у Пивоваровой?            
-OUTPUT: {\"labels\":[\"API_INFO\"]}
-
-INPUT: Как подготовиться к анализу крови?        
-OUTPUT: {\"labels\":[\"SCRIPTS\"]}
-
-INPUT: Запишите меня к терапевту завтра утром.    
-OUTPUT: {\"labels\":[\"APPOINTMENT\"]}
-
-INPUT: Вы плохо взяли кровь, огромный синяк!      
-OUTPUT: {\"labels\":[\"SCRIPTS\"]}
-
-INPUT: Подготовка к УЗИ и запишите к УЗИсту.      
-OUTPUT: {\"labels\":[\"SCRIPTS\",\"APPOINTMENT\"]}
-
-INPUT: Где принимает Иванов?               
-OUTPUT: {\"labels\":[\"API_INFO\"]}
-
-INPUT: все про кольпоскопию               
-OUTPUT: {\"labels\":[\"SCRIPTS\"]}
-
-INPUT: подготовка к вульвоскопии               
-OUTPUT: {\"labels\":[\"SCRIPTS\"]}
-
-"""
+LABEL_PRIORITY = load_prompt("LABEL_PRIORITY", False).split(",")
+ALLOWED = set(LABEL_PRIORITY + ["UNDEFINED"])  # TODO: разобраться, не совсем понятое добавление лейбла "снаружи".
+LABEL_DOC = load_prompt("LABEL_DOC", False)
+EXAMPLES = load_prompt("EXAMPLES", False)
 
 
 # ----------------------------------------------
@@ -69,6 +39,21 @@ OUTPUT: {\"labels\":[\"SCRIPTS\"]}
 # ----------------------------------------------
 
 def _history_reveal(user: str, sess: Dict[str, Any]) -> str:
+    """
+    Processes the session history to generate a formatted string for revealing the
+    interaction history. This function excludes the last user query in the history if it
+    matches the current user to avoid duplication and uses a specific format for
+    presentation.
+
+    :param user: The identifier for the current user.
+    :type user: str
+    :param sess: The session dictionary containing interaction history. The expected key
+        in the dictionary is "history" with a list of dialogue turns.
+    :type sess: Dict[str, Any]
+    :return: A formatted string representing the interaction history, where each turn
+        is labeled as either "User:" or "Assistant:" followed by the content.
+    :rtype: str
+    """
     history = sess.get("history", [])
 
     # Отбрасываем последний пользовательский запрос, чтобы он не дублировался в истории, передаваемой в запрос
@@ -90,83 +75,51 @@ def _history_reveal(user: str, sess: Dict[str, Any]) -> str:
 # Функции обработки входящих сообщений
 # ----------------------------------------------
 
-def classificator_prompt(user: str, sess: Dict[str, Any]) -> str:
+def classificator_prompt(text_user: str, sess: Dict[str, Any]) -> str:
     today = datetime.now().strftime("%d %B %Y, %H:%M:%S")
-    # TODO: Есть история диалога!
-    return f"""
-SYSTEM:
-Сегодня: {today}.
-Ты – ассистент многопрофильной клиники «Наука» с амбулаторией, операционными, лабораторией и офисами в разных городах.
-Верни **только JSON** вида {{\"labels\":[…]}} (можно несколько label‑ов).
-Допустимые label‑ы:\n{LABEL_DOC}\n
-EXAMPLES: \n{EXAMPLES}\n
-USER: \n{user}
-HISTORY: \n {_history_reveal(user, sess)}
+    template = load_prompt("classificator_prompt", False)
 
-"""
+    return template.format(
+        today=today,
+        user=text_user,
+        sess=_history_reveal(text_user, sess),  # обрабатывается история диалога с пользователем
+        LABEL_DOC=LABEL_DOC,
+        EXAMPLES=EXAMPLES, )
 
 
-# TODO: Промпт требует переосмысления!
-def split_prompt(text: str, sess: Dict[str, Any]) -> str:
-    return f"""
-SYSTEM:
-1. Сначала переформулируй запрос, привязывая все упоминания услуг/вопросов к фамилии врача.
-2. Затем разбей на смысловые сегменты (JSON segments).
+def split_prompt(text_user: str, sess: Dict[str, Any]) -> str:
+    template = load_prompt("split_prompt", False)
 
-Правила:
-- Если фамилия упомянута, все смежные вопросы (расписание, цена, подготовка) должны содержать ту же фамилию;
-- Объединяй в один сегмент связанные запросы к одному врачу:
- • Расписание;
- • Вся известная информация о враче; 
- • Любые комбинации для одного специалиста.
-- Объединяй в один сегмент связанные запросы по поводу:
- • адресов клиник и времени работы клиник;
- • медицинской услуги или подготовки к анализу/исследованию;
- • если ответ на запрос предусматривает некий алгоритм действий;
- • если ответ предусматривает информацию о медицинской процедуре, заболевании, исследовании;
-- Разделяй сегменты, когда меняется фамилия врача или начинается общая тема.
-
-Примеры переформулировки:
-Исходно: "У Мухопад окна и как подготовиться к УЗИ печени"
-Этап 1: "Расписание приемов у Мухопад и подготовка к ультразвуковой диагностике печени"
-Этап 2: {{"segments": ["Расписание у Мухопад", "подготовка к ультразвуковой диагностике печени"]}}
-
-Исходно: "К Мухопад запись, а про Нурмагомедову график"
-Этап 1: "Запись к Мухопад и подготовка к приёму у Мухопад. Расписание Нурмагомедовой"
-Этап 2: {{"segments": ["Запись на приём к Мухопад", "Расписание Нурмагомедовой"]}}
-
-Исходно: "Вульвоскопия с кольпоскопией, как подготовиться и скажите как попасть к Нурмагомедовой"
-Этап 1: "Подготовка к вульвоскопии и кольпоскопии. Расписание Нурмагомедовой"
-Этап 2: {{"segments": ["Подготовка к вульвоскопии, кольпоскопии", "Расписание Нурмагомедовой"]}}
-
-Исходно: "все что известно про кольпоскопию"
-Этап 1: "кольпоскопия"
-Этап 2: {{"segments": ["кольпоскопия"]}}
+    return template.format(
+        user=text_user,
+        sess=_history_reveal(text_user, sess),  # обрабатывается история диалога с пользователем
+    )
 
 
-ВАЖНО: Верни только JSON с полем segments, содержащим массив строк!
-
-USER: \n{text}
-HISTORY: \n{_history_reveal(text, sess)}
-"""
-
-
-async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
+async def split_into_segments(text: str, sess: Dict[str, Any], think: bool = None) -> List[str]:
     """
     Важно! Функция переформулирует запрос!
+    Это первая функция в каскаде обработки входящего сообщения пользователя.
 
+    :param think: Включать ли reasoning у поддерживающих моделей
     :param text: Входящий сырой запрос.
     :param sess:
     :return: Возвращает список запросов от пользователя.
     """
-    # print("\n================= SPLIT PROCESS START =================")
-    # print(f"Original input: '{text}'")
+    think = ollama_settings.resolve_think(think)
+    print("!!!THINK:", think)
+    ollama_settings.init_model_name()
+    # print("split_into_segments OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
+    # print("split_into_segments options: ", ollama_settings.options_set())
+    if not ollama_settings.OLLAMA_MODEL:
+        raise ValueError("split_into_segments OLLAMA_MODEL cannot be empty")
 
-    res = await ollama.generate(model=OLLAMA_MODEL,
-                                prompt=split_prompt(text, sess),  # Добавить sess
-                                options=options_set(level="expressive"),
+    res = await ollama.generate(model=ollama_settings.OLLAMA_MODEL,
+                                prompt=split_prompt(text, sess),  # Добавляется sess
+                                options=ollama_settings.options_set(),
                                 format="json",
-                                keep_alive=-1)
+                                keep_alive=-1,
+                                think=think, )
 
     try:
         segments = json.loads(res["response"]).get("segments", [])
@@ -175,7 +128,6 @@ async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
         print("\nProcessing results:")
         print(f"• Segments count: {len(splitted_segments)}")
         print(f"• Final segments: {splitted_segments}")
-        # print("================= SPLIT PROCESS END =================\n")
 
         return splitted_segments
 
@@ -190,19 +142,30 @@ async def split_into_segments(text: str, sess: Dict[str, Any]) -> List[str]:
         return [text]
 
 
-async def classify(text: str, sess: Dict[str, Any]) -> List[str]:
+async def classify(text: str, sess: Dict[str, Any], think: bool = None) -> List[str]:
     """
-    Классификатор сегментов входящего запроса пользователя
+    Классификатор сегментов входящего запроса пользователя,
+    второй этап обработки входящего сообщения пользователя.
 
-    :param text:
+    :param think: Включать ли reasoning у поддерживающих моделей
+    :param text: Фрагмент (выделенный предыдущей функцией) входящего текста для анализа и маркировки.
     :param sess:
     :return:
     """
-    res = await ollama.generate(model=OLLAMA_MODEL,
+
+    # print("classify OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
+    # print("classify options: ", ollama_settings.options_set())
+    think = ollama_settings.resolve_think(think)
+    print("!!!THINK:", think)
+    if not ollama_settings.OLLAMA_MODEL:
+        raise ValueError("classify OLLAMA_MODEL cannot be empty")
+
+    res = await ollama.generate(model=ollama_settings.OLLAMA_MODEL,
                                 prompt=classificator_prompt(text, sess),
-                                options=options_set(level="expressive"),
+                                options=ollama_settings.options_set(),
                                 format="json",
-                                keep_alive=-1)
+                                keep_alive=-1,
+                                think=think, )
     try:
         labels = [l.upper() for l in json.loads(res["response"]).get("labels", []) if l.upper() in ALLOWED]
         print("----------------- LABELS -----------------------")
@@ -215,82 +178,32 @@ async def classify(text: str, sess: Dict[str, Any]) -> List[str]:
 
 
 async def final_answering(primary_request: str,
-                          collected_info: str):  # Пока неясно что за тип данных будет возвращаться
-    prompt = f"""
-    SYSTEM:
-    Ты — ассистент колл-центра клиники «Наука». Отвечай **только на русском** и **строго по шаблонам**.
-        1) Определи тип запроса:
-           - **Конкретный врач** — запрос содержит имя или «приём у <ФИО>».
-           - **Специализация** — запрос содержит профессиональное название (например, «кардиологи», "урологи").
-           - **График работы** —  запрос содержит "график работы", "расписание", "время приема", "часы приема", "когда работает"
-           - **Иное** — все остальные запросы.
-        
-        2) Если это запрос **по конкретному врачу**:
-        
-            - поля "Специализация_подробно" и "Прайс-лист" выводи дословно,
-            - если ответ из базы данных не содержит информации о враче, ответь "Врач не найден в базе данных".
-            
-            **Структура твоего ответа:**
-            **ФИО врача:** {{ФИО}}  
-            **Специализация кратко:** {{compose from Специализация}}  
-            **Специализация подробно:** {{Специализация}}  
-            **Категория:** {{(Высшая/Первая/Не указано - compose from 📞Заметка)}} 
-            **Контактный телефон:** {{(извлеки как есть из 📞Заметка или напиши "не указан")}} 
-            **Приходящий:** {{(Да!/Нет! (обязательно с восклицательным знаком) и всеми условиями compose from 📞Заметка)}} 
-            **Стаж работы:** {{(compose from 📞Заметка)}}  
-            **Возраcт пациентов:** {{(compose from 📞Заметка)}}  
-            **ДМС:** {{(Да/Нет и условия compose from 📞Заметка)}}  
-            **Прайс-лист:** {{(все пункты цен compose from 📞Заметка)}}  
-            **Адрес/адреса работы:** {{Адрес/Адреса}}
-            — Конец списка —
-        
-        3) Если это запрос по врачебной специализации и тебе передан список врачей:
-            Выведи полный список всех врачей, как передано. 
-            
-            **Структура твоего ответа:** 
-            **ФИО врача:** {{ФИО}} 
-            **Специализация кратко:** {{compose from Специализация, какие услуги оказывает, не более 10 слов!}}
-            **Адрес/адреса работы:** {{Адрес/Адреса}}
-            (каждый врач — отдельный блок; если не найдено — "Релевантной информации не найдено")
-            После последнего блока напиши — Конец списка — и НЕ начинай новую нумерацию.
-           
-        4) Если это запрос про **график работы врача**:
-        
-            **Структура твоего ответа:** 
-            **ФИО врача:** {{ФИО}}  
-            **Специализация кратко:** {{compose from Специализация}}  
-            **График приёма с адресами работы:**{{Адрес/Адреса}}
-            {{Расписание}}
-            
-            ❗ **Блок {{Расписание}} выводи дословно**, ровно как в DATABASE: 
-            сохраняй «По адресу приёма…», «Окна:», отступы и переносы строк. 
-            Никакой переработки или перелинковки временных слотов.
-            Улучши отображение даты приема: вместо "2025-07-08: 08:30-13:45 * Окна: 10:00, 10:30, 12:30, 13:00, 13:30"
-            напиши "**08 июля:** работает с 08:30 по 13:45 * Окна: 10:00, 10:30, 12:30, 13:00, 13:30"            
-        
-        5) Если это **прочий запрос**:
-        
-           **Структура твоего ответа:** 
-           **Информация из базы знаний:**  
-           {{KNOWLEDGE_SNIPPET}} 
-           ...
-           Если ответ из базы данных таков: 
-           "{{KNOWLEDGE_SNIPPET}} 
-           Совпадений не найдено, cформулируйте запрос иначе", 
-           то верни сообщение: "Подходящей информации в базе знаний не найдено".
-        
-    DATABASE: {collected_info}
-    
-    USER: {primary_request}  
-    
-    """
+                          collected_info: str,
+                          think: bool = None,
+                          ):  # Пока неясно что за тип данных будет возвращаться
+
+    template = load_prompt("final_answer", False)
+    prompt = template.format(
+        primary_request=primary_request,
+        collected_info=collected_info,
+
+    )
+
+    # print("final_answering OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
+    # print("final_answering options: ", ollama_settings.options_set())
+    if not ollama_settings.OLLAMA_MODEL:
+        raise ValueError("final_answering OLLAMA_MODEL cannot be empty")
+    think = ollama_settings.resolve_think(think)
+    print("!!!THINK:", think)
+
     partial = ""  # накопитель
     stream = await ollama.generate(
-        model=OLLAMA_MODEL,
+        model=ollama_settings.OLLAMA_MODEL,
         prompt=prompt,
-        options=options_set(level="expressive"),
+        options=ollama_settings.options_set(),
         keep_alive=-1,
         stream=True,
+        think=think,
     )
     async for chunk in stream:
         partial += chunk["response"]
@@ -301,15 +214,19 @@ async def final_answering(primary_request: str,
 # Подключаем doctor_info из llama_func_call
 # ──────────────────────────────────────────────────────
 
-async def get_doc_info_from_api(question: str, **_) -> Tuple[str, bool]:
-    result = await doctor_info.investigate(question)
+async def get_doc_info_from_api(question: str, think: bool = None, **_, ) -> Tuple[str, bool]:
+    think = ollama_settings.resolve_think(think)
+    print("!!!THINK:", think)
+    result = await doctor_info.investigate(question, think=think)
     return result, False
 
 
 # ------------------------------------------------------
 # Подключаем заглушку функции записи пациента
 # ------------------------------------------------------
-async def appointment_stub(_text: str, **__) -> Tuple[str, bool]:
+async def appointment_stub(_text: str, think: bool = None, **__) -> Tuple[str, bool]:
+    think = ollama_settings.resolve_think(think)
+    print("!!!THINK:", think)
     return "Модуль записи к врачу скоро появится. ", False
 
 
@@ -319,10 +236,11 @@ async def appointment_stub(_text: str, **__) -> Tuple[str, bool]:
 # ──────────────────────────────────────────────────────
 # ToDo: Объединить все запросы в одну функцию
 # TODO: Завернуть всю поисковую часть (MEILI) в одну функцию
-async def instructions_search(_text: str, **__) -> Tuple[str, bool]:
+async def instructions_search(_text: str, think: bool = None, **__) -> Tuple[str, bool]:
     """
     Для поиска нужной информации в индексе или коллекции используется переформулировка запроса пользователя
     Пока не ясно, следует ли ее делать.
+    :param think:
     :param _text:
     :param __:
     :return: Кортеж: результат поиска и стоп - паттерн для PENDING
@@ -357,14 +275,30 @@ async def instructions_search(_text: str, **__) -> Tuple[str, bool]:
 # ────────────────────────────────────────────────
 
 # Ярлыки для вызова функций обработки данных после роутинга
+# дополнительная секция констант для работы логики (не может быть обозначена вверху модуля, так как содержит в себе
+# объявление функций для вызова
 
-MODULES = {
-    "API_INFO": get_doc_info_from_api,
-    "APPOINTMENT": appointment_stub,
-    "SCRIPTS": instructions_search,
+# MODULES = {
+#     "API_INFO": get_doc_info_from_api,
+#     "APPOINTMENT": appointment_stub,
+#     "SCRIPTS": instructions_search,
+# }
+
+# Нужно промежуточное извлечение, так как строка не может содержать вызова функции
+MODULES_str: str = load_prompt("MODULES", False)
+
+# Шаблон: "КЛЮЧ": ИМЯ_ФУНКЦИИ
+pattern = r'"(?P<key>[^"]+)":\s*(?P<name>\w+)'
+pairs = re.findall(pattern, MODULES_str)
+
+# Берём функции из globals() (или из MODULE) и тут уже обращение к функциям
+MODULES: Dict = {
+    key: globals()[name]
+    for key, name in pairs
 }
 
 # Дополнительные обозначения типов для понимания вывода
+# Данные по переменной sess:
 SessionType: TypeAlias = Dict[str, Any]
 RoutingResult: TypeAlias = Tuple[str, SessionType]
 
@@ -372,13 +306,13 @@ RoutingResult: TypeAlias = Tuple[str, SessionType]
 SEGMENT_SEPARATOR = "\n\n— — —\n\n"
 
 
-async def handle_pending_module(text: str, sess: SessionType) -> RoutingResult | None:
+async def handle_pending_module(text: str, sess: SessionType, think: bool | None = None) -> RoutingResult | None:
     if (pending_module := sess.get("pending")) and pending_module in MODULES:
         print("=" * 45)
         print("pending_module content: ", pending_module or "Empty")
         print("=" * 45)
 
-        response, continue_pending = await MODULES[pending_module](text, session=sess, )
+        response, continue_pending = await MODULES[pending_module](text, session=sess, think=think)
         sess["pending"] = pending_module if continue_pending else None
 
         # Record interaction in history
@@ -389,6 +323,7 @@ async def handle_pending_module(text: str, sess: SessionType) -> RoutingResult |
 
         return response, sess
     return None
+
 
 def is_possible_surname_or_specialty(segment: str) -> bool:
     """
@@ -408,12 +343,13 @@ def is_possible_surname_or_specialty(segment: str) -> bool:
             return True
     return False
 
-async def process_segments(text: str, sess: SessionType) -> str:
-    segments = await split_into_segments(text, sess)
+
+async def process_segments(text: str, sess: SessionType, think: bool | None = None) -> str:
+    segments = await split_into_segments(text, sess, think)
     responses: List[str] = []
 
     for idx, segment in enumerate(segments, 1):
-        labels = await classify(segment, sess)
+        labels = await classify(segment, sess, think)
         main_labels = [lbl for lbl in labels if lbl in LABEL_PRIORITY]
 
         print("=" * 45)
@@ -424,18 +360,18 @@ async def process_segments(text: str, sess: SessionType) -> str:
         # Fallback если это возможно фамилия или специальность
         if is_possible_surname_or_specialty(segment):
             print(f"  [Force doctor_info fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
-            response, continue_pending = await get_doc_info_from_api(segment, session=sess)
+            response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
             responses.append(response)
             continue
 
         if not main_labels:
             print(f"  [Fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
-            response, continue_pending = await get_doc_info_from_api(segment, session=sess)
+            response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
             responses.append(response)
             continue
 
         for label in main_labels:
-            response, continue_pending = await MODULES[label](segment, session=sess)
+            response, continue_pending = await MODULES[label](segment, session=sess, think=think, )
             responses.append(response)
             if continue_pending:
                 sess["pending"] = label
@@ -450,9 +386,16 @@ async def process_segments(text: str, sess: SessionType) -> str:
     print("=" * 45)
     return final_answ
 
+
+#  Модуль - пример для сохранения единообразия:
+# async def _call_module(label: str, text: str, sess: SessionType, think: bool | None):
+#     return await MODULES[label](text, session=sess, think=think)
+#
+
 async def routing(text: str,
                   sess: SessionType | None = None,
                   extra_processing: Literal["direct", "processed"] = "processed",
+                  think: bool = None,
                   ) -> AsyncGenerator[RoutingResult, None]:
     """
     Обработка входящего запроса пользователя идет в следующем направлении:
@@ -464,6 +407,7 @@ async def routing(text: str,
     Here is variant of routing() that *yields* (partial_answer, session) pairs,
         so that the outer UI can stream them.
 
+    :param think: Включает Reasoning у поддерживающей его модели
     :param extra_processing: определяется, будет ли использоваться на выходе
     постобработка входящих данных с помощью функции final_answering либо же
     данные из БД будут выводиться напрямую
@@ -480,11 +424,11 @@ async def routing(text: str,
 
     # Handle pending module if exists
     # TODO: Понять зачем вообще это тут вызывается
-    if pending_result := await handle_pending_module(text, sess):
+    if pending_result := await handle_pending_module(text, sess, think=think):
         yield pending_result
 
     # Process text segments
-    result = await process_segments(text, sess)
+    result = await process_segments(text, sess, think=think, )
 
     # Update history
     sess["history"].extend([
@@ -493,13 +437,13 @@ async def routing(text: str,
     ])
 
     if extra_processing == "processed":
-        async for partial in final_answering(text, result):
+        async for partial in final_answering(text, result, think=think):
             yield partial, sess  # Stream final response V1 with processing by final_answering func.
     else:
         yield result, sess  # Stream final response V2 without handling by final_answering func.
 
 
-async def process_routing_request(query: str) -> Tuple[str, Dict[str, Any]]:
+async def process_routing_request(query: str, think: bool | None = None) -> Tuple[str, Dict[str, Any]]:
     """
     Запускает маршрутизацию и собирает все части ответа из async-генератора,
     возвращая финальную строку и итоговую сессию. Нужно чисто для тестирования данного модуля
@@ -508,7 +452,7 @@ async def process_routing_request(query: str) -> Tuple[str, Dict[str, Any]]:
     final_session: dict[str, Any] = {}
 
     # routing возвращает AsyncGenerator[(partial_response, session), None]
-    async for partial, sess in routing(query.strip()):
+    async for partial, sess in routing(query.strip(), think=think, ):
         # на каждой итерации приходят (partial, sess)
         final_response = partial  # перезаписываем — в итоге останется последний
         final_session = sess
@@ -517,9 +461,16 @@ async def process_routing_request(query: str) -> Tuple[str, Dict[str, Any]]:
 
 
 async def main():
-    async for partial, sess in routing("Смирнова"):
+    async for partial, sess in routing("Смирнова", think=False, ):
         print(partial)  # или обновлять UI
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(process_routing_request("Доктор Дразнин"))
+    # print(classificator_prompt("-сообщение пользователя-",
+    #                            {"history": [{"user": "-содержимое памяти-",
+    #                                          "bot": "_невнятное сообщение ассистента_", }, ]}))
+    # print()
+    # print("ALLOWED: ", ALLOWED)
+    # print()
+    # print("MODULES: ", MODULES)

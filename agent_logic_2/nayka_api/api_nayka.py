@@ -1,11 +1,11 @@
 import json
 import os
 import sys
+from collections import defaultdict
 from datetime import timedelta, datetime, date
 from pathlib import Path
 from pprint import pprint
 from typing import Dict, List, Set, Union
-from collections import defaultdict
 
 import requests
 
@@ -33,7 +33,7 @@ def get_yesterday_str() -> str:
     return (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
 
 
-def find_existing_doctors_file() -> Path or None:
+def find_existing_doctors_file() -> Union[Path, None]:
     """Находит самый свежий файл с данными о врачах"""
     pattern = "doctors_*.jsonl"
     files = list(DATA_DIR.glob(pattern))
@@ -51,7 +51,7 @@ def save_doctors_data(doctors: list):
     """Сохраняет список врачей в формате JSONL — по одному врачу на строку."""
     # Очищаем старые файлы перед сохранением нового
     cleanup_old_doctors_files()
-    
+
     today = get_today_str()
     filename = DATA_DIR / f"doctors_{today}.jsonl"
     with open(filename, "w", encoding="utf-8") as f:
@@ -79,6 +79,7 @@ def cleanup_old_doctors_files():
         if file_date != today:
             print(f"🗑️ Удаляем файл с данными о врачах: {file.name}")
             file.unlink()
+
 
 def get_all_doctors() -> List[Dict]:
     """
@@ -129,7 +130,6 @@ def get_all_doctors() -> List[Dict]:
                     else:
                         region_pairs.append((reg_id, f"ID {reg_id}"))
 
-
         doc_region_ids = [r[0] for r in region_pairs]
         doc_regions = [r[1] for r in region_pairs]
 
@@ -145,6 +145,7 @@ def get_all_doctors() -> List[Dict]:
         result.append(doctor_data)
 
     return result
+
 
 def get_cached_doctors_data() -> list:
     """
@@ -175,6 +176,7 @@ def get_cached_doctors_data() -> list:
     save_doctors_data(doctors)
     print("✅ Новые данные о врачах успешно загружены")
     return doctors
+
 
 def _units_tree() -> Dict[int, Set[int]]:
     """Строит дерево подразделений."""
@@ -207,7 +209,7 @@ def _descendants(unit_ids: Set[int], tree: Dict[int, Set[int]]) -> Set[int]:
 def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
     """
     Ищем по:
-      • тексту specialization    («кардиолог», «ультразвук»)  
+      • тексту specialization («кардиолог», «ультразвук»)
     Возвращаем краткий список врачей.
     """
     kw = keyword.lower()

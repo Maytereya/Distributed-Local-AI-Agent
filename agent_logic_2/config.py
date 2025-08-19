@@ -10,15 +10,15 @@ config_path = os.path.join(BASE_DIR, 'config.ini')
 # Если config.ini лежит на уровень выше, используем '..'
 # config_path = os.path.join(BASE_DIR, '..', 'config.ini')
 
-print("Computed config.ini path:", config_path)
+# print("Computed config.ini path:", config_path)
 
 config = configparser.ConfigParser()
 
 config.read(config_path)
 
-print("Current working directory:", os.getcwd())
-files_read = config.read(config_path)
-print("Files read:", files_read)
+# print("Current working directory:", os.getcwd())
+# files_read = config.read(config_path)
+# print("Files read:", files_read)
 # -------------------------------------------------
 environment = 'DOCKER_PRODUCTION'
 # | 'DEVELOPMENT' IP квартиры
@@ -26,7 +26,7 @@ environment = 'DOCKER_PRODUCTION'
 # | 'PRODUCTION' внешний белый IP
 # | 'DOCKER_PRODUCTION' под контейнеры
 
-print("environment:", environment)
+# print("environment:", environment)
 # --------------------------------------------------
 
 ollama_url = config[environment]['ollama_url']
@@ -40,6 +40,8 @@ AUTH_PASS = config['DEFAULT']['AUTH_PASS']
 nayka_base_url = config['DEFAULT']['base_url']
 nayka_login = config['DEFAULT']['nayka_login']
 nayka_pass = config['DEFAULT']['nayka_pass']
+think = config['DEFAULT']['think']
 
 ll_model_big = config['DEFAULT']['ll_model_big']
 ll_model_small = config['DEFAULT']['ll_model_small']
+# ll_model_alternative = config['DEFAULT']['ll_model_alternative']
