@@ -4,12 +4,14 @@ import re
 import shutil
 import time
 import uuid
+from pathlib import Path
 from typing import Dict, List, Union, Tuple
 
 import gradio as gr
 from gradio_pdf import PDF
 
 import agent_logic_2.ollama_settings as ollama_settings
+from VOSK import audio_stream_processor as processor
 from agent_logic_2 import config as c
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
@@ -22,6 +24,9 @@ from converters import pdf_to_json_txt_tables_meili as pdf2json
 # Label constants
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
 INDEXES_IN_MEILI = "Индексы документов Meilisearch"
+# Static files config for Gradio
+STATIC_DIR = (Path(__file__).parent / "static").resolve()
+
 # EXAMPLES = [
 #     [
 #         "Запишите на прием к доктору Дразнину",  # message
@@ -93,6 +98,46 @@ footer {
     text-decoration: none;
     color: #ccc;              /* Цвет ссылки */
     margin-left: 0.5rem;      /* Отступ между текстом и ссылкой */
+}
+
+/* Шапка с логотипом — без лишних отступов */
+#logo-bar {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 0 !important;
+  margin: 0 !important;           /* убираем нижний отступ */
+  border-bottom: none !important;  /* если не нужна линия */
+  line-height: 0 !important;       /* убираем «подлипание» снизу из-за baseline */
+}
+
+/* Контейнер Row с логотипом — минимальный низ */
+#logo-row {
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* Само изображение: фикс. высота, без кликов, без baseline-отступа */
+#brand-logo {
+  height: 28px !important;
+  width: auto !important;
+  display: block !important;       /* убирает baseline-отступ под img */
+  pointer-events: none !important; /* без взаимодействия */
+  user-select: none !important;
+}
+
+/* У верхней кромки табов — убрать отступы */
+#main-tabs {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+}
+
+/* На некоторых версиях Gradio верхняя «полка» табов — отдельный блок */
+#main-tabs [data-testid="tab-nav"],
+#main-tabs .tab-nav,
+#main-tabs .tabs {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
 }
 """
 
@@ -599,20 +644,65 @@ def main():
     ollama_settings.init_model_name()
     ollama_settings.init_options()
     ollama_settings.init_thinking()
-    # print("✅ |||| Загружено имя базовой LLM OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL, "|||")
+    # Allow serving local /static files via /gradio_api/file=...
+    gr.set_static_paths(paths=[STATIC_DIR])
 
     with gr.Blocks(css=custom_css) as blocks:
         model_state = gr.State()  # Нужно для однократной загрузки моделей из Ollama
 
-        gr.Markdown(
-            """<h2>📚 МОЯ НАУКА <b> \U000000ABМедЦентр\U000000BB</b>"""
-        )
-        with gr.Tabs():
+        with gr.Row(elem_id="logo-row"):
+            gr.HTML(
+                "<div id='logo-bar'>"
+                "<img id='brand-logo' src='/gradio_api/file=static/logo.png' alt='Логотип'>"
+                "</div>"
+            )
+
+        with gr.Tabs(elem_id="main-tabs"):
             # --------------------------------------------------
             # Вкладка 1 — основной интерфейс
             # --------------------------------------------------
 
-            with gr.Tab("\U0001F4D6 Поиск по документам"):
+            with gr.Tab("\U0001F4D6 AI - ассистент"):
+
+                # ====== ЗАХВАТ АУДИО И РАСШИФРОВКА ======
+                with gr.Row():
+                    asr_state = gr.State()  # хранит rec и накопленный текст
+                    live_transcript = gr.Textbox(
+                        label="🎙️ Живая расшифровка",
+                        lines=3,
+                        max_lines=3,
+                        interactive=False,
+                        show_copy_button=True,
+                        autoscroll=True,
+                        container=True
+                    )
+                    mic = gr.Audio(
+                        sources=["microphone"],
+                        type="numpy",
+                        streaming=True,
+                        label="Микрофон",
+                        interactive=True,
+                        format="wav",
+                        min_width=100,
+                        show_download_button=True,
+                    )
+                    reset_asr_btn = gr.Button("Сбросить", variant="secondary", scale=0, min_width=100, size="sm")
+
+                # потоковое обновление текста
+                mic.stream(
+                    # fn=audio_stream.vosk_stream,
+                    fn=processor.vosk_stream,
+                    inputs=[mic, asr_state],
+                    outputs=[live_transcript, asr_state]
+                )
+
+                # сброс накопленного текста и рекогнайзера
+                def reset_asr(_state):
+                    return gr.update(value=""), None
+
+                reset_asr_btn.click(reset_asr, inputs=[asr_state], outputs=[live_transcript, asr_state])
+
+                # ====== ГЛАВНЫЙ ИНТЕРФЕЙС ======
                 chatbot = gr.Chatbot(type="messages",
                                      autoscroll=False,
                                      placeholder="<strong>Поиск по документам</strong><br>Задайте вопрос",
@@ -700,7 +790,7 @@ def main():
             # Вкладка 2 - Upload PDF to MEILI or CHROMA DB
             # --------------------------------------------------
 
-            with gr.Tab("\U0001F4E4 Загрузка готовых PDF/JSON"):
+            with gr.Tab("\U0001F4E4 Добавить документ"):
                 gr.Markdown("### Загрузка и распределение документов по коллекциям ChromaDB или индексам Meilisearch")
                 with gr.Row():
                     radio_type_of_db = gr.Radio(["ChromaDB", "Meilisearch"],
@@ -967,8 +1057,8 @@ def main():
             # Вкладка 3 — конструктор документа для загрузки
             # --------------------------------------------------
 
-            with gr.Tab("\U0001F4C4 Добавить документ в Meilisearch"):
-                gr.Markdown("### Заполните форму для добавления документа в индекс Meilisearch")
+            with gr.Tab("\U0001F4C4 Добавить информацию"):
+                gr.Markdown("### Заполните форму для добавления информации в индекс Meilisearch")
 
                 with gr.Column():
                     doc_id = str(uuid.uuid4())  # Генератор названия документа
@@ -1191,7 +1281,7 @@ def main():
                                              outputs=[status], )
 
                         think_checkbox.change(ollama_settings.write_think_status, inputs=[think_checkbox],
-                                                outputs=[status])
+                                              outputs=[status])
 
                         json_ollama_options = gr.Code(label="📄Ollama Options",
                                                       value=fn_load_options(explain=False),
@@ -1499,8 +1589,14 @@ def main():
         """,
         visible=True
     )
-    blocks.launch(server_name="0.0.0.0", server_port=7860, auth=check_auth, show_api=False)
 
+    blocks.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        auth=check_auth,
+        show_api=False,
+        allowed_paths=[str(STATIC_DIR)]
+    )
 
 if __name__ == "__main__":
     main()
