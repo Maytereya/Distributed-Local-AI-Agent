@@ -154,7 +154,7 @@ async def classify(text: str, sess: Dict[str, Any], think: bool = None) -> List[
     """
 
     # print("classify OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
-    # print("classify options: ", ollama_settings.options_set())
+    # print("classify options:", ollama_settings.options_set())
     think = ollama_settings.resolve_think(think)
     print("!!!THINK:", think)
     if not ollama_settings.OLLAMA_MODEL:
@@ -190,7 +190,7 @@ async def final_answering(primary_request: str,
     )
 
     # print("final_answering OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
-    # print("final_answering options: ", ollama_settings.options_set())
+    # print("final_answering options:", ollama_settings.options_set())
     if not ollama_settings.OLLAMA_MODEL:
         raise ValueError("final_answering OLLAMA_MODEL cannot be empty")
     think = ollama_settings.resolve_think(think)

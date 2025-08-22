@@ -11,7 +11,7 @@ import gradio as gr
 from gradio_pdf import PDF
 
 import agent_logic_2.ollama_settings as ollama_settings
-from VOSK import audio_stream_processor as processor
+from VOSK.audio_stream_ws import vosk_ws_stream, flush_ws
 from agent_logic_2 import config as c
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
@@ -254,6 +254,27 @@ async def universal_echo(
         )
         yield result
         return
+
+
+# async def search_from_audio(
+#         asr_state,
+#         radio_value,
+# ):
+#     if not asr_state or not asr_state.get("last_final"):
+#         return "Нет финализированного фрагмента для поиска."
+#
+#     last = asr_state["last_final"].strip()
+#     query = _extract_keywords(last, top_k=6)
+#
+#     if radio_value == "ai-router":
+#         out = []
+#         async for partial, _ in routing(query, sess={}):
+#             out.append(partial)
+#         # return {"role": "user", "content": "".join(out)}
+#         message = gr.ChatMessage("".join(out))
+#         return message
+#
+#     return "Неверно задан режим поиска."
 
 
 # --------------------
@@ -647,7 +668,7 @@ def main():
     # Allow serving local /static files via /gradio_api/file=...
     gr.set_static_paths(paths=[STATIC_DIR])
 
-    with gr.Blocks(css=custom_css) as blocks:
+    with (gr.Blocks(css=custom_css) as blocks):
         model_state = gr.State()  # Нужно для однократной загрузки моделей из Ollama
 
         with gr.Row(elem_id="logo-row"):
@@ -674,7 +695,8 @@ def main():
                         interactive=False,
                         show_copy_button=True,
                         autoscroll=True,
-                        container=True
+                        container=True,
+                        scale=70,
                     )
                     mic = gr.Audio(
                         sources=["microphone"],
@@ -683,30 +705,43 @@ def main():
                         label="Микрофон",
                         interactive=True,
                         format="wav",
-                        min_width=100,
+                        min_width=150,
                         show_download_button=True,
+                        scale=30,
                     )
-                    reset_asr_btn = gr.Button("Сбросить", variant="secondary", scale=0, min_width=100, size="sm")
+                with gr.Row():
+                    search_btn = gr.Button("🔎 Искать по всей фразе", variant="primary", size="sm", scale=10)
+                    flush_btn = gr.Button("Завершить фразу", variant="stop", size="sm", scale=10)
+                    reset_asr_btn = gr.Button("Сбросить", variant="secondary", size="sm", scale=10)
 
                 # потоковое обновление текста
                 mic.stream(
                     # fn=audio_stream.vosk_stream,
-                    fn=processor.vosk_stream,
+                    fn=vosk_ws_stream,
                     inputs=[mic, asr_state],
                     outputs=[live_transcript, asr_state]
                 )
 
-                # сброс накопленного текста и рекогнайзера
+                # сброс состояния без EOF
                 def reset_asr(_state):
-                    return gr.update(value=""), None
+                    # аккуратно закрыть сокет, если открыт
+                    return gr.update(value=""), {"text": "", "acc": bytearray(), "ws": None, "closing": False}
 
                 reset_asr_btn.click(reset_asr, inputs=[asr_state], outputs=[live_transcript, asr_state])
+
+                # завершить фразу и получить финал
+                async def flush_click(asr_state):
+                    txt, st = await flush_ws(asr_state or {})
+                    return txt, st
+
+                flush_btn.click(flush_click, inputs=[asr_state], outputs=[live_transcript, asr_state])
 
                 # ====== ГЛАВНЫЙ ИНТЕРФЕЙС ======
                 chatbot = gr.Chatbot(type="messages",
                                      autoscroll=False,
                                      placeholder="<strong>Поиск по документам</strong><br>Задайте вопрос",
-                                     height=700, )
+                                     height=700,
+                                     label="Чат с ИИ Медцентра")
 
                 textbox = gr.Textbox(lines=1,
                                      placeholder="Напишите свой вопрос",
@@ -740,8 +775,6 @@ def main():
                                                                         render=False,
                                                                         )
 
-                # with gr.Row():
-
                 value_n_results_slider = gr.Slider(value=5, minimum=1, maximum=20, step=1,
                                                    label="Количество документов, включенных в выдачу",
                                                    info="Только в режиме vectorstore",
@@ -764,6 +797,7 @@ def main():
                                            interactive=False,
                                            render=False,
                                            )
+                settings_accordion = gr.Accordion("Настройки поиска", open=False, visible=True, render=False)
 
                 demo = gr.ChatInterface(
                     fn=universal_echo,
@@ -771,7 +805,7 @@ def main():
                     # examples=EXAMPLES,
                     chatbot=chatbot,  # без examples тут
                     textbox=textbox,
-                    additional_inputs_accordion="Настройки поиска",
+                    additional_inputs_accordion=settings_accordion,
 
                     additional_inputs=[
                         radio_type_of_search,
@@ -786,6 +820,16 @@ def main():
                     show_progress="full",
                 )
 
+                # Передача аудиораcшифровки в поиск AI-Search
+
+                def copy_to_textbox(input: str):
+                    return gr.update(value=input)
+
+                search_btn.click(
+                    fn=copy_to_textbox,
+                    inputs=live_transcript,
+                    outputs=textbox,
+                )
             # --------------------------------------------------
             # Вкладка 2 - Upload PDF to MEILI or CHROMA DB
             # --------------------------------------------------
@@ -1597,6 +1641,7 @@ def main():
         show_api=False,
         allowed_paths=[str(STATIC_DIR)]
     )
+
 
 if __name__ == "__main__":
     main()
