@@ -33,6 +33,8 @@ ollama_url = config[environment]['ollama_url']
 chroma_host = config[environment]['chroma_host']
 chroma_port = int(config[environment]['chroma_port'])
 MEILI_URL = config[environment]['MEILI_URL']
+VOSK_URL = config[environment]['VOSK_URL']
+
 
 MASTER_KEY = config['DEFAULT']['MASTER_KEY']
 AUTH_NAME = config['DEFAULT']['AUTH_NAME']
@@ -41,6 +43,7 @@ nayka_base_url = config['DEFAULT']['base_url']
 nayka_login = config['DEFAULT']['nayka_login']
 nayka_pass = config['DEFAULT']['nayka_pass']
 think = config['DEFAULT']['think']
+VOSK_model_path = config['DEFAULT']['VOSK_model_path']
 
 ll_model_big = config['DEFAULT']['ll_model_big']
 ll_model_small = config['DEFAULT']['ll_model_small']
