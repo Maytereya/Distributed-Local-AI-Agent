@@ -46,8 +46,19 @@ def _resample_to_16k(x, sr):
 async def _ensure_ws(state):
     if state.get("ws") and not state.get("closing"):
         return state["ws"]
-    ws = await websockets.connect(c.VOSK_URL, max_size=1 << 20)
-    await ws.send(json.dumps({"config": {"sample_rate": TARGET_SR, "phrase_list": GRAMMAR}, "words": 1}, ))
+    ws = await websockets.connect(
+        c.VOSK_URL,
+        max_size=1<<20,
+        ping_interval=20,   # keepalive
+        ping_timeout=20
+    )
+    await ws.send(json.dumps({
+        "config": {
+            "sample_rate": TARGET_SR,
+            # "phrase_list": GRAMMAR,
+            "words": 1
+        }
+    }))
     state["ws"] = ws
     state["closing"] = False
     return ws
@@ -62,30 +73,37 @@ async def _recv_nonblock(ws, timeout=0.001):
 
 
 async def flush_ws(asr_state):
-    """Отправить EOF и добрать финал."""
     ws = asr_state.get("ws")
     if not ws:
-        return asr_state.get("text", ""), asr_state
-    # добросить хвост буфера, если есть
+        return asr_state.get("text",""), asr_state
+
+    # добросим хвост, если остался
     acc = asr_state.get("acc")
     if acc:
         await ws.send(bytes(acc))
         acc.clear()
-    await ws.send(json.dumps({"eof": 1}))
-    # дочитать финал
+
     try:
-        last = await asyncio.wait_for(ws.recv(), timeout=1.0)
-        j = json.loads(last)
-        final = (j.get("text") or "").strip()
-        if final:
-            asr_state["text"] = (asr_state.get("text", "") + " " + final).strip()
-            asr_state["last_final"] = final  # ← запомнить последний законченный фрагмент
-    except asyncio.TimeoutError:
-        pass
-    asr_state["closing"] = True
-    await ws.close()
-    asr_state["ws"] = None
-    return asr_state.get("text", ""), asr_state
+        await ws.send(json.dumps({"eof": 1}))
+        # дочитаем финал (не зависаем вечно)
+        try:
+            last = await asyncio.wait_for(ws.recv(), timeout=1.0)
+            j = json.loads(last)
+            final = (j.get("text") or "").strip()
+            if final:
+                asr_state["text"] = (asr_state.get("text","") + " " + final).strip()
+        except asyncio.TimeoutError:
+            pass
+    finally:
+        # нормальное закрытие соединения
+        try:
+            await ws.close(code=1000, reason="done")
+        except Exception:
+            pass
+        asr_state["ws"] = None
+        asr_state["closing"] = True
+
+        return asr_state.get("text",""), asr_state
 
 
 # === основной обработчик для gr.Audio(streaming=True) ===
