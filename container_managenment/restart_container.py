@@ -1,11 +1,11 @@
 import subprocess
 
 
-def restart_ollama_container(container_name="ollama") -> str:
+def restart_ollama_container(container_name="ollama", docker_path="/usr/bin/docker") -> str:
     try:
         # stdout/stderr выводим в UI
         res = subprocess.run(
-            ["docker", "restart", container_name],
+            [docker_path, "restart", container_name],
             check=True,
             capture_output=True,
             text=True,
@@ -15,4 +15,3 @@ def restart_ollama_container(container_name="ollama") -> str:
     except subprocess.CalledProcessError as e:
         err = (e.stderr or e.stdout or "").strip()
         return f"✘ Ошибка: {err or str(e)}"
-
