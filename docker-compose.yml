@@ -6,6 +6,8 @@ services:
     container_name: bookworm-agent
     ports:
       - "7860:7860"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - local_net
 
