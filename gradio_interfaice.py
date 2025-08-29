@@ -19,6 +19,7 @@ from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
 from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
+from container_managenment import restart_container
 from converters import pdf_to_json_txt_tables_meili as pdf2json
 
 # Label constants
@@ -27,17 +28,31 @@ INDEXES_IN_MEILI = "Индексы документов Meilisearch"
 # Static files config for Gradio
 STATIC_DIR = (Path(__file__).parent / "static").resolve()
 
+# помощник для стройки строки примера
+# def example_row(
+#     msg: str,
+#     mode: str = "ai-router",
+#     thr: float = 0.005,
+#     n_results: int = 5,
+#     k: int = 2,
+#     collection: str | None = None,
+#     index: str | None = None,
+# ):
+#     return [msg, mode, thr, n_results, k, collection, index]
+
+# если хочешь не None, а реальные значения — возьми первые доступные
+# _collections = gr_existed_collections()
+# _indexes = gr_existed_indexes()
+# first_collection = _collections[0] if _collections else None
+# first_index = _indexes[0] if _indexes else None
+
 # EXAMPLES = [
-#     [
-#         "Запишите на прием к доктору Дразнину",  # message
-#         "",  # chroma_search_collection_dropdown (не используется)
-#         0.005,  # thresholdvalue_slider (заглушка)
-#         5,  # value_n_results_slider (заглушка)
-#         2,  # value_k_slider (заглушка)
-#         "ai-router",  # radio_type_of_search
-#         "",  # meili_search_indexes_dropdown (не используется)
-#         {}  # state
-#     ]
+#     # просто роутер, коллекции/индексы не трогаем
+#     example_row("Запиши к неврологу на пятницу"),
+#     # пример для vectorstore: укажи коллекцию (если есть)
+#     example_row("Покажи документы по диабету 2 типа", mode="vectorstore", n_results=8, collection=None),
+#     # пример для meilisearch: укажи индекс (если есть)
+#     example_row("Найди выписки по Иванову за январь", mode="meilisearch", k=5, index=None),
 # ]
 # -------------------
 # SECURITY
@@ -710,7 +725,7 @@ def main():
                         scale=30,
                     )
                 with gr.Row():
-                    search_btn = gr.Button("🔎 Искать по всей фразе", variant="primary", size="sm", scale=10)
+                    search_btn = gr.Button("🔎 Передать в поиск", variant="primary", size="sm", scale=10)
                     flush_btn = gr.Button("Завершить фразу", variant="stop", size="sm", scale=10)
                     reset_asr_btn = gr.Button("Сбросить", variant="secondary", size="sm", scale=10)
 
@@ -816,6 +831,9 @@ def main():
                         meili_search_indexes_dropdown,
 
                     ],
+                    # examples=EXAMPLES,
+                    # example_labels=["Запись", "Диабет", "Медкарта"],  # опционально
+                    # run_examples_on_click=True,
 
                     show_progress="full",
                 )
@@ -1281,6 +1299,11 @@ def main():
                     return models
                 return gr.update(choices=models, value=models[-1] if models else [])
 
+            # ------------Container Management Section--------------
+
+            def restart() -> str:
+                return restart_container.restart_ollama_container()
+
             # ------------------------------------------------------
 
             with gr.Tab("⚙️ Настройки"):
@@ -1306,14 +1329,16 @@ def main():
                                 choices=fn_load_main_model(),
                                 multiselect=False,
                                 label="Выбор главной LLM",
-                                interactive=True
+                                interactive=True,
+                                container=True,
                             )
-                            reload_main_model_btn = gr.Button("🔄 Загрузить доступные модели", size="md")
-                            save_model_btn = gr.Button("💾 Утвердить выбранную модель", size="md")
-                            # TODO: Активация рассуждения пока не прокинута в router_preprocessor.
                             think_checkbox = gr.Checkbox(label="Активировать способность рассуждать",
                                                          # info="Только для reasoning models, снижает скорость",
-                                                         value=ollama_settings.init_thinking())
+                                                         value=ollama_settings.init_thinking(),
+                                                         container=True, )
+
+                            reload_main_model_btn = gr.Button("⬇️ Загрузить доступные модели", size="sm", )
+                            save_model_btn = gr.Button("💾 Утвердить выбранную модель", size="sm", )
 
                         reload_main_model_btn.click(
                             fn=reassert_main_model_dropdown,
@@ -1335,8 +1360,10 @@ def main():
                                                       interactive=True,
                                                       scale=4)
                         with gr.Column():
-                            load_options_btn = gr.Button("🔄 Загрузить текущие опции", scale=20, size="md")
-                            save_options_btn = gr.Button("💾 Сохранить новые опции", scale=20, size="md")
+                            load_options_btn = gr.Button("⬇️ Загрузить текущие опции", scale=20, size="sm", )
+                            save_options_btn = gr.Button("💾 Сохранить новые опции", scale=20, size="sm", )
+                            restart_ollama_btn = gr.Button("🔃 Перезагрузить Ollama", scale=20, size="sm",
+                                                           variant="stop")
 
                 load_options_btn.click(fn=fn_load_options,
                                        # в данном случае explain = True (умолчание), так как надо передать оповещение в статус.
@@ -1347,6 +1374,7 @@ def main():
                                        ],
                                        )
                 save_options_btn.click(fn=fn_save_options, inputs=json_ollama_options, outputs=status)
+                restart_ollama_btn.click(fn=restart, outputs=status)
 
                 # --------------------------------------------------------
                 #  Split prompt section
