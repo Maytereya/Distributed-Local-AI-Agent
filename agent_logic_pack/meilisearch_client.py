@@ -12,7 +12,7 @@ import json
 # Retry section
 # import time
 import logging
-from typing import List
+from typing import List, Literal
 
 import meilisearch
 import requests
@@ -93,24 +93,39 @@ def get_task_info(task_number: int) -> dict:
         return {}
 
 
-def meili_list_documents(index_name: str) -> List[str]:
+def meili_list_documents(index_name: str, return_type: Literal["ID", "All"] = "ID") -> List[List[str]] | List[str]:
     """
     Retrieves documents from a Meilisearch index (Python version. httpx GET version also exists.)
+    :param return_type:
     :param index_name: Name of the target Meilisearch index.
     :return: List of documents names.
     """
 
     data = client.index(index_name).get_documents({})
     array_of_docs = data.results
-    meili_docs = [doc.id for doc in array_of_docs]
+    try:
+        meili_docs = [[doc.id, doc.title, doc.content] for doc in array_of_docs]
+    except AttributeError as err:
+        return [["Ошибка:"], ["Один из документов не содержит обязательное поле"], [err]]
 
-    return meili_docs
+    if return_type == "All":
+        final_list = []
+        for doc in meili_docs:
+            cropped = [doc[0], doc[1], doc[2][:60] + "..."]
+            final_list.append(cropped)
+        return final_list
+    else:
+        id_list = []
+        for doc in meili_docs:
+            cropped = doc[0]
+            id_list.append(cropped)
+        return id_list
 
 
 def search_meili(index_name: str, query: str, limit: int = 2,
                  highlight: str = None, highlight_fields: str = '*') -> str:
     """
-    Performs a search on the given Meilisearch index using the Python client.
+    Performs a search on the given Meilisearch index.
 
     :param index_name: Name of the Meilisearch index.
     :param query: The search query (keyword, phrase, etc.).
@@ -131,7 +146,6 @@ def search_meili(index_name: str, query: str, limit: int = 2,
             # "highlightPostTag": highlight,
             "attributesToHighlight": [highlight_fields],
         })
-        # print("Search results:", search_result)
 
         hits = search_result.get("hits", [])
 
@@ -140,14 +154,24 @@ def search_meili(index_name: str, query: str, limit: int = 2,
         for doc in hits:
             # doc['_formatted'] может не всегда быть, поэтому используем .get(...)
             fmt = doc.get("_formatted", {})
+            _id = doc.get("id")
+            _file_name = doc.get("file_name", "не указан")
+            _title = doc.get("title", "не указан")
+            _page_number = doc.get("page_number", 1)
             content_str = fmt.get("content", "")
+
+            contents.append("ID документа: " + _id)
+            contents.append("Заголовок: " + _title)
+            contents.append("Имя файла: " + _file_name)
+            contents.append("Номер страницы: " + str(_page_number))
             contents.append(content_str)
 
         # Склеиваем их в итоговую строку
-        combined_text = "\n-----\n".join(contents)
+        combined_text = "\n---------\n".join(contents)
         if len(combined_text) == 0:
             combined_text = "Совпадений не найдено, cформулируйте запрос иначе"
         return combined_text
+        # return search_result
 
     except Exception as e:
         print(f"Error searching in index '{index_name}': {e}")
@@ -322,9 +346,18 @@ def main():
 
     print("=======")
 
-    res_https = get_meili_list_documents("algo_docs")  # preparation_docs
-    for doc in res_https:
-        print(doc)
+    # result = search_meili(
+    #     index_name="main_index",
+    #     query="диета",
+    # )
+    # print(result)
+    # print("=======")
+    # doc_list = get_meili_list_documents("main_index")
+    # for doc in doc_list:
+    #     print(doc)
+    # print("=======")
+    res = meili_list_documents("main_index", return_type="ID")
+    print(res)
 
 
 if __name__ == '__main__':
