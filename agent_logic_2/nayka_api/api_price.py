@@ -33,7 +33,7 @@ CACHE_TTL_DAYS = 2
 BASE_URL = c.nayka_base_url.rstrip("/")
 AUTH = requests.auth.HTTPBasicAuth(c.nayka_login, c.nayka_pass)
 VERIFY_TLS = getattr(c, "nayka_verify_tls", False)  # по умолчанию как было — False
-HTTP_TIMEOUT = getattr(c, "nayka_timeout", 10)
+HTTP_TIMEOUT = getattr(c, "nayka_timeout", 60)
 
 ENDPOINT_PRICE_ALL = f"{BASE_URL}/priceAll"
 ENDPOINT_DOCTOR_PRICES_BY_REGION = f"{BASE_URL}/doctorServicePricesByRegion"

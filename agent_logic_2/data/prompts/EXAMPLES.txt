@@ -30,3 +30,18 @@ OUTPUT: {\"labels\":[\"SCRIPTS\"]}
 
 INPUT: подготовка к вульвоскопии
 OUTPUT: {\"labels\":[\"SCRIPTS\"]}
+
+INPUT: врачи по дмс
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: какие врачи работают с детьми?
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: приходящие врачи
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: не приходящие врачи
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: урологи по дмс
+OUTPUT: {"labels":["API_INFO"]}
