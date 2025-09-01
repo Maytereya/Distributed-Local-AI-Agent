@@ -26,6 +26,23 @@ INDEXES_IN_MEILI = "Индексы документов Meilisearch"
 # Static files config for Gradio
 STATIC_DIR = (Path(__file__).parent / "static").resolve()
 
+# OpenGraph/Twitter preview meta tags (for messengers and social previews)
+OG_IMAGE_URL = "https://ontheflyai.ru/gradio_api/file=static/logo_nauka.png?v=1"
+OG_HEAD = (
+    "<meta property=\"og:type\" content=\"website\" />\n"
+    "<meta property=\"og:title\" content=\"Neiry.ai\" />\n"
+    "<meta property=\"og:description\" "
+    "content=\"Neiry.ai — чат‑бот для ваших данных. Нажмите, чтобы открыть.\" />\n"
+    "<meta property=\"og:url\" content=\"https://ontheflyai.ru/\" />\n"
+    "<meta property=\"og:site_name\" content=\"Neiry.ai\" />\n"
+    f"<meta property=\"og:image\" content=\"{OG_IMAGE_URL}\" />\n"
+    "<meta name=\"twitter:card\" content=\"summary_large_image\" />\n"
+    "<meta name=\"twitter:title\" content=\"Neiry.ai\" />\n"
+    "<meta name=\"twitter:description\" "
+    "content=\"Neiry.ai — чат‑бот для ваших данных. Нажмите, чтобы открыть.\" />\n"
+    f"<meta name=\"twitter:image\" content=\"{OG_IMAGE_URL}\" />\n"
+)
+
 # EXAMPLES = [
 #     [
 #         "Запишите на прием к доктору Дразнину",  # message
@@ -648,7 +665,7 @@ def main():
     # Allow serving local /static files via /gradio_api/file=...
     gr.set_static_paths(paths=[STATIC_DIR])
 
-    with gr.Blocks(css=custom_css, title="Neiry.ai") as blocks:
+    with gr.Blocks(css=custom_css, title="Neiry.ai", head=OG_HEAD) as blocks:
         model_state = gr.State()  # Нужно для однократной загрузки моделей из Ollama
 
         with gr.Row(elem_id="logo-row"):
