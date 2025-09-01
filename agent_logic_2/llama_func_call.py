@@ -112,7 +112,7 @@ class DoctorsRepository:
     @with_retries(tries=2)
     async def update(self, fetch_fn: Callable[[], List[Dict[str, Any]]]) -> bool:
         today = self._today_path()
-        data = fetch_fn()
+        data = await asyncio.to_thread(fetch_fn)
         if not data:
             logger.error("Fetch doctors returned no data")
             return False
@@ -140,6 +140,12 @@ class DoctorsRepository:
         found = [d for d in docs if surname in d.get("fio", "").lower()]
         logger.info(f"Found {len(found)} by surname {surname}")
         return found
+
+    async def read_all_async(self) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self.read_all)
+
+    async def find_by_surname_async(self, surname: str) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self.find_by_surname, surname)
 
 
 # ── Извлечение фамилии ───────────────────────────────────────────────────────
@@ -234,6 +240,34 @@ def enrich_with_cc_info(doctors: list):
 
         cc_info = get_doctors_cc_info()
         cc_by_id = {cc.get("id"): cc.get("callCenterInfo", "Нет заметок") for cc in cc_info}
+        for doc in doctors:
+            doc_id = doc.get("id")
+            doc["callCenterInfo"] = cc_by_id.get(doc_id, "Нет заметок")
+    except Exception as e:
+        print(f"[DEBUG] enrich_with_cc_info error: {e}")
+    return doctors
+
+# ── Асинхронное обогащение заметками call-центра с кэшем ─────────────────────
+_cc_map: Optional[Dict[int, str]] = None
+_cc_ts: float = 0.0
+CC_TTL: int = 600  # seconds
+
+async def get_cc_map_cached() -> Dict[int, str]:
+    import time
+    global _cc_map, _cc_ts
+    now = time.time()
+    if _cc_map is None or (now - _cc_ts) > CC_TTL:
+        data = await asyncio.to_thread(get_doctors_cc_info)
+        _cc_map = {row.get("id"): row.get("callCenterInfo", "Нет заметок") for row in (data or [])}
+        _cc_ts = now
+    return _cc_map
+
+async def async_enrich_with_cc_info(doctors: list):
+    """
+    Асинхронное обогащение каждого dict заметкой call-центра с кешированием.
+    """
+    try:
+        cc_by_id = await get_cc_map_cached()
         for doc in doctors:
             doc_id = doc.get("id")
             doc["callCenterInfo"] = cc_by_id.get(doc_id, "Нет заметок")
@@ -369,6 +403,16 @@ repo = DoctorsRepository(DATA_DIR)
 
 FORMATTER = "\n\n---\n\n"
 
+# ── Асинхронные обёртки для синхронных I/O/API ────────────────────────────────
+async def find_doctors_by_keyword_async(q: str):
+    return await asyncio.to_thread(find_doctors_by_keyword, q)
+
+async def find_doctor_schedule_async(surname: str):
+    return await asyncio.to_thread(find_doctor_schedule, surname)
+
+async def load_doctor_prices_async():
+    return await asyncio.to_thread(load_doctor_prices)
+
 
 @with_retries(tries=2)
 async def ollama_call(prompt: str, llm: str = model, think: bool = None, ) -> Dict[str, Any]:
@@ -382,12 +426,15 @@ async def ollama_call(prompt: str, llm: str = model, think: bool = None, ) -> Di
     #     print("!!! ollama_call Think status:", think)
     #     print("!!! options: ", ollama_settings.options_set())
 
-    res = await ollama_client.generate(
-        model=llm,
-        prompt=prompt,
-        options=ollama_settings.options_set(),
-        keep_alive=-1,
-        think=think,
+    res = await asyncio.wait_for(
+        ollama_client.generate(
+            model=llm,
+            prompt=prompt,
+            options=ollama_settings.options_set(),
+            keep_alive=-1,
+            think=think,
+        ),
+        timeout=25
     )
 
     return res.__dict__
@@ -396,6 +443,13 @@ async def ollama_call(prompt: str, llm: str = model, think: bool = None, ) -> Di
 async def investigate(question: str, think: bool = None) -> str:
     print("\n=== Начало обработки вопроса ===")
     print(f"Вопрос: {question}")
+    # Быстрый путь: если запрос похож на одиночную фамилию — пропускаем LLM-парсер
+    q = (question or "").strip()
+    if q and len(q.split()) == 1 and is_potential_surname(q):
+        try:
+            return await handle_surname_search(q, question)
+        except Exception:
+            pass
 
     key_type, value = await extract_search_keyword_llm(question, think=think)
     if not value:
@@ -456,6 +510,15 @@ def get_region_map():
         _region_map = build_region_map()
     return _region_map
 
+async def build_region_map_async():
+    return await asyncio.to_thread(build_region_map)
+
+async def get_region_map_async():
+    global _region_map
+    if _region_map is None:
+        _region_map = await build_region_map_async()
+    return _region_map
+
 
 async def handle_surname_search(surname: str, question: str) -> str:
     print(f"LLM-парсер определил фамилию: {surname}")
@@ -465,15 +528,28 @@ async def handle_surname_search(surname: str, question: str) -> str:
 
     docs = await search_with_fallback(full_name or surname, bool(full_name))
     if docs:
-        docs = enrich_with_cc_info(docs)
+        # Параллельно обогащаем CC и (если нужно) готовим карту регионов/прайс
+        need_price = bool(re.search(r"\b(прайс|стоимость|услуги|цены?|цена)\b", question.lower()))
+        cc_task = asyncio.create_task(async_enrich_with_cc_info(docs))
+        region_task = asyncio.create_task(get_region_map_async()) if need_price else None
+
+        docs = await cc_task
         answer = format_documents(docs)
-        if re.search(r"\b(прайс|стоимость|услуги|цены?|цена)\b", question.lower()):
-            region_map = get_region_map()
-            for doc in docs:
-                doctor_id = doc.get("id")
-                fio = doc.get("fio")
-                price_block = format_doctor_prices(doctor_id, fio, region_map)
-                answer += f"\n\n[Прайс по филиалам для {fio}]\n{price_block}"
+
+        if need_price:
+            region_map = await region_task
+            async def _price_one(doc):
+                try:
+                    return await asyncio.wait_for(
+                        asyncio.to_thread(format_doctor_prices, doc.get("id"), doc.get("fio"), region_map),
+                        timeout=20,
+                    )
+                except Exception as e:
+                    return "• Прайс временно недоступен."
+
+            price_blocks = await asyncio.gather(*[_price_one(d) for d in docs], return_exceptions=False)
+            for (doc, price) in zip(docs, price_blocks):
+                answer += f"\n\n[Прайс по филиалам для {doc.get('fio')}]\n{price}"
         return answer
 
     similar = find_similar_surname(surname, repo.read_all())
@@ -495,9 +571,9 @@ async def search_with_fallback(name: str, is_full_name: bool) -> List[Dict[str, 
     Попытка найти документы локально, затем обновление репозитория и повторный поиск.
     """
     docs = (
-        filter_docs(repo.read_all(), name)
+        filter_docs(await repo.read_all_async(), name)
         if is_full_name
-        else repo.find_by_surname(name)
+        else await repo.find_by_surname_async(name)
     )
     if docs:
         return docs
@@ -505,9 +581,9 @@ async def search_with_fallback(name: str, is_full_name: bool) -> List[Dict[str, 
     await repo.update(get_all_doctors)
 
     return (
-        filter_docs(repo.read_all(), name)
+        filter_docs(await repo.read_all_async(), name)
         if is_full_name
-        else repo.find_by_surname(name)
+        else await repo.find_by_surname_async(name)
     )
 
 
@@ -536,7 +612,7 @@ def format_documents(docs: List[Dict[str, Any]]) -> str:
 async def handle_specialty_search(specialty: str, _: str) -> str:
     print(f"LLM-парсер определил специальность: {specialty}")
 
-    docs = find_doctors_by_keyword(specialty)
+    docs = await find_doctors_by_keyword_async(specialty)
     if not docs:
         return f"Врачи по специальности '{specialty}' не найдены."
     #
@@ -550,7 +626,7 @@ async def handle_specialty_search(specialty: str, _: str) -> str:
 async def handle_timetable_search(surname: str, _: str) -> str:
     print(f"LLM-парсер определил запрос расписания по фамилии: {surname}")
 
-    docs = find_doctor_schedule(surname)
+    docs = await find_doctor_schedule_async(surname)
     if isinstance(docs, str):
         return docs
 
@@ -581,7 +657,11 @@ def print_unique_priceall_regions():
 async def main():
     """Основная функция."""
     q = input("Введите вопрос: ")
-    update_price_all()
+    if os.getenv("NAUKA_PRICE_WARMUP", "0").strip() in ("1", "true", "yes"):
+        try:
+            await asyncio.wait_for(asyncio.to_thread(update_price_all), timeout=30)
+        except Exception as e:
+            print(f"[warmup] update_price_all skipped/failed: {e}")
     res = await investigate(q)
     print("\n" + "= " * 25)
     print(f"Ответ модели:\n\n{res}")

@@ -6,6 +6,9 @@ from datetime import timedelta, datetime, date
 from pathlib import Path
 from pprint import pprint
 from typing import Dict, List, Set, Union
+import requests, urllib3
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 import requests
 
@@ -17,6 +20,36 @@ sys.path.append(root_dir)
 
 base_url = c.nayka_base_url
 auth = requests.auth.HTTPBasicAuth(c.nayka_login, c.nayka_pass)
+
+VERIFY_TLS = os.getenv("NAUKA_VERIFY_TLS", "true").strip().lower() in ("1","true","yes")
+CA_BUNDLE = os.getenv("NAUKA_CA_BUNDLE","").strip()
+REQ_CONNECT_TIMEOUT = float(os.getenv("NAUKA_TIMEOUT_CONNECT","5"))
+REQ_READ_TIMEOUT    = float(os.getenv("NAUKA_TIMEOUT_READ","20"))
+DEFAULT_TIMEOUT = (REQ_CONNECT_TIMEOUT, REQ_READ_TIMEOUT)
+
+SESSION = requests.Session()
+_retry = Retry(
+    total=3, connect=3, read=3, backoff_factor=0.5,
+    status_forcelist=[429,500,502,503,504],
+    allowed_methods=frozenset(["GET"])
+)
+adapter = HTTPAdapter(max_retries=_retry)
+SESSION.mount("https://", adapter)
+SESSION.mount("http://", adapter)
+
+if CA_BUNDLE:
+    VERIFY_ARG = CA_BUNDLE
+else:
+    VERIFY_ARG = VERIFY_TLS
+
+if VERIFY_ARG is False:
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+def _session_get(url: str, **kwargs):
+    kwargs.setdefault("auth", auth)
+    kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
+    kwargs.setdefault("verify", VERIFY_ARG)
+    return SESSION.get(url, **kwargs)
 
 # Директория для кэширования данных
 DATA_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "apidata"
@@ -271,67 +304,56 @@ def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
 
 def site_company_units():
     """Получить список подразделений."""
-    response = requests.get(f"{base_url}/companyUnits", auth=auth, verify=False)
-    if not response.ok:
-        print(f"Ошибка при получении списка подразделений: {response.status_code}")
-        return []
     try:
-        return response.json()
-    except Exception as e:
-        print(f"Ошибка при разборе JSON: {e}")
+        resp = _session_get(f"{base_url}/companyUnits")
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as e:
+        print(f"Ошибка при получении списка подразделений: {e}")
         return []
 
 
 def site_doctors():
     """Получить список врачей."""
-    response = requests.get(f"{base_url}/doctors", auth=auth, verify=False)
-    if not response.ok:
-        print(f"Ошибка при получении списка врачей: {response.status_code}")
-        return []
     try:
-        return response.json()
-    except Exception as e:
-        print(f"Ошибка при разборе JSON: {e}")
+        resp = _session_get(f"{base_url}/doctors")
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as e:
+        print(f"Ошибка при получении списка врачей: {e}")
         return []
 
 
 def site_doctor_company_units():
     """Получить связи врачей с подразделениями."""
-    response = requests.get(f"{base_url}/doctorCompanyUnits", auth=auth, verify=False)
-    if not response.ok:
-        print(f"Ошибка при получении связей: {response.status_code}")
-        return []
     try:
-        return response.json()
-    except Exception as e:
-        print(f"Ошибка при разборе JSON: {e}")
+        resp = _session_get(f"{base_url}/doctorCompanyUnits")
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as e:
+        print(f"Ошибка при получении связей врач–подразделение: {e}")
         return []
 
 
 def site_doctor_regions():
     """Получить связи врачей с регионами."""
-    response = requests.get(f"{base_url}/doctorRegions", auth=auth, verify=False)
-    if not response.ok:
-        print(f"Ошибка при получении связей: {response.status_code}")
-        return []
     try:
-        return response.json()
-    except Exception as e:
-        print(f"Ошибка при разборе JSON: {e}")
+        resp = _session_get(f"{base_url}/doctorRegions")
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as e:
+        print(f"Ошибка при получении связей врач–регион: {e}")
         return []
 
 
 def site_regions():
     """Получить список регионов."""
-    response = requests.get(f"{base_url}/regions", auth=auth, verify=False)
-    if not response.ok:
-        print(f"Ошибка при получении списка регионов: {response.status_code}")
-        print(f"Ответ: {response.text}")
-        return []
     try:
-        return response.json()
-    except Exception as e:
-        print(f"Ошибка при разборе JSON: {e}")
+        resp = _session_get(f"{base_url}/regions")
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError) as e:
+        print(f"Ошибка при получении списка регионов: {e}")
         return []
 
 
@@ -344,6 +366,9 @@ def find_doctor_schedule(
       • тексту fio (фамилия, имя, отчество)  («Смирнова», «Иванов Иван»)
     Возвращаем краткий список врачей.
     """
+    # Лимитер на количество врачей, чтобы не штурмовать API при большом числе совпадений
+    MAX_DOCS = int(os.getenv("NAUKA_MAX_SCHEDULE_DOCS", "5"))
+
     # --- Получаем регионы ---
     regions = site_regions()
     region_map = {r["id"]: r["name"] for r in regions}
@@ -354,15 +379,32 @@ def find_doctor_schedule(
             return f"Регион '{region_name}' не найден."
 
     # --- Получаем врачей ---
-    doctors = requests.get(f"{base_url}/doctors", auth=auth, verify=False).json()
+    try:
+        doctors_resp = _session_get(f"{base_url}/doctors")
+        doctors_resp.raise_for_status()
+        doctors = doctors_resp.json()
+    except (requests.RequestException, ValueError) as e:
+        return f"Не удалось получить список врачей: {e}"
     doctor_dict = {doc["id"]: doc for doc in doctors}
     matched_doctors = {doc["id"]: doc for doc in doctors if last_name.lower() in doc["fio"].lower()}
     if not matched_doctors:
         return f"Врач с фамилией (или частью ФИО) '{last_name}' не найден."
 
+    # Ограничиваем количество врачей до MAX_DOCS, если их слишком много
+    if len(matched_doctors) > MAX_DOCS:
+        matched_ids = sorted(matched_doctors.keys(), key=lambda i: doctor_dict[i]["fio"])[:MAX_DOCS]
+        matched_doctors = {i: doctor_dict[i] for i in matched_ids}
+
     # --- Получаем companyUnit и doctorRegions ---
-    mappings = requests.get(f"{base_url}/doctorCompanyUnits", auth=auth, verify=False).json()
-    dr_regions = requests.get(f"{base_url}/doctorRegions", auth=auth, verify=False).json()
+    try:
+        mappings = _session_get(f"{base_url}/doctorCompanyUnits")
+        mappings.raise_for_status()
+        mappings = mappings.json()
+        dr_regions = _session_get(f"{base_url}/doctorRegions")
+        dr_regions.raise_for_status()
+        dr_regions = dr_regions.json()
+    except (requests.RequestException, ValueError) as e:
+        return f"Не удалось получить связи врача: {e}"
 
     start_date = date.today().isoformat()
     end_date = (date.today() + timedelta(days=7)).isoformat()
@@ -390,24 +432,21 @@ def find_doctor_schedule(
                 f"{base_url}/doctorSchedule?doctor={doctor_id}&companyUnit={company_unit}&region={reg_id}"
                 f"&startDate={start_date}&endDate={end_date}"
             )
-            schedule_resp = requests.get(schedule_url, auth=auth, verify=False)
-            if not schedule_resp.ok:
-                continue
             try:
+                schedule_resp = _session_get(schedule_url)
+                schedule_resp.raise_for_status()
                 schedule_days = schedule_resp.json()
-            except Exception:
+            except (requests.RequestException, ValueError):
                 continue
             for day in schedule_days:
                 # --- Слоты ---
                 cells_url = f"{base_url}/doctorScheduleCells?doctorSchedule={day['id']}"
-                cells_resp = requests.get(cells_url, auth=auth, verify=False)
-                if cells_resp.ok:
-                    try:
-                        cells = cells_resp.json()
-                        free_slots = [cell["startTime"] for cell in cells if cell.get("free")]
-                    except Exception:
-                        free_slots = []
-                else:
+                try:
+                    cells_resp = _session_get(cells_url)
+                    cells_resp.raise_for_status()
+                    cells = cells_resp.json()
+                    free_slots = [cell.get("startTime") for cell in cells if isinstance(cell, dict) and cell.get("free")]
+                except (requests.RequestException, ValueError):
                     free_slots = []
                 schedules_by_region[region_name_val].append({
                     "date": day.get("curDate"),

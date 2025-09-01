@@ -4,15 +4,30 @@ import asyncio
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Tuple, AsyncGenerator, TypeAlias, Literal
+from typing import Any, Dict, List, Tuple, AsyncGenerator, TypeAlias, Literal, Optional
 
 from ollama import AsyncClient
 
 import agent_logic_2.ollama_settings as ollama_settings
 from agent_logic_2 import llama_func_call as doctor_info, config as c
 from agent_logic_2.prompts import load_prompt
+from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
+from agent_logic_2.llama_func_call import repo, get_region_map
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
+
+
+# --- ensure doctors repo is warmed up (file may be absent on first FILTER run) ---
+async def _ensure_doctors_repo_loaded() -> None:
+    try:
+        # try fast-path
+        _ = repo.read_all()
+    except Exception:
+        # fallback: warm up via the same public API that lazily builds the dataset
+        try:
+            await doctor_info.investigate("инициализация справочника врачей (warmup)", think=False)
+        except Exception:
+            pass
 
 # LLM‑клиент для классификации входящих запросов
 ollama = AsyncClient(c.ollama_url)
@@ -30,9 +45,331 @@ ollama = AsyncClient(c.ollama_url)
 LABEL_PRIORITY = load_prompt("LABEL_PRIORITY", False).split(",")
 ALLOWED = set(LABEL_PRIORITY + ["UNDEFINED"])  # TODO: разобраться, не совсем понятое добавление лейбла "снаружи".
 LABEL_DOC = load_prompt("LABEL_DOC", False)
+RAW_MODE_MARKER = "<NO_POSTPROC>"
 EXAMPLES = load_prompt("EXAMPLES", False)
+ITEM_MARKER = "⊢ID:" # маркер для компактного формата
+
+# --- CC‑info thin process cache (по id врача) ---
+_CC_INFO_MAP: Dict[int, str] | None = None
+
+def _get_cc_info_map() -> Dict[int, str]:
+    """Получает информацию о заметках call-центра по врачам."""
+    global _CC_INFO_MAP
+    if _CC_INFO_MAP is None:
+        try:
+            data = get_doctors_cc_info()
+            _CC_INFO_MAP = {
+                row.get('id'): row.get('callCenterInfo', '')
+                for row in data if isinstance(row, dict)
+            }
+        except Exception:
+            _CC_INFO_MAP = {}
+    return _CC_INFO_MAP
+
+def _extract_age_from_cc(cc: str) -> str:
+    """Пытается вытащить возраст из заметки КЦ и вернуть нормализованную строку вида "с N лет".
+    Возвращает "не указан" если не найдено.
+    """
+    if not isinstance(cc, str) or not cc:
+        return "не указан"
+    s = cc.lower()
+    # Явные формулировки
+    m = re.search(r"с\s*(\d{1,2})\s*лет", s)
+    if m:
+        return f"с {m.group(1)} лет"
+    m = re.search(r"в\s+возрасте\s*(\d{1,2})\s*лет", s)
+    if m:
+        return f"с {m.group(1)} лет"
+    m = re.search(r"принимает\s*(пациентов\s*)?с\s*(\d{1,2})\s*лет", s)
+    if m:
+        return f"с {m.group(2)} лет"
+    # Иногда пишут "с 0+" или "0+"
+    if "0+" in s or re.search(r"\bс\s*0\s*лет\b", s):
+        return "с 0 лет"
+    # Негативные формулировки дают подсказку: только взрослые → с 18 лет
+    if "только взросл" in s or re.search(r"\bс\s*18\s*лет\b", s):
+        return "с 18 лет"
+    return "не указан"
 
 
+def _bool_to_ru(v: Optional[bool]) -> str:
+    return "Да" if v is True else ("Нет" if v is False else "—")
+
+def _compact_line(d: dict) -> str:
+    fio = (d.get("fio") or "").strip()
+    spec = d.get("units") or d.get("specialization") or ""
+    if isinstance(spec, list):
+        spec = ", ".join(spec[:2])
+    addr_list = d.get("regions") or []
+    addr = ", ".join(addr_list[:2])
+
+    # исходная заметка КЦ (как есть); _flag_from_cc сам приводит к lower()
+    cc_text = d.get("callCenterInfo") or ""
+
+    # нормализованные флаги через единую функцию
+    arriving_flag = _flag_from_cc(cc_text, "arriving")
+    dms_flag      = _flag_from_cc(cc_text, "dms")
+    children_flag = _flag_from_cc(cc_text, "children")
+
+    age = _extract_age_from_cc(cc_text)
+
+    return (
+        f"{ITEM_MARKER}{d.get('id')} — {fio} — {spec} — {addr} — "
+        f"ДМС: {_bool_to_ru(dms_flag)} — "
+        f"Приходящий: {_bool_to_ru(arriving_flag)} — "
+        f"Дети: {_bool_to_ru(children_flag)} — "
+        f"Возраст: {age}"
+    )
+
+
+def _format_compact(matched: List[Dict[str, Any]]) -> str:
+    lines = [_compact_line(d) for d in matched]
+    n = len(lines)
+    header = f"[SAFE_LIST]\nN={n}\nORDER=PRESERVE\nFORMAT=ECHO_ALL\n"
+    return header + "\n".join(lines)
+
+
+def _extract_safe_list_meta(s: str) -> Tuple[int, List[str] | None]:
+    """Returns (N, ids) if [SAFE_LIST] is present, else (0, None)."""
+    if "[SAFE_LIST]" not in s:
+        return 0, None
+    try:
+        head, *_ = s.split("\n\n", 1)
+        m = re.search(r"\bN=(\d+)", head)
+        n = int(m.group(1)) if m else 0
+        ids = re.findall(rf"{re.escape(ITEM_MARKER)}(\d+)", s)
+        return n, ids
+    except Exception:
+        return 0, None
+
+
+
+# =========================
+# SAFE_LIST deterministic helpers
+# =========================
+def _parse_safe_compact_line(line: str) -> Dict[str, str]:
+    """Парсит строку формата
+    ⊢ID:123 — Иванов И.И. — Врач терапевт — Ленина 5 — ДМС: Да — Приходящий: Нет — Дети: Да — Возраст: с 18 лет
+    и возвращает словарь полей. Не бросает исключений.
+    """
+    out = {"id": "", "fio": "", "spec": "", "addr": "", "dms": "—", "arriving": "—", "children": "—", "age": "не указан"}
+    if not isinstance(line, str) or ITEM_MARKER not in line:
+        return out
+    try:
+        head = line.split(ITEM_MARKER, 1)[1].strip()
+        parts = [p.strip() for p in head.split(" — ")]
+        if parts:
+            out["id"] = parts[0]
+        if len(parts) > 1:
+            out["fio"] = parts[1]
+        if len(parts) > 2:
+            out["spec"] = parts[2]
+        if len(parts) > 3:
+            out["addr"] = parts[3]
+        # Остальные метки в произвольном порядке
+        tail = " — ".join(parts[4:]) if len(parts) > 4 else ""
+        tl = tail.lower()
+        # ДМС
+        m = re.search(r"дмс:\s*(да|нет)", tl)
+        if m:
+            out["dms"] = "Да" if m.group(1) == "да" else "Нет"
+        # Приходящий
+        m = re.search(r"приходящий:\s*(да|нет)", tl)
+        if m:
+            out["arriving"] = "Да" if m.group(1) == "да" else "Нет"
+        else:
+            if "не приход" in tl or "неприход" in tl:
+                out["arriving"] = "Нет"
+            elif "приходящ" in tl:
+                out["arriving"] = "Да"
+        # Дети
+        m = re.search(r"дети:\s*(да|нет)", tl)
+        if m:
+            out["children"] = "Да" if m.group(1) == "да" else "Нет"
+        # Возраст
+        m = re.search(r"возраст:\s*([^—\n]+)", tail, flags=re.IGNORECASE)
+        if m:
+            out["age"] = m.group(1).strip()
+    except Exception:
+        pass
+    return out
+
+
+def _shorten_specialty(text: str, limit_words: int = 10) -> str:
+    """Аккуратно укорачивает строку спец-сти до <= limit_words слов."""
+    if not isinstance(text, str) or not text.strip():
+        return "не указано"
+    # иногда приходит перечисление через запятую — берём первый фрагмент
+    first = text.split(";")[0].split(".")[0]
+    words = [w for w in re.split(r"\s+|,\s*", first) if w]
+    if len(words) <= limit_words:
+        return first.strip()
+    return " ".join(words[:limit_words]).strip()
+
+
+def _render_numbered_list_from_safe(compact_payload: str) -> str:
+    """Строит итоговый пронумерованный список в формате final_answer (без участия LLM)."""
+    lines = [ln for ln in compact_payload.splitlines() if ln.strip().startswith(ITEM_MARKER)]
+    blocks: List[str] = []
+    for i, ln in enumerate(lines, 1):
+        row = _parse_safe_compact_line(ln)
+        fio = row.get("fio") or "не указано"
+        spec_short = _shorten_specialty(row.get("spec") or "")
+        addr = row.get("addr") or "не указан"
+        arriving = row.get("arriving") or "—"
+        dms = row.get("dms") or "—"
+        age = row.get("age") or "не указан"
+        block = (
+            f"{i}. **ФИО врача:** {fio}\n"
+            f"**Специализация кратко:** {spec_short}\n"
+            f"**Адрес/адреса работы:** {addr}\n"
+            f"**Приходящий:** {('Да!' if arriving == 'Да' else ('Нет!' if arriving == 'Нет' else 'не указан'))}\n"
+            f"**Возраст пациентов:** {age}\n"
+            f"**ДМС:** {('Да' if dms == 'Да' else ('Нет' if dms == 'Нет' else 'не указан'))}\n"
+            "\n---\n"
+        )
+        blocks.append(block)
+    if not blocks:
+        return "Релевантной информации не найдено"
+    return "\n".join(blocks) + "\n— Конец списка —"
+
+# --- FILTER segment support (ARRIVING / CHILDREN / DMS) ---
+FILTER_RE = re.compile(r'^\s*FILTER:\s*(.+)$', re.IGNORECASE)
+
+_KEYWORDS_TRUE = {
+    'dms': [
+        'по дмс', 'принимает по дмс', 'работает по дмс', 'есть дмс', 'дмс да'
+    ],
+    'children': [
+        'работает с детьми', 'принимает детей', 'детей принимает', 'детям', 'с детьми'
+    ],
+    'arriving': [
+        'приходящий', 'приходящие', 'разовый', 'совмещает'
+    ],
+}
+
+_KEYWORDS_FALSE = {
+    'dms': [
+        'не по дмс', 'не принимает по дмс', 'без дмс', 'дмс нет'
+    ],
+    'children': [
+        'не работает с детьми', 'без детей', 'детей не принимает', 'только взросл'
+    ],
+    'arriving': [
+        'не приходящий', 'не приходящие', 'неприходящий', 'неприходящие'
+    ],
+}
+
+def _keyword_to_filter(segment: str) -> Dict[str, bool] | None:
+    """Грубое извлечение фильтров из естественных формулировок, если LLM не вернул FILTER:"""
+    if not isinstance(segment, str) or not segment.strip():
+        return None
+    s = segment.lower()
+    out: Dict[str, bool] = {}
+    # DMS
+    if any(k in s for k in _KEYWORDS_TRUE['dms']):
+        out['dms'] = True
+    if any(k in s for k in _KEYWORDS_FALSE['dms']):
+        out['dms'] = False
+    # CHILDREN
+    if any(k in s for k in _KEYWORDS_TRUE['children']):
+        out['children'] = True
+    if any(k in s for k in _KEYWORDS_FALSE['children']):
+        out['children'] = False
+    # ARRIVING
+    if any(k in s for k in _KEYWORDS_TRUE['arriving']):
+        out['arriving'] = True
+    if any(k in s for k in _KEYWORDS_FALSE['arriving']):
+        out['arriving'] = False
+    # Дополнительное правило: "с N лет" → children=True (если N < 18), N>=18 → children=False
+    m = re.search(r"с\s*(\d{1,2})\s*лет", s)
+    if m:
+        try:
+            n = int(m.group(1))
+            if n < 18:
+                out.setdefault('children', True)
+            else:
+                out.setdefault('children', False)
+        except Exception:
+            pass
+    return out or None
+
+
+def _safe_format(template: str, **kwargs) -> str:
+    """
+    Безопасно подставляет {placeholders} в шаблон, где также встречаются JSON-скобки.
+    Экранирует все фигурные скобки, кроме известных плейсхолдеров из kwargs.
+    """
+    if not isinstance(template, str):
+        return template
+    # временно защищаем целевые плейсхолдеры
+    protected: dict[str, str] = {}
+    for k in kwargs.keys():
+        protected[k] = f"<<__{k.upper()}__>>"
+        template = template.replace("{"+k+"}", protected[k])
+    # экранируем все остальные скобки
+    template = template.replace("{", "{{").replace("}", "}}")
+    # возвращаем плейсхолдеры и форматируем
+    for k, marker in protected.items():
+        template = template.replace(marker, "{"+k+"}")
+    return template.format(**kwargs)
+
+
+
+
+
+# --- robust JSON extraction without PCRE recursion ---
+
+def _extract_json_object(text: str):
+    """
+    Достаёт первый валидный JSON-объект { ... } из текста.
+    Учитывает строки и экранирование, не бросает исключений.
+    """
+    if not text:
+        return None
+
+    s = text
+    start = s.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_str = False
+    esc = False
+
+    for i in range(start, len(s)):
+        ch = s[i]
+
+        if esc:
+            esc = False
+            continue
+
+        if ch == "\\":
+            esc = True
+            continue
+
+        if ch == '"':
+            in_str = not in_str
+            continue
+
+        if not in_str:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    chunk = s[start:i+1]
+                    try:
+                        return json.loads(chunk)
+                    except Exception:
+                        # мягкая попытка почистить лишние переводы строк/пробелы
+                        cleaned = " ".join(chunk.split())
+                        try:
+                            return json.loads(cleaned)
+                        except Exception:
+                            return None
+    return None
+        
 # ----------------------------------------------
 # Функция обработки истории запросов
 # и ответов на них
@@ -79,18 +416,21 @@ def classificator_prompt(text_user: str, sess: Dict[str, Any]) -> str:
     today = datetime.now().strftime("%d %B %Y, %H:%M:%S")
     template = load_prompt("classificator_prompt", False)
 
-    return template.format(
+    return _safe_format(
+        template,
         today=today,
         user=text_user,
         sess=_history_reveal(text_user, sess),  # обрабатывается история диалога с пользователем
         LABEL_DOC=LABEL_DOC,
-        EXAMPLES=EXAMPLES, )
+        EXAMPLES=EXAMPLES,
+    )
 
 
 def split_prompt(text_user: str, sess: Dict[str, Any]) -> str:
     template = load_prompt("split_prompt", False)
 
-    return template.format(
+    return _safe_format(
+        template,
         user=text_user,
         sess=_history_reveal(text_user, sess),  # обрабатывается история диалога с пользователем
     )
@@ -114,30 +454,41 @@ async def split_into_segments(text: str, sess: Dict[str, Any], think: bool = Non
     if not ollama_settings.OLLAMA_MODEL:
         raise ValueError("split_into_segments OLLAMA_MODEL cannot be empty")
 
-    res = await ollama.generate(model=ollama_settings.OLLAMA_MODEL,
-                                prompt=split_prompt(text, sess),  # Добавляется sess
-                                options=ollama_settings.options_set(),
-                                format="json",
-                                keep_alive=-1,
-                                think=think, )
-
+    # Защищаемся от долгого ответа модели: ограничиваем время ожидания
     try:
-        segments = json.loads(res["response"]).get("segments", [])
-        splitted_segments = [s.strip() for s in segments if s.strip()]
-
-        print("\nProcessing results:")
-        print(f"• Segments count: {len(splitted_segments)}")
-        print(f"• Final segments: {splitted_segments}")
-
-        return splitted_segments
-
-    except json.JSONDecodeError as e:
-        print(f"\n⚠️ JSON decode error: {e}")
-        print("⚠️ Returned original text as single segment")
+        res = await asyncio.wait_for(
+            ollama.generate(
+                model=ollama_settings.OLLAMA_MODEL,
+                prompt=split_prompt(text, sess),  # Добавляется sess
+                options=ollama_settings.options_set(),
+                format="json",
+                keep_alive=-1,
+                think=think,
+            ),
+            timeout=20,
+        )
+    except Exception as e:
+        print(f"\n⚠️ split_into_segments timeout/error: {e}")
         return [text]
 
+    try:
+        obj = _extract_json_object(res.get("response"))
+        segments = []
+        if isinstance(obj, dict):
+            raw = obj.get("segments")
+            if isinstance(raw, list):
+                segments = [str(s).strip() for s in raw if str(s).strip()]
+        # Fallback: если модель не выполнила контракт — считаем весь текст одним сегментом
+        if not segments:
+            segments = [text]
+
+        print("\nProcessing results:")
+        print(f"• Segments count: {len(segments)}")
+        print(f"• Final segments: {segments}")
+        return segments
+
     except Exception as e:
-        print(f"\n⚠️ Unexpected error: {e}")
+        print(f"\n⚠️ Unexpected error in split_into_segments: {e}")
         print("⚠️ Returned original text as single segment")
         return [text]
 
@@ -154,18 +505,27 @@ async def classify(text: str, sess: Dict[str, Any], think: bool = None) -> List[
     """
 
     # print("classify OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
-    # print("classify options:", ollama_settings.options_set())
+    # print("classify options: ", ollama_settings.options_set())
     think = ollama_settings.resolve_think(think)
     print("!!!THINK:", think)
     if not ollama_settings.OLLAMA_MODEL:
         raise ValueError("classify OLLAMA_MODEL cannot be empty")
 
-    res = await ollama.generate(model=ollama_settings.OLLAMA_MODEL,
-                                prompt=classificator_prompt(text, sess),
-                                options=ollama_settings.options_set(),
-                                format="json",
-                                keep_alive=-1,
-                                think=think, )
+    try:
+        res = await asyncio.wait_for(
+            ollama.generate(
+                model=ollama_settings.OLLAMA_MODEL,
+                prompt=classificator_prompt(text, sess),
+                options=ollama_settings.options_set(),
+                format="json",
+                keep_alive=-1,
+                think=think,
+            ),
+            timeout=20,
+        )
+    except Exception as e:
+        print(f"\n⚠️ classify timeout/error: {e}")
+        return ["UNDEFINED"]
     try:
         labels = [l.upper() for l in json.loads(res["response"]).get("labels", []) if l.upper() in ALLOWED]
         print("----------------- LABELS -----------------------")
@@ -183,14 +543,14 @@ async def final_answering(primary_request: str,
                           ):  # Пока неясно что за тип данных будет возвращаться
 
     template = load_prompt("final_answer", False)
-    prompt = template.format(
+    prompt = _safe_format(
+        template,
         primary_request=primary_request,
         collected_info=collected_info,
-
     )
 
     # print("final_answering OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
-    # print("final_answering options:", ollama_settings.options_set())
+    # print("final_answering options: ", ollama_settings.options_set())
     if not ollama_settings.OLLAMA_MODEL:
         raise ValueError("final_answering OLLAMA_MODEL cannot be empty")
     think = ollama_settings.resolve_think(think)
@@ -255,10 +615,7 @@ async def instructions_search(_text: str, think: bool = None, **__) -> Tuple[str
           or "Empty")
     print("=" * 45)
 
-    collected_info = meilisearch.search_meili("spravka_docs",
-                                              # extracted_keyword,
-                                              _text,
-                                              )
+    collected_info = await asyncio.to_thread(meilisearch.search_meili, "spravka_docs", _text)
 
     # Очистка HTML перед подстановкой в prompt
     clean_info = html_cleaner.strip_html(collected_info)
@@ -292,10 +649,13 @@ pattern = r'"(?P<key>[^"]+)":\s*(?P<name>\w+)'
 pairs = re.findall(pattern, MODULES_str)
 
 # Берём функции из globals() (или из MODULE) и тут уже обращение к функциям
-MODULES: Dict = {
-    key: globals()[name]
-    for key, name in pairs
-}
+MODULES: Dict[str, Any] = {}
+for key, name in pairs:
+    func = globals().get(name)
+    if callable(func):
+        MODULES[key] = func
+    else:
+        print(f"[router_preprocessor] ⚠️ MODULES: функция '{name}' для ключа '{key}' не найдена")
 
 # Дополнительные обозначения типов для понимания вывода
 # Данные по переменной sess:
@@ -325,23 +685,112 @@ async def handle_pending_module(text: str, sess: SessionType, think: bool | None
     return None
 
 
-def is_possible_surname_or_specialty(segment: str) -> bool:
+
+async def is_possible_surname_or_specialty(segment: str) -> bool:
     """
     Возвращает True если сегмент похож на фамилию или спец-ность врача
-    (использует doctor_info.repo.read_all() для ФИО и specialties)
+    (использует repo.read_all() для ФИО и specialties)
     """
     text = segment.strip()
     if not text or len(text.split()) > 3:
         return False
-    # Проверяем заглавную букву (Фамилия) или что в базе есть такая спец-ность
-    docs = doctor_info.repo.read_all()
-    # Проверка ФИО
+    # ensure repo is ready (creates data file on first use)
+    await _ensure_doctors_repo_loaded()
+    docs = repo.read_all()
+    # Проверка ФИО и специальности
+    tl = text.lower()
     for d in docs:
-        if text.lower() in d.get('fio', '').lower().split():
+        if tl in d.get('fio', '').lower().split():
             return True
-        if text.lower() == (d.get('specialization') or '').lower():
+        if tl == (d.get('specialization') or '').lower():
             return True
     return False
+
+
+# --- FILTER segment support (ARRIVING / CHILDREN / DMS) ---
+
+_DEF_TRUE = {"yes", "да", "true", "1"}
+_DEF_FALSE = {"no", "нет", "false", "0"}
+
+def _parse_filters(expr: str) -> Dict[str, bool]:
+    # "ARRIVING=YES; CHILDREN=NO; DMS=YES" -> {"arriving": True, "children": False, "dms": True}
+    pairs = [p.strip() for p in expr.split(';') if p.strip()]
+    out: Dict[str, bool] = {}
+    for p in pairs:
+        if '=' not in p:
+            continue
+        k, v = [t.strip().lower() for t in p.split('=', 1)]
+        if v in _DEF_TRUE:
+            out[k] = True
+        elif v in _DEF_FALSE:
+            out[k] = False
+    return out
+
+def _flag_from_cc(cc: str, key: str) -> Optional[bool]:
+    if not cc:
+        return None
+    s = cc.lower()
+    if key == 'arriving':
+        if 'не приход' in s or 'неприход' in s:
+            return False
+        if 'приходящ' in s:
+            return True
+        return None
+    if key == 'children':
+        if 'с 18 лет' in s or 'принимает с 18' in s or 'только взросл' in s:
+            return False
+        if 'дет' in s and ('работ' in s or 'принимает' in s):
+            return True
+        return None
+    if key == 'dms':
+        if 'не принимает по дмс' in s or 'дмс: нет' in s or 'дмс — нет' in s or 'дмс - нет' in s:
+            return False
+        if 'по дмс' in s or 'дмс: да' in s or 'дмс — да' in s or 'дмс - да' in s:
+            return True
+        return None
+    return None
+
+
+async def _filter_doctors_via_cc_info(filters: Dict[str, bool]) -> str:
+    """Вернёт отформатированный список врачей, удовлетворяющих фильтрам, используя существующие repo/formatter."""
+    await _ensure_doctors_repo_loaded()
+    try:
+        cc_by_id = _get_cc_info_map()
+    except Exception as e:
+        return f"Релевантной информации не найдено (ошибка загрузки заметок колл-центра: {e})."
+
+    docs = repo.read_all()
+    matched: List[Dict[str, Any]] = []
+
+    for d in docs:
+        did = d.get('id')
+        cc_text = cc_by_id.get(did, '')
+        ok = True
+        for k, desired in filters.items():
+            key = k.lower()
+            if key.startswith('arriv') or key.startswith('приход'):
+                key = 'arriving'
+            elif key.startswith('child') or key.startswith('дет'):
+                key = 'children'
+            elif key in ('dms', 'дмс'):
+                key = 'dms'
+            else:
+                continue
+            val = _flag_from_cc(cc_text, key)
+            if val is None or val != desired:
+                ok = False
+                break
+        if ok:
+            dd = dict(d)
+            dd['callCenterInfo'] = cc_text or 'Нет заметок'
+            matched.append(dd)
+
+    if not matched:
+        return "Релевантной информации не найдено"
+
+    full_text = doctor_info.format_documents(matched)
+    compact = _format_compact(matched)
+    return compact + "\n\n[RAW_FULL]\n" + full_text
 
 
 async def process_segments(text: str, sess: SessionType, think: bool | None = None) -> str:
@@ -349,6 +798,34 @@ async def process_segments(text: str, sess: SessionType, think: bool | None = No
     responses: List[str] = []
 
     for idx, segment in enumerate(segments, 1):
+        # SAFETY NET: если LLM не вернул FILTER:, но сегмент выглядит как фильтр — обрабатываем правилами
+        kw_filters = _keyword_to_filter(segment)
+        if kw_filters:
+            print("[KEYWORD→FILTER] parsed:", kw_filters)
+            response = await _filter_doctors_via_cc_info(kw_filters)
+            responses.append(response)
+            continue
+        # 0) FILTER: ... → обрабатываем напрямую, не ломая существующие ветки
+        m = FILTER_RE.match(segment)
+        if m:
+            flt = _parse_filters(m.group(1))
+            print("[FILTER] parsed:", flt)
+            response = await _filter_doctors_via_cc_info(flt)
+            responses.append(response)
+            continue
+
+        # Быстрый путь: если это похоже на фамилию/спец-сть — сразу идём в doctor_info,
+        # чтобы не ждать классификатор LLM (который может зависнуть)
+        try:
+            if await is_possible_surname_or_specialty(segment):
+                print(f"  [Force doctor_info fallback EARLY] Отправляю сегмент напрямую в doctor_info: {segment}")
+                response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
+                # Добавим RAW-маркер, чтобы миновать postprocessing LLM
+                responses.append(RAW_MODE_MARKER + "\n" + response)
+                continue
+        except Exception as e:
+            print(f"[EARLY fallback check error]: {e}")
+
         labels = await classify(segment, sess, think)
         main_labels = [lbl for lbl in labels if lbl in LABEL_PRIORITY]
 
@@ -357,17 +834,20 @@ async def process_segments(text: str, sess: SessionType, think: bool | None = No
         print("LABELS: ", labels)
         print("=" * 45)
 
-        # Fallback если это возможно фамилия или специальность
-        if is_possible_surname_or_specialty(segment):
-            print(f"  [Force doctor_info fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
-            response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
-            responses.append(response)
-            continue
+        # Fallback если это возможно фамилия или специальность (второй шанс)
+        try:
+            if await is_possible_surname_or_specialty(segment):
+                print(f"  [Force doctor_info fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
+                response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
+                responses.append(RAW_MODE_MARKER + "\n" + response)
+                continue
+        except Exception as e:
+            print(f"[Fallback check error]: {e}")
 
         if not main_labels:
             print(f"  [Fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
             response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
-            responses.append(response)
+            responses.append(RAW_MODE_MARKER + "\n" + response)
             continue
 
         for label in main_labels:
@@ -430,11 +910,28 @@ async def routing(text: str,
     # Process text segments
     result = await process_segments(text, sess, think=think, )
 
+    # ==== SAFE_LIST path (детерминированный рендер без изменения final_answer) ====
+    N, ids = _extract_safe_list_meta(result)
+    if N and ids:
+        compact, raw_full = (result.split("\n\n[RAW_FULL]\n", 1) + [""])[:2] if "\n\n[RAW_FULL]\n" in result else (result, "")
+        # Рендерим сами (без LLM), чтобы не терять позиции и не зависеть от final_answer
+        formatted = _render_numbered_list_from_safe(compact)
+        sess["history"].extend([{"user": text}, {"bot": formatted}])
+        yield formatted, sess
+        return
+
     # Update history
     sess["history"].extend([
         {"user": text},
         {"bot": result}
     ])
+
+    # ⬇️ новый быстрый выход для «сырых» (готовых) результатов
+    if isinstance(result, str) and (RAW_MODE_MARKER in result):
+        # отдаём как есть, без постпроцесса (final_answering)
+        cleaned = result.replace(RAW_MODE_MARKER, "").lstrip("\n\r ")
+        yield cleaned, sess
+        return
 
     if extra_processing == "processed":
         async for partial in final_answering(text, result, think=think):
@@ -466,7 +963,10 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(process_routing_request("Доктор Дразнин"))
+    import sys
+    query = " ".join(sys.argv[1:]).strip() or input("Введите запрос: ").strip()
+    final_resp, final_sess = asyncio.run(process_routing_request(query, think=False))
+    print(final_resp)
     # print(classificator_prompt("-сообщение пользователя-",
     #                            {"history": [{"user": "-содержимое памяти-",
     #                                          "bot": "_невнятное сообщение ассистента_", }, ]}))

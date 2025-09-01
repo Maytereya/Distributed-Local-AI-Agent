@@ -1,5 +1,5 @@
 """
-v0.2
+v0.3
 
 This module provides two ways to work with Meilisearch:
 1) Using the official Python client for adding documents and searching them.
@@ -12,7 +12,7 @@ import json
 # Retry section
 # import time
 import logging
-from typing import List, Literal
+from typing import List, Literal, Any, Union
 
 import meilisearch
 import requests
@@ -93,33 +93,49 @@ def get_task_info(task_number: int) -> dict:
         return {}
 
 
-def meili_list_documents(index_name: str, return_type: Literal["ID", "All"] = "ID") -> List[List[str]] | List[str]:
+def meili_list_documents(
+        index_name: str,
+        return_type: Literal["ID", "All"] = "ID",
+        content_limit: int = 150
+) -> Union[List[List[str]], List[str]]:
     """
-    Retrieves documents from a Meilisearch index (Python version. httpx GET version also exists.)
-    :param return_type:
-    :param index_name: Name of the target Meilisearch index.
-    :return: List of documents names.
+    Возвращает:
+      - "ID": список id
+      - "All": список [id, title_or_default, cropped_content]
     """
 
     data = client.index(index_name).get_documents({})
     array_of_docs = data.results
-    try:
-        meili_docs = [[doc.id, doc.title, doc.content] for doc in array_of_docs]
-    except AttributeError as err:
-        return [["Ошибка:"], ["Один из документов не содержит обязательное поле"], [err]]
 
-    if return_type == "All":
-        final_list = []
-        for doc in meili_docs:
-            cropped = [doc[0], doc[1], doc[2][:60] + "..."]
-            final_list.append(cropped)
-        return final_list
-    else:
-        id_list = []
-        for doc in meili_docs:
-            cropped = doc[0]
-            id_list.append(cropped)
-        return id_list
+    def safe_get(doc: Any, key: str, default: str = "") -> str:
+        # 1) атрибут
+        try:
+            val = getattr(doc, key)
+        except AttributeError:
+            # 2) доступ по ключу
+            try:
+                val = doc[key]
+            except Exception:
+                val = default
+        return "" if val is None else str(val)
+
+    def crop(text: str, limit: int) -> str:
+        return text[:limit] + "..." if len(text) > limit else text
+
+    out_all: List[List[str]] = []
+    out_ids: List[str] = []
+
+    for doc in array_of_docs:
+        doc_id = safe_get(doc, "id", "")
+        title = safe_get(doc, "title", "")
+        if not title:
+            title = "Без заголовка"
+        content = crop(safe_get(doc, "content", ""), content_limit)
+
+        out_ids.append(doc_id)
+        out_all.append([doc_id, title, content])
+
+    return out_all if return_type == "All" else out_ids
 
 
 def search_meili(index_name: str, query: str, limit: int = 2,
@@ -319,44 +335,9 @@ def main():
     """
     Example usage. Adjust as needed.
     """
-    # Example: add documents to an index
-    # path_to_doc = "/path/to/side_effects_guideline_list1.json"
-    # add_doc_to_meili(path_to_doc, "side_effects_improved")
-
-    # List indexes
-    # indexes = show_list_indexes()
-    # print(indexes)
-
-    # List documents (limit=2)
-    # docs = list_documents("side_effects_improved", limit=2)
-    # print(docs)
-
-    # Search in Meilisearch
-    # result = search_meili("side_effects_improved", "headache", limit=3)
-    # print("Search result:", result)
-
-    # Delete a specific document
-    # delete_document("side_effects_improved", "side_effects_guideline_for_RAG_paged_pdf_page_1")
-
-    # Delete an entire index
-    # delete_index("side_effects_improved")
-    # res = meili_list_documents("preparation_docs")
-    # for doc in res:
-    #     print(doc)
 
     print("=======")
-
-    # result = search_meili(
-    #     index_name="main_index",
-    #     query="диета",
-    # )
-    # print(result)
-    # print("=======")
-    # doc_list = get_meili_list_documents("main_index")
-    # for doc in doc_list:
-    #     print(doc)
-    # print("=======")
-    res = meili_list_documents("main_index", return_type="ID")
+    res = meili_list_documents("main_index", return_type="All")
     print(res)
 
 

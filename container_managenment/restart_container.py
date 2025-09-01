@@ -1,30 +1,13 @@
-# import subprocess
-#
-#
-# def restart_ollama_container(container_name="ollama", docker_path="/usr/bin/docker") -> str:
-#     try:
-#         # stdout/stderr выводим в UI
-#         res = subprocess.run(
-#             [docker_path, "restart", container_name],
-#             check=True,
-#             capture_output=True,
-#             text=True,
-#         )
-#         out = res.stdout.strip() or "ok"
-#         return f"✔ Перезапущен: {out}"
-#     except subprocess.CalledProcessError as e:
-#         err = (e.stderr or e.stdout or "").strip()
-#         return f"✘ Ошибка: {err or str(e)}"
-
+import time
 
 import docker
-import time
+
 
 def restart_ollama_container(container_name="ollama") -> str:
     # подключаемся к сокету, примонтированному из хоста
     client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
     c = client.containers.get(container_name)
     c.restart()
-    time.sleep(5)
+    time.sleep(7)
     status = client.containers.get(container_name).status
     return f"Контейнер {container_name}: {status}"
