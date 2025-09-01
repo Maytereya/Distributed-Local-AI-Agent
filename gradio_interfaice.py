@@ -648,7 +648,7 @@ def main():
     # Allow serving local /static files via /gradio_api/file=...
     gr.set_static_paths(paths=[STATIC_DIR])
 
-    with gr.Blocks(css=custom_css) as blocks:
+    with gr.Blocks(css=custom_css, title="Neiry.ai") as blocks:
         model_state = gr.State()  # Нужно для однократной загрузки моделей из Ollama
 
         with gr.Row(elem_id="logo-row"):
@@ -1556,7 +1556,8 @@ def main():
         server_port=7860,
         auth=check_auth,
         show_api=False,
-        allowed_paths=[str(STATIC_DIR)]
+        allowed_paths=[str(STATIC_DIR)],
+        favicon_path=str(STATIC_DIR / "logo.png")
     )
 
 if __name__ == "__main__":
