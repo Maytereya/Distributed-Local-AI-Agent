@@ -26,8 +26,8 @@ INDEXES_IN_MEILI = "Индексы документов Meilisearch"
 # Static files config for Gradio
 STATIC_DIR = (Path(__file__).parent / "static").resolve()
 
-# OpenGraph/Twitter preview meta tags (for messengers and social previews)
-OG_IMAGE_URL = "https://ontheflyai.ru/gradio_api/file=static/logo_nauka.png?v=1"
+# OpenGraph preview meta tags (Telegram/WhatsApp use OG)
+OG_IMAGE_URL = "https://ontheflyai.ru/gradio_api/file=static/logo_nauka.png?v=2"
 OG_HEAD = (
     "<meta property=\"og:type\" content=\"website\" />\n"
     "<meta property=\"og:title\" content=\"Neiry.ai\" />\n"
@@ -36,11 +36,11 @@ OG_HEAD = (
     "<meta property=\"og:url\" content=\"https://ontheflyai.ru/\" />\n"
     "<meta property=\"og:site_name\" content=\"Neiry.ai\" />\n"
     f"<meta property=\"og:image\" content=\"{OG_IMAGE_URL}\" />\n"
-    "<meta name=\"twitter:card\" content=\"summary_large_image\" />\n"
-    "<meta name=\"twitter:title\" content=\"Neiry.ai\" />\n"
-    "<meta name=\"twitter:description\" "
-    "content=\"Neiry.ai — чат‑бот для ваших данных. Нажмите, чтобы открыть.\" />\n"
-    f"<meta name=\"twitter:image\" content=\"{OG_IMAGE_URL}\" />\n"
+    f"<meta property=\"og:image:secure_url\" content=\"{OG_IMAGE_URL}\" />\n"
+    "<meta property=\"og:image:type\" content=\"image/png\" />\n"
+    "<meta property=\"og:image:width\" content=\"1200\" />\n"
+    "<meta property=\"og:image:height\" content=\"630\" />\n"
+    "<meta property=\"og:locale\" content=\"ru_RU\" />\n"
 )
 
 # EXAMPLES = [
