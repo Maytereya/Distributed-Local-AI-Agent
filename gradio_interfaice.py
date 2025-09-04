@@ -31,7 +31,7 @@ INDEXES_IN_MEILI = "Индексы документов Meilisearch"
 STATIC_DIR = (Path(__file__).parent / "static").resolve()
 
 # OpenGraph/Twitter preview meta tags (for messengers and social previews)
-OG_IMAGE_URL = "https://ontheflyai.ru/gradio_api/file=static/logo_nauka.png?v=1"
+OG_IMAGE_URL = "https://ontheflyai.ru/preview/og.png"
 OG_HEAD = (
     "<meta property=\"og:type\" content=\"website\" />\n"
     "<meta property=\"og:title\" content=\"Neiry.ai\" />\n"
