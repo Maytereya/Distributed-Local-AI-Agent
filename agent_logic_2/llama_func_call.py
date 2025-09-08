@@ -73,6 +73,25 @@ STOP_WORDS = {
 }
 
 
+# ── Нормализация специальности (простая лемматизация множественного к единственному) ──
+def normalize_specialty_term(q: str) -> str:
+    """
+    Очень простая эвристика для приведения множественного числа к единственному для
+    названий специальностей: "кардиологи" → "кардиолог", "педиатры" → "педиатр".
+    Работает только для однословных форм; если не уверены — возвращаем исходное.
+    """
+    if not isinstance(q, str) or not q:
+        return q
+    w = q.strip().lower()
+    # частые шумовые слова
+    if w in {"врачи", "врач"}:
+        return ""
+    # базовые правила: ..."и" → удалить, ..."ы" → удалить
+    if len(w) > 4 and (w.endswith("и") or w.endswith("ы")):
+        return w[:-1]
+    return w
+
+
 # ── Утилиты ──────────────────────────────────────────────────────────────────
 def with_retries(tries: int = 3):
     def decorator(fn: Callable) -> Callable:
@@ -161,6 +180,8 @@ SYSTEM:
 "кардиолог", "эндокринолог", "педиатр", "хирург", "терапевт", "травматолог", "проктолог" и т.п.).
 Если в вопросе встречаются слова вида "список <специальность во множественном числе>", 
 то определи специальность и верни её в единственном числе, например: Specialty: хирург
+Если в вопросе указана специальность во множественном числе (например: "кардиологи", "урологи"), 
+верни Specialty в единственном числе: Specialty: кардиолог
 Если в вопросе встречаются слова: "узи", "узи врач", "узист", "ультразвуковая диагностика", "врач ультразвуковой диагностики", 
 "врач узи", "узи-диагностика" — всегда возвращай Specialty: врач ультразвуковой диагностики.
 Если в вопросе есть только фамилия — верни: Surname: Иванов
@@ -563,6 +584,17 @@ async def handle_surname_search(surname: str, question: str) -> str:
                 f"{format_documents(docs)}"
             )
 
+    # Доп. эвристика: одно слово, но фамилия не найдена — пробуем трактовать как специальность
+    if surname and len(surname.split()) == 1:
+        spec_try = normalize_specialty_term(surname)
+        for variant in filter(None, [spec_try, surname.lower()]):
+            try:
+                docs = await find_doctors_by_keyword_async(variant)
+                if docs:
+                    return format_documents(docs)
+            except Exception:
+                pass
+
     return f"Врач с фамилией '{surname}' не найден в базе данных."
 
 
@@ -612,9 +644,14 @@ def format_documents(docs: List[Dict[str, Any]]) -> str:
 async def handle_specialty_search(specialty: str, _: str) -> str:
     print(f"LLM-парсер определил специальность: {specialty}")
 
-    docs = await find_doctors_by_keyword_async(specialty)
+    query = normalize_specialty_term(specialty) or specialty
+    docs = await find_doctors_by_keyword_async(query)
     if not docs:
-        return f"Врачи по специальности '{specialty}' не найдены."
+        # Попробуем без нормализации как запасной вариант
+        if query != specialty:
+            docs = await find_doctors_by_keyword_async(specialty)
+        if not docs:
+            return f"Врачи по специальности '{specialty}' не найдены."
     #
     # Пока отключим обогащение заметками колл-центра списка врачей.
     # if isinstance(docs, list):
