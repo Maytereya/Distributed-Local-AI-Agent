@@ -45,28 +45,41 @@ except Exception as e:
     logger.error(f"❌ Ошибка подключения к MeiliSearch: {e}")
 
 
-# client = meilisearch.Client(c.MEILI_URL, c.MASTER_KEY)
+# TODO: Имя индекса задается жестко и не правится в gradio
+def init_meili_index(index_name="main_index"):
+    """
+    Функция сообщения правильных атрибутов главному индексу
+    :param _client:
+    :param index_name:
+    :return:
+    """
+    try:
+        client.get_index(index_name)
+    except Exception:
+        client.create_index(index_name, {"primaryKey": "id"})
+
+    client.index(index_name).update_settings({
+        "searchableAttributes": ["title", "content", "keywords", "html", "csv"],
+        "displayedAttributes": ["*"],
+        "filterableAttributes": ["doc_id", "type", "page", "block_id", "keywords"],
+        "sortableAttributes": ["page", "block_id", "created_at"]
+    })
+    print("=== Index settings have been updated ===")
 
 
-def add_doc_to_meili(doc_path: str, index_name: str) -> str or None:
+def add_doc_to_meili(blocks: List[dict], index_name: str) -> str:
     """
     Adds JSON documents from a local file to a Meilisearch index.
     If the index does not exist, it will be created automatically.
 
+    :param blocks:
     :param doc_path: Path to the local JSON file containing the documents (list of dicts).
     :param index_name: Name of the target Meilisearch index.
     :return: None
     """
-    try:
-        with open(doc_path, mode="r", encoding="utf-8") as json_file:
-            documents = json.load(json_file)
-    except (IOError, json.JSONDecodeError) as e:
-        msg = f"Ошибка чтения или парсинга JSON файла '{doc_path}': {e}"
-        print(msg)
-        return msg
 
     try:
-        task_info = client.index(index_name).add_documents(documents)
+        task_info = client.index(index_name).add_documents(blocks)
         msg = f"Документ успешно поставлен в очередь на добавление в индекс '{index_name}': {task_info}"
         print(msg)
         return msg
@@ -339,6 +352,12 @@ def main():
     print("=======")
     res = meili_list_documents("main_index", return_type="All")
     print(res)
+    print("=======")
+    print("=======")
+
+    s_r = search_meili("main_index", "уретрит")
+    print("=======")
+    print(s_r)
 
 
 if __name__ == '__main__':

@@ -17,6 +17,7 @@ from VOSK.audio_stream_ws import vosk_ws_stream, flush_ws
 from agent_logic_2 import config as c
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
+from agent_logic_2.direct_upload_meili_tab import build_blocks, TABLE_HEADERS
 from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
 from agent_logic_pack import aretrieve3 as retrieve
@@ -47,14 +48,6 @@ OG_HEAD = (
     f"<meta name=\"twitter:image\" content=\"{OG_IMAGE_URL}\" />\n"
 )
 
-# EXAMPLES = [
-#     # просто роутер, коллекции/индексы не трогаем
-#     example_row("Запиши к неврологу на пятницу"),
-#     # пример для vectorstore: укажи коллекцию (если есть)
-#     example_row("Покажи документы по диабету 2 типа", mode="vectorstore", n_results=8, collection=None),
-#     # пример для meilisearch: укажи индекс (если есть)
-#     example_row("Найди выписки по Иванову за январь", mode="meilisearch", k=5, index=None),
-# ]
 # -------------------
 # SECURITY
 # -------------------
@@ -682,6 +675,7 @@ def main():
     ollama_settings.init_model_name()
     ollama_settings.init_options()
     ollama_settings.init_thinking()
+    meilisearch.init_meili_index()
     # Allow serving local /static files via /gradio_api/file=...
     gr.set_static_paths(paths=[STATIC_DIR])
 
@@ -819,8 +813,7 @@ def main():
                 demo = gr.ChatInterface(
                     fn=universal_echo,
                     type="messages",
-                    # examples=EXAMPLES,
-                    chatbot=chatbot,  # без examples тут
+                    chatbot=chatbot,  # без examples: тут они вообще не работают
                     textbox=textbox,
                     additional_inputs_accordion=settings_accordion,
 
@@ -833,9 +826,6 @@ def main():
                         meili_search_indexes_dropdown,
 
                     ],
-                    # examples=EXAMPLES,
-                    # example_labels=["Запись", "Диабет", "Медкарта"],  # опционально
-                    # run_examples_on_click=True,
 
                     show_progress="full",
                 )
@@ -946,15 +936,22 @@ def main():
                                                             size="sm",
                                                             variant="primary",
                                                             )
+
+                # ----------------------------------------------------
+                # Секция оформления страницы - конструктора документа
+                # ----------------------------------------------------
+
+                # единый state вместо отдельных переменных для хранения документов прямой загрузки
+                meta_state = gr.State(
+                    value=None)  # dict: {"doc_id": str, "index": str, "blocks": list[dict]}
+                table_state = gr.State(value=[["", ""], ["", ""], ["", ""]])
+
                 with gr.Accordion(label="Форма для прямого добавления информации в базу знаний Meilisearch",
                                   open=False, ):
                     with gr.Column():
                         def generate_new_id():
                             return str(uuid.uuid4())
 
-                        # ----------------------------------------------------
-                        # Секция оформления страницы - конструктора документа
-                        # ----------------------------------------------------
                         with gr.Row():
                             index_dropdown = gr.Dropdown(
                                 choices=gr_existed_indexes(),
@@ -963,8 +960,8 @@ def main():
                                 scale=30,
                             )
                             id_input = gr.Textbox(
-                                label="ID документа (генерируется автоматически, но можно назвать латиницей самостоятельно)* ",
-                                value=generate_new_id,
+                                label="ID документа (латиница или UUID)* ",
+                                value=generate_new_id(),
                                 scale=50
                             )
                             generate_id_button = gr.Button("🔄 Сгенерировать новый ID", scale=20, size="md")
@@ -972,123 +969,102 @@ def main():
                         title_input = gr.Textbox(label="Заголовок, title *")
                         content_input = gr.Textbox(label="Основной текст, content *", lines=20, max_lines=80)
                         keywords_input = gr.Textbox(label="Ключевые слова, keywords (через запятую)")
+
+                        # опциональная таблица
+                        table_df = gr.Dataframe(
+                            label="Таблица (необязательно)",
+                            headers=TABLE_HEADERS,
+                            datatype="str",
+                            row_count=(3, "dynamic"),
+                            col_count=(len(TABLE_HEADERS), "fixed"),
+                            type="array",
+                            value=[["", ""], ["", ""], ["", ""]],
+                            interactive=True,
+                            show_fullscreen_button=True,
+                        )
+
+                        def _passthrough_table(t):
+                            # t — это list[list]; чисто прокидываем в State
+                            return t
+
+                        # любое редактирование таблицы сразу обновляет State
+                        table_df.change(_passthrough_table, inputs=[table_df], outputs=[table_state])
+
                         status_output = gr.Textbox(value=txt_default(),
                                                    label="Статус операции",
                                                    interactive=False,
-                                                   every=15.0,
-                                                   container=False)
-                        preview_button = gr.Button("Посмотреть получившийся JSON")
+                                                   # every=10.0,
+                                                   # container=False,
+                                                   )
+                        preview_button = gr.Button("Предпросмотр блоков")
                         preview_json = gr.JSON(label="Предпросмотр JSON", visible=False)
+                        # сейвим собранные блоки между кликами
                         save_button = gr.Button("Сохранить и отправить в индекс")
 
-                    # -----------------------------------------------------
+                    # ----------------------------
+                    # Предпросмотр и сохранение
+                    # ----------------------------
 
-                    def fn_preview_json(current_doc_id, title, content, keywords, selected_index):
-
-                        if not content.strip():
-                            return gr.update(visible=False), "Ошибка: поле 'content' не может быть пустым"
+                    def fn_preview_json(current_doc_id, title, content, keywords, table, selected_index):
 
                         if not selected_index:
-                            return gr.update(visible=False), "Ошибка: не выбран индекс"
+                            return gr.update(visible=False), "Ошибка: не выбран индекс", gr.update(value=None)
 
-                        if not title.strip():
-                            return gr.update(visible=False), "Ошибка: не введен заголовок"
+                        try:
+                            doc_id, blocks = build_blocks(current_doc_id, title, content, keywords, table)
+                        except ValueError as e:
+                            return gr.update(visible=False), f"Ошибка: {e}", gr.update(value=None)
 
-                        if not current_doc_id:
-                            id_input.value = generate_new_id()
+                        meta = {"doc_id": doc_id, "index": selected_index, "blocks": blocks}
+                        print(f"Preview JSON, meta content: {meta}")
 
-                        # Проверка уникальности ID
-                        json_path = os.path.join("Upload", f"{current_doc_id}.json")
-                        if os.path.exists(json_path):
-                            return gr.update(visible=False), f"Ошибка: документ с ID '{current_doc_id}' уже существует."
+                        return (
+                            gr.update(visible=True, value=blocks),  # preview_json
+                            f"✅ Предпросмотр: '{doc_id}', блоков: {len(blocks)} → '{selected_index}'",  # статус
+                            meta  # meta_state
+                        )
 
-                        doc = {
-                            "id": current_doc_id,
-                            "title": title,
-                            "content": content,
-                            "keywords": [kw.strip() for kw in keywords.split(",") if kw.strip()],
-                            "Indexes_meili": selected_index,
-                        }
+                    preview_button.click(
+                        fn_preview_json,
+                        inputs=[id_input, title_input, content_input, keywords_input, table_state, index_dropdown],
+                        outputs=[preview_json, status_output, meta_state],
+                    )
 
-                        return (gr.update(visible=True,
-                                          value=doc),
-                                f"\u2705 Документ '{current_doc_id}' для индекса '{selected_index}' просматривается..."
-                                )
+                    def save_and_send_to_meilisearch(meta):
+                        print("+++++")
+                        print(meta)
+                        print("+++++")
 
-                    def save_and_send_to_meilisearch(current_doc_id, temporary_json, selected_index):
-                        """
-                        Saves the temporary JSON file with a given document ID, checks for ID uniqueness,
-                        and sends the document to the Meilisearch database. Handles document creation,
-                        error handling, validation and indexing process.
+                        if not meta:
+                            return "Ошибка: нет данных (сделайте Предпросмотр)."
 
-                        :param current_doc_id: str, optional
-                            The ID of the document to be saved. If not provided, a new unique ID will
-                            be generated.
-                        :param temporary_json: dict
-                            The JSON data to be saved and indexed.
-                        :param selected_index: str
-                            The name of the Meilisearch index where the document should be added.
-                        :return: tuple
-                            A tuple of `gr.update()` calls containing the visibility and state updates
-                            for the UI elements, as well as a success or error message as a string.
-                        """
-                        if not current_doc_id:
-                            id_input.value = generate_new_id()
+                        index_name = meta["index"]
+                        _blocks = meta["blocks"]
+                        if not index_name:
+                            return "Ошибка: не выбран индекс."
+                        if not _blocks:
+                            return "Ошибка: пустой массив блоков."
+                        msg: str = ""
+                        try:
+                            msg = meilisearch.add_doc_to_meili(_blocks, index_name)
+                            # client.index(index_name).add_documents(blocks)
+                        except Exception as e:
+                            return f"Ошибка добавления в Meilisearch: {e}, сообщение от Meilisearch: {msg}"
 
-                        # Проверка уникальности ID
-                        json_path = os.path.join("Upload", f"{current_doc_id}.json")
-                        if os.path.exists(json_path):
-                            return (gr.update(value=None, visible=False),
-                                    gr.update(),
-                                    gr.update(value=None),
-                                    gr.update(value=None),
-                                    gr.update(value=None),
-                                    f"Ошибка: документ с ID '{current_doc_id}' уже существует.",
-                                    gr.update(),
-                                    gr.update(),
-                                    )
+                        return (f"✅ Успешно: '{meta['doc_id']}', добавлено {len(_blocks)} блок(ов) в '{index_name}', "
+                                f"сообщение от Meilisearch: {msg}")
 
-                        if temporary_json:
-                            with open(json_path, "w", encoding="utf-8") as f:
-                                json.dump(temporary_json, f, ensure_ascii=False, indent=2)
+                    save_button.click(
+                        save_and_send_to_meilisearch,
+                        inputs=[meta_state],
+                        outputs=[status_output],
+                    )
 
-                            try:
-                                meilisearch.add_doc_to_meili(json_path, selected_index)
-                            except Exception as e:
-                                return (gr.update(),
-                                        gr.update(),
-                                        gr.update(),
-                                        gr.update(),
-                                        gr.update(),
-                                        f"Ошибка загрузки в Meilisearch: {e}",
-                                        gr.update(),
-                                        gr.update(),
-                                        )
-
-                            return (gr.update(value=None, visible=False),
-                                    gr.update(value=str(generate_new_id())),
-                                    gr.update(value=None),
-                                    gr.update(value=None),
-                                    gr.update(value=None),
-                                    f"\u2705 Документ успешно добавлен в индекс '{selected_index}'.",
-                                    gr.update(interactive=True),
-                                    gr.update(interactive=True),
-                                    )
-                        else:
-                            return (
-                                gr.update(visible=True, ),
-                                gr.update(visible=True, ),
-                                gr.update(visible=True, ),
-                                gr.update(visible=True, ),
-                                gr.update(visible=True, ),
-                                "\u274C Ошибка: документ для сохранения не передан. Сначала используйте 'Посмотреть получившийся JSON'.",
-                                gr.update(visible=True, interactive=True),
-                                gr.update(visible=True, interactive=True),
-                            )
                 # ---------------------------------------------------
                 # Секция просмотра содержимого коллекций
                 # и индексов
                 # ---------------------------------------------------
+
                 with gr.Accordion(label="База знаний Meilisearch (просмотр и удаление)",
                                   open=True, ):
 
@@ -1698,27 +1674,27 @@ def main():
             # Event handlers for upper sections
             # ----------------------------------
 
-            generate_id_button.click(fn=generate_new_id, inputs=[], outputs=[id_input])
+            generate_id_button.click(fn=generate_new_id, outputs=[id_input])
 
-            preview_button.click(
-                fn=fn_preview_json,
-                inputs=[id_input, title_input, content_input, keywords_input, index_dropdown],
-                outputs=[preview_json,
-                         status_output, ]
-            )
+            # preview_button.click(
+            #     fn=fn_preview_json,
+            #     inputs=[id_input, title_input, content_input, keywords_input, index_dropdown],
+            #     outputs=[preview_json,
+            #              status_output, ]
+            # )
 
-            save_button.click(
-                fn=save_and_send_to_meilisearch,
-                inputs=[id_input, preview_json, index_dropdown],
-                outputs=[preview_json,
-                         id_input,
-                         title_input,
-                         content_input,
-                         keywords_input,
-                         status_output,
-                         preview_button,
-                         save_button, ]
-            )
+            # save_button.click(
+            #     fn=save_and_send_to_meilisearch,
+            #     inputs=[id_input, preview_json, index_dropdown],
+            #     outputs=[preview_json,
+            #              id_input,
+            #              title_input,
+            #              content_input,
+            #              keywords_input,
+            #              status_output,
+            #              preview_button,
+            #              save_button, ]
+            # )
 
     # -------------------------
     # Footer html realization
