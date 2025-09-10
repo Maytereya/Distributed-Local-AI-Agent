@@ -2,17 +2,23 @@ import json
 import os
 import sys
 from collections import defaultdict
-from datetime import timedelta, datetime, date
+from datetime import timedelta, datetime, date, time
 from pathlib import Path
 from pprint import pprint
 from typing import Dict, List, Set, Union
 import requests, urllib3
+import asyncio
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 import requests
 
 from agent_logic_2 import config as c
+
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except Exception:
+    ZoneInfo = None  # fallback ниже
 
 # Добавляем корневую директорию в PYTHONPATH
 root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -56,8 +62,19 @@ DATA_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "apidata"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _now_samara() -> datetime:
+    """Текущее время в часовом поясе Самары (Europe/Samara)."""
+    try:
+        if ZoneInfo is not None:
+            return datetime.now(tz=ZoneInfo("Europe/Samara"))
+    except Exception:
+        pass
+    # Фолбэк: считаем, что Самара = UTC+4 без переходов
+    return datetime.utcnow() + timedelta(hours=4)
+
+
 def get_today_str() -> str:
-    """Возвращает текущую дату в формате YYYYMMDD"""
+    """Текущая дата (локальная) в формате YYYYMMDD — сохранено для обратной совместимости."""
     return datetime.now().strftime("%Y%m%d")
 
 
@@ -66,13 +83,21 @@ def get_yesterday_str() -> str:
     return (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
 
 
+def get_active_date_str() -> str:
+    """Дата «активного» кэша по Самаре: до 06:00 — вчера, после — сегодня."""
+    now = _now_samara()
+    if now.hour >= 6:
+        return now.strftime("%Y%m%d")
+    return (now - timedelta(days=1)).strftime("%Y%m%d")
+
+
 def find_existing_doctors_file() -> Union[Path, None]:
-    """Находит самый свежий файл с данными о врачах"""
-    pattern = "doctors_*.jsonl"
-    files = list(DATA_DIR.glob(pattern))
-    if not files:
-        return None
-    return max(files, key=lambda f: f.stem.split("_")[-1])
+    """Находит актуальный файл данных: сначала за активную дату (MSK 06:00), иначе самый свежий."""
+    active = DATA_DIR / f"doctors_{get_active_date_str()}.jsonl"
+    if active.exists():
+        return active
+    files = sorted(DATA_DIR.glob("doctors_*.jsonl"), reverse=True)
+    return files[0] if files else None
 
 
 def get_date_from_filename(file: Path) -> str:
@@ -81,12 +106,12 @@ def get_date_from_filename(file: Path) -> str:
 
 
 def save_doctors_data(doctors: list):
-    """Сохраняет список врачей в формате JSONL — по одному врачу на строку."""
-    # Очищаем старые файлы перед сохранением нового
+    """Сохраняет список врачей в формате JSONL — по одному врачу на строку (для активной даты)."""
+    # Чистим лишнее, но сохраняем активную и вчерашнюю датy
     cleanup_old_doctors_files()
 
-    today = get_today_str()
-    filename = DATA_DIR / f"doctors_{today}.jsonl"
+    date_str = get_active_date_str()
+    filename = DATA_DIR / f"doctors_{date_str}.jsonl"
     with open(filename, "w", encoding="utf-8") as f:
         for doc in doctors:
             f.write(json.dumps(doc, ensure_ascii=False) + "\n")
@@ -103,15 +128,22 @@ def load_doctors_data(file: Path) -> list:
     return doctors_
 
 
-def cleanup_old_doctors_files():
-    """Удаляет все файлы с данными о врачах, кроме сегодняшнего"""
-    today = get_today_str()
-    pattern = "doctors_*.jsonl"
-    for file in DATA_DIR.glob(pattern):
+def cleanup_old_doctors_files(keep_dates: Union[None, set, List[str]] = None):
+    """Удаляет все файлы, кроме активной (MSK) и вчерашней дат.
+    При передаче keep_dates — сохраняет указанные даты в формате YYYYMMDD.
+    """
+    if keep_dates is None:
+        keep_dates = {get_active_date_str(), (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")}
+    else:
+        keep_dates = set(keep_dates)
+    for file in DATA_DIR.glob("doctors_*.jsonl"):
         file_date = get_date_from_filename(file)
-        if file_date != today:
-            print(f"🗑️ Удаляем файл с данными о врачах: {file.name}")
-            file.unlink()
+        if file_date not in keep_dates:
+            try:
+                print(f"🗑️ Удаляем файл с данными о врачах: {file.name}")
+                file.unlink()
+            except Exception:
+                pass
 
 
 def get_all_doctors() -> List[Dict]:
@@ -182,33 +214,87 @@ def get_all_doctors() -> List[Dict]:
 
 def get_cached_doctors_data() -> list:
     """
-    Возвращает кэшированные данные о врачах, если кэш свежий.
-    Если кэш устарел или отсутствует — загружает новые данные через API и сохраняет их в кэш.
+    Возвращает кэшированные данные о врачах. Активная дата переключается в 06:00 по Москве:
+    до 06:00 — используем «вчера», после — «сегодня». При отсутствии файла для активной даты
+    — скачиваем заново и сохраняем.
     """
-    cleanup_old_doctors_files()
-    today = get_today_str()
-    existing_file = find_existing_doctors_file()
+    active = get_active_date_str()
+    existing_file = DATA_DIR / f"doctors_{active}.jsonl"
+    if existing_file.exists():
+        print(f"✅ Нашли кэш за активную дату {active}: {existing_file.name}")
+        return load_doctors_data(existing_file)
 
-    print(f"[DEBUG] Сегодня: {today}")
-    print(f"[DEBUG] Найден файл: {existing_file}")
-
-    # Если есть актуальный кэш — используем его
-    if existing_file:
-        file_date = get_date_from_filename(existing_file)
-        print(f"[DEBUG] Дата файла: {file_date}")
-
-        if file_date == today:
-            print("✅ Нашли свежие данные о врачах на сегодня (используем кэш)")
-            return load_doctors_data(existing_file)
-        else:
-            print(f"♻️ Данные найдены, но они от {file_date}. Скачиваем новые.")
-
-    # Если кэша нет или он устарел — обновляем через API
-    print("[DEBUG] Кэш не найден или устарел — обновляем через API!")
-    doctors = get_all_doctors()  # Собирает всё как надо (regions/region_ids и т.д.)
+    # Кэша на активную дату нет — обновляем
+    print(f"[DEBUG] Кэш за активную дату {active} не найден — обновляем через API!")
+    doctors = get_all_doctors()
     save_doctors_data(doctors)
     print("✅ Новые данные о врачах успешно загружены")
     return doctors
+
+# ==========================
+# Ежедневное обновление кэша в 06:00 (Самара)
+# ==========================
+_refresh_task = None
+
+def _next_refresh_dt() -> datetime:
+    now = _now_samara()
+    target = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    if now >= target:
+        target = target + timedelta(days=1)
+    return target
+
+async def _refresh_once():
+    try:
+        # 1) Врачи
+        docs = await asyncio.to_thread(get_all_doctors)
+        save_doctors_data(docs)
+        # подчистим, оставив активную и вчерашнюю
+        cleanup_old_doctors_files()
+        print("✅ [DAILY REFRESH] Кэш врачей обновлён")
+        # 2) Заметки call-центра (zametka_button_*.json)
+        try:
+            from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info as _get_cc
+            await asyncio.to_thread(_get_cc, True)  # force=True
+            print("✅ [DAILY REFRESH] Кэш заметок КЦ обновлён")
+        except Exception as cc_e:
+            print(f"⚠️ [DAILY REFRESH] Ошибка обновления заметок КЦ: {cc_e}")
+    except Exception as e:
+        print(f"⚠️ [DAILY REFRESH] Ошибка обновления кэша: {e}")
+
+async def _daily_refresh_loop():
+    while True:
+        target = _next_refresh_dt()
+        now = _now_samara()
+        wait_sec = max(1.0, (target - now).total_seconds())
+        try:
+            await asyncio.sleep(wait_sec)
+        except Exception:
+            # если sleep прерван, цикл продолжится и пересчитает target
+            pass
+        await _refresh_once()
+
+def ensure_daily_refresh_started() -> bool:
+    """Запускает фоновую задачу обновления кэша в 06:00 по Самаре (idempotent).
+    Возвращает True, если задача запущена (или уже была запущена) внутри запущенного event loop.
+    """
+    global _refresh_task
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # нет активного event loop — запустить позже
+        return False
+    if _refresh_task is None or _refresh_task.done():
+        _refresh_task = loop.create_task(_daily_refresh_loop())
+        print("▶️ [DAILY REFRESH] Планировщик запущен")
+        # Если активного файла нет (например, приложение запущено после 06:00),
+        # дергаем немедленное обновление в фоне, чтобы не тратить время на первый запрос.
+        try:
+            active_file = DATA_DIR / f"doctors_{get_active_date_str()}.jsonl"
+            if not active_file.exists():
+                loop.create_task(_refresh_once())
+        except Exception:
+            pass
+    return True
 
 
 def _units_tree() -> Dict[int, Set[int]]:

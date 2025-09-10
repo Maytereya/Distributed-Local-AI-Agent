@@ -1,23 +1,28 @@
+from __future__ import annotations
+
 import json
 import os
 import re
 import shutil
 import time
 import uuid
-from typing import Dict, List, Union, Tuple
 from pathlib import Path
+from typing import Dict, List, Union, Tuple, Literal
 
 import gradio as gr
 from gradio_pdf import PDF
 
 import agent_logic_2.ollama_settings as ollama_settings
+from VOSK.audio_stream_ws import vosk_ws_stream, flush_ws
 from agent_logic_2 import config as c
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
+from agent_logic_2.direct_upload_meili_tab import build_blocks, TABLE_HEADERS
 from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
 from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
+from container_managenment import restart_container
 from converters import pdf_to_json_txt_tables_meili as pdf2json
 
 # Label constants
@@ -26,8 +31,8 @@ INDEXES_IN_MEILI = "Индексы документов Meilisearch"
 # Static files config for Gradio
 STATIC_DIR = (Path(__file__).parent / "static").resolve()
 
-# OpenGraph preview meta tags (Telegram/WhatsApp use OG)
-OG_IMAGE_URL = "https://ontheflyai.ru/gradio_api/file=static/logo_nauka.png?v=2"
+# OpenGraph/Twitter preview meta tags (for messengers and social previews)
+OG_IMAGE_URL = "https://ontheflyai.ru/preview/og.png"
 OG_HEAD = (
     "<meta property=\"og:type\" content=\"website\" />\n"
     "<meta property=\"og:title\" content=\"Neiry.ai\" />\n"
@@ -36,25 +41,13 @@ OG_HEAD = (
     "<meta property=\"og:url\" content=\"https://ontheflyai.ru/\" />\n"
     "<meta property=\"og:site_name\" content=\"Neiry.ai\" />\n"
     f"<meta property=\"og:image\" content=\"{OG_IMAGE_URL}\" />\n"
-    f"<meta property=\"og:image:secure_url\" content=\"{OG_IMAGE_URL}\" />\n"
-    "<meta property=\"og:image:type\" content=\"image/png\" />\n"
-    "<meta property=\"og:image:width\" content=\"1200\" />\n"
-    "<meta property=\"og:image:height\" content=\"630\" />\n"
-    "<meta property=\"og:locale\" content=\"ru_RU\" />\n"
+    "<meta name=\"twitter:card\" content=\"summary_large_image\" />\n"
+    "<meta name=\"twitter:title\" content=\"Neiry.ai\" />\n"
+    "<meta name=\"twitter:description\" "
+    "content=\"Neiry.ai — чат‑бот для ваших данных. Нажмите, чтобы открыть.\" />\n"
+    f"<meta name=\"twitter:image\" content=\"{OG_IMAGE_URL}\" />\n"
 )
 
-# EXAMPLES = [
-#     [
-#         "Запишите на прием к доктору Дразнину",  # message
-#         "",  # chroma_search_collection_dropdown (не используется)
-#         0.005,  # thresholdvalue_slider (заглушка)
-#         5,  # value_n_results_slider (заглушка)
-#         2,  # value_k_slider (заглушка)
-#         "ai-router",  # radio_type_of_search
-#         "",  # meili_search_indexes_dropdown (не используется)
-#         {}  # state
-#     ]
-# ]
 # -------------------
 # SECURITY
 # -------------------
@@ -283,16 +276,21 @@ def gr_create_collection(c_name: str):
     :param c_name: String, passed new name of the collection.
     :return: String, name of the collection.
     """
-    result = retrieve.create_collection(c_name)
-    #
-    time.sleep(5)
-    #
-    new_collections = gr_existed_collections()
-    return (
-        f"Коллекция {result.name} создана",
-        gr.update(choices=new_collections, value=c_name, ),
-        gr.update(choices=new_collections, value=c_name, ),
-    )
+    if c_name:
+        result = retrieve.create_collection(c_name)
+        time.sleep(5)
+        new_collections = gr_existed_collections()
+        return (
+            f"Коллекция {result.name} создана",
+            gr.update(choices=new_collections, value=c_name, ),
+            gr.update(choices=new_collections, value=c_name, ),
+        )
+    else:
+        return (
+            f"Ошибка: введите имя коллекции",
+            gr.update(),
+            gr.update(),
+        )
 
 
 def gr_remove_collection(c_name: str):
@@ -360,14 +358,18 @@ def gr_existed_indexes():
     return meilisearch.show_list_indexes(detail_mode="uid")
 
 
-def existed_docs_in_selected_index(selected_index: str) -> list[str]:
+def existed_docs_in_selected_index(selected_index: str,
+                                   return_type: Literal["All", "ID"]) -> List[str] | List[
+    List[str]]:
     """
 
     :return:
     """
     if not selected_index:
         return ["Индекс не выбран"]
-    return meilisearch.meili_list_documents(selected_index)
+    if return_type == "All":
+        return meilisearch.meili_list_documents(selected_index, return_type="All")
+    return meilisearch.meili_list_documents(selected_index, return_type="ID")
 
 
 def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_type: str):
@@ -490,7 +492,7 @@ def gr_remove_index(index: str):
     """
     meilisearch.delete_index(index)
     #
-    time.sleep(15)
+    time.sleep(10)
     #
     new_list = gr_existed_indexes()
 
@@ -505,19 +507,31 @@ def gr_remove_index(index: str):
 def gr_create_index(index_name: str):
     """
     Создаёт индекс в Meilisearch
+
+    -> upload_indices_dropdown,
+    -> meili_search_indexes_dropdown,
+    -> meili_ind_for_cont_dropdown,
+    -> status_bar,
     """
     meilisearch.create_index(index_name)
     time.sleep(10)  #
     new_list = gr_existed_indexes()
     return (
+        gr.update(choices=new_list, value=index_name),
+        gr.update(choices=new_list, value=index_name),
+        gr.update(choices=new_list, value=index_name),
         f"Индекс {index_name} создан",
-        gr.update(choices=new_list, value=index_name),
-        gr.update(choices=new_list, value=index_name),
     )
 
 
-def gr_rm_doc_from_index():
-    return None
+def gr_rm_doc_from_index(ind_id: str, doc_id: str):
+    meilisearch.delete_meili_document(ind_id, doc_id)
+    id_list = existed_docs_in_selected_index(gr_existed_indexes()[0], return_type="ID")
+    full_list = existed_docs_in_selected_index(gr_existed_indexes()[0], return_type="All")
+    return (f"Документ с ID {doc_id} удален",
+            gr.update(choices=id_list, ),
+            gr.update(value=full_list, ),
+            )
 
 
 # ------------------------------------
@@ -530,11 +544,12 @@ def update_docs_in_meili_index(index_name: str):
     При выборе индекса возвращает обновлённый список документов в этом индексе
     для выпадающего списка документов (meili_content_of_index_dropdown).
     """
-    meili_doc_list = existed_docs_in_selected_index(index_name)
+    id_list = existed_docs_in_selected_index(index_name, return_type="ID")
+    full_list = existed_docs_in_selected_index(index_name, return_type="All")
 
     return (
-        gr.update(choices=meili_doc_list, ),
-        gr.update(value=meili_doc_list, ),
+        gr.update(value=full_list, ),
+        gr.update(choices=id_list, ),
     )
 
 
@@ -563,7 +578,7 @@ def radio_sliders_change(choice):
     chroma_search_collection_dropdown,
 
     The search type selector that enables appropriated sliders.
-    :param choice: AI Router, Vectorstore search or Chroma DB Search.
+    :param choice: AI Router, Vectorstore search, or Chroma DB Search.
     :return: Configurations of sliders that refine the search.
     """
     if choice == "vectorstore":
@@ -615,7 +630,7 @@ def radio_search_engine_change(choice):
             gr.update(visible=True, interactive=True),
             gr.update(visible=False),
             gr.update(visible=False),
-            # gr.Button(visible=True),
+            gr.Button(visible=True),
             gr.update(visible=True),
             gr.update(visible=False),
             gr.update(visible=True),
@@ -628,7 +643,7 @@ def radio_search_engine_change(choice):
             gr.update(visible=True),
             gr.update(visible=True),
             gr.update(visible=False),
-            # gr.Button(visible=False),
+            gr.Button(visible=False),
             gr.update(visible=True),
             gr.update(visible=False),
             gr.update(visible=False),
@@ -660,8 +675,7 @@ def main():
     ollama_settings.init_model_name()
     ollama_settings.init_options()
     ollama_settings.init_thinking()
-    # print("✅ |||| Загружено имя базовой LLM OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL, "|||")
-
+    meilisearch.init_meili_index()
     # Allow serving local /static files via /gradio_api/file=...
     gr.set_static_paths(paths=[STATIC_DIR])
 
@@ -680,11 +694,65 @@ def main():
             # Вкладка 1 — основной интерфейс
             # --------------------------------------------------
 
-            with gr.Tab("\U0001F4D6 Поиск по документам"):
+            with gr.Tab("\U0001F4D6 AI - ассистент"):
+
+                # ====== ЗАХВАТ АУДИО И РАСШИФРОВКА ======
+                with gr.Row():
+                    asr_state = gr.State()  # хранит rec и накопленный текст
+                    live_transcript = gr.Textbox(
+                        label="🎙️ Живая расшифровка",
+                        lines=3,
+                        max_lines=3,
+                        interactive=False,
+                        show_copy_button=True,
+                        autoscroll=True,
+                        container=True,
+                        scale=70,
+                    )
+                    mic = gr.Audio(
+                        sources=["microphone"],
+                        type="numpy",
+                        streaming=True,
+                        label="Микрофон",
+                        interactive=True,
+                        format="wav",
+                        min_width=150,
+                        show_download_button=True,
+                        scale=30,
+                    )
+                with gr.Row():
+                    search_btn = gr.Button("🔎 Передать в поиск", variant="primary", size="sm", scale=10)
+                    flush_btn = gr.Button("Завершить фразу", variant="stop", size="sm", scale=10)
+                    reset_asr_btn = gr.Button("Сбросить", variant="secondary", size="sm", scale=10)
+
+                # потоковое обновление текста
+                mic.stream(
+                    # fn=audio_stream.vosk_stream,
+                    fn=vosk_ws_stream,
+                    inputs=[mic, asr_state],
+                    outputs=[live_transcript, asr_state]
+                )
+
+                # сброс состояния без EOF
+                def reset_asr(_state):
+                    # аккуратно закрыть сокет, если открыт
+                    return gr.update(value=""), {"text": "", "acc": bytearray(), "ws": None, "closing": False}
+
+                reset_asr_btn.click(reset_asr, inputs=[asr_state], outputs=[live_transcript, asr_state])
+
+                # завершить фразу и получить финал
+                async def flush_click(asr_state):
+                    txt, st = await flush_ws(asr_state or {})
+                    return txt, st
+
+                flush_btn.click(flush_click, inputs=[asr_state], outputs=[live_transcript, asr_state])
+
+                # ====== ГЛАВНЫЙ ИНТЕРФЕЙС ======
                 chatbot = gr.Chatbot(type="messages",
                                      autoscroll=False,
                                      placeholder="<strong>Поиск по документам</strong><br>Задайте вопрос",
-                                     height=700, )
+                                     height=700,
+                                     label="Чат с ИИ Медцентра")
 
                 textbox = gr.Textbox(lines=1,
                                      placeholder="Напишите свой вопрос",
@@ -718,8 +786,6 @@ def main():
                                                                         render=False,
                                                                         )
 
-                # with gr.Row():
-
                 value_n_results_slider = gr.Slider(value=5, minimum=1, maximum=20, step=1,
                                                    label="Количество документов, включенных в выдачу",
                                                    info="Только в режиме vectorstore",
@@ -742,14 +808,14 @@ def main():
                                            interactive=False,
                                            render=False,
                                            )
+                settings_accordion = gr.Accordion("Настройки поиска", open=False, visible=True, render=False)
 
                 demo = gr.ChatInterface(
                     fn=universal_echo,
                     type="messages",
-                    # examples=EXAMPLES,
-                    chatbot=chatbot,  # без examples тут
+                    chatbot=chatbot,  # без examples: тут они вообще не работают
                     textbox=textbox,
-                    additional_inputs_accordion="Настройки поиска",
+                    additional_inputs_accordion=settings_accordion,
 
                     additional_inputs=[
                         radio_type_of_search,
@@ -764,169 +830,340 @@ def main():
                     show_progress="full",
                 )
 
+                # Передача аудиораcшифровки в поиск AI-Search
+
+                def copy_to_textbox(input: str):
+                    return gr.update(value=input)
+
+                search_btn.click(
+                    fn=copy_to_textbox,
+                    inputs=live_transcript,
+                    outputs=textbox,
+                )
             # --------------------------------------------------
             # Вкладка 2 - Upload PDF to MEILI or CHROMA DB
             # --------------------------------------------------
 
-            with gr.Tab("\U0001F4E4 Загрузка готовых PDF/JSON"):
-                gr.Markdown("### Загрузка и распределение документов по коллекциям ChromaDB или индексам Meilisearch")
-                with gr.Row():
-                    radio_type_of_db = gr.Radio(["ChromaDB", "Meilisearch"],
-                                                label="Тип базы данных",
-                                                value="ChromaDB",
-                                                container=True,
-                                                info="для добавления документа")
+            with gr.Tab("\U0001F4E4 Документы"):
+                with gr.Accordion(label="Загрузка готовых документов в базы знаний Meilisearch и ChromaDB",
+                                  open=False, ):
+                    with gr.Row():
+                        radio_type_of_db = gr.Radio(["ChromaDB", "Meilisearch"],
+                                                    label="Тип базы данных",
+                                                    value="ChromaDB",
+                                                    container=True,
+                                                    # info="для добавления документа"
+                                                    )
 
-                    radio_type_of_upl_data = gr.Radio(["PDF", "JSON"],
-                                                      label="Тип документа",
-                                                      value="PDF",
-                                                      container=True,
-                                                      info="для загрузки в MEILISEARCH",
-                                                      visible=False)
+                        radio_type_of_upl_data = gr.Radio(["PDF", "JSON"],
+                                                          label="Тип документа",
+                                                          value="PDF",
+                                                          container=True,
+                                                          # info="для загрузки в MEILISEARCH",
+                                                          visible=False)
 
-                    upload_collections_dropdown = gr.Dropdown(choices=gr_existed_collections(),
+                        upload_collections_dropdown = gr.Dropdown(choices=gr_existed_collections(),
+                                                                  value=None,
+                                                                  allow_custom_value=True,
+                                                                  filterable=True,
+                                                                  label=COLLECTIONS_IN_CHROMA,
+                                                                  # info="Коллекции документов",
+                                                                  visible=True, )
+
+                        upload_indices_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
                                                               value=None,
                                                               allow_custom_value=True,
                                                               filterable=True,
-                                                              label=COLLECTIONS_IN_CHROMA,
-                                                              info="Коллекции документов по темам",
-                                                              visible=True, )
+                                                              label=INDEXES_IN_MEILI,
+                                                              # info="Индексы документов",
+                                                              visible=False)
 
-                    upload_indices_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
-                                                          value=None,
-                                                          allow_custom_value=True,
-                                                          filterable=True,
-                                                          label=INDEXES_IN_MEILI,
-                                                          info="Индексы документов по темам",
-                                                          visible=False)
+                        # Поле для вывода текущего статуса работы с коллекциями
+                        status_bar = gr.Textbox(value=txt_default,
+                                                every=15.0,
+                                                label="Статус операции",
+                                                # info="Только вывод",
+                                                interactive=False, )
 
-                    # Поле для вывода текущего статуса работы с коллекциями
-                    status_bar = gr.Textbox(value=txt_default,
-                                            every=20.0,
-                                            label="Монитор текущего статуса операции",
-                                            # info="Только вывод",
-                                            interactive=False, )
+                        # Кнопки для работы с коллекциями или индексами
+                        with gr.Column():
+                            add_collection_button = gr.Button("✅ Добавить коллекцию",
+                                                              visible=True,
+                                                              size="sm",
+                                                              variant="primary",
+                                                              scale=10,
+                                                              )
+                            rm_collection_button = gr.Button("⛔ Удалить коллекцию",
+                                                             visible=True,
+                                                             size="sm",
+                                                             variant="stop",
+                                                             scale=10,
+                                                             )
 
-                    # Кнопки для работы с коллекциями или индексами
-                    with gr.Column():
-                        add_collection_button = gr.Button("Добавить коллекцию",
-                                                          visible=True,
-                                                          size="md",
-                                                          )
-                        rm_collection_button = gr.Button("Удалить коллекцию",
-                                                         visible=True,
-                                                         size="md",
+                            add_index_button = gr.Button("✅ Добавить индекс",
+                                                         visible=False,
+                                                         size="sm",
+                                                         variant="primary",
+                                                         scale=10,
                                                          )
+                            rm_index_button = gr.Button("⛔ Удалить индекс",
+                                                        visible=False,
+                                                        size="sm",
+                                                        variant="stop",
+                                                        scale=10,
+                                                        )
 
-                        # add_index_button = gr.Button("Добавить индекс", visible=False)
-                        rm_index_button = gr.Button("Удалить индекс",
-                                                    visible=False,
-                                                    size="md",
-                                                    )
+                    with gr.Row():
+                        pdf = PDF(label="Загрузить PDF", interactive=True, scale=80)
 
-                with gr.Row():
-                    pdf = PDF(label="Загрузить PDF", interactive=True, scale=80)
+                        # Загрузка JSON (по умолчанию невидим)
+                        json_file = gr.File(
+                            label="Загрузить JSON",
+                            visible=False,
+                            scale=80,
+                            file_types=[".json"],  # или просто ["json"]
+                            type="filepath"
+                        )
 
-                    # Загрузка JSON (по умолчанию невидим)
-                    json_file = gr.File(
-                        label="Загрузить JSON",
-                        visible=False,
-                        scale=80,
-                        file_types=[".json"],  # или можно просто ["json"]
-                        type="filepath"
+                        with gr.Column():
+                            add_to_collection_button = gr.Button("Добавить в коллекцию",
+                                                                 visible=True,
+                                                                 size="sm",
+                                                                 variant="primary",
+                                                                 )
+                            add_to_index_button = gr.Button("Добавить в индекс",
+                                                            visible=False,
+                                                            size="sm",
+                                                            variant="primary",
+                                                            )
+
+                # ----------------------------------------------------
+                # Секция оформления страницы - конструктора документа
+                # ----------------------------------------------------
+
+                # единый state вместо отдельных переменных для хранения документов прямой загрузки
+                meta_state = gr.State(
+                    value=None)  # dict: {"doc_id": str, "index": str, "blocks": list[dict]}
+                table_state = gr.State(value=[["", ""], ["", ""], ["", ""]])
+
+                with gr.Accordion(label="Форма для прямого добавления информации в базу знаний Meilisearch",
+                                  open=False, ):
+                    with gr.Column():
+                        def generate_new_id():
+                            return str(uuid.uuid4())
+
+                        with gr.Row():
+                            index_dropdown = gr.Dropdown(
+                                choices=gr_existed_indexes(),
+                                label="Выберите индекс Meilisearch",
+                                interactive=True,
+                                scale=30,
+                            )
+                            id_input = gr.Textbox(
+                                label="ID документа (латиница или UUID)* ",
+                                value=generate_new_id(),
+                                scale=50
+                            )
+                            generate_id_button = gr.Button("🔄 Сгенерировать новый ID", scale=20, size="md")
+
+                        title_input = gr.Textbox(label="Заголовок, title *")
+                        content_input = gr.Textbox(label="Основной текст, content *", lines=20, max_lines=80)
+                        keywords_input = gr.Textbox(label="Ключевые слова, keywords (через запятую)")
+
+                        # опциональная таблица
+                        table_df = gr.Dataframe(
+                            label="Таблица (необязательно)",
+                            headers=TABLE_HEADERS,
+                            datatype="str",
+                            row_count=(3, "dynamic"),
+                            col_count=(len(TABLE_HEADERS), "fixed"),
+                            type="array",
+                            value=[["", ""], ["", ""], ["", ""]],
+                            interactive=True,
+                            show_fullscreen_button=True,
+                        )
+
+                        def _passthrough_table(t):
+                            # t — это list[list]; чисто прокидываем в State
+                            return t
+
+                        # любое редактирование таблицы сразу обновляет State
+                        table_df.change(_passthrough_table, inputs=[table_df], outputs=[table_state])
+
+                        status_output = gr.Textbox(value=txt_default(),
+                                                   label="Статус операции",
+                                                   interactive=False,
+                                                   # every=10.0,
+                                                   # container=False,
+                                                   )
+                        preview_button = gr.Button("Предпросмотр блоков")
+                        preview_json = gr.JSON(label="Предпросмотр JSON", visible=False)
+                        # сейвим собранные блоки между кликами
+                        save_button = gr.Button("Сохранить и отправить в индекс")
+
+                    # ----------------------------
+                    # Предпросмотр и сохранение
+                    # ----------------------------
+
+                    def fn_preview_json(current_doc_id, title, content, keywords, table, selected_index):
+
+                        if not selected_index:
+                            return gr.update(visible=False), "Ошибка: не выбран индекс", gr.update(value=None)
+
+                        try:
+                            doc_id, blocks = build_blocks(current_doc_id, title, content, keywords, table)
+                        except ValueError as e:
+                            return gr.update(visible=False), f"Ошибка: {e}", gr.update(value=None)
+
+                        meta = {"doc_id": doc_id, "index": selected_index, "blocks": blocks}
+                        print(f"Preview JSON, meta content: {meta}")
+
+                        return (
+                            gr.update(visible=True, value=blocks),  # preview_json
+                            f"✅ Предпросмотр: '{doc_id}', блоков: {len(blocks)} → '{selected_index}'",  # статус
+                            meta  # meta_state
+                        )
+
+                    preview_button.click(
+                        fn_preview_json,
+                        inputs=[id_input, title_input, content_input, keywords_input, table_state, index_dropdown],
+                        outputs=[preview_json, status_output, meta_state],
                     )
 
-                    with gr.Column():
-                        add_to_collection_button = gr.Button("Добавить в коллекцию",
-                                                             visible=True,
-                                                             size="md",
-                                                             )
-                        add_to_index_button = gr.Button("Индексировать",
-                                                        visible=False,
-                                                        size="md",
-                                                        )
+                    def save_and_send_to_meilisearch(meta):
+                        print("+++++")
+                        print(meta)
+                        print("+++++")
+
+                        if not meta:
+                            return "Ошибка: нет данных (сделайте Предпросмотр)."
+
+                        index_name = meta["index"]
+                        _blocks = meta["blocks"]
+                        if not index_name:
+                            return "Ошибка: не выбран индекс."
+                        if not _blocks:
+                            return "Ошибка: пустой массив блоков."
+                        msg: str = ""
+                        try:
+                            msg = meilisearch.add_doc_to_meili(_blocks, index_name)
+                            # client.index(index_name).add_documents(blocks)
+                        except Exception as e:
+                            return f"Ошибка добавления в Meilisearch: {e}, сообщение от Meilisearch: {msg}"
+
+                        return (f"✅ Успешно: '{meta['doc_id']}', добавлено {len(_blocks)} блок(ов) в '{index_name}', "
+                                f"сообщение от Meilisearch: {msg}")
+
+                    save_button.click(
+                        save_and_send_to_meilisearch,
+                        inputs=[meta_state],
+                        outputs=[status_output],
+                    )
 
                 # ---------------------------------------------------
                 # Секция просмотра содержимого коллекций
                 # и индексов
                 # ---------------------------------------------------
 
-                gr.Markdown("### Содержание Индексов и Коллекций")
+                with gr.Accordion(label="База знаний Meilisearch (просмотр и удаление)",
+                                  open=True, ):
 
-                with gr.Row():
-                    with gr.Column():
+                    with gr.Row():
                         meili_ind_for_cont_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
                                                                   filterable=True,
                                                                   interactive=True,
                                                                   label=INDEXES_IN_MEILI,
-                                                                  info="Выберите Индекс для просмотра содержимого",
+                                                                  # info="Выберите Индекс для просмотра",
                                                                   visible=True,
+                                                                  scale=4,
                                                                   )
 
-                        meili_indices_table = gr.DataFrame(
-                            value=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value),
-                            label="Содержание выбранного Индекса",
-                            headers=["Имя файла", ],
-                            row_count=(15, "dynamic"),
-                            col_count=(1, "fixed"),
-                            datatype="str",
-                            interactive=False
+                        meili_content_of_index_dropdown = gr.Dropdown(
+                            choices=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value, "ID"),
+                            allow_custom_value=True,
+                            label="Выбрать документ по ID для удаления",
+                            visible=True,
+                            interactive=True,
+                            scale=4,
                         )
-                        with gr.Row():
-                            meili_content_of_index_dropdown = gr.Dropdown(
-                                # choices=[],
-                                choices=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value),
-                                # value=None,
-                                allow_custom_value=False,
-                                label="Выбрать документ для удаления",
-                                visible=True,
-                                interactive=True,
-                                scale=80
 
-                            )
-
-                            rm_doc_from_index_button = gr.Button("Удалить из Индекса",
-                                                                 size="md",
+                        with gr.Column():
+                            refresh_data_btn = gr.Button("🔄 Обновить",
+                                                         size="md",
+                                                         visible=True,
+                                                         interactive=True,
+                                                         variant="primary",
+                                                         scale=2,
+                                                         )
+                            rm_doc_from_index_button = gr.Button("⛔ Удалить из Индекса",
+                                                                 size="sm",
                                                                  visible=True,
-                                                                 interactive=False, )
+                                                                 interactive=True,
+                                                                 variant="stop",
+                                                                 scale=2,
+                                                                 )
 
-                    with gr.Column():
+                    status_bar1 = gr.Textbox(txt_default(),
+                                             label="Статус операции",
+                                             every=15,
+                                             interactive=False)
+
+                    meili_indices_table = gr.DataFrame(
+                        value=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value, "All"),
+                        label="Содержание выбранного Индекса",
+                        headers=["ID документа", "Заголовок документа", "Фрагмент содержания"],
+                        row_count=(20, "dynamic"),
+                        col_count=(3, "fixed"),
+                        datatype="str",
+                        interactive=False
+                    )
+
+                with gr.Accordion(label="База знаний Chroma DB (просмотр и удаление)", open=False, ):
+                    with gr.Row():
                         chroma_coll_for_cont_dropdown = gr.Dropdown(choices=gr_existed_collections(),
                                                                     filterable=True,
                                                                     label=COLLECTIONS_IN_CHROMA,
                                                                     interactive=True,
-                                                                    info="Выберите Коллекцию для просмотра содержимого",
+                                                                    # info="Выберите Коллекцию для просмотра содержимого",
                                                                     visible=True,
+                                                                    scale=4,
                                                                     )
-                        chroma_collection_table = gr.DataFrame(
-                            value=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
-                            label="Содержание выбранной Коллекции",
-                            headers=["Имя файла и страница", ],
-                            row_count=(15, "dynamic"),
-                            col_count=(1, "fixed"),
-                            datatype="str",
-                            interactive=False
+                        chroma_collection_content = gr.Dropdown(
+                            # choices=[],
+                            choices=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
+                            # value=None,
+                            allow_custom_value=False,
+                            label="Выбрать документ для удаления",
+                            visible=True,
+                            interactive=True,
+                            scale=4,
                         )
-                        with gr.Row():
-                            chroma_collection_content = gr.Dropdown(
-                                # choices=[],
-                                choices=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
-                                # value=None,
-                                allow_custom_value=False,
-                                label="Выбрать документ для удаления",
-                                visible=True,
-                                interactive=True,
-                                scale=80,
-                            )
 
-                            rm_doc_from_collection_button = gr.Button("Удалить из Коллекции",
-                                                                      size="md",
-                                                                      visible=True,
-                                                                      interactive=False,
-                                                                      )
+                        rm_doc_from_collection_button = gr.Button("Удалить из Коллекции",
+                                                                  size="sm",
+                                                                  visible=True,
+                                                                  interactive=False,
+                                                                  variant="stop",
+                                                                  scale=2
+                                                                  )
+
+                    status_bar2 = gr.Textbox(txt_default(),
+                                             label="Статус операции",
+                                             every=15,
+                                             interactive=False)
+
+                    chroma_collection_table = gr.DataFrame(
+                        value=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
+                        label="Содержание выбранной Коллекции",
+                        headers=["Имя файла и страница", ],
+                        row_count=(15, "dynamic"),
+                        col_count=(1, "fixed"),
+                        datatype="str",
+                        interactive=False
+                    )
 
                 # ---------------------------------------------
-                # Секция интерфейса чата, немного излишний код
+                # Секция интерфейса чата, дополнительный код
                 # Оформление и дизайн
                 # ---------------------------------------------
 
@@ -950,7 +1187,7 @@ def main():
                                             upload_indices_dropdown,
                                             add_collection_button,
                                             rm_collection_button,
-                                            # add_index_button,
+                                            add_index_button,
                                             rm_index_button,
                                             add_to_collection_button,
                                             add_to_index_button,
@@ -1002,12 +1239,29 @@ def main():
                     ]
                 )
 
+                add_index_button.click(
+                    gr_create_index,
+                    inputs=upload_indices_dropdown,
+                    outputs=[
+                        upload_indices_dropdown,
+                        meili_search_indexes_dropdown,
+                        meili_ind_for_cont_dropdown,
+                        status_bar,
+                    ]
+                )
+
                 # Event handlers of universal indexation button
                 # Универсальная кнопка для индексации (PDF или JSON)
                 add_to_index_button.click(
                     gr_add_to_index_universal,
                     inputs=[upload_indices_dropdown, pdf, json_file, radio_type_of_upl_data],
                     outputs=[pdf, json_file, status_bar, upload_indices_dropdown, meili_search_indexes_dropdown]
+                )
+
+                rm_doc_from_index_button.click(
+                    gr_rm_doc_from_index,
+                    inputs=[meili_ind_for_cont_dropdown, meili_content_of_index_dropdown],
+                    outputs=[status_bar1, meili_content_of_index_dropdown, meili_indices_table]
                 )
 
                 # ----------------------------------------------------------------
@@ -1019,8 +1273,9 @@ def main():
                 meili_ind_for_cont_dropdown.change(
                     fn=update_docs_in_meili_index,
                     inputs=meili_ind_for_cont_dropdown,
-                    outputs=[meili_content_of_index_dropdown,
-                             meili_indices_table]
+                    outputs=[meili_indices_table,
+                             meili_content_of_index_dropdown,
+                             ]
                 )
 
                 # При смене выбранной коллекции -> обновить список документов
@@ -1031,136 +1286,13 @@ def main():
                              chroma_collection_table]
                 )
 
-            # --------------------------------------------------
-            # Вкладка 3 — конструктор документа для загрузки
-            # --------------------------------------------------
-
-            with gr.Tab("\U0001F4C4 Добавить документ в Meilisearch"):
-                gr.Markdown("### Заполните форму для добавления документа в индекс Meilisearch")
-
-                with gr.Column():
-                    doc_id = str(uuid.uuid4())  # Генератор названия документа
-
-                    def generate_new_id():
-                        return str(uuid.uuid4())
-
-                    # ----------------------------------------------------
-                    # Секция оформления страницы - конструктора документа
-                    # ----------------------------------------------------
-                    with gr.Row():
-                        index_dropdown = gr.Dropdown(
-                            choices=gr_existed_indexes(),
-                            label="Выберите индекс Meilisearch",
-                            interactive=True,
-                            scale=30,
-                        )
-                        id_input = gr.Textbox(label="ID документа (генерируется по умолчанию, но можно менять вручную)",
-                                              value=generate_new_id,
-                                              scale=50
-                                              )
-                        generate_id_button = gr.Button("🔄 Сгенерировать новый ID", scale=20, size="md")
-
-                    title_input = gr.Textbox(label="Заголовок, title")
-                    content_input = gr.Textbox(label="Основной текст, content", lines=20, max_lines=80)
-                    keywords_input = gr.Textbox(label="Ключевые слова, keywords (через запятую)")
-                    status_output = gr.Textbox(label="Статус операции", interactive=False, value=txt_default,
-                                               every=10.0,
-                                               container=False)
-                    preview_button = gr.Button("Посмотреть получившийся JSON")
-                    preview_json = gr.JSON(label="Предпросмотр JSON", visible=False)
-                    save_button = gr.Button("Сохранить и отправить в индекс")
-
-                # -----------------------------------------------------
-
-                def new_doc_fulfilling():  # Пока не работает
-
-                    return (
-                        gr.update(interactive=True),
-                        gr.update(interactive=True),
-                    )
-
-                def fn_preview_json(current_doc_id, title, content, keywords, selected_index):
-
-                    if not content.strip():
-                        return gr.update(visible=False), "Ошибка: поле 'content' не может быть пустым"
-
-                    if not selected_index:
-                        return gr.update(visible=False), "Ошибка: не выбран индекс"
-
-                    if not current_doc_id:
-                        current_doc_id = generate_new_id()
-                        id_input.value = current_doc_id
-
-                    # Проверка уникальности ID
-                    json_path = os.path.join("Upload", f"{current_doc_id}.json")
-                    if os.path.exists(json_path):
-                        return gr.update(visible=False), f"Ошибка: документ с ID '{current_doc_id}' уже существует."
-
-                    doc = {
-                        "id": current_doc_id,
-                        "title": title or "(без заголовка)",
-                        "content": content,
-                        "keywords": [kw.strip() for kw in keywords.split(",") if kw.strip()],
-                        "Indexes_meili": selected_index,
-                    }
-
-                    return (gr.update(visible=True,
-                                      value=doc),
-                            f"\u2705 Документ '{current_doc_id}' для индекса '{selected_index}' просматривается..."
-                            )
-
-                def save_and_send_to_meilisearch(current_doc_id, temporary_json, selected_index):
-
-                    if not current_doc_id:
-                        current_doc_id = generate_new_id()
-                        id_input.value = current_doc_id
-
-                    # Проверка уникальности ID
-                    json_path = os.path.join("Upload", f"{current_doc_id}.json")
-                    if os.path.exists(json_path):
-                        return gr.update(visible=False), f"Ошибка: документ с ID '{current_doc_id}' уже существует."
-
-                    if temporary_json:
-                        with open(json_path, "w", encoding="utf-8") as f:
-                            json.dump(temporary_json, f, ensure_ascii=False, indent=2)
-
-                        try:
-                            meilisearch.add_doc_to_meili(json_path, selected_index)
-                        except Exception as e:
-                            return (gr.update(),
-                                    gr.update(),
-                                    gr.update(),
-                                    gr.update(),
-                                    gr.update(),
-                                    f"Ошибка загрузки в Meilisearch: {e}",
-                                    gr.update(),
-                                    gr.update(),
-                                    )
-
-                        return (gr.update(value=None),
-                                gr.update(value=str(uuid.uuid4())),
-                                gr.update(value=None),
-                                gr.update(value=None),
-                                gr.update(value=None),
-                                f"\u2705 Документ успешно добавлен в индекс '{selected_index}'.",
-                                gr.update(interactive=False),
-                                gr.update(interactive=False),
-                                )
-                    else:
-                        return (
-                            gr.update(visible=True, ),
-                            gr.update(visible=True, ),
-                            gr.update(visible=True, ),
-                            gr.update(visible=True, ),
-                            gr.update(visible=True, ),
-                            "\u274C Ошибка: документ для сохранения не передан. Сначала используйте 'Посмотреть получившийся JSON'.",
-                            gr.update(visible=True, interactive=True),
-                            gr.update(visible=True, interactive=True),
-                        )
-
-            # ---------------------------------------
-            # Вкладка 4 -- Settings & Adjustments
-            # ---------------------------------------
+            refresh_data_btn.click(
+                update_docs_in_meili_index,
+                inputs=[meili_ind_for_cont_dropdown],
+                outputs=[meili_indices_table,
+                         meili_content_of_index_dropdown,
+                         ]
+            )
 
             # -------- FUNCTIONS SECTION ------------
 
@@ -1196,7 +1328,7 @@ def main():
                 except Exception as e:
                     return f"❌ Ошибка сохранения на уровне интерфейса: {e}"
 
-            # ------------ ASSERT(VALIDATE) MAIN LLM ---------------
+            # ------------ ASSERT(ACCEPT/VALIDATE/CHOOSE) MAIN LLM ---------------
 
             def fn_load_main_model() -> List[str]:
                 return [ollama_settings.read_main_model_name(False)]
@@ -1214,6 +1346,11 @@ def main():
                 if only_list:
                     return models
                 return gr.update(choices=models, value=models[-1] if models else [])
+
+            # ------------Container Management Section--------------
+
+            def restart() -> str:
+                return restart_container.restart_ollama_container()
 
             # ------------------------------------------------------
 
@@ -1240,14 +1377,16 @@ def main():
                                 choices=fn_load_main_model(),
                                 multiselect=False,
                                 label="Выбор главной LLM",
-                                interactive=True
+                                interactive=True,
+                                container=True,
                             )
-                            reload_main_model_btn = gr.Button("🔄 Загрузить доступные модели", size="md")
-                            save_model_btn = gr.Button("💾 Утвердить выбранную модель", size="md")
-                            # TODO: Активация рассуждения пока не прокинута в router_preprocessor.
                             think_checkbox = gr.Checkbox(label="Активировать способность рассуждать",
                                                          # info="Только для reasoning models, снижает скорость",
-                                                         value=ollama_settings.init_thinking())
+                                                         value=ollama_settings.init_thinking(),
+                                                         container=True, )
+
+                            reload_main_model_btn = gr.Button("⬇️ Загрузить доступные модели", size="sm", )
+                            save_model_btn = gr.Button("💾 Утвердить выбранную модель", size="sm", )
 
                         reload_main_model_btn.click(
                             fn=reassert_main_model_dropdown,
@@ -1259,7 +1398,7 @@ def main():
                                              outputs=[status], )
 
                         think_checkbox.change(ollama_settings.write_think_status, inputs=[think_checkbox],
-                                                outputs=[status])
+                                              outputs=[status])
 
                         json_ollama_options = gr.Code(label="📄Ollama Options",
                                                       value=fn_load_options(explain=False),
@@ -1269,8 +1408,10 @@ def main():
                                                       interactive=True,
                                                       scale=4)
                         with gr.Column():
-                            load_options_btn = gr.Button("🔄 Загрузить текущие опции", scale=20, size="md")
-                            save_options_btn = gr.Button("💾 Сохранить новые опции", scale=20, size="md")
+                            load_options_btn = gr.Button("⬇️ Загрузить текущие опции", scale=20, size="sm", )
+                            save_options_btn = gr.Button("💾 Сохранить новые опции", scale=20, size="sm", )
+                            restart_ollama_btn = gr.Button("🔃 Перезагрузить Ollama", scale=20, size="sm",
+                                                           variant="stop")
 
                 load_options_btn.click(fn=fn_load_options,
                                        # в данном случае explain = True (умолчание), так как надо передать оповещение в статус.
@@ -1281,6 +1422,7 @@ def main():
                                        ],
                                        )
                 save_options_btn.click(fn=fn_save_options, inputs=json_ollama_options, outputs=status)
+                restart_ollama_btn.click(fn=restart, outputs=status)
 
                 # --------------------------------------------------------
                 #  Split prompt section
@@ -1532,27 +1674,27 @@ def main():
             # Event handlers for upper sections
             # ----------------------------------
 
-            generate_id_button.click(fn=generate_new_id, inputs=[], outputs=[id_input])
+            generate_id_button.click(fn=generate_new_id, outputs=[id_input])
 
-            preview_button.click(
-                fn=fn_preview_json,
-                inputs=[id_input, title_input, content_input, keywords_input, index_dropdown],
-                outputs=[preview_json,
-                         status_output, ]
-            )
+            # preview_button.click(
+            #     fn=fn_preview_json,
+            #     inputs=[id_input, title_input, content_input, keywords_input, index_dropdown],
+            #     outputs=[preview_json,
+            #              status_output, ]
+            # )
 
-            save_button.click(
-                fn=save_and_send_to_meilisearch,
-                inputs=[id_input, preview_json, index_dropdown],
-                outputs=[preview_json,
-                         id_input,
-                         title_input,
-                         content_input,
-                         keywords_input,
-                         status_output,
-                         preview_button,
-                         save_button, ]
-            )
+            # save_button.click(
+            #     fn=save_and_send_to_meilisearch,
+            #     inputs=[id_input, preview_json, index_dropdown],
+            #     outputs=[preview_json,
+            #              id_input,
+            #              title_input,
+            #              content_input,
+            #              keywords_input,
+            #              status_output,
+            #              preview_button,
+            #              save_button, ]
+            # )
 
     # -------------------------
     # Footer html realization
@@ -1562,7 +1704,7 @@ def main():
         """
         <div id="custom-footer">
             &copy; ООО "Нейри" 2025
-            <a href="https://neiry-ai.ru" target= "_blank">neiry-ai.ru</a>
+            <a href="https://neiry-ai.ru" target="_blank">neiry-ai.ru</a>
         </div>
         """,
         visible=True
@@ -1576,6 +1718,7 @@ def main():
         allowed_paths=[str(STATIC_DIR)],
         favicon_path=str(STATIC_DIR / "logo.png")
     )
+
 
 if __name__ == "__main__":
     main()

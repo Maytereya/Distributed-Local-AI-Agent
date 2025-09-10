@@ -12,6 +12,7 @@ import agent_logic_2.ollama_settings as ollama_settings
 from agent_logic_2 import llama_func_call as doctor_info, config as c
 from agent_logic_2.prompts import load_prompt
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
+from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
 from agent_logic_2.llama_func_call import repo
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
@@ -20,6 +21,11 @@ from converters import html_cleaner
 # --- ensure doctors repo is warmed up (file may be absent on first FILTER run) ---
 async def _ensure_doctors_repo_loaded() -> None:
     try:
+        # стараемся запустить планировщик ежедневного обновления (внутри активного event loop)
+        try:
+            ensure_daily_refresh_started()
+        except Exception:
+            pass
         # try fast-path
         data = repo.read_all()
         if not data:
@@ -76,20 +82,32 @@ def _extract_age_from_cc(cc: str) -> str:
         return "не указан"
     s = cc.lower()
     # Явные формулировки
-    m = re.search(r"с\s*(\d{1,2})\s*лет", s)
+    # 1) "с N(-и) лет"
+    m = re.search(r"\bс\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", s)
     if m:
         return f"с {m.group(1)} лет"
-    m = re.search(r"в\s+возрасте\s*(\d{1,2})\s*лет", s)
+    # 2) "в возрасте N(-и) лет"
+    m = re.search(r"\bв\s*возрасте\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", s)
     if m:
         return f"с {m.group(1)} лет"
-    m = re.search(r"принимает\s*(пациентов\s*)?с\s*(\d{1,2})\s*лет", s)
+    # 3) "с возраста N(-и) лет"
+    m = re.search(r"\bс\s*возраста\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", s)
     if m:
-        return f"с {m.group(2)} лет"
+        return f"с {m.group(1)} лет"
+    # 4) "принимает с N(-и) лет"
+    m = re.search(r"принимает\s*(пациентов\s*)?с\s*(\d{1,2})\s*(?:-?и)?\s*лет", s)
+    if m:
+        # номер группы может быть 1 или 2, поэтому берём первую непустую
+        num = m.group(2) or m.group(1)
+        return f"с {num} лет"
+    # Совершеннолетние пациенты → считаем с 18 лет
+    if "совершеннолет" in s:
+        return "с 18 лет"
     # Иногда пишут "с 0+" или "0+"
     if "0+" in s or re.search(r"\bс\s*0\s*лет\b", s):
         return "с 0 лет"
     # Негативные формулировки дают подсказку: только взрослые → с 18 лет
-    if "только взросл" in s or re.search(r"\bс\s*18\s*лет\b", s):
+    if "только взросл" in s or "взросл" in s or re.search(r"\bс\s*18\s*лет\b", s):
         return "с 18 лет"
     return "не указан"
 
@@ -740,10 +758,23 @@ def _flag_from_cc(cc: str, key: str) -> Optional[bool]:
             return True
         return None
     if key == 'children':
-        if 'с 18 лет' in s or 'принимает с 18' in s or 'только взросл' in s:
+        # Явные отрицания/только взрослые/совершеннолетние
+        if 'с 18 лет' in s or 'принимает с 18' in s or 'только взросл' in s or 'взросл' in s or 'совершеннолет' in s:
             return False
+        # Явные указания работы с детьми
         if 'дет' in s and ('работ' in s or 'принимает' in s):
             return True
+        # Возрастной признак: если указан возраст начала приёма < 18 — считаем, что работает с детьми
+        m = re.search(r"\bс\s*(\d{1,2})\s*лет\b", s)
+        if m:
+            try:
+                n = int(m.group(1))
+                if n < 18:
+                    return True
+                else:
+                    return False
+            except Exception:
+                pass
         return None
     if key == 'dms':
         if 'не принимает по дмс' in s or 'дмс: нет' in s or 'дмс — нет' in s or 'дмс - нет' in s:
@@ -825,9 +856,14 @@ def _extract_specialty_terms_from_segment(segment: str, docs: List[Dict[str, Any
     return uniq_terms
 
 
-async def _filter_doctors_via_cc_info(filters: Dict[str, bool], segment: str | None = None) -> str:
+async def _filter_doctors_via_cc_info(
+    filters: Dict[str, bool],
+    segment: str | None = None,
+    fallback_segment: str | None = None,
+) -> str:
     """Вернёт отформатированный список врачей, удовлетворяющих фильтрам, а также (если удаётся распознать)
-    специальности из того же сегмента. Если специальность не распознана — поведение остаётся прежним.
+    специальности из сегмента. Если в текущем сегменте спец‑термины не найдены — пробуем извлечь их из
+    полного исходного запроса (fallback_segment).
     """
     await _ensure_doctors_repo_loaded()
     try:
@@ -841,6 +877,12 @@ async def _filter_doctors_via_cc_info(filters: Dict[str, bool], segment: str | N
     if segment:
         try:
             spec_terms = _extract_specialty_terms_from_segment(segment, docs)
+        except Exception:
+            spec_terms = []
+    # Fallback: если не нашли в текущем сегменте, попробуем во всём тексте запроса
+    if not spec_terms and fallback_segment and fallback_segment != segment:
+        try:
+            spec_terms = _extract_specialty_terms_from_segment(fallback_segment, docs)
         except Exception:
             spec_terms = []
     require_spec = bool(spec_terms)
@@ -901,7 +943,7 @@ async def process_segments(text: str, sess: SessionType, think: bool | None = No
         kw_filters = _keyword_to_filter(segment)
         if kw_filters:
             print("[KEYWORD→FILTER] parsed:", kw_filters)
-            response = await _filter_doctors_via_cc_info(kw_filters, segment=segment)
+            response = await _filter_doctors_via_cc_info(kw_filters, segment=segment, fallback_segment=text)
             responses.append(response)
             continue
         # 0) FILTER: ... → обрабатываем напрямую, не ломая существующие ветки
@@ -909,7 +951,7 @@ async def process_segments(text: str, sess: SessionType, think: bool | None = No
         if m:
             flt = _parse_filters(m.group(1))
             print("[FILTER] parsed:", flt)
-            response = await _filter_doctors_via_cc_info(flt, segment=segment)
+            response = await _filter_doctors_via_cc_info(flt, segment=segment, fallback_segment=text)
             responses.append(response)
             continue
 

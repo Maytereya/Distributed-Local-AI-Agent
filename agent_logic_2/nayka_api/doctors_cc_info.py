@@ -11,6 +11,7 @@ import glob
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent_logic_2 import config as c
 from agent_logic_2.nayka_api.api_nayka import get_today_str
+import urllib3
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -112,7 +113,7 @@ def save_to_cache(data: List[Dict]) -> None:
         logger.error(f"Ошибка при сохранении кэша: {e}")
 
 
-def get_doctors_cc_info() -> List[Dict]:
+def get_doctors_cc_info(force: bool = False) -> List[Dict]:
     """
     Получает информацию о заметках call-центра по врачам.
     Сначала проверяет кэш, если данных нет или они устарели - запрашивает API.
@@ -123,10 +124,11 @@ def get_doctors_cc_info() -> List[Dict]:
         - id: код врача
         - callCenterInfo: заметка call-центра по этому врачу
     """
-    # Пробуем загрузить из кэша
-    cached_data = load_from_cache()
-    if cached_data is not None:
-        return cached_data
+    # Пробуем загрузить из кэша (если не запрошено принудительное обновление)
+    if not force:
+        cached_data = load_from_cache()
+        if cached_data is not None:
+            return cached_data
         
     try:
         # URL для API
@@ -136,6 +138,8 @@ def get_doctors_cc_info() -> List[Dict]:
         auth = (c.nayka_login, c.nayka_pass)
         
         # Отправляем GET запрос с авторизацией
+        # Подавляем предупреждения, если явно используем verify=False
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         response = requests.get(url, auth=auth, verify=False)
         
         # Проверяем статус ответа
