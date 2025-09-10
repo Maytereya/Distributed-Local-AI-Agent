@@ -12,7 +12,7 @@ import agent_logic_2.ollama_settings as ollama_settings
 from agent_logic_2 import llama_func_call as doctor_info, config as c
 from agent_logic_2.prompts import load_prompt
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
-from agent_logic_2.llama_func_call import repo, get_region_map
+from agent_logic_2.llama_func_call import repo
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
 
@@ -21,11 +21,13 @@ from converters import html_cleaner
 async def _ensure_doctors_repo_loaded() -> None:
     try:
         # try fast-path
-        _ = repo.read_all()
+        data = repo.read_all()
+        if not data:
+            raise RuntimeError("doctors repo is empty")
     except Exception:
-        # fallback: warm up via the same public API that lazily builds the dataset
+        # Fallback: обновляем репозиторий напрямую из API без участия LLM
         try:
-            await doctor_info.investigate("инициализация справочника врачей (warmup)", think=False)
+            await repo.update(doctor_info.get_all_doctors)
         except Exception:
             pass
 
@@ -238,10 +240,10 @@ FILTER_RE = re.compile(r'^\s*FILTER:\s*(.+)$', re.IGNORECASE)
 
 _KEYWORDS_TRUE = {
     'dms': [
-        'по дмс', 'принимает по дмс', 'работает по дмс', 'есть дмс', 'дмс да'
+        'по дмс', 'принимает по дмс', 'принимают по дмс', 'работает по дмс', 'работают по дмс', 'есть дмс', 'дмс да'
     ],
     'children': [
-        'работает с детьми', 'принимает детей', 'детей принимает', 'детям', 'с детьми'
+        'работает с детьми', 'работают с детьми', 'принимает детей', 'принимают детей', 'детей принимает', 'детям', 'с детьми'
     ],
     'arriving': [
         'приходящий', 'приходящие', 'разовый', 'совмещает'
@@ -250,10 +252,10 @@ _KEYWORDS_TRUE = {
 
 _KEYWORDS_FALSE = {
     'dms': [
-        'не по дмс', 'не принимает по дмс', 'без дмс', 'дмс нет'
+        'не по дмс', 'не принимает по дмс', 'не принимают по дмс', 'без дмс', 'дмс нет', 'нет дмс'
     ],
     'children': [
-        'не работает с детьми', 'без детей', 'детей не принимает', 'только взросл'
+        'не работает с детьми', 'не работают с детьми', 'без детей', 'детей не принимает', 'детей не принимают', 'только взросл'
     ],
     'arriving': [
         'не приходящий', 'не приходящие', 'неприходящий', 'неприходящие'
@@ -266,23 +268,24 @@ def _keyword_to_filter(segment: str) -> Dict[str, bool] | None:
         return None
     s = segment.lower()
     out: Dict[str, bool] = {}
-    # DMS
-    if any(k in s for k in _KEYWORDS_TRUE['dms']):
-        out['dms'] = True
-    if any(k in s for k in _KEYWORDS_FALSE['dms']):
+    # DMS — сначала проверяем отрицания, затем положительные упоминания
+    # Регулярки учитывают формы "принимает/принимают", "работает/работают"
+    if re.search(r"\b(не\s*(принима(ет|ют)|работа(ет|ют)|по)\s*по\s*дмс|без\s*дмс|дмс\s*нет|нет\s*дмс)\b", s):
         out['dms'] = False
+    elif re.search(r"\b(принима(ет|ют)\s*по\s*дмс|работа(ет|ют)\s*по\s*дмс|по\s*дмс|дмс\s*да)\b", s):
+        out['dms'] = True
     # CHILDREN
-    if any(k in s for k in _KEYWORDS_TRUE['children']):
-        out['children'] = True
-    if any(k in s for k in _KEYWORDS_FALSE['children']):
+    if re.search(r"\b(не\s*работа(ет|ют)\s*с\s*детьми|без\s*детей|детей\s*не\s*принима(ет|ют)|только\s*взросл)\b", s):
         out['children'] = False
+    elif any(k in s for k in _KEYWORDS_TRUE['children']):
+        out['children'] = True
     # ARRIVING
-    if any(k in s for k in _KEYWORDS_TRUE['arriving']):
-        out['arriving'] = True
     if any(k in s for k in _KEYWORDS_FALSE['arriving']):
         out['arriving'] = False
+    elif any(k in s for k in _KEYWORDS_TRUE['arriving']):
+        out['arriving'] = True
     # Дополнительное правило: "с N лет" → children=True (если N < 18), N>=18 → children=False
-    m = re.search(r"с\s*(\d{1,2})\s*лет", s)
+    m = re.search(r"\bс\s*(\d{1,2})\s*лет\b", s)
     if m:
         try:
             n = int(m.group(1))
@@ -751,8 +754,81 @@ def _flag_from_cc(cc: str, key: str) -> Optional[bool]:
     return None
 
 
-async def _filter_doctors_via_cc_info(filters: Dict[str, bool]) -> str:
-    """Вернёт отформатированный список врачей, удовлетворяющих фильтрам, используя существующие repo/formatter."""
+def _norm_text(s: str) -> str:
+    return (s or "").lower()
+
+def _extract_specialty_terms_from_segment(segment: str, docs: List[Dict[str, Any]]) -> List[str]:
+    """
+    Пытается извлечь возможные ключевые слова специальности из сегмента.
+    Возвращает только те токены, которые встречаются хотя бы в одной специализации/юните врача.
+    """
+    if not isinstance(segment, str) or not segment.strip():
+        return []
+    seg = _norm_text(segment)
+    seg = re.sub(r"[,.!?;:()\[\]{}]", " ", seg)
+    tokens = [t for t in re.split(r"\s+", seg) if t]
+    # Уберём частые служебные слова и слова фильтров
+    stop = set(getattr(doctor_info, 'STOP_WORDS', set())) | {
+        'дмс', 'страховка', 'страховой', 'страховая', 'по', 'с', 'без',
+        'дети', 'детям', 'детей', 'взрослые', 'взрослый', 'приходящий', 'приходящие', 'неприходящий',
+        'принимает', 'работает', 'где', 'кто', 'список', 'нужен', 'ищу'
+    }
+    tokens = [t for t in tokens if t not in stop and len(t) >= 3]
+
+    # Морфологическая нормализация (простая): множественное → единственное
+    norm_tokens: List[str] = []
+    for t in tokens:
+        try:
+            # используем имеющуюся нормализацию из doctor_info, если доступна
+            if hasattr(doctor_info, 'normalize_specialty_term'):
+                nt = doctor_info.normalize_specialty_term(t) or t
+            else:
+                nt = t[:-1] if (len(t) > 4 and (t.endswith('и') or t.endswith('ы'))) else t
+        except Exception:
+            nt = t
+        norm_tokens.append(nt)
+
+    # Базовые синонимы под подстроки, встречающиеся в наших данных
+    synonyms = {
+        'лор': 'отоларинголог',
+        'узи': 'ультразвуков',   # покроет и "врач ультразвуковой диагностики"
+        'узист': 'ультразвуков',
+    }
+    expanded_tokens: List[str] = []
+    for t in norm_tokens:
+        expanded_tokens.append(t)
+        if t in synonyms:
+            expanded_tokens.append(synonyms[t])
+
+    if not expanded_tokens:
+        return []
+
+    # Построим текст для поиска по каждому врачу: specialization + units
+    texts = []
+    for d in docs:
+        spec = _norm_text(d.get('specialization') or '')
+        units = ", ".join(d.get('units') or [])
+        texts.append(spec + " " + _norm_text(units))
+
+    # Оставляем только те термины, которые где-то реально встречаются
+    valid_terms = []
+    for t in expanded_tokens:
+        if any(t in txt for txt in texts):
+            valid_terms.append(t)
+    # Уберём дубликаты, сохранив порядок
+    seen = set()
+    uniq_terms = []
+    for t in valid_terms:
+        if t not in seen:
+            seen.add(t)
+            uniq_terms.append(t)
+    return uniq_terms
+
+
+async def _filter_doctors_via_cc_info(filters: Dict[str, bool], segment: str | None = None) -> str:
+    """Вернёт отформатированный список врачей, удовлетворяющих фильтрам, а также (если удаётся распознать)
+    специальности из того же сегмента. Если специальность не распознана — поведение остаётся прежним.
+    """
     await _ensure_doctors_repo_loaded()
     try:
         cc_by_id = _get_cc_info_map()
@@ -760,12 +836,35 @@ async def _filter_doctors_via_cc_info(filters: Dict[str, bool]) -> str:
         return f"Релевантной информации не найдено (ошибка загрузки заметок колл-центра: {e})."
 
     docs = repo.read_all()
+    # Попробуем аккуратно вытащить ключевые слова специальности из сегмента
+    spec_terms: List[str] = []
+    if segment:
+        try:
+            spec_terms = _extract_specialty_terms_from_segment(segment, docs)
+        except Exception:
+            spec_terms = []
+    require_spec = bool(spec_terms)
     matched: List[Dict[str, Any]] = []
 
     for d in docs:
         did = d.get('id')
         cc_text = cc_by_id.get(did, '')
         ok = True
+        # 1) Специальность/направление (если распознан термин спец-сти в сегменте)
+        if require_spec:
+            units_text = _norm_text(" ".join(d.get('units') or []))
+            spec_text = _norm_text(d.get('specialization') or '')
+            def _match_in_units(term: str) -> bool:
+                return term in units_text
+            def _match_in_spec(term: str) -> bool:
+                if not spec_text:
+                    return False
+                # требуем соседство с "врач" в пределах 25 символов в любую сторону
+                pattern = rf"(врач[^\n\r\-,:;]{{0,25}}{re.escape(term)})|({re.escape(term)}[^\n\r\-,:;]{{0,25}}врач)"
+                return re.search(pattern, spec_text) is not None
+            if not (any(_match_in_units(t) for t in spec_terms) or any(_match_in_spec(t) for t in spec_terms)):
+                ok = False
+        # 2) Флаги FILTER (ДМС/дети/приходящий)
         for k, desired in filters.items():
             key = k.lower()
             if key.startswith('arriv') or key.startswith('приход'):
@@ -802,7 +901,7 @@ async def process_segments(text: str, sess: SessionType, think: bool | None = No
         kw_filters = _keyword_to_filter(segment)
         if kw_filters:
             print("[KEYWORD→FILTER] parsed:", kw_filters)
-            response = await _filter_doctors_via_cc_info(kw_filters)
+            response = await _filter_doctors_via_cc_info(kw_filters, segment=segment)
             responses.append(response)
             continue
         # 0) FILTER: ... → обрабатываем напрямую, не ломая существующие ветки
@@ -810,7 +909,7 @@ async def process_segments(text: str, sess: SessionType, think: bool | None = No
         if m:
             flt = _parse_filters(m.group(1))
             print("[FILTER] parsed:", flt)
-            response = await _filter_doctors_via_cc_info(flt)
+            response = await _filter_doctors_via_cc_info(flt, segment=segment)
             responses.append(response)
             continue
 
