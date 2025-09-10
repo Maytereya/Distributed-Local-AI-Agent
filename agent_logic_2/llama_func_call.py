@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Optional
 from ollama import AsyncClient
 
 from agent_logic_2.nayka_api.api_nayka import find_doctors_by_keyword, find_doctor_schedule, \
-    cleanup_old_doctors_files, get_all_doctors
+    cleanup_old_doctors_files, get_all_doctors, get_active_date_str
 from nayka_api.api_price import load_doctor_prices, update_price_all, load_price_all
 # from nayka_api.api_price_all import update_price_all, load_price_all
 from nayka_api.doctors_cc_info import get_doctors_cc_info
@@ -119,7 +119,8 @@ class DoctorsRepository:
         os.makedirs(self.data_dir, exist_ok=True)
 
     def _today_path(self) -> str:
-        date = datetime.now().strftime("%Y%m%d")
+        # Используем «активную» дату по Москве (до 06:00 — вчера, после — сегодня)
+        date = get_active_date_str()
         return os.path.join(self.data_dir, f"doctors_{date}.jsonl")
 
     def _default_path(self) -> str:
@@ -137,7 +138,7 @@ class DoctorsRepository:
             return False
         print(f"Получено {len(data)} врачей")
         print(f"Первый врач: {data[0] if data else 'нет данных'}")
-        # Очищаем старые файлы врачей перед записью нового
+        # Очищаем старые файлы (сохраняем активную и вчерашнюю дату)
         cleanup_old_doctors_files()
         with open(today, "w", encoding="utf-8") as f:
             for item in data:
@@ -494,12 +495,12 @@ async def investigate(question: str, think: bool = None) -> str:
 
 
 def get_latest_doctors_file():
-    """Находит актуальный doctors_*.jsonl (сегодняшний, иначе самый свежий)"""
+    """Находит актуальный doctors_*.jsonl: сначала за активную дату (MSK 06:00), иначе самый свежий."""
     apidata = Path(DATA_DIR)
-    today = datetime.now().strftime("%Y%m%d")
-    today_file = apidata / f"doctors_{today}.jsonl"
-    if today_file.exists():
-        return str(today_file)
+    active = get_active_date_str()
+    active_file = apidata / f"doctors_{active}.jsonl"
+    if active_file.exists():
+        return str(active_file)
     all_files = sorted(apidata.glob("doctors_*.jsonl"), reverse=True)
     for f in all_files:
         if f.exists():
