@@ -110,6 +110,6 @@ def load_previous_log(path: str):
 
 if __name__ == "__main__":
     rez = asyncio.run(llama_func_call.ollama_call(
-        "Какова техника прыжка ollie на трюковом скейте?"))
+        "Какова техника прыжка ollie на трюковом скейте?"),)
 
-    print(rez['response'])
+    print(rez)
