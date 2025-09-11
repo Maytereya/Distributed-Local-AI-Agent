@@ -198,11 +198,6 @@ def _parse_safe_compact_line(line: str) -> Dict[str, str]:
         m = re.search(r"\bприходящий:\s*(да|нет)\b", tl)
         if m:
             out["arriving"] = "Да" if m.group(1) == "да" else "Нет"
-        else:
-            if "не приход" in tl or "неприход" in tl:
-                out["arriving"] = "Нет"
-            elif "приходящ" in tl:
-                out["arriving"] = "Да"
         # Дети
         m = re.search(r"дети:\s*(да|нет)", tl)
         if m:
