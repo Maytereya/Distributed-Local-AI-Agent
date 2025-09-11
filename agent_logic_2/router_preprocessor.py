@@ -193,8 +193,9 @@ def _parse_safe_compact_line(line: str) -> Dict[str, str]:
         m = re.search(r"дмс:\s*(да|нет)", tl)
         if m:
             out["dms"] = "Да" if m.group(1) == "да" else "Нет"
-        # Приходящий
-        m = re.search(r"приходящий:\s*(да|нет)", tl)
+        # Приходящий: учитываем ТОЛЬКО явные метки "да"/"нет", без эвристик
+        # Если метки нет — оставляем значение по умолчанию "—" (неизвестно)
+        m = re.search(r"\bприходящий:\s*(да|нет)\b", tl)
         if m:
             out["arriving"] = "Да" if m.group(1) == "да" else "Нет"
         else:
