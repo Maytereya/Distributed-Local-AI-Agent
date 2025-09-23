@@ -133,7 +133,7 @@ def get_doctors_cc_info(force: bool = False) -> List[Dict]:
     try:
         # URL для API
         url = f"{BASE_URL}/ai/doctors-cc-info"
-        url = "https://tc.naykalab.ru:444/H8PdIkzEjteo5ZPvVwt29t4TVjf0XN1K/medserver-test/api/v1/ai/doctors-cc-info"
+        # url = "https://tc.naykalab.ru:444/H8PdIkzEjteo5ZPvVwt29t4TVjf0XN1K/medserver-test/api/v1/ai/doctors-cc-info"
 
         # Данные для авторизации
         auth = (c.nayka_login, c.nayka_pass)
