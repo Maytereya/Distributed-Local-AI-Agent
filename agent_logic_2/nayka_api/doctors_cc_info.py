@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Константы для кэширования
 CACHE_DIR = os.path.join(os.path.dirname(__file__), 'apidata')
 CACHE_EXPIRY = timedelta(hours=24)  # Кэш действителен 24 часа
-
+BASE_URL = c.nayka_base_url_no_site.rstrip("/")
 
 def get_cache_filename(date: str = None) -> str:
     """Возвращает имя файла кэша с датой"""
@@ -132,8 +132,9 @@ def get_doctors_cc_info(force: bool = False) -> List[Dict]:
         
     try:
         # URL для API
+        url = f"{BASE_URL}/ai/doctors-cc-info"
         url = "https://tc.naykalab.ru:444/H8PdIkzEjteo5ZPvVwt29t4TVjf0XN1K/medserver-test/api/v1/ai/doctors-cc-info"
-        
+
         # Данные для авторизации
         auth = (c.nayka_login, c.nayka_pass)
         
