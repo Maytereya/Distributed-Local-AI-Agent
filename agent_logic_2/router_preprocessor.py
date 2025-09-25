@@ -544,7 +544,13 @@ async def classify(text: str, sess: Dict[str, Any], think: bool = None) -> List[
         print(f"\n⚠️ classify timeout/error: {e}")
         return ["UNDEFINED"]
     try:
-        labels = [l.upper() for l in json.loads(res["response"]).get("labels", []) if l.upper() in ALLOWED]
+        obj = _extract_json_object(res.get("response"))
+        labels_raw: list[str] = []
+        if isinstance(obj, dict):
+            raw = obj.get("labels")
+            if isinstance(raw, list):
+                labels_raw = raw
+        labels = [str(l).upper() for l in labels_raw if str(l).upper() in ALLOWED]
         print("----------------- LABELS -----------------------")
         print(f"Маркировано labels: ", labels)
         print("------------------------------------------------")
