@@ -1709,7 +1709,9 @@ def main():
         """,
         visible=True
     )
-
+    blocks.queue(
+        default_concurrency_limit=8,
+        max_size=64)
     blocks.launch(
         server_name="0.0.0.0",
         server_port=7860,
