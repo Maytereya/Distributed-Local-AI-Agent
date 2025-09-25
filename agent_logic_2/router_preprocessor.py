@@ -638,7 +638,7 @@ async def instructions_search(_text: str, think: bool = None, **__) -> Tuple[str
           or "Empty")
     print("=" * 45)
 
-    collected_info = await asyncio.to_thread(meilisearch.search_meili, "spravka_docs", _text)
+    collected_info = await asyncio.to_thread(meilisearch.search_meili, "main_index", _text)
 
     # Очистка HTML перед подстановкой в prompt
     clean_info = html_cleaner.strip_html(collected_info)
