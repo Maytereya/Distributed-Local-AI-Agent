@@ -299,7 +299,7 @@ def _keyword_to_filter(segment: str) -> Dict[str, bool] | None:
     elif any(k in s for k in _KEYWORDS_TRUE['arriving']):
         out['arriving'] = True
     # Дополнительное правило: "с N лет" → children=True (если N < 18), N>=18 → children=False
-    m = re.search(r"\bс\s*(\d{1,2})\s*лет\b", s)
+    m = re.search(r"\bс\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", s)
     if m:
         try:
             n = int(m.group(1))
