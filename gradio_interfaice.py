@@ -1112,7 +1112,7 @@ def main():
                         value=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value, "All"),
                         label="Содержание выбранного Индекса",
                         headers=["ID документа", "Заголовок документа", "Фрагмент содержания"],
-                        row_count=(20, "dynamic"),
+                        row_count=(200, "dynamic"),
                         col_count=(3, "fixed"),
                         datatype="str",
                         interactive=False

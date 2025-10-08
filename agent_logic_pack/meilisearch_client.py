@@ -109,7 +109,8 @@ def get_task_info(task_number: int) -> dict:
 def meili_list_documents(
         index_name: str,
         return_type: Literal["ID", "All"] = "ID",
-        content_limit: int = 150
+        content_limit: int = 150,
+        doc_count_limit: int = 200,
 ) -> Union[List[List[str]], List[str]]:
     """
     Возвращает:
@@ -117,7 +118,7 @@ def meili_list_documents(
       - "All": список [id, title_or_default, cropped_content]
     """
 
-    data = client.index(index_name).get_documents({})
+    data = client.index(index_name).get_documents({'limit': doc_count_limit, })
     array_of_docs = data.results
 
     def safe_get(doc: Any, key: str, default: str = "") -> str:
@@ -355,9 +356,9 @@ def main():
     print("=======")
     print("=======")
 
-    s_r = search_meili("main_index", "уретрит")
-    print("=======")
-    print(s_r)
+    # s_r = search_meili("main_index", "уретрит")
+    # print("=======")
+    # print(s_r)
 
 
 if __name__ == '__main__':
