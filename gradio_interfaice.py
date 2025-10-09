@@ -7,7 +7,7 @@ import shutil
 import time
 import uuid
 from pathlib import Path
-from typing import Dict, List, Union, Tuple, Literal
+from typing import Dict, List, Union, Tuple, Literal, Any
 
 import gradio as gr
 from gradio_pdf import PDF
@@ -24,6 +24,7 @@ from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
 from container_managenment import restart_container
 from converters import pdf_to_json_txt_tables_meili as pdf2json
+from agent_logic_2.id_validation import is_valid_id, sanitize_id
 
 # Label constants
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
@@ -533,6 +534,19 @@ def gr_rm_doc_from_index(ind_id: str, doc_id: str):
             gr.update(value=full_list, ),
             )
 
+def validate_id_live(current: str) -> tuple[dict[str, Any], str]:
+    """
+    Живой валидатор для id_input: если строка уже валидна — оставляем,
+    если нет — предлагаем «почищенную» версию.
+    Возвращаем (value для id_input, статус).
+    """
+    if is_valid_id(current):
+        return gr.update(value=current), "ID валиден"
+    proposal = sanitize_id(current or "")
+    # если пусто — не подменяем молча
+    if proposal and proposal != current:
+        return gr.update(value=proposal), "ID нормализован автоматически"
+    return gr.update(value=current), "Некорректный ID. Разрешены: [a-z0-9_], длина 3–60"
 
 # ------------------------------------
 # GRADIO WRAPPING functions section
@@ -759,7 +773,9 @@ def main():
                                      submit_btn=True,
                                      container=True,
                                      autoscroll=False,
-                                     autofocus=True)
+                                     autofocus=True,
+                                     html_attributes=gr.InputHTMLAttributes(autocorrect="off", spellcheck=False)
+                                     )
 
                 with gr.Column():
                     with gr.Row():
@@ -960,11 +976,15 @@ def main():
                                 scale=30,
                             )
                             id_input = gr.Textbox(
-                                label="ID документа (латиница или UUID)* ",
-                                value=generate_new_id(),
+                                label="ID документа (латиница/цифры/нижнее подчеркивание, 3–60)",
+                                value="",
+                                placeholder="например: price_list_2025 или izmeneniya_grafika_priema",
                                 scale=50
                             )
-                            generate_id_button = gr.Button("🔄 Сгенерировать новый ID", scale=20, size="md")
+                            with gr.Column():
+                                normalize_id_btn = gr.Button("🧹 Нормализовать ID", scale=20, size="md")
+                                generate_id_from_title_btn = gr.Button("🪄 ID из заголовка", scale=20, size="md")
+                                generate_id_button = gr.Button("🔄 Сгенерировать цифровой ID", scale=20, size="md")
 
                         title_input = gr.Textbox(label="Заголовок, title *")
                         content_input = gr.Textbox(label="Основной текст, content *", lines=20, max_lines=80)
@@ -987,13 +1007,14 @@ def main():
                             # t — это list[list]; чисто прокидываем в State
                             return t
 
-                        # любое редактирование таблицы сразу обновляет State
+                        # любое редактирование таблицы обновляет State
                         table_df.change(_passthrough_table, inputs=[table_df], outputs=[table_state])
 
                         status_output = gr.Textbox(value=txt_default(),
                                                    label="Статус операции",
+                                                   lines=3,
                                                    interactive=False,
-                                                   # every=10.0,
+                                                   every=10.0,
                                                    # container=False,
                                                    )
                         preview_button = gr.Button("Предпросмотр блоков")
@@ -1031,9 +1052,6 @@ def main():
                     )
 
                     def save_and_send_to_meilisearch(meta):
-                        print("+++++")
-                        print(meta)
-                        print("+++++")
 
                         if not meta:
                             return "Ошибка: нет данных (сделайте Предпросмотр)."
@@ -1059,6 +1077,26 @@ def main():
                         inputs=[meta_state],
                         outputs=[status_output],
                     )
+
+                    # живой валидатор на каждый ввод
+                    id_input.change(validate_id_live, inputs=[id_input], outputs=[id_input, status_output])
+
+                    # ручная нормализация
+                    def normalize_id_click(current: str) -> tuple[dict[str, Any], str]:
+                        cleaned = sanitize_id(current or "")
+                        return gr.update(value=cleaned), (
+                            "ID нормализован" if is_valid_id(cleaned) else "ID всё ещё некорректен")
+
+                    normalize_id_btn.click(normalize_id_click, inputs=[id_input], outputs=[id_input, status_output])
+
+                    # генерация из заголовка
+                    def gen_id_from_title(title: str) -> tuple[dict[str, Any], str]:
+                        cleaned = sanitize_id(title or "")
+                        return gr.update(value=cleaned), (
+                            "ID получен из заголовка" if cleaned else "Не удалось получить ID")
+
+                    generate_id_from_title_btn.click(gen_id_from_title, inputs=[title_input],
+                                                     outputs=[id_input, status_output])
 
                 # ---------------------------------------------------
                 # Секция просмотра содержимого коллекций
@@ -1115,7 +1153,9 @@ def main():
                         row_count=(200, "dynamic"),
                         col_count=(3, "fixed"),
                         datatype="str",
-                        interactive=False
+                        interactive=False,
+                        show_row_numbers=True,
+                        show_search="filter"
                     )
 
                 with gr.Accordion(label="База знаний Chroma DB (просмотр и удаление)", open=False, ):

@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 
 # Retry Decorator
-@retry(stop=stop_after_attempt(10), wait=wait_fixed(6))
+@retry(stop=stop_after_attempt(5), wait=wait_fixed(3))
 def connect_to_chroma():
     logger.info("🔄 Подключение к ChromaDB...")
     return chromadb.HttpClient(host=c.chroma_host, port=c.chroma_port)
