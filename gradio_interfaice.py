@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import time
-import uuid
 from pathlib import Path
 from typing import Dict, List, Union, Tuple, Literal, Any
 
@@ -18,13 +17,13 @@ from agent_logic_2 import config as c
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
 from agent_logic_2.direct_upload_meili_tab import build_blocks, TABLE_HEADERS
+from agent_logic_2.id_validation import is_valid_id, sanitize_id
 from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
 from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
 from container_managenment import restart_container
 from converters import pdf_to_json_txt_tables_meili as pdf2json
-from agent_logic_2.id_validation import is_valid_id, sanitize_id
 
 # Label constants
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
@@ -486,21 +485,30 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
 
 def gr_remove_index(index: str):
     """
+    Remove an index from a Meilisearch instance and update the lists of available indexes.
 
-    :param index:
-    :return:
+    The function deletes the specified index from Meilisearch, waits for a short period to
+    ensure index operation consistency, and retrieves the updated list of existing indexes
+    to reflect changes. If no indexes remain, the function returns a default message
+    indicating the absence of indexes.
 
+    :param index: The name of the index to be removed from Meilisearch.
+    :type index: str
+    :return: Tuple containing updates for UI components with new index choices, an update
+             message, and other relevant UI values.
+    :rtype: tuple
     """
     meilisearch.delete_index(index)
     #
     time.sleep(10)
     #
-    new_list = gr_existed_indexes()
+    new_list = gr_existed_indexes() if gr_existed_indexes() else "Индекс отсутствует"
 
     return (
-        gr.update(choices=new_list, value=None),
-        gr.update(choices=new_list, value=None),
-        gr.update(choices=new_list, value=None),
+        gr.update(choices=new_list, value=new_list[0] if new_list else ""),
+        gr.update(choices=new_list, value=new_list[0] if new_list else ""),
+        gr.update(choices=new_list, value=new_list[0] if new_list else ""),
+        gr.update(choices=new_list, value=new_list[0] if new_list else ""),
         "Индекс удален",
     )
 
@@ -515,9 +523,10 @@ def gr_create_index(index_name: str):
     -> status_bar,
     """
     meilisearch.create_index(index_name)
-    time.sleep(10)  #
+    time.sleep(8)  #
     new_list = gr_existed_indexes()
     return (
+        gr.update(choices=new_list, value=index_name),
         gr.update(choices=new_list, value=index_name),
         gr.update(choices=new_list, value=index_name),
         gr.update(choices=new_list, value=index_name),
@@ -534,6 +543,7 @@ def gr_rm_doc_from_index(ind_id: str, doc_id: str):
             gr.update(value=full_list, ),
             )
 
+
 def validate_id_live(current: str) -> tuple[dict[str, Any], str]:
     """
     Живой валидатор для id_input: если строка уже валидна — оставляем,
@@ -548,6 +558,7 @@ def validate_id_live(current: str) -> tuple[dict[str, Any], str]:
         return gr.update(value=proposal), "ID нормализован автоматически"
     return gr.update(value=current), "Некорректный ID. Разрешены: [a-z0-9_], длина 3–60"
 
+
 # ------------------------------------
 # GRADIO WRAPPING functions section
 # ------------------------------------
@@ -558,12 +569,13 @@ def update_docs_in_meili_index(index_name: str):
     При выборе индекса возвращает обновлённый список документов в этом индексе
     для выпадающего списка документов (meili_content_of_index_dropdown).
     """
-    id_list = existed_docs_in_selected_index(index_name, return_type="ID")
+
     full_list = existed_docs_in_selected_index(index_name, return_type="All")
+    id_list = existed_docs_in_selected_index(index_name, return_type="ID")
 
     return (
         gr.update(value=full_list, ),
-        gr.update(choices=id_list, ),
+        gr.update(choices=id_list, value=(id_list[0] if id_list else "нет данных")),
     )
 
 
@@ -879,7 +891,7 @@ def main():
                                                           visible=False)
 
                         upload_collections_dropdown = gr.Dropdown(choices=gr_existed_collections(),
-                                                                  value=None,
+                                                                  # value=None,
                                                                   allow_custom_value=True,
                                                                   filterable=True,
                                                                   label=COLLECTIONS_IN_CHROMA,
@@ -887,7 +899,7 @@ def main():
                                                                   visible=True, )
 
                         upload_indices_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
-                                                              value=None,
+                                                              # value=None,
                                                               allow_custom_value=True,
                                                               filterable=True,
                                                               label=INDEXES_IN_MEILI,
@@ -965,8 +977,8 @@ def main():
                 with gr.Accordion(label="Форма для прямого добавления информации в базу знаний Meilisearch",
                                   open=False, ):
                     with gr.Column():
-                        def generate_new_id():
-                            return str(uuid.uuid4())
+                        # def generate_new_id():
+                        #     return str(uuid.uuid4())
 
                         with gr.Row():
                             index_dropdown = gr.Dropdown(
@@ -982,9 +994,12 @@ def main():
                                 scale=50
                             )
                             with gr.Column():
-                                normalize_id_btn = gr.Button("🧹 Нормализовать ID", scale=20, size="md")
-                                generate_id_from_title_btn = gr.Button("🪄 ID из заголовка", scale=20, size="md")
-                                generate_id_button = gr.Button("🔄 Сгенерировать цифровой ID", scale=20, size="md")
+                                normalize_id_btn = gr.Button("🧹 Нормализовать ID", scale=20, size="sm",
+                                                             variant="primary")
+                                generate_id_from_title_btn = gr.Button("🪄 ID из заголовка", scale=20, size="sm",
+                                                                       variant="primary")
+                                vanish_screen_btn = gr.Button("🧹 Очистить ввод", scale=20, size="sm", variant="stop")
+                                # generate_id_button = gr.Button("🔄 Сгенерировать цифровой ID", scale=20, size="md")
 
                         title_input = gr.Textbox(label="Заголовок, title *")
                         content_input = gr.Textbox(label="Основной текст, content *", lines=20, max_lines=80)
@@ -1098,7 +1113,16 @@ def main():
                     generate_id_from_title_btn.click(gen_id_from_title, inputs=[title_input],
                                                      outputs=[id_input, status_output])
 
-                # ---------------------------------------------------
+                    def vanish_all_windows():
+                        return "", "", "", "", [["", ""], ["", ""], ["", ""]]
+
+                    vanish_screen_btn.click(vanish_all_windows,
+                                            outputs=[id_input,
+                                                     title_input,
+                                                     content_input,
+                                                     keywords_input,
+                                                     table_df, ])
+                    # ---------------------------------------------------
                 # Секция просмотра содержимого коллекций
                 # и индексов
                 # ---------------------------------------------------
@@ -1118,6 +1142,7 @@ def main():
 
                         meili_content_of_index_dropdown = gr.Dropdown(
                             choices=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value, "ID"),
+                            value="",
                             allow_custom_value=True,
                             label="Выбрать документ по ID для удаления",
                             visible=True,
@@ -1275,6 +1300,7 @@ def main():
                         upload_indices_dropdown,
                         meili_search_indexes_dropdown,
                         meili_ind_for_cont_dropdown,
+                        index_dropdown,
                         status_bar,
                     ]
                 )
@@ -1286,6 +1312,7 @@ def main():
                         upload_indices_dropdown,
                         meili_search_indexes_dropdown,
                         meili_ind_for_cont_dropdown,
+                        index_dropdown,
                         status_bar,
                     ]
                 )
@@ -1329,9 +1356,10 @@ def main():
             refresh_data_btn.click(
                 update_docs_in_meili_index,
                 inputs=[meili_ind_for_cont_dropdown],
-                outputs=[meili_indices_table,
-                         meili_content_of_index_dropdown,
-                         ]
+                outputs=[
+                    meili_indices_table,
+                    meili_content_of_index_dropdown,
+                ]
             )
 
             # -------- FUNCTIONS SECTION ------------
@@ -1714,7 +1742,7 @@ def main():
             # Event handlers for upper sections
             # ----------------------------------
 
-            generate_id_button.click(fn=generate_new_id, outputs=[id_input])
+            # generate_id_button.click(fn=generate_new_id, outputs=[id_input])
 
             # preview_button.click(
             #     fn=fn_preview_json,

@@ -227,7 +227,7 @@ def show_list_indexes(detail_mode: str = "full") -> list:
     headers = {"Authorization": f"Bearer {c.MASTER_KEY}"}
 
     try:
-        response = requests.get(endpoint, headers=headers, timeout=10)
+        response = requests.get(endpoint, headers=headers, timeout=3)
         if response.status_code == 200:
             data = response.json()
             indexes = data.get("results", [])
@@ -249,20 +249,22 @@ def show_list_indexes(detail_mode: str = "full") -> list:
         return []
 
 
-def create_index(index_uid: str) -> None:
+def create_index(index_uid: str, primary_key:str = "id") -> None:
     """
     Создаёт индекс в Meilisearch по обозначенному UID.
 
+    :param primary_key: primary key for the new index.
     :param index_uid: Уникальный идентификатор (UID) для нового индекса.
     :return: None
     """
     endpoint = f"{c.MEILI_URL}/indexes"
     headers = {"Authorization": f"Bearer {c.MASTER_KEY}"}
     payload = {
-        "uid": index_uid
+        "uid": index_uid,
+        "primaryKey": primary_key,
     }
     try:
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=10)
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=3)
         # Можно обработать статус ответа — например, 201 говорит о создании,
         # но в любом случае выведем результат (или при необходимости вернём)
         print(f"Info about creating index '{index_uid}': {response.text}")
@@ -351,8 +353,11 @@ def main():
     """
 
     print("=======")
-    res = meili_list_documents("main_index", return_type="All")
-    print(res)
+    # res = meili_list_documents("main_index", return_type="All")
+    # print(res)
+    print(show_list_indexes("all"))
+    # delete_index("try_0")
+    # create_index("news")
     print("=======")
     print("=======")
 
