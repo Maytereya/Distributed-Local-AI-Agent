@@ -1,5 +1,8 @@
 INPUT: Скажите, есть ли акция или скидка?
-OUTPUT: {\"labels\":[\"SCRIPTS\"]}
+OUTPUT: {\"labels\":[\"NEWS\"]}
+
+INPUT: Скидку можете сделать? Может быть, акция какая-нибудь есть?
+OUTPUT: {\"labels\":[\"NEWS\"]}
 
 INPUT: Сколько стоит приём кардиолога Михлик?
 OUTPUT: {\"labels\":[\"API_INFO\"]}
