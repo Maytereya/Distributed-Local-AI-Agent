@@ -1,3 +1,4 @@
 "API_INFO": get_doc_info_from_api,
 "APPOINTMENT": appointment_stub,
 "SCRIPTS": instructions_search,
+"NEWS": instructions_search,

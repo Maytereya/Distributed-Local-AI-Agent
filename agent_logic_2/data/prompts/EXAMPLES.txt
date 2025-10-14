@@ -1,3 +1,6 @@
+INPUT: Скажите, есть ли акция или скидка?
+OUTPUT: {\"labels\":[\"SCRIPTS\"]}
+
 INPUT: Сколько стоит приём кардиолога Михлик?
 OUTPUT: {\"labels\":[\"API_INFO\"]}
 

@@ -152,18 +152,47 @@ def meili_list_documents(
     return out_all if return_type == "All" else out_ids
 
 
-def search_meili(index_name: str, query: str, limit: int = 2,
+def search_meili(index_name: str, query: str, limit: int = 3,
                  highlight: str = None, highlight_fields: str = '*') -> str:
     """
-    Performs a search on the given Meilisearch index.
+    Performs a search query in a specified Meilisearch index and returns formatted results.
 
-    :param index_name: Name of the Meilisearch index.
-    :param query: The search query (keyword, phrase, etc.).
-    :param limit: Maximum number of results to return.
-    :param highlight: A tag to wrap around highlights (e.g. <em></em>).
-    :param highlight_fields: Which fields to highlight. By default, '*'.
-    :return: A dictionary of search results, as returned by Meilisearch.
+    This function searches for documents matching the given query and formats the results
+    into a human-readable string containing document metadata and content. Each result
+    includes the document ID, title, filename, page number, and content.
+
+    :param index_name: Name of the Meilisearch index to search in. Must not be empty.
+    :param query: Search query string to match against searchable attributes.
+    :param limit: Maximum number of search results to return. Defaults to 3.
+    :param highlight: Highlight tag parameter (currently not used in implementation).
+    :param highlight_fields: Fields to highlight in search results. Defaults to '*' (all fields).
+
+    :return: A formatted string containing search results with document metadata and content,
+             separated by '\n---------\n'. Returns an error message if:
+             - The index_name is empty or not provided
+             - No matches are found
+             - An exception occurs during the search
+
+    :raises: Does not raise exceptions directly; catches and returns error messages as strings.
+
+    Example:
+        >>> result = search_meili("main_index", "уретрит", limit=5)
+        >>> print(result)
+        ID документа: doc_123
+        Заголовок: Medical Article
+        Имя файла: medicine.pdf
+        Номер страницы: 5
+        Content text here...
+        ---------
+        ID документа: doc_124
+        ...
+
+    Note:
+        - If no matches are found, returns: "Совпадений не найдено, cформулируйте запрос иначе"
+        - Results are formatted with '_formatted' field from Meilisearch for proper highlighting
+        - Missing document fields default to "не указан" (not specified) or appropriate defaults
     """
+
     if not index_name:
         return (
             "Ошибка: не выбран индекс, в котором следует осуществлять поиск"
@@ -196,7 +225,7 @@ def search_meili(index_name: str, query: str, limit: int = 2,
             contents.append("Номер страницы: " + str(_page_number))
             contents.append(content_str)
 
-        # Склеиваем их в итоговую строку
+        # Склеиваем в итоговую строку
         combined_text = "\n---------\n".join(contents)
         if len(combined_text) == 0:
             combined_text = "Совпадений не найдено, cформулируйте запрос иначе"

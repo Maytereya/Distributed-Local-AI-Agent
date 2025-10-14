@@ -52,6 +52,12 @@ ollama = AsyncClient(c.ollama_url)
 
 LABEL_PRIORITY = load_prompt("LABEL_PRIORITY", False).split(",")
 ALLOWED = set(LABEL_PRIORITY + ["UNDEFINED"])  # TODO: разобраться, не совсем понятое добавление лейбла "снаружи".
+# Какой индекс MEILISEARCH открывать для конкретного лейбла:
+INDEX_BY_LABEL: dict[str, str] = {
+    "NEWS": "news",          # для NEWS — индекс "news"
+    "SCRIPTS": "main_index", # явно, чтоб читаемо; но по дефолту — тоже main_index
+    # при необходимости добавишь другие
+}
 LABEL_DOC = load_prompt("LABEL_DOC", False)
 RAW_MODE_MARKER = "<NO_POSTPROC>"
 EXAMPLES = load_prompt("EXAMPLES", False)
@@ -464,7 +470,7 @@ async def split_into_segments(text: str, sess: Dict[str, Any], think: bool = Non
     :return: Возвращает список запросов от пользователя.
     """
     think = ollama_settings.resolve_think(think)
-    print("!!!THINK:", think)
+    # print("!!!THINK:", think)
     ollama_settings.init_model_name()
     # print("split_into_segments OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
     # print("split_into_segments options: ", ollama_settings.options_set())
@@ -524,7 +530,7 @@ async def classify(text: str, sess: Dict[str, Any], think: bool = None) -> List[
     # print("classify OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
     # print("classify options: ", ollama_settings.options_set())
     think = ollama_settings.resolve_think(think)
-    print("!!!THINK:", think)
+    # print("!!!THINK:", think)
     if not ollama_settings.OLLAMA_MODEL:
         raise ValueError("classify OLLAMA_MODEL cannot be empty")
 
@@ -551,9 +557,9 @@ async def classify(text: str, sess: Dict[str, Any], think: bool = None) -> List[
             if isinstance(raw, list):
                 labels_raw = raw
         labels = [str(l).upper() for l in labels_raw if str(l).upper() in ALLOWED]
-        print("----------------- LABELS -----------------------")
-        print(f"Маркировано labels: ", labels)
-        print("------------------------------------------------")
+        # print("----------------- LABELS -----------------------")
+        # print(f"Маркировано labels: ", labels)
+        # print("------------------------------------------------")
         return labels or ["UNDEFINED"]
     except Exception as e:
         print(f"\n Classificator error: {e}")
@@ -577,7 +583,7 @@ async def final_answering(primary_request: str,
     if not ollama_settings.OLLAMA_MODEL:
         raise ValueError("final_answering OLLAMA_MODEL cannot be empty")
     think = ollama_settings.resolve_think(think)
-    print("!!!THINK:", think)
+    # print("!!!THINK:", think)
 
     partial = ""  # накопитель
     stream = await ollama.generate(
@@ -599,7 +605,7 @@ async def final_answering(primary_request: str,
 
 async def get_doc_info_from_api(question: str, think: bool = None, **_, ) -> Tuple[str, bool]:
     think = ollama_settings.resolve_think(think)
-    print("!!!THINK:", think)
+    # print("!!!THINK:", think)
     result = await doctor_info.investigate(question, think=think)
     return result, False
 
@@ -609,7 +615,7 @@ async def get_doc_info_from_api(question: str, think: bool = None, **_, ) -> Tup
 # ------------------------------------------------------
 async def appointment_stub(_text: str, think: bool = None, **__) -> Tuple[str, bool]:
     think = ollama_settings.resolve_think(think)
-    print("!!!THINK:", think)
+    # print("!!!THINK:", think)
     return "Модуль записи к врачу скоро появится. ", False
 
 
@@ -617,12 +623,11 @@ async def appointment_stub(_text: str, think: bool = None, **__) -> Tuple[str, b
 # Search with MEILISEARCH function
 # (может использовать LLM переформулировку)
 # ──────────────────────────────────────────────────────
-# ToDo: Объединить все запросы в одну функцию
-# TODO: Завернуть всю поисковую часть (MEILI) в одну функцию
-async def instructions_search(_text: str, think: bool = None, **__) -> Tuple[str, bool]:
+async def instructions_search(_text: str, think: bool = None, index: str = "main_index", **__) -> Tuple[str, bool]:
     """
     Для поиска нужной информации в индексе или коллекции используется переформулировка запроса пользователя
-    Пока не ясно, следует ли ее делать.
+    Пока неясно, следует ли ее делать.
+    :param index:
     :param think:
     :param _text:
     :param __:
@@ -631,22 +636,22 @@ async def instructions_search(_text: str, think: bool = None, **__) -> Tuple[str
     # Временно отключу переформулировку!
     # extracted_keyword = await formulate.extract_keyword(_text, extract_type="sentence")
 
-    print("=" * 45)
-    print("Экстрагировалось: ",
-          # extracted_keyword
-          _text  # шарахнем запрос напрямую без переформулировки
-          or "Empty")
-    print("=" * 45)
+    # print("=" * 45)
+    # print("Экстрагировалось: ",
+    #       # extracted_keyword
+    #       _text  # шарахнем запрос напрямую без переформулировки
+    #       or "Empty")
+    # print("=" * 45)
 
-    collected_info = await asyncio.to_thread(meilisearch.search_meili, "main_index", _text)
+    collected_info = await asyncio.to_thread(meilisearch.search_meili, index, _text)
 
     # Очистка HTML перед подстановкой в prompt
     clean_info = html_cleaner.strip_html(collected_info)
     # Добавление маркера для лучшего распознавания LLM
     marked_info = "{KNOWLEDGE_SNIPPET}" + "\n" + clean_info
-    print("=" * 45)
-    print(marked_info)
-    print("=" * 45)
+    # print("=" * 45)
+    # print(marked_info)
+    # print("=" * 45)
     return marked_info, False
 
 
@@ -695,10 +700,14 @@ async def handle_pending_module(text: str, sess: SessionType, think: bool | None
         print("pending_module content: ", pending_module or "Empty")
         print("=" * 45)
 
-        response, continue_pending = await MODULES[pending_module](text, session=sess, think=think)
+        kwargs = {"session": sess, "think": think}
+        idx_name = INDEX_BY_LABEL.get(pending_module)
+        if idx_name:
+            kwargs["index"] = idx_name
+
+        response, continue_pending = await MODULES[pending_module](text, **kwargs)
         sess["pending"] = pending_module if continue_pending else None
 
-        # Record interaction in history
         sess["history"].extend([
             {"user": text},
             {"bot": response}
@@ -972,10 +981,10 @@ async def process_segments(text: str, sess: SessionType, think: bool | None = No
         labels = await classify(segment, sess, think)
         main_labels = [lbl for lbl in labels if lbl in LABEL_PRIORITY]
 
-        print("=" * 45)
-        print(f"PART view #{idx}: ", segment or "Empty PART")
-        print("LABELS: ", labels)
-        print("=" * 45)
+        # print("=" * 45)
+        # print(f"PART view #{idx}: ", segment or "Empty PART")
+        # print("LABELS: ", labels)
+        # print("=" * 45)
 
         # Fallback если это возможно фамилия или специальность (второй шанс)
         try:
@@ -994,19 +1003,26 @@ async def process_segments(text: str, sess: SessionType, think: bool | None = No
             continue
 
         for label in main_labels:
-            response, continue_pending = await MODULES[label](segment, session=sess, think=think, )
+            # базовые аргументы в модуль
+            kwargs: Dict[str, Any] = {"session": sess, "think": think}
+
+            # NEW: подставляем имя индекса, если задано для этого лейбла
+            idx_name = INDEX_BY_LABEL.get(label)
+            if idx_name:
+                kwargs["index"] = idx_name
+
+            # вызов соответствующего обработчика
+            response, continue_pending = await MODULES[label](segment, **kwargs)
             responses.append(response)
+
             if continue_pending:
                 sess["pending"] = label
-                print("=" * 45)
-                print("need pending view: ", sess["pending"] or "Empty need")
-                print("=" * 45)
-                break
+                break  # выход из цикла по main_labels, чтобы дождаться продолжения pending-модуля
 
     final_answ = SEGMENT_SEPARATOR.join(responses)
-    print("=" * 45)
-    print("Финальный ответ процессора сегментов: ", final_answ)
-    print("=" * 45)
+    # print("=" * 45)
+    # print("Финальный ответ процессора сегментов: ", final_answ)
+    # print("=" * 45)
     return final_answ
 
 
