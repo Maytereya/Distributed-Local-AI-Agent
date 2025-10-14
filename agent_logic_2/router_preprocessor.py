@@ -19,9 +19,8 @@ from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
 
 #  Initialize logging for understanding the logics of the router
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
-
 
 # --- ensure doctors repo is warmed up (file may be absent on first FILTER run) ---
 async def _ensure_doctors_repo_loaded() -> None:
@@ -654,7 +653,7 @@ async def instructions_search(_text: str, think: bool = None, index: str = "main
     #       or "Empty")
     # print("=" * 45)
 
-    collected_info = await asyncio.to_thread(meilisearch.search_meili, index, _text)
+    collected_info = await asyncio.to_thread(meilisearch.search_meili, index_name=index, query=_text)
 
     # Очистка HTML перед подстановкой в prompt
     clean_info = html_cleaner.strip_html(collected_info)
@@ -963,87 +962,74 @@ async def _filter_doctors_via_cc_info(
 
 async def process_segments(text: str, sess: SessionType, think: bool | None = None) -> str:
     segments = await split_into_segments(text, sess, think)
+    logger.debug("segments=%d: %s", len(segments), segments)
     responses: List[str] = []
 
     for idx, segment in enumerate(segments, 1):
-        # SAFETY NET: если LLM не вернул FILTER:, но сегмент выглядит как фильтр — обрабатываем правилами
+        logger.debug("[seg#%d] raw='%s'", idx, segment)
+
         kw_filters = _keyword_to_filter(segment)
         if kw_filters:
-            print("[KEYWORD→FILTER] parsed:", kw_filters)
+            logger.debug("[seg#%d] FILTER kw -> %s", idx, kw_filters)
             response = await _filter_doctors_via_cc_info(kw_filters, segment=segment, fallback_segment=text)
             responses.append(response)
             continue
-        # 0) FILTER: ... → обрабатываем напрямую, не ломая существующие ветки
+
         m = FILTER_RE.match(segment)
         if m:
             flt = _parse_filters(m.group(1))
-            print("[FILTER] parsed:", flt)
+            logger.debug("[seg#%d] FILTER explicit -> %s", idx, flt)
             response = await _filter_doctors_via_cc_info(flt, segment=segment, fallback_segment=text)
             responses.append(response)
             continue
 
-        # Быстрый путь: если это похоже на фамилию/спец-сть — сразу идём в doctor_info,
-        # чтобы не ждать классификатор LLM (который может зависнуть)
         try:
             if await is_possible_surname_or_specialty(segment):
-                print(f"  [Force doctor_info fallback EARLY] Отправляю сегмент напрямую в doctor_info: {segment}")
+                logger.debug("[seg#%d] EARLY doctor_info fallback", idx)
                 response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
-                # Добавим RAW-маркер, чтобы миновать postprocessing LLM
                 responses.append(RAW_MODE_MARKER + "\n" + response)
                 continue
         except Exception as e:
-            print(f"[EARLY fallback check error]: {e}")
+            logger.exception("[seg#%d] EARLY fallback check error: %s", idx, e)
 
         labels = await classify(segment, sess, think)
         main_labels = [lbl for lbl in labels if lbl in LABEL_PRIORITY]
+        logger.debug("[seg#%d] labels=%s | main=%s", idx, labels, main_labels)
 
-        # print("=" * 45)
-        # print(f"PART view #{idx}: ", segment or "Empty PART")
-        # print("LABELS: ", labels)
-        # print("=" * 45)
-
-        # Fallback если это возможно фамилия или специальность (второй шанс)
         try:
             if await is_possible_surname_or_specialty(segment):
-                print(f"  [Force doctor_info fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
+                logger.debug("[seg#%d] LATE doctor_info fallback", idx)
                 response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
                 responses.append(RAW_MODE_MARKER + "\n" + response)
                 continue
         except Exception as e:
-            print(f"[Fallback check error]: {e}")
+            logger.exception("[seg#%d] Fallback check error: %s", idx, e)
 
         if not main_labels:
-            print(f"  [Fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
+            logger.debug("[seg#%d] no main_labels → doctor_info fallback", idx)
             response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
             responses.append(RAW_MODE_MARKER + "\n" + response)
             continue
 
         for label in main_labels:
-            # базовые аргументы в модуль
             kwargs: Dict[str, Any] = {"session": sess, "think": think}
-
-            # NEW: подставляем имя индекса, если задано для этого лейбла
             idx_name = INDEX_BY_LABEL.get(label)
             if idx_name:
                 kwargs["index"] = idx_name
-            #
-            logger.info("Подставленный индекс по имени:", idx_name)
-            #
-            # вызов соответствующего обработчика
+            logger.info("[seg#%d] call MODULE label=%s index=%s", idx, label, idx_name)
+
             response, continue_pending = await MODULES[label](segment, **kwargs)
-            #
-            logger.info("Ответ meilisearch при поисковом запросе:", response)
-            #
+
+            logger.debug("[seg#%d] module=%s responded, size=%d", idx, label, len(response) if response else 0)
             responses.append(response)
 
             if continue_pending:
                 sess["pending"] = label
-                break  # выход из цикла по main_labels, чтобы дождаться продолжения pending-модуля
+                logger.debug("[seg#%d] pending set to %s", idx, label)
+                break
 
     final_answ = SEGMENT_SEPARATOR.join(responses)
-    # print("=" * 45)
-    # print("Финальный ответ процессора сегментов: ", final_answ)
-    # print("=" * 45)
+    logger.debug("final response size=%d", len(final_answ))
     return final_answ
 
 
