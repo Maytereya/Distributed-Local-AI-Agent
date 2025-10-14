@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, AsyncGenerator, TypeAlias, Literal, Optional
@@ -10,12 +11,16 @@ from ollama import AsyncClient
 
 import agent_logic_2.ollama_settings as ollama_settings
 from agent_logic_2 import llama_func_call as doctor_info, config as c
-from agent_logic_2.prompts import load_prompt
-from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
-from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
 from agent_logic_2.llama_func_call import repo
+from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
+from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
+from agent_logic_2.prompts import load_prompt
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
+
+#  Initialize logging for understanding the logics of the router
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 # --- ensure doctors repo is warmed up (file may be absent on first FILTER run) ---
@@ -37,6 +42,7 @@ async def _ensure_doctors_repo_loaded() -> None:
         except Exception:
             pass
 
+
 # LLM‑клиент для классификации входящих запросов
 ollama = AsyncClient(c.ollama_url)
 
@@ -54,17 +60,18 @@ LABEL_PRIORITY = load_prompt("LABEL_PRIORITY", False).split(",")
 ALLOWED = set(LABEL_PRIORITY + ["UNDEFINED"])  # TODO: разобраться, не совсем понятое добавление лейбла "снаружи".
 # Какой индекс MEILISEARCH открывать для конкретного лейбла:
 INDEX_BY_LABEL: dict[str, str] = {
-    "NEWS": "news",          # для NEWS — индекс "news"
-    "SCRIPTS": "main_index", # явно, чтоб читаемо; но по дефолту — тоже main_index
+    "NEWS": "news",  # для NEWS — индекс "news"
+    "SCRIPTS": "main_index",  # явно, чтоб читаемо; но по дефолту — тоже main_index
     # при необходимости добавишь другие
 }
 LABEL_DOC = load_prompt("LABEL_DOC", False)
 RAW_MODE_MARKER = "<NO_POSTPROC>"
 EXAMPLES = load_prompt("EXAMPLES", False)
-ITEM_MARKER = "⊢ID:" # маркер для компактного формата
+ITEM_MARKER = "⊢ID:"  # маркер для компактного формата
 
 # --- CC‑info thin process cache (по id врача) ---
 _CC_INFO_MAP: Dict[int, str] | None = None
+
 
 def _get_cc_info_map() -> Dict[int, str]:
     """Получает информацию о заметках call-центра по врачам."""
@@ -79,6 +86,7 @@ def _get_cc_info_map() -> Dict[int, str]:
         except Exception:
             _CC_INFO_MAP = {}
     return _CC_INFO_MAP
+
 
 def _extract_age_from_cc(cc: str) -> str:
     """Пытается вытащить возраст из заметки КЦ и вернуть нормализованную строку вида "с N лет".
@@ -121,6 +129,7 @@ def _extract_age_from_cc(cc: str) -> str:
 def _bool_to_ru(v: Optional[bool]) -> str:
     return "Да" if v is True else ("Нет" if v is False else "—")
 
+
 def _compact_line(d: dict) -> str:
     fio = (d.get("fio") or "").strip()
     spec = d.get("units") or d.get("specialization") or ""
@@ -134,7 +143,7 @@ def _compact_line(d: dict) -> str:
 
     # нормализованные флаги через единую функцию
     arriving_flag = _flag_from_cc(cc_text, "arriving")
-    dms_flag      = _flag_from_cc(cc_text, "dms")
+    dms_flag = _flag_from_cc(cc_text, "dms")
     children_flag = _flag_from_cc(cc_text, "children")
 
     age = _extract_age_from_cc(cc_text)
@@ -169,7 +178,6 @@ def _extract_safe_list_meta(s: str) -> Tuple[int, List[str] | None]:
         return 0, None
 
 
-
 # =========================
 # SAFE_LIST deterministic helpers
 # =========================
@@ -178,7 +186,8 @@ def _parse_safe_compact_line(line: str) -> Dict[str, str]:
     ⊢ID:123 — Иванов И.И. — Врач терапевт — Ленина 5 — ДМС: Да — Приходящий: Нет — Дети: Да — Возраст: с 18 лет
     и возвращает словарь полей. Не бросает исключений.
     """
-    out = {"id": "", "fio": "", "spec": "", "addr": "", "dms": "—", "arriving": "—", "children": "—", "age": "не указан"}
+    out = {"id": "", "fio": "", "spec": "", "addr": "", "dms": "—", "arriving": "—", "children": "—",
+           "age": "не указан"}
     if not isinstance(line, str) or ITEM_MARKER not in line:
         return out
     try:
@@ -255,6 +264,7 @@ def _render_numbered_list_from_safe(compact_payload: str) -> str:
         return "Релевантной информации не найдено"
     return "\n".join(blocks) + "\n— Конец списка —"
 
+
 # --- FILTER segment support (ARRIVING / CHILDREN / DMS) ---
 FILTER_RE = re.compile(r'^\s*FILTER:\s*(.+)$', re.IGNORECASE)
 
@@ -263,7 +273,8 @@ _KEYWORDS_TRUE = {
         'по дмс', 'принимает по дмс', 'принимают по дмс', 'работает по дмс', 'работают по дмс', 'есть дмс', 'дмс да'
     ],
     'children': [
-        'работает с детьми', 'работают с детьми', 'принимает детей', 'принимают детей', 'детей принимает', 'детям', 'с детьми'
+        'работает с детьми', 'работают с детьми', 'принимает детей', 'принимают детей', 'детей принимает', 'детям',
+        'с детьми'
     ],
     'arriving': [
         'приходящий', 'приходящие', 'разовый', 'совмещает'
@@ -275,12 +286,14 @@ _KEYWORDS_FALSE = {
         'не по дмс', 'не принимает по дмс', 'не принимают по дмс', 'без дмс', 'дмс нет', 'нет дмс'
     ],
     'children': [
-        'не работает с детьми', 'не работают с детьми', 'без детей', 'детей не принимает', 'детей не принимают', 'только взросл'
+        'не работает с детьми', 'не работают с детьми', 'без детей', 'детей не принимает', 'детей не принимают',
+        'только взросл'
     ],
     'arriving': [
         'не приходящий', 'не приходящие', 'неприходящий', 'неприходящие'
     ],
 }
+
 
 def _keyword_to_filter(segment: str) -> Dict[str, bool] | None:
     """Грубое извлечение фильтров из естественных формулировок, если LLM не вернул FILTER:"""
@@ -329,16 +342,13 @@ def _safe_format(template: str, **kwargs) -> str:
     protected: dict[str, str] = {}
     for k in kwargs.keys():
         protected[k] = f"<<__{k.upper()}__>>"
-        template = template.replace("{"+k+"}", protected[k])
+        template = template.replace("{" + k + "}", protected[k])
     # экранируем все остальные скобки
     template = template.replace("{", "{{").replace("}", "}}")
     # возвращаем плейсхолдеры и форматируем
     for k, marker in protected.items():
-        template = template.replace(marker, "{"+k+"}")
+        template = template.replace(marker, "{" + k + "}")
     return template.format(**kwargs)
-
-
-
 
 
 # --- robust JSON extraction without PCRE recursion ---
@@ -381,7 +391,7 @@ def _extract_json_object(text: str):
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    chunk = s[start:i+1]
+                    chunk = s[start:i + 1]
                     try:
                         return json.loads(chunk)
                     except Exception:
@@ -392,6 +402,7 @@ def _extract_json_object(text: str):
                         except Exception:
                             return None
     return None
+
 
 # ----------------------------------------------
 # Функция обработки истории запросов
@@ -717,7 +728,6 @@ async def handle_pending_module(text: str, sess: SessionType, think: bool | None
     return None
 
 
-
 async def is_possible_surname_or_specialty(segment: str) -> bool:
     """
     Возвращает True если сегмент похож на фамилию или спец-ность врача
@@ -744,6 +754,7 @@ async def is_possible_surname_or_specialty(segment: str) -> bool:
 _DEF_TRUE = {"yes", "да", "true", "1"}
 _DEF_FALSE = {"no", "нет", "false", "0"}
 
+
 def _parse_filters(expr: str) -> Dict[str, bool]:
     # "ARRIVING=YES; CHILDREN=NO; DMS=YES" -> {"arriving": True, "children": False, "dms": True}
     pairs = [p.strip() for p in expr.split(';') if p.strip()]
@@ -757,6 +768,7 @@ def _parse_filters(expr: str) -> Dict[str, bool]:
         elif v in _DEF_FALSE:
             out[k] = False
     return out
+
 
 def _flag_from_cc(cc: str, key: str) -> Optional[bool]:
     if not cc:
@@ -799,6 +811,7 @@ def _flag_from_cc(cc: str, key: str) -> Optional[bool]:
 def _norm_text(s: str) -> str:
     return (s or "").lower()
 
+
 def _extract_specialty_terms_from_segment(segment: str, docs: List[Dict[str, Any]]) -> List[str]:
     """
     Пытается извлечь возможные ключевые слова специальности из сегмента.
@@ -833,7 +846,7 @@ def _extract_specialty_terms_from_segment(segment: str, docs: List[Dict[str, Any
     # Базовые синонимы под подстроки, встречающиеся в наших данных
     synonyms = {
         'лор': 'отоларинголог',
-        'узи': 'ультразвуков',   # покроет и "врач ультразвуковой диагностики"
+        'узи': 'ультразвуков',  # покроет и "врач ультразвуковой диагностики"
         'узист': 'ультразвуков',
     }
     expanded_tokens: List[str] = []
@@ -868,9 +881,9 @@ def _extract_specialty_terms_from_segment(segment: str, docs: List[Dict[str, Any
 
 
 async def _filter_doctors_via_cc_info(
-    filters: Dict[str, bool],
-    segment: str | None = None,
-    fallback_segment: str | None = None,
+        filters: Dict[str, bool],
+        segment: str | None = None,
+        fallback_segment: str | None = None,
 ) -> str:
     """Вернёт отформатированный список врачей, удовлетворяющих фильтрам, а также (если удаётся распознать)
     специальности из сегмента. Если в текущем сегменте спец‑термины не найдены — пробуем извлечь их из
@@ -907,14 +920,17 @@ async def _filter_doctors_via_cc_info(
         if require_spec:
             units_text = _norm_text(" ".join(d.get('units') or []))
             spec_text = _norm_text(d.get('specialization') or '')
+
             def _match_in_units(term: str) -> bool:
                 return term in units_text
+
             def _match_in_spec(term: str) -> bool:
                 if not spec_text:
                     return False
                 # требуем соседство с "врач" в пределах 25 символов в любую сторону
                 pattern = rf"(врач[^\n\r\-,:;]{{0,25}}{re.escape(term)})|({re.escape(term)}[^\n\r\-,:;]{{0,25}}врач)"
                 return re.search(pattern, spec_text) is not None
+
             if not (any(_match_in_units(t) for t in spec_terms) or any(_match_in_spec(t) for t in spec_terms)):
                 ok = False
         # 2) Флаги FILTER (ДМС/дети/приходящий)
@@ -1010,9 +1026,14 @@ async def process_segments(text: str, sess: SessionType, think: bool | None = No
             idx_name = INDEX_BY_LABEL.get(label)
             if idx_name:
                 kwargs["index"] = idx_name
-
+            #
+            logger.info("Подставленный индекс по имени:", idx_name)
+            #
             # вызов соответствующего обработчика
             response, continue_pending = await MODULES[label](segment, **kwargs)
+            #
+            logger.info("Ответ meilisearch при поисковом запросе:", response)
+            #
             responses.append(response)
 
             if continue_pending:
@@ -1072,7 +1093,8 @@ async def routing(text: str,
     # ==== SAFE_LIST path (детерминированный рендер без изменения final_answer) ====
     N, ids = _extract_safe_list_meta(result)
     if N and ids:
-        compact, raw_full = (result.split("\n\n[RAW_FULL]\n", 1) + [""])[:2] if "\n\n[RAW_FULL]\n" in result else (result, "")
+        compact, raw_full = (result.split("\n\n[RAW_FULL]\n", 1) + [""])[:2] if "\n\n[RAW_FULL]\n" in result else (
+            result, "")
         # Рендерим сами (без LLM), чтобы не терять позиции и не зависеть от final_answer
         formatted = _render_numbered_list_from_safe(compact)
         sess["history"].extend([{"user": text}, {"bot": formatted}])
@@ -1123,6 +1145,7 @@ async def main():
 
 if __name__ == "__main__":
     import sys
+
     query = " ".join(sys.argv[1:]).strip() or input("Введите запрос: ").strip()
     final_resp, final_sess = asyncio.run(process_routing_request(query, think=False))
     print(final_resp)
