@@ -12,6 +12,7 @@ from difflib import SequenceMatcher
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from converters import html_cleaner
 
 from ollama import AsyncClient
 
@@ -319,7 +320,8 @@ def format_doctor(item: Dict[str, Any]) -> str:
     if cc:
         lines.append("─" * 10)
         lines.append("• 📞Заметка колл-центра:")
-        lines.append(str(cc))
+        # Чистим HTML и сущности, чтобы не показывать теги/&#NNNN;
+        lines.append(html_cleaner.strip_html(str(cc)))
         # lines.append("─" * 10)
 
     # Расписание (если есть)

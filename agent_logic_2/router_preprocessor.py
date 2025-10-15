@@ -93,7 +93,8 @@ def _extract_age_from_cc(cc: str) -> str:
     """
     if not isinstance(cc, str) or not cc:
         return "не указан"
-    s = cc.lower()
+    # Нормализация HTML: удаляем теги и декодируем сущности
+    s = html_cleaner.strip_html(cc).lower()
     # Явные формулировки
     # 1) "с N(-и) лет"
     m = re.search(r"\bс\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b", s)
@@ -772,7 +773,8 @@ def _parse_filters(expr: str) -> Dict[str, bool]:
 def _flag_from_cc(cc: str, key: str) -> Optional[bool]:
     if not cc:
         return None
-    s = cc.lower()
+    # Нормализация HTML: удаляем теги и декодируем сущности
+    s = html_cleaner.strip_html(cc).lower()
     if key == 'arriving':
         if 'не приход' in s or 'неприход' in s:
             return False
