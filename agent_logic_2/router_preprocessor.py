@@ -96,7 +96,7 @@ def _extract_age_from_cc(cc: str) -> str:
     s = cc.lower()
     # Явные формулировки
     # 1) "с N(-и) лет"
-    m = re.search(r"\bс\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", s)
+    m = re.search(r"\bс\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b", s)
     if m:
         return f"с {m.group(1)} лет"
     # 2) "в возрасте N(-и) лет"
@@ -317,7 +317,7 @@ def _keyword_to_filter(segment: str) -> Dict[str, bool] | None:
     elif any(k in s for k in _KEYWORDS_TRUE['arriving']):
         out['arriving'] = True
     # Дополнительное правило: "с N лет" → children=True (если N < 18), N>=18 → children=False
-    m = re.search(r"\bс\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", s)
+    m = re.search(r"\bс\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b", s)
     if m:
         try:
             n = int(m.group(1))
@@ -787,16 +787,22 @@ def _flag_from_cc(cc: str, key: str) -> Optional[bool]:
         if 'дет' in s and ('работ' in s or 'принимает' in s):
             return True
         # Возрастной признак: если указан возраст начала приёма < 18 — считаем, что работает с детьми
-        m = re.search(r"\bс\s*(\d{1,2})\s*лет\b", s)
-        if m:
-            try:
-                n = int(m.group(1))
-                if n < 18:
-                    return True
-                else:
-                    return False
-            except Exception:
-                pass
+        age_patterns = (
+            r"\bс\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b",
+            r"возраст[а-я\s]*?(?:с\s*)?(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет",
+            r"\bс\s*возраста\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b",
+        )
+        for pat in age_patterns:
+            m = re.search(pat, s)
+            if m:
+                try:
+                    n = int(m.group(1))
+                    if n < 18:
+                        return True
+                    else:
+                        return False
+                except Exception:
+                    continue
         return None
     if key == 'dms':
         if 'не принимает по дмс' in s or 'дмс: нет' in s or 'дмс — нет' in s or 'дмс - нет' in s:
@@ -844,15 +850,18 @@ def _extract_specialty_terms_from_segment(segment: str, docs: List[Dict[str, Any
 
     # Базовые синонимы под подстроки, встречающиеся в наших данных
     synonyms = {
-        'лор': 'отоларинголог',
-        'узи': 'ультразвуков',  # покроет и "врач ультразвуковой диагностики"
-        'узист': 'ультразвуков',
+        'лор': ['отоларинголог', 'оториноларинголог', 'лор-врач'],
+        'узи': ['ультразвуков'],
+        'узист': ['ультразвуков'],
     }
     expanded_tokens: List[str] = []
     for t in norm_tokens:
         expanded_tokens.append(t)
-        if t in synonyms:
-            expanded_tokens.append(synonyms[t])
+        vals = synonyms.get(t)
+        if isinstance(vals, list):
+            expanded_tokens.extend(vals)
+        elif isinstance(vals, str):
+            expanded_tokens.append(vals)
 
     if not expanded_tokens:
         return []
