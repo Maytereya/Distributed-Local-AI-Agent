@@ -208,16 +208,21 @@ def search_meili(index_name: str, query: str, limit: int = 3,
 
         hits = search_result.get("hits", [])
 
+        # --------------------------------------------
+        def fix_none_err(v, default="не указан"):
+            return default if v is None else str(v)
+        # --------------------------------------------
+
         # Собираем все куски контента:
         contents = []
         for doc in hits:
             # doc['_formatted'] может не всегда быть, поэтому используем .get(...)
             fmt = doc.get("_formatted", {})
-            _id = doc.get("id")
-            _file_name = doc.get("file_name", "не указан")
-            _title = doc.get("title", "не указан")
-            _page_number = doc.get("page_number", 1)
-            content_str = fmt.get("content", "")
+            _id = fix_none_err(doc.get("id"))
+            _file_name = fix_none_err(doc.get("file_name", "не указан"))
+            _title = fix_none_err(doc.get("title", "не указан"))
+            _page_number = fix_none_err(doc.get("page_number", 1))
+            content_str = fix_none_err(fmt.get("content", ""))
 
             contents.append("ID документа: " + _id)
             contents.append("Заголовок: " + _title)
@@ -278,7 +283,7 @@ def show_list_indexes(detail_mode: str = "full") -> list:
         return []
 
 
-def create_index(index_uid: str, primary_key:str = "id") -> None:
+def create_index(index_uid: str, primary_key: str = "id") -> None:
     """
     Создаёт индекс в Meilisearch по обозначенному UID.
 
@@ -384,15 +389,15 @@ def main():
     print("=======")
     # res = meili_list_documents("main_index", return_type="All")
     # print(res)
-    print(show_list_indexes("all"))
+    # print(show_list_indexes("all"))
     # delete_index("try_0")
     # create_index("news")
-    print("=======")
-    print("=======")
-
-    # s_r = search_meili("main_index", "уретрит")
     # print("=======")
-    # print(s_r)
+    # print("=======")
+
+    s_r = search_meili("news", "прием флеболога бесплатно")
+    print("=======")
+    print(s_r)
 
 
 if __name__ == '__main__':
