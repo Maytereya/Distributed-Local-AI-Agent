@@ -2,6 +2,15 @@
 # routing(..., think) → get_doc_info_from_api(..., think) →
 # doctor_info.investigate(..., think) → extract_search_keyword_llm(..., think) → ollama_call(..., think).
 
+"""Интеграция с CRM «Наука» для поиска врачей/расписаний и форматирования ответа.
+
+Содержит:
+- Простую нормализацию специальностей и фильтрацию по ФИО.
+- Репозиторий врачей с локальным кэшем JSONL и ежедневным обновлением.
+- Форматирование карточек врача/расписания, обогащение заметками call‑центра.
+Внешние эффекты: сетевые запросы к CRM, чтение/запись в agent_logic_2/nayka_api/apidata.
+"""
+
 import asyncio
 import json
 import logging
@@ -115,6 +124,10 @@ def with_retries(tries: int = 3):
 
 # ── Репозиторий данных врачей ─────────────────────────────────────────────────
 class DoctorsRepository:
+    """Локальный кэш данных о врачах (JSONL), с переключением активной даты.
+    Читает/пишет файлы doctors_YYYYMMDD.jsonl, предоставляет быстрый доступ:
+    read_all(), find_by_surname(), update(fetch_fn).
+    """
     def __init__(self, data_dir: str):
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
@@ -245,6 +258,10 @@ def is_potential_surname(word: str) -> bool:
 
 # ── Поиск похожей фамилии ─────────────────────────────────────────────────────
 def find_similar_surname(input_surname: str, doctors: List[Dict[str, Any]], threshold: float = 0.75) -> Optional[str]:
+    """
+    Ищет в кеше наиболее похожую фамилию (по SequenceMatcher).
+    Возвращает нормализованную фамилию, если схожесть ≥ threshold, иначе None.
+    """
     surnames = {d["fio"].split()[0].lower() for d in doctors}
     best, br = None, 0.0
     for s in surnames:
@@ -367,6 +384,7 @@ def format_doctor_prices(doctor_id, fio, region_map=None):
 
 
 def format_doctor_schedule(doc):
+    """Формирует блок расписания: под каждую локацию выводит даты, окна и дополнительные комментарии. На вход принимает расписание в формате API."""
     fio = doc.get("fio", "-")
     spec = doc.get("specialization", "-")
     spec_lines = [line.strip() for line in spec.split('\n') if line.strip()]
@@ -465,6 +483,13 @@ async def ollama_call(prompt: str, llm: str = model, think: bool = None, ) -> Di
 
 
 async def investigate(question: str, think: bool = None) -> str:
+    """Определяет тип запроса (фамилия/спец-ть/расписание) и возвращает отформатированный ответ.
+    Args:
+        question: Исходный текст пользователя.
+        think: Флаг reasoning для LLM.
+    Returns:
+        Готовый текстовый ответ (карточки, список, расписание или пояснение).
+    """
     print("\n=== Начало обработки вопроса ===")
     print(f"Вопрос: {question}")
     # Быстрый путь: если запрос похож на одиночную фамилию — пропускаем LLM-парсер
@@ -529,6 +554,7 @@ _region_map = None
 
 
 def get_region_map():
+    """Получает карту регионов из кеша или строит её заново."""
     global _region_map
     if _region_map is None:
         _region_map = build_region_map()
@@ -545,6 +571,7 @@ async def get_region_map_async():
 
 
 async def handle_surname_search(surname: str, question: str) -> str:
+    """Обрабатывает запрос по фамилии."""
     print(f"LLM-парсер определил фамилию: {surname}")
 
     words = re.findall(r"[А-ЯЁ][а-яё]+", question)
@@ -634,17 +661,20 @@ def extract_full_name(words: List[str], surname: str) -> Optional[str]:
 
 
 def filter_docs(docs: List[Dict[str, Any]], full_name: str) -> List[Dict[str, Any]]:
+    """Фильтрует список врачей по фамилии."""
     matches = [d for d in docs if d.get("fio", "").startswith(full_name)]
     return matches[:1] if len(matches) > 1 else matches
 
 
 def format_documents(docs: List[Dict[str, Any]]) -> str:
+    """Форматирует список врачей в строку: нумерует и форматирует каждого врача."""
     return FORMATTER.join(
         f"{i + 1}. {format_doctor(d)}" for i, d in enumerate(docs)
     )
 
 
 async def handle_specialty_search(specialty: str, _: str) -> str:
+    """Ищет врачей по специальности и возвращает компактный список карточек."""
     print(f"LLM-парсер определил специальность: {specialty}")
 
     query = normalize_specialty_term(specialty) or specialty
@@ -664,6 +694,7 @@ async def handle_specialty_search(specialty: str, _: str) -> str:
 
 
 async def handle_timetable_search(surname: str, _: str) -> str:
+    """Ищет расписание врача(ей) по фамилии и возвращает пронумерованный список."""
     print(f"LLM-парсер определил запрос расписания по фамилии: {surname}")
 
     docs = await find_doctor_schedule_async(surname)
@@ -677,10 +708,12 @@ async def handle_timetable_search(surname: str, _: str) -> str:
 
 
 def find_doctors_by_keyword_llm(question: str) -> str:
+    """Ищет врачей по ключевому слову."""
     return find_doctors_by_keyword(question)
 
 
 def print_unique_priceall_regions():
+    """Выводит уникальные регионы из priceAll."""
     price_all = load_price_all()
     regions_in_priceall = set()
     for row in price_all:

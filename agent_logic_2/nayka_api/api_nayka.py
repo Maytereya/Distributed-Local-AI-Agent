@@ -1,3 +1,14 @@
+"""HTTP‑обёртки к CRM «Наука» и сбор агрегированных данных.
+
+Функции:
+- site_*: тонкие GET‑вызовы к REST (подразделения, врачи, регионы, связи).
+- get_all_doctors(): сборный профиль врача (regions/units/specialization).
+- find_doctors_by_keyword(): быстрый поиск по спец‑тям/подразделениям.
+- find_doctor_schedule(): расписание на 7 дней по врачам/филиалам.
+- Кэш JSONL и ежедневный авто‑рефреш (07:45 Europe/Samara).
+Сетевые таймауты/ретраи задаются через переменные окружения.
+"""
+
 import json
 import os
 import sys
@@ -147,8 +158,9 @@ def cleanup_old_doctors_files(keep_dates: Union[None, set, List[str]] = None):
 
 
 def get_all_doctors() -> List[Dict]:
-    """
-    Получает список всех врачей с их данными, где regions и region_ids совпадают по позиции.
+    """Строит сводные карточки врачей из нескольких эндпоинтов CRM.
+    Returns:
+        Список словарей: {id, fio, specialization, regions, region_ids, units}.
     """
     # Получаем все данные через API
     doctors = site_doctors()
@@ -232,13 +244,13 @@ def get_cached_doctors_data() -> list:
     return doctors
 
 # ==========================
-# Ежедневное обновление кэша в 06:00 (Самара)
+# Ежедневное обновление кэша в 07:45 (Самара)
 # ==========================
 _refresh_task = None
 
 def _next_refresh_dt() -> datetime:
     now = _now_samara()
-    target = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    target = now.replace(hour=7, minute=45, second=0, microsecond=0)
     if now >= target:
         target = target + timedelta(days=1)
     return target
@@ -274,7 +286,7 @@ async def _daily_refresh_loop():
         await _refresh_once()
 
 def ensure_daily_refresh_started() -> bool:
-    """Запускает фоновую задачу обновления кэша в 06:00 по Самаре (idempotent).
+    """Запускает фоновую задачу обновления кэша в 07:45 по Самаре (idempotent).
     Возвращает True, если задача запущена (или уже была запущена) внутри запущенного event loop.
     """
     global _refresh_task
@@ -286,7 +298,7 @@ def ensure_daily_refresh_started() -> bool:
     if _refresh_task is None or _refresh_task.done():
         _refresh_task = loop.create_task(_daily_refresh_loop())
         print("▶️ [DAILY REFRESH] Планировщик запущен")
-        # Если активного файла нет (например, приложение запущено после 06:00),
+        # Если активного файла нет (например, приложение запущено после 07:45),
         # дергаем немедленное обновление в фоне, чтобы не тратить время на первый запрос.
         try:
             active_file = DATA_DIR / f"doctors_{get_active_date_str()}.jsonl"
