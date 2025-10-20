@@ -1,3 +1,18 @@
+"""
+Маршрутизация пользовательских запросов: сегментация, классификация, вызов модулей.
+
+Пайплайн:
+1) split_into_segments() — переформулировка и разбиение текста.
+2) classify() — присвоение label‑ов (API_INFO/APPOINTMENT/SCRIPTS/NEWS/UNDEFINED).
+3) process_segments() — логика FILTER/эвристик/быстрых путей и сбор ответов.
+4) routing() — асинхронный генератор ответов (стриминг), финальный постпроцесс.
+
+Особенности:
+- «SAFE_LIST» детерминированный формат для списков врачей (без участия LLM).
+- «<NO_POSTPROC>» позволяет миновать финальную постобработку.
+- Фильтры: ARRIVING/CHILDREN/DMS из явных меток, ключевых слов и возрастных паттернов.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -24,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 # --- ensure doctors repo is warmed up (file may be absent on first FILTER run) ---
 async def _ensure_doctors_repo_loaded() -> None:
+    """Обеспечивает загрузку кэша врачей (JSONL) и его обновление из API при необходимости."""
     try:
         # стараемся запустить планировщик ежедневного обновления (внутри активного event loop)
         try:
@@ -93,8 +109,8 @@ def _extract_age_from_cc(cc: str) -> str:
     """
     if not isinstance(cc, str) or not cc:
         return "не указан"
-    # Нормализация HTML: удаляем теги, декодируем сущности и заменяем неразрывные пробелы
-    s = html_cleaner.strip_html(cc).replace('\xa0', ' ').lower()
+    # Нормализация HTML: удаляем теги и декодируем сущности
+    s = html_cleaner.strip_html(cc).lower()
     # Явные формулировки
     # 1) "с N(-и) лет"
     m = re.search(r"\bс\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b", s)
