@@ -20,10 +20,10 @@ config.read(config_path)
 # files_read = config.read(config_path)
 # print("Files read:", files_read)
 # -------------------------------------------------
-environment = 'PRODUCTION' #'PRODUCTION'
+environment = 'DOCKER_PRODUCTION' #'PRODUCTION'
 # | 'DEVELOPMENT' IP квартиры
 # | 'LOCAL' localhost
-# | 'PRODUCTION' внешний белый IP
+# | 'PRODUCTION' внешний белый IP Клиники
 # | 'DOCKER_PRODUCTION' под контейнеры
 
 # print("environment:", environment)
@@ -47,4 +47,3 @@ think = config['DEFAULT']['think']
 
 ll_model_big = config['DEFAULT']['ll_model_big']
 ll_model_small = config['DEFAULT']['ll_model_small']
-# ll_model_alternative = config['DEFAULT']['ll_model_alternative']
