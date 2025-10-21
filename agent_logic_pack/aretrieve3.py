@@ -301,7 +301,7 @@ def pdf_loader(path: str) -> List[Document]:
 # Работа с коллекциями
 # -----------------------------------
 
-def handle_collection(existed_collection: str) -> List[str] or str:
+def handle_collection(existed_collection: str) -> List[str] | str:
     """
         Retrieve and display details of an existing Chroma DB collection.
 
@@ -755,5 +755,5 @@ if __name__ == '__main__':
     cs = ChromaService(c.chroma_host, c.chroma_port)
     collections = cs.display_collections(output_format="list")
     print(collections)
-    disp = handle_collection("25_01_2025_LaBSE-en-ru_pdf")
+    disp = handle_collection("main_collection")
     print(disp)
