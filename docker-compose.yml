@@ -8,6 +8,13 @@ services:
       - "7860:7860"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # общий кэш Hugging Face
+      - /opt/hf-cache:/root/.cache/huggingface
+    environment:
+      - FILTRATION_LOCAL_ONLY=1        # офлайн режим!
+      - FILTRATION_DEVICE=auto
+      - FILTRATION_CACHE=/root/.cache/huggingface
+      - TOKENIZERS_PARALLELISM=false
     networks:
       - local_net
 
