@@ -12,7 +12,7 @@ import json
 # Retry section
 # import time
 import logging
-from typing import List, Literal, Any, Union
+from typing import List, Literal, Any, Union, Optional, Dict
 
 import meilisearch
 import requests
@@ -381,23 +381,60 @@ def delete_meili_document(index_uid: str, doc_id: str) -> None:
         print(f"Error deleting document '{doc_id}' in index '{index_uid}': {e}")
 
 
+# --------------------------------------------
+# Функции, посвященные редактированию
+# документов в индексе Meili
+# --------------------------------------------
+
+def get_document_by_id(index_name: str, doc_id: str) -> Optional[Dict[str, Any]]:
+    """
+    GET /indexes/{index}/documents/{id}
+    Вернёт dict (документ) или None (если 404).
+    """
+    url = f"{c.MEILI_URL}/indexes/{index_name}/documents/{doc_id}"
+    headers = {"Authorization": f"Bearer {c.MASTER_KEY}"}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+        if r.status_code == 404:
+            return None
+        print("get_document_by_id error:", r.status_code, r.text)
+        return None
+    except requests.RequestException as e:
+        print("get_document_by_id exception:", e)
+        return None
+
+def upsert_document(index_name: str, doc: Dict[str, Any]) -> str:
+    """
+    POST /indexes/{index}/documents — add/replace по primaryKey (обычно 'id').
+    На вход — один документ (мы отправляем массив из одного).
+    """
+    url = f"{c.MEILI_URL}/indexes/{index_name}/documents"
+    headers = {"Authorization": f"Bearer {c.MASTER_KEY}", "Content-Type": "application/json"}
+    try:
+        r = requests.post(url, headers=headers, json=[doc], timeout=20)
+        if r.status_code in (200, 202):
+            return "OK"
+        return f"ERR {r.status_code}: {r.text}"
+    except requests.RequestException as e:
+        return f"ERR: {e}"
+
+
 def main():
     """
     Example usage. Adjust as needed.
     """
 
     print("=======")
-    # res = meili_list_documents("main_index", return_type="All")
-    # print(res)
-    # print(show_list_indexes("all"))
-    # delete_index("try_0")
-    # create_index("news")
+    # doc: dict = {'id': 'skidka_50_na_manipulyaciyu_lor_hirurgiya_p1_b1', 'doc_id': 'skidka_50_na_manipulyaciyu_lor_hirurgiya', 'page': 1, 'block_id': 1, 'type': 'text', 'title': 'Скидка 50% на манипуляцию ЛОР, хирургия (+ check)', 'content': 'Скидка 50% на манипуляцию ЛОР, хирургия (+check2).\n_\nСкидка предоставляется на прием специалиста при прохождения данных манипуляций у доктора.\n_\nВНИМАНИЕ!   Пациент должен иметь на руках  протокол консультации врача, где указано, что  рекомендовано та или иная манипуляция (с него снимают копию и вклеивают в карту пациентки).\n  Если  протокола/направления от врача нет (и соответственно нет рекомендации для проведения данной манипуляции), то пациент оплачивает полную стоимость приема!\n_\nЗапись в Мед.центре: в примечании пишем 50%манипуляция\n_\nПродолжительность акции: не указана.', 'html': None, 'csv': None, 'keywords': [], 'created_at': '2025-10-13T17:12:38Z'}
+    #
     # print("=======")
-    # print("=======")
-
-    s_r = search_meili("news", "прием флеболога бесплатно")
+    # print(get_document_by_id("news", "skidka_50_na_manipulyaciyu_lor_hirurgiya_p1_b1"))
+    # print(upsert_document("news", doc))
+    # s_r = search_meili("news", "прием флеболога бесплатно")
     print("=======")
-    print(s_r)
+    # print(s_r)
 
 
 if __name__ == '__main__':

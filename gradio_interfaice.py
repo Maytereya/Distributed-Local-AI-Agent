@@ -977,9 +977,6 @@ def main():
                 with gr.Accordion(label="Форма для прямого добавления информации в базу знаний Meilisearch",
                                   open=False, ):
                     with gr.Column():
-                        # def generate_new_id():
-                        #     return str(uuid.uuid4())
-
                         with gr.Row():
                             index_dropdown = gr.Dropdown(
                                 choices=gr_existed_indexes(),
@@ -987,19 +984,27 @@ def main():
                                 interactive=True,
                                 scale=30,
                             )
+                            # -------------------------------
+                            # Это же окно служит для ввода
+                            # нужного ID при редактировании
+                            # -------------------------------
+
                             id_input = gr.Textbox(
                                 label="ID документа (латиница/цифры/нижнее подчеркивание, 3–60)",
                                 value="",
                                 placeholder="например: price_list_2025 или izmeneniya_grafika_priema",
                                 scale=50
                             )
+
                             with gr.Column():
                                 normalize_id_btn = gr.Button("🧹 Нормализовать ID", scale=20, size="sm",
                                                              variant="primary")
                                 generate_id_from_title_btn = gr.Button("🪄 ID из заголовка", scale=20, size="sm",
                                                                        variant="primary")
                                 vanish_screen_btn = gr.Button("🧹 Очистить ввод", scale=20, size="sm", variant="stop")
-                                # generate_id_button = gr.Button("🔄 Сгенерировать цифровой ID", scale=20, size="md")
+                                load_doc_btn = gr.Button("⬇️ Загрузить по ID", size="sm")
+                                save_doc_btn_direct = gr.Button("💾 Сохранить (обновить по ID)", size="sm",
+                                                                variant="primary")
 
                         title_input = gr.Textbox(label="Заголовок, title *")
                         content_input = gr.Textbox(label="Основной текст, content *", lines=20, max_lines=80)
@@ -1092,8 +1097,10 @@ def main():
                         inputs=[meta_state],
                         outputs=[status_output],
                     )
-
+                    # ------------------------------
                     # живой валидатор на каждый ввод
+                    # ------------------------------
+
                     id_input.change(validate_id_live, inputs=[id_input], outputs=[id_input, status_output])
 
                     # ручная нормализация
@@ -1104,7 +1111,10 @@ def main():
 
                     normalize_id_btn.click(normalize_id_click, inputs=[id_input], outputs=[id_input, status_output])
 
+                    # ------------------------
                     # генерация из заголовка
+                    # ------------------------
+
                     def gen_id_from_title(title: str) -> tuple[dict[str, Any], str]:
                         cleaned = sanitize_id(title or "")
                         return gr.update(value=cleaned), (
@@ -1122,7 +1132,70 @@ def main():
                                                      content_input,
                                                      keywords_input,
                                                      table_df, ])
-                    # ---------------------------------------------------
+
+                    # --------------------------------------------
+                    # Секция загрузки документа для редактирования
+                    # --------------------------------------------
+
+                    def load_doc_into_form_by_id(index_name: str, doc_id: str):
+                        if not index_name:
+                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "Укажите индекс."
+                        if not doc_id:
+                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "Укажите ID."
+
+                        doc = meilisearch.get_document_by_id(index_name, doc_id)
+                        if not doc:
+                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "❌ Документ не найден."
+
+                        # Подставляются дефолтные ключи, проверить на отличие!
+                        title = doc.get("title", "")
+                        content = doc.get("content", "")
+                        keywords = doc.get("keywords", "")
+                        table_val = doc.get("table") or [["", ""], ["", ""], ["", ""]]
+
+                        return (
+                            gr.update(value=doc_id),
+                            gr.update(value=title),
+                            gr.update(value=content),
+                            gr.update(value=keywords),
+                            gr.update(value=table_val),
+                            "✅ Загружено."
+                        )
+
+                    load_doc_btn.click(
+                        load_doc_into_form_by_id,
+                        inputs=[index_dropdown, id_input],
+                        outputs=[id_input, title_input, content_input, keywords_input, table_df, status_output],
+                    )
+
+                    #  ------------------------------------
+                    # Секция сохранения документа после
+                    # редактирования
+                    #  ------------------------------------
+
+                    def save_doc_by_id(index_name: str, doc_id: str, title: str, content: str, keywords: str, table):
+                        if not index_name:
+                            return "Укажи индекс."
+                        if not doc_id or not is_valid_id(doc_id):
+                            return "Некорректный ID (разрешено [a-z0-9_], длина 3–60)."
+
+                        doc = {
+                            "id": doc_id,
+                            "title": title or "",
+                            "content": content or "",
+                            "keywords": keywords or "",
+                            "table": table or [],
+                        }
+                        msg = meilisearch.upsert_document(index_name, doc)
+                        return "✅ Сохранено." if msg == "OK" else f"❌ {msg}"
+
+                    save_doc_btn_direct.click(
+                        save_doc_by_id,
+                        inputs=[index_dropdown, id_input, title_input, content_input, keywords_input, table_state],
+                        outputs=[status_output],
+                    )
+
+                # ---------------------------------------------------
                 # Секция просмотра содержимого коллекций
                 # и индексов
                 # ---------------------------------------------------
