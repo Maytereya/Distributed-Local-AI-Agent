@@ -128,7 +128,7 @@ class ChromaService:
         self.chroma_client.reset()
         self.chroma_client.clear_system_cache()
 
-    def display_collections(self, output_format: Literal["list", "str"] = "list") -> List[str] or str:
+    def display_collections(self, output_format: Literal["list", "str"] = "list") -> List[str] | str:
         """
         Display all collections stored in Chroma DB.
 
@@ -638,7 +638,7 @@ async def main_retrieve_async(collection: str,
                               k: int = 5,
                               n_results: int = 2,
                               threshold: float = 0.005,
-                              ) -> List[Document] or str:
+                              ) -> List[Document] | str:
     """
 
     :param return_type: Определяет, в каком виде выдается итог поиска: [Document] или str, по умолчанию [Document].
@@ -701,7 +701,7 @@ async def main_retrieve_async(collection: str,
 def main_add_to_chroma(
         # filename: str = "side_effects_guideline_for_RAG_paged.pdf",
         path_to_file: str = None,
-        collection: str = "25_01_2025_LaBSE-en-ru_pdf",
+        collection: str = "main_collection",
         doc_type: Literal["URL", "PDF", "TXT"] = "PDF",
 ) -> None:
     """
