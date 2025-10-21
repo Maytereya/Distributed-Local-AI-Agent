@@ -75,8 +75,8 @@ gitdb==4.0.12
 GitPython==3.1.44
 google-auth==2.37.0
 googleapis-common-protos==1.66.0
-gradio==5.44.1
-gradio_client==1.12.1
+gradio==5.49.0
+gradio_client==1.13.3
 gradio_pdf==0.0.22
 groovy==0.1.2
 grpcio==1.69.0
