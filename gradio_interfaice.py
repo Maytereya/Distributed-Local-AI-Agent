@@ -974,12 +974,24 @@ def main():
                     value=None)  # dict: {"doc_id": str, "index": str, "blocks": list[dict]}
                 table_state = gr.State(value=[["", ""], ["", ""], ["", ""]])
 
-                with gr.Accordion(label="Форма для прямого добавления информации в базу знаний Meilisearch",
+                with gr.Accordion(label="Форма для добавления информации в базу знаний Meilisearch",
                                   open=False, ):
                     with gr.Column():
+                        # ----------------------------
+                        # Убогое окно,
+                        # сообщающее о статусе операций
+                        # -----------------------------
+                        status_output = gr.Textbox(value=txt_default(),
+                                                   label="Статус операции",
+                                                   lines=2,
+                                                   interactive=False,
+                                                   every=10.0,
+                                                   # container=False,
+                                                   )
                         with gr.Row():
                             index_dropdown = gr.Dropdown(
                                 choices=gr_existed_indexes(),
+                                info="main_index - для скриптов/подсказок, news - для новостей/акций",
                                 label="Выберите индекс Meilisearch",
                                 interactive=True,
                                 scale=30,
@@ -991,20 +1003,21 @@ def main():
 
                             id_input = gr.Textbox(
                                 label="ID документа (латиница/цифры/нижнее подчеркивание, 3–60)",
+                                info="Либо создаем ID при добавлении нового документа, либо вставляем ID документа, который надо отредактировать",
                                 value="",
                                 placeholder="например: price_list_2025 или izmeneniya_grafika_priema",
                                 scale=50
                             )
 
-                            with gr.Column():
-                                normalize_id_btn = gr.Button("🧹 Нормализовать ID", scale=20, size="sm",
-                                                             variant="primary")
-                                generate_id_from_title_btn = gr.Button("🪄 ID из заголовка", scale=20, size="sm",
-                                                                       variant="primary")
-                                vanish_screen_btn = gr.Button("🧹 Очистить ввод", scale=20, size="sm", variant="stop")
-                                load_doc_btn = gr.Button("⬇️ Загрузить по ID", size="sm")
-                                save_doc_btn_direct = gr.Button("💾 Сохранить (обновить по ID)", size="sm",
-                                                                variant="primary")
+                        with gr.Row():
+                            normalize_id_btn = gr.Button("🧹 Нормализовать ID", size="sm",
+                                                         variant="secondary")
+                            generate_id_from_title_btn = gr.Button("🪄 ID из заголовка", size="sm",
+                                                                   variant="primary")
+                            vanish_screen_btn = gr.Button("🧹 Очистить ввод", size="sm", variant="stop")
+                            load_doc_btn = gr.Button("⬇️ Загрузить по ID", size="sm", variant="primary")
+                            save_doc_btn_direct = gr.Button("💾 Сохранить (обновить по ID)", size="sm",
+                                                            variant="primary")
 
                         title_input = gr.Textbox(label="Заголовок, title *")
                         content_input = gr.Textbox(label="Основной текст, content *", lines=20, max_lines=80)
@@ -1029,14 +1042,6 @@ def main():
 
                         # любое редактирование таблицы обновляет State
                         table_df.change(_passthrough_table, inputs=[table_df], outputs=[table_state])
-
-                        status_output = gr.Textbox(value=txt_default(),
-                                                   label="Статус операции",
-                                                   lines=3,
-                                                   interactive=False,
-                                                   every=10.0,
-                                                   # container=False,
-                                                   )
                         preview_button = gr.Button("Предпросмотр блоков")
                         preview_json = gr.JSON(label="Предпросмотр JSON", visible=False)
                         # сейвим собранные блоки между кликами
@@ -1049,16 +1054,19 @@ def main():
                     def fn_preview_json(current_doc_id, title, content, keywords, table, selected_index):
 
                         if not selected_index:
+                            gr.Warning("Ошибка: не выбран индекс")
                             return gr.update(visible=False), "Ошибка: не выбран индекс", gr.update(value=None)
 
                         try:
                             doc_id, blocks = build_blocks(current_doc_id, title, content, keywords, table)
                         except ValueError as e:
+                            gr.Error(f"Ошибка: {e}")
                             return gr.update(visible=False), f"Ошибка: {e}", gr.update(value=None)
 
                         meta = {"doc_id": doc_id, "index": selected_index, "blocks": blocks}
-                        print(f"Preview JSON, meta content: {meta}")
+                        # print(f"Preview JSON, meta content: {meta}")
 
+                        gr.Info(f"✅ Предпросмотр: '{doc_id}', блоков: {len(blocks)} → '{selected_index}'")
                         return (
                             gr.update(visible=True, value=blocks),  # preview_json
                             f"✅ Предпросмотр: '{doc_id}', блоков: {len(blocks)} → '{selected_index}'",  # статус
@@ -1074,21 +1082,27 @@ def main():
                     def save_and_send_to_meilisearch(meta):
 
                         if not meta:
-                            return "Ошибка: нет данных (сделайте Предпросмотр)."
+                            gr.Warning("Ошибка: нет данных (сделайте Предпросмотр)")
+                            return "Ошибка: нет данных (сделайте Предпросмотр)"
 
                         index_name = meta["index"]
                         _blocks = meta["blocks"]
                         if not index_name:
-                            return "Ошибка: не выбран индекс."
+                            gr.Warning("Ошибка: не выбран индекс")
+                            return "Ошибка: не выбран индекс"
                         if not _blocks:
-                            return "Ошибка: пустой массив блоков."
+                            gr.Warning("Ошибка: пустой массив блоков")
+                            return "Ошибка: пустой массив блоков"
                         msg: str = ""
                         try:
                             msg = meilisearch.add_doc_to_meili(_blocks, index_name)
                             # client.index(index_name).add_documents(blocks)
                         except Exception as e:
+                            gr.Error(f"Ошибка добавления в Meilisearch: {e}, сообщение от Meilisearch: {msg}")
                             return f"Ошибка добавления в Meilisearch: {e}, сообщение от Meilisearch: {msg}"
-
+                        gr.Success(
+                            f"✅ Успешно: '{meta['doc_id']}', добавлено {len(_blocks)} блок(ов) в '{index_name}', "
+                            f"сообщение от Meilisearch: {msg}")
                         return (f"✅ Успешно: '{meta['doc_id']}', добавлено {len(_blocks)} блок(ов) в '{index_name}', "
                                 f"сообщение от Meilisearch: {msg}")
 
@@ -1106,8 +1120,13 @@ def main():
                     # ручная нормализация
                     def normalize_id_click(current: str) -> tuple[dict[str, Any], str]:
                         cleaned = sanitize_id(current or "")
-                        return gr.update(value=cleaned), (
-                            "ID нормализован" if is_valid_id(cleaned) else "ID всё ещё некорректен")
+                        if cleaned:
+                            gr.Info(f"ID корректен: {cleaned}")
+                            return gr.update(value=cleaned), (
+                                "ID нормализован")
+                        else:
+                            gr.Warning("ID всё ещё некорректен")
+                            return gr.update(), "ID всё ещё некорректен"
 
                     normalize_id_btn.click(normalize_id_click, inputs=[id_input], outputs=[id_input, status_output])
 
@@ -1117,13 +1136,19 @@ def main():
 
                     def gen_id_from_title(title: str) -> tuple[dict[str, Any], str]:
                         cleaned = sanitize_id(title or "")
-                        return gr.update(value=cleaned), (
-                            "ID получен из заголовка" if cleaned else "Не удалось получить ID")
+
+                        if cleaned:
+                            gr.Success(f"ID сгенерирован: {cleaned}")
+                            return gr.update(value=cleaned), "ID получен из заголовка"
+                        else:
+                            gr.Warning("Не удалось сгенерировать ID из заголовка")
+                            return gr.update(), "Не удалось получить ID"
 
                     generate_id_from_title_btn.click(gen_id_from_title, inputs=[title_input],
                                                      outputs=[id_input, status_output])
 
                     def vanish_all_windows():
+                        gr.Info("Все окна очищены, готов к загрузке нового документа")
                         return "", "", "", "", [["", ""], ["", ""], ["", ""]]
 
                     vanish_screen_btn.click(vanish_all_windows,
@@ -1139,12 +1164,15 @@ def main():
 
                     def load_doc_into_form_by_id(index_name: str, doc_id: str):
                         if not index_name:
+                            gr.Warning("Укажите индекс")
                             return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "Укажите индекс."
                         if not doc_id:
-                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "Укажите ID."
+                            gr.Warning("Укажите ID")
+                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "Укажите ID"
 
                         doc = meilisearch.get_document_by_id(index_name, doc_id)
                         if not doc:
+                            gr.Warning("❌ Документ не найден")
                             return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "❌ Документ не найден."
 
                         # Подставляются дефолтные ключи, проверить на отличие!
@@ -1153,6 +1181,7 @@ def main():
                         keywords = doc.get("keywords", "")
                         table_val = doc.get("table") or [["", ""], ["", ""], ["", ""]]
 
+                        gr.Success("✅ Документ загружен")
                         return (
                             gr.update(value=doc_id),
                             gr.update(value=title),
@@ -1175,8 +1204,10 @@ def main():
 
                     def save_doc_by_id(index_name: str, doc_id: str, title: str, content: str, keywords: str, table):
                         if not index_name:
-                            return "Укажи индекс."
+                            gr.Warning("Укажите индекс")
+                            return "Укажите индекс"
                         if not doc_id or not is_valid_id(doc_id):
+                            gr.Warning("Некорректный ID (разрешено [a-z0-9_], длина 3–60).")
                             return "Некорректный ID (разрешено [a-z0-9_], длина 3–60)."
 
                         doc = {
@@ -1187,7 +1218,12 @@ def main():
                             "table": table or [],
                         }
                         msg = meilisearch.upsert_document(index_name, doc)
-                        return "✅ Сохранено." if msg == "OK" else f"❌ {msg}"
+                        if msg == "OK":
+                            gr.Success("✅ Сохранено")
+                            return "✅ Сохранено."
+                        else:
+                            gr.Error(f"❌ {msg}")
+                            return f"❌ {msg}"
 
                     save_doc_btn_direct.click(
                         save_doc_by_id,
