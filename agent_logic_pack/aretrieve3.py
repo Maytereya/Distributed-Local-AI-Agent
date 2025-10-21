@@ -1,10 +1,19 @@
 # Async Retriever for Chroma DB v 3.1
 # Connection section
-import logging
+
 import os
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")           # снять при онлайне
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")     # снять при онлайне
+import logging
 import uuid
 from typing import List, Optional
 from typing import Literal
+
+# <<< ВАЖНО >>> тяжёлые хрени импортируем позже, внутри функций
+# from langchain_huggingface import HuggingFaceEmbeddings
+# from sentence_transformers import SentenceTransformer
 
 import chromadb
 from chromadb import Documents, EmbeddingFunction, Embeddings, Collection
@@ -13,9 +22,8 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.document_loaders import TextLoader, DirectoryLoader
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from sentence_transformers import SentenceTransformer
+
 from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
 
 from agent_logic_2 import config as c
@@ -74,34 +82,22 @@ except Exception as e:
 # -----------------------------
 
 def choose_model(model: Literal["distiluse", "sbert", "instructor", "default"] = "default",
-                 return_type: Literal["model", "name"] = "model") -> SentenceTransformer | str:
-    """
-    Select and return either the sentence transformer model or the model name string.
-
-    :param model: The name of the model to select. Options: "distiluse", "sbert", "instructor", "default".
-    :param return_type: Determines whether to return the model object ("model") or just the model name ("name").
-    :return: The selected model as a SentenceTransformer object or a string with the model name.
-    """
-
+                 return_type: Literal["model", "name"] = "model"):
     model_mapping = {
         "distiluse": "sentence-transformers/distiluse-base-multilingual-cased-v1",
         "sbert": "ai-forever/sbert_large_nlu_ru",
         "instructor": "hkunlp/instructor-xl",
         "default": "cointegrated/LaBSE-en-ru"
     }
-
     selected_model_name = model_mapping.get(model, model_mapping["default"])
 
     if return_type == "name":
-        # Return only the model name as a string
         return selected_model_name
 
-    else:
-        # Return the model object
-        # TODO: Выяснить, работает ли кэш правильно.
-        # cache_folder="/app/st-cache"
-        # Пока не подключил, так как надо правильно смонтировать папку и вообще выяснить как это работает.
-        return SentenceTransformer(selected_model_name, )
+    # ленивый импорт и явный CPU
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer(selected_model_name, device='cpu')
+
 
 
 # -----------------------------------
@@ -175,36 +171,16 @@ class ChromaService:
 # --------------------------------------------------------
 
 class HuggingFaceEmbeddingFunction(EmbeddingFunction[Documents]):
-    """
-    A custom embedding function for Chroma server database.
-
-    This class allows embedding documents using a pre-selected HuggingFace model.
-    Note:
-    - Default embedding model is "cointegrated/LaBSE-en-ru".
-    - To switch to a different model (e.g., "sbert"), specify it using the `set_model` method.
-    """
-
     def set_model(self, model: Literal["distiluse", "sbert", "instructor", "default"] = "default"):
-        """
-        Set the model to be used for embedding.
-
-        :param model: The name of the model to use for embeddings. Options: "distiluse", "sbert", "instructor", or "default".
-        """
-        self._model = choose_model(model)
+        self._model_name = model
+        self._model = None
 
     def __call__(self, input: Documents) -> Embeddings:
-        """
-        Embed the input documents using the pre-selected model.
+        if not hasattr(self, '_model') or self._model is None:
+            # реальная инициализация только на первый вызов
+            self._model = choose_model(getattr(self, '_model_name', 'default'))
+        return self._model.encode(input, show_progress_bar=True).tolist()
 
-        :param input: A list of LangChain Document objects to embed.
-        :return: A list of embeddings in Python list format.
-        """
-        if not hasattr(self, '_model'):
-            # Use the default model if none has been set
-            self._model = choose_model("default")
-
-        # Convert numpy array to Python list
-        return self._model.encode(input, show_progress_bar=True, ).tolist()
 
 
 # ----------------------------------
@@ -561,9 +537,16 @@ def vs_query(
     documents: List[Document] = []
 
     try:
-        # Получаем название модели через функцию choose_model
+        # ленивый импорт, чтобы не инициализировать transformers на импорт файла
+        from langchain_huggingface import HuggingFaceEmbeddings
+        from langchain_chroma import Chroma
+
         model_name = choose_model(model, return_type="name")
-        embedding_function = HuggingFaceEmbeddings(model_name=model_name)
+        embedding_function = HuggingFaceEmbeddings(
+            model_name=model_name,
+            model_kwargs={"device": "cpu"},  # ключевая строчка
+            encode_kwargs={"normalize_embeddings": True}
+        )
 
         vector_store_from_client = Chroma(
             client=chroma_client,
