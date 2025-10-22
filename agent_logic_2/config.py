@@ -21,7 +21,7 @@ config.read(config_path)
 # print("Files read:", files_read)
 # -------------------------------------------------
 environment = 'DOCKER_PRODUCTION' #'PRODUCTION'
-# | 'DEVELOPMENT' IP клиники
+# | 'DEVELOPMENT' IP квартиры
 # | 'LOCAL' localhost
 # | 'PRODUCTION' внешний белый IP Клиники
 # | 'DOCKER_PRODUCTION' под контейнеры

@@ -16,7 +16,7 @@ from collections import defaultdict
 from datetime import timedelta, datetime, date, time
 from pathlib import Path
 from pprint import pprint
-from typing import Dict, List, Set, Union
+from typing import Any, Dict, List, Set, Tuple, Union
 import requests, urllib3
 import asyncio
 from requests.adapters import HTTPAdapter
@@ -71,6 +71,9 @@ def _session_get(url: str, **kwargs):
 # Директория для кэширования данных
 DATA_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "apidata"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# регионы, которые исключаем из кэша (Оренбургская область и её потомки)
+EXCLUDED_REGION_ROOTS: Set[int] = {19}
 
 
 def _now_samara() -> datetime:
@@ -169,6 +172,8 @@ def get_all_doctors() -> List[Dict]:
     doctor_regions = site_doctor_regions()
     regions = site_regions()
 
+    excluded_region_ids = _collect_region_descendants(regions, EXCLUDED_REGION_ROOTS)
+
     # Быстрый доступ к названиям регионов по id
     regions_dict = {r["id"]: r["name"] for r in regions}
     units_dict = {u["id"]: u["name"] for u in units}
@@ -194,21 +199,26 @@ def get_all_doctors() -> List[Dict]:
         doc_units = list(dict.fromkeys(filter(None, doc_units)))
 
         # Готовим пары регионов (id, name) — без дублей, с сохранением порядка
-        seen_region_ids = set()
-        region_pairs = []
+        seen_region_ids: Set[int] = set()
+        region_pairs: List[Tuple[int, str]] = []
         for link in doctor_regions:
             if link["worker"] == doctor_id:
                 reg_id = link["region"]
-                if reg_id and reg_id not in seen_region_ids:
-                    seen_region_ids.add(reg_id)
-                    reg_name = regions_dict.get(reg_id)
-                    if reg_name:
-                        region_pairs.append((reg_id, reg_name))
-                    else:
-                        region_pairs.append((reg_id, f"ID {reg_id}"))
+                if not reg_id or reg_id in seen_region_ids or reg_id in excluded_region_ids:
+                    continue
+                seen_region_ids.add(reg_id)
+                reg_name = regions_dict.get(reg_id)
+                if reg_name:
+                    region_pairs.append((reg_id, reg_name))
+                else:
+                    region_pairs.append((reg_id, f"ID {reg_id}"))
 
         doc_region_ids = [r[0] for r in region_pairs]
         doc_regions = [r[1] for r in region_pairs]
+
+        # Если после фильтра не осталось регионов — пропускаем врача (Оренбургские филиалы)
+        if not doc_region_ids:
+            continue
 
         doctor_data = {
             "id": doctor_id,
@@ -335,6 +345,31 @@ def _descendants(unit_ids: Set[int], tree: Dict[int, Set[int]]) -> Set[int]:
         to_process.update(new_children)
 
     return result
+
+
+def _collect_region_descendants(regions: List[Dict[str, Any]], roots: Set[int]) -> Set[int]:
+    """Строит множество id регионов, входящих в указанные корни (с учётом потомков)."""
+    if not roots:
+        return set()
+
+    tree: Dict[int, Set[int]] = {}
+    for region in regions:
+        parent = region.get("parentId") or region.get("parent")
+        child_id = region.get("id")
+        if parent is None or child_id is None:
+            continue
+        tree.setdefault(parent, set()).add(child_id)
+
+    excluded: Set[int] = set()
+    stack = list(roots)
+    while stack:
+        current = stack.pop()
+        if current in excluded:
+            continue
+        excluded.add(current)
+        stack.extend(tree.get(current, ()))
+
+    return excluded
 
 
 def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:

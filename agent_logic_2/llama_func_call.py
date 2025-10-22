@@ -293,6 +293,7 @@ _cc_ts: float = 0.0
 CC_TTL: int = 600  # seconds
 
 async def get_cc_map_cached() -> Dict[int, str]:
+    """Кэширует заметки call‑центра по id врача с TTL, снижая нагрузку на API."""
     import time
     global _cc_map, _cc_ts
     now = time.time()
@@ -318,6 +319,7 @@ async def async_enrich_with_cc_info(doctors: list):
 
 # ── Форматирование ответа ────────────────────────────────────────────────────
 def format_doctor(item: Dict[str, Any]) -> str:
+    """Форматирует карточку врача: ФИО, спец-ть, адреса, заметка КЦ (очищенный HTML)."""
     lines: List[str] = [
         f"• ФИО: {item.get('fio', '-')}",
     ]
@@ -571,7 +573,13 @@ async def get_region_map_async():
 
 
 async def handle_surname_search(surname: str, question: str) -> str:
-    """Обрабатывает запрос по фамилии."""
+    """Ищет врача по фамилии/ФИО и формирует карточки; при необходимости добавляет прайс.
+    Аргументы:
+        surname: Определённая фамилия (или ФИО).
+        question: Исходный запрос (для эвристик, например «цены»).
+    Возвращает:
+        Отформатированный список карточек (1..N) или сообщение об отсутствии данных.
+    """
     print(f"LLM-парсер определил фамилию: {surname}")
 
     words = re.findall(r"[А-ЯЁ][а-яё]+", question)
