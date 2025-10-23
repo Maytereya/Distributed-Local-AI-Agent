@@ -7,12 +7,16 @@ This module provides two ways to work with Meilisearch:
    and removing them (as well as deleting entire indexes).
 
 """
+from __future__ import annotations
 
 import json
 # Retry section
 # import time
 import logging
-from typing import List, Literal, Any, Union, Optional, Dict
+import os
+from collections.abc import Sequence
+from typing import List, Literal, Any, Optional, Dict
+from typing import Union
 
 import meilisearch
 import requests
@@ -64,46 +68,141 @@ def init_meili_index(index_name="main_index"):
         "filterableAttributes": ["doc_id", "type", "page", "block_id", "keywords"],
         "sortableAttributes": ["page", "block_id", "created_at"]
     })
-    print("=== Index settings have been updated ===")
 
 
-def add_doc_to_meili(blocks: List[dict], index_name: str) -> str:
+import time
+
+
+def _task_to_dict(task):
+    # Приводим Pydantic-модель к dict, если нужно
+    if hasattr(task, "model_dump"):  # pydantic v2
+        return task.model_dump()
+    if hasattr(task, "dict"):  # pydantic v1
+        return task.dict()
+    if isinstance(task, dict):
+        return task
+    # последний шанс — собрать по атрибутам
+    d = {}
+    for attr in ("uid", "task_uid", "taskUid", "status", "type", "enqueued_at", "finished_at"):
+        if hasattr(task, attr):
+            d[attr] = getattr(task, attr)
+    return d
+
+
+def _extract_task_uid(task_info):
     """
-    Adds JSON documents from a local file to a Meilisearch index.
-    If the index does not exist, it will be created automatically.
-
-    :param blocks:
-    :param doc_path: Path to the local JSON file containing the documents (list of dicts).
-    :param index_name: Name of the target Meilisearch index.
-    :return: None
+    Поддерживает:
+    - dict с 'taskUid' или 'uid'
+    - Pydantic-модель TaskInfo с .task_uid / .uid
     """
+    # Pydantic v1/v2
+    if hasattr(task_info, "task_uid"):
+        return task_info.task_uid
+    if hasattr(task_info, "uid"):
+        return task_info.uid
 
+    # dict
+    if isinstance(task_info, dict):
+        return task_info.get("taskUid") or task_info.get("uid")
+
+    # что-то ещё (модель без привычных полей) — пробуем через приведение к dict
+    d = _task_to_dict(task_info)
+    uid = d.get("taskUid") or d.get("uid")
+    if uid is not None:
+        return uid
+
+    raise ValueError("Не удалось извлечь task uid из ответа Meilisearch.")
+
+
+def wait_for_task_completion(client, task_info, *, timeout=60, poll_interval=1.0):
+    """
+    Универсальное ожидание завершения задачи Meilisearch.
+    Поддерживает старые и новые версии Python-клиента.
+    Возвращает: (status: str, task: dict)
+    """
+    task_uid = _extract_task_uid(task_info)
+    start = time.time()
+
+    while True:
+        # В новых клиентах есть .tasks.get_task, в старых — client.get_task
+        if hasattr(client, "tasks"):
+            task = client.tasks.get_task(task_uid)
+        else:
+            task = client.get_task(task_uid)
+
+        # Нормализуем к dict
+        task_d = _task_to_dict(task)
+        status = task_d.get("status")
+
+        if status in {"succeeded", "failed", "canceled"}:
+            return status, task_d
+
+        if time.time() - start > timeout:
+            raise TimeoutError(f"Задача {task_uid} не завершилась за {timeout} сек. Текущий статус: {status}")
+
+        time.sleep(poll_interval)
+
+
+def add_doc_to_meili(
+        docs: Union[str, os.PathLike, Sequence[dict]],
+        index_name: str,
+        *,
+        timeout: int = 60,
+        poll_interval: float = 1.0,
+) -> str:
+
+    # 1) Нормализуем вход
+    if isinstance(docs, (str, os.PathLike)):
+        with open(docs, "r", encoding="utf-8") as f:
+            blocks = json.load(f)
+    else:
+        blocks = list(docs)
+
+    # 2) Валидация
+    if isinstance(blocks, dict):
+        blocks = [blocks]
+    if not isinstance(blocks, list) or not all(isinstance(x, dict) for x in blocks):
+        raise ValueError("add_doc_to_meili: ожидается список словарей (list[dict]).")
+    if not blocks:
+        raise ValueError("add_doc_to_meili: список документов пуст.")
+
+    # 3) Отправка + ожидание завершения
     try:
         task_info = client.index(index_name).add_documents(blocks)
-        msg = f"Документ успешно поставлен в очередь на добавление в индекс '{index_name}': {task_info}"
-        print(msg)
+        status, task = wait_for_task_completion(
+            client, task_info, timeout=timeout, poll_interval=poll_interval
+        )
+
+        if status == "succeeded":
+            uid = task.get("uid") or task.get("taskUid")
+            msg = f"Документы добавлены в индекс '{index_name}'. task={uid}"
+            logger.info(msg)
+            return msg
+
+        msg = f"Индексирование завершилось со статусом '{status}'. task={task}"
+        logger.warning(msg)
         return msg
+
     except Exception as e:
-        msg = f"Ошибка добавления документа в индекс '{index_name}': {e}"
-        print(msg)
-        return msg
+        logger.exception("Ошибка добавления документов в Meilisearch")
+        return f"Ошибка добавления документа(ов) в индекс '{index_name}': {e}"
 
 
-def get_task_info(task_number: int) -> dict:
-    """
-    Retrieves information about a specific asynchronous task in Meilisearch.
-    Meilisearch uses tasks to handle operations such as adding, updating, or deleting documents.
-
-    :param task_number: The numeric ID of the task.
-    :return: A dictionary containing information about the requested task.
-    """
-    try:
-        task = client.get_task(task_number)
-        print("Task info:", task)
-        return task
-    except Exception as gte:
-        print(f"Error retrieving info for task #{task_number}: {gte}")
-        return {}
+# def get_task_info(task_number: int) -> dict:
+#     """
+#     Retrieves information about a specific asynchronous task in Meilisearch.
+#     Meilisearch uses tasks to handle operations such as adding, updating, or deleting documents.
+#
+#     :param task_number: The numeric ID of the task.
+#     :return: A dictionary containing information about the requested task.
+#     """
+#     try:
+#         task = client.get_task(task_number)
+#         print("Task info:", task)
+#         return task
+#     except Exception as gte:
+#         print(f"Error retrieving info for task #{task_number}: {gte}")
+#         return {}
 
 
 def meili_list_documents(
@@ -211,6 +310,7 @@ def search_meili(index_name: str, query: str, limit: int = 3,
         # --------------------------------------------
         def fix_none_err(v, default="не указан"):
             return default if v is None else str(v)
+
         # --------------------------------------------
 
         # Собираем все куски контента:
@@ -404,6 +504,7 @@ def get_document_by_id(index_name: str, doc_id: str) -> Optional[Dict[str, Any]]
     except requests.RequestException as e:
         print("get_document_by_id exception:", e)
         return None
+
 
 def upsert_document(index_name: str, doc: Dict[str, Any]) -> str:
     """

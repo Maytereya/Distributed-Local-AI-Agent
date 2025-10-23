@@ -1,7 +1,8 @@
 import json
-import pdfplumber
 import os
 import re
+
+import pdfplumber
 
 
 def pdf_to_meili_json(pdf_path, output_json_path):
@@ -34,8 +35,9 @@ def pdf_to_meili_json(pdf_path, output_json_path):
             # Формируем объект (документ) для Meilisearch
             doc = {
                 "id": doc_id,
-                "file_name": base_name,
+                "title": base_name,
                 "page_number": page_num,
+                "keywords": text[:10],
                 "content": text,
             }
 

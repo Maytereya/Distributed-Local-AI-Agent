@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import time
+from functools import partial
 from pathlib import Path
 from typing import Dict, List, Union, Tuple, Literal, Any
 
@@ -359,11 +360,8 @@ def gr_existed_indexes():
 
 
 def existed_docs_in_selected_index(selected_index: str,
-                                   return_type: Literal["All", "ID"]) -> List[str] | List[
-    List[str]]:
+                                   return_type: Literal["All", "ID"]) -> List[str] | List[List[str]]:
     """
-
-    :return:
     """
     if not selected_index:
         return ["Индекс не выбран"]
@@ -378,21 +376,22 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
     либо JSON-файла напрямую.
     """
     if not index:
+        gr.Warning("Не выбран индекс. Укажите индекс Meilisearch", title="Предупреждение")
         return (
             gr.update(value=None),  # PDF
             gr.update(value=None),  # JSON
-            "Ошибка: не выбран индекс. Укажите индекс Meilisearch.",
             gr.update(),
             gr.update()
         )
+    # Гарантируем наличие каталога для выгрузки перед любыми манипуляциями с путями.
+    os.makedirs("Upload", exist_ok=True)
 
     if doc_type == "PDF":
-        # Обработка PDF
         if not pdf_path:
+            gr.Warning("PDF не загружен, загрузите документ", title="Предупреждение")
             return (
                 gr.update(value=None),
                 gr.update(value=None),
-                "Ошибка: PDF не загружен, загрузите документ.",
                 gr.update(),
                 gr.update()
             )
@@ -407,20 +406,19 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
         try:
             meili_msg = meilisearch.add_doc_to_meili(json_path, index)
         except Exception as e:
+            gr.Error(f"{meili_msg}. {e}", title="Ошибка")
             return (
                 PDF(value=None, label="Загрузить PDF", interactive=True, scale=80),
                 gr.update(value=None),  # сбрасываем JSON
-                f"{meili_msg}. {e}",  # Возможно, это дублирование одного и того же сообщения об ошибке
                 gr.update(),
                 gr.update(),
             )
         time.sleep(5)
         new_list = gr_existed_indexes()
-
+        gr.Success(f"Файл (PDF) добавлен в индекс. {meili_msg}", title="Успешно")
         return (
             PDF(value=None, label="Загрузить PDF", interactive=True, scale=80),
             gr.update(value=None),  # сбрасываем JSON
-            f"Файл (PDF) добавлен в индекс. {meili_msg}",
             gr.update(choices=new_list),
             gr.update(choices=new_list),
         )
@@ -431,10 +429,10 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
         # Обработка JSON
 
         if not json_file:
+            gr.Warning("JSON не загружен, загрузите документ.", title="Предупреждение")
             return (
                 gr.update(value=None),
                 gr.update(value=None),
-                "Ошибка: JSON не загружен, загрузите документ.",
                 gr.update(),
                 gr.update()
             )
@@ -453,31 +451,30 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
         try:
             meili_msg = meilisearch.add_doc_to_meili(local_json_path, index)
         except Exception as e:
+            gr.Error(f"{meili_msg}. {e}", title="Ошибка")
             return (
                 gr.update(value=None),  # сбрасываем PDF
                 gr.update(value=None),  # сбрасываем JSON
-                f"{meili_msg}, {e}",  # Возможно, это дублирование одного и того же сообщения об ошибке
                 gr.update(),
                 gr.update(),
             )
         time.sleep(5)
 
         new_list = gr_existed_indexes()
-
+        gr.Success(f"Файл (JSON) добавлен в индекс. {meili_msg}", title="Успешно")
         return (
             gr.update(value=None),  # сбрасываем PDF
             gr.update(value=None),  # сбрасываем JSON
-            f"{meili_msg}",
             gr.update(choices=new_list),
             gr.update(choices=new_list),
         )
 
 
     else:
+        gr.Warning("Неподдерживаемый тип документа.", title="Предупреждение")
         return (
             gr.update(value=None),
             gr.update(value=None),
-            "Неподдерживаемый тип документа.",
             gr.update(),
             gr.update()
         )
@@ -503,13 +500,12 @@ def gr_remove_index(index: str):
     time.sleep(10)
     #
     new_list = gr_existed_indexes() if gr_existed_indexes() else "Индекс отсутствует"
-
+    gr.Success(message=f"Индекс {index} удален", title="Успешно")
     return (
         gr.update(choices=new_list, value=new_list[0] if new_list else ""),
         gr.update(choices=new_list, value=new_list[0] if new_list else ""),
         gr.update(choices=new_list, value=new_list[0] if new_list else ""),
         gr.update(choices=new_list, value=new_list[0] if new_list else ""),
-        "Индекс удален",
     )
 
 
@@ -520,17 +516,17 @@ def gr_create_index(index_name: str):
     -> upload_indices_dropdown,
     -> meili_search_indexes_dropdown,
     -> meili_ind_for_cont_dropdown,
-    -> status_bar,
     """
     meilisearch.create_index(index_name)
     time.sleep(8)  #
     new_list = gr_existed_indexes()
+    gr.Success(message=f"Индекс {index_name} создан", title="Успешно")
     return (
         gr.update(choices=new_list, value=index_name),
         gr.update(choices=new_list, value=index_name),
         gr.update(choices=new_list, value=index_name),
         gr.update(choices=new_list, value=index_name),
-        f"Индекс {index_name} создан",
+
     )
 
 
@@ -538,32 +534,36 @@ def gr_rm_doc_from_index(ind_id: str, doc_id: str):
     meilisearch.delete_meili_document(ind_id, doc_id)
     id_list = existed_docs_in_selected_index(gr_existed_indexes()[0], return_type="ID")
     full_list = existed_docs_in_selected_index(gr_existed_indexes()[0], return_type="All")
-    return (f"Документ с ID {doc_id} удален",
-            gr.update(choices=id_list, ),
-            gr.update(value=full_list, ),
-            )
+    gr.Success(message=f"Документ с ID {ind_id} удален", title="Успешно")
+    return (
+        gr.update(choices=id_list, ),
+        gr.update(value=full_list, ),
+    )
 
 
-def validate_id_live(current: str) -> tuple[dict[str, Any], str]:
+def validate_id_live(current: str) -> dict[str, Any]:
     """
     Живой валидатор для id_input: если строка уже валидна — оставляем,
     если нет — предлагаем «почищенную» версию.
     Возвращаем (value для id_input, статус).
     """
     if is_valid_id(current):
-        return gr.update(value=current), "ID валиден"
+        gr.Info("ID валиден", title="Инфо")
+        return gr.update(value=current)
     proposal = sanitize_id(current or "")
     # если пусто — не подменяем молча
     if proposal and proposal != current:
-        return gr.update(value=proposal), "ID нормализован автоматически"
-    return gr.update(value=current), "Некорректный ID. Разрешены: [a-z0-9_], длина 3–60"
+        gr.Info("ID нормализован автоматически", title="Инфо")
+        return gr.update(value=proposal)
+    gr.Warning("Некорректный ID. Разрешены: [a-z0-9_], длина 3–60", title="Предупреждение")
+    return gr.update(value=current)
 
 
 # ------------------------------------
 # GRADIO WRAPPING functions section
 # ------------------------------------
 
-def update_docs_in_meili_index(index_name: str):
+def update_docs_in_meili_index(index_name: str, output: Literal["full", "id_only"] = "full"):
     """
     Функция-обработчик для .change события:
     При выборе индекса возвращает обновлённый список документов в этом индексе
@@ -573,10 +573,13 @@ def update_docs_in_meili_index(index_name: str):
     full_list = existed_docs_in_selected_index(index_name, return_type="All")
     id_list = existed_docs_in_selected_index(index_name, return_type="ID")
 
-    return (
-        gr.update(value=full_list, ),
-        gr.update(choices=id_list, value=(id_list[0] if id_list else "нет данных")),
-    )
+    if output == "full":
+        return (
+            gr.update(value=full_list, ),
+            gr.update(choices=id_list, value=(id_list[0] if id_list else "нет данных")),
+        )
+    else:
+        return gr.update(choices=id_list, value=(id_list[0] if id_list else "нет данных"))
 
 
 def update_docs_in_chroma_collection(collection_name: str):
@@ -701,7 +704,9 @@ def main():
     ollama_settings.init_model_name()
     ollama_settings.init_options()
     ollama_settings.init_thinking()
-    meilisearch.init_meili_index()
+    # Пока отключим инициализацию главного индекса. Не факт, что она нужна.
+    # meilisearch.init_meili_index()
+
     # Allow serving local /static files via /gradio_api/file=...
     gr.set_static_paths(paths=[STATIC_DIR])
 
@@ -907,11 +912,11 @@ def main():
                                                               visible=False)
 
                         # Поле для вывода текущего статуса работы с коллекциями
-                        status_bar = gr.Textbox(value=txt_default,
-                                                every=15.0,
-                                                label="Статус операции",
-                                                # info="Только вывод",
-                                                interactive=False, )
+                        # status_bar = gr.Textbox(value=txt_default,
+                        #                         every=15.0,
+                        #                         label="Статус операции",
+                        #                         # info="Только вывод",
+                        #                         interactive=False, )
 
                         # Кнопки для работы с коллекциями или индексами
                         with gr.Column():
@@ -977,47 +982,62 @@ def main():
                 with gr.Accordion(label="Форма для добавления информации в базу знаний Meilisearch",
                                   open=False, ):
                     with gr.Column():
-                        # ----------------------------
-                        # Убогое окно,
-                        # сообщающее о статусе операций
-                        # -----------------------------
-                        status_output = gr.Textbox(value=txt_default(),
-                                                   label="Статус операции",
-                                                   lines=2,
-                                                   interactive=False,
-                                                   every=10.0,
-                                                   # container=False,
-                                                   )
                         with gr.Row():
+                            io_radio = gr.Radio(
+                                [("Создать документ", "create"), ("Редактировать существующий", "change")],
+                                # container=True,
+                                value="create",
+                                scale=30,
+                                label="Выберите действие"
+                            )
+
                             index_dropdown = gr.Dropdown(
                                 choices=gr_existed_indexes(),
-                                info="main_index - для скриптов/подсказок, news - для новостей/акций",
+                                info="main_index - для скриптов, news - для акций",
                                 label="Выберите индекс Meilisearch",
                                 interactive=True,
                                 scale=30,
                             )
                             # -------------------------------
-                            # Это же окно служит для ввода
-                            # нужного ID при редактировании
+                            # Окно служит для ввода ID
                             # -------------------------------
 
                             id_input = gr.Textbox(
                                 label="ID документа (латиница/цифры/нижнее подчеркивание, 3–60)",
-                                info="Либо создаем ID при добавлении нового документа, либо вставляем ID документа, который надо отредактировать",
+                                info="Введите уникальный ID для добавления нового документа",
                                 value="",
+                                visible=True,
                                 placeholder="например: price_list_2025 или izmeneniya_grafika_priema",
-                                scale=50
+                                scale=50,
                             )
 
-                        with gr.Row():
-                            normalize_id_btn = gr.Button("🧹 Нормализовать ID", size="sm",
-                                                         variant="secondary")
-                            generate_id_from_title_btn = gr.Button("🪄 ID из заголовка", size="sm",
-                                                                   variant="primary")
-                            vanish_screen_btn = gr.Button("🧹 Очистить ввод", size="sm", variant="stop")
-                            load_doc_btn = gr.Button("⬇️ Загрузить по ID", size="sm", variant="primary")
-                            save_doc_btn_direct = gr.Button("💾 Сохранить (обновить по ID)", size="sm",
-                                                            variant="primary")
+                            # _______________________________
+                            # Дропдаун служит для выбора ID
+                            # для редактирования
+                            # -------------------------------
+
+                            id_select = gr.Dropdown(
+                                label="ID документа",
+                                info="Выберите ID для редактирования нового документа",
+                                choices=existed_docs_in_selected_index(index_dropdown.value, "ID"),
+                                # value="",
+                                allow_custom_value=True,
+                                visible=False,
+                                interactive=True,
+                                scale=50,
+                            )
+
+                            with gr.Column():
+                                normalize_id_btn = gr.Button("🧹 Нормализовать ID", size="sm",
+                                                             variant="secondary", visible=True)
+                                generate_id_from_title_btn = gr.Button("🪄 ID из заголовка", size="sm",
+                                                                       variant="primary", visible=True)
+                                vanish_screen_btn = gr.Button("🧹 Очистить ввод", size="sm", variant="stop",
+                                                              visible=True)
+                                load_doc_btn = gr.Button("⬇️ Загрузить по ID", size="sm", variant="primary",
+                                                         visible=False)
+                                save_doc_btn_direct = gr.Button("💾 Сохранить (обновить по ID)", size="sm",
+                                                                variant="primary", visible=False)
 
                         title_input = gr.Textbox(label="Заголовок, title *")
                         content_input = gr.Textbox(label="Основной текст, content *", lines=20, max_lines=80)
@@ -1054,101 +1074,111 @@ def main():
                     def fn_preview_json(current_doc_id, title, content, keywords, table, selected_index):
 
                         if not selected_index:
-                            gr.Warning("Ошибка: не выбран индекс")
-                            return gr.update(visible=False), "Ошибка: не выбран индекс", gr.update(value=None)
+                            gr.Warning("Не выбран индекс", title="Предупреждение")
+                            return gr.update(visible=False),
 
                         try:
                             doc_id, blocks = build_blocks(current_doc_id, title, content, keywords, table)
                         except ValueError as e:
-                            gr.Error(f"Ошибка: {e}")
-                            return gr.update(visible=False), f"Ошибка: {e}", gr.update(value=None)
+                            gr.Error(f"Проблема: {e}", title="Ошибка!")
+                            return gr.update(visible=False),
 
                         meta = {"doc_id": doc_id, "index": selected_index, "blocks": blocks}
-                        # print(f"Preview JSON, meta content: {meta}")
 
-                        gr.Info(f"✅ Предпросмотр: '{doc_id}', блоков: {len(blocks)} → '{selected_index}'")
+                        gr.Info(f"✅ Предпросмотр: '{doc_id}', блоков: {len(blocks)} → '{selected_index}'", title="Инфо")
                         return (
                             gr.update(visible=True, value=blocks),  # preview_json
-                            f"✅ Предпросмотр: '{doc_id}', блоков: {len(blocks)} → '{selected_index}'",  # статус
                             meta  # meta_state
                         )
 
                     preview_button.click(
                         fn_preview_json,
                         inputs=[id_input, title_input, content_input, keywords_input, table_state, index_dropdown],
-                        outputs=[preview_json, status_output, meta_state],
+                        outputs=[preview_json,
+                                 # status_output,
+                                 meta_state],
                     )
 
                     def save_and_send_to_meilisearch(meta):
 
                         if not meta:
-                            gr.Warning("Ошибка: нет данных (сделайте Предпросмотр)")
-                            return "Ошибка: нет данных (сделайте Предпросмотр)"
+                            gr.Warning("Нет данных (сделайте Предпросмотр)", title="Предупреждение")
+                            return None
 
                         index_name = meta["index"]
                         _blocks = meta["blocks"]
                         if not index_name:
-                            gr.Warning("Ошибка: не выбран индекс")
-                            return "Ошибка: не выбран индекс"
+                            gr.Warning("Не выбран индекс", title="Предупреждение")
+                            return None
+
                         if not _blocks:
-                            gr.Warning("Ошибка: пустой массив блоков")
-                            return "Ошибка: пустой массив блоков"
+                            gr.Warning("Пустой массив блоков", title="Предупреждение")
+                            return None
+
                         msg: str = ""
                         try:
                             msg = meilisearch.add_doc_to_meili(_blocks, index_name)
-                            # client.index(index_name).add_documents(blocks)
+
                         except Exception as e:
-                            gr.Error(f"Ошибка добавления в Meilisearch: {e}, сообщение от Meilisearch: {msg}")
-                            return f"Ошибка добавления в Meilisearch: {e}, сообщение от Meilisearch: {msg}"
+                            gr.Error(f"Ошибка добавления в Meilisearch: {e}, сообщение от Meilisearch: {msg}",
+                                     title="Ошибка!")
+                            return None
                         gr.Success(
-                            f"✅ Успешно: '{meta['doc_id']}', добавлено {len(_blocks)} блок(ов) в '{index_name}', "
-                            f"сообщение от Meilisearch: {msg}")
-                        return (f"✅ Успешно: '{meta['doc_id']}', добавлено {len(_blocks)} блок(ов) в '{index_name}', "
-                                f"сообщение от Meilisearch: {msg}")
+                            f"✅ '{meta['doc_id']}', добавлено {len(_blocks)} блок(ов) в '{index_name}', "
+                            f"сообщение от сервера Meilisearch: {msg}", title="Успешно")
+                        return None
 
                     save_button.click(
                         save_and_send_to_meilisearch,
                         inputs=[meta_state],
-                        outputs=[status_output],
+
                     )
                     # ------------------------------
                     # живой валидатор на каждый ввод
                     # ------------------------------
 
-                    id_input.change(validate_id_live, inputs=[id_input], outputs=[id_input, status_output])
+                    id_input.change(validate_id_live, inputs=[id_input], outputs=[id_input,
+                                                                                  # status_output
+                                                                                  ])
 
+                    # ------------------------------
                     # ручная нормализация
-                    def normalize_id_click(current: str) -> tuple[dict[str, Any], str]:
+                    # ------------------------------
+                    def normalize_id_click(current: str) -> dict[str, Any]:
                         cleaned = sanitize_id(current or "")
                         if cleaned:
-                            gr.Info(f"ID корректен: {cleaned}")
-                            return gr.update(value=cleaned), (
-                                "ID нормализован")
-                        else:
-                            gr.Warning("ID всё ещё некорректен")
-                            return gr.update(), "ID всё ещё некорректен"
+                            gr.Info(f"ID корректен: {cleaned}", title="Инфо")
+                            return gr.update(value=cleaned)
 
-                    normalize_id_btn.click(normalize_id_click, inputs=[id_input], outputs=[id_input, status_output])
+                        else:
+                            gr.Warning("ID всё ещё некорректен", title="Предупреждение")
+                            return gr.update()
+
+                    normalize_id_btn.click(normalize_id_click, inputs=id_input, outputs=id_input
+                                           )
 
                     # ------------------------
                     # генерация из заголовка
                     # ------------------------
 
-                    def gen_id_from_title(title: str) -> tuple[dict[str, Any], str]:
+                    def gen_id_from_title(title: str) -> dict[str, Any]:
                         cleaned = sanitize_id(title or "")
 
                         if cleaned:
-                            gr.Success(f"ID сгенерирован: {cleaned}")
-                            return gr.update(value=cleaned), "ID получен из заголовка"
+                            gr.Success(f"ID сгенерирован: {cleaned}", title="Успешно")
+                            return gr.update(value=cleaned)
                         else:
-                            gr.Warning("Не удалось сгенерировать ID из заголовка")
-                            return gr.update(), "Не удалось получить ID"
+                            gr.Warning("Не удалось сгенерировать ID из заголовка", title="Предупреждение")
+                            return gr.update()
+
 
                     generate_id_from_title_btn.click(gen_id_from_title, inputs=[title_input],
-                                                     outputs=[id_input, status_output])
+                                                     outputs=id_input
+
+                                                     )
 
                     def vanish_all_windows():
-                        gr.Info("Все окна очищены, готов к загрузке нового документа")
+                        gr.Info("Все окна очищены, готов к загрузке нового документа", title="Инфо")
                         return "", "", "", "", [["", ""], ["", ""], ["", ""]]
 
                     vanish_screen_btn.click(vanish_all_windows,
@@ -1164,37 +1194,42 @@ def main():
 
                     def load_doc_into_form_by_id(index_name: str, doc_id: str):
                         if not index_name:
-                            gr.Warning("Укажите индекс")
-                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "Укажите индекс."
+                            gr.Warning("Укажите индекс", title="Предупреждение")
+                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
                         if not doc_id:
-                            gr.Warning("Укажите ID")
-                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "Укажите ID"
+                            gr.Warning("Укажите ID", title="Предупреждение")
+                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
 
                         doc = meilisearch.get_document_by_id(index_name, doc_id)
                         if not doc:
-                            gr.Warning("❌ Документ не найден")
-                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), "❌ Документ не найден."
+                            gr.Warning("❌ Документ не найден", title="Предупреждение")
+                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
 
-                        # Подставляются дефолтные ключи, проверить на отличие!
+                        # Подставляются дефолтные ключи
                         title = doc.get("title", "")
                         content = doc.get("content", "")
                         keywords = doc.get("keywords", "")
                         table_val = doc.get("table") or [["", ""], ["", ""], ["", ""]]
 
-                        gr.Success("✅ Документ загружен")
+                        gr.Success(message="✅ Документ загружен", title="Успешно")
                         return (
                             gr.update(value=doc_id),
                             gr.update(value=title),
                             gr.update(value=content),
                             gr.update(value=keywords),
                             gr.update(value=table_val),
-                            "✅ Загружено."
+
                         )
 
                     load_doc_btn.click(
                         load_doc_into_form_by_id,
-                        inputs=[index_dropdown, id_input],
-                        outputs=[id_input, title_input, content_input, keywords_input, table_df, status_output],
+                        inputs=[index_dropdown, id_select],
+                        outputs=[id_input,
+                                 title_input,
+                                 content_input,
+                                 keywords_input,
+                                 table_df,
+                                 ],
                     )
 
                     #  ------------------------------------
@@ -1204,12 +1239,17 @@ def main():
 
                     def save_doc_by_id(index_name: str, doc_id: str, title: str, content: str, keywords: str, table):
                         if not index_name:
-                            gr.Warning("Укажите индекс")
-                            return "Укажите индекс"
+                            gr.Warning("Укажите индекс", title="Предупреждение")
+                            return None
                         if not doc_id or not is_valid_id(doc_id):
-                            gr.Warning("Некорректный ID (разрешено [a-z0-9_], длина 3–60).")
-                            return "Некорректный ID (разрешено [a-z0-9_], длина 3–60)."
-
+                            gr.Warning("Некорректный ID (разрешено [a-z0-9_], длина 3–60).", title="Предупреждение")
+                            return None
+                        if not title:
+                            gr.Warning("Создайте заголовок", title="Предупреждение")
+                            return None
+                        if not content:
+                            gr.Warning("Создайте контент", title="Предупреждение")
+                            return None
                         doc = {
                             "id": doc_id,
                             "title": title or "",
@@ -1219,17 +1259,64 @@ def main():
                         }
                         msg = meilisearch.upsert_document(index_name, doc)
                         if msg == "OK":
-                            gr.Success("✅ Сохранено")
-                            return "✅ Сохранено."
+                            gr.Success("✅ Сохранено", title="Успешно")
+                            return None
+
                         else:
-                            gr.Error(f"❌ {msg}")
-                            return f"❌ {msg}"
+                            gr.Error(f"❌ {msg}", title="Ошибка!")
+                            return None
 
                     save_doc_btn_direct.click(
                         save_doc_by_id,
-                        inputs=[index_dropdown, id_input, title_input, content_input, keywords_input, table_state],
-                        outputs=[status_output],
+                        inputs=[index_dropdown,
+                                id_select,
+                                title_input,
+                                content_input,
+                                keywords_input,
+                                table_state],
                     )
+
+                # ----------------------------------------------------
+                # Функционал селектора (radio) Создать/редактировать
+                # ----------------------------------------------------
+                def create_or_change_fn(choose: Literal["create", "change"] = "create"):
+                    # Пока 2 возможных значения, но не исключено, что их будет 3: + "delete"
+                    if choose == "create":
+                        return (
+                            gr.update(visible=True),
+                            gr.update(visible=False),
+                            gr.update(visible=True),
+                            gr.update(visible=True),
+                            gr.update(visible=True),
+                            gr.update(visible=False),
+                            gr.update(visible=False),
+
+                        )
+                    else:
+                        return (
+                            gr.update(visible=False),
+                            gr.update(visible=True),
+                            gr.update(visible=False),
+                            gr.update(visible=False),
+                            gr.update(visible=True),
+                            gr.update(visible=True),
+                            gr.update(visible=True),
+                        )
+
+                io_radio.change(create_or_change_fn, inputs=[io_radio],
+                                outputs=[id_input,
+                                         id_select,
+                                         normalize_id_btn,
+                                         generate_id_from_title_btn,
+                                         vanish_screen_btn,
+                                         load_doc_btn,
+                                         save_doc_btn_direct,
+                                         ])
+                # Используется partial для того, чтобы передать параметр output заранее
+                # Так как прямая передача параметров не из объектов Gradio невозможна
+                index_dropdown.change(fn=partial(update_docs_in_meili_index, output="id_only"),
+                                      inputs=index_dropdown,
+                                      outputs=id_select)
 
                 # ---------------------------------------------------
                 # Секция просмотра содержимого коллекций
@@ -1275,10 +1362,6 @@ def main():
                                                                  scale=2,
                                                                  )
 
-                    status_bar1 = gr.Textbox(txt_default(),
-                                             label="Статус операции",
-                                             every=15,
-                                             interactive=False)
 
                     meili_indices_table = gr.DataFrame(
                         value=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value, "All"),
@@ -1320,11 +1403,6 @@ def main():
                                                                   variant="stop",
                                                                   scale=2
                                                                   )
-
-                    status_bar2 = gr.Textbox(txt_default(),
-                                             label="Статус операции",
-                                             every=15,
-                                             interactive=False)
 
                     chroma_collection_table = gr.DataFrame(
                         value=existed_docs_in_selected_collection(chroma_coll_for_cont_dropdown.value),
@@ -1383,19 +1461,19 @@ def main():
                 add_collection_button.click(
                     gr_create_collection,
                     inputs=upload_collections_dropdown,
-                    outputs=[status_bar, upload_collections_dropdown, chroma_search_collection_dropdown]
+                    outputs=[upload_collections_dropdown, chroma_search_collection_dropdown]
                 )
 
                 rm_collection_button.click(
                     gr_remove_collection,
                     inputs=upload_collections_dropdown,
-                    outputs=[upload_collections_dropdown, chroma_search_collection_dropdown, status_bar, ]
+                    outputs=[upload_collections_dropdown, chroma_search_collection_dropdown,]
                 )
 
                 add_to_collection_button.click(
                     gr_add_to_collection,
                     inputs=[upload_collections_dropdown, pdf],
-                    outputs=[pdf, status_bar, ]
+                    outputs=[pdf,]
                 )
 
                 # --------------------------------------
@@ -1410,7 +1488,7 @@ def main():
                         meili_search_indexes_dropdown,
                         meili_ind_for_cont_dropdown,
                         index_dropdown,
-                        status_bar,
+
                     ]
                 )
 
@@ -1422,7 +1500,7 @@ def main():
                         meili_search_indexes_dropdown,
                         meili_ind_for_cont_dropdown,
                         index_dropdown,
-                        status_bar,
+
                     ]
                 )
 
@@ -1431,13 +1509,13 @@ def main():
                 add_to_index_button.click(
                     gr_add_to_index_universal,
                     inputs=[upload_indices_dropdown, pdf, json_file, radio_type_of_upl_data],
-                    outputs=[pdf, json_file, status_bar, upload_indices_dropdown, meili_search_indexes_dropdown]
+                    outputs=[pdf, json_file, upload_indices_dropdown, meili_search_indexes_dropdown]
                 )
 
                 rm_doc_from_index_button.click(
                     gr_rm_doc_from_index,
                     inputs=[meili_ind_for_cont_dropdown, meili_content_of_index_dropdown],
-                    outputs=[status_bar1, meili_content_of_index_dropdown, meili_indices_table]
+                    outputs=[meili_content_of_index_dropdown, meili_indices_table]
                 )
 
                 # ----------------------------------------------------------------
