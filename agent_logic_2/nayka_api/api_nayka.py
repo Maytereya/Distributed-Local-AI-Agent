@@ -75,6 +75,94 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 # регионы, которые исключаем из кэша (Оренбургская область и её потомки)
 EXCLUDED_REGION_ROOTS: Set[int] = {19}
 
+# кеш для проверок наличия расписания (doctor_id, companyUnit, region_id)
+_SCHEDULE_CACHE: Dict[Tuple[int, int, int], bool] = {}
+
+
+def _has_schedule(doctor_id: int, company_unit: int, region_id: int, start: str, end: str) -> bool:
+    """Проверяет, есть ли у врача активное расписание на площадке в заданный период."""
+    key = (doctor_id, company_unit, region_id)
+    cached = _SCHEDULE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    url = (
+        f"{base_url}/doctorSchedule?doctor={doctor_id}&companyUnit={company_unit}&region={region_id}"
+        f"&startDate={start}&endDate={end}"
+    )
+    try:
+        resp = _session_get(url)
+        resp.raise_for_status()
+        data = resp.json() or []
+        result = bool(data)
+    except (requests.RequestException, ValueError):
+        result = False
+
+    _SCHEDULE_CACHE[key] = result
+    return result
+
+
+def _filter_region_entries_with_schedule(
+    doctor_id: int,
+    entries: List[Dict[str, Any]],
+    start_iso: str,
+    end_iso: str,
+) -> List[Dict[str, Any]]:
+    """Возвращает только те doctorRegions, где в ближайшие дни есть расписание."""
+    result: List[Dict[str, Any]] = []
+    for entry in entries:
+        company_unit = entry.get("companyUnit")
+        region_id = entry.get("region")
+        if not company_unit or not region_id:
+            continue
+        if _has_schedule(doctor_id, company_unit, region_id, start_iso, end_iso):
+            result.append(entry)
+    return result
+
+# кеш для проверок наличия расписания (doctor_id, company_unit, region_id)
+_SCHEDULE_CACHE: Dict[Tuple[int, int, int], bool] = {}
+
+
+def _has_schedule(doctor_id: int, company_unit: int, region_id: int, start: str, end: str) -> bool:
+    """Проверяет, есть ли у врача активное расписание на площадке в заданный период."""
+    key = (doctor_id, company_unit, region_id)
+    cached = _SCHEDULE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    url = (
+        f"{base_url}/doctorSchedule?doctor={doctor_id}&companyUnit={company_unit}&region={region_id}"
+        f"&startDate={start}&endDate={end}"
+    )
+    try:
+        resp = _session_get(url)
+        resp.raise_for_status()
+        data = resp.json() or []
+        result = bool(data)
+    except (requests.RequestException, ValueError):
+        result = False
+
+    _SCHEDULE_CACHE[key] = result
+    return result
+
+
+def _filter_region_entries_with_schedule(
+    doctor_id: int,
+    entries: List[Dict[str, Any]],
+    start_iso: str,
+    end_iso: str,
+) -> List[Dict[str, Any]]:
+    """Возвращает только те doctorRegions, где в ближайшие дни есть расписание."""
+    result: List[Dict[str, Any]] = []
+    for entry in entries:
+        company_unit = entry.get("companyUnit")
+        region_id = entry.get("region")
+        if not company_unit or not region_id:
+            continue
+        if _has_schedule(doctor_id, company_unit, region_id, start_iso, end_iso):
+            result.append(entry)
+    return result
+
 
 def _now_samara() -> datetime:
     """Текущее время в часовом поясе Самары (Europe/Samara)."""
@@ -165,6 +253,7 @@ def get_all_doctors() -> List[Dict]:
     Returns:
         Список словарей: {id, fio, specialization, regions, region_ids, units}.
     """
+    _SCHEDULE_CACHE.clear()
     # Получаем все данные через API
     doctors = site_doctors()
     units = site_company_units()
@@ -174,50 +263,65 @@ def get_all_doctors() -> List[Dict]:
 
     excluded_region_ids = _collect_region_descendants(regions, EXCLUDED_REGION_ROOTS)
 
-    # Быстрый доступ к названиям регионов по id
+    # Быстрый доступ к названиям регионов и подразделений по id
     regions_dict = {r["id"]: r["name"] for r in regions}
     units_dict = {u["id"]: u["name"] for u in units}
+
+    # Предподготовка связей
+    units_by_doctor: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for link in doctor_units:
+        units_by_doctor[link["worker"]].append(link)
+
+    regions_by_doctor: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for link in doctor_regions:
+        regions_by_doctor[link["worker"]].append(link)
+
+    start_dt = date.today()
+    end_dt = start_dt + timedelta(days=7)
+    start_iso = start_dt.isoformat()
+    end_iso = end_dt.isoformat()
 
     result = []
     for doctor in doctors:
         doctor_id = doctor["id"]
 
-        # Все specialization
-        specs = [
-            link.get("specialization", "") or ""
-            for link in doctor_units
-            if link["worker"] == doctor_id
-        ]
-        specs = list(dict.fromkeys(filter(None, specs)))  # Сохраняем порядок, убираем дубли
+        unit_links = units_by_doctor.get(doctor_id, [])
+        region_links = regions_by_doctor.get(doctor_id, [])
 
-        # Все подразделения врача
-        doc_units = [
-            units_dict.get(link["companyUnit"], "")
-            for link in doctor_units
-            if link["worker"] == doctor_id
-        ]
-        doc_units = list(dict.fromkeys(filter(None, doc_units)))
+        # Все specialization (из unit_links)
+        specs = [link.get("specialization", "") or "" for link in unit_links]
+        specs = list(dict.fromkeys(filter(None, specs)))
 
-        # Готовим пары регионов (id, name) — без дублей, с сохранением порядка
+        # Оставляем только те площадки, где есть расписание в ближайшую неделю
+        active_region_links = _filter_region_entries_with_schedule(
+            doctor_id, region_links, start_iso, end_iso
+        )
+
         seen_region_ids: Set[int] = set()
         region_pairs: List[Tuple[int, str]] = []
-        for link in doctor_regions:
-            if link["worker"] == doctor_id:
-                reg_id = link["region"]
-                if not reg_id or reg_id in seen_region_ids or reg_id in excluded_region_ids:
-                    continue
-                seen_region_ids.add(reg_id)
-                reg_name = regions_dict.get(reg_id)
-                if reg_name:
-                    region_pairs.append((reg_id, reg_name))
-                else:
-                    region_pairs.append((reg_id, f"ID {reg_id}"))
+        for link in active_region_links:
+            reg_id = link.get("region")
+            if not reg_id or reg_id in seen_region_ids or reg_id in excluded_region_ids:
+                continue
+            seen_region_ids.add(reg_id)
+            reg_name = regions_dict.get(reg_id)
+            region_pairs.append((reg_id, reg_name or f"ID {reg_id}"))
 
         doc_region_ids = [r[0] for r in region_pairs]
         doc_regions = [r[1] for r in region_pairs]
-
-        # Если после фильтра не осталось регионов — пропускаем врача (Оренбургские филиалы)
         if not doc_region_ids:
+            continue
+
+        # Подразделения только для активных площадок
+        active_unit_ids = {entry.get("companyUnit") for entry in active_region_links}
+        doc_units: List[str] = []
+        for link in unit_links:
+            unit_id = link.get("companyUnit")
+            if unit_id in active_unit_ids:
+                unit_name = units_dict.get(unit_id)
+                if unit_name and unit_name not in doc_units:
+                    doc_units.append(unit_name)
+        if not doc_units:
             continue
 
         doctor_data = {
@@ -226,7 +330,7 @@ def get_all_doctors() -> List[Dict]:
             "specialization": specs[0] if specs else None,
             "regions": doc_regions,
             "region_ids": doc_region_ids,
-            "units": doc_units
+            "units": doc_units,
         }
 
         result.append(doctor_data)

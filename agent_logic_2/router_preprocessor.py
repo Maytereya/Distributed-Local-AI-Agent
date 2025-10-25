@@ -1153,7 +1153,10 @@ async def _search_in_cc_notes(
     full_text = doctor_info.format_documents(matched)
     compact = _format_compact(matched)
     compact_with_query = compact.replace("[SAFE_LIST]", f"[SAFE_LIST]\nCC_QUERY=\"{query_repr}\"")
-    return compact_with_query + "\n\n[RAW_FULL]\n" + full_text
+
+    # Добавляем заголовок с запросом
+    header = f"Запрос \"{query_repr}\" встречается у следующих врачей:\n"
+    return header + compact_with_query + "\n\n[RAW_FULL]\n" + full_text
 
 
 async def _filter_doctors_via_cc_info(
@@ -1250,7 +1253,12 @@ async def _filter_doctors_via_cc_info(
 
     full_text = doctor_info.format_documents(matched)
     compact = _format_compact(matched)
-    return compact + "\n\n[RAW_FULL]\n" + full_text
+    note_terms = filters.get('notes') if isinstance(filters, dict) else None
+    header = ""
+    if isinstance(note_terms, list) and note_terms:
+        query_phrase = " ".join(note_terms)
+        header = f"Запрос \"{query_phrase}\" встречается у следующих врачей:\n"
+    return header + compact + "\n\n[RAW_FULL]\n" + full_text
 
 
 async def process_segments(text: str, sess: SessionType, think: bool | None = None) -> str:
