@@ -14,7 +14,9 @@ import json
 # import time
 import logging
 import os
-from collections.abc import Sequence
+import time
+from collections.abc import Sequence, Mapping
+from datetime import datetime, timezone
 from typing import List, Literal, Any, Optional, Dict
 from typing import Union
 
@@ -45,100 +47,214 @@ def connect_to_meilisearch():
 try:
     client = connect_to_meilisearch()
     logger.info("✅ Успешное подключение к MeiliSearch!")
+    ver = client.get_version()  # dict
+    # прим.: {'pkgVersion': '1.11.0', 'commitSha': '...', 'buildDate': '...'}
+    pkg_version = ver.get("pkgVersion")
+    logger.info(f"Meilisearch server ver.: {pkg_version}")
 except Exception as e:
     logger.error(f"❌ Ошибка подключения к MeiliSearch: {e}")
 
+# -----------------------------------------------------------
+# Настройки для индексов двух типов: скриптовый и новостной.
+# -----------------------------------------------------------
 
-# TODO: Имя индекса задается жестко и не правится в gradio
-def init_meili_index(index_name="main_index"):
+
+MAIN_SETTINGS = {
+    "searchableAttributes": ["title", "content", "keywords", "html", "csv"],
+    "displayedAttributes": ["*"],
+    "filterableAttributes": ["doc_id", "doc_type", "page", "block_id", "keywords"],
+    "sortableAttributes": ["page", "block_id", "created_at"],
+}
+
+NEWS_SETTINGS = {
+    # базовый полнотекст
+    "searchableAttributes": ["title",
+                             "content",
+                             "keywords"],
+    "displayedAttributes": ["*"],
+    # ToDo: синхронизировать имя поля: в коде «doc_type», а в main — «type».
+
+    "filterableAttributes": [
+        "from_ts",
+        "to_ts",
+        "is_permanent",
+        "doc_type",  # Разобраться с этим атрибутом. Где-то он type...
+        "tags",
+        "keywords"
+    ],
+    "sortableAttributes": ["from_ts", "to_ts"],
+}
+
+# Какие списковые ключи мержим по-множественному
+_LIST_KEYS = {
+    "searchableAttributes",
+    "displayedAttributes",
+    "filterableAttributes",
+    "sortableAttributes",
+    "stopWords",
+    "synonyms",  # тут мапа: отдельно обрабатываем
+}
+
+
+def _as_set(v):
+    if v is None:
+        return set()
+    if isinstance(v, (list, tuple, set)):
+        return set(v)
+    return set([v])
+
+
+def ensure_index(client, index_name: str, primary_key: str = "id",
+                 settings_patch: Mapping | None = None,
+                 wait_fn=None):
     """
-    Функция сообщения правильных атрибутов главному индексу
-    :param _client:
-    :param index_name:
-    :return:
+    Создаёт индекс при отсутствии и НЕразрушительно дополняет настройки (union).
+    settings_patch — словарь с фрагментом настроек, который нужно гарантировать.
+    wait_fn(task) — ваша обвязка ожидания задач Meili (taskUid/uid).
     """
+    # 1) get or create
     try:
-        client.get_index(index_name)
+        index = client.get_index(index_name)
     except Exception:
-        client.create_index(index_name, {"primaryKey": "id"})
+        task = client.create_index(index_name, {"primaryKey": primary_key})
+        if wait_fn:
+            wait_fn(task)
 
-    client.index(index_name).update_settings({
-        "searchableAttributes": ["title", "content", "keywords", "html", "csv"],
-        "displayedAttributes": ["*"],
-        "filterableAttributes": ["doc_id", "type", "page", "block_id", "keywords"],
-        "sortableAttributes": ["page", "block_id", "created_at"]
-    })
+        index = client.index(index_name)
+
+    if not settings_patch:
+        return index
+
+    # 2) забираем текущие настройки
+    current = index.get_settings()  # dict
+
+    # 3) готовим патч без разрушений: union на списках, merge на synonyms
+    merged = {}
+
+    for k, want in settings_patch.items():
+        if k == "synonyms" and isinstance(want, Mapping):
+            cur_syn = current.get("synonyms") or {}
+            cur_syn = dict(cur_syn)
+            # merge (добавляем/переписываем только указанные)
+            cur_syn.update(want)
+            merged[k] = cur_syn
+            continue
+
+        if k in _LIST_KEYS:
+            have = _as_set(current.get(k))
+            need = _as_set(want)
+            # '*' в displayedAttributes сохраняем как есть
+            if k == "displayedAttributes" and ("*" in have or "*" in need):
+                merged[k] = ["*"]
+            else:
+                merged[k] = sorted(have | need)
+        else:
+            # примитивы/прочее — просто ставим
+            merged[k] = want
+
+    # 4) применяем, ждём task
+    task = index.update_settings(merged)
+    if wait_fn:
+        wait_fn(task)
+
+    return index
 
 
-import time
+# def init_meili_index(index_name="main_index"):
+#     """
+#     Функция сообщения правильных атрибутов главному индексу
+#     :param _client:
+#     :param index_name:
+#     :return:
+#     """
+#     try:
+#         client.get_index(index_name)
+#     except Exception:
+#         client.create_index(index_name, {"primaryKey": "id"})
+#
+#     client.index(index_name).update_settings({
+#         "searchableAttributes": ["title", "content", "keywords", "html", "csv"],
+#         "displayedAttributes": ["*"],
+#         "filterableAttributes": ["doc_id", "type", "page", "block_id", "keywords"],
+#         "sortableAttributes": ["page", "block_id", "created_at"]
+#     })
 
 
-def _task_to_dict(task):
-    # Приводим Pydantic-модель к dict, если нужно
-    if hasattr(task, "model_dump"):  # pydantic v2
-        return task.model_dump()
-    if hasattr(task, "dict"):  # pydantic v1
-        return task.dict()
+# def ensure_news_index_settings(index):
+#     index.update_settings({
+#         "filterableAttributes": list({"from_ts", "to_ts", "is_permanent", "type", "tags", "keywords"}),
+#         "sortableAttributes": list({"from_ts", "to_ts"}),
+#     })
+
+# Удалить ветки hasattr(client, "tasks") и старые ключи в _extract_task_uid/_task_to_dict.
+
+def _extract_task_uid(task_info: object) -> int:
+    if isinstance(task_info, int):
+        return task_info
+    if isinstance(task_info, str) and task_info.isdigit():
+        return int(task_info)
+    # TaskInfo из 0.33.1
+    if hasattr(task_info, "task_uid"):
+        return int(getattr(task_info, "task_uid"))
+    # на всякий, если кто-то передал dict
+    if isinstance(task_info, dict):
+        v = task_info.get("task_uid") or task_info.get("uid")
+        if v is not None:
+            return int(v)
+    raise ValueError(f"Не удалось извлечь task_uid: {task_info!r}")
+
+
+def _task_to_dict(task: object) -> dict:
     if isinstance(task, dict):
         return task
-    # последний шанс — собрать по атрибутам
-    d = {}
-    for attr in ("uid", "task_uid", "taskUid", "status", "type", "enqueued_at", "finished_at"):
-        if hasattr(task, attr):
-            d[attr] = getattr(task, attr)
-    return d
+    # ожидаем объект Task из 0.33.1
+    try:
+        d = {
+            "uid": getattr(task, "uid", None),
+            "index_uid": getattr(task, "index_uid", None),
+            "status": getattr(task, "status", None),
+            "type": getattr(task, "type", None),
+            "enqueued_at": getattr(task, "enqueued_at", None),
+            "started_at": getattr(task, "started_at", None),
+            "finished_at": getattr(task, "finished_at", None),
+            "duration": getattr(task, "duration", None),
+            "error": getattr(task, "error", None),
+        }
+    except Exception:
+        # крайний случай: просто распаковать dataclass/obj
+        try:
+            d = dict(vars(task))
+        except Exception:
+            d = {}
+    # убрать None-ключи, чтобы не засорять логи
+    return {k: v for k, v in d.items() if v is not None}
 
 
-def _extract_task_uid(task_info):
+def wait_for_task_completion(client, task_info: Any, *, timeout: float = 60.0,
+                             poll_interval: float = 0.25, raise_on_fail: bool = False) -> tuple[str, dict]:
     """
-    Поддерживает:
-    - dict с 'taskUid' или 'uid'
-    - Pydantic-модель TaskInfo с .task_uid / .uid
+    Ожидание задачи Meilisearch (SDK 0.33.1+).
+    task_info: объект TaskInfo ИЛИ int uid.
+    Возвращает: (status, task_dict)
     """
-    # Pydantic v1/v2
-    if hasattr(task_info, "task_uid"):
-        return task_info.task_uid
-    if hasattr(task_info, "uid"):
-        return task_info.uid
+    # TaskInfo.task_uid или сразу int
+    task_uid = task_info.task_uid if hasattr(task_info, "task_uid") else int(task_info)
 
-    # dict
-    if isinstance(task_info, dict):
-        return task_info.get("taskUid") or task_info.get("uid")
-
-    # что-то ещё (модель без привычных полей) — пробуем через приведение к dict
-    d = _task_to_dict(task_info)
-    uid = d.get("taskUid") or d.get("uid")
-    if uid is not None:
-        return uid
-
-    raise ValueError("Не удалось извлечь task uid из ответа Meilisearch.")
-
-
-def wait_for_task_completion(client, task_info, *, timeout=60, poll_interval=1.0):
-    """
-    Универсальное ожидание завершения задачи Meilisearch.
-    Поддерживает старые и новые версии Python-клиента.
-    Возвращает: (status: str, task: dict)
-    """
-    task_uid = _extract_task_uid(task_info)
     start = time.time()
-
     while True:
-        # В новых клиентах есть .tasks.get_task, в старых — client.get_task
-        if hasattr(client, "tasks"):
-            task = client.tasks.get_task(task_uid)
-        else:
-            task = client.get_task(task_uid)
-
-        # Нормализуем к dict
-        task_d = _task_to_dict(task)
-        status = task_d.get("status")
+        t = client.get_task(task_uid)  # -> Task
+        status = t.status  # 'enqueued' | 'processing' | 'succeeded' | 'failed' | 'canceled'
 
         if status in {"succeeded", "failed", "canceled"}:
-            return status, task_d
+            if raise_on_fail and status != "succeeded":
+                # у Task обычно есть .error (dict | None)
+                raise RuntimeError(f"Meili task {task_uid} -> {status}: {getattr(t, 'error', None)}")
+            # нормализуем в dict
+            td = vars(t) if not isinstance(t, dict) else t
+            return status, td
 
         if time.time() - start > timeout:
-            raise TimeoutError(f"Задача {task_uid} не завершилась за {timeout} сек. Текущий статус: {status}")
+            raise TimeoutError(f"Task {task_uid} не завершилась за {timeout} с, статус: {status}")
 
         time.sleep(poll_interval)
 
@@ -150,7 +266,6 @@ def add_doc_to_meili(
         timeout: int = 60,
         poll_interval: float = 1.0,
 ) -> str:
-
     # 1) Нормализуем вход
     if isinstance(docs, (str, os.PathLike)):
         with open(docs, "r", encoding="utf-8") as f:
@@ -522,6 +637,71 @@ def upsert_document(index_name: str, doc: Dict[str, Any]) -> str:
         return f"ERR: {e}"
 
 
+# ------------------------------------
+# Обработка новостей / акций / промо
+# ------------------------------------
+
+
+def _now_ts_utc() -> int:
+    return int(datetime.now(timezone.utc).timestamp())
+
+
+def search_news_active(
+        index_name: str = "news",
+        keyword: str | None = None,
+        *,
+        now_ts: int | None = None,
+        limit: int = 20,
+        sort: list[str] | None = None,  # например ["from_ts:desc"]
+) -> list[dict]:
+    """
+    Возвращает активные на текущий момент новости/акции (type="news", interval overlap).
+    """
+
+    ts = _now_ts_utc() if now_ts is None else int(now_ts)
+    # Пересечение интервалов: [from_ts, to_ts] с точкой now
+    # + явный тип документа для чистоты
+    flt = f'from_ts <= {ts} AND to_ts >= {ts} AND type = "news"'
+
+    # -------------------example-----------------------
+
+    # search_result = client.index(index_name).search(query, {
+    #     "limit": limit,
+    #     # "highlightPreTag": highlight,
+    #     # "highlightPostTag": highlight,
+    #     "attributesToHighlight": [highlight_fields],
+    # })
+
+    res = client.index(index_name).search(keyword or "", {
+        "filter": flt,
+        "limit": limit,
+        "sort": sort or ["from_ts:desc"],  # сначала свежие старты
+    })
+    # res["hits"] — список документов
+    return res.get("hits", [])
+
+
+# -----поиск новостей за период-----------------------------------
+def search_news_by_period(
+        #     Не факт, что пригодится, но пусть будет.
+
+        index_name: str,
+        keyword: str | None,
+        start_ts: int,
+        end_ts: int,
+        limit: int = 50,
+        sort: list[str] | None = None,
+) -> list[dict]:
+    # Пересечение интервалов: [from_ts, to_ts] ∩ [start_ts, end_ts] ≠ Ø
+    flt = f"from_ts <= {end_ts} AND to_ts >= {start_ts} AND type = 'news'"
+    res = client.index(index_name).search(keyword or "", {
+        "filter": flt,
+        "limit": limit,
+        "sort": sort or ["from_ts:asc"],
+    })
+    return res.get("hits", [])
+
+
 def main():
     """
     Example usage. Adjust as needed.
@@ -531,7 +711,7 @@ def main():
     # doc: dict = {'id': 'skidka_50_na_manipulyaciyu_lor_hirurgiya_p1_b1', 'doc_id': 'skidka_50_na_manipulyaciyu_lor_hirurgiya', 'page': 1, 'block_id': 1, 'type': 'text', 'title': 'Скидка 50% на манипуляцию ЛОР, хирургия (+ check)', 'content': 'Скидка 50% на манипуляцию ЛОР, хирургия (+check2).\n_\nСкидка предоставляется на прием специалиста при прохождения данных манипуляций у доктора.\n_\nВНИМАНИЕ!   Пациент должен иметь на руках  протокол консультации врача, где указано, что  рекомендовано та или иная манипуляция (с него снимают копию и вклеивают в карту пациентки).\n  Если  протокола/направления от врача нет (и соответственно нет рекомендации для проведения данной манипуляции), то пациент оплачивает полную стоимость приема!\n_\nЗапись в Мед.центре: в примечании пишем 50%манипуляция\n_\nПродолжительность акции: не указана.', 'html': None, 'csv': None, 'keywords': [], 'created_at': '2025-10-13T17:12:38Z'}
     #
     # print("=======")
-    # print(get_document_by_id("news", "skidka_50_na_manipulyaciyu_lor_hirurgiya_p1_b1"))
+    print(get_document_by_id("news", "probnyi_dokument_so_vremenem_p1_b1"))
     # print(upsert_document("news", doc))
     # s_r = search_meili("news", "прием флеболога бесплатно")
     print("=======")

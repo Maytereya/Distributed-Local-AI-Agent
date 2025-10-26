@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import time
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Dict, List, Union, Tuple, Literal, Any
@@ -704,8 +705,19 @@ def main():
     ollama_settings.init_model_name()
     ollama_settings.init_options()
     ollama_settings.init_thinking()
-    # Пока отключим инициализацию главного индекса. Не факт, что она нужна.
-    # meilisearch.init_meili_index()
+
+    # Инициализация основных двух индексов (чтобы все поля в индексах были корректно настроены)
+    client = meilisearch.connect_to_meilisearch()
+    waiter = partial(meilisearch.wait_for_task_completion, client)  # фиксируем client
+    meilisearch.ensure_index(client,
+                             "main_index", "id",
+                             meilisearch.MAIN_SETTINGS,
+                             wait_fn=waiter)
+    meilisearch.ensure_index(client,
+                             "news",
+                             "id",
+                             meilisearch.NEWS_SETTINGS,
+                             wait_fn=waiter)
 
     # Allow serving local /static files via /gradio_api/file=...
     gr.set_static_paths(paths=[STATIC_DIR])
@@ -984,16 +996,16 @@ def main():
                     with gr.Column():
                         with gr.Row():
                             io_radio = gr.Radio(
-                                [("Создать документ", "create"), ("Редактировать существующий", "change")],
+                                [("Создать", "create"), ("Редактировать", "change")],
                                 # container=True,
                                 value="create",
-                                scale=30,
+                                scale=20,
                                 label="Выберите действие"
                             )
 
                             index_dropdown = gr.Dropdown(
                                 choices=gr_existed_indexes(),
-                                info="main_index - для скриптов, news - для акций",
+                                info="main_index: скрипты, news: акции/новости",
                                 label="Выберите индекс Meilisearch",
                                 interactive=True,
                                 scale=30,
@@ -1004,7 +1016,7 @@ def main():
 
                             id_input = gr.Textbox(
                                 label="ID документа (латиница/цифры/нижнее подчеркивание, 3–60)",
-                                info="Введите уникальный ID для добавления нового документа",
+                                info="Введите уникальный для добавления нового документа",
                                 value="",
                                 visible=True,
                                 placeholder="например: price_list_2025 или izmeneniya_grafika_priema",
@@ -1018,7 +1030,7 @@ def main():
 
                             id_select = gr.Dropdown(
                                 label="ID документа",
-                                info="Выберите ID для редактирования нового документа",
+                                info="Выберите для редактирования документа",
                                 choices=existed_docs_in_selected_index(index_dropdown.value, "ID"),
                                 # value="",
                                 allow_custom_value=True,
@@ -1039,7 +1051,79 @@ def main():
                                 save_doc_btn_direct = gr.Button("💾 Сохранить (обновить по ID)", size="sm",
                                                                 variant="primary", visible=False)
 
-                        title_input = gr.Textbox(label="Заголовок, title *")
+                        # ---------------------------------------------
+                        # Компилятор новостей и диапазонов
+                        # действия новостей
+                        # ---------------------------------------------
+                        # Константа для обозначения бессрочной акции
+                        FAR_FUTURE_DT = datetime(2099, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+                        #
+                        INDEX_FOR_TYPE = {"static": "main_index", "news": "news"}
+                        TYPE_FOR_INDEX = {"main_index": "static", "news": "news"}
+
+                        with gr.Row():
+                            doc_type_radio = gr.Radio(
+                                choices=[("Скрипты", "static"), ("Новость / Акция", "news")],
+                                value="static",
+                                label="Тип документа",
+                                scale=30,
+                                interactive=False,
+                                visible=True,
+                            )
+                            # ----------------------------------------------
+                            title_input = gr.Textbox(label="Заголовок, title *", scale=70)
+                        # ----------------------------------------------
+                        # Редактор новостей и времени - продолжение
+                        # ----------------------------------------------
+
+                        with gr.Row(visible=False) as news_dates_row:
+                            # Применено обобщение (as), к которому может применяться однотипный update
+                            valid_from_dp = gr.DateTime(label="Действует с (UTC)", type="datetime", include_time=False,
+                                                        timezone="UTC")  # вернет datetime
+                            valid_to_dp = gr.DateTime(label="Действует по (UTC)", type="datetime", include_time=False,
+                                                      timezone="UTC")
+                            permanent_cb = gr.Checkbox(label="Бессрочно", value=False, visible=False)
+
+                        def on_doc_type_change(t):
+                            is_news = (t == "news")
+                            return (
+                                gr.update(visible=is_news),  # news_dates_row
+                                gr.update(visible=is_news),  # permanent_cb
+                            )
+
+                        doc_type_radio.change(on_doc_type_change, inputs=[doc_type_radio],
+                                              outputs=[news_dates_row, permanent_cb])
+
+                        def on_index_change(idx: str):
+                            """
+                            Сделан чтобы исключить выбор radio и зациклить только на индексе.
+                            :param idx: 
+                            :return: 
+                            """
+                            t = TYPE_FOR_INDEX.get(idx, "static")
+                            is_news = (t == "news")
+                            return (
+                                gr.update(value=t),  # doc_type_radio
+                                gr.update(visible=is_news),  # news_dates_row
+                                gr.update(visible=is_news),  # permanent_cb
+                            )
+
+                        index_dropdown.change(
+                            on_index_change,
+                            inputs=[index_dropdown],
+                            outputs=[doc_type_radio, news_dates_row, permanent_cb],
+                        )
+
+                        def to_utc(dt: datetime | None) -> datetime | None:
+                            if dt is None:
+                                return None
+                            if dt.tzinfo is None:
+                                return dt.replace(tzinfo=timezone.utc)
+                            return dt.astimezone(timezone.utc)
+
+                        def to_ts(dt: datetime) -> int:
+                            return int(dt.timestamp())
+
                         content_input = gr.Textbox(label="Основной текст, content *", lines=20, max_lines=80)
                         keywords_input = gr.Textbox(label="Ключевые слова, keywords (через запятую)")
 
@@ -1062,8 +1146,10 @@ def main():
 
                         # любое редактирование таблицы обновляет State
                         table_df.change(_passthrough_table, inputs=[table_df], outputs=[table_state])
+                        # Скрыть в случае редактирования документа
                         preview_button = gr.Button("Предпросмотр блоков")
                         preview_json = gr.JSON(label="Предпросмотр JSON", visible=False)
+                        #
                         # сейвим собранные блоки между кликами
                         save_button = gr.Button("Сохранить и отправить в индекс")
 
@@ -1071,21 +1157,67 @@ def main():
                     # Предпросмотр и сохранение
                     # ----------------------------
 
-                    def fn_preview_json(current_doc_id, title, content, keywords, table, selected_index):
+                    def fn_preview_json(current_doc_id, title, content, keywords, table,
+                                        selected_index, doc_type, valid_from, valid_to, is_permanent):
+
+                        # Жесткая проверка на соответствие индекса функционалу
+                        expected_type = TYPE_FOR_INDEX.get(selected_index, "static")
+                        if doc_type != expected_type:
+                            # жёстко приводим
+                            doc_type = expected_type
+                            gr.Warning("Тип документа приведён к выбранному индексу.", title="Предупреждение")
 
                         if not selected_index:
                             gr.Warning("Не выбран индекс", title="Предупреждение")
-                            return gr.update(visible=False),
+                            return gr.update(visible=False), None
 
                         try:
-                            doc_id, blocks = build_blocks(current_doc_id, title, content, keywords, table)
+                            doc_id, blocks = build_blocks(current_doc_id, title, content, keywords, table, )
                         except ValueError as e:
-                            gr.Error(f"Проблема: {e}", title="Ошибка!")
-                            return gr.update(visible=False),
+                            gr.Error(f"{e}", title="Ошибка!")
+                            return gr.update(visible=False), None
 
-                        meta = {"doc_id": doc_id, "index": selected_index, "blocks": blocks}
+                        # валидируем даты, только если news
+                        vf_utc = vt_utc = None
+                        is_perm = False
+                        if doc_type == "news":
+                            is_perm = bool(is_permanent)
+                            if is_perm:
+                                vf_utc = to_utc(valid_from) or datetime.now(timezone.utc)
+                                vt_utc = FAR_FUTURE_DT
+                            else:
+                                vf_utc = to_utc(valid_from)
+                                vt_utc = to_utc(valid_to)
+                                if not vf_utc or not vt_utc:
+                                    gr.Warning("Укажите обе даты для новости (или отметьте 'Бессрочно')",
+                                               title="Предупреждение")
+                                    return gr.update(visible=False), None
+                                if vf_utc > vt_utc:
+                                    gr.Warning("Дата 'с' позже даты 'по'", title="Предупреждение")
+                                    return gr.update(visible=False), None
 
-                        gr.Info(f"✅ Предпросмотр: '{doc_id}', блоков: {len(blocks)} → '{selected_index}'", title="Инфо")
+                        # обогащаем каждый блок полями валидности + типом
+                        if doc_type == "news":
+                            for b in blocks:
+                                b.update({
+                                    "doc_type": "news",
+                                    "valid_from": vf_utc.isoformat().replace("+00:00", "Z"),
+                                    "valid_to": vt_utc.isoformat().replace("+00:00", "Z"),
+                                    "from_ts": to_ts(vf_utc),
+                                    "to_ts": to_ts(vt_utc),
+                                    "is_permanent": is_perm,
+                                })
+                        else:
+                            for b in blocks:
+                                b.update({"doc_type": "static"})
+
+                        meta = {
+                            "doc_id": doc_id,
+                            "index": selected_index,
+                            "blocks": blocks
+                        }
+
+                        gr.Info(f"✅ Итого: '{doc_id}', блоков: {len(blocks)} → '{selected_index}'", title="Инфо")
                         return (
                             gr.update(visible=True, value=blocks),  # preview_json
                             meta  # meta_state
@@ -1093,10 +1225,9 @@ def main():
 
                     preview_button.click(
                         fn_preview_json,
-                        inputs=[id_input, title_input, content_input, keywords_input, table_state, index_dropdown],
-                        outputs=[preview_json,
-                                 # status_output,
-                                 meta_state],
+                        inputs=[id_input, title_input, content_input, keywords_input, table_state,
+                                index_dropdown, doc_type_radio, valid_from_dp, valid_to_dp, permanent_cb],
+                        outputs=[preview_json, meta_state],
                     )
 
                     def save_and_send_to_meilisearch(meta):
@@ -1120,12 +1251,12 @@ def main():
                             msg = meilisearch.add_doc_to_meili(_blocks, index_name)
 
                         except Exception as e:
-                            gr.Error(f"Ошибка добавления в Meilisearch: {e}, сообщение от Meilisearch: {msg}",
+                            gr.Error(f"{e}, сообщение от сервера Meilisearch: {msg}",
                                      title="Ошибка!")
                             return None
                         gr.Success(
                             f"✅ '{meta['doc_id']}', добавлено {len(_blocks)} блок(ов) в '{index_name}', "
-                            f"сообщение от сервера Meilisearch: {msg}", title="Успешно")
+                            f"сообщение от сервера  Meilisearch: {msg}", title="Успешно")
                         return None
 
                     save_button.click(
@@ -1171,7 +1302,6 @@ def main():
                             gr.Warning("Не удалось сгенерировать ID из заголовка", title="Предупреждение")
                             return gr.update()
 
-
                     generate_id_from_title_btn.click(gen_id_from_title, inputs=[title_input],
                                                      outputs=id_input
 
@@ -1179,56 +1309,93 @@ def main():
 
                     def vanish_all_windows():
                         gr.Info("Все окна очищены, готов к загрузке нового документа", title="Инфо")
-                        return "", "", "", "", [["", ""], ["", ""], ["", ""]]
+                        return "", "", "", "", [["", ""], ["", ""], ["", ""]], "static", None, None, False
 
-                    vanish_screen_btn.click(vanish_all_windows,
-                                            outputs=[id_input,
-                                                     title_input,
-                                                     content_input,
-                                                     keywords_input,
-                                                     table_df, ])
+                    vanish_screen_btn.click(
+                        vanish_all_windows,
+                        outputs=[id_input, title_input, content_input, keywords_input, table_df,
+                                 doc_type_radio, valid_from_dp, valid_to_dp, permanent_cb]
+                    )
 
                     # --------------------------------------------
                     # Секция загрузки документа для редактирования
                     # --------------------------------------------
+                    def _parse_iso(x: str | None):
+                        if not x: return None
+                        try:
+                            return datetime.fromisoformat(x.replace("Z", "+00:00")).astimezone(timezone.utc)
+                        except Exception:
+                            return None
 
                     def load_doc_into_form_by_id(index_name: str, doc_id: str):
                         if not index_name:
                             gr.Warning("Укажите индекс", title="Предупреждение")
-                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                            return (gr.update(),) * 10
                         if not doc_id:
                             gr.Warning("Укажите ID", title="Предупреждение")
-                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                            return (gr.update(),) * 10
 
                         doc = meilisearch.get_document_by_id(index_name, doc_id)
                         if not doc:
                             gr.Warning("❌ Документ не найден", title="Предупреждение")
-                            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                            return (gr.update(),) * 10  # Хороший способ уменьшить визуальные повторения
 
                         # Подставляются дефолтные ключи
                         title = doc.get("title", "")
                         content = doc.get("content", "")
+
+                        # 👉 если поля нет — берём тип из выбранного индекса
+                        doc_type = doc.get("doc_type") or doc.get("type") or TYPE_FOR_INDEX.get(index_name, "static")
+                        is_news = (doc_type == "news")
+
+                        #
+                        vf = _parse_iso(doc.get("valid_from"))
+                        vt = _parse_iso(doc.get("valid_to"))
+                        is_perm = bool(doc.get("is_permanent", False))
+                        # если это news, но дат нет — подсказываем пользователю
+                        if is_news and not (vf or vt or is_perm):
+                            gr.Warning(
+                                "Это документ из индекса 'news', но даты не заданы. Укажите период или отметьте 'Бессрочно'.",
+                                title="Требуются даты")
+
                         keywords = doc.get("keywords", "")
                         table_val = doc.get("table") or [["", ""], ["", ""], ["", ""]]
 
                         gr.Success(message="✅ Документ загружен", title="Успешно")
+                        # Важно: поставить тип документа и корректно показать/скрыть даты
+
+                        # Показываем даты и чекбокс только если news
+                        is_news = (doc_type == "news")
+
                         return (
                             gr.update(value=doc_id),
                             gr.update(value=title),
                             gr.update(value=content),
+
+                            gr.update(value=vf),  # valid_from_dp
+                            gr.update(value=vt),  # valid_to_dp
+                            gr.update(value=is_perm, visible=is_news),  # permanent_cb
+
                             gr.update(value=keywords),
                             gr.update(value=table_val),
-
+                            gr.update(value=doc_type),  # doc_type_radio ← новый выход
+                            gr.update(visible=is_news),  # news_dates_row ← новый выход
                         )
 
+                    # Обработка события загрузки документа в форму редактирования
                     load_doc_btn.click(
                         load_doc_into_form_by_id,
                         inputs=[index_dropdown, id_select],
-                        outputs=[id_input,
+                        outputs=[id_input,  # 8 pcs
                                  title_input,
                                  content_input,
+                                 valid_from_dp,
+                                 valid_to_dp,
+                                 permanent_cb,
                                  keywords_input,
                                  table_df,
+                                 doc_type_radio,
+                                 news_dates_row,
                                  ],
                     )
 
@@ -1237,7 +1404,38 @@ def main():
                     # редактирования
                     #  ------------------------------------
 
-                    def save_doc_by_id(index_name: str, doc_id: str, title: str, content: str, keywords: str, table):
+                    def save_doc_by_id(doc_type: Literal["static", "news"], index_name: str, doc_id: str, title: str,
+                                       content: str,
+                                       valid_from, valid_to,
+                                       permanent, keywords: str, table):
+                        """
+                        Важен актуальный формат исходящего документа: новость или скрипт
+                        :param doc_type:
+                        :param index_name:
+                        :param doc_id:
+                        :param title:
+                        :param content:
+                        :param valid_from:
+                        :param valid_to:
+                        :param permanent:
+                        :param keywords:
+                        :param table:
+                        :return:
+                        """
+                        base_doc: dict[str, Any] = {
+                            "id": doc_id,
+                            "title": title or "",
+                            "content": content or "",
+                            "keywords": keywords or "",
+                            "table": table or [],
+                        }
+                        # Жесткая проверка на соответствие индекса функционалу
+                        expected_type = TYPE_FOR_INDEX.get(index_name, "static")
+                        if doc_type != expected_type:
+                            # жёстко приводим
+                            doc_type = expected_type
+                            gr.Warning("Тип документа приведён к выбранному индексу.", title="Предупреждение")
+
                         if not index_name:
                             gr.Warning("Укажите индекс", title="Предупреждение")
                             return None
@@ -1250,14 +1448,46 @@ def main():
                         if not content:
                             gr.Warning("Создайте контент", title="Предупреждение")
                             return None
-                        doc = {
-                            "id": doc_id,
-                            "title": title or "",
-                            "content": content or "",
-                            "keywords": keywords or "",
-                            "table": table or [],
-                        }
-                        msg = meilisearch.upsert_document(index_name, doc)
+
+                        # формирование документа в зависимости от его типа
+                        # по умолчанию загрузится static
+
+                        if doc_type == "news":
+                            # нормализуем к UTC/ISO/ts
+                            def _to_utc(dt):
+                                if dt is None: return None
+                                return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+                            if permanent:
+                                if not valid_from:
+                                    gr.Warning("Уточните дату начала", title="Предупреждение");
+                                    return None
+                                vf = _to_utc(valid_from)
+                                vt = datetime(2099, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+                            else:
+                                if not valid_from or not valid_to:
+                                    gr.Warning("Укажите обе даты или отметьте 'Бессрочно'", title="Предупреждение");
+                                    return None
+                                vf, vt = _to_utc(valid_from), _to_utc(valid_to)
+                                if vf > vt:
+                                    gr.Warning("Дата 'с' позже даты 'по'", title="Предупреждение");
+                                    return None
+
+                            base_doc.update({
+                                "doc_type": "news",
+                                "valid_from": vf.isoformat().replace("+00:00", "Z"),
+                                "valid_to": vt.isoformat().replace("+00:00", "Z"),
+                                "from_ts": int(vf.timestamp()),
+                                "to_ts": int(vt.timestamp()),
+                                "is_permanent": bool(permanent),
+                            })
+                        else:
+                            base_doc.update({"doc_type": "static"})  # Важный момент! Возможно
+                            # тут ошибка в связи с несоответствием с полем в Индексе: doc_type -> type
+                            # print("Base_doc: ", base_doc)
+
+                        msg = meilisearch.upsert_document(index_name, base_doc)
+
                         if msg == "OK":
                             gr.Success("✅ Сохранено", title="Успешно")
                             return None
@@ -1268,14 +1498,19 @@ def main():
 
                     save_doc_btn_direct.click(
                         save_doc_by_id,
-                        inputs=[index_dropdown,
-                                id_select,
-                                title_input,
-                                content_input,
-                                keywords_input,
-                                table_state],
+                        inputs=[doc_type_radio,  # 1) doc_type
+                                index_dropdown,  # 2) index_name
+                                id_select,  # 3) doc_id
+                                title_input,  # 4) title
+                                content_input,  # 5) content
+                                valid_from_dp,  # 6) valid_from
+                                valid_to_dp,  # 7) valid_to
+                                permanent_cb,  # 8) permanent
+                                keywords_input,  # 9) keywords
+                                table_state],  # 10) table
                     )
 
+                # ToDo: Доделать с учетом date
                 # ----------------------------------------------------
                 # Функционал селектора (radio) Создать/редактировать
                 # ----------------------------------------------------
@@ -1290,6 +1525,9 @@ def main():
                             gr.update(visible=True),
                             gr.update(visible=False),
                             gr.update(visible=False),
+                            gr.update(visible=True),  # preview.JSON
+                            gr.update(visible=True),  # save button
+                            gr.update(visible=True),  # preview button
 
                         )
                     else:
@@ -1301,6 +1539,9 @@ def main():
                             gr.update(visible=True),
                             gr.update(visible=True),
                             gr.update(visible=True),
+                            gr.update(visible=False),  # preview.JSON
+                            gr.update(visible=False),  # save button
+                            gr.update(visible=False),  # preview button
                         )
 
                 io_radio.change(create_or_change_fn, inputs=[io_radio],
@@ -1311,6 +1552,9 @@ def main():
                                          vanish_screen_btn,
                                          load_doc_btn,
                                          save_doc_btn_direct,
+                                         preview_json,
+                                         save_button,
+                                         preview_button,
                                          ])
                 # Используется partial для того, чтобы передать параметр output заранее
                 # Так как прямая передача параметров не из объектов Gradio невозможна
@@ -1361,7 +1605,6 @@ def main():
                                                                  variant="stop",
                                                                  scale=2,
                                                                  )
-
 
                     meili_indices_table = gr.DataFrame(
                         value=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value, "All"),
@@ -1467,13 +1710,13 @@ def main():
                 rm_collection_button.click(
                     gr_remove_collection,
                     inputs=upload_collections_dropdown,
-                    outputs=[upload_collections_dropdown, chroma_search_collection_dropdown,]
+                    outputs=[upload_collections_dropdown, chroma_search_collection_dropdown, ]
                 )
 
                 add_to_collection_button.click(
                     gr_add_to_collection,
                     inputs=[upload_collections_dropdown, pdf],
-                    outputs=[pdf,]
+                    outputs=[pdf, ]
                 )
 
                 # --------------------------------------

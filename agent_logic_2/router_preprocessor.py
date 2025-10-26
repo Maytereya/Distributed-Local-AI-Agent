@@ -19,7 +19,7 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple, AsyncGenerator, TypeAlias, Literal, Optional
 
 from ollama import AsyncClient
@@ -30,6 +30,7 @@ from agent_logic_2.llama_func_call import repo
 from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
 from agent_logic_2.prompts import load_prompt
+# импорт пока под вопросом - где-то он еще есть, не могу найти =(
 from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
 
@@ -113,48 +114,49 @@ KEYWORDS_FALSE = {
 DEF_TRUE = {"yes", "да", "true", "1"}
 DEF_FALSE = {"no", "нет", "false", "0"}
 
+
 # =========================
 # УТИЛИТАРНЫЕ КЛАССЫ
 # =========================
 
 class CCNotesProcessor:
     """Обработка заметок call-центра"""
-    
+
     @staticmethod
     def normalize_text(cc: str | None) -> str:
         """Очищает HTML, заменяет NBSP на пробел и приводит к lower()."""
         if not cc:
             return ""
         return html_cleaner.strip_html(cc).replace("\xa0", " ").lower()
-    
+
     @staticmethod
     def extract_age(cc: str) -> str:
         """Пытается вытащить возраст из заметки КЦ и вернуть нормализованную строку вида "с N лет"."""
         if not isinstance(cc, str) or not cc:
             return "не указан"
-        
+
         s = CCNotesProcessor.normalize_text(cc)
-        
+
         # Возрастные формулировки
         for pat in AGE_PATTERNS + (r"принимает\s*(пациентов\s*)?с\s*(\d{1,2})\s*(?:-?и)?\s*лет",):
             m = re.search(pat, s)
             if m:
                 num = (m.group(2) or m.group(1)) if (m.lastindex or 0) >= 2 else m.group(1)
                 return f"с {num} лет"
-        
+
         # Дополнительные паттерны
         patterns = [
             (r"\bв\s*возрасте\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", "с {0} лет"),
             (r"\bс\s*возраста\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", "с {0} лет"),
             (r"принимает\s*(пациентов\s*)?с\s*(\d{1,2})\s*(?:-?и)?\s*лет", "с {1} лет"),
         ]
-        
+
         for pattern, template in patterns:
             m = re.search(pattern, s)
             if m:
                 num = m.group(2) or m.group(1)
                 return template.format(num)
-        
+
         # Специальные случаи
         if "совершеннолет" in s:
             return "с 18 лет"
@@ -162,24 +164,24 @@ class CCNotesProcessor:
             return "с 0 лет"
         if "только взросл" in s or "взросл" in s or re.search(r"\bс\s*18\s*лет\b", s):
             return "с 18 лет"
-        
+
         return "не указан"
-    
+
     @staticmethod
     def get_flag(cc: str, key: str) -> Optional[bool]:
         """Определяет флаг из заметки call-центра."""
         if not cc:
             return None
-        
+
         s = CCNotesProcessor.normalize_text(cc)
-        
+
         if key == 'arriving':
             if 'не приход' in s or 'неприход' in s:
                 return False
             if 'приходящ' in s:
                 return True
             return None
-        
+
         if key == 'children':
             # Явные отрицания/только взрослые/совершеннолетние
             if 'с 18 лет' in s or 'принимает с 18' in s or 'только взросл' in s or 'взросл' in s or 'совершеннолет' in s:
@@ -197,16 +199,16 @@ class CCNotesProcessor:
                     except Exception:
                         continue
             return None
-        
+
         if key == 'dms':
             if 'не принимает по дмс' in s or 'дмс: нет' in s or 'дмс — нет' in s or 'дмс - нет' in s:
                 return False
             if 'по дмс' in s or 'дмс: да' in s or 'дмс — да' in s or 'дмс - да' in s:
                 return True
             return None
-        
+
         return None
-    
+
     @staticmethod
     def extract_note_keywords(segment: str) -> List[str]:
         """Выделяет ключевые слова/фразы из запроса про заметки."""
@@ -219,6 +221,7 @@ class CCNotesProcessor:
 
         # Извлекаем кавычённые фразы
         quoted: List[str] = []
+
         def _drop(m):
             for g in m.groups():
                 if g:
@@ -254,24 +257,24 @@ class CCNotesProcessor:
 
 class SegmentProcessor:
     """Обработка сегментов текста"""
-    
+
     @staticmethod
     def check_pattern_match(segment: str, text: str, pattern: re.Pattern) -> Tuple[bool, bool]:
         """Универсальная проверка паттернов в сегменте и тексте."""
         hit_in_segment = bool(pattern.search(segment))
         hit_in_full = bool(pattern.search(text)) if text else False
         return hit_in_segment, hit_in_full
-    
+
     @staticmethod
     def extract_specialty_terms(segment: str, docs: List[Dict[str, Any]]) -> List[str]:
         """Пытается извлечь возможные ключевые слова специальности из сегмента."""
         if not isinstance(segment, str) or not segment.strip():
             return []
-        
+
         seg = segment.lower()
         seg = re.sub(r"[,.!?;:()\[\]{}]", " ", seg)
         tokens = [t for t in re.split(r"\s+", seg) if t]
-        
+
         # Уберём частые служебные слова и слова фильтров
         stop = set(getattr(doctor_info, 'STOP_WORDS', set())) | {
             'дмс', 'страховка', 'страховой', 'страховая', 'по', 'с', 'без',
@@ -322,7 +325,7 @@ class SegmentProcessor:
         for t in expanded_tokens:
             if any(t in txt for txt in texts):
                 valid_terms.append(t)
-        
+
         # Уберём дубликаты, сохранив порядок
         seen = set()
         uniq_terms = []
@@ -335,7 +338,7 @@ class SegmentProcessor:
 
 class FilterProcessor:
     """Обработка фильтров"""
-    
+
     @staticmethod
     def parse_filters(expr: str) -> Dict[str, bool]:
         """Парсит строку фильтров и возвращает словарь с фильтрами."""
@@ -350,34 +353,35 @@ class FilterProcessor:
             elif v in DEF_FALSE:
                 out[k] = False
         return out
-    
+
     @staticmethod
     def keyword_to_filter(segment: str, original: str | None = None) -> Dict[str, Any] | None:
         """Грубое извлечение фильтров из естественных формулировок."""
         if not isinstance(segment, str) or not segment.strip():
             return None
-        
+
         s = segment.lower()
         out: Dict[str, Any] = {}
-        
+
         # DMS
         if re.search(r"\b(не\s*(принима(ет|ют)|работа(ет|ют)|по)\s*по\s*дмс|без\s*дмс|дмс\s*нет|нет\s*дмс)\b", s):
             out['dms'] = False
         elif re.search(r"\b(принима(ет|ют)\s*по\s*дмс|работа(ет|ют)\s*по\s*дмс|по\s*дмс|дмс\s*да)\b", s):
             out['dms'] = True
-        
+
         # CHILDREN
-        if re.search(r"\b(не\s*работа(ет|ют)\s*с\s*детьми|без\s*детей|детей\s*не\s*принима(ет|ют)|только\s*взросл)\b", s):
+        if re.search(r"\b(не\s*работа(ет|ют)\s*с\s*детьми|без\s*детей|детей\s*не\s*принима(ет|ют)|только\s*взросл)\b",
+                     s):
             out['children'] = False
         elif any(k in s for k in KEYWORDS_TRUE['children']):
             out['children'] = True
-        
+
         # ARRIVING
         if any(k in s for k in KEYWORDS_FALSE['arriving']):
             out['arriving'] = False
         elif any(k in s for k in KEYWORDS_TRUE['arriving']):
             out['arriving'] = True
-        
+
         # NOTE keywords
         note_terms: List[str] = []
         sources: List[str] = []
@@ -385,17 +389,17 @@ class FilterProcessor:
             sources.append(segment)
         if original and original not in sources:
             sources.append(original)
-        
+
         for src in sources:
             if not src or not NOTE_WORD_RE.search(src):
                 continue
             for kw in CCNotesProcessor.extract_note_keywords(src):
                 if kw not in note_terms:
                     note_terms.append(kw)
-        
+
         if note_terms:
             out.setdefault('notes', note_terms)
-        
+
         # Дополнительное правило: "с N лет" → children=True (если N < 18)
         m = re.search(r"\bс\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b", s)
         if m:
@@ -407,7 +411,7 @@ class FilterProcessor:
                     out.setdefault('children', False)
             except Exception:
                 pass
-        
+
         return out or None
 
 
@@ -420,6 +424,7 @@ ollama = AsyncClient(c.ollama_url)
 
 # CC‑info thin process cache (по id врача)
 _CC_INFO_MAP: Dict[int, str] | None = None
+
 
 def _get_cc_info_map() -> Dict[int, str]:
     """Получает информацию о заметках call-центра по врачам."""
@@ -434,6 +439,7 @@ def _get_cc_info_map() -> Dict[int, str]:
         except Exception:
             _CC_INFO_MAP = {}
     return _CC_INFO_MAP
+
 
 # --- ensure doctors repo is warmed up (file may be absent on first FILTER run) ---
 async def _ensure_doctors_repo_loaded() -> None:
@@ -454,7 +460,6 @@ async def _ensure_doctors_repo_loaded() -> None:
             await repo.update(doctor_info.get_all_doctors)
         except Exception:
             pass
-
 
 
 # =========================
@@ -502,14 +507,15 @@ async def _handle_filter_search(segment: str, text: str) -> Optional[str]:
         flt = FilterProcessor.parse_filters(m.group(1))
         logger.debug("FILTER explicit -> %s", flt)
         return await _filter_doctors_via_cc_info(flt, segment=segment, fallback_segment=text)
-    
+
     # Проверяем ключевые слова
     kw_filters = FilterProcessor.keyword_to_filter(segment, text)
     if kw_filters:
         logger.debug("FILTER kw -> %s", kw_filters)
         return await _filter_doctors_via_cc_info(kw_filters, segment=segment, fallback_segment=text)
-    
+
     return None
+
 
 # Удалены дублированные определения - используются из утилитарных классов
 
@@ -971,9 +977,10 @@ async def appointment_stub(_text: str, think: bool | None = None, **__) -> Tuple
 # Search with MEILISEARCH function
 # (может использовать LLM переформулировку)
 # ──────────────────────────────────────────────────────
-async def instructions_search(_text: str, think: bool | None = None, index: str = "main_index", **__) -> Tuple[str, bool]:
+async def instructions_search(_text: str, think: bool | None = None, index: str = "main_index", **__) -> Tuple[
+    str, bool]:
     """
-    Для поиска нужной информации в индексе или коллекции используется переформулировка запроса пользователя
+    Для поиска нужной информации в главном индексе или коллекции используется переформулировка запроса пользователя
     Пока неясно, следует ли ее делать.
     :param index:
     :param think:
@@ -984,23 +991,56 @@ async def instructions_search(_text: str, think: bool | None = None, index: str 
     # Временно отключу переформулировку!
     # extracted_keyword = await formulate.extract_keyword(_text, extract_type="sentence")
 
-    # print("=" * 45)
-    # print("Экстрагировалось: ",
-    #       # extracted_keyword
-    #       _text  # шарахнем запрос напрямую без переформулировки
-    #       or "Empty")
-    # print("=" * 45)
-
     collected_info = await asyncio.to_thread(meilisearch.search_meili, index_name=index, query=_text)
 
     # Очистка HTML перед подстановкой в prompt
     clean_info = html_cleaner.strip_html(collected_info)
     # Добавление маркера для лучшего распознавания LLM
     marked_info = "{KNOWLEDGE_SNIPPET}" + "\n" + clean_info
-    # print("=" * 45)
-    # print(marked_info)
-    # print("=" * 45)
     return marked_info, False
+
+
+# ------- поиск в новостном индексе---------------
+
+
+def _fmt_news(hit: dict) -> str:
+    vf = hit.get("valid_from") or ""
+    vt = hit.get("valid_to") or ""
+    title = hit.get("title") or "(без заголовка)"
+    body = hit.get("content") or hit.get("body") or ""
+    # короткий фрагмент:
+    snippet = body.strip()
+    if len(snippet) > 400:
+        snippet = snippet[:380].rstrip() + "…"
+    return f"[{vf} — {vt}] {title}\n{snippet}"
+
+
+async def news_search(text: str, think: bool | None = None, index: str = "news", **__) -> Tuple[str, bool]:
+    """
+    Возвращает список активных на сейчас новостей/акций из индекса news.
+    keyword берётся из исходного сегмента (без переформулировки).
+    """
+    # ключевое слово — сам сегмент | переформулировка не подключена!
+    keyword = (text or "").strip() or None
+
+    logger.info(f"Работает поиск по новостям, ключевое слово: {keyword}")
+
+    hits = await asyncio.to_thread(
+        meilisearch.search_news_active,
+        index_name=index,
+        keyword=keyword,
+        now_ts=int(datetime.now(timezone.utc).timestamp()),
+        limit=20,
+        sort=["from_ts:desc"],
+    )
+
+    if not hits:
+        return "Сейчас нет активных новостей/акций по заданным критериям.", False
+
+    lines = [_fmt_news(h) for h in hits]
+    # Помечаем как «сырое содержимое» — минуется final_answering для теста
+    payload = "<NO_POSTPROC>\n" + "\n\n---\n\n".join(lines)
+    return payload, False
 
 
 # ────────────────────────────────────────────────
@@ -1011,11 +1051,6 @@ async def instructions_search(_text: str, think: bool | None = None, index: str 
 # дополнительная секция констант для работы логики (не может быть обозначена вверху модуля, так как содержит в себе
 # объявление функций для вызова
 
-# MODULES = {
-#     "API_INFO": get_doc_info_from_api,
-#     "APPOINTMENT": appointment_stub,
-#     "SCRIPTS": instructions_search,
-# }
 
 # Нужно промежуточное извлечение, так как строка не может содержать вызова функции
 MODULES_str: str = load_prompt("MODULES", False)
@@ -1096,9 +1131,9 @@ def _norm_text(s: str) -> str:
 
 
 async def _search_in_cc_notes(
-    keywords: str,
-    fallback_segment: str | None = None,
-    match_mode: Literal["all", "any"] = "all",
+        keywords: str,
+        fallback_segment: str | None = None,
+        match_mode: Literal["all", "any"] = "all",
 ) -> str:
     """Ищет врачей по ключевым словам/фразам в заметках call‑центра."""
     await _ensure_doctors_repo_loaded()
@@ -1160,9 +1195,9 @@ async def _search_in_cc_notes(
 
 
 async def _filter_doctors_via_cc_info(
-    filters: Dict[str, Any],
-    segment: str | None = None,
-    fallback_segment: str | None = None,
+        filters: Dict[str, Any],
+        segment: str | None = None,
+        fallback_segment: str | None = None,
 ) -> str:
     """Возвращает отформатированный список врачей, удовлетворяющих фильтрам."""
     await _ensure_doctors_repo_loaded()
@@ -1172,7 +1207,7 @@ async def _filter_doctors_via_cc_info(
         return f"Релевантной информации не найдено (ошибка загрузки заметок колл-центра: {e})."
 
     docs = repo.read_all()
-    
+
     # Попробуем аккуратно вытащить ключевые слова специальности из сегмента
     spec_terms: List[str] = []
     if segment:
@@ -1180,14 +1215,14 @@ async def _filter_doctors_via_cc_info(
             spec_terms = SegmentProcessor.extract_specialty_terms(segment, docs)
         except Exception:
             spec_terms = []
-    
+
     # Fallback: если не нашли в текущем сегменте, попробуем во всём тексте запроса
     if not spec_terms and fallback_segment and fallback_segment != segment:
         try:
             spec_terms = SegmentProcessor.extract_specialty_terms(fallback_segment, docs)
         except Exception:
             spec_terms = []
-    
+
     require_spec = bool(spec_terms)
     matched: List[Dict[str, Any]] = []
 
@@ -1197,7 +1232,7 @@ async def _filter_doctors_via_cc_info(
             continue
         cc_text = cc_by_id.get(int(did), '')
         ok = True
-        
+
         # 1) Специальность/направление (если распознан термин спец-сти в сегменте)
         if require_spec:
             units_text = _norm_text(" ".join(d.get('units') or []))
@@ -1215,7 +1250,7 @@ async def _filter_doctors_via_cc_info(
 
             if not (any(_match_in_units(t) for t in spec_terms) or any(_match_in_spec(t) for t in spec_terms)):
                 ok = False
-        
+
         # 2) Флаги FILTER (ДМС/дети/приходящий)
         for k, desired in filters.items():
             key = k.lower()
@@ -1229,7 +1264,7 @@ async def _filter_doctors_via_cc_info(
                 key = 'notes'
             else:
                 continue
-            
+
             if key == 'notes':
                 keywords = desired if isinstance(desired, list) else [desired]
                 note_text = CCNotesProcessor.normalize_text(cc_text or '')
@@ -1237,12 +1272,12 @@ async def _filter_doctors_via_cc_info(
                     ok = False
                     break
                 continue
-            
+
             val = CCNotesProcessor.get_flag(cc_text, key)
             if val is None or val != desired:
                 ok = False
                 break
-        
+
         if ok:
             dd = dict(d)
             dd['callCenterInfo'] = cc_text or 'Нет заметок'
