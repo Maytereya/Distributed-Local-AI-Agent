@@ -31,7 +31,7 @@ from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
 from agent_logic_2.prompts import load_prompt
 # импорт пока под вопросом - где-то он еще есть, не могу найти =(
-from agent_logic_pack import meilisearch_client as meilisearch
+from agent_logic_pack import meilisearch_client as meilisearch, formulate
 from converters import html_cleaner
 
 #  Initialize logging for understanding the logics of the router
@@ -1010,8 +1010,8 @@ def _fmt_news(hit: dict) -> str:
     body = hit.get("content") or hit.get("body") or ""
     # короткий фрагмент:
     snippet = body.strip()
-    if len(snippet) > 400:
-        snippet = snippet[:380].rstrip() + "…"
+    if len(snippet) > 1000:
+        snippet = snippet[:980].rstrip() + "…"
     return f"[{vf} — {vt}] {title}\n{snippet}"
 
 
@@ -1022,9 +1022,12 @@ async def news_search(text: str, think: bool | None = None, index: str = "news",
     """
     # ключевое слово — сам сегмент | переформулировка не подключена!
     keyword = (text or "").strip() or None
-
-    logger.info(f"Работает поиск по новостям, ключевое слово: {keyword}")
-
+    # extracted_keyword = await formulate.extract_keyword(keyword, extract_type="sentence")
+    logger.info(f"Работает поиск по новостям, фраза запроса: {keyword}")
+    # logger.info(f"Работает поиск по новостям, экстрагированное ключевое слово: {extracted_keyword}")
+    logger.info(
+        f"Индекс поиска: {index}, timestamp: {int(datetime.now(timezone.utc).timestamp())}"
+    )
     hits = await asyncio.to_thread(
         meilisearch.search_news_active,
         index_name=index,
@@ -1039,7 +1042,9 @@ async def news_search(text: str, think: bool | None = None, index: str = "news",
 
     lines = [_fmt_news(h) for h in hits]
     # Помечаем как «сырое содержимое» — минуется final_answering для теста
-    payload = "<NO_POSTPROC>\n" + "\n\n---\n\n".join(lines)
+    # payload = "<NO_POSTPROC>\n" + "\n\n---\n\n".join(lines)
+    payload = "\n\n---\n\n".join(lines)
+    logger.info(payload)
     return payload, False
 
 

@@ -718,7 +718,13 @@ def main():
                              "id",
                              meilisearch.NEWS_SETTINGS,
                              wait_fn=waiter)
+    # Только проверка!
 
+    s1 = client.index("news").get_settings()
+    s2 = client.index("main_index").get_settings()
+    print("!!! news searchable:", s1.get("searchableAttributes"))
+    print("!!! static searchable:", s2.get("searchableAttributes"))
+    #
     # Allow serving local /static files via /gradio_api/file=...
     gr.set_static_paths(paths=[STATIC_DIR])
 

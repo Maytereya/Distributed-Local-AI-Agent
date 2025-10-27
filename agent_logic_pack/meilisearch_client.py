@@ -27,6 +27,7 @@ from tenacity import retry, stop_after_attempt, wait_fixed  # Для автом�
 
 #
 from agent_logic_2 import config as c
+# from gradio_interfaice import waiter
 
 # --------------------------------------
 # Секция загрузки и ретраев для отладки
@@ -67,13 +68,10 @@ MAIN_SETTINGS = {
 }
 
 NEWS_SETTINGS = {
-    # базовый полнотекст
     "searchableAttributes": ["title",
                              "content",
                              "keywords"],
     "displayedAttributes": ["*"],
-    # ToDo: синхронизировать имя поля: в коде «doc_type», а в main — «type».
-
     "filterableAttributes": [
         "from_ts",
         "to_ts",
@@ -135,21 +133,34 @@ def ensure_index(client, index_name: str, primary_key: str = "id",
         if k == "synonyms" and isinstance(want, Mapping):
             cur_syn = current.get("synonyms") or {}
             cur_syn = dict(cur_syn)
-            # merge (добавляем/переписываем только указанные)
             cur_syn.update(want)
             merged[k] = cur_syn
             continue
 
         if k in _LIST_KEYS:
-            have = _as_set(current.get(k))
-            need = _as_set(want)
-            # '*' в displayedAttributes сохраняем как есть
-            if k == "displayedAttributes" and ("*" in have or "*" in need):
+            have_list = current.get(k) or []
+            want_list = list(want or [])
+
+            # ── спец-логика для searchableAttributes ─────────────────────────
+            if k == "searchableAttributes":
+                if "*" in want_list:
+                    # Явно хотим wildcard → так и ставим
+                    merged[k] = ["*"]
+                elif "*" in have_list:
+                    # На индексе сейчас wildcard, а мы хотим конкретный список → ПЕРЕЗАПИСЫВАЕМ
+                    merged[k] = want_list
+                else:
+                    merged[k] = sorted(set(have_list) | set(want_list))
+                continue
+
+            # ── спец-логика для displayedAttributes (оставить wildcard) ──────
+            if k == "displayedAttributes" and ("*" in have_list or "*" in want_list):
                 merged[k] = ["*"]
-            else:
-                merged[k] = sorted(have | need)
+                continue
+
+            # ── дефолт: объединение множеств ─────────────────────────────────
+            merged[k] = sorted(set(have_list) | set(want_list))
         else:
-            # примитивы/прочее — просто ставим
             merged[k] = want
 
     # 4) применяем, ждём task
@@ -661,7 +672,7 @@ def search_news_active(
     ts = _now_ts_utc() if now_ts is None else int(now_ts)
     # Пересечение интервалов: [from_ts, to_ts] с точкой now
     # + явный тип документа для чистоты
-    flt = f'from_ts <= {ts} AND to_ts >= {ts} AND type = "news"'
+    flt = f'from_ts <= {ts} AND to_ts >= {ts} AND doc_type = "news"'
 
     # -------------------example-----------------------
 
@@ -706,15 +717,51 @@ def main():
     """
     Example usage. Adjust as needed.
     """
+    # 1) есть ли в принципе документы типа news
+    from datetime import datetime, timezone
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    flt = f'from_ts <= {now_ts} AND to_ts >= {now_ts} AND doc_type = "news"'
+    search_result = client.index("news").search("торакоцентез", {
+        "limit": 10,
+        "filter": flt,
+
+        # "highlightPreTag": highlight,
+        # "highlightPostTag": highlight,
+        # "attributesToHighlight": [highlight_fields],
+    })
+    print(json.dumps(search_result, indent=2, ensure_ascii=False))
+
+    NEWS_SETTINGS = {
+        "searchableAttributes": ["title", "content", "keywords"],
+        "displayedAttributes": ["*"],
+        "filterableAttributes": ["from_ts", "to_ts", "is_permanent", "doc_type", "keywords"],
+        "sortableAttributes": ["from_ts", "to_ts"],
+    }
+    ensure_index(client, "news", "id", NEWS_SETTINGS, wait_fn=waiter)
+
+    s = client.index("news").get_settings()
+    print("searchable:", s.get("searchableAttributes"))
+
+
+    # idx = client.index("news").search( {})
+    # print(idx.search("", filter='doc_type = "news"', limit=3))
+    #
+    # # 2) есть ли документы с from_ts/to_ts (и какие значения)
+    # hits = idx.search("", filter='doc_type = "news"', limit=50).get("hits", [])
+    # print([(h.get("id"), h.get("from_ts"), h.get("to_ts")) for h in hits])
+    #
+    # # 3) что даёт «активные сейчас» без keyword
+
+    # print(idx.search("", filter=flt, limit=3))
 
     print("=======")
     # doc: dict = {'id': 'skidka_50_na_manipulyaciyu_lor_hirurgiya_p1_b1', 'doc_id': 'skidka_50_na_manipulyaciyu_lor_hirurgiya', 'page': 1, 'block_id': 1, 'type': 'text', 'title': 'Скидка 50% на манипуляцию ЛОР, хирургия (+ check)', 'content': 'Скидка 50% на манипуляцию ЛОР, хирургия (+check2).\n_\nСкидка предоставляется на прием специалиста при прохождения данных манипуляций у доктора.\n_\nВНИМАНИЕ!   Пациент должен иметь на руках  протокол консультации врача, где указано, что  рекомендовано та или иная манипуляция (с него снимают копию и вклеивают в карту пациентки).\n  Если  протокола/направления от врача нет (и соответственно нет рекомендации для проведения данной манипуляции), то пациент оплачивает полную стоимость приема!\n_\nЗапись в Мед.центре: в примечании пишем 50%манипуляция\n_\nПродолжительность акции: не указана.', 'html': None, 'csv': None, 'keywords': [], 'created_at': '2025-10-13T17:12:38Z'}
     #
     # print("=======")
-    print(get_document_by_id("news", "probnyi_dokument_so_vremenem_p1_b1"))
+    # print(get_document_by_id("news", "probnyi_dokument_so_vremenem_p1_b1"))
     # print(upsert_document("news", doc))
-    # s_r = search_meili("news", "прием флеболога бесплатно")
-    print("=======")
+    s_r = search_meili("news", "прием флеболога бесплатно")
+    # print("=======")
     # print(s_r)
 
 
