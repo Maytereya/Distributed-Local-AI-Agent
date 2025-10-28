@@ -201,9 +201,9 @@ class CCNotesProcessor:
             return None
 
         if key == 'dms':
-            if 'не принимает по дмс' in s or 'дмс: нет' in s or 'дмс — нет' in s or 'дмс - нет' in s:
+            if re.search(r"(?:не\s*(?:принима(ет|ют)|работа(ет|ют))\s*по\s*дмс|не\s*по\s*дмс|без\s*дмс|дмс\s*(?:[:\-—]\s*)?нет)", s):
                 return False
-            if 'по дмс' in s or 'дмс: да' in s or 'дмс — да' in s or 'дмс - да' in s:
+            if re.search(r"(?:по\s*дмс|дмс\s*(?:[:\-—]\s*)?да)", s):
                 return True
             return None
 
@@ -642,6 +642,11 @@ def _shorten_specialty(text: str, limit_words: int = 10) -> str:
 
 def _render_numbered_list_from_safe(compact_payload: str) -> str:
     """Строит итоговый пронумерованный список в формате final_answer (без участия LLM)."""
+    query_text = None
+    m = re.search(r'CC_QUERY="([^"]+)"', compact_payload)
+    if m:
+        query_text = m.group(1).replace("\n", " ").strip()
+
     lines = [ln for ln in compact_payload.splitlines() if ln.strip().startswith(ITEM_MARKER)]
     blocks: List[str] = []
     for i, ln in enumerate(lines, 1):
@@ -664,7 +669,10 @@ def _render_numbered_list_from_safe(compact_payload: str) -> str:
         blocks.append(block)
     if not blocks:
         return "Релевантной информации не найдено"
-    return "\n".join(blocks) + "\n— Конец списка —"
+    body = "\n".join(blocks) + "\n— Конец списка —"
+    if query_text:
+        return f"В заметках по запросу «{query_text}» найдены следующие врачи:\n\n{body}"
+    return body
 
 
 # Удалены - заменены на FilterProcessor
