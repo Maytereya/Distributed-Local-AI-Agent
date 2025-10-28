@@ -500,7 +500,7 @@ async def _handle_manager_search(segment: str, text: str) -> Optional[str]:
     if manager_hit_seg or manager_hit_full:
         search_source = segment if manager_hit_seg else text
         logger.debug("MANAGER search (source=%s)", "segment" if manager_hit_seg else "full")
-        response, _ = await instructions_search(search_source, index="main_index")
+        response, _ = await instructions_search(search_source, index="main_index", manager_mode=True)
         return response
     return None
 
@@ -1003,7 +1003,12 @@ async def appointment_stub(_text: str, think: bool | None = None, **__) -> Tuple
 # Search with MEILISEARCH function
 # (может использовать LLM переформулировку)
 # ──────────────────────────────────────────────────────
-async def instructions_search(_text: str, think: bool | None = None, index: str = "main_index", **__) -> Tuple[
+async def instructions_search(_text: str,
+                               think: bool | None = None,
+                               index: str = "main_index",
+                               raw: bool = False,
+                               manager_mode: bool = False,
+                               **__) -> Tuple[
     str, bool]:
     """
     Для поиска нужной информации в главном индексе или коллекции используется переформулировка запроса пользователя
@@ -1021,8 +1026,21 @@ async def instructions_search(_text: str, think: bool | None = None, index: str 
 
     # Очистка HTML перед подстановкой в prompt
     clean_info = html_cleaner.strip_html(collected_info)
+    if manager_mode:
+        clean_info = (
+            clean_info
+            .replace("\r\n_\r\n", "\n\n")
+            .replace("\r\n_\n", "\n\n")
+            .replace("\n_\r\n", "\n\n")
+            .replace("\n_\n", "\n\n")
+            .replace("\n_", "\n")
+            .replace("_\n", "\n")
+        )
+    if raw:
+        return RAW_MODE_MARKER + "\n" + clean_info, False
     # Добавление маркера для лучшего распознавания LLM
-    marked_info = "{KNOWLEDGE_SNIPPET}" + "\n" + clean_info
+    marker = "[MANAGER_INFO]\n" if manager_mode else ""
+    marked_info = "{KNOWLEDGE_SNIPPET}" + "\n" + marker + clean_info
     return marked_info, False
 
 
