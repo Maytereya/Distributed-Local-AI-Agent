@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Dict, List, Union, Tuple, Literal, Any
-
+import asyncio
 import gradio as gr
 from gradio_pdf import PDF
 
@@ -177,6 +177,13 @@ async def echo_ai_router(message, history, session_state):
         async for partial, session_state in routing(message, sess=session_state):
             # Каждая итерация — новое состояние и новый кусок ответа
             yield partial, session_state
+
+    except (asyncio.CancelledError, GeneratorExit):
+        # Стоп из ChatInterface: ничего не шлем в UI, просто даём отмене подняться —
+        # это закроет стримовые соединения ниже по стеку (включая Ollama).
+        print("Стоп в echo_ai_router ПРОИЗОШЕЛ")
+        raise
+
     except Exception as e:
         # При ошибке тоже стримим её сразу
         yield f"⚠️ Ошибка обработки запроса в AI-router: {e}", session_state
@@ -718,13 +725,7 @@ def main():
                              "id",
                              meilisearch.NEWS_SETTINGS,
                              wait_fn=waiter)
-    # Только проверка!
 
-    s1 = client.index("news").get_settings()
-    s2 = client.index("main_index").get_settings()
-    print("!!! news searchable:", s1.get("searchableAttributes"))
-    print("!!! static searchable:", s2.get("searchableAttributes"))
-    #
     # Allow serving local /static files via /gradio_api/file=...
     gr.set_static_paths(paths=[STATIC_DIR])
 
@@ -806,6 +807,7 @@ def main():
                 textbox = gr.Textbox(lines=1,
                                      placeholder="Напишите свой вопрос",
                                      submit_btn=True,
+                                     stop_btn=True,
                                      container=True,
                                      autoscroll=False,
                                      autofocus=True,
@@ -866,6 +868,8 @@ def main():
                     type="messages",
                     chatbot=chatbot,  # без examples: тут они вообще не работают
                     textbox=textbox,
+                    submit_btn="Отправить",  # <-- текст на кнопке отправки
+                    stop_btn="⏹ Остановить",  # <-- тогда появится стоп во время стрима
                     additional_inputs_accordion=settings_accordion,
 
                     additional_inputs=[

@@ -31,7 +31,7 @@ from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
 from agent_logic_2.prompts import load_prompt
 # импорт пока под вопросом - где-то он еще есть, не могу найти =(
-from agent_logic_pack import meilisearch_client as meilisearch, formulate
+from agent_logic_pack import meilisearch_client as meilisearch
 from converters import html_cleaner
 
 #  Initialize logging for understanding the logics of the router
@@ -201,7 +201,9 @@ class CCNotesProcessor:
             return None
 
         if key == 'dms':
-            if re.search(r"(?:не\s*(?:принима(ет|ют)|работа(ет|ют))\s*по\s*дмс|не\s*по\s*дмс|без\s*дмс|дмс\s*(?:[:\-—]\s*)?нет)", s):
+            if re.search(
+                    r"(?:не\s*(?:принима(ет|ют)|работа(ет|ют))\s*по\s*дмс|не\s*по\s*дмс|без\s*дмс|дмс\s*(?:[:\-—]\s*)?нет)",
+                    s):
                 return False
             if re.search(r"(?:по\s*дмс|дмс\s*(?:[:\-—]\s*)?да)", s):
                 return True
@@ -473,6 +475,10 @@ async def _try_doctor_fallback(segment: str, sess: SessionType, think: bool | No
             logger.debug(f"[{context}] doctor_info fallback")
             response, _ = await get_doc_info_from_api(segment, session=sess, think=think)
             return RAW_MODE_MARKER + "\n" + response
+    except (asyncio.CancelledError, GeneratorExit):
+        print("_try_doctor_fallback ОСТАНОВЛЕН")
+        # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+        raise
     except Exception as e:
         logger.exception(f"[{context}] fallback check error: %s", e)
     return None
@@ -850,6 +856,11 @@ async def split_into_segments(text: str, sess: Dict[str, Any], think: bool | Non
             ),
             timeout=20,
         )
+    except (asyncio.CancelledError, GeneratorExit):
+        print("split_into_segments ОСТАНОВЛЕН")
+        # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+        raise
+
     except Exception as e:
         print(f"\n⚠️ split_into_segments timeout/error: {e}")
         return [text]
@@ -887,10 +898,8 @@ async def classify(text: str, sess: Dict[str, Any], think: bool | None = None) -
     :return:
     """
 
-    # print("classify OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
-    # print("classify options: ", ollama_settings.options_set())
     think = ollama_settings.resolve_think(think)
-    # print("!!!THINK:", think)
+
     if not ollama_settings.OLLAMA_MODEL:
         raise ValueError("classify OLLAMA_MODEL cannot be empty")
 
@@ -906,6 +915,11 @@ async def classify(text: str, sess: Dict[str, Any], think: bool | None = None) -
             ),
             timeout=20,
         )
+    except (asyncio.CancelledError, GeneratorExit):
+        print("classify ОСТАНОВЛЕН")
+        # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+        raise
+
     except Exception as e:
         print(f"\n⚠️ classify timeout/error: {e}")
         return ["UNDEFINED"]
@@ -917,9 +931,7 @@ async def classify(text: str, sess: Dict[str, Any], think: bool | None = None) -
             if isinstance(raw, list):
                 labels_raw = raw
         labels = [str(label).upper() for label in labels_raw if str(label).upper() in ALLOWED]
-        # print("----------------- LABELS -----------------------")
-        # print(f"Маркировано labels: ", labels)
-        # print("------------------------------------------------")
+
         return labels or ["UNDEFINED"]
     except Exception as e:
         print(f"\n Classificator error: {e}")
@@ -938,26 +950,28 @@ async def final_answering(primary_request: str,
         collected_info=collected_info,
     )
 
-    # print("final_answering OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
-    # print("final_answering options: ", ollama_settings.options_set())
+
     if not ollama_settings.OLLAMA_MODEL:
         raise ValueError("final_answering OLLAMA_MODEL cannot be empty")
     think = ollama_settings.resolve_think(think)
-    # print("!!!THINK:", think)
+    try:
+        partial = ""  # накопитель
+        stream = await ollama.generate(
+            model=ollama_settings.OLLAMA_MODEL,
+            prompt=prompt,
+            options=ollama_settings.options_set(),
+            keep_alive=-1,
+            stream=True,
+            think=think,
+        )
+        async for chunk in stream:
+            partial += chunk["response"]
+            yield partial
 
-    partial = ""  # накопитель
-    stream = await ollama.generate(
-        model=ollama_settings.OLLAMA_MODEL,
-        prompt=prompt,
-        options=ollama_settings.options_set(),
-        keep_alive=-1,
-        stream=True,
-        think=think,
-    )
-    async for chunk in stream:
-        partial += chunk["response"]
-        yield partial
-
+    except (asyncio.CancelledError, GeneratorExit):
+        print("final_answering ОСТАНОВЛЕН")
+        # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+        raise
 
 # ──────────────────────────────────────────────────────
 # Подключаем doctor_info из llama_func_call
@@ -966,9 +980,14 @@ async def final_answering(primary_request: str,
 async def get_doc_info_from_api(question: str, think: bool | None = None, **_, ) -> Tuple[str, bool]:
     """Получает информацию из API Мед.центра."""
     think = ollama_settings.resolve_think(think)
-    # print("!!!THINK:", think)
-    result = await doctor_info.investigate(question, think=think)
-    return result, False
+    try:
+        result = await doctor_info.investigate(question, think=think)
+        return result, False
+
+    except (asyncio.CancelledError, GeneratorExit):
+        print("get_doc_info_from_api ОСТАНОВЛЕН")
+        # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+        raise
 
 
 # ------------------------------------------------------
@@ -977,7 +996,6 @@ async def get_doc_info_from_api(question: str, think: bool | None = None, **_, )
 async def appointment_stub(_text: str, think: bool | None = None, **__) -> Tuple[str, bool]:
     """Заглушка функции записи пациента."""
     think = ollama_settings.resolve_think(think)
-    # print("!!!THINK:", think)
     return "Модуль записи к врачу скоро появится. ", False
 
 
@@ -1018,8 +1036,8 @@ def _fmt_news(hit: dict) -> str:
     body = hit.get("content") or hit.get("body") or ""
     # короткий фрагмент:
     snippet = body.strip()
-    if len(snippet) > 1000:
-        snippet = snippet[:980].rstrip() + "…"
+    if len(snippet) > 5000:
+        snippet = snippet[:5000].rstrip() + "… [новость сокращена до 5.000 символов]"
     return f"[{vf} — {vt}] {title}\n{snippet}"
 
 
@@ -1090,15 +1108,12 @@ RoutingResult: TypeAlias = Tuple[str, SessionType]
 async def handle_pending_module(text: str, sess: SessionType, think: bool | None = None) -> RoutingResult | None:
     """Обрабатывает задержки выполнения модулей."""
     if (pending_module := sess.get("pending")) and pending_module in MODULES:
-        print("=" * 45)
-        print("pending_module content: ", pending_module or "Empty")
-        print("=" * 45)
-
         kwargs = {"session": sess, "think": think}
         idx_name = INDEX_BY_LABEL.get(pending_module)
         if idx_name:
             kwargs["index"] = idx_name
-
+        # ToDo: возможно сюда так же стоит поставить перехватчик ошибки - команды СТОП от пользователя
+        # но это не точно, поскольку этот обработчик есть у вызываемых функций.
         response, continue_pending = await MODULES[pending_module](text, **kwargs)
         sess["pending"] = pending_module if continue_pending else None
 
