@@ -164,9 +164,10 @@ footer {
 
 # ------------------------------------------------------------------------
 
-async def echo_ai_router(message, history, session_state):
+async def echo_ai_router(message, history, session_state, ai_feed: Literal["local", "cloud"] = "local"):
     """
     Обновлённая версия universal_echo — подключает роутер и стримит ответ.
+    :param ai_feed: Что подключаем: локальную LLM или облачную.
     :param message: Текст запроса пользователя
     :param history: (не используется, можно убрать)
     :param session_state: словарь сессии, хранит pending и history
@@ -175,7 +176,7 @@ async def echo_ai_router(message, history, session_state):
     session_state = session_state or {}
     try:
         # routing возвращает AsyncGenerator[(partial_response, session), None]
-        async for partial, session_state in routing(message, sess=session_state):
+        async for partial, session_state in routing(message, sess=session_state, ai_feed=ai_feed):
             # Каждая итерация — новое состояние и новый кусок ответа
             yield partial, session_state
 
@@ -235,7 +236,7 @@ async def meili_echo(
 async def universal_echo(
         message: str,
         history: List[Dict],
-        radio_value: str,  # "ai-router", "meilisearch", "vectorstore", "db"
+        radio_value: str,  # "ai-router", "gigachat", "meilisearch", "vectorstore", "db"
         threshold_value: float,
         slider_value_n_results: int,
         slider_value_k: int,
@@ -244,12 +245,22 @@ async def universal_echo(
 ):
     if radio_value == "ai-router":
         session_state: dict = {}
+        ai_feed: Literal["local", "cloud"] = "local"
         # стримим
-        async for partial, session_state in echo_ai_router(message, history, session_state):
+        async for partial, session_state in echo_ai_router(message, history, session_state, ai_feed=ai_feed):
             yield partial
         # после завершения стрима — выходим
         return
 
+    if radio_value == "gigachat":
+        session_state: dict = {}
+        ai_feed: Literal["local", "cloud"] = "cloud"
+
+        # стримим
+        async for partial, session_state in echo_ai_router(message, history, session_state, ai_feed=ai_feed):
+            yield partial
+        # после завершения стрима — выходим
+        return
 
     elif radio_value == "meilisearch":
         result = await meili_echo(

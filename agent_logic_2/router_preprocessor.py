@@ -963,7 +963,7 @@ async def final_answering(primary_request: str,
     partial = ""  # накопитель
     if ai_feed == "local":
         try:
-
+            logger.info("final_answering LOCAL branch has activated/активировано подключение к локальной LLM")
             stream = await ollama.generate(
                 model=ollama_settings.OLLAMA_MODEL,
                 prompt=prompt,
@@ -983,6 +983,7 @@ async def final_answering(primary_request: str,
 
     if ai_feed == "cloud":
         try:
+            logger.info("final_answering cloud branch has activated/активировано подключение к облачной LLM")
             stream = gigachat.gigachad_echo_async(
                 system=cloud_prompt,
                 prompt=primary_request,
@@ -1029,11 +1030,11 @@ async def appointment_stub(_text: str, think: bool | None = None, **__) -> Tuple
 # (может использовать LLM переформулировку)
 # ──────────────────────────────────────────────────────
 async def instructions_search(_text: str,
-                               think: bool | None = None,
-                               index: str = "main_index",
-                               raw: bool = False,
-                               manager_mode: bool = False,
-                               **__) -> Tuple[
+                              think: bool | None = None,
+                              index: str = "main_index",
+                              raw: bool = False,
+                              manager_mode: bool = False,
+                              **__) -> Tuple[
     str, bool]:
     """
     Для поиска нужной информации в главном индексе или коллекции используется переформулировка запроса пользователя
@@ -1454,6 +1455,7 @@ async def routing(text: str,
                   sess: SessionType | None = None,
                   extra_processing: Literal["direct", "processed"] = "processed",
                   think: bool | None = None,
+                  ai_feed: Literal["local", "cloud"] = "local",
                   ) -> AsyncGenerator[RoutingResult, None]:
     """
     Обработка входящего запроса пользователя идет в следующем направлении:
@@ -1465,6 +1467,7 @@ async def routing(text: str,
     Here is variant of routing() that *yields* (partial_answer, session) pairs,
         so that the outer UI can stream them.
 
+    :param ai_feed: Что подключаем к итоговой обработке текста: облачную LLM или локальную
     :param think: Включает Reasoning у поддерживающей его модели
     :param extra_processing: определяется, будет ли использоваться на выходе
     постобработка входящих данных с помощью функции final_answering либо же
@@ -1513,7 +1516,8 @@ async def routing(text: str,
         return
 
     if extra_processing == "processed":
-        async for partial in final_answering(text, result, think=think):
+        async for partial in final_answering(text, result, think=think, ai_feed=ai_feed):
+            yield partial, sess
             yield partial, sess  # Stream final response V1 with processing by final_answering func.
     else:
         yield result, sess  # Stream final response V2 without handling by final_answering func.
