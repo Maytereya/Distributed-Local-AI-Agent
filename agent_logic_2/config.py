@@ -20,7 +20,7 @@ config.read(config_path)
 # files_read = config.read(config_path)
 # print("Files read:", files_read)
 # -------------------------------------------------
-environment = 'DOCKER_PRODUCTION' #'DEVELOPMENT' #'PRODUCTION'
+environment = 'DOCKER_PRODUCTION' #'PRODUCTION'
 # | 'DEVELOPMENT' IP квартиры
 # | 'LOCAL' localhost
 # | 'PRODUCTION' внешний белый IP Клиники
@@ -44,6 +44,7 @@ nayka_base_url_no_site = config['DEFAULT']['base_url_no_site']
 nayka_login = config['DEFAULT']['nayka_login']
 nayka_pass = config['DEFAULT']['nayka_pass']
 think = config['DEFAULT']['think']
+giga_authorization = config['DEFAULT']['giga_authorization_key']
 
 ll_model_big = config['DEFAULT']['ll_model_big']
 ll_model_small = config['DEFAULT']['ll_model_small']
