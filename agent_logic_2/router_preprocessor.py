@@ -26,6 +26,7 @@ from ollama import AsyncClient
 
 import agent_logic_2.ollama_settings as ollama_settings
 from agent_logic_2 import llama_func_call as doctor_info, config as c
+from agent_logic_2.gigachat import async_gigachat_logic as gigachat
 from agent_logic_2.llama_func_call import repo
 from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
@@ -476,7 +477,7 @@ async def _try_doctor_fallback(segment: str, sess: SessionType, think: bool | No
             response, _ = await get_doc_info_from_api(segment, session=sess, think=think)
             return RAW_MODE_MARKER + "\n" + response
     except (asyncio.CancelledError, GeneratorExit):
-        print("_try_doctor_fallback ОСТАНОВЛЕН")
+        logger.info("_try_doctor_fallback ОСТАНОВЛЕН")
         # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
         raise
     except Exception as e:
@@ -857,7 +858,7 @@ async def split_into_segments(text: str, sess: Dict[str, Any], think: bool | Non
             timeout=20,
         )
     except (asyncio.CancelledError, GeneratorExit):
-        print("split_into_segments ОСТАНОВЛЕН")
+        logger.info("split_into_segments ОСТАНОВЛЕН")
         # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
         raise
 
@@ -916,7 +917,7 @@ async def classify(text: str, sess: Dict[str, Any], think: bool | None = None) -
             timeout=20,
         )
     except (asyncio.CancelledError, GeneratorExit):
-        print("classify ОСТАНОВЛЕН")
+        logger.info("classify ОСТАНОВЛЕН")
         # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
         raise
 
@@ -941,37 +942,61 @@ async def classify(text: str, sess: Dict[str, Any], think: bool | None = None) -
 async def final_answering(primary_request: str,
                           collected_info: str,
                           think: bool | None = None,
+                          ai_feed: Literal["local", "cloud"] = "local",
                           ):  # Пока неясно что за тип данных будет возвращаться
     """Форматирует строку prompt для генерации ответа на входящее сообщение пользователя."""
     template = load_prompt("final_answer", False)
+    template_cloud = load_prompt("final_answer_giga", False)
     prompt = _safe_format(
         template,
         primary_request=primary_request,
         collected_info=collected_info,
     )
-
+    cloud_prompt = _safe_format(
+        template_cloud,
+        collected_info=collected_info,
+    )
 
     if not ollama_settings.OLLAMA_MODEL:
         raise ValueError("final_answering OLLAMA_MODEL cannot be empty")
     think = ollama_settings.resolve_think(think)
-    try:
-        partial = ""  # накопитель
-        stream = await ollama.generate(
-            model=ollama_settings.OLLAMA_MODEL,
-            prompt=prompt,
-            options=ollama_settings.options_set(),
-            keep_alive=-1,
-            stream=True,
-            think=think,
-        )
-        async for chunk in stream:
-            partial += chunk["response"]
-            yield partial
+    partial = ""  # накопитель
+    if ai_feed == "local":
+        try:
 
-    except (asyncio.CancelledError, GeneratorExit):
-        print("final_answering ОСТАНОВЛЕН")
-        # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
-        raise
+            stream = await ollama.generate(
+                model=ollama_settings.OLLAMA_MODEL,
+                prompt=prompt,
+                options=ollama_settings.options_set(),
+                keep_alive=-1,
+                stream=True,
+                think=think,
+            )
+            async for chunk in stream:
+                partial += chunk["response"]
+                yield partial
+
+        except (asyncio.CancelledError, GeneratorExit):
+            logger.info("final_answering ollama ОСТАНОВЛЕН")
+            # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+            raise
+
+    if ai_feed == "cloud":
+        try:
+            stream = gigachat.gigachad_echo_async(
+                system=cloud_prompt,
+                prompt=primary_request,
+            )
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content or ""
+                partial += delta
+                yield partial
+
+        except (asyncio.CancelledError, GeneratorExit):
+            logger.info("final_answering GigaChat ОСТАНОВЛЕН")
+            # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+            raise
+
 
 # ──────────────────────────────────────────────────────
 # Подключаем doctor_info из llama_func_call
@@ -1088,7 +1113,7 @@ async def news_search(text: str, think: bool | None = None, index: str = "news",
     # Помечаем как «сырое содержимое» — минуется final_answering для теста
     # payload = "<NO_POSTPROC>\n" + "\n\n---\n\n".join(lines)
     payload = "\n\n---\n\n".join(lines)
-    logger.info(payload)
+    # logger.info(payload)
     return payload, False
 
 

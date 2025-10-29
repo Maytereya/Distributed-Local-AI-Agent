@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -9,7 +10,7 @@ from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Dict, List, Union, Tuple, Literal, Any
-import asyncio
+
 import gradio as gr
 from gradio_pdf import PDF
 
@@ -186,7 +187,7 @@ async def echo_ai_router(message, history, session_state):
 
     except Exception as e:
         # При ошибке тоже стримим её сразу
-        yield f"⚠️ Ошибка обработки запроса в AI-router: {e}", session_state
+        yield f"⚠️ Ошибка обработки запроса в ai-router: {e}", session_state
 
 
 async def chroma_echo(message: str, history: List[Dict], collection: str, threshold_value: float,
@@ -248,6 +249,7 @@ async def universal_echo(
             yield partial
         # после завершения стрима — выходим
         return
+
 
     elif radio_value == "meilisearch":
         result = await meili_echo(
@@ -816,7 +818,7 @@ def main():
 
                 with gr.Column():
                     with gr.Row():
-                        radio_type_of_search = gr.Radio(["ai-router", "meilisearch", "vectorstore", "db", ],
+                        radio_type_of_search = gr.Radio(["ai-router", "gigachat", "meilisearch", "vectorstore", "db", ],
                                                         label="Способы поиска в базе знаний",
                                                         value="ai-router",
                                                         container=True,

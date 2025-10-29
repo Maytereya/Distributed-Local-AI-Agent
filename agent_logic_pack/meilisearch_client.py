@@ -704,7 +704,7 @@ def search_news_by_period(
         sort: list[str] | None = None,
 ) -> list[dict]:
     # Пересечение интервалов: [from_ts, to_ts] ∩ [start_ts, end_ts] ≠ Ø
-    flt = f"from_ts <= {end_ts} AND to_ts >= {start_ts} AND type = 'news'"
+    flt = f"from_ts <= {end_ts} AND to_ts >= {start_ts} AND doc_type = 'news'"
     res = client.index(index_name).search(keyword or "", {
         "filter": flt,
         "limit": limit,
