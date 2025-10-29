@@ -71,11 +71,12 @@ fqdn==1.5.1
 frozenlist==1.5.0
 fsspec==2024.12.0
 gguf==0.16.3
+gigachat==0.1.42.post2
 gitdb==4.0.12
 GitPython==3.1.44
 google-auth==2.37.0
 googleapis-common-protos==1.66.0
-gradio==5.49.0
+gradio==5.49.1
 gradio_client==1.13.3
 gradio_pdf==0.0.22
 groovy==0.1.2
