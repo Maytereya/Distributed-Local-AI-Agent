@@ -502,6 +502,22 @@ async def investigate(question: str, think: bool = None) -> str:
         except Exception:
             pass
 
+    # Эвристика: если в вопросе есть потенциальная фамилия, и она есть в базе — обрабатываем как поиск по фамилии.
+    tokens = re.findall(r"[А-ЯЁа-яё\-]+", q)
+    for raw_word in tokens:
+        candidate = raw_word if raw_word[:1].isupper() else raw_word.capitalize()
+        if not is_potential_surname(candidate):
+            continue
+        try:
+            docs = await repo.find_by_surname_async(candidate)
+        except Exception:
+            docs = []
+        if docs:
+            try:
+                return await handle_surname_search(candidate, question)
+            except Exception:
+                break
+
     key_type, value = await extract_search_keyword_llm(question, think=think)
     if not value:
         return (

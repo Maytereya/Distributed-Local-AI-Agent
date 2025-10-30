@@ -79,9 +79,9 @@ NOTE_STOPWORDS = {
 
 # Возрастные паттерны
 AGE_PATTERNS: tuple[str, ...] = (
-    r"\bс\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b",
-    r"возраст[а-я\s]*?(?:с\s*)?(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет",
-    r"\bс\s*возраста\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b",
+    r"\b[сc]\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b",
+    r"возраст[а-я\s]*?(?:[сc]\s*)?(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет",
+    r"\b[сc]\s*возраста\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b",
 )
 
 # Ключевые слова для фильтров
@@ -139,7 +139,7 @@ class CCNotesProcessor:
         s = CCNotesProcessor.normalize_text(cc)
 
         # Возрастные формулировки
-        for pat in AGE_PATTERNS + (r"принимает\s*(пациентов\s*)?с\s*(\d{1,2})\s*(?:-?и)?\s*лет",):
+        for pat in AGE_PATTERNS + (r"принимает\s*(пациентов\s*)?[сc]\s*(\d{1,2})\s*(?:-?и)?\s*лет",):
             m = re.search(pat, s)
             if m:
                 num = (m.group(2) or m.group(1)) if (m.lastindex or 0) >= 2 else m.group(1)
@@ -148,8 +148,8 @@ class CCNotesProcessor:
         # Дополнительные паттерны
         patterns = [
             (r"\bв\s*возрасте\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", "с {0} лет"),
-            (r"\bс\s*возраста\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", "с {0} лет"),
-            (r"принимает\s*(пациентов\s*)?с\s*(\d{1,2})\s*(?:-?и)?\s*лет", "с {1} лет"),
+            (r"\b[сc]\s*возраста\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", "с {0} лет"),
+            (r"принимает\s*(пациентов\s*)?[сc]\s*(\d{1,2})\s*(?:-?и)?\s*лет", "с {1} лет"),
         ]
 
         for pattern, template in patterns:
@@ -161,9 +161,9 @@ class CCNotesProcessor:
         # Специальные случаи
         if "совершеннолет" in s:
             return "с 18 лет"
-        if "0+" in s or re.search(r"\bс\s*0\s*лет\b", s):
+        if "0+" in s or re.search(r"\b[сc]\s*0\s*лет\b", s):
             return "с 0 лет"
-        if "только взросл" in s or "взросл" in s or re.search(r"\bс\s*18\s*лет\b", s):
+        if "только взросл" in s or "взросл" in s or re.search(r"\b[сc]\s*18\s*лет\b", s):
             return "с 18 лет"
 
         return "не указан"
@@ -185,7 +185,13 @@ class CCNotesProcessor:
 
         if key == 'children':
             # Явные отрицания/только взрослые/совершеннолетние
-            if 'с 18 лет' in s or 'принимает с 18' in s or 'только взросл' in s or 'взросл' in s or 'совершеннолет' in s:
+            if (
+                re.search(r"\b[сc]\s*18\s*лет\b", s)
+                or re.search(r"принимает\s*[сc]\s*18", s)
+                or 'только взросл' in s
+                or 'взросл' in s
+                or 'совершеннолет' in s
+            ):
                 return False
             # Явные указания работы с детьми
             if 'дет' in s and ('работ' in s or 'принимает' in s):
