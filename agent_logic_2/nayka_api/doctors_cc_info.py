@@ -22,6 +22,23 @@ CACHE_DIR = os.path.join(os.path.dirname(__file__), 'apidata')
 CACHE_EXPIRY = timedelta(hours=24)  # Кэш действителен 24 часа
 BASE_URL = c.nayka_base_url_no_site.rstrip("/")
 
+
+def _filter_cc_records(data: List[Dict]) -> List[Dict]:
+    """Оставляет только тех врачей, которые присутствуют в локальном кэше doctors_*.jsonl."""
+    if not data:
+        return data
+    try:
+        from agent_logic_2.nayka_api.api_nayka import get_cached_doctors_data
+
+        cached = get_cached_doctors_data()
+        allowed_ids = {doc.get("id") for doc in cached if doc.get("id") is not None}
+        if not allowed_ids:
+            return []
+        return [row for row in data if row.get("id") in allowed_ids]
+    except Exception as e:
+        logger.error(f"Не удалось сопоставить заметки с кэшем врачей: {e}")
+        return data
+
 def get_cache_filename(date: str = None) -> str:
     """Возвращает имя файла кэша с датой"""
     if date is None:
@@ -80,6 +97,7 @@ def load_from_cache() -> Optional[List[Dict]]:
             
         with open(cache_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
+            data = _filter_cc_records(data)
             logger.info(f"Загружены данные о {len(data)} врачах из кэша: {os.path.basename(cache_file)}")
             return data
             
@@ -105,9 +123,11 @@ def save_to_cache(data: List[Dict]) -> None:
         # Создаем файл с датой в имени
         cache_file = get_cache_filename()
         
+        filtered = _filter_cc_records(data)
+
         with open(cache_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info(f"Данные о {len(data)} врачах сохранены в кэш: {os.path.basename(cache_file)}")
+            json.dump(filtered, f, ensure_ascii=False, indent=2)
+            logger.info(f"Данные о {len(filtered)} врачах сохранены в кэш: {os.path.basename(cache_file)}")
             
     except Exception as e:
         logger.error(f"Ошибка при сохранении кэша: {e}")
@@ -149,7 +169,8 @@ def get_doctors_cc_info(force: bool = False) -> List[Dict]:
         # Парсим JSON ответ
         data = response.json()
         
-        # Сохраняем в кэш
+        # Фильтруем и сохраняем в кэш
+        data = _filter_cc_records(data)
         save_to_cache(data)
         
         # Логируем успешное получение данных

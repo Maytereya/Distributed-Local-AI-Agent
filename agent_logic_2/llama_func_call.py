@@ -503,20 +503,24 @@ async def investigate(question: str, think: bool = None) -> str:
             pass
 
     # Эвристика: если в вопросе есть потенциальная фамилия, и она есть в базе — обрабатываем как поиск по фамилии.
-    tokens = re.findall(r"[А-ЯЁа-яё\-]+", q)
-    for raw_word in tokens:
-        candidate = raw_word if raw_word[:1].isupper() else raw_word.capitalize()
-        if not is_potential_surname(candidate):
-            continue
-        try:
-            docs = await repo.find_by_surname_async(candidate)
-        except Exception:
-            docs = []
-        if docs:
+    timetable_keywords = ("распис", "график", "прием", "приём", "schedule")
+    has_timetable_intent = any(kw in q.lower() for kw in timetable_keywords)
+
+    if not has_timetable_intent:
+        tokens = re.findall(r"[А-ЯЁа-яё\-]+", q)
+        for raw_word in tokens:
+            candidate = raw_word if raw_word[:1].isupper() else raw_word.capitalize()
+            if not is_potential_surname(candidate):
+                continue
             try:
-                return await handle_surname_search(candidate, question)
+                docs = await repo.find_by_surname_async(candidate)
             except Exception:
-                break
+                docs = []
+            if docs:
+                try:
+                    return await handle_surname_search(candidate, question)
+                except Exception:
+                    break
 
     key_type, value = await extract_search_keyword_llm(question, think=think)
     if not value:

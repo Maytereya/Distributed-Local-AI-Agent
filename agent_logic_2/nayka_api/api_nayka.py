@@ -288,20 +288,32 @@ def get_all_doctors() -> List[Dict]:
         unit_links = units_by_doctor.get(doctor_id, [])
         region_links = regions_by_doctor.get(doctor_id, [])
 
+        # Уберём оренбургские площадки заранее
+        valid_region_links = []
+        for link in region_links:
+            reg_id = link.get("region")
+            if not reg_id or reg_id in excluded_region_ids:
+                continue
+            valid_region_links.append(link)
+        if not valid_region_links:
+            # Врач присутствует только в исключённых регионах
+            continue
+
         # Все specialization (из unit_links)
         specs = [link.get("specialization", "") or "" for link in unit_links]
         specs = list(dict.fromkeys(filter(None, specs)))
 
         # Оставляем только те площадки, где есть расписание в ближайшую неделю
         active_region_links = _filter_region_entries_with_schedule(
-            doctor_id, region_links, start_iso, end_iso
+            doctor_id, valid_region_links, start_iso, end_iso
         )
+        selected_region_links = active_region_links or valid_region_links
 
         seen_region_ids: Set[int] = set()
         region_pairs: List[Tuple[int, str]] = []
-        for link in active_region_links:
+        for link in selected_region_links:
             reg_id = link.get("region")
-            if not reg_id or reg_id in seen_region_ids or reg_id in excluded_region_ids:
+            if not reg_id or reg_id in seen_region_ids:
                 continue
             seen_region_ids.add(reg_id)
             reg_name = regions_dict.get(reg_id)
@@ -313,12 +325,26 @@ def get_all_doctors() -> List[Dict]:
             continue
 
         # Подразделения только для активных площадок
-        active_unit_ids = {entry.get("companyUnit") for entry in active_region_links}
+        unit_ids_from_regions = {
+            entry.get("companyUnit") for entry in selected_region_links if entry.get("companyUnit")
+        }
+        if not unit_ids_from_regions:
+            unit_ids_from_regions = {
+                entry.get("companyUnit") for entry in valid_region_links if entry.get("companyUnit")
+            }
+
         doc_units: List[str] = []
         for link in unit_links:
             unit_id = link.get("companyUnit")
-            if unit_id in active_unit_ids:
-                unit_name = units_dict.get(unit_id)
+            if unit_ids_from_regions and unit_id not in unit_ids_from_regions:
+                continue
+            unit_name = units_dict.get(unit_id)
+            if unit_name and unit_name not in doc_units:
+                doc_units.append(unit_name)
+        if not doc_units:
+            # fallback — возьмём все названия подразделений врача
+            for link in unit_links:
+                unit_name = units_dict.get(link.get("companyUnit"))
                 if unit_name and unit_name not in doc_units:
                     doc_units.append(unit_name)
         if not doc_units:

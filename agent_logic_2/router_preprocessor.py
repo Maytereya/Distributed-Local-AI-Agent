@@ -148,6 +148,7 @@ class CCNotesProcessor:
         # Дополнительные паттерны
         patterns = [
             (r"\bв\s*возрасте\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", "с {0} лет"),
+            (r"\bв\s*возрасте\s*(\d{1,2})\s*\+", "с {0} лет"),
             (r"\b[сc]\s*возраста\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", "с {0} лет"),
             (r"принимает\s*(пациентов\s*)?[сc]\s*(\d{1,2})\s*(?:-?и)?\s*лет", "с {1} лет"),
         ]
@@ -155,13 +156,13 @@ class CCNotesProcessor:
         for pattern, template in patterns:
             m = re.search(pattern, s)
             if m:
-                num = m.group(2) or m.group(1)
+                num = m.group(2) if (m.lastindex or 0) >= 2 else m.group(1)
                 return template.format(num)
 
         # Специальные случаи
         if "совершеннолет" in s:
             return "с 18 лет"
-        if "0+" in s or re.search(r"\b[сc]\s*0\s*лет\b", s):
+        if "0+" in s or re.search(r"\b[сc]\s*0\s*лет\b", s) or re.search(r"\b0\s*\+", s):
             return "с 0 лет"
         if "только взросл" in s or "взросл" in s or re.search(r"\b[сc]\s*18\s*лет\b", s):
             return "с 18 лет"
