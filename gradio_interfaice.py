@@ -24,8 +24,8 @@ from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
 from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
-from asr_sber import asr_stream_sber, sber_flush, sber_reset_state
-from auth_sber import start_token_refresher
+# from asr_sber import asr_stream_sber, sber_flush, sber_reset_state
+# from auth_sber import start_token_refresher
 from container_managenment import restart_container
 from converters import pdf_to_json_txt_tables_meili as pdf2json
 
@@ -747,7 +747,8 @@ def main():
     ollama_settings.init_model_name()
     ollama_settings.init_options()
     ollama_settings.init_thinking()
-    start_token_refresher()  # Получение свежего SALUT - токена от Сбера. Который действует 30 минут.
+
+    # start_token_refresher()  # Получение свежего SALUT - токена от Сбера. Который действует 30 минут.
     # Инициализация основных двух индексов (чтобы все поля в индексах были корректно настроены)
     client = meilisearch.connect_to_meilisearch()
     waiter = partial(meilisearch.wait_for_task_completion, client)  # фиксируем client
@@ -794,6 +795,7 @@ def main():
                         show_copy_button=True,
                         autoscroll=True,
                         container=True,
+                        visible=False,
                         scale=70,
                     )
                     mic = gr.Audio(
@@ -805,26 +807,27 @@ def main():
                         format="wav",
                         min_width=150,
                         show_download_button=True,
+                        visible=False,
                         scale=30,
                     )
                 with gr.Row():
-                    search_btn = gr.Button("🔎 Передать в поиск", variant="primary", size="sm", scale=10)
-                    flush_btn = gr.Button("Завершить фразу", variant="stop", size="sm", scale=10)
-                    reset_asr_btn = gr.Button("Сбросить", variant="secondary", size="sm", scale=10)
+                    search_btn = gr.Button("🔎 Передать в поиск", variant="primary", size="sm", scale=10, visible=False)
+                    flush_btn = gr.Button("Завершить фразу", variant="stop", size="sm", scale=10, visible=False)
+                    reset_asr_btn = gr.Button("Сбросить", variant="secondary", size="sm", scale=10, visible=False)
                     # Ищем поломку
                     test_btn = gr.Button("🔊 Тест Sber: WAV", variant="secondary", size="sm", visible=False)
 
-                    async def _test_push(asr_state):
-                        import soundfile as sf  # pip install soundfile
-                        data, sr = sf.read("data/sample.wav", dtype="float32", always_2d=False)
-                        if data.ndim == 2: data = data.mean(axis=1)
-                        # используем тот же поток:
-                        live, state = await asr_stream_sber((sr, data), asr_state or {})
-                        # и сразу EOF, чтобы увидеть финальный текст:
-                        final, state = await sber_flush(state)
-                        return (final or live), state
+                    # async def _test_push(asr_state):
+                    #     import soundfile as sf  # pip install soundfile
+                    #     data, sr = sf.read("data/sample.wav", dtype="float32", always_2d=False)
+                    #     if data.ndim == 2: data = data.mean(axis=1)
+                    #     # используем тот же поток:
+                    #     live, state = await asr_stream_sber((sr, data), asr_state or {})
+                    #     # и сразу EOF, чтобы увидеть финальный текст:
+                    #     final, state = await sber_flush(state)
+                    #     return (final or live), state
 
-                    test_btn.click(fn=_test_push, inputs=[asr_state], outputs=[live_transcript, asr_state])
+                    # test_btn.click(fn=_test_push, inputs=[asr_state], outputs=[live_transcript, asr_state])
 
                 # потоковое обновление текста, VOSK - версия
                 # mic.stream(
@@ -835,16 +838,16 @@ def main():
                 # )
 
                 # потоковое обновление текста Сбербанк - версия
-                mic.stream(fn=asr_stream_sber,
-                           inputs=[mic, asr_state],
-                           outputs=[live_transcript, asr_state])
+                # mic.stream(fn=asr_stream_sber,
+                #            inputs=[mic, asr_state],
+                #            outputs=[live_transcript, asr_state])
 
                 # Автоматически завершать фразу при остановке записи, Сбербанк - версия:
-                mic.stop_recording(
-                    fn=sber_flush,
-                    inputs=[asr_state],
-                    outputs=[live_transcript, asr_state],
-                )
+                # mic.stop_recording(
+                #     fn=sber_flush,
+                #     inputs=[asr_state],
+                #     outputs=[live_transcript, asr_state],
+                # )
 
                 # сброс состояния без EOF
                 def reset_asr(_state):
@@ -854,7 +857,7 @@ def main():
                 # VOSK - версия:
                 # reset_asr_btn.click(reset_asr, inputs=[asr_state], outputs=[live_transcript, asr_state])
                 # Сбербанк - версия:
-                reset_asr_btn.click(fn=sber_reset_state, inputs=[asr_state], outputs=[live_transcript, asr_state])
+                # reset_asr_btn.click(fn=sber_reset_state, inputs=[asr_state], outputs=[live_transcript, asr_state])
 
                 # завершить фразу и получить финал
                 async def flush_click(asr_state):
@@ -864,7 +867,7 @@ def main():
                 # VOSK - версия:
                 # flush_btn.click(flush_click, inputs=[asr_state], outputs=[live_transcript, asr_state])
                 # Сбербанк - версия:
-                flush_btn.click(fn=sber_flush, inputs=[asr_state], outputs=[live_transcript, asr_state])
+                # flush_btn.click(fn=sber_flush, inputs=[asr_state], outputs=[live_transcript, asr_state])
 
                 # ====== ГЛАВНЫЙ ИНТЕРФЕЙС ======
                 chatbot = gr.Chatbot(type="messages",
