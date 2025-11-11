@@ -3,7 +3,7 @@
 #
 import time
 import uuid
-from typing import Optional, Any, List, Tuple
+from typing import Optional, Any, List, Tuple, Literal
 
 import pandas as pd
 
@@ -19,10 +19,14 @@ def _now_utc_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _split_paragraphs(text: str):
-    # простой и предсказуемый сплит: по пустой строке
-    paras = [p.strip() for p in (text or "").split("\n\n") if p.strip()]
-    return paras if paras else []
+def _split_paragraphs(text: str, split: Literal["on", "off"]):
+    if split == "on":
+        # простой и предсказуемый сплит: по пустой строке
+        paras = [p.strip() for p in (text or "").split("\n\n") if p.strip()]
+        return paras if paras else []
+    else:
+        return [text]
+
 
 
 def _normalize_table(table_value: Any, headers: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
@@ -51,7 +55,9 @@ def build_blocks(
         content: str,
         keywords_csv: str,
         table_data: Any,
+        split: Literal["on", "off"] = "off",
         table_headers: Optional[List[str]] = None  # например: ["Колонка 1", "Колонка 2"]
+
 ) -> Tuple[str, List[dict]]:
     """
     Возвращает (doc_id, blocks) для индексации.
@@ -71,21 +77,40 @@ def build_blocks(
     block_id = 0
 
     # текст → параграфы (каждый абзац — отдельный блок)
-    for para in _split_paragraphs(content):
+    for para in _split_paragraphs(content, split):
         block_id += 1
-        blocks.append({
-            "id": f"{doc_id}_p1_b{block_id}",
-            "doc_id": doc_id,
-            "page": 1,
-            "block_id": block_id,
-            "type": "text",
-            "title": title if block_id == 1 else None,  # заголовок только в первом блоке
-            "content": para,  # <-- ключ 'content'
-            "html": None,
-            "csv": None,
-            "keywords": keywords,
-            "created_at": created
-        })
+        if split == "on":
+            blocks.append({
+                "id": f"{doc_id}_p1_b{block_id}",
+                "doc_id": doc_id,
+                "page": 1,
+                "block_id": block_id,
+                "type": "text",
+                "title": title if block_id == 1 else None,  # заголовок только в первом блоке
+                "content": para,  # <-- ключ 'content'
+                "html": None,
+                "csv": None,
+                "keywords": keywords,
+                "created_at": created
+            })
+
+        elif split == "off":
+            # Не подставляем маркер блока и страницы в doc_id
+            blocks.append({
+                "id": doc_id,
+                "doc_id": doc_id,
+                "page": 1,
+                "block_id": doc_id,
+                "type": "text",
+                "title": title,  # заголовок только в первом блоке
+                "content": para,  # <-- ключ 'content'
+                "html": None,
+                "csv": None,
+                "keywords": keywords,
+                "created_at": created
+            })
+
+
 
     # таблица (если есть данные)
     if table_data is not None:

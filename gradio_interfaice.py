@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -15,7 +14,7 @@ import gradio as gr
 from gradio_pdf import PDF
 
 import agent_logic_2.ollama_settings as ollama_settings
-from VOSK.audio_stream_ws import vosk_ws_stream, flush_ws
+from VOSK.audio_stream_ws import flush_ws
 from agent_logic_2 import config as c
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
@@ -25,6 +24,8 @@ from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
 from agent_logic_pack import aretrieve3 as retrieve
 from agent_logic_pack import meilisearch_client as meilisearch
+from asr_sber import asr_stream_sber, sber_flush, sber_reset_state
+from auth_sber import start_token_refresher
 from container_managenment import restart_container
 from converters import pdf_to_json_txt_tables_meili as pdf2json
 
@@ -153,13 +154,34 @@ footer {
 }
 """
 
-
 # -------------------
 # ECHOES PART
 # -------------------
 
 # Глобальная сессия (Gradio поддерживает per-user state)
 # state = gr.State({})  # будет передаваться как дополнительный input/output
+
+# ЛОГИРОВАНИЕ ДЛЯ ПОИСКА ПРОБЛЕМЫ С РАСПОЗНАВАНИЕМ ОТ СБЕРБАНКА
+import os, logging, sys, asyncio
+
+
+def enable_debug_logging():
+    # 1) консольный логгер
+    logging.basicConfig(
+        level=logging.DEBUG,  # можно INFO, если шумно
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    # 2) gRPC подробности (TLS/handshake/stream)
+    os.environ.setdefault("GRPC_VERBOSITY", "info")  # или debug
+    os.environ.setdefault("GRPC_TRACE", "handshaker,handshake,security,transport_stream,tsi,client_channel,call_error")
+    # 3) asyncio debug
+    os.environ.setdefault("PYTHONASYNCIODEBUG", "1")
+    try:
+        loop = asyncio.get_event_loop()
+        loop.set_debug(True)
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------------------
@@ -725,7 +747,7 @@ def main():
     ollama_settings.init_model_name()
     ollama_settings.init_options()
     ollama_settings.init_thinking()
-
+    start_token_refresher()  # Получение свежего SALUT - токена от Сбера. Который действует 30 минут.
     # Инициализация основных двух индексов (чтобы все поля в индексах были корректно настроены)
     client = meilisearch.connect_to_meilisearch()
     waiter = partial(meilisearch.wait_for_task_completion, client)  # фиксируем client
@@ -741,6 +763,8 @@ def main():
 
     # Allow serving local /static files via /gradio_api/file=...
     gr.set_static_paths(paths=[STATIC_DIR])
+    # ToDo: возможно убрать!
+    asr_state = gr.State(value={})  # чтобы не было первого None при отправке чанков в сбер.
 
     with gr.Blocks(css=custom_css, title="Neiry.ai", head=OG_HEAD) as blocks:
         model_state = gr.State()  # Нужно для однократной загрузки моделей из Ollama
@@ -787,13 +811,39 @@ def main():
                     search_btn = gr.Button("🔎 Передать в поиск", variant="primary", size="sm", scale=10)
                     flush_btn = gr.Button("Завершить фразу", variant="stop", size="sm", scale=10)
                     reset_asr_btn = gr.Button("Сбросить", variant="secondary", size="sm", scale=10)
+                    # Ищем поломку
+                    test_btn = gr.Button("🔊 Тест Sber: WAV", variant="secondary", size="sm", visible=False)
 
-                # потоковое обновление текста
-                mic.stream(
-                    # fn=audio_stream.vosk_stream,
-                    fn=vosk_ws_stream,
-                    inputs=[mic, asr_state],
-                    outputs=[live_transcript, asr_state]
+                    async def _test_push(asr_state):
+                        import soundfile as sf  # pip install soundfile
+                        data, sr = sf.read("data/sample.wav", dtype="float32", always_2d=False)
+                        if data.ndim == 2: data = data.mean(axis=1)
+                        # используем тот же поток:
+                        live, state = await asr_stream_sber((sr, data), asr_state or {})
+                        # и сразу EOF, чтобы увидеть финальный текст:
+                        final, state = await sber_flush(state)
+                        return (final or live), state
+
+                    test_btn.click(fn=_test_push, inputs=[asr_state], outputs=[live_transcript, asr_state])
+
+                # потоковое обновление текста, VOSK - версия
+                # mic.stream(
+                #     # fn=audio_stream.vosk_stream,
+                #     fn=vosk_ws_stream,
+                #     inputs=[mic, asr_state],
+                #     outputs=[live_transcript, asr_state]
+                # )
+
+                # потоковое обновление текста Сбербанк - версия
+                mic.stream(fn=asr_stream_sber,
+                           inputs=[mic, asr_state],
+                           outputs=[live_transcript, asr_state])
+
+                # Автоматически завершать фразу при остановке записи, Сбербанк - версия:
+                mic.stop_recording(
+                    fn=sber_flush,
+                    inputs=[asr_state],
+                    outputs=[live_transcript, asr_state],
                 )
 
                 # сброс состояния без EOF
@@ -801,14 +851,20 @@ def main():
                     # аккуратно закрыть сокет, если открыт
                     return gr.update(value=""), {"text": "", "acc": bytearray(), "ws": None, "closing": False}
 
-                reset_asr_btn.click(reset_asr, inputs=[asr_state], outputs=[live_transcript, asr_state])
+                # VOSK - версия:
+                # reset_asr_btn.click(reset_asr, inputs=[asr_state], outputs=[live_transcript, asr_state])
+                # Сбербанк - версия:
+                reset_asr_btn.click(fn=sber_reset_state, inputs=[asr_state], outputs=[live_transcript, asr_state])
 
                 # завершить фразу и получить финал
                 async def flush_click(asr_state):
                     txt, st = await flush_ws(asr_state or {})
                     return txt, st
 
-                flush_btn.click(flush_click, inputs=[asr_state], outputs=[live_transcript, asr_state])
+                # VOSK - версия:
+                # flush_btn.click(flush_click, inputs=[asr_state], outputs=[live_transcript, asr_state])
+                # Сбербанк - версия:
+                flush_btn.click(fn=sber_flush, inputs=[asr_state], outputs=[live_transcript, asr_state])
 
                 # ====== ГЛАВНЫЙ ИНТЕРФЕЙС ======
                 chatbot = gr.Chatbot(type="messages",
@@ -842,7 +898,6 @@ def main():
                                                                     interactive=False,
                                                                     render=False,
                                                                     )
-                        # TODO: C какой-то стати в value передается {}
                         chroma_search_collection_dropdown = gr.Dropdown(choices=gr_existed_collections(),
                                                                         label=COLLECTIONS_IN_CHROMA,
                                                                         info="Выберите Коллекцию для поиска информации",
@@ -945,13 +1000,6 @@ def main():
                                                               label=INDEXES_IN_MEILI,
                                                               # info="Индексы документов",
                                                               visible=False)
-
-                        # Поле для вывода текущего статуса работы с коллекциями
-                        # status_bar = gr.Textbox(value=txt_default,
-                        #                         every=15.0,
-                        #                         label="Статус операции",
-                        #                         # info="Только вывод",
-                        #                         interactive=False, )
 
                         # Кнопки для работы с коллекциями или индексами
                         with gr.Column():
@@ -1153,6 +1201,7 @@ def main():
                         # опциональная таблица
                         table_df = gr.Dataframe(
                             label="Таблица (необязательно)",
+                            visible=False,
                             headers=TABLE_HEADERS,
                             datatype="str",
                             row_count=(3, "dynamic"),
@@ -1181,7 +1230,8 @@ def main():
                     # ----------------------------
 
                     def fn_preview_json(current_doc_id, title, content, keywords, table,
-                                        selected_index, doc_type, valid_from, valid_to, is_permanent):
+                                        selected_index, doc_type, valid_from, valid_to, is_permanent,
+                                        split: Literal["on", "off"] = "off"):
 
                         # Жесткая проверка на соответствие индекса функционалу
                         expected_type = TYPE_FOR_INDEX.get(selected_index, "static")
@@ -1195,7 +1245,8 @@ def main():
                             return gr.update(visible=False), None
 
                         try:
-                            doc_id, blocks = build_blocks(current_doc_id, title, content, keywords, table, )
+                            # Построение блоков (можно включить или выключить через параметр split)
+                            doc_id, blocks = build_blocks(current_doc_id, title, content, keywords, table, split=split)
                         except ValueError as e:
                             gr.Error(f"{e}", title="Ошибка!")
                             return gr.update(visible=False), None
@@ -1369,6 +1420,9 @@ def main():
 
                         # 👉 если поля нет — берём тип из выбранного индекса
                         doc_type = doc.get("doc_type") or doc.get("type") or TYPE_FOR_INDEX.get(index_name, "static")
+                        # Устаревшая маркировка поля, больше не используется, конвертируем text -> static
+                        if doc_type == "text":
+                            doc_type = "static"
                         is_news = (doc_type == "news")
 
                         #
@@ -1427,7 +1481,8 @@ def main():
                     # редактирования
                     #  ------------------------------------
 
-                    def save_doc_by_id(doc_type: Literal["static", "news"], index_name: str, doc_id: str, title: str,
+                    def save_doc_by_id(doc_type: Literal["static", "news", "text"], index_name: str, doc_id: str,
+                                       title: str,
                                        content: str,
                                        valid_from, valid_to,
                                        permanent, keywords: str, table):
@@ -2190,32 +2245,6 @@ def main():
 
                              ]
                 )
-
-            # ----------------------------------
-            # Event handlers for upper sections
-            # ----------------------------------
-
-            # generate_id_button.click(fn=generate_new_id, outputs=[id_input])
-
-            # preview_button.click(
-            #     fn=fn_preview_json,
-            #     inputs=[id_input, title_input, content_input, keywords_input, index_dropdown],
-            #     outputs=[preview_json,
-            #              status_output, ]
-            # )
-
-            # save_button.click(
-            #     fn=save_and_send_to_meilisearch,
-            #     inputs=[id_input, preview_json, index_dropdown],
-            #     outputs=[preview_json,
-            #              id_input,
-            #              title_input,
-            #              content_input,
-            #              keywords_input,
-            #              status_output,
-            #              preview_button,
-            #              save_button, ]
-            # )
 
     # -------------------------
     # Footer html realization

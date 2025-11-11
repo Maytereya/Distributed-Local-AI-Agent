@@ -20,7 +20,7 @@ config.read(config_path)
 # files_read = config.read(config_path)
 # print("Files read:", files_read)
 # -------------------------------------------------
-environment = 'DOCKER_PRODUCTION' #'PRODUCTION'
+environment = 'PRODUCTION' #'PRODUCTION'
 # | 'DEVELOPMENT' IP квартиры
 # | 'LOCAL' localhost
 # | 'PRODUCTION' внешний белый IP Клиники
@@ -45,6 +45,16 @@ nayka_login = config['DEFAULT']['nayka_login']
 nayka_pass = config['DEFAULT']['nayka_pass']
 think = config['DEFAULT']['think']
 giga_authorization = config['DEFAULT']['giga_authorization_key']
-
+salut_authorization = config['DEFAULT']['salut_speech_key']
+SBER_HOST = config['DEFAULT']['SBER_HOST']
+SBER_CA = config['DEFAULT']['SBER_CA']
+SBER_TOKEN = config['DEFAULT']['SBER_TOKEN']
+SBER_MODEL = config['DEFAULT']['SBER_MODEL']
+SBER_ENABLE_PARTIAL = config['DEFAULT']['SBER_ENABLE_PARTIAL']
+SBER_ENABLE_MULTI_UTTERANCE = config['DEFAULT']['SBER_ENABLE_MULTI_UTTERANCE']
+SBER_NO_SPEECH_TIMEOUT = int(config['DEFAULT']['SBER_NO_SPEECH_TIMEOUT'])
+SBER_MAX_SPEECH_TIMEOUT = int(config['DEFAULT']['SBER_MAX_SPEECH_TIMEOUT'])
+SBER_DUMP_DIR = config['DEFAULT']['SBER_DUMP_DIR']
+SBER_DUMP_AUDIO = bool(config['DEFAULT']['SBER_DUMP_AUDIO'])
 ll_model_big = config['DEFAULT']['ll_model_big']
 ll_model_small = config['DEFAULT']['ll_model_small']
