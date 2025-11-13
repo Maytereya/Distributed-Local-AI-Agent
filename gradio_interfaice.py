@@ -770,7 +770,7 @@ def main():
     # ToDo: возможно убрать!
     asr_state = gr.State(value={})  # чтобы не было первого None при отправке чанков в сбер.
 
-    with gr.Blocks(css=custom_css, title="Neiry.ai", head=OG_HEAD) as blocks:
+    with (gr.Blocks(css=custom_css, title="Neiry.ai", head=OG_HEAD) as blocks):
         model_state = gr.State()  # Нужно для однократной загрузки моделей из Ollama
 
         with gr.Row(elem_id="logo-row"):
@@ -816,10 +816,10 @@ def main():
                         # stop_recording_on_silence=True,
                     )
                 with gr.Row(visible=True):
-                    whisper_btn = gr.Button("1️⃣ 🔊 Расшифровать", variant="primary", size="sm", scale=10, visible=True)
-                    search_btn = gr.Button("2️⃣ 🔎 Передать в поиск", variant="secondary", size="sm", scale=10, visible=True)
+                    whisper_btn = gr.Button("1️⃣ 🔊 Расшифровать", variant="primary", size="sm", scale=50, visible=True)
+                    search_btn = gr.Button("2️⃣ 🔎 Передать в поиск", variant="secondary", size="sm", scale=30, visible=True)
                     # flush_btn = gr.Button("Завершить фразу", variant="stop", size="sm", scale=10, visible=False)
-                    # reset_asr_btn = gr.Button("Сбросить", variant="secondary", size="sm", scale=10, visible=True)
+                    reset_asr_btn = gr.Button("3️⃣ 🗑️ Сбросить", variant="secondary", size="sm", scale=20, visible=True)
                     # Ищем поломку
                     # test_btn = gr.Button("🔊 Тест Sber: WAV", variant="secondary", size="sm", visible=False)
                     # whisper_btn = gr.Button("🔊 Расшифровать", variant="primary", size="sm", scale=10, visible=True)
@@ -861,10 +861,10 @@ def main():
                 # сброс состояния без EOF
                 def reset_asr(_state):
                     # аккуратно закрыть сокет, если открыт
-                    return gr.update(value=""), {"text": "", "acc": bytearray(), "ws": None, "closing": False}
+                    return gr.update(value=""),{"text": "", "acc": bytearray(), "ws": None, "closing": False}, None
 
                 # VOSK - версия:
-                # reset_asr_btn.click(reset_asr, inputs=[asr_state], outputs=[live_transcript, asr_state])
+                reset_asr_btn.click(reset_asr, inputs=[asr_state], outputs=[live_transcript, asr_state, mic])
                 # Сбербанк - версия:
                 # reset_asr_btn.click(fn=sber_reset_state, inputs=[asr_state], outputs=[live_transcript, asr_state])
 
@@ -895,7 +895,7 @@ def main():
                                      stop_btn=True,
                                      container=True,
                                      autoscroll=False,
-                                     autofocus=True,
+                                     autofocus=False,
                                      html_attributes=gr.InputHTMLAttributes(autocorrect="off", spellcheck=False)
                                      )
 
