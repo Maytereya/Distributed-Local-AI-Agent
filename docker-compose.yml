@@ -39,7 +39,6 @@ services:
   certbot:
     image: certbot/certbot
     container_name: certbot
-    restart: no
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt
       - /home/vl/bookworm_app/Distributed-Local-AI-Agent/nginx/html:/var/www/certbot/html
