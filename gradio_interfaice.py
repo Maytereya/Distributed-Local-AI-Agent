@@ -28,6 +28,9 @@ from agent_logic_pack import meilisearch_client as meilisearch
 # from auth_sber import start_token_refresher
 from container_managenment import restart_container
 from converters import pdf_to_json_txt_tables_meili as pdf2json
+#
+from whisper.wisper_ws_client import ws_transcribe
+#
 
 # Label constants
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
@@ -785,7 +788,7 @@ def main():
             with gr.Tab("\U0001F4D6 AI - ассистент"):
 
                 # ====== ЗАХВАТ АУДИО И РАСШИФРОВКА ======
-                with gr.Row():
+                with gr.Row(visible=True):
                     asr_state = gr.State()  # хранит rec и накопленный текст
                     live_transcript = gr.Textbox(
                         label="🎙️ Живая расшифровка",
@@ -795,39 +798,45 @@ def main():
                         show_copy_button=True,
                         autoscroll=True,
                         container=True,
-                        visible=False,
+                        visible=True,
                         scale=70,
                     )
                     mic = gr.Audio(
                         sources=["microphone"],
                         type="numpy",
-                        streaming=True,
+                        streaming=False,
                         label="Микрофон",
                         interactive=True,
                         format="wav",
                         min_width=150,
                         show_download_button=True,
-                        visible=False,
+                        visible=True,
                         scale=30,
+                        # recording=True,
+                        # stop_recording_on_silence=True,
                     )
-                with gr.Row():
-                    search_btn = gr.Button("🔎 Передать в поиск", variant="primary", size="sm", scale=10, visible=False)
-                    flush_btn = gr.Button("Завершить фразу", variant="stop", size="sm", scale=10, visible=False)
-                    reset_asr_btn = gr.Button("Сбросить", variant="secondary", size="sm", scale=10, visible=False)
+                with gr.Row(visible=True):
+                    whisper_btn = gr.Button("1️⃣ 🔊 Расшифровать", variant="primary", size="sm", scale=10, visible=True)
+                    search_btn = gr.Button("2️⃣ 🔎 Передать в поиск", variant="secondary", size="sm", scale=10, visible=True)
+                    # flush_btn = gr.Button("Завершить фразу", variant="stop", size="sm", scale=10, visible=False)
+                    # reset_asr_btn = gr.Button("Сбросить", variant="secondary", size="sm", scale=10, visible=True)
                     # Ищем поломку
-                    test_btn = gr.Button("🔊 Тест Sber: WAV", variant="secondary", size="sm", visible=False)
+                    # test_btn = gr.Button("🔊 Тест Sber: WAV", variant="secondary", size="sm", visible=False)
+                    # whisper_btn = gr.Button("🔊 Расшифровать", variant="primary", size="sm", scale=10, visible=True)
 
-                    # async def _test_push(asr_state):
-                    #     import soundfile as sf  # pip install soundfile
-                    #     data, sr = sf.read("data/sample.wav", dtype="float32", always_2d=False)
-                    #     if data.ndim == 2: data = data.mean(axis=1)
-                    #     # используем тот же поток:
-                    #     live, state = await asr_stream_sber((sr, data), asr_state or {})
-                    #     # и сразу EOF, чтобы увидеть финальный текст:
-                    #     final, state = await sber_flush(state)
-                    #     return (final or live), state
+                whisper_btn.click(fn=ws_transcribe, inputs=mic, outputs=live_transcript)
 
-                    # test_btn.click(fn=_test_push, inputs=[asr_state], outputs=[live_transcript, asr_state])
+                # async def _test_push(asr_state):
+                #     import soundfile as sf  # pip install soundfile
+                #     data, sr = sf.read("data/sample.wav", dtype="float32", always_2d=False)
+                #     if data.ndim == 2: data = data.mean(axis=1)
+                #     # используем тот же поток:
+                #     live, state = await asr_stream_sber((sr, data), asr_state or {})
+                #     # и сразу EOF, чтобы увидеть финальный текст:
+                #     final, state = await sber_flush(state)
+                #     return (final or live), state
+
+                # test_btn.click(fn=_test_push, inputs=[asr_state], outputs=[live_transcript, asr_state])
 
                 # потоковое обновление текста, VOSK - версия
                 # mic.stream(
@@ -864,10 +873,14 @@ def main():
                     txt, st = await flush_ws(asr_state or {})
                     return txt, st
 
+
+
                 # VOSK - версия:
                 # flush_btn.click(flush_click, inputs=[asr_state], outputs=[live_transcript, asr_state])
                 # Сбербанк - версия:
                 # flush_btn.click(fn=sber_flush, inputs=[asr_state], outputs=[live_transcript, asr_state])
+
+
 
                 # ====== ГЛАВНЫЙ ИНТЕРФЕЙС ======
                 chatbot = gr.Chatbot(type="messages",
@@ -957,6 +970,7 @@ def main():
                 )
 
                 # Передача аудиораcшифровки в поиск AI-Search
+                # Оставляем тут, иначе textbox не определится.
 
                 def copy_to_textbox(input: str):
                     return gr.update(value=input)
@@ -966,6 +980,8 @@ def main():
                     inputs=live_transcript,
                     outputs=textbox,
                 )
+
+
             # --------------------------------------------------
             # Вкладка 2 - Upload PDF to MEILI or CHROMA DB
             # --------------------------------------------------

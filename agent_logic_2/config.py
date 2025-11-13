@@ -34,6 +34,7 @@ chroma_host = config[environment]['chroma_host']
 chroma_port = int(config[environment]['chroma_port'])
 MEILI_URL = config[environment]['MEILI_URL']
 VOSK_URL = config[environment]['VOSK_URL']
+WHISPER_URL = config[environment]['WHISPER_URL']
 
 
 MASTER_KEY = config['DEFAULT']['MASTER_KEY']

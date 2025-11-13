@@ -4,6 +4,7 @@ services:
   bookworm-agent:
     build: .
     container_name: bookworm-agent
+    restart: unless-stopped
     ports:
       - "7860:7860"
     volumes:
@@ -21,6 +22,7 @@ services:
   nginx:
     image: nginx:latest
     container_name: nginx_proxy
+    restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
@@ -37,6 +39,7 @@ services:
   certbot:
     image: certbot/certbot
     container_name: certbot
+    restart: no
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt
       - /home/vl/bookworm_app/Distributed-Local-AI-Agent/nginx/html:/var/www/certbot/html
