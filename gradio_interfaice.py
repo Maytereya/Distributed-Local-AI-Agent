@@ -75,11 +75,12 @@ def check_auth(username, password):
 # Footer!
 # -------------------
 custom_css = """
-/* 
-   Общие стили для футера: расположим элементы 
-   вертикально (flex-direction: column), 
-   без лишних отступов (gap, margin, padding).
-*/
+
+.gradio-container footer {
+    display: none !important;
+}
+
+/*
 footer {
     display: flex !important;           /* Чтобы мы могли управлять расположением */
     /* flex-direction: column !important;   Расположим элементы сверху вниз */
@@ -90,7 +91,7 @@ footer {
     margin: 0 !important;
     padding: 3px 0 !important;          /* Можно подвинуть значение для плотности */
 }
-
+*/
 /* Убираем потенциальные точки/буллеты у "Built with Gradio" */
 /* footer ul {
     list-style: none !important;
@@ -99,7 +100,7 @@ footer {
 }*/
 
 /* Это сам блок, где вы размещаете свою ссылку и копирайт */
-#custom-footer {
+/*#custom-footer {
     text-align: center;
     margin: 0 auto;
     padding: 0;
@@ -107,14 +108,15 @@ footer {
     font-size: 14px;
     line-height: 1.2;         /* Чуть плотнее строки */
 }
-
+*/
 /* Если хотите, чтобы только ссылка была #ccc, а текст — другим цветом,
    перенесите color в #custom-footer a { ... } */
-#custom-footer a {
+/*#custom-footer a {
     text-decoration: none;
     color: #ccc;              /* Цвет ссылки */
     margin-left: 0.5rem;      /* Отступ между текстом и ссылкой */
 }
+*/
 
 /* Шапка с логотипом — без лишних отступов */
 #logo-bar {
@@ -770,6 +772,19 @@ def main():
     # ToDo: возможно убрать!
     asr_state = gr.State(value={})  # чтобы не было первого None при отправке чанков в сбер.
 
+    custom_footer = """
+    <div style="
+        width: 100%;
+        text-align: center;
+        padding: 12px 0;
+        font-size: 14px;
+        color: #888;
+        /*border-top: 1px solid #3333;*/
+        margin-top: 10px;
+    ">
+        © 2025 <b>neiry.ai llc.</b>
+    </div>
+    """
     with (gr.Blocks(css=custom_css, title="Neiry.ai", head=OG_HEAD) as blocks):
         model_state = gr.State()  # Нужно для однократной загрузки моделей из Ollama
 
@@ -2265,19 +2280,10 @@ def main():
                              ]
                 )
 
-    # -------------------------
-    # Footer html realization
-    # -------------------------
-
-    gr.HTML(
-        """
-        <div id="custom-footer">
-            &copy; ООО "Нейри" 2025
-            <a href="https://neiry-ai.ru" target="_blank">neiry-ai.ru</a>
-        </div>
-        """,
-        visible=True
-    )
+        # -------------------------
+        # Footer html realization
+        # -------------------------
+        gr.HTML(custom_footer)
     blocks.queue(
         default_concurrency_limit=8,
         max_size=64)
