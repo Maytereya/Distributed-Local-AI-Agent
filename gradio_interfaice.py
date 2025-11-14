@@ -28,8 +28,10 @@ from agent_logic_pack import meilisearch_client as meilisearch
 # from auth_sber import start_token_refresher
 from container_managenment import restart_container
 from converters import pdf_to_json_txt_tables_meili as pdf2json
+from whisper import whisper_dict as w
 #
 from whisper.wisper_ws_client import ws_transcribe
+
 #
 
 # Label constants
@@ -80,45 +82,8 @@ custom_css = """
     display: none !important;
 }
 
-/*
-footer {
-    display: flex !important;           /* Чтобы мы могли управлять расположением */
-    /* flex-direction: column !important;   Расположим элементы сверху вниз */
-    align-items: center !important;     /* Центрируем по горизонтали */
-    justify-content: center !important;
-    text-align: center !important;
-    gap: 0.25rem !important;            /* Небольшой зазор между строками */
-    margin: 0 !important;
-    padding: 3px 0 !important;          /* Можно подвинуть значение для плотности */
-}
-*/
-/* Убираем потенциальные точки/буллеты у "Built with Gradio" */
-/* footer ul {
-    list-style: none !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}*/
 
-/* Это сам блок, где вы размещаете свою ссылку и копирайт */
-/*#custom-footer {
-    text-align: center;
-    margin: 0 auto;
-    padding: 0;
-    color: #ccc;              /* Светло-серый цвет для текста (можно поменять) */
-    font-size: 14px;
-    line-height: 1.2;         /* Чуть плотнее строки */
-}
-*/
-/* Если хотите, чтобы только ссылка была #ccc, а текст — другим цветом,
-   перенесите color в #custom-footer a { ... } */
-/*#custom-footer a {
-    text-decoration: none;
-    color: #ccc;              /* Цвет ссылки */
-    margin-left: 0.5rem;      /* Отступ между текстом и ссылкой */
-}
-*/
-
-/* Шапка с логотипом — без лишних отступов */
+/* Шапка с логотипом */
 #logo-bar {
   display: flex !important;
   align-items: center !important;
@@ -780,7 +745,7 @@ def main():
         font-size: 14px;
         color: #888;
         /*border-top: 1px solid #3333;*/
-        margin-top: 10px;
+        /*margin-top: 10px;*/
     ">
         © 2025 <b>neiry.ai llc.</b>
     </div>
@@ -832,7 +797,8 @@ def main():
                     )
                 with gr.Row(visible=True):
                     whisper_btn = gr.Button("1️⃣ 🔊 Расшифровать", variant="primary", size="sm", scale=50, visible=True)
-                    search_btn = gr.Button("2️⃣ 🔎 Передать в поиск", variant="secondary", size="sm", scale=30, visible=True)
+                    search_btn = gr.Button("2️⃣ 🔎 Передать в поиск", variant="secondary", size="sm", scale=30,
+                                           visible=True)
                     # flush_btn = gr.Button("Завершить фразу", variant="stop", size="sm", scale=10, visible=False)
                     reset_asr_btn = gr.Button("3️⃣ 🗑️ Сбросить", variant="secondary", size="sm", scale=20, visible=True)
                     # Ищем поломку
@@ -876,10 +842,11 @@ def main():
                 # сброс состояния без EOF
                 def reset_asr(_state):
                     # аккуратно закрыть сокет, если открыт
-                    return gr.update(value=""),{"text": "", "acc": bytearray(), "ws": None, "closing": False}, None
+                    return gr.update(value=""), {"text": "", "acc": bytearray(), "ws": None, "closing": False}, None
 
                 # VOSK - версия:
                 reset_asr_btn.click(reset_asr, inputs=[asr_state], outputs=[live_transcript, asr_state, mic])
+
                 # Сбербанк - версия:
                 # reset_asr_btn.click(fn=sber_reset_state, inputs=[asr_state], outputs=[live_transcript, asr_state])
 
@@ -888,14 +855,10 @@ def main():
                     txt, st = await flush_ws(asr_state or {})
                     return txt, st
 
-
-
                 # VOSK - версия:
                 # flush_btn.click(flush_click, inputs=[asr_state], outputs=[live_transcript, asr_state])
                 # Сбербанк - версия:
                 # flush_btn.click(fn=sber_flush, inputs=[asr_state], outputs=[live_transcript, asr_state])
-
-
 
                 # ====== ГЛАВНЫЙ ИНТЕРФЕЙС ======
                 chatbot = gr.Chatbot(type="messages",
@@ -995,7 +958,6 @@ def main():
                     inputs=live_transcript,
                     outputs=textbox,
                 )
-
 
             # --------------------------------------------------
             # Вкладка 2 - Upload PDF to MEILI or CHROMA DB
@@ -1965,7 +1927,8 @@ def main():
             # ------------------------------------------------------
 
             with gr.Tab("⚙️ Настройки"):
-                gr.Markdown("""<h3>⚙️ Настройки нейросетей и сервера Ollama</h3>""")
+
+                gr.Markdown("""<h3>⚙️ Настройки нейросетей и серверов Ollama/Uvicorn</h3>""")
 
                 with gr.Column():
                     status = gr.Textbox(lines=1,
@@ -2168,8 +2131,9 @@ def main():
                     btn_save_c3.click(lambda txt: fn_save_prompt("LABEL_PRIORITY", txt),
                                       prompt_code_c3, status)
 
+                # ---------------------
                 # с4: MODULES
-
+                # ---------------------
                 with gr.Row():
                     with gr.Accordion(label="MODULES: The names of agents's functions", open=False):
                         prompt_code_c4 = gr.Code(
@@ -2189,6 +2153,27 @@ def main():
 
                     # btn_save_c4.click(lambda txt: fn_save_prompt("MODULES", txt),
                     #                   prompt_code_c3, status,)
+
+                # ---------------------------------
+                # Whisper general prompt section
+                # ---------------------------------
+
+                with gr.Row():
+                    with gr.Accordion(label="📖 Словарь фамилий, терминов и профессий для системы перевода речи в текст", open=False):
+                        prompt_code_whisper = gr.Code(
+                            value=w.load_prompt(),
+                            language=None,
+                            label="Whisper",
+                            interactive=True,
+                            lines=50,
+                            scale=4,
+                        )
+
+                        with gr.Row():
+                            load_btn = gr.Button("📥 Загрузить", size="sm", variant="primary")
+                            save_btn = gr.Button("📤 Сохранить", size="sm", variant="secondary")
+                        load_btn.click(fn=w.load_prompt, inputs=None, outputs=prompt_code_whisper)
+                        save_btn.click(fn=w.save_prompt, inputs=prompt_code_whisper, )
 
             # ---------------------------------------
             # Вкладка 5 -- Benchmarking
