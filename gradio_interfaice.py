@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
-from typing import Dict, List, Union, Tuple, Literal, Any
+from typing import Dict, List, Union, Tuple, Literal, Any, Optional
 
 import gradio as gr
 from gradio_pdf import PDF
@@ -576,23 +576,48 @@ def validate_id_live(current: str) -> dict[str, Any]:
 # GRADIO WRAPPING functions section
 # ------------------------------------
 
-def update_docs_in_meili_index(index_name: str, output: Literal["full", "id_only"] = "full"):
+def update_docs_in_meili_index(
+        index_name: str,
+        output: Literal["full", "id_only"] = "full",
+        current_id: Optional[str] = None,
+):
     """
-    Функция-обработчик для .change события:
-    При выборе индекса возвращает обновлённый список документов в этом индексе
-    для выпадающего списка документов (meili_content_of_index_dropdown).
+    Обновляет содержимое индекса Meilisearch для UI:
+    - full: возвращает (таблица, dropdown c ID)
+    - id_only: возвращает только dropdown c ID
+    optional current_id: какой ID сделать выбранным, если он есть в списке.
     """
 
+    # Если индекса нет (пустой дропдаун) — сразу отдаем пустые значения
+    if not index_name:
+        empty_ids: list[str] = []
+        if output == "full":
+            return (
+                gr.update(value=[]),  # таблица
+                gr.update(choices=empty_ids, value="")  # dropdown
+            )
+        else:
+            return gr.update(choices=empty_ids, value="")
+
+    # Список документов: "All" = табличные данные, "ID" = список ID
     full_list = existed_docs_in_selected_index(index_name, return_type="All")
-    id_list = existed_docs_in_selected_index(index_name, return_type="ID")
+    id_list = existed_docs_in_selected_index(index_name, return_type="ID") or []
+
+    # Какой value выбрать по умолчанию
+    if current_id and current_id in id_list:
+        value = current_id
+    else:
+        value = id_list[0] if id_list else ""
 
     if output == "full":
+        # 1) таблица, 2) dropdown по ID
         return (
-            gr.update(value=full_list, ),
-            gr.update(choices=id_list, value=(id_list[0] if id_list else "нет данных")),
+            gr.update(value=full_list),
+            gr.update(choices=id_list, value=value),
         )
     else:
-        return gr.update(choices=id_list, value=(id_list[0] if id_list else "нет данных"))
+        # Только dropdown по ID
+        return gr.update(choices=id_list, value=value)
 
 
 def update_docs_in_chroma_collection(collection_name: str):
@@ -1049,13 +1074,16 @@ def main():
                                                             variant="primary",
                                                             )
 
-                # ----------------------------------------------------
+                # --------------------------------------------------------------------------------
                 # Секция оформления страницы - конструктора документа
-                # ----------------------------------------------------
+                # --------------------------------------------------------------------------------
 
                 # единый state вместо отдельных переменных для хранения документов прямой загрузки
                 meta_state = gr.State(
                     value=None)  # dict: {"doc_id": str, "index": str, "blocks": list[dict]}
+
+                DEFAULT_EMPTY_TABLE = [["", ""], ["", ""], ["", ""]]
+
                 table_state = gr.State(value=[["", ""], ["", ""], ["", ""]])
 
                 with gr.Accordion(label="Форма для добавления информации в базу знаний Meilisearch",
@@ -1301,38 +1329,41 @@ def main():
                     )
 
                     def save_and_send_to_meilisearch(meta):
-
                         if not meta:
                             gr.Warning("Нет данных (сделайте Предпросмотр)", title="Предупреждение")
-                            return None
+                            return gr.update()  # для id_select
 
                         index_name = meta["index"]
                         _blocks = meta["blocks"]
+                        doc_id = meta["doc_id"]
+
                         if not index_name:
                             gr.Warning("Не выбран индекс", title="Предупреждение")
-                            return None
+                            return gr.update()
 
                         if not _blocks:
                             gr.Warning("Пустой массив блоков", title="Предупреждение")
-                            return None
+                            return gr.update()
 
                         msg: str = ""
                         try:
                             msg = meilisearch.add_doc_to_meili(_blocks, index_name)
-
                         except Exception as e:
-                            gr.Error(f"{e}, сообщение от сервера Meilisearch: {msg}",
-                                     title="Ошибка!")
-                            return None
+                            gr.Error(f"{e}, сообщение от сервера Meilisearch: {msg}", title="Ошибка!")
+                            return gr.update()
+
                         gr.Success(
-                            f"✅ '{meta['doc_id']}', добавлено {len(_blocks)} блок(ов) в '{index_name}', "
-                            f"сообщение от сервера  Meilisearch: {msg}", title="Успешно")
-                        return None
+                            f"✅ '{doc_id}', добавлено {len(_blocks)} блок(ов) в '{index_name}', "
+                            f"сообщение от сервера  Meilisearch: {msg}", title="Успешно"
+                        )
+
+                        # 🔄 обновляем dropdown с ID, выставляя только что созданный doc_id
+                        return update_docs_in_meili_index(index_name, output="id_only", current_id=doc_id)
 
                     save_button.click(
                         save_and_send_to_meilisearch,
                         inputs=[meta_state],
-
+                        outputs=[id_select],  # 🆕 обновляем dropdown выбора ID для редактирования
                     )
                     # ------------------------------
                     # живой валидатор на каждый ввод
@@ -1379,12 +1410,32 @@ def main():
 
                     def vanish_all_windows():
                         gr.Info("Все окна очищены, готов к загрузке нового документа", title="Инфо")
-                        return "", "", "", "", [["", ""], ["", ""], ["", ""]], "static", None, None, False
+                        return (
+                            "",  # id_input
+                            "",  # title_input
+                            "",  # content_input
+                            "",  # keywords_input
+                            DEFAULT_EMPTY_TABLE,  # table_df
+                            "static",  # doc_type_radio
+                            None,  # valid_from_dp
+                            None,  # valid_to_dp
+                            False,  # permanent_cb
+                            DEFAULT_EMPTY_TABLE,  # table_state  🆕
+                        )
 
                     vanish_screen_btn.click(
                         vanish_all_windows,
-                        outputs=[id_input, title_input, content_input, keywords_input, table_df,
-                                 doc_type_radio, valid_from_dp, valid_to_dp, permanent_cb]
+                        outputs=[id_input,
+                                 title_input,
+                                 content_input,
+                                 keywords_input,
+                                 table_df,
+                                 doc_type_radio,
+                                 valid_from_dp,
+                                 valid_to_dp,
+                                 permanent_cb,
+                                 table_state,  # 🆕
+                                 ]
                     )
 
                     # --------------------------------------------
@@ -1398,78 +1449,124 @@ def main():
                             return None
 
                     def load_doc_into_form_by_id(index_name: str, doc_id: str):
+                        """
+                        Загружает документ из Meilisearch по index_name + doc_id
+                        и подготавливает значения для формы редактирования.
+
+                        ВАЖНО: выбор в выпадающем списке id_select сохраняется (value=doc_id),
+                        даже если показываем предупреждения.
+                        """
+
+                        # 0. Базовая валидация входа
                         if not index_name:
                             gr.Warning("Укажите индекс", title="Предупреждение")
-                            return (gr.update(),) * 10
+                            # НИЧЕГО не меняем в форме, в т.ч. не трогаем id_select
+                            return (gr.update(),) * 10 + (gr.update(),)
+
                         if not doc_id:
                             gr.Warning("Укажите ID", title="Предупреждение")
-                            return (gr.update(),) * 10
+                            return (gr.update(),) * 10 + (gr.update(),)
 
+                        # 1. Получаем документ из Meilisearch
                         doc = meilisearch.get_document_by_id(index_name, doc_id)
                         if not doc:
                             gr.Warning("❌ Документ не найден", title="Предупреждение")
-                            return (gr.update(),) * 10  # Хороший способ уменьшить визуальные повторения
+                            return (gr.update(),) * 10 + (gr.update(),)
 
-                        # Подставляются дефолтные ключи
-                        title = doc.get("title", "")
-                        content = doc.get("content", "")
+                        # 2. Заголовок и контент (защита от None)
+                        title = doc.get("title") or ""
+                        content = doc.get("content") or ""
 
-                        # 👉 если поля нет — берём тип из выбранного индекса
-                        doc_type = doc.get("doc_type") or doc.get("type") or TYPE_FOR_INDEX.get(index_name, "static")
-                        # Устаревшая маркировка поля, больше не используется, конвертируем text -> static
+                        # 3. Нормализация типа документа с учётом индекса (миграция старых схем)
+                        idx_default_type = TYPE_FOR_INDEX.get(index_name, "static")  # "news" или "static"
+
+                        doc_type = doc.get("doc_type") or doc.get("type") or idx_default_type
+
+                        # Миграция старых документов:
+                        # - если type == "text" в индексе news → считаем документ новостью
+                        # - если type == "text" в других индексах → считаем статическим
                         if doc_type == "text":
-                            doc_type = "static"
+                            if idx_default_type == "news":
+                                doc_type = "news"
+                            else:
+                                doc_type = "static"
+
+                        # На всякий случай, если doc_type что-то странное — откатываем к дефолту индекса
+                        if doc_type not in ("news", "static"):
+                            doc_type = idx_default_type
+
                         is_news = (doc_type == "news")
 
-                        #
+                        # 4. Даты действия новости + флаг "Бессрочно"
                         vf = _parse_iso(doc.get("valid_from"))
                         vt = _parse_iso(doc.get("valid_to"))
                         is_perm = bool(doc.get("is_permanent", False))
-                        # если это news, но дат нет — подсказываем пользователю
+
+                        # Если это news, но дат нет и не отмечено "Бессрочно" — подсказываем,
+                        # НО при этом НИЧЕГО не сбрасываем в формах, всё ниже всё равно заполняется.
                         if is_news and not (vf or vt or is_perm):
                             gr.Warning(
-                                "Это документ из индекса 'news', но даты не заданы. Укажите период или отметьте 'Бессрочно'.",
-                                title="Требуются даты")
+                                "Это документ из индекса 'news', но даты не заданы. "
+                                "Укажите период или отметьте 'Бессрочно'.",
+                                title="Требуются даты",
+                            )
 
-                        keywords = doc.get("keywords", "")
-                        table_val = doc.get("table") or [["", ""], ["", ""], ["", ""]]
+                        # 5. Нормализация keywords:
+                        raw_keywords = doc.get("keywords", "")
+                        if isinstance(raw_keywords, list):
+                            keywords = ", ".join(str(k) for k in raw_keywords if k)
+                        else:
+                            keywords = str(raw_keywords or "")
 
+                        # 6. Таблица: если нет или None — ставим дефолтную
+                        table_val = doc.get("table") or DEFAULT_EMPTY_TABLE
+
+                        # 7. Сообщение об успехе
                         gr.Success(message="✅ Документ загружен", title="Успешно")
-                        # Важно: поставить тип документа и корректно показать/скрыть даты
 
-                        # Показываем даты и чекбокс только если news
-                        is_news = (doc_type == "news")
-
+                        # 8. Возвращаем значения для компонентов Gradio.
+                        #    Порядок должен соответствовать outputs в .click:
+                        #    [id_input, title_input, content_input,
+                        #     valid_from_dp, valid_to_dp, permanent_cb,
+                        #     keywords_input, table_df,
+                        #     doc_type_radio, news_dates_row,
+                        #     id_select]  ← последний — наша выпадайка с ID
                         return (
-                            gr.update(value=doc_id),
-                            gr.update(value=title),
-                            gr.update(value=content),
+                            gr.update(value=doc_id),  # id_input
+                            gr.update(value=title),  # title_input
+                            gr.update(value=content),  # content_input
 
                             gr.update(value=vf),  # valid_from_dp
                             gr.update(value=vt),  # valid_to_dp
                             gr.update(value=is_perm, visible=is_news),  # permanent_cb
 
-                            gr.update(value=keywords),
-                            gr.update(value=table_val),
-                            gr.update(value=doc_type),  # doc_type_radio ← новый выход
-                            gr.update(visible=is_news),  # news_dates_row ← новый выход
+                            gr.update(value=keywords),  # keywords_input
+                            gr.update(value=table_val),  # table_df
+
+                            gr.update(value=doc_type),  # doc_type_radio
+                            gr.update(visible=is_news),  # news_dates_row
+
+                            # 🧷 ВАЖНО: явно сохраняем выбор в dropdown ID
+                            gr.update(value=doc_id),  # id_select
                         )
 
                     # Обработка события загрузки документа в форму редактирования
                     load_doc_btn.click(
                         load_doc_into_form_by_id,
                         inputs=[index_dropdown, id_select],
-                        outputs=[id_input,  # 8 pcs
-                                 title_input,
-                                 content_input,
-                                 valid_from_dp,
-                                 valid_to_dp,
-                                 permanent_cb,
-                                 keywords_input,
-                                 table_df,
-                                 doc_type_radio,
-                                 news_dates_row,
-                                 ],
+                        outputs=[
+                            id_input,
+                            title_input,
+                            content_input,
+                            valid_from_dp,
+                            valid_to_dp,
+                            permanent_cb,
+                            keywords_input,
+                            table_df,
+                            doc_type_radio,
+                            news_dates_row,
+                            id_select,  # ← добавили сюда
+                        ],
                     )
 
                     #  ------------------------------------
@@ -1564,11 +1661,16 @@ def main():
 
                         if msg == "OK":
                             gr.Success("✅ Сохранено", title="Успешно")
-                            return None
+                            # 🔄 возвращаем обновлённый dropdown, оставляя выбранным этот же doc_id
+                            return update_docs_in_meili_index(index_name, output="id_only", current_id=doc_id)
+
+                            # возвращаем обновление для id_select
+                            # return gr.update(choices=ids_only, value=doc_id)
 
                         else:
                             gr.Error(f"❌ {msg}", title="Ошибка!")
-                            return None
+                            # Ничего не меняем в интерфейсе
+                            return gr.update()
 
                     save_doc_btn_direct.click(
                         save_doc_by_id,
@@ -1582,6 +1684,7 @@ def main():
                                 permanent_cb,  # 8) permanent
                                 keywords_input,  # 9) keywords
                                 table_state],  # 10) table
+                        outputs=[id_select],  # обновление для id_select
                     )
 
                 # ToDo: Доделать с учетом date
@@ -2159,7 +2262,8 @@ def main():
                 # ---------------------------------
 
                 with gr.Row():
-                    with gr.Accordion(label="📖 Словарь фамилий, терминов и профессий для системы перевода речи в текст", open=False):
+                    with gr.Accordion(label="📖 Словарь фамилий, терминов и профессий для системы перевода речи в текст",
+                                      open=False):
                         prompt_code_whisper = gr.Code(
                             value=w.load_prompt(),
                             language=None,
