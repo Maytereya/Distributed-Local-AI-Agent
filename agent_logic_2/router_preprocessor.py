@@ -57,6 +57,7 @@ INDEX_BY_LABEL: dict[str, str] = {
 LABEL_DOC = load_prompt("LABEL_DOC", False)
 RAW_MODE_MARKER = "<NO_POSTPROC>"
 EXAMPLES = load_prompt("EXAMPLES", False)
+KNOWLEDGE_MARKER = "{KNOWLEDGE_SNIPPET}"
 ITEM_MARKER = "⊢ID:"
 SEGMENT_SEPARATOR = "\n\n— — —\n\n"
 
@@ -712,6 +713,14 @@ def _safe_format(template: str, **kwargs) -> str:
     return template.format(**kwargs)
 
 
+def _strip_service_markers(text: str) -> str:
+    """Удаляет служебные маркеры из выходного текста перед отправкой пользователю."""
+    if not isinstance(text, str):
+        return text
+    cleaned = text.replace(KNOWLEDGE_MARKER, "")
+    return cleaned.replace("{{KNOWLEDGE_SNIPPET}}", "")
+
+
 # --- robust JSON extraction without PCRE recursion ---
 
 def _extract_json_object(text: str):
@@ -981,6 +990,7 @@ async def final_answering(primary_request: str,
             )
             async for chunk in stream:
                 partial += chunk["response"]
+                partial = _strip_service_markers(partial)
                 yield partial
 
         except (asyncio.CancelledError, GeneratorExit):
@@ -998,6 +1008,7 @@ async def final_answering(primary_request: str,
             async for chunk in stream:
                 delta = chunk.choices[0].delta.content or ""
                 partial += delta
+                partial = _strip_service_markers(partial)
                 yield partial
 
         except (asyncio.CancelledError, GeneratorExit):
@@ -1073,7 +1084,7 @@ async def instructions_search(_text: str,
         return RAW_MODE_MARKER + "\n" + clean_info, False
     # Добавление маркера для лучшего распознавания LLM
     marker = "[MANAGER_INFO]\n" if manager_mode else ""
-    marked_info = "{KNOWLEDGE_SNIPPET}" + "\n" + marker + clean_info
+    marked_info = KNOWLEDGE_MARKER + "\n" + marker + clean_info
     return marked_info, False
 
 
@@ -1115,14 +1126,15 @@ async def news_search(text: str, think: bool | None = None, index: str = "news",
     )
 
     if not hits:
-        return "Сейчас нет активных новостей/акций по заданным критериям.", False
+        return KNOWLEDGE_MARKER + "\nСейчас нет активных новостей/акций по заданным критериям.", False
 
     lines = [_fmt_news(h) for h in hits]
     # Помечаем как «сырое содержимое» — минуется final_answering для теста
     # payload = "<NO_POSTPROC>\n" + "\n\n---\n\n".join(lines)
     payload = "\n\n---\n\n".join(lines)
+    marked_payload = KNOWLEDGE_MARKER + "\n" + payload
     # logger.info(payload)
-    return payload, False
+    return marked_payload, False
 
 
 # ────────────────────────────────────────────────
@@ -1167,7 +1179,7 @@ async def handle_pending_module(text: str, sess: SessionType, think: bool | None
         # но это не точно, поскольку этот обработчик есть у вызываемых функций.
         response, continue_pending = await MODULES[pending_module](text, **kwargs)
         sess["pending"] = pending_module if continue_pending else None
-
+        response = _strip_service_markers(response)
         sess["history"].extend([
             {"user": text},
             {"bot": response}
@@ -1519,6 +1531,7 @@ async def routing(text: str,
     if isinstance(result, str) and (RAW_MODE_MARKER in result):
         # отдаём как есть, без постпроцесса (final_answering)
         cleaned = result.replace(RAW_MODE_MARKER, "").lstrip("\n\r ")
+        cleaned = _strip_service_markers(cleaned)
         yield cleaned, sess
         return
 
@@ -1527,7 +1540,7 @@ async def routing(text: str,
             yield partial, sess
             yield partial, sess  # Stream final response V1 with processing by final_answering func.
     else:
-        yield result, sess  # Stream final response V2 without handling by final_answering func.
+        yield _strip_service_markers(result), sess  # Stream final response V2 without handling by final_answering func.
 
 
 async def process_routing_request(query: str, think: bool | None = None) -> Tuple[str, Dict[str, Any]]:
