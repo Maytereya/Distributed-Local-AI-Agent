@@ -544,32 +544,67 @@ def gr_create_index(index_name: str):
 
 
 def gr_rm_doc_from_index(ind_id: str, doc_id: str):
-    meilisearch.delete_meili_document(ind_id, doc_id)
-    id_list = existed_docs_in_selected_index(gr_existed_indexes()[0], return_type="ID")
-    full_list = existed_docs_in_selected_index(gr_existed_indexes()[0], return_type="All")
-    gr.Success(message=f"Документ с ID {ind_id} удален", title="Успешно")
-    return (
-        gr.update(choices=id_list, ),
-        gr.update(value=full_list, ),
+    """
+    Удаляет документ из индекса Meilisearch и показывает человеко-понятное сообщение.
+    НЕ обновляет UI (выпадайки/таблицы) — этим занимается обёртка rm_doc_and_refresh_all.
+    """
+
+    if not ind_id:
+        gr.Warning("Не выбран индекс для удаления", title="Предупреждение")
+        return
+
+    if not doc_id:
+        gr.Warning("Не выбран документ для удаления", title="Предупреждение")
+        return
+
+    # Пробуем заранее получить документ, чтобы красиво вывести заголовок
+    doc = None
+    try:
+        doc = meilisearch.get_document_by_id(ind_id, doc_id)
+    except Exception as e:
+        gr.Warning(f"Не удалось получить документ перед удалением: {e}", title="Предупреждение")
+
+    if doc:
+        title = doc.get("title") or doc.get("doc_id") or doc_id
+        if not title:
+            content = (doc.get("content") or "").strip()
+            if content:
+                title = content[:60] + ("…" if len(content) > 60 else "")
+    else:
+        title = doc_id
+
+    try:
+
+        meilisearch.delete_meili_document(ind_id, doc_id)
+    except Exception as e:
+        gr.Error(f"Ошибка при удалении документа: {e}", title="Ошибка!")
+        return
+
+    gr.Success(
+        message=f"🗑 Документ «{title}» (ID: {doc_id}) удалён из индекса '{ind_id}'.",
+        title="Успешно",
     )
 
 
-def validate_id_live(current: str) -> dict[str, Any]:
-    """
-    Живой валидатор для id_input: если строка уже валидна — оставляем,
-    если нет — предлагаем «почищенную» версию.
-    Возвращаем (value для id_input, статус).
-    """
-    if is_valid_id(current):
-        gr.Info("ID валиден", title="Инфо")
-        return gr.update(value=current)
-    proposal = sanitize_id(current or "")
-    # если пусто — не подменяем молча
-    if proposal and proposal != current:
-        gr.Info("ID нормализован автоматически", title="Инфо")
-        return gr.update(value=proposal)
-    gr.Warning("Некорректный ID. Разрешены: [a-z0-9_], длина 3–60", title="Предупреждение")
-    return gr.update(value=current)
+def validate_id_live(current: str, mode: Literal["create", "change"]):
+    current = (current or "").strip()
+
+    # 1️⃣ В режиме "Редактировать" ID не валидируем
+    if mode == "change":
+        return gr.update()
+
+    # 2️⃣ Пустой ID – молча игнорируем
+    if not current:
+        return gr.update()
+
+    # 3️⃣ Остальное – как раньше
+    if not is_valid_id(current):
+        gr.Warning("Некорректный ID. Разрешены: [a-z0-9_], длина 3–60", title="Предупреждение")
+        return gr.update()
+
+    # Можно ничего не показывать на корректный ID
+    # gr.Info("ID корректен", title="OK")
+    return gr.update()
 
 
 # ------------------------------------
@@ -1081,6 +1116,9 @@ def main():
                 # единый state вместо отдельных переменных для хранения документов прямой загрузки
                 meta_state = gr.State(
                     value=None)  # dict: {"doc_id": str, "index": str, "blocks": list[dict]}
+                # отдельный state для хранения ID документа
+                # для работы переименования в редакторе документов
+                orig_doc_id_state = gr.State(value=None)
 
                 DEFAULT_EMPTY_TABLE = [["", ""], ["", ""], ["", ""]]
 
@@ -1328,50 +1366,129 @@ def main():
                         outputs=[preview_json, meta_state],
                     )
 
-                    def save_and_send_to_meilisearch(meta):
+                    def save_and_send_to_meilisearch(meta, meili_view_index: str):
+                        """
+                        Сохраняет блоки в Meilisearch (режим конструктора с предпросмотром)
+                        и обновляет UI:
+
+                          - id_select в конструкторе
+                          - dropdown и таблицу в секции просмотра/удаления (если индекс совпадает)
+                          - очищает поля конструктора (ID, заголовок, контент, keywords)
+                          - очищает и скрывает preview_json
+                          - сбрасывает meta_state
+                        """
+
+                        # нет подготовленных данных
                         if not meta:
                             gr.Warning("Нет данных (сделайте Предпросмотр)", title="Предупреждение")
-                            return gr.update()  # для id_select
+                            # порядок: id_select, dropdown_del, table, id_input, title, content, keywords, preview_json, permanent_cb, meta_state
+                            return (
+                                gr.update(),  # id_select
+                                gr.update(),  # meili_content_of_index_dropdown
+                                gr.update(),  # meili_indices_table
+                                gr.update(),  # id_input
+                                gr.update(),  # title_input
+                                gr.update(),  # content_input
+                                gr.update(),  # keywords_input
+                                gr.update(),  # preview_json
+                                gr.update(), # cb - бессрочно
+                                meta,  # meta_state оставляем как есть
+                            )
 
-                        index_name = meta["index"]
-                        _blocks = meta["blocks"]
-                        doc_id = meta["doc_id"]
+                        index_name = meta.get("index")
+                        blocks = meta.get("blocks") or []
+                        doc_id = meta.get("doc_id")
 
                         if not index_name:
                             gr.Warning("Не выбран индекс", title="Предупреждение")
-                            return gr.update()
+                            return (
+                                gr.update(), gr.update(), gr.update(),
+                                gr.update(), gr.update(), gr.update(), gr.update(),
+                                gr.update(), gr.update(), meta,
+                            )
 
-                        if not _blocks:
+                        if not blocks:
                             gr.Warning("Пустой массив блоков", title="Предупреждение")
-                            return gr.update()
+                            return (
+                                gr.update(), gr.update(), gr.update(),
+                                gr.update(), gr.update(), gr.update(), gr.update(),
+                                gr.update(), gr.update(), meta,
+                            )
 
                         msg: str = ""
                         try:
-                            msg = meilisearch.add_doc_to_meili(_blocks, index_name)
+                            msg = meilisearch.add_doc_to_meili(blocks, index_name)
                         except Exception as e:
                             gr.Error(f"{e}, сообщение от сервера Meilisearch: {msg}", title="Ошибка!")
-                            return gr.update()
+                            return (
+                                gr.update(), gr.update(), gr.update(),
+                                gr.update(), gr.update(), gr.update(), gr.update(),
+                                gr.update(), gr.update(), meta,
+                            )
 
                         gr.Success(
-                            f"✅ '{doc_id}', добавлено {len(_blocks)} блок(ов) в '{index_name}', "
-                            f"сообщение от сервера  Meilisearch: {msg}", title="Успешно"
+                            f"✅ '{doc_id}', добавлено {len(blocks)} блок(ов) в '{index_name}', "
+                            f"сообщение от сервера Meilisearch: {msg}",
+                            title="Успешно",
                         )
 
-                        # 🔄 обновляем dropdown с ID, выставляя только что созданный doc_id
-                        return update_docs_in_meili_index(index_name, output="id_only", current_id=doc_id)
+                        # 1) обновляем id_select в конструкторе
+                        id_select_update = update_docs_in_meili_index(
+                            index_name,
+                            output="id_only",
+                            current_id=doc_id,
+                        )
 
-                    save_button.click(
-                        save_and_send_to_meilisearch,
-                        inputs=[meta_state],
-                        outputs=[id_select],  # 🆕 обновляем dropdown выбора ID для редактирования
-                    )
+                        # 2) если выбранный в секции просмотра индекс совпадает — обновляем и её
+                        if meili_view_index == index_name:
+                            table_update, dropdown_update = update_docs_in_meili_index(
+                                index_name,
+                                output="full",
+                            )
+                        else:
+                            table_update = gr.update()
+                            dropdown_update = gr.update()
+
+                        # 3) очищаем поля конструктора
+                        id_input_update = gr.update(value="")
+                        title_update = gr.update(value="")
+                        content_update = gr.update(value="")
+                        keywords_update = gr.update(value="")
+                        permanent_cb_upd = gr.update(value=False)
+
+                        # 4) очищаем и прячем предпросмотр
+                        preview_update = gr.update(visible=False, value=None)
+
+                        # 5) сбрасываем meta_state
+                        meta_out = None
+
+                        # порядок outputs:
+                        # [id_select, meili_content_of_index_dropdown, meili_indices_table,
+                        #  id_input, title_input, content_input, keywords_input,
+                        #  preview_json, permanent_cb, meta_state]
+                        return (
+                            id_select_update,
+                            dropdown_update,
+                            table_update,
+                            id_input_update,
+                            title_update,
+                            content_update,
+                            keywords_update,
+                            preview_update,
+                            permanent_cb_upd,
+                            meta_out,
+                        )
+
+
                     # ------------------------------
                     # живой валидатор на каждый ввод
                     # ------------------------------
 
-                    id_input.change(validate_id_live, inputs=[id_input], outputs=[id_input,
-                                                                                  # status_output
-                                                                                  ])
+                    id_input.change(
+                        validate_id_live,
+                        inputs=[id_input, io_radio],  # 🆕 передаем текущий режим (редактир или создание)
+                        outputs=[id_input],
+                    )
 
                     # ------------------------------
                     # ручная нормализация
@@ -1411,7 +1528,9 @@ def main():
                     def vanish_all_windows():
                         gr.Info("Все окна очищены, готов к загрузке нового документа", title="Инфо")
                         return (
+                            gr.update(value="create"),  # io_radio → режим "Создать"
                             "",  # id_input
+                            gr.update(value=""),  # id_select: сбрасываем выбранный ID (choices не трогаем)
                             "",  # title_input
                             "",  # content_input
                             "",  # keywords_input
@@ -1420,22 +1539,27 @@ def main():
                             None,  # valid_from_dp
                             None,  # valid_to_dp
                             False,  # permanent_cb
-                            DEFAULT_EMPTY_TABLE,  # table_state  🆕
+                            gr.update(visible=False, value=None),  # preview_json: спрятать и очистить
+                            None,  # meta_state: сброс
                         )
 
                     vanish_screen_btn.click(
                         vanish_all_windows,
-                        outputs=[id_input,
-                                 title_input,
-                                 content_input,
-                                 keywords_input,
-                                 table_df,
-                                 doc_type_radio,
-                                 valid_from_dp,
-                                 valid_to_dp,
-                                 permanent_cb,
-                                 table_state,  # 🆕
-                                 ]
+                        outputs=[
+                            io_radio,  # 🆕 переключаем на "Создать"
+                            id_input,
+                            id_select,  # 🆕 очищаем выбор ID
+                            title_input,
+                            content_input,
+                            keywords_input,
+                            table_df,
+                            doc_type_radio,
+                            valid_from_dp,
+                            valid_to_dp,
+                            permanent_cb,
+                            preview_json,  # 🆕 очищаем и прячем
+                            meta_state,  # 🆕 сбрасываем
+                        ],
                     )
 
                     # --------------------------------------------
@@ -1548,6 +1672,7 @@ def main():
 
                             # 🧷 ВАЖНО: явно сохраняем выбор в dropdown ID
                             gr.update(value=doc_id),  # id_select
+                            gr.update(value=doc_id),  # 🆕 orig_doc_id_state
                         )
 
                     # Обработка события загрузки документа в форму редактирования
@@ -1566,6 +1691,7 @@ def main():
                             doc_type_radio,
                             news_dates_row,
                             id_select,  # ← добавили сюда
+                            orig_doc_id_state,  # 🆕
                         ],
                     )
 
@@ -1574,25 +1700,69 @@ def main():
                     # редактирования
                     #  ------------------------------------
 
-                    def save_doc_by_id(doc_type: Literal["static", "news", "text"], index_name: str, doc_id: str,
-                                       title: str,
-                                       content: str,
-                                       valid_from, valid_to,
-                                       permanent, keywords: str, table):
+                    def save_doc_by_id(
+                            doc_type: Literal["static", "news", "text"],
+                            index_name: str,
+                            current_doc_id: str,  # текущее значение ID (пользователь мог изменить)
+                            orig_doc_id: str | None,  # исходный ID документа, который был загружен для редактирования
+                            title: str,
+                            content: str,
+                            valid_from,
+                            valid_to,
+                            permanent,
+                            keywords: str,
+                            table,
+                    ):
                         """
-                        Важен актуальный формат исходящего документа: новость или скрипт
-                        :param doc_type:
-                        :param index_name:
-                        :param doc_id:
-                        :param title:
-                        :param content:
-                        :param valid_from:
-                        :param valid_to:
-                        :param permanent:
-                        :param keywords:
-                        :param table:
-                        :return:
+                        Сохраняет (upsert) документ в индексе Meilisearch в режиме редактирования.
+
+                        Поддерживает смену ID:
+                          * current_doc_id — ID из интерфейса (id_select), пользователь может его изменить;
+                          * orig_doc_id — исходный ID документа, загруженного для редактирования.
+                            Если после сохранения current_doc_id != orig_doc_id, старый документ
+                            удаляется из индекса (реализация "переименования" ID).
+
+                        Возвращает:
+                          * gr.update(...) для обновления выпадающего списка ID (id_select) —
+                            в нём будет актуальный список документов, с выбранным текущим doc_id.
                         """
+
+                        # ---------------- Базовая подготовка и валидация ----------------
+
+                        doc_id = (current_doc_id or "").strip()
+                        orig_id = (orig_doc_id or "").strip() if orig_doc_id is not None else None
+
+                        if not index_name:
+                            gr.Warning("Укажите индекс", title="Предупреждение")
+                            return gr.update()
+
+                        # валидация нового ID (при создании или переименовании)
+                        if not doc_id or not is_valid_id(doc_id):
+                            gr.Warning("Некорректный ID (разрешено [a-z0-9_], длина 3–60).", title="Предупреждение")
+                            return gr.update()
+
+                        if not title:
+                            gr.Warning("Создайте заголовок", title="Предупреждение")
+                            return gr.update()
+
+                        if not content:
+                            gr.Warning("Создайте контент", title="Предупреждение")
+                            return gr.update()
+
+                        # ---------------- Нормализация doc_type относительно индекса ----------------
+
+                        expected_type = TYPE_FOR_INDEX.get(index_name, "static")  # "news" или "static"
+
+                        # устаревшее значение "text" трактуем как тип индекса
+                        if doc_type == "text":
+                            doc_type = expected_type
+
+                        if doc_type != expected_type:
+                            doc_type = expected_type
+                            gr.Warning("Тип документа приведён к выбранному индексу.", title="Предупреждение")
+
+                        # ---------------- Базовый каркас документа ----------------
+
                         base_doc: dict[str, Any] = {
                             "id": doc_id,
                             "title": title or "",
@@ -1600,49 +1770,31 @@ def main():
                             "keywords": keywords or "",
                             "table": table or [],
                         }
-                        # Жесткая проверка на соответствие индекса функционалу
-                        expected_type = TYPE_FOR_INDEX.get(index_name, "static")
-                        if doc_type != expected_type:
-                            # жёстко приводим
-                            doc_type = expected_type
-                            gr.Warning("Тип документа приведён к выбранному индексу.", title="Предупреждение")
 
-                        if not index_name:
-                            gr.Warning("Укажите индекс", title="Предупреждение")
-                            return None
-                        if not doc_id or not is_valid_id(doc_id):
-                            gr.Warning("Некорректный ID (разрешено [a-z0-9_], длина 3–60).", title="Предупреждение")
-                            return None
-                        if not title:
-                            gr.Warning("Создайте заголовок", title="Предупреждение")
-                            return None
-                        if not content:
-                            gr.Warning("Создайте контент", title="Предупреждение")
-                            return None
-
-                        # формирование документа в зависимости от его типа
-                        # по умолчанию загрузится static
+                        # ---------------- Формирование полей для новостей ----------------
 
                         if doc_type == "news":
-                            # нормализуем к UTC/ISO/ts
                             def _to_utc(dt):
-                                if dt is None: return None
+                                if dt is None:
+                                    return None
                                 return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
                             if permanent:
+                                # бессрочная новость: нужна дата начала
                                 if not valid_from:
-                                    gr.Warning("Уточните дату начала", title="Предупреждение");
-                                    return None
+                                    gr.Warning("Уточните дату начала", title="Предупреждение")
+                                    return gr.update()
                                 vf = _to_utc(valid_from)
                                 vt = datetime(2099, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
                             else:
+                                # ограниченный период — нужны обе даты
                                 if not valid_from or not valid_to:
-                                    gr.Warning("Укажите обе даты или отметьте 'Бессрочно'", title="Предупреждение");
-                                    return None
+                                    gr.Warning("Укажите обе даты или отметьте 'Бессрочно'", title="Предупреждение")
+                                    return gr.update()
                                 vf, vt = _to_utc(valid_from), _to_utc(valid_to)
                                 if vf > vt:
-                                    gr.Warning("Дата 'с' позже даты 'по'", title="Предупреждение");
-                                    return None
+                                    gr.Warning("Дата 'с' позже даты 'по'", title="Предупреждение")
+                                    return gr.update()
 
                             base_doc.update({
                                 "doc_type": "news",
@@ -1653,41 +1805,61 @@ def main():
                                 "is_permanent": bool(permanent),
                             })
                         else:
-                            base_doc.update({"doc_type": "static"})  # Важный момент! Возможно
-                            # тут ошибка в связи с несоответствием с полем в Индексе: doc_type -> type
-                            # print("Base_doc: ", base_doc)
+                            # все остальные документы — статические
+                            base_doc.update({"doc_type": "static"})
 
-                        msg = meilisearch.upsert_document(index_name, base_doc)
+                        # ---------------- Переименование ID: удаляем старый (если нужен) ----------------
 
-                        if msg == "OK":
-                            gr.Success("✅ Сохранено", title="Успешно")
-                            # 🔄 возвращаем обновлённый dropdown, оставляя выбранным этот же doc_id
-                            return update_docs_in_meili_index(index_name, output="id_only", current_id=doc_id)
+                        # Флаг переименования: старый ID есть и он отличается от нового
+                        is_rename = bool(orig_id) and (orig_id != doc_id)
 
-                            # возвращаем обновление для id_select
-                            # return gr.update(choices=ids_only, value=doc_id)
+                        if is_rename:
+                            # маленький маячок, чтобы в логах было видно, что ветка переименования сработала
+                            gr.Info(f"Переименование документа: старый ID = {orig_id}, новый ID = {doc_id}",
+                                    title="Инфо")
 
-                        else:
-                            gr.Error(f"❌ {msg}", title="Ошибка!")
-                            # Ничего не меняем в интерфейсе
+                            # ВАРИАНТ: сначала удалить старый документ, потом сохранить новый
+                            try:
+                                print("DEBUG RENAME:", index_name, orig_id, "->", doc_id)
+                                meilisearch.delete_meili_document(index_name, orig_id)
+                            except Exception as e:
+                                gr.Warning(
+                                    f"Не удалось удалить старый документ с ID {orig_id}: {e}",
+                                    title="Предупреждение",
+                                )
+                                # продолжаем, всё равно попробуем сохранить документ с новым ID
+
+                        # ---------------- Сохранение в Meilisearch ----------------
+
+                        try:
+                            msg = meilisearch.upsert_document(index_name, base_doc)
+                        except Exception as e:
+                            gr.Error(f"Ошибка при сохранении документа: {e}", title="Ошибка!")
                             return gr.update()
+
+                        gr.Success(f"✅ Сохранено (ответ сервера: {msg})", title="Успешно")
+
+                        # ---------------- Обновление выпадайки ID ----------------
+
+                        # Всегда возвращаем обновлённый список ID, с выбранным текущим doc_id
+                        return update_docs_in_meili_index(index_name, output="id_only", current_id=doc_id)
 
                     save_doc_btn_direct.click(
                         save_doc_by_id,
                         inputs=[doc_type_radio,  # 1) doc_type
                                 index_dropdown,  # 2) index_name
-                                id_select,  # 3) doc_id
-                                title_input,  # 4) title
-                                content_input,  # 5) content
-                                valid_from_dp,  # 6) valid_from
-                                valid_to_dp,  # 7) valid_to
-                                permanent_cb,  # 8) permanent
-                                keywords_input,  # 9) keywords
-                                table_state],  # 10) table
+                                id_select,       # 3) current_doc_id (может быть изменён)
+                                orig_doc_id_state,# 4) исходный ID
+                                title_input,      # 5) title
+                                content_input,   # 6) content
+                                valid_from_dp,  # 7) valid_from
+                                valid_to_dp,  # 8) valid_to
+                                permanent_cb,  # 9) permanent
+                                keywords_input,  # 10) keywords
+                                table_state],  # 11) table
                         outputs=[id_select],  # обновление для id_select
                     )
 
-                # ToDo: Доделать с учетом date
                 # ----------------------------------------------------
                 # Функционал селектора (radio) Создать/редактировать
                 # ----------------------------------------------------
@@ -1899,6 +2071,23 @@ def main():
                 # --------------------------------------
                 # Event handlers of Meilisearch
                 # --------------------------------------
+                # Клик - ивент пришлось унести сюда поскольку meili_ind_for_cont_dropdown расположен низко.
+                save_button.click(
+                    save_and_send_to_meilisearch,
+                    inputs=[meta_state, meili_ind_for_cont_dropdown],
+                    outputs=[
+                        id_select,  # 1
+                        meili_content_of_index_dropdown,  # 2
+                        meili_indices_table,  # 3
+                        id_input,  # 4 — очистить ID
+                        title_input,  # 5 — очистить заголовок
+                        content_input,  # 6 — очистить текст
+                        keywords_input,  # 7 — очистить keywords
+                        preview_json,  # 8 — очистить/спрятать JSON
+                        permanent_cb, # 9 убрать галочку бессрочно, если она есть
+                        meta_state,  # 10 — сбросить state
+                    ],
+                )
 
                 rm_index_button.click(
                     gr_remove_index,
@@ -1932,10 +2121,67 @@ def main():
                     outputs=[pdf, json_file, upload_indices_dropdown, meili_search_indexes_dropdown]
                 )
 
+                # ------------------------------------------
+                def rm_doc_and_refresh_all(
+                        index_for_delete: str,
+                        doc_id_to_delete: str,
+                        constructor_index: str,
+                        constructor_current_id: str | None,
+                ):
+                    """
+                    1) Удаляет документ (через gr_rm_doc_from_index).
+                    2) Обновляет:
+                       - dropdown "Выбрать документ по ID для удаления"
+                       - таблицу содержимого индекса
+                       - dropdown id_select в конструкторе (если индекс тот же).
+                    """
+
+                    # 1. Удаляем документ (сообщения об успехе/ошибке внутри)
+                    gr_rm_doc_from_index(index_for_delete, doc_id_to_delete)
+
+                    if not index_for_delete:
+                        # Индекса нет — ничего не трогаем
+                        return gr.update(), gr.update(), gr.update()
+
+                    # 2. Обновляем содержимое индекса (просмотр/удаление)
+                    # update_docs_in_meili_index(output="full") возвращает (table_update, dropdown_update)
+                    table_update, dropdown_update = update_docs_in_meili_index(
+                        index_for_delete,
+                        output="full",
+                    )
+
+                    # Но в .click у нас порядок outputs: [meili_content_of_index_dropdown, meili_indices_table, id_select]
+                    # Поэтому dropdown_update пойдёт первым, а table_update — вторым.
+
+                    # 3. Обновляем конструктор, если он смотрит на тот же индекс
+                    if constructor_index == index_for_delete:
+                        constructor_dd_update = update_docs_in_meili_index(
+                            constructor_index,
+                            output="id_only",
+                            current_id=constructor_current_id,
+                        )
+                    else:
+                        constructor_dd_update = gr.update()
+
+                    return (
+                        dropdown_update,  # meili_content_of_index_dropdown
+                        table_update,  # meili_indices_table
+                        constructor_dd_update,  # id_select (конструктор)
+                    )
+
                 rm_doc_from_index_button.click(
-                    gr_rm_doc_from_index,
-                    inputs=[meili_ind_for_cont_dropdown, meili_content_of_index_dropdown],
-                    outputs=[meili_content_of_index_dropdown, meili_indices_table]
+                    rm_doc_and_refresh_all,
+                    inputs=[
+                        meili_ind_for_cont_dropdown,  # индекс для удаления
+                        meili_content_of_index_dropdown,  # ID документа для удаления
+                        index_dropdown,  # индекс из конструктора
+                        id_select,  # текущий ID в конструкторе
+                    ],
+                    outputs=[
+                        meili_content_of_index_dropdown,  # dropdown "Выбрать документ по ID для удаления"
+                        meili_indices_table,  # таблица "Содержание выбранного Индекса"
+                        id_select,  # dropdown ID в конструкторе
+                    ],
                 )
 
                 # ----------------------------------------------------------------
@@ -1943,14 +2189,6 @@ def main():
                 # для показа документов
                 # ----------------------------------------------------------------
 
-                # При смене выбранного индекса -> обновить список документов
-                meili_ind_for_cont_dropdown.change(
-                    fn=update_docs_in_meili_index,
-                    inputs=meili_ind_for_cont_dropdown,
-                    outputs=[meili_indices_table,
-                             meili_content_of_index_dropdown,
-                             ]
-                )
 
                 # При смене выбранной коллекции -> обновить список документов
                 chroma_coll_for_cont_dropdown.change(
@@ -1960,13 +2198,55 @@ def main():
                              chroma_collection_table]
                 )
 
+                def refresh_meili_views(
+                        index_for_view: str,
+                        constructor_index: str,
+                        constructor_current_id: str | None,
+                ):
+                    """
+                    Обновляет:
+                      - таблицу и выпадайку ID в секции просмотра/удаления
+                      - выпадайку ID в конструкторе (если выбран тот же индекс)
+                    """
+
+                    # если индекс в секции просмотра не выбран — ничего не ломаем
+                    if not index_for_view:
+                        return gr.update(), gr.update(), gr.update()
+
+                    # 1) Обновляем таблицу + выпадайку удаления для выбранного индекса
+                    table_update, dropdown_del_update = update_docs_in_meili_index(
+                        index_for_view,
+                        output="full",
+                    )
+
+                    # 2) Обновляем конструктор, только если он смотрит на тот же индекс
+                    if constructor_index == index_for_view:
+                        constructor_dd_update = update_docs_in_meili_index(
+                            constructor_index,
+                            output="id_only",
+                            current_id=constructor_current_id,
+                        )
+                    else:
+                        constructor_dd_update = gr.update()
+
+                    # порядок соответствует outputs
+                    return table_update, dropdown_del_update, constructor_dd_update
+
             refresh_data_btn.click(
-                update_docs_in_meili_index,
-                inputs=[meili_ind_for_cont_dropdown],
+                refresh_meili_views,
+                inputs=[meili_ind_for_cont_dropdown, index_dropdown, id_select],
                 outputs=[
                     meili_indices_table,
                     meili_content_of_index_dropdown,
-                ]
+                    id_select,
+                ],
+            )
+
+            # При смене выбранного индекса -> обновить список документов
+            meili_ind_for_cont_dropdown.change(
+                fn=refresh_meili_views,
+                inputs=[meili_ind_for_cont_dropdown, index_dropdown, id_select],
+                outputs=[meili_indices_table, meili_content_of_index_dropdown, id_select],
             )
 
             # -------- FUNCTIONS SECTION ------------
