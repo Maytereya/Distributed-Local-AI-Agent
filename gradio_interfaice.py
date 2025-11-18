@@ -824,7 +824,7 @@ def main():
             with gr.Tab("\U0001F4D6 AI - ассистент"):
                 chatbot = gr.Chatbot(type="messages",
                                      autoscroll=False,
-                                     placeholder="<strong>🩻 ИИ - помощник</strong><br>Знает всю информацию о врачах и услугах клиники Наука",
+                                     placeholder="<strong>🧠 ИИ - помощник</strong><br>Знает всю информацию о врачах и услугах клиники Наука",
                                      height=700,
                                      max_height=1000,
                                      label="Моя Наука")
