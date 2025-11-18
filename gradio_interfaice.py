@@ -777,7 +777,6 @@ def main():
     ollama_settings.init_options()
     ollama_settings.init_thinking()
 
-    # start_token_refresher()  # Получение свежего SALUT - токена от Сбера. Который действует 30 минут.
     # Инициализация основных двух индексов (чтобы все поля в индексах были корректно настроены)
     client = meilisearch.connect_to_meilisearch()
     waiter = partial(meilisearch.wait_for_task_completion, client)  # фиксируем client
@@ -793,8 +792,6 @@ def main():
 
     # Allow serving local /static files via /gradio_api/file=...
     gr.set_static_paths(paths=[STATIC_DIR])
-    # ToDo: возможно убрать!
-    asr_state = gr.State(value={})  # чтобы не было первого None при отправке чанков в сбер.
 
     custom_footer = """
     <div style="
@@ -827,7 +824,7 @@ def main():
             with gr.Tab("\U0001F4D6 AI - ассистент"):
                 chatbot = gr.Chatbot(type="messages",
                                      autoscroll=False,
-                                     placeholder="<strong>ИИ - помощник</strong><br>знает всю информацию о врачах и услугах клиники Наука",
+                                     placeholder="<strong>🩻 ИИ - помощник</strong><br>Знает всю информацию о врачах и услугах клиники Наука",
                                      height=700,
                                      max_height=1000,
                                      label="Моя Наука")
@@ -894,7 +891,7 @@ def main():
                                            interactive=False,
                                            render=False,
                                            )
-                settings_accordion = gr.Accordion("Настройки поиска", open=False, visible=True, render=False)
+                settings_accordion = gr.Accordion("⚙️ Настройки поиска", open=False, visible=True, render=False)
 
 
 
