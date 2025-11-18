@@ -828,7 +828,7 @@ def main():
                 chatbot = gr.Chatbot(type="messages",
                                      autoscroll=False,
                                      placeholder="<strong>ИИ - помощник</strong><br>знает всю информацию о врачах и услугах клиники Наука",
-                                     height=600,
+                                     height=700,
                                      max_height=1000,
                                      label="Моя Наука")
 
