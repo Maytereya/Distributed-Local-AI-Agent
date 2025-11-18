@@ -14,7 +14,6 @@ import gradio as gr
 from gradio_pdf import PDF
 
 import agent_logic_2.ollama_settings as ollama_settings
-from VOSK.audio_stream_ws import flush_ws
 from agent_logic_2 import config as c
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
@@ -826,140 +825,52 @@ def main():
             # --------------------------------------------------
 
             with gr.Tab("\U0001F4D6 AI - ассистент"):
-
-                # ====== ЗАХВАТ АУДИО И РАСШИФРОВКА ======
-                with gr.Row(visible=True):
-                    asr_state = gr.State()  # хранит rec и накопленный текст
-                    live_transcript = gr.Textbox(
-                        label="🎙️ Живая расшифровка",
-                        lines=3,
-                        max_lines=3,
-                        interactive=False,
-                        show_copy_button=True,
-                        autoscroll=True,
-                        container=True,
-                        visible=True,
-                        scale=70,
-                    )
-                    mic = gr.Audio(
-                        sources=["microphone"],
-                        type="numpy",
-                        streaming=False,
-                        label="Микрофон",
-                        interactive=True,
-                        format="wav",
-                        min_width=150,
-                        show_download_button=True,
-                        visible=True,
-                        scale=30,
-                        # recording=True,
-                        # stop_recording_on_silence=True,
-                    )
-                with gr.Row(visible=True):
-                    whisper_btn = gr.Button("1️⃣ 🔊 Расшифровать", variant="primary", size="sm", scale=50, visible=True)
-                    search_btn = gr.Button("2️⃣ 🔎 Передать в поиск", variant="secondary", size="sm", scale=30,
-                                           visible=True)
-                    # flush_btn = gr.Button("Завершить фразу", variant="stop", size="sm", scale=10, visible=False)
-                    reset_asr_btn = gr.Button("3️⃣ 🗑️ Сбросить", variant="secondary", size="sm", scale=20, visible=True)
-                    # Ищем поломку
-                    # test_btn = gr.Button("🔊 Тест Sber: WAV", variant="secondary", size="sm", visible=False)
-                    # whisper_btn = gr.Button("🔊 Расшифровать", variant="primary", size="sm", scale=10, visible=True)
-
-                whisper_btn.click(fn=ws_transcribe, inputs=mic, outputs=live_transcript)
-
-                # async def _test_push(asr_state):
-                #     import soundfile as sf  # pip install soundfile
-                #     data, sr = sf.read("data/sample.wav", dtype="float32", always_2d=False)
-                #     if data.ndim == 2: data = data.mean(axis=1)
-                #     # используем тот же поток:
-                #     live, state = await asr_stream_sber((sr, data), asr_state or {})
-                #     # и сразу EOF, чтобы увидеть финальный текст:
-                #     final, state = await sber_flush(state)
-                #     return (final or live), state
-
-                # test_btn.click(fn=_test_push, inputs=[asr_state], outputs=[live_transcript, asr_state])
-
-                # потоковое обновление текста, VOSK - версия
-                # mic.stream(
-                #     # fn=audio_stream.vosk_stream,
-                #     fn=vosk_ws_stream,
-                #     inputs=[mic, asr_state],
-                #     outputs=[live_transcript, asr_state]
-                # )
-
-                # потоковое обновление текста Сбербанк - версия
-                # mic.stream(fn=asr_stream_sber,
-                #            inputs=[mic, asr_state],
-                #            outputs=[live_transcript, asr_state])
-
-                # Автоматически завершать фразу при остановке записи, Сбербанк - версия:
-                # mic.stop_recording(
-                #     fn=sber_flush,
-                #     inputs=[asr_state],
-                #     outputs=[live_transcript, asr_state],
-                # )
-
-                # сброс состояния без EOF
-                def reset_asr(_state):
-                    # аккуратно закрыть сокет, если открыт
-                    return gr.update(value=""), {"text": "", "acc": bytearray(), "ws": None, "closing": False}, None
-
-                # VOSK - версия:
-                reset_asr_btn.click(reset_asr, inputs=[asr_state], outputs=[live_transcript, asr_state, mic])
-
-                # Сбербанк - версия:
-                # reset_asr_btn.click(fn=sber_reset_state, inputs=[asr_state], outputs=[live_transcript, asr_state])
-
-                # завершить фразу и получить финал
-                async def flush_click(asr_state):
-                    txt, st = await flush_ws(asr_state or {})
-                    return txt, st
-
-                # VOSK - версия:
-                # flush_btn.click(flush_click, inputs=[asr_state], outputs=[live_transcript, asr_state])
-                # Сбербанк - версия:
-                # flush_btn.click(fn=sber_flush, inputs=[asr_state], outputs=[live_transcript, asr_state])
-
-                # ====== ГЛАВНЫЙ ИНТЕРФЕЙС ======
                 chatbot = gr.Chatbot(type="messages",
                                      autoscroll=False,
-                                     placeholder="<strong>Поиск по документам</strong><br>Задайте вопрос",
-                                     height=700,
-                                     label="Чат с ИИ Медцентра")
+                                     placeholder="<strong>ИИ - помощник</strong><br>знает всю информацию о врачах и услугах клиники Наука",
+                                     height=600,
+                                     max_height=1000,
+                                     label="Моя Наука")
 
-                textbox = gr.Textbox(lines=1,
+
+
+                textbox = gr.Textbox(lines=2,
+                                     max_lines=12,
                                      placeholder="Напишите свой вопрос",
                                      submit_btn=True,
                                      stop_btn=True,
                                      container=True,
                                      autoscroll=False,
                                      autofocus=False,
+                                     min_width=0,
+                                     scale=70,
                                      html_attributes=gr.InputHTMLAttributes(autocorrect="off", spellcheck=False)
                                      )
 
-                with gr.Column():
-                    with gr.Row():
-                        radio_type_of_search = gr.Radio(["ai-router", "gigachat", "meilisearch", "vectorstore", "db", ],
-                                                        label="Способы поиска в базе знаний",
-                                                        value="ai-router",
-                                                        container=True,
-                                                        render=False,
-                                                        info="Выберите алгоритм поиска")
 
-                        meili_search_indexes_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
-                                                                    label=INDEXES_IN_MEILI,
-                                                                    info="Выберите Индекс для поиска информации",
-                                                                    interactive=False,
-                                                                    render=False,
-                                                                    )
-                        chroma_search_collection_dropdown = gr.Dropdown(choices=gr_existed_collections(),
-                                                                        label=COLLECTIONS_IN_CHROMA,
-                                                                        info="Выберите Коллекцию для поиска информации",
-                                                                        interactive=False,
-                                                                        allow_custom_value=True,
-                                                                        # крайне желательно этого избежать
-                                                                        render=False,
-                                                                        )
+
+                radio_type_of_search = gr.Radio(["ai-router", "gigachat", "meilisearch", "vectorstore", "db", ],
+                                                label="Способы поиска в базе знаний",
+                                                value="ai-router",
+                                                container=True,
+                                                render=False,
+                                                info="Выберите алгоритм поиска")
+
+
+                meili_search_indexes_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
+                                                            label=INDEXES_IN_MEILI,
+                                                            info="Выберите Индекс для поиска информации",
+                                                            interactive=False,
+                                                            render=False,
+                                                            )
+                chroma_search_collection_dropdown = gr.Dropdown(choices=gr_existed_collections(),
+                                                                label=COLLECTIONS_IN_CHROMA,
+                                                                info="Выберите Коллекцию для поиска информации",
+                                                                interactive=False,
+                                                                allow_custom_value=True,
+                                                                # крайне желательно этого избежать
+                                                                render=False,
+                                                                )
 
                 value_n_results_slider = gr.Slider(value=5, minimum=1, maximum=20, step=1,
                                                    label="Количество документов, включенных в выдачу",
@@ -985,13 +896,14 @@ def main():
                                            )
                 settings_accordion = gr.Accordion("Настройки поиска", open=False, visible=True, render=False)
 
+
+
                 demo = gr.ChatInterface(
                     fn=universal_echo,
                     type="messages",
-                    chatbot=chatbot,  # без examples: тут они вообще не работают
+                    chatbot=chatbot,
                     textbox=textbox,
-                    submit_btn="Отправить",  # <-- текст на кнопке отправки
-                    stop_btn="⏹ Остановить",  # <-- тогда появится стоп во время стрима
+
                     additional_inputs_accordion=settings_accordion,
 
                     additional_inputs=[
@@ -1005,19 +917,46 @@ def main():
                     ],
 
                     show_progress="full",
+
                 )
 
-                # Передача аудиораcшифровки в поиск AI-Search
-                # Оставляем тут, иначе textbox не определится.
+                # ====== ЗАХВАТ АУДИО И РАСШИФРОВКА ======
 
-                def copy_to_textbox(input: str):
-                    return gr.update(value=input)
+                mic = gr.Audio(
+                    sources=["microphone"],
+                    type="numpy",
+                    streaming=False,
+                    label="Микрофон",
+                    interactive=True,
+                    format="wav",
+                    min_width=150,
+                    show_download_button=False,
+                    show_share_button=False,
+                    editable=False,
+                    show_label=False,
+                    visible=True,
+                    scale=30,
 
-                search_btn.click(
-                    fn=copy_to_textbox,
-                    inputs=live_transcript,
-                    outputs=textbox,
                 )
+
+
+                async def ws_transcribe_to(audio):
+                    """
+                    audio -> текст от Whisper
+                    :return: текст в textbox
+                    """
+                    if audio is None:
+                        return None
+                    text = await ws_transcribe(audio)  # функция уровнем ниже
+                    return text
+
+
+            # Автотранскрипция по окончании записи и очистка по клику на крестик
+            mic.change(
+                fn=ws_transcribe_to,
+                inputs=mic,
+                outputs=[textbox],
+            )
 
             # --------------------------------------------------
             # Вкладка 2 - Upload PDF to MEILI or CHROMA DB
@@ -1230,8 +1169,8 @@ def main():
                         def on_index_change(idx: str):
                             """
                             Сделан чтобы исключить выбор radio и зациклить только на индексе.
-                            :param idx: 
-                            :return: 
+                            :param idx:
+                            :return:
                             """
                             t = TYPE_FOR_INDEX.get(idx, "static")
                             is_news = (t == "news")
@@ -1391,7 +1330,7 @@ def main():
                                 gr.update(),  # content_input
                                 gr.update(),  # keywords_input
                                 gr.update(),  # preview_json
-                                gr.update(), # cb - бессрочно
+                                gr.update(),  # cb - бессрочно
                                 meta,  # meta_state оставляем как есть
                             )
 
@@ -1478,7 +1417,6 @@ def main():
                             permanent_cb_upd,
                             meta_out,
                         )
-
 
                     # ------------------------------
                     # живой валидатор на каждый ввод
@@ -1848,10 +1786,10 @@ def main():
                         save_doc_by_id,
                         inputs=[doc_type_radio,  # 1) doc_type
                                 index_dropdown,  # 2) index_name
-                                id_select,       # 3) current_doc_id (может быть изменён)
-                                orig_doc_id_state,# 4) исходный ID
-                                title_input,      # 5) title
-                                content_input,   # 6) content
+                                id_select,  # 3) current_doc_id (может быть изменён)
+                                orig_doc_id_state,  # 4) исходный ID
+                                title_input,  # 5) title
+                                content_input,  # 6) content
                                 valid_from_dp,  # 7) valid_from
                                 valid_to_dp,  # 8) valid_to
                                 permanent_cb,  # 9) permanent
@@ -2084,7 +2022,7 @@ def main():
                         content_input,  # 6 — очистить текст
                         keywords_input,  # 7 — очистить keywords
                         preview_json,  # 8 — очистить/спрятать JSON
-                        permanent_cb, # 9 убрать галочку бессрочно, если она есть
+                        permanent_cb,  # 9 убрать галочку бессрочно, если она есть
                         meta_state,  # 10 — сбросить state
                     ],
                 )
@@ -2188,7 +2126,6 @@ def main():
                 # ЛОГИКА ОБНОВЛЕНИЯ при выборе индекса/коллекции
                 # для показа документов
                 # ----------------------------------------------------------------
-
 
                 # При смене выбранной коллекции -> обновить список документов
                 chroma_coll_for_cont_dropdown.change(
