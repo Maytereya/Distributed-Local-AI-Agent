@@ -1,8 +1,9 @@
 import json
 import os
-import re
 
 import pdfplumber
+
+from agent_logic_2.id_validation import sanitize_id
 
 
 def pdf_to_meili_json(pdf_path, output_json_path):
@@ -20,7 +21,7 @@ def pdf_to_meili_json(pdf_path, output_json_path):
         # Используем имя файла (без пути) для читабельного ID
         base_name = os.path.basename(pdf_path)
         # Заменяем неалфанумерные символы на "_"
-        base_name_clean = re.sub(r'[^a-zA-Z0-9-_]', '_', base_name)
+        base_name_clean = sanitize_id(base_name)
 
         for page_num, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""

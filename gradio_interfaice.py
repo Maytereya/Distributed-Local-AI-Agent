@@ -410,7 +410,10 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
 
         base_name = os.path.basename(pdf_path)
         base_no_ext, _ = os.path.splitext(base_name)
-        base_no_ext_clean = re.sub(r'[^a-zA-Z0-9-_]', '_', base_no_ext)
+        # замена названия файла в подходящий формат.
+        base_no_ext_clean: str = "untitled"
+        if base_no_ext:
+            base_no_ext_clean = sanitize_id(base_no_ext)
 
         json_path = f"Upload/{base_no_ext_clean}.json"
         pdf2json.pdf_to_meili_json(pdf_path, json_path)
@@ -425,7 +428,7 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
                 gr.update(),
                 gr.update(),
             )
-        time.sleep(5)
+        time.sleep(3)
         new_list = gr_existed_indexes()
         gr.Success(f"Файл (PDF) добавлен в индекс. {meili_msg}", title="Успешно")
         return (
@@ -451,7 +454,9 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
 
         base_name = os.path.basename(json_file)  # "file.json"
         base_no_ext, _ = os.path.splitext(base_name)
-        base_no_ext_clean = re.sub(r'[^a-zA-Z0-9-_]', '_', base_no_ext)
+        base_no_ext_clean: str = "untitled"
+        if base_no_ext:
+            base_no_ext_clean = sanitize_id(base_no_ext)
         local_json_path = f"Upload/{base_no_ext_clean}.json"
         # Копируем загруженный временный файл в свою папку
         # (import shutil)
@@ -470,7 +475,7 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
                 gr.update(),
                 gr.update(),
             )
-        time.sleep(5)
+        time.sleep(3)
 
         new_list = gr_existed_indexes()
         gr.Success(f"Файл (JSON) добавлен в индекс. {meili_msg}", title="Успешно")
@@ -829,8 +834,6 @@ def main():
                                      max_height=1000,
                                      label="Моя Наука")
 
-
-
                 textbox = gr.Textbox(lines=2,
                                      max_lines=12,
                                      placeholder="Напишите свой вопрос",
@@ -844,15 +847,12 @@ def main():
                                      html_attributes=gr.InputHTMLAttributes(autocorrect="off", spellcheck=False)
                                      )
 
-
-
                 radio_type_of_search = gr.Radio(["ai-router", "gigachat", "meilisearch", "vectorstore", "db", ],
                                                 label="Способы поиска в базе знаний",
                                                 value="ai-router",
                                                 container=True,
                                                 render=False,
                                                 info="Выберите алгоритм поиска")
-
 
                 meili_search_indexes_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
                                                             label=INDEXES_IN_MEILI,
@@ -892,8 +892,6 @@ def main():
                                            render=False,
                                            )
                 settings_accordion = gr.Accordion("⚙️ Настройки поиска", open=False, visible=True, render=False)
-
-
 
                 demo = gr.ChatInterface(
                     fn=universal_echo,
@@ -936,7 +934,6 @@ def main():
 
                 )
 
-
                 async def ws_transcribe_to(audio):
                     """
                     audio -> текст от Whisper
@@ -946,7 +943,6 @@ def main():
                         return None
                     text = await ws_transcribe(audio)  # функция уровнем ниже
                     return text
-
 
             # Автотранскрипция по окончании записи и очистка по клику на крестик
             mic.change(
@@ -1058,7 +1054,7 @@ def main():
 
                 DEFAULT_EMPTY_TABLE = [["", ""], ["", ""], ["", ""]]
 
-                table_state = gr.State(value=[["", ""], ["", ""], ["", ""]])
+                table_state = gr.State(value=DEFAULT_EMPTY_TABLE)
 
                 with gr.Accordion(label="Форма для добавления информации в базу знаний Meilisearch",
                                   open=False, ):
