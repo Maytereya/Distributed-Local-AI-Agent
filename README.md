@@ -1,262 +1,215 @@
-# Distributed Local Retrieval-Augmented Generation (RAG) Agent Using LangGraph. 
-## Adapted for the Russian Language
-__Llama 3.1, vikhr nemo 12b, Command-R, Ollama 0.4.6, Chroma 0.5.4, Tavily AI__
+# Distributed Local / Hybrid AI Agent
 
-# Agent Operation Algorithm
-
-## Request Processing Workflow
-
-### Speech Recognition
-- **Real-time recording:** Operator-patient dialogues are recorded on the fly.
-- **Audio-to-text conversion:** Speech is converted to text using [VOSK](https://alphacephei.com/vosk/).
-
-### Keyword Extraction
-- **Text analysis:** The input text is analyzed with an LLM (Large Language Model).
-- **Keyword extraction:** Key terms are identified for information retrieval.
-
-### Information Retrieval
-- **Database query:** The vector database ([ChromaDB](https://www.trychroma.com/)) is queried for relevant information.
-- **Text filtering:** Retrieved text is filtered using the `cointegrated/rubert-tiny2` model.
-
-### Response Formation
-- **Text generation:** Responses are created using an LLM.
-- **Hallucination check:**
-  - Ensures the response aligns with the database query results.
-  - Verifies correspondence with the extracted keywords.
-
-### Prompt Display
-- **Operator assistance:** The generated text is presented to the operator in the chatbot interface.
+Локальный или гибридный RAG-агент для автоматизированной работы колл-центра.
+Поддерживает работу на одном или двух серверах, с видеокартами или без,
+используя локальные или облачные LLM/ASR-сервисы.
 
 ---
 
-## Task Distribution Between Servers
+## 🧩 Ключевые особенности системы
 
-### Server 1 (2 x NVIDIA RTX 4090)
-- Manages the vector database.
-- Performs text embedding.
-- Handles speech recognition.
-- Controls agent logic and integrates with clinical systems.
+### ✔ Работает **на одном** или **на двух** физических серверах
 
-### Server 2 (4 x AMD Radeon RX 7900 XTX)
-- Processes requests using the LLM.
-- Generates textual responses.
+Архитектура масштабируется:
 
----
+* **Один сервер** — если используется только логика, система индексирования Meilisearch и облачные модели.
+* **Два сервера** — для использования локальной LLM в составе Ollama + локального сервера Whisper в Uvicorn.
 
-## Tools and Technologies
-- **Speech Recognition:** [VOSK](https://alphacephei.com/vosk/)
-- **Vector Database:** [ChromaDB](https://www.trychroma.com/)
-- **Text Filtering Model:** `cointegrated/rubert-tiny2`
-- **Language Models:** Large Language Models (LLMs)
+### ✔ Может работать **без видеокарт**
 
----
+В этом режиме сервер выполняет только:
 
-## Functional Capabilities of the AI Agent
+* логику агента;
+* автоматическое ежедневное кэширование данных по API из CRM/ERP/МИС (например, списки услуг, сотрудников, прайс, скрипты);
+*  обращение по API к CRM/ERP/МИС в случае использования некэшируемых данных (например, расписание работы конкретного сотрудника)
+* сервер Meilisearch;
+* сервер nginx;
+* сервер Gradio UI.
 
-### AI Agent Features
+LLM и ASR берутся из облака (Sber Salut / GigaChat / др.).
 
-The AI agent supports a flexible approach to request processing using complex routing logic and retrieval of relevant information. Its key functionalities include:
+### ✔ Может работать **полностью локально**
 
-### 1. Request Recognition and Routing
-- Identifies the data source for request processing:
-  - **Vector Storage:** Uses [ChromaDB](https://www.trychroma.com/) optimized for result diversity (MMR).
-  - **Chat with Memory:** Supports conversational mode with prior interaction history.
-  - **Web Search:** Acts as a fallback if no relevant data is found locally.
-  - **Session Termination:** Provides an option to end the agent's operation.
+При наличии GPU:
 
-### 2. Request Processing
-- **Focus and Enhancement of Queries:**
-  - Extracts keywords to optimize the search process.
-  - Refines queries for precise information retrieval.
-- **Multi-Step Data Retrieval:** Ensures high accuracy by:
-  - Utilizing various search strategies in the vector database:
-    - High response diversity (MMR, `lambda_mult=0.25`).
-    - Moderate diversity (`lambda_mult=0.85`).
-    - Mathematical computation of diversity based on the probability of finding relevant content in the collection.
-    - Specific embedding models for fallback searches.
-  - Selecting appropriate data collections for specific tasks.
+* локальная LLM через **Ollama** (Mistral Small 3.2 + любые другие модели из репозитория),
+* локальное ASR Whisper-GPU,
+* резервная ChromaDB,
+* быстрый Meilisearch.
+* Неограниченный доступ к новым генеративным моделям (LLM) с возможностью бенчмаркинга и тестирования на практике.
 
-### 3. Filtering and Relevance Verification
-- Filters documents based on similarity to user query keywords (cosine distance evaluation).
-- Evaluates document relevance:
-  - Matches document content to the request using scoring models.
-  - Automatically switches to alternate sources if no relevant data is found.
+### ✔ **Без LangGraph**
 
-### 4. Response Generation
-- Utilizes LLMs like `Llama 3.1 70b fp16`, `rscr/vikhr_nemo_12b`, or `Command-R` for task-specific generation:
-  - Generates text based on:
-    - Local vector database (RAG).
-    - Web search results if local data is insufficient.
-  - Verifies responses to eliminate hallucinations and ensure alignment with user queries.
+Изначально архитектура проектировалась на LangGraph,
+но в текущей стабильной версии используется **чистая Python-логика с состояниями**.
 
-### 5. Conversational Memory
-- Maintains dialogue context for more accurate responses.
-- Stores interaction history for seamless user experience.
+Главный модуль логики:
+`router_preprocessor.py`
+Он:
 
-### 6. Error Handling and Session Logic
-- Proceeds to the next processing step if relevant data is unavailable, up to session termination.
-- Supports multi-step routing through a state graph.
+* принимает входящее сообщение,
+* определяет стратегию ответа,
+* решает, где искать данные,
+* управляет состояниями диалога и маршрутизацией.
 
-### 7. Asynchronous Processing
-- Employs asynchronous methods for parallel task execution, such as:
-  - Data retrieval.
-  - Response generation.
-  - Document relevance assessment.
+### ✔ Источники данных
 
-### 8. Integration with ChromaDB
-- Works with ChromaDB through built-in retrievers:
-  - Implements search strategies like MMR and cosine similarity for diverse results.
-  - Leverages fallback collections built using various embedding models (e.g., LaBSE, Distiluse).
+1. **CRM API клиента** — все данные кешируются локально (ускоряет фильтрацию и поиск).
+2. **Meilisearch** — основной индексатор и классификатор (корпоративные данные классифицируются в индексах для организации поиска и снижения вероятности ошибок)
+3. **ChromaDB** — система векторного поиска. Содержится как **резервная** для поиска в документах по смыслу, а не релевантности. 
 
-### 9. Response Quality Verification
-- Uses evaluation models to:
-  - Analyze document relevance.
-  - Ensure the adequacy of generated responses.
+### ✔ Аудиораспознавание
 
-### 10. Interface and Session Management
-- User interaction through a chat interface.
-- Session termination command support.
-- Automatic handling of multiple requests within a session.
+* **Whisper-GPU** — основной локальный модуль. Поддерживает настраиваемые словари — подсказки для распознавания специфической лексики.
+* **VOSK** — оставлен в резерве.
+* **Sber Salut** — подключаемая альтернатива для бюджетного (без GPU) режима.
+
+### ✔ Графический интерфейс
+
+**Gradio UI**.
+Поддерживает:
+
+* простой, лаконичный чат оператора колл-центра,
+* аудиораспознавание сообщений оператора/клиента/ или обоих участников разговора с передачей в поиск сформулированного текста,
+* загрузку файлов (PDF/JSON) или прямой полуструктурированный ввод данных в базу знаний RAG-Агента,
+* настройки промптов/логики RAG-Агента,
+* выбор и настройка LLM,
+* настройка словаря Whisper,
+* бенчмаркинг и сравнительный анализ эффективности LLM
 
 ---
 
-### User Interface Features
+## 🖥 Аппаратные профили
 
-An asynchronous web server based on [Quart](https://pgjones.gitlab.io/quart/) will provide the interface for user interaction and agent integration into workflows. The interface supports session management for call center operators and file upload for data placement in vector collections based on user access rights.
+### **I. Основной сервер (локальная LLM + Meilisearch + логика)**
 
-### Key Interface Features
+* **3 × NVIDIA GEFORCE RTX 4090 24Gb**
+  Используется для:
+* работы Ollama (любые LLM),
+* Whisper-GPU (при необходимости),
+* логического модуля,
+* Meilisearch,
+* Nginx,
+* Gradio.
 
-#### 1. Web Chat Interface
-- Users can send queries through a web page (CRM integration or standalone Windows app as per client agreement).
-- AI agent responses are displayed in real time.
-- Dialogue history is preserved for context-aware responses.
+### **II. Второй сервер (ASR/LLM, если требуется разделить нагрузку)**
 
-#### 2. Asynchronous Query Handling
-- Queries are processed asynchronously for optimal performance.
+Варианты:
 
-#### 3. File Upload and Processing
-- Supports uploading TXT, PDF, and web links (additional formats per client agreement).
-- Uploaded files are stored and processed for addition to ChromaDB.
+* **2 × AMD Radeon 7900 XTX 24Gb**, или
+* **1 × NVIDIA RTX 5090 32Gb**
 
-#### 4. Data Collection Management
-- Allows prioritization of specific collections for user requests.
+Используется для:
 
-### Detailed Interface Description
+* Whisper-GPU (ASR)
 
-#### 1. Main Page
-- **Route `/`:** Displays the chat interface using the `index.html` template.
+### Поддерживаемые нагрузки
 
-#### 2. Text Query Handling
-- **Route `/get`:**
-  - Accepts text queries via AJAX requests.
-  - Saves queries and responses in session history.
-  - Asynchronously calls the `get_agent_response` function for generating responses.
-
-#### 3. File Upload
-- **Route `/upload`:**
-  - Accepts files via POST requests.
-  - Supports `.pdf` and `.txt` formats.
-  - Processes files asynchronously and adds their content to the vector database.
-
-#### 4. Document Processing
-- **Function `process_file`:**
-  - Processes uploaded files.
-  - Adds content to ChromaDB for future retrieval.
-
-#### 5. Session Support
-- Utilizes `session` for storing dialogue history.
-- Ensures context-aware responses in ongoing interactions.
+Система протестирована при **одновременной работе 8 операторов колл-центра**.
 
 ---
 
-### Data Retrieval and Vector Database Integration
+## 🧱 Архитектурный обзор
 
-The AI agent uses ChromaDB and embedding models to perform high-precision search, data addition, and document processing. Its retrieval logic is built on an adaptive approach to search and collection management.
+### Основные сервисы в docker-compose:
 
-### Key Retrieval Features
+| Сервис             | Назначение                                       |
+| ------------------ | ------------------------------------------------ |
+| `nginx_proxy`      | HTTPS + проксирование Gradio, API                |
+| `bookworm-agent`   | основной агент + логика (router_preprocessor.py) |
+| `whisper-gpu`      | локальный Whisper ASR                            |
+| `ollama`           | локальная LLM                                    |
+| `vosk-ru`          | резервный VOSK ASR                               |
+| `meili_server`     | основной поисковый движок                        |
+| `chroma_container` | резервная векторная БД                           |
 
-#### 1. Embedding Models
-- Supported models for text embeddings include:
-  - `cointegrated/LaBSE-en-ru`
-  - `sentence-transformers/distiluse-base-multilingual-cased-v1`
-  - `ai-forever/sbert_large_nlu_ru`
-  - `hkunlp/instructor-xl` (instruction-based embedding training)
+## 🔍 Процесс обработки запроса
 
-#### 2. ChromaDB Collection Management
-- Creation, deletion, and listing of collections.
-- Environment preparation for collection updates.
+1. **Получение сообщения**
+   Gradio - интерфейс → bookworm-agent → `router_preprocessor.py`
 
-#### 3. Data Upload and Processing
-- Supported data types:
-  - **PDF:** Split into pages and indexed.
-  - **TXT:** Split into fragments for optimal indexing.
-  - **URL:** Text extracted, processed, and added to the database.
+2. **Выбор стратегии ответа**
+   На основе:
 
-#### 4. Search and Filtering
-- Multiple search types:
-  - **Simil:** Vector similarity search.
-  - **Simil_score:** Similarity with scoring.
-  - **Vector:** Direct vector-based search.
-  - **MMR:** Maximal Marginal Relevance for diverse results.
-- Metadata-based filtering.
+   * ключевых слов, выбранных из текста входящего запроса 
+   *  данных в кеше CRM,
+   * наличия релевантных документов в Meilisearch.
 
-#### 5. Flexible Search Parameter Management
-- Adjustable parameters:
-  - Number of returned documents (`k`).
-  - Number of fetched documents (`fetch_k`).
-  - Diversity coefficient (`lambda_mult`).
+3. **Получение данных**
+   Приоритет:
 
----
+   1. CRM кеш
+   2. Meilisearch
+   3. ChromaDB (резерв)
 
-### Speech Recognition
+4. **Формирование ответа**
 
-The module records speech from a call center operator’s headset and processes it through an ASR server ([VOSK](https://alphacephei.com/vosk/)) via WebSocket. This enables the agent to handle voice requests and convert them into structured text for further processing.
+   * Локальная LLM через Ollama *(если есть GPU)*
+   * Или облачная LLM *(если GPU отсутствует)*
 
-### Key Features
-
-#### 1. Goal
-- Provide a voice interface for user interaction.
-- Ensure accurate speech-to-text conversion.
-
-#### 2. Workflow
-- Records audio signals in real time.
-- Sends audio blocks to the ASR server via WebSocket.
-- Processes recognized text for use in queries.
-
-#### 3. Technical Details
-- Uses `sounddevice` for audio recording.
-- Asynchronous processing with `websockets`.
-- Customizable settings via command-line arguments.
+5. **Отправка ответа пользователю**
 
 ---
 
-For detailed technical documentation and examples, refer to the [Documentation](./docs/README.md).
+## 🎤 Аудиомодуль
 
+### Whisper-GPU
 
+* Docker-контейнер
+* Передаёт потоковые блоки операторской речи
+* Быстрое распознавание в реальном времени
 
-## Code Description
+### Sber Salut ASR
 
-The code provides a framework for an agent that uses a state graph to handle user queries, perform actions such as document retrieval, answer generation, and web search.
+Используется когда:
 
-### Core LangGraph Logic
+* нет GPU
+* нужно бюджетное распознавание с компромиссной безопасностью
 
-**AgentState**: Defines the data structure for storing the agent’s current state. This is a TypedDict with fields for messages, the question, generation, web search state, and documents.
+### VOSK
 
-**Agent**: The `__init__` constructor initializes the system, tools, and state graph.
+Оставлен только как резерв.
 
-- The `retrieve` method fetches documents from the indexed storage based on the query.
+---
 
-- The `generate` method produces an answer using the retrieved documents.
+## 📁 Структура репозитория (актуальная)
 
-- The `grade_documents` method assesses the relevance of documents to the given query.
+```
+agent_logic_2/          — основная логика и состояния
+router_preprocessor.py — главный модуль маршрутизации запросов
+Upload/                 — агрегация файлов на загрузку в Meilisearch
+VOSK/                   — резервный модуль ASR
+whisper/                — конфигурация запросов к uvicorn/Whisper
+converters/             — обработка PDF/TXT/URL
+container_managenment/  — Docker модули
+static/                 — статические файлы
+gradio_interfaice.py    — визуальный интерфейс
+docker-compose.yml      — основной оркестратор
+```
+* Cервер Uvicorn/Whisper с API в репозитории https://github.com/Maytereya/whisper-server
+---
 
-- The `web_search` method performs an Internet search and appends the results to the documents.
+## 🔧 Развёртывание
 
-- The `route_question` method determines whether the query should be directed to a web search or the vector store.
+1. Установить Docker + Docker Compose
+2.  Настроить `agent_logic_2/config.ini` (ключи CRM / облака / GigaChat / Sber)
+3. Запуск:
 
-- The `decide_to_generate` method decides whether to proceed with generating a response or to perform a web search.
+```bash
+docker compose up -d --build
+```
 
-- The `grade_generation_v_documents_and_question` method checks whether the generated answer is correct and matches the query.
+4. Интерфейс доступен через Nginx (порт 80/443)
 
-## Contact
-For any questions or contributions, feel free to open an issue or submit a pull request.
+---
+
+## 📄 Лицензия
+
+Проект распространяется под лицензией **Apache-2.0**.
+
+---
+
+## 🤝 Контрибьюции
+
+Pull-request’ы приветствуются.
+По вопросам и улучшениям — создавайте issue.
