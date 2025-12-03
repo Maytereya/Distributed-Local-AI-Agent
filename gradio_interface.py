@@ -1935,9 +1935,9 @@ def main():
                 # Оформление и дизайн
                 # ---------------------------------------------
 
-                # ---------------------------------
-                # Event handlers of chat interface
-                # ---------------------------------
+                # ---------------------------------------------
+                # Обработчики событий чат-интерфейса
+                # ---------------------------------------------
 
                 radio_type_of_search.change(fn=radio_sliders_change, inputs=radio_type_of_search,
                                             outputs=[
@@ -1971,7 +1971,7 @@ def main():
                                               )
 
                 # --------------------------------------
-                # Event handlers of ChromaDB
+                # Обработчики событий ChromaDB
                 # --------------------------------------
 
                 add_collection_button.click(
@@ -1993,7 +1993,7 @@ def main():
                 )
 
                 # --------------------------------------
-                # Event handlers of Meilisearch
+                # Обработчики событий Meilisearch
                 # --------------------------------------
                 # Клик - ивент пришлось унести сюда поскольку meili_ind_for_cont_dropdown расположен низко.
                 save_button.click(
@@ -2037,7 +2037,6 @@ def main():
                     ]
                 )
 
-                # Event handlers of universal indexation button
                 # Универсальная кнопка для индексации (PDF или JSON)
                 add_to_index_button.click(
                     gr_add_to_index_universal,
@@ -2074,7 +2073,7 @@ def main():
                         output="full",
                     )
 
-                    # Но в .click у нас порядок outputs: [meili_content_of_index_dropdown, meili_indices_table, id_select]
+                    # В .click порядок outputs: [meili_content_of_index_dropdown, meili_indices_table, id_select]
                     # Поэтому dropdown_update пойдёт первым, а table_update — вторым.
 
                     # 3. Обновляем конструктор, если он смотрит на тот же индекс
@@ -2176,18 +2175,16 @@ def main():
 
             def fn_load_options(explain: bool = True) -> Union[tuple[str, str], str]:
                 """
-                Loads and serializes Ollama settings for requests into a JSON-formatted string with indentation.
-
-                :return: A JSON-formatted string representation of the loaded settings
-                    with ensured ASCII disabled and proper indentation.
+                Загружает и сериализует настройки Ollama в JSON с отступами.
+                :return: JSON-форматированная строка
+                    ASCII отключено, отступы есть.
                 :rtype: Str
                 """
-                # return json.dumps(ollama_settings.load_settings(), ensure_ascii=False, indent=4)
                 return ollama_settings.load_ollama_options(explain)
 
             def fn_save_options(text: str) -> str:
                 """
-                Saves the corrected Ollama settings to a JSON-formatted file.
+                Сохраняет измененные настройки Ollama в файл JSON.
                 """
                 try:
                     data = json.loads(text)
@@ -2225,7 +2222,7 @@ def main():
                     return models
                 return gr.update(choices=models, value=models[-1] if models else [])
 
-            # ------------Container Management Section--------------
+            # ------------Секция управления контейнерами------------
 
             def restart() -> str:
                 return restart_container.restart_ollama_container()
@@ -2247,7 +2244,7 @@ def main():
                                         )
 
                     # -----------------------------------------------------
-                    # OLLAMA OPTIONS SECTION
+                    # OLLAMA OPTIONS Секция
                     # -----------------------------------------------------
 
                     with gr.Row():
@@ -2304,7 +2301,7 @@ def main():
                 restart_ollama_btn.click(fn=restart, outputs=status)
 
                 # --------------------------------------------------------
-                #  Split prompt section
+                #  Split prompt секция
                 # --------------------------------------------------------
                 with gr.Row():
                     with gr.Accordion(label="Split Prompt", open=False):
@@ -2326,7 +2323,7 @@ def main():
                                  prompt_code_2, status)
 
                 # --------------------------------------------------------
-                #  Classificator prompt section
+                #  Classificator prompt секция
                 # --------------------------------------------------------
                 with gr.Row():
                     with gr.Accordion(label="Classificator Prompt", open=False):
@@ -2348,7 +2345,7 @@ def main():
                                  prompt_code_3, status)
 
                 # -----------------------------------------------------
-                # Final answering prompt section
+                # Final answering prompt секция
                 # -----------------------------------------------------
                 with gr.Row():
                     with gr.Accordion(label="Final Answer Prompt", open=False):
@@ -2369,7 +2366,7 @@ def main():
                                  prompt_code_1, status)
 
                 # ---------------------------------------
-                #     CONSTANTS SECTION
+                #     CONSTANTS секция
                 # ---------------------------------------
                 # c1: EXAMPLES
 
@@ -2437,9 +2434,9 @@ def main():
                     btn_save_c3.click(lambda txt: fn_save_prompt("LABEL_PRIORITY", txt),
                                       prompt_code_c3, status)
 
-                # ---------------------
+
                 # с4: MODULES
-                # ---------------------
+
                 with gr.Row():
                     with gr.Accordion(label="MODULES: The names of agents's functions", open=False):
                         prompt_code_c4 = gr.Code(
@@ -2461,7 +2458,7 @@ def main():
                     #                   prompt_code_c3, status,)
 
                 # ---------------------------------
-                # Whisper general prompt section
+                # Whisper general prompt секция
                 # ---------------------------------
 
                 with gr.Row():
@@ -2573,7 +2570,7 @@ def main():
                 )
 
         # -------------------------
-        # Footer html realization
+        # Footer html реализация
         # -------------------------
         gr.HTML(custom_footer)
     blocks.queue(
