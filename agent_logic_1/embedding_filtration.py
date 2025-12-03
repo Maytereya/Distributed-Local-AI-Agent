@@ -129,13 +129,13 @@ def get_embedding(text: str) -> torch.Tensor:
 def filtrate(keyword: str, texts: List[Document] | None, threshold: float = 0.005) -> List[Document]:
     """
     Динамический порог: пропускаем документы с sim >= max(sim) - threshold.
-    При ошибке загрузки модели — возвращаем вход как есть (не блокируем сервис).
+    При ошибке загрузки модели возвращаем вход как есть (не блокируем сервис).
     """
     print("- Section FILTRATE -")
     print("keyword:", keyword)
 
     if not texts:
-        print("Document list is empty or None — nothing to filtrate.")
+        print("Document list is empty or None - nothing to filtrate.")
         return []
 
     try:
@@ -153,5 +153,5 @@ def filtrate(keyword: str, texts: List[Document] | None, threshold: float = 0.00
         return kept
 
     except Exception:
-        logger.exception("[filtration] Ошибка в фильтрации — возвращаю документы без фильтрации.")
+        logger.exception("[filtration] Ошибка в фильтрации - возвращаю документы без фильтрации.")
         return texts  # мягкий фолбэк; можно заменить на [] для строгого режима

@@ -51,9 +51,7 @@ async def gigachad_echo_async(system: str, prompt: str, ) -> str:
                 role=MessagesRole.SYSTEM,
                 content=system,
             ),
-            # Messages(
-            #     role=MessagesRole.ASSISTANT,
-            #     content="Как я могу помочь вам?"),
+
             Messages(
                 role=MessagesRole.USER,
                 content=prompt,

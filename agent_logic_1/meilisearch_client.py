@@ -172,34 +172,6 @@ def ensure_index(client, index_name: str, primary_key: str = "id",
     return index
 
 
-# def init_meili_index(index_name="main_index"):
-#     """
-#     Функция сообщения правильных атрибутов главному индексу
-#     :param _client:
-#     :param index_name:
-#     :return:
-#     """
-#     try:
-#         client.get_index(index_name)
-#     except Exception:
-#         client.create_index(index_name, {"primaryKey": "id"})
-#
-#     client.index(index_name).update_settings({
-#         "searchableAttributes": ["title", "content", "keywords", "html", "csv"],
-#         "displayedAttributes": ["*"],
-#         "filterableAttributes": ["doc_id", "type", "page", "block_id", "keywords"],
-#         "sortableAttributes": ["page", "block_id", "created_at"]
-#     })
-
-
-# def ensure_news_index_settings(index):
-#     index.update_settings({
-#         "filterableAttributes": list({"from_ts", "to_ts", "is_permanent", "type", "tags", "keywords"}),
-#         "sortableAttributes": list({"from_ts", "to_ts"}),
-#     })
-
-# Удалить ветки hasattr(client, "tasks") и старые ключи в _extract_task_uid/_task_to_dict.
-
 def _extract_task_uid(task_info: object) -> int:
     if isinstance(task_info, int):
         return task_info
@@ -315,22 +287,6 @@ def add_doc_to_meili(
         return f"Ошибка добавления документа(ов) в индекс '{index_name}': {e}"
 
 
-# def get_task_info(task_number: int) -> dict:
-#     """
-#     Retrieves information about a specific asynchronous task in Meilisearch.
-#     Meilisearch uses tasks to handle operations such as adding, updating, or deleting documents.
-#
-#     :param task_number: The numeric ID of the task.
-#     :return: A dictionary containing information about the requested task.
-#     """
-#     try:
-#         task = client.get_task(task_number)
-#         print("Task info:", task)
-#         return task
-#     except Exception as gte:
-#         print(f"Error retrieving info for task #{task_number}: {gte}")
-#         return {}
-
 
 def meili_list_documents(
         index_name: str,
@@ -381,42 +337,30 @@ def meili_list_documents(
 def search_meili(index_name: str, query: str, limit: int = 3,
                  highlight: str = None, highlight_fields: str = '*') -> str:
     """
-    Performs a search query in a specified Meilisearch index and returns formatted results.
+    Выполняет поисковый запрос в указанном индексе Meilisearch и возвращает
+    отформатированные результаты.
 
-    This function searches for documents matching the given query and formats the results
-    into a human-readable string containing document metadata and content. Each result
-    includes the document ID, title, filename, page number, and content.
+    Функция ищет документы, соответствующие переданному запросу, и формирует
+    удобочитаемую строку с информацией о каждом найденном документе. В вывод
+    включаются: ID документа, заголовок, имя файла, номер страницы и фрагмент
+    содержимого (используя поле '_formatted' для подсветки).
 
-    :param index_name: Name of the Meilisearch index to search in. Must not be empty.
-    :param query: Search query string to match against searchable attributes.
-    :param limit: Maximum number of search results to return. Defaults to 3.
-    :param highlight: Highlight tag parameter (currently not used in implementation).
-    :param highlight_fields: Fields to highlight in search results. Defaults to '*' (all fields).
+    :param index_name: Имя индекса Meilisearch, в котором выполняется поиск.
+                       Не должно быть пустым.
+    :param query: Строка поискового запроса.
+    :param limit: Максимальное количество возвращаемых результатов (по умолчанию 3).
+    :param highlight: Параметр для тегов подсветки (в текущей реализации не используется).
+    :param highlight_fields: Поля, по которым Meilisearch выполняет подсветку.
+                             По умолчанию '*' — все поля.
 
-    :return: A formatted string containing search results with document metadata and content,
-             separated by '\n---------\n'. Returns an error message if:
-             - The index_name is empty or not provided
-             - No matches are found
-             - An exception occurs during the search
+    :return: Строка с результатами поиска, где документы разделены
+             '\n---------\n'. Возможные варианты возврата:
+             - форматированный список найденных документов;
+             - сообщение "Совпадений не найдено, cформулируйте запрос иначе",
+             - текст ошибки при некорректном индексе или сбое поиска.
 
-    :raises: Does not raise exceptions directly; catches and returns error messages as strings.
-
-    Example:
-        >>> result = search_meili("main_index", "уретрит", limit=5)
-        >>> print(result)
-        ID документа: doc_123
-        Заголовок: Medical Article
-        Имя файла: medicine.pdf
-        Номер страницы: 5
-        Content text here...
-        ---------
-        ID документа: doc_124
-        ...
-
-    Note:
-        - If no matches are found, returns: "Совпадений не найдено, cформулируйте запрос иначе"
-        - Results are formatted with '_formatted' field from Meilisearch for proper highlighting
-        - Missing document fields default to "не указан" (not specified) or appropriate defaults
+    :raises: Исключения не пробрасываются наружу — все ошибки перехватываются
+             и возвращаются в виде текстового сообщения.
     """
 
     if not index_name:
@@ -470,19 +414,20 @@ def search_meili(index_name: str, query: str, limit: int = 3,
 
 
 # -----------------------------
-# Raw HTTP request operations
+# Прямые HTTP - запросы
 # -----------------------------
 
 def show_list_indexes(detail_mode: str = "full") -> list:
     """
-    Sends a GET request to retrieve all indexes in Meilisearch.
+    Отправляет GET-запрос к Meilisearch для получения списка всех индексов.
 
     :param detail_mode:
-        - "full": Print and return a list of index dictionaries
-                  (each containing 'uid', 'createdAt', 'updatedAt', 'primaryKey').
-        - "uid":  Print and return only a list of 'uid' values.
-    :return: A list of either index dictionaries or just 'uid' strings,
-             depending on 'detail_mode'. Returns an empty list on failure.
+        - "full": вернуть полный список словарей индексов
+                  (каждый содержит 'uid', 'createdAt', 'updatedAt', 'primaryKey').
+        - "uid":  вернуть только список значений 'uid'.
+                  Любое иное значение трактуется как "full".
+    :return: Список индексов (в виде словарей) или список строк 'uid',
+             в зависимости от выбранного режима. В случае ошибки возвращает пустой список.
     """
     endpoint = f"{c.MEILI_URL}/indexes"
     headers = {"Authorization": f"Bearer {c.MASTER_KEY}"}
@@ -512,11 +457,13 @@ def show_list_indexes(detail_mode: str = "full") -> list:
 
 def create_index(index_uid: str, primary_key: str = "id") -> None:
     """
-    Создаёт индекс в Meilisearch по обозначенному UID.
+    Создаёт новый индекс в Meilisearch с указанным UID и primary key.
 
-    :param primary_key: primary key for the new index.
-    :param index_uid: Уникальный идентификатор (UID) для нового индекса.
-    :return: None
+    :param index_uid: Уникальный идентификатор создаваемого индекса.
+    :param primary_key: Ключ документа, который Meilisearch будет считать первичным.
+                        По умолчанию "id".
+    :return: None. Результат создания выводится в консоль. При сетевой ошибке
+             выводится сообщение об исключении.
     """
     endpoint = f"{c.MEILI_URL}/indexes"
     headers = {"Authorization": f"Bearer {c.MASTER_KEY}"}
@@ -535,10 +482,11 @@ def create_index(index_uid: str, primary_key: str = "id") -> None:
 
 def delete_index(index_uid: str) -> None:
     """
-    Deletes an entire index by UID.
+    Удаляет индекс Meilisearch по его UID.
 
-    :param index_uid: The unique identifier of the index to delete.
-    :return: None
+    :param index_uid: Уникальный идентификатор индекса, который требуется удалить.
+    :return: None. Результат операции выводится в консоль. При сетевой ошибке
+             выводится сообщение об исключении.
     """
     endpoint = f"{c.MEILI_URL}/indexes/{index_uid}"
     headers = {"Authorization": f"Bearer {c.MASTER_KEY}"}
@@ -555,12 +503,12 @@ def delete_index(index_uid: str) -> None:
 
 def get_meili_list_documents(index_uid: str, limit: int = 20, offset: int = 0) -> list:
     """
-    Sends a GET request to retrieve documents from a specific index, using pagination.
+    Возвращает список документов из указанного индекса Meilisearch с пагинацией.
 
-    :param index_uid: The unique identifier of the index.
-    :param limit: How many documents to retrieve (default=20).
-    :param offset: The starting offset (default=0).
-    :return: A list of documents (dictionaries). Empty list on error.
+    :param index_uid: UID индекса, из которого необходимо получить документы.
+    :param limit: Количество документов для выборки (по умолчанию 20).
+    :param offset: Смещение, откуда начинать выборку (по умолчанию 0).
+    :return: Список документов (dict). В случае ошибки — пустой список.
     """
     endpoint = f"{c.MEILI_URL}/indexes/{index_uid}/documents"
     headers = {"Authorization": f"Bearer {c.MASTER_KEY}"}
@@ -587,11 +535,12 @@ def get_meili_list_documents(index_uid: str, limit: int = 20, offset: int = 0) -
 
 def delete_meili_document(index_uid: str, doc_id: str) -> None:
     """
-    Deletes a specific document from an index by its document ID.
+   Удаляет конкретный документ из индекса по его ID.
 
-    :param index_uid: The index from which the document will be removed.
-    :param doc_id: The ID of the document to delete.
-    :return: None
+    :param index_uid: UID индекса, из которого должен быть удалён документ.
+    :param doc_id: Идентификатор документа, подлежащего удалению.
+    :return: None. Информация о результате удаления выводится в консоль.
+             При ошибке выводится текст исключения.
     """
     endpoint = f"{c.MEILI_URL}/indexes/{index_uid}/documents/{doc_id}"
     headers = {"Authorization": f"Bearer {c.MASTER_KEY}"}
@@ -615,8 +564,15 @@ def delete_meili_document(index_uid: str, doc_id: str) -> None:
 
 def get_document_by_id(index_name: str, doc_id: str) -> Optional[Dict[str, Any]]:
     """
-    GET /indexes/{index}/documents/{id}
-    Вернёт dict (документ) или None (если 404).
+    Возвращает документ из Meilisearch по его ID.
+
+    Выполняет запрос:
+        GET /indexes/{index}/documents/{id}
+
+    :param index_name: Имя индекса.
+    :param doc_id: ID документа.
+    :return: dict с данными документа, если найден;
+             None — если документ отсутствует (404) или произошла ошибка.
     """
     url = f"{c.MEILI_URL}/indexes/{index_name}/documents/{doc_id}"
     headers = {"Authorization": f"Bearer {c.MASTER_KEY}"}
@@ -635,8 +591,16 @@ def get_document_by_id(index_name: str, doc_id: str) -> Optional[Dict[str, Any]]
 
 def upsert_document(index_name: str, doc: Dict[str, Any]) -> str:
     """
-    POST /indexes/{index}/documents — add/replace по primaryKey (обычно 'id').
-    На вход — один документ (мы отправляем массив из одного).
+     Добавляет или обновляет документ в индексе Meilisearch по его primary key.
+
+    Запрос:
+        POST /indexes/{index}/documents
+    Документ отправляется в массиве из одного элемента.
+
+    :param index_name: Имя индекса.
+    :param doc: Документ для сохранения (dict).
+    :return: "OK" при успешной вставке/обновлении,
+             либо строка с текстом ошибки.
     """
     url = f"{c.MEILI_URL}/indexes/{index_name}/documents"
     headers = {"Authorization": f"Bearer {c.MASTER_KEY}", "Content-Type": "application/json"}
@@ -667,7 +631,18 @@ def search_news_active(
         sort: list[str] | None = None,  # например ["from_ts:desc"]
 ) -> list[dict]:
     """
-    Возвращает активные на текущий момент новости/акции (type="news", interval overlap).
+   Возвращает активные на текущий момент новости/акции.
+
+    Документ считается активным, если текущий момент (или переданный now_ts)
+    попадает в интервал [from_ts, to_ts], и doc_type = "news".
+
+    :param index_name: Имя индекса новостей.
+    :param keyword: Ключевое слово для поиска (может быть None).
+    :param now_ts: Текущая временная отметка (timestamp).
+                   Если не указано — вычисляется автоматически.
+    :param limit: Максимальное количество результатов.
+    :param sort: Параметры сортировки (по умолчанию ["from_ts:desc"]).
+    :return: Список найденных документов (dict).
     """
 
     ts = _now_ts_utc() if now_ts is None else int(now_ts)
@@ -697,6 +672,9 @@ def search_news_active(
 def search_news_by_period(
         #     Не факт, что пригодится, но пусть будет.
 
+
+
+
         index_name: str,
         keyword: str | None,
         start_ts: int,
@@ -704,6 +682,19 @@ def search_news_by_period(
         limit: int = 50,
         sort: list[str] | None = None,
 ) -> list[dict]:
+
+    """
+    Выполняет поиск новостей/акций, период активности которых пересекается
+    с заданным интервалом [start_ts, end_ts].
+
+    :param index_name: Имя индекса.
+    :param keyword: Ключевое слово для поиска (может быть None).
+    :param start_ts: Начало временного интервала поиска.
+    :param end_ts: Конец временного интервала поиска.
+    :param limit: Максимальное количество результатов.
+    :param sort: Параметры сортировки (по умолчанию ["from_ts:asc"]).
+    :return: Список документов, пересекающих заданный период.
+    """
     # Пересечение интервалов: [from_ts, to_ts] ∩ [start_ts, end_ts] ≠ Ø
     flt = f"from_ts <= {end_ts} AND to_ts >= {start_ts} AND doc_type = 'news'"
     res = client.index(index_name).search(keyword or "", {
@@ -716,7 +707,7 @@ def search_news_by_period(
 
 def main():
     """
-    Example usage. Adjust as needed.
+    Пример использования. Настроить как нужно.
     """
     # 1) есть ли в принципе документы типа news
     from datetime import datetime, timezone

@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Union, Tuple
+from typing import Any, Dict, Tuple, Union
 
 from ollama import Options
 
@@ -59,12 +59,19 @@ _think = False
 
 
 # --------------------------------------------------
-# -----  OLLAMA THINK (REASONING) SECTION ----------
+# -----  OLLAMA THINK (REASONING) секция  ----------
 # --------------------------------------------------
 
 # ---- THINK helpers -------------------------------
 def get_think() -> bool:
-    """Текущее значение think из кэша/файла."""
+    """
+    Возвращает текущее значение флага Think.
+
+    Если значение ещё не инициализировано, выполняет init_thinking()
+    и берёт состояние из файла / config.ini.
+
+    :return: Текущее значение параметра Think (True/False).
+    """
     global _think
     if "_think" not in globals() or _think is None:
         init_thinking()
@@ -72,20 +79,39 @@ def get_think() -> bool:
 
 
 def set_think(status: bool) -> None:
-    """Обновить и кэш, и файл (тонкая обёртка над write_think_status)."""
+    """
+    Устанавливает новое значение флага Think и сохраняет его в файл.
+
+    Тонкая обёртка над write_think_status: обновляет и кэш, и файл.
+
+    :param status: Новое состояние параметра Think (True/False).
+    """
     write_think_status(bool(status))
 
 
 def resolve_think(override: bool | None) -> bool | None:
     """
-    Если override is None — вернуть текущее значение из настроек,
-    иначе вернуть override.
+    Возвращает финальное значение флага Think с учётом override.
+
+    :param override:
+        - None — вернуть текущее значение Think из настроек (файл / config.ini);
+        - True/False — вернуть переданное значение, не трогая файл.
+    :return: Итоговое значение параметра Think или None (если явно так задано).
     """
     return get_think() if override is None else override
 
 
 # -----------------------------------------------------
 def init_thinking() -> bool:
+    """
+    Инициализирует флаг Think при старте приложения.
+
+    Логика:
+    - если существует think.txt — читаем значение из файла;
+    - иначе берём дефолт из config.ini (c.think) и считаем его текущим.
+
+    :return: Инициализированное значение параметра Think.
+    """
     settings_dir.mkdir(parents=True, exist_ok=True)
     global _think
     if think_path.exists():
@@ -100,8 +126,13 @@ def init_thinking() -> bool:
 
 def write_think_status(status: bool, ) -> str:
     """
-    Сохраняет статус параметра Think в файл и в кэш.
-    Кеш - строка с именем.
+    Сохраняет статус параметра Think в файл и обновляет кэш.
+
+    При True в файле хранится строка "True".
+    При False файл очищается, но состояние всё равно фиксируется в кэше.
+
+    :param status: Новое состояние параметра Think.
+    :return: Строка-статус операции (успех / ошибка).
     """
     global _think
     _think = bool(status)
@@ -124,6 +155,16 @@ def write_think_status(status: bool, ) -> str:
 
 
 def read_think_status(inform: bool = True) -> Union[Tuple[bool, str], bool]:
+    """
+    Читает и инициализирует состояние Think, возвращая его (с текстом или без).
+
+    Вызов всегда приводит к init_thinking() и обновлению глобального _think.
+
+    :param inform:
+        - True: вернуть (status, message);
+        - False: вернуть только status.
+    :return: bool или (bool, str) в зависимости от флага inform.
+    """
     status = init_thinking()
 
     global _think
@@ -137,52 +178,95 @@ def read_think_status(inform: bool = True) -> Union[Tuple[bool, str], bool]:
 
 
 # --------------------------------------------------
-# ------------  OLLAMA OPTIONS SECTION ------------
+# ------------  OLLAMA OPTIONS СЕКЦИЯ --------------
 # --------------------------------------------------
 
-def init_options():
+def init_options() -> Dict[str, Any]:
+    """
+    Инициализирует кэш настроек Ollama из файла или дефолтных значений.
+
+    Если settings_path существует, пытается прочитать JSON и проверить, что это dict.
+    При любой ошибке чтения/разбора используется пресет _OPTIONS["expressive"].
+
+    :return: Текущий словарь настроек Ollama (_cached_opts).
+    """
     settings_dir.mkdir(parents=True, exist_ok=True)
-    # we are Loading JSON into cache here
     global _cached_opts
+
     if settings_path.exists():
-        _cached_opts = json.loads(settings_path.read_text(encoding='utf-8'))
+        try:
+            loaded = json.loads(settings_path.read_text(encoding='utf-8'))
+            if not isinstance(loaded, dict):
+                raise ValueError("Настройки Ollama должны быть словарём (dict)")
+            _cached_opts = loaded
+        except Exception as e:
+            logger.error(
+                "❌ Ошибка при чтении/разборе настроек Ollama (%s), "
+                "используются дефолтные значения 'expressive'", e
+            )
+            _cached_opts = _OPTIONS["expressive"]
     else:
         _cached_opts = _OPTIONS["expressive"]
+
     return _cached_opts
 
 
-def load_ollama_options(explain: bool = True, ) -> Union[str, (str, str)]:
+def load_ollama_options(explain: bool = True) -> str | tuple[str, str]:
     """
-    Загружает данные из сохраненного файла, если он существует.
-    Returns:
-        Dict: Данные для базовой настройки Ollama.
+    Загружает текущие настройки Ollama и возвращает их в виде JSON-строки.
+
+    Источник:
+    - если файл настроек существует и корректен — берёт данные из него;
+    - при ошибке чтения/разбора — использует дефолтные настройки 'expressive'.
+
+    :param explain:
+        - True: вернуть (json_str, message);
+        - False: вернуть только json_str.
+    :return: JSON-строка с настройками (и опционально текстовое сообщение).
     """
     try:
-        init_options()
-        data: str = json.dumps(_cached_opts, ensure_ascii=False, indent=2)
+        opts = init_options()
+        data: str = json.dumps(opts, ensure_ascii=False, indent=2)
         logger.info("✅ Загружены данные о настройках Ollama")
         if explain:
             return data, f"✅ Загружены данные о настройках Ollama для {OLLAMA_MODEL}"
         return data
 
     except Exception as e:
-        global _OPTIONS
+        # сюда мы, по идее, попадать не должны, но на всякий случай
         logger.error(
-            f"\n❌ Ошибка при чтении файла с настройками Ollama: {e}, загружены базовые настройки для {OLLAMA_MODEL}.")
+            "❌ Критическая ошибка при загрузке настроек Ollama: %s, "
+            "пытаемся использовать дефолтные значения 'expressive'", e
+        )
+        fallback = _OPTIONS["expressive"]
+        data = json.dumps(fallback, ensure_ascii=False, indent=2)
         if explain:
-            return _OPTIONS, f"⚠️ Установлены дефолтные настройки Ollama для {OLLAMA_MODEL} в связи с ошибкой: {e}"
-        return _OPTIONS  # Если пойдет не так, возвращаем базовый дефолт, вшитый в код
+            return data, (
+                f"⚠️ Установлены дефолтные настройки Ollama для {OLLAMA_MODEL} "
+                f"в связи с ошибкой: {e}"
+            )
+        return data
 
 
 def options_set() -> Options:
     """
-      :return: Options set for Ollama.
-      """
-    return Options(
-        **_cached_opts)  # важно, чтобы передался Dict, а не str. Без сообщений в строку Status интерфейса
+    Преобразует текущие кэшированные настройки Ollama в объект Options.
+
+    Перед вызовом ожидается, что init_options()/load_ollama_options()
+    уже были вызваны и _cached_opts содержит валидный словарь.
+
+    :return: Объект ollama.Options, готовый к передаче в клиент Ollama.
+    """
+    return Options(**_cached_opts)
 
 
 def write_options(data: Dict) -> str:
+    """
+    Сохраняет настройки Ollama в JSON-файл и обновляет кэш.
+
+    :param data: Словарь с настройками (параметры для Ollama).
+    :return: Строка-статус операции (успех / ошибка).
+    """
     try:
         settings_dir.mkdir(parents=True, exist_ok=True)
         with open(settings_path, "w", encoding="utf-8") as f:
@@ -195,11 +279,19 @@ def write_options(data: Dict) -> str:
 
 
 # --------------------------------------------------
-# ------------  MAIN MODEL NAME SECTION ------------
+# ------------  MAIN MODEL NAME СЕКЦИЯ ---0---------
 # --------------------------------------------------
 
-def init_model_name():
+def init_model_name() -> str:
     """
+    Инициализирует имя основной модели Ollama (OLLAMA_MODEL).
+
+    Логика:
+    - если main_model_path существует и содержит непустое имя —
+      читаем его и используем как базовую LLM;
+    - иначе берём значение из config.ini (c.ll_model_small).
+
+    :return: Текущее имя базовой модели (строка).
     """
     settings_dir.mkdir(parents=True, exist_ok=True)
     global OLLAMA_MODEL
@@ -213,7 +305,18 @@ def init_model_name():
     return OLLAMA_MODEL
 
 
-def read_main_model_name(inform: bool = True) -> Union[str, (str, str)]:
+def read_main_model_name(inform: bool = True) -> str | tuple[str, str]:
+    """
+    Читает имя основной модели Ollama (из файла или config.ini) и возвращает его.
+
+    Всегда вызывает init_model_name(), тем самым гарантируя актуальное
+    значение в глобальной переменной OLLAMA_MODEL.
+
+    :param inform:
+        - True: вернуть (name, message);
+        - False: вернуть только name.
+    :return: Строка с именем модели или кортеж (name, message).
+    """
     init_model_name()
     global OLLAMA_MODEL
     logger.info("✅ Загружено имя модели %s", OLLAMA_MODEL)
@@ -223,13 +326,15 @@ def read_main_model_name(inform: bool = True) -> Union[str, (str, str)]:
         return OLLAMA_MODEL
 
 
-def write_main_model_name(name: str, ) -> str:
+def write_main_model_name(name: str) -> str:
     """
-    Сохраняет имя выбранной LLM в файл и в кэш.
-    Кеш - строка с именем.
+    Сохраняет имя выбранной LLM в файл и обновляет кэш (OLLAMA_MODEL).
+
+    :param name: Имя модели Ollama (например, "llama3.1:8b").
+    :return: Строка-статус операции (успех / ошибка).
     """
-    global _model_cache
-    _model_cache = name
+    global OLLAMA_MODEL
+    OLLAMA_MODEL = name
     try:
         main_model_path.write_text(name, encoding="utf-8")
         logger.info("✅ Имя модели %s сохранено", name)
@@ -240,7 +345,6 @@ def write_main_model_name(name: str, ) -> str:
 
 
 if __name__ == "__main__":
-    # print(write_main_model_name("gpt-4"))
     print(write_think_status(False))
     print(read_think_status())
     print(_think)

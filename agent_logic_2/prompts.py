@@ -15,31 +15,23 @@ PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
 _PROMPT_CACHE: Dict[str, str] = {}
 
 
-def load_prompt(name: str, inform: bool = True) -> Union[(str, str) or str]:
+def load_prompt(name: str, inform: bool = True) -> str | tuple[str, str]:
     """
-    Loads a prompt from a file or the cache. If the specified prompt is found in
-    the cache, returns it directly. Otherwise, attempts to read the prompt
-    from a designated directory. Optionally, logs information about the process
-    and includes any relevant messages in the return value.
+    Загружает текст промпта из кэша или файла.
 
-    If the prompt file does not exist and logging is enabled, an information log
-    entry is generated. The function optionally returns an empty string and an
-    appropriate message in such a case.
+    Логика:
+    - если промпт уже есть в кэше — вернуть его;
+    - иначе прочитать файл `<name>.txt` из каталога PROMPTS_DIR и положить в кэш;
+    - если файла нет — вернуть пустую строку (и сообщение, если inform=True).
 
-    :param name: The name of the prompt file (without the extension) to load.
-    :type name: str
-    :param inform: A flag indicating whether to log messages or include status
-                   messages in the returned tuple.
-                   Default is True.
-    :type inform: bool
-    :return: The loaded prompt or a tuple containing the loaded prompt and an
-             informational message. If inform is False, only the prompt is
-             returned. If the prompt does not exist, an empty string and a
-             message are returned when inform is True; otherwise, only an
-             empty string is returned.
-    :rtype: (str, str) or str
+    :param name: Имя промпта без расширения (имя файла .txt).
+    :param inform:
+        - True: вернуть (text, message);
+        - False: вернуть только text.
+    :return:
+        - при успехе: текст промпта, либо (текст, сообщение);
+        - если файла нет: "" или ("", сообщение).
     """
-
     if name in _PROMPT_CACHE:
         if inform:
             return _PROMPT_CACHE[name], f"✅ Промпт {name} загружен из кэша"
@@ -51,7 +43,6 @@ def load_prompt(name: str, inform: bool = True) -> Union[(str, str) or str]:
         if inform:
             logger.info("❌ Не найден файл промпта %s", name)
             return "", f"❌ Не найден файл промпта {name}"
-            # raise FileNotFoundError(f"Prompt file not found: {path}")
         return ""
 
     text = path.read_text(encoding="utf-8")
@@ -64,8 +55,11 @@ def load_prompt(name: str, inform: bool = True) -> Union[(str, str) or str]:
 
 def write_prompt(name: str, text: str) -> str:
     """
-    Сохраняет отредактированный шаблон в файл и в кэш.
-    Кеш - словарь, ключ - имя файла, значение - текст в файле.
+    Сохраняет шаблон промпта в файл и обновляет кэш.
+
+    :param name: Имя промпта (будет сохранён в файл <name>.txt).
+    :param text: Текст промпта для сохранения.
+    :return: Строка-статус операции (успех / ошибка).
     """
     try:
         path = PROMPTS_DIR / f"{name}.txt"

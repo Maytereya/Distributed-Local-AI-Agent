@@ -9,6 +9,10 @@ import pandas as pd
 
 
 def generate_new_id():
+    """
+    Генерирует новый уникальный идентификатор документа (UUID4).
+    :return: Строка с UUID.
+    """
     return str(uuid.uuid4())
 
 
@@ -16,10 +20,26 @@ TABLE_HEADERS = ["Колонка 1", "Колонка 2"]  # держим в од
 
 
 def _now_utc_iso():
+    """
+    Возвращает текущую временную метку в формате ISO UTC.
+
+    Формат: YYYY-MM-DDTHH:MM:SSZ
+
+    :return: Строка с датой и временем в UTC.
+    """
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def _split_paragraphs(text: str, split: Literal["on", "off"]):
+    """
+    Разбивает текст на абзацы по пустой строке, либо возвращает текст целиком.
+
+    :param text: Исходный текст.
+    :param split:
+        - "on": возвращает список абзацев (сплит по пустой строке);
+        - "off": возвращает список из одного элемента — исходного текста.
+    :return: Список строк (абзацев).
+    """
     if split == "on":
         # простой и предсказуемый сплит: по пустой строке
         paras = [p.strip() for p in (text or "").split("\n\n") if p.strip()]
@@ -30,6 +50,17 @@ def _split_paragraphs(text: str, split: Literal["on", "off"]):
 
 
 def _normalize_table(table_value: Any, headers: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
+    """
+    Приводит табличные данные к аккуратному DataFrame с заданными заголовками.
+
+    - Выравнивает длину строк по количеству колонок.
+    - Приводит значения к строкам и очищает пробелы.
+    - Удаляет полностью пустые строки.
+
+    :param table_value: Любые табличные данные (список списков, Gradio Dataframe и т.п.).
+    :param headers: Заголовки колонок (если не заданы — используются дефолтные).
+    :return: DataFrame или None, если таблица пустая.
+    """
     headers = headers or ["Column 1", "Column 2"]
     width = len(headers)
 
@@ -60,8 +91,22 @@ def build_blocks(
 
 ) -> Tuple[str, List[dict]]:
     """
-    Возвращает (doc_id, blocks) для индексации.
-    Таблица добавляется отдельным блоком с полями content/html/csv.
+    Формирует структуру блоков для индексации документа.
+
+    - Основной текст разбивается на один или несколько блоков (в зависимости от split).
+    - Таблица (если есть) добавляется отдельным блоком с HTML, CSV и текстовой версией.
+    - Каждый блок получает собственный id, метаданные и ключевые слова.
+
+    :param doc_id: Идентификатор документа (если пуст — генерируется новый).
+    :param title: Заголовок документа (обязателен).
+    :param content: Основной текст документа (обязателен).
+    :param keywords_csv: CSV-строка с ключевыми словами.
+    :param table_data: Исходная таблица (может быть None).
+    :param split:
+        - "on": разбивать текст по абзацам;
+        - "off": считать весь текст одним блоком.
+    :param table_headers: Заголовки колонок таблицы (если нужны отличные от стандартных).
+    :return: (doc_id, список блоков для записи в индекс).
     """
     if not doc_id or not doc_id.strip():
         doc_id = generate_new_id()

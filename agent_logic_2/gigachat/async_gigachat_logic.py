@@ -29,14 +29,6 @@ async def gigachad_echo_async(system: str, prompt: str, ):
         async for chunk in giga.astream(pl):
             yield chunk
 
-        # async for chunk in giga.astream(pl):
-        #     response_list.append(chunk.choices[0].delta.content)
-        #     if response_list:
-        #         response_str: str = "\n\n---\n\n".join(response_list)
-        #         # print(chunk.choices[0].delta.content, flush=True)
-        #     else:
-        #         response_str = "GigaChat не отвечает"
-        # return response_str
 
 
 async def main():

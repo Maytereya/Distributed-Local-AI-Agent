@@ -64,11 +64,21 @@ logger = logging.getLogger(__name__)
 # Retry Decorator
 @retry(stop=stop_after_attempt(5), wait=wait_fixed(3))
 def connect_to_chroma():
+    """
+        Пытается подключиться к серверу ChromaDB с автоматическими повторами.
+
+        Использует параметры retry:
+        - до 5 попыток подключения,
+        - пауза 3 секунды между попытками.
+
+        :return: Инициализированный chromadb.HttpClient при успешном подключении.
+        :raises: Исключение, если все попытки подключения завершились неудачей.
+        """
     logger.info("🔄 Подключение к ChromaDB...")
     return chromadb.HttpClient(host=c.chroma_host, port=c.chroma_port)
 
 
-# Initialize Chroma client
+# Инициализация Chroma - клиента
 try:
     chroma_client = connect_to_chroma()
     logger.info("✅ Успешное подключение к ChromaDB!")
@@ -83,6 +93,20 @@ except Exception as e:
 
 def choose_model(model: Literal["distiluse", "sbert", "instructor", "default"] = "default",
                  return_type: Literal["model", "name"] = "model"):
+    """
+        Выбирает и при необходимости загружает модель эмбеддингов.
+
+        :param model: Ключ модели:
+            - "distiluse"  -> sentence-transformers/distiluse-base-multilingual-cased-v1
+            - "sbert"      -> ai-forever/sbert_large_nlu_ru
+            - "instructor" -> hkunlp/instructor-xl
+            - "default"    -> cointegrated/LaBSE-en-ru
+        :param return_type:
+            - "name": вернуть только имя модели (строкой);
+            - "model": вернуть загруженный объект SentenceTransformer.
+        :return: Либо строка с именем модели, либо объект модели (SentenceTransformer на CPU).
+        """
+
     model_mapping = {
         "distiluse": "sentence-transformers/distiluse-base-multilingual-cased-v1",
         "sbert": "ai-forever/sbert_large_nlu_ru",
@@ -106,7 +130,8 @@ def choose_model(model: Literal["distiluse", "sbert", "instructor", "default"] =
 
 class ChromaService:
     """
-    A service class for managing Chroma DB operations.
+    Сервисный класс для работы с ChromaDB: подключение, диагностика
+    и базовые операции с коллекциями.
     """
 
     def __init__(self, host: str, port: int):
@@ -114,22 +139,29 @@ class ChromaService:
 
     def info_chroma(self):
         """
-        Print current Chroma version, collections count, and heartbeat - health satus of database.
+       Выводит в консоль служебную информацию о ChromaDB:
+        текущую версию и количество коллекций.
         """
         print("Chroma current version: " + str(self.chroma_client.get_version()))
         print("Collections count: " + str(self.chroma_client.count_collections()))
         # print("Chroma heartbeat: " + str(round(self.chroma_client.heartbeat() / 3_600_000_000_000, 2)), " hours")
 
     def reset_chroma(self):
+        """
+        Полностью очищает ChromaDB и сбрасывает системный кэш.
+        Использовать с осторожностью: все данные будут удалены.
+        """
         self.chroma_client.reset()
         self.chroma_client.clear_system_cache()
 
     def display_collections(self, output_format: Literal["list", "str"] = "list") -> List[str] | str:
         """
-        Display all collections stored in Chroma DB.
+        Возвращает список коллекций, сохранённых в ChromaDB.
 
-        :param output_format: Format of the output - "list" for a list of collection names, "str" for a single string.
-        :return: List of collection names or a single string with names separated by new lines.
+        :param output_format:
+            - "list": вернуть список имён коллекций (List[str]);
+            - "str":  вернуть одну строку с именами коллекций, разделёнными переводами строк.
+        :return: Список имён коллекций или строка с перечислением имён.
         """
         list_col = self.chroma_client.list_collections()
 
@@ -142,11 +174,15 @@ class ChromaService:
 
         return result
 
-    # TODO: Проверить работоспособность
+
     def preconditioning(self, target_name: str):
         """
-        Prepare the conditions for creating and using collections by removing an existing collection if found.
-        :param target_name: The target collection name to check and reset if necessary.
+        Проверяет наличие коллекции с указанным именем и при необходимости удаляет её.
+
+        Используется как подготовительный шаг перед созданием новой коллекции
+        с тем же именем.
+
+        :param target_name: Имя коллекции, которую требуется сбросить/подготовить.
         """
         # Имя коллекции = target_name
         list_col = self.chroma_client.list_collections()
@@ -171,11 +207,33 @@ class ChromaService:
 # --------------------------------------------------------
 
 class HuggingFaceEmbeddingFunction(EmbeddingFunction[Documents]):
+    """
+    Обёртка для использования моделей SentenceTransformers в качестве
+    embedding_function для ChromaDB.
+
+    Поддерживает ленивую инициализацию модели и выбор пресетов
+    (distiluse / sbert / instructor / default).
+    """
+
     def set_model(self, model: Literal["distiluse", "sbert", "instructor", "default"] = "default"):
+        """
+        Задаёт пресет модели эмбеддингов для последующих вызовов.
+        Модель фактически будет загружена только при первом вызове __call__.
+        :param model: Ключ пресета модели ("distiluse", "sbert", "instructor", "default").
+        """
         self._model_name = model
         self._model = None
 
     def __call__(self, input: Documents) -> Embeddings:
+        """
+        Вычисляет эмбеддинги для списка документов/строк.
+
+        При первом вызове лениво загружает модель, заданную через set_model()
+        (или "default", если set_model не вызывалась).
+
+        :param input: Список строк (Documents), для которых нужно получить эмбеддинги.
+        :return: Список эмбеддингов (List[List[float]]).
+        """
         if not hasattr(self, '_model') or self._model is None:
             # реальная инициализация только на первый вызов
             self._model = choose_model(getattr(self, '_model_name', 'default'))
@@ -189,10 +247,10 @@ class HuggingFaceEmbeddingFunction(EmbeddingFunction[Documents]):
 
 def web_txt_splitter(add_urls) -> List[Document]:
     """
-    Split web documents into smaller chunks for processing.
+    Загружает веб-страницы по списку URL и разбивает их содержимое на чанки.
 
-    :param add_urls: A list of URLs to fetch and split into chunks.
-    :return: A list of Document objects containing the split text.
+    :param add_urls: Список URL, откуда нужно загрузить текст и разбить его на фрагменты.
+    :return: Список объектов Document с разбитым текстом.
     """
 
     doc_splits: List[Document] = []
@@ -222,10 +280,10 @@ def web_txt_splitter(add_urls) -> List[Document]:
 
 def txt_loader(path: str = "Upload/") -> List[Document]:
     """
-    Load and split text files from a directory into chunks.
+    Загружает текстовые файлы из директории и разбивает их содержимое на чанки.
 
-    :param path: The directory path containing text files to load.
-    :return: A list of Document objects with the split text.
+    :param path: Путь к директории, содержащей .txt-файлы.
+    :return: Список объектов Document с разбитым текстом.
     """
 
     split_docs: List[Document] = []
@@ -250,10 +308,10 @@ def txt_loader(path: str = "Upload/") -> List[Document]:
 
 def pdf_loader(path: str) -> List[Document]:
     """
-    Load and split a PDF document by pages, retaining page number and path metadata.
+    Загружает PDF-документ постранично, сохраняя метаданные о номере страницы и пути.
 
-    :param path: The file path of the PDF document to load.
-    :return: A list of Document objects containing the split pages.
+    :param path: Путь к PDF-файлу.
+    :return: Список объектов Document, по одному на страницу.
     """
 
     docs = []
@@ -279,9 +337,12 @@ def pdf_loader(path: str) -> List[Document]:
 
 def handle_collection(existed_collection: str) -> List[str] | str:
     """
-        Retrieve and display details of an existing Chroma DB collection.
+    Получает информацию о существующей коллекции ChromaDB и возвращает
+    список файлов с указанием страницы.
 
-        :param existed_collection: The name of the existing collection to retrieve.
+    :param existed_collection: Имя существующей коллекции.
+    :return: Список строк вида "<имя_файла>, p.<номер_страницы>" или
+             сообщение о том, что коллекция/документы недоступны.
     """
     try:
         collection = chroma_client.get_collection(name=existed_collection,
@@ -311,11 +372,6 @@ def handle_collection(existed_collection: str) -> List[str] | str:
             file_name = os.path.basename(file_path)
             file_list.append(f"{file_name}, p.{page_num}")
 
-        # print(file_list)
-
-        # print(f"list of the items in the collection: {peek}")
-        # print(f"collection_info: {collection_info}")
-        # print(f'the number of items in the collection: {collection.count()}')
 
         return file_list if file_list else ["Не найдено подходящих документов"]
 
@@ -328,11 +384,12 @@ def create_collection(
         model: Literal["distiluse", "sbert", "default"] = "default"
 ) -> Optional[Collection]:
     """
-    Create a new collection in Chroma DB with the specified name.
+    Создаёт новую коллекцию в ChromaDB с указанным именем и моделью эмбеддингов.
 
-    :param new_collection_name: The name of the new collection to create.
-    :param model: The embedding model to use for the collection. Default: "default" (LaBSE-en-ru).
-    :return: The created Collection object if successful, otherwise None.
+    :param new_collection_name: Имя создаваемой коллекции.
+    :param model: Выбранная модель эмбеддингов для коллекции.
+                  "default" — LaBSE-en-ru, а также предопределённые варианты "sbert", "distiluse".
+    :return: Объект Collection при успешном создании, иначе None.
     """
     embedding_function = HuggingFaceEmbeddingFunction()
     embedding_function.set_model(model)  # Set the embedding model.
@@ -356,6 +413,12 @@ def create_collection(
 
 
 def remove_collection(collection_name: str, ):
+    """
+        Удаляет коллекцию из ChromaDB по имени.
+
+        :param collection_name: Имя коллекции, которую необходимо удалить.
+        :return: None. В случае ошибки выводит сообщение в консоль.
+        """
     try:
         chroma_client.delete_collection(name=collection_name)
     except Exception as erc:
@@ -371,16 +434,17 @@ def add_data(
         model: Literal["distiluse", "sbert", "instructor", "default"] = "default"
 ):
     """
-    Add data to an existing Chroma DB collection based on the upload type.
+    Добавляет данные в существующую коллекцию ChromaDB в зависимости от типа источника.
 
-    :param exist_collection_name: The name of the existing collection to which data will be added.
-    :param upload_type: The type of data to upload. Options:
-        - "URL": Load text data from a list of URLs.
-        - "PDF": Load data from a PDF file at the specified path.
-        - "TXT": Load data from text files in the specified directory.
-    :param add_urls: A list of URLs for loading documents (used if upload_type = "URL").
-    :param add_path: The file path or directory path for loading data (used for "PDF" or "TXT").
-    :param model: The embedding model to use. Options: "default" (LaBSE-en-ru), "sbert", "instructor", "distiluse".
+    :param exist_collection_name: Имя существующей коллекции, в которую будут загружены данные.
+    :param upload_type: Тип загружаемых данных:
+        - "URL": загрузить текст по списку URL;
+        - "PDF": загрузить содержимое из одного PDF-файла;
+        - "TXT": загрузить содержимое из текстовых файлов в директории.
+    :param add_urls: Список URL (используется, если upload_type = "URL").
+    :param add_path: Путь к файлу или директории (используется для "PDF" и "TXT").
+    :param model: Модель эмбеддингов ("default" / "sbert" / "instructor" / "distiluse").
+    :return: None. Сообщения о ходе и ошибках выводятся в консоль.
     """
 
     print(f"Adding data to collection: {exist_collection_name}")
@@ -463,14 +527,14 @@ def query_collection(
         model: Literal["distiluse", "sbert", "instructor", "default"] = "default"
 ) -> Optional[List[Document]]:
     """
-    Query a Chroma DB collection and return matching documents.
+    Выполняет запрос к коллекции ChromaDB и возвращает подходящие документы.
 
-    :param existed_collection: The name of the collection to query.
-    :param question: The query text to search for.
-    :param contains: A filter for documents containing this text.
-    :param n_results: The number of results to return.
-    :param model: The embedding model to use for the query.
-    :return: A list of matching Document objects.
+    :param existed_collection: Имя коллекции, по которой выполняется поиск.
+    :param question: Текст запроса (используется для эмбеддинга).
+    :param contains: Фильтр по содержимому документа (where_document, оператор "$contains").
+    :param n_results: Количество возвращаемых результатов.
+    :param model: Модель эмбеддингов, используемая при поиске.
+    :return: Список объектов Document с найденными фрагментами или None в случае ошибки.
     """
     embedding_function = HuggingFaceEmbeddingFunction()
     embedding_function.set_model(model)
@@ -485,11 +549,6 @@ def query_collection(
         where_document={"$contains": contains}  # Filter documents containing the specified text.
     )
 
-    # print("QUERY RESPONSE (def query_collection): ")
-    # print()
-    # print(f"Documents:  {result["documents"][0]}")
-    # print(f"Distances:  {result["distances"][0]}")
-    # print(f"Metadata:  {result["metadatas"][0][0]}")
 
     documents = [
         Document(page_content=doc, metadata=meta)
@@ -517,21 +576,23 @@ def vs_query(
         lambda_mult: float = 0.85
 ) -> List[Document]:
     """
-    Perform a vector-based search in Chroma DB using various search types.
+    Выполняет векторный поиск по коллекции Chroma через LangChain VectorStore.
 
-    :param existed_collection: The name of the collection to search in.
-    :param question: The query text to search for.
-    :param search_type: The type of search to perform:
-        - "simil": Similarity search.
-        - "simil_score": Similarity search with scores.
-        - "vector": Search by embedding vector.
-        - "mmr": Maximal Marginal Relevance (MMR) search.
-    :param model: The embedding model to use for the query.
-    :param k: The number of results to return.
-    :param filters: Filters to apply during the search. Default: {"source": "pdf/side_effects_guidelines.pdf"}.
-    :param fetch_k: The number of documents to fetch for MMR.
-    :param lambda_mult: Adjusts diversity in MMR results (lower = less diverse).
-    :return: A list of Document objects containing the results.
+    :param existed_collection: Имя коллекции для поиска.
+    :param question: Текст запроса.
+    :param search_type: Тип поиска:
+        - "simil": обычный similarity search;
+        - "simil_score": similarity search с оценками похожести;
+        - "vector": поиск по вручную рассчитанному вектору;
+        - "mmr": поиск с Maximal Marginal Relevance (MMR).
+    :param model: Модель эмбеддингов для построения векторов.
+    :param k: Количество возвращаемых документов.
+    :param filters: Фильтры для поиска по метаданным
+                    (по умолчанию {"source": "pdf/side_effects_guidelines.pdf"}).
+    :param fetch_k: Количество документов, выбираемых до MMR-отбора.
+    :param lambda_mult: Коэффициент баланса между релевантностью и разнообразием
+                        для MMR (чем ниже — тем выше упор на релевантность).
+    :return: Список объектов Document с результатами поиска (может быть пустым при ошибке).
     """
 
     documents: List[Document] = []
@@ -623,15 +684,25 @@ async def main_retrieve_async(collection: str,
                               threshold: float = 0.005,
                               ) -> List[Document] | str:
     """
+    Основная асинхронная функция для поиска по Chroma (через VectorStore или напрямую по DB)
+    с фильтрацией похожих документов.
 
-    :param return_type: Определяет, в каком виде выдается итог поиска: [Document] или str, по умолчанию [Document].
-    :param threshold: Порог срабатывания отсекателя похожих документов. Чем больше значение, тем больше документов попадет в выдачу.
-    :param n_results: Определяет количество документов в выдаче при поиске по ChromaDB.
-    :param k: Определяет количество документов в выдаче при поиске по Chroma Vectorstore.
-    :param search_type: Определяет принцип поиска: Vectorstore с фильтрацией по ключевому слову или ChromaDB c ключевым словом.
-    :param collection: Имя коллекции, которая будет создаваться.
-    :param question: Вопрос заданный пользователем.
-    :return: Список документов для ответа Агента.
+    :param collection: Имя коллекции, в которой выполняется поиск.
+    :param question: Вопрос пользователя (исходный текст запроса).
+    :param search_type:
+        - "vectorstore": поиск через Chroma VectorStore (LangChain) с MMR;
+        - "db": прямой запрос к ChromaDB (collection.query) с фильтром по ключевому слову.
+    :param return_type:
+        - "list": вернуть список объектов Document;
+        - "str": вернуть конкатенированный текст всех найденных документов.
+    :param k: Количество документов в выдаче при поиске через VectorStore.
+    :param n_results: Количество документов в выдаче при прямом поиске по ChromaDB.
+    :param threshold: Порог отсечения сильно похожих документов при пост-фильтрации
+                      (чем больше значение, тем больше документов остаётся).
+    :return: Либо список Document, либо строка с объединённым содержимым
+             (в зависимости от параметра return_type).
+             При отсутствии совпадений возвращается заглушка
+             с текстом "Совпадений не найдено, cформулируйте запрос иначе".
     """
     if not collection:
         return (
@@ -659,8 +730,6 @@ async def main_retrieve_async(collection: str,
         filtrated_docs = query_collection(collection, question, contains=keyword, n_results=n_results,
                                           model="default")
 
-    # не удалять этот вывод для отладки
-    # print(f'{filtrated_docs=}')
 
     if len(filtrated_docs) == 0:
         filtrated_docs = [
@@ -680,7 +749,6 @@ async def main_retrieve_async(collection: str,
     return filtrated_docs
 
 
-# ToDo: доделать!
 def main_add_to_chroma(
         # filename: str = "side_effects_guideline_for_RAG_paged.pdf",
         path_to_file: str = None,
@@ -688,31 +756,21 @@ def main_add_to_chroma(
         doc_type: Literal["URL", "PDF", "TXT"] = "PDF",
 ) -> None:
     """
-    Create collection and Upload the document in it.
+    Высокоуровневая функция для загрузки документов в коллекцию ChromaDB.
 
-    :param path_to_file: String, path to uploaded PDF in memory. Mandatory.
-    :param collection: String, name of the collection, that will be created in Chroma database.
+    Создаёт (при необходимости) и/или использует существующую коллекцию,
+    после чего добавляет в неё данные указанного типа.
 
-    :param doc_type: Choose one of supported types of the document to upload: "URL", "PDF", "TXT".
-    :return: None
+    :param path_to_file: Путь к файлу или директории, откуда загружаются данные.
+                         Для "PDF" — PDF-файл, для "TXT" — директория с .txt-файлами.
+                         Для "URL" путь обрабатывается внутри add_data (используются URL-списки).
+    :param collection: Имя коллекции, в которую будут добавлены документы.
+    :param doc_type: Тип загружаемого источника: "URL", "PDF" или "TXT".
+    :return: None.
     """
 
     chroma_service = ChromaService(c.chroma_host, c.chroma_port)
-
     chroma_service.info_chroma()
-
-    # ToDo: Функция preconditioning требует доработки
-    # chroma_service.preconditioning(collection)
-
-    # path = path_handling.create_path(filename) # Actual, if there is internal path only
-
-    # Create collection:
-    # if new_collection:
-    #     create_collection(collection)
-    # else:
-    #     collection = choose_last_collection()
-
-    # Add web/pdf/txt data to collection...
     add_data(exist_collection_name=collection, upload_type=doc_type,
              add_path=path_to_file, )
 

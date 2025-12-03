@@ -31,11 +31,10 @@ from agent_logic_2.llama_func_call import repo
 from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
 from agent_logic_2.prompts import load_prompt
-# импорт пока под вопросом - где-то он еще есть, не могу найти =(
 from agent_logic_1 import meilisearch_client as meilisearch
 from converters import html_cleaner
 
-#  Initialize logging for understanding the logics of the router
+#  Инициализация logging для понимания логики роутера
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
