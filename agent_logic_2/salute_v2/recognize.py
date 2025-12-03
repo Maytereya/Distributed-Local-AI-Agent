@@ -6,9 +6,7 @@ import time
 
 import grpc
 
-from sber_proto import recognitionv2_pb2
-from sber_proto import recognitionv2_pb2_grpc
-
+from sber_salut_operations.sber_proto import recognitionv2_pb2, recognitionv2_pb2_grpc
 
 CHUNK_SIZE = 2048
 SLEEP_TIME = 0.1

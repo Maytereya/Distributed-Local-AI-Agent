@@ -6,8 +6,7 @@ from google.protobuf import duration_pb2
 # print(duration_pb2.Duration(seconds=5))  # → seconds: 5
 
 import agent_logic_2.config as c
-import sber_proto.recognitionv2_pb2 as rec_pb2
-import sber_proto.recognitionv2_pb2_grpc as rec_grpc
+from sber_salut_operations import sber_proto as rec_pb2, sber_proto as rec_grpc
 
 BUNDLE = os.path.abspath(c.SBER_CA)
 
