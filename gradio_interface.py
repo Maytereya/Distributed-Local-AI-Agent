@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import re
 import shutil
 import time
 from datetime import datetime, timezone
@@ -21,25 +19,21 @@ from agent_logic_2.direct_upload_meili_tab import build_blocks, TABLE_HEADERS
 from agent_logic_2.id_validation import is_valid_id, sanitize_id
 from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
-from agent_logic_pack import aretrieve3 as retrieve
-from agent_logic_pack import meilisearch_client as meilisearch
-# from asr_sber import asr_stream_sber, sber_flush, sber_reset_state
-# from auth_sber import start_token_refresher
+from agent_logic_1 import aretrieve as retrieve
+from agent_logic_1 import meilisearch_client as meilisearch
 from container_managenment import restart_container
 from converters import pdf_to_json_txt_tables_meili as pdf2json
 from whisper import whisper_dict as w
-#
 from whisper.wisper_ws_client import ws_transcribe
+import os, logging, sys, asyncio
 
-#
-
-# Label constants
+# Label - константы
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
 INDEXES_IN_MEILI = "Индексы документов Meilisearch"
 # Static files config for Gradio
 STATIC_DIR = (Path(__file__).parent / "static").resolve()
 
-# OpenGraph/Twitter preview meta tags (for messengers and social previews)
+# Мета-теги для превью в соцсетях
 OG_IMAGE_URL = "https://ontheflyai.ru/preview/og.png"
 OG_HEAD = (
     "<meta property=\"og:type\" content=\"website\" />\n"
@@ -57,7 +51,7 @@ OG_HEAD = (
 )
 
 # -------------------
-# SECURITY
+# БЕЗОПАСНОСТЬ
 # -------------------
 
 USERNAME = c.AUTH_NAME
@@ -73,7 +67,7 @@ def check_auth(username, password):
 
 
 # -------------------
-# Footer!
+# Footer/Подвал
 # -------------------
 custom_css = """
 
@@ -124,14 +118,11 @@ custom_css = """
 """
 
 # -------------------
-# ECHOES PART
+# ECHOES - раздел
 # -------------------
 
 # Глобальная сессия (Gradio поддерживает per-user state)
 # state = gr.State({})  # будет передаваться как дополнительный input/output
-
-# ЛОГИРОВАНИЕ ДЛЯ ПОИСКА ПРОБЛЕМЫ С РАСПОЗНАВАНИЕМ ОТ СБЕРБАНКА
-import os, logging, sys, asyncio
 
 
 def enable_debug_logging():
@@ -157,7 +148,7 @@ def enable_debug_logging():
 
 async def echo_ai_router(message, history, session_state, ai_feed: Literal["local", "cloud"] = "local"):
     """
-    Обновлённая версия universal_echo — подключает роутер и стримит ответ.
+    Подключает роутер и стримит ответ.
     :param ai_feed: Что подключаем: локальную LLM или облачную.
     :param message: Текст запроса пользователя
     :param history: (не используется, можно убрать)
@@ -212,12 +203,12 @@ async def meili_echo(
         limit: int
 ) -> str:
     """
-
+    Поддерживает прямое обращение к серверу Meilisearch.
     :param message:
     :param history:
     :param index:
     :param limit:
-    :return: string результаты поиска
+    :return: String - результаты поиска
     """
     search_result = meilisearch.search_meili(query=message, index_name=index, limit=limit)
 
@@ -279,19 +270,19 @@ async def universal_echo(
 
 
 # --------------------
-# CHROMA DB section
+# CHROMA DB - секция
 # --------------------
 
 def gr_create_collection(c_name: str):
     """
-    Created a collection and return its name in str.
+    Создает коллекцию и возвращает ее имя в качестве строки.
     Warning: in the next releases Chroma .name parameter will be removed!
     :param c_name: String, passed new name of the collection.
     :return: String, name of the collection.
     """
     if c_name:
         result = retrieve.create_collection(c_name)
-        time.sleep(5)
+        time.sleep(3)
         new_collections = gr_existed_collections()
         return (
             f"Коллекция {result.name} создана",
@@ -307,6 +298,11 @@ def gr_create_collection(c_name: str):
 
 
 def gr_remove_collection(c_name: str):
+    """
+    Удаляет коллекцию по имени.
+    :param c_name:
+    :return: String - сообщение и обновление объектов Gradio.
+    """
     retrieve.remove_collection(c_name)
     new_collections = gr_existed_collections()
     return (
@@ -318,7 +314,7 @@ def gr_remove_collection(c_name: str):
 
 def gr_existed_collections():
     """
-
+    Выводит имена существующих коллекций.
     :return: List of existed collection names.
     """
     chroma_service = retrieve.ChromaService(c.chroma_host, c.chroma_port)
@@ -327,7 +323,8 @@ def gr_existed_collections():
 
 def existed_docs_in_selected_collection(selected_collection: str):
     """
-    Через функционал collection.peek["metadatas"] получение названия загруженных документов и их страниц
+    Через функционал collection.peek["metadatas"] получает названия загруженных
+    документов и их страниц.
     :return: List of strings.
     """
     if not selected_collection:
@@ -339,6 +336,12 @@ def existed_docs_in_selected_collection(selected_collection: str):
 
 
 def gr_add_to_collection(collection: str, file_path: str):
+    """
+    Добавляет файл в коллекцию.
+    :param collection:
+    :param file_path:
+    :return:
+    """
     if not collection:
         return (
             gr.update(value=None),
@@ -360,12 +363,12 @@ def gr_add_to_collection(collection: str, file_path: str):
 
 
 # ----------------
-# MEILI section
+# MEILI - секция
 # ----------------
 
 def gr_existed_indexes():
     """
-
+    Возвращает список существующих индексов.
     :return: List of existed Meilisearch indexes.
     """
     return meilisearch.show_list_indexes(detail_mode="uid")
@@ -374,6 +377,7 @@ def gr_existed_indexes():
 def existed_docs_in_selected_index(selected_index: str,
                                    return_type: Literal["All", "ID"]) -> List[str] | List[List[str]]:
     """
+    Возвращает список существующих документов в индексе.
     """
     if not selected_index:
         return ["Индекс не выбран"]
@@ -459,7 +463,6 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
             base_no_ext_clean = sanitize_id(base_no_ext)
         local_json_path = f"Upload/{base_no_ext_clean}.json"
         # Копируем загруженный временный файл в свою папку
-        # (import shutil)
         shutil.copyfile(json_file, local_json_path)
 
         meili_msg = ''  # Переменная, которая сообщает об ошибках Meili
@@ -499,14 +502,9 @@ def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_typ
 
 def gr_remove_index(index: str):
     """
-    Remove an index from a Meilisearch instance and update the lists of available indexes.
+    Удаляет индекс из Meilisearch и обновляет список всех индексов.
 
-    The function deletes the specified index from Meilisearch, waits for a short period to
-    ensure index operation consistency, and retrieves the updated list of existing indexes
-    to reflect changes. If no indexes remain, the function returns a default message
-    indicating the absence of indexes.
-
-    :param index: The name of the index to be removed from Meilisearch.
+    :param index: Имя индекса, который должен быть удален из Meilisearch.
     :type index: str
     :return: Tuple containing updates for UI components with new index choices, an update
              message, and other relevant UI values.
@@ -514,16 +512,13 @@ def gr_remove_index(index: str):
     """
     meilisearch.delete_index(index)
     #
-    time.sleep(10)
+    time.sleep(5)
     #
     new_list = gr_existed_indexes() if gr_existed_indexes() else "Индекс отсутствует"
     gr.Success(message=f"Индекс {index} удален", title="Успешно")
     return (
         gr.update(choices=new_list, value=new_list[0] if new_list else ""),
-        gr.update(choices=new_list, value=new_list[0] if new_list else ""),
-        gr.update(choices=new_list, value=new_list[0] if new_list else ""),
-        gr.update(choices=new_list, value=new_list[0] if new_list else ""),
-    )
+    )*4
 
 
 def gr_create_index(index_name: str):
@@ -540,11 +535,7 @@ def gr_create_index(index_name: str):
     gr.Success(message=f"Индекс {index_name} создан", title="Успешно")
     return (
         gr.update(choices=new_list, value=index_name),
-        gr.update(choices=new_list, value=index_name),
-        gr.update(choices=new_list, value=index_name),
-        gr.update(choices=new_list, value=index_name),
-
-    )
+    )*4
 
 
 def gr_rm_doc_from_index(ind_id: str, doc_id: str):
@@ -612,7 +603,7 @@ def validate_id_live(current: str, mode: Literal["create", "change"]):
 
 
 # ------------------------------------
-# GRADIO WRAPPING functions section
+# GRADIO секция функций - оберток
 # ------------------------------------
 
 def update_docs_in_meili_index(
@@ -627,7 +618,7 @@ def update_docs_in_meili_index(
     optional current_id: какой ID сделать выбранным, если он есть в списке.
     """
 
-    # Если индекса нет (пустой дропдаун) — сразу отдаем пустые значения
+    # Если индекса нет (пустой дропдаун(выпадайка)) - сразу отдаем пустые значения
     if not index_name:
         empty_ids: list[str] = []
         if output == "full":
@@ -661,7 +652,7 @@ def update_docs_in_meili_index(
 
 def update_docs_in_chroma_collection(collection_name: str):
     """
-    Аналогичная функция для Chroma:
+    Функция для Chroma:
     При выборе коллекции возвращаем список документов в ней.
     """
     chroma_doc_list = retrieve.handle_collection(collection_name)
@@ -671,21 +662,19 @@ def update_docs_in_chroma_collection(collection_name: str):
     )
 
 
-def txt_default():
-    return f"Ожидание действий..."
+# def txt_default():
+#     return f"Ожидание действий..."
 
 
 def radio_sliders_change(choice):
     """
-    value_n_results_slider,
-    thresholdvalue_slider,
-    value_k_slider,
-    meili_search_indexes_dropdown,
-    chroma_search_collection_dropdown,
+    Обновляет интерактивное состояние всех слайдеров в зависимости от выбранной опции.
 
-    The search type selector that enables appropriated sliders.
-    :param choice: AI Router, Vectorstore search, or Chroma DB Search.
-    :return: Configurations of sliders that refine the search.
+    :param choice: Строка, отображающая возможные варианты. Варианты:
+        "vectorstore", "db", and "meilisearch".
+    :type choice: str
+    :return: Кортеж `gr.update` объектов.
+    :rtype: tuple
     """
     if choice == "vectorstore":
         return (gr.update(interactive=True),
@@ -724,6 +713,9 @@ def radio_sliders_change(choice):
 
 def radio_search_engine_change(choice):
     """
+    Функция для селектора выбора движка для загрузки данных. Возможны варианты
+    - Chroma,
+    - Meilisearch.
 
     collections_dropdown, index_dropdown, add_collection_button, rm_collection_button,
     add_index_button, rm_index_button, add_to_collection_button, add_to_index_button
@@ -996,6 +988,7 @@ def main():
                                                               size="sm",
                                                               variant="primary",
                                                               scale=10,
+
                                                               )
                             rm_collection_button = gr.Button("⛔ Удалить коллекцию",
                                                              visible=True,
@@ -1573,7 +1566,7 @@ def main():
                         else:
                             keywords = str(raw_keywords or "")
 
-                        # 6. Таблица: если нет или None — ставим дефолтную
+                        # 6. Таблица: если нет или None - ставим дефолтную
                         table_val = doc.get("table") or DEFAULT_EMPTY_TABLE
 
                         # 7. Сообщение об успехе
@@ -1585,7 +1578,7 @@ def main():
                         #     valid_from_dp, valid_to_dp, permanent_cb,
                         #     keywords_input, table_df,
                         #     doc_type_radio, news_dates_row,
-                        #     id_select]  ← последний — наша выпадайка с ID
+                        #     id_select]  ← последний - выпадайка с ID
                         return (
                             gr.update(value=doc_id),  # id_input
                             gr.update(value=title),  # title_input
@@ -1601,7 +1594,7 @@ def main():
                             gr.update(value=doc_type),  # doc_type_radio
                             gr.update(visible=is_news),  # news_dates_row
 
-                            # 🧷 ВАЖНО: явно сохраняем выбор в dropdown ID
+                            # 🧷 ВАЖНО: сохраняем выбор в dropdown ID
                             gr.update(value=doc_id),  # id_select
                             gr.update(value=doc_id),  # 🆕 orig_doc_id_state
                         )

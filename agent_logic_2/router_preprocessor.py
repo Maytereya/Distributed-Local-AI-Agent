@@ -32,7 +32,7 @@ from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
 from agent_logic_2.prompts import load_prompt
 # импорт пока под вопросом - где-то он еще есть, не могу найти =(
-from agent_logic_pack import meilisearch_client as meilisearch
+from agent_logic_1 import meilisearch_client as meilisearch
 from converters import html_cleaner
 
 #  Initialize logging for understanding the logics of the router

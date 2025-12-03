@@ -18,7 +18,7 @@ def enable_debug_logging():
 TARGET_SR = 16000
 
 
-async def ws_transcribe(audio, meta_output:bool=False):
+async def ws_transcribe(audio, meta_output: bool = False):
     """
     audio: (sr, numpy.ndarray) от Gradio (type='numpy')
     Отправляем один цельный кусок аудио по WebSocket на /stream,

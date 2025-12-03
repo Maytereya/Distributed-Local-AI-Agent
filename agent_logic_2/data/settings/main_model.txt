@@ -1,1 +1,1 @@
-mistral-small3.2:24b-instruct-2506-q4_K_M
+ministral-3:14b-instruct-2512-fp16

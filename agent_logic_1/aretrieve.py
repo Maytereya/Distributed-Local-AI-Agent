@@ -11,7 +11,7 @@ import uuid
 from typing import List, Optional
 from typing import Literal
 
-# <<< ВАЖНО >>> тяжёлые хрени импортируем позже, внутри функций
+# <<< ВАЖНО >>> тяжёлые модули импортируем позже, внутри функций
 # from langchain_huggingface import HuggingFaceEmbeddings
 # from sentence_transformers import SentenceTransformer
 
@@ -27,7 +27,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
 
 from agent_logic_2 import config as c
-from agent_logic_pack import formulate, embedding_filtration
+from agent_logic_1 import formulate, embedding_filtration
 
 # Model loading for embeddings
 # from InstructorEmbedding import INSTRUCTOR

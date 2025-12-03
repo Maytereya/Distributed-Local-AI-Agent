@@ -27,7 +27,8 @@ from tenacity import retry, stop_after_attempt, wait_fixed  # Для автом�
 
 #
 from agent_logic_2 import config as c
-# from gradio_interfaice import waiter
+
+# from gradio_interface import waiter
 
 # --------------------------------------
 # Секция загрузки и ретраев для отладки
@@ -108,7 +109,7 @@ def ensure_index(client, index_name: str, primary_key: str = "id",
     """
     Создаёт индекс при отсутствии и НЕразрушительно дополняет настройки (union).
     settings_patch — словарь с фрагментом настроек, который нужно гарантировать.
-    wait_fn(task) — ваша обвязка ожидания задач Meili (taskUid/uid).
+    wait_fn(task) —  обвязка ожидания задач Meili (taskUid/uid).
     """
     # 1) get or create
     try:
@@ -737,11 +738,10 @@ def main():
         "filterableAttributes": ["from_ts", "to_ts", "is_permanent", "doc_type", "keywords"],
         "sortableAttributes": ["from_ts", "to_ts"],
     }
-    ensure_index(client, "news", "id", NEWS_SETTINGS, wait_fn=waiter)
+    ensure_index(client, "news", "id", NEWS_SETTINGS, )
 
     s = client.index("news").get_settings()
     print("searchable:", s.get("searchableAttributes"))
-
 
     # idx = client.index("news").search( {})
     # print(idx.search("", filter='doc_type = "news"', limit=3))
@@ -757,13 +757,13 @@ def main():
     print("=======")
     # doc: dict = {'id': 'skidka_50_na_manipulyaciyu_lor_hirurgiya_p1_b1', 'doc_id': 'skidka_50_na_manipulyaciyu_lor_hirurgiya', 'page': 1, 'block_id': 1, 'type': 'text', 'title': 'Скидка 50% на манипуляцию ЛОР, хирургия (+ check)', 'content': 'Скидка 50% на манипуляцию ЛОР, хирургия (+check2).\n_\nСкидка предоставляется на прием специалиста при прохождения данных манипуляций у доктора.\n_\nВНИМАНИЕ!   Пациент должен иметь на руках  протокол консультации врача, где указано, что  рекомендовано та или иная манипуляция (с него снимают копию и вклеивают в карту пациентки).\n  Если  протокола/направления от врача нет (и соответственно нет рекомендации для проведения данной манипуляции), то пациент оплачивает полную стоимость приема!\n_\nЗапись в Мед.центре: в примечании пишем 50%манипуляция\n_\nПродолжительность акции: не указана.', 'html': None, 'csv': None, 'keywords': [], 'created_at': '2025-10-13T17:12:38Z'}
     #
-    # print("=======")
-    # print(get_document_by_id("news", "probnyi_dokument_so_vremenem_p1_b1"))
+    print("=======")
+    print(get_document_by_id("main_index", "obsluzhivanie_sotrudnikov_t_banka_po_chekapam_renessans_p1_b1"))
     # print(upsert_document("news", doc))
-    s_r = search_meili("news", "прием флеболога бесплатно")
+    # s_r = search_meili("news", "прием флеболога бесплатно")
     # print("=======")
     # print(s_r)
 
 
 if __name__ == '__main__':
-    main()
+    print(get_document_by_id("news", "novosti_za_1710"))

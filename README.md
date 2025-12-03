@@ -183,7 +183,7 @@ whisper/                — конфигурация запросов к uvicorn
 converters/             — обработка PDF/TXT/URL
 container_managenment/  — Docker модули
 static/                 — статические файлы
-gradio_interfaice.py    — визуальный интерфейс
+gradio_interface.py    — визуальный интерфейс
 docker-compose.yml      — основной оркестратор
 ```
 * Cервер Uvicorn/Whisper с API в репозитории https://github.com/Maytereya/whisper-server
