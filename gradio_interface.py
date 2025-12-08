@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
+import os
 import shutil
+import sys
 import time
 from datetime import datetime, timezone
 from functools import partial
@@ -12,6 +16,8 @@ import gradio as gr
 from gradio_pdf import PDF
 
 import agent_logic_2.ollama_settings as ollama_settings
+from agent_logic_1 import aretrieve as retrieve
+from agent_logic_1 import meilisearch_client as meilisearch
 from agent_logic_2 import config as c
 from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
@@ -19,13 +25,10 @@ from agent_logic_2.direct_upload_meili_tab import build_blocks, TABLE_HEADERS
 from agent_logic_2.id_validation import is_valid_id, sanitize_id
 from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
-from agent_logic_1 import aretrieve as retrieve
-from agent_logic_1 import meilisearch_client as meilisearch
 from container_managenment import restart_container
 from converters import pdf_to_json_txt_tables_meili as pdf2json
 from whisper import whisper_dict as w
 from whisper.wisper_ws_client import ws_transcribe
-import os, logging, sys, asyncio
 
 # Label - константы
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
@@ -116,6 +119,7 @@ custom_css = """
   padding-top: 0 !important;
 }
 """
+
 
 # -------------------
 # ECHOES - раздел
@@ -518,7 +522,7 @@ def gr_remove_index(index: str):
     gr.Success(message=f"Индекс {index} удален", title="Успешно")
     return (
         gr.update(choices=new_list, value=new_list[0] if new_list else ""),
-    )*4
+    ) * 4
 
 
 def gr_create_index(index_name: str):
@@ -535,7 +539,7 @@ def gr_create_index(index_name: str):
     gr.Success(message=f"Индекс {index_name} создан", title="Успешно")
     return (
         gr.update(choices=new_list, value=index_name),
-    )*4
+    ) * 4
 
 
 def gr_rm_doc_from_index(ind_id: str, doc_id: str):
@@ -836,7 +840,7 @@ def main():
                                      autofocus=False,
                                      min_width=0,
                                      scale=70,
-                                     html_attributes=gr.InputHTMLAttributes(autocorrect="off", spellcheck=False)
+                                     html_attributes=gr.InputHTMLAttributes(autocorrect="off", spellcheck=True)
                                      )
 
                 radio_type_of_search = gr.Radio(["ai-router", "gigachat", "meilisearch", "vectorstore", "db", ],
@@ -922,7 +926,7 @@ def main():
                     editable=False,
                     show_label=False,
                     visible=True,
-                    scale=30,
+                    # scale=30,
 
                 )
 
@@ -932,15 +936,15 @@ def main():
                     :return: текст в textbox
                     """
                     if audio is None:
-                        return None
+                        return gr.update(), gr.update()
                     text = await ws_transcribe(audio)  # функция уровнем ниже
-                    return text
+                    return gr.update(value=text), gr.update(value=None)
 
             # Автотранскрипция по окончании записи и очистка по клику на крестик
             mic.change(
                 fn=ws_transcribe_to,
                 inputs=mic,
-                outputs=[textbox],
+                outputs=[textbox, mic],
             )
 
             # --------------------------------------------------
@@ -2433,7 +2437,6 @@ def main():
 
                     btn_save_c3.click(lambda txt: fn_save_prompt("LABEL_PRIORITY", txt),
                                       prompt_code_c3, status)
-
 
                 # с4: MODULES
 
