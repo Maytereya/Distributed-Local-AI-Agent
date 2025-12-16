@@ -287,20 +287,34 @@ def add_doc_to_meili(
         return f"Ошибка добавления документа(ов) в индекс '{index_name}': {e}"
 
 
+def parse_iso(x: str | None) -> str | None:
+    """
+    Приводит дату и время из индекса meili в удобочитаемый формат
+    :param x: дата из meili
+    :return: дата в удобочитаемом формате
+    """
+    if not x: return "не установлена"
+    try:
+        return str(datetime.fromisoformat(x.replace("Z", "")).astimezone(timezone.utc).strftime("%A, %d %B %Y, %H:%M"))
+    except Exception:
+        return None
+
 
 def meili_list_documents(
         index_name: str,
-        return_type: Literal["ID", "All"] = "ID",
+        return_type: Literal["ID", "All", "All_News"] = "ID",
         content_limit: int = 150,
         doc_count_limit: int = 200,
 ) -> Union[List[List[str]], List[str]]:
     """
     Возвращает:
       - "ID": список id
-      - "All": список [id, title_or_default, cropped_content]
+      - "All": список [id, valid_from, valid_to, is_permanent, title_or_default, cropped_content]
     """
+    # Поля, которые важны в документе
+    fields = ['id', 'title', 'content', 'valid_from', 'valid_to', 'is_permanent']
 
-    data = client.index(index_name).get_documents({'limit': doc_count_limit, })
+    data = client.index(index_name).get_documents({'limit': doc_count_limit, 'fields': fields})
     array_of_docs = data.results
 
     def safe_get(doc: Any, key: str, default: str = "") -> str:
@@ -319,6 +333,7 @@ def meili_list_documents(
         return text[:limit] + "..." if len(text) > limit else text
 
     out_all: List[List[str]] = []
+    out_all_news: List[List[str]] = []
     out_ids: List[str] = []
 
     for doc in array_of_docs:
@@ -327,11 +342,25 @@ def meili_list_documents(
         if not title:
             title = "Без заголовка"
         content = crop(safe_get(doc, "content", ""), content_limit)
+        valid_from = parse_iso(safe_get(doc, "valid_from", ""))
+        valid_to = parse_iso(safe_get(doc, "valid_to", ""))
+        if safe_get(doc, "is_permanent", ""):
+            is_permanent = valid_to = "Бессрочная" # в случае,
+            # если новость/акция "вечная" отключаем отображение конечной даты
+        else:
+            is_permanent = "Временная"
 
         out_ids.append(doc_id)
-        out_all.append([doc_id, title, content])
+        out_all.append([doc_id, title, content, ])
+        out_all_news.append([doc_id, title, is_permanent, valid_from, valid_to, content, ])
 
-    return out_all if return_type == "All" else out_ids
+    # return out_all if return_type == "All" else out_ids
+    if return_type == "All":
+        return out_all
+    elif return_type == "All_News":
+        return out_all_news
+    else:
+        return out_ids
 
 
 def search_meili(index_name: str, query: str, limit: int = 3,
@@ -672,9 +701,6 @@ def search_news_active(
 def search_news_by_period(
         #     Не факт, что пригодится, но пусть будет.
 
-
-
-
         index_name: str,
         keyword: str | None,
         start_ts: int,
@@ -682,7 +708,6 @@ def search_news_by_period(
         limit: int = 50,
         sort: list[str] | None = None,
 ) -> list[dict]:
-
     """
     Выполняет поиск новостей/акций, период активности которых пересекается
     с заданным интервалом [start_ts, end_ts].
@@ -757,4 +782,18 @@ def main():
 
 
 if __name__ == '__main__':
-    print(get_document_by_id("news", "novosti_za_1710"))
+    doc = get_document_by_id("news", "novosti_za_1710")
+    print(doc)
+    print("Начало действия новости: ", parse_iso(doc.get("valid_from")))
+    print("Окончание действия новости: ", parse_iso(doc.get("valid_to")))
+    if bool(doc.get("is_permanent", False)):
+        print("Бессрочная новость: ", bool(doc.get("is_permanent", False)))
+    else:
+        print("Cрочная новость")
+    now = datetime.now()
+    formatted_full = now.strftime("%A, %d %B %Y, %H:%M")  # Понедельник, 15 Декабрь 2025, 14:30
+    print("Сейчас: ", formatted_full)
+
+    info = meili_list_documents("news", "All", 50)
+    for i in info:
+        print(i)

@@ -379,7 +379,7 @@ def gr_existed_indexes():
 
 
 def existed_docs_in_selected_index(selected_index: str,
-                                   return_type: Literal["All", "ID"]) -> List[str] | List[List[str]]:
+                                   return_type: Literal["All", "All_News", "ID"]) -> List[str] | List[List[str]]:
     """
     Возвращает список существующих документов в индексе.
     """
@@ -387,7 +387,10 @@ def existed_docs_in_selected_index(selected_index: str,
         return ["Индекс не выбран"]
     if return_type == "All":
         return meilisearch.meili_list_documents(selected_index, return_type="All")
-    return meilisearch.meili_list_documents(selected_index, return_type="ID")
+    elif return_type == "All_News":
+        return meilisearch.meili_list_documents(selected_index, return_type="All_News")
+    else:
+        return meilisearch.meili_list_documents(selected_index, return_type="ID")
 
 
 def gr_add_to_index_universal(index: str, pdf_path: str, json_file: str, doc_type: str):
@@ -612,17 +615,18 @@ def validate_id_live(current: str, mode: Literal["create", "change"]):
 
 def update_docs_in_meili_index(
         index_name: str,
-        output: Literal["full", "id_only"] = "full",
+        output: Literal["full", "full_news", "id_only"] = "full",
         current_id: Optional[str] = None,
 ):
     """
     Обновляет содержимое индекса Meilisearch для UI:
     - full: возвращает (таблица, dropdown c ID)
+    - full_news: возвращает модифицированную под новости таблицу, dropdown c ID)
     - id_only: возвращает только dropdown c ID
     optional current_id: какой ID сделать выбранным, если он есть в списке.
     """
 
-    # Если индекса нет (пустой дропдаун(выпадайка)) - сразу отдаем пустые значения
+    # Если индекса нет (пустой дропдаун/выпадайка) - сразу отдаем пустые значения
     if not index_name:
         empty_ids: list[str] = []
         if output == "full":
@@ -633,8 +637,12 @@ def update_docs_in_meili_index(
         else:
             return gr.update(choices=empty_ids, value="")
 
-    # Список документов: "All" = табличные данные, "ID" = список ID
+    # Список документов: "All" = табличные данные,
+    # "All_News" = табличные данные для новостного индекса,
+    # "ID" = список ID
+
     full_list = existed_docs_in_selected_index(index_name, return_type="All")
+    full_news_list = existed_docs_in_selected_index(index_name, return_type="All_News")  # !
     id_list = existed_docs_in_selected_index(index_name, return_type="ID") or []
 
     # Какой value выбрать по умолчанию
@@ -646,7 +654,16 @@ def update_docs_in_meili_index(
     if output == "full":
         # 1) таблица, 2) dropdown по ID
         return (
-            gr.update(value=full_list),
+            gr.update(value=full_list, headers=["ID документа", "Заголовок", "Фрагмент"], col_count=(3, "fixed"), ),
+            gr.update(choices=id_list, value=value),
+        )
+
+    if output == "full_news":
+        # 1) таблица, 2) dropdown по ID
+        return (
+            gr.update(value=full_news_list,
+                      headers=["ID документа", "Заголовок", "Срок", "Дата начала", "Дата окончания", "Фрагмент"],
+                      col_count=(6, "fixed"), ),
             gr.update(choices=id_list, value=value),
         )
     else:
@@ -664,10 +681,6 @@ def update_docs_in_chroma_collection(collection_name: str):
         gr.update(choices=chroma_doc_list, ),
         gr.update(value=chroma_doc_list)
     )
-
-
-# def txt_default():
-#     return f"Ожидание действий..."
 
 
 def radio_sliders_change(choice):
@@ -1086,7 +1099,7 @@ def main():
                             )
 
                             # _______________________________
-                            # Дропдаун служит для выбора ID
+                            # Дропдаун/выпадайка служит для выбора ID
                             # для редактирования
                             # -------------------------------
 
@@ -1158,7 +1171,7 @@ def main():
 
                         def on_index_change(idx: str):
                             """
-                            Сделан чтобы исключить выбор radio и зациклить только на индексе.
+                            Сделан, чтобы исключить выбор radio и зациклить только на индексе.
                             :param idx:
                             :return:
                             """
@@ -1543,7 +1556,7 @@ def main():
                             else:
                                 doc_type = "static"
 
-                        # На всякий случай, если doc_type что-то странное — откатываем к дефолту индекса
+                        # На всякий случай, если doc_type - что-то странное - откатываем к дефолту индекса
                         if doc_type not in ("news", "static"):
                             doc_type = idx_default_type
 
@@ -1844,6 +1857,10 @@ def main():
                 # и индексов
                 # ---------------------------------------------------
 
+                # Функционал отображения даты в превью документов
+                now = datetime.now()
+                formatted_full = now.strftime("%A, %d %B %Y, %H:%M")  # Понедельник, 15 Декабрь 2025, 14:30
+
                 with gr.Accordion(label="База знаний Meilisearch (просмотр и удаление)",
                                   open=True, ):
 
@@ -1885,8 +1902,9 @@ def main():
 
                     meili_indices_table = gr.DataFrame(
                         value=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value, "All"),
-                        label="Содержание выбранного Индекса",
-                        headers=["ID документа", "Заголовок документа", "Фрагмент содержания"],
+                        label="Содержание выбранного Индекса" + " на сегодня: " + formatted_full,
+                        headers=["ID документа", "Заголовок",
+                                 "Фрагмент"],
                         row_count=(200, "dynamic"),
                         col_count=(3, "fixed"),
                         datatype="str",
@@ -2125,11 +2143,14 @@ def main():
                 )
 
                 def refresh_meili_views(
-                        index_for_view: str,
-                        constructor_index: str,
+                        index_for_view: str,  # Индекс в секции просмотра/удаления
+                        constructor_index: str,  # Индекс, выбранный в конструкторе документа (текущий индекс)
                         constructor_current_id: str | None,
                 ):
                     """
+                    Функция обновления выпадаек ID в просмотре/удалении, конструкторе
+                    и таблицы документов в просмотре/удалении
+
                     Обновляет:
                       - таблицу и выпадайку ID в секции просмотра/удаления
                       - выпадайку ID в конструкторе (если выбран тот же индекс)
@@ -2140,11 +2161,19 @@ def main():
                         return gr.update(), gr.update(), gr.update()
 
                     # 1) Обновляем таблицу + выпадайку удаления для выбранного индекса
-                    table_update, dropdown_del_update = update_docs_in_meili_index(
-                        index_for_view,
-                        output="full",
-                    )
+                    if index_for_view == "news":
+                        table_update, dropdown_del_update = update_docs_in_meili_index(
+                            # еще одна версия обновляющей функции?
+                            index_for_view,
+                            output="full_news",
+                        )
 
+                    else:
+                        table_update, dropdown_del_update = update_docs_in_meili_index(
+                            # еще одна версия обновляющей функции?
+                            index_for_view,
+                            output="full",
+                        )
                     # 2) Обновляем конструктор, только если он смотрит на тот же индекс
                     if constructor_index == index_for_view:
                         constructor_dd_update = update_docs_in_meili_index(
@@ -2160,13 +2189,17 @@ def main():
 
             refresh_data_btn.click(
                 refresh_meili_views,
-                inputs=[meili_ind_for_cont_dropdown, index_dropdown, id_select],
+                inputs=[meili_ind_for_cont_dropdown,  # выпадайка выбора индекса в просмотре/удалении
+                        index_dropdown,  # выпадайка выбора индекса в конструкторе документа
+                        id_select  # выбор документа для редактирования в конструкторе документа
+                        ],
                 outputs=[
-                    meili_indices_table,
-                    meili_content_of_index_dropdown,
-                    id_select,
+                    meili_indices_table,  # таблица просмотра всех документов с превью
+                    meili_content_of_index_dropdown,  # выпадайка выбора ID в секции просмотра/удаления
+                    id_select,  # выбор документа для редактирования в конструкторе документа
                 ],
             )
+
 
             # При смене выбранного индекса -> обновить список документов
             meili_ind_for_cont_dropdown.change(
