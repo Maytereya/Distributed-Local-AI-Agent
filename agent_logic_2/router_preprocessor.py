@@ -63,6 +63,7 @@ SEGMENT_SEPARATOR = "\n\n— — —\n\n"
 # Регулярные выражения
 NOTE_WORD_RE = re.compile(r"замет\w*", re.IGNORECASE)
 MANAGER_WORD_RE = re.compile(r"\bменеджер\w*", re.IGNORECASE)
+SCRIPT_WORD_RE = re.compile(r"\bскрипт\w*", re.IGNORECASE)
 NOTE_SPLIT_RE = re.compile(r"[^0-9a-zа-яё]+", re.IGNORECASE)
 FILTER_RE = re.compile(r'^\s*FILTER:\s*(.+)$', re.IGNORECASE)
 
@@ -1427,6 +1428,12 @@ async def process_segments(text: str, sess: SessionType, think: bool | None = No
         labels = await classify(segment, sess, think)
         main_labels = [lbl for lbl in labels if lbl in LABEL_PRIORITY]
         logger.debug("[seg#%d] labels=%s | main=%s", idx, labels, main_labels)
+
+        # 5.5. Патч: принудительная активация meilisearch при наличии слова "скрипт"
+        script_hit_seg, script_hit_full = SegmentProcessor.check_pattern_match(segment, text, SCRIPT_WORD_RE)
+        if (script_hit_seg or script_hit_full) and "SCRIPTS" not in main_labels:
+            logger.debug("[seg#%d] скрипт обнаружен → принудительно добавляем SCRIPTS", idx)
+            main_labels.insert(0, "SCRIPTS")  # Добавляем в начало для приоритета
 
         # 6. Late fallback к doctor_info
         if response := await _try_doctor_fallback(segment, sess, think, f"seg#{idx} LATE"):
