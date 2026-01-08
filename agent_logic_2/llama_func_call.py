@@ -22,6 +22,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from converters import html_cleaner
+from agent_logic_2.text_fuzzy import fuzzy_match, normalize_text_for_fuzzy
 
 from ollama import AsyncClient
 
@@ -81,6 +82,8 @@ STOP_WORDS = {
     "чей", "чья", "чьё", "чьи", "который", "которая",
     "которое", "которые",
 }
+
+NEGATIVE_CONTEXT_WORDS = {"кроме", "исключая", "исключением"}
 
 
 # ── Нормализация специальности (простая лемматизация множественного к единственному) ──
@@ -199,6 +202,8 @@ SYSTEM:
 верни Specialty в единственном числе: Specialty: кардиолог
 Если в вопросе встречаются слова: "узи", "узи врач", "узист", "ультразвуковая диагностика", "врач ультразвуковой диагностики", 
 "врач узи", "узи-диагностика" — всегда возвращай Specialty: врач ультразвуковой диагностики.
+Если в вопросе встречаются слова: "лор", "лор-врач", "оториноларинголог" — всегда возвращай Specialty: оториноларинголог.
+Если в вопросе встречаются слова: "онкогинеколог", "онколог-гинеколог", "онкологический гинеколог" — всегда возвращай Specialty: онкогинеколог.
 Если в вопросе есть только фамилия — верни: Surname: Иванов
 Если в вопросе только специальность — верни: Specialty: кардиолог
 Если вопрос про расписание (слова "расписание", "приём", "график работы", "время работы" и т.п.) и указано ФИО или фамилия, верни Timetable: Иванов
@@ -315,6 +320,87 @@ async def async_enrich_with_cc_info(doctors: list):
     except Exception as e:
         print(f"[DEBUG] enrich_with_cc_info error: {e}")
     return doctors
+
+
+async def find_doctors_by_cc_notes_fallback_async(specialty: str, threshold: float = 0.86) -> List[Dict[str, Any]]:
+    """
+    Ищет врачей по заметкам call-центра с нестрогим совпадением.
+    Используется как fallback, когда поиск по specialization/units ничего не дал.
+    """
+    if not specialty or not isinstance(specialty, str):
+        return []
+
+    query_norm = normalize_text_for_fuzzy(specialty)
+    query_join = query_norm.replace(" ", "")
+    if len(query_join) < 4:
+        return []
+
+    try:
+        cc_by_id = await get_cc_map_cached()
+    except Exception:
+        return []
+
+    docs = await repo.read_all_async()
+    if not docs:
+        return []
+
+    matched: Dict[int, Dict[str, Any]] = {}
+    for d in docs:
+        did = d.get("id")
+        if did is None:
+            continue
+        cc_text = cc_by_id.get(did)
+        if not cc_text and isinstance(did, (int, str)):
+            try:
+                cc_text = cc_by_id.get(int(did))
+            except (TypeError, ValueError):
+                cc_text = None
+        if not cc_text:
+            continue
+
+        cc_plain = html_cleaner.strip_html(str(cc_text)).replace("\xa0", " ")
+        note_norm = normalize_text_for_fuzzy(cc_plain)
+        if not note_norm:
+            continue
+
+        note_join = note_norm.replace(" ", "")
+        if _has_negative_specialty_mention(note_norm, specialty, threshold):
+            continue
+        if query_norm in note_norm or (query_join and query_join in note_join):
+            dd = dict(d)
+            dd["callCenterInfo"] = cc_text
+            try:
+                key = int(did)
+            except (TypeError, ValueError):
+                key = did
+            matched[key] = dd
+            continue
+
+        tokens = note_norm.split()
+        if any(fuzzy_match(specialty, t, threshold) for t in tokens):
+            dd = dict(d)
+            dd["callCenterInfo"] = cc_text
+            try:
+                key = int(did)
+            except (TypeError, ValueError):
+                key = did
+            matched[key] = dd
+            continue
+
+        if len(tokens) > 1:
+            for i in range(len(tokens) - 1):
+                joined = tokens[i] + tokens[i + 1]
+                if fuzzy_match(specialty, joined, threshold):
+                    dd = dict(d)
+                    dd["callCenterInfo"] = cc_text
+                    try:
+                        key = int(did)
+                    except (TypeError, ValueError):
+                        key = did
+                    matched[key] = dd
+                    break
+
+    return list(matched.values())
 
 
 # ── Форматирование ответа ────────────────────────────────────────────────────
@@ -701,18 +787,63 @@ def format_documents(docs: List[Dict[str, Any]]) -> str:
     )
 
 
+def _has_negative_specialty_mention(text: str, term: str, threshold: float = 0.86) -> bool:
+    """Проверяет, что термин упомянут в негативном контексте (например: «кроме ...»)."""
+    norm = normalize_text_for_fuzzy(text)
+    tokens = norm.split()
+    if not tokens:
+        return False
+
+    def has_negative_window(idx: int) -> bool:
+        window = tokens[max(0, idx - 3):idx]
+        return any(w in NEGATIVE_CONTEXT_WORDS for w in window)
+
+    for i, t in enumerate(tokens):
+        if fuzzy_match(term, t, threshold) and has_negative_window(i):
+            return True
+
+    for i in range(len(tokens) - 1):
+        joined = tokens[i] + tokens[i + 1]
+        if fuzzy_match(term, joined, threshold) and has_negative_window(i):
+            return True
+
+    return False
+
+
 async def handle_specialty_search(specialty: str, _: str) -> str:
     """Ищет врачей по специальности и возвращает компактный список карточек."""
     print(f"LLM-парсер определил специальность: {specialty}")
 
     query = normalize_specialty_term(specialty) or specialty
     docs = await find_doctors_by_keyword_async(query)
+    if docs:
+        filtered = [
+            d for d in docs
+            if not _has_negative_specialty_mention(d.get("specialization", ""), query)
+        ]
+        if filtered:
+            docs = filtered
+        else:
+            docs = []
     if not docs:
         # Попробуем без нормализации как запасной вариант
         if query != specialty:
             docs = await find_doctors_by_keyword_async(specialty)
+            if docs:
+                filtered = [
+                    d for d in docs
+                    if not _has_negative_specialty_mention(d.get("specialization", ""), specialty)
+                ]
+                if filtered:
+                    docs = filtered
+                else:
+                    docs = []
         if not docs:
-            return f"Врачи по специальности '{specialty}' не найдены."
+            docs = await find_doctors_by_cc_notes_fallback_async(query)
+            if not docs and query != specialty:
+                docs = await find_doctors_by_cc_notes_fallback_async(specialty)
+            if not docs:
+                return f"Врачи по специальности '{specialty}' не найдены."
     #
     # Пока отключим обогащение заметками колл-центра списка врачей.
     # if isinstance(docs, list):

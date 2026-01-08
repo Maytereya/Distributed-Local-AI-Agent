@@ -33,6 +33,7 @@ from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
 from agent_logic_2.prompts import load_prompt
 from agent_logic_1 import meilisearch_client as meilisearch
 from converters import html_cleaner
+from agent_logic_2.text_fuzzy import fuzzy_match, normalize_text_for_fuzzy
 
 #  Инициализация logging для понимания логики роутера
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -61,7 +62,7 @@ ITEM_MARKER = "⊢ID:"
 SEGMENT_SEPARATOR = "\n\n— — —\n\n"
 
 # Регулярные выражения
-NOTE_WORD_RE = re.compile(r"замет\w*", re.IGNORECASE)
+NOTE_WORD_RE = re.compile(r"(замет\w*|кнопк\w*|кнопоч\w*)", re.IGNORECASE)
 MANAGER_WORD_RE = re.compile(r"\bменеджер\w*", re.IGNORECASE)
 SCRIPT_WORD_RE = re.compile(r"\bскрипт\w*", re.IGNORECASE)
 NOTE_SPLIT_RE = re.compile(r"[^0-9a-zа-яё]+", re.IGNORECASE)
@@ -74,9 +75,13 @@ NOTE_STOPWORDS = {
     "по", "про", "покажи", "покажите", "выведи", "выведите", "выдай", "выдайте",
     "найди", "найдите", "найти", "на", "в", "и", "или", "что", "всех",
     "заметка", "заметки", "заметках", "заметке", "заметок",
+    "кнопка", "кнопки", "кнопке", "кнопку", "кнопок",
+    "кнопочка", "кнопочки", "кнопочке", "кнопочку", "кнопочек",
     "присутствует", "присутствуют", "встречается", "встречаются", "содержится", "содержатся",
     "информация", "информацию", "об", "о", "обо"
 }
+
+NOTE_TRIGGER_WORDS = ("заметка", "кнопка")
 
 # Возрастные паттерны
 AGE_PATTERNS: tuple[str, ...] = (
@@ -257,6 +262,8 @@ class CCNotesProcessor:
 
         for tok in tokens:
             if tok in NOTE_STOPWORDS or len(tok) < 2:
+                continue
+            if any(fuzzy_match(tok, w, 0.84) for w in NOTE_TRIGGER_WORDS):
                 continue
             _push(tok)
 
@@ -496,6 +503,18 @@ async def _try_doctor_fallback(segment: str, sess: SessionType, think: bool | No
 async def _handle_note_search(segment: str, text: str) -> Optional[str]:
     """Обработка поиска по заметкам."""
     note_hit_seg, note_hit_full = SegmentProcessor.check_pattern_match(segment, text, NOTE_WORD_RE)
+    if not (note_hit_seg or note_hit_full):
+        def _fuzzy_hit(src: str) -> bool:
+            if not src:
+                return False
+            norm = normalize_text_for_fuzzy(src)
+            for tok in norm.split():
+                if any(fuzzy_match(tok, w, 0.84) for w in NOTE_TRIGGER_WORDS):
+                    return True
+            return False
+
+        note_hit_seg = _fuzzy_hit(segment)
+        note_hit_full = _fuzzy_hit(text)
     if note_hit_seg or note_hit_full:
         search_source = segment if note_hit_seg else text
         logger.debug("CC NOTES search (source=%s)", "segment" if note_hit_seg else "full")
@@ -1250,6 +1269,8 @@ async def _search_in_cc_notes(
 
     logger.debug("[CC_NOTES] terms=%s | mode=%s", search_terms, match_mode)
 
+    fuzzy_threshold = 0.86
+
     for d in docs:
         did = d.get('id')
         if did is None:
@@ -1260,12 +1281,35 @@ async def _search_in_cc_notes(
 
         # Очищаем HTML, NBSP → пробел, приводим к lower
         clean_cc = CCNotesProcessor.normalize_text(cc_text)
+        clean_cc_fuzzy = normalize_text_for_fuzzy(clean_cc)
+        note_tokens = clean_cc_fuzzy.split()
+        note_join = clean_cc_fuzzy.replace(" ", "")
+        if not clean_cc_fuzzy:
+            continue
+
+        def _term_matches(term: str) -> bool:
+            term_norm = normalize_text_for_fuzzy(term)
+            if not term_norm:
+                return False
+            if term_norm in clean_cc_fuzzy:
+                return True
+            term_join = term_norm.replace(" ", "")
+            if term_join and term_join in note_join:
+                return True
+            for tok in note_tokens:
+                if fuzzy_match(term_norm, tok, fuzzy_threshold):
+                    return True
+            for i in range(len(note_tokens) - 1):
+                joined = note_tokens[i] + note_tokens[i + 1]
+                if fuzzy_match(term_norm, joined, fuzzy_threshold):
+                    return True
+            return False
 
         # Проверяем наличие терминов согласно match_mode
         if match_mode == "all":
-            has_match = all(term in clean_cc for term in search_terms)
+            has_match = all(_term_matches(term) for term in search_terms)
         else:
-            has_match = any(term in clean_cc for term in search_terms)
+            has_match = any(_term_matches(term) for term in search_terms)
 
         if has_match:
             dd = dict(d)
