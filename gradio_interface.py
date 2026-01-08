@@ -25,7 +25,7 @@ from agent_logic_2.direct_upload_meili_tab import build_blocks, TABLE_HEADERS
 from agent_logic_2.id_validation import is_valid_id, sanitize_id
 from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
-from container_managenment import restart_container
+from container_managenment import restart_container, system_data
 from converters import pdf_to_json_txt_tables_meili as pdf2json
 from whisper import whisper_dict as w
 from whisper.wisper_ws_client import ws_transcribe
@@ -2265,20 +2265,42 @@ def main():
                 return restart_container.restart_ollama_container()
 
             # ------------------------------------------------------
+            # ----Секция сбора системной информации через Docker----
+            MONITORED = [
+                "bookworm-agent",
+                "ollama",
+                "whisper-gpu",
+                "meili_server",
+                "chroma_container",
+                "vosk-ru",
+                "nginx_proxy",
+            ]
+
+            def ui_docker_stats():
+                return system_data.get_docker_containers_stats(MONITORED)
+
+            # ------------------------------------------------------
 
             with gr.Tab("⚙️ Настройки"):
 
                 gr.Markdown("""<h3>⚙️ Настройки нейросетей и серверов Ollama/Uvicorn</h3>""")
 
                 with gr.Column():
-                    status = gr.Textbox(lines=1,
-                                        label="Текущий статус",
-                                        submit_btn=False,
-                                        container=True,
-                                        autoscroll=False,
-                                        interactive=True,
-                                        autofocus=False,
-                                        )
+                    with gr.Row():
+                        stats_json = gr.JSON(label="Нагрузка на сервер")
+                        # btn = gr.Button("Обновить данные", size="sm", variant="secondary" )
+                        t = gr.Timer(2.0)
+
+                        status = gr.Textbox(lines=1,
+                                            label="Текущий статус",
+                                            submit_btn=False,
+                                            container=True,
+                                            autoscroll=False,
+                                            interactive=True,
+                                            autofocus=False,
+                                            )
+                    # btn.click(ui_docker_stats, outputs=stats_json)
+                    t.tick(ui_docker_stats, outputs=stats_json)
 
                     # -----------------------------------------------------
                     # OLLAMA OPTIONS Секция
