@@ -2277,7 +2277,7 @@ def main():
             ]
 
             def ui_docker_stats():
-                return system_data.get_docker_containers_stats(MONITORED)
+                return system_data.make_human_monitor_payload(MONITORED)
 
             # ------------------------------------------------------
 
@@ -2289,7 +2289,7 @@ def main():
                     with gr.Row():
                         stats_json = gr.JSON(label="Нагрузка на сервер")
                         # btn = gr.Button("Обновить данные", size="sm", variant="secondary" )
-                        t = gr.Timer(2.0)
+                        t = gr.Timer(1.0)
 
                         status = gr.Textbox(lines=1,
                                             label="Текущий статус",
