@@ -14,6 +14,14 @@ services:
       - FILTRATION_DEVICE=auto
       - FILTRATION_CACHE=/root/.cache/huggingface
       - TOKENIZERS_PARALLELISM=false
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     networks:
       - local_net
 
