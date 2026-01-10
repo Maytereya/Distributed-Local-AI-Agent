@@ -2696,15 +2696,15 @@ def main():
 
                 # график: CPU по серверу
                 cpu_plot = gr.LinePlot(
-                    x="время",
-                    y="загрузка процессора",
+                    x="time",
+                    y="processor_load",
                     title="Загрузка процессора (CPU), %",
                     height=260,
                 )
 
                 # график: RAM
                 ram_plot = gr.LinePlot(
-                    x="время",
+                    x="time",
                     y="MB",
                     title="Сумма использованной контейнерами RAM",
                     height=260,
@@ -2712,7 +2712,7 @@ def main():
 
                 # график: VRAM free min (если есть)
                 vram_plot = gr.LinePlot(
-                    x="время",
+                    x="time",
                     y="MB",
                     title="Свободная память максимально загруженной видеокарты",
                     height=260,
