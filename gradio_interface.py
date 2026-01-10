@@ -2604,9 +2604,15 @@ def main():
                              ]
                 )
 
+            # --------------------------------------------
+            # --- 📈Вкладка 6 Мониторинг нагрузки --------
+            # --------------------------------------------
+
+            import pandas as pd
+
             with gr.Tab("📈 Мониторинг нагрузки"):
-                gr.Markdown("""<h3>Показатели использования RAM, SSD, GPU, CPU</h3>""")
-                # ----Секция сбора системной информации через Docker----
+                gr.Markdown("<h3>Показатели использования RAM, SSD, GPU, CPU</h3>")
+
                 MONITORED = [
                     "bookworm-agent",
                     "ollama",
@@ -2617,20 +2623,105 @@ def main():
                     "nginx_proxy",
                 ]
 
-                def ui_docker_stats():
-                    return system_data.make_human_monitor_payload(MONITORED)
+                THRESHOLDS = {
+                    "cpu_warning": 70,
+                    "cpu_critical": 90,
+                    "ram_warning_mb": 96_000,
+                    "ram_critical_mb": 196_000,
+                    "vram_warning_free_mb": 1500,
+                    "vram_critical_free_mb": 700,
+                }
 
-                def tick_slider_change(value: float) -> float:
-                    gr.Info(f"Частота обновления данных: {value}",
-                            duration=3.0,
-                            title="Системный монитор"
+                # для построения графиков
+                history_state = gr.State([])
 
-                            )
-                    return value
 
-                stats_json = gr.JSON(label="Нагрузка на сервер",
-                                     min_height=500,
-                                     max_height=700, )
+                def build_monitor_view():
+                    """
+                    Возвращает сразу несколько “виджетов”:
+                    - summary_md: человекочитаемая сводка
+                    - top_ram_df: топ по RAM
+                    - top_cpu_df: топ по CPU
+                    - gpu_df / gpu_note
+                    - details_json: полный payload
+                    """
+                    payload = system_data.make_human_monitor_payload(MONITORED)
+
+                    s = payload.get("summary", {})
+                    summary_md = (
+                        f"### Сводка\n"
+                        f"- **CPU (сумма по контейнерам):** {s.get('total_cpu_%_sum', 0)}%\n"
+                        f"- **RAM (сумма по контейнерам):** {s.get('total_ram_used_mb', 0)} MB\n"
+                        f"- **NET IN/OUT:** {s.get('total_net_in_mb', 0)} / {s.get('total_net_out_mb', 0)} MB\n"
+                        f"- **PIDs (суммарно):** {s.get('total_pids', 0)}\n\n"
+                        f"ℹ️ CPU здесь — это сумма docker CPU% по контейнерам (может быть >100% при использовании нескольких ядер)."
+                    )
+
+                    # Top consumers
+                    top = payload.get("top_consumers", {})
+                    by_ram = top.get("by_ram", [])
+                    by_cpu = top.get("by_cpu", [])
+
+
+                    top_ram_df = pd.DataFrame(by_ram) if by_ram else pd.DataFrame(
+                        columns=["container", "ram_used_mb", "cpu_%"])
+                    top_cpu_df = pd.DataFrame(by_cpu) if by_cpu else pd.DataFrame(
+                        columns=["container", "cpu_%", "ram_used_mb"])
+
+
+                    # GPU
+                    gpu = payload.get("gpu", {})
+                    gpu_note = ""
+                    gpu_df = pd.DataFrame()
+
+                    if isinstance(gpu, dict) and "gpus" in gpu:
+                        gpu_df = pd.DataFrame(gpu["gpus"])
+                    else:
+                        gpu_note = gpu.get("note", "GPU данные недоступны.")
+
+                    return summary_md, top_ram_df, top_cpu_df, gpu_df, gpu_note, payload
+
+
+
+                # --- UI ---
+                summary_md = gr.Markdown()
+                warnings_md = gr.Markdown()
+                gpu_note = gr.Markdown()
+
+                with gr.Row():
+                    gpu_table = gr.Dataframe(label="Видеокарты (Общее использование / Загрузка памяти)", interactive=False, wrap=True)
+                    top_ram = gr.Dataframe(label="Топ контейнеров по загрузке оперативной памяти", interactive=False, wrap=True)
+                    top_cpu = gr.Dataframe(label="Топ контейнеров по загрузке процессора", interactive=False, wrap=True)
+
+                # график: CPU по серверу
+                cpu_plot = gr.LinePlot(
+                    x="time",
+                    y="cpu_host_%",
+                    title="CPU (нормализовано, % от сервера)",
+                    height=260,
+                )
+
+                # график: RAM
+                ram_plot = gr.LinePlot(
+                    x="time",
+                    y="ram_mb",
+                    title="RAM (сумма контейнеров, MB)",
+                    height=260,
+                )
+
+                # график: VRAM free min (если есть)
+                vram_plot = gr.LinePlot(
+                    x="time",
+                    y="vram_free_mb_min",
+                    title="GPU VRAM free (минимум по GPU, MB)",
+                    height=260,
+                )
+
+
+
+                with gr.Accordion("Детальный отчет JSON", open=False):
+                    details_json = gr.JSON(label="Нагрузка на сервер (по всем docker - контейнерам)", min_height=400, max_height=900)
+
                 t = gr.Timer(1.0)
 
                 with gr.Row():
@@ -2643,12 +2734,78 @@ def main():
                         value=1.0,
                     )
 
-                btn.click(ui_docker_stats, outputs=stats_json)
-                t.tick(ui_docker_stats, outputs=stats_json)
+                def render(payload, history):
+                    # summary
+                    s = payload.get("summary", {})
+                    host = payload.get("host", {})
+                    summary = (
+                        f"### Сводка\n"
+                        f"- **CPU (ядра):** {s.get('cpu_cores_used', 0)}\n"
+                        f"- **CPU (% от сервера):** {s.get('cpu_host_%', 0)}% (логических CPU: {host.get('cpu_count', '?')})\n"
+                        f"- **RAM (сумма контейнеров):** {s.get('total_ram_used_mb', 0)} MB\n"
+                    )
+
+                    # warnings
+                    warns = system_data.compute_alerts(payload, THRESHOLDS)
+                    if warns:
+                        warnings_text = "### ⚠️ Предупреждения\n" + "\n".join([f"- {w}" for w in warns])
+                    else:
+                        warnings_text = "### ✅ Предупреждения\n- Нет превышений порогов."
+
+                    # history + dfs
+                    history = system_data.update_history(history, payload, max_points=180)
+                    df = system_data.history_to_df(history)
+
+                    return summary, warnings_text, df, df, df, payload, history
+
+                def tick(history):
+                    payload = system_data.make_human_monitor_payload(MONITORED)
+                    return render(payload, history)
+
+                btn.click(fn=tick, inputs=[history_state],
+                          outputs=[summary_md,
+                                   warnings_md,
+                                   cpu_plot,
+                                   ram_plot,
+                                   vram_plot,
+                                   details_json,
+                                   history_state]
+                          )
+                t.tick(fn=tick,
+                       inputs=[history_state],
+                       outputs=[summary_md,
+                                warnings_md,
+                                cpu_plot,
+                                ram_plot,
+                                vram_plot,
+                                details_json,
+                                history_state]
+                       )
+
+                # --- handlers ---
+                btn.click(
+                    fn=build_monitor_view,
+                    outputs=[summary_md, top_ram, top_cpu, gpu_table, gpu_note, details_json],
+                )
+                t.tick(
+                    fn=build_monitor_view,
+                    outputs=[summary_md, top_ram, top_cpu, gpu_table, gpu_note, details_json],
+                )
+
+
+                # подавляем двойное всплываение gr.Info на старте
+                first_change = gr.State(True)
+
+                def tick_slider_change(value: float, is_first: bool):
+                    if is_first:
+                        return value, False
+                    gr.Info(f"Частота обновления данных: {value}", duration=3.0, title="Системный монитор")
+                    return value, False
+
                 tick_slider.change(
                     fn=tick_slider_change,
-                    inputs=tick_slider,
-                    outputs=t,
+                    inputs=[tick_slider, first_change],
+                    outputs=[t, first_change],
                 )
 
         # -------------------------
