@@ -2650,11 +2650,11 @@ def main():
                     s = payload.get("summary", {})
                     summary_md = (
                         f"### Сводка\n"
-                        f"- **CPU (сумма по контейнерам):** {s.get('total_cpu_%_sum', 0)}%\n"
-                        f"- **RAM (сумма по контейнерам):** {s.get('total_ram_used_mb', 0)} MB\n"
-                        f"- **NET IN/OUT:** {s.get('total_net_in_mb', 0)} / {s.get('total_net_out_mb', 0)} MB\n"
-                        f"- **PIDs (суммарно):** {s.get('total_pids', 0)}\n\n"
-                        f"ℹ️ CPU здесь — это сумма docker CPU% по контейнерам (может быть >100% при использовании нескольких ядер)."
+                        f"- **Процессор (CPU), суммарно по контейнерам:** {s.get('total_cpu_%_sum', 0)}%\n"
+                        f"- **Оперативка (RAM), суммарно по контейнерам:** {s.get('total_ram_used_mb', 0)} MB\n"
+                        f"- **Docker-сеть IN/OUT:** {s.get('total_net_in_mb', 0)} / {s.get('total_net_out_mb', 0)} MB\n"
+                        f"- **Процессы (PIDs) суммарно:** {s.get('total_pids', 0)}\n\n"
+                        # f"ℹ️ CPU здесь — это сумма docker CPU% по контейнерам (может быть >100% при использовании нескольких ядер)."
                     )
 
                     # Top consumers
@@ -2671,15 +2671,15 @@ def main():
 
                     # GPU
                     gpu = payload.get("gpu", {})
-                    gpu_note = ""
+                    gpu_note_ = ""
                     gpu_df = pd.DataFrame()
 
                     if isinstance(gpu, dict) and "gpus" in gpu:
                         gpu_df = pd.DataFrame(gpu["gpus"])
                     else:
-                        gpu_note = gpu.get("note", "GPU данные недоступны.")
+                        gpu_note_ = gpu.get("note", "GPU данные недоступны.")
 
-                    return summary_md, top_ram_df, top_cpu_df, gpu_df, gpu_note, payload
+                    return summary_md, top_ram_df, top_cpu_df, gpu_df, gpu_note_, payload
 
 
 
@@ -2689,34 +2689,34 @@ def main():
                 gpu_note = gr.Markdown()
 
                 with gr.Row():
-                    gpu_table = gr.Dataframe(label="Видеокарты (Общее использование / Загрузка памяти)", interactive=False, wrap=True)
+                    gpu_table = gr.Dataframe(label="Видеокарты (Общее использование / Загрузка памяти)", interactive=False, wrap=False)
+                with gr.Row():
                     top_ram = gr.Dataframe(label="Топ контейнеров по загрузке оперативной памяти", interactive=False, wrap=True)
                     top_cpu = gr.Dataframe(label="Топ контейнеров по загрузке процессора", interactive=False, wrap=True)
 
                 # график: CPU по серверу
                 cpu_plot = gr.LinePlot(
-                    x="time",
-                    y="cpu_host_%",
-                    title="CPU (нормализовано, % от сервера)",
+                    x="время",
+                    y="загрузка процессора",
+                    title="Загрузка процессора (CPU), %",
                     height=260,
                 )
 
                 # график: RAM
                 ram_plot = gr.LinePlot(
-                    x="time",
-                    y="ram_mb",
-                    title="RAM (сумма контейнеров, MB)",
+                    x="время",
+                    y="MB",
+                    title="Сумма использованной контейнерами RAM",
                     height=260,
                 )
 
                 # график: VRAM free min (если есть)
                 vram_plot = gr.LinePlot(
-                    x="time",
-                    y="vram_free_mb_min",
-                    title="GPU VRAM free (минимум по GPU, MB)",
+                    x="время",
+                    y="MB",
+                    title="Свободная память максимально загруженной видеокарты",
                     height=260,
                 )
-
 
 
                 with gr.Accordion("Детальный отчет JSON", open=False):
