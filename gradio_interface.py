@@ -2804,14 +2804,14 @@ def main():
                 )
 
                 # --- handlers ---
-                btn.click(
-                    fn=build_monitor_view,
-                    outputs=[summary_md, top_ram, top_cpu, gpu_table, gpu_note, details_json],
-                )
-                t.tick(
-                    fn=build_monitor_view,
-                    outputs=[summary_md, top_ram, top_cpu, gpu_table, gpu_note, details_json],
-                )
+                # btn.click(
+                #     fn=build_monitor_view,
+                #     outputs=[summary_md, top_ram, top_cpu, gpu_table, gpu_note, details_json],
+                # )
+                # t.tick(
+                #     fn=build_monitor_view,
+                #     outputs=[summary_md, top_ram, top_cpu, gpu_table, gpu_note, details_json],
+                # )
 
 
                 # подавляем двойное всплываение gr.Info на старте
