@@ -2200,7 +2200,6 @@ def main():
                 ],
             )
 
-
             # При смене выбранного индекса -> обновить список документов
             meili_ind_for_cont_dropdown.change(
                 fn=refresh_meili_views,
@@ -2265,32 +2264,12 @@ def main():
                 return restart_container.restart_ollama_container()
 
             # ------------------------------------------------------
-            # ----Секция сбора системной информации через Docker----
-            MONITORED = [
-                "bookworm-agent",
-                "ollama",
-                "whisper-gpu",
-                "meili_server",
-                "chroma_container",
-                "vosk-ru",
-                "nginx_proxy",
-            ]
-
-            def ui_docker_stats():
-                return system_data.make_human_monitor_payload(MONITORED)
-
-            # ------------------------------------------------------
 
             with gr.Tab("⚙️ Настройки"):
-
                 gr.Markdown("""<h3>⚙️ Настройки нейросетей и серверов Ollama/Uvicorn</h3>""")
 
                 with gr.Column():
                     with gr.Row():
-                        stats_json = gr.JSON(label="Нагрузка на сервер")
-                        # btn = gr.Button("Обновить данные", size="sm", variant="secondary" )
-                        t = gr.Timer(1.0)
-
                         status = gr.Textbox(lines=1,
                                             label="Текущий статус",
                                             submit_btn=False,
@@ -2299,8 +2278,6 @@ def main():
                                             interactive=True,
                                             autofocus=False,
                                             )
-                    # btn.click(ui_docker_stats, outputs=stats_json)
-                    t.tick(ui_docker_stats, outputs=stats_json)
 
                     # -----------------------------------------------------
                     # OLLAMA OPTIONS Секция
@@ -2625,6 +2602,53 @@ def main():
                              # download_log_btn,
 
                              ]
+                )
+
+            with gr.Tab("📈 Мониторинг нагрузки"):
+                gr.Markdown("""<h3>Показатели использования RAM, SSD, GPU, CPU</h3>""")
+                # ----Секция сбора системной информации через Docker----
+                MONITORED = [
+                    "bookworm-agent",
+                    "ollama",
+                    "whisper-gpu",
+                    "meili_server",
+                    "chroma_container",
+                    "vosk-ru",
+                    "nginx_proxy",
+                ]
+
+                def ui_docker_stats():
+                    return system_data.make_human_monitor_payload(MONITORED)
+
+                def tick_slider_change(value: float) -> float:
+                    gr.Info(f"Частота обновления данных: {value}",
+                            duration=3.0,
+                            title="Системный монитор"
+
+                            )
+                    return value
+
+                stats_json = gr.JSON(label="Нагрузка на сервер",
+                                     min_height=500,
+                                     max_height=700, )
+                t = gr.Timer(1.0)
+
+                with gr.Row():
+                    btn = gr.Button("Обновить данные", size="sm", variant="secondary")
+                    tick_slider = gr.Slider(
+                        label="Частота обновления с шагом 0.5 сек",
+                        minimum=0.5,
+                        maximum=2.0,
+                        step=0.5,
+                        value=1.0,
+                    )
+
+                btn.click(ui_docker_stats, outputs=stats_json)
+                t.tick(ui_docker_stats, outputs=stats_json)
+                tick_slider.change(
+                    fn=tick_slider_change,
+                    inputs=tick_slider,
+                    outputs=t,
                 )
 
         # -------------------------
