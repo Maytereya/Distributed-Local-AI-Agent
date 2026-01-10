@@ -2694,29 +2694,10 @@ def main():
                     top_ram = gr.Dataframe(label="Топ контейнеров по загрузке оперативной памяти", interactive=False, wrap=True)
                     top_cpu = gr.Dataframe(label="Топ контейнеров по загрузке процессора", interactive=False, wrap=True)
 
-                # график: CPU по серверу
-                cpu_plot = gr.LinePlot(
-                    x="time",
-                    y="processor_load",
-                    title="Загрузка процессора (CPU), %",
-                    height=260,
-                )
-
-                # график: RAM
-                ram_plot = gr.LinePlot(
-                    x="time",
-                    y="MB",
-                    title="Сумма использованной контейнерами RAM",
-                    height=260,
-                )
-
-                # график: VRAM free min (если есть)
-                vram_plot = gr.LinePlot(
-                    x="time",
-                    y="MB",
-                    title="Свободная память максимально загруженной видеокарты",
-                    height=260,
-                )
+                # графики по серверу
+                cpu_plot = gr.LinePlot(x="time", y="cpu_host_%", title="Загрузка центрального процессора (CPU), %", height=260)
+                ram_plot = gr.LinePlot(x="time", y="ram_mb", title="Оперативка, RAM (занятая контейнерами), MB", height=260)
+                vram_plot = gr.LinePlot(x="time", y="vram_free_mb_min", title="Свободная видеопамять у самой загруженной видеокарты, MB", height=260)
 
 
                 with gr.Accordion("Детальный отчет JSON", open=False):
@@ -2743,44 +2724,84 @@ def main():
                         f"- **CPU (ядра):** {s.get('cpu_cores_used', 0)}\n"
                         f"- **CPU (% от сервера):** {s.get('cpu_host_%', 0)}% (логических CPU: {host.get('cpu_count', '?')})\n"
                         f"- **RAM (сумма контейнеров):** {s.get('total_ram_used_mb', 0)} MB\n"
+                        f"- **Docker-сеть IN/OUT:** {s.get('total_net_in_mb', 0)} / {s.get('total_net_out_mb', 0)} MB\n"
+                        f"- **PIDs (суммарно):** {s.get('total_pids', 0)}\n"
                     )
 
                     # warnings
                     warns = system_data.compute_alerts(payload, THRESHOLDS)
-                    if warns:
-                        warnings_text = "### ⚠️ Предупреждения\n" + "\n".join([f"- {w}" for w in warns])
-                    else:
-                        warnings_text = "### ✅ Предупреждения\n- Нет превышений порогов."
+                    warnings_text = (
+                        "### ⚠️ Предупреждения\n" + "\n".join([f"- {w}" for w in warns])
+                        if warns else
+                        "### ✅ Предупреждения\n- Нет превышений порогов."
+                    )
 
-                    # history + dfs
+                    # top consumers
+                    top = payload.get("top_consumers", {})
+                    by_ram = top.get("by_ram", [])
+                    by_cpu = top.get("by_cpu", [])
+
+                    top_ram_df = pd.DataFrame(by_ram) if by_ram else pd.DataFrame(
+                        columns=["container", "ram_used_mb", "cpu_%"])
+                    top_cpu_df = pd.DataFrame(by_cpu) if by_cpu else pd.DataFrame(
+                        columns=["container", "cpu_%", "ram_used_mb"])
+
+                    # gpu table + note
+                    gpu = payload.get("gpu", {})
+                    if isinstance(gpu, dict) and "gpus" in gpu:
+                        gpu_df = pd.DataFrame(gpu["gpus"])
+                        gpu_note_ = ""
+                    else:
+                        gpu_df = pd.DataFrame(
+                            columns=["gpu", "name", "util_gpu_%", "vram_used_mb", "vram_free_mb", "vram_total_mb"])
+                        gpu_note_ = gpu.get("note", "GPU данные недоступны.")
+
+                    # history + df for plots
                     history = system_data.update_history(history, payload, max_points=180)
                     df = system_data.history_to_df(history)
 
-                    return summary, warnings_text, df, df, df, payload, history
+                    # важно: df должен содержать колонки time, cpu_host_%, ram_mb, vram_free_mb_min
+                    return summary, warnings_text, top_ram_df, top_cpu_df, gpu_df, gpu_note_, df, df, df, payload, history
 
                 def tick(history):
                     payload = system_data.make_human_monitor_payload(MONITORED)
                     return render(payload, history)
 
-                btn.click(fn=tick, inputs=[history_state],
-                          outputs=[summary_md,
-                                   warnings_md,
-                                   cpu_plot,
-                                   ram_plot,
-                                   vram_plot,
-                                   details_json,
-                                   history_state]
-                          )
-                t.tick(fn=tick,
-                       inputs=[history_state],
-                       outputs=[summary_md,
-                                warnings_md,
-                                cpu_plot,
-                                ram_plot,
-                                vram_plot,
-                                details_json,
-                                history_state]
-                       )
+                btn.click(
+                    fn=tick,
+                    inputs=[history_state],
+                    outputs=[
+                        summary_md,
+                        warnings_md,
+                        top_ram,
+                        top_cpu,
+                        gpu_table,
+                        gpu_note,
+                        cpu_plot,
+                        ram_plot,
+                        vram_plot,
+                        details_json,
+                        history_state
+                    ],
+                )
+
+                t.tick(
+                    fn=tick,
+                    inputs=[history_state],
+                    outputs=[
+                        summary_md,
+                        warnings_md,
+                        top_ram,
+                        top_cpu,
+                        gpu_table,
+                        gpu_note,
+                        cpu_plot,
+                        ram_plot,
+                        vram_plot,
+                        details_json,
+                        history_state
+                    ],
+                )
 
                 # --- handlers ---
                 btn.click(
