@@ -1587,7 +1587,7 @@ async def routing(text: str,
 
     if extra_processing == "processed":
         async for partial in final_answering(text, result, think=think, ai_feed=ai_feed):
-            yield partial, sess
+            # yield partial, sess
             yield partial, sess  # Stream final response V1 with processing by final_answering func.
     else:
         yield _strip_service_markers(result), sess  # Stream final response V2 without handling by final_answering func.
