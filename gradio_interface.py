@@ -2515,7 +2515,7 @@ def main():
                         save_btn.click(fn=w.save_prompt, inputs=prompt_code_whisper, )
 
             # ---------------------------------------
-            # Вкладка 5 -- Benchmarking
+            # ---- Вкладка 5 -- Benchmarking --------
             # ---------------------------------------
 
             with gr.Tab("🚀️ Тестирование производительности"):
@@ -2543,11 +2543,8 @@ def main():
                 with gr.Column():
                     log_output = gr.Textbox(
                         label="Ход выполнения",
-                        lines=8,
-                        interactive=False,
-                        autoscroll=True,
-                        show_copy_button=True,
-                    )
+                        autoscroll=False,
+                        lines=40, )
 
                 gr.Markdown("""### ℹ️ Пояснение к метрикам
                     - **Wall Avg(s)** – среднее полное время ответа (что видит пользователь).
@@ -2578,7 +2575,7 @@ def main():
                     models = sorted([m["model"] for m in models_response["models"]])
                     return gr.update(choices=models, value=models[-1] if models else [])
 
-                async def wrapped_benchmark(models, laps, think):
+                async def wrapped_benchmark(models, laps, think: bool):
                     if not models:
                         return (
                             "🟡 Сначала загрузите и выберите модели для тестирования.",
@@ -2635,73 +2632,30 @@ def main():
                 # для построения графиков
                 history_state = gr.State([])
 
-
-                def build_monitor_view():
-                    """
-                    Возвращает сразу несколько “виджетов”:
-                    - summary_md: человекочитаемая сводка
-                    - top_ram_df: топ по RAM
-                    - top_cpu_df: топ по CPU
-                    - gpu_df / gpu_note
-                    - details_json: полный payload
-                    """
-                    payload = system_data.make_human_monitor_payload(MONITORED)
-
-                    s = payload.get("summary", {})
-                    summary_md = (
-                        f"### Сводка\n"
-                        f"- **Процессор (CPU), суммарно по контейнерам:** {s.get('total_cpu_%_sum', 0)}%\n"
-                        f"- **Оперативка (RAM), суммарно по контейнерам:** {s.get('total_ram_used_mb', 0)} MB\n"
-                        f"- **Docker-сеть IN/OUT:** {s.get('total_net_in_mb', 0)} / {s.get('total_net_out_mb', 0)} MB\n"
-                        f"- **Процессы (PIDs) суммарно:** {s.get('total_pids', 0)}\n\n"
-                        # f"ℹ️ CPU здесь — это сумма docker CPU% по контейнерам (может быть >100% при использовании нескольких ядер)."
-                    )
-
-                    # Top consumers
-                    top = payload.get("top_consumers", {})
-                    by_ram = top.get("by_ram", [])
-                    by_cpu = top.get("by_cpu", [])
-
-
-                    top_ram_df = pd.DataFrame(by_ram) if by_ram else pd.DataFrame(
-                        columns=["container", "ram_used_mb", "cpu_%"])
-                    top_cpu_df = pd.DataFrame(by_cpu) if by_cpu else pd.DataFrame(
-                        columns=["container", "cpu_%", "ram_used_mb"])
-
-
-                    # GPU
-                    gpu = payload.get("gpu", {})
-                    gpu_note_ = ""
-                    gpu_df = pd.DataFrame()
-
-                    if isinstance(gpu, dict) and "gpus" in gpu:
-                        gpu_df = pd.DataFrame(gpu["gpus"])
-                    else:
-                        gpu_note_ = gpu.get("note", "GPU данные недоступны.")
-
-                    return summary_md, top_ram_df, top_cpu_df, gpu_df, gpu_note_, payload
-
-
-
                 # --- UI ---
                 summary_md = gr.Markdown()
                 warnings_md = gr.Markdown()
                 gpu_note = gr.Markdown()
 
                 with gr.Row():
-                    gpu_table = gr.Dataframe(label="Видеокарты (Общее использование / Загрузка памяти)", interactive=False, wrap=False)
+                    gpu_table = gr.Dataframe(label="Видеокарты (Общее использование / Загрузка памяти)",
+                                             interactive=False, wrap=False)
                 with gr.Row():
-                    top_ram = gr.Dataframe(label="Топ контейнеров по загрузке оперативной памяти", interactive=False, wrap=True)
+                    top_ram = gr.Dataframe(label="Топ контейнеров по загрузке оперативной памяти", interactive=False,
+                                           wrap=True)
                     top_cpu = gr.Dataframe(label="Топ контейнеров по загрузке процессора", interactive=False, wrap=True)
 
                 # графики по серверу
-                cpu_plot = gr.LinePlot(x="time", y="cpu_host_%", title="Загрузка центрального процессора (CPU), %", height=260)
-                ram_plot = gr.LinePlot(x="time", y="ram_mb", title="Оперативка, RAM (занятая контейнерами), MB", height=260)
-                vram_plot = gr.LinePlot(x="time", y="vram_free_mb_min", title="Свободная видеопамять у самой загруженной видеокарты, MB", height=260)
-
+                cpu_plot = gr.LinePlot(x="time", y="cpu_host_%", title="Загрузка центрального процессора (CPU), %",
+                                       height=260)
+                ram_plot = gr.LinePlot(x="time", y="ram_mb", title="Оперативка, RAM (занятая контейнерами), MB",
+                                       height=260)
+                vram_plot = gr.LinePlot(x="time", y="vram_free_mb_min",
+                                        title="Свободная видеопамять у самой загруженной видеокарты, MB", height=260)
 
                 with gr.Accordion("Детальный отчет JSON", open=False):
-                    details_json = gr.JSON(label="Нагрузка на сервер (по всем docker - контейнерам)", min_height=400, max_height=900)
+                    details_json = gr.JSON(label="Нагрузка на сервер (по всем docker - контейнерам)", min_height=400,
+                                           max_height=900)
 
                 t = gr.Timer(1.0)
 
@@ -2802,17 +2756,6 @@ def main():
                         history_state
                     ],
                 )
-
-                # --- handlers ---
-                # btn.click(
-                #     fn=build_monitor_view,
-                #     outputs=[summary_md, top_ram, top_cpu, gpu_table, gpu_note, details_json],
-                # )
-                # t.tick(
-                #     fn=build_monitor_view,
-                #     outputs=[summary_md, top_ram, top_cpu, gpu_table, gpu_note, details_json],
-                # )
-
 
                 # подавляем двойное всплываение gr.Info на старте
                 first_change = gr.State(True)

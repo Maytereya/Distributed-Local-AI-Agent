@@ -165,7 +165,7 @@ def get_docker_containers_stats(container_names: List[str]) -> Dict[str, Any]:
 
     return out
 
-def make_human_monitor_payload(container_names: List[str], top_k: int = 3) -> Dict[str, Any]:
+def make_human_monitor_payload(container_names: List[str], top_k: int = 5) -> Dict[str, Any]:
     containers = get_docker_containers_stats(container_names)
 
     # totals (только по тем, у кого нет error)
