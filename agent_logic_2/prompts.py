@@ -1,15 +1,71 @@
 import logging
+import shutil
 from pathlib import Path
+from importlib import resources
 from typing import Dict, Union
-
+import config as c
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Папка data/prompts внутри пакета
-BASE_DIR = Path(__file__).resolve().parent
-PROMPTS_DIR = BASE_DIR / "data" / "prompts"
-PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_DATA_DIR = Path(c.APP_DATA_DIR).resolve()
+PROMPTS_DIR = Path(DEFAULT_DATA_DIR / "prompts").resolve()
+
+PKG = "agent_logic_2"  # имя пакета, откуда идет загрузка дефолтных промптов для агента
+DEFAULTS_SUBDIR = ("data", "prompts")  # адрес, где лежат дефолтные .txt внутри пакета
+
+def ensure_default_prompts(dest_dir: Path, overwrite: bool = False) -> int:
+    """
+    Копирует дефолтные *.txt промпты из пакета в dest_dir.
+    По умолчанию НЕ перезаписывает существующие файлы.
+
+    :return: сколько файлов скопировано
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    src_root = resources.files(PKG).joinpath(*DEFAULTS_SUBDIR)
+
+    # src_root — Traversable (может быть внутри zip/wheel)
+    for entry in src_root.iterdir():
+        if not entry.is_file():
+            continue
+        if entry.name.startswith(".") or entry.suffix.lower() != ".txt":
+            continue
+
+        target = dest_dir / entry.name
+        if target.exists() and not overwrite:
+            continue
+
+        # открываем ресурс как бинарный поток (работает и из wheel)
+        with entry.open("r", encoding="utf-8") as r:
+            target.write_text(r.read(), encoding="utf-8")
+
+        copied += 1
+
+    if copied:
+        logger.info("✅ Скопировано дефолтных промптов: %d в %s", copied, dest_dir)
+    else:
+        logger.info("ℹ️ Дефолтные промпты уже на месте: %s", dest_dir)
+
+    return copied
+
+try:
+    PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
+except (OSError, PermissionError) as e:
+    logger.error("❌ Не удалось создать директорию для промптов: %s. Используется временная директория.", e)
+    # Резервный вариант в текущей папке, если основной путь недоступен
+    PROMPTS_DIR = Path.cwd() / "prompts"
+    PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Копируем дефолтные промпты в рабочую папку
+ensure_default_prompts(PROMPTS_DIR, overwrite=False)
+
+# BASE_DIR = Path(__file__).resolve().parent
+# PROMPTS_DIR = BASE_DIR / "data" / "prompts"
+# PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # Кэш «загруженных один раз» шаблонов
 _PROMPT_CACHE: Dict[str, str] = {}

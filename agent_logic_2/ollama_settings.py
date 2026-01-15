@@ -1,17 +1,22 @@
 # ToDo: Перепроверить данные, которые передаются в benchmark_tab
 # Не все модели имеют выдачу генерации, названную также как и у Mistral. Поэтому может быть пустое сообщение от модели.
-# Скорее всего это касается рассуждающих моделей. Перепроверить.
+# Скорее всего это касается рассуждающих моделей.
 
 from __future__ import annotations
 
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Dict, Tuple, Union, Optional
 
+from ollama import AsyncClient as OllamaClient
 from ollama import Options
 
 from agent_logic_2 import config as c
+from threading import Lock
+
+# Инициализация блокировки потока на время смены имени модели. Чтобы не вышло ошибки или полусостояния.
+_lock = Lock()
 
 # Настройка логирования
 # logging.basicConfig(level=logging.INFO)
@@ -37,7 +42,7 @@ _OPTIONS = {
         "stop": ["<|eot_id|>", "— Конец списка —"]
     },
 }
-
+ollama_client = OllamaClient(c.ollama_url)
 # Создание директории и файла для сохранения
 # 1. Берём директорию, в которой лежит этот скрипт
 BASE_DIR: Path = Path(__file__).resolve().parent
@@ -279,69 +284,84 @@ def write_options(data: Dict) -> str:
 
 
 # --------------------------------------------------
-# ------------  MAIN MODEL NAME СЕКЦИЯ ---0---------
+# ------------  MAIN MODEL NAME СЕКЦИЯ -------------
 # --------------------------------------------------
 
-def init_model_name() -> str:
+def write_main_model_name(name: str) -> bool:
     """
-    Инициализирует имя основной модели Ollama (OLLAMA_MODEL).
-
-    Логика:
-    - если main_model_path существует и содержит непустое имя —
-      читаем его и используем как базовую LLM;
-    - иначе берём значение из config.ini (c.ll_model_small).
-
-    :return: Текущее имя базовой модели (строка).
-    """
-    settings_dir.mkdir(parents=True, exist_ok=True)
-    global OLLAMA_MODEL
-    if main_model_path.exists():
-        OLLAMA_MODEL = main_model_path.read_text(encoding="utf-8").strip()
-        if OLLAMA_MODEL != "":
-            logger.info("✅ Инициализировано имя базовой LLM: %s из кэша ollama_settings", OLLAMA_MODEL)
-        else:
-            OLLAMA_MODEL = c.ll_model_small
-            logger.info("✅ Инициализировано имя базовой LLM: %s из config.ini", OLLAMA_MODEL)
-    return OLLAMA_MODEL
-
-
-def read_main_model_name(inform: bool = True) -> str | tuple[str, str]:
-    """
-    Читает имя основной модели Ollama (из файла или config.ini) и возвращает его.
-
-    Всегда вызывает init_model_name(), тем самым гарантируя актуальное
-    значение в глобальной переменной OLLAMA_MODEL.
-
-    :param inform:
-        - True: вернуть (name, message);
-        - False: вернуть только name.
-    :return: Строка с именем модели или кортеж (name, message).
-    """
-    init_model_name()
-    global OLLAMA_MODEL
-    logger.info("✅ Загружено имя модели %s", OLLAMA_MODEL)
-    if inform:
-        return OLLAMA_MODEL, f"✅ Имя модели {OLLAMA_MODEL} загружено"
-    else:
-        return OLLAMA_MODEL
-
-
-def write_main_model_name(name: str) -> str:
-    """
-    Сохраняет имя выбранной LLM в файл и обновляет кэш (OLLAMA_MODEL).
+    Сохраняет имя выбранной LLM в файл.
 
     :param name: Имя модели Ollama (например, "llama3.1:8b").
-    :return: Строка-статус операции (успех / ошибка).
+    :return: True если успешно, иначе False.
     """
-    global OLLAMA_MODEL
-    OLLAMA_MODEL = name
     try:
         main_model_path.write_text(name, encoding="utf-8")
-        logger.info("✅ Имя модели %s сохранено", name)
-        return f"✅ Выбрана модель {name} в качестве основной"
-    except Exception as e:
-        logger.error("❌ Ошибка при сохранении имени модели %s: %s", name, str(e))
-        return f"❌ Ошибка при сохранении имени модели {name}: {str(e)}"
+        logger.info("✅ Выбрана LLM: %s", name)
+        return True
+    except Exception:
+        logger.exception("❌ Ошибка при выборе LLM %s", name)
+        return False
+
+
+class LLMName:
+    current_llm: Optional[str] = None
+    models_list = []
+
+
+    @classmethod
+    def ensure_initialized(cls) -> None:
+        if cls.current_llm is not None:
+            return
+
+        settings_dir.mkdir(parents=True, exist_ok=True)
+
+        name = ""
+        try:
+            if main_model_path.exists():
+                name = main_model_path.read_text(encoding="utf-8").strip()
+        except Exception:
+            logger.exception("❌ Не удалось прочитать файл модели %s", main_model_path)
+
+        if not name:
+            name = c.ll_model_small
+            logger.info("✅ Инициализирована LLM: %s из config.ini", name)
+        else:
+            logger.info("✅ Инициализирована LLM: %s из %s", name, main_model_path)
+
+        cls.current_llm = name
+
+    @classmethod
+    def get(cls) -> str:
+        cls.ensure_initialized()
+        assert cls.current_llm is not None
+        return cls.current_llm
+
+    @classmethod
+    def set(cls, name: str) -> str:
+        name = (name or "").strip()
+        if not name:
+            return "❌ Имя модели пустое"
+
+        with _lock:
+            cls.ensure_initialized()
+            if name == cls.current_llm:
+                return f"ℹ️ LLM уже выбрана: {name}"
+
+            ok = write_main_model_name(name)
+            if not ok:
+                return f"❌ Не удалось сохранить LLM: {name}"
+
+            cls.current_llm = name
+
+        return f"✅ Выбрана LLM {name}"
+
+    @classmethod
+    async def list_all_models(cls):
+        # Тут хорошо бы привести ответ к списку строк/объектов
+        cls.models_list: list[str] = await ollama_client.list()
+        return cls.models_list
+
+
 
 
 if __name__ == "__main__":

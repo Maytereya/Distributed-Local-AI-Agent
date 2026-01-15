@@ -30,6 +30,7 @@ from agent_logic_2.gigachat import async_gigachat_logic as gigachat
 from agent_logic_2.llama_func_call import repo
 from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
+from agent_logic_2.ollama_settings import LLMName
 from agent_logic_2.prompts import load_prompt
 from agent_logic_1 import meilisearch_client as meilisearch
 from converters import html_cleaner
@@ -873,21 +874,21 @@ async def split_into_segments(text: str, sess: Dict[str, Any], think: bool | Non
     """
     think = ollama_settings.resolve_think(think)
     # print("!!!THINK:", think)
-    ollama_settings.init_model_name()
+    # ollama_settings.init_model_name()
     # print("split_into_segments OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
     # print("split_into_segments options: ", ollama_settings.options_set())
-    if not ollama_settings.OLLAMA_MODEL:
-        raise ValueError("split_into_segments OLLAMA_MODEL cannot be empty")
+    # if not ollama_settings.OLLAMA_MODEL:
+    #     raise ValueError("split_into_segments OLLAMA_MODEL cannot be empty")
 
     # Защищаемся от долгого ответа модели: ограничиваем время ожидания
     try:
         res = await asyncio.wait_for(
             ollama.generate(
-                model=ollama_settings.OLLAMA_MODEL,
+                model=LLMName.get(),
                 prompt=split_prompt(text, sess),  # Добавляется sess
                 options=ollama_settings.options_set(),
                 format="json",
-                keep_alive=-1,
+                # keep_alive=-1,
                 think=think,
             ),
             timeout=20,
@@ -936,13 +937,13 @@ async def classify(text: str, sess: Dict[str, Any], think: bool | None = None) -
 
     think = ollama_settings.resolve_think(think)
 
-    if not ollama_settings.OLLAMA_MODEL:
-        raise ValueError("classify OLLAMA_MODEL cannot be empty")
+    if not LLMName.get():
+        raise ValueError("for classify LLMName.get() cannot be empty")
 
     try:
         res = await asyncio.wait_for(
             ollama.generate(
-                model=ollama_settings.OLLAMA_MODEL,
+                model=LLMName.get(),
                 prompt=classificator_prompt(text, sess),
                 options=ollama_settings.options_set(),
                 format="json",
@@ -992,15 +993,15 @@ async def final_answering(primary_request: str,
         collected_info=collected_info,
     )
 
-    if not ollama_settings.OLLAMA_MODEL:
-        raise ValueError("final_answering OLLAMA_MODEL cannot be empty")
+    if not LLMName.get():
+        raise ValueError("final_answering LLMName.get() cannot be empty")
     think = ollama_settings.resolve_think(think)
     partial = ""  # накопитель
     if ai_feed == "local":
         try:
             logger.info("final_answering LOCAL branch has activated/активировано подключение к локальной LLM")
             stream = await ollama.generate(
-                model=ollama_settings.OLLAMA_MODEL,
+                model=LLMName.get(),
                 prompt=prompt,
                 options=ollama_settings.options_set(),
                 keep_alive=-1,

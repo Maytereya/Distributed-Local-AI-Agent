@@ -4,18 +4,19 @@ from typing import Literal
 from ollama import AsyncClient, Options
 
 from agent_logic_2 import config as c
+from agent_logic_2.ollama_settings import LLMName
 
 ollama_aclient = AsyncClient(host=c.ollama_url)
 options = Options(temperature=0.2, )
 
 # Выбор llm
-llm = c.ll_model_big
+llm = LLMName.get()
 
 
 async def formulate(sentence: str, ):
     """
     Formulate a question of the user
-    :param question: Сырой запрос пользователя
+    :param sentence: Сырой запрос пользователя
     :return: Обработанный запрос пользователя для облегчения поиска в векторной базе и фомулирования правильного запроса
     """
 

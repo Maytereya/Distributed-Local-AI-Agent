@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from converters import html_cleaner
 from agent_logic_2.text_fuzzy import fuzzy_match, normalize_text_for_fuzzy
-
+from agent_logic_2.ollama_settings import LLMName
 from ollama import AsyncClient
 
 from agent_logic_2.nayka_api.api_nayka import find_doctors_by_keyword, find_doctor_schedule, \
@@ -55,7 +55,8 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "nayka_api", "apidata")
 ollama_client = AsyncClient(c.ollama_url)
 # ollama_settings.init_model_name()
 ollama_settings.init_options()
-model: str = ollama_settings.init_model_name()
+
+# model: str = ollama_settings.init_model_name()
 
 # Расширенный список стоп-слов
 STOP_WORDS = {
@@ -213,7 +214,7 @@ SYSTEM:
     user_part = f"\nUSER:\nВопрос: {question}\n"
     prompt = system_base + user_part
 
-    resp = await ollama_call(prompt=prompt, llm=ollama_settings.init_model_name(), think=think)
+    resp = await ollama_call(prompt=prompt, llm=LLMName.get(), think=think)
     text = resp.get("response", "").strip()
     if text.upper() == "NONE":
         return None, None
@@ -545,7 +546,7 @@ async def load_doctor_prices_async():
 
 
 @with_retries(tries=2)
-async def ollama_call(prompt: str, llm: str = model, think: bool = None, ) -> Dict[str, Any]:
+async def ollama_call(prompt: str, llm: str = LLMName.get() , think: bool = None, ) -> Dict[str, Any]:
     if not llm:
         raise ValueError("Model is not specified yet")
     think = ollama_settings.resolve_think(think)

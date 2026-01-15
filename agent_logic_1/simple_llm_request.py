@@ -18,7 +18,7 @@ llm = "ministral-3:14b-instruct-2512-fp16"
 async def formulate(sentence: str, ):
     """
     Formulate a question of the user
-    :param question: Сырой запрос пользователя
+    :param sentence: Сырой запрос пользователя
     :return: Обработанный запрос пользователя для облегчения поиска в векторной базе и фомулирования правильного запроса
     """
 

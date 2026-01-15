@@ -9,6 +9,8 @@ from typing import Any
 from ollama import AsyncClient, GenerateResponse, Options
 
 from agent_logic_2 import ollama_settings
+from agent_logic_2.ollama_settings import LLMName #
+
 from agent_logic_2.config import ollama_url
 from agent_logic_2.llama_func_call import with_retries
 
@@ -164,7 +166,7 @@ def load_previous_log(path: str):
 if __name__ == "__main__":
     rez, _ = asyncio.run(
         ollama_test_call(prompt="Print out synonyms of the words 'burglar and thief' pls",
-                         llm=ollama_settings.init_model_name(), ))
+                         llm=LLMName.get(), ))
 
 
     print(type(rez[0].response))

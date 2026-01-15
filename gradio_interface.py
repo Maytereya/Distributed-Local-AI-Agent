@@ -16,6 +16,7 @@ import gradio as gr
 from gradio_pdf import PDF
 
 import agent_logic_2.ollama_settings as ollama_settings
+from agent_logic_2.ollama_settings import LLMName
 from agent_logic_1 import aretrieve as retrieve
 from agent_logic_1 import meilisearch_client as meilisearch
 from agent_logic_2 import config as c
@@ -787,7 +788,7 @@ def radio_type_of_upl_file_change(choice):
 
 def main():
     # Инициализация при загрузке приложения options и model name
-    ollama_settings.init_model_name()
+    # ollama_settings.init_model_name()
     ollama_settings.init_options()
     ollama_settings.init_thinking()
 
@@ -2242,21 +2243,29 @@ def main():
             # ------------ ASSERT(ACCEPT/VALIDATE/CHOOSE) MAIN LLM ---------------
 
             def fn_load_main_model() -> List[str]:
-                return [ollama_settings.read_main_model_name(False)]
+                return [LLMName.get()]
 
             def fn_assert_main_model(name: str, ) -> str:
 
                 try:
-                    return ollama_settings.write_main_model_name(name)
+                    return LLMName.set(name)
                 except Exception as e:
                     return f"❌ Ошибка сохранения на уровне интерфейса: {e}"
 
+            # async def reassert_main_model_dropdown(only_list: bool = False) -> Union[gr.update(), List[str]]:
+            #     models_response = await ollama.list()
+            #     models = sorted([m["model"] for m in models_response["models"]])
+            #     if only_list:
+            #         return models
+            #     return gr.update(choices=models, value=models[-1] if models else [])
+
             async def reassert_main_model_dropdown(only_list: bool = False) -> Union[gr.update(), List[str]]:
-                models_response = await ollama.list()
+                models_response = await LLMName.list_all_models()
                 models = sorted([m["model"] for m in models_response["models"]])
                 if only_list:
                     return models
                 return gr.update(choices=models, value=models[-1] if models else [])
+
 
             # ------------Секция управления контейнерами------------
 
