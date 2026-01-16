@@ -282,7 +282,9 @@ def write_options(data: Dict) -> str:
             json.dump(data, f, ensure_ascii=False, indent=2)
             global _cached_opts
             _cached_opts = data  # обновляем кэш
+            logger.info("✅ Ollama options сохранены")
             return f"✅ Данные о настройках Ollama для {OLLAMA_MODEL} сохранены"
+
     except Exception as e:
         return f"❌ Ошибка при сохранении настроек Ollama: {e} для модели {OLLAMA_MODEL}"
 
