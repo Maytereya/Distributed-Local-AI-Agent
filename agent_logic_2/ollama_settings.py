@@ -128,8 +128,7 @@ def init_thinking() -> bool:
         logger.info("✅ Инициализировано состояние параметра Think: %s из config.ini", _think)
     return _think
 
-
-def write_think_status(status: bool, ) -> str:
+def write_think_status(status: bool, ) -> None:
     """
     Сохраняет статус параметра Think в файл и обновляет кэш.
 
@@ -139,25 +138,30 @@ def write_think_status(status: bool, ) -> str:
     :param status: Новое состояние параметра Think.
     :return: Строка-статус операции (успех / ошибка).
     """
+
     global _think
     _think = bool(status)
     if status:
         try:
             think_path.write_text(str(status), encoding="utf-8")
             logger.info("✅ Статус параметра Think %s сохранен", status)
-            return f"✅ Статус параметра Think {status} сохранен"
+
+            # return f"✅ Статус параметра Think {status} сохранен"
+            return None
         except Exception as e:
             logger.error("❌ Ошибка при сохранении статуса параметра Think %s: %s", status, str(e))
-            return f"❌ Ошибка при сохранении статуса параметра Think {status}: {str(e)}"
+            # return f"❌ Ошибка при сохранении статуса параметра Think {status}: {str(e)}"
+            return None
     else:
         try:
             think_path.write_text("", encoding="utf-8")
             logger.info("✅ Статус параметра Think %s сохранен", status)
-            return f"✅ Статус параметра Think {status} сохранен"
+            # return f"✅ Статус параметра Think {status} сохранен"
+            return None
         except Exception as e:
             logger.error("❌ Ошибка при сохранении статуса параметра Think %s: %s", status, str(e))
-            return f"❌ Ошибка при сохранении статуса параметра Think {status}: {str(e)}"
-
+            # return f"❌ Ошибка при сохранении статуса параметра Think {status}: {str(e)}"
+            return None
 
 def read_think_status(inform: bool = True) -> Union[Tuple[bool, str], bool]:
     """

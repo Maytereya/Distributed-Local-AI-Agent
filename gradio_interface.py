@@ -2209,14 +2209,17 @@ def main():
             )
 
             # -------- FUNCTIONS SECTION ------------
+            # ---- Функции настроек системы ---------
+            # ---------------------------------------
 
-            def fn_load_options(explain: bool = True) -> Union[tuple[str, str], str]:
+            def fn_load_options(explain: bool = False) -> Union[tuple[str, str], str]:
                 """
                 Загружает и сериализует настройки Ollama в JSON с отступами.
                 :return: JSON-форматированная строка
                     ASCII отключено, отступы есть.
                 :rtype: Str
                 """
+                gr.Success(title="Загружены успешно",message="Options для Ollama")
                 return ollama_settings.load_ollama_options(explain)
 
             def fn_save_options(text: str) -> str:
@@ -2225,39 +2228,54 @@ def main():
                 """
                 try:
                     data = json.loads(text)
+                    gr.Success(title="Сохранены успешно",
+                               duration=3,
+                               message=f"Options для Ollama",
+                               )
                 except json.JSONDecodeError as e:
+                    gr.Error(f"❌ Ошибка сохранения OPTIONS на уровне интерфейса: {e}")
                     return f"❌ Ошибка преобразования JSON на уровне интерфейса: {e}"
                 return ollama_settings.write_options(data)
 
             def fn_load_prompt(name: str, inform: bool = True) -> Union[Tuple[str, str], str]:
                 return load_prompt(name, inform)
 
-            def fn_save_prompt(name: str, text: str) -> str:
+            def fn_save_prompt(name: str, text: str) -> None:
 
                 try:
                     info = write_prompt(name, text)
-                    return info
+                    gr.Success(title="Сохранен успешно",
+                               duration=3,
+                               message=info,
+                               )
+                    return None
                 except Exception as e:
-                    return f"❌ Ошибка сохранения на уровне интерфейса: {e}"
+                    gr.Error(f"❌ Ошибка сохранения на уровне интерфейса: {e}")
+                    return None
 
             # ------------ ASSERT(ACCEPT/VALIDATE/CHOOSE) MAIN LLM ---------------
 
             def fn_load_main_model() -> List[str]:
+                # gr.Success(title="Выбор сохранен",
+                #            duration=3,
+                #            message=f"LLM по умолчанию установлена",
+                #            )
                 return [LLMName.get()]
 
-            def fn_assert_main_model(name: str, ) -> str:
+            def fn_assert_main_model(name: str, ) -> None:
 
                 try:
-                    return LLMName.set(name)
-                except Exception as e:
-                    return f"❌ Ошибка сохранения на уровне интерфейса: {e}"
+                    gr.Success(title="Выбор сохранен",
+                               duration=3,
+                               message=f"LLM {name} установлена",
+                               )
+                    LLMName.set(name)
+                    return None
 
-            # async def reassert_main_model_dropdown(only_list: bool = False) -> Union[gr.update(), List[str]]:
-            #     models_response = await ollama.list()
-            #     models = sorted([m["model"] for m in models_response["models"]])
-            #     if only_list:
-            #         return models
-            #     return gr.update(choices=models, value=models[-1] if models else [])
+                except Exception as e:
+                    gr.Error(f"❌ Ошибка сохранения на уровне интерфейса: {e}")
+                    return None
+
 
             async def reassert_main_model_dropdown(only_list: bool = False) -> Union[gr.update(), List[str]]:
                 models_response = await LLMName.list_all_models()
@@ -2269,6 +2287,10 @@ def main():
             # ------------Секция управления контейнерами------------
 
             def restart() -> str:
+                gr.Info(title="Ollama Server",
+                           duration=3,
+                           message=f"Docker-контейнер Ollama получил команду перезапуска, для перезагрузки требуется около 1 минуты",
+                           )
                 return restart_container.restart_ollama_container()
 
             # ------------------------------------------------------
@@ -2276,27 +2298,17 @@ def main():
             with gr.Tab("⚙️ Настройки"):
                 gr.Markdown("""<h3>⚙️ Настройки нейросетей и серверов Ollama/Uvicorn</h3>""")
 
+                # -----------------------------------------------------
+                # OLLAMA OPTIONS Секция
+                # -----------------------------------------------------
+
                 with gr.Column():
-                    with gr.Row():
-                        status = gr.Textbox(lines=1,
-                                            label="Текущий статус",
-                                            submit_btn=False,
-                                            container=True,
-                                            autoscroll=False,
-                                            interactive=True,
-                                            autofocus=False,
-                                            )
-
-                    # -----------------------------------------------------
-                    # OLLAMA OPTIONS Секция
-                    # -----------------------------------------------------
-
                     with gr.Row():
                         with gr.Column():
                             main_model_selector = gr.Dropdown(
                                 choices=fn_load_main_model(),
                                 multiselect=False,
-                                label="Выбор главной LLM",
+                                label="Выбор основной LLM",
                                 interactive=True,
                                 container=True,
                             )
@@ -2314,11 +2326,12 @@ def main():
                             outputs=main_model_selector)
 
                         save_model_btn.click(fn=fn_assert_main_model,
-                                             inputs=[main_model_selector],
-                                             outputs=[status], )
+                                             inputs=main_model_selector,
+                                             outputs=None, )
+
 
                         think_checkbox.change(ollama_settings.write_think_status, inputs=[think_checkbox],
-                                              outputs=[status])
+                                              outputs=None)
 
                         json_ollama_options = gr.Code(label="📄Ollama Options",
                                                       value=fn_load_options(explain=False),
@@ -2338,11 +2351,10 @@ def main():
                                        inputs=[],
                                        outputs=[
                                            json_ollama_options,
-                                           status
                                        ],
                                        )
-                save_options_btn.click(fn=fn_save_options, inputs=json_ollama_options, outputs=status)
-                restart_ollama_btn.click(fn=restart, outputs=status)
+                save_options_btn.click(fn=fn_save_options, inputs=json_ollama_options, outputs=None)
+                restart_ollama_btn.click(fn=restart, outputs=None)
 
                 # --------------------------------------------------------
                 #  Split prompt секция
@@ -2357,14 +2369,14 @@ def main():
                             lines=20,
                             scale=4,
                         )
+                        with gr.Row():
+                            btn_load_2 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
+                            btn_save_2 = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
-                        btn_load_2 = gr.Button("🔄 Загрузить", size="md")
-                        btn_save_2 = gr.Button("💾 Сохранить", size="md")
-
-                btn_load_2.click(lambda: fn_load_prompt("split_prompt"),
-                                 [], [prompt_code_2, status])
-                btn_save_2.click(lambda txt: fn_save_prompt("split_prompt", txt),
-                                 prompt_code_2, status)
+                    btn_load_2.click(lambda: fn_load_prompt("split_prompt"),
+                                 [], [prompt_code_2,])
+                    btn_save_2.click(lambda txt: fn_save_prompt("split_prompt", txt),
+                                 [prompt_code_2,])
 
                 # --------------------------------------------------------
                 #  Classificator prompt секция
@@ -2380,13 +2392,14 @@ def main():
                             scale=4,
                         )
 
-                        btn_load_3 = gr.Button("🔄 Загрузить", size="md")
-                        btn_save_3 = gr.Button("💾 Сохранить", size="md")
+                        with gr.Row():
+                            btn_load_3 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
+                            btn_save_3 = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
                 btn_load_3.click(lambda: fn_load_prompt("classificator_prompt"),
-                                 [], [prompt_code_3, status])
+                                 [], [prompt_code_3,])
                 btn_save_3.click(lambda txt: fn_save_prompt("classificator_prompt", txt),
-                                 prompt_code_3, status)
+                                 prompt_code_3, )
 
                 # -----------------------------------------------------
                 # Final answering prompt секция
@@ -2401,13 +2414,14 @@ def main():
                             lines=20,
                             scale=4,
                         )
-                        btn_load_1 = gr.Button("🔄 Загрузить", size="md")
-                        btn_save_1 = gr.Button("💾 Сохранить", size="md")
+                        with gr.Row():
+                            btn_load_1 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
+                            btn_save_1 = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
                 btn_load_1.click(lambda: fn_load_prompt("final_answer"),
-                                 [], [prompt_code_1, status])
+                                 [], [prompt_code_1,])
                 btn_save_1.click(lambda txt: fn_save_prompt("final_answer", txt),
-                                 prompt_code_1, status)
+                                 prompt_code_1,)
 
                 # ---------------------------------------
                 #     CONSTANTS секция
@@ -2425,14 +2439,15 @@ def main():
                             scale=4,
                         )
 
-                        btn_load_c1 = gr.Button("🔄 Загрузить", size="md")
-                        btn_save_c1 = gr.Button("💾 Сохранить", size="md")
+                        with gr.Row():
+                            btn_load_c1 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
+                            btn_save_c1 = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
                         btn_load_c1.click(lambda: fn_load_prompt("EXAMPLES"),
-                                          [], [prompt_code_c1, status])
+                                          [], [prompt_code_c1,])
 
                         btn_save_c1.click(lambda txt: fn_save_prompt("EXAMPLES", txt),
-                                          prompt_code_c1, status)
+                                          prompt_code_c1, )
 
                 # c2: LABEL_DOC
 
@@ -2447,14 +2462,15 @@ def main():
                             scale=4,
                         )
 
-                        btn_load_c2 = gr.Button("🔄 Загрузить", size="md")
-                        btn_save_c2 = gr.Button("💾 Сохранить", size="md")
+                        with gr.Row():
+                            btn_load_c2 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
+                            btn_save_c2 = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
                     btn_load_c2.click(lambda: fn_load_prompt("LABEL_DOC"),
-                                      [], [prompt_code_c2, status])
+                                      [], [prompt_code_c2,])
 
                     btn_save_c2.click(lambda txt: fn_save_prompt("LABEL_DOC", txt),
-                                      prompt_code_c2, status)
+                                      prompt_code_c2, )
 
                 # с3: LABEL_PRIORITY
 
@@ -2469,14 +2485,15 @@ def main():
                             scale=4,
                         )
 
-                        btn_load_c3 = gr.Button("🔄 Загрузить", size="md")
-                        btn_save_c3 = gr.Button("💾 Сохранить", size="md")
+                        with gr.Row():
+                            btn_load_c3 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
+                            btn_save_c3 = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
                     btn_load_c3.click(lambda: fn_load_prompt("LABEL_PRIORITY"),
-                                      [], [prompt_code_c3, status])
+                                      [], [prompt_code_c3,])
 
                     btn_save_c3.click(lambda txt: fn_save_prompt("LABEL_PRIORITY", txt),
-                                      prompt_code_c3, status)
+                                      prompt_code_c3,)
 
                 # с4: MODULES
 
@@ -2491,14 +2508,17 @@ def main():
                             scale=4,
                         )
 
-                        btn_load_c4 = gr.Button("🔄 Загрузить", size="md")
-                        # btn_save_c4 = gr.Button("💾 Сохранить", size="md")
+                        with gr.Row():
+                            btn_load_c4 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
+                            btn_save_c4 = gr.Button("💾 Сохранить", size="sm", variant="primary",
+                                                    interactive=False) # Возможность кликнуть отключена, так как
+                            # менять названия функций нельзя
 
                     btn_load_c4.click(lambda: fn_load_prompt("MODULES"),
-                                      [], [prompt_code_c4, status])
+                                      [], [prompt_code_c4,])
 
-                    # btn_save_c4.click(lambda txt: fn_save_prompt("MODULES", txt),
-                    #                   prompt_code_c3, status,)
+                    btn_save_c4.click(lambda txt: fn_save_prompt("MODULES", txt),
+                                      prompt_code_c4,)
 
                 def load_all_prompts():
                     """
