@@ -16,7 +16,6 @@ import gradio as gr
 from gradio_pdf import PDF
 
 import agent_logic_2.ollama_settings as ollama_settings
-from agent_logic_2.ollama_settings import LLMName
 from agent_logic_1 import aretrieve as retrieve
 from agent_logic_1 import meilisearch_client as meilisearch
 from agent_logic_2 import config as c
@@ -24,6 +23,7 @@ from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
 from agent_logic_2.benchmark_tab import ollama_client as ollama
 from agent_logic_2.direct_upload_meili_tab import build_blocks, TABLE_HEADERS
 from agent_logic_2.id_validation import is_valid_id, sanitize_id
+from agent_logic_2.ollama_settings import LLMName
 from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
 from container_managenment import restart_container, system_data
@@ -2266,7 +2266,6 @@ def main():
                     return models
                 return gr.update(choices=models, value=models[-1] if models else [])
 
-
             # ------------Секция управления контейнерами------------
 
             def restart() -> str:
@@ -2351,7 +2350,7 @@ def main():
                 with gr.Row():
                     with gr.Accordion(label="Split Prompt", open=False):
                         prompt_code_2 = gr.Code(
-                            value=fn_load_prompt("split_prompt", False),
+                            value="",
                             language=None,
                             label="Split Prompt section",
                             interactive=True,
@@ -2373,7 +2372,7 @@ def main():
                 with gr.Row():
                     with gr.Accordion(label="Classificator Prompt", open=False):
                         prompt_code_3 = gr.Code(
-                            value=fn_load_prompt("classificator_prompt", False),
+                            value="",
                             language=None,
                             label="Classificator Prompt section",
                             interactive=True,
@@ -2395,7 +2394,7 @@ def main():
                 with gr.Row():
                     with gr.Accordion(label="Final Answer Prompt", open=False):
                         prompt_code_1 = gr.Code(
-                            value=fn_load_prompt("final_answer", False),
+                            value="",
                             language=None,
                             label="Final Answering Prompt section",
                             interactive=True,
@@ -2418,7 +2417,7 @@ def main():
                 with gr.Row():
                     with gr.Accordion(label="Examples for Classification", open=False):
                         prompt_code_c1 = gr.Code(
-                            value=fn_load_prompt("EXAMPLES", False),
+                            value="",
                             language=None,
                             label="EXAMPLES section: примеры для классификации",
                             interactive=True,
@@ -2440,7 +2439,7 @@ def main():
                 with gr.Row():
                     with gr.Accordion(label="Markers for Text Chunks", open=False):
                         prompt_code_c2 = gr.Code(
-                            value=fn_load_prompt("LABEL_DOC", False),
+                            value="",
                             language=None,
                             label="LABEL_DOC section: образцы маркировки распознанных текстовых сегментов",
                             interactive=True,
@@ -2462,7 +2461,7 @@ def main():
                 with gr.Row():
                     with gr.Accordion(label="Text Chunks Layout Priority", open=False):
                         prompt_code_c3 = gr.Code(
-                            value=fn_load_prompt("LABEL_PRIORITY", False),
+                            value="",
                             language=None,
                             label="LABEL_PRIORITY section: приоритет расположения текстовых сегментов после распознавания",
                             interactive=True,
@@ -2484,7 +2483,7 @@ def main():
                 with gr.Row():
                     with gr.Accordion(label="MODULES: The names of agents's functions", open=False):
                         prompt_code_c4 = gr.Code(
-                            value=fn_load_prompt("MODULES", False),
+                            value="",
                             language=None,
                             label="MODULES section: имена агентских функций, ассоциированных с маркерами, только чтение",
                             interactive=False,
@@ -2496,11 +2495,49 @@ def main():
                         # btn_save_c4 = gr.Button("💾 Сохранить", size="md")
 
                     btn_load_c4.click(lambda: fn_load_prompt("MODULES"),
-                                      [], [prompt_code_c3, status])
+                                      [], [prompt_code_c4, status])
 
                     # btn_save_c4.click(lambda txt: fn_save_prompt("MODULES", txt),
                     #                   prompt_code_c3, status,)
 
+                def load_all_prompts():
+                    """
+                    Обходим кэш Gradio, чтобы читать с диска
+                    Загружаем все промпты для работы агента разом. Таким образом загрузка будет
+                    производиться заново при рестарте страницы.
+
+                    This function retrieves multiple predefined prompts from disk by utilizing the
+                    `fn_load_prompt` helper function. Each prompt is identified by its specific
+                    name and loaded as necessary for further use in the application.
+
+                    :return: A tuple containing instances of all loaded prompts, maintaining the
+                        order of their retrieval.
+                    :rtype: tuple
+                    """
+
+                    return (
+                        fn_load_prompt("final_answer", False),
+                        fn_load_prompt("split_prompt", False),
+                        fn_load_prompt("classificator_prompt", False),
+                        fn_load_prompt("EXAMPLES", False),
+                        fn_load_prompt("LABEL_DOC", False),
+                        fn_load_prompt("LABEL_PRIORITY", False),
+                        fn_load_prompt("MODULES", False),
+                    )
+
+                blocks.load(
+                    fn=load_all_prompts,
+                    inputs=None,
+                    outputs=[
+                        prompt_code_1,
+                        prompt_code_2,
+                        prompt_code_3,
+                        prompt_code_c1,
+                        prompt_code_c2,
+                        prompt_code_c3,
+                        prompt_code_c4,
+                    ],
+                )
                 # ---------------------------------
                 # Whisper general prompt секция
                 # ---------------------------------
@@ -2788,6 +2825,7 @@ def main():
     blocks.queue(
         default_concurrency_limit=8,
         max_size=64)
+
     blocks.launch(
         server_name="0.0.0.0",
         server_port=7860,
