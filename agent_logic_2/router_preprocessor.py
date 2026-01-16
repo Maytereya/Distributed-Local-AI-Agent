@@ -68,6 +68,7 @@ MANAGER_WORD_RE = re.compile(r"\bменеджер\w*", re.IGNORECASE)
 SCRIPT_WORD_RE = re.compile(r"\bскрипт\w*", re.IGNORECASE)
 NOTE_SPLIT_RE = re.compile(r"[^0-9a-zа-яё]+", re.IGNORECASE)
 FILTER_RE = re.compile(r'^\s*FILTER:\s*(.+)$', re.IGNORECASE)
+UZI_RE = re.compile(r"\b(узи|узист|ультразвук\w*|ультразвуков\w*)\b", re.IGNORECASE)
 
 # Стоп-слова для заметок
 NOTE_STOPWORDS = {
@@ -503,6 +504,8 @@ async def _try_doctor_fallback(segment: str, sess: SessionType, think: bool | No
 
 async def _handle_note_search(segment: str, text: str) -> Optional[str]:
     """Обработка поиска по заметкам."""
+    if UZI_RE.search(segment or "") or UZI_RE.search(text or ""):
+        return None
     note_hit_seg, note_hit_full = SegmentProcessor.check_pattern_match(segment, text, NOTE_WORD_RE)
     if not (note_hit_seg or note_hit_full):
         def _fuzzy_hit(src: str) -> bool:

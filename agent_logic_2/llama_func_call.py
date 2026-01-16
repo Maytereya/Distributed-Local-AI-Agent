@@ -86,6 +86,158 @@ STOP_WORDS = {
 
 NEGATIVE_CONTEXT_WORDS = {"кроме", "исключая", "исключением"}
 
+# Шаблон для детекта УЗИ-запросов
+UZI_RE = re.compile(r"\b(узи|узист|ультразвук\w*|ультразвуков\w*)\b", re.IGNORECASE)
+
+# Стоп-слова для извлечения смысла запроса УЗИ
+UZI_QUERY_STOPWORDS = {
+    "кто", "делает", "делают", "проводит", "проводят", "нужен", "нужно", "нужна", "нужны",
+    "список", "врач", "врачи", "врачей", "покажи", "покажите", "выведи", "выведите",
+}
+
+# Обобщённые слова, которые не несут смысла для типа УЗИ
+UZI_GENERIC_WORDS = {
+    "узи", "ультразвуковое", "ультразвуковая", "ультразвуковой", "исследование", "диагностика",
+    "комплексное", "комплексная", "обследование",
+}
+
+UZI_EXCLUDE_KEYWORDS = {
+    "под контрол", "пункц", "биопс", "инъекц", "операц", "дренирован", "лапароцентез",
+}
+
+_UZI_PROCEDURES_CACHE: list[Dict[str, Any]] | None = None
+
+
+def _uzi_tokens(text: str, drop_generic: bool = True) -> list[str]:
+    norm = normalize_text_for_fuzzy(text)
+    if not norm:
+        return []
+    tokens = [t for t in norm.split() if len(t) >= 3]
+    if drop_generic:
+        tokens = [t for t in tokens if t not in UZI_GENERIC_WORDS]
+    return tokens
+
+
+def _uzi_line_is_candidate(line: str) -> bool:
+    if not line or not UZI_RE.search(line):
+        return False
+    norm = normalize_text_for_fuzzy(line)
+    if any(bad in norm for bad in UZI_EXCLUDE_KEYWORDS):
+        return False
+    return True
+
+
+def extract_uzi_query_phrase(text: str) -> str:
+    """Достаёт из запроса пользовательскую часть про УЗИ."""
+    if not isinstance(text, str) or not text:
+        return ""
+    m = UZI_RE.search(text)
+    src = text[m.start():] if m else text
+    norm = normalize_text_for_fuzzy(src)
+    if not norm:
+        return ""
+    tokens = [t for t in norm.split() if t and t not in UZI_QUERY_STOPWORDS]
+    return " ".join(tokens)
+
+
+def _build_uzi_catalog() -> list[Dict[str, Any]]:
+    """Собирает каталог реальных УЗИ процедур (raw/norm/tokens)."""
+    global _UZI_PROCEDURES_CACHE
+    if _UZI_PROCEDURES_CACHE is not None:
+        return _UZI_PROCEDURES_CACHE
+
+    phrases: set[str] = set()
+
+    # Из кэша прайса врача (берём самый свежий файл, без сетевых запросов)
+    try:
+        prices_dir = Path(DATA_DIR) / "doctor_prices"
+        files = sorted(prices_dir.glob("doctor_prices_*.jsonl"))
+        if files:
+            with files[-1].open(encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    name = (row.get("serviceName") or "").strip()
+                    if name and UZI_RE.search(name):
+                        phrases.add(name)
+    except Exception:
+        pass
+
+    # Из специализаций врачей (реальные формулировки)
+    try:
+        for doc in repo.read_all():
+            spec = (doc.get("specialization") or "").splitlines()
+            for line in spec:
+                line = line.strip(" \t•-")
+                if _uzi_line_is_candidate(line):
+                    phrases.add(line)
+    except Exception:
+        pass
+
+    catalog: list[Dict[str, Any]] = []
+    for raw in sorted(phrases):
+        norm = normalize_text_for_fuzzy(raw)
+        tokens = _uzi_tokens(norm)
+        if not tokens:
+            continue
+        catalog.append({
+            "raw": raw,
+            "norm": norm,
+            "tokens": tokens,
+            "key": " ".join(tokens),
+        })
+
+    _UZI_PROCEDURES_CACHE = catalog
+    return catalog
+
+
+def _uzi_match_groups(query: str) -> tuple[list[Dict[str, Any]], list[str]]:
+    """Возвращает (matched_catalog_entries, query_tokens)."""
+    phrase = extract_uzi_query_phrase(query)
+    if not phrase:
+        return [], []
+    query_norm = normalize_text_for_fuzzy(phrase)
+    query_tokens = _uzi_tokens(query_norm)
+    if not query_tokens:
+        return [], []
+
+    catalog = _build_uzi_catalog()
+    matched = [c for c in catalog if all(t in c["tokens"] for t in query_tokens)]
+    if not matched:
+        query_key = " ".join(query_tokens)
+        matched = [c for c in catalog if fuzzy_match(query_key, c["key"], threshold=0.88)]
+    return matched, query_tokens
+
+
+def find_uzi_doctors_by_specialty(query: str) -> List[Dict[str, Any]]:
+    """Находит врачей по УЗИ‑процедуре строго по полю specialization."""
+    matched_catalog, query_tokens = _uzi_match_groups(query)
+    token_groups = [c["tokens"] for c in matched_catalog] if matched_catalog else (
+        [query_tokens] if query_tokens else []
+    )
+    matched: list[Dict[str, Any]] = []
+    for doc in repo.read_all():
+        fio = (doc.get("fio") or "").strip()
+        if not fio:
+            continue
+        spec = doc.get("specialization") or ""
+        if not spec or not UZI_RE.search(spec):
+            continue
+        lines = [ln.strip(" \t•-") for ln in spec.splitlines() if ln.strip()]
+        candidates = [ln for ln in lines if _uzi_line_is_candidate(ln)]
+        if not candidates:
+            continue
+        if not token_groups:
+            matched.append(doc)
+            continue
+        for line in candidates:
+            line_norm = normalize_text_for_fuzzy(line)
+            if any(all(t in line_norm for t in group) for group in token_groups):
+                matched.append(doc)
+                break
+    return matched
+
 
 # ── Нормализация специальности (простая лемматизация множественного к единственному) ──
 def normalize_specialty_term(q: str) -> str:
@@ -608,6 +760,15 @@ async def investigate(question: str, think: bool = None) -> str:
                     return await handle_surname_search(candidate, question)
                 except Exception:
                     break
+
+    # УЗИ-запрос: ищем по специализации и реальным формулировкам процедур
+    if UZI_RE.search(q):
+        try:
+            docs = find_uzi_doctors_by_specialty(q)
+            if docs:
+                return format_documents(docs)
+        except Exception:
+            pass
 
     key_type, value = await extract_search_keyword_llm(question, think=think)
     if not value:
