@@ -32,6 +32,7 @@ from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
 from agent_logic_2.ollama_settings import LLMName
 from agent_logic_2.prompts import load_prompt
+from agent_logic_2.text_constants import NOTE_STOPWORDS
 from agent_logic_1 import meilisearch_client as meilisearch
 from converters import html_cleaner
 from agent_logic_2.text_fuzzy import fuzzy_match, normalize_text_for_fuzzy
@@ -69,19 +70,6 @@ SCRIPT_WORD_RE = re.compile(r"\bскрипт\w*", re.IGNORECASE)
 NOTE_SPLIT_RE = re.compile(r"[^0-9a-zа-яё]+", re.IGNORECASE)
 FILTER_RE = re.compile(r'^\s*FILTER:\s*(.+)$', re.IGNORECASE)
 UZI_RE = re.compile(r"\b(узи|узист|ультразвук\w*|ультразвуков\w*)\b", re.IGNORECASE)
-
-# Стоп-слова для заметок
-NOTE_STOPWORDS = {
-    "список", "списке", "врач", "врачи", "врачей", "у", "кого", "есть",
-    "со", "словом", "слово", "какие", "каких", "какая", "каком", "в каких",
-    "по", "про", "покажи", "покажите", "выведи", "выведите", "выдай", "выдайте",
-    "найди", "найдите", "найти", "на", "в", "и", "или", "что", "всех",
-    "заметка", "заметки", "заметках", "заметке", "заметок",
-    "кнопка", "кнопки", "кнопке", "кнопку", "кнопок",
-    "кнопочка", "кнопочки", "кнопочке", "кнопочку", "кнопочек",
-    "присутствует", "присутствуют", "встречается", "встречаются", "содержится", "содержатся",
-    "информация", "информацию", "об", "о", "обо"
-}
 
 NOTE_TRIGGER_WORDS = ("заметка", "кнопка")
 

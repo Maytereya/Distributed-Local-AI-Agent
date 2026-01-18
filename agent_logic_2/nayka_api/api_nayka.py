@@ -75,50 +75,6 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 # регионы, которые исключаем из кэша (Оренбургская область и её потомки)
 EXCLUDED_REGION_ROOTS: Set[int] = {19}
 
-# кеш для проверок наличия расписания (doctor_id, companyUnit, region_id)
-_SCHEDULE_CACHE: Dict[Tuple[int, int, int], bool] = {}
-
-
-def _has_schedule(doctor_id: int, company_unit: int, region_id: int, start: str, end: str) -> bool:
-    """Проверяет, есть ли у врача активное расписание на площадке в заданный период."""
-    key = (doctor_id, company_unit, region_id)
-    cached = _SCHEDULE_CACHE.get(key)
-    if cached is not None:
-        return cached
-
-    url = (
-        f"{base_url}/doctorSchedule?doctor={doctor_id}&companyUnit={company_unit}&region={region_id}"
-        f"&startDate={start}&endDate={end}"
-    )
-    try:
-        resp = _session_get(url)
-        resp.raise_for_status()
-        data = resp.json() or []
-        result = bool(data)
-    except (requests.RequestException, ValueError):
-        result = False
-
-    _SCHEDULE_CACHE[key] = result
-    return result
-
-
-def _filter_region_entries_with_schedule(
-    doctor_id: int,
-    entries: List[Dict[str, Any]],
-    start_iso: str,
-    end_iso: str,
-) -> List[Dict[str, Any]]:
-    """Возвращает только те doctorRegions, где в ближайшие дни есть расписание."""
-    result: List[Dict[str, Any]] = []
-    for entry in entries:
-        company_unit = entry.get("companyUnit")
-        region_id = entry.get("region")
-        if not company_unit or not region_id:
-            continue
-        if _has_schedule(doctor_id, company_unit, region_id, start_iso, end_iso):
-            result.append(entry)
-    return result
-
 # кеш для проверок наличия расписания (doctor_id, company_unit, region_id)
 _SCHEDULE_CACHE: Dict[Tuple[int, int, int], bool] = {}
 

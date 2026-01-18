@@ -23,6 +23,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from converters import html_cleaner
 from agent_logic_2.text_fuzzy import fuzzy_match, normalize_text_for_fuzzy
+from agent_logic_2.text_constants import (
+    STOP_WORDS,
+    UZI_QUERY_STOPWORDS,
+    PROCEDURE_QUERY_STOPWORDS,
+    PROCEDURE_GENERIC_WORDS,
+)
 from agent_logic_2.ollama_settings import LLMName
 from ollama import AsyncClient
 
@@ -58,42 +64,10 @@ ollama_settings.init_options()
 
 # model: str = ollama_settings.init_model_name()
 
-# Расширенный список стоп-слов
-STOP_WORDS = {
-    # Местоимения
-    "я", "ты", "он", "она", "оно", "мы", "вы", "они",
-    "меня", "тебя", "его", "её", "нас", "вас", "их",
-    "мне", "тебе", "ему", "ей", "нам", "вам", "им",
-    "мной", "тобой", "им", "ей", "нами", "вами", "ими",
-    "себя", "себе", "собой",
-    # Предлоги и союзы
-    "у", "в", "на", "с", "к", "о", "об", "от", "и", "или",
-    "а", "но", "по", "под", "над", "перед", "за", "через",
-    "из", "из-за", "из-под",
-    # Служебные слова
-    "работает", "работают", "работа", "доктор", "врач",
-    "клиника", "принимает", "приём", "запись", "где", "как",
-    "есть", "быть", "будет", "будут", "был", "была", "были",
-    # Указательные слова
-    "этот", "эта", "это", "эти", "тот", "та", "то", "те",
-    # Частицы
-    "ли", "же", "бы", "ведь", "вот", "даже", "именно",
-    # Вопросительные слова
-    "кто", "что", "какой", "какая", "какое", "какие",
-    "чей", "чья", "чьё", "чьи", "который", "которая",
-    "которое", "которые",
-}
-
 NEGATIVE_CONTEXT_WORDS = {"кроме", "исключая", "исключением"}
 
 # Шаблон для детекта УЗИ-запросов
 UZI_RE = re.compile(r"\b(узи|узист|ультразвук\w*|ультразвуков\w*)\b", re.IGNORECASE)
-
-# Стоп-слова для извлечения смысла запроса УЗИ
-UZI_QUERY_STOPWORDS = {
-    "кто", "делает", "делают", "проводит", "проводят", "нужен", "нужно", "нужна", "нужны",
-    "список", "врач", "врачи", "врачей", "покажи", "покажите", "выведи", "выведите",
-}
 
 # Обобщённые слова, которые не несут смысла для типа УЗИ
 UZI_GENERIC_WORDS = {
@@ -107,6 +81,8 @@ UZI_EXCLUDE_KEYWORDS = {
 
 _UZI_PROCEDURES_CACHE: list[Dict[str, Any]] | None = None
 
+_PROCEDURE_CATALOG_CACHE: list[Dict[str, Any]] | None = None
+
 
 def _uzi_tokens(text: str, drop_generic: bool = True) -> list[str]:
     norm = normalize_text_for_fuzzy(text)
@@ -115,6 +91,16 @@ def _uzi_tokens(text: str, drop_generic: bool = True) -> list[str]:
     tokens = [t for t in norm.split() if len(t) >= 3]
     if drop_generic:
         tokens = [t for t in tokens if t not in UZI_GENERIC_WORDS]
+    return tokens
+
+
+def _procedure_tokens(text: str, drop_generic: bool = True) -> list[str]:
+    norm = normalize_text_for_fuzzy(text)
+    if not norm:
+        return []
+    tokens = [t for t in norm.split() if len(t) >= 3]
+    if drop_generic:
+        tokens = [t for t in tokens if t not in PROCEDURE_GENERIC_WORDS]
     return tokens
 
 
@@ -137,6 +123,17 @@ def extract_uzi_query_phrase(text: str) -> str:
     if not norm:
         return ""
     tokens = [t for t in norm.split() if t and t not in UZI_QUERY_STOPWORDS]
+    return " ".join(tokens)
+
+
+def extract_procedure_query_phrase(text: str) -> str:
+    """Достаёт из запроса пользовательскую часть про процедуру."""
+    if not isinstance(text, str) or not text:
+        return ""
+    norm = normalize_text_for_fuzzy(text)
+    if not norm:
+        return ""
+    tokens = [t for t in norm.split() if t and t not in PROCEDURE_QUERY_STOPWORDS]
     return " ".join(tokens)
 
 
@@ -192,6 +189,53 @@ def _build_uzi_catalog() -> list[Dict[str, Any]]:
     return catalog
 
 
+def _build_procedure_catalog() -> list[Dict[str, Any]]:
+    """Собирает каталог реальных процедур из doctor_prices (raw/tokens/doc_ids)."""
+    global _PROCEDURE_CATALOG_CACHE
+    if _PROCEDURE_CATALOG_CACHE is not None:
+        return _PROCEDURE_CATALOG_CACHE
+
+    catalog_map: dict[str, Dict[str, Any]] = {}
+
+    try:
+        prices_dir = Path(DATA_DIR) / "doctor_prices"
+        files = sorted(prices_dir.glob("doctor_prices_*.jsonl"))
+        if files:
+            with files[-1].open(encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    name = (row.get("serviceName") or "").strip()
+                    doc_id = row.get("doctorId")
+                    if not name or not doc_id:
+                        continue
+                    tokens = _procedure_tokens(name)
+                    if not tokens:
+                        continue
+                    key = " ".join(tokens)
+                    entry = catalog_map.get(key)
+                    if not entry:
+                        entry = {"key": key, "tokens": tokens, "doc_ids": set(), "raws": set()}
+                        catalog_map[key] = entry
+                    entry["raws"].add(name)
+                    entry["doc_ids"].add(doc_id)
+    except Exception:
+        pass
+
+    catalog: list[Dict[str, Any]] = []
+    for entry in catalog_map.values():
+        catalog.append({
+            "key": entry["key"],
+            "tokens": entry["tokens"],
+            "doc_ids": entry["doc_ids"],
+            "raws": entry["raws"],
+        })
+
+    _PROCEDURE_CATALOG_CACHE = catalog
+    return catalog
+
+
 def _uzi_match_groups(query: str) -> tuple[list[Dict[str, Any]], list[str]]:
     """Возвращает (matched_catalog_entries, query_tokens)."""
     phrase = extract_uzi_query_phrase(query)
@@ -203,6 +247,24 @@ def _uzi_match_groups(query: str) -> tuple[list[Dict[str, Any]], list[str]]:
         return [], []
 
     catalog = _build_uzi_catalog()
+    matched = [c for c in catalog if all(t in c["tokens"] for t in query_tokens)]
+    if not matched:
+        query_key = " ".join(query_tokens)
+        matched = [c for c in catalog if fuzzy_match(query_key, c["key"], threshold=0.88)]
+    return matched, query_tokens
+
+
+def _procedure_match_groups(query: str) -> tuple[list[Dict[str, Any]], list[str]]:
+    """Возвращает (matched_catalog_entries, query_tokens)."""
+    phrase = extract_procedure_query_phrase(query)
+    if not phrase:
+        return [], []
+    query_norm = normalize_text_for_fuzzy(phrase)
+    query_tokens = _procedure_tokens(query_norm)
+    if not query_tokens:
+        return [], []
+
+    catalog = _build_procedure_catalog()
     matched = [c for c in catalog if all(t in c["tokens"] for t in query_tokens)]
     if not matched:
         query_key = " ".join(query_tokens)
@@ -237,6 +299,35 @@ def find_uzi_doctors_by_specialty(query: str) -> List[Dict[str, Any]]:
                 matched.append(doc)
                 break
     return matched
+
+
+def find_doctors_by_procedure(query: str) -> List[Dict[str, Any]]:
+    """Находит врачей по процедуре на основе doctor_prices и специализаций."""
+    matched_catalog, _ = _procedure_match_groups(query)
+    if not matched_catalog:
+        return []
+
+    token_groups = [c["tokens"] for c in matched_catalog]
+    doc_ids: set[int] = set()
+    for entry in matched_catalog:
+        doc_ids.update(entry.get("doc_ids") or set())
+
+    docs_by_id = {d.get("id"): d for d in repo.read_all() if (d.get("fio") or "").strip()}
+
+    # Доп. фильтр: упоминание процедуры в специализации врача
+    if token_groups:
+        for doc in docs_by_id.values():
+            spec = doc.get("specialization") or ""
+            if not spec:
+                continue
+            lines = [ln.strip(" \t•-") for ln in spec.splitlines() if ln.strip()]
+            for line in lines:
+                line_norm = normalize_text_for_fuzzy(line)
+                if any(all(t in line_norm for t in group) for group in token_groups):
+                    doc_ids.add(doc.get("id"))
+                    break
+
+    return [docs_by_id[doc_id] for doc_id in doc_ids if doc_id in docs_by_id]
 
 
 # ── Нормализация специальности (простая лемматизация множественного к единственному) ──
@@ -769,6 +860,14 @@ async def investigate(question: str, think: bool = None) -> str:
                 return format_documents(docs)
         except Exception:
             pass
+
+    # Процедурный запрос: ищем по процедурам в прайсах/специализации
+    try:
+        docs = find_doctors_by_procedure(q)
+        if docs:
+            return format_documents(docs)
+    except Exception:
+        pass
 
     key_type, value = await extract_search_keyword_llm(question, think=think)
     if not value:
