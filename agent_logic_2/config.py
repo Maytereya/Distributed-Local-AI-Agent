@@ -61,3 +61,8 @@ SBER_DUMP_DIR = config['DEFAULT']['SBER_DUMP_DIR']
 SBER_DUMP_AUDIO = bool(config['DEFAULT']['SBER_DUMP_AUDIO'])
 ll_model_big = config['DEFAULT']['ll_model_big']
 ll_model_small = config['DEFAULT']['ll_model_small']
+
+# Флаги функций (безопасные значения по умолчанию, если параметра нет в config.ini)
+USE_DOCTOR_PRICES_FOR_PROCEDURES = config['DEFAULT'].get(
+    'USE_DOCTOR_PRICES_FOR_PROCEDURES', 'false'
+).strip().lower() in ('1', 'true', 'yes')

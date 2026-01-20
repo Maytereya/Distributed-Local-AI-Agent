@@ -198,28 +198,24 @@ def _build_procedure_catalog() -> list[Dict[str, Any]]:
     catalog_map: dict[str, Dict[str, Any]] = {}
 
     try:
-        prices_dir = Path(DATA_DIR) / "doctor_prices"
-        files = sorted(prices_dir.glob("doctor_prices_*.jsonl"))
-        if files:
-            with files[-1].open(encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    row = json.loads(line)
-                    name = (row.get("serviceName") or "").strip()
-                    doc_id = row.get("doctorId")
-                    if not name or not doc_id:
-                        continue
-                    tokens = _procedure_tokens(name)
-                    if not tokens:
-                        continue
-                    key = " ".join(tokens)
-                    entry = catalog_map.get(key)
-                    if not entry:
-                        entry = {"key": key, "tokens": tokens, "doc_ids": set(), "raws": set()}
-                        catalog_map[key] = entry
-                    entry["raws"].add(name)
-                    entry["doc_ids"].add(doc_id)
+        prices = load_doctor_prices()
+        for row in prices:
+            if not isinstance(row, dict):
+                continue
+            name = (row.get("serviceName") or "").strip()
+            doc_id = row.get("doctorId")
+            if not name or not doc_id:
+                continue
+            tokens = _procedure_tokens(name)
+            if not tokens:
+                continue
+            key = " ".join(tokens)
+            entry = catalog_map.get(key)
+            if not entry:
+                entry = {"key": key, "tokens": tokens, "doc_ids": set(), "raws": set()}
+                catalog_map[key] = entry
+            entry["raws"].add(name)
+            entry["doc_ids"].add(doc_id)
     except Exception:
         pass
 
@@ -302,12 +298,20 @@ def find_uzi_doctors_by_specialty(query: str) -> List[Dict[str, Any]]:
 
 
 def find_doctors_by_procedure(query: str) -> List[Dict[str, Any]]:
-    """Находит врачей по процедуре на основе doctor_prices и специализаций."""
-    matched_catalog, _ = _procedure_match_groups(query)
-    if not matched_catalog:
+    """Находит врачей по процедуре (specialization + doctor_prices по флагу)."""
+    phrase = extract_procedure_query_phrase(query)
+    if not phrase:
+        return []
+    query_norm = normalize_text_for_fuzzy(phrase)
+    query_tokens = _procedure_tokens(query_norm)
+    if not query_tokens:
         return []
 
-    token_groups = [c["tokens"] for c in matched_catalog]
+    matched_catalog: list[Dict[str, Any]] = []
+    if c.USE_DOCTOR_PRICES_FOR_PROCEDURES:
+        matched_catalog, _ = _procedure_match_groups(query)
+
+    token_groups = [c_entry["tokens"] for c_entry in matched_catalog] if matched_catalog else [query_tokens]
     doc_ids: set[int] = set()
     for entry in matched_catalog:
         doc_ids.update(entry.get("doc_ids") or set())
@@ -315,17 +319,16 @@ def find_doctors_by_procedure(query: str) -> List[Dict[str, Any]]:
     docs_by_id = {d.get("id"): d for d in repo.read_all() if (d.get("fio") or "").strip()}
 
     # Доп. фильтр: упоминание процедуры в специализации врача
-    if token_groups:
-        for doc in docs_by_id.values():
-            spec = doc.get("specialization") or ""
-            if not spec:
-                continue
-            lines = [ln.strip(" \t•-") for ln in spec.splitlines() if ln.strip()]
-            for line in lines:
-                line_norm = normalize_text_for_fuzzy(line)
-                if any(all(t in line_norm for t in group) for group in token_groups):
-                    doc_ids.add(doc.get("id"))
-                    break
+    for doc in docs_by_id.values():
+        spec = doc.get("specialization") or ""
+        if not spec:
+            continue
+        lines = [ln.strip(" \t•-") for ln in spec.splitlines() if ln.strip()]
+        for line in lines:
+            line_norm = normalize_text_for_fuzzy(line)
+            if any(all(t in line_norm for t in group) for group in token_groups):
+                doc_ids.add(doc.get("id"))
+                break
 
     return [docs_by_id[doc_id] for doc_id in doc_ids if doc_id in docs_by_id]
 
