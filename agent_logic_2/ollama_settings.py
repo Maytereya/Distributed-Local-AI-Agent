@@ -26,19 +26,22 @@ logger = logging.getLogger(__name__)
 _OPTIONS = {
     "conservative": {
         "temperature": 0.1,
-        "top_k": 30,
-        "top_p": 0.9,
-        "repeat_penalty": 1.1,
+        "top_k": 40,
+        "top_p": 0.95,
+        "repeat_penalty": 1.08,
+        "num_predict": 2048,
         "stop": ["<|eot_id|>"],
     },
+
+
     "expressive": {
-        "temperature": 0.15,
-        "top_p": 1,
-        "top_k": 0,
-        "repeat_penalty": 1.0,
+        "temperature": 0.1,
+        "top_p": 0.95,
+        "top_k": 50,
+        "repeat_penalty": 1.08,
         "presence_penalty": 0.0,
         "frequency_penalty": 0.0,
-        "max_new_tokens": 4096,
+        "max_new_tokens": 2048,
         "stop": ["<|eot_id|>", "— Конец списка —"]
     },
 }
