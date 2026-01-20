@@ -59,6 +59,8 @@ logger = logging.getLogger(__name__)
 DATA_DIR = os.path.join(os.path.dirname(__file__), "nayka_api", "apidata")
 # Инициализация Ollama
 ollama_client = AsyncClient(c.ollama_url)
+# Таймаут обращения к ollama
+timeout: int = 300
 # ollama_settings.init_model_name()
 ollama_settings.init_options()
 
@@ -375,6 +377,7 @@ class DoctorsRepository:
     Читает/пишет файлы doctors_YYYYMMDD.jsonl, предоставляет быстрый доступ:
     read_all(), find_by_surname(), update(fetch_fn).
     """
+
     def __init__(self, data_dir: str):
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
@@ -457,7 +460,9 @@ SYSTEM:
     user_part = f"\nUSER:\nВопрос: {question}\n"
     prompt = system_base + user_part
 
-    resp = await ollama_call(prompt=prompt, llm=LLMName.get(), think=think)
+    resp = await ollama_call(prompt=prompt,
+                             # llm=LLMName.get(),
+                             think=think)
     text = resp.get("response", "").strip()
     if text.upper() == "NONE":
         return None, None
@@ -536,10 +541,12 @@ def enrich_with_cc_info(doctors: list):
         print(f"[DEBUG] enrich_with_cc_info error: {e}")
     return doctors
 
+
 # ── Асинхронное обогащение заметками call-центра с кэшем ─────────────────────
 _cc_map: Optional[Dict[int, str]] = None
 _cc_ts: float = 0.0
 CC_TTL: int = 600  # seconds
+
 
 async def get_cc_map_cached() -> Dict[int, str]:
     """Кэширует заметки call‑центра по id врача с TTL, снижая нагрузку на API."""
@@ -551,6 +558,7 @@ async def get_cc_map_cached() -> Dict[int, str]:
         _cc_map = {row.get("id"): row.get("callCenterInfo", "Нет заметок") for row in (data or [])}
         _cc_ts = now
     return _cc_map
+
 
 async def async_enrich_with_cc_info(doctors: list):
     """
@@ -777,19 +785,22 @@ repo = DoctorsRepository(DATA_DIR)
 
 FORMATTER = "\n\n---\n\n"
 
+
 # ── Асинхронные обёртки для синхронных I/O/API ────────────────────────────────
 async def find_doctors_by_keyword_async(q: str):
     return await asyncio.to_thread(find_doctors_by_keyword, q)
 
+
 async def find_doctor_schedule_async(surname: str):
     return await asyncio.to_thread(find_doctor_schedule, surname)
+
 
 async def load_doctor_prices_async():
     return await asyncio.to_thread(load_doctor_prices)
 
 
 @with_retries(tries=2)
-async def ollama_call(prompt: str, llm: str = LLMName.get() , think: bool = None, ) -> Dict[str, Any]:
+async def ollama_call(prompt: str, llm: str = LLMName.get(), think: bool = None, ) -> Dict[str, Any]:
     if not llm:
         raise ValueError("Model is not specified yet")
     think = ollama_settings.resolve_think(think)
@@ -805,10 +816,10 @@ async def ollama_call(prompt: str, llm: str = LLMName.get() , think: bool = None
             model=llm,
             prompt=prompt,
             options=ollama_settings.options_set(),
-            keep_alive=-1,
+            # keep_alive=-1,
             think=think,
         ),
-        timeout=25
+        timeout=timeout,
     )
 
     return res.__dict__
@@ -929,8 +940,10 @@ def get_region_map():
         _region_map = build_region_map()
     return _region_map
 
+
 async def build_region_map_async():
     return await asyncio.to_thread(build_region_map)
+
 
 async def get_region_map_async():
     global _region_map
@@ -964,11 +977,12 @@ async def handle_surname_search(surname: str, question: str) -> str:
 
         if need_price:
             region_map = await region_task
+
             async def _price_one(doc):
                 try:
                     return await asyncio.wait_for(
                         asyncio.to_thread(format_doctor_prices, doc.get("id"), doc.get("fio"), region_map),
-                        timeout=20,
+                        timeout=50,
                     )
                 except Exception as e:
                     return "• Прайс временно недоступен."

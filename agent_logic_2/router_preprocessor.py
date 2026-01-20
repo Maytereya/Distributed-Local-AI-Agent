@@ -111,6 +111,9 @@ KEYWORDS_FALSE = {
 DEF_TRUE = {"yes", "да", "true", "1"}
 DEF_FALSE = {"no", "нет", "false", "0"}
 
+# Таймаут для вызова ollama
+timeout: int = 300
+
 
 # =========================
 # УТИЛИТАРНЫЕ КЛАССЫ
@@ -427,7 +430,7 @@ class FilterProcessor:
 # ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И ИНИЦИАЛИЗАЦИЯ
 # =========================
 
-# LLM‑клиент для классификации входящих запросов
+# LLM‑клиент для обработки входящих запросов
 ollama = AsyncClient(c.ollama_url)
 
 # CC‑info thin process cache (по id врача)
@@ -879,10 +882,10 @@ async def split_into_segments(text: str, sess: Dict[str, Any], think: bool | Non
                 prompt=split_prompt(text, sess),  # Добавляется sess
                 options=ollama_settings.options_set(),
                 format="json",
-                # keep_alive=-1,
+                # keep_alive=10min,
                 think=think,
             ),
-            timeout=20,
+            timeout=timeout,
         )
     except (asyncio.CancelledError, GeneratorExit):
         logger.info("split_into_segments ОСТАНОВЛЕН")
@@ -938,10 +941,10 @@ async def classify(text: str, sess: Dict[str, Any], think: bool | None = None) -
                 prompt=classificator_prompt(text, sess),
                 options=ollama_settings.options_set(),
                 format="json",
-                keep_alive=-1,
+                # keep_alive=-1,
                 think=think,
             ),
-            timeout=20,
+            timeout=timeout,
         )
     except (asyncio.CancelledError, GeneratorExit):
         logger.info("classify ОСТАНОВЛЕН")
@@ -995,7 +998,7 @@ async def final_answering(primary_request: str,
                 model=LLMName.get(),
                 prompt=prompt,
                 options=ollama_settings.options_set(),
-                keep_alive=-1,
+                # keep_alive=-1,
                 stream=True,
                 think=think,
             )
