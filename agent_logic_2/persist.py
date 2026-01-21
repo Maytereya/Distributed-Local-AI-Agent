@@ -53,6 +53,9 @@ def copy_defaults(src_subdir: tuple[str, ...], dest_dir: Path, suffixes: tuple[s
 
     if copied:
         logger.info("✅ Defaults copied=%d from %s -> %s", copied, "/".join(src_subdir), dest_dir)
+    else:
+        logger.info("ℹ️ Defaults already present: %s -> %s", "/".join(src_subdir), dest_dir)
+
     return copied
 
 

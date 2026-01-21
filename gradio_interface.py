@@ -795,6 +795,10 @@ def bootstrap_files() -> None:
     copy_defaults(("data", "prompts"), pdir, suffixes=(".txt",), overwrite=False)
     copy_defaults(("data", "settings"), sdir, suffixes=(".txt", ".json"), overwrite=False)
 
+    # logger.info("BOOTSTRAP prompts dir: %s", pdir)
+    # logger.info("BOOTSTRAP settings dir: %s", sdir)
+
+
 
 def main():
 
@@ -2223,7 +2227,7 @@ def main():
             # ---- Функции настроек системы ---------
             # ---------------------------------------
 
-            def fn_load_options(explain: bool = False) -> Union[tuple[str, str], str] | None:
+            def fn_load_options() -> str | None:
                 """
                 Загружает и сериализует настройки Ollama в JSON с отступами.
                 :return: JSON-форматированная строка
@@ -2231,8 +2235,8 @@ def main():
                 :rtype: Str
                 """
                 try:
-                    data = ollama_settings.load_ollama_options(explain)
-                    gr.Success(title="Загружены успешно", message="Options для Ollama")
+                    data = ollama_settings.load_ollama_options(False)
+                    gr.Success(title="Загружены успешно", message="Options для Ollama",duration=3)
                     return data
                 except Exception as e:
                     gr.Error(title="Ошибка загрузки options", message=str(e))
@@ -2303,12 +2307,13 @@ def main():
 
             # ------------Секция управления контейнерами------------
 
-            def restart() -> str:
+            def restart() -> None:
+                info = restart_container.restart_ollama_container()
                 gr.Info(title="Ollama Server",
-                        duration=3,
-                        message=f"Docker-контейнер Ollama получил команду перезапуска, для перезагрузки требуется около 1 минуты",
+                        duration=15,
+                        message=info,
                         )
-                return restart_container.restart_ollama_container()
+                return None
 
             # ------------------------------------------------------
 
@@ -2329,9 +2334,9 @@ def main():
                                 interactive=True,
                                 container=True,
                             )
-                            think_checkbox = gr.Checkbox(label="Активировать способность рассуждать",
+                            think_checkbox = gr.Checkbox(label="Активировать рассуждение",
                                                          # info="Только для reasoning models, снижает скорость",
-                                                         value=ollama_settings.init_thinking(),
+                                                         value=False,
                                                          container=True, )
 
                             reload_main_model_btn = gr.Button("⬇️ Загрузить доступные модели", size="sm", )
@@ -2350,8 +2355,7 @@ def main():
                                               outputs=None)
 
                         json_ollama_options = gr.Code(label="📄Ollama Options",
-                                                      value=fn_load_options(explain=False),
-                                                      # в данном случае explain = False
+                                                      value="",
                                                       language="json",
                                                       visible=True,
                                                       interactive=True,
@@ -2363,7 +2367,6 @@ def main():
                                                            variant="stop")
 
                 load_options_btn.click(fn=fn_load_options,
-                                       # в данном случае explain = True (умолчание), так как надо передать оповещение в статус.
                                        inputs=[],
                                        outputs=[
                                            json_ollama_options,
@@ -2559,6 +2562,8 @@ def main():
                         fn_load_prompt("LABEL_DOC", False),
                         fn_load_prompt("LABEL_PRIORITY", False),
                         fn_load_prompt("MODULES", False),
+                        fn_load_options(),
+                        ollama_settings.read_think_status(False),
                     )
 
                 blocks.load(
@@ -2572,6 +2577,8 @@ def main():
                         prompt_code_c2,
                         prompt_code_c3,
                         prompt_code_c4,
+                        json_ollama_options,
+                        think_checkbox,
                     ],
                 )
                 # ---------------------------------
