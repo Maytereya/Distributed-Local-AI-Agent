@@ -30,6 +30,7 @@ from container_managenment import restart_container, system_data
 from converters import pdf_to_json_txt_tables_meili as pdf2json
 from whisper import whisper_dict as w
 from whisper.wisper_ws_client import ws_transcribe
+from agent_logic_2.persist import PROMPTS_DIR, SETTINGS_DIR, ensure_dir, copy_defaults
 
 # Label - константы
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
@@ -785,10 +786,20 @@ def radio_type_of_upl_file_change(choice):
             gr.update(visible=False),
         )
 
+def bootstrap_files() -> None:
+    # гарантируем папки в APP_DATA_DIR (или fallback)
+    pdir = ensure_dir(PROMPTS_DIR, "prompts")
+    sdir = ensure_dir(SETTINGS_DIR, "settings")
+
+    # копируем дефолты из пакета, но НЕ перетираем существующие
+    copy_defaults(("data", "prompts"), pdir, suffixes=(".txt",), overwrite=False)
+    copy_defaults(("data", "settings"), sdir, suffixes=(".txt", ".json"), overwrite=False)
+
 
 def main():
+
     # Инициализация при загрузке приложения options и model name
-    # ollama_settings.init_model_name()
+    bootstrap_files() #Прогружаем файлы промптов, опций, названия модели, think - mode.
     ollama_settings.init_options()
     ollama_settings.init_thinking()
 

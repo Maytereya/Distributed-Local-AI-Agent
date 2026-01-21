@@ -14,6 +14,7 @@ from ollama import Options
 
 from agent_logic_2 import config as c
 from threading import Lock
+from agent_logic_2.persist import SETTINGS_DIR, ensure_dir, parse_bool
 
 # Инициализация блокировки потока на время смены имени модели. Чтобы не вышло ошибки или полусостояния.
 _lock = Lock()
@@ -47,11 +48,9 @@ _OPTIONS = {
 }
 ollama_client = OllamaClient(c.ollama_url)
 # Создание директории и файла для сохранения
-# 1. Берём директорию, в которой лежит этот скрипт
-BASE_DIR: Path = Path(__file__).resolve().parent
+# гарантируем директорию
+settings_dir: Path = ensure_dir(SETTINGS_DIR, "settings")
 
-# 2. Формируем нужный путь к папке и файлу
-settings_dir: Path = BASE_DIR / "data" / "settings"
 settings_path: Path = settings_dir / "ollama_request_settings.json"
 main_model_path: Path = settings_dir / "main_model.txt"
 think_path: Path = settings_dir / "think.txt"
@@ -122,8 +121,9 @@ def init_thinking() -> bool:
     """
     settings_dir.mkdir(parents=True, exist_ok=True)
     global _think
+
     if think_path.exists():
-        _think = bool(think_path.read_text(encoding="utf-8").strip())
+        _think = parse_bool(think_path.read_text(encoding="utf-8"))
         if _think:
             logger.info("✅ Инициализировано состояние параметра Think: %s из кэша", _think)
     else:
@@ -131,40 +131,14 @@ def init_thinking() -> bool:
         logger.info("✅ Инициализировано состояние параметра Think: %s из config.ini", _think)
     return _think
 
-def write_think_status(status: bool, ) -> None:
-    """
-    Сохраняет статус параметра Think в файл и обновляет кэш.
-
-    При True в файле хранится строка "True".
-    При False файл очищается, но состояние всё равно фиксируется в кэше.
-
-    :param status: Новое состояние параметра Think.
-    :return: Строка-статус операции (успех / ошибка).
-    """
-
+def write_think_status(status: bool) -> None:
     global _think
     _think = bool(status)
-    if status:
-        try:
-            think_path.write_text(str(status), encoding="utf-8")
-            logger.info("✅ Статус параметра Think %s сохранен", status)
-
-            # return f"✅ Статус параметра Think {status} сохранен"
-            return None
-        except Exception as e:
-            logger.error("❌ Ошибка при сохранении статуса параметра Think %s: %s", status, str(e))
-            # return f"❌ Ошибка при сохранении статуса параметра Think {status}: {str(e)}"
-            return None
-    else:
-        try:
-            think_path.write_text("", encoding="utf-8")
-            logger.info("✅ Статус параметра Think %s сохранен", status)
-            # return f"✅ Статус параметра Think {status} сохранен"
-            return None
-        except Exception as e:
-            logger.error("❌ Ошибка при сохранении статуса параметра Think %s: %s", status, str(e))
-            # return f"❌ Ошибка при сохранении статуса параметра Think {status}: {str(e)}"
-            return None
+    try:
+        think_path.write_text("true" if _think else "false", encoding="utf-8")
+        logger.info("✅ Статус Think сохранен: %s", _think)
+    except Exception:
+        logger.exception("❌ Ошибка при сохранении Think")
 
 def read_think_status(inform: bool = True) -> Union[Tuple[bool, str], bool]:
     """
