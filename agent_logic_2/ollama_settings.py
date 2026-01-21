@@ -57,8 +57,8 @@ think_path: Path = settings_dir / "think.txt"
 
 # Дополнительный узел синхронизации моделей,
 # Инициализация кешей
-OLLAMA_MODEL: str
-OLLAMA_MODEL = ""
+# OLLAMA_MODEL: str
+# OLLAMA_MODEL = ""
 _cached_opts: Dict
 _cached_opts = {}
 _think: bool
@@ -164,109 +164,6 @@ def read_think_status(inform: bool = True) -> Union[Tuple[bool, str], bool]:
 
 
 # --------------------------------------------------
-# ------------  OLLAMA OPTIONS СЕКЦИЯ --------------
-# --------------------------------------------------
-
-def init_options() -> Dict[str, Any]:
-    """
-    Инициализирует кэш настроек Ollama из файла или дефолтных значений.
-
-    Если settings_path существует, пытается прочитать JSON и проверить, что это dict.
-    При любой ошибке чтения/разбора используется пресет _OPTIONS["expressive"].
-
-    :return: Текущий словарь настроек Ollama (_cached_opts).
-    """
-    settings_dir.mkdir(parents=True, exist_ok=True)
-    global _cached_opts
-
-    if settings_path.exists():
-        try:
-            loaded = json.loads(settings_path.read_text(encoding='utf-8'))
-            if not isinstance(loaded, dict):
-                raise ValueError("Настройки Ollama должны быть словарём (dict)")
-            _cached_opts = loaded
-        except Exception as e:
-            logger.error(
-                "❌ Ошибка при чтении/разборе настроек Ollama (%s), "
-                "используются дефолтные значения 'expressive'", e
-            )
-            _cached_opts = _OPTIONS["expressive"]
-    else:
-        _cached_opts = _OPTIONS["expressive"]
-
-    return _cached_opts
-
-
-def load_ollama_options(explain: bool = True) -> str | tuple[str, str]:
-    """
-    Загружает текущие настройки Ollama и возвращает их в виде JSON-строки.
-
-    Источник:
-    - если файл настроек существует и корректен — берёт данные из него;
-    - при ошибке чтения/разбора — использует дефолтные настройки 'expressive'.
-
-    :param explain:
-        - True: вернуть (json_str, message);
-        - False: вернуть только json_str.
-    :return: JSON-строка с настройками (и опционально текстовое сообщение).
-    """
-    try:
-        opts = init_options()
-        data: str = json.dumps(opts, ensure_ascii=False, indent=2)
-        logger.info("✅ Загружены данные о настройках Ollama")
-        if explain:
-            return data, f"✅ Загружены данные о настройках Ollama для {OLLAMA_MODEL}"
-        return data
-
-    except Exception as e:
-        # сюда мы, по идее, попадать не должны, но на всякий случай
-        logger.error(
-            "❌ Критическая ошибка при загрузке настроек Ollama: %s, "
-            "пытаемся использовать дефолтные значения 'expressive'", e
-        )
-        fallback = _OPTIONS["expressive"]
-        data = json.dumps(fallback, ensure_ascii=False, indent=2)
-        if explain:
-            return data, (
-                f"⚠️ Установлены дефолтные настройки Ollama для {OLLAMA_MODEL} "
-                f"в связи с ошибкой: {e}"
-            )
-        return data
-
-
-def options_set() -> Options:
-    """
-    Преобразует текущие кэшированные настройки Ollama в объект Options.
-
-    Перед вызовом ожидается, что init_options()/load_ollama_options()
-    уже были вызваны и _cached_opts содержит валидный словарь.
-
-    :return: Объект ollama.Options, готовый к передаче в клиент Ollama.
-    """
-    return Options(**_cached_opts)
-
-
-def write_options(data: Dict) -> str:
-    """
-    Сохраняет настройки Ollama в JSON-файл и обновляет кэш.
-
-    :param data: Словарь с настройками (параметры для Ollama).
-    :return: Строка-статус операции (успех / ошибка).
-    """
-    try:
-        settings_dir.mkdir(parents=True, exist_ok=True)
-        with open(settings_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            global _cached_opts
-            _cached_opts = data  # обновляем кэш
-            logger.info("✅ Ollama options сохранены")
-            return f"✅ Данные о настройках Ollama для {OLLAMA_MODEL} сохранены"
-
-    except Exception as e:
-        return f"❌ Ошибка при сохранении настроек Ollama: {e} для модели {OLLAMA_MODEL}"
-
-
-# --------------------------------------------------
 # ------------  MAIN MODEL NAME СЕКЦИЯ -------------
 # --------------------------------------------------
 
@@ -343,6 +240,109 @@ class LLMName:
         # Тут хорошо бы привести ответ к списку строк/объектов
         cls.models_list: list[str] = await ollama_client.list()
         return cls.models_list
+
+
+# --------------------------------------------------
+# ------------  OLLAMA OPTIONS СЕКЦИЯ --------------
+# --------------------------------------------------
+
+def init_options() -> Dict[str, Any]:
+    """
+    Инициализирует кэш настроек Ollama из файла или дефолтных значений.
+
+    Если settings_path существует, пытается прочитать JSON и проверить, что это dict.
+    При любой ошибке чтения/разбора используется пресет _OPTIONS["expressive"].
+
+    :return: Текущий словарь настроек Ollama (_cached_opts).
+    """
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    global _cached_opts
+
+    if settings_path.exists():
+        try:
+            loaded = json.loads(settings_path.read_text(encoding='utf-8'))
+            if not isinstance(loaded, dict):
+                raise ValueError("Настройки Ollama должны быть словарём (dict)")
+            _cached_opts = loaded
+        except Exception as e:
+            logger.error(
+                "❌ Ошибка при чтении/разборе настроек Ollama (%s), "
+                "используются дефолтные значения 'expressive'", e
+            )
+            _cached_opts = _OPTIONS["expressive"]
+    else:
+        _cached_opts = _OPTIONS["expressive"]
+
+    return _cached_opts
+
+
+def load_ollama_options(explain: bool = True) -> str | tuple[str, str]:
+    """
+    Загружает текущие настройки Ollama и возвращает их в виде JSON-строки.
+
+    Источник:
+    - если файл настроек существует и корректен — берёт данные из него;
+    - при ошибке чтения/разбора — использует дефолтные настройки 'expressive'.
+
+    :param explain:
+        - True: вернуть (json_str, message);
+        - False: вернуть только json_str.
+    :return: JSON-строка с настройками (и опционально текстовое сообщение).
+    """
+    try:
+        opts = init_options()
+        data: str = json.dumps(opts, ensure_ascii=False, indent=2)
+        logger.info("✅ Загружены данные о настройках Ollama")
+        if explain:
+            return data, f"✅ Загружены данные о настройках Ollama для {LLMName.get()}"
+        return data
+
+    except Exception as e:
+        # сюда мы, по идее, попадать не должны, но на всякий случай
+        logger.error(
+            "❌ Критическая ошибка при загрузке настроек Ollama: %s, "
+            "пытаемся использовать дефолтные значения 'expressive'", e
+        )
+        fallback = _OPTIONS["expressive"]
+        data = json.dumps(fallback, ensure_ascii=False, indent=2)
+        if explain:
+            return data, (
+                f"⚠️ Установлены дефолтные настройки Ollama для {LLMName.get()} "
+                f"в связи с ошибкой: {e}"
+            )
+        return data
+
+
+def options_set() -> Options:
+    """
+    Преобразует текущие кэшированные настройки Ollama в объект Options.
+
+    Перед вызовом ожидается, что init_options()/load_ollama_options()
+    уже были вызваны и _cached_opts содержит валидный словарь.
+
+    :return: Объект ollama.Options, готовый к передаче в клиент Ollama.
+    """
+    return Options(**_cached_opts)
+
+
+def write_options(data: Dict) -> str:
+    """
+    Сохраняет настройки Ollama в JSON-файл и обновляет кэш.
+
+    :param data: Словарь с настройками (параметры для Ollama).
+    :return: Строка-статус операции (успех / ошибка).
+    """
+    try:
+        settings_dir.mkdir(parents=True, exist_ok=True)
+        with open(settings_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            global _cached_opts
+            _cached_opts = data  # обновляем кэш
+            logger.info("✅ Ollama options сохранены")
+            return f"✅ Данные о настройках Ollama для {LLMName.get()} сохранены"
+
+    except Exception as e:
+        return f"❌ Ошибка при сохранении настроек Ollama: {e} для модели {LLMName.get()}"
 
 
 

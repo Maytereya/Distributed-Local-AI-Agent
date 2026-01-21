@@ -24,13 +24,13 @@ from agent_logic_2.benchmark_tab import ollama_client as ollama
 from agent_logic_2.direct_upload_meili_tab import build_blocks, TABLE_HEADERS
 from agent_logic_2.id_validation import is_valid_id, sanitize_id
 from agent_logic_2.ollama_settings import LLMName
+from agent_logic_2.persist import PROMPTS_DIR, SETTINGS_DIR, ensure_dir, copy_defaults
 from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
 from container_managenment import restart_container, system_data
 from converters import pdf_to_json_txt_tables_meili as pdf2json
 from whisper import whisper_dict as w
 from whisper.wisper_ws_client import ws_transcribe
-from agent_logic_2.persist import PROMPTS_DIR, SETTINGS_DIR, ensure_dir, copy_defaults
 
 # Label - константы
 COLLECTIONS_IN_CHROMA = "Коллекции документов Chroma DB"
@@ -786,6 +786,7 @@ def radio_type_of_upl_file_change(choice):
             gr.update(visible=False),
         )
 
+
 def bootstrap_files() -> None:
     # гарантируем папки в APP_DATA_DIR (или fallback)
     pdir = ensure_dir(PROMPTS_DIR, "prompts")
@@ -799,11 +800,9 @@ def bootstrap_files() -> None:
     # logger.info("BOOTSTRAP settings dir: %s", sdir)
 
 
-
 def main():
-
     # Инициализация при загрузке приложения options и model name
-    bootstrap_files() #Прогружаем файлы промптов, опций, названия модели, think - mode.
+    bootstrap_files()  # Прогружаем файлы промптов, опций, названия модели, think - mode.
     ollama_settings.init_options()
     ollama_settings.init_thinking()
 
@@ -2235,9 +2234,23 @@ def main():
                 :rtype: Str
                 """
                 try:
-                    data = ollama_settings.load_ollama_options(False)
-                    gr.Success(title="Загружены успешно", message="Options для Ollama",duration=3)
+                    data, info = ollama_settings.load_ollama_options(True)
+                    gr.Success(title="Успешно", message=info, duration=3)
                     return data
+                except Exception as e:
+                    gr.Error(title="Ошибка загрузки options", message=str(e))
+                    return None
+
+            def fn_load_options_silent() -> str | None:
+
+                """
+                Загружает и сериализует настройки Ollama в JSON с отступами.
+                :return: JSON-форматированная строка
+                    ASCII отключено, отступы есть.
+                :rtype: Str
+                """
+                try:
+                    return ollama_settings.load_ollama_options(False)
                 except Exception as e:
                     gr.Error(title="Ошибка загрузки options", message=str(e))
                     return None
@@ -2562,7 +2575,7 @@ def main():
                         fn_load_prompt("LABEL_DOC", False),
                         fn_load_prompt("LABEL_PRIORITY", False),
                         fn_load_prompt("MODULES", False),
-                        fn_load_options(),
+                        fn_load_options_silent(),
                         ollama_settings.read_think_status(False),
                     )
 
