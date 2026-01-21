@@ -33,18 +33,16 @@ async def ollama_test_call(prompt: str, llm: str, think: bool = None, ) -> tuple
     tuple[GenerateResponse], dict[str, bool | None | str | Options]]:
     if not llm:
         raise ValueError("Языковая модель не определена для функции 'ollama_call'")
-    # think = ollama_settings.resolve_think(think)
     # Словарь для вывода актуальных настроек Ollama в момент генерации ответа
     llm_meta = {"think_from_ollama_settings": think,
                 "llm_as_argument": llm,
-                "llm_from_ollama_settings": ollama_settings.OLLAMA_MODEL,
+                "llm_from_LLMName.get()": LLMName.get(),
                 "options": ollama_settings.options_set(), }
 
     res = await ollama_client.generate(
         model=llm,
         prompt=prompt,
         options=ollama_settings.options_set(),
-        # keep_alive=-1,
         think=think,
     ),
 

@@ -464,7 +464,6 @@ SYSTEM:
     prompt = system_base + user_part
 
     resp = await ollama_call(prompt=prompt,
-                             # llm=LLMName.get(),
                              think=think)
     text = resp.get("response", "").strip()
     if text.upper() == "NONE":
@@ -819,7 +818,6 @@ async def ollama_call(prompt: str, llm: str = LLMName.get(), think: bool = None,
             model=llm,
             prompt=prompt,
             options=ollama_settings.options_set(),
-            # keep_alive=-1,
             think=think,
         ),
         timeout=timeout,

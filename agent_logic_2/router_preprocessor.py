@@ -882,7 +882,6 @@ async def split_into_segments(text: str, sess: Dict[str, Any], think: bool | Non
                 prompt=split_prompt(text, sess),  # Добавляется sess
                 options=ollama_settings.options_set(),
                 format="json",
-                # keep_alive=10min,
                 think=think,
             ),
             timeout=timeout,
@@ -941,7 +940,6 @@ async def classify(text: str, sess: Dict[str, Any], think: bool | None = None) -
                 prompt=classificator_prompt(text, sess),
                 options=ollama_settings.options_set(),
                 format="json",
-                # keep_alive=-1,
                 think=think,
             ),
             timeout=timeout,
@@ -998,7 +996,6 @@ async def final_answering(primary_request: str,
                 model=LLMName.get(),
                 prompt=prompt,
                 options=ollama_settings.options_set(),
-                # keep_alive=-1,
                 stream=True,
                 think=think,
             )
