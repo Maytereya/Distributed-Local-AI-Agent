@@ -1547,7 +1547,8 @@ async def routing(text: str,
     # Handle pending module if exists
     # TODO: Понять зачем вообще это тут вызывается
     if pending_result := await handle_pending_module(text, sess, think=think):
-        yield pending_result
+        yield pending_result # потенциальная проблема - вывод строки вместо кортежа.
+
 
     # Process text segments
     result = await process_segments(text, sess, think=think, )

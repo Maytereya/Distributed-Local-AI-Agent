@@ -26,6 +26,19 @@ services:
     networks:
       - local_net
 
+  agent-api:
+    build: .
+    container_name: agent-api
+    restart: unless-stopped
+    expose:
+      - "8010"
+    environment:
+      - AGENT_API_KEY=${AGENT_API_KEY:-}
+      - TOKENIZERS_PARALLELISM=false
+    command: [ "uvicorn", "agent_api:app", "--host", "0.0.0.0", "--port", "8010" ]
+    networks:
+      - local_net
+
   nginx:
     image: nginx:latest
     container_name: nginx_proxy
@@ -40,6 +53,7 @@ services:
       - ./default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - bookworm-agent
+      - agent-api
     networks:
       - local_net
 
