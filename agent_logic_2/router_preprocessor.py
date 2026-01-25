@@ -1539,7 +1539,7 @@ async def routing(text: str,
     """
 
     # 1. Инициализируем состояние сессии обработки входящего текстового блока
-
+    think = bool(think) if think is not None else False # ToDo: Надо проверить функционирование!
     sess = sess or {}
     sess.setdefault("pending", None)
     sess.setdefault("history", [])
