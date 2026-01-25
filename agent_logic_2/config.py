@@ -20,7 +20,7 @@ config.read(config_path)
 # files_read = config.read(config_path)
 # print("Files read:", files_read)
 # -------------------------------------------------
-environment = 'DOCKER_PRODUCTION' #'PRODUCTION'
+environment = 'PRODUCTION' #'PRODUCTION'
 # | 'DEVELOPMENT' IP квартиры
 # | 'LOCAL' localhost
 # | 'PRODUCTION' внешний белый IP Клиники
@@ -41,6 +41,7 @@ MASTER_KEY = config['DEFAULT']['MASTER_KEY']
 AUTH_NAME = config['DEFAULT']['AUTH_NAME']
 AUTH_PASS = config['DEFAULT']['AUTH_PASS']
 APP_DATA_DIR = config['DEFAULT']['APP_DATA_DIR']
+AGENT_API_KEY = config['DEFAULT']['AGENT_API_KEY']
 
 nayka_base_url = config['DEFAULT']['base_url']
 nayka_base_url_no_site = config['DEFAULT']['base_url_no_site']

@@ -10,20 +10,23 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from agent_logic_2.router_preprocessor import routing  # <-- твой путь
+from agent_logic_2.router_preprocessor import routing  # <-- путь к генератору ответов
+import agent_logic_2.config as c
+from fastapi import Security
+from fastapi.security.api_key import APIKeyHeader
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 SessionType = Dict[str, Any]
 
 app = FastAPI(title="Neiry Agent API", version="0.1")
+API_KEY = c.AGENT_API_KEY.strip()
 
-API_KEY = os.getenv("AGENT_API_KEY", "").strip()
 
-
-def require_api_key(x_api_key: Optional[str]) -> None:
-    # если ключ не задан — dev-режим
+def require_api_key(api_key: str | None = Security(api_key_header)) -> None:
     if not API_KEY:
-        return
-    if not x_api_key or x_api_key != API_KEY:
+        raise HTTPException(status_code=500, detail="Server misconfigured: AGENT_API_KEY is empty")
+    if not api_key or api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
