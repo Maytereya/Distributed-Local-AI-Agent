@@ -35,7 +35,7 @@ class AgentRequest(BaseModel):
     session: Optional[SessionType] = None  # клиент хранит session_state
 
     extra_processing: Literal["direct", "processed"] = "processed"
-    think: Optional[bool] = None
+    think: bool = False   # ← ВАЖНО
     ai_feed: Literal["local", "cloud"] = "local"
 
     meta: Dict[str, Any] = Field(default_factory=dict)
