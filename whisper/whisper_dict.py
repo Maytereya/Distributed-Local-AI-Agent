@@ -6,7 +6,16 @@ import agent_logic_2.config as c
 
 def load_prompt():
     try:
-        resp = requests.get(f"{c.WHISPER_HTTP_API}/prompt", timeout=5)
+        headers = {
+            "X-API-Key": c.WHISPER_API_KEY,
+        }
+
+        resp = requests.get(
+            f"{c.WHISPER_HTTP_API}/prompt",
+            headers=headers,
+            timeout=5,
+        )
+        # resp = requests.get(f"{c.WHISPER_HTTP_API}/prompt", timeout=5)
         resp.raise_for_status()
         data = resp.json()
         gr.Success("Словарь успешно загружен")

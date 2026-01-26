@@ -6,6 +6,7 @@ import numpy as np
 import websockets
 
 from agent_logic_2 import config as c
+from urllib.parse import urlencode
 
 
 def enable_debug_logging():
@@ -51,8 +52,8 @@ async def ws_transcribe(audio, meta_output: bool = False):
 
     # Приводим к float32 на всяк случай повторно
     data = data.astype(np.float32)
-
-    async with websockets.connect(c.WHISPER_URL, max_size=10_000_000) as ws:
+    ws_url = f"{c.WHISPER_URL}?{urlencode({'api_key': c.WHISPER_API_KEY})}"
+    async with websockets.connect(ws_url, max_size=10_000_000) as ws:
         # Отправляем всё аудио одним чанком (как "стрим" из одного куска)
         await ws.send(data.tobytes())
         # Сигнал конца потока

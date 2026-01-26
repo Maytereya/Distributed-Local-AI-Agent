@@ -37,11 +37,13 @@ VOSK_URL = config[environment]['VOSK_URL']
 WHISPER_URL = config[environment]['WHISPER_URL']
 WHISPER_HTTP_API = config[environment]['WHISPER_HTTP_API']
 
+
 MASTER_KEY = config['DEFAULT']['MASTER_KEY']
 AUTH_NAME = config['DEFAULT']['AUTH_NAME']
 AUTH_PASS = config['DEFAULT']['AUTH_PASS']
 APP_DATA_DIR = config['DEFAULT']['APP_DATA_DIR']
 AGENT_API_KEY = config['DEFAULT']['AGENT_API_KEY']
+WHISPER_API_KEY = config['DEFAULT']['WHISPER_API_KEY']
 
 nayka_base_url = config['DEFAULT']['base_url']
 nayka_base_url_no_site = config['DEFAULT']['base_url_no_site']
