@@ -26,6 +26,7 @@ from agent_logic_2.text_fuzzy import fuzzy_match, normalize_text_for_fuzzy
 from agent_logic_2.text_constants import (
     STOP_WORDS,
     UZI_QUERY_STOPWORDS,
+    PROCEDURE_HINT_REGEX,
     PROCEDURE_QUERY_STOPWORDS,
     PROCEDURE_GENERIC_WORDS,
 )
@@ -70,6 +71,11 @@ NEGATIVE_CONTEXT_WORDS = {"кроме", "исключая", "исключени�
 
 # Шаблон для детекта УЗИ-запросов
 UZI_RE = re.compile(r"\b(узи|узист|ультразвук\w*|ультразвуков\w*)\b", re.IGNORECASE)
+UZI_ALT_RE = re.compile(
+    r"\b(уздг|дуплекс\w*|триплекс\w*|допплер\w*|сканирован\w*)\b",
+    re.IGNORECASE,
+)
+PROCEDURE_HINT_RE = re.compile(PROCEDURE_HINT_REGEX, re.IGNORECASE)
 
 # Обобщённые слова, которые не несут смысла для типа УЗИ
 UZI_GENERIC_WORDS = {
@@ -83,6 +89,128 @@ UZI_EXCLUDE_KEYWORDS = {
 
 _UZI_PROCEDURES_CACHE: list[Dict[str, Any]] | None = None
 
+# Суффиксы для грубой нормализации русских слов (минимальная "лемматизация")
+_RU_SUFFIXES: tuple[str, ...] = (
+    "иями", "ями", "ами", "ями", "ыми", "ими",
+    "иях", "ях", "ах", "ях",
+    "ого", "его", "ому", "ему", "ыми", "ими",
+    "ыми", "ими", "ыми", "ими",
+    "ый", "ий", "ой", "ая", "яя", "ое", "ее",
+    "ов", "ев", "ам", "ям", "ом", "ем",
+    "ах", "ях", "ою", "ею", "ью",
+    "а", "я", "ы", "и", "е", "о", "у", "ю", "ь", "й",
+)
+
+
+def _normalize_ru_token(token: str) -> str:
+    t = token or ""
+    for suf in _RU_SUFFIXES:
+        if t.endswith(suf) and len(t) - len(suf) >= 3:
+            return t[:-len(suf)]
+    return t
+
+
+def _token_match(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    min_len = min(len(a), len(b))
+    threshold = 0.75 if min_len <= 4 else 0.86
+    return fuzzy_match(a, b, threshold=threshold)
+
+
+def _is_procedure_like_query(text: str) -> bool:
+    if not text:
+        return False
+    return bool(UZI_RE.search(text) or PROCEDURE_HINT_RE.search(text))
+
+
+async def normalize_procedure_query_llm(query: str, think: bool | None = None) -> list[str]:
+    """Нормализует запрос по процедуре в 1–4 канонических формулировки."""
+    if not c.LLM_PROCEDURE_NORMALIZATION:
+        logger.info("LLM procedure normalization disabled; using raw query")
+        return [query]
+
+    system = (
+        "SYSTEM:\n"
+        "Ты нормализуешь медицинскую процедуру/исследование.\n"
+        "Верни только JSON вида {\"variants\":[...]}.\n"
+        "variants — 1-4 коротких формулировки процедуры без врачей, адресов и пояснений.\n"
+        "Если не уверен — верни исходную формулировку.\n"
+    )
+    prompt = system + f"\nUSER:\n{query}\n"
+    try:
+        resp = await ollama_call(prompt=prompt, llm=LLMName.get(), think=think)
+        text = (resp.get("response") or "").strip()
+        m = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not m:
+            return [query]
+        data = json.loads(m.group(0))
+        variants = data.get("variants")
+        if not isinstance(variants, list):
+            return [query]
+        out = []
+        for v in variants:
+            v = str(v).strip()
+            if v and v not in out:
+                out.append(v)
+        final_variants = out[:3] or [query]
+        logger.info("LLM procedure variants: %s", final_variants)
+        return final_variants
+    except Exception:
+        logger.info("LLM procedure normalization failed; using raw query")
+        return [query]
+
+
+def _find_docs_by_specialization_variants(variants: list[str], uzi_only: bool = False) -> list[Dict[str, Any]]:
+    docs = []
+    if not variants:
+        return docs
+
+    token_groups = []
+    for v in variants:
+        tokens = _uzi_tokens(v) if uzi_only else _procedure_tokens(v)
+        if tokens:
+            token_groups.append(tokens)
+    if not token_groups:
+        return docs
+
+    for doc in repo.read_all():
+        fio = (doc.get("fio") or "").strip()
+        if not fio:
+            continue
+        spec = doc.get("specialization") or ""
+        if not spec:
+            continue
+        if uzi_only and not (UZI_RE.search(spec) or UZI_ALT_RE.search(spec)):
+            continue
+        lines = [ln.strip(" \t•-") for ln in spec.splitlines() if ln.strip()]
+        if uzi_only:
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                if not _uzi_line_is_candidate(line):
+                    i += 1
+                    continue
+                block_tokens = _uzi_tokens(line)
+                j = i + 1
+                while j < len(lines):
+                    nxt = lines[j]
+                    if _uzi_line_is_candidate(nxt):
+                        break
+                    block_tokens.extend(_uzi_tokens(nxt))
+                    j += 1
+                if any(all(any(_token_match(t, lt) for lt in block_tokens) for t in group) for group in token_groups):
+                    docs.append(doc)
+                    break
+                i = j
+        else:
+            for line in lines:
+                line_tokens = _procedure_tokens(line)
+                if any(all(any(_token_match(t, lt) for lt in line_tokens) for t in group) for group in token_groups):
+                    docs.append(doc)
+                    break
+    return docs
+
 _PROCEDURE_CATALOG_CACHE: list[Dict[str, Any]] | None = None
 
 
@@ -93,7 +221,7 @@ def _uzi_tokens(text: str, drop_generic: bool = True) -> list[str]:
     tokens = [t for t in norm.split() if len(t) >= 3]
     if drop_generic:
         tokens = [t for t in tokens if t not in UZI_GENERIC_WORDS]
-    return tokens
+    return [_normalize_ru_token(t) for t in tokens]
 
 
 def _procedure_tokens(text: str, drop_generic: bool = True) -> list[str]:
@@ -103,11 +231,11 @@ def _procedure_tokens(text: str, drop_generic: bool = True) -> list[str]:
     tokens = [t for t in norm.split() if len(t) >= 3]
     if drop_generic:
         tokens = [t for t in tokens if t not in PROCEDURE_GENERIC_WORDS]
-    return tokens
+    return [_normalize_ru_token(t) for t in tokens]
 
 
 def _uzi_line_is_candidate(line: str) -> bool:
-    if not line or not UZI_RE.search(line):
+    if not line or not (UZI_RE.search(line) or UZI_ALT_RE.search(line)):
         return False
     norm = normalize_text_for_fuzzy(line)
     if any(bad in norm for bad in UZI_EXCLUDE_KEYWORDS):
@@ -158,7 +286,7 @@ def _build_uzi_catalog() -> list[Dict[str, Any]]:
                         continue
                     row = json.loads(line)
                     name = (row.get("serviceName") or "").strip()
-                    if name and UZI_RE.search(name):
+                    if name and (UZI_RE.search(name) or UZI_ALT_RE.search(name)):
                         phrases.add(name)
     except Exception:
         pass
@@ -247,6 +375,11 @@ def _uzi_match_groups(query: str) -> tuple[list[Dict[str, Any]], list[str]]:
     catalog = _build_uzi_catalog()
     matched = [c for c in catalog if all(t in c["tokens"] for t in query_tokens)]
     if not matched:
+        matched = [
+            c for c in catalog
+            if all(any(_token_match(t, ct) for ct in c["tokens"]) for t in query_tokens)
+        ]
+    if not matched:
         query_key = " ".join(query_tokens)
         matched = [c for c in catalog if fuzzy_match(query_key, c["key"], threshold=0.88)]
     return matched, query_tokens
@@ -265,6 +398,11 @@ def _procedure_match_groups(query: str) -> tuple[list[Dict[str, Any]], list[str]
     catalog = _build_procedure_catalog()
     matched = [c for c in catalog if all(t in c["tokens"] for t in query_tokens)]
     if not matched:
+        matched = [
+            c for c in catalog
+            if all(any(_token_match(t, ct) for ct in c["tokens"]) for t in query_tokens)
+        ]
+    if not matched:
         query_key = " ".join(query_tokens)
         matched = [c for c in catalog if fuzzy_match(query_key, c["key"], threshold=0.88)]
     return matched, query_tokens
@@ -282,7 +420,7 @@ def find_uzi_doctors_by_specialty(query: str) -> List[Dict[str, Any]]:
         if not fio:
             continue
         spec = doc.get("specialization") or ""
-        if not spec or not UZI_RE.search(spec):
+        if not spec or not (UZI_RE.search(spec) or UZI_ALT_RE.search(spec)):
             continue
         lines = [ln.strip(" \t•-") for ln in spec.splitlines() if ln.strip()]
         candidates = [ln for ln in lines if _uzi_line_is_candidate(ln)]
@@ -292,8 +430,8 @@ def find_uzi_doctors_by_specialty(query: str) -> List[Dict[str, Any]]:
             matched.append(doc)
             continue
         for line in candidates:
-            line_norm = normalize_text_for_fuzzy(line)
-            if any(all(t in line_norm for t in group) for group in token_groups):
+            line_tokens = _uzi_tokens(line)
+            if any(all(any(_token_match(t, lt) for lt in line_tokens) for t in group) for group in token_groups):
                 matched.append(doc)
                 break
     return matched
@@ -327,8 +465,8 @@ def find_doctors_by_procedure(query: str) -> List[Dict[str, Any]]:
             continue
         lines = [ln.strip(" \t•-") for ln in spec.splitlines() if ln.strip()]
         for line in lines:
-            line_norm = normalize_text_for_fuzzy(line)
-            if any(all(t in line_norm for t in group) for group in token_groups):
+            line_tokens = _procedure_tokens(line)
+            if any(all(any(_token_match(t, lt) for lt in line_tokens) for t in group) for group in token_groups):
                 doc_ids.add(doc.get("id"))
                 break
 
@@ -555,8 +693,10 @@ async def get_cc_map_cached() -> Dict[int, str]:
     import time
     global _cc_map, _cc_ts
     now = time.time()
-    if _cc_map is None or (now - _cc_ts) > CC_TTL:
+    if _cc_map is None or (now - _cc_ts) > CC_TTL or (_cc_map is not None and len(_cc_map) == 0):
         data = await asyncio.to_thread(get_doctors_cc_info)
+        if not data:
+            data = await asyncio.to_thread(get_doctors_cc_info, True)
         _cc_map = {row.get("id"): row.get("callCenterInfo", "Нет заметок") for row in (data or [])}
         _cc_ts = now
     return _cc_map
@@ -568,9 +708,21 @@ async def async_enrich_with_cc_info(doctors: list):
     """
     try:
         cc_by_id = await get_cc_map_cached()
+        total = len(doctors)
+        with_notes = 0
         for doc in doctors:
             doc_id = doc.get("id")
-            doc["callCenterInfo"] = cc_by_id.get(doc_id, "Нет заметок")
+            note = cc_by_id.get(doc_id)
+            if note:
+                with_notes += 1
+            doc["callCenterInfo"] = note or "Нет заметок"
+        logger.info(
+            "cc_enrich: docs=%d notes=%d missing=%d map=%d",
+            total,
+            with_notes,
+            total - with_notes,
+            len(cc_by_id),
+        )
     except Exception as e:
         print(f"[DEBUG] enrich_with_cc_info error: {e}")
     return doctors
@@ -867,19 +1019,37 @@ async def investigate(question: str, think: bool = None) -> str:
     # УЗИ-запрос: ищем по специализации и реальным формулировкам процедур
     if UZI_RE.search(q):
         try:
-            docs = find_uzi_doctors_by_specialty(q)
+            variants = await normalize_procedure_query_llm(q, think=think)
+            docs = _find_docs_by_specialization_variants(variants, uzi_only=True)
+            if not docs:
+                docs = find_uzi_doctors_by_specialty(q)
             if docs:
+                docs = await async_enrich_with_cc_info(docs)
                 return format_documents(docs)
         except Exception:
             pass
 
     # Процедурный запрос: ищем по процедурам в прайсах/специализации
-    try:
-        docs = find_doctors_by_procedure(q)
-        if docs:
-            return format_documents(docs)
-    except Exception:
-        pass
+    procedure_like = _is_procedure_like_query(q)
+    logger.info(
+        "procedure_like=%s hint_match=%s",
+        procedure_like,
+        bool(PROCEDURE_HINT_RE.search(q)),
+    )
+    if procedure_like:
+        try:
+            variants = await normalize_procedure_query_llm(q, think=think)
+            docs = _find_docs_by_specialization_variants(variants, uzi_only=False)
+            if not docs:
+                for v in variants:
+                    docs = find_doctors_by_procedure(v)
+                    if docs:
+                        break
+            if docs:
+                docs = await async_enrich_with_cc_info(docs)
+                return format_documents(docs)
+        except Exception:
+            pass
 
     key_type, value = await extract_search_keyword_llm(question, think=think)
     if not value:

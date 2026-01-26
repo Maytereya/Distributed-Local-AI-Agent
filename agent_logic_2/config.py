@@ -67,3 +67,18 @@ ll_model_small = config['DEFAULT']['ll_model_small']
 USE_DOCTOR_PRICES_FOR_PROCEDURES = config['DEFAULT'].get(
     'USE_DOCTOR_PRICES_FOR_PROCEDURES', 'false'
 ).strip().lower() in ('1', 'true', 'yes')
+
+# Флаг для вывода "сырого" ответа без final_answer
+DEBUG_RAW_OUTPUT = config['DEFAULT'].get(
+    'DEBUG_RAW_OUTPUT', 'false'
+).strip().lower() in ('1', 'true', 'yes')
+
+# Нормализация процедур через LLM (только для процедурных запросов)
+LLM_PROCEDURE_NORMALIZATION = config['DEFAULT'].get(
+    'LLM_PROCEDURE_NORMALIZATION', 'false'
+).strip().lower() in ('1', 'true', 'yes')
+
+# Логировать вход в final_answering (размер/кол-во записей)
+DEBUG_FINAL_INPUT = config['DEFAULT'].get(
+    'DEBUG_FINAL_INPUT', 'false'
+).strip().lower() in ('1', 'true', 'yes')

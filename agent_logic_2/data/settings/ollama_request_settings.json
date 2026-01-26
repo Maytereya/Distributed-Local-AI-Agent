@@ -5,9 +5,9 @@
   "repeat_penalty": 1.08,
   "presence_penalty": 0.0,
   "frequency_penalty": 0.0,
-  "num_predict": 2048,
+  "num_predict": 4096,
   "stop": [
     "<|eot_id|>",
-    "- Конец списка -"
+    "— Конец списка —"
   ]
 }

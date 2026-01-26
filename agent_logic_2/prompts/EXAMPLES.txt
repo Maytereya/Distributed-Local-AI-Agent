@@ -71,7 +71,7 @@ INPUT: подготовка к торакоцентезу
 OUTPUT: {"labels":["SCRIPTS"]}
 
 INPUT: узи брюшной полости
-OUTPUT: {"labels":["API_INFO", "SCRIPTS"]}
+OUTPUT: {"labels":["API_INFO"]}
 
 INPUT: какие врачи делают узи брюшной полости?
 OUTPUT: {"labels":["API_INFO"]}
