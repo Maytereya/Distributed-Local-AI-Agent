@@ -2241,7 +2241,7 @@ def main():
                     gr.Error(title="Ошибка загрузки options", message=str(e))
                     return None
 
-            def fn_load_options_silent() -> str | None:
+            def fn_load_options_silent() -> str:
 
                 """
                 Загружает и сериализует настройки Ollama в JSON с отступами.
@@ -2250,10 +2250,12 @@ def main():
                 :rtype: Str
                 """
                 try:
-                    return ollama_settings.load_ollama_options(False)
+                    res = ollama_settings.load_ollama_options(False)
+                    return res[0] if isinstance(res, tuple) else res
                 except Exception as e:
                     gr.Error(title="Ошибка загрузки options", message=str(e))
-                    return None
+                    return ""
+
 
             def fn_save_options(text: str) -> None:
                 """
