@@ -2274,8 +2274,12 @@ def main():
                     gr.Error(f"❌ Ошибка сохранения OPTIONS: {e}")
                     return None
 
-            def fn_load_prompt(name: str, inform: bool = True) -> Union[Tuple[str, str], str]:
+            def fn_load_prompt(name: str, inform: bool = False) -> str:
                 return load_prompt(name, inform)
+
+            def fn_load_prompt_with_status(name: str) -> tuple[str, str]:
+                text, msg = load_prompt(name, inform=True)
+                return text, msg
 
             def fn_save_prompt(name: str, text: str) -> None:
 
@@ -2407,7 +2411,7 @@ def main():
                             btn_load_2 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
                             btn_save_2 = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
-                    btn_load_2.click(lambda: fn_load_prompt("split_prompt"),
+                    btn_load_2.click(lambda: fn_load_prompt_with_status("split_prompt"),
                                      [], [prompt_code_2, ])
                     btn_save_2.click(lambda txt: fn_save_prompt("split_prompt", txt),
                                      [prompt_code_2, ])
@@ -2430,7 +2434,7 @@ def main():
                             btn_load_3 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
                             btn_save_3 = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
-                btn_load_3.click(lambda: fn_load_prompt("classificator_prompt"),
+                btn_load_3.click(lambda: fn_load_prompt_with_status("classificator_prompt"),
                                  [], [prompt_code_3, ])
                 btn_save_3.click(lambda txt: fn_save_prompt("classificator_prompt", txt),
                                  prompt_code_3, )
@@ -2452,7 +2456,7 @@ def main():
                             btn_load_1 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
                             btn_save_1 = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
-                btn_load_1.click(lambda: fn_load_prompt("final_answer"),
+                btn_load_1.click(lambda: fn_load_prompt_with_status("final_answer"),
                                  [], [prompt_code_1, ])
                 btn_save_1.click(lambda txt: fn_save_prompt("final_answer", txt),
                                  prompt_code_1, )
@@ -2477,7 +2481,7 @@ def main():
                             btn_load_c1 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
                             btn_save_c1 = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
-                        btn_load_c1.click(lambda: fn_load_prompt("EXAMPLES"),
+                        btn_load_c1.click(lambda: fn_load_prompt_with_status("EXAMPLES"),
                                           [], [prompt_code_c1, ])
 
                         btn_save_c1.click(lambda txt: fn_save_prompt("EXAMPLES", txt),
@@ -2500,7 +2504,7 @@ def main():
                             btn_load_c2 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
                             btn_save_c2 = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
-                    btn_load_c2.click(lambda: fn_load_prompt("LABEL_DOC"),
+                    btn_load_c2.click(lambda: fn_load_prompt_with_status("LABEL_DOC"),
                                       [], [prompt_code_c2, ])
 
                     btn_save_c2.click(lambda txt: fn_save_prompt("LABEL_DOC", txt),
@@ -2523,7 +2527,7 @@ def main():
                             btn_load_c3 = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
                             btn_save_c3 = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
-                    btn_load_c3.click(lambda: fn_load_prompt("LABEL_PRIORITY"),
+                    btn_load_c3.click(lambda: fn_load_prompt_with_status("LABEL_PRIORITY"),
                                       [], [prompt_code_c3, ])
 
                     btn_save_c3.click(lambda txt: fn_save_prompt("LABEL_PRIORITY", txt),
@@ -2548,7 +2552,7 @@ def main():
                                                     interactive=False)  # Возможность кликнуть отключена, так как
                             # менять названия функций нельзя
 
-                    btn_load_c4.click(lambda: fn_load_prompt("MODULES"),
+                    btn_load_c4.click(lambda: fn_load_prompt_with_status("MODULES"),
                                       [], [prompt_code_c4, ])
 
                     btn_save_c4.click(lambda txt: fn_save_prompt("MODULES", txt),
