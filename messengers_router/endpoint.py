@@ -4,9 +4,9 @@ import json
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from memory import MemoryStore
-from services import Services
-from router import patient_routing_stream
+from .memory import MemoryStore
+from .services import Services
+from .router import patient_routing_stream
 
 router = APIRouter()
 
