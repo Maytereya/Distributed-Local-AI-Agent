@@ -10,7 +10,9 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from agent_logic_2.router_preprocessor import routing  # <-- путь к генератору ответов
+from agent_logic_2.router_preprocessor import routing  # <-- путь к генератору ответов для колл-центра
+from messengers_router.endpoint import router as messenger_router  # <-- путь к генератору ответов
+# для мессенджеров
 import agent_logic_2.config as c
 from fastapi import Security
 from fastapi.security.api_key import APIKeyHeader
@@ -20,6 +22,8 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 SessionType = Dict[str, Any]
 
 app = FastAPI(title="Neiry Agent API", version="0.1")
+app.include_router(messenger_router)
+
 API_KEY = c.AGENT_API_KEY.strip()
 
 
