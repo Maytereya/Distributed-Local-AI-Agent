@@ -659,7 +659,12 @@ async def patient_routing_stream(
         attachments.append({"type": "pdf", "name": "Результаты анализов.pdf", "url": pdf_payload["pdf"]})
 
     async for chunk in render_stream(user_text, decision, evidence):
-        yield ResponseEnvelope(text=chunk, attachments=[], handoff=decision.needs_handoff)
+        # yield ResponseEnvelope(text=chunk, attachments=[], handoff=decision.needs_handoff)
+        yield ResponseEnvelope(text=chunk, attachments=[], handoff=False)
+
+    if decision.needs_handoff:
+        # отдельный сигнал для интегратора/мессенджера
+        yield ResponseEnvelope(text="", attachments=[], handoff=True)
 
     if attachments:
         yield ResponseEnvelope(text="", attachments=attachments, handoff=False)
