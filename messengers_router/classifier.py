@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any, cast
 
-from mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision
+from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision
 from policies import (
     detect_urgent,
     detect_complaint,

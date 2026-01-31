@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from mess_types import SessionState
+from .mess_types import SessionState
 
 
 @dataclass
