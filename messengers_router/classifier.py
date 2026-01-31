@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+# точка . позволяет следующее:
+# код работает одинаково в контейнере и локально
+# не зависит от PYTHONPATH
+# не конфликтует с чужими пакетами
+
 import json
 import re
 from typing import Any, cast
 
 from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision
-from policies import (
+from .policies import (
     detect_urgent,
     detect_complaint,
     detect_medical_advice,
