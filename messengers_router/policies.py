@@ -125,15 +125,19 @@ def detect_schedule_intent(text: str) -> bool:
     return any(re.search(p, t) for p in SCHEDULE_PATTERNS)
 
 
+_NOTE_RE = re.compile(r"📞\s*Заметка.*?(?=\n{2,}|\Z)", flags=re.S | re.I)
+
 def sanitize_for_patient(text: str) -> str:
     if not text:
         return ""
-    text = re.sub(r"📞\s*Заметка.*?(?=\n{2,}|\Z)", "", text, flags=re.S | re.I)
+
+    # удаляем служебные блоки/теги
+    text = _NOTE_RE.sub("", text)
     text = text.replace("[SAFE_LIST]", "")
     text = text.replace("<NO_POSTPROC>", "")
     text = text.replace("RAW_FULL:", "")
     text = text.replace("SEGMENT_SEPARATOR", "")
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
     return text
 
 

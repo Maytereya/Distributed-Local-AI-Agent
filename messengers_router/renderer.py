@@ -90,5 +90,5 @@ def render_complaint() -> ResponseEnvelope:
 async def render_stream(user_text: str, decision: RouteDecision, evidence: Evidence) -> AsyncGenerator[str, None]:
     prompt = _final_prompt(user_text, decision, evidence)
     async for chunk in ollama_call(prompt):
-        yield chunk
-        # yield sanitize_for_patient(chunk)
+        # yield chunk
+        yield sanitize_for_patient(chunk)
