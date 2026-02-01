@@ -2277,9 +2277,14 @@ def main():
             def fn_load_prompt(name: str, inform: bool = False) -> str:
                 return load_prompt(name, inform)
 
-            def fn_load_prompt_with_status(name: str) -> tuple[str, str]:
+            def fn_load_prompt_with_status(name: str) -> str:
+
                 text, msg = load_prompt(name, inform=True)
-                return text, msg
+                gr.Info(title="Загружен успешно",
+                           duration=3,
+                           message=msg,
+                           )
+                return text
 
             def fn_save_prompt(name: str, text: str) -> None:
 
