@@ -10,7 +10,6 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from agent_logic_2.router_preprocessor import routing  # <-- путь к генератору ответов для колл-центра
 from messengers_router.endpoint import router as messenger_router  # <-- путь к генератору ответов
 # для мессенджеров
 import agent_logic_2.config as c
@@ -22,7 +21,7 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 SessionType = Dict[str, Any]
 
 app = FastAPI(title="Neiry Agent API", version="0.1")
-app.include_router(messenger_router)
+app.include_router(messenger_router, tags=["for-messengers"])
 
 API_KEY = c.AGENT_API_KEY.strip()
 
@@ -50,10 +49,10 @@ def sse_event(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@app.post("/v1/agent/stream")
+@app.post("/v1/agent/stream", tags=["for-call-center"])
 async def stream_agent(payload: AgentRequest, request: Request, x_api_key: Optional[str] = Header(default=None)):
     require_api_key(x_api_key)
-
+    from agent_logic_2.router_preprocessor import routing  # lazy import чтобы не спамить в логи, если он не дергается намеренно
     trace_id = str(uuid.uuid4())
     sess: SessionType = payload.session or {}
 
