@@ -34,6 +34,12 @@ class MessengerGenerateRequest(BaseModel):
         description="Текст сообщения пользователя (пациента).",
         examples=["покажи расписание уролога", "как записаться на УЗИ", "у меня кровотечение"],
     )
+    debug: bool = Field(
+        default=False,
+        description="Debug-режим. Для /api/messenger-generate игнорируется (не добавляет debug в стрим). "
+                    "Для /api/messenger-generate-once возвращает диагностику в state_update.",
+        examples=[False, True],
+    )
 
 
 class Attachment(BaseModel):
@@ -49,7 +55,7 @@ class ResponseEnvelopeOut(BaseModel):
     text: str = Field(default="", description="Итоговый текст ответа (уже склеенный).")
     attachments: list[Attachment] = Field(default_factory=list, description="Вложения (если есть).")
     handoff: bool = Field(default=False, description="Нужно передать диалог оператору.")
-    state_update: dict[str, Any] = Field(default_factory=dict, description="Опционально: обновления состояния.")
+    state_update: dict[str, Any] = Field(default_factory=dict, description="Диагностика/обновления состояния (только debug-once).")
 
 
 class ResponseEnvelopeLine(BaseModel):
@@ -59,11 +65,12 @@ class ResponseEnvelopeLine(BaseModel):
     text: str = Field(default="", description="Фрагмент текста (delta). Клиент должен склеивать.")
     attachments: list[Attachment] = Field(default_factory=list, description="Вложения (если есть).")
     handoff: bool = Field(default=False, description="Сигнал передать оператору (обычно отдельной строкой в конце).")
-    state_update: dict[str, Any] = Field(default_factory=dict, description="Опционально: обновления состояния клиента.")
+    state_update: dict[str, Any] = Field(default_factory=dict, description="(В стриме не используется).")
 
 
 # ---------------------------------------------------------------------
 # Streaming endpoint (NDJSON)
+# Debug-флаг принимаем, но намеренно игнорируем (чтобы не ломать интеграции).
 # ---------------------------------------------------------------------
 
 @router.post(
@@ -75,7 +82,9 @@ class ResponseEnvelopeLine(BaseModel):
         "1) читать строки по мере поступления\n"
         "2) склеивать `text` в итоговый ответ\n"
         "3) обработать `attachments`\n"
-        "4) если получен `handoff=true` — передать диалог оператору\n"
+        "4) если получен `handoff=true` — передать диалог оператору\n\n"
+        "Примечание: параметр `debug` в этом endpoint игнорируется (debug-данные в стрим не добавляются). "
+        "Для диагностики используйте /api/messenger-generate-once с debug=true."
     ),
     response_class=StreamingResponse,
     responses={
@@ -95,7 +104,7 @@ class ResponseEnvelopeLine(BaseModel):
                             "summary": "Отдача PDF вложения",
                             "value": (
                                 '{"text":"Ваши результаты готовы.","attachments":[],"handoff":false,"state_update":{}}\n'
-                                '{"text":"","attachments":[{"type":"pdf","name":"Результаты анализов.pdf","url":"https://.../result.pdf"}],"handoff":false,"state_update":{}}\n'
+                                '{"text":"","attachments":[{"type":"pdf","name":"Результаты анализов.pdf","url":"https://example.com/result.pdf"}],"handoff":false,"state_update":{}}\n'
                             ),
                         },
                     }
@@ -114,14 +123,14 @@ async def messenger_generate(payload: MessengerGenerateRequest):
         memory.append_turn(state, "user", text)
 
         async def event_stream():
-            async for env in patient_routing_stream(text, state, services, memory):
-                env: InternalEnvelope # Чтобы IDE понимала что за тип данных.
-                obj = ResponseEnvelopeLine(
-                    text=env.text or "",
-                    attachments=env.attachments or [],
-                    handoff=bool(env.handoff),
-                    state_update=getattr(env, "state_update", {}) or {},
-                ).model_dump()
+            # debug=False — осознанно
+            async for env in patient_routing_stream(text, state, services, memory, debug=False):
+                obj = {
+                    "text": env.text or "",
+                    "attachments": env.attachments or [],
+                    "handoff": bool(env.handoff),
+                    "state_update": {},  # в стриме не используем
+                }
                 yield (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
 
         return StreamingResponse(event_stream(), media_type="application/x-ndjson")
@@ -131,17 +140,19 @@ async def messenger_generate(payload: MessengerGenerateRequest):
 
 # ---------------------------------------------------------------------
 # Debug endpoint (НЕ стримит) — удобно для Swagger / ручных тестов
+# Включает debug-метаданные в state_update (если payload.debug=true).
 # ---------------------------------------------------------------------
 
 @router.post(
     "/api/messenger-generate-once",
     summary="Debug: генерация ответа одним JSON (без стрима)",
     description=(
-        "Удобно для Swagger-понимания/ручных тестов.\n\n"
-        "Внутри читает NDJSON-стрим и:\n"
+        "Удобно для Swagger/ручных тестов.\n\n"
+        "Внутри читает поток и:\n"
         "- склеивает весь `text` в одну строку\n"
         "- собирает `attachments`\n"
-        "- `handoff=true`, если в стриме был сигнал handoff\n"
+        "- `handoff=true`, если был сигнал handoff\n\n"
+        "Если `debug=true`, дополнительно вернёт диагностику в `state_update` (decision/plan/evidence/pending/history_tail)."
     ),
     response_model=ResponseEnvelopeOut,
     responses={422: {"description": "Validation error: неверный JSON или отсутствуют обязательные поля."}},
@@ -159,19 +170,23 @@ async def messenger_generate_once(payload: MessengerGenerateRequest):
         handoff = False
         state_update: dict[str, Any] = {}
 
-        async for env in patient_routing_stream(text, state, services, memory):
+        async for env in patient_routing_stream(text, state, services, memory, debug=payload.debug):
             if env.text:
                 parts.append(env.text)
 
             if env.attachments:
                 for a in env.attachments:
-                    attachments.append(Attachment.model_validate(a)) #Валидация типа, годная конкретно для Pydantic
+                    attachments.append(Attachment.model_validate(a))
 
             if env.handoff:
                 handoff = True
 
-            if getattr(env, "state_update", None):
-                state_update = getattr(env, "state_update") or state_update
+            # если debug включён — patient_routing_stream отдаст meta через state_update (обычно первым env)
+            if payload.debug and getattr(env, "state_update", None):
+                su = env.state_update or {}
+                # берём целиком (это будет {"debug": {...}})
+                if su:
+                    state_update = su
 
         out = ResponseEnvelopeOut(
             text="".join(parts).strip(),

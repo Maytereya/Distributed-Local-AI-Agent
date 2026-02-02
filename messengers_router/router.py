@@ -625,13 +625,50 @@ async def route_patient_message(
     return decision, plan, evidence
 
 
+
+def _debug_meta(decision: RouteDecision, plan: Plan, evidence: Evidence, state: SessionState, pending: Any) -> dict[str, Any]:
+    return {
+        "decision": {
+            "label": decision.label,
+            "confidence": decision.confidence,
+            "flags": sorted(list(decision.flags)),
+            "entities": decision.entities,
+            "needs_handoff": decision.needs_handoff,
+        },
+        "plan": {
+            "label": plan.label,
+            "steps": [
+                {"tool": s.tool, "input": s.input, "required": s.required, "auth": s.auth}
+                for s in plan.steps
+            ],
+        },
+        "evidence": {
+            "items": evidence.items,
+            "debug_trace": evidence.debug_trace,
+        },
+        "pending": pending,
+        "history_tail": (state.history or [])[-10:],
+        "last_entities": state.last_entities,
+    }
+
+
 async def patient_routing_stream(
     user_text: str,
     state: SessionState,
     services: Services,
     memory: MemoryStore,
+    debug: bool = False,
 ) -> AsyncGenerator[ResponseEnvelope, None]:
     decision, plan, evidence = await route_patient_message(user_text, state, services, memory)
+
+    if debug:
+        pending = memory.get_pending(state)
+        yield ResponseEnvelope(
+            text="",
+            attachments=[],
+            handoff=False,
+            state_update={"debug": _debug_meta(decision, plan, evidence, state, pending)},
+        )
 
     if decision.label == "URGENT":
         yield render_urgent()
@@ -646,7 +683,10 @@ async def patient_routing_stream(
     pending = memory.get_pending(state)
     if not plan.steps and pending:
         missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
-        yield ResponseEnvelope(text=_clarification_question(plan.label, missing if isinstance(missing, list) else []), handoff=False)
+        yield ResponseEnvelope(
+            text=_clarification_question(plan.label, missing if isinstance(missing, list) else []),
+            handoff=False,
+        )
         return
 
     if evidence.get("auth_required"):
@@ -659,11 +699,9 @@ async def patient_routing_stream(
         attachments.append({"type": "pdf", "name": "Результаты анализов.pdf", "url": pdf_payload["pdf"]})
 
     async for chunk in render_stream(user_text, decision, evidence):
-        # yield ResponseEnvelope(text=chunk, attachments=[], handoff=decision.needs_handoff)
         yield ResponseEnvelope(text=chunk, attachments=[], handoff=False)
 
     if decision.needs_handoff:
-        # отдельный сигнал для интегратора/мессенджера
         yield ResponseEnvelope(text="", attachments=[], handoff=True)
 
     if attachments:
