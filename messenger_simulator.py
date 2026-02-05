@@ -16,6 +16,11 @@ class BotResult:
     handoff: bool
     error: Optional[str] = None
 
+def sanitize_text(s: str) -> str:
+    if not s:
+        return s
+    # удаляем невалидные unicode surrogate
+    return s.encode("utf-8", "ignore").decode("utf-8")
 
 def parse_jsonl_stream(lines: List[str]) -> BotResult:
     """
@@ -80,7 +85,11 @@ def parse_jsonl_stream(lines: List[str]) -> BotResult:
 
 
 def send_message(url: str, session_id: str, text: str, host_header: Optional[str] = None) -> BotResult:
-    payload = {"session_id": session_id, "text": text}
+
+    payload = {
+        "session_id": session_id,
+        "text": sanitize_text(text),
+    }
 
     headers = {"Content-Type": "application/json"}
     if host_header:
