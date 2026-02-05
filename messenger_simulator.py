@@ -91,8 +91,10 @@ def send_message(url: str, session_id: str, text: str, host_header: Optional[str
     # timeout=None: чтобы не рвать долгий стрим
     with httpx.Client(timeout=None) as client:
         with client.stream("POST", url, json=payload, headers=headers) as resp:
-            # если 401/403/404 — увидеть сразу
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                body = resp.read()
+                text = body.decode("utf-8", errors="replace") if body else ""
+                return BotResult(text="", attachments=[], handoff=False, error=f"HTTP {resp.status_code}: {text}")
 
             for line in resp.iter_lines():
                 if line is None:

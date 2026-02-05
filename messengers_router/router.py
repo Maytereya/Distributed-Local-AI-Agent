@@ -680,6 +680,19 @@ async def patient_routing_stream(
         yield render_medical_advice()
         return
 
+    if decision.label == "DOCTOR_SCHEDULE":
+        # есть специальность, но нет врача → уточняем
+        if (
+                "specialty" in decision.entities
+                and "last_name" not in decision.entities
+                and "doctor_last_name" not in decision.entities
+        ):
+            yield ResponseEnvelope(
+                text="Уточните, пожалуйста, фамилию врача.",
+                handoff=False,
+            )
+            return
+
     pending = memory.get_pending(state)
     if not plan.steps and pending:
         missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
