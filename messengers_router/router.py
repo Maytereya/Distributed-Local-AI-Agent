@@ -27,7 +27,10 @@ REQUIRED_SLOTS: dict[str, list[str]] = {
     "TEST_RESULT": ["_any_of:order_id"],
 
     "DOCTOR_INFO": ["_any_of:specialty,doctor_id,doctor_name"],
-    "DOCTOR_SCHEDULE": ["_any_of:doctor_id,doctor_name,specialty"],
+    # "DOCTOR_SCHEDULE": ["_any_of:doctor_id,doctor_name,specialty"],
+    # Важно: расписание в Nayka API в текущей реализации получается по конкретному врачу (id/фамилия),
+    # а не по специальности. Если есть только specialty — нужно уточнить врача, иначе получим 500.
+    "DOCTOR_SCHEDULE": ["_any_of:doctor_id,doctor_name"],
 
     "PRICE": ["service_name"],
     "ADDRESS": [],
@@ -57,7 +60,8 @@ def _missing_slots(label: str, entities: dict[str, Any]) -> list[str]:
 
 def _clarification_question(label: str, missing: list[str]) -> str:
     if label == "DOCTOR_SCHEDULE":
-        return "По какому врачу или специальности показать расписание? Можно фамилию врача или, например, «уролог»."
+        return ("Чтобы показать расписание, нужна фамилия врача (или ID). "
+                "Напишите, например: «расписание уролога Дразнина».")
     if label == "DOCTOR_INFO":
         return "Какого врача или специалиста вы ищете? (например: «уролог», или фамилия врача)."
     if label == "PRICE":
