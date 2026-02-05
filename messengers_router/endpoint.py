@@ -116,7 +116,12 @@ class ResponseEnvelopeLine(BaseModel):
 )
 async def messenger_generate(payload: MessengerGenerateRequest):
     session_id = payload.session_id or "anon"
-    text = payload.text.strip()
+
+    # Защищаемся от строк, содержащих внезапные символьные суррогаты.
+    text = (payload.get("text") or "")
+    text = text.encode("utf-8", "ignore").decode("utf-8")
+    text = text.strip()
+
 
     state = await memory.aget(session_id)
     try:
@@ -159,7 +164,10 @@ async def messenger_generate(payload: MessengerGenerateRequest):
 )
 async def messenger_generate_once(payload: MessengerGenerateRequest):
     session_id = payload.session_id or "anon"
-    text = payload.text.strip()
+    # Такая же защита, как в коде выше.
+    text = (payload.get("text") or "")
+    text = text.encode("utf-8", "ignore").decode("utf-8")
+    text = text.strip()
 
     state = await memory.aget(session_id)
     try:
