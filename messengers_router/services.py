@@ -5,6 +5,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
 from agent_logic_2.nayka_api import api_nayka
 
 
@@ -249,6 +250,16 @@ class Services:
         Пока заглушка.
         """
         return [
-            {"id": "branch_novo-sadovaya", "name": "Филиал на Ново - Садовой", "aliases": "ново - садовая, ул ново-садовая"},
+            {"id": "branch_novo-sadovaya", "name": "Филиал на Ново - Садовой",
+             "aliases": "ново - садовая, ул ново-садовая"},
             {"id": "branch_lenina", "name": "Филиал на Ленина", "aliases": "ленина,ул ленина,ленина 5"},
         ]
+
+
+if __name__ == "__main__":
+    async def main():
+        s = Services()
+        print(await s.doctors_info("уролог Дразнин", {"specialty": "уролог", "last_name": "Дразнин"}))
+        print(await s.doctors_schedule_week("покажи расписание Дразнина", {"last_name": "Дразнин"}))
+
+    asyncio.run(main())

@@ -17,9 +17,9 @@ from .renderer import (
 from .memory import MemoryStore
 
 
-# ----------------------------
+# ----------------------------------
 # Required slots (planner contract)
-# ----------------------------
+# ----------------------------------
 
 REQUIRED_SLOTS: dict[str, list[str]] = {
     "APPOINTMENT": ["_any_of:doctor_id,doctor_name,specialty,service_name"],
@@ -85,7 +85,7 @@ def _apply_pending_override(decision_label: str, pending: dict | None) -> str:
 
 
 # ----------------------------
-# Quick slot filling (NO LLM)
+# Quick slot filling (NO LLM!)
 # ----------------------------
 
 _DMS_RE = re.compile(r"\bдмс\b", re.I)
@@ -510,7 +510,7 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
 
     if missing:
         memory.set_pending(state, label=effective_label, missing_slots=missing)
-        return Plan(label=effective_label, steps=[])
+        return Plan(label=effective_label, steps=[])  # Возможно, ошибка. Проверить.
 
     memory.clear_pending(state)
 
@@ -574,7 +574,7 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
         ent = inp.get("entities") or {}
 
         if tool == "doctors_info":
-            ev.put("doctors_info", await services.doctors_info(q, ent))
+            ev.put("doctors_info", await services.doctors_info(q, ent, output_max=5))
         elif tool == "doctors_schedule_week":
             ev.put("doctor_schedule", await services.doctors_schedule_week(q, ent))
         elif tool == "appointment_help":
