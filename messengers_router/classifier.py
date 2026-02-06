@@ -31,7 +31,7 @@ from .policies import (
 )
 
 ollama_client = AsyncClient(c.ollama_url)
-_CLASSIFY_TIMEOUT = 20
+_CLASSIFY_TIMEOUT = 45
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 
@@ -86,17 +86,20 @@ async def ollama_classify_json(prompt: str) -> dict[str, Any]:
     llm = LLMName.get()
     think = ollama_settings.resolve_think(None)
 
-    res = await asyncio.wait_for(
-        ollama_client.generate(
-            model=llm,
-            prompt=prompt,
-            options=ollama_settings.options_set(),
-            format="json",
-            keep_alive=-1,
-            think=think,
-        ),
-        timeout=_CLASSIFY_TIMEOUT,
-    )
+    try:
+        res = await asyncio.wait_for(
+            ollama_client.generate(
+                model=llm,
+                prompt=prompt,
+                options=ollama_settings.options_set(),
+                format="json",
+                keep_alive=-1,
+                think=think,
+            ),
+            timeout=_CLASSIFY_TIMEOUT,
+        )
+    except Exception:
+        return {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_timeout"]}
 
     raw = res.get("response") if isinstance(res, dict) else None
     if isinstance(raw, str):
