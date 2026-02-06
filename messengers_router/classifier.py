@@ -5,9 +5,17 @@ from __future__ import annotations
 # не зависит от PYTHONPATH
 # не конфликтует с чужими пакетами
 
+import asyncio
 import json
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, cast
+
+from ollama import AsyncClient
+
+from agent_logic_2 import config as c, ollama_settings
+from agent_logic_2.ollama_settings import LLMName
 
 from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision
 from .policies import (
@@ -22,16 +30,80 @@ from .policies import (
     low_confidence_policy,
 )
 
-# ---------------------------
-# Ollama hook (replace later)
-# ---------------------------
+ollama_client = AsyncClient(c.ollama_url)
+_CLASSIFY_TIMEOUT = 20
+_PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+
+
+@lru_cache
+def _load_prompt(name: str) -> str:
+    path = _PROMPTS_DIR / name
+    return path.read_text(encoding="utf-8")
+
+
+def _extract_json(text: str) -> dict[str, Any] | None:
+    if not text:
+        return None
+    s = text.strip()
+    start = s.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(s)):
+        ch = s[i]
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if not in_str:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    chunk = s[start:i + 1]
+                    try:
+                        return json.loads(chunk)
+                    except Exception:
+                        try:
+                            return json.loads(" ".join(chunk.split()))
+                        except Exception:
+                            return None
+    return None
+
 
 async def ollama_classify_json(prompt: str) -> dict[str, Any]:
     """
-    ЗАГЛУШКА: заменить на реальный вызов Ollama:
-      - generate(..., format="json")
-      - return parsed dict
+    Реальный вызов Ollama: generate(format="json") + безопасный парсинг.
     """
+    llm = LLMName.get()
+    think = ollama_settings.resolve_think(None)
+
+    res = await asyncio.wait_for(
+        ollama_client.generate(
+            model=llm,
+            prompt=prompt,
+            options=ollama_settings.options_set(),
+            format="json",
+            keep_alive=-1,
+            think=think,
+        ),
+        timeout=_CLASSIFY_TIMEOUT,
+    )
+
+    raw = res.get("response") if isinstance(res, dict) else None
+    if isinstance(raw, str):
+        obj = _extract_json(raw)
+        if isinstance(obj, dict):
+            return obj
+
     return {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": []}
 
 
@@ -40,10 +112,25 @@ async def ollama_classify_json(prompt: str) -> dict[str, Any]:
 # ---------------------------
 
 _ORDER_ID_RE = re.compile(r"(?:заказ|order|№)\s*([0-9]{4,})", re.I)
+_APPOINTMENT_RE = re.compile(r"\bзапис(аться|ать|ываюсь|ываться|ь|ки)?\b|перенос|перенести|перезапис|отменить|отмена", re.I)
+_APPOINTMENT_CANCEL_RE = re.compile(r"\bотмен(ить|а|у)\b", re.I)
+_APPOINTMENT_RESCHEDULE_RE = re.compile(r"\bперен(ести|ос|есу|есём|есем)|перезапис", re.I)
+_DIAGNOSTIC_RE = re.compile(r"\b(экг|узи|мрт|кт|фгдс|фкс|рентген|флюорограф|колоноскоп)\b", re.I)
+_DOCTOR_WORDS_RE = re.compile(
+    r"\b(врач|специалист|кардиолог|эндокринолог|уролог|гинеколог|терапевт|педиатр|невролог|лор|хирург|стоматолог|гастроэнтеролог|онколог|проктолог|дерматолог|офтальмолог)\b",
+    re.I,
+)
 
 def _extract_order_id(text: str) -> str | None:
     m = _ORDER_ID_RE.search(text)
     return m.group(1) if m else None
+
+
+def _extract_service_keyword(text: str) -> str | None:
+    m = _DIAGNOSTIC_RE.search(text)
+    if not m:
+        return None
+    return m.group(1).upper()
 
 
 def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
@@ -51,6 +138,7 @@ def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
         "doctor_id", "doctor_name", "specialty",
         "branch_id", "branch_name", "city",
         "insurance_type", "accepts_children",
+        "child_age",
         "date_from", "date_to", "time_from", "time_to", "date_hint",
         "test_name", "service_name", "order_id",
     )
@@ -59,59 +147,12 @@ def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
 
 def _build_classify_prompt(text: str, seeded: dict[str, Any]) -> str:
     allowed = ", ".join(PATIENT_LABEL_PRIORITY)
-    return f"""
-Ты классификатор запросов пациента клиники.
-Верни JSON строго следующего формата (без лишних ключей):
-{{
-  "label": "<one of: {allowed}>",
-  "confidence": 0.0-1.0,
-  "entities": {{
-    "doctor_name": string|null,
-    "doctor_id": string|null,
-    "specialty": string|null,
-    "branch_name": string|null,
-    "branch_id": string|null,
-    "city": string|null,
-
-    "service_name": string|null,
-    "appointment_action": "book"|"reschedule"|"cancel"|null,
-
-    "test_name": string|null,
-    "test_goal": string|null,
-    "order_id": string|null,
-    "result_action": "status"|"get_pdf"|null,
-    "include_promos": boolean|null,
-
-    "insurance_type": "dms"|"oms"|"paid"|null,
-    "accepts_children": boolean|null,
-
-    "date_hint": "today"|"tomorrow"|"this_week"|"next_week"|null,
-    "date_from": "YYYY-MM-DD"|null,
-    "date_to": "YYYY-MM-DD"|null,
-    "time_from": "HH:MM"|null,
-    "time_to": "HH:MM"|null
-  }},
-  "flags": ["..."]
-}}
-
-Правила:
-- Не выдумывай doctor_id/order_id. Если их нет в тексте — ставь null.
-- TEST_RESULT: готовность/получение результатов анализов/PDF.
-- TEST_ASSIST: подобрать анализ/комплекс/чекап, интерес к скидкам.
-- DOCTOR_SCHEDULE: расписание/график/когда принимает/следующая неделя.
-- DOCTOR_INFO: найти врача/специальность/подбор врача.
-- APPOINTMENT: записаться/перенести/отменить.
-- ADDRESS: адрес/как добраться.
-- PRICE: стоимость/прайс.
-- PREPARE: подготовка к анализам/исследованиям.
-- NEWS: акции/скидки/новости.
-- MEDICAL_ADVICE: диагноз/лечение/интерпретация результатов.
-- иначе OTHER.
-
-Контекст (сущности из прошлых сообщений, если релевантно): {json.dumps(seeded, ensure_ascii=False)}
-
-Текст пациента: {text}
-""".strip()
+    tmpl = _load_prompt("classifier_patient.txt")
+    return (
+        tmpl.replace("<<ALLOWED_LABELS>>", allowed)
+        .replace("<<SEEDED>>", json.dumps(seeded, ensure_ascii=False))
+        .replace("<<TEXT>>", text)
+    ).strip()
 
 
 def _normalize_label(x: Any) -> Label:
@@ -133,7 +174,7 @@ _ALLOWED_ENTITY_KEYS = {
     "branch_name", "branch_id", "city",
     "service_name", "appointment_action",
     "test_name", "test_goal", "order_id", "result_action", "include_promos",
-    "insurance_type", "accepts_children",
+    "insurance_type", "accepts_children", "child_age",
     "date_hint", "date_from", "date_to", "time_from", "time_to",
 }
 
@@ -170,6 +211,18 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
 
     if detect_medical_advice(text) or detect_test_interpretation(text):
         return RouteDecision(label="MEDICAL_ADVICE", confidence=1.0, entities={}, flags=flags | {"medical_advice"}, needs_handoff=True)
+
+    # hard rule: appointment intents (before LLM)
+    if _APPOINTMENT_RE.search(text) and (_DIAGNOSTIC_RE.search(text) or _DOCTOR_WORDS_RE.search(text)):
+        entities: dict[str, Any] = {}
+        if _APPOINTMENT_CANCEL_RE.search(text):
+            entities["appointment_action"] = "cancel"
+        elif _APPOINTMENT_RESCHEDULE_RE.search(text):
+            entities["appointment_action"] = "reschedule"
+        svc = _extract_service_keyword(text)
+        if svc:
+            entities["service_name"] = svc
+        return RouteDecision(label="APPOINTMENT", confidence=0.75, entities=entities, flags=flags | {"rule_appointment"}, needs_handoff=False)
 
     # light hints
     if detect_test_result_intent(text):

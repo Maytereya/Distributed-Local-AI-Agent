@@ -6,7 +6,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from agent_logic_2.nayka_api import api_nayka
+from agent_logic_1 import meilisearch_client as meilisearch
+from agent_logic_2.nayka_api import api_nayka, api_price
+from converters import html_cleaner
 
 
 def _normalise_input(s: str) -> str:
@@ -31,6 +33,13 @@ def _get_first_present(d: dict[str, Any], keys: list[str]) -> Optional[str]:
         if isinstance(v, str) and v.strip():
             return v.strip()
     return None
+
+
+def _as_int(val: Any) -> int | None:
+    try:
+        return int(val)
+    except Exception:
+        return None
 
 
 @dataclass
@@ -198,8 +207,8 @@ class Services:
                 "entities_used": entities,
             }
 
-        # необязательный фильтр региона/филиала
-        region_name = _get_first_present(entities, ["region", "branch", "company_unit", "unit"])
+        # необязательный фильтр региона/филиала/города
+        region_name = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city", "branch_name"])
 
         # api_nayka.find_doctor_schedule блокирующая (requests) — уводим в thread
         try:
@@ -216,31 +225,93 @@ class Services:
 
     # Остальные методы пока как заглушки
     async def appointment_help(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
+        if query:
+            raw = await asyncio.to_thread(meilisearch.search_meili, "main_index", query)
+            cleaned = html_cleaner.strip_html(raw)
+            return {"instructions": cleaned, "entities_used": entities}
         return {
             "instructions": "Чтобы записаться, уточните врача/специальность/услугу и удобные даты.",
             "entities_used": entities,
         }
 
     async def test_assist(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        return {"tests": [], "promos": [], "note": "stub test_assist", "entities_used": entities}
+        test_name = _get_first_present(entities, ["test_name", "service_name"]) or query
+        needle = _normalise_input(test_name)
+        if not needle:
+            return {"tests": [], "promos": [], "note": "no test query", "entities_used": entities}
+
+        price_all = await asyncio.to_thread(api_price.load_price_all)
+        matches = [p for p in price_all if needle in _normalise_input(p.get("serviceName"))][:10]
+
+        return {"tests": matches, "promos": [], "entities_used": entities}
 
     async def test_prepare(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        return {"prepare": "", "note": "stub test_prepare", "entities_used": entities}
+        q = _get_first_present(entities, ["test_name", "service_name"]) or query
+        if not q:
+            return {"prepare": "", "note": "no query", "entities_used": entities}
+        raw = await asyncio.to_thread(meilisearch.search_meili, "main_index", q)
+        cleaned = html_cleaner.strip_html(raw)
+        return {"prepare": cleaned, "entities_used": entities}
 
     async def test_result_status(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        return {"ready": False, "note": "stub test_result_status", "entities_used": entities}
+        return {
+            "ready": False,
+            "note": "no result API",
+            "handoff_required": True,
+            "entities_used": entities,
+        }
 
     async def test_result_pdf(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        return {"pdf": None, "note": "stub test_result_pdf", "entities_used": entities}
+        return {
+            "pdf": None,
+            "note": "no result PDF service",
+            "handoff_required": True,
+            "entities_used": entities,
+        }
 
     async def price_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        return {"prices": [], "note": "stub price_info", "entities_used": entities}
+        doctor_id = _as_int(entities.get("doctor_id"))
+        service_name = _get_first_present(entities, ["service_name", "test_name"]) or query
+        needle = _normalise_input(service_name)
+
+        if doctor_id:
+            prices = await asyncio.to_thread(api_price.load_doctor_prices)
+            doc_prices = [p for p in prices if _as_int(p.get("doctorId")) == doctor_id]
+            if needle:
+                doc_prices = [p for p in doc_prices if needle in _normalise_input(p.get("serviceName"))]
+            return {"prices": doc_prices[:10], "entities_used": entities}
+
+        price_all = await asyncio.to_thread(api_price.load_price_all)
+        if not needle:
+            return {"prices": [], "note": "no service query", "entities_used": entities}
+        matches = [p for p in price_all if needle in _normalise_input(p.get("serviceName"))][:10]
+        return {"prices": matches, "entities_used": entities}
 
     async def address_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        return {"addresses": [], "note": "stub address_info", "entities_used": entities}
+        doctors = await self._ensure_doctors_cache_loaded()
+        branch = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city"]) or query
+        branch_q = _normalise_input(branch)
+
+        addresses: list[str] = []
+        for d in doctors:
+            for addr in (d.get("regions") or d.get("addresses") or []):
+                addr_norm = _normalise_input(str(addr))
+                if branch_q and branch_q not in addr_norm:
+                    continue
+                addresses.append(str(addr))
+
+        uniq = sorted(set(addresses))
+        return {"addresses": uniq, "entities_used": entities}
 
     async def news_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        return {"news": [], "note": "stub news_info", "entities_used": entities}
+        hits = await asyncio.to_thread(
+            meilisearch.search_news_active,
+            index_name="news",
+            keyword=query or None,
+            limit=10,
+            sort=["from_ts:desc"],
+        )
+        return {"news": hits, "entities_used": entities}
 
     def get_branches(self) -> list[dict[str, str]]:
         """
@@ -249,11 +320,29 @@ class Services:
           [{"id":"branch_1","name":"Филиал на Проспекте Ленина","aliases":"Ленина, Ленинская,Проспект Ленина 5"}]
         Пока заглушка.
         """
-        return [
-            {"id": "branch_novo-sadovaya", "name": "Филиал на Ново - Садовой",
-             "aliases": "ново - садовая, ул ново-садовая"},
-            {"id": "branch_lenina", "name": "Филиал на Ленина", "aliases": "ленина,ул ленина,ленина 5"},
-        ]
+        try:
+            doctors = self._doctors_cache or []
+        except Exception:
+            doctors = []
+
+        addresses: list[str] = []
+        for d in doctors:
+            for addr in (d.get("regions") or d.get("addresses") or []):
+                if addr:
+                    addresses.append(str(addr))
+
+        uniq = sorted(set(addresses))
+        if not uniq:
+            return [
+                {"id": "branch_novo-sadovaya", "name": "Филиал на Ново - Садовой",
+                 "aliases": "ново - садовая, ул ново-садовая"},
+                {"id": "branch_lenina", "name": "Филиал на Ленина", "aliases": "ленина,ул ленина,ленина 5"},
+            ]
+
+        out: list[dict[str, str]] = []
+        for i, addr in enumerate(uniq, 1):
+            out.append({"id": f"branch_{i}", "name": addr, "aliases": _normalise_input(addr)})
+        return out
 
 
 if __name__ == "__main__":

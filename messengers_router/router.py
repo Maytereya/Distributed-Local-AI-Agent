@@ -13,6 +13,7 @@ from .renderer import (
     render_complaint,
     render_medical_advice,
     render_stream,
+    format_doctor_schedule_for_patient,
 )
 from .memory import MemoryStore
 
@@ -22,8 +23,14 @@ from .memory import MemoryStore
 # ----------------------------------
 
 REQUIRED_SLOTS: dict[str, list[str]] = {
-    "APPOINTMENT": ["_any_of:doctor_id,doctor_name,specialty,service_name"],
-    "TEST_ASSIST": ["_any_of:test_goal,test_name"],
+    "APPOINTMENT": [
+        "_any_of:doctor_id,doctor_name,specialty,service_name",
+        "_any_of:city,branch_name,branch_id",
+    ],
+    "TEST_ASSIST": [
+        "_any_of:city,branch_name,branch_id",
+        "_any_of:test_goal,test_name",
+    ],
     "TEST_RESULT": ["_any_of:order_id"],
 
     "DOCTOR_INFO": ["_any_of:specialty,doctor_id,doctor_name"],
@@ -32,8 +39,11 @@ REQUIRED_SLOTS: dict[str, list[str]] = {
     # а не по специальности. Если есть только specialty — нужно уточнить врача, иначе получим 500.
     "DOCTOR_SCHEDULE": ["_any_of:doctor_id,doctor_name"],
 
-    "PRICE": ["service_name"],
-    "ADDRESS": [],
+    "PRICE": [
+        "_any_of:city,branch_name,branch_id",
+        "service_name",
+    ],
+    "ADDRESS": ["_any_of:city,branch_name,branch_id"],
     "PREPARE": ["_any_of:test_name,service_name"],
     "NEWS": [],
 
@@ -55,10 +65,20 @@ def _missing_slots(label: str, entities: dict[str, Any]) -> list[str]:
         else:
             if not entities.get(r):
                 missing.append(r)
+    if label == "APPOINTMENT":
+        if entities.get("accepts_children") and not entities.get("child_age"):
+            missing.append("child_age")
     return missing
 
 
 def _clarification_question(label: str, missing: list[str]) -> str:
+    need_city = any(m.startswith("_any_of:city") for m in missing)
+    need_service = any("doctor_id" in m or "doctor_name" in m or "specialty" in m or "service_name" in m for m in missing)
+
+    if "child_age" in missing:
+        return "Сколько полных лет ребенку?"
+    if label in {"PRICE", "TEST_ASSIST", "ADDRESS"} and need_city:
+        return "Из какого города вы обращаетесь?"
     if label == "DOCTOR_SCHEDULE":
         return ("Чтобы показать расписание, нужна фамилия врача (или ID). "
                 "Напишите, например: «расписание уролога Дразнина».")
@@ -71,10 +91,24 @@ def _clarification_question(label: str, missing: list[str]) -> str:
     if label == "TEST_ASSIST":
         return "Для какой цели хотите подобрать анализы? Например: «проверить щитовидку», «витамины», «чекап»."
     if label == "APPOINTMENT":
-        return "Чтобы помочь с записью, уточните: к какому врачу/специалисту или на какую услугу вы хотите записаться?"
+        if need_service:
+            return "Чтобы помочь с записью, уточните: к какому врачу/специалисту или на какую услугу вы хотите записаться?"
+        if need_city:
+            return "Из какого города вы обращаетесь?"
+        return "Уточните, пожалуйста, детали записи."
     if label == "TEST_RESULT":
         return "Чтобы проверить готовность результатов, нужен номер заказа (обычно вида «№12345»). Если удобнее — подскажу, как пройти авторизацию."
     return "Уточните, пожалуйста, детали запроса."
+
+
+def _evidence_requires_handoff(evidence: Evidence) -> tuple[bool, str | None]:
+    for _key, val in evidence.items.items():
+        if isinstance(val, dict) and val.get("handoff_required"):
+            msg = val.get("handoff_message")
+            if isinstance(msg, str) and msg.strip():
+                return True, msg.strip()
+            return True, None
+    return False, None
 
 
 def _apply_pending_override(decision_label: str, pending: dict | None) -> str:
@@ -97,6 +131,7 @@ _OMS_RE = re.compile(r"\bомс\b", re.I)
 _PAID_RE = re.compile(r"\bплатн(о|ый|ая)\b|\bза наличн|\bоплат", re.I)
 
 _CHILD_RE = re.compile(r"\bдет(и|ям|ский|ская|ского|ских)\b", re.I)
+_AGE_RE = re.compile(r"\b(\d{1,2})\s*(?:лет|года|год)\b", re.I)
 
 _NEXT_WEEK_RE = re.compile(r"\bна следующ(ей|ую)\s+недел", re.I)
 _THIS_WEEK_RE = re.compile(r"\bна эт(ой|у)\s+недел|\bв эт(ой|у)\s+недел", re.I)
@@ -105,6 +140,10 @@ _TODAY_RE = re.compile(r"\bсегодня\b", re.I)
 
 _BRANCH_EXPLICIT_RE = re.compile(r"\bфилиал\b[:\s]*([^\n,;.]{2,80})", re.I)
 _BRANCH_ON_RE = re.compile(r"\bна\s+([А-ЯЁа-яё0-9\-]{3,40})(?:\s+([0-9]{1,4}))?\b")
+_ADDRESS_WORD_RE = re.compile(
+    r"\b(ул\.?|улиц[аеы]|пр\.?|проспект|пр-?т|шоссе|бульвар|пер\.?|переулок|наб\.?|набережн|пл\.?|площадь)\b",
+    re.I,
+)
 
 _SPECIALTY_HINT_RE = re.compile(
     r"\b(уролог|гинеколог|терапевт|эндокринолог|невролог|кардиолог|лор|офтальмолог|дерматолог|педиатр)\b",
@@ -185,6 +224,10 @@ def _tokenize(s: str) -> list[str]:
     s = re.sub(r"[^a-zа-яё0-9\s\-]", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return [t for t in s.split(" ") if t]
+
+
+def _looks_like_address(text: str) -> bool:
+    return bool(_ADDRESS_WORD_RE.search(text) or re.search(r"\d", text))
 
 
 def _build_branch_index(branches: list[dict[str, str]]) -> list[dict[str, Any]]:
@@ -461,9 +504,18 @@ def quick_fill_entities_from_text(
         if not state_entities.get("test_name"):
             out["test_goal"] = t[:200]
 
-    # service_name heuristic (price/prepare)
-    if any(r == "service_name" for r in missing_rules) and len(t) >= 3:
+    # service_name heuristic (price/appointment/prepare)
+    if any("service_name" in r for r in missing_rules) and len(t) >= 3:
         out["service_name"] = t[:200]
+
+    # child_age heuristic
+    if "child_age" in missing_rules:
+        m_age = _AGE_RE.search(low)
+        if m_age:
+            try:
+                out["child_age"] = int(m_age.group(1))
+            except Exception:
+                pass
 
     # ----------------------------
     # Branch resolution
@@ -480,12 +532,15 @@ def quick_fill_entities_from_text(
             if m_on:
                 street = (m_on.group(1) or "").strip()
                 num = (m_on.group(2) or "").strip()
-                branch_hint = f"{street} {num}".strip()
+                candidate = f"{street} {num}".strip()
+                if num or _ADDRESS_WORD_RE.search(t):
+                    branch_hint = candidate
 
         if not branch_hint:
             words = [w for w in re.split(r"\s+", t) if w]
             if 1 <= len(words) <= 3 and len(t) <= 30:
-                branch_hint = t
+                if _looks_like_address(t):
+                    branch_hint = t
 
         if branch_hint:
             branches = services.get_branches()
@@ -495,7 +550,7 @@ def quick_fill_entities_from_text(
                 out["branch_id"] = bid
             if bname and not state_entities.get("branch_name"):
                 out["branch_name"] = bname
-            if not bid and not state_entities.get("branch_name"):
+            if not bid and not state_entities.get("branch_name") and _looks_like_address(branch_hint):
                 out["branch_name"] = branch_hint[:80]
 
     return out
@@ -539,7 +594,10 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
         return Plan(label=label, steps=steps)
 
     if label == "APPOINTMENT":
-        steps.append(PlanStep(tool="appointment_help", input={"query": user_text, "entities": dict(entities)}))
+        if entities.get("doctor_id") or entities.get("doctor_name"):
+            steps.append(PlanStep(tool="doctors_schedule_week", input={"query": user_text, "entities": dict(entities)}))
+        else:
+            steps.append(PlanStep(tool="appointment_help", input={"query": user_text, "entities": dict(entities)}))
         return Plan(label=label, steps=steps)
 
     if label == "PRICE":
@@ -613,6 +671,15 @@ async def route_patient_message(
 
     # merge entities from LLM+rules
     memory.merge_entities(state, decision.entities, label=decision.label)
+
+    # quick fill on current turn (before pending exists)
+    pending = memory.get_pending(state)
+    if not pending:
+        missing_now = _missing_slots(decision.label, state.last_entities)
+        if missing_now:
+            quick_now = quick_fill_entities_from_text(user_text, state.last_entities, missing_now, services)
+            if quick_now:
+                memory.merge_entities(state, quick_now, label=decision.label)
 
     # if pending exists, try quick fill missing slots (NO LLM)
     pending = memory.get_pending(state)
@@ -709,6 +776,21 @@ async def patient_routing_stream(
     if evidence.get("auth_required"):
         yield ResponseEnvelope(text=evidence.get("auth_message", "Нужна авторизация."), handoff=False)
         return
+
+    handoff_required, handoff_msg = _evidence_requires_handoff(evidence)
+    if handoff_required:
+        if handoff_msg:
+            yield ResponseEnvelope(text=handoff_msg, handoff=True)
+        else:
+            yield ResponseEnvelope(text="Передаю диалог оператору.", handoff=True)
+        return
+
+    schedule_payload = evidence.get("doctor_schedule")
+    if decision.label in {"DOCTOR_SCHEDULE", "APPOINTMENT"} and isinstance(schedule_payload, dict):
+        if schedule_payload.get("schedule"):
+            text = format_doctor_schedule_for_patient(schedule_payload, decision.entities)
+            yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+            return
 
     attachments: list[dict[str, Any]] = []
     pdf_payload = evidence.get("test_result_pdf")
