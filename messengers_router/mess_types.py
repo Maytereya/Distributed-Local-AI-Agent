@@ -1,3 +1,9 @@
+"""Доменные типы мессенджерного роутера.
+
+Содержит канонический список labels и dataclass-контракты между модулями:
+RouteDecision, Plan, Evidence, SessionState, ResponseEnvelope.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

@@ -1,3 +1,9 @@
+"""HTTP endpoint-слой мессенджерного контура.
+
+Определяет streaming и debug-once точки входа, читает/сохраняет session state
+и преобразует внутренние envelope-ответы в публичный JSON/NDJSON контракт.
+"""
+
 from __future__ import annotations
 
 import json

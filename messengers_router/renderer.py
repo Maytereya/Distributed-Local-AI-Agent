@@ -1,3 +1,9 @@
+"""Рендеринг финального ответа пациенту.
+
+Формирует prompt для LLM по decision+evidence, отдает поток текстовых чанков
+и предоставляет шаблонные ответы для safety/early-exit веток.
+"""
+
 from __future__ import annotations
 
 import asyncio

@@ -1,3 +1,9 @@
+"""Главный оркестратор мессенджерного диалога.
+
+Выполняет pipeline: classify -> slot filling -> plan -> services -> rendering,
+ведет APPOINTMENT flow, pending-уточнения, handoff решения и debug meta.
+"""
+
 from __future__ import annotations
 
 import re
@@ -6,7 +12,32 @@ from typing import AsyncGenerator, Any
 
 from .mess_types import Evidence, Plan, PlanStep, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
-from .policies import require_auth_for_test_result
+from .policies import (
+    require_auth_for_test_result,
+    missing_slots,
+    clarification_question,
+    evidence_requires_handoff,
+    handoff_message,
+    appointment_step_policy,
+    APPOINTMENT_STEP_BRANCH,
+    APPOINTMENT_STEP_DATETIME,
+    APPOINTMENT_STEP_CONFIRM,
+    APPOINTMENT_CONFIRM_YES,
+    APPOINTMENT_CONFIRM_NO,
+    appointment_confirmation_transition,
+    extract_price_rub,
+    appointment_summary,
+    appointment_addresses_for_city,
+    appointment_text_branch_prompt,
+    appointment_text_datetime_prompt,
+    appointment_text_confirm_prompt,
+    appointment_text_confirmed_handoff,
+    appointment_text_reask_datetime,
+    appointment_text_reask_confirm,
+    doctor_schedule_text_clarify_doctor,
+    decision_handoff_text,
+    extract_service_phrase,
+)
 from .services import Services
 from .renderer import (
     render_urgent,
@@ -16,99 +47,7 @@ from .renderer import (
     format_doctor_schedule_for_patient,
 )
 from .memory import MemoryStore
-
-
-# ----------------------------------
-# Required slots (planner contract)
-# ----------------------------------
-
-REQUIRED_SLOTS: dict[str, list[str]] = {
-    "APPOINTMENT": [
-        "_any_of:doctor_id,doctor_name,specialty,service_name",
-        "_any_of:city,branch_name,branch_id",
-    ],
-    "TEST_ASSIST": [
-        "_any_of:city,branch_name,branch_id",
-        "_any_of:test_goal,test_name",
-    ],
-    "TEST_RESULT": ["_any_of:order_id"],
-
-    "DOCTOR_INFO": ["_any_of:specialty,doctor_id,doctor_name"],
-    # "DOCTOR_SCHEDULE": ["_any_of:doctor_id,doctor_name,specialty"],
-    # Важно: расписание в Nayka API в текущей реализации получается по конкретному врачу (id/фамилия),
-    # а не по специальности. Если есть только specialty — нужно уточнить врача, иначе получим 500.
-    "DOCTOR_SCHEDULE": ["_any_of:doctor_id,doctor_name"],
-
-    "PRICE": [
-        "_any_of:city,branch_name,branch_id",
-        "service_name",
-    ],
-    "ADDRESS": ["_any_of:city,branch_name,branch_id"],
-    "PREPARE": ["_any_of:test_name,service_name"],
-    "NEWS": [],
-
-    "COMPLAINT": [],
-    "URGENT": [],
-    "MEDICAL_ADVICE": [],
-    "OTHER": [],
-}
-
-
-def _missing_slots(label: str, entities: dict[str, Any]) -> list[str]:
-    req = REQUIRED_SLOTS.get(label, [])
-    missing: list[str] = []
-    for r in req:
-        if r.startswith("_any_of:"):
-            keys = [k.strip() for k in r.split(":", 1)[1].split(",") if k.strip()]
-            if not any(entities.get(k) for k in keys):
-                missing.append(r)
-        else:
-            if not entities.get(r):
-                missing.append(r)
-    if label == "APPOINTMENT":
-        if entities.get("accepts_children") and not entities.get("child_age"):
-            missing.append("child_age")
-    return missing
-
-
-def _clarification_question(label: str, missing: list[str]) -> str:
-    need_city = any(m.startswith("_any_of:city") for m in missing)
-    need_service = any("doctor_id" in m or "doctor_name" in m or "specialty" in m or "service_name" in m for m in missing)
-
-    if "child_age" in missing:
-        return "Сколько полных лет ребенку?"
-    if label in {"PRICE", "TEST_ASSIST", "ADDRESS"} and need_city:
-        return "Из какого города вы обращаетесь?"
-    if label == "DOCTOR_SCHEDULE":
-        return ("Чтобы показать расписание, нужна фамилия врача (или ID). "
-                "Напишите, например: «расписание уролога Дразнина».")
-    if label == "DOCTOR_INFO":
-        return "Какого врача или специалиста вы ищете? (например: «уролог», или фамилия врача)."
-    if label == "PRICE":
-        return "Скажите, пожалуйста, название услуги/анализа — я уточню стоимость."
-    if label == "PREPARE":
-        return "К какому анализу или исследованию нужна подготовка? Напишите название."
-    if label == "TEST_ASSIST":
-        return "Для какой цели хотите подобрать анализы? Например: «проверить щитовидку», «витамины», «чекап»."
-    if label == "APPOINTMENT":
-        if need_service:
-            return "Чтобы помочь с записью, уточните: к какому врачу/специалисту или на какую услугу вы хотите записаться?"
-        if need_city:
-            return "Из какого города вы обращаетесь?"
-        return "Уточните, пожалуйста, детали записи."
-    if label == "TEST_RESULT":
-        return "Чтобы проверить готовность результатов, нужен номер заказа (обычно вида «№12345»). Если удобнее — подскажу, как пройти авторизацию."
-    return "Уточните, пожалуйста, детали запроса."
-
-
-def _evidence_requires_handoff(evidence: Evidence) -> tuple[bool, str | None]:
-    for _key, val in evidence.items.items():
-        if isinstance(val, dict) and val.get("handoff_required"):
-            msg = val.get("handoff_message")
-            if isinstance(msg, str) and msg.strip():
-                return True, msg.strip()
-            return True, None
-    return False, None
+from .city import match_city, looks_like_address
 
 
 def _apply_pending_override(decision_label: str, pending: dict | None) -> str:
@@ -120,6 +59,68 @@ def _apply_pending_override(decision_label: str, pending: dict | None) -> str:
     if decision_label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
         return decision_label
     return pending_label
+
+
+def _normalize_secondary_labels(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for x in value:
+        if isinstance(x, str) and x and x not in out:
+            out.append(x)
+    return out
+
+
+def _get_secondary_queue(state: SessionState) -> list[str]:
+    return _normalize_secondary_labels(state.last_entities.get("_secondary_queue"))
+
+
+def _set_secondary_queue(state: SessionState, labels: list[str]) -> None:
+    clean = _normalize_secondary_labels(labels)
+    if clean:
+        state.last_entities["_secondary_queue"] = clean
+        state.last_entities["secondary_intents"] = clean
+    else:
+        state.last_entities.pop("_secondary_queue", None)
+        state.last_entities.pop("secondary_intents", None)
+        state.last_entities.pop("_secondary_offer_pending", None)
+
+
+def _is_affirmative(text: str) -> bool:
+    return bool(_YES_RE.match(text or ""))
+
+
+def _is_negative(text: str) -> bool:
+    return bool(_NO_RE.match(text or ""))
+
+
+def _secondary_followup_text(labels: list[str]) -> str | None:
+    if not labels:
+        return None
+    first = labels[0]
+    mapping = {
+        "PRICE": "Также вижу вопрос по стоимости. Могу сразу подсказать цену по услуге.",
+        "ADDRESS": "Также могу подсказать адрес и режим работы подходящего филиала.",
+        "APPOINTMENT": "Также могу помочь с записью на прием после уточнения текущего вопроса.",
+        "TEST_ASSIST": "Также могу помочь с подбором анализов под вашу цель.",
+        "DOCTOR_SCHEDULE": "Также могу показать расписание нужного врача.",
+        "DOCTOR_INFO": "Также могу подсказать, какие врачи принимают по вашему запросу.",
+    }
+    return mapping.get(first)
+
+
+def _safe_get_branches(services: Services) -> list[dict[str, str]]:
+    """
+    Надежный доступ к справочнику филиалов:
+    при ошибке интеграции возвращаем пустой список, а не исключение.
+    """
+    try:
+        branches = services.get_branches()
+    except Exception:
+        return []
+    if not isinstance(branches, list):
+        return []
+    return [b for b in branches if isinstance(b, dict)]
 
 
 # ----------------------------
@@ -137,14 +138,11 @@ _NEXT_WEEK_RE = re.compile(r"\bна следующ(ей|ую)\s+недел", re.
 _THIS_WEEK_RE = re.compile(r"\bна эт(ой|у)\s+недел|\bв эт(ой|у)\s+недел", re.I)
 _TOMORROW_RE = re.compile(r"\bзавтра\b", re.I)
 _TODAY_RE = re.compile(r"\bсегодня\b", re.I)
+_YES_RE = re.compile(r"^\s*(да|ага|угу|ок|окей|хорошо|давайте|конечно)\s*[!.,?]*\s*$", re.I)
+_NO_RE = re.compile(r"^\s*(нет|не надо|не нужно|неа|отмена|не хочу)\s*[!.,?]*\s*$", re.I)
 
 _BRANCH_EXPLICIT_RE = re.compile(r"\bфилиал\b[:\s]*([^\n,;.]{2,80})", re.I)
 _BRANCH_ON_RE = re.compile(r"\bна\s+([А-ЯЁа-яё0-9\-]{3,40})(?:\s+([0-9]{1,4}))?\b")
-_ADDRESS_WORD_RE = re.compile(
-    r"\b(ул\.?|улиц[аеы]|пр\.?|проспект|пр-?т|шоссе|бульвар|пер\.?|переулок|наб\.?|набережн|пл\.?|площадь)\b",
-    re.I,
-)
-
 _SPECIALTY_HINT_RE = re.compile(
     r"\b(уролог|гинеколог|терапевт|эндокринолог|невролог|кардиолог|лор|офтальмолог|дерматолог|педиатр)\b",
     re.I,
@@ -226,10 +224,6 @@ def _tokenize(s: str) -> list[str]:
     return [t for t in s.split(" ") if t]
 
 
-def _looks_like_address(text: str) -> bool:
-    return bool(_ADDRESS_WORD_RE.search(text) or re.search(r"\d", text))
-
-
 def _build_branch_index(branches: list[dict[str, str]]) -> list[dict[str, Any]]:
     idx: list[dict[str, Any]] = []
     for b in branches:
@@ -252,6 +246,29 @@ def _build_branch_index(branches: list[dict[str, str]]) -> list[dict[str, Any]]:
     return idx
 
 
+def _branch_options_to_indexable(branch_options: Any) -> list[dict[str, str]]:
+    """
+    Превращает список ранее показанных адресов в branch-like список для локального матчинга.
+    """
+    if not isinstance(branch_options, list):
+        return []
+    out: list[dict[str, str]] = []
+    for i, raw in enumerate(branch_options, start=1):
+        if not isinstance(raw, str):
+            continue
+        name = raw.strip()
+        if not name:
+            continue
+        out.append(
+            {
+                "id": f"shown_{i}",
+                "name": name,
+                "aliases": _norm(name),
+            }
+        )
+    return out
+
+
 def _match_branch(text: str, branch_index: list[dict[str, Any]]) -> tuple[str | None, str | None]:
     if not branch_index:
         return None, None
@@ -259,12 +276,23 @@ def _match_branch(text: str, branch_index: list[dict[str, Any]]) -> tuple[str | 
     txt_tokens = set(_tokenize(text))
     if not txt_tokens:
         return None, None
+    input_numbers = {
+        t for t in txt_tokens
+        if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)
+    }
 
     best_id: str | None = None
     best_name: str | None = None
     best_score = 0
 
     for b in branch_index:
+        if input_numbers:
+            branch_numbers = {
+                t for t in b["tokens"]
+                if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)
+            }
+            if branch_numbers and not (input_numbers & branch_numbers):
+                continue
         common = txt_tokens & b["tokens"]
         score = len(common)
         if any(len(t) >= 5 for t in common):
@@ -277,8 +305,31 @@ def _match_branch(text: str, branch_index: list[dict[str, Any]]) -> tuple[str | 
     if best_score >= 2:
         return best_id, best_name
 
-    # fallback: один длинный токен
+    # fallback #1: один "средний" токен, но только если кандидат уникален
+    medium_candidates: list[tuple[str, str]] = []
     for b in branch_index:
+        if input_numbers:
+            branch_numbers = {
+                t for t in b["tokens"]
+                if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)
+            }
+            if branch_numbers and not (input_numbers & branch_numbers):
+                continue
+        common = txt_tokens & b["tokens"]
+        if any(len(t) >= 5 for t in common):
+            medium_candidates.append((b["id"], b["name"]))
+    if len(medium_candidates) == 1:
+        return medium_candidates[0]
+
+    # fallback #2: один длинный токен
+    for b in branch_index:
+        if input_numbers:
+            branch_numbers = {
+                t for t in b["tokens"]
+                if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)
+            }
+            if branch_numbers and not (input_numbers & branch_numbers):
+                continue
         common = txt_tokens & b["tokens"]
         if any(len(t) >= 7 for t in common):
             return b["id"], b["name"]
@@ -441,6 +492,16 @@ def _parse_date_time_ru(text: str, today: date | None = None) -> dict[str, Any]:
             out["time_from"] = tm
             out["time_to"] = tm
 
+    # --- bare time: "13:00" (без "в/к")
+    if "time_from" not in out and "time_to" not in out:
+        bare = _TIME_RE.search(s)
+        if bare:
+            h = int(bare.group(1))
+            m = int(bare.group(2))
+            tm = f"{h:02d}:{m:02d}"
+            out["time_from"] = tm
+            out["time_to"] = tm
+
     return out
 
 
@@ -506,7 +567,8 @@ def quick_fill_entities_from_text(
 
     # service_name heuristic (price/appointment/prepare)
     if any("service_name" in r for r in missing_rules) and len(t) >= 3:
-        out["service_name"] = t[:200]
+        service_phrase = extract_service_phrase(t)
+        out["service_name"] = (service_phrase or t[:200]).strip()
 
     # child_age heuristic
     if "child_age" in missing_rules:
@@ -520,6 +582,16 @@ def quick_fill_entities_from_text(
     # ----------------------------
     # Branch resolution
     # ----------------------------
+    needs_city = any("city" in r for r in missing_rules)
+    if needs_city and not state_entities.get("city"):
+        city = match_city(t)
+        if not city:
+            words = [w for w in re.split(r"\s+", t) if w]
+            if 1 <= len(words) <= 2 and len(t) <= 30 and not looks_like_address(t):
+                city = t
+        if city:
+            out["city"] = city.strip()
+
     if not state_entities.get("branch_id"):
         branch_hint = None
 
@@ -533,24 +605,47 @@ def quick_fill_entities_from_text(
                 street = (m_on.group(1) or "").strip()
                 num = (m_on.group(2) or "").strip()
                 candidate = f"{street} {num}".strip()
-                if num or _ADDRESS_WORD_RE.search(t):
+                if num or looks_like_address(t):
                     branch_hint = candidate
 
         if not branch_hint:
             words = [w for w in re.split(r"\s+", t) if w]
             if 1 <= len(words) <= 3 and len(t) <= 30:
-                if _looks_like_address(t):
+                # Если город уже известен, допускаем короткий выбор филиала ("Кирова").
+                city_guess = match_city(t)
+                is_city_only = bool(city_guess and _norm(city_guess) == _norm(t))
+                if (looks_like_address(t) or state_entities.get("city")) and not is_city_only:
                     branch_hint = t
 
         if branch_hint:
-            branches = services.get_branches()
+            # Если мы уже показывали список адресов пользователю, резолвим только внутри него.
+            shown_options = _branch_options_to_indexable(state_entities.get("appointment_branch_options"))
+            branches = shown_options
+            if not branches:
+                branches = _safe_get_branches(services)
+                city_hint = str(out.get("city") or state_entities.get("city") or "").strip().lower()
+                if city_hint:
+                    city_filtered = []
+                    for b in branches:
+                        if not isinstance(b, dict):
+                            continue
+                        hay = f"{b.get('name', '')} {b.get('aliases', '')}".lower()
+                        if city_hint in hay:
+                            city_filtered.append(b)
+                    if city_filtered:
+                        branches = city_filtered
             idx = _build_branch_index(branches)
             bid, bname = _match_branch(branch_hint, idx)
-            if bid:
+            if bid and not str(bid).startswith("shown_"):
                 out["branch_id"] = bid
             if bname and not state_entities.get("branch_name"):
                 out["branch_name"] = bname
-            if not bid and not state_entities.get("branch_name") and _looks_like_address(branch_hint):
+            if (
+                not shown_options
+                and not bid
+                and not state_entities.get("branch_name")
+                and looks_like_address(branch_hint)
+            ):
                 out["branch_name"] = branch_hint[:80]
 
     return out
@@ -565,11 +660,11 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
     effective_label = _apply_pending_override(decision.label, pending)
 
     entities = state.last_entities
-    missing = _missing_slots(effective_label, entities)
+    missing = missing_slots(effective_label, entities)
 
     if missing:
         memory.set_pending(state, label=effective_label, missing_slots=missing)
-        return Plan(label=effective_label, steps=[])  # Возможно, ошибка. Проверить.
+        return Plan(label=effective_label, steps=[])
 
     memory.clear_pending(state)
 
@@ -597,7 +692,8 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
         if entities.get("doctor_id") or entities.get("doctor_name"):
             steps.append(PlanStep(tool="doctors_schedule_week", input={"query": user_text, "entities": dict(entities)}))
         else:
-            steps.append(PlanStep(tool="appointment_help", input={"query": user_text, "entities": dict(entities)}))
+            steps.append(PlanStep(tool="address_info", input={"query": user_text, "entities": dict(entities)}))
+            steps.append(PlanStep(tool="price_info", input={"query": user_text, "entities": dict(entities)}, required=False))
         return Plan(label=label, steps=steps)
 
     if label == "PRICE":
@@ -635,28 +731,45 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
         q = inp.get("query", "")
         ent = inp.get("entities") or {}
 
-        if tool == "doctors_info":
-            ev.put("doctors_info", await services.doctors_info(q, ent, output_max=5))
-        elif tool == "doctors_schedule_week":
-            ev.put("doctor_schedule", await services.doctors_schedule_week(q, ent))
-        elif tool == "appointment_help":
-            ev.put("appointment", await services.appointment_help(q, ent))
-        elif tool == "test_assist":
-            ev.put("test_assist", await services.test_assist(q, ent))
-        elif tool == "test_prepare":
-            ev.put("prepare", await services.test_prepare(q, ent))
-        elif tool == "test_result_status":
-            ev.put("test_result_status", await services.test_result_status(q, ent))
-        elif tool == "test_result_pdf":
-            ev.put("test_result_pdf", await services.test_result_pdf(q, ent))
-        elif tool == "price_info":
-            ev.put("price", await services.price_info(q, ent))
-        elif tool == "address_info":
-            ev.put("address", await services.address_info(q, ent))
-        elif tool == "news_info":
-            ev.put("news", await services.news_info(q, ent))
-        else:
-            ev.put("unknown_tool", tool)
+        try:
+            if tool == "doctors_info":
+                ev.put("doctors_info", await services.doctors_info(q, ent, output_max=5))
+            elif tool == "doctors_schedule_week":
+                ev.put("doctor_schedule", await services.doctors_schedule_week(q, ent))
+            elif tool == "appointment_help":
+                ev.put("appointment", await services.appointment_help(q, ent))
+            elif tool == "test_assist":
+                ev.put("test_assist", await services.test_assist(q, ent))
+            elif tool == "test_prepare":
+                ev.put("prepare", await services.test_prepare(q, ent))
+            elif tool == "test_result_status":
+                ev.put("test_result_status", await services.test_result_status(q, ent))
+            elif tool == "test_result_pdf":
+                ev.put("test_result_pdf", await services.test_result_pdf(q, ent))
+            elif tool == "price_info":
+                ev.put("price", await services.price_info(q, ent))
+            elif tool == "address_info":
+                ev.put("address", await services.address_info(q, ent))
+            elif tool == "news_info":
+                ev.put("news", await services.news_info(q, ent))
+            else:
+                ev.put("unknown_tool", tool)
+        except Exception as e:
+            ev.put(
+                f"{tool}_error",
+                {
+                    "tool": tool,
+                    "message": str(e),
+                    "query": q,
+                },
+            )
+            ev.put("handoff_required", True)
+            ev.put("handoff_reason", "service_error")
+            ev.put(
+                "handoff_message",
+                handoff_message("service_error"),
+            )
+            return ev
 
     return ev
 
@@ -667,19 +780,77 @@ async def route_patient_message(
     services: Services,
     memory: MemoryStore,
 ) -> tuple[RouteDecision, Plan, Evidence]:
+    # Вежливое переключение на вторичный интент по короткому "да/нет".
+    queue = _get_secondary_queue(state)
+    if (
+        state.last_entities.get("_secondary_offer_pending")
+        and queue
+        and not state.last_entities.get("appointment_confirm_pending")
+        and not state.last_entities.get("appointment_flow_active")
+    ):
+        if _is_affirmative(user_text):
+            next_label = queue.pop(0)
+            _set_secondary_queue(state, queue)
+            state.last_entities["_secondary_offer_pending"] = False
+            decision = RouteDecision(
+                label=next_label,  # type: ignore[arg-type]
+                confidence=0.9,
+                entities={"secondary_intent_from_queue": True},
+                flags={"secondary_intent_activated"},
+                needs_handoff=False,
+            )
+            plan = build_plan(decision, state, user_text, memory=memory)
+            evidence = await execute_plan(plan, state, services)
+            return decision, plan, evidence
+        if _is_negative(user_text):
+            _set_secondary_queue(state, [])
+            state.last_entities["_secondary_offer_pending"] = False
+        else:
+            # Пользователь продолжил диалог в другом направлении.
+            state.last_entities["_secondary_offer_pending"] = False
+
     decision = await analyze(user_text, state.last_entities)
+
+    # Сохраняем сценарий записи на операторских уточнениях (ветка "да/нет", короткие ответы и т.п.).
+    if decision.label == "OTHER" and state.last_entities.get("appointment_flow_active"):
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=max(decision.confidence, 0.51),
+            entities=decision.entities,
+            flags=set(decision.flags) | {"flow_appointment_override"},
+            needs_handoff=False,
+        )
 
     # merge entities from LLM+rules
     memory.merge_entities(state, decision.entities, label=decision.label)
+    sec_now = _normalize_secondary_labels(decision.entities.get("secondary_intents"))
+    if sec_now:
+        existing = _get_secondary_queue(state)
+        merged = [x for x in existing if x != decision.label]
+        for x in sec_now:
+            if x != decision.label and x not in merged:
+                merged.append(x)
+        _set_secondary_queue(state, merged)
 
     # quick fill on current turn (before pending exists)
     pending = memory.get_pending(state)
     if not pending:
-        missing_now = _missing_slots(decision.label, state.last_entities)
+        missing_now = missing_slots(decision.label, state.last_entities)
         if missing_now:
             quick_now = quick_fill_entities_from_text(user_text, state.last_entities, missing_now, services)
             if quick_now:
                 memory.merge_entities(state, quick_now, label=decision.label)
+        elif decision.label == "APPOINTMENT" and state.last_entities.get("appointment_flow_active"):
+            # В активном сценарии записи продолжаем извлекать филиал/дату/время
+            # даже если формально required slots уже заполнены.
+            quick_flow = quick_fill_entities_from_text(
+                user_text,
+                state.last_entities,
+                ["_any_of:city,branch_name,branch_id", "date_from", "time_from"],
+                services,
+            )
+            if quick_flow:
+                memory.merge_entities(state, quick_flow, label=decision.label)
 
     # if pending exists, try quick fill missing slots (NO LLM)
     pending = memory.get_pending(state)
@@ -730,7 +901,21 @@ async def patient_routing_stream(
     memory: MemoryStore,
     debug: bool = False,
 ) -> AsyncGenerator[ResponseEnvelope, None]:
-    decision, plan, evidence = await route_patient_message(user_text, state, services, memory)
+    try:
+        decision, plan, evidence = await route_patient_message(user_text, state, services, memory)
+    except Exception as e:
+        fallback_text = handoff_message("service_error")
+        state_update: dict[str, Any] = {}
+        if debug:
+            state_update = {"debug": {"route_error": str(e)}}
+        yield ResponseEnvelope(
+            text=fallback_text,
+            attachments=[],
+            handoff=True,
+            state_update=state_update,
+        )
+        return
+    flow_label = plan.label
 
     if debug:
         pending = memory.get_pending(state)
@@ -751,7 +936,51 @@ async def patient_routing_stream(
         yield render_medical_advice()
         return
 
-    if decision.label == "DOCTOR_SCHEDULE":
+    if "doc_request_handoff" in decision.flags:
+        yield ResponseEnvelope(
+            text=handoff_message("doc_request_handoff"),
+            handoff=True,
+        )
+        return
+
+    if flow_label == "TEST_RESULT":
+        yield ResponseEnvelope(
+            text=handoff_message("test_result_fallback"),
+            handoff=True,
+        )
+        return
+
+    # APPOINTMENT confirmation loop: после вопроса "Подтверждаете?"
+    if state.last_entities.get("appointment_confirm_pending"):
+        confirm_transition = appointment_confirmation_transition(user_text)
+        if confirm_transition == APPOINTMENT_CONFIRM_YES:
+            summary = appointment_summary(state.last_entities)
+            state.last_entities["appointment_confirmed"] = True
+            state.last_entities.pop("appointment_confirm_pending", None)
+            state.last_entities.pop("appointment_flow_active", None)
+            yield ResponseEnvelope(
+                text=appointment_text_confirmed_handoff(summary),
+                handoff=True,
+            )
+            return
+        if confirm_transition == APPOINTMENT_CONFIRM_NO:
+            state.last_entities["appointment_confirmed"] = False
+            state.last_entities.pop("appointment_confirm_pending", None)
+            for k in ("date_from", "date_to", "time_from", "time_to", "date_hint"):
+                state.last_entities.pop(k, None)
+            state.last_entities["appointment_flow_active"] = True
+            yield ResponseEnvelope(
+                text=appointment_text_reask_datetime(),
+                handoff=False,
+            )
+            return
+        yield ResponseEnvelope(
+            text=appointment_text_reask_confirm(),
+            handoff=False,
+        )
+        return
+
+    if flow_label == "DOCTOR_SCHEDULE":
         # есть специальность, но нет врача → уточняем
         if (
                 "specialty" in decision.entities
@@ -759,7 +988,7 @@ async def patient_routing_stream(
                 and "doctor_last_name" not in decision.entities
         ):
             yield ResponseEnvelope(
-                text="Уточните, пожалуйста, фамилию врача.",
+                text=doctor_schedule_text_clarify_doctor(),
                 handoff=False,
             )
             return
@@ -768,7 +997,7 @@ async def patient_routing_stream(
     if not plan.steps and pending:
         missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
         yield ResponseEnvelope(
-            text=_clarification_question(plan.label, missing if isinstance(missing, list) else []),
+            text=clarification_question(flow_label, missing if isinstance(missing, list) else []),
             handoff=False,
         )
         return
@@ -777,19 +1006,55 @@ async def patient_routing_stream(
         yield ResponseEnvelope(text=evidence.get("auth_message", "Нужна авторизация."), handoff=False)
         return
 
-    handoff_required, handoff_msg = _evidence_requires_handoff(evidence)
+    handoff_required, handoff_msg, handoff_reason = evidence_requires_handoff(evidence)
     if handoff_required:
-        if handoff_msg:
-            yield ResponseEnvelope(text=handoff_msg, handoff=True)
-        else:
-            yield ResponseEnvelope(text="Передаю диалог оператору.", handoff=True)
+        yield ResponseEnvelope(text=handoff_message(handoff_reason, handoff_msg), handoff=True)
         return
 
     schedule_payload = evidence.get("doctor_schedule")
-    if decision.label in {"DOCTOR_SCHEDULE", "APPOINTMENT"} and isinstance(schedule_payload, dict):
+    if flow_label in {"DOCTOR_SCHEDULE", "APPOINTMENT"} and isinstance(schedule_payload, dict):
         if schedule_payload.get("schedule"):
             text = format_doctor_schedule_for_patient(schedule_payload, decision.entities)
             yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+            return
+
+    if flow_label == "APPOINTMENT":
+        entities = state.last_entities
+        state.last_entities["appointment_flow_active"] = True
+
+        appointment_step = appointment_step_policy(entities)
+        service = str(entities.get("service_name") or entities.get("test_name") or "услугу").strip()
+        city = str(entities.get("city") or "").strip()
+
+        if appointment_step == APPOINTMENT_STEP_BRANCH:
+            branches = _safe_get_branches(services)
+            addresses = appointment_addresses_for_city(
+                evidence.get("address"),
+                branches,
+                city=city or None,
+                limit=5,
+            )
+            state.last_entities["appointment_branch_options"] = addresses
+            yield ResponseEnvelope(
+                text=appointment_text_branch_prompt(service, city, addresses),
+                handoff=False,
+            )
+            return
+
+        if appointment_step == APPOINTMENT_STEP_DATETIME:
+            state.last_entities.pop("appointment_branch_options", None)
+            price_rub = extract_price_rub(evidence.get("price"))
+            branch = str(entities.get("branch_name") or entities.get("city") or "выбранном филиале").strip()
+            yield ResponseEnvelope(
+                text=appointment_text_datetime_prompt(service, branch, price_rub),
+                handoff=False,
+            )
+            return
+
+        if appointment_step == APPOINTMENT_STEP_CONFIRM:
+            state.last_entities["appointment_confirm_pending"] = True
+            summary = appointment_summary(entities)
+            yield ResponseEnvelope(text=appointment_text_confirm_prompt(summary), handoff=False)
             return
 
     attachments: list[dict[str, Any]] = []
@@ -797,11 +1062,30 @@ async def patient_routing_stream(
     if isinstance(pdf_payload, dict) and pdf_payload.get("pdf"):
         attachments.append({"type": "pdf", "name": "Результаты анализов.pdf", "url": pdf_payload["pdf"]})
 
-    async for chunk in render_stream(user_text, decision, evidence):
-        yield ResponseEnvelope(text=chunk, attachments=[], handoff=False)
+    try:
+        async for chunk in render_stream(user_text, decision, evidence):
+            yield ResponseEnvelope(text=chunk, attachments=[], handoff=False)
+    except Exception:
+        yield ResponseEnvelope(
+            text=handoff_message("renderer_error"),
+            attachments=[],
+            handoff=True,
+        )
+        return
 
     if decision.needs_handoff:
-        yield ResponseEnvelope(text="", attachments=[], handoff=True)
+        yield ResponseEnvelope(text=decision_handoff_text(decision.flags), attachments=[], handoff=True)
 
     if attachments:
         yield ResponseEnvelope(text="", attachments=attachments, handoff=False)
+
+    secondary = _get_secondary_queue(state)
+    followup = _secondary_followup_text(secondary)
+    if (
+        followup
+        and not state.last_entities.get("_secondary_offer_pending")
+        and not decision.needs_handoff
+        and flow_label not in {"APPOINTMENT", "URGENT", "COMPLAINT", "MEDICAL_ADVICE", "TEST_RESULT"}
+    ):
+        state.last_entities["_secondary_offer_pending"] = True
+        yield ResponseEnvelope(text=followup, attachments=[], handoff=False)

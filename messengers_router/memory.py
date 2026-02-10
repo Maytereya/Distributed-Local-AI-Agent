@@ -1,3 +1,9 @@
+"""In-memory хранилище состояния диалога по session_id.
+
+Отвечает за историю сообщений, pending-слоты, merge entities и TTL-очистку.
+Используется роутером как легковесная session memory для многошаговых флоу.
+"""
+
 from __future__ import annotations
 
 import asyncio
