@@ -143,7 +143,20 @@ class MemoryStore:
             doctor_changed = True
 
         if doctor_changed:
-            for k in ("date_from", "date_to", "time_from", "time_to", "date_hint"):
+            for k in (
+                "date_from",
+                "date_to",
+                "time_from",
+                "time_to",
+                "date_hint",
+                "appointment_windows",
+                "appointment_branch_options",
+                "appointment_flow_active",
+                "appointment_confirm_pending",
+                "appointment_confirmed",
+                "branch_id",
+                "branch_name",
+            ):
                 old.pop(k, None)
 
         test_changed = False

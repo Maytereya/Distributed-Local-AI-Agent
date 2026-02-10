@@ -21,6 +21,7 @@ from typing import Any, cast
 from ollama import AsyncClient
 
 from agent_logic_2 import config as c, ollama_settings
+from agent_logic_2.doctor_name_matching import extract_doctor_name_candidate, extract_surname_candidate
 from agent_logic_2.ollama_settings import LLMName
 
 from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision
@@ -37,6 +38,12 @@ from .policies import (
     detect_appointment_action,
     detect_price_intent,
     detect_address_intent,
+    detect_news_intent,
+    normalize_appointment_action,
+    has_appointment_context,
+    is_address_dominant_intent,
+    is_price_dominant_intent,
+    should_treat_result_delivery_as_test_assist,
     detect_pii,
     low_confidence_policy,
     extract_service_phrase,
@@ -128,11 +135,6 @@ async def ollama_classify_json(prompt: str) -> dict[str, Any]:
 
 _ORDER_ID_RE = re.compile(r"(?:заказ|order|№)\s*([0-9]{4,})", re.I)
 _DIAGNOSTIC_RE = re.compile(r"\b(экг|узи|мрт|кт|фгдс|фкс|рентген|флюорограф|колоноскоп|холтер)\b", re.I)
-_DOCTOR_WORDS_RE = re.compile(
-    r"\b(врач\w*|специалист\w*|кардиолог\w*|эндокринолог\w*|уролог\w*|гинеколог\w*|терапевт\w*|педиатр\w*|невролог\w*|лор\w*|хирург\w*|стоматолог\w*|гастроэнтеролог\w*|онколог\w*|проктолог\w*|дерматолог\w*|офтальмолог\w*)\b",
-    re.I,
-)
-_DOCTOR_NAME_HINT_RE = re.compile(r"\bк\s+[А-ЯЁа-яё\-]{3,}\b")
 _GREETING_ONLY_RE = re.compile(
     r"^\s*(привет|здравствуйте|здраствуйте|добрый день|доброе утро|добрый вечер|доброго дня|hello|hi)\s*[!.,?]*\s*$",
     re.I,
@@ -152,6 +154,14 @@ def _extract_service_keyword(text: str) -> str | None:
     if not m:
         return None
     return m.group(1).upper()
+
+
+def _extract_schedule_doctor_name(text: str) -> str | None:
+    return extract_surname_candidate(text)
+
+
+def _extract_appointment_doctor_name(text: str) -> str | None:
+    return extract_doctor_name_candidate(text)
 
 
 def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
@@ -220,18 +230,17 @@ def _normalize_flags(flags: Any) -> set[str]:
     return out
 
 
-def _collect_rule_intent_hints(text: str) -> list[Label]:
+def _collect_rule_intent_hints(text: str, last_entities: dict[str, Any] | None = None) -> list[Label]:
+    ctx = last_entities or {}
     labels: set[Label] = set()
     price_intent = detect_price_intent(text)
     appointment_intent = detect_appointment_intent(text)
-    appointment_action = detect_appointment_action(text)
-    has_appointment_context = bool(
-        _DIAGNOSTIC_RE.search(text) or _DOCTOR_WORDS_RE.search(text) or _DOCTOR_NAME_HINT_RE.search(text)
-    )
+    appointment_action = normalize_appointment_action(detect_appointment_action(text), text)
+    appt_ctx = has_appointment_context(text, ctx, appointment_action)
 
     if detect_test_result_intent(text):
         labels.add("TEST_RESULT")
-    if appointment_intent and has_appointment_context and not (price_intent and appointment_action is None):
+    if appointment_intent and appt_ctx and not (price_intent and appointment_action is None):
         labels.add("APPOINTMENT")
     if price_intent:
         labels.add("PRICE")
@@ -239,16 +248,22 @@ def _collect_rule_intent_hints(text: str) -> list[Label]:
         labels.add("ADDRESS")
     if detect_test_assist_intent(text):
         labels.add("TEST_ASSIST")
+    if detect_news_intent(text):
+        labels.add("NEWS")
     if detect_schedule_intent(text):
         labels.add("DOCTOR_SCHEDULE")
 
     return sorted(labels, key=lambda x: _LABEL_RANK.get(x, 10**9))
 
 
-def _attach_secondary_intents(text: str, decision: RouteDecision) -> RouteDecision:
+def _attach_secondary_intents(
+    text: str,
+    decision: RouteDecision,
+    last_entities: dict[str, Any] | None = None,
+) -> RouteDecision:
     if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
         return decision
-    hints = _collect_rule_intent_hints(text)
+    hints = _collect_rule_intent_hints(text, last_entities)
     secondary = [lbl for lbl in hints if lbl != decision.label]
     if not secondary:
         return decision
@@ -276,25 +291,28 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
             entities={},
             flags=flags | {"smalltalk_greeting"},
             needs_handoff=False,
-        ))
+        ), last_entities)
 
     # hard gates
     if detect_urgent(text):
         return _attach_secondary_intents(
             text,
             RouteDecision(label="URGENT", confidence=1.0, entities={}, flags=flags | {"urgent"}, needs_handoff=True),
+            last_entities,
         )
 
     if detect_complaint(text):
         return _attach_secondary_intents(
             text,
             RouteDecision(label="COMPLAINT", confidence=1.0, entities={}, flags=flags | {"complaint"}, needs_handoff=True),
+            last_entities,
         )
 
     if detect_medical_advice(text) or detect_test_interpretation(text):
         return _attach_secondary_intents(
             text,
             RouteDecision(label="MEDICAL_ADVICE", confidence=1.0, entities={}, flags=flags | {"medical_advice"}, needs_handoff=True),
+            last_entities,
         )
 
     # hard rule: doc/legal/certificate requests -> operator
@@ -305,10 +323,20 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
             entities={},
             flags=flags | {"doc_request_handoff"},
             needs_handoff=True,
-        ))
+        ), last_entities)
 
     # hard rule: result/doc delivery intents
     if detect_test_result_intent(text):
+        # Смешанные вопросы "результаты + можно/куда на почту" без явной жалобы
+        # трактуем как информационный сценарий ассиста по анализам.
+        if should_treat_result_delivery_as_test_assist(text):
+            return _attach_secondary_intents(text, RouteDecision(
+                label="TEST_ASSIST",
+                confidence=0.7,
+                entities={},
+                flags=flags | {"rule_test_assist", "result_delivery_info"},
+                needs_handoff=False,
+            ), last_entities)
         entities: dict[str, Any] = {}
         oid = _extract_order_id(text)
         if oid:
@@ -319,22 +347,71 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
             entities=entities,
             flags=flags | {"rule_test_result", "test_result_fallback"},
             needs_handoff=True,
-        ))
+        ), last_entities)
+
+    # hard rule: doctor schedule queries
+    if detect_schedule_intent(text):
+        entities: dict[str, Any] = {}
+        doctor_name = _extract_schedule_doctor_name(text)
+        if doctor_name:
+            entities["doctor_name"] = doctor_name
+        return _attach_secondary_intents(
+            text,
+            RouteDecision(
+                label="DOCTOR_SCHEDULE",
+                confidence=0.74,
+                entities=entities,
+                flags=flags | {"rule_schedule"},
+                needs_handoff=False,
+            ),
+            last_entities,
+        )
 
     # hard rules: appointment / price
     # Guard: explicit price query ("стоимость приема ...") should stay PRICE,
     # unless there is a clear appointment action (book/reschedule/cancel).
     appointment_intent = detect_appointment_intent(text)
-    appointment_action = detect_appointment_action(text)
+    appointment_action = normalize_appointment_action(detect_appointment_action(text), text)
     price_intent = detect_price_intent(text)
-    has_appointment_context = bool(
-        _DIAGNOSTIC_RE.search(text) or _DOCTOR_WORDS_RE.search(text) or _DOCTOR_NAME_HINT_RE.search(text)
+    address_intent = detect_address_intent(text)
+    appt_ctx = has_appointment_context(text, last_entities, appointment_action)
+    address_dominant = is_address_dominant_intent(
+        text,
+        address_intent=address_intent,
+        price_intent=price_intent,
+        appointment_action=appointment_action,
     )
+    if address_dominant:
+        return _attach_secondary_intents(
+            text,
+            RouteDecision(label="ADDRESS", confidence=0.72, entities={}, flags=flags | {"rule_address"}, needs_handoff=False),
+            last_entities,
+        )
 
-    if appointment_intent and has_appointment_context and not (price_intent and appointment_action is None):
+    # Цена должна побеждать "запись" в смешанных фразах без конкретного шага времени/даты.
+    price_dominant = is_price_dominant_intent(
+        text,
+        price_intent=price_intent,
+        appointment_action=appointment_action,
+    )
+    if price_dominant:
+        entities: dict[str, Any] = {}
+        svc = _extract_service_keyword(text)
+        if svc:
+            entities["service_name"] = svc
+        return _attach_secondary_intents(
+            text,
+            RouteDecision(label="PRICE", confidence=0.72, entities=entities, flags=flags | {"rule_price"}, needs_handoff=False),
+            last_entities,
+        )
+
+    if appointment_intent and appt_ctx and not price_dominant:
         entities: dict[str, Any] = {}
         if appointment_action:
             entities["appointment_action"] = appointment_action
+        doctor_name = _extract_appointment_doctor_name(text)
+        if doctor_name:
+            entities["doctor_name"] = doctor_name
         svc = _extract_service_keyword(text)
         if svc:
             entities["service_name"] = svc
@@ -344,7 +421,21 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
             entities=entities,
             flags=flags | {"rule_appointment"},
             needs_handoff=False,
-        ))
+        ), last_entities)
+
+    if detect_news_intent(text):
+        return _attach_secondary_intents(
+            text,
+            RouteDecision(label="NEWS", confidence=0.72, entities={}, flags=flags | {"rule_news"}, needs_handoff=False),
+            last_entities,
+        )
+
+    if detect_test_assist_intent(text):
+        return _attach_secondary_intents(
+            text,
+            RouteDecision(label="TEST_ASSIST", confidence=0.7, entities={}, flags=flags | {"rule_test_assist"}, needs_handoff=False),
+            last_entities,
+        )
 
     if price_intent:
         entities: dict[str, Any] = {}
@@ -354,18 +445,14 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
         return _attach_secondary_intents(
             text,
             RouteDecision(label="PRICE", confidence=0.72, entities=entities, flags=flags | {"rule_price"}, needs_handoff=False),
+            last_entities,
         )
 
     if detect_address_intent(text):
         return _attach_secondary_intents(
             text,
             RouteDecision(label="ADDRESS", confidence=0.72, entities={}, flags=flags | {"rule_address"}, needs_handoff=False),
-        )
-
-    if detect_test_assist_intent(text):
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(label="TEST_ASSIST", confidence=0.7, entities={}, flags=flags | {"rule_test_assist"}, needs_handoff=False),
+            last_entities,
         )
 
     # light hints
@@ -375,6 +462,8 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
         flags.add("hint_test_assist")
     if detect_schedule_intent(text):
         flags.add("hint_schedule")
+    if detect_news_intent(text):
+        flags.add("hint_news")
 
     seeded = _seed_entities_from_memory(last_entities)
 
@@ -414,7 +503,7 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
 
     # LLM может вернуть OTHER по confidence, но deterministic-hints подсказывают явный intent.
     if label == "OTHER" and "low_confidence" in flags:
-        hints = _collect_rule_intent_hints(text)
+        hints = _collect_rule_intent_hints(text, last_entities)
         if hints:
             promoted = hints[0]
             if promoted != "OTHER":
@@ -429,4 +518,5 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
     return _attach_secondary_intents(
         text,
         RouteDecision(label=label, confidence=conf, entities=entities, flags=flags, needs_handoff=needs_handoff),
+        last_entities,
     )

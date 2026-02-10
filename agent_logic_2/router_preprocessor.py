@@ -28,6 +28,7 @@ import agent_logic_2.ollama_settings as ollama_settings
 from agent_logic_2 import llama_func_call as doctor_info, config as c
 from agent_logic_2.gigachat import async_gigachat_logic as gigachat
 from agent_logic_2.llama_func_call import repo
+from agent_logic_2.doctor_name_matching import resolve_schedule_surname
 from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
 from agent_logic_2.ollama_settings import LLMName
@@ -1572,12 +1573,18 @@ async def is_possible_surname_or_specialty(segment: str) -> bool:
     # ensure repo is ready (creates data file on first use)
     await _ensure_doctors_repo_loaded()
     docs = repo.read_all()
-    # Проверка ФИО и специальности
+
+    # Проверка фамилии через общий helper (учитывает падежи/опечатки/регистр).
+    # Порог выше дефолтного, чтобы не ловить лишние fuzzy-совпадения в fallback-гейте.
+    if resolve_schedule_surname(text, docs, threshold=0.82):
+        return True
+
+    # Проверка специальности/юнитов.
     tl = text.lower()
     for d in docs:
-        if tl in d.get('fio', '').lower().split():
-            return True
-        if tl == (d.get('specialization') or '').lower():
+        spec = (d.get('specialization') or '').lower()
+        units = " ".join(d.get('units') or []).lower()
+        if tl and (tl == spec or tl in units.split() or tl in spec):
             return True
     return False
 

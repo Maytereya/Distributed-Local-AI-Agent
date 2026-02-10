@@ -7,9 +7,12 @@
 from __future__ import annotations
 
 import re
+from datetime import date, datetime, timedelta
 from typing import Any
 
-from .city import looks_like_address
+from agent_logic_2.doctor_name_matching import extract_doctor_name_candidate
+
+from .city import looks_like_address, match_city
 
 # ---------------------------
 # Fast detectors (cheap gates)
@@ -60,18 +63,35 @@ TEST_RESULT_PATTERNS = [
     r"\bрезультат(ы|ов)\s+анализ",
     r"\bанализ(ы)?\s+готов(ы|о)\b",
     r"\bготовност(ь|и)\s+анализ",
+    r"\bрезультат(ы)?\s+готов",
+    r"\bне\s+пришл\w*\s+.*\b(почт\w*|результат\w*)",
+    r"\bне\s+выслал\w*\s+.*\b(почт\w*|результат\w*)",
+    r"\bна\s+почт\w*\s+нет\b",
+    r"\bсмс\b.*\bготов\w*",
     r"\bпришлите\b.*\b(pdf|пдф|файл)\b",
     r"\bскачать\b.*\bрезультат",
     r"\bбланк\b.*\bанализ",
+    r"\bличн\w*\s+кабинет\w*",
 ]
 
 TEST_ASSIST_PATTERNS = [
+    r"\bподскажите\s+пожалуйста\b",
+    r"\bанализ\w*",
+    r"\bсдат\w*\s+(?:кров\w*|моч\w*|анализ\w*)",
+    r"\bкров\w*\s+на\s+анализ\w*",
     r"\bподобрат(ь|ь)\s+анализ",
     r"\bкакие анализ(ы)?\s+сдат(ь|ь)\b",
     r"\bчто сдат(ь|ь)\b.*\bанализ",
     r"\bчекап\b",
     r"\bкомплекс\b.*\bанализ",
     r"\bскрининг\b",
+    r"\bдо\s+скольки\b.*\bсдат\w*",
+    r"\bнатощак\b",
+    r"\bреференд\w*",
+    r"\bнорм\w*\s+значени\w*",
+    r"\bгормон\w*",
+    r"\bпотерял\w*\s+распечат\w*",
+    r"\bраспечат\w*\s+анализ\w*",
     r"\b(оак|оам|ферритин|ттг|т3|т4|глюкоз|витамин\s*д)\b",
 ]
 
@@ -100,8 +120,10 @@ APPOINTMENT_INTENT_PATTERNS = [
     r"\bзапись\b",
     r"\bпри(е|ё)м\w*",
     r"\bперен\w*",
+    r"\bсмест\w*",
     r"\bперезапис\w*",
     r"\bотмен\w*",
+    r"\bконсультаци\w*",
     r"\bхолтер\w*",
 ]
 
@@ -119,6 +141,14 @@ ADDRESS_PATTERNS = [
     r"\bрежим\w*.*\bработ\w*",
     r"\bкак\b.*\bдобрат\w*",
     r"\bгде\b.*\bнаходит\w*",
+]
+
+NEWS_PATTERNS = [
+    r"\bакци\w*",
+    r"\bскидк\w*",
+    r"\bспецпредложени\w*",
+    r"\bдефицит\s+желез\w*",
+    r"\bновост\w*",
 ]
 
 SERVICE_ANCHORS = (
@@ -144,6 +174,75 @@ SERVICE_BOUNDARY_WORDS = {
 }
 
 SERVICE_UPPERCASE = {"узи", "экг", "мрт", "кт", "фгдс", "фкс", "уздг"}
+
+_DIAGNOSTIC_RE = re.compile(r"\b(экг|узи|мрт|кт|фгдс|фкс|рентген|флюорограф|колоноскоп|холтер)\b", re.I)
+_DOCTOR_WORDS_RE = re.compile(
+    r"\b(врач\w*|специалист\w*|кардиолог\w*|эндокринолог\w*|уролог\w*|гинеколог\w*|терапевт\w*|педиатр\w*|невролог\w*|лор\w*|хирург\w*|стоматолог\w*|гастроэнтеролог\w*|онколог\w*|проктолог\w*|дерматолог\w*|офтальмолог\w*)\b",
+    re.I,
+)
+_DOCTOR_NAME_HINT_RE = re.compile(r"\bк\s+[А-ЯЁа-яё\-]{3,}\b")
+_BOOK_ACTION_STRICT_RE = re.compile(r"\b(записат\w*|запиш\w*|записыва\w*)\b", re.I)
+_DATE_TIME_SIGNAL_RE = re.compile(
+    r"\b(сегодня|завтра|послезавтра|понедельник|вторник|среда|четверг|пятница|суббота|воскресенье|"
+    r"\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{1,2}:\d{2})\b",
+    re.I,
+)
+_RESULT_DELIVERY_QUESTION_RE = re.compile(r"\b(можно|куда)\b.*\b(почт\w*|придут)\b", re.I)
+_ASSIST_PRICE_CONTEXT_RE = re.compile(
+    r"\b(по\s+направлен\w*|данн\w*\s+анализ\w*|сдач\w*\s+анализ\w*)\b",
+    re.I,
+)
+_QF_DMS_RE = re.compile(r"\bдмс\b", re.I)
+_QF_OMS_RE = re.compile(r"\bомс\b", re.I)
+_QF_PAID_RE = re.compile(r"\bплатн(о|ый|ая)\b|\bза наличн|\bоплат", re.I)
+_QF_CHILD_RE = re.compile(r"\bдет(и|ям|ский|ская|ского|ских)\b", re.I)
+_QF_AGE_RE = re.compile(r"\b(\d{1,2})\s*(?:лет|года|год)\b", re.I)
+_QF_BRANCH_EXPLICIT_RE = re.compile(r"\bфилиал\b[:\s]*([^\n,;.]{2,80})", re.I)
+_QF_BRANCH_ON_RE = re.compile(r"\bна\s+([А-ЯЁа-яё0-9\-]{3,40})(?:\s+([0-9]{1,4}))?\b")
+_QF_SPECIALTY_HINT_RE = re.compile(
+    r"\b(уролог|гинеколог|терапевт|эндокринолог|невролог|кардиолог|лор|офтальмолог|дерматолог|педиатр)\b",
+    re.I,
+)
+_QF_TIME_FRAGMENT_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
+_QF_APPOINTMENT_WORD_RE = re.compile(r"\b(запис\w*|перен\w*|отмен\w*|при(е|ё)м\w*)\b", re.I)
+_QF_ORDER_ID_RE = re.compile(r"(?:заказ|order|№)\s*([0-9]{4,})", re.I)
+_QF_TEST_WORDS_RE = re.compile(r"\b(анализ|пцр|hba1c|глюкоз|витамин|ферритин|ттг|т4|т3|холестер|оак|оам)\b", re.I)
+_QF_NEXT_WEEK_RE = re.compile(r"\bна следующ(ей|ую)\s+недел", re.I)
+_QF_THIS_WEEK_RE = re.compile(r"\bна эт(ой|у)\s+недел|\bв эт(ой|у)\s+недел", re.I)
+_QF_TOMORROW_RE = re.compile(r"\bзавтра\b", re.I)
+_QF_TODAY_RE = re.compile(r"\bсегодня\b", re.I)
+_QF_DATE_DOT_RE = re.compile(r"\b(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2,4}))?\b")
+_QF_DATE_WORD_RE = re.compile(r"\b(\d{1,2})\s+([А-ЯЁа-яё]+)(?:\s+(\d{4}))?\b", re.I)
+_QF_RANGE_WORD_RE = re.compile(
+    r"\bс\s+(\d{1,2})\s+(?:по|-)\s+(\d{1,2})\s+([А-ЯЁа-яё]+)(?:\s+(\d{4}))?\b",
+    re.I,
+)
+_QF_RANGE_DASH_RE = re.compile(
+    r"\b(\d{1,2})\s*[-–]\s*(\d{1,2})\s+([А-ЯЁа-яё]+)(?:\s+(\d{4}))?\b",
+    re.I,
+)
+_QF_WEEKDAY_RE = re.compile(
+    r"\b(в|во|на)\s+(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье|пн|вт|ср|чт|пт|сб|вс)\b",
+    re.I,
+)
+_QF_TIME_RE = re.compile(r"\b([01]?\d|2[0-3])[:.](\d{2})\b")
+_QF_AFTER_TIME_RE = re.compile(r"\b(после|с)\s+([01]?\d|2[0-3])(?:[:.](\d{2}))?\b", re.I)
+_QF_BEFORE_TIME_RE = re.compile(r"\b(до|раньше)\s+([01]?\d|2[0-3])(?:[:.](\d{2}))?\b", re.I)
+_QF_EXACT_TIME_RE = re.compile(r"\b(в|к)\s+([01]?\d|2[0-3])(?:[:.](\d{2}))?\b", re.I)
+_QF_RANGE_TIME_RE = re.compile(
+    r"\b(с)\s+([01]?\d|2[0-3])(?:[:.](\d{2}))?\s+(до|-)\s+([01]?\d|2[0-3])(?:[:.](\d{2}))?\b",
+    re.I,
+)
+_QF_WEEKDAYS = {
+    "понедельник": 0, "пн": 0, "вторник": 1, "вт": 1, "среда": 2, "ср": 2, "четверг": 3, "чт": 3,
+    "пятница": 4, "пт": 4, "суббота": 5, "сб": 5, "воскресенье": 6, "вс": 6,
+}
+_QF_MONTHS = {
+    "января": 1, "январь": 1, "февраля": 2, "февраль": 2, "марта": 3, "март": 3, "апреля": 4, "апрель": 4,
+    "мая": 5, "май": 5, "июня": 6, "июнь": 6, "июля": 7, "июль": 7, "августа": 8, "август": 8,
+    "сентября": 9, "сентябрь": 9, "октября": 10, "октябрь": 10, "ноября": 11, "ноябрь": 11, "декабря": 12,
+    "декабрь": 12,
+}
 
 # ---------------------------
 # Router policy maps
@@ -259,7 +358,7 @@ def detect_appointment_action(text: str) -> str | None:
     t = text.lower()
     if re.search(r"\bотмен\w*", t):
         return "cancel"
-    if re.search(r"\bперен\w*|\bперезапис\w*", t):
+    if re.search(r"\bперен\w*|\bперезапис\w*|\bсмест\w*", t):
         return "reschedule"
     if re.search(r"\bзапис\w*|\bзапиш\w*", t):
         return "book"
@@ -274,6 +373,385 @@ def detect_price_intent(text: str) -> bool:
 def detect_address_intent(text: str) -> bool:
     t = text.lower()
     return any(re.search(p, t) for p in ADDRESS_PATTERNS)
+
+
+def detect_news_intent(text: str) -> bool:
+    t = text.lower()
+    return any(re.search(p, t) for p in NEWS_PATTERNS)
+
+
+def normalize_appointment_action(action: str | None, text: str) -> str | None:
+    if action == "book" and not _BOOK_ACTION_STRICT_RE.search(text or ""):
+        return None
+    return action
+
+
+def has_datetime_signal(text: str) -> bool:
+    return bool(_DATE_TIME_SIGNAL_RE.search(text or ""))
+
+
+def has_appointment_context(text: str, last_entities: dict[str, Any], appointment_action: str | None) -> bool:
+    ctx = last_entities or {}
+    return bool(
+        _DIAGNOSTIC_RE.search(text or "")
+        or _DOCTOR_WORDS_RE.search(text or "")
+        or _DOCTOR_NAME_HINT_RE.search(text or "")
+        or ctx.get("doctor_id")
+        or ctx.get("doctor_name")
+        or ctx.get("service_name")
+        or appointment_action is not None
+    )
+
+
+def is_address_dominant_intent(
+    text: str,
+    *,
+    address_intent: bool,
+    price_intent: bool,
+    appointment_action: str | None,
+) -> bool:
+    return address_intent and not price_intent and appointment_action is None and not has_datetime_signal(text)
+
+
+def is_price_dominant_intent(
+    text: str,
+    *,
+    price_intent: bool,
+    appointment_action: str | None,
+) -> bool:
+    dominant = price_intent and appointment_action in {None, "book"} and not has_datetime_signal(text)
+    if not dominant:
+        return False
+    if detect_test_assist_intent(text) and _ASSIST_PRICE_CONTEXT_RE.search(text or ""):
+        return False
+    return True
+
+
+def should_treat_result_delivery_as_test_assist(text: str) -> bool:
+    low = (text or "").lower()
+    return (
+        detect_test_assist_intent(text)
+        and bool(_RESULT_DELIVERY_QUESTION_RE.search(text or ""))
+        and "не высл" not in low
+        and "почему" not in low
+        and "личн" not in low
+    )
+
+
+def normalize_loose_text(s: str) -> str:
+    s = (s or "").lower().strip()
+    s = re.sub(r"[\"'`]", "", s)
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def _tokenize_loose(s: str) -> list[str]:
+    s = normalize_loose_text(s)
+    s = re.sub(r"[^a-zа-яё0-9\s\-]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return [t for t in s.split(" ") if t]
+
+
+def looks_like_branch_hint(text: str) -> bool:
+    s = str(text or "").strip()
+    if not s:
+        return False
+    if _QF_TIME_FRAGMENT_RE.search(s):
+        return False
+    if _QF_APPOINTMENT_WORD_RE.search(s):
+        return False
+    if not re.search(r"[А-Яа-яЁё]", s):
+        return False
+    return looks_like_address(s)
+
+
+def branch_options_to_indexable(branch_options: Any) -> list[dict[str, str]]:
+    if not isinstance(branch_options, list):
+        return []
+    out: list[dict[str, str]] = []
+    for i, raw in enumerate(branch_options, start=1):
+        if not isinstance(raw, str):
+            continue
+        name = raw.strip()
+        if not name:
+            continue
+        out.append({"id": f"shown_{i}", "name": name, "aliases": normalize_loose_text(name)})
+    return out
+
+
+def build_branch_index(branches: list[dict[str, str]]) -> list[dict[str, Any]]:
+    idx: list[dict[str, Any]] = []
+    for b in branches:
+        bid = (b.get("id") or "").strip()
+        name = (b.get("name") or "").strip()
+        aliases_raw = (b.get("aliases") or "").strip()
+        if not bid or not name:
+            continue
+        alias_list = [a.strip() for a in aliases_raw.split(",") if a.strip()] if aliases_raw else []
+        bag = [name, *alias_list]
+        tokens: set[str] = set()
+        for item in bag:
+            for t in _tokenize_loose(item):
+                tokens.add(t)
+        idx.append({"id": bid, "name": name, "aliases": alias_list, "tokens": tokens})
+    return idx
+
+
+def match_branch_hint(text: str, branch_index: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    if not branch_index:
+        return None, None
+    txt_tokens = set(_tokenize_loose(text))
+    if not txt_tokens:
+        return None, None
+    input_numbers = {t for t in txt_tokens if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)}
+    best_id: str | None = None
+    best_name: str | None = None
+    best_score = 0
+    for b in branch_index:
+        if input_numbers:
+            branch_numbers = {t for t in b["tokens"] if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)}
+            if branch_numbers and not (input_numbers & branch_numbers):
+                continue
+        common = txt_tokens & b["tokens"]
+        score = len(common) + (1 if any(len(t) >= 5 for t in common) else 0)
+        if score > best_score:
+            best_score = score
+            best_id = b["id"]
+            best_name = b["name"]
+    if best_score >= 2:
+        return best_id, best_name
+
+    medium_candidates: list[tuple[str, str]] = []
+    for b in branch_index:
+        if input_numbers:
+            branch_numbers = {t for t in b["tokens"] if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)}
+            if branch_numbers and not (input_numbers & branch_numbers):
+                continue
+        common = txt_tokens & b["tokens"]
+        if any(len(t) >= 5 for t in common):
+            medium_candidates.append((b["id"], b["name"]))
+    if len(medium_candidates) == 1:
+        return medium_candidates[0]
+
+    for b in branch_index:
+        if input_numbers:
+            branch_numbers = {t for t in b["tokens"] if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)}
+            if branch_numbers and not (input_numbers & branch_numbers):
+                continue
+        common = txt_tokens & b["tokens"]
+        if any(len(t) >= 7 for t in common):
+            return b["id"], b["name"]
+    return None, None
+
+
+def _next_weekday(from_date: date, target_weekday: int) -> date:
+    delta = (target_weekday - from_date.weekday()) % 7
+    return from_date + timedelta(days=delta)
+
+
+def _safe_date(y: int, m: int, d: int) -> date | None:
+    try:
+        return date(y, m, d)
+    except Exception:
+        return None
+
+
+def parse_date_time_ru(text: str, today: date | None = None) -> dict[str, Any]:
+    if today is None:
+        today = datetime.now().date()
+    out: dict[str, Any] = {}
+    s = (text or "").strip()
+    low = s.lower()
+
+    if _QF_NEXT_WEEK_RE.search(low):
+        out["date_hint"] = "next_week"
+    elif _QF_THIS_WEEK_RE.search(low):
+        out["date_hint"] = "this_week"
+    elif _QF_TOMORROW_RE.search(low):
+        out["date_hint"] = "tomorrow"
+    elif _QF_TODAY_RE.search(low):
+        out["date_hint"] = "today"
+
+    m = _QF_RANGE_WORD_RE.search(s) or _QF_RANGE_DASH_RE.search(s)
+    if m:
+        d1, d2 = int(m.group(1)), int(m.group(2))
+        mon_word = m.group(3).lower()
+        y = m.group(4)
+        month = _QF_MONTHS.get(mon_word)
+        if month:
+            year = int(y) if y else today.year
+            dt1 = _safe_date(year, month, d1)
+            dt2 = _safe_date(year, month, d2)
+            if not y and dt2 and dt2 < today:
+                dt1 = _safe_date(year + 1, month, d1)
+                dt2 = _safe_date(year + 1, month, d2)
+            if dt1 and dt2:
+                if dt2 < dt1:
+                    dt1, dt2 = dt2, dt1
+                out["date_from"], out["date_to"] = dt1.isoformat(), dt2.isoformat()
+                out.pop("date_hint", None)
+
+    if "date_from" not in out:
+        md = _QF_DATE_DOT_RE.search(s)
+        if md:
+            d, mth = int(md.group(1)), int(md.group(2))
+            y = md.group(3)
+            year = int(y) if y else today.year
+            if year < 100:
+                year += 2000
+            dt = _safe_date(year, mth, d)
+            if dt and not y and dt < today:
+                dt = _safe_date(year + 1, mth, d)
+            if dt:
+                out["date_from"] = out["date_to"] = dt.isoformat()
+                out.pop("date_hint", None)
+
+    if "date_from" not in out:
+        mw = _QF_DATE_WORD_RE.search(s)
+        if mw:
+            d = int(mw.group(1))
+            month = _QF_MONTHS.get(mw.group(2).lower())
+            y = mw.group(3)
+            if month:
+                year = int(y) if y else today.year
+                dt = _safe_date(year, month, d)
+                if dt and not y and dt < today:
+                    dt = _safe_date(year + 1, month, d)
+                if dt:
+                    out["date_from"] = out["date_to"] = dt.isoformat()
+                    out.pop("date_hint", None)
+
+    if "date_from" not in out:
+        wd = _QF_WEEKDAY_RE.search(s)
+        if wd:
+            token = wd.group(2).lower()
+            token = {
+                "среду": "среда", "пятницу": "пятница", "субботу": "суббота", "воскресенье": "воскресенье",
+                "понедельник": "понедельник", "вторник": "вторник", "четверг": "четверг",
+            }.get(token, token)
+            target = _QF_WEEKDAYS.get(token)
+            if target is not None:
+                dt = _next_weekday(today, target)
+                out["date_from"] = out["date_to"] = dt.isoformat()
+                out.pop("date_hint", None)
+
+    tr = _QF_RANGE_TIME_RE.search(s)
+    if tr:
+        h1, m1 = int(tr.group(2)), int(tr.group(3)) if tr.group(3) else 0
+        h2, m2 = int(tr.group(5)), int(tr.group(6)) if tr.group(6) else 0
+        out["time_from"] = f"{h1:02d}:{m1:02d}"
+        out["time_to"] = f"{h2:02d}:{m2:02d}"
+    if "time_from" not in out:
+        a = _QF_AFTER_TIME_RE.search(s)
+        if a:
+            h, m = int(a.group(2)), int(a.group(3)) if a.group(3) else 0
+            out["time_from"] = f"{h:02d}:{m:02d}"
+    if "time_to" not in out:
+        b = _QF_BEFORE_TIME_RE.search(s)
+        if b:
+            h, m = int(b.group(2)), int(b.group(3)) if b.group(3) else 0
+            out["time_to"] = f"{h:02d}:{m:02d}"
+    if "time_from" not in out and "time_to" not in out:
+        ex = _QF_EXACT_TIME_RE.search(s)
+        if ex:
+            h, m = int(ex.group(2)), int(ex.group(3)) if ex.group(3) else 0
+            tm = f"{h:02d}:{m:02d}"
+            out["time_from"] = out["time_to"] = tm
+    if "time_from" not in out and "time_to" not in out:
+        bare = _QF_TIME_RE.search(s)
+        if bare:
+            h, m = int(bare.group(1)), int(bare.group(2))
+            tm = f"{h:02d}:{m:02d}"
+            out["time_from"] = out["time_to"] = tm
+    return out
+
+
+def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_rules: list[str]) -> dict[str, Any]:
+    t = (text or "").strip()
+    low = t.lower()
+    out: dict[str, Any] = {}
+
+    if _QF_DMS_RE.search(low):
+        out["insurance_type"] = "dms"
+    elif _QF_OMS_RE.search(low):
+        out["insurance_type"] = "oms"
+    elif _QF_PAID_RE.search(low):
+        out["insurance_type"] = "paid"
+
+    if _QF_CHILD_RE.search(low):
+        out["accepts_children"] = True
+
+    dt = parse_date_time_ru(t)
+    out.update({k: v for k, v in dt.items() if v is not None})
+
+    m_oid = _QF_ORDER_ID_RE.search(t)
+    if m_oid:
+        out["order_id"] = m_oid.group(1)
+
+    m_spec = _QF_SPECIALTY_HINT_RE.search(low)
+    if m_spec:
+        out["specialty"] = m_spec.group(1).lower()
+
+    needs_doctor_or_spec = any("doctor" in r or "specialty" in r for r in missing_rules)
+    if needs_doctor_or_spec:
+        extracted_name = extract_doctor_name_candidate(t)
+        if extracted_name:
+            out["doctor_name"] = extracted_name
+
+    needs_test = any("test_goal" in r or "test_name" in r for r in missing_rules)
+    if needs_test and _QF_TEST_WORDS_RE.search(low):
+        if not state_entities.get("test_name"):
+            out["test_goal"] = t[:200]
+
+    if any("service_name" in r for r in missing_rules) and len(t) >= 3:
+        service_phrase = extract_service_phrase(t)
+        out["service_name"] = (service_phrase or t[:200]).strip()
+
+    if "child_age" in missing_rules:
+        m_age = _QF_AGE_RE.search(low)
+        if m_age:
+            try:
+                out["child_age"] = int(m_age.group(1))
+            except Exception:
+                pass
+
+    needs_city = any("city" in r for r in missing_rules)
+    if needs_city and not state_entities.get("city"):
+        city = match_city(t)
+        if not city:
+            words = [w for w in re.split(r"\s+", t) if w]
+            if 1 <= len(words) <= 2 and len(t) <= 30 and not looks_like_address(t):
+                city = t
+        if city:
+            out["city"] = city.strip()
+
+    return out
+
+
+def extract_branch_hint(text: str, state_entities: dict[str, Any]) -> str | None:
+    t = (text or "").strip()
+    branch_hint: str | None = None
+    m_bx = _QF_BRANCH_EXPLICIT_RE.search(t)
+    if m_bx:
+        branch_hint = m_bx.group(1).strip()
+    if not branch_hint:
+        m_on = _QF_BRANCH_ON_RE.search(t)
+        if m_on:
+            street = (m_on.group(1) or "").strip()
+            num = (m_on.group(2) or "").strip()
+            candidate = f"{street} {num}".strip()
+            if num and street.isdigit():
+                candidate = ""
+            if candidate and (num or looks_like_address(t)):
+                branch_hint = candidate
+    if not branch_hint:
+        words = [w for w in re.split(r"\s+", t) if w]
+        if 1 <= len(words) <= 3 and len(t) <= 30:
+            city_guess = match_city(t)
+            is_city_only = bool(city_guess and normalize_loose_text(city_guess) == normalize_loose_text(t))
+            if (state_entities.get("city") or looks_like_branch_hint(t)) and not is_city_only:
+                branch_hint = t
+    return branch_hint
 
 
 def extract_service_phrase(text: str) -> str | None:
@@ -331,6 +809,10 @@ def missing_slots(label: str, entities: dict[str, Any]) -> list[str]:
                 missing.append(r)
         elif not entities.get(r):
             missing.append(r)
+    # Если уже известен конкретный врач, город не обязателен:
+    # расписание/адреса берем из live расписания врача.
+    if label == "APPOINTMENT" and (entities.get("doctor_id") or entities.get("doctor_name")):
+        missing = [m for m in missing if m != "_any_of:city,branch_name,branch_id"]
     if label == "APPOINTMENT" and entities.get("accepts_children") and not entities.get("child_age"):
         missing.append("child_age")
     return missing

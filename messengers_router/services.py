@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from agent_logic_1 import meilisearch_client as meilisearch
+from agent_logic_2.doctor_name_matching import resolve_schedule_surname, surname_variants
 from agent_logic_2.nayka_api import api_nayka, api_price
 from converters import html_cleaner
 
@@ -20,22 +21,11 @@ _ADDRESS_HINT_RE = re.compile(
     r"\b(ул\.?|улица|пр\.?|проспект|пр-?т|тракт|б-р|бульвар|шоссе|пер\.?|переулок|наб\.?|площадь|дом|д\.|корп\.?|к\.|пом\.?)\b",
     re.I,
 )
+_SCHEDULE_QUERY_RE = re.compile(r"\b(расписани\w*|график)\b", re.I)
 
 
 def _normalise_input(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
-
-
-def _extract_last_name(text: str) -> Optional[str]:
-    """
-    Простейшая эвристика: берём самое "похожее на фамилию" слово.
-    Для расписания нам обычно нужен last_name.
-    """
-    words = re.findall(r"[A-Za-zА-Яа-яЁё\-]{3,}", text or "")
-    if not words:
-        return None
-    # чаще фамилия — последнее "содержательное" слово
-    return words[-1]
 
 
 def _get_first_present(d: dict[str, Any], keys: list[str]) -> Optional[str]:
@@ -291,12 +281,33 @@ class Services:
 
         Возвращаем как есть (агрегированный список).
         """
-        last_name = _get_first_present(
+        raw_name = _get_first_present(
             entities,
             ["last_name", "doctor_last_name", "doctor", "doctor_name", "fio"],
         )
-        if not last_name:
-            last_name = _extract_last_name(query)
+        if not raw_name:
+            raw_name = query
+
+        doctors = await self._ensure_doctors_cache_loaded()
+        raw_for_match = str(raw_name or "").strip()
+        # Если прилетело полное ФИО, для расписания берем фамилию (1-е слово),
+        # иначе fuzzy-резолвер может схватить отчество и вернуть ложные матчи.
+        if " " in raw_for_match:
+            first = raw_for_match.split()[0].strip()
+            raw_for_match = first or raw_for_match
+
+        query_name = resolve_schedule_surname(str(query or ""), doctors) if query else None
+        last_name = resolve_schedule_surname(raw_for_match, doctors)
+        # Если в текущей реплике явно фигурирует другая фамилия по расписанию,
+        # приоритет отдаем ей (сброс от залипшего doctor_name из state).
+        if query_name and (
+            not last_name
+            or _SCHEDULE_QUERY_RE.search(str(query or ""))
+            and _normalise_input(str(query_name)) != _normalise_input(str(last_name))
+        ):
+            last_name = query_name
+        elif not last_name and query and query != raw_name:
+            last_name = query_name or resolve_schedule_surname(query, doctors)
 
         if not last_name:
             return {
@@ -308,20 +319,34 @@ class Services:
         # необязательный фильтр региона/филиала/города
         region_name = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city", "branch_name"])
 
-        # api_nayka.find_doctor_schedule блокирующая (requests) — уводим в thread
+        # api_nayka.find_doctor_schedule блокирующая (requests) — уводим в thread.
+        # Пробуем несколько вариантов фамилии (родительный падеж -> именительный).
+        data = None
+        candidates = surname_variants(str(last_name))
+        if not candidates:
+            candidates = [str(last_name)]
+        if query_name:
+            for qv in surname_variants(str(query_name)):
+                if qv not in candidates:
+                    candidates.append(qv)
         try:
-            data = await asyncio.to_thread(api_nayka.find_doctor_schedule, last_name, region_name)
-        except TypeError:
-            # если сигнатура find_doctor_schedule(last_name) без region_name
-            try:
-                data = await asyncio.to_thread(api_nayka.find_doctor_schedule, last_name)
-            except Exception:
-                return _service_fallback(
-                    note="doctors_schedule_week unavailable",
-                    handoff_message="Сейчас не удалось получить расписание автоматически. Соединяю с оператором.",
-                    entities=entities,
-                    extra={"schedule": []},
-                )
+            for candidate in candidates:
+                try:
+                    data = await asyncio.to_thread(api_nayka.find_doctor_schedule, candidate, region_name)
+                except TypeError:
+                    data = await asyncio.to_thread(api_nayka.find_doctor_schedule, candidate)
+                if isinstance(data, list) and data:
+                    last_name = candidate
+                    break
+                # fallback: если регионный фильтр дал пусто, пробуем без региона
+                if region_name:
+                    try:
+                        data = await asyncio.to_thread(api_nayka.find_doctor_schedule, candidate)
+                    except Exception:
+                        data = []
+                    if isinstance(data, list) and data:
+                        last_name = candidate
+                        break
         except Exception:
             return _service_fallback(
                 note="doctors_schedule_week unavailable",
@@ -333,7 +358,7 @@ class Services:
         return {
             "schedule": data or [],
             "note": "doctors_schedule_week: realtime from Nayka API",
-            "entities_used": {"last_name": last_name, "region_name": region_name},
+            "entities_used": {"last_name": last_name, "raw_name": raw_name, "region_name": region_name},
         }
 
     # Остальные методы пока как заглушки

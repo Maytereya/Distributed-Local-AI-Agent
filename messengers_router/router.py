@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timedelta
 from typing import AsyncGenerator, Any
 
 from .mess_types import Evidence, Plan, PlanStep, ResponseEnvelope, RouteDecision, SessionState
@@ -36,7 +35,12 @@ from .policies import (
     appointment_text_reask_confirm,
     doctor_schedule_text_clarify_doctor,
     decision_handoff_text,
-    extract_service_phrase,
+    quick_fill_core_entities,
+    extract_branch_hint,
+    looks_like_branch_hint,
+    branch_options_to_indexable,
+    build_branch_index,
+    match_branch_hint,
 )
 from .services import Services
 from .renderer import (
@@ -47,7 +51,7 @@ from .renderer import (
     format_doctor_schedule_for_patient,
 )
 from .memory import MemoryStore
-from .city import match_city, looks_like_address
+from .city import match_city
 
 
 def _apply_pending_override(decision_label: str, pending: dict | None) -> str:
@@ -84,6 +88,12 @@ def _set_secondary_queue(state: SessionState, labels: list[str]) -> None:
         state.last_entities.pop("_secondary_queue", None)
         state.last_entities.pop("secondary_intents", None)
         state.last_entities.pop("_secondary_offer_pending", None)
+
+
+_YES_RE = re.compile(r"^\s*(да|ага|угу|ок|окей|хорошо|давайте|конечно)\s*[!.,?]*\s*$", re.I)
+_NO_RE = re.compile(r"^\s*(нет|не надо|не нужно|неа|отмена|не хочу)\s*[!.,?]*\s*$", re.I)
+_TIME_FRAGMENT_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
+_APPOINTMENT_WORD_RE = re.compile(r"\b(запис\w*|перен\w*|отмен\w*|при(е|ё)м\w*)\b", re.I)
 
 
 def _is_affirmative(text: str) -> bool:
@@ -123,386 +133,125 @@ def _safe_get_branches(services: Services) -> list[dict[str, str]]:
     return [b for b in branches if isinstance(b, dict)]
 
 
-# ----------------------------
-# Quick slot filling (NO LLM!)
-# ----------------------------
+def _hydrate_appointment_context_from_schedule(state: SessionState, schedule_payload: dict[str, Any]) -> None:
+    """
+    Переносит минимальный контекст из ответа расписания в сценарий записи.
+    Нужен для фраз вида "записаться на 09:30" сразу после показа расписания.
+    """
+    docs = schedule_payload.get("schedule")
+    if not isinstance(docs, list) or not docs:
+        return
 
-_DMS_RE = re.compile(r"\bдмс\b", re.I)
-_OMS_RE = re.compile(r"\bомс\b", re.I)
-_PAID_RE = re.compile(r"\bплатн(о|ый|ая)\b|\bза наличн|\bоплат", re.I)
-
-_CHILD_RE = re.compile(r"\bдет(и|ям|ский|ская|ского|ских)\b", re.I)
-_AGE_RE = re.compile(r"\b(\d{1,2})\s*(?:лет|года|год)\b", re.I)
-
-_NEXT_WEEK_RE = re.compile(r"\bна следующ(ей|ую)\s+недел", re.I)
-_THIS_WEEK_RE = re.compile(r"\bна эт(ой|у)\s+недел|\bв эт(ой|у)\s+недел", re.I)
-_TOMORROW_RE = re.compile(r"\bзавтра\b", re.I)
-_TODAY_RE = re.compile(r"\bсегодня\b", re.I)
-_YES_RE = re.compile(r"^\s*(да|ага|угу|ок|окей|хорошо|давайте|конечно)\s*[!.,?]*\s*$", re.I)
-_NO_RE = re.compile(r"^\s*(нет|не надо|не нужно|неа|отмена|не хочу)\s*[!.,?]*\s*$", re.I)
-
-_BRANCH_EXPLICIT_RE = re.compile(r"\bфилиал\b[:\s]*([^\n,;.]{2,80})", re.I)
-_BRANCH_ON_RE = re.compile(r"\bна\s+([А-ЯЁа-яё0-9\-]{3,40})(?:\s+([0-9]{1,4}))?\b")
-_SPECIALTY_HINT_RE = re.compile(
-    r"\b(уролог|гинеколог|терапевт|эндокринолог|невролог|кардиолог|лор|офтальмолог|дерматолог|педиатр)\b",
-    re.I,
-)
-
-_DOCTOR_FIO_RE = re.compile(r"\b([А-ЯЁ][а-яё]+)\s+([А-ЯЁ][а-яё]+)\b")
-_SURNAME_RE = re.compile(r"\b([А-ЯЁ][а-яё]+)\b")
-
-_ORDER_ID_RE = re.compile(r"(?:заказ|order|№)\s*([0-9]{4,})", re.I)
-
-_TEST_WORDS_RE = re.compile(r"\b(анализ|пцр|hba1c|глюкоз|витамин|ферритин|ттг|т4|т3|холестер|оак|оам)\b", re.I)
-
-# --- date/time parsing ---
-_WEEKDAYS = {
-    "понедельник": 0, "пн": 0,
-    "вторник": 1, "вт": 1,
-    "среда": 2, "ср": 2,
-    "четверг": 3, "чт": 3,
-    "пятница": 4, "пт": 4,
-    "суббота": 5, "сб": 5,
-    "воскресенье": 6, "вс": 6,
-}
-
-_MONTHS = {
-    "января": 1, "январь": 1,
-    "февраля": 2, "февраль": 2,
-    "марта": 3, "март": 3,
-    "апреля": 4, "апрель": 4,
-    "мая": 5, "май": 5,
-    "июня": 6, "июнь": 6,
-    "июля": 7, "июль": 7,
-    "августа": 8, "август": 8,
-    "сентября": 9, "сентябрь": 9,
-    "октября": 10, "октябрь": 10,
-    "ноября": 11, "ноябрь": 11,
-    "декабря": 12, "декабрь": 12,
-}
-
-_DATE_DOT_RE = re.compile(r"\b(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2,4}))?\b")
-_DATE_WORD_RE = re.compile(r"\b(\d{1,2})\s+([А-ЯЁа-яё]+)(?:\s+(\d{4}))?\b", re.I)
-
-_RANGE_WORD_RE = re.compile(
-    r"\bс\s+(\d{1,2})\s+(?:по|-)\s+(\d{1,2})\s+([А-ЯЁа-яё]+)(?:\s+(\d{4}))?\b",
-    re.I,
-)
-_RANGE_DASH_RE = re.compile(
-    r"\b(\d{1,2})\s*[-–]\s*(\d{1,2})\s+([А-ЯЁа-яё]+)(?:\s+(\d{4}))?\b",
-    re.I,
-)
-
-_WEEKDAY_RE = re.compile(
-    r"\b(в|во|на)\s+(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье|пн|вт|ср|чт|пт|сб|вс)\b",
-    re.I,
-)
-
-# time patterns
-_TIME_RE = re.compile(r"\b([01]?\d|2[0-3])[:.](\d{2})\b")
-_TIME_HOUR_RE = re.compile(r"\b([01]?\d|2[0-3])\b")
-_AFTER_TIME_RE = re.compile(r"\b(после|с)\s+([01]?\d|2[0-3])(?:[:.](\d{2}))?\b", re.I)
-_BEFORE_TIME_RE = re.compile(r"\b(до|раньше)\s+([01]?\d|2[0-3])(?:[:.](\d{2}))?\b", re.I)
-_EXACT_TIME_RE = re.compile(r"\b(в|к)\s+([01]?\d|2[0-3])(?:[:.](\d{2}))?\b", re.I)
-_RANGE_TIME_RE = re.compile(
-    r"\b(с)\s+([01]?\d|2[0-3])(?:[:.](\d{2}))?\s+(до|-)\s+([01]?\d|2[0-3])(?:[:.](\d{2}))?\b",
-    re.I,
-)
-
-
-def _norm(s: str) -> str:
-    s = s.lower().strip()
-    s = re.sub(r"[\"'`]", "", s)
-    s = re.sub(r"\s+", " ", s)
-    return s
-
-
-def _tokenize(s: str) -> list[str]:
-    s = _norm(s)
-    s = re.sub(r"[^a-zа-яё0-9\s\-]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return [t for t in s.split(" ") if t]
-
-
-def _build_branch_index(branches: list[dict[str, str]]) -> list[dict[str, Any]]:
-    idx: list[dict[str, Any]] = []
-    for b in branches:
-        bid = (b.get("id") or "").strip()
-        name = (b.get("name") or "").strip()
-        aliases_raw = (b.get("aliases") or "").strip()
-        if not bid or not name:
+    doctor_fio = ""
+    regions: list[str] = []
+    windows: list[dict[str, str]] = []
+    for doc in docs[:3]:
+        if not isinstance(doc, dict):
             continue
+        if not doctor_fio:
+            fio = str(doc.get("fio") or "").strip()
+            if fio:
+                doctor_fio = fio
+        raw_regions = doc.get("regions") or []
+        if isinstance(raw_regions, list):
+            for r in raw_regions:
+                if not isinstance(r, str):
+                    continue
+                addr = r.strip()
+                if addr and addr not in regions:
+                    regions.append(addr)
+        schedule_map = doc.get("schedule") or {}
+        if isinstance(schedule_map, dict):
+            for region_name, days in schedule_map.items():
+                branch = str(region_name or "").strip()
+                if not isinstance(days, list):
+                    continue
+                for day in days:
+                    if not isinstance(day, dict):
+                        continue
+                    day_date = str(day.get("date") or "").strip()
+                    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day_date):
+                        continue
+                    raw_slots = day.get("slots") or []
+                    if not isinstance(raw_slots, list):
+                        continue
+                    for slot in raw_slots:
+                        slot_s = str(slot or "").strip()[:5]
+                        if not re.fullmatch(r"\d{2}:\d{2}", slot_s):
+                            continue
+                        windows.append({"date": day_date, "time": slot_s, "branch": branch})
 
-        alias_list = [a.strip() for a in aliases_raw.split(",") if a.strip()] if aliases_raw else []
+    if doctor_fio:
+        state.last_entities["doctor_name"] = doctor_fio
+    if regions:
+        state.last_entities["appointment_branch_options"] = regions[:10]
+        current_branch = str(state.last_entities.get("branch_name") or "").strip()
+        if len(regions) == 1:
+            state.last_entities["branch_name"] = regions[0]
+        elif current_branch and current_branch not in regions:
+            state.last_entities.pop("branch_name", None)
+    if windows:
+        uniq: list[dict[str, str]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for w in windows:
+            key = (w.get("date", ""), w.get("time", ""), w.get("branch", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(w)
+            if len(uniq) >= 300:
+                break
+        state.last_entities["appointment_windows"] = uniq
 
-        bag = [name, *alias_list]
 
-        tokens: set[str] = set()
-        for item in bag:
-            for t in _tokenize(item):
-                tokens.add(t)
-
-        idx.append({"id": bid, "name": name, "aliases": alias_list, "tokens": tokens})
-    return idx
-
-
-def _branch_options_to_indexable(branch_options: Any) -> list[dict[str, str]]:
+def _fill_date_from_schedule_windows(state: SessionState, label: str) -> None:
     """
-    Превращает список ранее показанных адресов в branch-like список для локального матчинга.
+    Если пациент после показа расписания написал только время (например, 09:00),
+    подставляем дату автоматически, когда она однозначна в показанных окнах.
     """
-    if not isinstance(branch_options, list):
-        return []
-    out: list[dict[str, str]] = []
-    for i, raw in enumerate(branch_options, start=1):
-        if not isinstance(raw, str):
+    if label != "APPOINTMENT":
+        return
+    entities = state.last_entities
+    if entities.get("date_from") or entities.get("date_hint"):
+        return
+    if not (entities.get("doctor_name") or entities.get("doctor_id")):
+        return
+    time_from = str(entities.get("time_from") or "").strip()[:5]
+    if not re.fullmatch(r"\d{2}:\d{2}", time_from):
+        return
+
+    windows = entities.get("appointment_windows")
+    if not isinstance(windows, list):
+        return
+
+    matches: list[tuple[str, str]] = []
+    for w in windows:
+        if not isinstance(w, dict):
             continue
-        name = raw.strip()
-        if not name:
+        t = str(w.get("time") or "").strip()[:5]
+        if t != time_from:
             continue
-        out.append(
-            {
-                "id": f"shown_{i}",
-                "name": name,
-                "aliases": _norm(name),
-            }
-        )
-    return out
+        d = str(w.get("date") or "").strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+            continue
+        branch = str(w.get("branch") or "").strip()
+        matches.append((d, branch))
 
+    if not matches:
+        return
 
-def _match_branch(text: str, branch_index: list[dict[str, Any]]) -> tuple[str | None, str | None]:
-    if not branch_index:
-        return None, None
+    dates = sorted({d for d, _ in matches})
+    if len(dates) != 1:
+        return
 
-    txt_tokens = set(_tokenize(text))
-    if not txt_tokens:
-        return None, None
-    input_numbers = {
-        t for t in txt_tokens
-        if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)
-    }
+    chosen_date = dates[0]
+    entities["date_from"] = chosen_date
+    entities["date_to"] = chosen_date
 
-    best_id: str | None = None
-    best_name: str | None = None
-    best_score = 0
-
-    for b in branch_index:
-        if input_numbers:
-            branch_numbers = {
-                t for t in b["tokens"]
-                if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)
-            }
-            if branch_numbers and not (input_numbers & branch_numbers):
-                continue
-        common = txt_tokens & b["tokens"]
-        score = len(common)
-        if any(len(t) >= 5 for t in common):
-            score += 1
-        if score > best_score:
-            best_score = score
-            best_id = b["id"]
-            best_name = b["name"]
-
-    if best_score >= 2:
-        return best_id, best_name
-
-    # fallback #1: один "средний" токен, но только если кандидат уникален
-    medium_candidates: list[tuple[str, str]] = []
-    for b in branch_index:
-        if input_numbers:
-            branch_numbers = {
-                t for t in b["tokens"]
-                if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)
-            }
-            if branch_numbers and not (input_numbers & branch_numbers):
-                continue
-        common = txt_tokens & b["tokens"]
-        if any(len(t) >= 5 for t in common):
-            medium_candidates.append((b["id"], b["name"]))
-    if len(medium_candidates) == 1:
-        return medium_candidates[0]
-
-    # fallback #2: один длинный токен
-    for b in branch_index:
-        if input_numbers:
-            branch_numbers = {
-                t for t in b["tokens"]
-                if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)
-            }
-            if branch_numbers and not (input_numbers & branch_numbers):
-                continue
-        common = txt_tokens & b["tokens"]
-        if any(len(t) >= 7 for t in common):
-            return b["id"], b["name"]
-
-    return None, None
-
-
-def _next_weekday(from_date: date, target_weekday: int) -> date:
-    """Ближайший день недели target_weekday (0=Mon), включая сегодня."""
-    delta = (target_weekday - from_date.weekday()) % 7
-    return from_date + timedelta(days=delta)
-
-
-def _safe_date(y: int, m: int, d: int) -> date | None:
-    try:
-        return date(y, m, d)
-    except Exception:
-        return None
-
-
-def _parse_date_time_ru(text: str, today: date | None = None) -> dict[str, Any]:
-    """
-    Парсим дату/диапазон/время.
-    Возвращает частичный dict: date_from/date_to/time_from/time_to/date_hint
-    """
-    if today is None:
-        today = datetime.now().date()
-
-    out: dict[str, Any] = {}
-    s = text.strip()
-    low = s.lower()
-
-    # --- relative day hints (keep as hint unless exact date parsed later)
-    if _NEXT_WEEK_RE.search(low):
-        out["date_hint"] = "next_week"
-    elif _THIS_WEEK_RE.search(low):
-        out["date_hint"] = "this_week"
-    elif _TOMORROW_RE.search(low):
-        out["date_hint"] = "tomorrow"
-    elif _TODAY_RE.search(low):
-        out["date_hint"] = "today"
-
-    # --- date ranges: "с 12 по 15 февраля" / "12–15 февраля"
-    m = _RANGE_WORD_RE.search(s)
-    if not m:
-        m = _RANGE_DASH_RE.search(s)
-    if m:
-        d1 = int(m.group(1))
-        d2 = int(m.group(2))
-        mon_word = m.group(3).lower()
-        y = m.group(4)
-        month = _MONTHS.get(mon_word)
-        if month:
-            year = int(y) if y else today.year
-            dt1 = _safe_date(year, month, d1)
-            dt2 = _safe_date(year, month, d2)
-            # если диапазон в прошлом и год не указан — двигаем на следующий год
-            if not y and dt2 and dt2 < today:
-                dt1 = _safe_date(year + 1, month, d1)
-                dt2 = _safe_date(year + 1, month, d2)
-
-            if dt1 and dt2:
-                if dt2 < dt1:
-                    dt1, dt2 = dt2, dt1
-                out["date_from"] = dt1.isoformat()
-                out["date_to"] = dt2.isoformat()
-                out.pop("date_hint", None)
-
-    # --- single date: dd.mm(.yyyy)
-    if "date_from" not in out:
-        md = _DATE_DOT_RE.search(s)
-        if md:
-            d = int(md.group(1))
-            mth = int(md.group(2))
-            y = md.group(3)
-            year = int(y) if y else today.year
-            if year < 100:  # 26 -> 2026
-                year += 2000
-            dt = _safe_date(year, mth, d)
-            if dt and not y and dt < today:
-                dt = _safe_date(year + 1, mth, d)
-            if dt:
-                out["date_from"] = dt.isoformat()
-                out["date_to"] = dt.isoformat()
-                out.pop("date_hint", None)
-
-    # --- single date: "12 февраля"
-    if "date_from" not in out:
-        mw = _DATE_WORD_RE.search(s)
-        if mw:
-            d = int(mw.group(1))
-            mon_word = mw.group(2).lower()
-            y = mw.group(3)
-            month = _MONTHS.get(mon_word)
-            if month:
-                year = int(y) if y else today.year
-                dt = _safe_date(year, month, d)
-                if dt and not y and dt < today:
-                    dt = _safe_date(year + 1, month, d)
-                if dt:
-                    out["date_from"] = dt.isoformat()
-                    out["date_to"] = dt.isoformat()
-                    out.pop("date_hint", None)
-
-    # --- weekday: "в понедельник"
-    if "date_from" not in out:
-        wd = _WEEKDAY_RE.search(s)
-        if wd:
-            token = wd.group(2).lower()
-            # нормализуем "среду/пятницу/субботу/воскресенье"
-            token = {
-                "среду": "среда",
-                "пятницу": "пятница",
-                "субботу": "суббота",
-                "воскресенье": "воскресенье",
-                "понедельник": "понедельник",
-                "вторник": "вторник",
-                "четверг": "четверг",
-            }.get(token, token)
-            target = _WEEKDAYS.get(token)
-            if target is not None:
-                dt = _next_weekday(today, target)
-                out["date_from"] = dt.isoformat()
-                out["date_to"] = dt.isoformat()
-                out.pop("date_hint", None)
-
-    # --- time ranges: "с 10 до 12"
-    tr = _RANGE_TIME_RE.search(s)
-    if tr:
-        h1 = int(tr.group(2))
-        m1 = int(tr.group(3)) if tr.group(3) else 0
-        h2 = int(tr.group(5))
-        m2 = int(tr.group(6)) if tr.group(6) else 0
-        out["time_from"] = f"{h1:02d}:{m1:02d}"
-        out["time_to"] = f"{h2:02d}:{m2:02d}"
-
-    # --- after/before
-    if "time_from" not in out:
-        a = _AFTER_TIME_RE.search(s)
-        if a:
-            h = int(a.group(2))
-            m = int(a.group(3)) if a.group(3) else 0
-            out["time_from"] = f"{h:02d}:{m:02d}"
-
-    if "time_to" not in out:
-        b = _BEFORE_TIME_RE.search(s)
-        if b:
-            h = int(b.group(2))
-            m = int(b.group(3)) if b.group(3) else 0
-            out["time_to"] = f"{h:02d}:{m:02d}"
-
-    # --- exact time: "в 18:30" / "к 16"
-    if "time_from" not in out and "time_to" not in out:
-        ex = _EXACT_TIME_RE.search(s)
-        if ex:
-            h = int(ex.group(2))
-            m = int(ex.group(3)) if ex.group(3) else 0
-            tm = f"{h:02d}:{m:02d}"
-            # интерпретируем как "точно в это время"
-            out["time_from"] = tm
-            out["time_to"] = tm
-
-    # --- bare time: "13:00" (без "в/к")
-    if "time_from" not in out and "time_to" not in out:
-        bare = _TIME_RE.search(s)
-        if bare:
-            h = int(bare.group(1))
-            m = int(bare.group(2))
-            tm = f"{h:02d}:{m:02d}"
-            out["time_from"] = tm
-            out["time_to"] = tm
-
-    return out
+    if not entities.get("branch_name"):
+        branches = sorted({b for _, b in matches if b})
+        if len(branches) == 1:
+            entities["branch_name"] = branches[0]
 
 
 def quick_fill_entities_from_text(
@@ -517,109 +266,17 @@ def quick_fill_entities_from_text(
     + парсинг даты/времени RU
     """
     t = text.strip()
-    low = t.lower()
-    out: dict[str, Any] = {}
-
-    # insurance_type
-    if _DMS_RE.search(low):
-        out["insurance_type"] = "dms"
-    elif _OMS_RE.search(low):
-        out["insurance_type"] = "oms"
-    elif _PAID_RE.search(low):
-        out["insurance_type"] = "paid"
-
-    # accepts_children
-    if _CHILD_RE.search(low):
-        out["accepts_children"] = True
-
-    # date/time parsing (always useful for schedule/appointment)
-    dt = _parse_date_time_ru(t)
-    out.update({k: v for k, v in dt.items() if v is not None})
-
-    # order_id
-    m_oid = _ORDER_ID_RE.search(t)
-    if m_oid:
-        out["order_id"] = m_oid.group(1)
-
-    # specialty hint
-    m_spec = _SPECIALTY_HINT_RE.search(low)
-    if m_spec:
-        out["specialty"] = m_spec.group(1).lower()
-
-    # doctor_name heuristic (only if we need doctor/specialty and message looks like a short answer)
-    needs_doctor_or_spec = any("doctor" in r or "specialty" in r for r in missing_rules)
-    if needs_doctor_or_spec:
-        m_fio = _DOCTOR_FIO_RE.search(t)
-        if m_fio:
-            out["doctor_name"] = f"{m_fio.group(1)} {m_fio.group(2)}"
-        else:
-            words = [w for w in re.split(r"\s+", t) if w]
-            if 1 <= len(words) <= 2:
-                m_s = _SURNAME_RE.fullmatch(words[0])
-                if m_s and not state_entities.get("doctor_name"):
-                    out["doctor_name"] = m_s.group(1)
-
-    # test goal/name heuristic
-    needs_test = any("test_goal" in r or "test_name" in r for r in missing_rules)
-    if needs_test and _TEST_WORDS_RE.search(low):
-        if not state_entities.get("test_name"):
-            out["test_goal"] = t[:200]
-
-    # service_name heuristic (price/appointment/prepare)
-    if any("service_name" in r for r in missing_rules) and len(t) >= 3:
-        service_phrase = extract_service_phrase(t)
-        out["service_name"] = (service_phrase or t[:200]).strip()
-
-    # child_age heuristic
-    if "child_age" in missing_rules:
-        m_age = _AGE_RE.search(low)
-        if m_age:
-            try:
-                out["child_age"] = int(m_age.group(1))
-            except Exception:
-                pass
+    out: dict[str, Any] = quick_fill_core_entities(t, state_entities, missing_rules)
 
     # ----------------------------
     # Branch resolution
     # ----------------------------
-    needs_city = any("city" in r for r in missing_rules)
-    if needs_city and not state_entities.get("city"):
-        city = match_city(t)
-        if not city:
-            words = [w for w in re.split(r"\s+", t) if w]
-            if 1 <= len(words) <= 2 and len(t) <= 30 and not looks_like_address(t):
-                city = t
-        if city:
-            out["city"] = city.strip()
-
     if not state_entities.get("branch_id"):
-        branch_hint = None
-
-        m_bx = _BRANCH_EXPLICIT_RE.search(t)
-        if m_bx:
-            branch_hint = m_bx.group(1).strip()
-
-        if not branch_hint:
-            m_on = _BRANCH_ON_RE.search(t)
-            if m_on:
-                street = (m_on.group(1) or "").strip()
-                num = (m_on.group(2) or "").strip()
-                candidate = f"{street} {num}".strip()
-                if num or looks_like_address(t):
-                    branch_hint = candidate
-
-        if not branch_hint:
-            words = [w for w in re.split(r"\s+", t) if w]
-            if 1 <= len(words) <= 3 and len(t) <= 30:
-                # Если город уже известен, допускаем короткий выбор филиала ("Кирова").
-                city_guess = match_city(t)
-                is_city_only = bool(city_guess and _norm(city_guess) == _norm(t))
-                if (looks_like_address(t) or state_entities.get("city")) and not is_city_only:
-                    branch_hint = t
+        branch_hint = extract_branch_hint(t, state_entities)
 
         if branch_hint:
             # Если мы уже показывали список адресов пользователю, резолвим только внутри него.
-            shown_options = _branch_options_to_indexable(state_entities.get("appointment_branch_options"))
+            shown_options = branch_options_to_indexable(state_entities.get("appointment_branch_options"))
             branches = shown_options
             if not branches:
                 branches = _safe_get_branches(services)
@@ -634,8 +291,8 @@ def quick_fill_entities_from_text(
                             city_filtered.append(b)
                     if city_filtered:
                         branches = city_filtered
-            idx = _build_branch_index(branches)
-            bid, bname = _match_branch(branch_hint, idx)
+            idx = build_branch_index(branches)
+            bid, bname = match_branch_hint(branch_hint, idx)
             if bid and not str(bid).startswith("shown_"):
                 out["branch_id"] = bid
             if bname and not state_entities.get("branch_name"):
@@ -644,7 +301,7 @@ def quick_fill_entities_from_text(
                 not shown_options
                 and not bid
                 and not state_entities.get("branch_name")
-                and looks_like_address(branch_hint)
+                and looks_like_branch_hint(branch_hint)
             ):
                 out["branch_name"] = branch_hint[:80]
 
@@ -821,6 +478,29 @@ async def route_patient_message(
             needs_handoff=False,
         )
 
+    if decision.label == "DOCTOR_SCHEDULE":
+        # Очищаем хвосты сценария записи, чтобы расписание не фильтровалось
+        # старым branch/date/time из предыдущих шагов.
+        for k in (
+            "appointment_flow_active",
+            "appointment_confirm_pending",
+            "appointment_confirmed",
+            "appointment_branch_options",
+            "service_name",
+            "test_name",
+            "branch_id",
+            "branch_name",
+            "date_from",
+            "date_to",
+            "time_from",
+            "time_to",
+            "date_hint",
+        ):
+            state.last_entities.pop(k, None)
+        city_hint = match_city(user_text)
+        if city_hint and not decision.entities.get("city"):
+            decision.entities["city"] = city_hint
+
     # merge entities from LLM+rules
     memory.merge_entities(state, decision.entities, label=decision.label)
     sec_now = _normalize_secondary_labels(decision.entities.get("secondary_intents"))
@@ -861,6 +541,8 @@ async def route_patient_message(
             quick = quick_fill_entities_from_text(user_text, state.last_entities, missing, services)
             if quick:
                 memory.merge_entities(state, quick, label=pend_label)
+
+    _fill_date_from_schedule_windows(state, decision.label)
 
     plan = build_plan(decision, state, user_text, memory=memory)
     evidence = await execute_plan(plan, state, services)
@@ -982,10 +664,16 @@ async def patient_routing_stream(
 
     if flow_label == "DOCTOR_SCHEDULE":
         # есть специальность, но нет врача → уточняем
+        doctor_known = bool(
+            decision.entities.get("doctor_name")
+            or decision.entities.get("doctor_last_name")
+            or decision.entities.get("last_name")
+            or state.last_entities.get("doctor_name")
+            or state.last_entities.get("doctor_id")
+        )
         if (
                 "specialty" in decision.entities
-                and "last_name" not in decision.entities
-                and "doctor_last_name" not in decision.entities
+                and not doctor_known
         ):
             yield ResponseEnvelope(
                 text=doctor_schedule_text_clarify_doctor(),
@@ -1012,18 +700,48 @@ async def patient_routing_stream(
         return
 
     schedule_payload = evidence.get("doctor_schedule")
-    if flow_label in {"DOCTOR_SCHEDULE", "APPOINTMENT"} and isinstance(schedule_payload, dict):
-        if schedule_payload.get("schedule"):
-            text = format_doctor_schedule_for_patient(schedule_payload, decision.entities)
-            yield ResponseEnvelope(text=text, attachments=[], handoff=False)
-            return
+    if flow_label == "DOCTOR_SCHEDULE" and isinstance(schedule_payload, dict):
+        _hydrate_appointment_context_from_schedule(state, schedule_payload)
+        # После показа расписания оставляем "живой" контекст записи:
+        # короткие реплики вида "на 16:30" должны интерпретироваться
+        # как продолжение сценария APPOINTMENT, а не как новый OTHER.
+        state.last_entities["appointment_flow_active"] = True
+        text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
+        yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+        return
+
+    # Если пользователь сразу хочет записаться к конкретному врачу, сначала
+    # показываем его актуальные окна, а не отправляем в общий сценарий "город -> филиал".
+    if (
+        flow_label == "APPOINTMENT"
+        and isinstance(schedule_payload, dict)
+        and (state.last_entities.get("doctor_name") or state.last_entities.get("doctor_id"))
+        and not (state.last_entities.get("date_from") or state.last_entities.get("date_hint"))
+        and not state.last_entities.get("time_from")
+    ):
+        _hydrate_appointment_context_from_schedule(state, schedule_payload)
+        state.last_entities["appointment_flow_active"] = True
+        text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
+        yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+        return
 
     if flow_label == "APPOINTMENT":
         entities = state.last_entities
         state.last_entities["appointment_flow_active"] = True
 
         appointment_step = appointment_step_policy(entities)
-        service = str(entities.get("service_name") or entities.get("test_name") or "услугу").strip()
+        service_raw = str(entities.get("service_name") or entities.get("test_name") or "").strip()
+        if not service_raw or _APPOINTMENT_WORD_RE.search(service_raw) or _TIME_FRAGMENT_RE.search(service_raw):
+            doctor_name = str(entities.get("doctor_name") or "").strip()
+            specialty = str(entities.get("specialty") or "").strip()
+            if doctor_name:
+                service = f"приём к врачу {doctor_name}"
+            elif specialty:
+                service = f"приём к {specialty}"
+            else:
+                service = "услугу"
+        else:
+            service = service_raw
         city = str(entities.get("city") or "").strip()
 
         if appointment_step == APPOINTMENT_STEP_BRANCH:
