@@ -57,8 +57,8 @@ KPI этапа: `>= 85%` кейсов с корректными `label` и `hand
 
 | ID | Вход | Ожидаемый label | Ожидаемый handoff |
 |---|---|---|---|
-| R1 | Результаты анализов готовы? | TEST_RESULT | true |
-| R2 | Пришлите PDF бланк анализов | TEST_RESULT | true |
+| R1 | Результаты анализов готовы? | TEST_RESULT | false |
+| R2 | Пришлите PDF бланк анализов | TEST_RESULT | false |
 
 ## DOC_REQUEST -> OTHER + handoff (3)
 

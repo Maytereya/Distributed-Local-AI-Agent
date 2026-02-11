@@ -176,6 +176,40 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
     return "\n".join([l for l in lines if l is not None]).strip()
 
 
+def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
+    docs = payload.get("doctors")
+    if not isinstance(docs, list) or not docs:
+        return "К сожалению, информация о враче не найдена. Уточните фамилию или специальность."
+
+    doctor_hint = str(entities.get("doctor_name") or "").strip().lower().replace("ё", "е")
+    if doctor_hint:
+        narrowed = []
+        for d in docs:
+            fio = str(d.get("fio") or "").strip().lower().replace("ё", "е")
+            if doctor_hint in fio:
+                narrowed.append(d)
+        if narrowed:
+            docs = narrowed
+
+    lines: list[str] = []
+    for i, doc in enumerate(docs[:3], 1):
+        fio = str(doc.get("fio") or "Врач").strip()
+        spec = str(doc.get("specialization") or "").strip()
+        regions = doc.get("regions") or []
+        lines.append(f"{i}. {fio}")
+        if spec:
+            # specialization уже сжат в services, оставляем человекочитаемый блок.
+            lines.append(spec)
+        if isinstance(regions, list) and regions:
+            clean_regions = [str(r).strip() for r in regions if str(r).strip()]
+            if clean_regions:
+                lines.append(f"Адреса приема: {', '.join(clean_regions)}")
+        lines.append("")
+
+    lines.append("Если нужно — могу показать расписание этого врача или помочь с записью.")
+    return "\n".join([l for l in lines if l is not None]).strip()
+
+
 def render_urgent() -> ResponseEnvelope:
     txt = (
         "Похоже, ситуация может быть срочной.\n\n"

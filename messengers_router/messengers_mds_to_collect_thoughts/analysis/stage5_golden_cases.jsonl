@@ -34,10 +34,10 @@
 {"case_id": "G034", "source_label": "TEST_ASSIST", "expected_label": "TEST_ASSIST", "expected_handoff": false, "text": "Здравствуйте, сдавала у вас анализы в субботу по адресу ул. Гастелло 46. Сказали в понедельник в течении рабочего дня должны прийти результаты. Хотела узнать куда они придут и может ли быть задержка?"}
 {"case_id": "G035", "source_label": "TEST_ASSIST", "expected_label": "TEST_ASSIST", "expected_handoff": false, "text": "Здравствуйте скажите пожалуйста а кровь на гормоны сдают на голодный желудок  новый город ленинского комсомола 32 с какого по какое время? И если вызвать медсестру домой для сбора анализов мы только это стоит"}
 {"case_id": "G036", "source_label": "TEST_ASSIST", "expected_label": "TEST_ASSIST", "expected_handoff": false, "text": "Добрый, отправляю фото анализов"}
-{"case_id": "G037", "source_label": "RESULTS", "expected_label": "TEST_RESULT", "expected_handoff": true, "text": "Добрый день конечно провожу"}
-{"case_id": "G038", "source_label": "RESULTS", "expected_label": "TEST_RESULT", "expected_handoff": true, "text": "ВЫ НЕ ВЫСЛАЛИ РЕЗУЛЬТАТЫ НА ЭЛЕКТРОННУЮ ПОЧТУ\nПОЧЕМУ???"}
-{"case_id": "G039", "source_label": "RESULTS", "expected_label": "TEST_RESULT", "expected_handoff": true, "text": "Здравствуйте , смс о том что результаты готовы пришло , а на почту нет"}
-{"case_id": "G040", "source_label": "RESULTS", "expected_label": "TEST_RESULT", "expected_handoff": true, "text": "Добрый день\nА отправить на почту или посмотреть в личном кабинете?"}
+{"case_id": "G037", "source_label": "RESULTS", "expected_label": "TEST_RESULT", "expected_handoff": false, "text": "Добрый день конечно провожу"}
+{"case_id": "G038", "source_label": "RESULTS", "expected_label": "TEST_RESULT", "expected_handoff": false, "text": "ВЫ НЕ ВЫСЛАЛИ РЕЗУЛЬТАТЫ НА ЭЛЕКТРОННУЮ ПОЧТУ\nПОЧЕМУ???"}
+{"case_id": "G039", "source_label": "RESULTS", "expected_label": "TEST_RESULT", "expected_handoff": false, "text": "Здравствуйте , смс о том что результаты готовы пришло , а на почту нет"}
+{"case_id": "G040", "source_label": "RESULTS", "expected_label": "TEST_RESULT", "expected_handoff": false, "text": "Добрый день\nА отправить на почту или посмотреть в личном кабинете?"}
 {"case_id": "G041", "source_label": "ADDRESS", "expected_label": "ADDRESS", "expected_handoff": false, "text": "Добрый день\nскажите, делают ли флюорографию по адресу  Больничная ул., 44г, Красный Яр, Самарская обл?"}
 {"case_id": "G042", "source_label": "ADDRESS", "expected_label": "ADDRESS", "expected_handoff": false, "text": "Здравствуйте. Как работает ваше отделение по адресу: г.Тольятти, Победы, 50 в праздничные дни"}
 {"case_id": "G043", "source_label": "ADDRESS", "expected_label": "ADDRESS", "expected_handoff": false, "text": "А какой адрес?"}

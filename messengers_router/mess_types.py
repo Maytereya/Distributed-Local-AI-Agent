@@ -42,6 +42,8 @@ Label = Literal[
     "OTHER",
 ]
 
+ContextAction = Literal["continue", "overwrite_doctor", "new_topic", "cancel_flow"]
+
 AuthLevel = Literal["none", "patient_token"]
 
 
@@ -62,6 +64,7 @@ class RouteDecision:
     entities: dict[str, Any] = field(default_factory=dict)
     flags: set[str] = field(default_factory=set)  # {"urgent","complaint","auth_required",...}
     needs_handoff: bool = field(default=False) # потребность в переключении на оператора
+    context_action: ContextAction = "continue"
 
 
 @dataclass

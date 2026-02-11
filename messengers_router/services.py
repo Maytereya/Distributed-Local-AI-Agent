@@ -7,13 +7,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from agent_logic_1 import meilisearch_client as meilisearch
-from agent_logic_2.doctor_name_matching import resolve_schedule_surname, surname_variants
+from agent_logic_2.doctor_name_matching import (
+    extract_doctor_name_candidate,
+    resolve_schedule_surname,
+    surname_variants,
+)
 from agent_logic_2.nayka_api import api_nayka, api_price
 from converters import html_cleaner
 
@@ -21,7 +26,8 @@ _ADDRESS_HINT_RE = re.compile(
     r"\b(ул\.?|улица|пр\.?|проспект|пр-?т|тракт|б-р|бульвар|шоссе|пер\.?|переулок|наб\.?|площадь|дом|д\.|корп\.?|к\.|пом\.?)\b",
     re.I,
 )
-_SCHEDULE_QUERY_RE = re.compile(r"\b(расписани\w*|график)\b", re.I)
+_SCHEDULE_QUERY_RE = re.compile(r"\b(расписани\w*|график|когда\b.*\bпринима\w*|принима\w*)\b", re.I)
+_FIO_TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё\-]{2,}")
 
 
 def _normalise_input(s: str) -> str:
@@ -41,6 +47,110 @@ def _as_int(val: Any) -> int | None:
         return int(val)
     except Exception:
         return None
+
+
+def _stringify_json_preview(value: Any, max_len: int = 2500) -> str:
+    try:
+        txt = json.dumps(value, ensure_ascii=False, indent=2)
+    except Exception:
+        txt = str(value)
+    if len(txt) > max_len:
+        return txt[:max_len] + "\n... (обрезано)"
+    return txt
+
+
+def _fio_tokens(text: str) -> list[str]:
+    return [t.lower() for t in _FIO_TOKEN_RE.findall(str(text or ""))]
+
+
+def _doctor_matches_fio(fio: str, doctor_query: str, resolved_surname: str | None = None) -> bool:
+    """
+    Проверка фамилии/ФИО ТОЛЬКО по fio врача.
+    Не ищем по specialization, чтобы "Ким" не матчился на "хроническим".
+    """
+    tokens = _fio_tokens(fio)
+    if not tokens:
+        return False
+
+    candidates: list[str] = []
+    if resolved_surname:
+        candidates.extend([v for v in surname_variants(resolved_surname) if v])
+    else:
+        q_tokens = _fio_tokens(doctor_query)
+        if q_tokens:
+            candidates.extend([v for v in surname_variants(q_tokens[0]) if v])
+
+    normalized = sorted({ _normalise_input(x) for x in candidates if len(_normalise_input(x)) >= 2 }, key=len, reverse=True)
+    if not normalized:
+        return False
+
+    for token in tokens:
+        for c in normalized:
+            if token.startswith(c):
+                return True
+    return False
+
+
+def _compact_specialization(text: str, max_lines: int = 16, max_chars: int = 900) -> str:
+    """
+    Сжимает повторяющиеся и слишком длинные блоки специализации для безопасного рендера.
+    """
+    lines = [ln.strip() for ln in str(text or "").splitlines()]
+    out: list[str] = []
+    seen: set[str] = set()
+    for ln in lines:
+        if not ln:
+            continue
+        key = re.sub(r"\s+", " ", ln).strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(ln)
+        if len(out) >= max_lines:
+            break
+
+    compact = "\n".join(out).strip()
+    if len(compact) > max_chars:
+        compact = compact[:max_chars].rstrip() + "..."
+    return compact
+
+
+def _dedupe_doctors_by_fio(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for d in docs:
+        fio = _normalise_input(str(d.get("fio") or ""))
+        if not fio or fio in seen:
+            continue
+        seen.add(fio)
+        out.append(d)
+    return out
+
+
+def _extract_result_query_fields(entities: dict[str, Any], query: str) -> dict[str, Any]:
+    surname = _get_first_present(entities, ["surname", "result_surname"])
+    filial = _get_first_present(entities, ["filial", "result_filial"])
+    year_raw = entities.get("year")
+    number_raw = entities.get("number")
+
+    if number_raw is None:
+        number_raw = entities.get("order_id")
+
+    # Мягкий fallback: если поле фамилии не заполнено, берем первое слово из query
+    if not surname and isinstance(query, str):
+        words = [w for w in re.findall(r"[A-Za-zА-Яа-яЁё\-]{2,}", query)]
+        if words:
+            surname = words[0]
+
+    year = _as_int(year_raw)
+    number = _as_int(number_raw)
+    return {
+        "surname": str(surname or "").strip(),
+        "year": year,
+        "filial": str(filial or "").strip(),
+        "number": number,
+        "lang": _get_first_present(entities, ["lang", "result_lang"]) or "ru",
+    }
 
 
 def _region_display_name(region: dict[str, Any]) -> str:
@@ -192,6 +302,19 @@ class Services:
     # NAUKA API used by router
     # -----------------------------
 
+    async def resolve_doctor_name(self, raw_text_or_name: str) -> str | None:
+        """
+        Валидация кандидата фамилии/ФИО по актуальному кэшу врачей.
+        Возвращает каноническую фамилию только если удалось сопоставить с кэшем.
+        """
+        doctors = await self._ensure_doctors_cache_loaded()
+        if not doctors:
+            return None
+        value = str(raw_text_or_name or "").strip()
+        if not value:
+            return None
+        return resolve_schedule_surname(value, doctors)
+
     async def doctors_info(self, query: str, entities: dict[str, Any], output_max: int = 5) -> dict[str, Any]:
         """
         Возвращает список врачей из кэша (без real-time API).
@@ -210,11 +333,16 @@ class Services:
             )
 
         q = _normalise_input(query)
-        fio_q = _normalise_input(
-            _get_first_present(entities, ["doctor", "doctor_name", "fio", "last_name", "doctor_last_name"]) or ""
-        )
+        doctor_raw = _get_first_present(entities, ["doctor", "doctor_name", "fio", "last_name", "doctor_last_name"]) or ""
+        fio_q = _normalise_input(doctor_raw)
         spec_q = _normalise_input(_get_first_present(entities, ["specialty", "specialization", "spec"]) or "")
         region_q = _normalise_input(_get_first_present(entities, ["region", "branch", " филиал", "company_unit"]) or "")
+        resolved_surname = resolve_schedule_surname(doctor_raw, doctors) if doctor_raw else None
+
+        if not resolved_surname and query:
+            candidate = extract_doctor_name_candidate(query, prefer_schedule=True)
+            if candidate:
+                resolved_surname = resolve_schedule_surname(candidate, doctors)
 
         # если из entities пусто — попробуем хотя бы query как ключ
         # (но аккуратно: не хотим показывать всех врачей по любому вопросу)
@@ -237,8 +365,9 @@ class Services:
             units = " ".join([_normalise_input(str(x)) for x in (doc.get("units") or [])])
 
             hay = " | ".join([fio, spec, regions, units])
-            if fio_q and fio_q not in hay:
-                return False
+            if fio_q:
+                if not _doctor_matches_fio(fio, fio_q, resolved_surname):
+                    return False
             if spec_q and spec_q not in hay:
                 return False
             if region_q and region_q not in hay:
@@ -253,18 +382,29 @@ class Services:
             return True
 
         filtered = [d for d in doctors if match_doc(d)]
+        filtered = _dedupe_doctors_by_fio(filtered)
+
+        if resolved_surname:
+            # при явной фамилии врача не раздуваем выдачу.
+            output_max = min(output_max, 3)
 
         # ограничим размер, чтобы не отправлять сотни карточек в LLM
         # (далее LLM/рендерер красиво завернёт)
         # Определить сколько тут карточек нужно в выводе обычно
         filtered = filtered[:output_max]
+        compact: list[dict[str, Any]] = []
+        for d in filtered:
+            row = dict(d)
+            row["specialization"] = _compact_specialization(str(row.get("specialization") or ""))
+            compact.append(row)
 
         return {
-            "doctors": filtered,
+            "doctors": compact,
             "note": "doctors_info: from cached registry (jsonl)",
             "cache_file": self._doctors_cache_path,
             "entities_used": {
                 "doctor_query": fio_q,
+                "doctor_resolved": resolved_surname,
                 "specialty_query": spec_q,
                 "region_query": region_q,
             },
@@ -296,14 +436,16 @@ class Services:
             first = raw_for_match.split()[0].strip()
             raw_for_match = first or raw_for_match
 
-        query_name = resolve_schedule_surname(str(query or ""), doctors) if query else None
+        query_doctor_candidate = extract_doctor_name_candidate(str(query or ""), prefer_schedule=True) if query else None
+        query_name = resolve_schedule_surname(str(query_doctor_candidate), doctors) if query_doctor_candidate else None
         last_name = resolve_schedule_surname(raw_for_match, doctors)
         # Если в текущей реплике явно фигурирует другая фамилия по расписанию,
         # приоритет отдаем ей (сброс от залипшего doctor_name из state).
+        has_schedule_signal = bool(_SCHEDULE_QUERY_RE.search(str(query or "")))
         if query_name and (
             not last_name
-            or _SCHEDULE_QUERY_RE.search(str(query or ""))
-            and _normalise_input(str(query_name)) != _normalise_input(str(last_name))
+            or has_schedule_signal
+            or _normalise_input(str(query_name)) != _normalise_input(str(last_name))
         ):
             last_name = query_name
         elif not last_name and query and query != raw_name:
@@ -430,22 +572,67 @@ class Services:
         return {"prepare": cleaned, "entities_used": entities}
 
     async def test_result_status(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
+        fields = _extract_result_query_fields(entities, query)
+        missing = [k for k in ("surname", "year", "filial", "number") if not fields.get(k)]
+        if missing:
+            return {
+                "ready": False,
+                "note": "missing_result_fields",
+                "missing_fields": missing,
+                "entities_used": entities,
+            }
+
+        try:
+            api_resp = await asyncio.to_thread(
+                api_nayka.site_result_for_patient,
+                surname=fields["surname"],
+                year=int(fields["year"]),
+                filial=fields["filial"],
+                number=int(fields["number"]),
+                lang=fields["lang"],
+                with_time=None,
+            )
+        except Exception as e:
+            return _service_fallback(
+                note=f"resultForPatient failed: {e}",
+                handoff_message="Сейчас не удалось получить результаты автоматически. Соединяю с оператором.",
+                entities=entities,
+                reason="test_result_fallback",
+                extra={"ready": False},
+            )
+
+        if not isinstance(api_resp, dict) or not api_resp.get("ok"):
+            return _service_fallback(
+                note=f"resultForPatient error: {api_resp}",
+                handoff_message="Сейчас не удалось получить результаты автоматически. Соединяю с оператором.",
+                entities=entities,
+                reason="test_result_fallback",
+                extra={"ready": False},
+            )
+
+        payload = api_resp.get("data")
+        has_payload = bool(payload)
+        if not has_payload:
+            return {
+                "ready": False,
+                "note": "result_not_found_or_not_ready",
+                "result_payload": payload,
+                "result_preview": "По указанным данным результаты пока не найдены или еще не готовы.",
+                "entities_used": entities,
+            }
+
         return {
-            "ready": False,
-            "note": "no result API",
-            "handoff_required": True,
-            "handoff_reason": "test_result_fallback",
+            "ready": True,
+            "note": "resultForPatient success",
+            "result_payload": payload,
+            "result_preview": _stringify_json_preview(payload),
             "entities_used": entities,
         }
 
     async def test_result_pdf(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "pdf": None,
-            "note": "no result PDF service",
-            "handoff_required": True,
-            "handoff_reason": "test_result_fallback",
-            "entities_used": entities,
-        }
+        # Пока отдельного PDF endpoint не подключали: отдаем пусто без handoff,
+        # чтобы не ломать успешный TEST_RESULT статус.
+        return {"pdf": None, "note": "no_result_pdf_endpoint", "entities_used": entities}
 
     async def price_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         doctor_id = _as_int(entities.get("doctor_id"))
@@ -577,12 +764,13 @@ class Services:
                 sort=["from_ts:desc"],
             )
         except Exception:
-            return _service_fallback(
-                note="news source unavailable",
-                handoff_message="Сейчас не удалось получить новости автоматически. Соединяю с оператором.",
-                entities=entities,
-                extra={"news": []},
-            )
+            # Для новостей деградация источника не критична: возвращаем пустой ответ
+            # без принудительного handoff.
+            return {
+                "news": [],
+                "note": "news source unavailable",
+                "entities_used": entities,
+            }
         return {"news": hits, "entities_used": entities}
 
     def get_branches(self) -> list[dict[str, str]]:

@@ -21,11 +21,48 @@ _SCHEDULE_DOCTOR_AFTER_RE = re.compile(
     re.I,
 )
 _SCHEDULE_DOCTOR_BEFORE_RE = re.compile(r"\b([А-ЯЁа-яё\-]{3,})\s+(?:расписани\w*|график)\b", re.I)
+_SCHEDULE_WHEN_AFTER_RE = re.compile(
+    r"(?:когда\s+принима\w*|принима\w*\s+когда)\s+"
+    r"(?:доктор\w*\s+|врач\w*\s+|уролог\w*\s+|кардиолог\w*\s+|невролог\w*\s+|"
+    r"терапевт\w*\s+|гинеколог\w*\s+|педиатр\w*\s+|лор\w*\s+|хирург\w*\s+)?"
+    r"([А-ЯЁа-яё\-]{3,})",
+    re.I,
+)
+_SCHEDULE_WHEN_BEFORE_RE = re.compile(
+    r"\b([А-ЯЁа-яё\-]{3,})\s+(?:когда\s+принима\w*|принима\w*)\b",
+    re.I,
+)
 _DOCTOR_APPOINTMENT_RE = re.compile(
     r"\bк\s+(?:доктор\w*\s+|врач\w*\s+)?([А-ЯЁа-яё\-]{3,})\b",
     re.I,
 )
+_DOCTOR_ABOUT_RE = re.compile(
+    r"\b(?:о|про)\s+(?:доктор\w*|врач\w*)\s+([А-ЯЁа-яё\-]{3,})\b",
+    re.I,
+)
+_DOCTOR_NEED_RE = re.compile(
+    r"\bнуж\w*\s+([А-ЯЁа-яё\-]{3,})\b",
+    re.I,
+)
 _DOCTOR_FIO_RE = re.compile(r"\b([А-ЯЁа-яё\-]{3,})\s+([А-ЯЁа-яё\-]{3,})\b")
+_EXTRA_STOPWORD_STEMS = (
+    "уролог",
+    "кардиолог",
+    "невролог",
+    "терапевт",
+    "гинеколог",
+    "педиатр",
+    "хирург",
+    "лор",
+    "эндокринолог",
+    "врач",
+    "доктор",
+    "расписан",
+    "график",
+    "принима",
+    "инф",
+    "нуж",
+)
 _EXTRA_STOPWORDS = {
     "расписание",
     "расписания",
@@ -53,6 +90,55 @@ _EXTRA_STOPWORDS = {
     "передумал",
     "передумала",
     "давайте",
+    "когда",
+    "принимает",
+    "принимают",
+    "прием",
+    "приёма",
+    "приема",
+    "есть",
+    "показывает",
+    "покажи",
+    "покажите",
+    "уролог",
+    "кардиолог",
+    "невролог",
+    "терапевт",
+    "гинеколог",
+    "педиатр",
+    "хирург",
+    "лор",
+    "эндокринолог",
+    "инфа",
+    "инфо",
+    "информация",
+    "нужен",
+    "нужна",
+    "нужно",
+    "нужны",
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+    "январь",
+    "февраль",
+    "март",
+    "апрель",
+    "июнь",
+    "июль",
+    "август",
+    "сентябрь",
+    "октябрь",
+    "ноябрь",
+    "декабрь",
 }
 
 
@@ -64,7 +150,10 @@ def _normalize_token(token: str) -> str | None:
     cleaned = _clean_token(token)
     if not cleaned or len(cleaned) < 3:
         return None
-    if cleaned.lower() in _EXTRA_STOPWORDS:
+    low = cleaned.lower()
+    if low in _EXTRA_STOPWORDS:
+        return None
+    if any(low.startswith(stem) for stem in _EXTRA_STOPWORD_STEMS):
         return None
     return cleaned.capitalize()
 
@@ -109,11 +198,25 @@ def _extract_surname_from_schedule_phrase(text: str) -> str | None:
         candidate = _normalize_token(m.group(1))
         if candidate:
             return candidate
+    m = _SCHEDULE_WHEN_AFTER_RE.search(text)
+    if m:
+        candidate = _normalize_token(m.group(1))
+        if candidate:
+            return candidate
+    m = _SCHEDULE_WHEN_BEFORE_RE.search(text)
+    if m:
+        candidate = _normalize_token(m.group(1))
+        if candidate:
+            return candidate
     return None
 
 
 def _extract_name_from_appointment_phrase(text: str) -> str | None:
     m = _DOCTOR_APPOINTMENT_RE.search(text or "")
+    if not m:
+        m = _DOCTOR_ABOUT_RE.search(text or "")
+    if not m:
+        m = _DOCTOR_NEED_RE.search(text or "")
     if not m:
         return None
     return _normalize_token(m.group(1))
@@ -137,7 +240,13 @@ def extract_surname_candidate(text: str) -> str | None:
     stop = {w.lower() for w in STOP_WORDS} | _EXTRA_STOPWORDS
     filtered = [w for w in words if w.lower() not in stop]
     if filtered:
-        return _normalize_token(filtered[-1])
+        # Берем первый осмысленный токен (а не последний),
+        # чтобы фразы "когда принимает Дразнин уролог" не превращались в "уролог".
+        for token in filtered:
+            normalized = _normalize_token(token)
+            if normalized:
+                return normalized
+        return None
     fallback = _normalize_token(words[-1])
     if not fallback or fallback.lower() in stop:
         return None
@@ -230,6 +339,45 @@ def resolve_schedule_surname(raw_text: str, doctors: list[dict[str, Any]], thres
     """
     Возвращает нормализованную фамилию для запроса расписания.
     """
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        return None
+
+    surnames_map = _doctor_surnames(doctors)
+    stop = {w.lower() for w in STOP_WORDS} | _EXTRA_STOPWORDS
+    words = _WORD_RE.findall(raw_text)
+    token_candidates: list[str] = []
+    for token in words:
+        low = token.lower()
+        if low in stop:
+            continue
+        normalized = _normalize_token(token)
+        if normalized:
+            token_candidates.append(normalized)
+
+    # 1) exact match по любому токену/его падежным вариантам
+    if surnames_map and token_candidates:
+        for token in token_candidates:
+            for variant in surname_variants(token):
+                exact = surnames_map.get(variant.lower().replace("ё", "е"))
+                if exact:
+                    return exact
+
+    # 2) fuzzy best по токенам
+    if surnames_map and token_candidates:
+        best: str | None = None
+        best_ratio = 0.0
+        for token in token_candidates:
+            for variant in surname_variants(token):
+                for normalized, canonical in surnames_map.items():
+                    score = fuzzy_ratio(variant, normalized)
+                    if score > best_ratio:
+                        best_ratio = score
+                        best = canonical
+        if best and best_ratio >= threshold:
+            return best
+        return None
+
+    # 3) fallback без кэша — только если кандидат действительно есть
     candidate = extract_surname_candidate(raw_text)
     if not candidate:
         return None

@@ -151,6 +151,14 @@ NEWS_PATTERNS = [
     r"\bновост\w*",
 ]
 
+DOCTOR_INFO_PATTERNS = [
+    r"\bинф\w*\b.*\b(врач\w*|доктор\w*)\b",
+    r"\bинформац\w*\b.*\b(врач\w*|доктор\w*)\b",
+    r"\bрасскаж\w*\b.*\b(о|про)\b.*\b(врач\w*|доктор\w*)\b",
+    r"\b(о|про)\b\s+(врач\w*|доктор\w*)\b",
+    r"\bкто\b.*\b(врач\w*|доктор\w*)\b",
+]
+
 SERVICE_ANCHORS = (
     "узи",
     "экг",
@@ -206,7 +214,17 @@ _QF_SPECIALTY_HINT_RE = re.compile(
 _QF_TIME_FRAGMENT_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
 _QF_APPOINTMENT_WORD_RE = re.compile(r"\b(запис\w*|перен\w*|отмен\w*|при(е|ё)м\w*)\b", re.I)
 _QF_ORDER_ID_RE = re.compile(r"(?:заказ|order|№)\s*([0-9]{4,})", re.I)
+_QF_RESULT_SURNAME_RE = re.compile(r"\bфамили[яиюе]\s*[:\-]?\s*([А-ЯЁа-яё\-]{2,})", re.I)
+_QF_RESULT_YEAR_RE = re.compile(r"\b(?:год\s*рождени[яея]|г\.?\s*р\.?)\s*[:\-]?\s*((?:19|20)\d{2})\b", re.I)
+_QF_RESULT_FILIAL_RE = re.compile(r"\b(?:филиал|отделени[ея]|город)\s*[:\-]?\s*([A-Za-zА-Яа-яЁё0-9 .,\-]{2,80})", re.I)
+_QF_RESULT_NUMBER_RE = re.compile(r"\b(?:номер|код)\s*(?:анализа)?\s*[:#№\-]?\s*(\d{3,})\b", re.I)
 _QF_TEST_WORDS_RE = re.compile(r"\b(анализ|пцр|hba1c|глюкоз|витамин|ферритин|ттг|т4|т3|холестер|оак|оам)\b", re.I)
+_QF_PATIENT_NAME_PREFIX_RE = re.compile(
+    r"\b(?:фио|ф\.?\s*и\.?\s*о\.?|меня\s+зовут|зовут)\b[:\s\-]*([А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+){1,2})",
+    re.I,
+)
+_QF_PLAIN_NAME_RE = re.compile(r"^\s*([А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+){1,2})\s*$")
+_QF_NAME_FRAGMENT_RE = re.compile(r"\b([А-ЯЁа-яё\-]{2,})\s+([А-ЯЁа-яё\-]{2,})\s+([А-ЯЁа-яё\-]{2,})\b")
 _QF_NEXT_WEEK_RE = re.compile(r"\bна следующ(ей|ую)\s+недел", re.I)
 _QF_THIS_WEEK_RE = re.compile(r"\bна эт(ой|у)\s+недел|\bв эт(ой|у)\s+недел", re.I)
 _QF_TOMORROW_RE = re.compile(r"\bзавтра\b", re.I)
@@ -257,7 +275,7 @@ REQUIRED_SLOTS: dict[str, list[str]] = {
         "_any_of:city,branch_name,branch_id",
         "_any_of:test_goal,test_name",
     ],
-    "TEST_RESULT": ["_any_of:order_id"],
+    "TEST_RESULT": ["surname", "year", "filial", "number"],
     "DOCTOR_INFO": ["_any_of:specialty,doctor_id,doctor_name"],
     # For schedule we require a concrete doctor reference, not specialty-only.
     "DOCTOR_SCHEDULE": ["_any_of:doctor_id,doctor_name"],
@@ -286,6 +304,7 @@ HANDOFF_REASON_MATRIX: dict[str, str] = {
 
 APPOINTMENT_STEP_BRANCH = "select_branch"
 APPOINTMENT_STEP_DATETIME = "select_datetime"
+APPOINTMENT_STEP_PATIENT = "collect_patient_name"
 APPOINTMENT_STEP_CONFIRM = "confirm"
 APPOINTMENT_STEP_DONE = "done"
 APPOINTMENT_CONFIRM_YES = "yes"
@@ -380,6 +399,11 @@ def detect_news_intent(text: str) -> bool:
     return any(re.search(p, t) for p in NEWS_PATTERNS)
 
 
+def detect_doctor_info_intent(text: str) -> bool:
+    t = text.lower()
+    return any(re.search(p, t) for p in DOCTOR_INFO_PATTERNS)
+
+
 def normalize_appointment_action(action: str | None, text: str) -> str | None:
     if action == "book" and not _BOOK_ACTION_STRICT_RE.search(text or ""):
         return None
@@ -422,6 +446,8 @@ def is_price_dominant_intent(
     dominant = price_intent and appointment_action in {None, "book"} and not has_datetime_signal(text)
     if not dominant:
         return False
+    if re.search(r"\b(стоим\w*|цен\w*|сколько\b.*\bстоит)\b", text or "", flags=re.I):
+        return True
     if detect_test_assist_intent(text) and _ASSIST_PRICE_CONTEXT_RE.search(text or ""):
         return False
     return True
@@ -688,12 +714,66 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
     if m_oid:
         out["order_id"] = m_oid.group(1)
 
+    # TEST_RESULT flow: собираем surname/year/filial/number по мере диалога.
+    needs_result = any(m in {"surname", "year", "filial", "number"} for m in missing_rules)
+    if needs_result:
+        m_surname = _QF_RESULT_SURNAME_RE.search(t)
+        if m_surname:
+            out["surname"] = m_surname.group(1).strip().capitalize()
+
+        m_year = _QF_RESULT_YEAR_RE.search(t)
+        if m_year:
+            out["year"] = int(m_year.group(1))
+        elif re.fullmatch(r"\s*(?:19|20)\d{2}\s*", t):
+            out["year"] = int(t.strip())
+        else:
+            y_any = re.search(r"\b((?:19|20)\d{2})\b", t)
+            if y_any:
+                out["year"] = int(y_any.group(1))
+
+        m_filial = _QF_RESULT_FILIAL_RE.search(t)
+        if m_filial:
+            out["filial"] = m_filial.group(1).strip(" ,.")
+        elif "filial" in missing_rules:
+            city_guess = match_city(t)
+            if city_guess:
+                out["filial"] = city_guess
+            words = [w for w in re.split(r"\s+", t) if w]
+            if "filial" not in out and 1 <= len(words) <= 3 and not re.search(r"\d", t) and not _QF_APPOINTMENT_WORD_RE.search(low):
+                out["filial"] = t.strip(" ,.")
+
+        m_number = _QF_RESULT_NUMBER_RE.search(t)
+        if m_number:
+            out["number"] = int(m_number.group(1))
+        elif m_oid:
+            out["number"] = int(m_oid.group(1))
+        elif re.fullmatch(r"\s*\d{3,}\s*", t):
+            out["number"] = int(t.strip())
+        else:
+            nums = [int(x) for x in re.findall(r"\b\d{3,}\b", t)]
+            if nums:
+                year_val = out.get("year")
+                filtered = [n for n in nums if year_val is None or n != year_val]
+                if filtered:
+                    out["number"] = filtered[-1]
+
+        if "surname" in missing_rules and "surname" not in out:
+            words = [w for w in re.split(r"\s+", t) if w]
+            if len(words) == 1 and re.fullmatch(r"[А-Яа-яЁё\-]{2,}", words[0]):
+                out["surname"] = words[0].capitalize()
+            elif words and re.fullmatch(r"[А-Яа-яЁё\-]{2,}", words[0]):
+                out["surname"] = words[0].capitalize()
+
     m_spec = _QF_SPECIALTY_HINT_RE.search(low)
     if m_spec:
         out["specialty"] = m_spec.group(1).lower()
 
     needs_doctor_or_spec = any("doctor" in r or "specialty" in r for r in missing_rules)
-    if needs_doctor_or_spec:
+    patient_name_like_text = bool(_QF_PATIENT_NAME_PREFIX_RE.search(t) or _QF_PLAIN_NAME_RE.match(t))
+    # В активном flow, когда врач уже известен, не перезаписываем doctor_name
+    # из свободного текста пациента (там часто его собственное ФИО).
+    doctor_already_selected = bool(state_entities.get("doctor_name") or state_entities.get("doctor_id"))
+    if needs_doctor_or_spec and not patient_name_like_text and not doctor_already_selected:
         extracted_name = extract_doctor_name_candidate(t)
         if extracted_name:
             out["doctor_name"] = extracted_name
@@ -714,6 +794,40 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
                 out["child_age"] = int(m_age.group(1))
             except Exception:
                 pass
+
+    if "patient_name" in missing_rules:
+        candidate: str | None = None
+        m_name = _QF_PATIENT_NAME_PREFIX_RE.search(t)
+        if m_name:
+            candidate = m_name.group(1).strip()
+        if not candidate:
+            m_plain = _QF_PLAIN_NAME_RE.match(t)
+            if m_plain:
+                plain = m_plain.group(1).strip()
+                low_plain = plain.lower()
+                if not (
+                    _QF_APPOINTMENT_WORD_RE.search(low_plain)
+                    or _QF_TIME_FRAGMENT_RE.search(low_plain)
+                    or match_city(low_plain)
+                ):
+                    candidate = plain
+        if not candidate:
+            # ФИО внутри смешанной строки ("12 февраля 09:00 Тен Максим Александрович")
+            # берём последнюю тройку слов как наиболее вероятное ФИО пациента.
+            fragments = list(_QF_NAME_FRAGMENT_RE.finditer(t))
+            if fragments:
+                raw = " ".join(fragments[-1].groups()).strip()
+                low_raw = raw.lower()
+                if not (
+                    _QF_APPOINTMENT_WORD_RE.search(low_raw)
+                    or _QF_TIME_FRAGMENT_RE.search(low_raw)
+                    or match_city(low_raw)
+                ):
+                    candidate = raw
+        if candidate:
+            normalized_tokens = [w.capitalize() for w in re.split(r"\s+", candidate) if w]
+            if len(normalized_tokens) >= 2:
+                out["patient_name"] = " ".join(normalized_tokens)
 
     needs_city = any("city" in r for r in missing_rules)
     if needs_city and not state_entities.get("city"):
@@ -853,13 +967,24 @@ def clarification_question(label: str, missing: list[str]) -> str:
             )
         if need_city:
             return "Из какого города вы обращаетесь?"
+        if "patient_name" in missing:
+            return "Укажите, пожалуйста, ФИО пациента для оформления записи."
         if "date_from" in missing or "time_from" in missing:
             return "Уточните, пожалуйста, дату и время записи."
         return "Уточните, пожалуйста, детали записи."
     if label == "TEST_RESULT":
+        need = set(missing)
+        if need == {"surname"}:
+            return "Укажите, пожалуйста, фамилию пациента."
+        if need == {"year"}:
+            return "Укажите год рождения пациента (например: 1985)."
+        if need == {"filial"}:
+            return "Укажите филиал (город/отделение), где сдавали анализ."
+        if need == {"number"}:
+            return "Укажите номер (код) анализа."
         return (
-            "Чтобы проверить готовность результатов, нужен номер заказа "
-            "(обычно вида «№12345»). Если удобнее — подскажу, как пройти авторизацию."
+            "Чтобы получить результат, нужны 4 поля: фамилия, год рождения, филиал и номер анализа. "
+            "Можно одним сообщением: «Иванов 1985 Самара 12345»."
         )
     return "Уточните, пожалуйста, детали запроса."
 
@@ -895,10 +1020,13 @@ def handoff_message(reason: str | None = None, override: str | None = None) -> s
 def appointment_step_policy(entities: dict[str, Any]) -> str:
     branch_selected = bool(entities.get("branch_id") or entities.get("branch_name"))
     has_date_time = bool((entities.get("date_from") or entities.get("date_hint")) and entities.get("time_from"))
+    has_patient_name = bool(str(entities.get("patient_name") or "").strip())
     if not branch_selected:
         return APPOINTMENT_STEP_BRANCH
     if not has_date_time:
         return APPOINTMENT_STEP_DATETIME
+    if not has_patient_name:
+        return APPOINTMENT_STEP_PATIENT
     if not entities.get("appointment_confirm_pending") and not entities.get("appointment_confirmed"):
         return APPOINTMENT_STEP_CONFIRM
     return APPOINTMENT_STEP_DONE
@@ -935,9 +1063,28 @@ def extract_price_rub(price_payload: dict[str, Any] | None) -> str | None:
 
 
 def appointment_summary(entities: dict[str, Any]) -> str:
-    service = str(entities.get("service_name") or entities.get("test_name") or "услуга").strip()
+    patient_name = str(entities.get("patient_name") or "").strip()
+    doctor_name = str(entities.get("doctor_name") or "").strip()
+    service = str(entities.get("service_name") or entities.get("test_name") or "").strip()
+    if not service or service.lower() == "услуга":
+        if doctor_name:
+            service = f"приём к врачу {doctor_name}"
+        else:
+            service = "услуга"
     place = str(entities.get("branch_name") or entities.get("city") or "выбранный филиал").strip()
-    date_part = str(entities.get("date_from") or entities.get("date_hint") or "уточним дату").strip()
+    date_part_raw = str(entities.get("date_from") or entities.get("date_hint") or "уточним дату").strip()
+    date_part = date_part_raw
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_part_raw):
+        try:
+            d = datetime.strptime(date_part_raw, "%Y-%m-%d").date()
+            month = {
+                1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+                5: "мая", 6: "июня", 7: "июля", 8: "августа",
+                9: "сентября", 10: "октября", 11: "ноября", 12: "декабря",
+            }[d.month]
+            date_part = f"{d.day} {month}"
+        except Exception:
+            date_part = date_part_raw
     time_from = str(entities.get("time_from") or "").strip()
     time_to = str(entities.get("time_to") or "").strip()
     if time_from and time_to and time_from != time_to:
@@ -946,6 +1093,8 @@ def appointment_summary(entities: dict[str, Any]) -> str:
         time_part = time_from
     else:
         time_part = "уточним время"
+    if patient_name:
+        return f"Запись: {patient_name}, {service}, {place}, {date_part}, {time_part}."
     return f"Запись: {service}, {place}, {date_part}, {time_part}."
 
 
@@ -1008,6 +1157,10 @@ def appointment_text_datetime_prompt(service: str, branch: str, price_rub: str |
     if price_rub:
         return f"Да, можем записать на {service} ({branch}), стоимость {price_rub} руб. На какую дату и время вам удобно?"
     return f"Да, можем записать на {service} ({branch}). На какую дату и время вам удобно?"
+
+
+def appointment_text_patient_name_prompt() -> str:
+    return "Укажите, пожалуйста, ФИО пациента для оформления заявки на запись."
 
 
 def appointment_text_confirm_prompt(summary: str) -> str:

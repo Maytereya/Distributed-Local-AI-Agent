@@ -79,7 +79,10 @@
   - `_any_of:city,branch_name,branch_id`
   - `_any_of:test_goal,test_name`
 - `TEST_RESULT`:
-  - `_any_of:order_id`
+  - `surname`
+  - `year`
+  - `filial`
+  - `number`
 - `DOCTOR_INFO`:
   - `_any_of:specialty,doctor_id,doctor_name`
 - `DOCTOR_SCHEDULE`:
@@ -115,11 +118,11 @@
 - `URGENT`
 - `COMPLAINT`
 - `MEDICAL_ADVICE`
-- `TEST_RESULT` без авторизации (медицинская тайна)
 
 ### 5.2 Handoff после частичной автоматизации
 
 - `APPOINTMENT`: после подтверждения заявки пользователем.
+- `TEST_RESULT`: при технической ошибке источника данных (`resultForPatient`) или явном service fallback.
 - недоступность критичных интеграций (timeout/API error) без рабочего fallback.
 
 ### 5.3 Не ставить handoff
@@ -138,7 +141,8 @@
 - `ADDRESS` -> `address_info`
 - `TEST_ASSIST` -> `test_assist`
 - `PREPARE` -> `test_prepare`
-- `TEST_RESULT` -> `test_result_status`, `test_result_pdf` (с auth)
+- `TEST_RESULT` -> `test_result_status`, `test_result_pdf`
+  - текущий контракт: сначала сбор `surname/year/filial/number`, затем запрос в `resultForPatient`
 - `NEWS` -> `news_info`
 
 Правило источников:
@@ -165,10 +169,10 @@
 
 ## 8. Найденные расхождения (docs vs code)
 
-1. В `classifier_patient.txt` есть few-shot labels `RESULTS`, `DISCOUNT`, `CERTIFICATE`, которых нет в каноническом наборе labels.
+1. В prompt нужно поддерживать только канонические labels и не добавлять экспериментальные label-алиасы.
 2. Policy частично централизован в `policies.py` (детекторы + slot/clarify/handoff), но часть логики еще остается в `router/services`.
 3. Нет автоматизированного eval-контура на корпусе чатов (регрессы ловятся вручную).
-4. По `TEST_RESULT` пока нет полноценного API, используется корректный fallback на оператора.
+4. По `TEST_RESULT` интеграция `resultForPatient` уже есть, но нужны стабильные тестовые данные и донастройка сценариев на реальных кейсах.
 5. Future-кейсы вынесены отдельно: `future_intents_backlog.md`; до отдельной реализации они маршрутизируются как `OTHER + handoff`.
 
 ## 9. Roadmap работ (поэтапно)
@@ -224,7 +228,8 @@
 - Текущий статус: добавлен preflight endpoint check в `eval_stage5_corpus.py`, чтобы сразу показывать проблему окружения вместо массовых `transport_or_json_error`.
 - Текущий статус: добавлена инструкция запуска `stage5_corpus_eval.md`.
 - Текущий статус: зафиксирован baseline в `stage5_baseline.md` и разбор mismatch в `stage5_mismatch_analysis_1770728996.md`.
-- Последний run: `1770728996` -> `intent 49.0%`, `handoff 65.3%`, `false_handoff 34.7%`, `slot_fill 21.2%` (gate не пройден).
+- Последний run: `1770839513` -> `intent 89.8%`, `handoff 91.8%`, `false_handoff 2.0%`, `slot_fill 29.7%`.
+- Оставшийся фокус: `APPOINTMENT` edge-cases, `TEST_RESULT` ожидания в golden и качество slot-fill.
 
 ### Этап 6. Промпты и стиль
 
@@ -235,8 +240,8 @@
 
 Следующий практический шаг: закрыть Этап 5 на рабочем окружении и зафиксировать baseline.
 
-- стабилизировать rule-покрытие `TEST_ASSIST`, `TEST_RESULT`, `NEWS`;
-- снизить `handoff_recommended` для non-critical low-confidence;
+- синхронизировать golden-ожидания для `TEST_RESULT` с текущим контрактом сбора полей;
+- поднять slot fill rate для `APPOINTMENT`/`TEST_RESULT`;
 - перепрогнать `scripts/eval_stage5_corpus.py` и поднять показатели до release-threshold.
 
 После закрытия Этапа 5: перейти к Этапу 6 (чистка classifier/renderer prompts под реальные формулировки из чатов без изменения policy-contract).

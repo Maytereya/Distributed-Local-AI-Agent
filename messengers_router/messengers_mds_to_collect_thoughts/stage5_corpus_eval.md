@@ -22,7 +22,8 @@ venv/bin/python /Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/
   - `RESULTS -> TEST_RESULT`
   - `DISCOUNT -> NEWS`
   - `CERTIFICATE -> OTHER`
-- Для `TEST_RESULT` и `OTHER(=doc request)` в golden по умолчанию `expected_handoff=true`.
+- Для `OTHER(=doc request)` в golden по умолчанию `expected_handoff=true`.
+- Для `TEST_RESULT` в golden по умолчанию `expected_handoff=false`: бот собирает поля `surname/year/filial/number` и продолжает сценарий без немедленного перевода на оператора.
 - Из выборки автоматически исключаются пустые/тривиальные приветствия.
 
 ## 2) Прогон eval
@@ -64,4 +65,3 @@ venv/bin/python /Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/
 - `intent_accuracy >= 90%`
 - `handoff_accuracy >= 92%`
 - `false_handoff_rate <= 8%`
-

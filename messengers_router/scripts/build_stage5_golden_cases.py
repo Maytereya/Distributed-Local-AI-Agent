@@ -29,7 +29,7 @@ MAPPING: dict[str, LabelMap] = {
     "PRICE": LabelMap("PRICE", "PRICE", False),
     "APPOINTMENT": LabelMap("APPOINTMENT", "APPOINTMENT", False),
     "TEST_ASSIST": LabelMap("TEST_ASSIST", "TEST_ASSIST", False),
-    "RESULTS": LabelMap("RESULTS", "TEST_RESULT", True),
+    "RESULTS": LabelMap("RESULTS", "TEST_RESULT", False),
     "ADDRESS": LabelMap("ADDRESS", "ADDRESS", False),
     "DISCOUNT": LabelMap("DISCOUNT", "NEWS", False),
     "CERTIFICATE": LabelMap("CERTIFICATE", "OTHER", True),

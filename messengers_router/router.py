@@ -20,6 +20,7 @@ from .policies import (
     appointment_step_policy,
     APPOINTMENT_STEP_BRANCH,
     APPOINTMENT_STEP_DATETIME,
+    APPOINTMENT_STEP_PATIENT,
     APPOINTMENT_STEP_CONFIRM,
     APPOINTMENT_CONFIRM_YES,
     APPOINTMENT_CONFIRM_NO,
@@ -29,6 +30,7 @@ from .policies import (
     appointment_addresses_for_city,
     appointment_text_branch_prompt,
     appointment_text_datetime_prompt,
+    appointment_text_patient_name_prompt,
     appointment_text_confirm_prompt,
     appointment_text_confirmed_handoff,
     appointment_text_reask_datetime,
@@ -49,6 +51,7 @@ from .renderer import (
     render_medical_advice,
     render_stream,
     format_doctor_schedule_for_patient,
+    format_doctor_info_for_patient,
 )
 from .memory import MemoryStore
 from .city import match_city
@@ -94,6 +97,21 @@ _YES_RE = re.compile(r"^\s*(да|ага|угу|ок|окей|хорошо|дав
 _NO_RE = re.compile(r"^\s*(нет|не надо|не нужно|неа|отмена|не хочу)\s*[!.,?]*\s*$", re.I)
 _TIME_FRAGMENT_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
 _APPOINTMENT_WORD_RE = re.compile(r"\b(запис\w*|перен\w*|отмен\w*|при(е|ё)м\w*)\b", re.I)
+_SCHEDULE_SIGNAL_RE = re.compile(r"\b(расписани\w*|график|когда\b.*\bпринима\w*)\b", re.I)
+_PATIENT_FIO_RE = re.compile(r"^[А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+){1,2}$")
+_INTRO_TEXT = (
+    "Здравствуйте! Это ИИ-помощник клиники «Наука».\n"
+    "Через меня вы можете записаться к врачу, перенести или отменить запись, "
+    "узнать результаты анализов и получить информацию об услугах."
+)
+
+
+def _looks_like_patient_fio(text: str) -> bool:
+    s = str(text or "").strip()
+    if not _PATIENT_FIO_RE.fullmatch(s):
+        return False
+    tokens = [t for t in s.split() if t]
+    return len(tokens) >= 2
 
 
 def _is_affirmative(text: str) -> bool:
@@ -102,6 +120,153 @@ def _is_affirmative(text: str) -> bool:
 
 def _is_negative(text: str) -> bool:
     return bool(_NO_RE.match(text or ""))
+
+
+def _normalize_doctor_key(value: Any) -> str:
+    s = str(value or "").strip().lower()
+    s = s.replace("ё", "е")
+    return re.sub(r"\s+", " ", s)
+
+
+def _clear_flow_state(state: SessionState) -> None:
+    for k in (
+        "appointment_flow_active",
+        "appointment_confirm_pending",
+        "appointment_confirmed",
+        "appointment_windows",
+        "appointment_branch_options",
+        "date_from",
+        "date_to",
+        "time_from",
+        "time_to",
+        "date_hint",
+        "_pending",
+    ):
+        state.last_entities.pop(k, None)
+
+
+def _clear_topic_state(state: SessionState) -> None:
+    _clear_flow_state(state)
+    for k in (
+        "doctor_id",
+        "doctor_name",
+        "specialty",
+        "service_name",
+        "test_name",
+        "branch_id",
+        "branch_name",
+        "secondary_intents",
+        "_secondary_queue",
+        "_secondary_offer_pending",
+    ):
+        state.last_entities.pop(k, None)
+
+
+def _apply_context_action(decision: RouteDecision, state: SessionState, user_text: str) -> RouteDecision:
+    action = decision.context_action
+    if action == "cancel_flow":
+        _clear_flow_state(state)
+        return decision
+
+    if action == "new_topic":
+        _clear_topic_state(state)
+        return decision
+
+    if action != "overwrite_doctor":
+        return decision
+
+    extracted_doctor = str(decision.entities.get("doctor_name") or "").strip()
+    if not extracted_doctor:
+        return decision
+
+    current = _normalize_doctor_key(state.last_entities.get("doctor_name"))
+    target = _normalize_doctor_key(extracted_doctor)
+    if current and target and current == target:
+        return decision
+
+    _clear_flow_state(state)
+    entities = dict(decision.entities)
+    entities["doctor_name"] = extracted_doctor
+    sanitized_flags = set(decision.flags)
+    sanitized_flags.discard("handoff_recommended")
+    sanitized_flags.discard("low_confidence")
+    sanitized_flags.discard("ollama_timeout")
+
+    # Если пользователь сменил врача в процессе и при этом явно просит расписание
+    # (или до этого уже был schedule-контекст), приоритезируем DOCTOR_SCHEDULE.
+    prev_label = str(state.last_entities.get("_last_label") or "")
+    if decision.label == "OTHER" and (prev_label == "DOCTOR_SCHEDULE" or _SCHEDULE_SIGNAL_RE.search(user_text or "")):
+        return RouteDecision(
+            label="DOCTOR_SCHEDULE",
+            confidence=max(decision.confidence, 0.74),
+            entities=entities,
+            flags=sanitized_flags | {"context_action_overwrite_doctor"},
+            needs_handoff=False,
+            context_action=action,
+        )
+
+    return RouteDecision(
+        label=decision.label,
+        confidence=decision.confidence,
+        entities=entities,
+        flags=sanitized_flags | {"context_action_overwrite_doctor"},
+        needs_handoff=decision.needs_handoff,
+        context_action=action,
+    )
+
+
+async def _verify_doctor_entity(
+    decision: RouteDecision,
+    services: Services,
+    user_text: str,
+) -> RouteDecision:
+    """
+    Подтверждает doctor_name только через кэш врачей.
+    Если совпадения нет — doctor_name удаляется из entities.
+    """
+    entities = dict(decision.entities)
+    flags = set(decision.flags)
+    # Верифицируем doctor_name в любом label, если поле присутствует.
+    # Это защищает flow-override OTHER -> APPOINTMENT от ложного "врача"
+    # из ФИО пациента (например: "12 февраля 09:00 Тен Максим Александрович").
+    needs_doctor_verification = bool(entities.get("doctor_name")) or decision.label in {
+        "DOCTOR_SCHEDULE",
+        "DOCTOR_INFO",
+        "APPOINTMENT",
+    } or (decision.context_action == "overwrite_doctor")
+    if not needs_doctor_verification:
+        return decision
+
+    raw = str(entities.get("doctor_name") or "").strip()
+    resolved: str | None = None
+    if raw:
+        resolved = await services.resolve_doctor_name(raw)
+    if not resolved and decision.context_action == "overwrite_doctor":
+        resolved = await services.resolve_doctor_name(user_text)
+
+    context_action = decision.context_action
+    if resolved:
+        entities["doctor_name"] = resolved
+        flags.add("doctor_name_verified")
+    elif raw:
+        entities.pop("doctor_name", None)
+        flags.add("doctor_name_unverified")
+        if decision.label == "APPOINTMENT" and _looks_like_patient_fio(raw):
+            entities["patient_name"] = raw
+            flags.add("patient_name_from_unverified_doctor")
+            context_action = "continue"
+    elif decision.context_action == "overwrite_doctor" and decision.label == "OTHER":
+        # Не подтвердили нового врача по кэшу — считаем, что это не переключение врача.
+        context_action = "continue"
+
+    return RouteDecision(
+        label=decision.label,
+        confidence=decision.confidence,
+        entities=entities,
+        flags=flags,
+        needs_handoff=decision.needs_handoff,
+        context_action=context_action,
+    )
 
 
 def _secondary_followup_text(labels: list[str]) -> str | None:
@@ -329,8 +494,8 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
     steps: list[PlanStep] = []
 
     if label == "TEST_RESULT":
-        steps.append(PlanStep(tool="test_result_status", input={"query": user_text, "entities": dict(entities)}, auth="patient_token"))
-        steps.append(PlanStep(tool="test_result_pdf", input={"query": user_text, "entities": dict(entities)}, auth="patient_token", required=False))
+        steps.append(PlanStep(tool="test_result_status", input={"query": user_text, "entities": dict(entities)}, auth="none"))
+        steps.append(PlanStep(tool="test_result_pdf", input={"query": user_text, "entities": dict(entities)}, auth="none", required=False))
         return Plan(label=label, steps=steps)
 
     if label == "TEST_ASSIST":
@@ -467,15 +632,22 @@ async def route_patient_message(
             state.last_entities["_secondary_offer_pending"] = False
 
     decision = await analyze(user_text, state.last_entities)
+    decision = await _verify_doctor_entity(decision, services, user_text)
+    decision = _apply_context_action(decision, state, user_text)
 
     # Сохраняем сценарий записи на операторских уточнениях (ветка "да/нет", короткие ответы и т.п.).
-    if decision.label == "OTHER" and state.last_entities.get("appointment_flow_active"):
+    if (
+        decision.label == "OTHER"
+        and decision.context_action == "continue"
+        and state.last_entities.get("appointment_flow_active")
+    ):
         decision = RouteDecision(
             label="APPOINTMENT",
             confidence=max(decision.confidence, 0.51),
             entities=decision.entities,
             flags=set(decision.flags) | {"flow_appointment_override"},
             needs_handoff=False,
+            context_action="continue",
         )
 
     if decision.label == "DOCTOR_SCHEDULE":
@@ -526,7 +698,13 @@ async def route_patient_message(
             quick_flow = quick_fill_entities_from_text(
                 user_text,
                 state.last_entities,
-                ["_any_of:city,branch_name,branch_id", "date_from", "time_from"],
+                [
+                    "_any_of:doctor_id,doctor_name,specialty",
+                    "_any_of:city,branch_name,branch_id",
+                    "date_from",
+                    "time_from",
+                    "patient_name",
+                ],
                 services,
             )
             if quick_flow:
@@ -555,6 +733,7 @@ def _debug_meta(decision: RouteDecision, plan: Plan, evidence: Evidence, state: 
         "decision": {
             "label": decision.label,
             "confidence": decision.confidence,
+            "context_action": decision.context_action,
             "flags": sorted(list(decision.flags)),
             "entities": decision.entities,
             "needs_handoff": decision.needs_handoff,
@@ -608,6 +787,11 @@ async def patient_routing_stream(
             state_update={"debug": _debug_meta(decision, plan, evidence, state, pending)},
         )
 
+    user_turn_count = sum(1 for h in (state.history or []) if isinstance(h, dict) and h.get("role") == "user")
+    if "smalltalk_greeting" in decision.flags and user_turn_count <= 1:
+        yield ResponseEnvelope(text=_INTRO_TEXT, attachments=[], handoff=False)
+        return
+
     if decision.label == "URGENT":
         yield render_urgent()
         return
@@ -621,13 +805,6 @@ async def patient_routing_stream(
     if "doc_request_handoff" in decision.flags:
         yield ResponseEnvelope(
             text=handoff_message("doc_request_handoff"),
-            handoff=True,
-        )
-        return
-
-    if flow_label == "TEST_RESULT":
-        yield ResponseEnvelope(
-            text=handoff_message("test_result_fallback"),
             handoff=True,
         )
         return
@@ -699,6 +876,31 @@ async def patient_routing_stream(
         yield ResponseEnvelope(text=handoff_message(handoff_reason, handoff_msg), handoff=True)
         return
 
+    if flow_label == "TEST_RESULT":
+        result_status = evidence.get("test_result_status")
+        if isinstance(result_status, dict):
+            if result_status.get("ready") is True:
+                preview = str(result_status.get("result_preview") or "").strip()
+                text = "Результаты по вашим данным найдены."
+                if preview:
+                    text = f"{text}\n\n{preview}"
+                yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+                return
+
+            missing = result_status.get("missing_fields")
+            if isinstance(missing, list) and missing:
+                yield ResponseEnvelope(
+                    text=clarification_question("TEST_RESULT", [str(m) for m in missing]),
+                    attachments=[],
+                    handoff=False,
+                )
+                return
+
+            preview = str(result_status.get("result_preview") or "").strip()
+            text = preview or "По указанным данным результаты пока не найдены или ещё не готовы."
+            yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+            return
+
     schedule_payload = evidence.get("doctor_schedule")
     if flow_label == "DOCTOR_SCHEDULE" and isinstance(schedule_payload, dict):
         _hydrate_appointment_context_from_schedule(state, schedule_payload)
@@ -707,6 +909,12 @@ async def patient_routing_stream(
         # как продолжение сценария APPOINTMENT, а не как новый OTHER.
         state.last_entities["appointment_flow_active"] = True
         text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
+        yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+        return
+
+    doctors_info_payload = evidence.get("doctors_info")
+    if flow_label == "DOCTOR_INFO" and isinstance(doctors_info_payload, dict):
+        text = format_doctor_info_for_patient(doctors_info_payload, state.last_entities)
         yield ResponseEnvelope(text=text, attachments=[], handoff=False)
         return
 
@@ -765,6 +973,13 @@ async def patient_routing_stream(
             branch = str(entities.get("branch_name") or entities.get("city") or "выбранном филиале").strip()
             yield ResponseEnvelope(
                 text=appointment_text_datetime_prompt(service, branch, price_rub),
+                handoff=False,
+            )
+            return
+
+        if appointment_step == APPOINTMENT_STEP_PATIENT:
+            yield ResponseEnvelope(
+                text=appointment_text_patient_name_prompt(),
                 handoff=False,
             )
             return

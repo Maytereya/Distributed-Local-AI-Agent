@@ -24,7 +24,7 @@ DEFAULT_GOLDEN = ROOT / "messengers_router" / "messengers_mds_to_collect_thought
 REQUIRED_SLOTS: dict[str, list[str]] = {
     "APPOINTMENT": ["_any_of:doctor_id,doctor_name,specialty,service_name", "_any_of:city,branch_name,branch_id"],
     "TEST_ASSIST": ["_any_of:city,branch_name,branch_id", "_any_of:test_goal,test_name"],
-    "TEST_RESULT": ["_any_of:order_id"],
+    "TEST_RESULT": ["surname", "year", "filial", "number"],
     "DOCTOR_INFO": ["_any_of:specialty,doctor_id,doctor_name"],
     "DOCTOR_SCHEDULE": ["_any_of:doctor_id,doctor_name"],
     "PRICE": ["_any_of:city,branch_name,branch_id", "service_name"],
