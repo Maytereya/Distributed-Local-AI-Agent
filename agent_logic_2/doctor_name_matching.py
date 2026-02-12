@@ -32,6 +32,10 @@ _SCHEDULE_WHEN_BEFORE_RE = re.compile(
     r"\b([А-ЯЁа-яё\-]{3,})\s+(?:когда\s+принима\w*|принима\w*)\b",
     re.I,
 )
+_SCHEDULE_SLOTS_U_RE = re.compile(
+    r"(?:свободн\w*\s+)?(?:окн\w*|слот\w*)\D{0,25}\bу\s+([А-ЯЁа-яё\-]{3,})\b",
+    re.I,
+)
 _DOCTOR_APPOINTMENT_RE = re.compile(
     r"\bк\s+(?:доктор\w*\s+|врач\w*\s+)?([А-ЯЁа-яё\-]{3,})\b",
     re.I,
@@ -85,6 +89,22 @@ _EXTRA_STOPWORDS = {
     "покажите",
     "подскажи",
     "подскажите",
+    "какие",
+    "какой",
+    "какая",
+    "какое",
+    "какую",
+    "есть",
+    "свободные",
+    "свободное",
+    "свободный",
+    "слот",
+    "слоты",
+    "слота",
+    "окно",
+    "окна",
+    "окну",
+    "у",
     "скажи",
     "скажите",
     "передумал",
@@ -204,6 +224,11 @@ def _extract_surname_from_schedule_phrase(text: str) -> str | None:
         if candidate:
             return candidate
     m = _SCHEDULE_WHEN_BEFORE_RE.search(text)
+    if m:
+        candidate = _normalize_token(m.group(1))
+        if candidate:
+            return candidate
+    m = _SCHEDULE_SLOTS_U_RE.search(text)
     if m:
         candidate = _normalize_token(m.group(1))
         if candidate:

@@ -59,6 +59,57 @@ def _stringify_json_preview(value: Any, max_len: int = 2500) -> str:
     return txt
 
 
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.I)
+_BINARY_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+
+def _extract_urls_from_payload(value: Any) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add(raw: str) -> None:
+        u = str(raw or "").strip()
+        if not u:
+            return
+        # Убираем хвостовые знаки пунктуации после ссылки в тексте.
+        u = u.rstrip(".,;)]}»\"'")
+        if u and u not in seen:
+            seen.add(u)
+            urls.append(u)
+
+    def walk(obj: Any) -> None:
+        if obj is None:
+            return
+        if isinstance(obj, str):
+            for m in _URL_RE.findall(obj):
+                add(m)
+            return
+        if isinstance(obj, dict):
+            for v in obj.values():
+                walk(v)
+            return
+        if isinstance(obj, (list, tuple, set)):
+            for v in obj:
+                walk(v)
+
+    walk(value)
+    return urls
+
+
+def _looks_like_pdf_or_binary_payload(value: Any) -> bool:
+    if isinstance(value, (bytes, bytearray)):
+        head = bytes(value[:16])
+        return head.startswith(b"%PDF") or bool(_BINARY_CONTROL_CHARS_RE.search(value.decode("latin1", errors="ignore")))
+    if isinstance(value, str):
+        s = value.lstrip()
+        if s.startswith("%PDF"):
+            return True
+        # Если в строке много управляющих символов — это, скорее всего, бинарник.
+        ctrl = len(_BINARY_CONTROL_CHARS_RE.findall(value))
+        return ctrl >= 8
+    return False
+
+
 def _fio_tokens(text: str) -> list[str]:
     return [t.lower() for t in _FIO_TOKEN_RE.findall(str(text or ""))]
 
@@ -135,12 +186,6 @@ def _extract_result_query_fields(entities: dict[str, Any], query: str) -> dict[s
 
     if number_raw is None:
         number_raw = entities.get("order_id")
-
-    # Мягкий fallback: если поле фамилии не заполнено, берем первое слово из query
-    if not surname and isinstance(query, str):
-        words = [w for w in re.findall(r"[A-Za-zА-Яа-яЁё\-]{2,}", query)]
-        if words:
-            surname = words[0]
 
     year = _as_int(year_raw)
     number = _as_int(number_raw)
@@ -621,11 +666,29 @@ class Services:
                 "entities_used": entities,
             }
 
+        links = _extract_urls_from_payload(payload)
+        if not links and _looks_like_pdf_or_binary_payload(payload):
+            return {
+                "ready": True,
+                "note": "resultForPatient success (binary-pdf)",
+                "result_payload": None,
+                "result_preview": (
+                    "Результаты найдены, но сервис вернул файл в бинарном формате. "
+                    "Чтобы выдать документ корректно, подключаю оператора."
+                ),
+                "result_links": [],
+                "handoff_required": True,
+                "handoff_reason": "test_result_fallback",
+                "handoff_message": "Результаты найдены, но сейчас не удалось выдать PDF автоматически. Соединяю с оператором.",
+                "entities_used": entities,
+            }
+
         return {
             "ready": True,
             "note": "resultForPatient success",
             "result_payload": payload,
             "result_preview": _stringify_json_preview(payload),
+            "result_links": links,
             "entities_used": entities,
         }
 

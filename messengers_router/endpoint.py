@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 from .memory import MemoryStore
 from .router import patient_routing_stream
 from .services import Services
-from .mess_types import ResponseEnvelope as InternalEnvelope
 
 router = APIRouter()
 

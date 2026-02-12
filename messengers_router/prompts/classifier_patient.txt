@@ -101,7 +101,23 @@ context_action: continue
 Label: DOCTOR_SCHEDULE
 context_action: continue
 
+Текст: К Дразнину какие есть окна?
+Label: DOCTOR_SCHEDULE
+context_action: continue
+
+Текст: какие есть свободные слоты у Дразнина?
+Label: DOCTOR_SCHEDULE
+context_action: continue
+
+Текст: Когда принимает Дразнин уролог?
+Label: DOCTOR_SCHEDULE
+context_action: continue
+
 Текст: вся инфа о враче Ким
+Label: DOCTOR_INFO
+context_action: continue
+
+Текст: расскажите про врача Ким
 Label: DOCTOR_INFO
 context_action: continue
 
@@ -110,6 +126,10 @@ Label: DOCTOR_SCHEDULE
 context_action: overwrite_doctor
 
 Текст: Добрый день, пришло смс по готовности анализов. Можно отправить на почту?
+Label: TEST_RESULT
+context_action: continue
+
+Текст: Хотел бы узнать результаты анализов
 Label: TEST_RESULT
 context_action: continue
 
@@ -140,6 +160,31 @@ context_action: new_topic
 Текст: Расшифруйте мои анализы и скажите что мне пить
 Label: MEDICAL_ADVICE
 context_action: new_topic
+
+Negative few-shot (не путать):
+Текст: да
+Label: OTHER
+context_action: continue
+
+Текст: угу
+Label: OTHER
+context_action: continue
+
+Текст: наверное
+Label: OTHER
+context_action: continue
+
+Текст: Тен Максим Александрович
+Label: OTHER
+context_action: continue
+
+Текст: 18 февраля 09:45 Тен Максим Александрович
+Label: APPOINTMENT
+context_action: continue
+
+Текст: хочу записаться к врачу
+Label: APPOINTMENT
+context_action: continue
 
 Контекст из прошлых сообщений (если релевантно): <<SEEDED>>
 

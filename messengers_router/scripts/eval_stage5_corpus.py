@@ -12,7 +12,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -122,7 +122,7 @@ def main() -> int:
     preflight_ok, preflight_note = preflight_endpoint(args.url)
     if not preflight_ok:
         print(f"[error] endpoint preflight failed: {preflight_note}")
-        print(f"[hint] start API first, e.g. python -m uvicorn agent_api:app --host 0.0.0.0 --port 8000 --reload")
+        print("[hint] start API first, e.g. python -m uvicorn agent_api:app --host 0.0.0.0 --port 8000 --reload")
         return 2
 
     run_id = args.run_id.strip() or str(int(time.time()))

@@ -57,6 +57,8 @@ _TOPIC_SWITCH_RE = re.compile(r"\b(передумал\w*|передумала\w*
 _CANCEL_FLOW_RE = re.compile(r"\b(отмен\w*|не\s+надо|не\s+хочу)\b", re.I)
 _DOCTOR_SWITCH_SIGNAL_RE = re.compile(r"\b(расписани\w*|график|врач\w*|доктор\w*|когда\b.*\bпринима\w*)\b", re.I)
 _INVALID_DOCTOR_TOKEN_RE = re.compile(r"^(отмен|перен|запис|покаж|подскаж|скажи|нуж|хоч|надо)", re.I)
+_REFINE_INTENTS = {"DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
+_REFINE_SIGNAL_RE = re.compile(r"\b(передумал\w*|передумала\w*|лучше|или|а\s+если|а\s+вот|уточн\w*)\b", re.I)
 
 
 @lru_cache
@@ -103,6 +105,36 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _extract_generate_response_text(res: Any) -> str | None:
+    """
+    Совместимо с разными версиями ollama python client:
+    - старые: dict-like ответ
+    - новые (0.5.x): GenerateResponse (pydantic model) с .response
+    """
+    raw: Any = None
+
+    if isinstance(res, dict):
+        raw = res.get("response")
+    else:
+        raw = getattr(res, "response", None)
+        if raw is None and hasattr(res, "model_dump"):
+            try:
+                dumped = res.model_dump()
+                if isinstance(dumped, dict):
+                    raw = dumped.get("response")
+            except Exception:
+                raw = None
+
+    if isinstance(raw, bytes):
+        try:
+            raw = raw.decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+    if isinstance(raw, str):
+        return raw
+    return None
+
+
 async def ollama_classify_json(prompt: str) -> dict[str, Any]:
     """
     Реальный вызов Ollama: generate(format="json") + безопасный парсинг.
@@ -125,13 +157,13 @@ async def ollama_classify_json(prompt: str) -> dict[str, Any]:
     except Exception:
         return {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_timeout"]}
 
-    raw = res.get("response") if isinstance(res, dict) else None
+    raw = _extract_generate_response_text(res)
     if isinstance(raw, str):
         obj = _extract_json(raw)
         if isinstance(obj, dict):
             return obj
 
-    return {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": []}
+    return {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_non_json"]}
 
 
 # ---------------------------
@@ -139,12 +171,34 @@ async def ollama_classify_json(prompt: str) -> dict[str, Any]:
 # ---------------------------
 
 _ORDER_ID_RE = re.compile(r"(?:заказ|order|№)\s*([0-9]{4,})", re.I)
-_DIAGNOSTIC_RE = re.compile(r"\b(экг|узи|мрт|кт|фгдс|фкс|рентген|флюорограф|колоноскоп|холтер)\b", re.I)
 _GREETING_ONLY_RE = re.compile(
     r"^\s*(привет|здравствуйте|здраствуйте|добрый день|доброе утро|добрый вечер|доброго дня|hello|hi)\s*[!.,?]*\s*$",
     re.I,
 )
+_GREETING_PREFIX_RE = re.compile(
+    r"^\s*(привет|здравствуйте|здраствуйте|добрый день|доброе утро|добрый вечер|доброго дня|hello|hi)\b",
+    re.I,
+)
+_SMALLTALK_RE = re.compile(
+    r"^\s*(как\s+дела|как\s+жизнь|как\s+ты|ч[её]\s+как|что\s+нового)\s*[!.,?]*\s*$",
+    re.I,
+)
 _LABEL_RANK = {lbl: i for i, lbl in enumerate(PATIENT_LABEL_PRIORITY)}
+
+
+def _is_smalltalk_greeting(text: str) -> bool:
+    s = str(text or "").strip()
+    if not s:
+        return False
+    if _GREETING_ONLY_RE.match(s):
+        return True
+    m = _GREETING_PREFIX_RE.match(s)
+    if not m:
+        return False
+    tail = s[m.end():].strip(" \t\n\r,!.?-:;")
+    if not tail:
+        return True
+    return bool(_SMALLTALK_RE.match(tail))
 
 def _extract_order_id(text: str) -> str | None:
     m = _ORDER_ID_RE.search(text)
@@ -152,13 +206,7 @@ def _extract_order_id(text: str) -> str | None:
 
 
 def _extract_service_keyword(text: str) -> str | None:
-    phrase = extract_service_phrase(text)
-    if phrase:
-        return phrase
-    m = _DIAGNOSTIC_RE.search(text)
-    if not m:
-        return None
-    return m.group(1).upper()
+    return extract_service_phrase(text)
 
 
 def _extract_schedule_doctor_name(text: str) -> str | None:
@@ -193,6 +241,95 @@ def _build_classify_prompt(text: str, seeded: dict[str, Any]) -> str:
         .replace("<<SEEDED>>", json.dumps(seeded, ensure_ascii=False))
         .replace("<<TEXT>>", text)
     ).strip()
+
+
+def _refine_allowed(base_label: Label) -> list[str]:
+    if base_label == "DOCTOR_SCHEDULE":
+        return ["DOCTOR_SCHEDULE", "DOCTOR_INFO", "APPOINTMENT", "OTHER"]
+    if base_label == "DOCTOR_INFO":
+        return ["DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT", "OTHER"]
+    if base_label == "APPOINTMENT":
+        return ["APPOINTMENT", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "PRICE", "OTHER"]
+    return [base_label]
+
+
+def _build_refine_prompt(text: str, seeded: dict[str, Any], base: RouteDecision) -> str:
+    tmpl = _load_prompt("classifier_refine_patient.txt")
+    allowed = ", ".join(_refine_allowed(base.label))
+    base_dump = {
+        "label": base.label,
+        "confidence": base.confidence,
+        "context_action": base.context_action,
+        "entities": base.entities,
+        "flags": sorted(list(base.flags)),
+    }
+    return (
+        tmpl.replace("<<ALLOWED_LABELS>>", allowed)
+        .replace("<<BASE_DECISION>>", json.dumps(base_dump, ensure_ascii=False))
+        .replace("<<SEEDED>>", json.dumps(seeded, ensure_ascii=False))
+        .replace("<<TEXT>>", text)
+    ).strip()
+
+
+async def _maybe_refine_live_intent(text: str, last_entities: dict[str, Any], base: RouteDecision) -> RouteDecision:
+    if base.label not in _REFINE_INTENTS:
+        return base
+    # Не гоняем лишний LLM-call на понятных фразах, чтобы не ухудшать стабильность.
+    # Рефайн включаем только для "серых" кейсов: нет ключевых сущностей или явное переключение/уточнение.
+    if base.label == "DOCTOR_SCHEDULE" and base.entities.get("doctor_name") and not _REFINE_SIGNAL_RE.search(text or ""):
+        return base
+    if (
+        base.label == "APPOINTMENT"
+        and (base.entities.get("doctor_name") or base.entities.get("service_name") or base.entities.get("appointment_action"))
+        and not _REFINE_SIGNAL_RE.search(text or "")
+    ):
+        return base
+
+    seeded = _seed_entities_from_memory(last_entities)
+    prompt = _build_refine_prompt(text, seeded, base)
+    data = await ollama_classify_json(prompt)
+    data_flags = _normalize_flags(data.get("flags"))
+    if "ollama_timeout" in data_flags or "ollama_non_json" in data_flags:
+        return RouteDecision(
+            label=base.label,
+            confidence=base.confidence,
+            entities=base.entities,
+            flags=set(base.flags) | data_flags | {"llm_refine_unavailable"},
+            needs_handoff=base.needs_handoff,
+            context_action=base.context_action,
+        )
+
+    cand_label = _normalize_label(data.get("label"))
+    allowed = set(_refine_allowed(base.label))
+    if cand_label not in allowed:
+        cand_label = base.label
+
+    cand_conf = _normalize_confidence(data.get("confidence"))
+    if cand_conf < 0.45:
+        return base
+
+    cand_entities = _sanitize_entities(data.get("entities"))
+    entities = dict(base.entities)
+    entities.update({k: v for k, v in cand_entities.items() if v not in (None, "", [])})
+
+    # Бережно сохраняем уже найденный appointment_action.
+    if base.entities.get("appointment_action") and not entities.get("appointment_action"):
+        entities["appointment_action"] = base.entities.get("appointment_action")
+
+    context_action = _normalize_context_action(data.get("context_action"))
+    if context_action == "continue":
+        derived = _derive_context_action(text, cand_label, entities, last_entities)
+        if derived != "continue":
+            context_action = derived
+
+    return RouteDecision(
+        label=cand_label,
+        confidence=max(base.confidence, cand_conf),
+        entities=entities,
+        flags=set(base.flags) | data_flags | {"llm_refine_used"},
+        needs_handoff=False,
+        context_action=context_action,
+    )
 
 
 def _normalize_label(x: Any) -> Label:
@@ -338,7 +475,7 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
     flags: set[str] = set()
     flags |= detect_pii(text)
 
-    if _GREETING_ONLY_RE.match(text or ""):
+    if _is_smalltalk_greeting(text):
         return _attach_secondary_intents(text, RouteDecision(
             label="OTHER",
             confidence=0.99,
@@ -413,18 +550,16 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
         doctor_name = _extract_schedule_doctor_name(text)
         if doctor_name:
             entities["doctor_name"] = doctor_name
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(
-                label="DOCTOR_SCHEDULE",
-                confidence=0.74,
-                entities=entities,
-                flags=flags | {"rule_schedule"},
-                needs_handoff=False,
-                context_action=_derive_context_action(text, "DOCTOR_SCHEDULE", entities, last_entities),
-            ),
-            last_entities,
+        base = RouteDecision(
+            label="DOCTOR_SCHEDULE",
+            confidence=0.74,
+            entities=entities,
+            flags=flags | {"rule_schedule"},
+            needs_handoff=False,
+            context_action=_derive_context_action(text, "DOCTOR_SCHEDULE", entities, last_entities),
         )
+        refined = await _maybe_refine_live_intent(text, last_entities, base)
+        return _attach_secondary_intents(text, refined, last_entities)
 
     # hard rule: doctor info queries
     if detect_doctor_info_intent(text):
@@ -432,18 +567,16 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
         doctor_name = _extract_appointment_doctor_name(text)
         if doctor_name:
             entities["doctor_name"] = doctor_name
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(
-                label="DOCTOR_INFO",
-                confidence=0.72,
-                entities=entities,
-                flags=flags | {"rule_doctor_info"},
-                needs_handoff=False,
-                context_action=_derive_context_action(text, "DOCTOR_INFO", entities, last_entities),
-            ),
-            last_entities,
+        base = RouteDecision(
+            label="DOCTOR_INFO",
+            confidence=0.72,
+            entities=entities,
+            flags=flags | {"rule_doctor_info"},
+            needs_handoff=False,
+            context_action=_derive_context_action(text, "DOCTOR_INFO", entities, last_entities),
         )
+        refined = await _maybe_refine_live_intent(text, last_entities, base)
+        return _attach_secondary_intents(text, refined, last_entities)
 
     # hard rules: appointment / price
     # Guard: explicit price query ("стоимость приема ...") should stay PRICE,
@@ -493,14 +626,16 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
         svc = _extract_service_keyword(text)
         if svc:
             entities["service_name"] = svc
-        return _attach_secondary_intents(text, RouteDecision(
+        base = RouteDecision(
             label="APPOINTMENT",
             confidence=0.75,
             entities=entities,
             flags=flags | {"rule_appointment"},
             needs_handoff=False,
             context_action=_derive_context_action(text, "APPOINTMENT", entities, last_entities),
-        ), last_entities)
+        )
+        refined = await _maybe_refine_live_intent(text, last_entities, base)
+        return _attach_secondary_intents(text, refined, last_entities)
 
     if detect_news_intent(text):
         return _attach_secondary_intents(

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -61,6 +62,10 @@ TEST_INTERPRET_PATTERNS = [
 
 TEST_RESULT_PATTERNS = [
     r"\bрезультат(ы|ов)\s+анализ",
+    r"\bрезультат(ы|ов)\s+тест\w*",
+    r"\bрезультат\b.*\b(анализ|тест)\w*",
+    r"\bнуж\w*\s+результат\w*",
+    r"\bполуч(ить|у|ите)\b.*\bрезультат\w*",
     r"\bанализ(ы)?\s+готов(ы|о)\b",
     r"\bготовност(ь|и)\s+анализ",
     r"\bрезультат(ы)?\s+готов",
@@ -99,8 +104,10 @@ SCHEDULE_PATTERNS = [
     r"\bрасписани(е|я)\b",
     r"\bграфик\b",
     r"\bкогда\b.*\bпринима(ет|ют)\b",
-    r"\bна следующ(ей|ую)\s+недел",
-    r"\bв ближайш(ие|ую)\s+7\s*дн",
+    r"\bсвободн\w*\s+окн\w*\b",
+    r"\bкакие\s+есть\s+окн\w*\b",
+    r"\bслот\w*\b",
+    r"\bокн\w*\b.*\bпри(е|ё)м\w*\b",
 ]
 
 DOC_REQUEST_PATTERNS = [
@@ -158,6 +165,32 @@ DOCTOR_INFO_PATTERNS = [
     r"\b(о|про)\b\s+(врач\w*|доктор\w*)\b",
     r"\bкто\b.*\b(врач\w*|доктор\w*)\b",
 ]
+_DOCTOR_INFO_HINT_RE = re.compile(r"\b(инф\w*|расскаж\w*|о\s+врач\w*|про\s+врач\w*|кто\s+так\w*)\b", re.I)
+_DOCTOR_SCHEDULE_HINT_RE = re.compile(r"\b(расписани\w*|график|окн\w*|слот\w*|когда\b.*\bпринима\w*)\b", re.I)
+
+
+def _compile_patterns(patterns: list[str]) -> tuple[re.Pattern[str], ...]:
+    return tuple(re.compile(p, re.I) for p in patterns)
+
+
+_URGENT_RE = _compile_patterns(URGENT_PATTERNS)
+_COMPLAINT_RE = _compile_patterns(COMPLAINT_PATTERNS)
+_MEDICAL_ADVICE_RE = _compile_patterns(MEDICAL_ADVICE_PATTERNS)
+_TEST_INTERPRET_RE = _compile_patterns(TEST_INTERPRET_PATTERNS)
+_TEST_RESULT_RE = _compile_patterns(TEST_RESULT_PATTERNS)
+_TEST_ASSIST_RE = _compile_patterns(TEST_ASSIST_PATTERNS)
+_SCHEDULE_RE = _compile_patterns(SCHEDULE_PATTERNS)
+_DOC_REQUEST_RE = _compile_patterns(DOC_REQUEST_PATTERNS)
+_APPOINTMENT_INTENT_RE = _compile_patterns(APPOINTMENT_INTENT_PATTERNS)
+_PRICE_RE = _compile_patterns(PRICE_PATTERNS)
+_ADDRESS_RE = _compile_patterns(ADDRESS_PATTERNS)
+_NEWS_RE = _compile_patterns(NEWS_PATTERNS)
+_DOCTOR_INFO_RE = _compile_patterns(DOCTOR_INFO_PATTERNS)
+
+
+def _matches_any(text: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
+    t = text or ""
+    return any(p.search(t) for p in patterns)
 
 SERVICE_ANCHORS = (
     "узи",
@@ -218,6 +251,20 @@ _QF_RESULT_SURNAME_RE = re.compile(r"\bфамили[яиюе]\s*[:\-]?\s*([А-Я
 _QF_RESULT_YEAR_RE = re.compile(r"\b(?:год\s*рождени[яея]|г\.?\s*р\.?)\s*[:\-]?\s*((?:19|20)\d{2})\b", re.I)
 _QF_RESULT_FILIAL_RE = re.compile(r"\b(?:филиал|отделени[ея]|город)\s*[:\-]?\s*([A-Za-zА-Яа-яЁё0-9 .,\-]{2,80})", re.I)
 _QF_RESULT_NUMBER_RE = re.compile(r"\b(?:номер|код)\s*(?:анализа)?\s*[:#№\-]?\s*(\d{3,})\b", re.I)
+_QF_RESULT_ORDERED_RE = re.compile(
+    r"^\s*([A-Za-zА-Яа-яЁё\-]{2,})\s*[,;]\s*((?:19|20)\d{2})\s*[,;]\s*([A-Za-zА-Яа-яЁё0-9\-]{1,20})\s*[,;]\s*(\d{3,})\s*$",
+    re.I,
+)
+_QF_RESULT_ORDERED_SPACE_RE = re.compile(
+    r"^\s*([A-Za-zА-Яа-яЁё\-]{2,})\s+((?:19|20)\d{2})\s+([A-Za-zА-Яа-яЁё0-9\-]{1,20})\s+(\d{3,})\s*$",
+    re.I,
+)
+_QF_RESULT_SURNAME_STOPWORDS = {
+    "хочу", "хотел", "хотела", "получить", "получу", "получите",
+    "узнать", "подскажите", "покажите", "пришлите",
+    "результат", "результаты", "тест", "тесты", "тестов", "анализ", "анализы", "анализов",
+    "готов", "готово", "готовы", "нужен", "нужны",
+}
 _QF_TEST_WORDS_RE = re.compile(r"\b(анализ|пцр|hba1c|глюкоз|витамин|ферритин|ттг|т4|т3|холестер|оак|оам)\b", re.I)
 _QF_PATIENT_NAME_PREFIX_RE = re.compile(
     r"\b(?:фио|ф\.?\s*и\.?\s*о\.?|меня\s+зовут|зовут)\b[:\s\-]*([А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+){1,2})",
@@ -292,8 +339,41 @@ REQUIRED_SLOTS: dict[str, list[str]] = {
     "OTHER": [],
 }
 
+CLARIFY_TEXT_MAP: dict[str, str] = {
+    "DOCTOR_SCHEDULE": (
+        "Чтобы показать расписание, нужна фамилия врача (или ID). "
+        "Напишите, например: «расписание уролога Дразнина»."
+    ),
+    "DOCTOR_INFO": "Какого врача или специалиста вы ищете? (например: «уролог», или фамилия врача).",
+    "PRICE": "Скажите, пожалуйста, название услуги/анализа — я уточню стоимость.",
+    "PREPARE": "К какому анализу или исследованию нужна подготовка? Напишите название.",
+    "TEST_ASSIST": (
+        "Для какой цели хотите подобрать анализы? "
+        "Например: «проверить щитовидку», «витамины», «чекап»."
+    ),
+}
+
+TEST_RESULT_CLARIFY_MAP: dict[frozenset[str], str] = {
+    frozenset({"surname"}): "Укажите, пожалуйста, фамилию пациента.",
+    frozenset({"year"}): "Укажите год рождения пациента (например: 1985).",
+    frozenset({"filial"}): "Укажите код анализа (например: Бг).",
+    frozenset({"number"}): "Укажите номер анализа.",
+}
+
+APPOINTMENT_CLARIFY_MAP: dict[str, str] = {
+    "need_service": (
+        "Чтобы помочь с записью, уточните: к какому врачу/специалисту "
+        "или на какую услугу вы хотите записаться?"
+    ),
+    "need_city": "Из какого города вы обращаетесь?",
+    "need_patient": "Укажите, пожалуйста, ФИО пациента для оформления записи.",
+    "need_datetime": "Уточните, пожалуйста, дату и время записи.",
+    "default": "Уточните, пожалуйста, детали записи.",
+}
+
 # Centralized reason -> patient message map for operator handoff.
 HANDOFF_REASON_MATRIX: dict[str, str] = {
+    "manual_operator": "Соединяю с оператором по вашему запросу.",
     "doc_request_handoff": "Для оформления справок и документов подключаю оператора. Он уточнит детали и поможет с заявкой.",
     "test_result_fallback": "Для проверки и выдачи результатов анализов подключаю оператора. Это нужно для корректной идентификации пациента.",
     "service_error": "Сейчас не удалось получить данные автоматически. Соединяю с оператором.",
@@ -310,6 +390,26 @@ APPOINTMENT_STEP_DONE = "done"
 APPOINTMENT_CONFIRM_YES = "yes"
 APPOINTMENT_CONFIRM_NO = "no"
 APPOINTMENT_CONFIRM_OTHER = "other"
+
+APPOINTMENT_REPLY_MAP: dict[str, str] = {
+    "patient_name_prompt": "Укажите, пожалуйста, ФИО пациента для оформления заявки на запись.",
+    "confirm_suffix": "Подтверждаете?",
+    "confirmed_handoff_suffix": "Передаю заявку оператору для окончательного подтверждения записи.",
+    "reask_datetime": "Хорошо, тогда уточните новую дату и время для записи.",
+    "reask_confirm": "Подтвердите запись, пожалуйста: ответьте «да» или «нет».",
+}
+
+
+@dataclass(frozen=True)
+class DoctorIntentOverridePolicy:
+    """
+    Политика мягкого повышения интента, когда врач уже подтвержден по кэшу.
+    Нужна для фраз типа "к Дразнину какие есть окна?" без точного шаблона.
+    """
+    promote_from_labels: frozenset[str] = frozenset({"OTHER", "TEST_ASSIST", "ADDRESS", "NEWS"})
+
+
+DOCTOR_INTENT_OVERRIDE_POLICY = DoctorIntentOverridePolicy()
 
 # ---------------------------
 # Simple PII detector (MVP)
@@ -329,48 +429,47 @@ def detect_pii(text: str) -> set[str]:
 
 
 def detect_urgent(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in URGENT_PATTERNS)
+    return _matches_any(text, _URGENT_RE)
 
 
 def detect_complaint(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in COMPLAINT_PATTERNS)
+    return _matches_any(text, _COMPLAINT_RE)
 
 
 def detect_medical_advice(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in MEDICAL_ADVICE_PATTERNS)
+    return _matches_any(text, _MEDICAL_ADVICE_RE)
 
 
 def detect_test_interpretation(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in TEST_INTERPRET_PATTERNS)
+    return _matches_any(text, _TEST_INTERPRET_RE)
 
 
 def detect_test_result_intent(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in TEST_RESULT_PATTERNS)
+    if _matches_any(text, _TEST_RESULT_RE):
+        return True
+    # Поддержка "чистого" ввода реквизитов без слов "результат/анализ":
+    # "Иванов, 1989, Бг, 1234" или "Иванов 1989 Бг 1234"
+    if _QF_RESULT_ORDERED_RE.match(text or ""):
+        return True
+    if _QF_RESULT_ORDERED_SPACE_RE.match(text or ""):
+        return True
+    return False
 
 
 def detect_test_assist_intent(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in TEST_ASSIST_PATTERNS)
+    return _matches_any(text, _TEST_ASSIST_RE)
 
 
 def detect_schedule_intent(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in SCHEDULE_PATTERNS)
+    return _matches_any(text, _SCHEDULE_RE)
 
 
 def detect_doc_request_intent(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in DOC_REQUEST_PATTERNS)
+    return _matches_any(text, _DOC_REQUEST_RE)
 
 
 def detect_appointment_intent(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in APPOINTMENT_INTENT_PATTERNS)
+    return _matches_any(text, _APPOINTMENT_INTENT_RE)
 
 
 def detect_appointment_action(text: str) -> str | None:
@@ -385,23 +484,44 @@ def detect_appointment_action(text: str) -> str | None:
 
 
 def detect_price_intent(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in PRICE_PATTERNS)
+    return _matches_any(text, _PRICE_RE)
 
 
 def detect_address_intent(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in ADDRESS_PATTERNS)
+    return _matches_any(text, _ADDRESS_RE)
 
 
 def detect_news_intent(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in NEWS_PATTERNS)
+    return _matches_any(text, _NEWS_RE)
 
 
 def detect_doctor_info_intent(text: str) -> bool:
-    t = text.lower()
-    return any(re.search(p, t) for p in DOCTOR_INFO_PATTERNS)
+    return _matches_any(text, _DOCTOR_INFO_RE)
+
+
+def apply_verified_doctor_override(label: str, flags: set[str], text: str) -> tuple[str, set[str]]:
+    """
+    Если doctor_name уже верифицирован, переводим слабый label в профильный doctor intent.
+    Это снижает ложные handoff на естественных формулировках пользователя.
+    """
+    if "doctor_name_verified" not in flags:
+        return label, flags
+    if label in {"DOCTOR_SCHEDULE", "DOCTOR_INFO", "APPOINTMENT", "PRICE"}:
+        return label, flags
+    if label not in DOCTOR_INTENT_OVERRIDE_POLICY.promote_from_labels:
+        return label, flags
+
+    out_flags = set(flags)
+    low = text.lower()
+    if detect_schedule_intent(low) or _DOCTOR_SCHEDULE_HINT_RE.search(low):
+        out_flags.add("policy_promote_doctor_schedule")
+        return "DOCTOR_SCHEDULE", out_flags
+    if detect_doctor_info_intent(low) or _DOCTOR_INFO_HINT_RE.search(low):
+        out_flags.add("policy_promote_doctor_info")
+        return "DOCTOR_INFO", out_flags
+
+    out_flags.add("policy_promote_doctor_info")
+    return "DOCTOR_INFO", out_flags
 
 
 def normalize_appointment_action(action: str | None, text: str) -> str | None:
@@ -717,6 +837,22 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
     # TEST_RESULT flow: собираем surname/year/filial/number по мере диалога.
     needs_result = any(m in {"surname", "year", "filial", "number"} for m in missing_rules)
     if needs_result:
+        # Формат одной строкой: "Иванов, 1989, Бг, 1234"
+        ordered = _QF_RESULT_ORDERED_RE.match(t)
+        if ordered:
+            out["surname"] = ordered.group(1).strip().capitalize()
+            out["year"] = int(ordered.group(2))
+            out["filial"] = ordered.group(3).strip()
+            out["number"] = int(ordered.group(4))
+        else:
+            # Альтернативный формат без запятых: "Иванов 1989 Бг 1234"
+            ordered_space = _QF_RESULT_ORDERED_SPACE_RE.match(t)
+            if ordered_space:
+                out["surname"] = ordered_space.group(1).strip().capitalize()
+                out["year"] = int(ordered_space.group(2))
+                out["filial"] = ordered_space.group(3).strip()
+                out["number"] = int(ordered_space.group(4))
+
         m_surname = _QF_RESULT_SURNAME_RE.search(t)
         if m_surname:
             out["surname"] = m_surname.group(1).strip().capitalize()
@@ -759,9 +895,11 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
 
         if "surname" in missing_rules and "surname" not in out:
             words = [w for w in re.split(r"\s+", t) if w]
-            if len(words) == 1 and re.fullmatch(r"[А-Яа-яЁё\-]{2,}", words[0]):
-                out["surname"] = words[0].capitalize()
-            elif words and re.fullmatch(r"[А-Яа-яЁё\-]{2,}", words[0]):
+            if (
+                len(words) == 1
+                and re.fullmatch(r"[А-Яа-яЁё\-]{2,}", words[0])
+                and words[0].lower() not in _QF_RESULT_SURNAME_STOPWORDS
+            ):
                 out["surname"] = words[0].capitalize()
 
     m_spec = _QF_SPECIALTY_HINT_RE.search(low)
@@ -943,48 +1081,26 @@ def clarification_question(label: str, missing: list[str]) -> str:
         return "Сколько полных лет ребенку?"
     if label in {"PRICE", "TEST_ASSIST", "ADDRESS"} and need_city:
         return "Из какого города вы обращаетесь?"
-    if label == "DOCTOR_SCHEDULE":
-        return (
-            "Чтобы показать расписание, нужна фамилия врача (или ID). "
-            "Напишите, например: «расписание уролога Дразнина»."
-        )
-    if label == "DOCTOR_INFO":
-        return "Какого врача или специалиста вы ищете? (например: «уролог», или фамилия врача)."
-    if label == "PRICE":
-        return "Скажите, пожалуйста, название услуги/анализа — я уточню стоимость."
-    if label == "PREPARE":
-        return "К какому анализу или исследованию нужна подготовка? Напишите название."
-    if label == "TEST_ASSIST":
-        return (
-            "Для какой цели хотите подобрать анализы? "
-            "Например: «проверить щитовидку», «витамины», «чекап»."
-        )
+    if label in CLARIFY_TEXT_MAP:
+        return CLARIFY_TEXT_MAP[label]
     if label == "APPOINTMENT":
         if need_service:
-            return (
-                "Чтобы помочь с записью, уточните: к какому врачу/специалисту "
-                "или на какую услугу вы хотите записаться?"
-            )
+            return APPOINTMENT_CLARIFY_MAP["need_service"]
         if need_city:
-            return "Из какого города вы обращаетесь?"
+            return APPOINTMENT_CLARIFY_MAP["need_city"]
         if "patient_name" in missing:
-            return "Укажите, пожалуйста, ФИО пациента для оформления записи."
+            return APPOINTMENT_CLARIFY_MAP["need_patient"]
         if "date_from" in missing or "time_from" in missing:
-            return "Уточните, пожалуйста, дату и время записи."
-        return "Уточните, пожалуйста, детали записи."
+            return APPOINTMENT_CLARIFY_MAP["need_datetime"]
+        return APPOINTMENT_CLARIFY_MAP["default"]
     if label == "TEST_RESULT":
-        need = set(missing)
-        if need == {"surname"}:
-            return "Укажите, пожалуйста, фамилию пациента."
-        if need == {"year"}:
-            return "Укажите год рождения пациента (например: 1985)."
-        if need == {"filial"}:
-            return "Укажите филиал (город/отделение), где сдавали анализ."
-        if need == {"number"}:
-            return "Укажите номер (код) анализа."
+        need = frozenset(missing)
+        if need in TEST_RESULT_CLARIFY_MAP:
+            return TEST_RESULT_CLARIFY_MAP[need]
         return (
-            "Чтобы получить результат, нужны 4 поля: фамилия, год рождения, филиал и номер анализа. "
-            "Можно одним сообщением: «Иванов 1985 Самара 12345»."
+            "Чтобы получить результат, укажите данные в таком порядке: "
+            "фамилия, год рождения, код анализа, номер анализа. "
+            "Пример: «Иванов, 1989, Бг, 1234»."
         )
     return "Уточните, пожалуйста, детали запроса."
 
@@ -1032,8 +1148,11 @@ def appointment_step_policy(entities: dict[str, Any]) -> str:
     return APPOINTMENT_STEP_DONE
 
 
-_YES_RE = re.compile(r"^\s*(да|ага|угу|подтверждаю|подтверждаем|верно|ок|окей)\s*[!.]?\s*$", re.I)
-_NO_RE = re.compile(r"^\s*(нет|неа|не подтверждаю|не подтверждаем|неверно)\s*[!.]?\s*$", re.I)
+_YES_RE = re.compile(
+    r"^\s*(да|ага|угу|подтверждаю|подтверждаем|верно|ок|окей|конечно|давайте|наверное)\s*[!.]?\s*$",
+    re.I,
+)
+_NO_RE = re.compile(r"^\s*(нет|неа|не подтверждаю|не подтверждаем|неверно|не надо|не нужно)\s*[!.]?\s*$", re.I)
 
 
 def appointment_confirmation_transition(text: str) -> str:
@@ -1042,6 +1161,14 @@ def appointment_confirmation_transition(text: str) -> str:
     if _NO_RE.match(text or ""):
         return APPOINTMENT_CONFIRM_NO
     return APPOINTMENT_CONFIRM_OTHER
+
+
+def is_context_affirmative(text: str) -> bool:
+    return bool(_YES_RE.match(text or ""))
+
+
+def is_context_negative(text: str) -> bool:
+    return bool(_NO_RE.match(text or ""))
 
 
 def extract_price_rub(price_payload: dict[str, Any] | None) -> str | None:
@@ -1065,12 +1192,7 @@ def extract_price_rub(price_payload: dict[str, Any] | None) -> str | None:
 def appointment_summary(entities: dict[str, Any]) -> str:
     patient_name = str(entities.get("patient_name") or "").strip()
     doctor_name = str(entities.get("doctor_name") or "").strip()
-    service = str(entities.get("service_name") or entities.get("test_name") or "").strip()
-    if not service or service.lower() == "услуга":
-        if doctor_name:
-            service = f"приём к врачу {doctor_name}"
-        else:
-            service = "услуга"
+    service = appointment_service_display(entities)
     place = str(entities.get("branch_name") or entities.get("city") or "выбранный филиал").strip()
     date_part_raw = str(entities.get("date_from") or entities.get("date_hint") or "уточним дату").strip()
     date_part = date_part_raw
@@ -1096,10 +1218,6 @@ def appointment_summary(entities: dict[str, Any]) -> str:
     if patient_name:
         return f"Запись: {patient_name}, {service}, {place}, {date_part}, {time_part}."
     return f"Запись: {service}, {place}, {date_part}, {time_part}."
-
-
-def appointment_addresses(address_payload: Any, branches: list[dict[str, str]], limit: int = 5) -> list[str]:
-    return appointment_addresses_for_city(address_payload, branches, city=None, limit=limit)
 
 
 def appointment_addresses_for_city(
@@ -1160,23 +1278,40 @@ def appointment_text_datetime_prompt(service: str, branch: str, price_rub: str |
 
 
 def appointment_text_patient_name_prompt() -> str:
-    return "Укажите, пожалуйста, ФИО пациента для оформления заявки на запись."
+    return APPOINTMENT_REPLY_MAP["patient_name_prompt"]
 
 
 def appointment_text_confirm_prompt(summary: str) -> str:
-    return f"{summary} Подтверждаете?"
+    return f"{summary} {APPOINTMENT_REPLY_MAP['confirm_suffix']}"
 
 
 def appointment_text_confirmed_handoff(summary: str) -> str:
-    return f"{summary}\nПередаю заявку оператору для окончательного подтверждения записи."
+    return f"{summary}\n{APPOINTMENT_REPLY_MAP['confirmed_handoff_suffix']}"
 
 
 def appointment_text_reask_datetime() -> str:
-    return "Хорошо, тогда уточните новую дату и время для записи."
+    return APPOINTMENT_REPLY_MAP["reask_datetime"]
 
 
 def appointment_text_reask_confirm() -> str:
-    return "Подтвердите запись, пожалуйста: ответьте «да» или «нет»."
+    return APPOINTMENT_REPLY_MAP["reask_confirm"]
+
+
+def appointment_service_display(entities: dict[str, Any]) -> str:
+    service_raw = str(entities.get("service_name") or entities.get("test_name") or "").strip()
+    if (
+        not service_raw
+        or _QF_APPOINTMENT_WORD_RE.search(service_raw)
+        or _QF_TIME_FRAGMENT_RE.search(service_raw)
+    ):
+        doctor_name = str(entities.get("doctor_name") or "").strip()
+        specialty = str(entities.get("specialty") or "").strip()
+        if doctor_name:
+            return f"приём к врачу {doctor_name}"
+        if specialty:
+            return f"приём к {specialty}"
+        return "услугу"
+    return service_raw
 
 
 def doctor_schedule_text_clarify_doctor() -> str:
