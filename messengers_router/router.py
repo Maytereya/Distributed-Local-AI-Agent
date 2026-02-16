@@ -79,12 +79,32 @@ def _should_break_pending(decision: RouteDecision, pending_label: str) -> bool:
     return False
 
 
-def _apply_pending_override(decision: RouteDecision, pending: dict | None) -> str:
+def _is_appointment_waiting_patient_name(pending: dict | None) -> bool:
+    if not isinstance(pending, dict):
+        return False
+    if pending.get("label") != "APPOINTMENT":
+        return False
+    missing = pending.get("missing")
+    if not isinstance(missing, list):
+        return False
+    return "patient_name" in missing
+
+
+def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_text: str = "") -> str:
     if not pending:
         return decision.label
     pending_label = pending.get("label")
     if not isinstance(pending_label, str):
         return decision.label
+    # В шаге добора ФИО пациента не даем случайной переклассификации
+    # (например, в TEST_RESULT) перебить активный APPOINTMENT flow.
+    if (
+        _is_appointment_waiting_patient_name(pending)
+        and _looks_like_patient_fio(user_text)
+        and decision.context_action == "continue"
+        and decision.label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
+    ):
+        return "APPOINTMENT"
     if _should_break_pending(decision, pending_label):
         return decision.label
     return pending_label
@@ -116,6 +136,13 @@ def _set_secondary_queue(state: SessionState, labels: list[str]) -> None:
 
 
 _PATIENT_FIO_RE = re.compile(r"^[А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+){1,2}$")
+_PATIENT_FIO_STOPWORDS = {
+    "анализ", "анализы", "анализов", "результат", "результаты", "тест", "тесты", "тестов",
+    "врач", "врача", "доктор", "расписание", "запись", "прием", "приём", "окна", "слоты",
+    "оператор", "город", "филиал", "адрес", "цена", "стоимость", "услуга", "услуги",
+    "мне", "нужно", "надо", "хочу", "когда", "где", "какой", "какие", "покажи", "покажите",
+    "да", "нет",
+}
 _OPERATOR_REQUEST_RE = re.compile(r"\b(оператор\w*|соедин\w*.*оператор\w*|жив[оы]м?\s+человек\w*)\b", re.I)
 _INTRO_TEXT = (
     "Здравствуйте! Это ИИ-помощник клиники «Наука».\n"
@@ -133,7 +160,12 @@ def _looks_like_patient_fio(text: str) -> bool:
     if not _PATIENT_FIO_RE.fullmatch(s):
         return False
     tokens = [t for t in s.split() if t]
-    return len(tokens) >= 2
+    if len(tokens) < 2:
+        return False
+    normalized = [t.lower().replace("ё", "е") for t in tokens]
+    if any(t in _PATIENT_FIO_STOPWORDS for t in normalized):
+        return False
+    return True
 
 
 def _normalize_doctor_key(value: Any) -> str:
@@ -493,7 +525,7 @@ def quick_fill_entities_from_text(
 
 def build_plan(decision: RouteDecision, state: SessionState, user_text: str, memory: MemoryStore) -> Plan:
     pending = memory.get_pending(state)
-    effective_label = _apply_pending_override(decision, pending)
+    effective_label = _apply_pending_override(decision, pending, user_text=user_text)
 
     entities = state.last_entities
     missing = missing_slots(effective_label, entities)
@@ -509,7 +541,6 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
 
     if label == "TEST_RESULT":
         steps.append(PlanStep(tool="test_result_status", input={"query": user_text, "entities": dict(entities)}, auth="none"))
-        steps.append(PlanStep(tool="test_result_pdf", input={"query": user_text, "entities": dict(entities)}, auth="none", required=False))
         return Plan(label=label, steps=steps)
 
     if label == "TEST_ASSIST":
@@ -580,8 +611,6 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
                 ev.put("prepare", await services.test_prepare(q, ent))
             elif tool == "test_result_status":
                 ev.put("test_result_status", await services.test_result_status(q, ent))
-            elif tool == "test_result_pdf":
-                ev.put("test_result_pdf", await services.test_result_pdf(q, ent))
             elif tool == "price_info":
                 ev.put("price", await services.price_info(q, ent))
             elif tool == "address_info":
@@ -699,8 +728,13 @@ async def route_patient_message(
 
     if decision.label == "TEST_RESULT":
         # При переходе к результатам анализов завершаем хвост APPOINTMENT flow.
-        for k in ("appointment_flow_active", "appointment_confirm_pending", "appointment_confirmed"):
-            state.last_entities.pop(k, None)
+        # Исключение: если прямо сейчас ждем ФИО пациента и пользователь прислал ФИО,
+        # не сбрасываем запись из-за случайной переклассификации.
+        pending_now = memory.get_pending(state)
+        keep_appointment_flow = _is_appointment_waiting_patient_name(pending_now) and _looks_like_patient_fio(user_text)
+        if not keep_appointment_flow:
+            for k in ("appointment_flow_active", "appointment_confirm_pending", "appointment_confirmed"):
+                state.last_entities.pop(k, None)
 
     # merge entities from LLM+rules
     memory.merge_entities(state, decision.entities, label=decision.label)
@@ -1074,11 +1108,6 @@ async def patient_routing_stream(
             yield ResponseEnvelope(text=appointment_text_confirm_prompt(summary), handoff=False)
             return
 
-    attachments: list[dict[str, Any]] = []
-    pdf_payload = evidence.get("test_result_pdf")
-    if isinstance(pdf_payload, dict) and pdf_payload.get("pdf"):
-        attachments.append({"type": "pdf", "name": "Результаты анализов.pdf", "url": pdf_payload["pdf"]})
-
     try:
         async for chunk in render_stream(user_text, decision, evidence):
             yield ResponseEnvelope(text=chunk, attachments=[], handoff=False)
@@ -1092,9 +1121,6 @@ async def patient_routing_stream(
 
     if decision.needs_handoff:
         yield ResponseEnvelope(text=decision_handoff_text(decision.flags), attachments=[], handoff=True)
-
-    if attachments:
-        yield ResponseEnvelope(text="", attachments=attachments, handoff=False)
 
     secondary = _get_secondary_queue(state)
     followup = _secondary_followup_text(secondary)

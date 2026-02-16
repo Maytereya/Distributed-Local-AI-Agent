@@ -105,11 +105,11 @@ class ResponseEnvelopeLine(BaseModel):
                                 '{"text":"","attachments":[],"handoff":true,"state_update":{}}\n'
                             ),
                         },
-                        "pdf_attachment": {
-                            "summary": "Отдача PDF вложения",
+                        "result_link": {
+                            "summary": "Отдача ссылки на результат в тексте",
                             "value": (
                                 '{"text":"Ваши результаты готовы.","attachments":[],"handoff":false,"state_update":{}}\n'
-                                '{"text":"","attachments":[{"type":"pdf","name":"Результаты анализов.pdf","url":"https://example.com/result.pdf"}],"handoff":false,"state_update":{}}\n'
+                                '{"text":"Ссылка на результат: https://naykalab.ru/getanaliz.php?fam=...","attachments":[],"handoff":false,"state_update":{}}\n'
                             ),
                         },
                     }

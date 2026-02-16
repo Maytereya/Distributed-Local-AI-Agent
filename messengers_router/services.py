@@ -643,11 +643,6 @@ class Services:
             "entities_used": entities,
         }
 
-    async def test_result_pdf(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        # Пока отдельного PDF endpoint не подключали: отдаем пусто без handoff,
-        # чтобы не ломать успешный TEST_RESULT статус.
-        return {"pdf": None, "note": "no_result_pdf_endpoint", "entities_used": entities}
-
     async def price_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         doctor_id = _as_int(entities.get("doctor_id"))
         service_name = _get_first_present(entities, ["service_name", "test_name"]) or query

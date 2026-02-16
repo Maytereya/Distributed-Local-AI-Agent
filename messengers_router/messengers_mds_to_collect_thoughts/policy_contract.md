@@ -141,7 +141,7 @@
 - `ADDRESS` -> `address_info`
 - `TEST_ASSIST` -> `test_assist`
 - `PREPARE` -> `test_prepare`
-- `TEST_RESULT` -> `test_result_status`, `test_result_pdf`
+- `TEST_RESULT` -> `test_result_status`
   - текущий контракт: сначала сбор `surname/year/filial/number`, затем запрос в `resultForPatient`
 - `NEWS` -> `news_info`
 

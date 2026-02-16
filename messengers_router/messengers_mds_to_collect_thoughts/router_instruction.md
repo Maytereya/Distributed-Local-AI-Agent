@@ -101,7 +101,7 @@ endpoint)
 • get_prices(...)
 • get_addresses(...)
 • get_promotions(...)
-• get_test_result_pdf(patient_token, ...) (авторизация)
+• get_test_result_status(...) (проверка и формирование ссылки на результат)
 Править тут, если:
 • роутер правильно понял intent, но данные не находятся
 • надо поменять, из какой БД/индекса искать (Meili/Chroma/CRM)
