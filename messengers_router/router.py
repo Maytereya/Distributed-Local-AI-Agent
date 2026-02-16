@@ -960,11 +960,15 @@ async def patient_routing_stream(
         result_status = evidence.get("test_result_status")
         if isinstance(result_status, dict):
             if result_status.get("ready") is True:
+                note = str(result_status.get("note") or "")
                 preview = str(result_status.get("result_preview") or "").strip()
                 links_raw = result_status.get("result_links")
                 links = [str(x).strip() for x in links_raw] if isinstance(links_raw, list) else []
                 links = [x for x in links if x]
-                text = "Результаты по вашим данным найдены."
+                if note == "result_link_constructed":
+                    text = "Сформировал ссылку для просмотра результата по указанным данным."
+                else:
+                    text = "Результаты по вашим данным найдены."
                 if links:
                     if len(links) == 1:
                         text = f"{text}\n\nСсылка на результат: {links[0]}"

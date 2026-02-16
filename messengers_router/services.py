@@ -7,9 +7,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import time
+from urllib.parse import quote_from_bytes
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -47,67 +47,6 @@ def _as_int(val: Any) -> int | None:
         return int(val)
     except Exception:
         return None
-
-
-def _stringify_json_preview(value: Any, max_len: int = 2500) -> str:
-    try:
-        txt = json.dumps(value, ensure_ascii=False, indent=2)
-    except Exception:
-        txt = str(value)
-    if len(txt) > max_len:
-        return txt[:max_len] + "\n... (обрезано)"
-    return txt
-
-
-_URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.I)
-_BINARY_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
-
-
-def _extract_urls_from_payload(value: Any) -> list[str]:
-    urls: list[str] = []
-    seen: set[str] = set()
-
-    def add(raw: str) -> None:
-        u = str(raw or "").strip()
-        if not u:
-            return
-        # Убираем хвостовые знаки пунктуации после ссылки в тексте.
-        u = u.rstrip(".,;)]}»\"'")
-        if u and u not in seen:
-            seen.add(u)
-            urls.append(u)
-
-    def walk(obj: Any) -> None:
-        if obj is None:
-            return
-        if isinstance(obj, str):
-            for m in _URL_RE.findall(obj):
-                add(m)
-            return
-        if isinstance(obj, dict):
-            for v in obj.values():
-                walk(v)
-            return
-        if isinstance(obj, (list, tuple, set)):
-            for v in obj:
-                walk(v)
-
-    walk(value)
-    return urls
-
-
-def _looks_like_pdf_or_binary_payload(value: Any) -> bool:
-    if isinstance(value, (bytes, bytearray)):
-        head = bytes(value[:16])
-        return head.startswith(b"%PDF") or bool(_BINARY_CONTROL_CHARS_RE.search(value.decode("latin1", errors="ignore")))
-    if isinstance(value, str):
-        s = value.lstrip()
-        if s.startswith("%PDF"):
-            return True
-        # Если в строке много управляющих символов — это, скорее всего, бинарник.
-        ctrl = len(_BINARY_CONTROL_CHARS_RE.findall(value))
-        return ctrl >= 8
-    return False
 
 
 def _fio_tokens(text: str) -> list[str]:
@@ -196,6 +135,32 @@ def _extract_result_query_fields(entities: dict[str, Any], query: str) -> dict[s
         "number": number,
         "lang": _get_first_present(entities, ["lang", "result_lang"]) or "ru",
     }
+
+
+def _cp1251_urlencode(value: str) -> str:
+    """
+    Кодирование параметров под контракт ссылки naykalab/getanaliz:
+    Windows-1251 + URL-encode.
+    """
+    raw = str(value or "").strip().encode("cp1251", errors="replace")
+    return quote_from_bytes(raw, safe="")
+
+
+def _build_public_result_link(fields: dict[str, Any]) -> str | None:
+    surname = str(fields.get("surname") or "").strip()
+    filial = str(fields.get("filial") or "").strip()
+    year = _as_int(fields.get("year"))
+    number = _as_int(fields.get("number"))
+    if not surname or not filial or year is None or number is None:
+        return None
+    return (
+        "https://naykalab.ru/getanaliz.php"
+        f"?fam={_cp1251_urlencode(surname)}"
+        f"&year={year}"
+        f"&nom={_cp1251_urlencode(filial)}"
+        f"&nom2={number}"
+        "&fast=1"
+    )
 
 
 def _region_display_name(region: dict[str, Any]) -> str:
@@ -617,6 +582,15 @@ class Services:
         return {"prepare": cleaned, "entities_used": entities}
 
     async def test_result_status(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
+        def _result_fallback(note: str, message: str = "Сейчас не удалось получить результаты автоматически. Соединяю с оператором.") -> dict[str, Any]:
+            return _service_fallback(
+                note=note,
+                handoff_message=message,
+                entities=entities,
+                reason="test_result_fallback",
+                extra={"ready": False},
+            )
+
         fields = _extract_result_query_fields(entities, query)
         missing = [k for k in ("surname", "year", "filial", "number") if not fields.get(k)]
         if missing:
@@ -638,26 +612,13 @@ class Services:
                 with_time=None,
             )
         except Exception as e:
-            return _service_fallback(
-                note=f"resultForPatient failed: {e}",
-                handoff_message="Сейчас не удалось получить результаты автоматически. Соединяю с оператором.",
-                entities=entities,
-                reason="test_result_fallback",
-                extra={"ready": False},
-            )
+            return _result_fallback(f"resultForPatient failed: {e}")
 
         if not isinstance(api_resp, dict) or not api_resp.get("ok"):
-            return _service_fallback(
-                note=f"resultForPatient error: {api_resp}",
-                handoff_message="Сейчас не удалось получить результаты автоматически. Соединяю с оператором.",
-                entities=entities,
-                reason="test_result_fallback",
-                extra={"ready": False},
-            )
+            return _result_fallback(f"resultForPatient error: {api_resp}")
 
         payload = api_resp.get("data")
-        has_payload = bool(payload)
-        if not has_payload:
+        if not payload:
             return {
                 "ready": False,
                 "note": "result_not_found_or_not_ready",
@@ -666,29 +627,19 @@ class Services:
                 "entities_used": entities,
             }
 
-        links = _extract_urls_from_payload(payload)
-        if not links and _looks_like_pdf_or_binary_payload(payload):
-            return {
-                "ready": True,
-                "note": "resultForPatient success (binary-pdf)",
-                "result_payload": None,
-                "result_preview": (
-                    "Результаты найдены, но сервис вернул файл в бинарном формате. "
-                    "Чтобы выдать документ корректно, подключаю оператора."
-                ),
-                "result_links": [],
-                "handoff_required": True,
-                "handoff_reason": "test_result_fallback",
-                "handoff_message": "Результаты найдены, но сейчас не удалось выдать PDF автоматически. Соединяю с оператором.",
-                "entities_used": entities,
-            }
+        link = _build_public_result_link(fields)
+        if not link:
+            return _result_fallback(
+                "result_link_build_failed",
+                "Сейчас не удалось сформировать ссылку на результат автоматически. Соединяю с оператором.",
+            )
 
         return {
             "ready": True,
-            "note": "resultForPatient success",
+            "note": "result_link_constructed",
             "result_payload": payload,
-            "result_preview": _stringify_json_preview(payload),
-            "result_links": links,
+            "result_preview": "Ссылка на результат сформирована.",
+            "result_links": [link],
             "entities_used": entities,
         }
 
