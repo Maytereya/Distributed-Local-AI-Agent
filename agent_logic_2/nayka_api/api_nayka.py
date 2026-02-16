@@ -40,7 +40,7 @@ auth = requests.auth.HTTPBasicAuth(c.nayka_login, c.nayka_pass)
 
 VERIFY_TLS = os.getenv("NAUKA_VERIFY_TLS", "true").strip().lower() in ("1","true","yes")
 CA_BUNDLE = os.getenv("NAUKA_CA_BUNDLE","").strip()
-REQ_CONNECT_TIMEOUT = float(os.getenv("NAUKA_TIMEOUT_CONNECT","5"))
+REQ_CONNECT_TIMEOUT = float(os.getenv("NAUKA_TIMEOUT_CONNECT","10"))
 REQ_READ_TIMEOUT    = float(os.getenv("NAUKA_TIMEOUT_READ","20"))
 DEFAULT_TIMEOUT = (REQ_CONNECT_TIMEOUT, REQ_READ_TIMEOUT)
 
@@ -579,6 +579,89 @@ def site_regions():
     except (requests.RequestException, ValueError) as e:
         print(f"Ошибка при получении списка регионов: {e}")
         return []
+
+
+def site_result_for_patient(
+    *,
+    surname: str,
+    year: int,
+    filial: str,
+    number: int,
+    lang: str | None = None,
+    with_time: bool | None = None,
+) -> dict[str, Any]:
+    """
+    Получить результаты пациента через endpoint /site/resultForPatient.
+
+    Параметры соответствуют форме на сайте:
+    - surname: фамилия пациента
+    - year: год рождения
+    - filial: код/название филиала
+    - number: номер (код) анализа
+    - lang: язык (опционально)
+    - with_time: флаг time (опционально)
+    """
+    params: dict[str, Any] = {
+        "surname": surname,
+        "year": int(year),
+        "filial": filial,
+        "number": int(number),
+    }
+    if isinstance(lang, str) and lang.strip():
+        params["lang"] = lang.strip()
+    if with_time is not None:
+        params["time"] = bool(with_time)
+
+    try:
+        resp = _session_get(f"{base_url}/resultForPatient", params=params)
+        resp.raise_for_status()
+
+        content_type = str(resp.headers.get("Content-Type") or "").lower()
+        body_text = (resp.text or "").strip()
+
+        # API может возвращать как JSON, так и plain text (например, ссылку на бланк).
+        if "application/json" in content_type:
+            try:
+                payload: Any = resp.json()
+            except ValueError:
+                # Некорректный JSON при JSON Content-Type: пробуем текст как fallback.
+                if not body_text:
+                    return {
+                        "ok": False,
+                        "status_code": resp.status_code,
+                        "error": "empty_json_response",
+                        "params": params,
+                    }
+                try:
+                    payload = json.loads(body_text)
+                except Exception:
+                    payload = body_text
+        else:
+            if not body_text:
+                return {
+                    "ok": False,
+                    "status_code": resp.status_code,
+                    "error": "empty_response",
+                    "params": params,
+                }
+            try:
+                payload = json.loads(body_text)
+            except Exception:
+                payload = body_text
+
+        return {
+            "ok": True,
+            "status_code": resp.status_code,
+            "content_type": content_type,
+            "data": payload,
+        }
+    except requests.RequestException as e:
+        return {
+            "ok": False,
+            "status_code": getattr(getattr(e, "response", None), "status_code", None),
+            "error": str(e),
+            "params": params,
+        }
 
 
 def find_doctor_schedule(
