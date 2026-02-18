@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from difflib import get_close_matches
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -233,6 +234,16 @@ _ASSIST_PRICE_CONTEXT_RE = re.compile(
     r"\b(по\s+направлен\w*|данн\w*\s+анализ\w*|сдач\w*\s+анализ\w*)\b",
     re.I,
 )
+_NONBOOKABLE_ANALYSIS_RE = re.compile(
+    r"\b(анализ\w*|лаборатор\w*|биоматериал\w*|сдат\w*\s+(?:кров\w*|моч\w*|анализ\w*))\b",
+    re.I,
+)
+_NONBOOKABLE_ECG_RE = re.compile(r"\b(экг|электрокардиограм\w*)\b", re.I)
+_NONBOOKABLE_VISIT_RE = re.compile(r"\b(запис\w*|сдат\w*|пройти|сделат\w*|хочу|нуж\w*|можно)\b", re.I)
+_TEST_SELECTION_RE = re.compile(
+    r"\b(какие|какой|подобрат\w*|посовет\w*|чекап|чек[-\s]?ап|скрининг|для\s+чего|цель|по\s+направлен\w*)\b",
+    re.I,
+)
 _QF_DMS_RE = re.compile(r"\bдмс\b", re.I)
 _QF_OMS_RE = re.compile(r"\bомс\b", re.I)
 _QF_PAID_RE = re.compile(r"\bплатн(о|ый|ая)\b|\bза наличн|\bоплат", re.I)
@@ -265,7 +276,10 @@ _QF_RESULT_SURNAME_STOPWORDS = {
     "результат", "результаты", "тест", "тесты", "тестов", "анализ", "анализы", "анализов",
     "готов", "готово", "готовы", "нужен", "нужны",
 }
-_QF_TEST_WORDS_RE = re.compile(r"\b(анализ|пцр|hba1c|глюкоз|витамин|ферритин|ттг|т4|т3|холестер|оак|оам)\b", re.I)
+_QF_TEST_WORDS_RE = re.compile(
+    r"\b(анализ\w*|пцр|hba1c|глюкоз|витамин|ферритин|ттг|т4|т3|холестер|оак|оам|чекап|чек[-\s]?ап|щитовид|анеми|скрининг)\b",
+    re.I,
+)
 _QF_PATIENT_NAME_PREFIX_RE = re.compile(
     r"\b(?:фио|ф\.?\s*и\.?\s*о\.?|меня\s+зовут|зовут)\b[:\s\-]*([А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+){1,2})",
     re.I,
@@ -584,6 +598,48 @@ def should_treat_result_delivery_as_test_assist(text: str) -> bool:
     )
 
 
+def nonbookable_service_hint(text: str) -> str | None:
+    t = text or ""
+    has_analysis = bool(_NONBOOKABLE_ANALYSIS_RE.search(t))
+    has_ecg = bool(_NONBOOKABLE_ECG_RE.search(t))
+    if has_analysis and has_ecg:
+        return "анализы и ЭКГ"
+    if has_analysis:
+        return "анализы"
+    if has_ecg:
+        return "ЭКГ"
+    return None
+
+
+def detect_nonbookable_walkin_intent(text: str, entities: dict[str, Any] | None = None) -> bool:
+    """
+    ЭКГ и сдача анализов принимаются без записи (живая очередь),
+    поэтому запросы "записаться на ЭКГ/анализы" переводим в ADDRESS flow.
+    """
+    t = text or ""
+    if not t.strip():
+        return False
+    if detect_test_result_intent(t):
+        return False
+    if _TEST_SELECTION_RE.search(t):
+        return False
+    has_nonbookable = bool(_NONBOOKABLE_ANALYSIS_RE.search(t) or _NONBOOKABLE_ECG_RE.search(t))
+    if not has_nonbookable:
+        return False
+    compact = [w for w in re.split(r"\s+", t.strip()) if w]
+    short_direct = len(compact) <= 2
+    if not short_direct and not (_NONBOOKABLE_VISIT_RE.search(t) or _BOOK_ACTION_STRICT_RE.search(t)):
+        return False
+
+    ent = entities or {}
+    has_doctor_context = bool(ent.get("doctor_name") or ent.get("doctor_id") or ent.get("specialty"))
+    if _BOOK_ACTION_STRICT_RE.search(t) and _DOCTOR_WORDS_RE.search(t):
+        return False
+    if has_doctor_context and _BOOK_ACTION_STRICT_RE.search(t):
+        return False
+    return True
+
+
 def normalize_loose_text(s: str) -> str:
     s = (s or "").lower().strip()
     s = re.sub(r"[\"'`]", "", s)
@@ -687,6 +743,25 @@ def match_branch_hint(text: str, branch_index: list[dict[str, Any]]) -> tuple[st
         common = txt_tokens & b["tokens"]
         if any(len(t) >= 7 for t in common):
             return b["id"], b["name"]
+    # typo-tolerant fallback for short branch answers ("победы 38" -> "победы 83")
+    norm_text = normalize_loose_text(text)
+    if len(norm_text) >= 4:
+        by_phrase: dict[str, tuple[str, str]] = {}
+        for b in branch_index:
+            options = [b.get("name", ""), *b.get("aliases", [])]
+            for opt in options:
+                phrase = normalize_loose_text(str(opt or ""))
+                if len(phrase) < 4:
+                    continue
+                if input_numbers:
+                    phrase_numbers = {t for t in _tokenize_loose(phrase) if re.fullmatch(r"\d{1,4}[a-zа-яё]?", t)}
+                    if phrase_numbers and not (input_numbers & phrase_numbers):
+                        continue
+                by_phrase.setdefault(phrase, (b["id"], b["name"]))
+        if by_phrase:
+            best = get_close_matches(norm_text, list(by_phrase.keys()), n=1, cutoff=0.84)
+            if best:
+                return by_phrase[best[0]]
     return None, None
 
 
@@ -917,9 +992,10 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
             out["doctor_name"] = extracted_name
 
     needs_test = any("test_goal" in r or "test_name" in r for r in missing_rules)
-    if needs_test and _QF_TEST_WORDS_RE.search(low):
-        if not state_entities.get("test_name"):
-            out["test_goal"] = t[:200]
+    if needs_test:
+        if _QF_TEST_WORDS_RE.search(low):
+            if not state_entities.get("test_name"):
+                out["test_goal"] = t[:200]
 
     if any("service_name" in r for r in missing_rules) and len(t) >= 3:
         service_phrase = extract_service_phrase(t)
@@ -968,12 +1044,9 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
                 out["patient_name"] = " ".join(normalized_tokens)
 
     needs_city = any("city" in r for r in missing_rules)
-    if needs_city and not state_entities.get("city"):
+    if needs_city:
+        # 1) Всегда даем приоритет явному распознаванию города, даже если city уже был в state.
         city = match_city(t)
-        if not city:
-            words = [w for w in re.split(r"\s+", t) if w]
-            if 1 <= len(words) <= 2 and len(t) <= 30 and not looks_like_address(t):
-                city = t
         if city:
             out["city"] = city.strip()
 

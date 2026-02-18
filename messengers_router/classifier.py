@@ -45,6 +45,8 @@ from .policies import (
     is_address_dominant_intent,
     is_price_dominant_intent,
     should_treat_result_delivery_as_test_assist,
+    detect_nonbookable_walkin_intent,
+    nonbookable_service_hint,
     detect_pii,
     low_confidence_policy,
     extract_service_phrase,
@@ -425,9 +427,12 @@ def _collect_rule_intent_hints(text: str, last_entities: dict[str, Any] | None =
     appointment_intent = detect_appointment_intent(text)
     appointment_action = normalize_appointment_action(detect_appointment_action(text), text)
     appt_ctx = has_appointment_context(text, ctx, appointment_action)
+    nonbookable_walkin = detect_nonbookable_walkin_intent(text, ctx)
 
     if detect_test_result_intent(text):
         labels.add("TEST_RESULT")
+    if nonbookable_walkin:
+        labels.add("ADDRESS")
     if appointment_intent and appt_ctx and not (price_intent and appointment_action is None):
         labels.add("APPOINTMENT")
     if price_intent:
@@ -586,6 +591,7 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
     price_intent = detect_price_intent(text)
     address_intent = detect_address_intent(text)
     appt_ctx = has_appointment_context(text, last_entities, appointment_action)
+    nonbookable_walkin = detect_nonbookable_walkin_intent(text, last_entities)
     address_dominant = is_address_dominant_intent(
         text,
         address_intent=address_intent,
@@ -613,6 +619,24 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
         return _attach_secondary_intents(
             text,
             RouteDecision(label="PRICE", confidence=0.72, entities=entities, flags=flags | {"rule_price"}, needs_handoff=False, context_action="continue"),
+            last_entities,
+        )
+
+    if nonbookable_walkin:
+        entities: dict[str, Any] = {}
+        svc = nonbookable_service_hint(text)
+        if svc:
+            entities["service_name"] = svc
+        return _attach_secondary_intents(
+            text,
+            RouteDecision(
+                label="ADDRESS",
+                confidence=0.78,
+                entities=entities,
+                flags=flags | {"rule_nonbookable_walkin"},
+                needs_handoff=False,
+                context_action="continue",
+            ),
             last_entities,
         )
 

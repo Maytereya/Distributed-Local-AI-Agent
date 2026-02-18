@@ -45,6 +45,8 @@ from .policies import (
     match_branch_hint,
     detect_schedule_intent,
     apply_verified_doctor_override,
+    detect_nonbookable_walkin_intent,
+    nonbookable_service_hint,
     is_context_affirmative,
     is_context_negative,
     appointment_service_display,
@@ -57,6 +59,7 @@ from .renderer import (
     render_stream,
     format_doctor_schedule_for_patient,
     format_doctor_info_for_patient,
+    format_address_for_patient,
 )
 from .memory import MemoryStore
 from .city import match_city
@@ -688,6 +691,24 @@ async def route_patient_message(
             context_action=decision.context_action,
         )
 
+    if decision.label in {"APPOINTMENT", "TEST_ASSIST"}:
+        merged_ctx = dict(state.last_entities)
+        merged_ctx.update(decision.entities or {})
+        if detect_nonbookable_walkin_intent(user_text, merged_ctx):
+            entities = dict(decision.entities)
+            if not entities.get("service_name"):
+                svc = nonbookable_service_hint(user_text)
+                if svc:
+                    entities["service_name"] = svc
+            decision = RouteDecision(
+                label="ADDRESS",
+                confidence=max(decision.confidence, 0.78),
+                entities=entities,
+                flags=set(decision.flags) | {"policy_nonbookable_walkin"},
+                needs_handoff=False,
+                context_action="continue",
+            )
+
     # Сохраняем сценарий записи на операторских уточнениях (ветка "да/нет", короткие ответы и т.п.).
     if (
         decision.label == "OTHER"
@@ -738,6 +759,11 @@ async def route_patient_message(
 
     # merge entities from LLM+rules
     memory.merge_entities(state, decision.entities, label=decision.label)
+    # Явный город в текущей реплике должен уметь исправлять/обновлять контекст
+    # даже если city уже был заполнен ранее неверно.
+    city_hint_now = match_city(user_text)
+    if city_hint_now and decision.label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
+        memory.merge_entities(state, {"city": city_hint_now}, label=decision.label)
     sec_now = _normalize_secondary_labels(decision.entities.get("secondary_intents"))
     if sec_now:
         existing = _get_secondary_queue(state)
@@ -1042,6 +1068,30 @@ async def patient_routing_stream(
     doctors_info_payload = evidence.get("doctors_info")
     if flow_label == "DOCTOR_INFO" and isinstance(doctors_info_payload, dict):
         text = format_doctor_info_for_patient(doctors_info_payload, state.last_entities)
+        yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+        return
+
+    address_payload = evidence.get("address")
+    if flow_label == "ADDRESS" and isinstance(address_payload, dict):
+        branches_raw = address_payload.get("branches")
+        addresses_raw = address_payload.get("addresses")
+        has_branches = isinstance(branches_raw, list) and any(str((x or {}).get("address") if isinstance(x, dict) else x).strip() for x in branches_raw)
+        has_addresses = isinstance(addresses_raw, list) and any(str(x).strip() for x in addresses_raw)
+        if not has_branches and not has_addresses:
+            # Если город/адрес не найден, оставляем ADDRESS pending на повторный ввод города.
+            # Это предотвращает выпадение в OTHER после опечатки ("Самраа" -> "Самара").
+            state.last_entities.pop("city", None)
+            memory.set_pending(state, label="ADDRESS", missing_slots=["_any_of:city,branch_name,branch_id"])
+        walkin_hint: str | None = None
+        if any("nonbookable" in str(f) for f in decision.flags):
+            walkin_hint = nonbookable_service_hint(user_text) or str(state.last_entities.get("service_name") or "").strip()
+            if walkin_hint == "":
+                walkin_hint = None
+        text = format_address_for_patient(
+            address_payload,
+            state.last_entities,
+            nonbookable_service=walkin_hint,
+        )
         yield ResponseEnvelope(text=text, attachments=[], handoff=False)
         return
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from difflib import get_close_matches
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +16,7 @@ ADDRESS_WORD_RE = re.compile(
     re.I,
 )
 CITY_HINT_RE = re.compile(r"\b(в|из|по)\s+([А-ЯЁа-яё\-]{3,})\b")
+_CITY_FUZZY_CUTOFF = 0.82
 
 _CITIES_PATH = Path(__file__).resolve().parent / "data" / "cities.txt"
 
@@ -124,6 +126,38 @@ def city_regex() -> re.Pattern:
     return re.compile(rf"\b(в|из|по)\s+({"|".join(escaped)})\b", re.I)
 
 
+@lru_cache
+def _city_variant_keys() -> tuple[str, ...]:
+    mapping = city_variants_map()
+    return tuple(sorted([k for k in mapping.keys() if k], key=len))
+
+
+def fuzzy_match_city(text: str, cutoff: float = _CITY_FUZZY_CUTOFF) -> str | None:
+    mapping = city_variants_map()
+    if not mapping:
+        return None
+
+    t_norm = norm_city_text(text)
+    if not t_norm:
+        return None
+    if t_norm in mapping:
+        return mapping[t_norm]
+
+    candidates: list[str] = [t_norm]
+    m = CITY_HINT_RE.search(t_norm)
+    if m:
+        candidates.append(norm_city_text(m.group(2)))
+
+    keys = _city_variant_keys()
+    for candidate in candidates:
+        if not candidate or len(candidate) < 3:
+            continue
+        best = get_close_matches(candidate, keys, n=1, cutoff=cutoff)
+        if best:
+            return mapping.get(best[0])
+    return None
+
+
 def match_city(text: str) -> str | None:
     cities = load_city_list()
     if not cities:
@@ -140,4 +174,5 @@ def match_city(text: str) -> str | None:
     # short reply fallback: exact match to city variants
     if t_norm and t_norm in mapping:
         return mapping[t_norm]
-    return None
+    # typo-tolerant fallback: only canonical names from known city list
+    return fuzzy_match_city(text)

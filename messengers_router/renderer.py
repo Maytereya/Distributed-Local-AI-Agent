@@ -210,6 +210,72 @@ def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, 
     return "\n".join([l for l in lines if l is not None]).strip()
 
 
+def format_address_for_patient(
+    payload: dict[str, Any],
+    entities: dict[str, Any],
+    *,
+    nonbookable_service: str | None = None,
+) -> str:
+    target_city = str(entities.get("city") or "").strip()
+    addresses_raw = payload.get("addresses")
+    branches_raw = payload.get("branches")
+    addresses = [str(a).strip() for a in addresses_raw] if isinstance(addresses_raw, list) else []
+    addresses = [a for a in addresses if a]
+
+    branches: list[dict[str, str]] = []
+    if isinstance(branches_raw, list):
+        for row in branches_raw:
+            if not isinstance(row, dict):
+                continue
+            addr = str(row.get("address") or "").strip()
+            if not addr:
+                continue
+            city = str(row.get("city") or "").strip()
+            if target_city and city and target_city.lower() not in city.lower():
+                continue
+            branches.append(
+                {
+                    "address": addr,
+                    "phone": str(row.get("phone") or "").strip(),
+                    "work_time": str(row.get("work_time") or "").strip(),
+                }
+            )
+
+    if not branches:
+        for a in addresses:
+            if target_city and target_city.lower() not in a.lower():
+                continue
+            branches.append({"address": a, "phone": "", "work_time": ""})
+
+    if not branches:
+        return "Не нашёл филиалы по этому городу. Уточните город или адрес, пожалуйста."
+
+    lines: list[str] = []
+    if nonbookable_service:
+        svc = str(nonbookable_service).strip()
+        svc = svc.replace("экг", "ЭКГ").replace("Экг", "ЭКГ")
+        if svc:
+            svc = svc[:1].upper() + svc[1:]
+        lines.append(f"{svc} выполняются без записи, в порядке живой очереди.")
+        lines.append("")
+
+    if target_city:
+        lines.append(f"В городе {target_city} доступны филиалы:")
+    else:
+        lines.append("Доступные филиалы:")
+
+    for i, b in enumerate(branches[:12], 1):
+        lines.append(f"{i}. {b['address']}")
+        if b.get("phone"):
+            lines.append(f"Телефон: {b['phone']}")
+        if b.get("work_time"):
+            lines.append(f"График: {b['work_time']}")
+        lines.append("")
+
+    lines.append("Если нужно, подскажу ближайший филиал по вашему району.")
+    return "\n".join([x for x in lines if x is not None]).strip()
+
+
 def render_urgent() -> ResponseEnvelope:
     txt = (
         "Похоже, ситуация может быть срочной.\n\n"

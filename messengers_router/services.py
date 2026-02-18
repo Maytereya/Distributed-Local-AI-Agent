@@ -7,10 +7,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from urllib.parse import quote_from_bytes
 from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Optional
 
 from agent_logic_1 import meilisearch_client as meilisearch
@@ -28,6 +31,8 @@ _ADDRESS_HINT_RE = re.compile(
 )
 _SCHEDULE_QUERY_RE = re.compile(r"\b(расписани\w*|график|когда\b.*\bпринима\w*|принима\w*)\b", re.I)
 _FIO_TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё\-]{2,}")
+_PHONE_EXTRACT_RE = re.compile(r"\+?\d[\d\-\s\(\)]{7,}\d")
+_NONBOOKABLE_POINTS_PATH = Path(__file__).resolve().parent / "data" / "nonbookable_points.json"
 
 
 def _normalise_input(s: str) -> str:
@@ -186,6 +191,163 @@ def _looks_like_real_address(text: str) -> bool:
     return False
 
 
+def _service_query_matches(service_q: str, service_name: str) -> bool:
+    sq = _normalise_input(service_q)
+    sn = _normalise_input(service_name)
+    if not sq or not sn:
+        return False
+    if sq in sn:
+        return True
+    if "анализ" in sq or "лаборатор" in sq:
+        analysis_tokens = (
+            "анализ",
+            "лаборатор",
+            "биоматериал",
+            "взятие",
+            "кров",
+            "моч",
+            "мазок",
+            "сыворот",
+            "плазм",
+        )
+        return any(tok in sn for tok in analysis_tokens)
+    if sq == "экг":
+        return "экг" in sn or "электрокардиограм" in sn
+    return False
+
+
+def _extract_region_phone(region: dict[str, Any]) -> str:
+    phone_keys = ("phone", "phoneForSite", "phones", "phoneNumbers", "tel", "telephone")
+    for k in phone_keys:
+        v = region.get(k)
+        if isinstance(v, str):
+            nums = _PHONE_EXTRACT_RE.findall(v)
+            if nums:
+                return ", ".join(dict.fromkeys(n.strip() for n in nums))
+            if v.strip():
+                return v.strip()
+        if isinstance(v, list):
+            parts: list[str] = []
+            for item in v:
+                if isinstance(item, str):
+                    nums = _PHONE_EXTRACT_RE.findall(item)
+                    parts.extend(nums or [item.strip()])
+                elif isinstance(item, dict):
+                    val = str(item.get("phone") or item.get("value") or "").strip()
+                    if val:
+                        parts.append(val)
+            clean = [p for p in parts if p]
+            if clean:
+                return ", ".join(dict.fromkeys(clean))
+    return ""
+
+
+def _extract_region_work_time(region: dict[str, Any]) -> str:
+    work_keys = (
+        "workTime",
+        "work_time",
+        "worktime",
+        "workHours",
+        "work_hours",
+        "schedule",
+        "scheduleForSite",
+        "openingHours",
+        "hours",
+        "mode",
+    )
+    for k in work_keys:
+        v = region.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+        if isinstance(v, list):
+            parts = [str(x).strip() for x in v if str(x).strip()]
+            if parts:
+                return "; ".join(parts)
+        if isinstance(v, dict):
+            parts = []
+            for kk, vv in v.items():
+                txt = str(vv).strip()
+                if txt:
+                    parts.append(f"{kk}: {txt}")
+            if parts:
+                return "; ".join(parts)
+    return ""
+
+
+def _norm_city(s: str) -> str:
+    t = _normalise_input(s or "")
+    t = t.replace("ё", "е")
+    t = re.sub(r"^г\.?\s*", "", t)
+    return t.strip()
+
+
+@lru_cache(maxsize=1)
+def _load_nonbookable_points() -> dict[str, list[dict[str, Any]]]:
+    if not _NONBOOKABLE_POINTS_PATH.exists():
+        return {}
+    try:
+        raw = json.loads(_NONBOOKABLE_POINTS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for city, rows in raw.items():
+        if not isinstance(city, str) or not isinstance(rows, list):
+            continue
+        key = _norm_city(city)
+        if not key:
+            continue
+        norm_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            addr = str(row.get("address") or "").strip()
+            if not addr:
+                continue
+            norm_rows.append(
+                {
+                    "address": addr,
+                    "phone": str(row.get("phone") or "").strip(),
+                    "work_time": str(row.get("work_time") or "").strip(),
+                    "has_analysis": bool(row.get("has_analysis", True)),
+                    "has_ekg": bool(row.get("has_ekg", False)),
+                    "city": str(row.get("city") or city).strip(),
+                }
+            )
+        if norm_rows:
+            out[key] = norm_rows
+    return out
+
+
+def _nonbookable_needs(service_q: str) -> tuple[bool, bool]:
+    s = _normalise_input(service_q or "")
+    if not s:
+        return False, False
+    need_analysis = bool(re.search(r"\b(анализ\w*|лаборатор\w*|биоматериал)\b", s))
+    need_ekg = bool(re.search(r"\b(экг|электрокардиограм\w*)\b", s))
+    return need_analysis, need_ekg
+
+
+def _static_nonbookable_branches(city: str, service_q: str) -> list[dict[str, Any]]:
+    data = _load_nonbookable_points()
+    city_key = _norm_city(city)
+    if not city_key:
+        return []
+    rows = data.get(city_key) or []
+    if not rows:
+        return []
+    need_analysis, need_ekg = _nonbookable_needs(service_q)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if need_analysis and not bool(row.get("has_analysis", True)):
+            continue
+        if need_ekg and not bool(row.get("has_ekg", False)):
+            continue
+        out.append(dict(row))
+    return out
+
+
 def _service_fallback(
     *,
     note: str,
@@ -323,7 +485,14 @@ class Services:
         value = str(raw_text_or_name or "").strip()
         if not value:
             return None
-        return resolve_schedule_surname(value, doctors)
+        resolved = resolve_schedule_surname(value, doctors)
+        if resolved:
+            return resolved
+
+        candidate = extract_doctor_name_candidate(value, prefer_schedule=True)
+        if candidate and _normalise_input(candidate) != _normalise_input(value):
+            return resolve_schedule_surname(candidate, doctors)
+        return None
 
     async def doctors_info(self, query: str, entities: dict[str, Any], output_max: int = 5) -> dict[str, Any]:
         """
@@ -507,6 +676,17 @@ class Services:
                 extra={"schedule": []},
             )
 
+        # Защита от чрезмерно длинных/дублирующихся specialization блоков в realtime API.
+        if isinstance(data, list):
+            compact_data: list[dict[str, Any]] = []
+            for row in data:
+                if not isinstance(row, dict):
+                    continue
+                item = dict(row)
+                item["specialization"] = _compact_specialization(str(item.get("specialization") or ""))
+                compact_data.append(item)
+            data = compact_data
+
         return {
             "schedule": data or [],
             "note": "doctors_schedule_week: realtime from Nayka API",
@@ -686,19 +866,31 @@ class Services:
         branch_q = _normalise_input(branch)
         service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
         service_q = _normalise_input(service_name)
+        city_for_static = _get_first_present(entities, ["city"])
+
+        # Для анализов/ЭКГ: используем эталонный справочник филиалов (сайтовый источник истины).
+        if city_for_static and service_q:
+            static_rows = _static_nonbookable_branches(city_for_static, service_q)
+            if static_rows:
+                return {
+                    "addresses": [str(x.get("address") or "").strip() for x in static_rows if str(x.get("address") or "").strip()],
+                    "branches": static_rows,
+                    "note": "address_info: static nonbookable points catalog",
+                    "entities_used": entities,
+                }
 
         allowed_region_ids: set[int] | None = None
         if service_q:
             try:
-                doctor_prices = await asyncio.to_thread(api_price.load_doctor_prices)
+                price_all = await asyncio.to_thread(api_price.load_price_all)
                 matched_region_ids: set[int] = set()
-                for row in doctor_prices:
+                for row in price_all:
                     if not isinstance(row, dict):
                         continue
                     svc = _normalise_input(str(row.get("serviceName") or ""))
-                    if not svc or service_q not in svc:
+                    if not _service_query_matches(service_q, svc):
                         continue
-                    rid = _as_int(row.get("regionId"))
+                    rid = _as_int(row.get("regionId") or row.get("region_id"))
                     if rid is not None:
                         matched_region_ids.add(rid)
                 if matched_region_ids:
@@ -707,6 +899,7 @@ class Services:
                 allowed_region_ids = None
 
         addresses: list[str] = []
+        branches: list[dict[str, Any]] = []
         for r in regions:
             if not isinstance(r, dict):
                 continue
@@ -729,14 +922,38 @@ class Services:
             if branch_q and branch_q not in hay:
                 continue
             addresses.append(disp)
+            branches.append(
+                {
+                    "id": rid,
+                    "address": disp,
+                    "city": str(r.get("city") or "").strip(),
+                    "phone": _extract_region_phone(r),
+                    "work_time": _extract_region_work_time(r),
+                }
+            )
 
         uniq = sorted(set(addresses))
         if uniq:
+            by_addr: dict[str, dict[str, Any]] = {}
+            for b in branches:
+                addr = str(b.get("address") or "").strip()
+                if not addr:
+                    continue
+                prev = by_addr.get(addr)
+                if prev is None:
+                    by_addr[addr] = b
+                    continue
+                prev_score = int(bool(prev.get("phone"))) + int(bool(prev.get("work_time")))
+                cur_score = int(bool(b.get("phone"))) + int(bool(b.get("work_time")))
+                if cur_score > prev_score:
+                    by_addr[addr] = b
+
             note = "address_info: live regions API"
             if service_q and allowed_region_ids is not None:
                 note += " + filtered by service"
             return {
                 "addresses": uniq,
+                "branches": list(by_addr.values()),
                 "note": note,
                 "entities_used": entities,
             }
@@ -759,6 +976,7 @@ class Services:
                 fallback.append(a)
         return {
             "addresses": sorted(set(fallback)),
+            "branches": [{"address": a, "phone": "", "work_time": ""} for a in sorted(set(fallback))],
             "note": "address_info: doctors cache fallback",
             "entities_used": entities,
         }

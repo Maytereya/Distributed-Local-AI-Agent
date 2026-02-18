@@ -24,7 +24,7 @@ class Case:
 
 
 CASES: list[Case] = [
-    Case("A1", "Хочу записаться на ЭКГ в Самаре", "APPOINTMENT", False),
+    Case("A1", "Хочу записаться на ЭКГ в Самаре", "ADDRESS", False),
     Case("A2", "Можно перенести запись на холтер на завтра?", "APPOINTMENT", False),
     Case("A3", "Отмените прием у невролога", "APPOINTMENT", False),
     Case("A4", "Нужна запись к кардиологу ребенку 4 года", "APPOINTMENT", False),
