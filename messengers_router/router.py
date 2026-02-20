@@ -2,15 +2,41 @@
 
 Выполняет pipeline: classify -> slot filling -> plan -> services -> rendering,
 ведет APPOINTMENT flow, pending-уточнения, handoff решения и debug meta.
+
+Ответственность модуля:
+1) Координировать этапы пайплайна (NLU/graph/recovery/plan/services/render).
+2) Обновлять session state и pending-слоты без дублирования бизнес-логики.
+3) Сохранять API-совместимость ответа (`text`, `attachments`, `handoff`, `state_update`).
+
+Модуль не должен превращаться в "ручной классификатор": интент-детекторы,
+recovery-политика и сервисные интеграции вынесены в отдельные компоненты.
 """
 
 from __future__ import annotations
 
-import re
+import os
 from typing import AsyncGenerator, Any
 
 from .mess_types import Evidence, Plan, PlanStep, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
+from .context_summary import update_summary
+from .dialog_graph import GraphEngine
+from .entity_grounder import ground_decision_entities
+from .flow_policy import (
+    _apply_context_action,
+    _apply_pending_override,
+    _fill_date_from_schedule_windows,
+    _get_secondary_queue,
+    _hydrate_appointment_context_from_schedule,
+    _is_appointment_waiting_patient_name,
+    _looks_like_patient_fio,
+    _normalize_secondary_labels,
+    _safe_get_branches,
+    _secondary_followup_text,
+    _set_secondary_queue,
+    quick_fill_entities_from_text,
+)
+from .nlu_pipeline import analyze_with_candidates
 from .policies import (
     require_auth_for_test_result,
     missing_slots,
@@ -37,20 +63,12 @@ from .policies import (
     appointment_text_reask_confirm,
     doctor_schedule_text_clarify_doctor,
     decision_handoff_text,
-    quick_fill_core_entities,
-    extract_branch_hint,
-    looks_like_branch_hint,
-    branch_options_to_indexable,
-    build_branch_index,
-    match_branch_hint,
-    detect_schedule_intent,
     apply_verified_doctor_override,
     detect_nonbookable_walkin_intent,
     nonbookable_service_hint,
-    is_context_affirmative,
-    is_context_negative,
     appointment_service_display,
 )
+from .recovery_policy import contextual_reply_kind, evaluate_recovery, explicit_operator_requested
 from .services import Services
 from .renderer import (
     render_urgent,
@@ -60,93 +78,11 @@ from .renderer import (
     format_doctor_schedule_for_patient,
     format_doctor_info_for_patient,
     format_address_for_patient,
+    format_news_for_patient,
 )
 from .memory import MemoryStore
 from .city import match_city
 
-
-def _should_break_pending(decision: RouteDecision, pending_label: str) -> bool:
-    if decision.context_action in {"new_topic", "cancel_flow", "overwrite_doctor"}:
-        return True
-    if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
-        return True
-    if decision.label == "TEST_RESULT" and "rule_test_result" in decision.flags:
-        return True
-    if decision.label != pending_label and decision.label != "OTHER":
-        if decision.confidence >= 0.70:
-            return True
-        if any(str(f).startswith("rule_") for f in decision.flags):
-            return True
-        if "promoted_from_rule_hints" in decision.flags:
-            return True
-    return False
-
-
-def _is_appointment_waiting_patient_name(pending: dict | None) -> bool:
-    if not isinstance(pending, dict):
-        return False
-    if pending.get("label") != "APPOINTMENT":
-        return False
-    missing = pending.get("missing")
-    if not isinstance(missing, list):
-        return False
-    return "patient_name" in missing
-
-
-def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_text: str = "") -> str:
-    if not pending:
-        return decision.label
-    pending_label = pending.get("label")
-    if not isinstance(pending_label, str):
-        return decision.label
-    # В шаге добора ФИО пациента не даем случайной переклассификации
-    # (например, в TEST_RESULT) перебить активный APPOINTMENT flow.
-    if (
-        _is_appointment_waiting_patient_name(pending)
-        and _looks_like_patient_fio(user_text)
-        and decision.context_action == "continue"
-        and decision.label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
-    ):
-        return "APPOINTMENT"
-    if _should_break_pending(decision, pending_label):
-        return decision.label
-    return pending_label
-
-
-def _normalize_secondary_labels(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    out: list[str] = []
-    for x in value:
-        if isinstance(x, str) and x and x not in out:
-            out.append(x)
-    return out
-
-
-def _get_secondary_queue(state: SessionState) -> list[str]:
-    return _normalize_secondary_labels(state.last_entities.get("_secondary_queue"))
-
-
-def _set_secondary_queue(state: SessionState, labels: list[str]) -> None:
-    clean = _normalize_secondary_labels(labels)
-    if clean:
-        state.last_entities["_secondary_queue"] = clean
-        state.last_entities["secondary_intents"] = clean
-    else:
-        state.last_entities.pop("_secondary_queue", None)
-        state.last_entities.pop("secondary_intents", None)
-        state.last_entities.pop("_secondary_offer_pending", None)
-
-
-_PATIENT_FIO_RE = re.compile(r"^[А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+){1,2}$")
-_PATIENT_FIO_STOPWORDS = {
-    "анализ", "анализы", "анализов", "результат", "результаты", "тест", "тесты", "тестов",
-    "врач", "врача", "доктор", "расписание", "запись", "прием", "приём", "окна", "слоты",
-    "оператор", "город", "филиал", "адрес", "цена", "стоимость", "услуга", "услуги",
-    "мне", "нужно", "надо", "хочу", "когда", "где", "какой", "какие", "покажи", "покажите",
-    "да", "нет",
-}
-_OPERATOR_REQUEST_RE = re.compile(r"\b(оператор\w*|соедин\w*.*оператор\w*|жив[оы]м?\s+человек\w*)\b", re.I)
 _INTRO_TEXT = (
     "Здравствуйте! Это ИИ-помощник клиники «Наука».\n"
     "Через меня вы можете записаться к врачу, перенести или отменить запись, "
@@ -156,112 +92,28 @@ _LOW_CONF_CLARIFY_TEXT = (
     "Уточните, пожалуйста, запрос чуть подробнее, чтобы я не ошибся: "
     "что именно нужно — запись, расписание врача, стоимость, адрес или результаты анализов?"
 )
+_GRAPH_ENGINE = GraphEngine()
+_DOCTOR_NOISE_TOKENS = {
+    "хочу",
+    "нужно",
+    "надо",
+    "можно",
+    "запись",
+    "записаться",
+    "прием",
+    "приём",
+    "подскажите",
+    "скажите",
+    "когда",
+    "где",
+    "да",
+    "нет",
+}
 
 
-def _looks_like_patient_fio(text: str) -> bool:
-    s = str(text or "").strip()
-    if not _PATIENT_FIO_RE.fullmatch(s):
-        return False
-    tokens = [t for t in s.split() if t]
-    if len(tokens) < 2:
-        return False
-    normalized = [t.lower().replace("ё", "е") for t in tokens]
-    if any(t in _PATIENT_FIO_STOPWORDS for t in normalized):
-        return False
-    return True
-
-
-def _normalize_doctor_key(value: Any) -> str:
-    s = str(value or "").strip().lower()
-    s = s.replace("ё", "е")
-    return re.sub(r"\s+", " ", s)
-
-
-def _clear_flow_state(state: SessionState) -> None:
-    for k in (
-        "appointment_flow_active",
-        "appointment_confirm_pending",
-        "appointment_confirmed",
-        "appointment_windows",
-        "appointment_branch_options",
-        "date_from",
-        "date_to",
-        "time_from",
-        "time_to",
-        "date_hint",
-        "_pending",
-    ):
-        state.last_entities.pop(k, None)
-
-
-def _clear_topic_state(state: SessionState) -> None:
-    _clear_flow_state(state)
-    for k in (
-        "doctor_id",
-        "doctor_name",
-        "specialty",
-        "service_name",
-        "test_name",
-        "branch_id",
-        "branch_name",
-        "secondary_intents",
-        "_secondary_queue",
-        "_secondary_offer_pending",
-    ):
-        state.last_entities.pop(k, None)
-
-
-def _apply_context_action(decision: RouteDecision, state: SessionState, user_text: str) -> RouteDecision:
-    action = decision.context_action
-    if action == "cancel_flow":
-        _clear_flow_state(state)
-        return decision
-
-    if action == "new_topic":
-        _clear_topic_state(state)
-        return decision
-
-    if action != "overwrite_doctor":
-        return decision
-
-    extracted_doctor = str(decision.entities.get("doctor_name") or "").strip()
-    if not extracted_doctor:
-        return decision
-
-    current = _normalize_doctor_key(state.last_entities.get("doctor_name"))
-    target = _normalize_doctor_key(extracted_doctor)
-    if current and target and current == target:
-        return decision
-
-    _clear_flow_state(state)
-    entities = dict(decision.entities)
-    entities["doctor_name"] = extracted_doctor
-    sanitized_flags = set(decision.flags)
-    sanitized_flags.discard("handoff_recommended")
-    sanitized_flags.discard("low_confidence")
-    sanitized_flags.discard("ollama_timeout")
-
-    # Если пользователь сменил врача в процессе и при этом явно просит расписание
-    # (или до этого уже был schedule-контекст), приоритезируем DOCTOR_SCHEDULE.
-    prev_label = str(state.last_entities.get("_last_label") or "")
-    if decision.label == "OTHER" and (prev_label == "DOCTOR_SCHEDULE" or detect_schedule_intent(user_text or "")):
-        return RouteDecision(
-            label="DOCTOR_SCHEDULE",
-            confidence=max(decision.confidence, 0.74),
-            entities=entities,
-            flags=sanitized_flags | {"context_action_overwrite_doctor"},
-            needs_handoff=False,
-            context_action=action,
-        )
-
-    return RouteDecision(
-        label=decision.label,
-        confidence=decision.confidence,
-        entities=entities,
-        flags=sanitized_flags | {"context_action_overwrite_doctor"},
-        needs_handoff=decision.needs_handoff,
-        context_action=action,
-    )
+def _env_flag(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name, "1" if default else "0")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 async def _verify_doctor_entity(
@@ -287,6 +139,13 @@ async def _verify_doctor_entity(
         return decision
 
     raw = str(entities.get("doctor_name") or "").strip()
+    if raw:
+        raw_norm = " ".join(raw.lower().replace("ё", "е").split())
+        raw_tokens = [t for t in raw_norm.split(" ") if t]
+        if len(raw_tokens) == 1 and raw_tokens[0] in _DOCTOR_NOISE_TOKENS:
+            entities.pop("doctor_name", None)
+            flags.add("doctor_name_unverified")
+            raw = ""
     resolved: str | None = None
     if raw:
         resolved = await services.resolve_doctor_name(raw)
@@ -318,209 +177,91 @@ async def _verify_doctor_entity(
     )
 
 
-def _secondary_followup_text(labels: list[str]) -> str | None:
-    if not labels:
-        return None
-    first = labels[0]
-    mapping = {
-        "PRICE": "Также вижу вопрос по стоимости. Могу сразу подсказать цену по услуге.",
-        "ADDRESS": "Также могу подсказать адрес и режим работы подходящего филиала.",
-        "APPOINTMENT": "Также могу помочь с записью на прием после уточнения текущего вопроса.",
-        "TEST_ASSIST": "Также могу помочь с подбором анализов под вашу цель.",
-        "DOCTOR_SCHEDULE": "Также могу показать расписание нужного врача.",
-        "DOCTOR_INFO": "Также могу подсказать, какие врачи принимают по вашему запросу.",
-    }
-    return mapping.get(first)
-
-
-def _safe_get_branches(services: Services) -> list[dict[str, str]]:
-    """
-    Надежный доступ к справочнику филиалов:
-    при ошибке интеграции возвращаем пустой список, а не исключение.
-    """
-    try:
-        branches = services.get_branches()
-    except Exception:
-        return []
-    if not isinstance(branches, list):
-        return []
-    return [b for b in branches if isinstance(b, dict)]
-
-
-def _hydrate_appointment_context_from_schedule(state: SessionState, schedule_payload: dict[str, Any]) -> None:
-    """
-    Переносит минимальный контекст из ответа расписания в сценарий записи.
-    Нужен для фраз вида "записаться на 09:30" сразу после показа расписания.
-    """
-    docs = schedule_payload.get("schedule")
-    if not isinstance(docs, list) or not docs:
-        return
-
-    doctor_fio = ""
-    regions: list[str] = []
-    windows: list[dict[str, str]] = []
-    for doc in docs[:3]:
-        if not isinstance(doc, dict):
-            continue
-        if not doctor_fio:
-            fio = str(doc.get("fio") or "").strip()
-            if fio:
-                doctor_fio = fio
-        raw_regions = doc.get("regions") or []
-        if isinstance(raw_regions, list):
-            for r in raw_regions:
-                if not isinstance(r, str):
-                    continue
-                addr = r.strip()
-                if addr and addr not in regions:
-                    regions.append(addr)
-        schedule_map = doc.get("schedule") or {}
-        if isinstance(schedule_map, dict):
-            for region_name, days in schedule_map.items():
-                branch = str(region_name or "").strip()
-                if not isinstance(days, list):
-                    continue
-                for day in days:
-                    if not isinstance(day, dict):
-                        continue
-                    day_date = str(day.get("date") or "").strip()
-                    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day_date):
-                        continue
-                    raw_slots = day.get("slots") or []
-                    if not isinstance(raw_slots, list):
-                        continue
-                    for slot in raw_slots:
-                        slot_s = str(slot or "").strip()[:5]
-                        if not re.fullmatch(r"\d{2}:\d{2}", slot_s):
-                            continue
-                        windows.append({"date": day_date, "time": slot_s, "branch": branch})
-
-    if doctor_fio:
-        state.last_entities["doctor_name"] = doctor_fio
-    if regions:
-        state.last_entities["appointment_branch_options"] = regions[:10]
-        current_branch = str(state.last_entities.get("branch_name") or "").strip()
-        if len(regions) == 1:
-            state.last_entities["branch_name"] = regions[0]
-        elif current_branch and current_branch not in regions:
-            state.last_entities.pop("branch_name", None)
-    if windows:
-        uniq: list[dict[str, str]] = []
-        seen: set[tuple[str, str, str]] = set()
-        for w in windows:
-            key = (w.get("date", ""), w.get("time", ""), w.get("branch", ""))
-            if key in seen:
-                continue
-            seen.add(key)
-            uniq.append(w)
-            if len(uniq) >= 300:
-                break
-        state.last_entities["appointment_windows"] = uniq
-
-
-def _fill_date_from_schedule_windows(state: SessionState, label: str) -> None:
-    """
-    Если пациент после показа расписания написал только время (например, 09:00),
-    подставляем дату автоматически, когда она однозначна в показанных окнах.
-    """
-    if label != "APPOINTMENT":
-        return
-    entities = state.last_entities
-    if entities.get("date_from") or entities.get("date_hint"):
-        return
-    if not (entities.get("doctor_name") or entities.get("doctor_id")):
-        return
-    time_from = str(entities.get("time_from") or "").strip()[:5]
-    if not re.fullmatch(r"\d{2}:\d{2}", time_from):
-        return
-
-    windows = entities.get("appointment_windows")
-    if not isinstance(windows, list):
-        return
-
-    matches: list[tuple[str, str]] = []
-    for w in windows:
-        if not isinstance(w, dict):
-            continue
-        t = str(w.get("time") or "").strip()[:5]
-        if t != time_from:
-            continue
-        d = str(w.get("date") or "").strip()
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
-            continue
-        branch = str(w.get("branch") or "").strip()
-        matches.append((d, branch))
-
-    if not matches:
-        return
-
-    dates = sorted({d for d, _ in matches})
-    if len(dates) != 1:
-        return
-
-    chosen_date = dates[0]
-    entities["date_from"] = chosen_date
-    entities["date_to"] = chosen_date
-
-    if not entities.get("branch_name"):
-        branches = sorted({b for _, b in matches if b})
-        if len(branches) == 1:
-            entities["branch_name"] = branches[0]
-
-
-def quick_fill_entities_from_text(
-    text: str,
-    state_entities: dict[str, Any],
-    missing_rules: list[str],
+async def _sanitize_doctor_in_entities(
+    entities: dict[str, Any],
     services: Services,
+    *,
+    label: str,
 ) -> dict[str, Any]:
     """
-    Пытаемся заполнить частые слоты из текста без LLM.
-    + резолв филиала (branch_id)
-    + парсинг даты/времени RU
+    Любой doctor_name, появившийся после quick-fill/merge, должен быть
+    подтвержден через кэш врачей.
     """
-    t = text.strip()
-    out: dict[str, Any] = quick_fill_core_entities(t, state_entities, missing_rules)
+    out = dict(entities or {})
+    raw = str(out.get("doctor_name") or "").strip()
+    if not raw:
+        return out
 
-    # ----------------------------
-    # Branch resolution
-    # ----------------------------
-    if not state_entities.get("branch_id"):
-        branch_hint = extract_branch_hint(t, state_entities)
+    resolved = await services.resolve_doctor_name(raw)
+    if resolved:
+        out["doctor_name"] = resolved
+        return out
 
-        if branch_hint:
-            # Если мы уже показывали список адресов пользователю, резолвим только внутри него.
-            shown_options = branch_options_to_indexable(state_entities.get("appointment_branch_options"))
-            branches = shown_options
-            if not branches:
-                branches = _safe_get_branches(services)
-                city_hint = str(out.get("city") or state_entities.get("city") or "").strip().lower()
-                if city_hint:
-                    city_filtered = []
-                    for b in branches:
-                        if not isinstance(b, dict):
-                            continue
-                        hay = f"{b.get('name', '')} {b.get('aliases', '')}".lower()
-                        if city_hint in hay:
-                            city_filtered.append(b)
-                    if city_filtered:
-                        branches = city_filtered
-            idx = build_branch_index(branches)
-            bid, bname = match_branch_hint(branch_hint, idx)
-            if bid and not str(bid).startswith("shown_"):
-                out["branch_id"] = bid
-            if bname and not state_entities.get("branch_name"):
-                out["branch_name"] = bname
-            if (
-                not shown_options
-                and not bid
-                and not state_entities.get("branch_name")
-                and looks_like_branch_hint(branch_hint)
-            ):
-                out["branch_name"] = branch_hint[:80]
-
+    out.pop("doctor_name", None)
+    if label == "APPOINTMENT" and _looks_like_patient_fio(raw) and not out.get("patient_name"):
+        out["patient_name"] = raw
     return out
 
+
+async def _backfill_appointment_doctor_from_text(
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+) -> None:
+    """
+    В APPOINTMENT pending иногда приходит короткая реплика врача
+    ("к Дразнину", "Дразнин"), которая не проходит quick-fill контекст.
+    Делаем безопасный fallback через resolve_doctor_name (по кэшу врачей).
+    """
+    pending = memory.get_pending(state)
+    if not isinstance(pending, dict) or pending.get("label") != "APPOINTMENT":
+        return
+
+    if state.last_entities.get("doctor_id") or state.last_entities.get("doctor_name"):
+        return
+
+    missing = pending.get("missing")
+    if not isinstance(missing, list):
+        return
+    need_doctor_or_service = any(
+        isinstance(m, str) and ("doctor_id" in m or "doctor_name" in m or "specialty" in m or "service_name" in m)
+        for m in missing
+    )
+    if not need_doctor_or_service:
+        return
+
+    raw = str(user_text or "").strip()
+    if not raw:
+        return
+
+    probes: list[str] = [raw]
+    low = raw.lower()
+    if low.startswith("к "):
+        tail = raw[2:].strip()
+        if tail:
+            probes.append(tail)
+
+    resolved: str | None = None
+    for p in probes:
+        resolved = await services.resolve_doctor_name(p)
+        if resolved:
+            break
+
+    if not resolved:
+        return
+
+    memory.merge_entities(state, {"doctor_name": resolved}, label="APPOINTMENT")
+
+    # Если в service_name ранее ошибочно попало то же слово (например, "Дразнин"),
+    # очищаем его, чтобы план строился по doctor flow.
+    svc = str(state.last_entities.get("service_name") or "").strip()
+    if svc:
+        svc_norm = " ".join(svc.lower().replace("ё", "е").split())
+        raw_norm = " ".join(raw.lower().replace("ё", "е").split())
+        resolved_norm = " ".join(str(resolved).lower().replace("ё", "е").split())
+        if svc_norm in {raw_norm, resolved_norm}:
+            state.last_entities.pop("service_name", None)
 
 # ----------------------------
 # Planning & execution
@@ -562,7 +303,9 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
         if entities.get("doctor_id") or entities.get("doctor_name"):
             steps.append(PlanStep(tool="doctors_schedule_week", input={"query": user_text, "entities": dict(entities)}))
         else:
-            steps.append(PlanStep(tool="address_info", input={"query": user_text, "entities": dict(entities)}))
+            address_entities = dict(entities)
+            address_entities["__appointment_mode"] = True
+            steps.append(PlanStep(tool="address_info", input={"query": user_text, "entities": address_entities}))
             steps.append(PlanStep(tool="price_info", input={"query": user_text, "entities": dict(entities)}, required=False))
         return Plan(label=label, steps=steps)
 
@@ -656,7 +399,8 @@ async def route_patient_message(
         and not state.last_entities.get("appointment_confirm_pending")
         and not state.last_entities.get("appointment_flow_active")
     ):
-        if is_context_affirmative(user_text):
+        reply_kind = contextual_reply_kind(user_text)
+        if reply_kind == "yes":
             next_label = queue.pop(0)
             _set_secondary_queue(state, queue)
             state.last_entities["_secondary_offer_pending"] = False
@@ -670,14 +414,38 @@ async def route_patient_message(
             plan = build_plan(decision, state, user_text, memory=memory)
             evidence = await execute_plan(plan, state, services)
             return decision, plan, evidence
-        if is_context_negative(user_text):
+        if reply_kind == "no":
             _set_secondary_queue(state, [])
             state.last_entities["_secondary_offer_pending"] = False
         else:
             # Пользователь продолжил диалог в другом направлении.
             state.last_entities["_secondary_offer_pending"] = False
 
-    decision = await analyze(user_text, state.last_entities)
+    use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
+    shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False)
+    if use_v2_nlu:
+        nlu_result = await analyze_with_candidates(user_text, state)
+        decision = nlu_result.decision
+        state.last_entities["_nlu_candidates"] = [
+            {
+                "source": c.source,
+                "label": c.label,
+                "confidence": c.confidence,
+                "flags": c.flags[:8],
+            }
+            for c in nlu_result.candidates
+        ]
+        state.last_entities["_nlu_merged_from"] = nlu_result.merged_from
+        if shadow_nlu:
+            legacy = await analyze(user_text, state.last_entities)
+            state.last_entities["_nlu_shadow"] = {
+                "legacy_label": legacy.label,
+                "legacy_conf": legacy.confidence,
+                "v2_label": decision.label,
+                "v2_conf": decision.confidence,
+            }
+    else:
+        decision = await analyze(user_text, state.last_entities)
     decision = await _verify_doctor_entity(decision, services, user_text)
     decision = _apply_context_action(decision, state, user_text)
     promoted_label, promoted_flags = apply_verified_doctor_override(decision.label, set(decision.flags), user_text)
@@ -757,6 +525,25 @@ async def route_patient_message(
             for k in ("appointment_flow_active", "appointment_confirm_pending", "appointment_confirmed"):
                 state.last_entities.pop(k, None)
 
+    # Entity grounding: принимаем только подтвержденные/разрешенные сущности.
+    pending_before_merge = memory.get_pending(state)
+    grounding = await ground_decision_entities(
+        decision=decision,
+        user_text=user_text,
+        state=state,
+        services=services,
+        pending=pending_before_merge,
+    )
+    if grounding.entities != decision.entities or grounding.flags:
+        decision = RouteDecision(
+            label=decision.label,
+            confidence=decision.confidence,
+            entities=grounding.entities,
+            flags=set(decision.flags) | set(grounding.flags),
+            needs_handoff=decision.needs_handoff,
+            context_action=decision.context_action,
+        )
+
     # merge entities from LLM+rules
     memory.merge_entities(state, decision.entities, label=decision.label)
     # Явный город в текущей реплике должен уметь исправлять/обновлять контекст
@@ -780,6 +567,7 @@ async def route_patient_message(
         if missing_now:
             quick_now = quick_fill_entities_from_text(user_text, state.last_entities, missing_now, services)
             if quick_now:
+                quick_now = await _sanitize_doctor_in_entities(quick_now, services, label=decision.label)
                 memory.merge_entities(state, quick_now, label=decision.label)
         elif decision.label == "APPOINTMENT" and state.last_entities.get("appointment_flow_active"):
             # В активном сценарии записи продолжаем извлекать филиал/дату/время
@@ -797,6 +585,7 @@ async def route_patient_message(
                 services,
             )
             if quick_flow:
+                quick_flow = await _sanitize_doctor_in_entities(quick_flow, services, label=decision.label)
                 memory.merge_entities(state, quick_flow, label=decision.label)
 
     # if pending exists, try quick fill missing slots (NO LLM)
@@ -807,12 +596,36 @@ async def route_patient_message(
         if isinstance(pend_label, str) and isinstance(missing, list) and missing:
             quick = quick_fill_entities_from_text(user_text, state.last_entities, missing, services)
             if quick:
+                quick = await _sanitize_doctor_in_entities(quick, services, label=pend_label)
                 memory.merge_entities(state, quick, label=pend_label)
+        if pend_label == "APPOINTMENT":
+            await _backfill_appointment_doctor_from_text(user_text, state, services, memory)
 
     _fill_date_from_schedule_windows(state, decision.label)
 
     plan = build_plan(decision, state, user_text, memory=memory)
     evidence = await execute_plan(plan, state, services)
+    # Graph state transition (FSM слой)
+    pending_after_plan = memory.get_pending(state)
+    graph_out = _GRAPH_ENGINE.next(
+        session=state,
+        decision=decision,
+        pending=pending_after_plan,
+        handoff_planned=bool(evidence.get("handoff_required")),
+    )
+    evidence.debug_trace.append(
+        {
+            "graph_transition": {
+                "from": graph_out.transition.from_state.value,
+                "to": graph_out.transition.to_state.value,
+                "reason": graph_out.transition.reason,
+            }
+        }
+    )
+    update_summary(
+        state,
+        reason="topic_switch" if decision.context_action in {"new_topic", "overwrite_doctor"} else "",
+    )
     return decision, plan, evidence
 
 
@@ -841,6 +654,7 @@ def _debug_meta(decision: RouteDecision, plan: Plan, evidence: Evidence, state: 
         "pending": pending,
         "history_tail": (state.history or [])[-10:],
         "last_entities": state.last_entities,
+        "summary": state.summary,
     }
 
 
@@ -869,7 +683,7 @@ async def patient_routing_stream(
 
     # Явный запрос оператора должен иметь абсолютный приоритет
     # над pending/clarify сценариями, чтобы не зацикливать пользователя.
-    if _OPERATOR_REQUEST_RE.search(user_text or ""):
+    if explicit_operator_requested(user_text):
         memory.clear_pending(state)
         state.last_entities["_nlu_unclear_count"] = 0
         state.last_entities["appointment_flow_active"] = False
@@ -917,35 +731,23 @@ async def patient_routing_stream(
     # Важно: не перебиваем активный pending/flow (иначе ломается естественный диалог).
     pending_now = memory.get_pending(state)
     flow_active = bool(state.last_entities.get("appointment_flow_active"))
-    if (
-        "low_confidence" in decision.flags
-        and decision.label in {"OTHER", "TEST_ASSIST"}
-        and flow_label == decision.label
-        and not pending_now
-        and not flow_active
-    ):
-        if _OPERATOR_REQUEST_RE.search(user_text or ""):
-            state.last_entities["_nlu_unclear_count"] = 0
-            yield ResponseEnvelope(text=handoff_message("low_confidence"), handoff=True)
-            return
-
-        prev = state.last_entities.get("_nlu_unclear_count")
-        try:
-            n = int(prev) if prev is not None else 0
-        except Exception:
-            n = 0
-        n += 1
-        state.last_entities["_nlu_unclear_count"] = n
-
-        if n >= 3:
-            state.last_entities["_nlu_unclear_count"] = 0
-            yield ResponseEnvelope(text=handoff_message("low_confidence"), handoff=True)
-            return
-
-        yield ResponseEnvelope(text=_LOW_CONF_CLARIFY_TEXT, handoff=False)
+    recovery = evaluate_recovery(
+        user_text=user_text,
+        decision=decision,
+        flow_label=flow_label,
+        pending_exists=bool(pending_now),
+        flow_active=flow_active,
+        state_entities=state.last_entities,
+        summary=state.summary,
+        max_unclear=3,
+    )
+    if recovery.kind == "handoff":
+        update_summary(state, reason="handoff")
+        yield ResponseEnvelope(text=recovery.text or handoff_message("low_confidence"), handoff=True)
         return
-    else:
-        state.last_entities["_nlu_unclear_count"] = 0
+    if recovery.kind == "clarify":
+        yield ResponseEnvelope(text=recovery.text or _LOW_CONF_CLARIFY_TEXT, handoff=False)
+        return
 
     # APPOINTMENT confirmation loop: после вопроса "Подтверждаете?"
     if state.last_entities.get("appointment_confirm_pending"):
@@ -1095,13 +897,17 @@ async def patient_routing_stream(
         yield ResponseEnvelope(text=text, attachments=[], handoff=False)
         return
 
+    news_payload = evidence.get("news")
+    if flow_label == "NEWS" and isinstance(news_payload, dict):
+        text = format_news_for_patient(news_payload, state.last_entities)
+        yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+        return
+
     # Если пользователь сразу хочет записаться к конкретному врачу, сначала
     # показываем его актуальные окна, а не отправляем в общий сценарий "город -> филиал".
     if (
         flow_label == "APPOINTMENT"
         and isinstance(schedule_payload, dict)
-        and isinstance(schedule_payload.get("schedule"), list)
-        and bool(schedule_payload.get("schedule"))
         and (state.last_entities.get("doctor_name") or state.last_entities.get("doctor_id"))
         and not (state.last_entities.get("date_from") or state.last_entities.get("date_hint"))
         and not state.last_entities.get("time_from")
@@ -1121,6 +927,11 @@ async def patient_routing_stream(
         city = str(entities.get("city") or "").strip()
 
         if appointment_step == APPOINTMENT_STEP_BRANCH:
+            # Для записи без явно указанного города сначала всегда уточняем город,
+            # чтобы не предлагать общий/неподходящий список филиалов.
+            if not city and not entities.get("branch_name") and not entities.get("branch_id"):
+                yield ResponseEnvelope(text="Из какого города вы обращаетесь?", handoff=False)
+                return
             branches = _safe_get_branches(services)
             addresses = appointment_addresses_for_city(
                 evidence.get("address"),

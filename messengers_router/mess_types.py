@@ -52,6 +52,7 @@ class SessionState:
     session_id: str
     history: list[dict[str, str]] = field(default_factory=list)  # [{"role":"user|assistant","text":...}]
     last_entities: dict[str, Any] = field(default_factory=dict)
+    summary: str = field(default="")
     is_authenticated: bool = field(default=False)
     # Важно: токены лучше не хранить тут в явном виде
     auth_ref: str | None = None  # id сессии авторизации или что-то подобное

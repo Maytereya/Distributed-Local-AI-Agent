@@ -133,7 +133,10 @@ async def messenger_generate(payload: MessengerGenerateRequest):
 
         async def event_stream():
             # debug=False — осознанно
+            assistant_parts: list[str] = []
             async for env in patient_routing_stream(text, state, services, memory, debug=False):
+                if env.text:
+                    assistant_parts.append(str(env.text))
                 obj = {
                     "text": env.text or "",
                     "attachments": env.attachments or [],
@@ -141,6 +144,9 @@ async def messenger_generate(payload: MessengerGenerateRequest):
                     "state_update": {},  # в стриме не используем
                 }
                 yield (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+            assistant_text = "".join(assistant_parts).strip()
+            if assistant_text:
+                memory.append_turn(state, "assistant", assistant_text)
 
         return StreamingResponse(event_stream(), media_type="application/x-ndjson")
     finally:
@@ -204,6 +210,8 @@ async def messenger_generate_once(payload: MessengerGenerateRequest):
             handoff=handoff,
             state_update=state_update,
         )
+        if out.text:
+            memory.append_turn(state, "assistant", out.text)
         # JSONResponse чтобы Swagger красиво показал тело
         return JSONResponse(content=out.model_dump())
     finally:

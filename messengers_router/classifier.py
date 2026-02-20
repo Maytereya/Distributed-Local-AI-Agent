@@ -14,8 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from functools import lru_cache
-from pathlib import Path
 from typing import Any, cast
 
 from ollama import AsyncClient
@@ -25,6 +23,8 @@ from agent_logic_2.doctor_name_matching import extract_doctor_name_candidate
 from agent_logic_2.ollama_settings import LLMName
 
 from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision, ContextAction
+from .prompt_contracts import sanitize_classifier_json
+from .prompt_registry import load_prompt_text
 from .policies import (
     detect_urgent,
     detect_complaint,
@@ -54,20 +54,12 @@ from .policies import (
 
 ollama_client = AsyncClient(c.ollama_url)
 _CLASSIFY_TIMEOUT = 45
-_PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 _TOPIC_SWITCH_RE = re.compile(r"\b(передумал\w*|передумала\w*|друг(ой|ая)\s+врач\w*|нуж\w+)\b", re.I)
 _CANCEL_FLOW_RE = re.compile(r"\b(отмен\w*|не\s+надо|не\s+хочу)\b", re.I)
 _DOCTOR_SWITCH_SIGNAL_RE = re.compile(r"\b(расписани\w*|график|врач\w*|доктор\w*|когда\b.*\bпринима\w*)\b", re.I)
 _INVALID_DOCTOR_TOKEN_RE = re.compile(r"^(отмен|перен|запис|покаж|подскаж|скажи|нуж|хоч|надо)", re.I)
 _REFINE_INTENTS = {"DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
 _REFINE_SIGNAL_RE = re.compile(r"\b(передумал\w*|передумала\w*|лучше|или|а\s+если|а\s+вот|уточн\w*)\b", re.I)
-
-
-@lru_cache
-def _load_prompt(name: str) -> str:
-    path = _PROMPTS_DIR / name
-    return path.read_text(encoding="utf-8")
-
 
 def _extract_json(text: str) -> dict[str, Any] | None:
     if not text:
@@ -157,15 +149,19 @@ async def ollama_classify_json(prompt: str) -> dict[str, Any]:
             timeout=_CLASSIFY_TIMEOUT,
         )
     except Exception:
-        return {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_timeout"]}
+        return sanitize_classifier_json(
+            {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_timeout"]}
+        )
 
     raw = _extract_generate_response_text(res)
     if isinstance(raw, str):
         obj = _extract_json(raw)
         if isinstance(obj, dict):
-            return obj
+            return sanitize_classifier_json(obj)
 
-    return {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_non_json"]}
+    return sanitize_classifier_json(
+        {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_non_json"]}
+    )
 
 
 # ---------------------------
@@ -174,11 +170,11 @@ async def ollama_classify_json(prompt: str) -> dict[str, Any]:
 
 _ORDER_ID_RE = re.compile(r"(?:заказ|order|№)\s*([0-9]{4,})", re.I)
 _GREETING_ONLY_RE = re.compile(
-    r"^\s*(привет|здравствуйте|здраствуйте|добрый день|доброе утро|добрый вечер|доброго дня|hello|hi)\s*[!.,?]*\s*$",
+    r"^\s*(привет\w*|здравствуйте|здраствуйте|добрый день|доброе утро|добрый вечер|доброго дня|hello|hi)\s*[!.,?]*\s*$",
     re.I,
 )
 _GREETING_PREFIX_RE = re.compile(
-    r"^\s*(привет|здравствуйте|здраствуйте|добрый день|доброе утро|добрый вечер|доброго дня|hello|hi)\b",
+    r"^\s*(привет\w*|здравствуйте|здраствуйте|добрый день|доброе утро|добрый вечер|доброго дня|hello|hi)\b",
     re.I,
 )
 _SMALLTALK_RE = re.compile(
@@ -197,7 +193,10 @@ def _is_smalltalk_greeting(text: str) -> bool:
     m = _GREETING_PREFIX_RE.match(s)
     if not m:
         return False
-    tail = s[m.end():].strip(" \t\n\r,!.?-:;")
+    tail_raw = s[m.end():]
+    # Убираем пунктуацию/скобки/эмодзи-символы в хвосте, чтобы
+    # "привет)", "привет )))", "привет 🙂" считались приветствием.
+    tail = re.sub(r"[^\wА-Яа-яЁё]+", " ", tail_raw, flags=re.U).strip()
     if not tail:
         return True
     return bool(_SMALLTALK_RE.match(tail))
@@ -237,7 +236,7 @@ def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
 
 def _build_classify_prompt(text: str, seeded: dict[str, Any]) -> str:
     allowed = ", ".join(PATIENT_LABEL_PRIORITY)
-    tmpl = _load_prompt("classifier_patient.txt")
+    tmpl = load_prompt_text("classifier_patient")
     return (
         tmpl.replace("<<ALLOWED_LABELS>>", allowed)
         .replace("<<SEEDED>>", json.dumps(seeded, ensure_ascii=False))
@@ -256,7 +255,7 @@ def _refine_allowed(base_label: Label) -> list[str]:
 
 
 def _build_refine_prompt(text: str, seeded: dict[str, Any], base: RouteDecision) -> str:
-    tmpl = _load_prompt("classifier_refine_patient.txt")
+    tmpl = load_prompt_text("classifier_refine_patient")
     allowed = ", ".join(_refine_allowed(base.label))
     base_dump = {
         "label": base.label,

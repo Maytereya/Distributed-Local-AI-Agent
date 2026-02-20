@@ -19,6 +19,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_GOLDEN = ROOT / "messengers_router" / "messengers_mds_to_collect_thoughts" / "analysis" / "stage5_golden_cases.jsonl"
+DEFAULT_GOLDEN_VERSIONS_DIR = (
+    ROOT / "messengers_router" / "messengers_mds_to_collect_thoughts" / "analysis" / "golden_versions"
+)
 
 # Для прокси-оценки заполнения слотов на 1-й реплике
 REQUIRED_SLOTS: dict[str, list[str]] = {
@@ -106,11 +109,20 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Evaluate stage-5 golden corpus")
     p.add_argument("--url", default="http://localhost:8000/api/messenger-generate-once", help="Debug endpoint URL")
     p.add_argument("--golden", default=str(DEFAULT_GOLDEN), help="Golden JSONL path")
+    p.add_argument(
+        "--golden-version",
+        default="",
+        help="Version id from analysis/golden_versions, e.g. v1 (file: stage5_golden_v1.jsonl)",
+    )
     p.add_argument("--session-prefix", default="s_eval_stage5", help="Session prefix")
     p.add_argument("--run-id", default="", help="Optional run id (default unix ts)")
     args = p.parse_args()
 
-    golden_path = Path(args.golden).resolve()
+    golden_version = str(args.golden_version or "").strip()
+    if golden_version:
+        golden_path = (DEFAULT_GOLDEN_VERSIONS_DIR / f"stage5_golden_{golden_version}.jsonl").resolve()
+    else:
+        golden_path = Path(args.golden).resolve()
     if not golden_path.exists():
         print(f"[error] golden file not found: {golden_path}")
         return 2

@@ -2,6 +2,11 @@
 
 Формирует prompt для LLM по decision+evidence, отдает поток текстовых чанков
 и предоставляет шаблонные ответы для safety/early-exit веток.
+
+Ответственность модуля:
+1) Преобразовать evidence в пациентский текст (включая deterministic-форматтеры).
+2) Использовать LLM-рендер там, где нет надежного шаблона.
+3) Возвращать безопасные fallback-ответы для критических сценариев.
 """
 
 from __future__ import annotations
@@ -9,8 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, date, time
-from functools import lru_cache
-from pathlib import Path
 from typing import Any, AsyncGenerator
 
 from ollama import AsyncClient
@@ -20,16 +23,10 @@ from agent_logic_2 import config as c, ollama_settings
 from agent_logic_2.ollama_settings import LLMName
 from .mess_types import Evidence, RouteDecision, ResponseEnvelope
 from .policies import sanitize_for_patient
+from .prompt_registry import load_prompt_text
 
 ollama_client = AsyncClient(c.ollama_url)
 timeout = 300
-_PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
-
-
-@lru_cache
-def _load_prompt(name: str) -> str:
-    path = _PROMPTS_DIR / name
-    return path.read_text(encoding="utf-8")
 
 async def ollama_call(prompt: str, llm: str = LLMName.get(), think: bool = None, ) -> AsyncGenerator[str, Any]:
     if not llm:
@@ -54,7 +51,7 @@ async def ollama_call(prompt: str, llm: str = LLMName.get(), think: bool = None,
 
 
 def _final_prompt(user_text: str, decision: RouteDecision, evidence: Evidence) -> str:
-    tmpl = _load_prompt("renderer_patient.txt")
+    tmpl = load_prompt_text("renderer_patient")
     flags = ", ".join(sorted(decision.flags))
     evidence_txt = json.dumps(evidence.items, ensure_ascii=False)
     return (
@@ -264,7 +261,7 @@ def format_address_for_patient(
     else:
         lines.append("Доступные филиалы:")
 
-    for i, b in enumerate(branches[:12], 1):
+    for i, b in enumerate(branches, 1):
         lines.append(f"{i}. {b['address']}")
         if b.get("phone"):
             lines.append(f"Телефон: {b['phone']}")
@@ -274,6 +271,36 @@ def format_address_for_patient(
 
     lines.append("Если нужно, подскажу ближайший филиал по вашему району.")
     return "\n".join([x for x in lines if x is not None]).strip()
+
+
+def format_news_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
+    news = payload.get("news")
+    if not isinstance(news, list):
+        news = []
+
+    if not news:
+        city = str(entities.get("city") or "").strip()
+        if city:
+            return (
+                f"По вашему запросу в городе {city} сейчас нет подходящих активных акций. "
+                "Могу подсказать адреса филиалов или стоимость нужной услуги."
+            )
+        return "По вашему запросу сейчас нет подходящих активных акций. Могу подсказать адреса филиалов или стоимость услуги."
+
+    lines: list[str] = ["Нашёл актуальные предложения:"]
+    for i, item in enumerate(news[:5], 1):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("name") or item.get("subject") or "").strip()
+        url = str(item.get("url") or item.get("link") or "").strip()
+        if not title:
+            title = "Акция"
+        lines.append(f"{i}. {title}")
+        if url:
+            lines.append(url)
+    lines.append("")
+    lines.append("Если нужно, могу уточнить условия акции по вашему филиалу.")
+    return "\n".join(lines).strip()
 
 
 def render_urgent() -> ResponseEnvelope:

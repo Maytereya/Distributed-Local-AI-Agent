@@ -2,6 +2,13 @@
 
 Содержит вызовы внешних источников (Nayka API, price, meili), кэш врачей,
 поиск расписания/цен/адресов и fallback-контракты для handoff при сбоях.
+
+Ответственность модуля:
+1) Доступ к внешним данным и их нормализация к стабильному внутреннему формату.
+2) Локальный кэш/дедупликация/ограничение объема данных для рендера.
+3) Прозрачный graceful degradation (note/reason/handoff flags) при сбоях.
+
+Модуль не должен принимать state-machine решения по диалогу.
 """
 
 from __future__ import annotations
@@ -86,9 +93,15 @@ def _doctor_matches_fio(fio: str, doctor_query: str, resolved_surname: str | Non
     return False
 
 
-def _compact_specialization(text: str, max_lines: int = 16, max_chars: int = 900) -> str:
+def _compact_specialization(
+    text: str,
+    max_lines: int | None = None,
+    max_chars: int | None = None,
+) -> str:
     """
-    Сжимает повторяющиеся и слишком длинные блоки специализации для безопасного рендера.
+    Сжимает только дубли строк в специализации.
+    Ограничения по строкам/символам отключены по умолчанию (полный текст),
+    но могут быть включены параметрами max_lines/max_chars.
     """
     lines = [ln.strip() for ln in str(text or "").splitlines()]
     out: list[str] = []
@@ -101,11 +114,11 @@ def _compact_specialization(text: str, max_lines: int = 16, max_chars: int = 900
             continue
         seen.add(key)
         out.append(ln)
-        if len(out) >= max_lines:
+        if isinstance(max_lines, int) and max_lines > 0 and len(out) >= max_lines:
             break
 
     compact = "\n".join(out).strip()
-    if len(compact) > max_chars:
+    if isinstance(max_chars, int) and max_chars > 0 and len(compact) > max_chars:
         compact = compact[:max_chars].rstrip() + "..."
     return compact
 
@@ -862,11 +875,27 @@ class Services:
             regions = await self._ensure_regions_loaded()
         except Exception:
             regions = []
+        appointment_mode = bool(entities.get("__appointment_mode"))
         branch = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city"]) or query
         branch_q = _normalise_input(branch)
         service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
         service_q = _normalise_input(service_name)
         city_for_static = _get_first_present(entities, ["city"])
+
+        allowed_doctor_addresses_norm: set[str] = set()
+        if appointment_mode:
+            try:
+                doctors = await self._ensure_doctors_cache_loaded()
+            except Exception:
+                doctors = []
+            for d in doctors:
+                if not isinstance(d, dict):
+                    continue
+                for addr in (d.get("regions") or d.get("addresses") or []):
+                    a = str(addr).strip()
+                    if not a or not _looks_like_real_address(a):
+                        continue
+                    allowed_doctor_addresses_norm.add(_normalise_input(a))
 
         # Для анализов/ЭКГ: используем эталонный справочник филиалов (сайтовый источник истины).
         if city_for_static and service_q:
@@ -948,9 +977,24 @@ class Services:
                 if cur_score > prev_score:
                     by_addr[addr] = b
 
+            if appointment_mode and allowed_doctor_addresses_norm:
+                def _is_doctor_capable(addr: str) -> bool:
+                    n = _normalise_input(addr)
+                    for x in allowed_doctor_addresses_norm:
+                        if n == x or n in x or x in n:
+                            return True
+                    return False
+
+                filtered_addrs = [a for a in uniq if _is_doctor_capable(a)]
+                if filtered_addrs:
+                    uniq = filtered_addrs
+                    by_addr = {k: v for k, v in by_addr.items() if _is_doctor_capable(k)}
+
             note = "address_info: live regions API"
             if service_q and allowed_region_ids is not None:
                 note += " + filtered by service"
+            if appointment_mode:
+                note += " + filtered by doctor-capable branches"
             return {
                 "addresses": uniq,
                 "branches": list(by_addr.values()),
@@ -1044,11 +1088,7 @@ class Services:
                 uniq_by_name.setdefault(b["name"], b)
             return list(uniq_by_name.values())
 
-        return [
-            {"id": "branch_novo-sadovaya", "name": "Филиал на Ново - Садовой",
-             "aliases": "ново - садовая, ул ново-садовая"},
-            {"id": "branch_lenina", "name": "Филиал на Ленина", "aliases": "ленина,ул ленина,ленина 5"},
-        ]
+        return []
 
 
 if __name__ == "__main__":

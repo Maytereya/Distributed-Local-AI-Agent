@@ -216,6 +216,40 @@ SERVICE_BOUNDARY_WORDS = {
 }
 
 SERVICE_UPPERCASE = {"узи", "экг", "мрт", "кт", "фгдс", "фкс", "уздг"}
+SERVICE_GENERIC_STOPWORDS = {
+    "хочу",
+    "хотел",
+    "хотела",
+    "нужно",
+    "надо",
+    "можно",
+    "пожалуйста",
+    "записаться",
+    "записать",
+    "запись",
+    "врач",
+    "врачу",
+    "врача",
+    "доктор",
+    "доктору",
+    "доктора",
+    "специалист",
+    "специалисту",
+    "специалиста",
+    "прием",
+    "приём",
+    "услуга",
+    "услуги",
+    "услугу",
+    "процедура",
+    "процедуры",
+    "процедуру",
+}
+_SERVICE_FOLLOWUP_RE = re.compile(
+    r"\b(?:услуг\w*|процедур\w*|обследовани\w*|на|по)\s+([a-zа-яё0-9\- ]{2,80})",
+    re.I,
+)
+_SERVICE_SINGLE_WORD_RE = re.compile(r"^\s*([a-zа-яё][a-zа-яё0-9\-]{3,})\s*$", re.I)
 
 _DIAGNOSTIC_RE = re.compile(r"\b(экг|узи|мрт|кт|фгдс|фкс|рентген|флюорограф|колоноскоп|холтер)\b", re.I)
 _DOCTOR_WORDS_RE = re.compile(
@@ -286,6 +320,14 @@ _QF_PATIENT_NAME_PREFIX_RE = re.compile(
 )
 _QF_PLAIN_NAME_RE = re.compile(r"^\s*([А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+){1,2})\s*$")
 _QF_NAME_FRAGMENT_RE = re.compile(r"\b([А-ЯЁа-яё\-]{2,})\s+([А-ЯЁа-яё\-]{2,})\s+([А-ЯЁа-яё\-]{2,})\b")
+_QF_DOCTOR_CONTEXT_RE = re.compile(
+    r"\b("
+    r"расписани\w*|график|свободн\w*\s+(?:окн\w*|слот\w*)|"
+    r"когда\s+принима\w*|принима\w*\s+когда|"
+    r"к\s+(?:врач\w*\s+|доктор\w*\s+)?[А-ЯЁа-яё\-]{3,}"
+    r")\b",
+    re.I,
+)
 _QF_NEXT_WEEK_RE = re.compile(r"\bна следующ(ей|ую)\s+недел", re.I)
 _QF_THIS_WEEK_RE = re.compile(r"\bна эт(ой|у)\s+недел|\bв эт(ой|у)\s+недел", re.I)
 _QF_TOMORROW_RE = re.compile(r"\bзавтра\b", re.I)
@@ -887,6 +929,27 @@ def parse_date_time_ru(text: str, today: date | None = None) -> dict[str, Any]:
     return out
 
 
+def _doctor_candidate_is_contextual(text: str, candidate: str) -> bool:
+    """
+    Кандидат врача валиден только при явном doctor/schedule контексте.
+    Это защищает от ложных срабатываний вида "Здравствуйте" -> doctor_name.
+    """
+    t = str(text or "")
+    cand_raw = str(candidate or "").strip()
+    cand = normalize_loose_text(cand_raw)
+    if not cand_raw or not cand:
+        return False
+    if not _QF_DOCTOR_CONTEXT_RE.search(t):
+        return False
+    c = re.escape(cand_raw)
+    near_patterns = (
+        rf"\b(?:к|про|о)\s+(?:врач\w*\s+|доктор\w*\s+)?{c}\b",
+        rf"\b(?:расписани\w*|график|слот\w*|окн\w*|когда\s+принима\w*|принима\w*)\b[^.!?\n]{{0,40}}\b{c}\b",
+        rf"\b{c}\b[^.!?\n]{{0,40}}\b(?:расписани\w*|график|слот\w*|окн\w*|когда\s+принима\w*|принима\w*)\b",
+    )
+    return any(re.search(p, t, re.I) for p in near_patterns)
+
+
 def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_rules: list[str]) -> dict[str, Any]:
     t = (text or "").strip()
     low = t.lower()
@@ -988,7 +1051,7 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
     doctor_already_selected = bool(state_entities.get("doctor_name") or state_entities.get("doctor_id"))
     if needs_doctor_or_spec and not patient_name_like_text and not doctor_already_selected:
         extracted_name = extract_doctor_name_candidate(t)
-        if extracted_name:
+        if extracted_name and _doctor_candidate_is_contextual(t, extracted_name):
             out["doctor_name"] = extracted_name
 
     needs_test = any("test_goal" in r or "test_name" in r for r in missing_rules)
@@ -999,7 +1062,10 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
 
     if any("service_name" in r for r in missing_rules) and len(t) >= 3:
         service_phrase = extract_service_phrase(t)
-        out["service_name"] = (service_phrase or t[:200]).strip()
+        # Не подставляем весь текст как service_name: это приводит к
+        # ложным услугам вида "Можно записаться к врачу".
+        if service_phrase:
+            out["service_name"] = service_phrase.strip()
 
     if "child_age" in missing_rules:
         m_age = _QF_AGE_RE.search(low)
@@ -1087,41 +1153,62 @@ def extract_service_phrase(text: str) -> str | None:
     if not isinstance(text, str) or not text.strip():
         return None
 
+    raw = text.strip()
     low = text.lower()
     m = re.search(r"\b(" + "|".join(SERVICE_ANCHORS) + r")\b", low)
-    if not m:
-        return None
 
-    tail = low[m.start():]
-    tokens = re.findall(r"[a-zа-яё0-9:-]+", tail)
-    if not tokens:
-        return None
+    def _normalize_tokens(tokens: list[str]) -> str | None:
+        if not tokens:
+            return None
+        service_tokens: list[str] = []
+        for idx, tok in enumerate(tokens):
+            token = tok.strip().lower()
+            if not token:
+                continue
+            if len(service_tokens) >= 5:
+                break
+            if token in SERVICE_BOUNDARY_WORDS:
+                break
+            if ":" in token or re.search(r"\d", token):
+                break
+            if idx == 0 and token in SERVICE_GENERIC_STOPWORDS:
+                continue
+            service_tokens.append(token)
+        if not service_tokens:
+            return None
+        if len(service_tokens) == 1 and service_tokens[0] in SERVICE_GENERIC_STOPWORDS:
+            return None
+        first = service_tokens[0]
+        first_out = first.upper() if first in SERVICE_UPPERCASE else first.capitalize()
+        if len(service_tokens) == 1:
+            return first_out
+        return " ".join([first_out, *service_tokens[1:]])
 
-    service_tokens: list[str] = []
-    for idx, tok in enumerate(tokens):
-        if idx == 0:
-            service_tokens.append(tok)
-            continue
-        if len(service_tokens) >= 5:
-            break
-        if tok in SERVICE_BOUNDARY_WORDS:
-            break
-        if ":" in tok or re.search(r"\d", tok):
-            break
-        service_tokens.append(tok)
+    if m:
+        tail = low[m.start():]
+        tokens = re.findall(r"[a-zа-яё0-9:-]+", tail)
+        normalized = _normalize_tokens(tokens)
+        if normalized:
+            return normalized
 
-    if not service_tokens:
-        return None
+    # Fallback: поддержка услуг без "якорей" (пример: "на торакоцентез").
+    # Берем фразу после маркеров "услуга/процедура/на/по" и нормализуем.
+    f = _SERVICE_FOLLOWUP_RE.search(low)
+    if f:
+        cand = f.group(1).strip()
+        cand_tokens = re.findall(r"[a-zа-яё0-9:-]+", cand)
+        normalized = _normalize_tokens(cand_tokens)
+        if normalized and not match_city(normalized):
+            return normalized
 
-    first = service_tokens[0]
-    if first in SERVICE_UPPERCASE:
-        first_out = first.upper()
-    else:
-        first_out = first.capitalize()
+    # Однословный ввод в active clarify ("торакоцентез").
+    sw = _SERVICE_SINGLE_WORD_RE.match(raw)
+    if sw:
+        token = sw.group(1).strip().lower()
+        if token not in SERVICE_GENERIC_STOPWORDS and not match_city(token):
+            return token.capitalize()
 
-    if len(service_tokens) == 1:
-        return first_out
-    return " ".join([first_out, *service_tokens[1:]])
+    return None
 
 
 def missing_slots(label: str, entities: dict[str, Any]) -> list[str]:
@@ -1157,10 +1244,10 @@ def clarification_question(label: str, missing: list[str]) -> str:
     if label in CLARIFY_TEXT_MAP:
         return CLARIFY_TEXT_MAP[label]
     if label == "APPOINTMENT":
-        if need_service:
-            return APPOINTMENT_CLARIFY_MAP["need_service"]
         if need_city:
             return APPOINTMENT_CLARIFY_MAP["need_city"]
+        if need_service:
+            return APPOINTMENT_CLARIFY_MAP["need_service"]
         if "patient_name" in missing:
             return APPOINTMENT_CLARIFY_MAP["need_patient"]
         if "date_from" in missing or "time_from" in missing:
