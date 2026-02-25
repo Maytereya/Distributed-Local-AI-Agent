@@ -65,6 +65,12 @@ from .policies import (
     decision_handoff_text,
     apply_verified_doctor_override,
     detect_nonbookable_walkin_intent,
+    detect_test_assist_intent,
+    detect_test_result_intent,
+    detect_schedule_intent,
+    detect_doctor_info_intent,
+    has_datetime_signal,
+    looks_like_branch_hint,
     nonbookable_service_hint,
     appointment_service_display,
 )
@@ -114,6 +120,41 @@ _DOCTOR_NOISE_TOKENS = {
 def _env_flag(name: str, default: bool) -> bool:
     raw = str(os.getenv(name, "1" if default else "0")).strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def _should_keep_appointment_flow_override(user_text: str) -> bool:
+    """
+    Разрешаем мягкий OTHER->APPOINTMENT override только для реплик,
+    похожих на продолжение сценария записи (время/город/филиал/ФИО/да-нет).
+    Новые темы ("анализы", "результаты", "расписание") не должны
+    притягиваться назад в активный APPOINTMENT flow.
+    """
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+
+    low = text.lower()
+    if (
+        detect_test_result_intent(low)
+        or detect_test_assist_intent(low)
+        or detect_nonbookable_walkin_intent(text)
+        or detect_schedule_intent(low)
+        or detect_doctor_info_intent(low)
+    ):
+        return False
+
+    reply_kind = contextual_reply_kind(text)
+    if reply_kind in {"yes", "no"}:
+        return True
+    if has_datetime_signal(text):
+        return True
+    if match_city(text):
+        return True
+    if looks_like_branch_hint(text):
+        return True
+    if _looks_like_patient_fio(text):
+        return True
+    return False
 
 
 async def _verify_doctor_entity(
@@ -482,6 +523,7 @@ async def route_patient_message(
         decision.label == "OTHER"
         and decision.context_action == "continue"
         and state.last_entities.get("appointment_flow_active")
+        and _should_keep_appointment_flow_override(user_text)
     ):
         decision = RouteDecision(
             label="APPOINTMENT",
