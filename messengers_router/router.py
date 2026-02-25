@@ -534,6 +534,22 @@ async def route_patient_message(
             context_action="continue",
         )
 
+    # Защита активного APPOINTMENT flow: не даем случайной переклассификации
+    # увести реплику "дата/время/ФИО" в чужой интент.
+    if (
+        decision.label in {"TEST_RESULT", "DOCTOR_SCHEDULE", "DOCTOR_INFO"}
+        and state.last_entities.get("appointment_flow_active")
+        and _should_keep_appointment_flow_override(user_text)
+    ):
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=max(decision.confidence, 0.60),
+            entities=decision.entities,
+            flags=set(decision.flags) | {"flow_appointment_guard_override"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+
     if decision.label == "DOCTOR_SCHEDULE":
         # Очищаем хвосты сценария записи, чтобы расписание не фильтровалось
         # старым branch/date/time из предыдущих шагов.
@@ -562,7 +578,13 @@ async def route_patient_message(
         # Исключение: если прямо сейчас ждем ФИО пациента и пользователь прислал ФИО,
         # не сбрасываем запись из-за случайной переклассификации.
         pending_now = memory.get_pending(state)
-        keep_appointment_flow = _is_appointment_waiting_patient_name(pending_now) and _looks_like_patient_fio(user_text)
+        keep_appointment_flow = (
+            (_is_appointment_waiting_patient_name(pending_now) and _looks_like_patient_fio(user_text))
+            or (
+                bool(state.last_entities.get("appointment_flow_active"))
+                and _should_keep_appointment_flow_override(user_text)
+            )
+        )
         if not keep_appointment_flow:
             for k in ("appointment_flow_active", "appointment_confirm_pending", "appointment_confirmed"):
                 state.last_entities.pop(k, None)

@@ -260,7 +260,8 @@ _DOCTOR_NAME_HINT_RE = re.compile(r"\bк\s+[А-ЯЁа-яё\-]{3,}\b")
 _BOOK_ACTION_STRICT_RE = re.compile(r"\b(записат\w*|запиш\w*|записыва\w*)\b", re.I)
 _DATE_TIME_SIGNAL_RE = re.compile(
     r"\b(сегодня|завтра|послезавтра|понедельник|вторник|среда|четверг|пятница|суббота|воскресенье|"
-    r"\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{1,2}:\d{2})\b",
+    r"\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{4}[./-]\d{1,2}[./-]\d{1,2}|"
+    r"\d{1,2}:\d{2}|\b(?:в|к)\s+\d{1,2}\s*(?:утра|дня|вечера|ночи)?)\b",
     re.I,
 )
 _RESULT_DELIVERY_QUESTION_RE = re.compile(r"\b(можно|куда)\b.*\b(почт\w*|придут)\b", re.I)
@@ -333,6 +334,7 @@ _QF_THIS_WEEK_RE = re.compile(r"\bна эт(ой|у)\s+недел|\bв эт(ой
 _QF_TOMORROW_RE = re.compile(r"\bзавтра\b", re.I)
 _QF_TODAY_RE = re.compile(r"\bсегодня\b", re.I)
 _QF_DATE_DOT_RE = re.compile(r"\b(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2,4}))?\b")
+_QF_DATE_ISO_RE = re.compile(r"\b(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\b")
 _QF_DATE_WORD_RE = re.compile(r"\b(\d{1,2})\s+([А-ЯЁа-яё]+)(?:\s+(\d{4}))?\b", re.I)
 _QF_RANGE_WORD_RE = re.compile(
     r"\bс\s+(\d{1,2})\s+(?:по|-)\s+(\d{1,2})\s+([А-ЯЁа-яё]+)(?:\s+(\d{4}))?\b",
@@ -852,6 +854,15 @@ def parse_date_time_ru(text: str, today: date | None = None) -> dict[str, Any]:
                 if dt2 < dt1:
                     dt1, dt2 = dt2, dt1
                 out["date_from"], out["date_to"] = dt1.isoformat(), dt2.isoformat()
+                out.pop("date_hint", None)
+
+    if "date_from" not in out:
+        mi = _QF_DATE_ISO_RE.search(s)
+        if mi:
+            year, mth, d = int(mi.group(1)), int(mi.group(2)), int(mi.group(3))
+            dt = _safe_date(year, mth, d)
+            if dt:
+                out["date_from"] = out["date_to"] = dt.isoformat()
                 out.pop("date_hint", None)
 
     if "date_from" not in out:
