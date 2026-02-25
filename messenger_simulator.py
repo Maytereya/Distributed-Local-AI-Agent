@@ -4,7 +4,7 @@ import json
 import sys
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import httpx
 
@@ -24,7 +24,7 @@ def sanitize_text(s: str) -> str:
 
 def parse_jsonl_stream(lines: List[str]) -> BotResult:
     """
-    Твой текущий формат JSONL:
+    текущий формат JSONL:
       {"text": "...", "attachments": [...], "handoff": bool}
     Стримит по токенам, поэтому мы:
       - склеиваем text
@@ -36,7 +36,7 @@ def parse_jsonl_stream(lines: List[str]) -> BotResult:
     handoff = False
     error: Optional[str] = None
 
-    # На всякий случай поддержим режим "partial" (если когда-то вернёшь накопление).
+    # На всякий случай поддержим режим "partial" (если когда-то возвратится накопление).
     last_text = ""
 
     for raw in lines:
@@ -119,6 +119,7 @@ def send_message(url: str, session_id: str, text: str, host_header: Optional[str
 def repl():
     if len(sys.argv) < 2:
         print("Usage: python messenger_simulator.py <url> [session_id] [host_header]")
+        print('Example: python messenger_simulator.py "http://localhost:8000/v1/agent/stream" local_test')
         print('Example: python messenger_simulator.py "http://172.16.0.16/api/messenger-generate" s_test')
         print('Example: python messenger_simulator.py "http://172.16.0.16/api/messenger-generate" s_test ontheflyai.ru')
         sys.exit(1)
@@ -187,6 +188,21 @@ def repl():
             print("\n[SYSTEM] handoff=true -> transfer to operator")
 
         print("")
+
+# -------------------
+# Различные проверки
+# -------------------
+import asyncio
+from messengers_router.services import Services
+
+async def main():
+    s = Services()
+
+    print(await s.doctors_info("уролог Дразнин", {"specialty": "уролог", "last_name": "Дразнин"}))
+    print(await s.doctors_schedule_week("покажи расписание Дразнина", {"last_name": "Дразнин"}))
+
+# asyncio.run(main())
+
 
 
 if __name__ == "__main__":

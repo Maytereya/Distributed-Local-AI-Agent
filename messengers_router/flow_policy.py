@@ -116,7 +116,7 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
     if (
         _is_appointment_waiting_patient_name(pending)
         and _looks_like_patient_fio(user_text)
-        and decision.context_action == "continue"
+        and decision.context_action != "cancel_flow"
         and decision.label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
     ):
         return "APPOINTMENT"
