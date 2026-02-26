@@ -2287,7 +2287,7 @@ def main():
                            )
                 return text
 
-            def fn_load_prompt_with_fallback(name: str, fallback_key: str) -> str:
+            def fn_load_prompt_with_fallback(name: str, fallback_key: str, fallback_version: str = "v2") -> str:
                 text, msg = load_prompt(name, inform=True)
                 if not isinstance(text, str):
                     text = ""
@@ -2295,23 +2295,23 @@ def main():
                     gr.Info(title="Загружен успешно", duration=3, message=msg)
                     return text
                 try:
-                    fallback_text = load_prompt_text(fallback_key)
+                    fallback_text = load_prompt_text(fallback_key, version=fallback_version)
                     gr.Info(
                         title="Загружен fallback",
                         duration=3,
-                        message=f"{msg}; использован встроенный prompt {fallback_key}",
+                        message=f"{msg}; использован встроенный prompt {fallback_key}_{fallback_version}",
                     )
                     return fallback_text
                 except Exception as e:
                     gr.Error(title="Ошибка загрузки prompt", message=str(e))
                     return text
 
-            def fn_load_prompt_with_fallback_silent(name: str, fallback_key: str) -> str:
+            def fn_load_prompt_with_fallback_silent(name: str, fallback_key: str, fallback_version: str = "v2") -> str:
                 text = load_prompt(name, inform=False)
                 if isinstance(text, str) and text.strip():
                     return text
                 try:
-                    return load_prompt_text(fallback_key)
+                    return load_prompt_text(fallback_key, version=fallback_version)
                 except Exception:
                     return text if isinstance(text, str) else ""
 
@@ -2513,7 +2513,11 @@ def main():
                             btn_save_mr_rich = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
                 btn_load_mr_rich.click(
-                                       lambda: fn_load_prompt_with_fallback("mr_renderer_patient_rich_v2", "renderer_patient_rich"),
+                                       lambda: fn_load_prompt_with_fallback(
+                                           "mr_renderer_patient_rich_v2",
+                                           "renderer_patient_rich",
+                                           "v2",
+                                       ),
                                        [], [prompt_code_mr_rich, ])
                 btn_save_mr_rich.click(lambda txt: fn_save_prompt("mr_renderer_patient_rich_v2", txt),
                                        prompt_code_mr_rich, )
@@ -2539,6 +2543,7 @@ def main():
                                          lambda: fn_load_prompt_with_fallback(
                                              "mr_renderer_critic_patient_alignment_v2",
                                              "renderer_critic_patient_alignment",
+                                             "v2",
                                          ),
                                          [], [prompt_code_mr_critic, ])
                 btn_save_mr_critic.click(lambda txt: fn_save_prompt("mr_renderer_critic_patient_alignment_v2", txt),
@@ -2660,8 +2665,16 @@ def main():
                         fn_load_prompt("final_answer", False),
                         fn_load_prompt("split_prompt", False),
                         fn_load_prompt("classificator_prompt", False),
-                        fn_load_prompt_with_fallback_silent("mr_renderer_patient_rich_v2", "renderer_patient_rich"),
-                        fn_load_prompt_with_fallback_silent("mr_renderer_critic_patient_alignment_v2", "renderer_critic_patient_alignment"),
+                        fn_load_prompt_with_fallback_silent(
+                            "mr_renderer_patient_rich_v2",
+                            "renderer_patient_rich",
+                            "v2",
+                        ),
+                        fn_load_prompt_with_fallback_silent(
+                            "mr_renderer_critic_patient_alignment_v2",
+                            "renderer_critic_patient_alignment",
+                            "v2",
+                        ),
                         fn_load_prompt("EXAMPLES", False),
                         fn_load_prompt("LABEL_DOC", False),
                         fn_load_prompt("LABEL_PRIORITY", False),
