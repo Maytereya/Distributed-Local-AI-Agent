@@ -732,6 +732,49 @@ async def patient_routing_stream(
     debug: bool = False,
     runtime_options: RuntimeOptions | None = None,
 ) -> AsyncGenerator[ResponseEnvelope, None]:
+    # Явный запрос оператора должен иметь абсолютный приоритет.
+    if explicit_operator_requested(user_text):
+        memory.clear_pending(state)
+        state.last_entities["_nlu_unclear_count"] = 0
+        state.last_entities["appointment_flow_active"] = False
+        yield ResponseEnvelope(
+            text=handoff_message("manual_operator"),
+            attachments=[],
+            handoff=True,
+        )
+        return
+
+    # Подтверждение записи обрабатываем до NLU/route, чтобы rich/hybrid режим
+    # не влиял на handoff-переход.
+    if state.last_entities.get("appointment_confirm_pending"):
+        confirm_transition = appointment_confirmation_transition(user_text)
+        if confirm_transition == APPOINTMENT_CONFIRM_YES:
+            summary = appointment_summary(state.last_entities)
+            state.last_entities["appointment_confirmed"] = True
+            state.last_entities.pop("appointment_confirm_pending", None)
+            state.last_entities.pop("appointment_flow_active", None)
+            yield ResponseEnvelope(
+                text=appointment_text_confirmed_handoff(summary),
+                handoff=True,
+            )
+            return
+        if confirm_transition == APPOINTMENT_CONFIRM_NO:
+            state.last_entities["appointment_confirmed"] = False
+            state.last_entities.pop("appointment_confirm_pending", None)
+            for k in ("date_from", "date_to", "time_from", "time_to", "date_hint"):
+                state.last_entities.pop(k, None)
+            state.last_entities["appointment_flow_active"] = True
+            yield ResponseEnvelope(
+                text=appointment_text_reask_datetime(),
+                handoff=False,
+            )
+            return
+        yield ResponseEnvelope(
+            text=appointment_text_reask_confirm(),
+            handoff=False,
+        )
+        return
+
     try:
         decision, plan, evidence = await route_patient_message(
             user_text,
@@ -753,19 +796,6 @@ async def patient_routing_stream(
         )
         return
     flow_label = plan.label
-
-    # Явный запрос оператора должен иметь абсолютный приоритет
-    # над pending/clarify сценариями, чтобы не зацикливать пользователя.
-    if explicit_operator_requested(user_text):
-        memory.clear_pending(state)
-        state.last_entities["_nlu_unclear_count"] = 0
-        state.last_entities["appointment_flow_active"] = False
-        yield ResponseEnvelope(
-            text=handoff_message("manual_operator"),
-            attachments=[],
-            handoff=True,
-        )
-        return
 
     if debug:
         pending = memory.get_pending(state)
@@ -820,36 +850,6 @@ async def patient_routing_stream(
         return
     if recovery.kind == "clarify":
         yield ResponseEnvelope(text=recovery.text or _LOW_CONF_CLARIFY_TEXT, handoff=False)
-        return
-
-    # APPOINTMENT confirmation loop: после вопроса "Подтверждаете?"
-    if state.last_entities.get("appointment_confirm_pending"):
-        confirm_transition = appointment_confirmation_transition(user_text)
-        if confirm_transition == APPOINTMENT_CONFIRM_YES:
-            summary = appointment_summary(state.last_entities)
-            state.last_entities["appointment_confirmed"] = True
-            state.last_entities.pop("appointment_confirm_pending", None)
-            state.last_entities.pop("appointment_flow_active", None)
-            yield ResponseEnvelope(
-                text=appointment_text_confirmed_handoff(summary),
-                handoff=True,
-            )
-            return
-        if confirm_transition == APPOINTMENT_CONFIRM_NO:
-            state.last_entities["appointment_confirmed"] = False
-            state.last_entities.pop("appointment_confirm_pending", None)
-            for k in ("date_from", "date_to", "time_from", "time_to", "date_hint"):
-                state.last_entities.pop(k, None)
-            state.last_entities["appointment_flow_active"] = True
-            yield ResponseEnvelope(
-                text=appointment_text_reask_datetime(),
-                handoff=False,
-            )
-            return
-        yield ResponseEnvelope(
-            text=appointment_text_reask_confirm(),
-            handoff=False,
-        )
         return
 
     if flow_label == "DOCTOR_SCHEDULE":

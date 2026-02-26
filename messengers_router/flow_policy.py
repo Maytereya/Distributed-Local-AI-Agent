@@ -50,7 +50,7 @@ def _is_appointment_waiting_patient_name(pending: dict | None) -> bool:
     return "patient_name" in missing
 
 
-_PATIENT_FIO_RE = re.compile(r"^[А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+){1,2}$")
+_PATIENT_FIO_RE = re.compile(r"^[А-ЯЁа-яё\-]{2,}(?:\s+[А-ЯЁа-яё\-]{2,}){1,2}$")
 _PATIENT_FIO_STOPWORDS = {
     "анализ",
     "анализы",
