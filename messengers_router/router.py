@@ -15,6 +15,7 @@ recovery-политика и сервисные интеграции вынес�
 from __future__ import annotations
 
 import os
+import re
 from typing import AsyncGenerator, Any
 
 from .mess_types import Evidence, Plan, PlanStep, ResponseEnvelope, RouteDecision, SessionState
@@ -116,6 +117,7 @@ _DOCTOR_NOISE_TOKENS = {
     "да",
     "нет",
 }
+_PATIENT_NAME_FRAGMENT_RE = re.compile(r"^\s*[А-ЯЁа-яё\-]{2,}\s+[А-ЯЁа-яё\-]{1,}\s*$")
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -154,6 +156,9 @@ def _should_keep_appointment_flow_override(user_text: str) -> bool:
     if looks_like_branch_hint(text):
         return True
     if _looks_like_patient_fio(text):
+        return True
+    # На шаге ввода ФИО допускаем "Фамилия И" как продолжение потока записи.
+    if _PATIENT_NAME_FRAGMENT_RE.fullmatch(text):
         return True
     return False
 
@@ -1030,6 +1035,9 @@ async def patient_routing_stream(
             return
 
         if appointment_step == APPOINTMENT_STEP_PATIENT:
+            # Фиксируем pending patient_name, чтобы короткие/частичные ФИО
+            # не выбивали диалог в другой интент (например, TEST_RESULT).
+            memory.set_pending(state, label="APPOINTMENT", missing_slots=["patient_name"])
             yield ResponseEnvelope(
                 text=appointment_text_patient_name_prompt(),
                 handoff=False,
