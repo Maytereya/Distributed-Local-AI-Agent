@@ -37,6 +37,7 @@ from .flow_policy import (
     quick_fill_entities_from_text,
 )
 from .nlu_pipeline import analyze_with_candidates
+from .llm_mode_policy import RuntimeOptions
 from .policies import (
     require_auth_for_test_result,
     missing_slots,
@@ -431,6 +432,7 @@ async def route_patient_message(
     state: SessionState,
     services: Services,
     memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
 ) -> tuple[RouteDecision, Plan, Evidence]:
     # Вежливое переключение на вторичный интент по короткому "да/нет".
     queue = _get_secondary_queue(state)
@@ -465,7 +467,7 @@ async def route_patient_message(
     use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
     shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False)
     if use_v2_nlu:
-        nlu_result = await analyze_with_candidates(user_text, state)
+        nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
         decision = nlu_result.decision
         state.last_entities["_nlu_candidates"] = [
             {
@@ -486,7 +488,7 @@ async def route_patient_message(
                 "v2_conf": decision.confidence,
             }
     else:
-        decision = await analyze(user_text, state.last_entities)
+        decision = await analyze(user_text, state.last_entities, runtime_options=runtime_options)
     decision = await _verify_doctor_entity(decision, services, user_text)
     decision = _apply_context_action(decision, state, user_text)
     promoted_label, promoted_flags = apply_verified_doctor_override(decision.label, set(decision.flags), user_text)
@@ -728,9 +730,16 @@ async def patient_routing_stream(
     services: Services,
     memory: MemoryStore,
     debug: bool = False,
+    runtime_options: RuntimeOptions | None = None,
 ) -> AsyncGenerator[ResponseEnvelope, None]:
     try:
-        decision, plan, evidence = await route_patient_message(user_text, state, services, memory)
+        decision, plan, evidence = await route_patient_message(
+            user_text,
+            state,
+            services,
+            memory,
+            runtime_options=runtime_options,
+        )
     except Exception as e:
         fallback_text = handoff_message("service_error")
         state_update: dict[str, Any] = {}
@@ -1034,7 +1043,7 @@ async def patient_routing_stream(
             return
 
     try:
-        async for chunk in render_stream(user_text, decision, evidence):
+        async for chunk in render_stream(user_text, decision, evidence, runtime_options=runtime_options):
             yield ResponseEnvelope(text=chunk, attachments=[], handoff=False)
     except Exception:
         yield ResponseEnvelope(

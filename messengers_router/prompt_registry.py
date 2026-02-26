@@ -12,6 +12,8 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from agent_logic_2.persist import PROMPTS_DIR as APP_PROMPTS_DIR
+
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 
@@ -27,6 +29,8 @@ def _candidate_paths(key: str, version: str) -> list[Path]:
     # Старые — в корне prompts/.
     v2_name = f"{key}_{version}.txt"
     return [
+        APP_PROMPTS_DIR / f"mr_{key}_{version}.txt",
+        APP_PROMPTS_DIR / f"mr_{key}.txt",
         _PROMPTS_DIR / "versions" / version / v2_name,
         _PROMPTS_DIR / f"{key}.txt",
     ]

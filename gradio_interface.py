@@ -2466,6 +2466,50 @@ def main():
                 btn_save_1.click(lambda txt: fn_save_prompt("final_answer", txt),
                                  prompt_code_1, )
 
+                # -----------------------------------------------------
+                # Messenger Router Rich Prompt секция
+                # -----------------------------------------------------
+                with gr.Row():
+                    with gr.Accordion(label="MR Rich Generator Prompt (v2)", open=False):
+                        prompt_code_mr_rich = gr.Code(
+                            value="",
+                            language=None,
+                            label="messengers_router: mr_renderer_patient_rich_v2",
+                            interactive=True,
+                            lines=20,
+                            scale=4,
+                        )
+                        with gr.Row():
+                            btn_load_mr_rich = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
+                            btn_save_mr_rich = gr.Button("💾 Сохранить", size="sm", variant="primary")
+
+                btn_load_mr_rich.click(lambda: fn_load_prompt_with_status("mr_renderer_patient_rich_v2"),
+                                       [], [prompt_code_mr_rich, ])
+                btn_save_mr_rich.click(lambda txt: fn_save_prompt("mr_renderer_patient_rich_v2", txt),
+                                       prompt_code_mr_rich, )
+
+                # -----------------------------------------------------
+                # Messenger Router Critic Prompt секция
+                # -----------------------------------------------------
+                with gr.Row():
+                    with gr.Accordion(label="MR Critic Prompt (v2 JSON)", open=False):
+                        prompt_code_mr_critic = gr.Code(
+                            value="",
+                            language=None,
+                            label="messengers_router: mr_renderer_critic_patient_alignment_v2",
+                            interactive=True,
+                            lines=20,
+                            scale=4,
+                        )
+                        with gr.Row():
+                            btn_load_mr_critic = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
+                            btn_save_mr_critic = gr.Button("💾 Сохранить", size="sm", variant="primary")
+
+                btn_load_mr_critic.click(lambda: fn_load_prompt_with_status("mr_renderer_critic_patient_alignment_v2"),
+                                         [], [prompt_code_mr_critic, ])
+                btn_save_mr_critic.click(lambda txt: fn_save_prompt("mr_renderer_critic_patient_alignment_v2", txt),
+                                         prompt_code_mr_critic, )
+
                 # ---------------------------------------
                 #     CONSTANTS секция
                 # ---------------------------------------
@@ -2582,6 +2626,8 @@ def main():
                         fn_load_prompt("final_answer", False),
                         fn_load_prompt("split_prompt", False),
                         fn_load_prompt("classificator_prompt", False),
+                        fn_load_prompt("mr_renderer_patient_rich_v2", False),
+                        fn_load_prompt("mr_renderer_critic_patient_alignment_v2", False),
                         fn_load_prompt("EXAMPLES", False),
                         fn_load_prompt("LABEL_DOC", False),
                         fn_load_prompt("LABEL_PRIORITY", False),
@@ -2597,6 +2643,8 @@ def main():
                         prompt_code_1,
                         prompt_code_2,
                         prompt_code_3,
+                        prompt_code_mr_rich,
+                        prompt_code_mr_critic,
                         prompt_code_c1,
                         prompt_code_c2,
                         prompt_code_c3,

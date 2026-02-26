@@ -21,6 +21,7 @@ from typing import Any
 
 from . import classifier
 from .context_summary import seeded_context_for_nlu
+from .llm_mode_policy import RuntimeOptions
 from .mess_types import RouteDecision, SessionState
 from .policies import (
     detect_address_intent,
@@ -113,7 +114,7 @@ def _candidate_from_decision(source: str, d: RouteDecision) -> NLUCandidate:
     )
 
 
-def _merge(rule: RouteDecision, llm: RouteDecision) -> tuple[RouteDecision, str]:
+def _merge(rule: RouteDecision, llm: RouteDecision, *, llm_mode: str = "hybrid") -> tuple[RouteDecision, str]:
     # Safety всегда выше.
     if rule.label in _SAFETY_LABELS and llm.label not in _SAFETY_LABELS:
         return rule, "rule_safety"
@@ -121,7 +122,8 @@ def _merge(rule: RouteDecision, llm: RouteDecision) -> tuple[RouteDecision, str]
         return llm, "llm_safety"
 
     # Если LLM не уверен и deterministic видит явный intent — промотируем rule.
-    if llm.confidence < 0.55 and rule.label != "OTHER":
+    promote_threshold = 0.45 if llm_mode == "rich" else 0.55
+    if llm.confidence < promote_threshold and rule.label != "OTHER":
         merged_flags = set(llm.flags) | set(rule.flags) | {"promoted_from_rule_pass"}
         promoted = RouteDecision(
             label=rule.label,  # type: ignore[arg-type]
@@ -136,14 +138,19 @@ def _merge(rule: RouteDecision, llm: RouteDecision) -> tuple[RouteDecision, str]
     return llm, "llm_primary"
 
 
-async def analyze_with_candidates(text: str, state: SessionState) -> NLUResult:
+async def analyze_with_candidates(
+    text: str,
+    state: SessionState,
+    runtime_options: RuntimeOptions | None = None,
+) -> NLUResult:
     # bounded контекст для LLM pass
     seeded = seeded_context_for_nlu(state)
     llm_context = dict(state.last_entities)
     llm_context.update(seeded)
 
     rule = _rule_decision(text)
-    llm = await classifier.analyze(text, llm_context)
-    merged, source = _merge(rule, llm)
+    llm = await classifier.analyze(text, llm_context, runtime_options=runtime_options)
+    llm_mode = runtime_options.llm_mode if runtime_options else "hybrid"
+    merged, source = _merge(rule, llm, llm_mode=llm_mode)
     candidates = [_candidate_from_decision("rule", rule), _candidate_from_decision("llm", llm)]
     return NLUResult(decision=merged, candidates=candidates, merged_from=source)

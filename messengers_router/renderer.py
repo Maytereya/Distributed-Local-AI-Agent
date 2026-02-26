@@ -11,43 +11,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime, date, time
 from typing import Any, AsyncGenerator
 
-from ollama import AsyncClient
-
-from agent_logic_2 import config as c, ollama_settings
-# from agent_logic_2.llama_func_call import timeout
-from agent_logic_2.ollama_settings import LLMName
+from .llm_mode_policy import RuntimeOptions
+from .llm_runtime import generate_stream_text, generate_text
 from .mess_types import Evidence, RouteDecision, ResponseEnvelope
 from .policies import sanitize_for_patient
 from .prompt_registry import load_prompt_text
+from .self_check import build_critic_prompt, parse_critic_result, should_regenerate
 
-ollama_client = AsyncClient(c.ollama_url)
 timeout = 300
-
-async def ollama_call(prompt: str, llm: str = LLMName.get(), think: bool = None, ) -> AsyncGenerator[str, Any]:
-    if not llm:
-        raise ValueError("Model is not specified yet")
-    think = ollama_settings.resolve_think(think)
-
-    stream = await asyncio.wait_for(
-        ollama_client.generate(
-            model=llm,
-            prompt=prompt,
-            options=ollama_settings.options_set(),
-            stream=True,
-            think=think,
-        ),
-        timeout=timeout,
-    )
-
-    async for _chunk in stream:
-        delta = _chunk.get("response", "")
-        if delta:
-            yield delta
 
 
 def _final_prompt(user_text: str, decision: RouteDecision, evidence: Evidence) -> str:
@@ -59,6 +34,24 @@ def _final_prompt(user_text: str, decision: RouteDecision, evidence: Evidence) -
         .replace("<<LABEL>>", decision.label)
         .replace("<<FLAGS>>", flags)
         .replace("<<EVIDENCE>>", evidence_txt)
+    ).strip()
+
+
+def _final_prompt_rich(
+    user_text: str,
+    decision: RouteDecision,
+    evidence: Evidence,
+    critique: str = "",
+) -> str:
+    tmpl = load_prompt_text("renderer_patient_rich")
+    flags = ", ".join(sorted(decision.flags))
+    evidence_txt = json.dumps(evidence.items, ensure_ascii=False)
+    return (
+        tmpl.replace("<<USER_TEXT>>", user_text)
+        .replace("<<LABEL>>", decision.label)
+        .replace("<<FLAGS>>", flags)
+        .replace("<<EVIDENCE>>", evidence_txt)
+        .replace("<<CRITIQUE>>", critique or "Нет")
     ).strip()
 
 
@@ -336,8 +329,95 @@ def render_complaint() -> ResponseEnvelope:
     return ResponseEnvelope(text=txt, handoff=True)
 
 
-async def render_stream(user_text: str, decision: RouteDecision, evidence: Evidence) -> AsyncGenerator[str, None]:
-    prompt = _final_prompt(user_text, decision, evidence)
-    async for chunk in ollama_call(prompt):
-        # yield chunk
-        yield sanitize_for_patient(chunk)
+async def _rich_generate_once(
+    user_text: str,
+    decision: RouteDecision,
+    evidence: Evidence,
+    *,
+    queue_timeout_ms: int,
+    critique: str = "",
+) -> str:
+    prompt = _final_prompt_rich(user_text, decision, evidence, critique=critique)
+    raw = await generate_text(
+        prompt,
+        timeout_s=timeout,
+        queue_timeout_ms=queue_timeout_ms,
+    )
+    return sanitize_for_patient(raw.strip())
+
+
+async def _rich_self_check(
+    user_text: str,
+    decision: RouteDecision,
+    evidence: Evidence,
+    candidate_answer: str,
+    *,
+    queue_timeout_ms: int,
+) -> dict[str, Any]:
+    prompt = build_critic_prompt(
+        user_text=user_text,
+        label=decision.label,
+        flags=sorted(decision.flags),
+        evidence_items=dict(evidence.items or {}),
+        candidate_answer=candidate_answer,
+    )
+    raw = await generate_text(
+        prompt,
+        timeout_s=timeout,
+        queue_timeout_ms=queue_timeout_ms,
+        fmt="json",
+    )
+    return parse_critic_result(raw)
+
+
+async def render_stream(
+    user_text: str,
+    decision: RouteDecision,
+    evidence: Evidence,
+    runtime_options: RuntimeOptions | None = None,
+) -> AsyncGenerator[str, None]:
+    opts = runtime_options or RuntimeOptions()
+    queue_timeout_ms = int(opts.queue_timeout_ms)
+
+    if opts.llm_mode != "rich":
+        prompt = _final_prompt(user_text, decision, evidence)
+        async for chunk in generate_stream_text(
+            prompt,
+            timeout_s=timeout,
+            queue_timeout_ms=queue_timeout_ms,
+        ):
+            yield sanitize_for_patient(chunk)
+        return
+
+    answer = await _rich_generate_once(
+        user_text,
+        decision,
+        evidence,
+        queue_timeout_ms=queue_timeout_ms,
+    )
+    if not opts.self_check:
+        yield answer
+        return
+
+    critique_reason = ""
+    max_tries = max(0, int(opts.self_check_max_retries))
+    for _ in range(max_tries + 1):
+        verdict = await _rich_self_check(
+            user_text,
+            decision,
+            evidence,
+            answer,
+            queue_timeout_ms=queue_timeout_ms,
+        )
+        regen, reason = should_regenerate(verdict, threshold=float(opts.self_check_threshold))
+        if not regen:
+            break
+        critique_reason = reason or critique_reason
+        answer = await _rich_generate_once(
+            user_text,
+            decision,
+            evidence,
+            queue_timeout_ms=queue_timeout_ms,
+            critique=critique_reason,
+        )
+    yield answer

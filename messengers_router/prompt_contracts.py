@@ -98,3 +98,19 @@ def sanitize_classifier_json(payload: dict[str, Any]) -> dict[str, Any]:
     out["flags"] = [str(x) for x in flags[:16] if str(x).strip()]
 
     return out
+
+
+def sanitize_self_check_json(payload: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    out["aligned_with_user_intent"] = bool(payload.get("aligned_with_user_intent"))
+    out["fact_consistency"] = bool(payload.get("fact_consistency"))
+    out["state_consistency"] = bool(payload.get("state_consistency"))
+    out["unsafe_or_policy_violation"] = bool(payload.get("unsafe_or_policy_violation"))
+    try:
+        score = float(payload.get("score", 0.0))
+    except Exception:
+        score = 0.0
+    out["score"] = max(0.0, min(score, 1.0))
+    reason = payload.get("reason_short")
+    out["reason_short"] = str(reason).strip()[:240] if isinstance(reason, str) else ""
+    return out

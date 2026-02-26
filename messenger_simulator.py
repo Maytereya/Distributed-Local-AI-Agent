@@ -16,6 +16,15 @@ class BotResult:
     handoff: bool
     error: Optional[str] = None
 
+
+@dataclass
+class RuntimeOptions:
+    llm_mode: str = "hybrid"
+    self_check: bool = False
+    self_check_max_retries: int = 1
+    queue_timeout_ms: int = 30000
+
+
 def sanitize_text(s: str) -> str:
     if not s:
         return s
@@ -84,11 +93,22 @@ def parse_jsonl_stream(lines: List[str]) -> BotResult:
     return BotResult(text="".join(parts).strip(), attachments=attachments, handoff=handoff, error=error)
 
 
-def send_message(url: str, session_id: str, text: str, host_header: Optional[str] = None) -> BotResult:
+def send_message(
+    url: str,
+    session_id: str,
+    text: str,
+    host_header: Optional[str] = None,
+    runtime_options: Optional[RuntimeOptions] = None,
+) -> BotResult:
+    opts = runtime_options or RuntimeOptions()
 
     payload = {
         "session_id": session_id,
         "text": sanitize_text(text),
+        "llm_mode": opts.llm_mode,
+        "self_check": bool(opts.self_check),
+        "self_check_max_retries": int(opts.self_check_max_retries),
+        "queue_timeout_ms": int(opts.queue_timeout_ms),
     }
 
     headers = {"Content-Type": "application/json"}
@@ -133,7 +153,11 @@ def repl():
     print(f"session_id: {session_id}")
     if host_header:
         print(f"Host header: {host_header}")
-    print("Type messages. Commands: /new, /session <id>, /quit\n")
+    opts = RuntimeOptions()
+
+    print("Type messages.")
+    print("Commands: /new, /session <id>, /mode <strict|hybrid|rich>, /selfcheck <on|off>, /retries <0..2>, /qtimeout <ms>, /opts, /quit\n")
+    print(f"[opts] llm_mode={opts.llm_mode}, self_check={opts.self_check}, retries={opts.self_check_max_retries}, queue_timeout_ms={opts.queue_timeout_ms}\n")
 
     while True:
         try:
@@ -149,6 +173,15 @@ def repl():
             print("Bye.")
             return
 
+        if user_text == "/opts":
+            print(
+                f"[opts] llm_mode={opts.llm_mode}, "
+                f"self_check={opts.self_check}, "
+                f"retries={opts.self_check_max_retries}, "
+                f"queue_timeout_ms={opts.queue_timeout_ms}"
+            )
+            continue
+
         if user_text == "/new":
             session_id = f"sim_{uuid.uuid4().hex[:8]}"
             print(f"[system] new session_id: {session_id}")
@@ -159,8 +192,63 @@ def repl():
             print(f"[system] session_id set to: {session_id}")
             continue
 
+        if user_text.startswith("/mode "):
+            mode = user_text.split(" ", 1)[1].strip().lower()
+            if mode not in {"strict", "hybrid", "rich"}:
+                print("[system] invalid mode. use: strict|hybrid|rich")
+                continue
+            opts.llm_mode = mode
+            print(f"[system] llm_mode set to: {opts.llm_mode}")
+            continue
+
+        if user_text.startswith("/selfcheck "):
+            raw = user_text.split(" ", 1)[1].strip().lower()
+            if raw in {"on", "1", "true", "yes"}:
+                opts.self_check = True
+            elif raw in {"off", "0", "false", "no"}:
+                opts.self_check = False
+            else:
+                print("[system] invalid value. use: on|off")
+                continue
+            print(f"[system] self_check set to: {opts.self_check}")
+            continue
+
+        if user_text.startswith("/retries "):
+            raw = user_text.split(" ", 1)[1].strip()
+            try:
+                val = int(raw)
+            except Exception:
+                print("[system] invalid retries. use integer 0..2")
+                continue
+            if val < 0 or val > 2:
+                print("[system] retries must be 0..2")
+                continue
+            opts.self_check_max_retries = val
+            print(f"[system] self_check_max_retries set to: {opts.self_check_max_retries}")
+            continue
+
+        if user_text.startswith("/qtimeout "):
+            raw = user_text.split(" ", 1)[1].strip()
+            try:
+                val = int(raw)
+            except Exception:
+                print("[system] invalid qtimeout. use integer milliseconds")
+                continue
+            if val < 1000:
+                print("[system] qtimeout should be >= 1000 ms")
+                continue
+            opts.queue_timeout_ms = val
+            print(f"[system] queue_timeout_ms set to: {opts.queue_timeout_ms}")
+            continue
+
         try:
-            result = send_message(url, session_id, user_text, host_header=host_header)
+            result = send_message(
+                url,
+                session_id,
+                user_text,
+                host_header=host_header,
+                runtime_options=opts,
+            )
         except httpx.HTTPStatusError as e:
             # покажем ответ сервера для диагностики
             resp = e.response

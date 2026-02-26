@@ -11,17 +11,14 @@ from __future__ import annotations
 # не зависит от PYTHONPATH
 # не конфликтует с чужими пакетами
 
-import asyncio
 import json
 import re
 from typing import Any, cast
 
-from ollama import AsyncClient
-
-from agent_logic_2 import config as c, ollama_settings
 from agent_logic_2.doctor_name_matching import extract_doctor_name_candidate
-from agent_logic_2.ollama_settings import LLMName
 
+from .llm_mode_policy import RuntimeOptions
+from .llm_runtime import generate_text
 from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision, ContextAction
 from .prompt_contracts import sanitize_classifier_json
 from .prompt_registry import load_prompt_text
@@ -52,7 +49,6 @@ from .policies import (
     extract_service_phrase,
 )
 
-ollama_client = AsyncClient(c.ollama_url)
 _CLASSIFY_TIMEOUT = 45
 _TOPIC_SWITCH_RE = re.compile(r"\b(передумал\w*|передумала\w*|друг(ой|ая)\s+врач\w*|нуж\w+)\b", re.I)
 _CANCEL_FLOW_RE = re.compile(r"\b(отмен\w*|не\s+надо|не\s+хочу)\b", re.I)
@@ -99,61 +95,21 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _extract_generate_response_text(res: Any) -> str | None:
-    """
-    Совместимо с разными версиями ollama python client:
-    - старые: dict-like ответ
-    - новые (0.5.x): GenerateResponse (pydantic model) с .response
-    """
-    raw: Any = None
-
-    if isinstance(res, dict):
-        raw = res.get("response")
-    else:
-        raw = getattr(res, "response", None)
-        if raw is None and hasattr(res, "model_dump"):
-            try:
-                dumped = res.model_dump()
-                if isinstance(dumped, dict):
-                    raw = dumped.get("response")
-            except Exception:
-                raw = None
-
-    if isinstance(raw, bytes):
-        try:
-            raw = raw.decode("utf-8", errors="ignore")
-        except Exception:
-            return None
-    if isinstance(raw, str):
-        return raw
-    return None
-
-
-async def ollama_classify_json(prompt: str) -> dict[str, Any]:
+async def ollama_classify_json(prompt: str, *, queue_timeout_ms: int = 30000) -> dict[str, Any]:
     """
     Реальный вызов Ollama: generate(format="json") + безопасный парсинг.
     """
-    llm = LLMName.get()
-    think = ollama_settings.resolve_think(None)
-
     try:
-        res = await asyncio.wait_for(
-            ollama_client.generate(
-                model=llm,
-                prompt=prompt,
-                options=ollama_settings.options_set(),
-                format="json",
-                keep_alive=-1,
-                think=think,
-            ),
-            timeout=_CLASSIFY_TIMEOUT,
+        raw = await generate_text(
+            prompt,
+            timeout_s=_CLASSIFY_TIMEOUT,
+            queue_timeout_ms=queue_timeout_ms,
+            fmt="json",
         )
     except Exception:
         return sanitize_classifier_json(
             {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_timeout"]}
         )
-
-    raw = _extract_generate_response_text(res)
     if isinstance(raw, str):
         obj = _extract_json(raw)
         if isinstance(obj, dict):
@@ -272,7 +228,13 @@ def _build_refine_prompt(text: str, seeded: dict[str, Any], base: RouteDecision)
     ).strip()
 
 
-async def _maybe_refine_live_intent(text: str, last_entities: dict[str, Any], base: RouteDecision) -> RouteDecision:
+async def _maybe_refine_live_intent(
+    text: str,
+    last_entities: dict[str, Any],
+    base: RouteDecision,
+    *,
+    runtime_options: RuntimeOptions | None = None,
+) -> RouteDecision:
     if base.label not in _REFINE_INTENTS:
         return base
     # Не гоняем лишний LLM-call на понятных фразах, чтобы не ухудшать стабильность.
@@ -288,7 +250,8 @@ async def _maybe_refine_live_intent(text: str, last_entities: dict[str, Any], ba
 
     seeded = _seed_entities_from_memory(last_entities)
     prompt = _build_refine_prompt(text, seeded, base)
-    data = await ollama_classify_json(prompt)
+    queue_timeout_ms = int(runtime_options.queue_timeout_ms) if runtime_options else 30000
+    data = await ollama_classify_json(prompt, queue_timeout_ms=queue_timeout_ms)
     data_flags = _normalize_flags(data.get("flags"))
     if "ollama_timeout" in data_flags or "ollama_non_json" in data_flags:
         return RouteDecision(
@@ -475,7 +438,11 @@ def _attach_secondary_intents(
     )
 
 
-async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
+async def analyze(
+    text: str,
+    last_entities: dict[str, Any],
+    runtime_options: RuntimeOptions | None = None,
+) -> RouteDecision:
     flags: set[str] = set()
     flags |= detect_pii(text)
 
@@ -562,7 +529,7 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
             needs_handoff=False,
             context_action=_derive_context_action(text, "DOCTOR_SCHEDULE", entities, last_entities),
         )
-        refined = await _maybe_refine_live_intent(text, last_entities, base)
+        refined = await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
         return _attach_secondary_intents(text, refined, last_entities)
 
     # hard rule: doctor info queries
@@ -579,7 +546,7 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
             needs_handoff=False,
             context_action=_derive_context_action(text, "DOCTOR_INFO", entities, last_entities),
         )
-        refined = await _maybe_refine_live_intent(text, last_entities, base)
+        refined = await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
         return _attach_secondary_intents(text, refined, last_entities)
 
     # hard rules: appointment / price
@@ -657,7 +624,7 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
             needs_handoff=False,
             context_action=_derive_context_action(text, "APPOINTMENT", entities, last_entities),
         )
-        refined = await _maybe_refine_live_intent(text, last_entities, base)
+        refined = await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
         return _attach_secondary_intents(text, refined, last_entities)
 
     if detect_news_intent(text):
@@ -705,7 +672,8 @@ async def analyze(text: str, last_entities: dict[str, Any]) -> RouteDecision:
     seeded = _seed_entities_from_memory(last_entities)
 
     prompt = _build_classify_prompt(text, seeded)
-    data = await ollama_classify_json(prompt)
+    queue_timeout_ms = int(runtime_options.queue_timeout_ms) if runtime_options else 30000
+    data = await ollama_classify_json(prompt, queue_timeout_ms=queue_timeout_ms)
 
     label = _normalize_label(data.get("label"))
     conf = _normalize_confidence(data.get("confidence"))
