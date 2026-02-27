@@ -63,7 +63,6 @@ from .policies import (
     appointment_text_confirmed_handoff,
     appointment_text_reask_datetime,
     appointment_text_reask_confirm,
-    doctor_schedule_text_clarify_doctor,
     decision_handoff_text,
     apply_verified_doctor_override,
     detect_nonbookable_walkin_intent,
@@ -100,6 +99,8 @@ _LOW_CONF_CLARIFY_TEXT = (
     "Уточните, пожалуйста, запрос чуть подробнее, чтобы я не ошибся: "
     "что именно нужно — запись, расписание врача, стоимость, адрес или результаты анализов?"
 )
+_SAMARA_ONLY_OPERATOR_TEXT = "Сейчас могу помочь только по Самаре. Соединяю с оператором."
+_PRICE_TO_OPERATOR_TEXT = "По вопросам стоимости соединяю с оператором."
 _GRAPH_ENGINE = GraphEngine()
 _DOCTOR_NOISE_TOKENS = {
     "хочу",
@@ -123,6 +124,12 @@ _PATIENT_NAME_FRAGMENT_RE = re.compile(r"^\s*[А-ЯЁа-яё\-]{2,}\s+[А-ЯЁа
 def _env_flag(name: str, default: bool) -> bool:
     raw = str(os.getenv(name, "1" if default else "0")).strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def _is_samara_city(city: str | None) -> bool:
+    if not city:
+        return False
+    return str(city).strip().lower().replace("ё", "е") == "самара"
 
 
 def _should_keep_appointment_flow_override(user_text: str) -> bool:
@@ -507,6 +514,15 @@ async def route_patient_message(
             context_action=decision.context_action,
         )
 
+    # При запросах по специальности (без явного врача) чистим залипшего врача из state.
+    if (
+        decision.label in {"DOCTOR_INFO", "DOCTOR_SCHEDULE"}
+        and decision.entities.get("specialty")
+        and not any(decision.entities.get(k) for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"))
+    ):
+        for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"):
+            state.last_entities.pop(k, None)
+
     if decision.label in {"APPOINTMENT", "TEST_ASSIST"}:
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})
@@ -749,6 +765,20 @@ async def patient_routing_stream(
         )
         return
 
+    city_now = match_city(user_text)
+    if city_now and not _is_samara_city(city_now):
+        memory.clear_pending(state)
+        state.last_entities.pop("city", None)
+        for k in ("appointment_flow_active", "appointment_confirm_pending", "appointment_confirmed"):
+            state.last_entities.pop(k, None)
+        update_summary(state, reason="handoff")
+        yield ResponseEnvelope(
+            text=_SAMARA_ONLY_OPERATOR_TEXT,
+            attachments=[],
+            handoff=True,
+        )
+        return
+
     # Подтверждение записи обрабатываем до NLU/route, чтобы rich/hybrid режим
     # не влиял на handoff-переход.
     if state.last_entities.get("appointment_confirm_pending"):
@@ -826,6 +856,16 @@ async def patient_routing_stream(
         yield render_medical_advice()
         return
 
+    # По текущей политике стоимость не выдаем автоматически:
+    # любые ценовые запросы передаем оператору.
+    if decision.label == "PRICE":
+        memory.clear_pending(state)
+        for k in ("appointment_flow_active", "appointment_confirm_pending", "appointment_confirmed"):
+            state.last_entities.pop(k, None)
+        update_summary(state, reason="handoff")
+        yield ResponseEnvelope(text=_PRICE_TO_OPERATOR_TEXT, handoff=True)
+        return
+
     if "doc_request_handoff" in decision.flags:
         yield ResponseEnvelope(
             text=handoff_message("doc_request_handoff"),
@@ -866,15 +906,17 @@ async def patient_routing_stream(
             or state.last_entities.get("doctor_name")
             or state.last_entities.get("doctor_id")
         )
+        specialty_known = bool(
+            decision.entities.get("specialty")
+            or state.last_entities.get("specialty")
+        )
         if (
-                "specialty" in decision.entities
+                specialty_known
                 and not doctor_known
         ):
-            yield ResponseEnvelope(
-                text=doctor_schedule_text_clarify_doctor(),
-                handoff=False,
-            )
-            return
+            # По specialty-сценарию (например, "гастроэнтеролог ближайший")
+            # даем пройти к сервису расписания, который сам подбирает врача.
+            pass
 
     pending = memory.get_pending(state)
     if not plan.steps and pending:

@@ -17,6 +17,7 @@ import asyncio
 import json
 import re
 import time
+from datetime import datetime
 from urllib.parse import quote_from_bytes
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -40,10 +41,87 @@ _SCHEDULE_QUERY_RE = re.compile(r"\b(расписани\w*|график|когд
 _FIO_TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё\-]{2,}")
 _PHONE_EXTRACT_RE = re.compile(r"\+?\d[\d\-\s\(\)]{7,}\d")
 _NONBOOKABLE_POINTS_PATH = Path(__file__).resolve().parent / "data" / "nonbookable_points.json"
+_NEAREST_HINT_RE = re.compile(r"\b(ближайш\w*|сам\w*\s+ранн\w*|раньше|поскорее|свободн\w*\s+окн\w*)\b", re.I)
+_SPECIALTY_CANONICAL = (
+    "гастроэнтеролог",
+    "эндокринолог",
+    "офтальмолог",
+    "дерматолог",
+    "кардиолог",
+    "невролог",
+    "проктолог",
+    "травматолог",
+    "аллерголог",
+    "ревматолог",
+    "пульмонолог",
+    "гинеколог",
+    "терапевт",
+    "педиатр",
+    "уролог",
+    "онколог",
+    "хирург",
+    "ортопед",
+    "лор",
+)
+_SPECIALTY_RE = re.compile(
+    r"\b(" + "|".join(re.escape(x) for x in _SPECIALTY_CANONICAL) + r")\w*\b",
+    re.I,
+)
 
 
 def _normalise_input(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
+
+
+def _is_samara_city_value(value: str | None) -> bool:
+    if not value:
+        return False
+    norm = _normalise_input(value).replace("ё", "е")
+    return norm == "самара"
+
+
+def _is_non_samara_city_value(value: str | None) -> bool:
+    if not value:
+        return False
+    return not _is_samara_city_value(value)
+
+
+def _extract_specialty_from_text(text: str) -> str:
+    m = _SPECIALTY_RE.search(text or "")
+    if not m:
+        return ""
+    return str(m.group(1) or "").strip().lower().replace("ё", "е")
+
+
+def _has_nearest_hint(text: str) -> bool:
+    return bool(_NEAREST_HINT_RE.search(text or ""))
+
+
+def _iter_slot_datetimes(schedule: dict[str, Any]) -> list[datetime]:
+    out: list[datetime] = []
+    if not isinstance(schedule, dict):
+        return out
+    for days in schedule.values():
+        if not isinstance(days, list):
+            continue
+        for day in days:
+            if not isinstance(day, dict):
+                continue
+            day_date = str(day.get("date") or day.get("curDate") or "").strip()
+            if not day_date:
+                continue
+            slots = day.get("slots") or []
+            if not isinstance(slots, list):
+                continue
+            for slot in slots:
+                t = str(slot or "").strip()
+                if len(t) < 5:
+                    continue
+                try:
+                    out.append(datetime.fromisoformat(f"{day_date}T{t[:5]}:00"))
+                except Exception:
+                    continue
+    return out
 
 
 def _get_first_present(d: dict[str, Any], keys: list[str]) -> Optional[str]:
@@ -483,6 +561,87 @@ class Services:
             self._regions_cache_loaded_at = time.time()
             return self._regions_cache
 
+    async def _samara_region_tokens(self) -> set[str]:
+        regions = await self._ensure_regions_loaded()
+        tokens: set[str] = set()
+        for r in regions:
+            if not isinstance(r, dict):
+                continue
+            city = str(r.get("city") or "").strip()
+            name = str(r.get("name") or "").strip()
+            addr = str(r.get("addressForSite") or "").strip()
+            if not (
+                _is_samara_city_value(city)
+                or "самара" in _normalise_input(name)
+                or "самара" in _normalise_input(addr)
+            ):
+                continue
+            for raw in (name, addr):
+                n = _normalise_input(raw)
+                if n:
+                    tokens.add(n)
+        return tokens
+
+    async def _schedule_by_specialty(
+        self,
+        specialty: str,
+        entities: dict[str, Any],
+        *,
+        nearest_only: bool,
+    ) -> list[dict[str, Any]]:
+        doctors = await self._ensure_doctors_cache_loaded()
+        if not doctors:
+            return []
+        spec = _normalise_input(specialty)
+        if not spec:
+            return []
+
+        candidates = [
+            d for d in doctors
+            if spec in _normalise_input(str(d.get("specialization") or ""))
+        ][:8]
+        if not candidates:
+            return []
+
+        out_rows: list[dict[str, Any]] = []
+        for doc in candidates:
+            fio = str(doc.get("fio") or "").strip()
+            if not fio:
+                continue
+            surname = fio.split()[0]
+            try:
+                data = await asyncio.to_thread(api_nayka.find_doctor_schedule, surname)
+            except Exception:
+                continue
+            if not isinstance(data, list) or not data:
+                continue
+            for row in data:
+                if not isinstance(row, dict):
+                    continue
+                row_fio = str(row.get("fio") or "").strip()
+                if row_fio and _normalise_input(row_fio) != _normalise_input(fio):
+                    continue
+                item = dict(row)
+                item["specialization"] = _compact_specialization(str(item.get("specialization") or ""))
+                slots = _iter_slot_datetimes(item.get("schedule") or {})
+                if slots:
+                    item["_nearest_slot"] = min(slots)
+                out_rows.append(item)
+                break
+
+        if not out_rows:
+            return []
+        with_slots = [x for x in out_rows if isinstance(x.get("_nearest_slot"), datetime)]
+        if with_slots:
+            with_slots.sort(key=lambda x: x["_nearest_slot"])  # type: ignore[index]
+            chosen = with_slots[:1] if nearest_only else with_slots[:3]
+        else:
+            chosen = out_rows[:1] if nearest_only else out_rows[:3]
+
+        for item in chosen:
+            item.pop("_nearest_slot", None)
+        return chosen
+
     # -----------------------------
     # NAUKA API used by router
     # -----------------------------
@@ -528,13 +687,22 @@ class Services:
         doctor_raw = _get_first_present(entities, ["doctor", "doctor_name", "fio", "last_name", "doctor_last_name"]) or ""
         fio_q = _normalise_input(doctor_raw)
         spec_q = _normalise_input(_get_first_present(entities, ["specialty", "specialization", "spec"]) or "")
+        if not spec_q:
+            spec_q = _extract_specialty_from_text(query)
         region_q = _normalise_input(_get_first_present(entities, ["region", "branch", " филиал", "company_unit"]) or "")
         resolved_surname = resolve_schedule_surname(doctor_raw, doctors) if doctor_raw else None
 
-        if not resolved_surname and query:
-            candidate = extract_doctor_name_candidate(query, prefer_schedule=True)
-            if candidate:
-                resolved_surname = resolve_schedule_surname(candidate, doctors)
+        query_candidate = extract_doctor_name_candidate(query, prefer_schedule=True) if query else None
+        query_resolved = resolve_schedule_surname(query_candidate, doctors) if query_candidate else None
+        if not resolved_surname:
+            resolved_surname = query_resolved
+
+        # При поиске по специальности игнорируем "залипший" doctor_name из прошлого контекста.
+        if spec_q and not query_resolved:
+            fio_q = ""
+            resolved_surname = None
+
+        samara_tokens = await self._samara_region_tokens()
 
         # если из entities пусто — попробуем хотя бы query как ключ
         # (но аккуратно: не хотим показывать всех врачей по любому вопросу)
@@ -557,6 +725,10 @@ class Services:
             units = " ".join([_normalise_input(str(x)) for x in (doc.get("units") or [])])
 
             hay = " | ".join([fio, spec, regions, units])
+            if samara_tokens:
+                region_list = [_normalise_input(str(x)) for x in (doc.get("regions") or [])]
+                if not any(r in samara_tokens for r in region_list):
+                    return False
             if fio_q:
                 if not _doctor_matches_fio(fio, fio_q, resolved_surname):
                     return False
@@ -617,6 +789,9 @@ class Services:
             entities,
             ["last_name", "doctor_last_name", "doctor", "doctor_name", "fio"],
         )
+        specialty = _normalise_input(_get_first_present(entities, ["specialty", "specialization", "spec"]) or "")
+        if not specialty:
+            specialty = _extract_specialty_from_text(query)
         if not raw_name:
             raw_name = query
 
@@ -643,6 +818,18 @@ class Services:
         elif not last_name and query and query != raw_name:
             last_name = query_name or resolve_schedule_surname(query, doctors)
 
+        if not last_name and specialty:
+            schedule_by_spec = await self._schedule_by_specialty(
+                specialty,
+                entities,
+                nearest_only=_has_nearest_hint(query),
+            )
+            return {
+                "schedule": schedule_by_spec,
+                "note": "doctors_schedule_week: by specialty",
+                "entities_used": {"specialty": specialty, "raw_name": raw_name},
+            }
+
         if not last_name:
             return {
                 "schedule": [],
@@ -652,6 +839,14 @@ class Services:
 
         # необязательный фильтр региона/филиала/города
         region_name = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city", "branch_name"])
+        if region_name and _is_non_samara_city_value(region_name):
+            return _service_fallback(
+                note=f"doctors_schedule_week unsupported city: {region_name}",
+                handoff_message="Сейчас могу помочь только по Самаре. Соединяю с оператором.",
+                entities=entities,
+                reason="city_not_supported",
+                extra={"schedule": []},
+            )
 
         # api_nayka.find_doctor_schedule блокирующая (requests) — уводим в thread.
         # Пробуем несколько вариантов фамилии (родительный падеж -> именительный).
@@ -692,11 +887,28 @@ class Services:
         # Защита от чрезмерно длинных/дублирующихся specialization блоков в realtime API.
         if isinstance(data, list):
             compact_data: list[dict[str, Any]] = []
+            samara_tokens = await self._samara_region_tokens()
             for row in data:
                 if not isinstance(row, dict):
                     continue
                 item = dict(row)
                 item["specialization"] = _compact_specialization(str(item.get("specialization") or ""))
+                if samara_tokens:
+                    regions_src = item.get("regions") or []
+                    region_norm = [_normalise_input(str(x)) for x in regions_src if str(x).strip()]
+                    if region_norm and not any(r in samara_tokens for r in region_norm):
+                        continue
+                    sched = item.get("schedule")
+                    if isinstance(sched, dict) and sched:
+                        sched_filtered: dict[str, Any] = {}
+                        for k, v in sched.items():
+                            kn = _normalise_input(str(k))
+                            if kn in samara_tokens:
+                                sched_filtered[k] = v
+                        if sched_filtered:
+                            item["schedule"] = sched_filtered
+                        elif region_norm:
+                            continue
                 compact_data.append(item)
             data = compact_data
 
@@ -875,12 +1087,30 @@ class Services:
             regions = await self._ensure_regions_loaded()
         except Exception:
             regions = []
+        # Работаем только по Самаре.
+        regions = [
+            r for r in regions
+            if isinstance(r, dict)
+            and (
+                _is_samara_city_value(str(r.get("city") or ""))
+                or "самара" in _normalise_input(str(r.get("name") or ""))
+                or "самара" in _normalise_input(str(r.get("addressForSite") or ""))
+            )
+        ]
         appointment_mode = bool(entities.get("__appointment_mode"))
         branch = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city"]) or query
         branch_q = _normalise_input(branch)
         service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
         service_q = _normalise_input(service_name)
         city_for_static = _get_first_present(entities, ["city"])
+        if city_for_static and _is_non_samara_city_value(city_for_static):
+            return _service_fallback(
+                note=f"address_info unsupported city: {city_for_static}",
+                handoff_message="Сейчас могу помочь только по Самаре. Соединяю с оператором.",
+                entities=entities,
+                reason="city_not_supported",
+                extra={"addresses": [], "branches": []},
+            )
 
         allowed_doctor_addresses_norm: set[str] = set()
         if appointment_mode:
@@ -1064,6 +1294,12 @@ class Services:
         out: list[dict[str, str]] = []
         for r in regions:
             if not isinstance(r, dict):
+                continue
+            if not (
+                _is_samara_city_value(str(r.get("city") or ""))
+                or "самара" in _normalise_input(str(r.get("name") or ""))
+                or "самара" in _normalise_input(str(r.get("addressForSite") or ""))
+            ):
                 continue
             rid = r.get("id")
             disp = _region_display_name(r)

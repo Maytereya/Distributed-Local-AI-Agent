@@ -40,7 +40,7 @@ _LABEL_ENTITY_WHITELIST: dict[str, set[str]] = {
         "time_to",
         "date_hint",
     },
-    "DOCTOR_SCHEDULE": {"doctor_id", "doctor_name", "branch_name", "city"},
+    "DOCTOR_SCHEDULE": {"doctor_id", "doctor_name", "specialty", "branch_name", "city"},
     "DOCTOR_INFO": {"doctor_id", "doctor_name", "specialty"},
     "PRICE": {"service_name", "city", "branch_id", "branch_name"},
     "ADDRESS": {"city", "branch_id", "branch_name", "service_name"},

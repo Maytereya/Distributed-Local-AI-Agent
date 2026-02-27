@@ -286,8 +286,34 @@ _QF_CHILD_RE = re.compile(r"\bдет(и|ям|ский|ская|ского|ски
 _QF_AGE_RE = re.compile(r"\b(\d{1,2})\s*(?:лет|года|год)\b", re.I)
 _QF_BRANCH_EXPLICIT_RE = re.compile(r"\bфилиал\b[:\s]*([^\n,;.]{2,80})", re.I)
 _QF_BRANCH_ON_RE = re.compile(r"\bна\s+([А-ЯЁа-яё0-9\-]{3,40})(?:\s+([0-9]{1,4}))?\b")
-_QF_SPECIALTY_HINT_RE = re.compile(
-    r"\b(уролог|гинеколог|терапевт|эндокринолог|невролог|кардиолог|лор|офтальмолог|дерматолог|педиатр)\b",
+_SPECIALTY_CANONICAL = (
+    "гастроэнтеролог",
+    "эндокринолог",
+    "офтальмолог",
+    "дерматолог",
+    "кардиолог",
+    "невролог",
+    "проктолог",
+    "травматолог",
+    "аллерголог",
+    "ревматолог",
+    "пульмонолог",
+    "гинеколог",
+    "терапевт",
+    "педиатр",
+    "уролог",
+    "онколог",
+    "хирург",
+    "ортопед",
+    "лор",
+)
+_SPECIALTY_HINT_RE = re.compile(
+    r"\b(" + "|".join(re.escape(x) for x in _SPECIALTY_CANONICAL) + r")\w*\b",
+    re.I,
+)
+_QF_SPECIALTY_HINT_RE = _SPECIALTY_HINT_RE
+_NEAREST_SCHEDULE_HINT_RE = re.compile(
+    r"\b(ближайш\w*|сам\w*\s+ранн\w*|раньше|поскорее|свободн\w*\s+окн\w*)\b",
     re.I,
 )
 _QF_TIME_FRAGMENT_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
@@ -382,8 +408,10 @@ REQUIRED_SLOTS: dict[str, list[str]] = {
     ],
     "TEST_RESULT": ["surname", "year", "filial", "number"],
     "DOCTOR_INFO": ["_any_of:specialty,doctor_id,doctor_name"],
-    # For schedule we require a concrete doctor reference, not specialty-only.
-    "DOCTOR_SCHEDULE": ["_any_of:doctor_id,doctor_name"],
+    # Для расписания поддерживаем:
+    # - конкретного врача (doctor_id/doctor_name)
+    # - или специальность (specialty), если пользователь просит ближайшего врача по профилю.
+    "DOCTOR_SCHEDULE": ["_any_of:doctor_id,doctor_name,specialty"],
     "PRICE": [
         "_any_of:city,branch_name,branch_id",
         "service_name",
@@ -555,6 +583,18 @@ def detect_news_intent(text: str) -> bool:
 
 def detect_doctor_info_intent(text: str) -> bool:
     return _matches_any(text, _DOCTOR_INFO_RE)
+
+
+def extract_specialty(text: str) -> str | None:
+    m = _SPECIALTY_HINT_RE.search(text or "")
+    if not m:
+        return None
+    value = str(m.group(1) or "").strip().lower().replace("ё", "е")
+    return value or None
+
+
+def has_nearest_schedule_hint(text: str) -> bool:
+    return bool(_NEAREST_SCHEDULE_HINT_RE.search(text or ""))
 
 
 def apply_verified_doctor_override(label: str, flags: set[str], text: str) -> tuple[str, set[str]]:
@@ -1051,9 +1091,9 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
             ):
                 out["surname"] = words[0].capitalize()
 
-    m_spec = _QF_SPECIALTY_HINT_RE.search(low)
-    if m_spec:
-        out["specialty"] = m_spec.group(1).lower()
+    spec = extract_specialty(low)
+    if spec:
+        out["specialty"] = spec
 
     needs_doctor_or_spec = any("doctor" in r or "specialty" in r for r in missing_rules)
     patient_name_like_text = bool(_QF_PATIENT_NAME_PREFIX_RE.search(t) or _QF_PLAIN_NAME_RE.match(t))

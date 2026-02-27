@@ -38,6 +38,8 @@ from .policies import (
     detect_test_result_intent,
     detect_test_interpretation,
     detect_urgent,
+    extract_specialty,
+    has_nearest_schedule_hint,
 )
 
 _SAFETY_LABELS = {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
@@ -60,6 +62,7 @@ class NLUResult:
 
 
 def _rule_decision(text: str) -> RouteDecision:
+    specialty = extract_specialty(text or "")
     if detect_urgent(text):
         return RouteDecision(label="URGENT", confidence=1.0, flags={"rule_urgent"}, needs_handoff=True, context_action="new_topic")
     if detect_complaint(text):
@@ -82,17 +85,60 @@ def _rule_decision(text: str) -> RouteDecision:
         )
     if detect_test_result_intent(text):
         return RouteDecision(label="TEST_RESULT", confidence=0.85, flags={"rule_test_result"}, needs_handoff=False, context_action="continue")
-    if detect_schedule_intent(text):
-        return RouteDecision(label="DOCTOR_SCHEDULE", confidence=0.74, flags={"rule_schedule"}, needs_handoff=False, context_action="continue")
-    if detect_doctor_info_intent(text):
-        return RouteDecision(label="DOCTOR_INFO", confidence=0.72, flags={"rule_doctor_info"}, needs_handoff=False, context_action="continue")
-
     appt = detect_appointment_intent(text)
     appt_action = detect_appointment_action(text)
     price = detect_price_intent(text)
     addr = detect_address_intent(text)
     if price and not appt_action:
         return RouteDecision(label="PRICE", confidence=0.72, flags={"rule_price"}, needs_handoff=False, context_action="continue")
+    if detect_schedule_intent(text):
+        entities = {"specialty": specialty} if specialty else {}
+        flags = {"rule_schedule"}
+        if specialty:
+            flags.add("rule_schedule_with_specialty")
+        if specialty and has_nearest_schedule_hint(text):
+            flags.add("rule_schedule_nearest")
+        return RouteDecision(
+            label="DOCTOR_SCHEDULE",
+            confidence=0.74,
+            entities=entities,
+            flags=flags,
+            needs_handoff=False,
+            context_action="continue",
+        )
+    if detect_doctor_info_intent(text):
+        entities = {"specialty": specialty} if specialty else {}
+        flags = {"rule_doctor_info"}
+        if specialty:
+            flags.add("rule_doctor_info_with_specialty")
+        return RouteDecision(
+            label="DOCTOR_INFO",
+            confidence=0.72,
+            entities=entities,
+            flags=flags,
+            needs_handoff=False,
+            context_action="continue",
+        )
+    if specialty and has_nearest_schedule_hint(text):
+        return RouteDecision(
+            label="DOCTOR_SCHEDULE",
+            confidence=0.72,
+            entities={"specialty": specialty},
+            flags={"rule_schedule_nearest", "rule_schedule_with_specialty"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+    # Короткие запросы по специальности ("урологи", "нужен гастроэнтеролог")
+    # трактуем как поиск врачей, а не OTHER.
+    if specialty and not appt:
+        return RouteDecision(
+            label="DOCTOR_INFO",
+            confidence=0.70,
+            entities={"specialty": specialty},
+            flags={"rule_doctor_info_specialty"},
+            needs_handoff=False,
+            context_action="continue",
+        )
     if addr:
         return RouteDecision(label="ADDRESS", confidence=0.72, flags={"rule_address"}, needs_handoff=False, context_action="continue")
     if appt:
@@ -125,10 +171,12 @@ def _merge(rule: RouteDecision, llm: RouteDecision, *, llm_mode: str = "hybrid")
     promote_threshold = 0.45 if llm_mode == "rich" else 0.55
     if llm.confidence < promote_threshold and rule.label != "OTHER":
         merged_flags = set(llm.flags) | set(rule.flags) | {"promoted_from_rule_pass"}
+        merged_entities = dict(rule.entities or {})
+        merged_entities.update(dict(llm.entities or {}))
         promoted = RouteDecision(
             label=rule.label,  # type: ignore[arg-type]
             confidence=max(rule.confidence, llm.confidence, 0.60),
-            entities=dict(llm.entities or {}),
+            entities=merged_entities,
             flags=merged_flags,
             needs_handoff=False,
             context_action=llm.context_action,

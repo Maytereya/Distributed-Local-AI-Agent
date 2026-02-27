@@ -262,7 +262,6 @@ def format_address_for_patient(
             lines.append(f"График: {b['work_time']}")
         lines.append("")
 
-    lines.append("Если нужно, подскажу ближайший филиал по вашему району.")
     return "\n".join([x for x in lines if x is not None]).strip()
 
 
