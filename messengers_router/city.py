@@ -147,6 +147,14 @@ def fuzzy_match_city(text: str, cutoff: float = _CITY_FUZZY_CUTOFF) -> str | Non
     m = CITY_HINT_RE.search(t_norm)
     if m:
         candidates.append(norm_city_text(m.group(2)))
+    tokens = [tok for tok in t_norm.split() if tok and not re.search(r"\d", tok)]
+    for size in (1, 2, 3):
+        if len(tokens) < size:
+            continue
+        for i in range(len(tokens) - size + 1):
+            gram = " ".join(tokens[i : i + size]).strip()
+            if gram and gram not in candidates:
+                candidates.append(gram)
 
     keys = _city_variant_keys()
     for candidate in candidates:
@@ -174,5 +182,10 @@ def match_city(text: str) -> str | None:
     # short reply fallback: exact match to city variants
     if t_norm and t_norm in mapping:
         return mapping[t_norm]
+    # mixed phrase fallback: ищем известный город как отдельный фрагмент внутри фразы
+    # ("Анализы Самара", "нужен филиал в Самаре", "Самара анализы").
+    for key in sorted((k for k in mapping.keys() if k), key=len, reverse=True):
+        if re.search(rf"(?<![a-zа-яё0-9]){re.escape(key)}(?![a-zа-яё0-9])", t_norm):
+            return mapping[key]
     # typo-tolerant fallback: only canonical names from known city list
     return fuzzy_match_city(text)

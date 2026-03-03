@@ -1098,7 +1098,11 @@ class Services:
             )
         ]
         appointment_mode = bool(entities.get("__appointment_mode"))
-        branch = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city"]) or query
+        branch = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city"]) or ""
+        if not branch:
+            raw_query = str(query or "").strip()
+            if raw_query and (_looks_like_real_address(raw_query) or _ADDRESS_HINT_RE.search(raw_query)):
+                branch = raw_query
         branch_q = _normalise_input(branch)
         service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
         service_q = _normalise_input(service_name)
