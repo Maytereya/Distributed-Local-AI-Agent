@@ -129,9 +129,13 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
             lines.append(f"Адреса приема: {', '.join(regions)}")
 
         has_any = False
+        visible_regions: list[str] = []
+        rendered_schedule_lines: list[str] = []
         for region_name, days in schedule.items():
+            region_lines: list[str] = []
+            region_has_any = False
             if region_name:
-                lines.append(f"{region_name}:")
+                region_lines.append(f"{region_name}:")
             for day in days or []:
                 day_date = day.get("date")
                 if not day_date:
@@ -146,14 +150,32 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
 
                 slots = _filter_slots(day.get("slots") or [], t_from, t_to)
                 if slots:
-                    lines.append(f"• {day_date}: свободно {', '.join(slots)}")
-                    has_any = True
+                    region_lines.append(f"• {day_date}: свободно {', '.join(slots)}")
+                    region_has_any = True
                 else:
                     start = (day.get("start") or "")[:5]
                     end = (day.get("end") or "")[:5]
                     if start or end:
-                        lines.append(f"• {day_date}: {start}-{end}")
-                        has_any = True
+                        region_lines.append(f"• {day_date}: {start}-{end}")
+                        region_has_any = True
+
+            if region_has_any:
+                has_any = True
+                if region_name:
+                    visible_regions.append(str(region_name).strip())
+                rendered_schedule_lines.extend(region_lines)
+
+        if visible_regions:
+            visible_regions = list(dict.fromkeys([x for x in visible_regions if x]))
+            if len(visible_regions) == 1:
+                lines.append(f"Ближайшее актуальное расписание сейчас есть в филиале: {visible_regions[0]}")
+            else:
+                lines.append(
+                    "Ближайшее актуальное расписание сейчас есть по адресам: "
+                    + ", ".join(visible_regions)
+                )
+
+        lines.extend(rendered_schedule_lines)
 
         if not has_any:
             if date_from:

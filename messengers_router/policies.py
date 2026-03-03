@@ -275,6 +275,10 @@ _NONBOOKABLE_ANALYSIS_RE = re.compile(
 )
 _NONBOOKABLE_ECG_RE = re.compile(r"\b(экг|электрокардиограм\w*)\b", re.I)
 _NONBOOKABLE_VISIT_RE = re.compile(r"\b(запис\w*|сдат\w*|пройти|сделат\w*|хочу|нуж\w*|можно)\b", re.I)
+_DIAGNOSTIC_BOOKING_RE = re.compile(
+    r"\b(сделат\w*|пройти|провест\w*|хочу|нуж\w*|можно|требует\w*|нужно)\b",
+    re.I,
+)
 _TEST_SELECTION_RE = re.compile(
     r"\b(какие|какой|подобрат\w*|посовет\w*|чекап|чек[-\s]?ап|скрининг|для\s+чего|цель|по\s+направлен\w*)\b",
     re.I,
@@ -555,7 +559,15 @@ def detect_doc_request_intent(text: str) -> bool:
 
 
 def detect_appointment_intent(text: str) -> bool:
-    return _matches_any(text, _APPOINTMENT_INTENT_RE)
+    if _matches_any(text, _APPOINTMENT_INTENT_RE):
+        return True
+    t = text or ""
+    # Поддержка естественных формулировок без слова "записаться":
+    # "Хочу сделать УЗИ брюшной полости", "Можно пройти МРТ?".
+    # Для диагностических услуг такие фразы считаем сценарием записи/подбора адреса.
+    if _DIAGNOSTIC_RE.search(t) and _DIAGNOSTIC_BOOKING_RE.search(t):
+        return True
+    return False
 
 
 def detect_appointment_action(text: str) -> str | None:

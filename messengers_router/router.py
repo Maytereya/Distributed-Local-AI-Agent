@@ -99,6 +99,7 @@ _LOW_CONF_CLARIFY_TEXT = (
     "Уточните, пожалуйста, запрос чуть подробнее, чтобы я не ошибся: "
     "что именно нужно — запись, расписание врача, стоимость, адрес или результаты анализов?"
 )
+_DEFAULT_CITY = "Самара"
 _SAMARA_ONLY_OPERATOR_TEXT = "Сейчас могу помочь только по Самаре. Соединяю с оператором."
 _PRICE_TO_OPERATOR_TEXT = "По вопросам стоимости соединяю с оператором."
 _GRAPH_ENGINE = GraphEngine()
@@ -638,6 +639,9 @@ async def route_patient_message(
     city_hint_now = match_city(user_text)
     if city_hint_now and decision.label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
         memory.merge_entities(state, {"city": city_hint_now}, label=decision.label)
+    elif decision.label in {"APPOINTMENT", "ADDRESS", "TEST_ASSIST", "DOCTOR_INFO", "DOCTOR_SCHEDULE"}:
+        if not str(state.last_entities.get("city") or "").strip():
+            memory.merge_entities(state, {"city": _DEFAULT_CITY}, label=decision.label)
     sec_now = _normalize_secondary_labels(decision.entities.get("secondary_intents"))
     if sec_now:
         existing = _get_secondary_queue(state)
@@ -1047,18 +1051,21 @@ async def patient_routing_stream(
         city = str(entities.get("city") or "").strip()
 
         if appointment_step == APPOINTMENT_STEP_BRANCH:
-            # Для записи без явно указанного города сначала всегда уточняем город,
-            # чтобы не предлагать общий/неподходящий список филиалов.
-            if not city and not entities.get("branch_name") and not entities.get("branch_id"):
-                yield ResponseEnvelope(text="Из какого города вы обращаетесь?", handoff=False)
-                return
-            branches = _safe_get_branches(services)
-            addresses = appointment_addresses_for_city(
-                evidence.get("address"),
-                branches,
-                city=city or None,
-                limit=5,
-            )
+            if not city:
+                city = _DEFAULT_CITY
+                state.last_entities["city"] = city
+            stored_options = state.last_entities.get("appointment_branch_options")
+            addresses = []
+            if isinstance(stored_options, list):
+                addresses = [str(x).strip() for x in stored_options if str(x).strip()]
+            if not addresses:
+                branches = _safe_get_branches(services)
+                addresses = appointment_addresses_for_city(
+                    evidence.get("address"),
+                    branches,
+                    city=city or None,
+                    limit=5,
+                )
             state.last_entities["appointment_branch_options"] = addresses
             yield ResponseEnvelope(
                 text=appointment_text_branch_prompt(service, city, addresses),

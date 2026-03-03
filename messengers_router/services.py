@@ -42,6 +42,13 @@ _FIO_TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё\-]{2,}")
 _PHONE_EXTRACT_RE = re.compile(r"\+?\d[\d\-\s\(\)]{7,}\d")
 _NONBOOKABLE_POINTS_PATH = Path(__file__).resolve().parent / "data" / "nonbookable_points.json"
 _NEAREST_HINT_RE = re.compile(r"\b(ближайш\w*|сам\w*\s+ранн\w*|раньше|поскорее|свободн\w*\s+окн\w*)\b", re.I)
+_UZI_QUERY_RE = re.compile(r"\b(узи|узист|ультразвук\w*|ультразвуков\w*)\b", re.I)
+_UZI_LINE_RE = re.compile(r"\b(узи|ультразвук\w*|ультразвуков\w*)\b", re.I)
+_UZI_FALSE_POSITIVE_RE = re.compile(
+    r"\b(под\s+контролем\s+узи|во\s+время\s+консультативн\w*\s+при(е|ё)м\w*|"
+    r"в\s+рамках\s+при(е|ё)м\w*|интерпретац\w*|разъяснен\w*)\b",
+    re.I,
+)
 _SPECIALTY_CANONICAL = (
     "гастроэнтеролог",
     "эндокринолог",
@@ -87,6 +94,8 @@ def _is_non_samara_city_value(value: str | None) -> bool:
 
 
 def _extract_specialty_from_text(text: str) -> str:
+    if _UZI_QUERY_RE.search(text or ""):
+        return "узи"
     m = _SPECIALTY_RE.search(text or "")
     if not m:
         return ""
@@ -95,6 +104,37 @@ def _extract_specialty_from_text(text: str) -> str:
 
 def _has_nearest_hint(text: str) -> bool:
     return bool(_NEAREST_HINT_RE.search(text or ""))
+
+
+def _is_uzi_query_text(text: str) -> bool:
+    return bool(_UZI_QUERY_RE.search(text or ""))
+
+
+def _split_spec_lines(spec_text: str) -> list[str]:
+    return [ln.strip(" \t•-") for ln in str(spec_text or "").splitlines() if ln.strip()]
+
+
+def _matches_uzi_doctor_profile(doc: dict[str, Any]) -> bool:
+    spec_text = str(doc.get("specialization") or "")
+    if not spec_text:
+        return False
+
+    units_text = " ".join(str(x or "") for x in (doc.get("units") or []))
+    units_norm = _normalise_input(units_text)
+    if "ультразвук" in units_norm or re.search(r"\bузи\b", units_norm):
+        return True
+
+    for raw_line in _split_spec_lines(spec_text):
+        line = _normalise_input(raw_line)
+        if not line or not _UZI_LINE_RE.search(line):
+            continue
+        if _UZI_FALSE_POSITIVE_RE.search(line):
+            continue
+        if "врач ультразвуковой диагностики" in line or "ультразвуков" in line:
+            return True
+        if line.startswith("узи "):
+            return True
+    return False
 
 
 def _iter_slot_datetimes(schedule: dict[str, Any]) -> list[datetime]:
@@ -596,9 +636,14 @@ class Services:
         if not spec:
             return []
 
+        is_uzi_query = _is_uzi_query_text(spec)
         candidates = [
             d for d in doctors
-            if spec in _normalise_input(str(d.get("specialization") or ""))
+            if (
+                _matches_uzi_doctor_profile(d)
+                if is_uzi_query
+                else spec in _normalise_input(str(d.get("specialization") or ""))
+            )
         ][:8]
         if not candidates:
             return []
@@ -717,6 +762,7 @@ class Services:
             keyword = q
 
         keyword = keyword.strip()
+        is_uzi_query = _is_uzi_query_text(spec_q or keyword)
 
         def match_doc(doc: dict[str, Any], ) -> bool:
             fio = _normalise_input(str(doc.get("fio", "")))
@@ -732,8 +778,12 @@ class Services:
             if fio_q:
                 if not _doctor_matches_fio(fio, fio_q, resolved_surname):
                     return False
-            if spec_q and spec_q not in hay:
-                return False
+            if spec_q:
+                if is_uzi_query:
+                    if not _matches_uzi_doctor_profile(doc):
+                        return False
+                elif spec_q not in hay:
+                    return False
             if region_q and region_q not in hay:
                 return False
 

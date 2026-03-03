@@ -322,13 +322,6 @@ def _hydrate_appointment_context_from_schedule(state: SessionState, schedule_pay
 
     if doctor_fio:
         state.last_entities["doctor_name"] = doctor_fio
-    if regions:
-        state.last_entities["appointment_branch_options"] = regions[:10]
-        current_branch = str(state.last_entities.get("branch_name") or "").strip()
-        if len(regions) == 1:
-            state.last_entities["branch_name"] = regions[0]
-        elif current_branch and current_branch not in regions:
-            state.last_entities.pop("branch_name", None)
     if windows:
         uniq: list[dict[str, str]] = []
         seen: set[tuple[str, str, str]] = set()
@@ -341,6 +334,22 @@ def _hydrate_appointment_context_from_schedule(state: SessionState, schedule_pay
             if len(uniq) >= 300:
                 break
         state.last_entities["appointment_windows"] = uniq
+        branches_from_windows = sorted({str(w.get("branch") or "").strip() for w in uniq if str(w.get("branch") or "").strip()})
+        if branches_from_windows:
+            state.last_entities["appointment_branch_options"] = branches_from_windows[:10]
+        if len(branches_from_windows) == 1:
+            state.last_entities["branch_name"] = branches_from_windows[0]
+        elif branches_from_windows:
+            current_branch = str(state.last_entities.get("branch_name") or "").strip()
+            if current_branch and current_branch not in branches_from_windows:
+                state.last_entities.pop("branch_name", None)
+    elif regions:
+        state.last_entities["appointment_branch_options"] = regions[:10]
+        current_branch = str(state.last_entities.get("branch_name") or "").strip()
+        if len(regions) == 1:
+            state.last_entities["branch_name"] = regions[0]
+        elif current_branch and current_branch not in regions:
+            state.last_entities.pop("branch_name", None)
 
 
 def _fill_date_from_schedule_windows(state: SessionState, label: str) -> None:
