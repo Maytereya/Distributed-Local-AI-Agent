@@ -93,7 +93,9 @@ messengers_router/
     classifier_patient.txt
     classifier_refine_patient.txt
     renderer_patient.txt
-    versions/v2/*.txt
+    renderer_patient_rich.txt
+    renderer_critic_patient_alignment.txt
+    recovery_patient.txt
   data/
     cities.txt
     nonbookable_points.json
@@ -123,7 +125,7 @@ messengers_router/
 
 - `MR_ROUTER_V2_ENABLE` (default: on): включение v2 NLU pipeline.
 - `MR_ROUTER_V2_SHADOW` (default: off): сравнение v2 с legacy classifier.
-- `MR_PROMPT_VERSION` (`v1`/`v2`, default: `v2`): выбор prompt-версии.
+- Prompt overrides: `/app_data/prompts/mr_<key>.txt` (если файл есть, он имеет приоритет над bundle prompt).
 
 ## 7) Известные слабые места (актуально)
 

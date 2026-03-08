@@ -32,6 +32,8 @@ services:
     restart: unless-stopped
     expose:
       - "8010"
+    volumes:
+      - ./app_data:/app_data
     environment:
       - AGENT_API_KEY=${AGENT_API_KEY:-}
       - TOKENIZERS_PARALLELISM=false

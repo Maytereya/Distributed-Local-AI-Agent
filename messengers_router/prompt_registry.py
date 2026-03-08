@@ -1,45 +1,90 @@
-"""Реестр prompt-шаблонов с версионированием и fallback.
+"""Единая загрузка prompt-шаблонов для `messengers_router`.
 
-Ответственность модуля:
-1) Определить активную версию prompt-слоя (через env).
-2) Загружать prompt из versioned каталога с безопасным fallback на legacy.
-3) Централизовать доступ к шаблонам, чтобы убрать прямые file-read в модулях.
+Принципы (синхронизированы с общим подходом проекта):
+1) Источник runtime-правок — `APP_DATA_DIR/prompts` (через `agent_logic_2.config/persist`).
+2) Дефолты поставляются из дистрибутива: `messengers_router/prompts/*.txt`.
+3) Версионирование prompt-файлов и переключение через env не используются.
+4) Кэш чтения не используется намеренно: изменения файлов подхватываются без рестарта процесса.
+
+Порядок загрузки для ключа `<key>`:
+- `/app_data/prompts/mr_<key>.txt` (host override, если есть),
+- `messengers_router/prompts/<key>.txt` (bundle default).
+
+Для мягкой миграции поддерживается legacy-override имя
+`/app_data/prompts/mr_<key>_v2.txt`: при обнаружении содержимое переносится
+в новый файл `mr_<key>.txt`.
 """
 
 from __future__ import annotations
 
-import os
-from functools import lru_cache
+import logging
 from pathlib import Path
 
-from agent_logic_2.persist import PROMPTS_DIR as APP_PROMPTS_DIR
+from agent_logic_2.persist import PROMPTS_DIR as APP_PROMPTS_DIR, ensure_dir
+
+logger = logging.getLogger(__name__)
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+_RUNTIME_PROMPTS_DIR = ensure_dir(APP_PROMPTS_DIR, "prompts")
 
 
-def active_prompt_version() -> str:
-    raw = str(os.getenv("MR_PROMPT_VERSION", "v2")).strip().lower()
-    if raw in {"v1", "v2"}:
-        return raw
-    return "v2"
+def _safe_key(key: str) -> str:
+    cleaned = str(key or "").strip()
+    if not cleaned or "/" in cleaned or "\\" in cleaned or ".." in cleaned:
+        raise ValueError(f"Invalid prompt key: {key!r}")
+    return cleaned
 
 
-def _candidate_paths(key: str, version: str) -> list[Path]:
-    # Новые файлы храним в prompts/versions/<version>/...
-    # Старые — в корне prompts/.
-    v2_name = f"{key}_{version}.txt"
-    return [
-        APP_PROMPTS_DIR / f"mr_{key}_{version}.txt",
-        APP_PROMPTS_DIR / f"mr_{key}.txt",
-        _PROMPTS_DIR / "versions" / version / v2_name,
-        _PROMPTS_DIR / f"{key}.txt",
-    ]
+def _host_path(key: str) -> Path:
+    return _RUNTIME_PROMPTS_DIR / f"mr_{key}.txt"
 
 
-@lru_cache(maxsize=64)
-def load_prompt_text(key: str, version: str | None = None) -> str:
-    ver = (version or active_prompt_version()).strip().lower()
-    for path in _candidate_paths(key, ver):
-        if path.exists():
-            return path.read_text(encoding="utf-8")
-    raise FileNotFoundError(f"Prompt not found for key={key}, version={ver}")
+def _host_legacy_v2_path(key: str) -> Path:
+    return _RUNTIME_PROMPTS_DIR / f"mr_{key}_v2.txt"
+
+
+def _bundle_path(key: str) -> Path:
+    return _PROMPTS_DIR / f"{key}.txt"
+
+
+def _try_migrate_legacy_override(key: str) -> Path | None:
+    current = _host_path(key)
+    if current.exists():
+        return current
+
+    legacy = _host_legacy_v2_path(key)
+    if not legacy.exists():
+        return None
+
+    try:
+        current.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")
+        logger.info("migrated legacy prompt override %s -> %s", legacy.name, current.name)
+        return current
+    except Exception:
+        logger.exception("failed to migrate legacy prompt override: %s", legacy)
+        return legacy
+
+
+def load_prompt_text(key: str) -> str:
+    key = _safe_key(key)
+
+    host = _host_path(key)
+    if host.exists():
+        return host.read_text(encoding="utf-8")
+
+    migrated = _try_migrate_legacy_override(key)
+    if migrated and migrated.exists():
+        return migrated.read_text(encoding="utf-8")
+
+    bundle = _bundle_path(key)
+    if not bundle.exists():
+        raise FileNotFoundError(f"Prompt not found for key={key}")
+
+    # Пробуем посеять дефолт на host для прозрачного редактирования/персистентности.
+    # Если запись недоступна (права/FS), продолжаем работу на bundle-копии.
+    try:
+        host.write_text(bundle.read_text(encoding="utf-8"), encoding="utf-8")
+        return host.read_text(encoding="utf-8")
+    except Exception:
+        logger.warning("failed to seed host prompt override from bundle: %s", host)
+        return bundle.read_text(encoding="utf-8")

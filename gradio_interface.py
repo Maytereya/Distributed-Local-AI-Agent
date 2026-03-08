@@ -2287,7 +2287,7 @@ def main():
                            )
                 return text
 
-            def fn_load_prompt_with_fallback(name: str, fallback_key: str, fallback_version: str = "v2") -> str:
+            def fn_load_prompt_with_fallback(name: str, fallback_key: str) -> str:
                 text, msg = load_prompt(name, inform=True)
                 if not isinstance(text, str):
                     text = ""
@@ -2295,23 +2295,23 @@ def main():
                     gr.Info(title="Загружен успешно", duration=3, message=msg)
                     return text
                 try:
-                    fallback_text = load_prompt_text(fallback_key, version=fallback_version)
+                    fallback_text = load_prompt_text(fallback_key)
                     gr.Info(
                         title="Загружен fallback",
                         duration=3,
-                        message=f"{msg}; использован встроенный prompt {fallback_key}_{fallback_version}",
+                        message=f"{msg}; использован встроенный prompt {fallback_key}",
                     )
                     return fallback_text
                 except Exception as e:
                     gr.Error(title="Ошибка загрузки prompt", message=str(e))
                     return text
 
-            def fn_load_prompt_with_fallback_silent(name: str, fallback_key: str, fallback_version: str = "v2") -> str:
+            def fn_load_prompt_with_fallback_silent(name: str, fallback_key: str) -> str:
                 text = load_prompt(name, inform=False)
                 if isinstance(text, str) and text.strip():
                     return text
                 try:
-                    return load_prompt_text(fallback_key, version=fallback_version)
+                    return load_prompt_text(fallback_key)
                 except Exception:
                     return text if isinstance(text, str) else ""
 
@@ -2499,11 +2499,11 @@ def main():
                 # Messenger Router Rich Prompt секция
                 # -----------------------------------------------------
                 with gr.Row():
-                    with gr.Accordion(label="MR Rich Generator Prompt (v2)", open=False):
+                    with gr.Accordion(label="MR Rich Generator Prompt", open=False):
                         prompt_code_mr_rich = gr.Code(
                             value="",
                             language=None,
-                            label="messengers_router: mr_renderer_patient_rich_v2",
+                            label="messengers_router: mr_renderer_patient_rich",
                             interactive=True,
                             lines=20,
                             scale=4,
@@ -2514,23 +2514,22 @@ def main():
 
                 btn_load_mr_rich.click(
                                        lambda: fn_load_prompt_with_fallback(
-                                           "mr_renderer_patient_rich_v2",
+                                           "mr_renderer_patient_rich",
                                            "renderer_patient_rich",
-                                           "v2",
                                        ),
                                        [], [prompt_code_mr_rich, ])
-                btn_save_mr_rich.click(lambda txt: fn_save_prompt("mr_renderer_patient_rich_v2", txt),
+                btn_save_mr_rich.click(lambda txt: fn_save_prompt("mr_renderer_patient_rich", txt),
                                        prompt_code_mr_rich, )
 
                 # -----------------------------------------------------
                 # Messenger Router Critic Prompt секция
                 # -----------------------------------------------------
                 with gr.Row():
-                    with gr.Accordion(label="MR Critic Prompt (v2 JSON)", open=False):
+                    with gr.Accordion(label="MR Critic Prompt (JSON)", open=False):
                         prompt_code_mr_critic = gr.Code(
                             value="",
                             language=None,
-                            label="messengers_router: mr_renderer_critic_patient_alignment_v2",
+                            label="messengers_router: mr_renderer_critic_patient_alignment",
                             interactive=True,
                             lines=20,
                             scale=4,
@@ -2541,12 +2540,11 @@ def main():
 
                 btn_load_mr_critic.click(
                                          lambda: fn_load_prompt_with_fallback(
-                                             "mr_renderer_critic_patient_alignment_v2",
+                                             "mr_renderer_critic_patient_alignment",
                                              "renderer_critic_patient_alignment",
-                                             "v2",
                                          ),
                                          [], [prompt_code_mr_critic, ])
-                btn_save_mr_critic.click(lambda txt: fn_save_prompt("mr_renderer_critic_patient_alignment_v2", txt),
+                btn_save_mr_critic.click(lambda txt: fn_save_prompt("mr_renderer_critic_patient_alignment", txt),
                                          prompt_code_mr_critic, )
 
                 # ---------------------------------------
@@ -2666,14 +2664,12 @@ def main():
                         fn_load_prompt("split_prompt", False),
                         fn_load_prompt("classificator_prompt", False),
                         fn_load_prompt_with_fallback_silent(
-                            "mr_renderer_patient_rich_v2",
+                            "mr_renderer_patient_rich",
                             "renderer_patient_rich",
-                            "v2",
                         ),
                         fn_load_prompt_with_fallback_silent(
-                            "mr_renderer_critic_patient_alignment_v2",
+                            "mr_renderer_critic_patient_alignment",
                             "renderer_critic_patient_alignment",
-                            "v2",
                         ),
                         fn_load_prompt("EXAMPLES", False),
                         fn_load_prompt("LABEL_DOC", False),

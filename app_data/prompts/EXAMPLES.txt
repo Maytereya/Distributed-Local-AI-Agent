@@ -70,8 +70,17 @@ OUTPUT: {"labels":["SCRIPTS"]}
 INPUT: подготовка к торакоцентезу
 OUTPUT: {"labels":["SCRIPTS"]}
 
-INPUT: узи брюшной полости
+INPUT: какие врачи делают узи брюшной полости?
 OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: кто проводит торакоцентез?
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: торакоцентез, что это такое?
+OUTPUT: {"labels":["SCRIPTS"]}
+
+INPUT: подготовка к торакоцентезу
+OUTPUT: {"labels":["SCRIPTS"]}
 
 INPUT: какие врачи делают узи брюшной полости?
 OUTPUT: {"labels":["API_INFO"]}

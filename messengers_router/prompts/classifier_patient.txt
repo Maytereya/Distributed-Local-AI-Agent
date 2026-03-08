@@ -183,12 +183,40 @@ context_action: continue
 Label: OTHER
 context_action: continue
 
+Текст: Тен Максим Александрович
+Label: OTHER
+context_action: continue
+
 Текст: 18 февраля 09:45 Тен Максим Александрович
 Label: APPOINTMENT
 context_action: continue
 
 Текст: хочу записаться к врачу
 Label: APPOINTMENT
+context_action: continue
+
+Текст: результаты
+Label: TEST_RESULT
+context_action: continue
+
+Текст: анализы
+Label: TEST_ASSIST
+context_action: continue
+
+Текст: да, оператор
+Label: OTHER
+context_action: continue
+
+Текст: Самраа
+Label: OTHER
+context_action: continue
+
+Текст: передумал, мне нужны результаты анализов
+Label: TEST_RESULT
+context_action: continue
+
+Текст: подскажи адреса для сдачи анализов в Самаре
+Label: ADDRESS
 context_action: continue
 
 Контекст из прошлых сообщений (если релевантно): <<SEEDED>>
