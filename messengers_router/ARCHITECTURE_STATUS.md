@@ -64,7 +64,7 @@
 - `recovery_policy.py`: low-confidence clarify/escalation logic.
 - `context_summary.py`: bounded summary контекста для NLU.
 - `services.py`: интеграции и нормализация данных из внешних источников.
-- `prompt_registry.py`: версионирование prompt-шаблонов.
+- `prompt_registry.py`: runtime-загрузка prompt-шаблонов из `app_data/prompts` с fallback на bundle-файлы в `messengers_router/prompts`.
 - `prompt_contracts.py`: проверка/санитизация LLM JSON-контракта.
 - `city.py`: распознавание города, fuzzy-матч.
 - `mess_types.py`: доменные dataclass-типы.
@@ -91,8 +91,12 @@ messengers_router/
   prompt_registry.py
   prompt_contracts.py
   prompts/
-    versions/v2/*.txt   # активные шаблоны
-    *.txt               # legacy fallback (неосновной путь)
+    classifier_patient.txt
+    classifier_refine_patient.txt
+    recovery_patient.txt
+    renderer_critic_patient_alignment.txt
+    renderer_patient.txt
+    renderer_patient_rich.txt
   data/
     cities.txt
     nonbookable_points.json
@@ -131,14 +135,107 @@ messengers_router/
 - `MR_ROUTER_V2_SHADOW` (default: off): сравнение v2 с legacy classifier.
 - `MR_NLU_ENGINE=legacy_v2|llm_primary` (default: `legacy_v2`): выбор primary-NLU engine.
 - `MR_NLU_SHADOW=0|1` (default: `0`): shadow compare для нового NLU path.
-- `MR_PROMPT_VERSION`: оставлен для совместимости, но фактически поддерживается только `v2`.
-- Prompt policy: загрузка идет только по versioned-файлам (`prompts/versions/v2/*`).
+- Prompt policy:
+  - сначала читается host override `app_data/prompts/mr_<key>.txt`;
+  - если override нет, используется bundle prompt `messengers_router/prompts/<key>.txt`;
+  - legacy-имя host override `mr_<key>_v2.txt` мягко мигрируется в `mr_<key>.txt`.
 
 ### `llm_mode` semantics
 
 - `strict`: не использует free-form LLM-primary NLU; остается на legacy/fallback path.
 - `hybrid`: основной production-target для `llm_primary`.
 - `rich`: тот же `llm_primary` NLU + richer renderer/self-check + optional rare refine.
+
+## 6.1) Какие prompt-файлы реально используются
+
+Ключи, которые грузятся runtime-кодом через `load_prompt_text(...)`:
+
+- `classifier_patient` -> `classifier.py`
+- `classifier_refine_patient` -> `classifier.py`
+- `renderer_patient` -> `renderer.py`
+- `renderer_patient_rich` -> `renderer.py`
+- `recovery_patient` -> `recovery_policy.py`
+- `renderer_critic_patient_alignment` -> `self_check.py`
+
+Практический вывод:
+- базовые bundle prompt-файлы в `messengers_router/prompts/*.txt` должны существовать всегда;
+- на реальном сервере при наличии `app_data/prompts/mr_<key>.txt` используются именно host override-файлы.
+
+### 6.2) Текущая таблица prompt-источников
+
+Ниже зафиксировано текущее состояние prompt-слоя в репозитории и на локальном runtime.
+
+| Prompt key | Где используется | Bundle default | Host override | Что реально используется сейчас | Состояние |
+|---|---|---|---|---|---|
+| `classifier_patient` | `classifier.py` | `messengers_router/prompts/classifier_patient.txt` | `app_data/prompts/mr_classifier_patient.txt` | host override | bundle и host различаются |
+| `classifier_refine_patient` | `classifier.py` | `messengers_router/prompts/classifier_refine_patient.txt` | `app_data/prompts/mr_classifier_refine_patient.txt` | host override | bundle и host различаются |
+| `renderer_patient` | `renderer.py` | `messengers_router/prompts/renderer_patient.txt` | `app_data/prompts/mr_renderer_patient.txt` | host override | bundle и host различаются |
+| `renderer_patient_rich` | `renderer.py` | `messengers_router/prompts/renderer_patient_rich.txt` | `app_data/prompts/mr_renderer_patient_rich.txt` | host override | bundle и host различаются |
+| `recovery_patient` | `recovery_policy.py` | `messengers_router/prompts/recovery_patient.txt` | `app_data/prompts/mr_recovery_patient.txt` | host override | bundle и host различаются |
+| `renderer_critic_patient_alignment` | `self_check.py` | `messengers_router/prompts/renderer_critic_patient_alignment.txt` | `app_data/prompts/mr_renderer_critic_patient_alignment.txt` | host override | bundle и host совпадают |
+
+Ключевой риск:
+- правка только `messengers_router/prompts/*.txt` не меняет поведение runtime, если соответствующий `app_data/prompts/mr_<key>.txt` уже существует;
+- из-за этого bundle prompt-ы и host override prompt-ы могут разъехаться по смыслу.
+
+Что это значит для следующего этапа:
+- нужно принять единое решение, какие тексты считаются каноническими;
+- после этого синхронизировать bundle и host prompt-ы по каждому ключу;
+- до синхронизации любые изменения prompt-ов надо проверять сразу в обоих местах.
+
+### 6.3) Рекомендуемая prompt-policy для команды
+
+Рекомендуемое решение для текущего этапа проекта:
+
+- канонический источник prompt-ов для командной разработки — `messengers_router/prompts/*.txt`;
+- `app_data/prompts/mr_*.txt` — только host/runtime override:
+  - временный hotfix,
+  - правка через будущий интерфейс,
+  - точечный серверный эксперимент без redeploy.
+
+Почему это рекомендуется:
+- bundle prompt-ы живут в git, проходят review и видны в diff;
+- они воспроизводимы между разработчиками и стендами;
+- `app_data` удобно для runtime-override, но неудобно как командный source of truth, потому что легко разъезжается с репозиторием.
+
+Практический вывод:
+- если prompt признан удачным на сервере через `app_data`, его нужно переносить обратно в `messengers_router/prompts/*.txt`;
+- eval и локальные тесты нужно прогонять осознанно: либо на чистом bundle, либо понимая, что поведение задает именно host override.
+
+### 6.4) Практический план синхронизации prompt-ов
+
+Следующий рабочий шаг для команды:
+
+1. Для каждого ключа сравнить `app_data/prompts/mr_<key>.txt` и `messengers_router/prompts/<key>.txt`.
+2. По каждому ключу выбрать каноническую версию:
+   - `classifier_patient`
+   - `classifier_refine_patient`
+   - `renderer_patient`
+   - `renderer_patient_rich`
+   - `recovery_patient`
+   - `renderer_critic_patient_alignment`
+3. Победившую версию сохранить в bundle (`messengers_router/prompts/*.txt`).
+4. После этого:
+   - либо удалить соответствующий `app_data/prompts/mr_<key>.txt`,
+   - либо пересоздать его из bundle, если на сервере нужен осознанный override.
+5. После синхронизации прогнать:
+   - локальный smoke в `messenger_simulator.py`,
+   - `eval_stage5_corpus.py`,
+   - несколько ручных happy-path кейсов по `PRICE`, `APPOINTMENT`, `TEST_RESULT`, `ADDRESS`.
+
+Рекомендуемый порядок принятия решений:
+
+1. `classifier_patient`
+2. `classifier_refine_patient`
+3. `recovery_patient`
+4. `renderer_patient`
+5. `renderer_patient_rich`
+6. `renderer_critic_patient_alignment`
+
+Причина такого порядка:
+- сначала стабилизируется NLU/clarify behavior;
+- потом формат финального ответа;
+- critic-пrompt трогается последним, потому что он влияет только на `rich`/self-check path.
 
 ## 7) Известные слабые места (актуально)
 
@@ -212,7 +309,7 @@ messengers_router/
 - Для сценария "цена у врача":
   - добавлен path `doctor_name -> doctor_id -> doctor prices`.
 - Усилена Samara-only фильтрация по врачам/расписанию/адресам (исключение иногородних данных).
-- Prompt-слой приведен к `v2-only` (legacy prompt-файлы удалены).
+- Prompt-слой переведен на схему `host override -> bundle default` без runtime-переключения версий.
 
 ### 12.2 Статус 8 пунктов ТЗ
 
