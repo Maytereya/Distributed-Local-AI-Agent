@@ -40,10 +40,25 @@ _ADDRESS_HINT_RE = re.compile(
 _SCHEDULE_QUERY_RE = re.compile(r"\b(расписани\w*|график|когда\b.*\bпринима\w*|принима\w*)\b", re.I)
 _FIO_TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё\-]{2,}")
 _PHONE_EXTRACT_RE = re.compile(r"\+?\d[\d\-\s\(\)]{7,}\d")
+_PRICE_TOKEN_RE = re.compile(r"[a-zа-яё0-9]+", re.I)
+_PRICE_HOMECODE_DOTTED_RE = re.compile(r"\b\d+(?:\.\d+){1,6}\b")
+_PRICE_HOMECODE_NUM_RE = re.compile(r"\b\d{4,}\b")
+_DOCTOR_PRICE_HINT_RE = re.compile(r"\b(?:у|врач\w*|доктор\w*)\s+[а-яё\-]{3,}\b", re.I)
+_PRICE_REQUEST_RE = re.compile(r"\b(стоим\w*|цен\w*|сколько)\b", re.I)
+_PRICE_CONSULT_HINT_RE = re.compile(r"\b(при[её]м\w*|консультаци\w*)\b", re.I)
+_PRICE_SERVICE_PREFIX_RE = re.compile(
+    r"^\s*(?:а\s+)?(?:сколько\s+стоит|сколько\s+будет\s+стоить|цена|стоимость)\s+",
+    re.I,
+)
+_PRICE_DOCTOR_SUFFIX_RE = re.compile(
+    r"\bу\s+[а-яё\-]{3,}(?:\s+[а-яё\-]{2,}){0,2}\b.*$",
+    re.I,
+)
 _NONBOOKABLE_POINTS_PATH = Path(__file__).resolve().parent / "data" / "nonbookable_points.json"
 _NEAREST_HINT_RE = re.compile(r"\b(ближайш\w*|сам\w*\s+ранн\w*|раньше|поскорее|свободн\w*\s+окн\w*)\b", re.I)
 _UZI_QUERY_RE = re.compile(r"\b(узи|узист|ультразвук\w*|ультразвуков\w*)\b", re.I)
 _UZI_LINE_RE = re.compile(r"\b(узи|ультразвук\w*|ультразвуков\w*)\b", re.I)
+_CITY_PREFIX_RE = re.compile(r"\b(?:г|город)\.?\s*([а-яёa-z\-]+)\b", re.I)
 _UZI_FALSE_POSITIVE_RE = re.compile(
     r"\b(под\s+контролем\s+узи|во\s+время\s+консультативн\w*\s+при(е|ё)м\w*|"
     r"в\s+рамках\s+при(е|ё)м\w*|интерпретац\w*|разъяснен\w*)\b",
@@ -74,6 +89,34 @@ _SPECIALTY_RE = re.compile(
     r"\b(" + "|".join(re.escape(x) for x in _SPECIALTY_CANONICAL) + r")\w*\b",
     re.I,
 )
+# Важно: для /priceByRegion нужен city-level regionId (Самара = 3),
+# а для /doctorServicePricesByRegion используются branch-level regionId из doctorRegions.
+SAMARA_PRICE_REGION_ID = 3
+_PRICE_QUERY_STOPWORDS = {
+    "сколько",
+    "стоит",
+    "стоимость",
+    "цена",
+    "цена",
+    "на",
+    "в",
+    "по",
+    "у",
+    "для",
+    "и",
+    "или",
+    "услуга",
+    "услуги",
+    "процедура",
+    "процедуры",
+    "анализ",
+    "анализы",
+    "врач",
+    "врача",
+    "доктор",
+    "доктора",
+    "самара",
+}
 
 
 def _normalise_input(s: str) -> str:
@@ -91,6 +134,56 @@ def _is_non_samara_city_value(value: str | None) -> bool:
     if not value:
         return False
     return not _is_samara_city_value(value)
+
+
+def _normalize_region_text(value: str) -> str:
+    norm = _normalise_input(value).replace("ё", "е")
+    return re.sub(r"\s+", " ", norm).strip()
+
+
+def _compact_region_text(value: str) -> str:
+    return re.sub(r"[^a-zа-я0-9]+", "", _normalize_region_text(value))
+
+
+def _is_explicit_non_samara_region(value: str) -> bool:
+    norm = _normalize_region_text(value)
+    if not norm:
+        return False
+    if "самара" in norm:
+        return False
+    # Частый кейс в данных: оренбургские площадки не должны попадать в самарский контур.
+    if "оренбург" in norm:
+        return True
+    for city in _CITY_PREFIX_RE.findall(norm):
+        city_norm = _normalize_region_text(city)
+        if city_norm and city_norm != "самара":
+            return True
+    return False
+
+
+def _region_matches_samara_tokens(region: str, samara_tokens: set[str]) -> bool:
+    if not samara_tokens:
+        return False
+    region_norm = _normalize_region_text(region)
+    if not region_norm:
+        return False
+    if region_norm in samara_tokens:
+        return True
+    region_compact = _compact_region_text(region_norm)
+    for token in samara_tokens:
+        if region_norm in token or token in region_norm:
+            return True
+        token_compact = _compact_region_text(token)
+        if region_compact and token_compact and (region_compact in token_compact or token_compact in region_compact):
+            return True
+    return False
+
+
+def _has_explicit_non_samara_regions(values: list[str]) -> bool:
+    for value in values:
+        if _is_explicit_non_samara_region(value):
+            return True
+    return False
 
 
 def _extract_specialty_from_text(text: str) -> str:
@@ -347,6 +440,150 @@ def _service_query_matches(service_q: str, service_name: str) -> bool:
     return False
 
 
+def _extract_homecode_query(text: str) -> str:
+    s = _normalise_input(text)
+    m = _PRICE_HOMECODE_DOTTED_RE.search(s)
+    if m:
+        return str(m.group(0)).strip()
+    m = _PRICE_HOMECODE_NUM_RE.search(s)
+    if m:
+        return str(m.group(0)).strip()
+    return ""
+
+
+def _price_query_tokens(text: str) -> list[str]:
+    s = _normalise_input(text).replace("ё", "е")
+    out: list[str] = []
+    for t in _PRICE_TOKEN_RE.findall(s):
+        token = str(t or "").strip().lower().replace("ё", "е")
+        if len(token) < 2:
+            continue
+        if token in _PRICE_QUERY_STOPWORDS:
+            continue
+        out.append(token)
+        # "прием" и "консультация" считаем взаимозаменяемыми для ранжирования цен.
+        if token.startswith("прием") and "консультац" not in out:
+            out.append("консультац")
+        elif token.startswith("консультац") and "прием" not in out:
+            out.append("прием")
+    return out
+
+
+def _extract_price_service_from_query(query: str) -> str | None:
+    raw = str(query or "").strip()
+    if not raw:
+        return None
+    if _PRICE_CONSULT_HINT_RE.search(raw):
+        return "прием"
+    q = _normalise_input(raw)
+    q = _PRICE_DOCTOR_SUFFIX_RE.sub("", q).strip(" ?!.,;:")
+    q = _PRICE_SERVICE_PREFIX_RE.sub("", q).strip(" ?!.,;:")
+    if not q:
+        return None
+    if q in {"цена", "стоимость"}:
+        return None
+    words = [w for w in q.split() if w]
+    if not words:
+        return None
+    # Ограничиваем длину candidate, чтобы не тянуть в ranking целый диалог.
+    return " ".join(words[:8])
+
+
+def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], homecode_query: str) -> tuple[int, int]:
+    name = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
+    homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
+    if not name:
+        return 0, 0
+
+    score = 0
+    if homecode_query:
+        if homecode == homecode_query:
+            score += 260
+        elif homecode_query in homecode:
+            score += 180
+
+    if query:
+        if query == name:
+            score += 220
+        elif query in name:
+            score += 150
+
+    matched = 0
+    if tokens:
+        for tok in tokens:
+            if tok in name:
+                matched += 1
+        score += matched * 25
+        if matched == len(tokens):
+            score += 80
+        elif matched >= max(2, len(tokens) - 1):
+            score += 40
+
+    # Слегка понижаем заведомо нерелевантный общий тариф.
+    if "выезд на дом" in name and not any(tok in name for tok in tokens):
+        score -= 30
+
+    return score, matched
+
+
+def _rank_price_rows(rows: list[dict[str, Any]], query_text: str, *, limit: int = 10) -> list[dict[str, Any]]:
+    query = _normalise_input(query_text).replace("ё", "е")
+    tokens = _price_query_tokens(query_text)
+    homecode_query = _extract_homecode_query(query_text)
+
+    scored: list[tuple[int, int, int, int, dict[str, Any]]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        score, matched = _price_row_score(row, query=query, tokens=tokens, homecode_query=homecode_query)
+        if score <= 0:
+            continue
+        name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
+        name_gap = abs(len(name) - len(query)) if query else len(name)
+        cost = _as_int(row.get("cost")) or 0
+        scored.append((score, matched, -name_gap, -cost, row))
+
+    if not scored:
+        if query:
+            fallback = [r for r in rows if isinstance(r, dict) and query in _normalise_input(str(r.get("serviceName") or ""))]
+            if fallback:
+                return fallback[:limit]
+        if homecode_query:
+            fallback = [
+                r
+                for r in rows
+                if isinstance(r, dict)
+                and homecode_query in _normalise_input(str(r.get("serviceHomecode") or r.get("homecode") or ""))
+            ]
+            if fallback:
+                return fallback[:limit]
+        return []
+
+    scored.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for _, _, _, _, row in scored:
+        name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
+        code = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
+        key = (name, code)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _doctor_sort_key(doc: dict[str, Any]) -> tuple[int, str]:
+    try:
+        ord_value = int(doc.get("ord"))
+    except Exception:
+        ord_value = 10**9
+    fio = _normalise_input(str(doc.get("fio") or ""))
+    return ord_value, fio
+
+
 def _extract_region_phone(region: dict[str, Any]) -> str:
     phone_keys = ("phone", "phoneForSite", "phones", "phoneNumbers", "tel", "telephone")
     for k in phone_keys:
@@ -479,6 +716,42 @@ def _static_nonbookable_branches(city: str, service_q: str) -> list[dict[str, An
     return out
 
 
+def _filter_regions_by_service_flags(regions: list[dict[str, Any]], service_q: str) -> list[dict[str, Any]]:
+    sq = _normalise_input(service_q or "")
+    if not sq:
+        return list(regions)
+
+    need_analysis, need_ekg = _nonbookable_needs(sq)
+    need_uzi = bool(_UZI_QUERY_RE.search(sq))
+    need_doctor = False
+    if not (need_analysis or need_ekg or need_uzi):
+        need_doctor = (
+            "прием" in sq
+            or "приём" in sq
+            or "консультац" in sq
+            or "осмотр" in sq
+            or bool(_extract_specialty_from_text(sq))
+        )
+
+    if not (need_analysis or need_ekg or need_uzi or need_doctor):
+        return list(regions)
+
+    out: list[dict[str, Any]] = []
+    for row in regions:
+        if not isinstance(row, dict):
+            continue
+        if need_analysis and not bool(row.get("analysis")):
+            continue
+        if need_ekg and not bool(row.get("ecg")):
+            continue
+        if need_uzi and not bool(row.get("usi")):
+            continue
+        if need_doctor and not bool(row.get("doctorService")):
+            continue
+        out.append(row)
+    return out
+
+
 def _service_fallback(
     *,
     note: str,
@@ -537,11 +810,18 @@ class Services:
     # Low-level helpers (async)
     # -----------------------------
 
+    def ensure_background_refresh_started(self) -> None:
+        """Запускает фоновые refresh-задачи кэшей (idempotent)."""
+        try:
+            api_price.ensure_daily_price_refresh_started()
+        except Exception:
+            pass
+
     async def _ensure_doctors_cache_loaded(self) -> list[dict[str, Any]]:
         """
-        1) Проверяем актуальный файл doctors_YYYYMMDD.jsonl
-        2) Если файла нет — собираем через API и сохраняем
-        3) Держим in-memory-кэш поверх файла
+        1) Пытаемся получить свежий doctor cache через api_nayka.get_cached_doctors_data()
+        2) При неуспехе откатываемся на последний непустой файл
+        3) Держим in-memory-кэш поверх файлового кэша
         """
         now = time.time()
 
@@ -556,19 +836,32 @@ class Services:
                 return self._doctors_cache
 
             try:
-                # 1) ищем актуальный файл
+                doctors_loaded = await asyncio.to_thread(api_nayka.get_cached_doctors_data)
                 file_path = await asyncio.to_thread(api_nayka.find_existing_doctors_file)
 
-                # 2) если нет — обновляем
-                if file_path is None:
+                # Миграция старого кеша: ранние JSONL могли не содержать ord и
+                # могли хранить placeholder-адреса вида "ID 8502".
+                schema_outdated = False
+                if doctors_loaded:
+                    preview = doctors_loaded[:20]
+                    has_ord = any(isinstance(row, dict) and "ord" in row for row in preview)
+                    has_placeholder_region = any(
+                        isinstance(row, dict)
+                        and any(
+                            str(addr).strip().startswith(("ID ", "[ID "))
+                            for addr in (row.get("regions") or [])
+                        )
+                        for row in preview
+                    )
+                    schema_outdated = (not has_ord) or has_placeholder_region
+
+                if schema_outdated:
                     doctors = await asyncio.to_thread(api_nayka.get_all_doctors)
                     await asyncio.to_thread(api_nayka.save_doctors_data, doctors)
                     file_path = await asyncio.to_thread(api_nayka.find_existing_doctors_file)
-
-                # 3) загружаем файл
-                doctors_loaded: list[dict[str, Any]] = []
-                if file_path is not None:
-                    doctors_loaded = await asyncio.to_thread(api_nayka.load_doctors_data, file_path)
+                    doctors_loaded = []
+                    if file_path is not None:
+                        doctors_loaded = await asyncio.to_thread(api_nayka.load_doctors_data, file_path)
             except Exception:
                 return self._doctors_cache or []
 
@@ -637,14 +930,27 @@ class Services:
             return []
 
         is_uzi_query = _is_uzi_query_text(spec)
-        candidates = [
+        samara_tokens = await self._samara_region_tokens()
+        candidates = sorted(
+            [
             d for d in doctors
             if (
                 _matches_uzi_doctor_profile(d)
                 if is_uzi_query
                 else spec in _normalise_input(str(d.get("specialization") or ""))
             )
-        ][:8]
+            and not _has_explicit_non_samara_regions([str(x) for x in (d.get("regions") or []) if str(x).strip()])
+            and (
+                not samara_tokens
+                or any(
+                    _region_matches_samara_tokens(str(x), samara_tokens)
+                    for x in (d.get("regions") or [])
+                    if str(x).strip()
+                )
+            )
+            ],
+            key=_doctor_sort_key,
+        )[:8]
         if not candidates:
             return []
 
@@ -711,6 +1017,38 @@ class Services:
             return resolve_schedule_surname(candidate, doctors)
         return None
 
+    async def _resolve_doctor_id_from_name(self, raw_text_or_name: str) -> tuple[int | None, str | None]:
+        doctors = await self._ensure_doctors_cache_loaded()
+        if not doctors:
+            return None, None
+
+        raw = str(raw_text_or_name or "").strip()
+        if not raw:
+            return None, None
+
+        resolved_surname = resolve_schedule_surname(raw, doctors)
+        samara_tokens = await self._samara_region_tokens()
+        matched: list[dict[str, Any]] = []
+        for doc in doctors:
+            if not isinstance(doc, dict):
+                continue
+            fio = str(doc.get("fio") or "").strip()
+            if not fio:
+                continue
+            raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
+            if _has_explicit_non_samara_regions(raw_regions):
+                continue
+            if samara_tokens and raw_regions and not any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
+                continue
+            if _doctor_matches_fio(fio, raw, resolved_surname):
+                matched.append(doc)
+
+        if not matched:
+            return None, None
+        matched = sorted(matched, key=_doctor_sort_key)
+        first = matched[0]
+        return _as_int(first.get("id")), str(first.get("fio") or "").strip() or None
+
     async def doctors_info(self, query: str, entities: dict[str, Any], output_max: int = 5) -> dict[str, Any]:
         """
         Возвращает список врачей из кэша (без real-time API).
@@ -767,13 +1105,16 @@ class Services:
         def match_doc(doc: dict[str, Any], ) -> bool:
             fio = _normalise_input(str(doc.get("fio", "")))
             spec = _normalise_input(str(doc.get("specialization", "")))
-            regions = " ".join([_normalise_input(str(x)) for x in (doc.get("regions") or [])])
+            raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
+            regions = " ".join([_normalise_input(x) for x in raw_regions])
             units = " ".join([_normalise_input(str(x)) for x in (doc.get("units") or [])])
 
             hay = " | ".join([fio, spec, regions, units])
+            # Даже без live /regions не допускаем в выдачу явно не-самарские площадки.
+            if _has_explicit_non_samara_regions(raw_regions):
+                return False
             if samara_tokens:
-                region_list = [_normalise_input(str(x)) for x in (doc.get("regions") or [])]
-                if not any(r in samara_tokens for r in region_list):
+                if not any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
                     return False
             if fio_q:
                 if not _doctor_matches_fio(fio, fio_q, resolved_surname):
@@ -797,6 +1138,7 @@ class Services:
 
         filtered = [d for d in doctors if match_doc(d)]
         filtered = _dedupe_doctors_by_fio(filtered)
+        filtered = sorted(filtered, key=_doctor_sort_key)
 
         if resolved_surname:
             # при явной фамилии врача не раздуваем выдачу.
@@ -943,21 +1285,21 @@ class Services:
                     continue
                 item = dict(row)
                 item["specialization"] = _compact_specialization(str(item.get("specialization") or ""))
+                regions_src = [str(x) for x in (item.get("regions") or []) if str(x).strip()]
+                if _has_explicit_non_samara_regions(regions_src):
+                    continue
                 if samara_tokens:
-                    regions_src = item.get("regions") or []
-                    region_norm = [_normalise_input(str(x)) for x in regions_src if str(x).strip()]
-                    if region_norm and not any(r in samara_tokens for r in region_norm):
+                    if regions_src and not any(_region_matches_samara_tokens(x, samara_tokens) for x in regions_src):
                         continue
                     sched = item.get("schedule")
                     if isinstance(sched, dict) and sched:
                         sched_filtered: dict[str, Any] = {}
                         for k, v in sched.items():
-                            kn = _normalise_input(str(k))
-                            if kn in samara_tokens:
+                            if _region_matches_samara_tokens(str(k), samara_tokens):
                                 sched_filtered[k] = v
                         if sched_filtered:
                             item["schedule"] = sched_filtered
-                        elif region_norm:
+                        elif regions_src:
                             continue
                 compact_data.append(item)
             data = compact_data
@@ -1001,7 +1343,7 @@ class Services:
             return {"tests": [], "promos": [], "note": "no test query", "entities_used": entities}
 
         try:
-            price_all = await asyncio.to_thread(api_price.load_price_all)
+            price_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
         except Exception:
             return _service_fallback(
                 note="test_assist source unavailable",
@@ -1009,9 +1351,14 @@ class Services:
                 entities=entities,
                 extra={"tests": [], "promos": []},
             )
-        matches = [p for p in price_all if needle in _normalise_input(p.get("serviceName"))][:10]
+        matches = _rank_price_rows([p for p in price_rows if isinstance(p, dict)], test_name, limit=10)
 
-        return {"tests": matches, "promos": [], "entities_used": entities}
+        return {
+            "tests": matches,
+            "promos": [],
+            "note": f"test_assist: priceByRegion({SAMARA_PRICE_REGION_ID})",
+            "entities_used": entities,
+        }
 
     async def test_prepare(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         q = _get_first_present(entities, ["test_name", "service_name"]) or query
@@ -1100,10 +1447,34 @@ class Services:
 
     async def price_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         doctor_id = _as_int(entities.get("doctor_id"))
-        service_name = _get_first_present(entities, ["service_name", "test_name"]) or query
+        doctor_name = _get_first_present(entities, ["doctor_name", "doctor", "fio", "last_name", "doctor_last_name"]) or ""
+        resolved_doctor_fio: str | None = None
+        if not doctor_id and doctor_name:
+            doctor_id, resolved_doctor_fio = await self._resolve_doctor_id_from_name(doctor_name)
+        if not doctor_id and query and _DOCTOR_PRICE_HINT_RE.search(str(query or "")):
+            # Fallback для фраз вида "сколько стоит ... у Белохвостиковой":
+            # извлекаем врача из полного текста запроса, даже если classifier не выделил doctor_name.
+            doctor_id, q_resolved_fio = await self._resolve_doctor_id_from_name(str(query))
+            if doctor_id and q_resolved_fio:
+                resolved_doctor_fio = q_resolved_fio
+                doctor_name = q_resolved_fio
+        entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
+        query_service_name = _extract_price_service_from_query(query)
+        service_name = query_service_name or entity_service_name or query
+        # Если вопрос явно doctor-specific и сформулирован как новый price-запрос,
+        # не тянем "залипшую" услугу из прошлого контекста.
+        if (
+            doctor_id
+            and not query_service_name
+            and query
+            and _DOCTOR_PRICE_HINT_RE.search(str(query))
+            and _PRICE_REQUEST_RE.search(str(query))
+        ):
+            service_name = query
         needle = _normalise_input(service_name)
 
         if doctor_id:
+            # doctor prices: branch-level regionId из /doctorServicePricesByRegion cache
             try:
                 prices = await asyncio.to_thread(api_price.load_doctor_prices)
             except Exception:
@@ -1115,11 +1486,26 @@ class Services:
                 )
             doc_prices = [p for p in prices if _as_int(p.get("doctorId")) == doctor_id]
             if needle:
-                doc_prices = [p for p in doc_prices if needle in _normalise_input(p.get("serviceName"))]
-            return {"prices": doc_prices[:10], "entities_used": entities}
+                doc_prices = _rank_price_rows(doc_prices, service_name, limit=10)
+            if not needle:
+                doc_prices = sorted(
+                    [p for p in doc_prices if isinstance(p, dict)],
+                    key=lambda p: (_normalise_input(str(p.get("serviceName") or "")), _as_int(p.get("cost")) or 0),
+                )
+            return {
+                "prices": doc_prices[:10],
+                "note": "price_info: doctorServicePricesByRegion (branch-level regionId)",
+                "entities_used": {
+                    **entities,
+                    "doctor_id_resolved": doctor_id,
+                    "doctor_name_resolved": resolved_doctor_fio or doctor_name or "",
+                    "service_name_effective": service_name,
+                },
+            }
 
+        # retail prices: city-level regionId в /priceByRegion/{cityRegionId}
         try:
-            price_all = await asyncio.to_thread(api_price.load_price_all)
+            price_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
         except Exception:
             return _service_fallback(
                 note="price_info source unavailable",
@@ -1129,8 +1515,15 @@ class Services:
             )
         if not needle:
             return {"prices": [], "note": "no service query", "entities_used": entities}
-        matches = [p for p in price_all if needle in _normalise_input(p.get("serviceName"))][:10]
-        return {"prices": matches, "entities_used": entities}
+        matches = _rank_price_rows([p for p in price_rows if isinstance(p, dict)], service_name, limit=10)
+        return {
+            "prices": matches,
+            "note": f"price_info: priceByRegion({SAMARA_PRICE_REGION_ID})",
+            "entities_used": {
+                **entities,
+                "service_name_effective": service_name,
+            },
+        }
 
     async def address_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -1181,35 +1574,8 @@ class Services:
                         continue
                     allowed_doctor_addresses_norm.add(_normalise_input(a))
 
-        # Для анализов/ЭКГ: используем эталонный справочник филиалов (сайтовый источник истины).
-        if city_for_static and service_q:
-            static_rows = _static_nonbookable_branches(city_for_static, service_q)
-            if static_rows:
-                return {
-                    "addresses": [str(x.get("address") or "").strip() for x in static_rows if str(x.get("address") or "").strip()],
-                    "branches": static_rows,
-                    "note": "address_info: static nonbookable points catalog",
-                    "entities_used": entities,
-                }
-
-        allowed_region_ids: set[int] | None = None
         if service_q:
-            try:
-                price_all = await asyncio.to_thread(api_price.load_price_all)
-                matched_region_ids: set[int] = set()
-                for row in price_all:
-                    if not isinstance(row, dict):
-                        continue
-                    svc = _normalise_input(str(row.get("serviceName") or ""))
-                    if not _service_query_matches(service_q, svc):
-                        continue
-                    rid = _as_int(row.get("regionId") or row.get("region_id"))
-                    if rid is not None:
-                        matched_region_ids.add(rid)
-                if matched_region_ids:
-                    allowed_region_ids = matched_region_ids
-            except Exception:
-                allowed_region_ids = None
+            regions = _filter_regions_by_service_flags(regions, service_q)
 
         addresses: list[str] = []
         branches: list[dict[str, Any]] = []
@@ -1217,8 +1583,6 @@ class Services:
             if not isinstance(r, dict):
                 continue
             rid = _as_int(r.get("id"))
-            if allowed_region_ids is not None and (rid is None or rid not in allowed_region_ids):
-                continue
             disp = _region_display_name(r)
             if not disp:
                 continue
@@ -1275,8 +1639,8 @@ class Services:
                     by_addr = {k: v for k, v in by_addr.items() if _is_doctor_capable(k)}
 
             note = "address_info: live regions API"
-            if service_q and allowed_region_ids is not None:
-                note += " + filtered by service"
+            if service_q:
+                note += " + filtered by service flags"
             if appointment_mode:
                 note += " + filtered by doctor-capable branches"
             return {

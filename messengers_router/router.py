@@ -82,26 +82,18 @@ from .renderer import (
     render_complaint,
     render_medical_advice,
     render_stream,
+    format_price_for_patient,
     format_doctor_schedule_for_patient,
     format_doctor_info_for_patient,
     format_address_for_patient,
     format_news_for_patient,
 )
 from .memory import MemoryStore
+from .text_templates import INTRO_TEXT, LOW_CONF_CLARIFY_TEXT
 from .city import match_city
 
-_INTRO_TEXT = (
-    "Здравствуйте! Это ИИ-помощник клиники «Наука».\n"
-    "Через меня вы можете записаться к врачу, перенести или отменить запись, "
-    "узнать результаты анализов и получить информацию об услугах."
-)
-_LOW_CONF_CLARIFY_TEXT = (
-    "Уточните, пожалуйста, запрос чуть подробнее, чтобы я не ошибся: "
-    "что именно нужно — запись, расписание врача, стоимость, адрес или результаты анализов?"
-)
 _DEFAULT_CITY = "Самара"
 _SAMARA_ONLY_OPERATOR_TEXT = "Сейчас могу помочь только по Самаре. Соединяю с оператором."
-_PRICE_TO_OPERATOR_TEXT = "По вопросам стоимости соединяю с оператором."
 _GRAPH_ENGINE = GraphEngine()
 _DOCTOR_NOISE_TOKENS = {
     "хочу",
@@ -122,9 +114,54 @@ _DOCTOR_NOISE_TOKENS = {
 _PATIENT_NAME_FRAGMENT_RE = re.compile(r"^\s*[А-ЯЁа-яё\-]{2,}\s+[А-ЯЁа-яё\-]{1,}\s*$")
 
 
+def _reset_appointment_state_flags(state: SessionState) -> None:
+    for k in ("appointment_flow_active", "appointment_confirm_pending", "appointment_confirmed"):
+        state.last_entities.pop(k, None)
+
+
 def _env_flag(name: str, default: bool) -> bool:
     raw = str(os.getenv(name, "1" if default else "0")).strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def _copy_decision(decision: RouteDecision, **overrides: Any) -> RouteDecision:
+    data = {
+        "label": decision.label,
+        "confidence": decision.confidence,
+        "entities": dict(decision.entities),
+        "flags": set(decision.flags),
+        "needs_handoff": decision.needs_handoff,
+        "context_action": decision.context_action,
+        "source": decision.source,
+        "clarify_needed": decision.clarify_needed,
+        "clarify_reason": decision.clarify_reason,
+        "clarify_slots": list(decision.clarify_slots),
+        "intent_candidates": list(decision.intent_candidates),
+    }
+    data.update(overrides)
+    return RouteDecision(**data)
+
+
+def _remember_question(state: SessionState, kind: str, slots: list[str] | None = None) -> None:
+    state.last_entities["last_question_kind"] = str(kind or "").strip()
+    clean_slots = [str(x).strip() for x in (slots or []) if str(x).strip()]
+    if clean_slots:
+        state.last_entities["last_clarify_slots"] = clean_slots[:8]
+    else:
+        state.last_entities.pop("last_clarify_slots", None)
+
+
+def _extract_nlu_trace(evidence: Evidence) -> dict[str, Any]:
+    for item in reversed(evidence.debug_trace or []):
+        if not isinstance(item, dict):
+            continue
+        nlu = item.get("nlu")
+        if not isinstance(nlu, dict):
+            continue
+        trace = nlu.get("nlu_trace") or nlu.get("trace")
+        if isinstance(trace, dict):
+            return trace
+    return {}
 
 
 def _is_samara_city(city: str | None) -> bool:
@@ -229,6 +266,11 @@ async def _verify_doctor_entity(
         flags=flags,
         needs_handoff=decision.needs_handoff,
         context_action=context_action,
+        source=decision.source,
+        clarify_needed=decision.clarify_needed,
+        clarify_reason=decision.clarify_reason,
+        clarify_slots=list(decision.clarify_slots),
+        intent_candidates=list(decision.intent_candidates),
     )
 
 
@@ -352,6 +394,8 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
 
     if label == "DOCTOR_INFO":
         steps.append(PlanStep(tool="doctors_info", input={"query": user_text, "entities": dict(entities)}))
+        if entities.get("doctor_id") or entities.get("doctor_name"):
+            steps.append(PlanStep(tool="price_info", input={"query": user_text, "entities": dict(entities)}, required=False))
         return Plan(label=label, steps=steps)
 
     if label == "APPOINTMENT":
@@ -477,12 +521,18 @@ async def route_patient_message(
             # Пользователь продолжил диалог в другом направлении.
             state.last_entities["_secondary_offer_pending"] = False
 
+    # Диагностические NLU-поля не должны засорять долгоживущий session state.
+    # Актуальный trace отдаем только через debug-канал.
+    for key in ("_nlu_candidates", "_nlu_merged_from", "_nlu_shadow"):
+        state.last_entities.pop(key, None)
+
+    nlu_debug: dict[str, Any] = {}
     use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
-    shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False)
+    shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False) or _env_flag("MR_NLU_SHADOW", False)
     if use_v2_nlu:
         nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
         decision = nlu_result.decision
-        state.last_entities["_nlu_candidates"] = [
+        nlu_debug["candidates"] = [
             {
                 "source": c.source,
                 "label": c.label,
@@ -491,10 +541,13 @@ async def route_patient_message(
             }
             for c in nlu_result.candidates
         ]
-        state.last_entities["_nlu_merged_from"] = nlu_result.merged_from
+        nlu_debug["merged_from"] = nlu_result.merged_from
+        if nlu_result.trace:
+            nlu_debug["nlu_trace"] = nlu_result.trace
+            nlu_debug["trace"] = nlu_result.trace
         if shadow_nlu:
             legacy = await analyze(user_text, state.last_entities)
-            state.last_entities["_nlu_shadow"] = {
+            nlu_debug["shadow"] = {
                 "legacy_label": legacy.label,
                 "legacy_conf": legacy.confidence,
                 "v2_label": decision.label,
@@ -506,13 +559,12 @@ async def route_patient_message(
     decision = _apply_context_action(decision, state, user_text)
     promoted_label, promoted_flags = apply_verified_doctor_override(decision.label, set(decision.flags), user_text)
     if promoted_label != decision.label or promoted_flags != decision.flags:
-        decision = RouteDecision(
+        decision = _copy_decision(
+            decision,
             label=promoted_label,  # type: ignore[arg-type]
             confidence=max(decision.confidence, 0.65),
-            entities=dict(decision.entities),
             flags=promoted_flags,
             needs_handoff=False,
-            context_action=decision.context_action,
         )
 
     # При запросах по специальности (без явного врача) чистим залипшего врача из state.
@@ -533,13 +585,15 @@ async def route_patient_message(
                 svc = nonbookable_service_hint(user_text)
                 if svc:
                     entities["service_name"] = svc
-            decision = RouteDecision(
+            decision = _copy_decision(
+                decision,
                 label="ADDRESS",
                 confidence=max(decision.confidence, 0.78),
                 entities=entities,
                 flags=set(decision.flags) | {"policy_nonbookable_walkin"},
                 needs_handoff=False,
                 context_action="continue",
+                source="guardrail_post",
             )
 
     # Сохраняем сценарий записи на операторских уточнениях (ветка "да/нет", короткие ответы и т.п.).
@@ -549,10 +603,10 @@ async def route_patient_message(
         and state.last_entities.get("appointment_flow_active")
         and _should_keep_appointment_flow_override(user_text)
     ):
-        decision = RouteDecision(
+        decision = _copy_decision(
+            decision,
             label="APPOINTMENT",
             confidence=max(decision.confidence, 0.51),
-            entities=decision.entities,
             flags=set(decision.flags) | {"flow_appointment_override"},
             needs_handoff=False,
             context_action="continue",
@@ -565,10 +619,10 @@ async def route_patient_message(
         and state.last_entities.get("appointment_flow_active")
         and _should_keep_appointment_flow_override(user_text)
     ):
-        decision = RouteDecision(
+        decision = _copy_decision(
+            decision,
             label="APPOINTMENT",
             confidence=max(decision.confidence, 0.60),
-            entities=decision.entities,
             flags=set(decision.flags) | {"flow_appointment_guard_override"},
             needs_handoff=False,
             context_action="continue",
@@ -610,8 +664,7 @@ async def route_patient_message(
             )
         )
         if not keep_appointment_flow:
-            for k in ("appointment_flow_active", "appointment_confirm_pending", "appointment_confirmed"):
-                state.last_entities.pop(k, None)
+            _reset_appointment_state_flags(state)
 
     # Entity grounding: принимаем только подтвержденные/разрешенные сущности.
     pending_before_merge = memory.get_pending(state)
@@ -623,13 +676,10 @@ async def route_patient_message(
         pending=pending_before_merge,
     )
     if grounding.entities != decision.entities or grounding.flags:
-        decision = RouteDecision(
-            label=decision.label,
-            confidence=decision.confidence,
+        decision = _copy_decision(
+            decision,
             entities=grounding.entities,
             flags=set(decision.flags) | set(grounding.flags),
-            needs_handoff=decision.needs_handoff,
-            context_action=decision.context_action,
         )
 
     # merge entities from LLM+rules
@@ -696,6 +746,8 @@ async def route_patient_message(
 
     plan = build_plan(decision, state, user_text, memory=memory)
     evidence = await execute_plan(plan, state, services)
+    if nlu_debug:
+        evidence.debug_trace.append({"nlu": nlu_debug})
     # Graph state transition (FSM слой)
     pending_after_plan = memory.get_pending(state)
     graph_out = _GRAPH_ENGINE.next(
@@ -722,14 +774,20 @@ async def route_patient_message(
 
 
 def _debug_meta(decision: RouteDecision, plan: Plan, evidence: Evidence, state: SessionState, pending: Any) -> dict[str, Any]:
+    nlu_trace = _extract_nlu_trace(evidence)
     return {
         "decision": {
             "label": decision.label,
             "confidence": decision.confidence,
             "context_action": decision.context_action,
+            "source": decision.source,
             "flags": sorted(list(decision.flags)),
             "entities": decision.entities,
             "needs_handoff": decision.needs_handoff,
+            "clarify_needed": decision.clarify_needed,
+            "clarify_reason": decision.clarify_reason,
+            "clarify_slots": list(decision.clarify_slots),
+            "intent_candidates": list(decision.intent_candidates),
         },
         "plan": {
             "label": plan.label,
@@ -746,7 +804,238 @@ def _debug_meta(decision: RouteDecision, plan: Plan, evidence: Evidence, state: 
         "history_tail": (state.history or [])[-10:],
         "last_entities": state.last_entities,
         "summary": state.summary,
+        "nlu_trace": nlu_trace,
     }
+
+
+def _build_price_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
+    if flow_label != "PRICE":
+        return None
+    price_payload = evidence.get("price")
+    if not isinstance(price_payload, dict):
+        return None
+    render_entities = dict(state.last_entities or {})
+    used = price_payload.get("entities_used")
+    if isinstance(used, dict):
+        doctor_id_resolved = used.get("doctor_id_resolved")
+        doctor_name_resolved = used.get("doctor_name_resolved")
+        if doctor_id_resolved:
+            render_entities["doctor_id"] = doctor_id_resolved
+        if isinstance(doctor_name_resolved, str) and doctor_name_resolved.strip():
+            render_entities["doctor_name"] = doctor_name_resolved.strip()
+    text = format_price_for_patient(price_payload, render_entities)
+    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+
+def _build_doctor_info_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
+    if flow_label != "DOCTOR_INFO":
+        return None
+    doctors_info_payload = evidence.get("doctors_info")
+    if not isinstance(doctors_info_payload, dict):
+        return None
+    text = format_doctor_info_for_patient(doctors_info_payload, state.last_entities)
+    price_payload = evidence.get("price")
+    if isinstance(price_payload, dict):
+        raw_prices = price_payload.get("prices")
+        if isinstance(raw_prices, list) and raw_prices:
+            text = (
+                f"{text}\n\n"
+                "Примеры стоимости услуг этого врача:\n"
+                f"{format_price_for_patient(price_payload, state.last_entities)}"
+            ).strip()
+    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+
+def _build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseEnvelope | None:
+    if flow_label != "TEST_RESULT":
+        return None
+    result_status = evidence.get("test_result_status")
+    if not isinstance(result_status, dict):
+        return None
+
+    if result_status.get("ready") is True:
+        note = str(result_status.get("note") or "")
+        preview = str(result_status.get("result_preview") or "").strip()
+        links_raw = result_status.get("result_links")
+        links = [str(x).strip() for x in links_raw] if isinstance(links_raw, list) else []
+        links = [x for x in links if x]
+        if note == "result_link_constructed":
+            text = "Сформировал ссылку для просмотра результата по указанным данным."
+        else:
+            text = "Результаты по вашим данным найдены."
+        if links:
+            if len(links) == 1:
+                text = f"{text}\n\nСсылка на результат: {links[0]}"
+            else:
+                lines = "\n".join(f"- {u}" for u in links[:5])
+                text = f"{text}\n\nСсылки на результаты:\n{lines}"
+        if preview and not links:
+            text = f"{text}\n\n{preview}"
+        return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+    missing = result_status.get("missing_fields")
+    if isinstance(missing, list) and missing:
+        return ResponseEnvelope(
+            text=clarification_question("TEST_RESULT", [str(m) for m in missing]),
+            attachments=[],
+            handoff=False,
+        )
+
+    preview = str(result_status.get("result_preview") or "").strip()
+    text = preview or "По указанным данным результаты пока не найдены или ещё не готовы."
+    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+
+def _build_doctor_schedule_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
+    if flow_label != "DOCTOR_SCHEDULE":
+        return None
+    schedule_payload = evidence.get("doctor_schedule")
+    if not isinstance(schedule_payload, dict):
+        return None
+    _hydrate_appointment_context_from_schedule(state, schedule_payload)
+    # После показа расписания оставляем "живой" контекст записи:
+    # короткие реплики вида "на 16:30" должны интерпретироваться
+    # как продолжение сценария APPOINTMENT, а не как новый OTHER.
+    state.last_entities["appointment_flow_active"] = True
+    text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
+    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+
+def _build_address_response(
+    flow_label: str,
+    evidence: Evidence,
+    state: SessionState,
+    memory: MemoryStore,
+    decision: RouteDecision,
+    user_text: str,
+) -> ResponseEnvelope | None:
+    if flow_label != "ADDRESS":
+        return None
+    address_payload = evidence.get("address")
+    if not isinstance(address_payload, dict):
+        return None
+
+    branches_raw = address_payload.get("branches")
+    addresses_raw = address_payload.get("addresses")
+    has_branches = isinstance(branches_raw, list) and any(
+        str((x or {}).get("address") if isinstance(x, dict) else x).strip() for x in branches_raw
+    )
+    has_addresses = isinstance(addresses_raw, list) and any(str(x).strip() for x in addresses_raw)
+    if not has_branches and not has_addresses:
+        # Если город/адрес не найден, оставляем ADDRESS pending на повторный ввод города.
+        # Это предотвращает выпадение в OTHER после опечатки ("Самраа" -> "Самара").
+        state.last_entities.pop("city", None)
+        memory.set_pending(state, label="ADDRESS", missing_slots=["_any_of:city,branch_name,branch_id"])
+
+    walkin_hint: str | None = None
+    if any("nonbookable" in str(f) for f in decision.flags):
+        walkin_hint = nonbookable_service_hint(user_text) or str(state.last_entities.get("service_name") or "").strip()
+        if walkin_hint == "":
+            walkin_hint = None
+    text = format_address_for_patient(
+        address_payload,
+        state.last_entities,
+        nonbookable_service=walkin_hint,
+    )
+    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+
+def _build_news_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
+    if flow_label != "NEWS":
+        return None
+    news_payload = evidence.get("news")
+    if not isinstance(news_payload, dict):
+        return None
+    text = format_news_for_patient(news_payload, state.last_entities)
+    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+
+def _build_appointment_schedule_preview_response(
+    flow_label: str,
+    evidence: Evidence,
+    state: SessionState,
+) -> ResponseEnvelope | None:
+    if flow_label != "APPOINTMENT":
+        return None
+    schedule_payload = evidence.get("doctor_schedule")
+    if not isinstance(schedule_payload, dict):
+        return None
+    if not (state.last_entities.get("doctor_name") or state.last_entities.get("doctor_id")):
+        return None
+    if state.last_entities.get("date_from") or state.last_entities.get("date_hint"):
+        return None
+    if state.last_entities.get("time_from"):
+        return None
+
+    _hydrate_appointment_context_from_schedule(state, schedule_payload)
+    state.last_entities["appointment_flow_active"] = True
+    text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
+    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+
+def _build_appointment_step_response(
+    flow_label: str,
+    evidence: Evidence,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+) -> ResponseEnvelope | None:
+    if flow_label != "APPOINTMENT":
+        return None
+
+    entities = state.last_entities
+    state.last_entities["appointment_flow_active"] = True
+
+    appointment_step = appointment_step_policy(entities)
+    service = appointment_service_display(entities)
+    city = str(entities.get("city") or "").strip()
+
+    if appointment_step == APPOINTMENT_STEP_BRANCH:
+        if not city:
+            city = _DEFAULT_CITY
+            state.last_entities["city"] = city
+        stored_options = state.last_entities.get("appointment_branch_options")
+        addresses = []
+        if isinstance(stored_options, list):
+            addresses = [str(x).strip() for x in stored_options if str(x).strip()]
+        if not addresses:
+            branches = _safe_get_branches(services)
+            addresses = appointment_addresses_for_city(
+                evidence.get("address"),
+                branches,
+                city=city or None,
+                limit=5,
+            )
+        state.last_entities["appointment_branch_options"] = addresses
+        return ResponseEnvelope(
+            text=appointment_text_branch_prompt(service, city, addresses),
+            handoff=False,
+        )
+
+    if appointment_step == APPOINTMENT_STEP_DATETIME:
+        state.last_entities.pop("appointment_branch_options", None)
+        price_rub = extract_price_rub(evidence.get("price"))
+        branch = str(entities.get("branch_name") or entities.get("city") or "выбранном филиале").strip()
+        return ResponseEnvelope(
+            text=appointment_text_datetime_prompt(service, branch, price_rub),
+            handoff=False,
+        )
+
+    if appointment_step == APPOINTMENT_STEP_PATIENT:
+        # Фиксируем pending patient_name, чтобы короткие/частичные ФИО
+        # не выбивали диалог в другой интент (например, TEST_RESULT).
+        memory.set_pending(state, label="APPOINTMENT", missing_slots=["patient_name"])
+        return ResponseEnvelope(
+            text=appointment_text_patient_name_prompt(),
+            handoff=False,
+        )
+
+    if appointment_step == APPOINTMENT_STEP_CONFIRM:
+        state.last_entities["appointment_confirm_pending"] = True
+        summary = appointment_summary(entities)
+        return ResponseEnvelope(text=appointment_text_confirm_prompt(summary), handoff=False)
+
+    return None
 
 
 async def patient_routing_stream(
@@ -757,6 +1046,11 @@ async def patient_routing_stream(
     debug: bool = False,
     runtime_options: RuntimeOptions | None = None,
 ) -> AsyncGenerator[ResponseEnvelope, None]:
+    try:
+        services.ensure_background_refresh_started()
+    except Exception:
+        pass
+
     # Явный запрос оператора должен иметь абсолютный приоритет.
     if explicit_operator_requested(user_text):
         memory.clear_pending(state)
@@ -773,8 +1067,7 @@ async def patient_routing_stream(
     if city_now and not _is_samara_city(city_now):
         memory.clear_pending(state)
         state.last_entities.pop("city", None)
-        for k in ("appointment_flow_active", "appointment_confirm_pending", "appointment_confirmed"):
-            state.last_entities.pop(k, None)
+        _reset_appointment_state_flags(state)
         update_summary(state, reason="handoff")
         yield ResponseEnvelope(
             text=_SAMARA_ONLY_OPERATOR_TEXT,
@@ -847,7 +1140,7 @@ async def patient_routing_stream(
 
     user_turn_count = sum(1 for h in (state.history or []) if isinstance(h, dict) and h.get("role") == "user")
     if "smalltalk_greeting" in decision.flags and user_turn_count <= 1:
-        yield ResponseEnvelope(text=_INTRO_TEXT, attachments=[], handoff=False)
+        yield ResponseEnvelope(text=INTRO_TEXT, attachments=[], handoff=False)
         return
 
     if decision.label == "URGENT":
@@ -858,16 +1151,6 @@ async def patient_routing_stream(
         return
     if decision.label == "MEDICAL_ADVICE":
         yield render_medical_advice()
-        return
-
-    # По текущей политике стоимость не выдаем автоматически:
-    # любые ценовые запросы передаем оператору.
-    if decision.label == "PRICE":
-        memory.clear_pending(state)
-        for k in ("appointment_flow_active", "appointment_confirm_pending", "appointment_confirmed"):
-            state.last_entities.pop(k, None)
-        update_summary(state, reason="handoff")
-        yield ResponseEnvelope(text=_PRICE_TO_OPERATOR_TEXT, handoff=True)
         return
 
     if "doc_request_handoff" in decision.flags:
@@ -898,7 +1181,12 @@ async def patient_routing_stream(
         yield ResponseEnvelope(text=recovery.text or handoff_message("low_confidence"), handoff=True)
         return
     if recovery.kind == "clarify":
-        yield ResponseEnvelope(text=recovery.text or _LOW_CONF_CLARIFY_TEXT, handoff=False)
+        _remember_question(
+            state,
+            recovery.reason or "clarify",
+            list(decision.clarify_slots) if decision.clarify_slots else [],
+        )
+        yield ResponseEnvelope(text=recovery.text or LOW_CONF_CLARIFY_TEXT, handoff=False)
         return
 
     if flow_label == "DOCTOR_SCHEDULE":
@@ -927,6 +1215,7 @@ async def patient_routing_stream(
         missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
         if flow_label == "APPOINTMENT":
             state.last_entities["appointment_flow_active"] = True
+        _remember_question(state, f"pending:{flow_label}", missing if isinstance(missing, list) else [])
         yield ResponseEnvelope(
             text=clarification_question(flow_label, missing if isinstance(missing, list) else []),
             handoff=False,
@@ -942,162 +1231,47 @@ async def patient_routing_stream(
         yield ResponseEnvelope(text=handoff_message(handoff_reason, handoff_msg), handoff=True)
         return
 
-    if flow_label == "TEST_RESULT":
-        result_status = evidence.get("test_result_status")
-        if isinstance(result_status, dict):
-            if result_status.get("ready") is True:
-                note = str(result_status.get("note") or "")
-                preview = str(result_status.get("result_preview") or "").strip()
-                links_raw = result_status.get("result_links")
-                links = [str(x).strip() for x in links_raw] if isinstance(links_raw, list) else []
-                links = [x for x in links if x]
-                if note == "result_link_constructed":
-                    text = "Сформировал ссылку для просмотра результата по указанным данным."
-                else:
-                    text = "Результаты по вашим данным найдены."
-                if links:
-                    if len(links) == 1:
-                        text = f"{text}\n\nСсылка на результат: {links[0]}"
-                    else:
-                        lines = "\n".join(f"- {u}" for u in links[:5])
-                        text = f"{text}\n\nСсылки на результаты:\n{lines}"
-                if preview and not links:
-                    text = f"{text}\n\n{preview}"
-                yield ResponseEnvelope(text=text, attachments=[], handoff=False)
-                return
-
-            missing = result_status.get("missing_fields")
-            if isinstance(missing, list) and missing:
-                yield ResponseEnvelope(
-                    text=clarification_question("TEST_RESULT", [str(m) for m in missing]),
-                    attachments=[],
-                    handoff=False,
-                )
-                return
-
-            preview = str(result_status.get("result_preview") or "").strip()
-            text = preview or "По указанным данным результаты пока не найдены или ещё не готовы."
-            yield ResponseEnvelope(text=text, attachments=[], handoff=False)
-            return
-
-    schedule_payload = evidence.get("doctor_schedule")
-    if flow_label == "DOCTOR_SCHEDULE" and isinstance(schedule_payload, dict):
-        _hydrate_appointment_context_from_schedule(state, schedule_payload)
-        # После показа расписания оставляем "живой" контекст записи:
-        # короткие реплики вида "на 16:30" должны интерпретироваться
-        # как продолжение сценария APPOINTMENT, а не как новый OTHER.
-        state.last_entities["appointment_flow_active"] = True
-        text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
-        yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+    price_resp = _build_price_response(flow_label, evidence, state)
+    if price_resp is not None:
+        yield price_resp
         return
 
-    doctors_info_payload = evidence.get("doctors_info")
-    if flow_label == "DOCTOR_INFO" and isinstance(doctors_info_payload, dict):
-        text = format_doctor_info_for_patient(doctors_info_payload, state.last_entities)
-        yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+    test_result_resp = _build_test_result_response(flow_label, evidence)
+    if test_result_resp is not None:
+        yield test_result_resp
         return
 
-    address_payload = evidence.get("address")
-    if flow_label == "ADDRESS" and isinstance(address_payload, dict):
-        branches_raw = address_payload.get("branches")
-        addresses_raw = address_payload.get("addresses")
-        has_branches = isinstance(branches_raw, list) and any(str((x or {}).get("address") if isinstance(x, dict) else x).strip() for x in branches_raw)
-        has_addresses = isinstance(addresses_raw, list) and any(str(x).strip() for x in addresses_raw)
-        if not has_branches and not has_addresses:
-            # Если город/адрес не найден, оставляем ADDRESS pending на повторный ввод города.
-            # Это предотвращает выпадение в OTHER после опечатки ("Самраа" -> "Самара").
-            state.last_entities.pop("city", None)
-            memory.set_pending(state, label="ADDRESS", missing_slots=["_any_of:city,branch_name,branch_id"])
-        walkin_hint: str | None = None
-        if any("nonbookable" in str(f) for f in decision.flags):
-            walkin_hint = nonbookable_service_hint(user_text) or str(state.last_entities.get("service_name") or "").strip()
-            if walkin_hint == "":
-                walkin_hint = None
-        text = format_address_for_patient(
-            address_payload,
-            state.last_entities,
-            nonbookable_service=walkin_hint,
-        )
-        yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+    doctor_schedule_resp = _build_doctor_schedule_response(flow_label, evidence, state)
+    if doctor_schedule_resp is not None:
+        yield doctor_schedule_resp
         return
 
-    news_payload = evidence.get("news")
-    if flow_label == "NEWS" and isinstance(news_payload, dict):
-        text = format_news_for_patient(news_payload, state.last_entities)
-        yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+    doctor_info_resp = _build_doctor_info_response(flow_label, evidence, state)
+    if doctor_info_resp is not None:
+        yield doctor_info_resp
+        return
+
+    address_resp = _build_address_response(flow_label, evidence, state, memory, decision, user_text)
+    if address_resp is not None:
+        yield address_resp
+        return
+
+    news_resp = _build_news_response(flow_label, evidence, state)
+    if news_resp is not None:
+        yield news_resp
         return
 
     # Если пользователь сразу хочет записаться к конкретному врачу, сначала
     # показываем его актуальные окна, а не отправляем в общий сценарий "город -> филиал".
-    if (
-        flow_label == "APPOINTMENT"
-        and isinstance(schedule_payload, dict)
-        and (state.last_entities.get("doctor_name") or state.last_entities.get("doctor_id"))
-        and not (state.last_entities.get("date_from") or state.last_entities.get("date_hint"))
-        and not state.last_entities.get("time_from")
-    ):
-        _hydrate_appointment_context_from_schedule(state, schedule_payload)
-        state.last_entities["appointment_flow_active"] = True
-        text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
-        yield ResponseEnvelope(text=text, attachments=[], handoff=False)
+    appointment_preview_resp = _build_appointment_schedule_preview_response(flow_label, evidence, state)
+    if appointment_preview_resp is not None:
+        yield appointment_preview_resp
         return
 
-    if flow_label == "APPOINTMENT":
-        entities = state.last_entities
-        state.last_entities["appointment_flow_active"] = True
-
-        appointment_step = appointment_step_policy(entities)
-        service = appointment_service_display(entities)
-        city = str(entities.get("city") or "").strip()
-
-        if appointment_step == APPOINTMENT_STEP_BRANCH:
-            if not city:
-                city = _DEFAULT_CITY
-                state.last_entities["city"] = city
-            stored_options = state.last_entities.get("appointment_branch_options")
-            addresses = []
-            if isinstance(stored_options, list):
-                addresses = [str(x).strip() for x in stored_options if str(x).strip()]
-            if not addresses:
-                branches = _safe_get_branches(services)
-                addresses = appointment_addresses_for_city(
-                    evidence.get("address"),
-                    branches,
-                    city=city or None,
-                    limit=5,
-                )
-            state.last_entities["appointment_branch_options"] = addresses
-            yield ResponseEnvelope(
-                text=appointment_text_branch_prompt(service, city, addresses),
-                handoff=False,
-            )
-            return
-
-        if appointment_step == APPOINTMENT_STEP_DATETIME:
-            state.last_entities.pop("appointment_branch_options", None)
-            price_rub = extract_price_rub(evidence.get("price"))
-            branch = str(entities.get("branch_name") or entities.get("city") or "выбранном филиале").strip()
-            yield ResponseEnvelope(
-                text=appointment_text_datetime_prompt(service, branch, price_rub),
-                handoff=False,
-            )
-            return
-
-        if appointment_step == APPOINTMENT_STEP_PATIENT:
-            # Фиксируем pending patient_name, чтобы короткие/частичные ФИО
-            # не выбивали диалог в другой интент (например, TEST_RESULT).
-            memory.set_pending(state, label="APPOINTMENT", missing_slots=["patient_name"])
-            yield ResponseEnvelope(
-                text=appointment_text_patient_name_prompt(),
-                handoff=False,
-            )
-            return
-
-        if appointment_step == APPOINTMENT_STEP_CONFIRM:
-            state.last_entities["appointment_confirm_pending"] = True
-            summary = appointment_summary(entities)
-            yield ResponseEnvelope(text=appointment_text_confirm_prompt(summary), handoff=False)
-            return
+    appointment_step_resp = _build_appointment_step_response(flow_label, evidence, state, services, memory)
+    if appointment_step_resp is not None:
+        yield appointment_step_resp
+        return
 
     try:
         async for chunk in render_stream(user_text, decision, evidence, runtime_options=runtime_options):

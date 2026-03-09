@@ -58,7 +58,17 @@ class PromptSchemaVersion:
 CLASSIFIER_SCHEMA_V2 = PromptSchemaVersion(
     name="classifier_patient",
     version="v2",
-    required_top_keys=("label", "confidence", "context_action", "entities", "flags"),
+    required_top_keys=(
+        "label",
+        "confidence",
+        "context_action",
+        "entities",
+        "flags",
+        "clarify_needed",
+        "clarify_reason",
+        "clarify_slots",
+        "intent_candidates",
+    ),
 )
 
 
@@ -96,6 +106,25 @@ def sanitize_classifier_json(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(flags, list):
         flags = []
     out["flags"] = [str(x) for x in flags[:16] if str(x).strip()]
+
+    out["clarify_needed"] = bool(payload.get("clarify_needed"))
+
+    reason = payload.get("clarify_reason")
+    out["clarify_reason"] = str(reason).strip()[:120] if isinstance(reason, str) else ""
+
+    raw_slots = payload.get("clarify_slots")
+    if not isinstance(raw_slots, list):
+        raw_slots = []
+    out["clarify_slots"] = [str(x).strip() for x in raw_slots[:8] if str(x).strip()]
+
+    raw_candidates = payload.get("intent_candidates")
+    if not isinstance(raw_candidates, list):
+        raw_candidates = []
+    out["intent_candidates"] = [
+        str(x).strip()
+        for x in raw_candidates[:4]
+        if isinstance(x, str) and str(x).strip() in PATIENT_LABEL_PRIORITY
+    ]
 
     return out
 

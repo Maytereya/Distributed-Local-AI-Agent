@@ -1,14 +1,11 @@
-"""NLU-пайплайн v2 для роутера пациента (двухпроходная схема).
+"""NLU-пайплайн patient-router с rollout между legacy и LLM-primary.
 
 Ответственность модуля:
-1) Выполнить deterministic pass (правила/безопасность/явные паттерны).
-2) Выполнить LLM pass через существующий классификатор.
-3) Слить результаты в одно решение по фиксированной политике приоритетов.
+1) Выбрать NLU engine по runtime mode и rollout flags.
+2) Для legacy-path выполнить deterministic+LLM merge.
+3) Для нового path выполнить guardrail -> LLM-primary -> postprocess.
 
-Принцип merge:
-- safety-интенты имеют абсолютный приоритет;
-- при слабой уверенности LLM и явном rule-сигнале применяется rule-promote;
-- иначе используется решение LLM.
+Legacy merge-policy сохранен как fallback/escape hatch.
 
 Модуль не управляет диалоговым состоянием и не рендерит ответы:
 он возвращает только NLU-решение и кандидаты для debug/аналитики.
@@ -16,6 +13,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,24 +21,6 @@ from . import classifier
 from .context_summary import seeded_context_for_nlu
 from .llm_mode_policy import RuntimeOptions
 from .mess_types import RouteDecision, SessionState
-from .policies import (
-    detect_address_intent,
-    detect_appointment_action,
-    detect_appointment_intent,
-    detect_complaint,
-    detect_doc_request_intent,
-    detect_doctor_info_intent,
-    detect_medical_advice,
-    detect_news_intent,
-    detect_price_intent,
-    detect_schedule_intent,
-    detect_test_assist_intent,
-    detect_test_result_intent,
-    detect_test_interpretation,
-    detect_urgent,
-    extract_specialty,
-    has_nearest_schedule_hint,
-)
 
 _SAFETY_LABELS = {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
 
@@ -59,94 +39,25 @@ class NLUResult:
     decision: RouteDecision
     candidates: list[NLUCandidate]
     merged_from: str
+    trace: dict[str, Any] = field(default_factory=dict)
 
 
-def _rule_decision(text: str) -> RouteDecision:
-    specialty = extract_specialty(text or "")
-    if detect_urgent(text):
-        return RouteDecision(label="URGENT", confidence=1.0, flags={"rule_urgent"}, needs_handoff=True, context_action="new_topic")
-    if detect_complaint(text):
-        return RouteDecision(label="COMPLAINT", confidence=1.0, flags={"rule_complaint"}, needs_handoff=True, context_action="new_topic")
-    if detect_medical_advice(text) or detect_test_interpretation(text):
-        return RouteDecision(
-            label="MEDICAL_ADVICE",
-            confidence=1.0,
-            flags={"rule_medical_advice"},
-            needs_handoff=True,
-            context_action="new_topic",
-        )
-    if detect_doc_request_intent(text):
-        return RouteDecision(
-            label="OTHER",
-            confidence=0.99,
-            flags={"doc_request_handoff"},
-            needs_handoff=True,
-            context_action="new_topic",
-        )
-    if detect_test_result_intent(text):
-        return RouteDecision(label="TEST_RESULT", confidence=0.85, flags={"rule_test_result"}, needs_handoff=False, context_action="continue")
-    appt = detect_appointment_intent(text)
-    appt_action = detect_appointment_action(text)
-    price = detect_price_intent(text)
-    addr = detect_address_intent(text)
-    if price and not appt_action:
-        return RouteDecision(label="PRICE", confidence=0.72, flags={"rule_price"}, needs_handoff=False, context_action="continue")
-    if detect_schedule_intent(text):
-        entities = {"specialty": specialty} if specialty else {}
-        flags = {"rule_schedule"}
-        if specialty:
-            flags.add("rule_schedule_with_specialty")
-        if specialty and has_nearest_schedule_hint(text):
-            flags.add("rule_schedule_nearest")
-        return RouteDecision(
-            label="DOCTOR_SCHEDULE",
-            confidence=0.74,
-            entities=entities,
-            flags=flags,
-            needs_handoff=False,
-            context_action="continue",
-        )
-    if detect_doctor_info_intent(text):
-        entities = {"specialty": specialty} if specialty else {}
-        flags = {"rule_doctor_info"}
-        if specialty:
-            flags.add("rule_doctor_info_with_specialty")
-        return RouteDecision(
-            label="DOCTOR_INFO",
-            confidence=0.72,
-            entities=entities,
-            flags=flags,
-            needs_handoff=False,
-            context_action="continue",
-        )
-    if specialty and has_nearest_schedule_hint(text):
-        return RouteDecision(
-            label="DOCTOR_SCHEDULE",
-            confidence=0.72,
-            entities={"specialty": specialty},
-            flags={"rule_schedule_nearest", "rule_schedule_with_specialty"},
-            needs_handoff=False,
-            context_action="continue",
-        )
-    # Короткие запросы по специальности ("урологи", "нужен гастроэнтеролог")
-    # трактуем как поиск врачей, а не OTHER.
-    if specialty and not appt:
-        return RouteDecision(
-            label="DOCTOR_INFO",
-            confidence=0.70,
-            entities={"specialty": specialty},
-            flags={"rule_doctor_info_specialty"},
-            needs_handoff=False,
-            context_action="continue",
-        )
-    if addr:
-        return RouteDecision(label="ADDRESS", confidence=0.72, flags={"rule_address"}, needs_handoff=False, context_action="continue")
-    if appt:
-        return RouteDecision(label="APPOINTMENT", confidence=0.75, flags={"rule_appointment"}, needs_handoff=False, context_action="continue")
-    if detect_news_intent(text):
-        return RouteDecision(label="NEWS", confidence=0.72, flags={"rule_news"}, needs_handoff=False, context_action="continue")
-    if detect_test_assist_intent(text):
-        return RouteDecision(label="TEST_ASSIST", confidence=0.70, flags={"rule_test_assist"}, needs_handoff=False, context_action="continue")
+async def _rule_decision(
+    text: str,
+    last_entities: dict[str, Any],
+    runtime_options: RuntimeOptions | None = None,
+) -> RouteDecision:
+    decision = await classifier.deterministic_rule_decision(
+        text,
+        last_entities,
+        runtime_options=runtime_options,
+        # В rule-pass NLU v2 не делаем refine, чтобы не добавлять extra LLM-call.
+        allow_refine=False,
+        # secondary intents для внутреннего merge не нужны.
+        attach_secondary=False,
+    )
+    if decision is not None:
+        return decision
     return RouteDecision(label="OTHER", confidence=0.2, flags={"rule_none"}, needs_handoff=False, context_action="continue")
 
 
@@ -180,13 +91,25 @@ def _merge(rule: RouteDecision, llm: RouteDecision, *, llm_mode: str = "hybrid")
             flags=merged_flags,
             needs_handoff=False,
             context_action=llm.context_action,
+            source="guardrail_post",
+            clarify_needed=llm.clarify_needed,
+            clarify_reason=llm.clarify_reason,
+            clarify_slots=list(llm.clarify_slots),
+            intent_candidates=list(llm.intent_candidates),
         )
         return promoted, "rule_promoted"
 
     return llm, "llm_primary"
 
 
-async def analyze_with_candidates(
+def _engine_from_env() -> str:
+    raw = str(os.getenv("MR_NLU_ENGINE", "legacy_v2")).strip().lower()
+    if raw in {"legacy_v2", "llm_primary"}:
+        return raw
+    return "legacy_v2"
+
+
+async def _analyze_legacy_with_candidates(
     text: str,
     state: SessionState,
     runtime_options: RuntimeOptions | None = None,
@@ -196,9 +119,56 @@ async def analyze_with_candidates(
     llm_context = dict(state.last_entities)
     llm_context.update(seeded)
 
-    rule = _rule_decision(text)
+    rule = await _rule_decision(text, state.last_entities, runtime_options=runtime_options)
     llm = await classifier.analyze(text, llm_context, runtime_options=runtime_options)
     llm_mode = runtime_options.llm_mode if runtime_options else "hybrid"
     merged, source = _merge(rule, llm, llm_mode=llm_mode)
     candidates = [_candidate_from_decision("rule", rule), _candidate_from_decision("llm", llm)]
-    return NLUResult(decision=merged, candidates=candidates, merged_from=source)
+    return NLUResult(
+        decision=merged,
+        candidates=candidates,
+        merged_from=source,
+        trace={
+            "guardrail_pre": {},
+            "llm_primary_raw": "",
+            "llm_primary_sanitized": {},
+            "guardrail_post": {},
+            "final_decision": {
+                "label": merged.label,
+                "confidence": merged.confidence,
+                "source": source,
+            },
+        },
+    )
+
+
+async def _analyze_llm_primary_with_candidates(
+    text: str,
+    state: SessionState,
+    runtime_options: RuntimeOptions | None = None,
+) -> NLUResult:
+    seeded = seeded_context_for_nlu(state)
+    llm_context = dict(state.last_entities)
+    llm_context.update(seeded)
+
+    decision, trace = await classifier.analyze_llm_primary(text, llm_context, runtime_options=runtime_options)
+    candidate = _candidate_from_decision("llm_primary", decision)
+    return NLUResult(
+        decision=decision,
+        candidates=[candidate],
+        merged_from=str(decision.source or "llm_primary"),
+        trace=trace,
+    )
+
+
+async def analyze_with_candidates(
+    text: str,
+    state: SessionState,
+    runtime_options: RuntimeOptions | None = None,
+) -> NLUResult:
+    opts = runtime_options or RuntimeOptions()
+    if not opts.uses_llm_primary_nlu:
+        return await _analyze_legacy_with_candidates(text, state, runtime_options=runtime_options)
+    if _engine_from_env() != "llm_primary":
+        return await _analyze_legacy_with_candidates(text, state, runtime_options=runtime_options)
+    return await _analyze_llm_primary_with_candidates(text, state, runtime_options=runtime_options)

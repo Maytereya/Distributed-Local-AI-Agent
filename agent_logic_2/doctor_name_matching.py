@@ -192,6 +192,40 @@ def surname_variants(value: str) -> list[str]:
         variants.append(s[:-1])
     if low.endswith("я") and len(s) >= 4:
         variants.append(s[:-1] + "й")
+    # Мужские фамилии на -ов/-ев/-ин: Иванову -> Иванов, Трубину -> Трубин,
+    # Петровым -> Петров, об Иванове -> Иванов.
+    if low.endswith("ову") and len(s) >= 5:
+        variants.append(s[:-1])
+    if low.endswith("еву") and len(s) >= 5:
+        variants.append(s[:-1])
+    if low.endswith("ину") and len(s) >= 5:
+        variants.append(s[:-1])
+    if low.endswith("овым") and len(s) >= 6:
+        variants.append(s[:-2])
+    if low.endswith("евым") and len(s) >= 6:
+        variants.append(s[:-2])
+    if low.endswith("иным") and len(s) >= 6:
+        variants.append(s[:-2])
+    if low.endswith("ове") and len(s) >= 5:
+        variants.append(s[:-1])
+    if low.endswith("еве") and len(s) >= 5:
+        variants.append(s[:-1])
+    if low.endswith("ине") and len(s) >= 5:
+        variants.append(s[:-1])
+    # Женские фамилии на -ова/-ева/-ина: Белохвостиковой -> Белохвостикова,
+    # Султанову -> Султанова, Ильину -> Ильина.
+    if low.endswith("овой") and len(s) >= 6:
+        variants.append(s[:-2] + "а")
+    if low.endswith("евой") and len(s) >= 6:
+        variants.append(s[:-2] + "а")
+    if low.endswith("иной") and len(s) >= 6:
+        variants.append(s[:-2] + "а")
+    if low.endswith("ову") and len(s) >= 5:
+        variants.append(s[:-1] + "а")
+    if low.endswith("еву") and len(s) >= 5:
+        variants.append(s[:-1] + "а")
+    if low.endswith("ину") and len(s) >= 5:
+        variants.append(s[:-1] + "а")
     if low.endswith("ой") and len(s) >= 5:
         variants.append(s[:-2] + "ая")
     if low.endswith("ей") and len(s) >= 5:

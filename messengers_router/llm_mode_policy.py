@@ -1,4 +1,8 @@
-"""Runtime-политика режимов LLM для мессенджерного роутера."""
+"""Runtime-политика режимов LLM для мессенджерного роутера.
+
+Ответственность модуля: нормализовать входные runtime-опции (`strict/hybrid/rich`)
+и дать единый объект настроек для pipeline.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +19,14 @@ class RuntimeOptions:
     self_check_max_retries: int = 1
     self_check_threshold: float = 0.8
     queue_timeout_ms: int = 30000
+
+    @property
+    def uses_llm_primary_nlu(self) -> bool:
+        return self.llm_mode in {"hybrid", "rich"}
+
+    @property
+    def allows_refine_pass(self) -> bool:
+        return self.llm_mode == "rich"
 
 
 def _norm_mode(value: Any) -> LLMMode:
@@ -59,4 +71,3 @@ def normalize_runtime_options(
         self_check_threshold=threshold,
         queue_timeout_ms=timeout_ms,
     )
-

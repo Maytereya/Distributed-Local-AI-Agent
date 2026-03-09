@@ -23,9 +23,10 @@
 
 ### Стало (v2)
 - оркестрация по модульному pipeline;
-- dual-pass NLU (`rule pass` + `LLM pass`) и merge;
+- rollout между `legacy_v2` и `llm_primary` через feature flag;
+- `llm_primary` path: `guardrail_pre -> primary LLM JSON -> deterministic postprocess`;
 - явный FSM/graph слой;
-- recovery-политика (clarify/escalation);
+- structured recovery/clarify-политика;
 - entity grounding перед записью в state;
 - bounded context summary для длинных сессий.
 
@@ -36,7 +37,7 @@
    - достает session state из `memory.py`.
 
 2. `router.py` (оркестратор)
-   - вызывает NLU (`nlu_pipeline.py`, fallback/shadow на `classifier.py`);
+   - вызывает NLU (`nlu_pipeline.py`, shadow/fallback на legacy classifier);
    - применяет flow-хелперы (`flow_policy.py`);
    - применяет `entity_grounder.py`;
    - собирает план инструментов (`build_plan`);
@@ -54,8 +55,8 @@
 
 - `endpoint.py`: только HTTP-контракт + стрим/once режим.
 - `router.py`: orchestration pipeline, без “heavy text parsing”.
-- `nlu_pipeline.py`: rule+LLM merge в одно `RouteDecision`.
-- `classifier.py`: hard-rules + LLM-классификация, JSON-схема вывода.
+- `nlu_pipeline.py`: выбор engine (`legacy_v2` vs `llm_primary`) и debug-trace.
+- `classifier.py`: guardrails, primary LLM JSON classification, deterministic postprocess.
 - `entity_grounder.py`: валидация/нормализация сущностей перед merge в state.
 - `flow_policy.py`: stateful-хелперы APPOINTMENT/pending/quick-fill.
 - `policies.py`: детекторы интентов, clarify-тексты, slot-политики, quick-fill.
@@ -90,58 +91,71 @@ messengers_router/
   prompt_registry.py
   prompt_contracts.py
   prompts/
-    classifier_patient.txt
-    classifier_refine_patient.txt
-    renderer_patient.txt
-    renderer_patient_rich.txt
-    renderer_critic_patient_alignment.txt
-    recovery_patient.txt
+    versions/v2/*.txt   # активные шаблоны
+    *.txt               # legacy fallback (неосновной путь)
   data/
     cities.txt
     nonbookable_points.json
   scripts/
+    audit_nayka_site_api.py
     eval_stage1_cases.py
     eval_stage3_appointment_flow.py
+    eval_stage4_reliability.py
     eval_stage5_corpus.py
     compare_analysis_addresses.py
-  messengers_mds_to_collect_thoughts/
-    *.md, analysis/*.json*
+    build_stage5_golden_cases.py
+  messengers_mds_to_collect_thoughts/analysis/
+    stage5_golden_cases.jsonl
+    golden_versions/*.jsonl
 ```
 
 ## 5) Источники адресов (критично для support)
 
-### Для nonbookable сценариев (анализы/ЭКГ)
-Приоритет источника:
-1. `messengers_router/data/nonbookable_points.json` (статический справочник; сейчас заполнен для Самары).
-2. fallback на live API:
-   - `api_nayka.site_regions()` (`/regions`)
-   - фильтрация по `api_price.load_price_all()` (`/priceAll`, `regionId`).
+### Для адресных и nonbookable сценариев
+Основной источник: live `api_nayka.site_regions()` (`/regions`) с фильтрацией по флагам филиала:
+- `analysis`, `ecg`, `usi`, `doctorService`.
 
 Текущий факт:
-- для Самары nonbookable-ветка берется из статического каталога;
-- для городов, отсутствующих в `nonbookable_points.json`, результат зависит от live API и фильтров.
+- адреса/контакты и фильтрация филиалов идут из live `/regions`;
+- fallback — только адреса из doctor cache, если live API недоступен.
+
+## 5.1) Источники цен (актуально)
+
+- Розничные цены: `api_price.load_price_by_region(3)` (`/priceByRegion/3`, Самара).
+- Врачебные цены: `api_price.load_doctor_prices()` (кэш `doctorServicePricesByRegion`).
+- Для запроса вида "цена у врача X" выполняется резолв `doctor_name -> doctor_id` в `services.py`.
 
 ## 6) Feature flags / runtime toggles
 
 - `MR_ROUTER_V2_ENABLE` (default: on): включение v2 NLU pipeline.
 - `MR_ROUTER_V2_SHADOW` (default: off): сравнение v2 с legacy classifier.
-- Prompt overrides: `/app_data/prompts/mr_<key>.txt` (если файл есть, он имеет приоритет над bundle prompt).
+- `MR_NLU_ENGINE=legacy_v2|llm_primary` (default: `legacy_v2`): выбор primary-NLU engine.
+- `MR_NLU_SHADOW=0|1` (default: `0`): shadow compare для нового NLU path.
+- `MR_PROMPT_VERSION`: оставлен для совместимости, но фактически поддерживается только `v2`.
+- Prompt policy: загрузка идет только по versioned-файлам (`prompts/versions/v2/*`).
+
+### `llm_mode` semantics
+
+- `strict`: не использует free-form LLM-primary NLU; остается на legacy/fallback path.
+- `hybrid`: основной production-target для `llm_primary`.
+- `rich`: тот же `llm_primary` NLU + richer renderer/self-check + optional rare refine.
 
 ## 7) Известные слабые места (актуально)
 
 1. `APPOINTMENT` логика все еще распределена между `router.py`, `flow_policy.py`, `policies.py`.
 2. Есть overlap проверок `doctor_name` (`router._verify_doctor_entity` и `entity_grounder`).
-3. Качество по rare/свободным формулировкам зависит от сочетания quick-fill + grounding + pending-контекста.
-4. Для городов вне статического nonbookable-каталога поведение зависит от доступности/полноты live API.
+3. `llm_primary` улучшает free-form recall, но качество все еще ограничено grounding и качеством live data.
+4. При недоступности live `/regions` адресная выдача деградирует до doctor-cache fallback.
 5. Latency в сценариях расписания чаще упирается во внешние API, а не в локальную логику.
+6. Текущий Stage 5 golden недостаточен как единственный gate: 49 кейсов и перекос в `PRICE/APPOINTMENT/TEST_ASSIST`.
 
 ## 8) Что рефакторить дальше (рекомендуемый порядок)
 
 1. Убрать дубли doctor-validation в один слой (`entity_grounder` как единственный source of truth).
 2. Перенести APPOINTMENT step-machine целиком в отдельный модуль (`appointment_flow.py`) и держать `router.py` только как coordinator.
 3. Унифицировать quick-fill правила через “ожидаемый слот” (pending-driven extraction only).
-4. Ввести единый tracing-объект pipeline для debug (вместо разрозненных флагов).
-5. Добавить contract tests на response-shape + state transitions по ключевым сценариям.
+4. Расширить golden/eval на `DOCTOR_INFO`, `DOCTOR_SCHEDULE`, `PREPARE`, `OTHER`, non-Samara и follow-up turns.
+5. После стабилизации удалить legacy-shadow ветки и лишний rule-duplication.
 
 ## 9) Аудит перед пушем: что лишнее/шумное
 
@@ -150,7 +164,7 @@ messengers_router/
 - `__pycache__/` и `*.pyc`.
 
 ### Не runtime-артефакты (держать осознанно)
-- `messengers_router/messengers_mds_to_collect_thoughts/*` — аналитические md/json для разработки.
+- `messengers_router/messengers_mds_to_collect_thoughts/analysis/*.jsonl` — golden-корпус и версии для eval.
 - `messengers_router/чаты из ватсап для ии/*.txt` — сырой корпус чатов (очень большой объем, не участвует в runtime).
 
 ### Потенциальный долг по коду
@@ -168,6 +182,7 @@ messengers_router/
    - `python messenger_simulator.py "http://localhost:8000/api/messenger-generate" <session_id>`
 4. Для дебага одного хода использовать:
    - `POST /api/messenger-generate-once` с `"debug": true`.
+   - Смотреть `state_update.debug.nlu_trace` для `guardrail_pre/llm_primary_raw/guardrail_post/final_decision`.
 
 ## 11) Критерий “не ломаем” при следующих изменениях
 
@@ -180,3 +195,62 @@ messengers_router/
   - appointment city→doctor→time flow,
   - test-result guidance + link generation,
   - nonbookable address flow по городу.
+
+## 12) Прогресс по ТЗ (оперативный статус)
+
+Актуально после цикла доработок по endpoint-аудиту и мессенджерному роутеру.
+
+### 12.1 Что уже сделано технически
+
+- Проведен live-аудит `api/v1/site/*` с примерами ответов и usage-map по коду:
+  - `docs/nayka_site_api_live_audit_latest.md`
+  - `messengers_router/scripts/audit_nayka_site_api.py`
+- Цена в мессенджере:
+  - retail: `priceByRegion/3` (Самара),
+  - doctor-specific: `doctorServicePricesByRegion` через daily cache.
+- Возвращен стабильный PRICE intent (без автоматического handoff к оператору).
+- Для сценария "цена у врача":
+  - добавлен path `doctor_name -> doctor_id -> doctor prices`.
+- Усилена Samara-only фильтрация по врачам/расписанию/адресам (исключение иногородних данных).
+- Prompt-слой приведен к `v2-only` (legacy prompt-файлы удалены).
+
+### 12.2 Статус 8 пунктов ТЗ
+
+1. **Результаты анализов (ссылка)** — `READY`
+   - Работает в `TEST_RESULT`.
+2. **Стоимость анализов** — `PARTIAL`
+   - Работает через `priceByRegion/3`, но нужно довести релевантность/синонимы.
+3. **Услуга + розничный прайс + top-4 врачей по ord + доступность + подготовка** — `PARTIAL`
+   - Части готовы по отдельности, нет единого сквозного сценария.
+4. **Конкретный врач по ФИО + прайс его услуг** — `PARTIAL`
+   - Связка `ФИО -> doctor_id` добавлена; нужен финальный UX-контракт и edge-cases.
+5. **Врачи выбранной специальности с учетом ord** — `PARTIAL`
+   - Сортировка по `ord` есть; нужно закрепить правило top-4 + availability.
+6. **Расписание врача по ФИО** — `READY`
+7. **Запись к врачу по ФИО** — `PARTIAL`
+   - Flow записи есть, финал сейчас через handoff оператору (не прямой CRM commit).
+8. **Справка в налоговую** — `NOT_IN_SCOPE`
+   - Делегировано коллеге.
+
+## 13) Что брать коллеге в работу (приоритет)
+
+### P1 (сразу)
+
+1. Закрыть пункт 3 ТЗ как единый use-case:
+   - услуга -> retail price -> top-4 врачей (`ord asc`) -> проверка доступности расписания -> подготовка.
+2. Закрыть пункт 5 ТЗ:
+   - выдача врачей по специальности строго top-4 с понятным deterministic сортом.
+
+### P2 (следом)
+
+3. Дошлифовать пункт 2 ТЗ:
+   - улучшить матчинг цен анализов (синонимы/морфология, меньше шумных совпадений).
+4. Дошлифовать пункт 4 ТЗ:
+   - стабилизировать сценарий "цена услуги у конкретного врача" (падежи ФИО, редкие формулировки).
+
+### P3 (архитектурно)
+
+5. Решить policy по пункту 7:
+   - остается handoff или делаем прямой commit записи в CRM.
+6. Уточнить security policy по пункту 1:
+   - обязательна ли строгая авторизация перед выдачей ссылки на результат.

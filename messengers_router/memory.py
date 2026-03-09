@@ -2,6 +2,7 @@
 
 Отвечает за историю сообщений, pending-слоты, merge entities и TTL-очистку.
 Используется роутером как легковесная session memory для многошаговых флоу.
+Ответственность модуля: управлять state/pending и concurrency-safe доступом к сессиям.
 """
 
 from __future__ import annotations
@@ -103,9 +104,11 @@ class MemoryStore:
             "ts": time.time(),
             "ttl": self._pending_ttl,
         }
+        state.last_entities["_pending_label"] = label
 
     def clear_pending(self, state: SessionState) -> None:
         state.last_entities.pop("_pending", None)
+        state.last_entities.pop("_pending_label", None)
 
     def get_pending(self, state: SessionState) -> dict[str, Any] | None:
         p = state.last_entities.get("_pending")

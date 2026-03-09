@@ -4,10 +4,12 @@
 1) Ограничить, какие entities вообще можно принять на текущем шаге.
 2) Подтверждать критичные сущности по данным/эвристикам (doctor/city/service).
 3) Возвращать только "безопасные" entities для merge в session state.
+Ответственность модуля: не допускать попадание в state неподтвержденных сущностей.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,6 +25,11 @@ _CONTROL_KEYS = {
     "result_action",
     "query_terms",
 }
+
+_GENERIC_SERVICE_FALLBACK_RE = re.compile(
+    r"\b(запис\w*|врач\w*|доктор\w*|специалист\w*|услуг\w*|хочу|нужно|надо|можно)\b",
+    re.I,
+)
 
 _LABEL_ENTITY_WHITELIST: dict[str, set[str]] = {
     "APPOINTMENT": {
@@ -42,7 +49,7 @@ _LABEL_ENTITY_WHITELIST: dict[str, set[str]] = {
     },
     "DOCTOR_SCHEDULE": {"doctor_id", "doctor_name", "specialty", "branch_name", "city"},
     "DOCTOR_INFO": {"doctor_id", "doctor_name", "specialty"},
-    "PRICE": {"service_name", "city", "branch_id", "branch_name"},
+    "PRICE": {"service_name", "city", "branch_id", "branch_name", "doctor_name", "doctor_id"},
     "ADDRESS": {"city", "branch_id", "branch_name", "service_name"},
     "TEST_RESULT": {"surname", "year", "filial", "number", "lang", "result_action", "order_id"},
     "TEST_ASSIST": {"test_name", "test_goal", "service_name", "city", "branch_name", "branch_id"},
@@ -94,6 +101,8 @@ def _is_allowed_key(key: str, label: str, pending: dict[str, Any] | None) -> boo
         return True
     # Разрешаем city даже если формально не ждём, чтобы пользователь мог исправить город.
     if key == "city":
+        return True
+    if label == "PRICE" and key in {"doctor_name", "doctor_id"}:
         return True
     return False
 
@@ -155,6 +164,13 @@ async def ground_decision_entities(
                 out[key] = phrase
                 if str(value or "").strip() and phrase != str(value).strip():
                     flags.add("entity_grounded_service_name")
+            elif isinstance(value, str):
+                fallback = value.strip()
+                if fallback and not match_city(fallback) and not _GENERIC_SERVICE_FALLBACK_RE.search(fallback):
+                    out[key] = fallback
+                    flags.add("entity_kept_llm_service_name")
+                else:
+                    flags.add("entity_dropped_unverified_service_name")
             else:
                 flags.add("entity_dropped_unverified_service_name")
             continue

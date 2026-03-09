@@ -2,6 +2,7 @@
 
 Определяет streaming и debug-once точки входа, читает/сохраняет session state
 и преобразует внутренние envelope-ответы в публичный JSON/NDJSON контракт.
+Ответственность модуля: только API-контракт и жизненный цикл сессии на уровне HTTP.
 """
 
 from __future__ import annotations
@@ -48,7 +49,10 @@ class MessengerGenerateRequest(BaseModel):
     )
     llm_mode: Literal["strict", "hybrid", "rich"] = Field(
         default="hybrid",
-        description="Режим участия LLM: strict/hybrid/rich.",
+        description=(
+            "Режим участия LLM: strict — legacy/fallback NLU, "
+            "hybrid — llm_primary NLU, rich — llm_primary NLU + self-check/refine."
+        ),
         examples=["hybrid", "rich"],
     )
     self_check: bool = Field(
@@ -206,7 +210,8 @@ async def messenger_generate(payload: MessengerGenerateRequest):
         "- склеивает весь `text` в одну строку\n"
         "- собирает `attachments`\n"
         "- `handoff=true`, если был сигнал handoff\n\n"
-        "Если `debug=true`, дополнительно вернёт диагностику в `state_update` (decision/plan/evidence/pending/history_tail)."
+        "Если `debug=true`, дополнительно вернёт диагностику в `state_update` "
+        "(`decision/plan/evidence/pending/history_tail/nlu_trace`)."
     ),
     response_model=ResponseEnvelopeOut,
     responses={422: {"description": "Validation error: неверный JSON или отсутствуют обязательные поля."}},

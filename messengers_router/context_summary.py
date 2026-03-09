@@ -14,8 +14,8 @@ from typing import Any
 
 from .mess_types import SessionState
 
-_SUMMARY_MAX_CHARS = 1200
-_TAIL_TURNS = 8
+_SUMMARY_MAX_CHARS = 1600
+_TAIL_TURNS = 10
 
 _CRITICAL_KEYS = (
     "_last_label",
@@ -31,6 +31,9 @@ _CRITICAL_KEYS = (
     "time_from",
     "appointment_flow_active",
     "appointment_confirm_pending",
+    "_pending_label",
+    "last_question_kind",
+    "last_clarify_slots",
 )
 
 

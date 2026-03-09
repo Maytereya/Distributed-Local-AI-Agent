@@ -1,4 +1,8 @@
-"""Self-check для rich-режима рендера ответа пациенту."""
+"""Self-check для rich-режима рендера ответа пациенту.
+
+Ответственность модуля: собирать prompt критика и парсить его JSON-вердикт,
+чтобы renderer мог решить, нужна ли регенерация ответа.
+"""
 
 from __future__ import annotations
 
@@ -58,4 +62,3 @@ def should_regenerate(result: dict[str, Any], *, threshold: float) -> tuple[bool
     if score < threshold:
         return True, reason or "Качество ответа ниже порога."
     return False, reason
-

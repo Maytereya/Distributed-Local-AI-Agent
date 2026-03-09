@@ -77,6 +77,16 @@ EXCLUDED_REGION_ROOTS: Set[int] = {19}
 
 # кеш для проверок наличия расписания (doctor_id, company_unit, region_id)
 _SCHEDULE_CACHE: Dict[Tuple[int, int, int], bool] = {}
+SPECIAL_REGION_NAMES: Dict[int, str] = {
+    8502: "Выезд на дом",
+}
+
+
+def _region_display_name(region: Dict[str, Any]) -> str:
+    """Берем максимально человекочитаемое имя региона."""
+    address = str(region.get("addressForSite") or "").strip()
+    name = str(region.get("name") or "").strip()
+    return address or name
 
 
 def _has_schedule(doctor_id: int, company_unit: int, region_id: int, start: str, end: str) -> bool:
@@ -149,13 +159,30 @@ def get_active_date_str() -> str:
     return (now - timedelta(days=1)).strftime("%Y%m%d")
 
 
+def _file_has_doctors(file: Path) -> bool:
+    """Считаем кэш валидным только если в JSONL есть хотя бы одна непустая строка."""
+    try:
+        if not file.exists() or file.stat().st_size <= 0:
+            return False
+        with open(file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    return True
+    except Exception:
+        return False
+    return False
+
+
 def find_existing_doctors_file() -> Union[Path, None]:
-    """Находит актуальный файл данных: сначала за активную дату (MSK 06:00), иначе самый свежий."""
+    """Находит актуальный непустой файл данных: сначала за активную дату, иначе самый свежий непустой."""
     active = DATA_DIR / f"doctors_{get_active_date_str()}.jsonl"
-    if active.exists():
+    if _file_has_doctors(active):
         return active
     files = sorted(DATA_DIR.glob("doctors_*.jsonl"), reverse=True)
-    return files[0] if files else None
+    for file in files:
+        if _file_has_doctors(file):
+            return file
+    return None
 
 
 def get_date_from_filename(file: Path) -> str:
@@ -165,6 +192,9 @@ def get_date_from_filename(file: Path) -> str:
 
 def save_doctors_data(doctors: list):
     """Сохраняет список врачей в формате JSONL — по одному врачу на строку (для активной даты)."""
+    if not doctors:
+        print("⚠️ Пустой список врачей не сохраняем, чтобы не затереть рабочий кэш")
+        return
     # Чистим лишнее, но сохраняем активную и вчерашнюю датy
     cleanup_old_doctors_files()
 
@@ -220,7 +250,7 @@ def get_all_doctors() -> List[Dict]:
     excluded_region_ids = _collect_region_descendants(regions, EXCLUDED_REGION_ROOTS)
 
     # Быстрый доступ к названиям регионов и подразделений по id
-    regions_dict = {r["id"]: r["name"] for r in regions}
+    regions_dict = {r["id"]: _region_display_name(r) for r in regions}
     units_dict = {u["id"]: u["name"] for u in units}
 
     # Предподготовка связей
@@ -272,7 +302,7 @@ def get_all_doctors() -> List[Dict]:
             if not reg_id or reg_id in seen_region_ids:
                 continue
             seen_region_ids.add(reg_id)
-            reg_name = regions_dict.get(reg_id)
+            reg_name = regions_dict.get(reg_id) or SPECIAL_REGION_NAMES.get(reg_id)
             region_pairs.append((reg_id, reg_name or f"ID {reg_id}"))
 
         doc_region_ids = [r[0] for r in region_pairs]
@@ -309,6 +339,7 @@ def get_all_doctors() -> List[Dict]:
         doctor_data = {
             "id": doctor_id,
             "fio": doctor["fio"],
+            "ord": doctor.get("ord"),
             "specialization": specs[0] if specs else None,
             "regions": doc_regions,
             "region_ids": doc_region_ids,
@@ -328,16 +359,33 @@ def get_cached_doctors_data() -> list:
     """
     active = get_active_date_str()
     existing_file = DATA_DIR / f"doctors_{active}.jsonl"
-    if existing_file.exists():
+    if _file_has_doctors(existing_file):
         print(f"✅ Нашли кэш за активную дату {active}: {existing_file.name}")
         return load_doctors_data(existing_file)
 
-    # Кэша на активную дату нет — обновляем
-    print(f"[DEBUG] Кэш за активную дату {active} не найден — обновляем через API!")
-    doctors = get_all_doctors()
-    save_doctors_data(doctors)
-    print("✅ Новые данные о врачах успешно загружены")
-    return doctors
+    if existing_file.exists():
+        print(f"⚠️ Кэш за активную дату {active} пустой/битый: {existing_file.name}")
+    else:
+        print(f"[DEBUG] Кэш за активную дату {active} не найден — обновляем через API!")
+
+    # Для расписаний и doctor-resolution сначала пытаемся получить свежий список врачей.
+    try:
+        doctors = get_all_doctors()
+    except Exception as e:
+        print(f"⚠️ Не удалось обновить список врачей через API: {e}")
+        doctors = []
+
+    if doctors:
+        save_doctors_data(doctors)
+        print("✅ Новые данные о врачах успешно загружены")
+        return doctors
+
+    fallback_file = find_existing_doctors_file()
+    if fallback_file is not None:
+        print(f"⚠️ Используем последний непустой кэш врачей: {fallback_file.name}")
+        return load_doctors_data(fallback_file)
+
+    return []
 
 # ==========================
 # Ежедневное обновление кэша в 07:45 (Самара)
@@ -678,7 +726,7 @@ def find_doctor_schedule(
 
     # --- Получаем регионы ---
     regions = site_regions()
-    region_map = {r["id"]: r["name"] for r in regions}
+    region_map = {r["id"]: _region_display_name(r) for r in regions}
     region_id = None
     if region_name:
         region_id = next((r["id"] for r in regions if region_name.lower() in r["name"].lower()), None)
@@ -732,7 +780,7 @@ def find_doctor_schedule(
         for region_entry in doctor_reg_entries:
             company_unit = region_entry["companyUnit"]
             reg_id = region_entry["region"]
-            region_name_val = region_map.get(reg_id, f"[ID {reg_id}]")
+            region_name_val = region_map.get(reg_id) or SPECIAL_REGION_NAMES.get(reg_id) or f"[ID {reg_id}]"
             region_names.add(region_name_val)
             # --- Запрашиваем расписание ---
             schedule_url = (
@@ -772,6 +820,7 @@ def find_doctor_schedule(
         result.append({
             "id": doctor_id,
             "fio": doctor_obj["fio"],
+            "ord": doctor_obj.get("ord"),
             "specialization": spec,
             "regions": list(region_names),
             "schedule": dict(schedules_by_region)

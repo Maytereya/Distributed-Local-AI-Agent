@@ -2,6 +2,7 @@
 
 Содержит hard-rules (безопасность и бизнес-триггеры), LLM fallback,
 нормализацию entities/flags и поддержку primary+secondary intent hints.
+Ответственность модуля: выдать единое `RouteDecision` для следующего шага pipeline.
 """
 
 from __future__ import annotations
@@ -47,6 +48,9 @@ from .policies import (
     detect_pii,
     low_confidence_policy,
     extract_service_phrase,
+    extract_specialty,
+    has_nearest_schedule_hint,
+    missing_slots,
 )
 
 _CLASSIFY_TIMEOUT = 45
@@ -56,6 +60,7 @@ _DOCTOR_SWITCH_SIGNAL_RE = re.compile(r"\b(расписани\w*|график|в
 _INVALID_DOCTOR_TOKEN_RE = re.compile(r"^(отмен|перен|запис|покаж|подскаж|скажи|нуж|хоч|надо)", re.I)
 _REFINE_INTENTS = {"DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
 _REFINE_SIGNAL_RE = re.compile(r"\b(передумал\w*|передумала\w*|лучше|или|а\s+если|а\s+вот|уточн\w*)\b", re.I)
+_ALLOWED_CLARIFY_REASONS = {"", "intent_disambiguation", "slot_request", "context_repair", "low_confidence"}
 
 def _extract_json(text: str) -> dict[str, Any] | None:
     if not text:
@@ -95,10 +100,8 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     return None
 
 
-async def ollama_classify_json(prompt: str, *, queue_timeout_ms: int = 30000) -> dict[str, Any]:
-    """
-    Реальный вызов Ollama: generate(format="json") + безопасный парсинг.
-    """
+async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000) -> tuple[str, dict[str, Any]]:
+    """Возвращает исходный текст модели и санитизированный JSON классификатора."""
     try:
         raw = await generate_text(
             prompt,
@@ -107,17 +110,26 @@ async def ollama_classify_json(prompt: str, *, queue_timeout_ms: int = 30000) ->
             fmt="json",
         )
     except Exception:
-        return sanitize_classifier_json(
+        return "", sanitize_classifier_json(
             {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_timeout"]}
         )
     if isinstance(raw, str):
         obj = _extract_json(raw)
         if isinstance(obj, dict):
-            return sanitize_classifier_json(obj)
+            return raw, sanitize_classifier_json(obj)
 
-    return sanitize_classifier_json(
+    raw_text = raw if isinstance(raw, str) else ""
+    return raw_text, sanitize_classifier_json(
         {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_non_json"]}
     )
+
+
+async def ollama_classify_json(prompt: str, *, queue_timeout_ms: int = 30000) -> dict[str, Any]:
+    """
+    Реальный вызов Ollama: generate(format="json") + безопасный парсинг.
+    """
+    _, payload = await ollama_classify_payload(prompt, queue_timeout_ms=queue_timeout_ms)
+    return payload
 
 
 # ---------------------------
@@ -177,6 +189,13 @@ def _extract_appointment_doctor_name(text: str) -> str | None:
     return candidate
 
 
+def _extract_price_doctor_name(text: str) -> str | None:
+    candidate = extract_doctor_name_candidate(text, prefer_schedule=True)
+    if candidate and _INVALID_DOCTOR_TOKEN_RE.search(candidate):
+        return None
+    return candidate
+
+
 def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
     keep = (
         "doctor_id", "doctor_name", "specialty",
@@ -193,9 +212,11 @@ def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
 def _build_classify_prompt(text: str, seeded: dict[str, Any]) -> str:
     allowed = ", ".join(PATIENT_LABEL_PRIORITY)
     tmpl = load_prompt_text("classifier_patient")
+    hints = _collect_rule_intent_hints(text, seeded)
     return (
         tmpl.replace("<<ALLOWED_LABELS>>", allowed)
         .replace("<<SEEDED>>", json.dumps(seeded, ensure_ascii=False))
+        .replace("<<RULE_HINTS>>", json.dumps(hints, ensure_ascii=False))
         .replace("<<TEXT>>", text)
     ).strip()
 
@@ -348,6 +369,36 @@ def _normalize_context_action(x: Any) -> ContextAction:
     return cast(ContextAction, "continue")
 
 
+def _normalize_clarify_reason(x: Any) -> str:
+    if isinstance(x, str) and x in _ALLOWED_CLARIFY_REASONS:
+        return x
+    return ""
+
+
+def _normalize_intent_candidates(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        label = item.strip()
+        if label in PATIENT_LABEL_PRIORITY and label not in out:
+            out.append(label)
+    return out[:4]
+
+
+def _normalize_clarify_slots(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        slot = str(item or "").strip()
+        if slot and slot not in out:
+            out.append(slot)
+    return out[:8]
+
+
 def _derive_context_action(
     text: str,
     label: Label,
@@ -413,6 +464,207 @@ def _collect_rule_intent_hints(text: str, last_entities: dict[str, Any] | None =
     return sorted(labels, key=lambda x: _LABEL_RANK.get(x, 10**9))
 
 
+async def guardrail_precheck(
+    text: str,
+    last_entities: dict[str, Any],
+    *,
+    flags: set[str] | None = None,
+) -> RouteDecision | None:
+    """Hard-gated guardrails до запуска primary LLM NLU."""
+    local_flags: set[str] = set(flags or set())
+    local_flags |= detect_pii(text)
+
+    if _is_smalltalk_greeting(text):
+        return RouteDecision(
+            label="OTHER",
+            confidence=0.99,
+            entities={},
+            flags=local_flags | {"smalltalk_greeting"},
+            needs_handoff=False,
+            context_action="continue",
+            source="guardrail",
+        )
+    if detect_urgent(text):
+        return RouteDecision(
+            label="URGENT",
+            confidence=1.0,
+            entities={},
+            flags=local_flags | {"urgent"},
+            needs_handoff=True,
+            context_action="new_topic",
+            source="guardrail",
+        )
+    if detect_complaint(text):
+        return RouteDecision(
+            label="COMPLAINT",
+            confidence=1.0,
+            entities={},
+            flags=local_flags | {"complaint"},
+            needs_handoff=True,
+            context_action="new_topic",
+            source="guardrail",
+        )
+    if detect_medical_advice(text) or detect_test_interpretation(text):
+        return RouteDecision(
+            label="MEDICAL_ADVICE",
+            confidence=1.0,
+            entities={},
+            flags=local_flags | {"medical_advice"},
+            needs_handoff=True,
+            context_action="new_topic",
+            source="guardrail",
+        )
+    if detect_doc_request_intent(text):
+        return RouteDecision(
+            label="OTHER",
+            confidence=0.99,
+            entities={},
+            flags=local_flags | {"doc_request_handoff"},
+            needs_handoff=True,
+            context_action="new_topic",
+            source="guardrail",
+        )
+    _ = last_entities
+    return None
+
+
+def _postprocess_primary_decision(
+    text: str,
+    last_entities: dict[str, Any],
+    data: dict[str, Any],
+) -> RouteDecision:
+    label = _normalize_label(data.get("label"))
+    conf = _normalize_confidence(data.get("confidence"))
+    entities = _sanitize_entities(data.get("entities"))
+    flags = _normalize_flags(data.get("flags")) | detect_pii(text)
+    context_action = _normalize_context_action(data.get("context_action"))
+    clarify_needed = bool(data.get("clarify_needed"))
+    clarify_reason = _normalize_clarify_reason(data.get("clarify_reason"))
+    clarify_slots = _normalize_clarify_slots(data.get("clarify_slots"))
+    intent_candidates = _normalize_intent_candidates(data.get("intent_candidates"))
+
+    if not entities.get("order_id"):
+        oid = _extract_order_id(text)
+        if oid:
+            entities["order_id"] = oid
+
+    if label == "TEST_RESULT" and not entities.get("result_action"):
+        t = text.lower()
+        entities["result_action"] = "get_pdf" if ("pdf" in t or "пдф" in t or "файл" in t or "скач" in t) else "status"
+
+    if label == "PRICE" and not entities.get("doctor_name"):
+        doctor_name = _extract_price_doctor_name(text)
+        if doctor_name:
+            entities["doctor_name"] = doctor_name
+
+    if low_confidence_policy(conf):
+        flags.add("low_confidence")
+
+    hints = _collect_rule_intent_hints(text, last_entities)
+    if not intent_candidates:
+        intent_candidates = [lbl for lbl in hints if lbl != label][:3]
+
+    if label == "OTHER" and "low_confidence" in flags and intent_candidates:
+        clarify_needed = True
+        clarify_reason = clarify_reason or "intent_disambiguation"
+
+    missing = missing_slots(label, {**last_entities, **entities})
+    if label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"} and missing:
+        clarify_needed = True
+        clarify_reason = clarify_reason or "slot_request"
+        if not clarify_slots:
+            clarify_slots = missing
+
+    if context_action == "continue":
+        derived_action = _derive_context_action(text, label, entities, last_entities)
+        if derived_action != "continue":
+            context_action = derived_action
+
+    return _attach_secondary_intents(
+        text,
+        RouteDecision(
+            label=label,
+            confidence=conf,
+            entities=entities,
+            flags=flags,
+            needs_handoff=False,
+            context_action=context_action,
+            source="llm_primary",
+            clarify_needed=clarify_needed,
+            clarify_reason=clarify_reason,
+            clarify_slots=clarify_slots,
+            intent_candidates=intent_candidates,
+        ),
+        last_entities,
+    )
+
+
+async def analyze_llm_primary(
+    text: str,
+    last_entities: dict[str, Any],
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, dict[str, Any]]:
+    flags: set[str] = set()
+    guardrail = await guardrail_precheck(text, last_entities, flags=flags)
+    if guardrail is not None:
+        return guardrail, {
+            "guardrail_pre": {
+                "hit": True,
+                "label": guardrail.label,
+                "flags": sorted(list(guardrail.flags)),
+            },
+            "llm_primary_raw": "",
+            "llm_primary_sanitized": {},
+            "guardrail_post": {},
+            "final_decision": {
+                "label": guardrail.label,
+                "source": guardrail.source,
+            },
+        }
+
+    seeded = _seed_entities_from_memory(last_entities)
+    prompt = _build_classify_prompt(text, seeded)
+    queue_timeout_ms = int(runtime_options.queue_timeout_ms) if runtime_options else 30000
+    raw_text, data = await ollama_classify_payload(prompt, queue_timeout_ms=queue_timeout_ms)
+    decision = _postprocess_primary_decision(text, last_entities, data)
+
+    if runtime_options and runtime_options.allows_refine_pass and decision.clarify_needed and decision.label in _REFINE_INTENTS:
+        refined = await _maybe_refine_live_intent(text, last_entities, decision, runtime_options=runtime_options)
+        if refined.label != decision.label or refined.entities != decision.entities:
+            decision = RouteDecision(
+                label=refined.label,
+                confidence=max(decision.confidence, refined.confidence),
+                entities=dict(refined.entities),
+                flags=set(decision.flags) | set(refined.flags),
+                needs_handoff=False,
+                context_action=refined.context_action,
+                source="llm_primary",
+                clarify_needed=decision.clarify_needed,
+                clarify_reason=decision.clarify_reason,
+                clarify_slots=list(decision.clarify_slots),
+                intent_candidates=list(decision.intent_candidates),
+            )
+
+    trace = {
+        "guardrail_pre": {"hit": False},
+        "llm_primary_raw": raw_text,
+        "llm_primary_sanitized": data,
+        "guardrail_post": {
+            "clarify_needed": decision.clarify_needed,
+            "clarify_reason": decision.clarify_reason,
+            "clarify_slots": list(decision.clarify_slots),
+            "intent_candidates": list(decision.intent_candidates),
+            "flags": sorted(list(decision.flags)),
+        },
+        "final_decision": {
+            "label": decision.label,
+            "confidence": decision.confidence,
+            "source": decision.source,
+        },
+    }
+    return decision, trace
+
+
 def _attach_secondary_intents(
     text: str,
     decision: RouteDecision,
@@ -435,7 +687,281 @@ def _attach_secondary_intents(
         flags=flags,
         needs_handoff=decision.needs_handoff,
         context_action=decision.context_action,
+        source=decision.source,
+        clarify_needed=decision.clarify_needed,
+        clarify_reason=decision.clarify_reason,
+        clarify_slots=list(decision.clarify_slots),
+        intent_candidates=list(decision.intent_candidates),
     )
+
+
+async def deterministic_rule_decision(
+    text: str,
+    last_entities: dict[str, Any],
+    *,
+    flags: set[str] | None = None,
+    runtime_options: RuntimeOptions | None = None,
+    allow_refine: bool = True,
+    attach_secondary: bool = True,
+) -> RouteDecision | None:
+    """Детерминированный pass интентов без LLM-fallback классификации."""
+    local_flags: set[str] = set(flags or set())
+    local_flags |= detect_pii(text)
+
+    decision: RouteDecision | None = None
+
+    if _is_smalltalk_greeting(text):
+        decision = RouteDecision(
+            label="OTHER",
+            confidence=0.99,
+            entities={},
+            flags=local_flags | {"smalltalk_greeting"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+    elif detect_urgent(text):
+        decision = RouteDecision(
+            label="URGENT",
+            confidence=1.0,
+            entities={},
+            flags=local_flags | {"urgent"},
+            needs_handoff=True,
+            context_action="new_topic",
+        )
+    elif detect_complaint(text):
+        decision = RouteDecision(
+            label="COMPLAINT",
+            confidence=1.0,
+            entities={},
+            flags=local_flags | {"complaint"},
+            needs_handoff=True,
+            context_action="new_topic",
+        )
+    elif detect_medical_advice(text) or detect_test_interpretation(text):
+        decision = RouteDecision(
+            label="MEDICAL_ADVICE",
+            confidence=1.0,
+            entities={},
+            flags=local_flags | {"medical_advice"},
+            needs_handoff=True,
+            context_action="new_topic",
+        )
+    elif detect_doc_request_intent(text):
+        decision = RouteDecision(
+            label="OTHER",
+            confidence=0.99,
+            entities={},
+            flags=local_flags | {"doc_request_handoff"},
+            needs_handoff=True,
+            context_action="new_topic",
+        )
+    elif detect_test_result_intent(text):
+        if should_treat_result_delivery_as_test_assist(text):
+            decision = RouteDecision(
+                label="TEST_ASSIST",
+                confidence=0.7,
+                entities={},
+                flags=local_flags | {"rule_test_assist", "result_delivery_info"},
+                needs_handoff=False,
+                context_action="continue",
+            )
+        else:
+            entities: dict[str, Any] = {}
+            oid = _extract_order_id(text)
+            if oid:
+                entities["order_id"] = oid
+            decision = RouteDecision(
+                label="TEST_RESULT",
+                confidence=0.85,
+                entities=entities,
+                flags=local_flags | {"rule_test_result"},
+                needs_handoff=False,
+                context_action="continue",
+            )
+    elif detect_schedule_intent(text):
+        entities: dict[str, Any] = {}
+        doctor_name = _extract_schedule_doctor_name(text)
+        if doctor_name:
+            entities["doctor_name"] = doctor_name
+        base = RouteDecision(
+            label="DOCTOR_SCHEDULE",
+            confidence=0.74,
+            entities=entities,
+            flags=local_flags | {"rule_schedule"},
+            needs_handoff=False,
+            context_action=_derive_context_action(text, "DOCTOR_SCHEDULE", entities, last_entities),
+        )
+        decision = (
+            await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
+            if allow_refine
+            else base
+        )
+    elif detect_doctor_info_intent(text):
+        entities: dict[str, Any] = {}
+        doctor_name = _extract_appointment_doctor_name(text)
+        if doctor_name:
+            entities["doctor_name"] = doctor_name
+        base = RouteDecision(
+            label="DOCTOR_INFO",
+            confidence=0.72,
+            entities=entities,
+            flags=local_flags | {"rule_doctor_info"},
+            needs_handoff=False,
+            context_action=_derive_context_action(text, "DOCTOR_INFO", entities, last_entities),
+        )
+        decision = (
+            await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
+            if allow_refine
+            else base
+        )
+    else:
+        appointment_intent = detect_appointment_intent(text)
+        appointment_action = normalize_appointment_action(detect_appointment_action(text), text)
+        price_intent = detect_price_intent(text)
+        address_intent = detect_address_intent(text)
+        specialty = extract_specialty(text or "")
+        appt_ctx = has_appointment_context(text, last_entities, appointment_action)
+        nonbookable_walkin = detect_nonbookable_walkin_intent(text, last_entities)
+        address_dominant = is_address_dominant_intent(
+            text,
+            address_intent=address_intent,
+            price_intent=price_intent,
+            appointment_action=appointment_action,
+        )
+        if specialty and has_nearest_schedule_hint(text):
+            decision = RouteDecision(
+                label="DOCTOR_SCHEDULE",
+                confidence=0.72,
+                entities={"specialty": specialty},
+                flags=local_flags | {"rule_schedule_nearest", "rule_schedule_with_specialty"},
+                needs_handoff=False,
+                context_action="continue",
+            )
+        elif specialty and not appointment_intent:
+            decision = RouteDecision(
+                label="DOCTOR_INFO",
+                confidence=0.70,
+                entities={"specialty": specialty},
+                flags=local_flags | {"rule_doctor_info_specialty"},
+                needs_handoff=False,
+                context_action="continue",
+            )
+        elif address_dominant:
+            decision = RouteDecision(
+                label="ADDRESS",
+                confidence=0.72,
+                entities={},
+                flags=local_flags | {"rule_address"},
+                needs_handoff=False,
+                context_action="continue",
+            )
+        else:
+            price_dominant = is_price_dominant_intent(
+                text,
+                price_intent=price_intent,
+                appointment_action=appointment_action,
+            )
+            if price_dominant:
+                entities: dict[str, Any] = {}
+                svc = _extract_service_keyword(text)
+                if svc:
+                    entities["service_name"] = svc
+                doctor_name = _extract_price_doctor_name(text)
+                if doctor_name:
+                    entities["doctor_name"] = doctor_name
+                decision = RouteDecision(
+                    label="PRICE",
+                    confidence=0.72,
+                    entities=entities,
+                    flags=local_flags | {"rule_price"},
+                    needs_handoff=False,
+                    context_action="continue",
+                )
+            elif nonbookable_walkin:
+                entities = {}
+                svc = nonbookable_service_hint(text)
+                if svc:
+                    entities["service_name"] = svc
+                decision = RouteDecision(
+                    label="ADDRESS",
+                    confidence=0.78,
+                    entities=entities,
+                    flags=local_flags | {"rule_nonbookable_walkin"},
+                    needs_handoff=False,
+                    context_action="continue",
+                )
+            elif appointment_intent and appt_ctx and not price_dominant:
+                entities = {}
+                if appointment_action:
+                    entities["appointment_action"] = appointment_action
+                doctor_name = _extract_appointment_doctor_name(text)
+                if doctor_name:
+                    entities["doctor_name"] = doctor_name
+                svc = _extract_service_keyword(text)
+                if svc:
+                    entities["service_name"] = svc
+                base = RouteDecision(
+                    label="APPOINTMENT",
+                    confidence=0.75,
+                    entities=entities,
+                    flags=local_flags | {"rule_appointment"},
+                    needs_handoff=False,
+                    context_action=_derive_context_action(text, "APPOINTMENT", entities, last_entities),
+                )
+                decision = (
+                    await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
+                    if allow_refine
+                    else base
+                )
+            elif detect_news_intent(text):
+                decision = RouteDecision(
+                    label="NEWS",
+                    confidence=0.72,
+                    entities={},
+                    flags=local_flags | {"rule_news"},
+                    needs_handoff=False,
+                    context_action="continue",
+                )
+            elif detect_test_assist_intent(text):
+                decision = RouteDecision(
+                    label="TEST_ASSIST",
+                    confidence=0.7,
+                    entities={},
+                    flags=local_flags | {"rule_test_assist"},
+                    needs_handoff=False,
+                    context_action="continue",
+                )
+            elif price_intent:
+                entities = {}
+                svc = _extract_service_keyword(text)
+                if svc:
+                    entities["service_name"] = svc
+                doctor_name = _extract_price_doctor_name(text)
+                if doctor_name:
+                    entities["doctor_name"] = doctor_name
+                decision = RouteDecision(
+                    label="PRICE",
+                    confidence=0.72,
+                    entities=entities,
+                    flags=local_flags | {"rule_price"},
+                    needs_handoff=False,
+                    context_action="continue",
+                )
+            elif detect_address_intent(text):
+                decision = RouteDecision(
+                    label="ADDRESS",
+                    confidence=0.72,
+                    entities={},
+                    flags=local_flags | {"rule_address"},
+                    needs_handoff=False,
+                    context_action="continue",
+                )
+
+    if decision is None:
+        return None
+    if attach_secondary:
+        return _attach_secondary_intents(text, decision, last_entities)
+    return decision
 
 
 async def analyze(
@@ -446,218 +972,16 @@ async def analyze(
     flags: set[str] = set()
     flags |= detect_pii(text)
 
-    if _is_smalltalk_greeting(text):
-        return _attach_secondary_intents(text, RouteDecision(
-            label="OTHER",
-            confidence=0.99,
-            entities={},
-            flags=flags | {"smalltalk_greeting"},
-            needs_handoff=False,
-            context_action="continue",
-        ), last_entities)
-
-    # hard gates
-    if detect_urgent(text):
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(label="URGENT", confidence=1.0, entities={}, flags=flags | {"urgent"}, needs_handoff=True, context_action="new_topic"),
-            last_entities,
-        )
-
-    if detect_complaint(text):
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(label="COMPLAINT", confidence=1.0, entities={}, flags=flags | {"complaint"}, needs_handoff=True, context_action="new_topic"),
-            last_entities,
-        )
-
-    if detect_medical_advice(text) or detect_test_interpretation(text):
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(label="MEDICAL_ADVICE", confidence=1.0, entities={}, flags=flags | {"medical_advice"}, needs_handoff=True, context_action="new_topic"),
-            last_entities,
-        )
-
-    # hard rule: doc/legal/certificate requests -> operator
-    if detect_doc_request_intent(text):
-        return _attach_secondary_intents(text, RouteDecision(
-            label="OTHER",
-            confidence=0.99,
-            entities={},
-            flags=flags | {"doc_request_handoff"},
-            needs_handoff=True,
-            context_action="new_topic",
-        ), last_entities)
-
-    # hard rule: result/doc delivery intents
-    if detect_test_result_intent(text):
-        # Смешанные вопросы "результаты + можно/куда на почту" без явной жалобы
-        # трактуем как информационный сценарий ассиста по анализам.
-        if should_treat_result_delivery_as_test_assist(text):
-            return _attach_secondary_intents(text, RouteDecision(
-                label="TEST_ASSIST",
-                confidence=0.7,
-                entities={},
-                flags=flags | {"rule_test_assist", "result_delivery_info"},
-                needs_handoff=False,
-                context_action="continue",
-            ), last_entities)
-        entities: dict[str, Any] = {}
-        oid = _extract_order_id(text)
-        if oid:
-            entities["order_id"] = oid
-        return _attach_secondary_intents(text, RouteDecision(
-            label="TEST_RESULT",
-            confidence=0.85,
-            entities=entities,
-            flags=flags | {"rule_test_result"},
-            needs_handoff=False,
-            context_action="continue",
-        ), last_entities)
-
-    # hard rule: doctor schedule queries
-    if detect_schedule_intent(text):
-        entities: dict[str, Any] = {}
-        doctor_name = _extract_schedule_doctor_name(text)
-        if doctor_name:
-            entities["doctor_name"] = doctor_name
-        base = RouteDecision(
-            label="DOCTOR_SCHEDULE",
-            confidence=0.74,
-            entities=entities,
-            flags=flags | {"rule_schedule"},
-            needs_handoff=False,
-            context_action=_derive_context_action(text, "DOCTOR_SCHEDULE", entities, last_entities),
-        )
-        refined = await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
-        return _attach_secondary_intents(text, refined, last_entities)
-
-    # hard rule: doctor info queries
-    if detect_doctor_info_intent(text):
-        entities: dict[str, Any] = {}
-        doctor_name = _extract_appointment_doctor_name(text)
-        if doctor_name:
-            entities["doctor_name"] = doctor_name
-        base = RouteDecision(
-            label="DOCTOR_INFO",
-            confidence=0.72,
-            entities=entities,
-            flags=flags | {"rule_doctor_info"},
-            needs_handoff=False,
-            context_action=_derive_context_action(text, "DOCTOR_INFO", entities, last_entities),
-        )
-        refined = await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
-        return _attach_secondary_intents(text, refined, last_entities)
-
-    # hard rules: appointment / price
-    # Guard: explicit price query ("стоимость приема ...") should stay PRICE,
-    # unless there is a clear appointment action (book/reschedule/cancel).
-    appointment_intent = detect_appointment_intent(text)
-    appointment_action = normalize_appointment_action(detect_appointment_action(text), text)
-    price_intent = detect_price_intent(text)
-    address_intent = detect_address_intent(text)
-    appt_ctx = has_appointment_context(text, last_entities, appointment_action)
-    nonbookable_walkin = detect_nonbookable_walkin_intent(text, last_entities)
-    address_dominant = is_address_dominant_intent(
+    rule = await deterministic_rule_decision(
         text,
-        address_intent=address_intent,
-        price_intent=price_intent,
-        appointment_action=appointment_action,
+        last_entities,
+        flags=flags,
+        runtime_options=runtime_options,
+        allow_refine=True,
+        attach_secondary=True,
     )
-    if address_dominant:
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(label="ADDRESS", confidence=0.72, entities={}, flags=flags | {"rule_address"}, needs_handoff=False, context_action="continue"),
-            last_entities,
-        )
-
-    # Цена должна побеждать "запись" в смешанных фразах без конкретного шага времени/даты.
-    price_dominant = is_price_dominant_intent(
-        text,
-        price_intent=price_intent,
-        appointment_action=appointment_action,
-    )
-    if price_dominant:
-        entities: dict[str, Any] = {}
-        svc = _extract_service_keyword(text)
-        if svc:
-            entities["service_name"] = svc
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(label="PRICE", confidence=0.72, entities=entities, flags=flags | {"rule_price"}, needs_handoff=False, context_action="continue"),
-            last_entities,
-        )
-
-    if nonbookable_walkin:
-        entities: dict[str, Any] = {}
-        svc = nonbookable_service_hint(text)
-        if svc:
-            entities["service_name"] = svc
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(
-                label="ADDRESS",
-                confidence=0.78,
-                entities=entities,
-                flags=flags | {"rule_nonbookable_walkin"},
-                needs_handoff=False,
-                context_action="continue",
-            ),
-            last_entities,
-        )
-
-    if appointment_intent and appt_ctx and not price_dominant:
-        entities: dict[str, Any] = {}
-        if appointment_action:
-            entities["appointment_action"] = appointment_action
-        doctor_name = _extract_appointment_doctor_name(text)
-        if doctor_name:
-            entities["doctor_name"] = doctor_name
-        svc = _extract_service_keyword(text)
-        if svc:
-            entities["service_name"] = svc
-        base = RouteDecision(
-            label="APPOINTMENT",
-            confidence=0.75,
-            entities=entities,
-            flags=flags | {"rule_appointment"},
-            needs_handoff=False,
-            context_action=_derive_context_action(text, "APPOINTMENT", entities, last_entities),
-        )
-        refined = await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
-        return _attach_secondary_intents(text, refined, last_entities)
-
-    if detect_news_intent(text):
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(label="NEWS", confidence=0.72, entities={}, flags=flags | {"rule_news"}, needs_handoff=False, context_action="continue"),
-            last_entities,
-        )
-
-    if detect_test_assist_intent(text):
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(label="TEST_ASSIST", confidence=0.7, entities={}, flags=flags | {"rule_test_assist"}, needs_handoff=False, context_action="continue"),
-            last_entities,
-        )
-
-    if price_intent:
-        entities: dict[str, Any] = {}
-        svc = _extract_service_keyword(text)
-        if svc:
-            entities["service_name"] = svc
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(label="PRICE", confidence=0.72, entities=entities, flags=flags | {"rule_price"}, needs_handoff=False, context_action="continue"),
-            last_entities,
-        )
-
-    if detect_address_intent(text):
-        return _attach_secondary_intents(
-            text,
-            RouteDecision(label="ADDRESS", confidence=0.72, entities={}, flags=flags | {"rule_address"}, needs_handoff=False, context_action="continue"),
-            last_entities,
-        )
+    if rule is not None:
+        return rule
 
     # light hints
     if detect_test_result_intent(text):
@@ -693,6 +1017,10 @@ async def analyze(
             entities["result_action"] = "get_pdf"
         else:
             entities["result_action"] = "status"
+    if label == "PRICE" and not entities.get("doctor_name"):
+        doctor_name = _extract_price_doctor_name(text)
+        if doctor_name:
+            entities["doctor_name"] = doctor_name
 
     if low_confidence_policy(conf):
         flags.add("low_confidence")
@@ -727,6 +1055,7 @@ async def analyze(
             flags=flags,
             needs_handoff=needs_handoff,
             context_action=context_action,
+            source="fallback",
         ),
         last_entities,
     )

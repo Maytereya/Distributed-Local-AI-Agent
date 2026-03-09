@@ -2,6 +2,7 @@
 
 Здесь находятся regex-детекторы интентов, slot/clarify/handoff политики,
 тексты переходов APPOINTMENT flow и вспомогательные нормализаторы.
+Ответственность модуля: единая точка бизнес-правил без доступа к внешним сервисам.
 """
 
 from __future__ import annotations
@@ -1288,6 +1289,8 @@ def missing_slots(label: str, entities: dict[str, Any]) -> list[str]:
     # расписание/адреса берем из live расписания врача.
     if label == "APPOINTMENT" and (entities.get("doctor_id") or entities.get("doctor_name")):
         missing = [m for m in missing if m != "_any_of:city,branch_name,branch_id"]
+    if label == "PRICE" and (entities.get("doctor_id") or entities.get("doctor_name")):
+        missing = [m for m in missing if m not in {"_any_of:city,branch_name,branch_id", "service_name"}]
     if label == "APPOINTMENT" and entities.get("accepts_children") and not entities.get("child_age"):
         missing.append("child_age")
     return missing

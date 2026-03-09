@@ -16,14 +16,11 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .mess_types import RouteDecision
-from .policies import handoff_message, is_context_affirmative, is_context_negative
+from .policies import clarification_question, handoff_message, is_context_affirmative, is_context_negative
 from .prompt_registry import load_prompt_text
+from .text_templates import LOW_CONF_CLARIFY_TEXT
 
 _OPERATOR_REQUEST_RE = re.compile(r"\b(оператор\w*|соедин\w*.*оператор\w*|жив[оы]м?\s+человек\w*)\b", re.I)
-_LOW_CONF_CLARIFY_TEXT = (
-    "Уточните, пожалуйста, запрос чуть подробнее, чтобы я не ошибся: "
-    "что именно нужно — запись, расписание врача, стоимость, адрес или результаты анализов?"
-)
 _LOW_CONF_CLARIFY_OPTIONS_TEXT = (
     "Чтобы помочь быстрее, выберите вариант: "
     "1) запись к врачу, 2) расписание врача, 3) стоимость, 4) адреса филиалов, 5) результаты анализов."
@@ -74,6 +71,42 @@ def _build_recovery_text(user_text: str, summary: str, last_label: str) -> str:
     return _LOW_CONF_CLARIFY_OPTIONS_TEXT
 
 
+def _label_patient_option(label: str) -> str:
+    mapping = {
+        "APPOINTMENT": "запись к врачу",
+        "DOCTOR_SCHEDULE": "расписание врача",
+        "PRICE": "стоимость услуги",
+        "ADDRESS": "адреса филиалов",
+        "TEST_RESULT": "результаты анализов",
+        "DOCTOR_INFO": "информация о враче",
+        "TEST_ASSIST": "подбор анализов",
+        "PREPARE": "подготовка к исследованию",
+        "NEWS": "акции и предложения",
+    }
+    return mapping.get(label, "уточнение запроса")
+
+
+def _intent_disambiguation_text(candidates: list[str]) -> str:
+    clean = [c for c in candidates if c]
+    if not clean:
+        return _LOW_CONF_CLARIFY_OPTIONS_TEXT
+    if len(clean) == 1:
+        return f"Уточните, пожалуйста: вам нужна {_label_patient_option(clean[0])}?"
+    human = [f"{i}. {_label_patient_option(label)}" for i, label in enumerate(clean[:3], 1)]
+    return "Уточните, пожалуйста, что именно вам нужно:\n" + "\n".join(human)
+
+
+def _structured_clarify_text(decision: RouteDecision, flow_label: str, summary: str, user_text: str) -> str:
+    if decision.clarify_reason in {"slot_request", "context_repair"} and decision.clarify_slots:
+        return clarification_question(flow_label or decision.label, list(decision.clarify_slots))
+    if decision.clarify_reason in {"intent_disambiguation", "low_confidence"}:
+        candidates = list(decision.intent_candidates)
+        if decision.label != "OTHER" and decision.label not in candidates:
+            candidates.insert(0, decision.label)
+        return _intent_disambiguation_text(candidates)
+    return _build_recovery_text(user_text, summary, flow_label)
+
+
 def evaluate_recovery(
     *,
     user_text: str,
@@ -100,14 +133,21 @@ def evaluate_recovery(
             unclear_count=0,
         )
 
+    is_structured_clarify = bool(
+        decision.clarify_needed
+        and flow_label == decision.label
+        and not pending_exists
+        and not flow_active
+    )
     is_low_conf_case = (
-        "low_confidence" in decision.flags
+        not is_structured_clarify
+        and "low_confidence" in decision.flags
         and decision.label in {"OTHER", "TEST_ASSIST"}
         and flow_label == decision.label
         and not pending_exists
         and not flow_active
     )
-    if not is_low_conf_case:
+    if not (is_structured_clarify or is_low_conf_case):
         state_entities["_nlu_unclear_count"] = 0
         return RecoveryAction(kind="none", unclear_count=0)
 
@@ -132,16 +172,20 @@ def evaluate_recovery(
     if n == 1:
         return RecoveryAction(
             kind="clarify",
-            text=_LOW_CONF_CLARIFY_TEXT,
+            text=_structured_clarify_text(decision, flow_label, summary, user_text)
+            if is_structured_clarify
+            else _LOW_CONF_CLARIFY_TEXT,
             handoff=False,
-            reason="low_confidence_clarify_1",
+            reason=decision.clarify_reason or "low_confidence_clarify_1",
             unclear_count=n,
         )
 
     return RecoveryAction(
         kind="clarify",
-        text=_build_recovery_text(user_text, summary, flow_label),
+        text=_structured_clarify_text(decision, flow_label, summary, user_text)
+        if is_structured_clarify
+        else _build_recovery_text(user_text, summary, flow_label),
         handoff=False,
-        reason="low_confidence_clarify_2",
+        reason=decision.clarify_reason or "low_confidence_clarify_2",
         unclear_count=n,
     )

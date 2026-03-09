@@ -2,6 +2,7 @@
 
 Содержит stateful-хелперы и quick-fill логику, вынесенные из router.py,
 чтобы роутер оставался оркестратором pipeline.
+Ответственность модуля: обработка flow-специфичных переходов и быстрых заполнений слотов.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import re
 from typing import Any
 
 from .mess_types import RouteDecision, SessionState
+from .city import match_city
 from .policies import (
     branch_options_to_indexable,
     build_branch_index,
@@ -105,12 +107,51 @@ def _looks_like_patient_fio(text: str) -> bool:
     return True
 
 
+_CITY_REPLY_BLOCK_RE = re.compile(
+    r"\b(адрес\w*|филиал\w*|цена|стоим\w*|сколько|запис\w*|расписани\w*|врач\w*|доктор\w*|анализ\w*|результат\w*)\b",
+    re.I,
+)
+
+
+def _is_city_only_reply(text: str) -> bool:
+    s = str(text or "").strip()
+    if not s or len(s) > 48:
+        return False
+    if _CITY_REPLY_BLOCK_RE.search(s):
+        return False
+    city = match_city(s)
+    if not city:
+        return False
+
+    s_norm = re.sub(r"[^a-zа-яё0-9]+", " ", s.lower()).strip()
+    s_norm = re.sub(r"^(?:г|город|в)\s+", "", s_norm).strip()
+    city_norm = re.sub(r"[^a-zа-яё0-9]+", " ", city.lower()).strip()
+    if not s_norm or not city_norm:
+        return False
+    if s_norm == city_norm:
+        return True
+
+    city_stem = city_norm.rstrip("аеиоуыяьюй")
+    if len(city_stem) < 3:
+        city_stem = city_norm
+    # "самара", "самаре", "г самара", "в самаре" -> true
+    return city_stem in s_norm and len(s_norm.split()) <= 2
+
+
 def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_text: str = "") -> str:
     if not pending:
         return decision.label
     pending_label = pending.get("label")
     if not isinstance(pending_label, str):
         return decision.label
+    # Для добора города не разрешаем случайному ADDRESS-решению
+    # (обычно на короткий ответ "Самара") ломать исходный flow.
+    if (
+        pending_label in {"PRICE", "TEST_ASSIST", "APPOINTMENT"}
+        and decision.label == "ADDRESS"
+        and _is_city_only_reply(user_text)
+    ):
+        return pending_label
     # В шаге добора ФИО пациента не даем случайной переклассификации
     # (например, в TEST_RESULT) перебить активный APPOINTMENT flow.
     if (
@@ -231,6 +272,11 @@ def _apply_context_action(decision: RouteDecision, state: SessionState, user_tex
             flags=sanitized_flags | {"context_action_overwrite_doctor"},
             needs_handoff=False,
             context_action=action,
+            source=decision.source,
+            clarify_needed=decision.clarify_needed,
+            clarify_reason=decision.clarify_reason,
+            clarify_slots=list(decision.clarify_slots),
+            intent_candidates=list(decision.intent_candidates),
         )
 
     return RouteDecision(
@@ -240,6 +286,11 @@ def _apply_context_action(decision: RouteDecision, state: SessionState, user_tex
         flags=sanitized_flags | {"context_action_overwrite_doctor"},
         needs_handoff=decision.needs_handoff,
         context_action=action,
+        source=decision.source,
+        clarify_needed=decision.clarify_needed,
+        clarify_reason=decision.clarify_reason,
+        clarify_slots=list(decision.clarify_slots),
+        intent_candidates=list(decision.intent_candidates),
     )
 
 

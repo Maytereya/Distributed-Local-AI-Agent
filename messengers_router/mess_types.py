@@ -2,6 +2,7 @@
 
 Содержит канонический список labels и dataclass-контракты между модулями:
 RouteDecision, Plan, Evidence, SessionState, ResponseEnvelope.
+Ответственность модуля: единый межмодульный контракт типов.
 """
 
 from __future__ import annotations
@@ -66,6 +67,11 @@ class RouteDecision:
     flags: set[str] = field(default_factory=set)  # {"urgent","complaint","auth_required",...}
     needs_handoff: bool = field(default=False) # потребность в переключении на оператора
     context_action: ContextAction = "continue"
+    source: str = "guardrail"
+    clarify_needed: bool = False
+    clarify_reason: str = ""
+    clarify_slots: list[str] = field(default_factory=list)
+    intent_candidates: list[str] = field(default_factory=list)
 
 
 @dataclass

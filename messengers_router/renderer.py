@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, date, time
 from typing import Any, AsyncGenerator
 
@@ -220,6 +221,132 @@ def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, 
 
     lines.append("Если нужно — могу показать расписание этого врача или помочь с записью.")
     return "\n".join([l for l in lines if l is not None]).strip()
+
+
+def _extract_price_amount(row: dict[str, Any]) -> int | None:
+    for k in ("servicePrice", "price", "service_price", "amount", "cost"):
+        v = row.get(k)
+        if isinstance(v, (int, float)):
+            return int(round(float(v)))
+        if isinstance(v, str):
+            raw = v.replace(" ", "").replace("\u00a0", "").replace(",", ".")
+            m = re.search(r"\d+(?:\.\d+)?", raw)
+            if m:
+                try:
+                    return int(round(float(m.group(0))))
+                except Exception:
+                    continue
+    return None
+
+
+def _format_rub(amount: int | None) -> str:
+    if amount is None:
+        return "цена по запросу"
+    return f"{amount:,}".replace(",", " ") + " руб."
+
+
+def _price_source_marker(payload: dict[str, Any]) -> str | None:
+    note = str(payload.get("note") or "").lower()
+    if "doctorservicepricesbyregion" in note:
+        return "врачебный прайс"
+    if "pricebyregion(" in note:
+        return "розничный прайс Самары"
+    return None
+
+
+def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
+    prices_raw = payload.get("prices")
+    prices = prices_raw if isinstance(prices_raw, list) else []
+    service_hint = str(entities.get("service_name") or entities.get("test_name") or "").strip()
+    source_marker = _price_source_marker(payload)
+
+    def _finish(text: str) -> str:
+        txt = str(text or "").strip()
+        if not txt:
+            return txt
+        if source_marker:
+            return f"{txt}\nИсточник цены: {source_marker}."
+        return txt
+
+    if not prices:
+        if service_hint:
+            return _finish(
+                f"Не нашёл актуальную стоимость для «{service_hint}». "
+                "Уточните название услуги или ФИО врача, и я проверю снова."
+            )
+        return _finish("Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.")
+
+    rows: list[dict[str, str | int | None]] = []
+    seen: set[tuple[str, int | None, str, str]] = set()
+    for row in prices:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("serviceName") or row.get("name") or service_hint or "Услуга").strip()
+        fio = str(row.get("fio") or row.get("doctorFio") or "").strip()
+        branch = str(row.get("regionName") or row.get("branchName") or "").strip()
+        amount = _extract_price_amount(row)
+        key = (name.lower(), amount, fio.lower(), branch.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({"name": name, "fio": fio, "branch": branch, "amount": amount})
+        if len(rows) >= 5:
+            break
+
+    if not rows:
+        return _finish("Не удалось разобрать стоимость услуги. Уточните, пожалуйста, формулировку запроса.")
+
+    doctor_context = bool(entities.get("doctor_id") or entities.get("doctor_name"))
+    doctor_display = str(entities.get("doctor_name") or "").strip()
+    if not doctor_display:
+        first_fio = str(rows[0].get("fio") or "").strip()
+        if first_fio:
+            doctor_display = first_fio
+
+    def _line(item: dict[str, str | int | None]) -> str:
+        name = str(item.get("name") or "Услуга")
+        fio = str(item.get("fio") or "").strip()
+        branch = str(item.get("branch") or "").strip()
+        amount = item.get("amount")
+        amount_txt = _format_rub(amount if isinstance(amount, int) else None)
+        parts = [f"{name} — {amount_txt}"]
+        if doctor_context and fio:
+            parts.insert(0, f"{fio}:")
+        if branch:
+            parts.append(f"({branch})")
+        return " ".join(parts)
+
+    if doctor_context:
+        if len(rows) == 1:
+            one = rows[0]
+            name = str(one.get("name") or "Услуга")
+            branch = str(one.get("branch") or "").strip()
+            amount = one.get("amount")
+            amount_txt = _format_rub(amount if isinstance(amount, int) else None)
+            if doctor_display:
+                base = f"У врача {doctor_display} услуга «{name}» стоит {amount_txt}."
+            else:
+                base = f"Услуга «{name}» стоит {amount_txt}."
+            if branch:
+                base = f"{base} ({branch})"
+            return _finish(base)
+        if doctor_display:
+            lines = [f"По врачу {doctor_display} нашёл такие варианты стоимости:"]
+        else:
+            lines = ["Нашёл такие варианты стоимости по выбранному врачу:"]
+        for i, item in enumerate(rows, 1):
+            lines.append(f"{i}. {_line(item)}")
+        lines.append("Если нужен точный вариант, уточните филиал.")
+        return _finish("\n".join(lines))
+
+    if len(rows) == 1:
+        return _finish(_line(rows[0]))
+
+    lines = ["Нашёл варианты по стоимости:"]
+    for i, item in enumerate(rows, 1):
+        lines.append(f"{i}. {_line(item)}")
+    lines.append("Если нужен точный вариант, уточните врача или филиал.")
+    return _finish("\n".join(lines))
 
 
 def format_address_for_patient(
