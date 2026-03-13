@@ -102,6 +102,14 @@ TEST_ASSIST_PATTERNS = [
     r"\b(оак|оам|ферритин|ттг|т3|т4|глюкоз|витамин\s*д)\b",
 ]
 
+PREPARE_PATTERNS = [
+    r"\bподготов\w*\b",
+    r"\bкак\s+подготов\w*\b",
+    r"\bперед\b.*\b(анализ\w*|узи|фгдс|гастроскоп\w*|кольпоскоп\w*|вульвоскоп\w*)\b",
+    r"\b(натощак|на\s+голодный\s+желудок)\b",
+    r"\bможно\s+ли\s+(есть|пить)\b.*\bперед\b",
+]
+
 SCHEDULE_PATTERNS = [
     r"\bрасписани(е|я)\b",
     r"\bграфик\b",
@@ -181,6 +189,7 @@ _MEDICAL_ADVICE_RE = _compile_patterns(MEDICAL_ADVICE_PATTERNS)
 _TEST_INTERPRET_RE = _compile_patterns(TEST_INTERPRET_PATTERNS)
 _TEST_RESULT_RE = _compile_patterns(TEST_RESULT_PATTERNS)
 _TEST_ASSIST_RE = _compile_patterns(TEST_ASSIST_PATTERNS)
+_PREPARE_RE = _compile_patterns(PREPARE_PATTERNS)
 _SCHEDULE_RE = _compile_patterns(SCHEDULE_PATTERNS)
 _DOC_REQUEST_RE = _compile_patterns(DOC_REQUEST_PATTERNS)
 _APPOINTMENT_INTENT_RE = _compile_patterns(APPOINTMENT_INTENT_PATTERNS)
@@ -549,6 +558,10 @@ def detect_test_result_intent(text: str) -> bool:
 
 def detect_test_assist_intent(text: str) -> bool:
     return _matches_any(text, _TEST_ASSIST_RE)
+
+
+def detect_prepare_intent(text: str) -> bool:
+    return _matches_any(text, _PREPARE_RE)
 
 
 def detect_schedule_intent(text: str) -> bool:

@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
 
@@ -18,7 +17,7 @@ from agent_logic_2.ollama_settings import LLMName
 
 _DEFAULT_MAX_CONCURRENCY = 5
 try:
-    _MAX_CONCURRENCY = int(str(os.getenv("MR_LLM_MAX_CONCURRENCY", _DEFAULT_MAX_CONCURRENCY)).strip() or _DEFAULT_MAX_CONCURRENCY)
+    _MAX_CONCURRENCY = int(str(c.MR_LLM_MAX_CONCURRENCY).strip() or _DEFAULT_MAX_CONCURRENCY)
 except Exception:
     _MAX_CONCURRENCY = _DEFAULT_MAX_CONCURRENCY
 _SEMAPHORE = asyncio.Semaphore(max(1, _MAX_CONCURRENCY))

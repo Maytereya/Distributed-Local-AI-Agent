@@ -13,9 +13,10 @@ Legacy merge-policy сохранен как fallback/escape hatch.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from typing import Any
+
+from agent_logic_2 import config as c
 
 from . import classifier
 from .context_summary import seeded_context_for_nlu
@@ -46,19 +47,16 @@ async def _rule_decision(
     text: str,
     last_entities: dict[str, Any],
     runtime_options: RuntimeOptions | None = None,
-) -> RouteDecision:
-    decision = await classifier.deterministic_rule_decision(
+) -> RouteDecision | None:
+    return await classifier.deterministic_rule_decision(
         text,
         last_entities,
         runtime_options=runtime_options,
-        # В rule-pass NLU v2 не делаем refine, чтобы не добавлять extra LLM-call.
-        allow_refine=False,
-        # secondary intents для внутреннего merge не нужны.
-        attach_secondary=False,
+        # Держим те же настройки, что и в classifier.analyze(),
+        # чтобы убрать дубли rule-pass без поведенческого расхождения.
+        allow_refine=True,
+        attach_secondary=True,
     )
-    if decision is not None:
-        return decision
-    return RouteDecision(label="OTHER", confidence=0.2, flags={"rule_none"}, needs_handoff=False, context_action="continue")
 
 
 def _candidate_from_decision(source: str, d: RouteDecision) -> NLUCandidate:
@@ -102,8 +100,8 @@ def _merge(rule: RouteDecision, llm: RouteDecision, *, llm_mode: str = "hybrid")
     return llm, "llm_primary"
 
 
-def _engine_from_env() -> str:
-    raw = str(os.getenv("MR_NLU_ENGINE", "legacy_v2")).strip().lower()
+def _engine_from_config() -> str:
+    raw = str(c.MR_NLU_ENGINE).strip().lower()
     if raw in {"legacy_v2", "llm_primary"}:
         return raw
     return "legacy_v2"
@@ -119,8 +117,20 @@ async def _analyze_legacy_with_candidates(
     llm_context = dict(state.last_entities)
     llm_context.update(seeded)
 
-    rule = await _rule_decision(text, state.last_entities, runtime_options=runtime_options)
-    llm = await classifier.analyze(text, llm_context, runtime_options=runtime_options)
+    prefetched_rule = await _rule_decision(text, state.last_entities, runtime_options=runtime_options)
+    rule = prefetched_rule or RouteDecision(
+        label="OTHER",
+        confidence=0.2,
+        flags={"rule_none"},
+        needs_handoff=False,
+        context_action="continue",
+    )
+    llm = await classifier.analyze(
+        text,
+        llm_context,
+        runtime_options=runtime_options,
+        prefetched_rule=prefetched_rule,
+    )
     llm_mode = runtime_options.llm_mode if runtime_options else "hybrid"
     merged, source = _merge(rule, llm, llm_mode=llm_mode)
     candidates = [_candidate_from_decision("rule", rule), _candidate_from_decision("llm", llm)]
@@ -169,6 +179,6 @@ async def analyze_with_candidates(
     opts = runtime_options or RuntimeOptions()
     if not opts.uses_llm_primary_nlu:
         return await _analyze_legacy_with_candidates(text, state, runtime_options=runtime_options)
-    if _engine_from_env() != "llm_primary":
+    if _engine_from_config() != "llm_primary":
         return await _analyze_legacy_with_candidates(text, state, runtime_options=runtime_options)
     return await _analyze_llm_primary_with_candidates(text, state, runtime_options=runtime_options)

@@ -243,6 +243,55 @@ def test_appointment_help_meili(monkeypatch):
     assert res["instructions"] == "info"
 
 
+def test_main_index_info_success(monkeypatch):
+    svc = Services()
+
+    def fake_search(_index, _query):
+        return "<b>Справка для налоговой</b>"
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: "Справка для налоговой")
+
+    res = run(svc.main_index_info("Как получить справку для налоговой?", {}))
+
+    assert res["content"] == "Справка для налоговой"
+    assert res["note"] == "main_index_info: main_index"
+    assert res.get("handoff_required") is not True
+
+
+def test_main_index_info_no_matches(monkeypatch):
+    svc = Services()
+
+    def fake_search(_index, _query):
+        return "Совпадений не найдено, cформулируйте запрос иначе"
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+
+    res = run(svc.main_index_info("какой-то редкий запрос", {}))
+
+    assert res["content"] == ""
+    assert res["note"] == "main_index_info: no matches"
+    assert res.get("handoff_required") is True
+    assert res.get("handoff_reason") == "knowledge_not_found"
+    assert "в моей базе данных информации недостаточно" in str(res.get("handoff_message") or "").lower()
+
+
+def test_main_index_info_source_unavailable_returns_handoff(monkeypatch):
+    svc = Services()
+
+    def fake_search(_index, _query):
+        raise RuntimeError("meili unavailable")
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+
+    res = run(svc.main_index_info("справка для ФНС", {}))
+
+    assert res.get("handoff_required") is True
+    assert res.get("handoff_reason") == "service_error"
+    assert "не удалось найти информацию" in str(res.get("handoff_message") or "").lower()
+
+
 def test_test_assist_price_by_region(monkeypatch):
     svc = Services()
 
@@ -268,6 +317,22 @@ def test_test_prepare_meili(monkeypatch):
     res = run(svc.test_prepare("анализ крови", {}))
 
     assert res["prepare"] == "подготовка"
+
+
+def test_test_prepare_no_matches_returns_handoff(monkeypatch):
+    svc = Services()
+
+    def fake_search(_index, _query):
+        return "Совпадений не найдено, cформулируйте запрос иначе"
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+
+    res = run(svc.test_prepare("подготовка к анализу крови", {}))
+
+    assert res["prepare"] == ""
+    assert res.get("handoff_required") is True
+    assert res.get("handoff_reason") == "knowledge_not_found"
 
 
 def test_test_result_status_stub():
@@ -644,3 +709,84 @@ def test_get_branches(monkeypatch):
     branches = svc.get_branches()
 
     assert branches, "Expected branches list"
+
+
+def test_service_bundle_info_builds_topn_with_availability_and_prepare(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_regions():
+        return [
+            {"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"},
+            {"id": 2, "addressForSite": "г. Самара, ул. Победы, 83", "city": "Самара"},
+            {"id": 3, "addressForSite": "г. Самара, ул. Гастелло, 46", "city": "Самара"},
+        ]
+
+    async def fake_ensure_doctors_cache():
+        return [
+            {
+                "id": 10,
+                "fio": "Бета Доктор",
+                "ord": 2,
+                "specialization": "УЗИ",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "units": ["Диагностика"],
+            },
+            {
+                "id": 20,
+                "fio": "Альфа Доктор",
+                "ord": 1,
+                "specialization": "УЗИ",
+                "regions": ["г. Самара, ул. Победы, 83"],
+                "units": ["Диагностика"],
+            },
+            {
+                "id": 30,
+                "fio": "Гамма Доктор",
+                "ord": 3,
+                "specialization": "УЗИ",
+                "regions": ["г. Самара, ул. Гастелло, 46"],
+                "units": ["Диагностика"],
+            },
+        ]
+
+    def fake_retail(_region_id):
+        return [{"serviceName": "УЗИ брюшной полости", "cost": 1800}]
+
+    def fake_doctor_prices():
+        return [
+            {"doctorId": 10, "fio": "Бета Доктор", "serviceName": "УЗИ брюшной полости", "cost": 1700},
+            {"doctorId": 20, "fio": "Альфа Доктор", "serviceName": "УЗИ брюшной полости", "cost": 1600},
+            {"doctorId": 30, "fio": "Гамма Доктор", "serviceName": "УЗИ брюшной полости", "cost": 1900},
+        ]
+
+    def fake_schedule(last_name, _region_name=None):
+        if str(last_name).lower().startswith("альфа"):
+            return [{"fio": "Альфа Доктор", "schedule": {"г. Самара, пр. Ленина, 5": [{"date": "2026-03-20", "slots": ["09:00"]}]}}]
+        if str(last_name).lower().startswith("бета"):
+            return [{"fio": "Бета Доктор", "schedule": {"г. Самара, пр. Ленина, 5": [{"date": "2026-03-20", "slots": []}]}}]
+        return []
+
+    async def fake_prepare(_query, _entities):
+        return {"prepare": "Натощак 8 часов, воду можно.", "entities_used": {"service_name": "УЗИ брюшной полости"}}
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_retail)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+    monkeypatch.setattr(svc_mod.api_nayka, "find_doctor_schedule", fake_schedule)
+    monkeypatch.setattr(svc, "test_prepare", fake_prepare)
+
+    res = run(
+        svc.service_bundle_info(
+            "Сколько стоит УЗИ брюшной полости?",
+            {"service_name": "УЗИ брюшной полости"},
+            top_n=2,
+        )
+    )
+
+    assert res["retail_prices"], "Expected retail prices block"
+    assert len(res["doctors"]) == 2, "Expected top-2 doctors"
+    assert [d["fio"] for d in res["doctors"]] == ["Альфа Доктор", "Бета Доктор"]
+    assert res["doctors"][0]["available"] is True
+    assert res["doctors"][1]["available"] is False
+    assert "Натощак" in str(res.get("prepare") or "")

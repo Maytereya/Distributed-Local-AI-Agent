@@ -56,14 +56,18 @@
 - `endpoint.py`: только HTTP-контракт + стрим/once режим.
 - `router.py`: orchestration pipeline, без “heavy text parsing”.
 - `nlu_pipeline.py`: выбор engine (`legacy_v2` vs `llm_primary`) и debug-trace.
+- `llm_mode_policy.py`: нормализация runtime-опций (`strict/hybrid/rich`, self-check, queue timeout).
 - `classifier.py`: guardrails, primary LLM JSON classification, deterministic postprocess.
+- `llm_runtime.py`: единый runtime-слой вызовов LLM (очередь, таймауты, stream/text генерация).
 - `entity_grounder.py`: валидация/нормализация сущностей перед merge в state.
 - `flow_policy.py`: stateful-хелперы APPOINTMENT/pending/quick-fill.
 - `policies.py`: детекторы интентов, clarify-тексты, slot-политики, quick-fill.
 - `dialog_graph.py`: FSM переходы (`IDLE/APPOINTMENT_FLOW/...`).
 - `recovery_policy.py`: low-confidence clarify/escalation logic.
+- `self_check.py`: critic/self-check разбор для `rich`-рендера и decision о регенерации ответа.
 - `context_summary.py`: bounded summary контекста для NLU.
 - `services.py`: интеграции и нормализация данных из внешних источников.
+- `text_templates.py`: централизованные фиксированные пользовательские шаблоны текста.
 - `prompt_registry.py`: runtime-загрузка prompt-шаблонов из `app_data/prompts` с fallback на bundle-файлы в `messengers_router/prompts`.
 - `prompt_contracts.py`: проверка/санитизация LLM JSON-контракта.
 - `city.py`: распознавание города, fuzzy-матч.
@@ -76,16 +80,20 @@ messengers_router/
   endpoint.py
   router.py
   nlu_pipeline.py
+  llm_mode_policy.py
   classifier.py
+  llm_runtime.py
   entity_grounder.py
   flow_policy.py
   policies.py
   dialog_graph.py
   recovery_policy.py
+  self_check.py
   context_summary.py
   memory.py
   services.py
   renderer.py
+  text_templates.py
   city.py
   mess_types.py
   prompt_registry.py
@@ -262,7 +270,6 @@ messengers_router/
 
 ### Не runtime-артефакты (держать осознанно)
 - `messengers_router/messengers_mds_to_collect_thoughts/analysis/*.jsonl` — golden-корпус и версии для eval.
-- `messengers_router/чаты из ватсап для ии/*.txt` — сырой корпус чатов (очень большой объем, не участвует в runtime).
 
 ### Потенциальный долг по коду
 - legacy/shadow path в `router.py` (`analyze` + `_nlu_shadow`) полезен для сравнения, но со временем может быть удален после стабилизации v2.
@@ -310,6 +317,13 @@ messengers_router/
   - добавлен path `doctor_name -> doctor_id -> doctor prices`.
 - Усилена Samara-only фильтрация по врачам/расписанию/адресам (исключение иногородних данных).
 - Prompt-слой переведен на схему `host override -> bundle default` без runtime-переключения версий.
+- Для справок/документов:
+  - `DOC_REQUEST -> main_index_info` (`main_index`).
+  - При `no matches` включается handoff оператору с явным сообщением.
+- Для подготовки:
+  - добавлен rule-роутинг `PREPARE` (вопросы "как подготовиться..." и близкие формулировки).
+  - текущий runtime путь: `test_prepare -> Meili main_index`.
+  - в коде есть явная заглушка под будущий `API-first` для подготовки к анализам (`serviceInfoAll/preparation`).
 
 ### 12.2 Статус 8 пунктов ТЗ
 
@@ -326,28 +340,33 @@ messengers_router/
 6. **Расписание врача по ФИО** — `READY`
 7. **Запись к врачу по ФИО** — `PARTIAL`
    - Flow записи есть, финал сейчас через handoff оператору (не прямой CRM commit).
-8. **Справка в налоговую** — `NOT_IN_SCOPE`
-   - Делегировано коллеге.
+8. **Справка в налоговую / документальные запросы** — `PARTIAL`
+   - `DOC_REQUEST` работает через `main_index`.
+   - При отсутствии совпадений (`no matches`) — автоматический перевод на оператора.
+   - Дальнейшая доработка: расширение покрытия knowledge-контента и качество матчинга формулировок.
 
 ## 13) Что брать коллеге в работу (приоритет)
 
 ### P1 (сразу)
 
-1. Закрыть пункт 3 ТЗ как единый use-case:
+1. Довести пункт 3 ТЗ как единый use-case:
    - услуга -> retail price -> top-4 врачей (`ord asc`) -> проверка доступности расписания -> подготовка.
-2. Закрыть пункт 5 ТЗ:
-   - выдача врачей по специальности строго top-4 с понятным deterministic сортом.
+2. Зафиксировать пункт 5 ТЗ:
+   - выдача врачей по специальности строго top-4 с deterministic сортом.
+3. Закрепить knowledge policy:
+   - при `no matches` в knowledge-поиске переводить на оператора единым сообщением.
 
 ### P2 (следом)
 
-3. Дошлифовать пункт 2 ТЗ:
-   - улучшить матчинг цен анализов (синонимы/морфология, меньше шумных совпадений).
-4. Дошлифовать пункт 4 ТЗ:
-   - стабилизировать сценарий "цена услуги у конкретного врача" (падежи ФИО, редкие формулировки).
+4. Блок подготовки к анализам перевести в `API-first`:
+   - основной источник: `serviceInfoAll/preparation`;
+   - fallback: `Meili main_index`.
+5. Реализовать загрузку/обновление `serviceInfoAll` в файловый кэш.
+6. Подключить API-кэш подготовки в runtime и покрыть тестами.
 
 ### P3 (архитектурно)
 
-5. Решить policy по пункту 7:
+7. Решить policy по пункту 7:
    - остается handoff или делаем прямой commit записи в CRM.
-6. Уточнить security policy по пункту 1:
+8. Уточнить security policy по пункту 1:
    - обязательна ли строгая авторизация перед выдачей ссылки на результат.

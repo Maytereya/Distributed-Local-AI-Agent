@@ -30,6 +30,7 @@ from .policies import (
     detect_test_interpretation,
     detect_test_result_intent,
     detect_test_assist_intent,
+    detect_prepare_intent,
     detect_schedule_intent,
     detect_doc_request_intent,
     detect_appointment_intent,
@@ -452,6 +453,8 @@ def _collect_rule_intent_hints(text: str, last_entities: dict[str, Any] | None =
         labels.add("PRICE")
     if detect_address_intent(text):
         labels.add("ADDRESS")
+    if detect_prepare_intent(text):
+        labels.add("PREPARE")
     if detect_test_assist_intent(text):
         labels.add("TEST_ASSIST")
     if detect_news_intent(text):
@@ -517,10 +520,10 @@ async def guardrail_precheck(
     if detect_doc_request_intent(text):
         return RouteDecision(
             label="OTHER",
-            confidence=0.99,
+            confidence=0.85,
             entities={},
-            flags=local_flags | {"doc_request_handoff"},
-            needs_handoff=True,
+            flags=local_flags | {"doc_request_main_index"},
+            needs_handoff=False,
             context_action="new_topic",
             source="guardrail",
         )
@@ -749,10 +752,10 @@ async def deterministic_rule_decision(
     elif detect_doc_request_intent(text):
         decision = RouteDecision(
             label="OTHER",
-            confidence=0.99,
+            confidence=0.85,
             entities={},
-            flags=local_flags | {"doc_request_handoff"},
-            needs_handoff=True,
+            flags=local_flags | {"doc_request_main_index"},
+            needs_handoff=False,
             context_action="new_topic",
         )
     elif detect_test_result_intent(text):
@@ -922,6 +925,15 @@ async def deterministic_rule_decision(
                     needs_handoff=False,
                     context_action="continue",
                 )
+            elif detect_prepare_intent(text):
+                decision = RouteDecision(
+                    label="PREPARE",
+                    confidence=0.72,
+                    entities={},
+                    flags=local_flags | {"rule_prepare"},
+                    needs_handoff=False,
+                    context_action="continue",
+                )
             elif detect_test_assist_intent(text):
                 decision = RouteDecision(
                     label="TEST_ASSIST",
@@ -968,18 +980,36 @@ async def analyze(
     text: str,
     last_entities: dict[str, Any],
     runtime_options: RuntimeOptions | None = None,
+    prefetched_rule: RouteDecision | None = None,
 ) -> RouteDecision:
     flags: set[str] = set()
     flags |= detect_pii(text)
 
-    rule = await deterministic_rule_decision(
-        text,
-        last_entities,
-        flags=flags,
-        runtime_options=runtime_options,
-        allow_refine=True,
-        attach_secondary=True,
-    )
+    rule = prefetched_rule
+    if rule is None:
+        rule = await deterministic_rule_decision(
+            text,
+            last_entities,
+            flags=flags,
+            runtime_options=runtime_options,
+            allow_refine=True,
+            attach_secondary=True,
+        )
+    elif flags and not flags.issubset(set(rule.flags)):
+        # Бережно добавляем PII-флаги, если caller передал precomputed-rule без них.
+        rule = RouteDecision(
+            label=rule.label,
+            confidence=rule.confidence,
+            entities=dict(rule.entities),
+            flags=set(rule.flags) | flags,
+            needs_handoff=rule.needs_handoff,
+            context_action=rule.context_action,
+            source=rule.source,
+            clarify_needed=rule.clarify_needed,
+            clarify_reason=rule.clarify_reason,
+            clarify_slots=list(rule.clarify_slots),
+            intent_candidates=list(rule.intent_candidates),
+        )
     if rule is not None:
         return rule
 
@@ -988,6 +1018,8 @@ async def analyze(
         flags.add("hint_test_result")
     if detect_test_assist_intent(text):
         flags.add("hint_test_assist")
+    if detect_prepare_intent(text):
+        flags.add("hint_prepare")
     if detect_schedule_intent(text):
         flags.add("hint_schedule")
     if detect_news_intent(text):

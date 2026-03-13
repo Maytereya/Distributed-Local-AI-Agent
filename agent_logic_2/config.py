@@ -1,86 +1,399 @@
 import configparser
 import os
+from dataclasses import dataclass
 
-# Определяем путь к текущему файлу config.py
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+config_path = os.path.join(BASE_DIR, "config.ini")
 
-# Если config.ini лежит рядом с config.py:
-config_path = os.path.join(BASE_DIR, 'config.ini')
-
-# Если config.ini лежит на уровень выше, используем '..'
-# config_path = os.path.join(BASE_DIR, '..', 'config.ini')
-
-# print("Computed config.ini path:", config_path)
-
+# Shared parser object (some modules read c.config directly).
 config = configparser.ConfigParser()
-
-config.read(config_path)
-
-# print("Current working directory:", os.getcwd())
-# files_read = config.read(config_path)
-# print("Files read:", files_read)
-# -------------------------------------------------
-environment = 'PRODUCTION' #'PRODUCTION'
-# | 'DEVELOPMENT' IP квартиры
-# | 'LOCAL' localhost
-# | 'PRODUCTION' внешний белый IP Клиники
-# | 'DOCKER_PRODUCTION' под контейнеры
-
-# print("environment:", environment)
-# --------------------------------------------------
-
-ollama_url = config[environment]['ollama_url']
-chroma_host = config[environment]['chroma_host']
-chroma_port = int(config[environment]['chroma_port'])
-MEILI_URL = config[environment]['MEILI_URL']
-VOSK_URL = config[environment]['VOSK_URL']
-WHISPER_URL = config[environment]['WHISPER_URL']
-WHISPER_HTTP_API = config[environment]['WHISPER_HTTP_API']
+config.read(config_path, encoding="utf-8")
 
 
-MASTER_KEY = config['DEFAULT']['MASTER_KEY']
-AUTH_NAME = config['DEFAULT']['AUTH_NAME']
-AUTH_PASS = config['DEFAULT']['AUTH_PASS']
-APP_DATA_DIR = config['DEFAULT']['APP_DATA_DIR']
-AGENT_API_KEY = config['DEFAULT']['AGENT_API_KEY']
-WHISPER_API_KEY = config['DEFAULT']['WHISPER_API_KEY']
+def _norm_env(raw: str | None) -> str:
+    txt = str(raw or "").strip().upper()
+    return txt or "PRODUCTION"
 
-nayka_base_url = config['DEFAULT']['base_url']
-nayka_base_url_no_site = config['DEFAULT']['base_url_no_site']
-nayka_login = config['DEFAULT']['nayka_login']
-nayka_pass = config['DEFAULT']['nayka_pass']
-think = config['DEFAULT']['think']
-giga_authorization = config['DEFAULT']['giga_authorization_key']
-salut_authorization = config['DEFAULT']['salut_speech_key']
-SBER_HOST = config['DEFAULT']['SBER_HOST']
-SBER_CA = config['DEFAULT']['SBER_CA']
-SBER_TOKEN = config['DEFAULT']['SBER_TOKEN']
-SBER_MODEL = config['DEFAULT']['SBER_MODEL']
-SBER_ENABLE_PARTIAL = config['DEFAULT']['SBER_ENABLE_PARTIAL']
-SBER_ENABLE_MULTI_UTTERANCE = config['DEFAULT']['SBER_ENABLE_MULTI_UTTERANCE']
-SBER_NO_SPEECH_TIMEOUT = int(config['DEFAULT']['SBER_NO_SPEECH_TIMEOUT'])
-SBER_MAX_SPEECH_TIMEOUT = int(config['DEFAULT']['SBER_MAX_SPEECH_TIMEOUT'])
-SBER_DUMP_DIR = config['DEFAULT']['SBER_DUMP_DIR']
-SBER_DUMP_AUDIO = bool(config['DEFAULT']['SBER_DUMP_AUDIO'])
-ll_model_big = config['DEFAULT']['ll_model_big']
-ll_model_small = config['DEFAULT']['ll_model_small']
 
-# Флаги функций (безопасные значения по умолчанию, если параметра нет в config.ini)
-USE_DOCTOR_PRICES_FOR_PROCEDURES = config['DEFAULT'].get(
-    'USE_DOCTOR_PRICES_FOR_PROCEDURES', 'false'
-).strip().lower() in ('1', 'true', 'yes')
+def _as_bool(raw: object, default: bool = False) -> bool:
+    if raw is None:
+        return default
+    txt = str(raw).strip().lower()
+    if txt in {"1", "true", "yes", "on"}:
+        return True
+    if txt in {"0", "false", "no", "off"}:
+        return False
+    return default
 
-# Флаг для вывода "сырого" ответа без final_answer
-DEBUG_RAW_OUTPUT = config['DEFAULT'].get(
-    'DEBUG_RAW_OUTPUT', 'false'
-).strip().lower() in ('1', 'true', 'yes')
 
-# Нормализация процедур через LLM (только для процедурных запросов)
-LLM_PROCEDURE_NORMALIZATION = config['DEFAULT'].get(
-    'LLM_PROCEDURE_NORMALIZATION', 'false'
-).strip().lower() in ('1', 'true', 'yes')
+def _initial_environment() -> str:
+    if config.has_section("APP") and config.has_option("APP", "environment"):
+        return _norm_env(config.get("APP", "environment"))
+    if config.has_option("DEFAULT", "environment"):
+        return _norm_env(config.get("DEFAULT", "environment"))
+    return "PRODUCTION"
 
-# Логировать вход в final_answering (размер/кол-во записей)
-DEBUG_FINAL_INPUT = config['DEFAULT'].get(
-    'DEBUG_FINAL_INPUT', 'false'
-).strip().lower() in ('1', 'true', 'yes')
+
+environment = _initial_environment()
+
+
+def _section_candidates(section: str, env: str | None = None) -> list[str]:
+    env_name = _norm_env(env or environment)
+    base = str(section or "").strip()
+    if not base:
+        return []
+
+    out = [f"{base}.{env_name}", base]
+
+    # Backward compatibility with old [PRODUCTION]/[LOCAL]/... layout.
+    if base in {"OLLAMA", "CHROMA", "MEILI", "ASR_VOSK", "ASR_WHISPER"}:
+        out.append(env_name)
+
+    # Deduplicate while preserving order.
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for sec in out:
+        if sec not in seen:
+            deduped.append(sec)
+            seen.add(sec)
+    return deduped
+
+
+def _raw_value(
+    section: str,
+    key: str,
+    default: str | None = None,
+    *,
+    env: str | None = None,
+    legacy_key: str | None = None,
+) -> str | None:
+    opt = str(key or "").strip()
+    if not opt:
+        return default
+
+    for sec in _section_candidates(section, env=env):
+        if config.has_section(sec) and config.has_option(sec, opt):
+            return config.get(sec, opt)
+
+    legacy_opt = str(legacy_key or "").strip()
+    if legacy_opt:
+        env_name = _norm_env(env or environment)
+        if config.has_section(env_name) and config.has_option(env_name, legacy_opt):
+            return config.get(env_name, legacy_opt)
+        if config.has_option("DEFAULT", legacy_opt):
+            return config["DEFAULT"].get(legacy_opt)
+
+    if config.has_option("DEFAULT", opt):
+        return config["DEFAULT"].get(opt)
+
+    return default
+
+
+def _get_str(
+    section: str,
+    key: str,
+    default: str = "",
+    *,
+    env: str | None = None,
+    legacy_key: str | None = None,
+) -> str:
+    raw = _raw_value(section, key, default=default, env=env, legacy_key=legacy_key)
+    return str(raw if raw is not None else default).strip()
+
+
+def _get_int(
+    section: str,
+    key: str,
+    default: int,
+    *,
+    env: str | None = None,
+    legacy_key: str | None = None,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> int:
+    raw = _raw_value(section, key, default=str(default), env=env, legacy_key=legacy_key)
+    try:
+        value = int(str(raw).strip())
+    except Exception:
+        value = int(default)
+
+    if min_value is not None:
+        value = max(min_value, value)
+    if max_value is not None:
+        value = min(max_value, value)
+    return value
+
+
+def _get_bool(
+    section: str,
+    key: str,
+    default: bool,
+    *,
+    env: str | None = None,
+    legacy_key: str | None = None,
+) -> bool:
+    raw = _raw_value(section, key, default="true" if default else "false", env=env, legacy_key=legacy_key)
+    return _as_bool(raw, default=default)
+
+
+def _get_enum(
+    section: str,
+    key: str,
+    default: str,
+    allowed: set[str],
+    *,
+    env: str | None = None,
+    legacy_key: str | None = None,
+) -> str:
+    raw = _get_str(section, key, default=default, env=env, legacy_key=legacy_key).lower()
+    return raw if raw in allowed else default
+
+
+def _get_int_setting(name: str, default: int, *, min_value: int = 1, max_value: int = 100) -> int:
+    # Legacy helper kept for compatibility with earlier code style.
+    return _get_int(
+        "MESSENGER_ROUTER",
+        name,
+        default,
+        legacy_key=name,
+        min_value=min_value,
+        max_value=max_value,
+    )
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    environment: str
+    app_data_dir: str
+    agent_api_key: str
+
+
+@dataclass(frozen=True)
+class MessengerRouterConfig:
+    use_doctor_prices_for_procedures: bool
+    mr_doctors_top_n: int
+    debug_raw_output: bool
+    llm_procedure_normalization: bool
+    debug_final_input: bool
+
+
+@dataclass(frozen=True)
+class RouterConfig:
+    router_v2_enable: bool
+    router_v2_shadow: bool
+    default_city: str
+    samara_only_operator_text: str
+
+
+@dataclass(frozen=True)
+class NLUConfig:
+    nlu_engine: str
+    nlu_shadow: bool
+
+
+@dataclass(frozen=True)
+class SberCloudConfig:
+    giga_authorization_key: str
+
+
+@dataclass(frozen=True)
+class NaukaConfig:
+    base_url: str
+    base_url_no_site: str
+    login: str
+    password: str
+
+
+@dataclass(frozen=True)
+class OllamaConfig:
+    url: str
+    model_big: str
+    model_small: str
+    think: bool
+    llm_max_concurrency: int
+
+
+@dataclass(frozen=True)
+class ChromaConfig:
+    host: str
+    port: int
+
+
+@dataclass(frozen=True)
+class WhisperConfig:
+    ws_url: str
+    http_api: str
+    api_key: str
+
+
+@dataclass(frozen=True)
+class VoskConfig:
+    ws_url: str
+
+
+@dataclass(frozen=True)
+class MeiliConfig:
+    url: str
+    master_key: str
+    auth_name: str
+    auth_pass: str
+
+
+@dataclass(frozen=True)
+class Settings:
+    app: AppConfig
+    messenger_router: MessengerRouterConfig
+    router: RouterConfig
+    nlu: NLUConfig
+    sber_cloud: SberCloudConfig
+    nauka: NaukaConfig
+    ollama: OllamaConfig
+    chroma: ChromaConfig
+    whisper: WhisperConfig
+    vosk: VoskConfig
+    meili: MeiliConfig
+
+
+settings = Settings(
+    app=AppConfig(
+        environment=environment,
+        app_data_dir=_get_str("APP", "app_data_dir", default="/app_data", legacy_key="APP_DATA_DIR"),
+        agent_api_key=_get_str("APP", "agent_api_key", default="", legacy_key="AGENT_API_KEY"),
+    ),
+    messenger_router=MessengerRouterConfig(
+        use_doctor_prices_for_procedures=_get_bool(
+            "MESSENGER_ROUTER",
+            "use_doctor_prices_for_procedures",
+            default=False,
+            legacy_key="USE_DOCTOR_PRICES_FOR_PROCEDURES",
+        ),
+        mr_doctors_top_n=_get_int(
+            "MESSENGER_ROUTER",
+            "mr_doctors_top_n",
+            default=4,
+            legacy_key="MR_DOCTORS_TOP_N",
+            min_value=1,
+            max_value=20,
+        ),
+        debug_raw_output=_get_bool(
+            "MESSENGER_ROUTER",
+            "debug_raw_output",
+            default=False,
+            legacy_key="DEBUG_RAW_OUTPUT",
+        ),
+        llm_procedure_normalization=_get_bool(
+            "MESSENGER_ROUTER",
+            "llm_procedure_normalization",
+            default=False,
+            legacy_key="LLM_PROCEDURE_NORMALIZATION",
+        ),
+        debug_final_input=_get_bool(
+            "MESSENGER_ROUTER",
+            "debug_final_input",
+            default=False,
+            legacy_key="DEBUG_FINAL_INPUT",
+        ),
+    ),
+    router=RouterConfig(
+        router_v2_enable=_get_bool("ROUTER", "router_v2_enable", default=True, legacy_key="MR_ROUTER_V2_ENABLE"),
+        router_v2_shadow=_get_bool("ROUTER", "router_v2_shadow", default=False, legacy_key="MR_ROUTER_V2_SHADOW"),
+        default_city=_get_str("ROUTER", "default_city", default="Самара"),
+        samara_only_operator_text=_get_str(
+            "ROUTER",
+            "samara_only_operator_text",
+            default="Сейчас могу помочь только по Самаре. Соединяю с оператором.",
+        ),
+    ),
+    nlu=NLUConfig(
+        nlu_engine=_get_enum(
+            "NLU",
+            "nlu_engine",
+            default="legacy_v2",
+            allowed={"legacy_v2", "llm_primary"},
+            legacy_key="MR_NLU_ENGINE",
+        ),
+        nlu_shadow=_get_bool("NLU", "nlu_shadow", default=False, legacy_key="MR_NLU_SHADOW"),
+    ),
+    sber_cloud=SberCloudConfig(
+        giga_authorization_key=_get_str("SBER_CLOUD", "giga_authorization_key", default="", legacy_key="giga_authorization_key"),
+    ),
+    nauka=NaukaConfig(
+        base_url=_get_str("NAUKA", "base_url", default="", legacy_key="base_url"),
+        base_url_no_site=_get_str("NAUKA", "base_url_no_site", default="", legacy_key="base_url_no_site"),
+        login=_get_str("NAUKA", "login", default="", legacy_key="nayka_login"),
+        password=_get_str("NAUKA", "password", default="", legacy_key="nayka_pass"),
+    ),
+    ollama=OllamaConfig(
+        url=_get_str("OLLAMA", "url", default="http://localhost:11434", legacy_key="ollama_url"),
+        model_big=_get_str("OLLAMA", "ll_model_big", default="", legacy_key="ll_model_big"),
+        model_small=_get_str("OLLAMA", "ll_model_small", default="", legacy_key="ll_model_small"),
+        think=_get_bool("OLLAMA", "think", default=False, legacy_key="think"),
+        llm_max_concurrency=_get_int(
+            "OLLAMA",
+            "llm_max_concurrency",
+            default=5,
+            legacy_key="MR_LLM_MAX_CONCURRENCY",
+            min_value=1,
+            max_value=100,
+        ),
+    ),
+    chroma=ChromaConfig(
+        host=_get_str("CHROMA", "host", default="localhost", legacy_key="chroma_host"),
+        port=_get_int("CHROMA", "port", default=8000, legacy_key="chroma_port", min_value=1, max_value=65535),
+    ),
+    whisper=WhisperConfig(
+        ws_url=_get_str("ASR_WHISPER", "ws_url", default="", legacy_key="WHISPER_URL"),
+        http_api=_get_str("ASR_WHISPER", "http_api", default="", legacy_key="WHISPER_HTTP_API"),
+        api_key=_get_str("ASR_WHISPER", "api_key", default="", legacy_key="WHISPER_API_KEY"),
+    ),
+    vosk=VoskConfig(
+        ws_url=_get_str("ASR_VOSK", "ws_url", default="", legacy_key="VOSK_URL"),
+    ),
+    meili=MeiliConfig(
+        url=_get_str("MEILI", "url", default="", legacy_key="MEILI_URL"),
+        master_key=_get_str("MEILI", "master_key", default="", legacy_key="MASTER_KEY"),
+        auth_name=_get_str("MEILI", "auth_name", default="", legacy_key="AUTH_NAME"),
+        auth_pass=_get_str("MEILI", "auth_pass", default="", legacy_key="AUTH_PASS"),
+    ),
+)
+
+
+# Legacy aliases (keep old import style intact across the project).
+environment = settings.app.environment
+
+ollama_url = settings.ollama.url
+chroma_host = settings.chroma.host
+chroma_port = settings.chroma.port
+MEILI_URL = settings.meili.url
+VOSK_URL = settings.vosk.ws_url
+WHISPER_URL = settings.whisper.ws_url
+WHISPER_HTTP_API = settings.whisper.http_api
+
+MASTER_KEY = settings.meili.master_key
+AUTH_NAME = settings.meili.auth_name
+AUTH_PASS = settings.meili.auth_pass
+APP_DATA_DIR = settings.app.app_data_dir
+AGENT_API_KEY = settings.app.agent_api_key
+WHISPER_API_KEY = settings.whisper.api_key
+
+nayka_base_url = settings.nauka.base_url
+nayka_base_url_no_site = settings.nauka.base_url_no_site
+nayka_login = settings.nauka.login
+nayka_pass = settings.nauka.password
+
+think = settings.ollama.think
+giga_authorization = settings.sber_cloud.giga_authorization_key
+ll_model_big = settings.ollama.model_big
+ll_model_small = settings.ollama.model_small
+
+USE_DOCTOR_PRICES_FOR_PROCEDURES = settings.messenger_router.use_doctor_prices_for_procedures
+MR_DOCTORS_TOP_N = settings.messenger_router.mr_doctors_top_n
+DEBUG_RAW_OUTPUT = settings.messenger_router.debug_raw_output
+LLM_PROCEDURE_NORMALIZATION = settings.messenger_router.llm_procedure_normalization
+DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
+
+MR_ROUTER_V2_ENABLE = settings.router.router_v2_enable
+MR_ROUTER_V2_SHADOW = settings.router.router_v2_shadow
+MR_NLU_ENGINE = settings.nlu.nlu_engine
+MR_NLU_SHADOW = settings.nlu.nlu_shadow
+MR_LLM_MAX_CONCURRENCY = settings.ollama.llm_max_concurrency

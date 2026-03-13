@@ -4,7 +4,12 @@ from messengers_router.mess_types import SessionState
 from messengers_router.classifier import deterministic_rule_decision
 from messengers_router.nlu_pipeline import analyze_with_candidates
 from messengers_router.policies import missing_slots
-from messengers_router.renderer import format_address_for_patient, format_doctor_schedule_for_patient, format_price_for_patient
+from messengers_router.renderer import (
+    format_address_for_patient,
+    format_doctor_schedule_for_patient,
+    format_price_for_patient,
+    format_service_bundle_for_patient,
+)
 from messengers_router.router import _is_samara_city
 
 
@@ -135,6 +140,88 @@ def test_deterministic_rule_decision_price_with_doctor_name():
     assert out.entities.get("doctor_name")
 
 
+def test_deterministic_rule_decision_doc_request_uses_main_index_flag():
+    out = run(
+        deterministic_rule_decision(
+            "Как получить справку для налоговой?",
+            {},
+            allow_refine=False,
+            attach_secondary=False,
+        )
+    )
+    assert out is not None
+    assert out.label == "OTHER"
+    assert "doc_request_main_index" in out.flags
+    assert out.needs_handoff is False
+
+
+def test_deterministic_rule_decision_prepare_question_routes_to_prepare():
+    out = run(
+        deterministic_rule_decision(
+            "Как подготовиться к анализу крови?",
+            {},
+            allow_refine=False,
+            attach_secondary=False,
+        )
+    )
+    assert out is not None
+    assert out.label == "PREPARE"
+    assert "rule_prepare" in out.flags
+
+
 def test_price_slots_are_not_required_when_doctor_is_known():
     miss = missing_slots("PRICE", {"doctor_name": "Иванов"})
     assert miss == []
+
+
+def test_service_bundle_renderer_availability_checked_with_nearest_slot():
+    payload = {
+        "service_name": "УЗИ брюшной полости",
+        "retail_prices": [{"serviceName": "УЗИ брюшной полости", "cost": 1500}],
+        "doctors": [
+            {
+                "fio": "Иванов Иван Иванович",
+                "ord": 10,
+                "service_price": 1400,
+                "available": True,
+                "nearest_slot": "2026-03-14T09:30",
+                "availability_note": "availability_checked",
+            }
+        ],
+        "prepare": "Натощак 6 часов.",
+    }
+    text = format_service_bundle_for_patient(payload, {})
+    assert "доступен, ближайшее окно 14.03 09:30" in text
+
+
+def test_service_bundle_renderer_availability_checked_without_slots():
+    payload = {
+        "service_name": "УЗИ брюшной полости",
+        "doctors": [
+            {
+                "fio": "Иванов Иван Иванович",
+                "service_price": 1400,
+                "available": False,
+                "nearest_slot": "",
+                "availability_note": "availability_checked",
+            }
+        ],
+    }
+    text = format_service_bundle_for_patient(payload, {})
+    assert "сейчас без свободных окон" in text
+
+
+def test_service_bundle_renderer_availability_source_unavailable():
+    payload = {
+        "service_name": "УЗИ брюшной полости",
+        "doctors": [
+            {
+                "fio": "Иванов Иван Иванович",
+                "service_price": 1400,
+                "available": False,
+                "availability_note": "availability_source_unavailable",
+            }
+        ],
+    }
+    text = format_service_bundle_for_patient(payload, {})
+    assert "расписание временно недоступно" in text

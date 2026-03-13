@@ -11,6 +11,7 @@ from messengers_router.router import (
     _build_address_response,
     _build_appointment_schedule_preview_response,
     _build_appointment_step_response,
+    build_plan,
     _build_doctor_info_response,
     _build_doctor_schedule_response,
     _build_price_response,
@@ -132,6 +133,80 @@ def test_build_price_response_for_price_flow():
     assert env is not None
     assert "1 500 руб." in env.text
     assert env.handoff is False
+
+
+def test_build_plan_price_service_uses_service_bundle_tool():
+    state = SessionState(
+        session_id="price-bundle",
+        last_entities={"service_name": "УЗИ брюшной полости", "city": "Самара"},
+    )
+    memory = MemoryStore()
+    decision = RouteDecision(
+        label="PRICE",
+        confidence=0.8,
+        entities={"service_name": "УЗИ брюшной полости"},
+        flags=set(),
+        needs_handoff=False,
+    )
+
+    plan = build_plan(decision, state, "Сколько стоит УЗИ брюшной полости?", memory)
+
+    assert plan.steps
+    assert plan.steps[0].tool == "service_bundle_info"
+
+
+def test_build_plan_price_with_doctor_uses_price_info():
+    state = SessionState(
+        session_id="price-doctor",
+        last_entities={"service_name": "УЗИ брюшной полости", "doctor_name": "Иванов"},
+    )
+    memory = MemoryStore()
+    decision = RouteDecision(
+        label="PRICE",
+        confidence=0.8,
+        entities={"service_name": "УЗИ брюшной полости", "doctor_name": "Иванов"},
+        flags=set(),
+        needs_handoff=False,
+    )
+
+    plan = build_plan(decision, state, "Цена УЗИ у Иванова", memory)
+
+    assert plan.steps
+    assert plan.steps[0].tool == "price_info"
+
+
+def test_build_plan_doc_request_uses_main_index_info():
+    state = SessionState(session_id="doc-request", last_entities={})
+    memory = MemoryStore()
+    decision = RouteDecision(
+        label="OTHER",
+        confidence=0.85,
+        entities={},
+        flags={"doc_request_main_index"},
+        needs_handoff=False,
+    )
+
+    plan = build_plan(decision, state, "Как получить справку для налоговой?", memory)
+
+    assert plan.steps
+    assert plan.steps[0].tool == "main_index_info"
+
+
+def test_build_plan_legacy_doc_request_handoff_flag_also_uses_main_index_info():
+    state = SessionState(session_id="doc-request-legacy", last_entities={})
+    memory = MemoryStore()
+    decision = RouteDecision(
+        label="OTHER",
+        confidence=0.85,
+        entities={},
+        flags={"doc_request_handoff"},
+        needs_handoff=False,
+    )
+
+    plan = build_plan(decision, state, "Нужна справка для ФНС", memory)
+
+    assert plan.steps
+    assert plan.steps[0].tool == "main_index_info"
 
 
 def test_build_doctor_info_response_for_doctor_info_flow():

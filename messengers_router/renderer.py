@@ -16,6 +16,8 @@ import re
 from datetime import datetime, date, time
 from typing import Any, AsyncGenerator
 
+from agent_logic_2 import config as c
+
 from .llm_mode_policy import RuntimeOptions
 from .llm_runtime import generate_stream_text, generate_text
 from .mess_types import Evidence, RouteDecision, ResponseEnvelope
@@ -24,6 +26,10 @@ from .prompt_registry import load_prompt_text
 from .self_check import build_critic_prompt, parse_critic_result, should_regenerate
 
 timeout = 300
+try:
+    DOCTORS_TOP_N = max(1, int(c.MR_DOCTORS_TOP_N))
+except Exception:
+    DOCTORS_TOP_N = 4
 
 
 def _final_prompt(user_text: str, decision: RouteDecision, evidence: Evidence) -> str:
@@ -205,7 +211,7 @@ def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, 
             docs = narrowed
 
     lines: list[str] = []
-    for i, doc in enumerate(docs[:3], 1):
+    for i, doc in enumerate(docs[:DOCTORS_TOP_N], 1):
         fio = str(doc.get("fio") or "Врач").strip()
         spec = str(doc.get("specialization") or "").strip()
         regions = doc.get("regions") or []
@@ -221,6 +227,86 @@ def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, 
 
     lines.append("Если нужно — могу показать расписание этого врача или помочь с записью.")
     return "\n".join([l for l in lines if l is not None]).strip()
+
+
+def _format_slot_compact(slot_iso: str) -> str:
+    raw = str(slot_iso or "").strip()
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw)
+        return dt.strftime("%d.%m %H:%M")
+    except Exception:
+        return raw
+
+
+def _availability_text_for_doctor(doc: dict[str, Any]) -> str:
+    note = str(doc.get("availability_note") or "").strip().lower()
+    available = bool(doc.get("available"))
+    nearest = _format_slot_compact(str(doc.get("nearest_slot") or ""))
+
+    if note == "availability_source_unavailable":
+        return "расписание временно недоступно"
+    if note == "availability_missing_surname":
+        return "расписание не проверено"
+    if note in {"availability_empty", "availability_unmatched"}:
+        return "расписание не найдено"
+    if note == "availability_checked":
+        if available and nearest:
+            return f"доступен, ближайшее окно {nearest}"
+        if available:
+            return "доступен"
+        return "сейчас без свободных окон"
+
+    if available and nearest:
+        return f"доступен, ближайшее окно {nearest}"
+    if available:
+        return "доступен"
+    return "статус расписания уточняется"
+
+
+def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
+    service_name = str(payload.get("service_name") or entities.get("service_name") or entities.get("test_name") or "").strip()
+    retail_prices_raw = payload.get("retail_prices")
+    doctors_raw = payload.get("doctors")
+    prepare_text = str(payload.get("prepare") or "").strip()
+    doctors = doctors_raw if isinstance(doctors_raw, list) else []
+    retail_prices = retail_prices_raw if isinstance(retail_prices_raw, list) else []
+
+    if not service_name:
+        service_name = "услуга"
+
+    lines: list[str] = [f"По услуге «{service_name}» нашёл следующее:"]
+
+    if retail_prices:
+        top_price = retail_prices[0] if isinstance(retail_prices[0], dict) else {}
+        amount = _format_rub(_extract_price_amount(top_price))
+        price_name = str(top_price.get("serviceName") or top_price.get("name") or service_name).strip()
+        lines.append(f"1) Розничная цена: {price_name} — {amount}.")
+    else:
+        lines.append("1) Розничную цену сейчас точно определить не удалось.")
+
+    if doctors:
+        lines.append("2) Врачи (по приоритету):")
+        for i, doc in enumerate(doctors, 1):
+            if not isinstance(doc, dict):
+                continue
+            fio = str(doc.get("fio") or "Врач").strip()
+            ord_value = doc.get("ord")
+            ord_txt = f", ord={ord_value}" if isinstance(ord_value, int) else ""
+            price_txt = _format_rub(_extract_price_amount(doc))
+            avail_txt = _availability_text_for_doctor(doc)
+            lines.append(f"{i}. {fio}{ord_txt} — {price_txt}; {avail_txt}.")
+    else:
+        lines.append("2) Подходящих врачей по этой услуге сейчас не нашёл.")
+
+    if prepare_text:
+        lines.append(f"3) Подготовка: {prepare_text}")
+    else:
+        lines.append("3) Подготовку по этой услуге сейчас не удалось получить автоматически.")
+
+    lines.append("Если нужно, покажу подробное расписание выбранного врача.")
+    return "\n".join(lines).strip()
 
 
 def _extract_price_amount(row: dict[str, Any]) -> int | None:

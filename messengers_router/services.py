@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from agent_logic_1 import meilisearch_client as meilisearch
+from agent_logic_2 import config as c
 from agent_logic_2.doctor_name_matching import (
     extract_doctor_name_candidate,
     resolve_schedule_surname,
@@ -92,6 +93,10 @@ _SPECIALTY_RE = re.compile(
 # Важно: для /priceByRegion нужен city-level regionId (Самара = 3),
 # а для /doctorServicePricesByRegion используются branch-level regionId из doctorRegions.
 SAMARA_PRICE_REGION_ID = 3
+try:
+    DOCTORS_TOP_N = max(1, int(c.MR_DOCTORS_TOP_N))
+except Exception:
+    DOCTORS_TOP_N = 4
 _PRICE_QUERY_STOPWORDS = {
     "сколько",
     "стоит",
@@ -584,6 +589,38 @@ def _doctor_sort_key(doc: dict[str, Any]) -> tuple[int, str]:
     return ord_value, fio
 
 
+def _coerce_top_n(value: Any, *, default: int = DOCTORS_TOP_N) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = default
+    return max(1, min(parsed, 20))
+
+
+def _schedule_regions_with_free_slots(schedule: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    if not isinstance(schedule, dict):
+        return out
+    for region_name, days in schedule.items():
+        if not isinstance(days, list):
+            continue
+        has_free = False
+        for day in days:
+            if not isinstance(day, dict):
+                continue
+            slots = day.get("slots")
+            if not isinstance(slots, list):
+                continue
+            if any(str(s or "").strip() for s in slots):
+                has_free = True
+                break
+        if has_free:
+            region_clean = str(region_name or "").strip()
+            if region_clean and region_clean not in out:
+                out.append(region_clean)
+    return out
+
+
 def _extract_region_phone(region: dict[str, Any]) -> str:
     phone_keys = ("phone", "phoneForSite", "phones", "phoneNumbers", "tel", "telephone")
     for k in phone_keys:
@@ -776,6 +813,18 @@ def _is_meili_error_text(text: Any) -> bool:
     if not isinstance(text, str):
         return False
     return "Ошибка поисковой системы" in text or "Meilisearch" in text
+
+
+def _is_meili_no_matches_text(text: Any) -> bool:
+    if not isinstance(text, str):
+        return False
+    norm = _normalise_input(text)
+    if not norm:
+        return True
+    return "совпадений не найдено" in norm
+
+
+_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = "В моей базе данных информации недостаточно, перевожу на оператора."
 
 
 @dataclass
@@ -993,6 +1042,222 @@ class Services:
             item.pop("_nearest_slot", None)
         return chosen
 
+    async def _doctor_availability_snapshot(self, fio: str, *, samara_tokens: set[str]) -> dict[str, Any]:
+        fio_clean = str(fio or "").strip()
+        surname = fio_clean.split()[0] if fio_clean else ""
+        if not surname:
+            return {
+                "available": False,
+                "nearest_slot": "",
+                "regions_with_slots": [],
+                "note": "availability_missing_surname",
+            }
+
+        try:
+            data = await asyncio.to_thread(api_nayka.find_doctor_schedule, surname)
+        except Exception:
+            return {
+                "available": False,
+                "nearest_slot": "",
+                "regions_with_slots": [],
+                "note": "availability_source_unavailable",
+            }
+
+        if not isinstance(data, list) or not data:
+            return {
+                "available": False,
+                "nearest_slot": "",
+                "regions_with_slots": [],
+                "note": "availability_empty",
+            }
+
+        target_norm = _normalise_input(fio_clean)
+        chosen: dict[str, Any] | None = None
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            row_fio = str(row.get("fio") or "").strip()
+            if not row_fio:
+                continue
+            row_norm = _normalise_input(row_fio)
+            if target_norm and row_norm == target_norm:
+                chosen = row
+                break
+            if _doctor_matches_fio(row_fio, fio_clean, resolved_surname=surname):
+                chosen = row
+                break
+        if chosen is None:
+            chosen = next((row for row in data if isinstance(row, dict)), None)
+        if not isinstance(chosen, dict):
+            return {
+                "available": False,
+                "nearest_slot": "",
+                "regions_with_slots": [],
+                "note": "availability_unmatched",
+            }
+
+        schedule_raw = chosen.get("schedule")
+        schedule: dict[str, Any] = {}
+        if isinstance(schedule_raw, dict):
+            if samara_tokens:
+                for region_name, days in schedule_raw.items():
+                    region = str(region_name or "").strip()
+                    if not region:
+                        continue
+                    if _region_matches_samara_tokens(region, samara_tokens):
+                        schedule[region] = days
+            else:
+                schedule = {str(k): v for k, v in schedule_raw.items()}
+
+        slots = _iter_slot_datetimes(schedule)
+        nearest_slot = min(slots).isoformat(timespec="minutes") if slots else ""
+        return {
+            "available": bool(slots),
+            "nearest_slot": nearest_slot,
+            "regions_with_slots": _schedule_regions_with_free_slots(schedule),
+            "note": "availability_checked",
+        }
+
+    async def service_bundle_info(
+        self,
+        query: str,
+        entities: dict[str, Any],
+        *,
+        top_n: int | None = None,
+    ) -> dict[str, Any]:
+        top_limit = _coerce_top_n(top_n, default=DOCTORS_TOP_N)
+        entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
+        query_service_name = _extract_price_service_from_query(query)
+        service_name = query_service_name or entity_service_name or str(query or "").strip()
+        needle = _normalise_input(service_name)
+
+        out: dict[str, Any] = {
+            "service_name": service_name,
+            "retail_prices": [],
+            "doctors": [],
+            "prepare": "",
+            "top_n_applied": top_limit,
+            "note": "service_bundle_info",
+            "entities_used": {
+                **entities,
+                "service_name_effective": service_name,
+            },
+        }
+        if not needle:
+            out["note"] = "service_bundle_info: no service query"
+            return out
+
+        # 1) Retail price by city-level regionId (Самара = 3).
+        try:
+            retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
+            out["retail_prices"] = _rank_price_rows(
+                [p for p in retail_rows if isinstance(p, dict)],
+                service_name,
+                limit=5,
+            )
+        except Exception:
+            out["retail_prices"] = []
+            out["note"] = "service_bundle_info: retail source unavailable"
+
+        # 2) Top-N doctors by ord among doctors that have the matched service in doctor prices.
+        samara_tokens = await self._samara_region_tokens()
+        doctors = await self._ensure_doctors_cache_loaded()
+        by_id: dict[int, dict[str, Any]] = {}
+        for doc in doctors:
+            if not isinstance(doc, dict):
+                continue
+            doc_id = _as_int(doc.get("id"))
+            if doc_id is None:
+                continue
+            raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
+            if _has_explicit_non_samara_regions(raw_regions):
+                continue
+            if samara_tokens and raw_regions and not any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
+                continue
+            by_id[doc_id] = doc
+
+        matched_price_rows: list[tuple[int, int, int, int, dict[str, Any]]] = []
+        try:
+            doctor_prices = await asyncio.to_thread(api_price.load_doctor_prices)
+        except Exception:
+            doctor_prices = []
+        query_norm = _normalise_input(service_name).replace("ё", "е")
+        query_tokens = _price_query_tokens(service_name)
+        homecode_query = _extract_homecode_query(service_name)
+        for row in doctor_prices:
+            if not isinstance(row, dict):
+                continue
+            doctor_id = _as_int(row.get("doctorId"))
+            if doctor_id is None or doctor_id not in by_id:
+                continue
+            score, matched = _price_row_score(
+                row,
+                query=query_norm,
+                tokens=query_tokens,
+                homecode_query=homecode_query,
+            )
+            if score <= 0:
+                continue
+            cost = _as_int(row.get("cost")) or 0
+            matched_price_rows.append((score, matched, -cost, doctor_id, row))
+
+        if not matched_price_rows and query_norm:
+            # Мягкий fallback на substring, если ranker не дал совпадений.
+            for row in doctor_prices:
+                if not isinstance(row, dict):
+                    continue
+                doctor_id = _as_int(row.get("doctorId"))
+                if doctor_id is None or doctor_id not in by_id:
+                    continue
+                service_row_name = _normalise_input(str(row.get("serviceName") or ""))
+                if query_norm and query_norm in service_row_name:
+                    cost = _as_int(row.get("cost")) or 0
+                    matched_price_rows.append((1, 1, -cost, doctor_id, row))
+
+        matched_price_rows.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
+        best_row_by_doctor: dict[int, dict[str, Any]] = {}
+        for _, _, _, doctor_id, row in matched_price_rows:
+            if doctor_id not in best_row_by_doctor:
+                best_row_by_doctor[doctor_id] = row
+
+        doctor_cards = sorted(
+            [by_id[doctor_id] for doctor_id in best_row_by_doctor if doctor_id in by_id],
+            key=_doctor_sort_key,
+        )[:top_limit]
+
+        out_doctors: list[dict[str, Any]] = []
+        for doc in doctor_cards:
+            doctor_id = _as_int(doc.get("id"))
+            if doctor_id is None:
+                continue
+            price_row = best_row_by_doctor.get(doctor_id, {})
+            availability = await self._doctor_availability_snapshot(
+                str(doc.get("fio") or ""),
+                samara_tokens=samara_tokens,
+            )
+            out_doctors.append(
+                {
+                    "id": doctor_id,
+                    "fio": str(doc.get("fio") or "").strip(),
+                    "ord": _as_int(doc.get("ord")),
+                    "specialization": _compact_specialization(str(doc.get("specialization") or "")),
+                    "regions": [str(x).strip() for x in (doc.get("regions") or []) if str(x).strip()],
+                    "service_price": _as_int(price_row.get("cost")),
+                    "available": bool(availability.get("available")),
+                    "nearest_slot": str(availability.get("nearest_slot") or ""),
+                    "regions_with_slots": list(availability.get("regions_with_slots") or []),
+                    "availability_note": str(availability.get("note") or ""),
+                }
+            )
+        out["doctors"] = out_doctors
+
+        # 3) Preparation guidance by service/test name.
+        prepare_payload = await self.test_prepare(service_name, {"service_name": service_name})
+        if isinstance(prepare_payload, dict) and not prepare_payload.get("handoff_required"):
+            out["prepare"] = str(prepare_payload.get("prepare") or "").strip()
+
+        return out
+
     # -----------------------------
     # NAUKA API used by router
     # -----------------------------
@@ -1049,7 +1314,7 @@ class Services:
         first = matched[0]
         return _as_int(first.get("id")), str(first.get("fio") or "").strip() or None
 
-    async def doctors_info(self, query: str, entities: dict[str, Any], output_max: int = 5) -> dict[str, Any]:
+    async def doctors_info(self, query: str, entities: dict[str, Any], output_max: int | None = None) -> dict[str, Any]:
         """
         Возвращает список врачей из кэша (без real-time API).
         Фильтрация делается программно:
@@ -1140,14 +1405,15 @@ class Services:
         filtered = _dedupe_doctors_by_fio(filtered)
         filtered = sorted(filtered, key=_doctor_sort_key)
 
+        limit = _coerce_top_n(output_max, default=DOCTORS_TOP_N)
         if resolved_surname:
             # при явной фамилии врача не раздуваем выдачу.
-            output_max = min(output_max, 3)
+            limit = min(limit, 3)
 
         # ограничим размер, чтобы не отправлять сотни карточек в LLM
         # (далее LLM/рендерер красиво завернёт)
         # Определить сколько тут карточек нужно в выводе обычно
-        filtered = filtered[:output_max]
+        filtered = filtered[:limit]
         compact: list[dict[str, Any]] = []
         for d in filtered:
             row = dict(d)
@@ -1163,6 +1429,7 @@ class Services:
                 "doctor_resolved": resolved_surname,
                 "specialty_query": spec_q,
                 "region_query": region_q,
+                "output_limit": limit,
             },
         }
 
@@ -1311,6 +1578,48 @@ class Services:
         }
 
     # Остальные методы пока как заглушки
+    async def main_index_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
+        q = str(query or "").strip()
+        if not q:
+            return {
+                "content": "",
+                "note": "main_index_info: no query",
+                "entities_used": entities,
+            }
+        try:
+            raw = await asyncio.to_thread(meilisearch.search_meili, "main_index", q)
+            cleaned = html_cleaner.strip_html(raw).strip()
+        except Exception:
+            return _service_fallback(
+                note="main_index_info source unavailable",
+                handoff_message="Сейчас не удалось найти информацию автоматически. Соединяю с оператором.",
+                entities=entities,
+                extra={"content": ""},
+            )
+
+        if _is_meili_error_text(cleaned):
+            return _service_fallback(
+                note="main_index_info source unavailable",
+                handoff_message="Сейчас не удалось найти информацию автоматически. Соединяю с оператором.",
+                entities=entities,
+                extra={"content": ""},
+            )
+
+        if _is_meili_no_matches_text(cleaned):
+            return _service_fallback(
+                note="main_index_info: no matches",
+                handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
+                entities=entities,
+                reason="knowledge_not_found",
+                extra={"content": ""},
+            )
+
+        return {
+            "content": cleaned,
+            "note": "main_index_info: main_index",
+            "entities_used": entities,
+        }
+
     async def appointment_help(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         if query:
             try:
@@ -1364,6 +1673,17 @@ class Services:
         q = _get_first_present(entities, ["test_name", "service_name"]) or query
         if not q:
             return {"prepare": "", "note": "no query", "entities_used": entities}
+
+        # TODO(API-FIRST): здесь должна быть основная ветка поиска подготовки по анализам
+        # из API-кэша serviceInfoAll/preparation. Пока это осознанная заглушка.
+        api_cached_prepare = await self._prepare_from_analysis_api_cache_stub(q, entities)
+        if api_cached_prepare:
+            return {
+                "prepare": api_cached_prepare,
+                "note": "prepare: api cache",
+                "entities_used": entities,
+            }
+
         try:
             raw = await asyncio.to_thread(meilisearch.search_meili, "main_index", q)
             cleaned = html_cleaner.strip_html(raw)
@@ -1381,7 +1701,20 @@ class Services:
                 entities=entities,
                 extra={"prepare": ""},
             )
+        if _is_meili_no_matches_text(cleaned):
+            return _service_fallback(
+                note="prepare: no matches",
+                handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
+                entities=entities,
+                reason="knowledge_not_found",
+                extra={"prepare": ""},
+            )
         return {"prepare": cleaned, "entities_used": entities}
+
+    async def _prepare_from_analysis_api_cache_stub(self, query: str, entities: dict[str, Any]) -> str | None:
+        """Заглушка под API-first: подготовка к анализам из serviceInfoAll/preparation."""
+        _ = query, entities
+        return None
 
     async def test_result_status(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         def _result_fallback(note: str, message: str = "Сейчас не удалось получить результаты автоматически. Соединяю с оператором.") -> dict[str, Any]:

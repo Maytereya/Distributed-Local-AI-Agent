@@ -14,9 +14,10 @@ recovery-политика и сервисные интеграции вынес�
 
 from __future__ import annotations
 
-import os
 import re
 from typing import AsyncGenerator, Any
+
+from agent_logic_2 import config as c
 
 from .mess_types import Evidence, Plan, PlanStep, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -82,6 +83,7 @@ from .renderer import (
     render_complaint,
     render_medical_advice,
     render_stream,
+    format_service_bundle_for_patient,
     format_price_for_patient,
     format_doctor_schedule_for_patient,
     format_doctor_info_for_patient,
@@ -120,8 +122,15 @@ def _reset_appointment_state_flags(state: SessionState) -> None:
 
 
 def _env_flag(name: str, default: bool) -> bool:
-    raw = str(os.getenv(name, "1" if default else "0")).strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    cfg_flags = {
+        "MR_ROUTER_V2_ENABLE": c.MR_ROUTER_V2_ENABLE,
+        "MR_ROUTER_V2_SHADOW": c.MR_ROUTER_V2_SHADOW,
+        "MR_NLU_SHADOW": c.MR_NLU_SHADOW,
+    }
+    raw = cfg_flags.get(name, default)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _copy_decision(decision: RouteDecision, **overrides: Any) -> RouteDecision:
@@ -380,6 +389,10 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
     label = effective_label
     steps: list[PlanStep] = []
 
+    if "doc_request_main_index" in decision.flags or "doc_request_handoff" in decision.flags:
+        steps.append(PlanStep(tool="main_index_info", input={"query": user_text, "entities": dict(entities)}))
+        return Plan(label=label, steps=steps)
+
     if label == "TEST_RESULT":
         steps.append(PlanStep(tool="test_result_status", input={"query": user_text, "entities": dict(entities)}, auth="none"))
         return Plan(label=label, steps=steps)
@@ -409,7 +422,12 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
         return Plan(label=label, steps=steps)
 
     if label == "PRICE":
-        steps.append(PlanStep(tool="price_info", input={"query": user_text, "entities": dict(entities)}))
+        service_known = bool(str(entities.get("service_name") or entities.get("test_name") or "").strip())
+        doctor_known = bool(entities.get("doctor_id") or entities.get("doctor_name"))
+        if service_known and not doctor_known:
+            steps.append(PlanStep(tool="service_bundle_info", input={"query": user_text, "entities": dict(entities)}))
+        else:
+            steps.append(PlanStep(tool="price_info", input={"query": user_text, "entities": dict(entities)}))
         return Plan(label=label, steps=steps)
 
     if label == "ADDRESS":
@@ -445,7 +463,7 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
 
         try:
             if tool == "doctors_info":
-                ev.put("doctors_info", await services.doctors_info(q, ent, output_max=5))
+                ev.put("doctors_info", await services.doctors_info(q, ent))
             elif tool == "doctors_schedule_week":
                 ev.put("doctor_schedule", await services.doctors_schedule_week(q, ent))
             elif tool == "appointment_help":
@@ -458,6 +476,10 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
                 ev.put("test_result_status", await services.test_result_status(q, ent))
             elif tool == "price_info":
                 ev.put("price", await services.price_info(q, ent))
+            elif tool == "main_index_info":
+                ev.put("main_index_info", await services.main_index_info(q, ent))
+            elif tool == "service_bundle_info":
+                ev.put("service_bundle", await services.service_bundle_info(q, ent))
             elif tool == "address_info":
                 ev.put("address", await services.address_info(q, ent))
             elif tool == "news_info":
@@ -827,6 +849,16 @@ def _build_price_response(flow_label: str, evidence: Evidence, state: SessionSta
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 
+def _build_service_bundle_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
+    if flow_label != "PRICE":
+        return None
+    payload = evidence.get("service_bundle")
+    if not isinstance(payload, dict):
+        return None
+    text = format_service_bundle_for_patient(payload, state.last_entities)
+    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+
 def _build_doctor_info_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "DOCTOR_INFO":
         return None
@@ -948,6 +980,16 @@ def _build_news_response(flow_label: str, evidence: Evidence, state: SessionStat
         return None
     text = format_news_for_patient(news_payload, state.last_entities)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+
+def _build_main_index_info_response(evidence: Evidence) -> ResponseEnvelope | None:
+    payload = evidence.get("main_index_info")
+    if not isinstance(payload, dict):
+        return None
+    content = str(payload.get("content") or "").strip()
+    if content:
+        return ResponseEnvelope(text=content, attachments=[], handoff=False)
+    return None
 
 
 def _build_appointment_schedule_preview_response(
@@ -1153,13 +1195,6 @@ async def patient_routing_stream(
         yield render_medical_advice()
         return
 
-    if "doc_request_handoff" in decision.flags:
-        yield ResponseEnvelope(
-            text=handoff_message("doc_request_handoff"),
-            handoff=True,
-        )
-        return
-
     # Смягченный fallback для неуверенного NLU:
     # сначала уточняем, а к оператору передаем только после 3-го непонимания
     # или при явном запросе "оператор".
@@ -1229,6 +1264,16 @@ async def patient_routing_stream(
     handoff_required, handoff_msg, handoff_reason = evidence_requires_handoff(evidence)
     if handoff_required:
         yield ResponseEnvelope(text=handoff_message(handoff_reason, handoff_msg), handoff=True)
+        return
+
+    main_index_resp = _build_main_index_info_response(evidence)
+    if main_index_resp is not None:
+        yield main_index_resp
+        return
+
+    service_bundle_resp = _build_service_bundle_response(flow_label, evidence, state)
+    if service_bundle_resp is not None:
+        yield service_bundle_resp
         return
 
     price_resp = _build_price_response(flow_label, evidence, state)

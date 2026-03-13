@@ -34,7 +34,7 @@ def test_llm_primary_engine_used_when_enabled(monkeypatch):
         _ = text, state, runtime_options
         raise AssertionError("legacy engine should not be used")
 
-    monkeypatch.setenv("MR_NLU_ENGINE", "llm_primary")
+    monkeypatch.setattr("messengers_router.nlu_pipeline.c.MR_NLU_ENGINE", "llm_primary")
     monkeypatch.setattr("messengers_router.nlu_pipeline._analyze_llm_primary_with_candidates", fake_llm_primary)
     monkeypatch.setattr("messengers_router.nlu_pipeline._analyze_legacy_with_candidates", fake_legacy)
 
@@ -58,7 +58,7 @@ def test_strict_mode_forces_legacy_engine(monkeypatch):
             merged_from="legacy",
         )
 
-    monkeypatch.setenv("MR_NLU_ENGINE", "llm_primary")
+    monkeypatch.setattr("messengers_router.nlu_pipeline.c.MR_NLU_ENGINE", "llm_primary")
     monkeypatch.setattr("messengers_router.nlu_pipeline._analyze_llm_primary_with_candidates", fake_llm_primary)
     monkeypatch.setattr("messengers_router.nlu_pipeline._analyze_legacy_with_candidates", fake_legacy)
 
