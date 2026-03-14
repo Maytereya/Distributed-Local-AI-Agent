@@ -25,10 +25,11 @@ from typing import Any, Dict, List, Tuple, AsyncGenerator, TypeAlias, Literal, O
 from ollama import AsyncClient
 
 import agent_logic_2.ollama_settings as ollama_settings
+from agent_logic_1 import meilisearch_client as meilisearch, formulate
 from agent_logic_2 import llama_func_call as doctor_info, config as c
+from agent_logic_2.doctor_name_matching import resolve_schedule_surname
 from agent_logic_2.gigachat import async_gigachat_logic as gigachat
 from agent_logic_2.llama_func_call import repo
-from agent_logic_2.doctor_name_matching import resolve_schedule_surname
 from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
 from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
 from agent_logic_2.ollama_settings import LLMName
@@ -39,9 +40,8 @@ from agent_logic_2.text_constants import (
     UZI_FUZZY_TOKENS,
     PROCEDURE_HINT_REGEX,
 )
-from agent_logic_1 import meilisearch_client as meilisearch
-from converters import html_cleaner
 from agent_logic_2.text_fuzzy import fuzzy_match, normalize_text_for_fuzzy
+from converters import html_cleaner
 
 #  Инициализация logging для понимания логики роутера
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -379,6 +379,7 @@ def _is_procedure_like_query(text: str) -> bool:
         return True
     return bool(PROCEDURE_HINT_RE.search(text))
 
+
 # Возрастные паттерны
 AGE_PATTERNS: tuple[str, ...] = (
     r"\b[сc]\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b",
@@ -492,11 +493,11 @@ class CCNotesProcessor:
         if key == 'children':
             # Явные отрицания/только взрослые/совершеннолетние
             if (
-                re.search(r"\b[сc]\s*18\s*лет\b", s)
-                or re.search(r"принимает\s*[сc]\s*18", s)
-                or 'только взросл' in s
-                or 'взросл' in s
-                or 'совершеннолет' in s
+                    re.search(r"\b[сc]\s*18\s*лет\b", s)
+                    or re.search(r"принимает\s*[сc]\s*18", s)
+                    or 'только взросл' in s
+                    or 'взросл' in s
+                    or 'совершеннолет' in s
             ):
                 return False
             # Явные указания работы с детьми
@@ -1428,18 +1429,22 @@ async def instructions_search(_text: str,
                               **__) -> Tuple[
     str, bool]:
     """
-    Для поиска нужной информации в главном индексе или коллекции используется переформулировка запроса пользователя
+    Для поиска нужной информации в индексе опционно используется переформулировка запроса пользователя
     Пока неясно, следует ли ее делать.
+    :param manager_mode:
+    :param raw:
     :param index:
     :param think:
     :param _text:
     :param __:
     :return: Кортеж: результат поиска и стоп - паттерн для PENDING
     """
-    # Временно отключу переформулировку!
-    # extracted_keyword = await formulate.extract_keyword(_text, extract_type="sentence")
-
-    collected_info = await asyncio.to_thread(meilisearch.search_meili, index_name=index, query=_text)
+    # LLM - Переформулировка отключена!
+    extracted_keyword = await formulate.extract_keyword(_text,
+                                                        extract_type="sentence")
+    collected_info = await asyncio.to_thread(meilisearch.search_meili,
+                                             index_name=index,
+                                             query=_text)
 
     # Очистка HTML перед подстановкой в prompt
     clean_info = html_cleaner.strip_html(collected_info)
@@ -1912,7 +1917,7 @@ async def routing(text: str,
     """
 
     # 1. Инициализируем состояние сессии обработки входящего текстового блока
-    think = bool(think) if think is not None else False # ToDo: Надо проверить функционирование!
+    think = bool(think) if think is not None else False  # ToDo: Надо проверить функционирование!
     sess = sess or {}
     sess.setdefault("pending", None)
     sess.setdefault("history", [])
@@ -1920,8 +1925,7 @@ async def routing(text: str,
     # Handle pending module if exists
     # TODO: Понять зачем вообще это тут вызывается
     if pending_result := await handle_pending_module(text, sess, think=think):
-        yield pending_result # потенциальная проблема - вывод строки вместо кортежа.
-
+        yield pending_result  # потенциальная проблема - вывод строки вместо кортежа.
 
     # Process text segments
     result = await process_segments(text, sess, think=think, )

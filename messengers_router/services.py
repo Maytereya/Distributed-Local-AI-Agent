@@ -1587,7 +1587,13 @@ class Services:
                 "entities_used": entities,
             }
         try:
-            raw = await asyncio.to_thread(meilisearch.search_meili, "main_index", q)
+            raw = await asyncio.to_thread(
+                meilisearch.search_meili,
+                "main_index",
+                q,
+                output_mode="content_only",
+                max_chars=12000,
+            )
             cleaned = html_cleaner.strip_html(raw).strip()
         except Exception:
             return _service_fallback(
@@ -1623,7 +1629,13 @@ class Services:
     async def appointment_help(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         if query:
             try:
-                raw = await asyncio.to_thread(meilisearch.search_meili, "main_index", query)
+                raw = await asyncio.to_thread(
+                    meilisearch.search_meili,
+                    "main_index",
+                    query,
+                    output_mode="content_only",
+                    max_chars=12000,
+                )
                 cleaned = html_cleaner.strip_html(raw)
             except Exception:
                 return _service_fallback(
@@ -1685,7 +1697,13 @@ class Services:
             }
 
         try:
-            raw = await asyncio.to_thread(meilisearch.search_meili, "main_index", q)
+            raw = await asyncio.to_thread(
+                meilisearch.search_meili,
+                "main_index",
+                q,
+                output_mode="content_only",
+                max_chars=12000,
+            )
             cleaned = html_cleaner.strip_html(raw)
         except Exception:
             return _service_fallback(

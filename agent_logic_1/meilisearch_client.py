@@ -363,11 +363,20 @@ def meili_list_documents(
         return out_ids
 
 
-def search_meili(index_name: str, query: str, limit: int = 3,
-                 highlight: str = None, highlight_fields: str = '*') -> str:
+def search_meili(
+        index_name: str,
+        query: str,
+        limit: int = 3,
+        highlight: str = None,
+        highlight_fields: str = '*',
+        output_mode: str = "full",
+        max_chars: int | None = None,
+) -> str:
     """
     Выполняет поисковый запрос в указанном индексе Meilisearch и возвращает
-    отформатированные результаты.
+    результаты в одном из режимов:
+    - full: метаданные + контент (обратная совместимость, поведение по умолчанию);
+    - content_only: только текстовые фрагменты контента.
 
     Функция ищет документы, соответствующие переданному запросу, и формирует
     удобочитаемую строку с информацией о каждом найденном документе. В вывод
@@ -381,6 +390,11 @@ def search_meili(index_name: str, query: str, limit: int = 3,
     :param highlight: Параметр для тегов подсветки (в текущей реализации не используется).
     :param highlight_fields: Поля, по которым Meilisearch выполняет подсветку.
                              По умолчанию '*' — все поля.
+    :param output_mode: Режим вывода:
+                        - "full" (default): ID/заголовок/файл/страница + контент;
+                        - "content_only": только контент без сервисных полей.
+    :param max_chars: Опциональное ограничение длины ответа в символах.
+                      Если задано и ответ длиннее, хвост обрезается.
 
     :return: Строка с результатами поиска, где документы разделены
              '\n---------\n'. Возможные варианты возврата:
@@ -413,6 +427,10 @@ def search_meili(index_name: str, query: str, limit: int = 3,
 
         # --------------------------------------------
 
+        mode = str(output_mode or "full").strip().lower()
+        if mode not in {"full", "content_only"}:
+            mode = "full"
+
         # Собираем все куски контента:
         contents = []
         for doc in hits:
@@ -422,7 +440,15 @@ def search_meili(index_name: str, query: str, limit: int = 3,
             _file_name = fix_none_err(doc.get("file_name", "не указан"))
             _title = fix_none_err(doc.get("title", "не указан"))
             _page_number = fix_none_err(doc.get("page_number", 1))
-            content_str = fix_none_err(fmt.get("content", ""))
+            content_src = fmt.get("content")
+            if content_src is None:
+                content_src = doc.get("content", "")
+            content_str = str(content_src or "").strip()
+
+            if mode == "content_only":
+                if content_str:
+                    contents.append(content_str)
+                continue
 
             contents.append("ID документа: " + _id)
             contents.append("Заголовок: " + _title)
@@ -431,11 +457,17 @@ def search_meili(index_name: str, query: str, limit: int = 3,
             contents.append(content_str)
 
         # Склеиваем в итоговую строку
-        combined_text = "\n---------\n".join(contents)
+        if mode == "content_only":
+            combined_text = "\n\n".join(contents).strip()
+        else:
+            combined_text = "\n---------\n".join(contents)
+
+        if isinstance(max_chars, int) and max_chars > 0 and len(combined_text) > max_chars:
+            combined_text = combined_text[:max_chars].rstrip() + "…"
+
         if len(combined_text) == 0:
             combined_text = "Совпадений не найдено, cформулируйте запрос иначе"
         return combined_text
-        # return search_result
 
     except Exception as e:
         print(f"Error searching in index '{index_name}': {e}")

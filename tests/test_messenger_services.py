@@ -231,8 +231,10 @@ def test_doctors_schedule_week_excludes_explicit_non_samara_rows(monkeypatch):
 
 def test_appointment_help_meili(monkeypatch):
     svc = Services()
+    captured: dict[str, object] = {}
 
-    def fake_search(_index, _query):
+    def fake_search(_index, _query, *args, **kwargs):
+        captured["kwargs"] = dict(kwargs)
         return "<b>info</b>"
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
@@ -241,12 +243,15 @@ def test_appointment_help_meili(monkeypatch):
     res = run(svc.appointment_help("запись", {}))
 
     assert res["instructions"] == "info"
+    assert captured.get("kwargs") == {"output_mode": "content_only", "max_chars": 12000}
 
 
 def test_main_index_info_success(monkeypatch):
     svc = Services()
+    captured: dict[str, object] = {}
 
-    def fake_search(_index, _query):
+    def fake_search(_index, _query, *args, **kwargs):
+        captured["kwargs"] = dict(kwargs)
         return "<b>Справка для налоговой</b>"
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
@@ -257,12 +262,13 @@ def test_main_index_info_success(monkeypatch):
     assert res["content"] == "Справка для налоговой"
     assert res["note"] == "main_index_info: main_index"
     assert res.get("handoff_required") is not True
+    assert captured.get("kwargs") == {"output_mode": "content_only", "max_chars": 12000}
 
 
 def test_main_index_info_no_matches(monkeypatch):
     svc = Services()
 
-    def fake_search(_index, _query):
+    def fake_search(_index, _query, *args, **kwargs):
         return "Совпадений не найдено, cформулируйте запрос иначе"
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
@@ -280,7 +286,7 @@ def test_main_index_info_no_matches(monkeypatch):
 def test_main_index_info_source_unavailable_returns_handoff(monkeypatch):
     svc = Services()
 
-    def fake_search(_index, _query):
+    def fake_search(_index, _query, *args, **kwargs):
         raise RuntimeError("meili unavailable")
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
@@ -307,8 +313,10 @@ def test_test_assist_price_by_region(monkeypatch):
 
 def test_test_prepare_meili(monkeypatch):
     svc = Services()
+    captured: dict[str, object] = {}
 
-    def fake_search(_index, _query):
+    def fake_search(_index, _query, *args, **kwargs):
+        captured["kwargs"] = dict(kwargs)
         return "<i>подготовка</i>"
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
@@ -317,12 +325,13 @@ def test_test_prepare_meili(monkeypatch):
     res = run(svc.test_prepare("анализ крови", {}))
 
     assert res["prepare"] == "подготовка"
+    assert captured.get("kwargs") == {"output_mode": "content_only", "max_chars": 12000}
 
 
 def test_test_prepare_no_matches_returns_handoff(monkeypatch):
     svc = Services()
 
-    def fake_search(_index, _query):
+    def fake_search(_index, _query, *args, **kwargs):
         return "Совпадений не найдено, cформулируйте запрос иначе"
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
