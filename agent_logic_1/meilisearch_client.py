@@ -431,6 +431,36 @@ def search_meili(
         if mode not in {"full", "content_only"}:
             mode = "full"
 
+        def _to_text(value: Any) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, str):
+                return value.strip()
+            if isinstance(value, (list, tuple, set)):
+                parts = [str(x).strip() for x in value if str(x).strip()]
+                return ", ".join(parts).strip()
+            if isinstance(value, dict):
+                parts = [str(v).strip() for v in value.values() if str(v).strip()]
+                return " ".join(parts).strip()
+            return str(value).strip()
+
+        def _content_snippet(doc: dict, fmt: dict) -> str:
+            # Приоритет полей: сначала основное содержимое, затем расширенные текстовые поля.
+            for key in ("content", "html", "csv", "description", "indication", "preparation", "body"):
+                val_fmt = _to_text(fmt.get(key))
+                if val_fmt:
+                    return val_fmt
+                val_doc = _to_text(doc.get(key))
+                if val_doc:
+                    return val_doc
+
+            # Если текстового тела нет, используем title/keywords как слабый fallback,
+            # чтобы не терять релевантный hit при output_mode="content_only".
+            title_txt = _to_text(fmt.get("title")) or _to_text(doc.get("title"))
+            keywords_txt = _to_text(fmt.get("keywords")) or _to_text(doc.get("keywords"))
+            parts = [x for x in (title_txt, keywords_txt) if x]
+            return ". ".join(parts).strip()
+
         # Собираем все куски контента:
         contents = []
         for doc in hits:
@@ -440,10 +470,7 @@ def search_meili(
             _file_name = fix_none_err(doc.get("file_name", "не указан"))
             _title = fix_none_err(doc.get("title", "не указан"))
             _page_number = fix_none_err(doc.get("page_number", 1))
-            content_src = fmt.get("content")
-            if content_src is None:
-                content_src = doc.get("content", "")
-            content_str = str(content_src or "").strip()
+            content_str = _content_snippet(doc, fmt)
 
             if mode == "content_only":
                 if content_str:
