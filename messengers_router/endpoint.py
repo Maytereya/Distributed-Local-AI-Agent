@@ -18,6 +18,7 @@ from .llm_mode_policy import normalize_runtime_options
 from .memory import MemoryStore
 from .router import patient_routing_stream
 from .services import Services
+from .policies import handoff_message
 
 router = APIRouter()
 
@@ -170,23 +171,32 @@ async def messenger_generate(payload: MessengerGenerateRequest):
         async def event_stream():
             # debug=False — осознанно
             assistant_parts: list[str] = []
-            async for env in patient_routing_stream(
-                text,
-                state,
-                services,
-                memory,
-                debug=False,
-                runtime_options=runtime_options,
-            ):
-                if env.text:
-                    assistant_parts.append(str(env.text))
-                obj = {
-                    "text": env.text or "",
-                    "attachments": env.attachments or [],
-                    "handoff": bool(env.handoff),
-                    "state_update": {},  # в стриме не используем
+            try:
+                async for env in patient_routing_stream(
+                    text,
+                    state,
+                    services,
+                    memory,
+                    debug=False,
+                    runtime_options=runtime_options,
+                ):
+                    if env.text:
+                        assistant_parts.append(str(env.text))
+                    obj = {
+                        "text": env.text or "",
+                        "attachments": env.attachments or [],
+                        "handoff": bool(env.handoff),
+                        "state_update": {},  # в стриме не используем
+                    }
+                    yield (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+            except Exception:
+                fallback = {
+                    "text": handoff_message("service_error"),
+                    "attachments": [],
+                    "handoff": True,
+                    "state_update": {},
                 }
-                yield (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+                yield (json.dumps(fallback, ensure_ascii=False) + "\n").encode("utf-8")
             assistant_text = "".join(assistant_parts).strip()
             if assistant_text:
                 memory.append_turn(state, "assistant", assistant_text)
@@ -237,30 +247,37 @@ async def messenger_generate_once(payload: MessengerGenerateRequest):
         handoff = False
         state_update: dict[str, Any] = {}
 
-        async for env in patient_routing_stream(
-            text,
-            state,
-            services,
-            memory,
-            debug=payload.debug,
-            runtime_options=runtime_options,
-        ):
-            if env.text:
-                parts.append(env.text)
+        try:
+            async for env in patient_routing_stream(
+                text,
+                state,
+                services,
+                memory,
+                debug=payload.debug,
+                runtime_options=runtime_options,
+            ):
+                if env.text:
+                    parts.append(env.text)
 
-            if env.attachments:
-                for a in env.attachments:
-                    attachments.append(Attachment.model_validate(a))
+                if env.attachments:
+                    for a in env.attachments:
+                        attachments.append(Attachment.model_validate(a))
 
-            if env.handoff:
-                handoff = True
+                if env.handoff:
+                    handoff = True
 
-            # если debug включён — patient_routing_stream отдаст meta через state_update (обычно первым env)
-            if payload.debug and getattr(env, "state_update", None):
-                su = env.state_update or {}
-                # берём целиком (это будет {"debug": {...}})
-                if su:
-                    state_update = su
+                # если debug включён — patient_routing_stream отдаст meta через state_update (обычно первым env)
+                if payload.debug and getattr(env, "state_update", None):
+                    su = env.state_update or {}
+                    # берём целиком (это будет {"debug": {...}})
+                    if su:
+                        state_update = su
+        except Exception as e:
+            parts = [handoff_message("service_error")]
+            attachments = []
+            handoff = True
+            if payload.debug:
+                state_update = {"debug": {"endpoint_error": str(e)}}
 
         out = ResponseEnvelopeOut(
             text="".join(parts).strip(),

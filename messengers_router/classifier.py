@@ -441,11 +441,12 @@ def _collect_rule_intent_hints(text: str, last_entities: dict[str, Any] | None =
     appointment_intent = detect_appointment_intent(text)
     appointment_action = normalize_appointment_action(detect_appointment_action(text), text)
     appt_ctx = has_appointment_context(text, ctx, appointment_action)
+    prepare_intent = detect_prepare_intent(text)
     nonbookable_walkin = detect_nonbookable_walkin_intent(text, ctx)
 
     if detect_test_result_intent(text):
         labels.add("TEST_RESULT")
-    if nonbookable_walkin:
+    if nonbookable_walkin and not prepare_intent:
         labels.add("ADDRESS")
     if appointment_intent and appt_ctx and not (price_intent and appointment_action is None):
         labels.add("APPOINTMENT")
@@ -453,7 +454,7 @@ def _collect_rule_intent_hints(text: str, last_entities: dict[str, Any] | None =
         labels.add("PRICE")
     if detect_address_intent(text):
         labels.add("ADDRESS")
-    if detect_prepare_intent(text):
+    if prepare_intent:
         labels.add("PREPARE")
     if detect_test_assist_intent(text):
         labels.add("TEST_ASSIST")
@@ -824,6 +825,7 @@ async def deterministic_rule_decision(
         address_intent = detect_address_intent(text)
         specialty = extract_specialty(text or "")
         appt_ctx = has_appointment_context(text, last_entities, appointment_action)
+        prepare_intent = detect_prepare_intent(text)
         nonbookable_walkin = detect_nonbookable_walkin_intent(text, last_entities)
         address_dominant = is_address_dominant_intent(
             text,
@@ -880,7 +882,7 @@ async def deterministic_rule_decision(
                     needs_handoff=False,
                     context_action="continue",
                 )
-            elif nonbookable_walkin:
+            elif nonbookable_walkin and not prepare_intent:
                 entities = {}
                 svc = nonbookable_service_hint(text)
                 if svc:

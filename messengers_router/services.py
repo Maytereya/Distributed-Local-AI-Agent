@@ -1586,15 +1586,35 @@ class Services:
                 "note": "main_index_info: no query",
                 "entities_used": entities,
             }
+        normalized_q = _normalise_input(q)
+        fallback_queries: list[str] = []
+        if any(k in normalized_q for k in ("налог", "фнс", "вычет", "справк")):
+            fallback_queries = [
+                "справка для налоговой",
+                "налоговый вычет",
+                "справка об оплате медицинских услуг",
+            ]
+
+        queries = [q]
+        for fq in fallback_queries:
+            if _normalise_input(fq) != normalized_q:
+                queries.append(fq)
+
+        cleaned = ""
         try:
-            raw = await asyncio.to_thread(
-                meilisearch.search_meili,
-                "main_index",
-                q,
-                output_mode="content_only",
-                max_chars=12000,
-            )
-            cleaned = html_cleaner.strip_html(raw).strip()
+            for qq in queries:
+                raw = await asyncio.to_thread(
+                    meilisearch.search_meili,
+                    "main_index",
+                    qq,
+                    output_mode="content_only",
+                    max_chars=12000,
+                )
+                cleaned = html_cleaner.strip_html(raw).strip()
+                if _is_meili_error_text(cleaned):
+                    continue
+                if not _is_meili_no_matches_text(cleaned):
+                    break
         except Exception:
             return _service_fallback(
                 note="main_index_info source unavailable",

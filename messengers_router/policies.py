@@ -256,7 +256,7 @@ SERVICE_GENERIC_STOPWORDS = {
     "процедуру",
 }
 _SERVICE_FOLLOWUP_RE = re.compile(
-    r"\b(?:услуг\w*|процедур\w*|обследовани\w*|на|по)\s+([a-zа-яё0-9\- ]{2,80})",
+    r"\b(?:услуг\w*|процедур\w*|обследовани\w*|на|по|к)\s+([a-zа-яё0-9\- ]{2,80})",
     re.I,
 )
 _SERVICE_SINGLE_WORD_RE = re.compile(r"^\s*([a-zа-яё][a-zа-яё0-9\-]{3,})\s*$", re.I)
@@ -728,6 +728,9 @@ def detect_nonbookable_walkin_intent(text: str, entities: dict[str, Any] | None 
     """
     t = text or ""
     if not t.strip():
+        return False
+    # Вопрос "как подготовиться" должен идти в PREPARE, а не в ADDRESS.
+    if detect_prepare_intent(t):
         return False
     if detect_test_result_intent(t):
         return False

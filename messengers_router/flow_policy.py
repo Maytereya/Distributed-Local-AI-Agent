@@ -15,6 +15,10 @@ from .city import match_city
 from .policies import (
     branch_options_to_indexable,
     build_branch_index,
+    detect_address_intent,
+    detect_doc_request_intent,
+    detect_prepare_intent,
+    detect_price_intent,
     detect_schedule_intent,
     extract_branch_hint,
     looks_like_branch_hint,
@@ -138,6 +142,18 @@ def _is_city_only_reply(text: str) -> bool:
     return city_stem in s_norm and len(s_norm.split()) <= 2
 
 
+def _is_short_prepare_followup(text: str) -> bool:
+    s = str(text or "").strip()
+    if not s or len(s) > 64:
+        return False
+    tokens = [t for t in re.findall(r"[A-Za-zА-Яа-яЁё0-9\-]+", s) if t]
+    if not tokens or len(tokens) > 5:
+        return False
+    if detect_price_intent(s) or detect_address_intent(s) or detect_doc_request_intent(s):
+        return False
+    return True
+
+
 def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_text: str = "") -> str:
     if not pending:
         return decision.label
@@ -161,6 +177,11 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
         and decision.label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
     ):
         return "APPOINTMENT"
+    if pending_label == "PREPARE":
+        # Короткий ответ на уточнение подготовки ("вульвоскопия") не должен
+        # сбрасываться в PRICE/ADDRESS из-за одиночной переклассификации.
+        if detect_prepare_intent(user_text) or _is_short_prepare_followup(user_text):
+            return "PREPARE"
     if _should_break_pending(decision, pending_label):
         return decision.label
     return pending_label

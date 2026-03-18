@@ -906,10 +906,14 @@ def _build_price_response(flow_label: str, evidence: Evidence, state: SessionSta
     if isinstance(used, dict):
         doctor_id_resolved = used.get("doctor_id_resolved")
         doctor_name_resolved = used.get("doctor_name_resolved")
+        service_name_effective = str(used.get("service_name_effective") or "").strip()
         if doctor_id_resolved:
             render_entities["doctor_id"] = doctor_id_resolved
         if isinstance(doctor_name_resolved, str) and doctor_name_resolved.strip():
             render_entities["doctor_name"] = doctor_name_resolved.strip()
+        if service_name_effective:
+            render_entities["service_name"] = service_name_effective
+            render_entities.pop("test_name", None)
     text = format_price_for_patient(price_payload, render_entities)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
