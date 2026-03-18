@@ -251,6 +251,26 @@ def _is_new_topic_while_confirm_pending(user_text: str) -> bool:
     return ("?" in text) and (len(text.split()) >= 4)
 
 
+def _is_appointment_datetime_followup(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not text or not has_datetime_signal(text):
+        return False
+    low = text.lower()
+    if (
+        detect_prepare_intent(low)
+        or detect_test_assist_intent(low)
+        or detect_test_result_intent(low)
+        or detect_doc_request_intent(low)
+        or detect_schedule_intent(low)
+        or detect_doctor_info_intent(low)
+        or detect_address_intent(low)
+        or detect_price_intent(low)
+        or detect_nonbookable_walkin_intent(text)
+    ):
+        return False
+    return True
+
+
 def _early_debug_state_update(
     debug: bool,
     *,
@@ -644,6 +664,21 @@ async def route_patient_message(
     else:
         decision = await analyze(user_text, state.last_entities, runtime_options=runtime_options)
     decision = await _verify_doctor_entity(decision, services, user_text)
+    # В активном APPOINTMENT flow короткий follow-up с датой/временем
+    # считаем продолжением записи до применения context_action.
+    if (
+        state.last_entities.get("appointment_flow_active")
+        and _is_appointment_datetime_followup(user_text)
+        and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "ADDRESS", "PRICE"}
+    ):
+        decision = _copy_decision(
+            decision,
+            label="APPOINTMENT",
+            confidence=max(decision.confidence, 0.68),
+            flags=set(decision.flags) | {"flow_datetime_appointment_prelock"},
+            needs_handoff=False,
+            context_action="continue",
+        )
     decision = _apply_context_action(decision, state, user_text)
     promoted_label, promoted_flags = apply_verified_doctor_override(decision.label, set(decision.flags), user_text)
     if promoted_label != decision.label or promoted_flags != decision.flags:

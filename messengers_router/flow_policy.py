@@ -20,6 +20,7 @@ from .policies import (
     detect_prepare_intent,
     detect_price_intent,
     detect_schedule_intent,
+    has_datetime_signal,
     extract_branch_hint,
     looks_like_branch_hint,
     match_branch_hint,
@@ -262,6 +263,28 @@ def _apply_context_action(decision: RouteDecision, state: SessionState, user_tex
     if action == "new_topic":
         _clear_topic_state(state)
         return decision
+
+    if (
+        action == "overwrite_doctor"
+        and state.last_entities.get("appointment_flow_active")
+        and has_datetime_signal(user_text or "")
+        and not detect_schedule_intent(user_text or "")
+    ):
+        # Во время активной записи реплика с датой/временем почти всегда
+        # является продолжением APPOINTMENT, а не сменой врача.
+        return RouteDecision(
+            label=decision.label,
+            confidence=decision.confidence,
+            entities=dict(decision.entities),
+            flags=set(decision.flags) | {"context_action_overwrite_doctor_blocked"},
+            needs_handoff=decision.needs_handoff,
+            context_action="continue",
+            source=decision.source,
+            clarify_needed=decision.clarify_needed,
+            clarify_reason=decision.clarify_reason,
+            clarify_slots=list(decision.clarify_slots),
+            intent_candidates=list(decision.intent_candidates),
+        )
 
     if action != "overwrite_doctor":
         return decision
