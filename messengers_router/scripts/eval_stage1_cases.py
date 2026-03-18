@@ -39,7 +39,7 @@ CASES: list[Case] = [
     Case("T2", "Нужен чекап по анемии", "TEST_ASSIST", False),
     Case("T3", "Можно сдать ОАК и ферритин завтра?", "TEST_ASSIST", False),
     Case("D1", "Адрес филиала на Победы 83 и режим работы", "ADDRESS", False),
-    Case("D2", "Где вы находитесь в Оренбурге?", "ADDRESS", False),
+    Case("D2", "Где вы находитесь в Оренбурге?", "ADDRESS", True),
     Case("R1", "Результаты анализов готовы?", "TEST_RESULT", False),
     Case("R2", "Пришлите PDF бланк анализов", "TEST_RESULT", False),
     Case("C1", "Мне нужна справка для налогового вычета", "OTHER", True),

@@ -1682,7 +1682,10 @@ class Services:
         }
 
     async def test_prepare(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        q = _get_first_present(entities, ["test_name", "service_name"]) or query
+        raw_query = str(query or "").strip()
+        entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
+        # Для нового вопроса берем текст пользователя, чтобы не залипала старая услуга из контекста.
+        q = raw_query or entity_query
         if not q:
             return {"prepare": "", "note": "no query", "entities_used": entities}
 
@@ -1810,18 +1813,25 @@ class Services:
                 resolved_doctor_fio = q_resolved_fio
                 doctor_name = q_resolved_fio
         entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
-        query_service_name = _extract_price_service_from_query(query)
-        service_name = query_service_name or entity_service_name or query
+        query_text = str(query or "").strip()
+        query_service_name = _extract_price_service_from_query(query_text)
+        # Для явного нового price-запроса не тянем старую услугу из entities.
+        if query_service_name:
+            service_name = query_service_name
+        elif query_text and _PRICE_REQUEST_RE.search(query_text):
+            service_name = query_text
+        else:
+            service_name = entity_service_name or query_text
         # Если вопрос явно doctor-specific и сформулирован как новый price-запрос,
         # не тянем "залипшую" услугу из прошлого контекста.
         if (
             doctor_id
             and not query_service_name
-            and query
-            and _DOCTOR_PRICE_HINT_RE.search(str(query))
-            and _PRICE_REQUEST_RE.search(str(query))
+            and query_text
+            and _DOCTOR_PRICE_HINT_RE.search(query_text)
+            and _PRICE_REQUEST_RE.search(query_text)
         ):
-            service_name = query
+            service_name = query_text
         needle = _normalise_input(service_name)
 
         if doctor_id:

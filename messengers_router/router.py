@@ -69,6 +69,10 @@ from .policies import (
     detect_nonbookable_walkin_intent,
     detect_test_assist_intent,
     detect_test_result_intent,
+    detect_prepare_intent,
+    detect_price_intent,
+    detect_address_intent,
+    detect_doc_request_intent,
     detect_schedule_intent,
     detect_doctor_info_intent,
     has_datetime_signal,
@@ -194,6 +198,10 @@ def _should_keep_appointment_flow_override(user_text: str) -> bool:
     if (
         detect_test_result_intent(low)
         or detect_test_assist_intent(low)
+        or detect_prepare_intent(low)
+        or detect_price_intent(low)
+        or detect_address_intent(low)
+        or detect_doc_request_intent(low)
         or detect_nonbookable_walkin_intent(text)
         or detect_schedule_intent(low)
         or detect_doctor_info_intent(low)
@@ -215,6 +223,63 @@ def _should_keep_appointment_flow_override(user_text: str) -> bool:
     if _PATIENT_NAME_FRAGMENT_RE.fullmatch(text):
         return True
     return False
+
+
+def _is_new_topic_while_confirm_pending(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    if contextual_reply_kind(text) in {"yes", "no"}:
+        return False
+
+    low = text.lower()
+    if (
+        detect_prepare_intent(low)
+        or detect_price_intent(low)
+        or detect_test_assist_intent(low)
+        or detect_test_result_intent(low)
+        or detect_address_intent(low)
+        or detect_schedule_intent(low)
+        or detect_doctor_info_intent(low)
+        or detect_doc_request_intent(low)
+        or detect_nonbookable_walkin_intent(text)
+    ):
+        return True
+
+    # Длинная вопросительная реплика с высокой вероятностью новая тема.
+    return ("?" in text) and (len(text.split()) >= 4)
+
+
+def _early_debug_state_update(
+    debug: bool,
+    *,
+    label: str,
+    handoff: bool,
+    flags: set[str] | None = None,
+    context_action: str = "continue",
+    confidence: float = 0.95,
+) -> dict[str, Any]:
+    if not debug:
+        return {}
+    return {
+        "debug": {
+            "decision": {
+                "label": label,
+                "confidence": confidence,
+                "context_action": context_action,
+                "source": "router_precheck",
+                "flags": sorted(list(flags or set())),
+                "entities": {},
+                "needs_handoff": handoff,
+                "clarify_needed": False,
+                "clarify_reason": "",
+                "clarify_slots": [],
+                "intent_candidates": [],
+            },
+            "plan": {"label": label, "steps": []},
+            "evidence": {"items": {}, "debug_trace": [{"router_precheck": {"reason": context_action}}]},
+        }
+    }
 
 
 async def _verify_doctor_entity(
@@ -598,7 +663,7 @@ async def route_patient_message(
         for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"):
             state.last_entities.pop(k, None)
 
-    if decision.label in {"APPOINTMENT", "TEST_ASSIST"}:
+    if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text):
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})
         if detect_nonbookable_walkin_intent(user_text, merged_ctx):
@@ -1102,6 +1167,14 @@ async def patient_routing_stream(
             text=handoff_message("manual_operator"),
             attachments=[],
             handoff=True,
+            state_update=_early_debug_state_update(
+                debug,
+                label="OTHER",
+                handoff=True,
+                flags={"manual_operator"},
+                context_action="new_topic",
+                confidence=1.0,
+            ),
         )
         return
 
@@ -1115,6 +1188,14 @@ async def patient_routing_stream(
             text=_SAMARA_ONLY_OPERATOR_TEXT,
             attachments=[],
             handoff=True,
+            state_update=_early_debug_state_update(
+                debug,
+                label="ADDRESS",
+                handoff=True,
+                flags={"city_not_supported"},
+                context_action="new_topic",
+                confidence=1.0,
+            ),
         )
         return
 
@@ -1130,6 +1211,13 @@ async def patient_routing_stream(
             yield ResponseEnvelope(
                 text=appointment_text_confirmed_handoff(summary),
                 handoff=True,
+                state_update=_early_debug_state_update(
+                    debug,
+                    label="APPOINTMENT",
+                    handoff=True,
+                    flags={"appointment_confirm_yes"},
+                    confidence=1.0,
+                ),
             )
             return
         if confirm_transition == APPOINTMENT_CONFIRM_NO:
@@ -1141,13 +1229,43 @@ async def patient_routing_stream(
             yield ResponseEnvelope(
                 text=appointment_text_reask_datetime(),
                 handoff=False,
+                state_update=_early_debug_state_update(
+                    debug,
+                    label="APPOINTMENT",
+                    handoff=False,
+                    flags={"appointment_confirm_no"},
+                    confidence=1.0,
+                ),
             )
             return
-        yield ResponseEnvelope(
-            text=appointment_text_reask_confirm(),
-            handoff=False,
-        )
-        return
+        if _is_new_topic_while_confirm_pending(user_text):
+            # Пользователь сменил тему: выходим из шага подтверждения.
+            state.last_entities.pop("appointment_confirm_pending", None)
+            state.last_entities.pop("appointment_flow_active", None)
+            for k in (
+                "date_from",
+                "date_to",
+                "time_from",
+                "time_to",
+                "date_hint",
+                "appointment_windows",
+                "appointment_branch_options",
+            ):
+                state.last_entities.pop(k, None)
+            memory.clear_pending(state)
+        else:
+            yield ResponseEnvelope(
+                text=appointment_text_reask_confirm(),
+                handoff=False,
+                state_update=_early_debug_state_update(
+                    debug,
+                    label="APPOINTMENT",
+                    handoff=False,
+                    flags={"appointment_confirm_reask"},
+                    confidence=1.0,
+                ),
+            )
+            return
 
     try:
         decision, plan, evidence = await route_patient_message(
