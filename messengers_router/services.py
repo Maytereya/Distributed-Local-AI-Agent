@@ -824,6 +824,115 @@ def _is_meili_no_matches_text(text: Any) -> bool:
     return "совпадений не найдено" in norm
 
 
+_DOC_RELEVANCE_STOPWORDS = {
+    "как",
+    "что",
+    "где",
+    "когда",
+    "нужно",
+    "нужна",
+    "нужен",
+    "нужны",
+    "получить",
+    "получения",
+    "подскажите",
+    "пожалуйста",
+    "добрый",
+    "день",
+    "здравствуйте",
+    "мне",
+    "для",
+    "по",
+    "про",
+    "это",
+    "этого",
+    "требуется",
+    "делаете",
+    "сколько",
+    "стоимость",
+    "стоимости",
+}
+
+
+def _doc_tokens(text: str) -> set[str]:
+    norm = _normalise_input(text).replace("ё", "е")
+    out: set[str] = set()
+    for token in re.findall(r"[a-zа-я0-9]{3,}", norm):
+        if token.isdigit() or token in _DOC_RELEVANCE_STOPWORDS:
+            continue
+        out.add(token)
+    return out
+
+
+def _is_main_index_relevant(query: str, content: str, *, doc_kind: str) -> bool:
+    content_norm = _normalise_input(content).replace("ё", "е")
+    query_norm = _normalise_input(query).replace("ё", "е")
+    if not content_norm:
+        return False
+
+    if doc_kind == "tax":
+        tax_anchors = (
+            "налог",
+            "вычет",
+            "фнс",
+            "налогов",
+            "оплате медицинских услуг",
+        )
+        if not any(anchor in content_norm for anchor in tax_anchors):
+            return False
+    else:
+        if "договор" in query_norm and "договор" not in content_norm:
+            return False
+        if "амбулатор" in query_norm and not ("амбулатор" in content_norm or "карт" in content_norm):
+            return False
+        if ("соревн" in query_norm or "допуск" in query_norm) and not (
+            "соревн" in content_norm or "допуск" in content_norm
+        ):
+            return False
+        if "справк" in query_norm and not any(x in query_norm for x in ("налог", "вычет", "фнс")) and not (
+            "справк" in content_norm or "допуск" in content_norm
+        ):
+            return False
+
+    q_tokens = _doc_tokens(query_norm)
+    if not q_tokens:
+        return True
+    content_tokens = _doc_tokens(content_norm)
+    return bool(q_tokens & content_tokens)
+
+
+def _is_prepare_relevant(query: str, content: str) -> bool:
+    query_norm = _normalise_input(query).replace("ё", "е")
+    content_norm = _normalise_input(content).replace("ё", "е")
+    if not content_norm:
+        return False
+    if not any(x in content_norm for x in ("подготов", "натощак", "перед процедур", "перед исследован")):
+        return False
+
+    anchors = (
+        "фгдс",
+        "гастроскоп",
+        "кольпоскоп",
+        "вульвоскоп",
+        "биопс",
+        "узи",
+        "анализ",
+        "кров",
+        "моч",
+        "сперм",
+        "холестерин",
+    )
+    query_anchors = [a for a in anchors if a in query_norm]
+    if query_anchors and not any(a in content_norm for a in query_anchors):
+        return False
+
+    q_tokens = _doc_tokens(query_norm)
+    c_tokens = _doc_tokens(content_norm)
+    if q_tokens and not (q_tokens & c_tokens):
+        return False
+    return True
+
+
 _KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = "В моей базе данных информации недостаточно, перевожу на оператора."
 
 
@@ -1517,21 +1626,35 @@ class Services:
             for qv in surname_variants(str(query_name)):
                 if qv not in candidates:
                     candidates.append(qv)
+
+        async def _schedule_call(candidate_value: str, region_value: str | None = None) -> Any:
+            last_exc: Exception | None = None
+            for attempt in range(2):
+                try:
+                    if region_value:
+                        try:
+                            return await asyncio.to_thread(api_nayka.find_doctor_schedule, candidate_value, region_value)
+                        except TypeError:
+                            return await asyncio.to_thread(api_nayka.find_doctor_schedule, candidate_value)
+                    return await asyncio.to_thread(api_nayka.find_doctor_schedule, candidate_value)
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt == 0:
+                        await asyncio.sleep(0.12)
+                        continue
+            if last_exc is not None:
+                raise last_exc
+            return []
+
         try:
             for candidate in candidates:
-                try:
-                    data = await asyncio.to_thread(api_nayka.find_doctor_schedule, candidate, region_name)
-                except TypeError:
-                    data = await asyncio.to_thread(api_nayka.find_doctor_schedule, candidate)
+                data = await _schedule_call(candidate, region_name)
                 if isinstance(data, list) and data:
                     last_name = candidate
                     break
                 # fallback: если регионный фильтр дал пусто, пробуем без региона
                 if region_name:
-                    try:
-                        data = await asyncio.to_thread(api_nayka.find_doctor_schedule, candidate)
-                    except Exception:
-                        data = []
+                    data = await _schedule_call(candidate, None)
                     if isinstance(data, list) and data:
                         last_name = candidate
                         break
@@ -1586,9 +1709,14 @@ class Services:
                 "note": "main_index_info: no query",
                 "entities_used": entities,
             }
+        doc_kind = str(entities.get("doc_request_kind") or "").strip().lower()
+        if doc_kind not in {"tax", "generic"}:
+            norm_q = _normalise_input(q)
+            doc_kind = "tax" if any(k in norm_q for k in ("налог", "вычет", "фнс")) else "generic"
+
         normalized_q = _normalise_input(q)
         fallback_queries: list[str] = []
-        if any(k in normalized_q for k in ("налог", "фнс", "вычет", "справк")):
+        if doc_kind == "tax" and any(k in normalized_q for k in ("налог", "фнс", "вычет", "справк")):
             fallback_queries = [
                 "справка для налоговой",
                 "налоговый вычет",
@@ -1601,6 +1729,7 @@ class Services:
                 queries.append(fq)
 
         cleaned = ""
+        relevant_hit = False
         try:
             for qq in queries:
                 raw = await asyncio.to_thread(
@@ -1613,7 +1742,10 @@ class Services:
                 cleaned = html_cleaner.strip_html(raw).strip()
                 if _is_meili_error_text(cleaned):
                     continue
-                if not _is_meili_no_matches_text(cleaned):
+                if _is_meili_no_matches_text(cleaned):
+                    continue
+                if _is_main_index_relevant(qq, cleaned, doc_kind=doc_kind):
+                    relevant_hit = True
                     break
         except Exception:
             return _service_fallback(
@@ -1640,9 +1772,18 @@ class Services:
                 extra={"content": ""},
             )
 
+        if not relevant_hit:
+            return _service_fallback(
+                note=f"main_index_info: weak relevance ({doc_kind})",
+                handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
+                entities=entities,
+                reason="knowledge_not_found",
+                extra={"content": ""},
+            )
+
         return {
             "content": cleaned,
-            "note": "main_index_info: main_index",
+            "note": f"main_index_info: main_index ({doc_kind})",
             "entities_used": entities,
         }
 
@@ -1750,6 +1891,14 @@ class Services:
                 reason="knowledge_not_found",
                 extra={"prepare": ""},
             )
+        if not _is_prepare_relevant(q, cleaned):
+            return _service_fallback(
+                note="prepare: weak relevance",
+                handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
+                entities=entities,
+                reason="knowledge_not_found",
+                extra={"prepare": ""},
+            )
         return {"prepare": cleaned, "entities_used": entities}
 
     async def _prepare_from_analysis_api_cache_stub(self, query: str, entities: dict[str, Any]) -> str | None:
@@ -1820,6 +1969,20 @@ class Services:
         }
 
     async def price_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
+        async def _load_with_retry(fn: Any, *args: Any) -> Any:
+            last_exc: Exception | None = None
+            for attempt in range(2):
+                try:
+                    return await asyncio.to_thread(fn, *args)
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt == 0:
+                        await asyncio.sleep(0.12)
+                        continue
+            if last_exc is not None:
+                raise last_exc
+            return []
+
         doctor_id = _as_int(entities.get("doctor_id"))
         doctor_name = _get_first_present(entities, ["doctor_name", "doctor", "fio", "last_name", "doctor_last_name"]) or ""
         resolved_doctor_fio: str | None = None
@@ -1857,7 +2020,7 @@ class Services:
         if doctor_id:
             # doctor prices: branch-level regionId из /doctorServicePricesByRegion cache
             try:
-                prices = await asyncio.to_thread(api_price.load_doctor_prices)
+                prices = await _load_with_retry(api_price.load_doctor_prices)
             except Exception:
                 return _service_fallback(
                     note="price_info source unavailable",
@@ -1886,7 +2049,7 @@ class Services:
 
         # retail prices: city-level regionId в /priceByRegion/{cityRegionId}
         try:
-            price_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
+            price_rows = await _load_with_retry(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
         except Exception:
             return _service_fallback(
                 note="price_info source unavailable",

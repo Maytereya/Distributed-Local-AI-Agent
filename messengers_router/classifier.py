@@ -33,6 +33,7 @@ from .policies import (
     detect_prepare_intent,
     detect_schedule_intent,
     detect_doc_request_intent,
+    detect_tax_doc_request_intent,
     detect_appointment_intent,
     detect_appointment_action,
     detect_price_intent,
@@ -519,11 +520,13 @@ async def guardrail_precheck(
             source="guardrail",
         )
     if detect_doc_request_intent(text):
+        doc_kind = "tax" if detect_tax_doc_request_intent(text) else "generic"
+        kind_flag = "doc_request_tax" if doc_kind == "tax" else "doc_request_generic"
         return RouteDecision(
             label="OTHER",
             confidence=0.85,
-            entities={},
-            flags=local_flags | {"doc_request_main_index"},
+            entities={"doc_request_kind": doc_kind},
+            flags=local_flags | {"doc_request_main_index", kind_flag},
             needs_handoff=False,
             context_action="new_topic",
             source="guardrail",
@@ -751,11 +754,13 @@ async def deterministic_rule_decision(
             context_action="new_topic",
         )
     elif detect_doc_request_intent(text):
+        doc_kind = "tax" if detect_tax_doc_request_intent(text) else "generic"
+        kind_flag = "doc_request_tax" if doc_kind == "tax" else "doc_request_generic"
         decision = RouteDecision(
             label="OTHER",
             confidence=0.85,
-            entities={},
-            flags=local_flags | {"doc_request_main_index"},
+            entities={"doc_request_kind": doc_kind},
+            flags=local_flags | {"doc_request_main_index", kind_flag},
             needs_handoff=False,
             context_action="new_topic",
         )

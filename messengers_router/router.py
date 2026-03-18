@@ -31,6 +31,7 @@ from .flow_policy import (
     _get_secondary_queue,
     _hydrate_appointment_context_from_schedule,
     _is_appointment_waiting_patient_name,
+    _is_short_prepare_followup,
     _looks_like_patient_fio,
     _normalize_secondary_labels,
     _safe_get_branches,
@@ -682,6 +683,43 @@ async def route_patient_message(
                 context_action="continue",
                 source="guardrail_post",
             )
+
+    # Короткий follow-up после PREPARE (например, "вульвоскопия") держим
+    # в подготовке, чтобы не сваливаться обратно в TEST_ASSIST.
+    if (
+        str(state.last_entities.get("_last_label") or "") == "PREPARE"
+        and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE"}
+        and _is_short_prepare_followup(user_text)
+        and not detect_prepare_intent(user_text)
+    ):
+        decision = _copy_decision(
+            decision,
+            label="PREPARE",
+            confidence=max(decision.confidence, 0.62),
+            flags=set(decision.flags) | {"flow_prepare_followup_override"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+
+    # В активном сценарии записи реплики с датой/временем трактуем как
+    # продолжение APPOINTMENT, даже если NLU ушел в расписание/OTHER.
+    if (
+        state.last_entities.get("appointment_flow_active")
+        and has_datetime_signal(user_text)
+        and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "ADDRESS", "PRICE"}
+        and not detect_prepare_intent(user_text)
+        and not detect_test_assist_intent(user_text)
+        and not detect_test_result_intent(user_text)
+        and not detect_doc_request_intent(user_text)
+    ):
+        decision = _copy_decision(
+            decision,
+            label="APPOINTMENT",
+            confidence=max(decision.confidence, 0.66),
+            flags=set(decision.flags) | {"flow_datetime_appointment_override"},
+            needs_handoff=False,
+            context_action="continue",
+        )
 
     # Сохраняем сценарий записи на операторских уточнениях (ветка "да/нет", короткие ответы и т.п.).
     if (

@@ -40,17 +40,27 @@ REQUIRED_SLOTS: dict[str, list[str]] = {
 UNSAFE_LABELS = {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
 
 
-def post_json(url: str, payload: dict, timeout_sec: int = 50) -> dict[str, Any]:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        url=url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-        raw = resp.read().decode("utf-8")
-    return json.loads(raw)
+def post_json(url: str, payload: dict, timeout_sec: int = 50, retries: int = 1) -> dict[str, Any]:
+    last_exc: Exception | None = None
+    for attempt in range(max(0, retries) + 1):
+        try:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                url=url,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+                raw = resp.read().decode("utf-8")
+            return json.loads(raw)
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            last_exc = exc
+            if attempt >= retries:
+                raise
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("post_json failed without exception")
 
 
 def preflight_endpoint(url: str) -> tuple[bool, str]:

@@ -131,6 +131,14 @@ DOC_REQUEST_PATTERNS = [
     r"\bзаявлени\w*\s+на\s+возврат\w*",
 ]
 
+TAX_DOC_REQUEST_PATTERNS = [
+    r"\bфнс\b",
+    r"\bналог\w*\s+вычет\w*",
+    r"\bсправк\w*.*\bналог\w*",
+    r"\bсправк\w*.*\bвычет\w*",
+    r"\bсправк\w*.*\bоплат\w*.*\bмедицинск\w*.*\bуслуг\w*",
+]
+
 APPOINTMENT_INTENT_PATTERNS = [
     r"\bзапис\w*",
     r"\bзапиш\w*",
@@ -192,6 +200,7 @@ _TEST_ASSIST_RE = _compile_patterns(TEST_ASSIST_PATTERNS)
 _PREPARE_RE = _compile_patterns(PREPARE_PATTERNS)
 _SCHEDULE_RE = _compile_patterns(SCHEDULE_PATTERNS)
 _DOC_REQUEST_RE = _compile_patterns(DOC_REQUEST_PATTERNS)
+_TAX_DOC_REQUEST_RE = _compile_patterns(TAX_DOC_REQUEST_PATTERNS)
 _APPOINTMENT_INTENT_RE = _compile_patterns(APPOINTMENT_INTENT_PATTERNS)
 _PRICE_RE = _compile_patterns(PRICE_PATTERNS)
 _ADDRESS_RE = _compile_patterns(ADDRESS_PATTERNS)
@@ -570,6 +579,10 @@ def detect_schedule_intent(text: str) -> bool:
 
 def detect_doc_request_intent(text: str) -> bool:
     return _matches_any(text, _DOC_REQUEST_RE)
+
+
+def detect_tax_doc_request_intent(text: str) -> bool:
+    return _matches_any(text, _TAX_DOC_REQUEST_RE)
 
 
 def detect_appointment_intent(text: str) -> bool:

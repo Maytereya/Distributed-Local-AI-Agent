@@ -136,6 +136,8 @@ class MemoryStore:
             cleaned[k] = v
 
         if not cleaned:
+            if label:
+                old["_last_label"] = label
             return
 
         # object change rules

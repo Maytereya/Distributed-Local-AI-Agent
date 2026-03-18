@@ -163,47 +163,45 @@ async def messenger_generate(payload: MessengerGenerateRequest):
         queue_timeout_ms=payload.queue_timeout_ms,
     )
 
-
     state = await memory.aget(session_id)
-    try:
-        memory.append_turn(state, "user", text)
+    memory.append_turn(state, "user", text)
 
-        async def event_stream():
-            # debug=False — осознанно
-            assistant_parts: list[str] = []
-            try:
-                async for env in patient_routing_stream(
-                    text,
-                    state,
-                    services,
-                    memory,
-                    debug=False,
-                    runtime_options=runtime_options,
-                ):
-                    if env.text:
-                        assistant_parts.append(str(env.text))
-                    obj = {
-                        "text": env.text or "",
-                        "attachments": env.attachments or [],
-                        "handoff": bool(env.handoff),
-                        "state_update": {},  # в стриме не используем
-                    }
-                    yield (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
-            except Exception:
-                fallback = {
-                    "text": handoff_message("service_error"),
-                    "attachments": [],
-                    "handoff": True,
-                    "state_update": {},
+    async def event_stream():
+        # debug=False — осознанно
+        assistant_parts: list[str] = []
+        try:
+            async for env in patient_routing_stream(
+                text,
+                state,
+                services,
+                memory,
+                debug=False,
+                runtime_options=runtime_options,
+            ):
+                if env.text:
+                    assistant_parts.append(str(env.text))
+                obj = {
+                    "text": env.text or "",
+                    "attachments": env.attachments or [],
+                    "handoff": bool(env.handoff),
+                    "state_update": {},  # в стриме не используем
                 }
-                yield (json.dumps(fallback, ensure_ascii=False) + "\n").encode("utf-8")
+                yield (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+        except Exception:
+            fallback = {
+                "text": handoff_message("service_error"),
+                "attachments": [],
+                "handoff": True,
+                "state_update": {},
+            }
+            yield (json.dumps(fallback, ensure_ascii=False) + "\n").encode("utf-8")
+        finally:
             assistant_text = "".join(assistant_parts).strip()
             if assistant_text:
                 memory.append_turn(state, "assistant", assistant_text)
+            await memory.aset(state)
 
-        return StreamingResponse(event_stream(), media_type="application/x-ndjson")
-    finally:
-        await memory.aset(state)
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
 
 # ---------------------------------------------------------------------

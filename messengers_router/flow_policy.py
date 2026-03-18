@@ -243,6 +243,7 @@ def _clear_topic_state(state: SessionState) -> None:
         "specialty",
         "service_name",
         "test_name",
+        "doc_request_kind",
         "branch_id",
         "branch_name",
         "secondary_intents",

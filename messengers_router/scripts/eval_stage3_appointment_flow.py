@@ -54,17 +54,27 @@ FLOWS: list[Flow] = [
 ]
 
 
-def post_json(url: str, payload: dict) -> dict:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        url=url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=50) as resp:
-        raw = resp.read().decode("utf-8")
-    return json.loads(raw)
+def post_json(url: str, payload: dict, retries: int = 1) -> dict:
+    last_exc: Exception | None = None
+    for attempt in range(max(0, retries) + 1):
+        try:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                url=url,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=50) as resp:
+                raw = resp.read().decode("utf-8")
+            return json.loads(raw)
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            last_exc = exc
+            if attempt >= retries:
+                raise
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("post_json failed without exception")
 
 
 def _contains_any(text: str, patterns: tuple[str, ...]) -> bool:
