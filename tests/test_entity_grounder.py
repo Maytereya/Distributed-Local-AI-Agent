@@ -123,3 +123,23 @@ def test_grounder_normalizes_city_typo():
         )
     )
     assert out.entities.get("city") == "Самара"
+
+
+def test_grounder_keeps_patient_name_for_other_when_pending_appointment():
+    svc = Services()
+    decision = RouteDecision(
+        label="OTHER",
+        confidence=0.3,
+        entities={"patient_name": "Рахманов Владимир"},
+        flags=set(),
+    )
+    out = run(
+        ground_decision_entities(
+            decision=decision,
+            user_text="Рахманов Владимир",
+            state=SessionState(session_id="s6"),
+            services=svc,
+            pending={"label": "APPOINTMENT", "missing": ["patient_name"]},
+        )
+    )
+    assert out.entities.get("patient_name") == "Рахманов Владимир"

@@ -85,6 +85,16 @@ def _pending_missing(pending: dict[str, Any] | None) -> list[str]:
 
 
 def _is_allowed_key(key: str, label: str, pending: dict[str, Any] | None) -> bool:
+    if key == "patient_name":
+        missing = _pending_missing(pending)
+        need = _keys_from_missing(missing)
+        if (
+            isinstance(pending, dict)
+            and pending.get("label") == "APPOINTMENT"
+            and "patient_name" in need
+        ):
+            return True
+
     if key in _CONTROL_KEYS:
         return True
     base = _LABEL_ENTITY_WHITELIST.get(label, set())

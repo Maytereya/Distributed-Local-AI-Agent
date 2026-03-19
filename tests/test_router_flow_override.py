@@ -1,12 +1,13 @@
 import asyncio
 
-from messengers_router.flow_policy import _apply_pending_override, _hydrate_appointment_context_from_schedule
+from messengers_router.flow_policy import _apply_pending_override, _apply_context_action, _hydrate_appointment_context_from_schedule
 from messengers_router.mess_types import Evidence, Plan, PlanStep, SessionState
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision
 from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
 from messengers_router.policies import quick_fill_core_entities
 from messengers_router.services import Services
+from messengers_router import classifier as classifier_mod
 from messengers_router.router import (
     _DEFAULT_CITY,
     _apply_appointment_continuity_overrides,
@@ -620,6 +621,49 @@ def test_apply_pending_override_allows_address_switch_on_explicit_address_reques
     label = _apply_pending_override(decision, pending, user_text="адрес в Самаре")
 
     assert label == "ADDRESS"
+
+
+def test_deterministic_rule_uses_patient_name_when_pending_appointment():
+    decision = asyncio.run(
+        classifier_mod.deterministic_rule_decision(
+            "Рахманов Владимир",
+            {
+                "appointment_flow_active": True,
+                "_pending": {"label": "APPOINTMENT", "missing": ["patient_name"]},
+            },
+            allow_refine=False,
+        )
+    )
+
+    assert decision is not None
+    assert decision.label == "APPOINTMENT"
+    assert decision.entities.get("patient_name") == "Рахманов Владимир"
+    assert "rule_appointment_patient_name" in decision.flags
+
+
+def test_apply_context_action_blocks_new_topic_on_patient_name_step():
+    state = SessionState(
+        session_id="appt-new-topic-block",
+        last_entities={
+            "appointment_flow_active": True,
+            "_pending": {"label": "APPOINTMENT", "missing": ["patient_name"]},
+            "doctor_name": "Хальметова Алина Алексеевна",
+        },
+    )
+    decision = RouteDecision(
+        label="OTHER",
+        confidence=0.3,
+        entities={"patient_name": "Рахманов Владимир"},
+        flags={"low_confidence", "new_topic"},
+        needs_handoff=False,
+        context_action="new_topic",
+    )
+
+    out = _apply_context_action(decision, state, "Рахманов Владимир")
+
+    assert out.context_action == "continue"
+    assert "context_action_new_topic_blocked_patient_name" in out.flags
+    assert state.last_entities.get("_pending") is not None
 
 
 def test_build_appointment_step_response_patient_step_sets_pending():

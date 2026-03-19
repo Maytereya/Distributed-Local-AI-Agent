@@ -278,6 +278,23 @@ def _apply_context_action(decision: RouteDecision, state: SessionState, user_tex
         return decision
 
     if action == "new_topic":
+        # Если в APPOINTMENT pending явно ждем ФИО пациента и пользователь
+        # прислал ФИО, не даем случайному new_topic сбросить сценарий записи.
+        pending_now = state.last_entities.get("_pending")
+        if _is_appointment_waiting_patient_name(pending_now if isinstance(pending_now, dict) else None) and _looks_like_patient_fio(user_text):
+            return RouteDecision(
+                label=decision.label,
+                confidence=decision.confidence,
+                entities=dict(decision.entities),
+                flags=set(decision.flags) | {"context_action_new_topic_blocked_patient_name"},
+                needs_handoff=decision.needs_handoff,
+                context_action="continue",
+                source=decision.source,
+                clarify_needed=decision.clarify_needed,
+                clarify_reason=decision.clarify_reason,
+                clarify_slots=list(decision.clarify_slots),
+                intent_candidates=list(decision.intent_candidates),
+            )
         _clear_topic_state(state)
         return decision
 

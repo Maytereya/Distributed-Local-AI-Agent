@@ -42,6 +42,7 @@ from .policies import (
     detect_doctor_info_intent,
     normalize_appointment_action,
     has_appointment_context,
+    has_datetime_signal,
     is_address_dominant_intent,
     is_price_dominant_intent,
     should_treat_result_delivery_as_test_assist,
@@ -63,6 +64,25 @@ _INVALID_DOCTOR_TOKEN_RE = re.compile(r"^(отмен|перен|запис|по�
 _REFINE_INTENTS = {"DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
 _REFINE_SIGNAL_RE = re.compile(r"\b(передумал\w*|передумала\w*|лучше|или|а\s+если|а\s+вот|уточн\w*)\b", re.I)
 _ALLOWED_CLARIFY_REASONS = {"", "intent_disambiguation", "slot_request", "context_repair", "low_confidence"}
+_PATIENT_NAME_ONLY_RE = re.compile(r"^\s*[А-ЯЁа-яё\-]{2,}(?:\s+[А-ЯЁа-яё\-]{2,}){1,2}\s*$")
+_PATIENT_NAME_STOPWORDS = {
+    "анализ",
+    "анализы",
+    "результат",
+    "результаты",
+    "врач",
+    "доктор",
+    "адрес",
+    "филиал",
+    "город",
+    "стоимость",
+    "цена",
+    "запись",
+    "расписание",
+    "да",
+    "нет",
+    "самара",
+}
 
 def _extract_json(text: str) -> dict[str, Any] | None:
     if not text:
@@ -196,6 +216,32 @@ def _extract_price_doctor_name(text: str) -> str | None:
     if candidate and _INVALID_DOCTOR_TOKEN_RE.search(candidate):
         return None
     return candidate
+
+
+def _pending_waits_appointment_patient_name(last_entities: dict[str, Any]) -> bool:
+    pending = last_entities.get("_pending")
+    if not isinstance(pending, dict):
+        return False
+    if pending.get("label") != "APPOINTMENT":
+        return False
+    missing = pending.get("missing")
+    if not isinstance(missing, list):
+        return False
+    return any(str(slot).strip() == "patient_name" for slot in missing)
+
+
+def _looks_like_patient_name_only(text: str) -> bool:
+    s = str(text or "").strip()
+    if not _PATIENT_NAME_ONLY_RE.fullmatch(s):
+        return False
+    if has_datetime_signal(s):
+        return False
+    tokens = [t.lower().replace("ё", "е") for t in re.findall(r"[А-Яа-яЁёA-Za-z\-]+", s) if t]
+    if len(tokens) < 2:
+        return False
+    if any(t in _PATIENT_NAME_STOPWORDS for t in tokens):
+        return False
+    return True
 
 
 def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
@@ -787,6 +833,15 @@ async def deterministic_rule_decision(
                 needs_handoff=False,
                 context_action="continue",
             )
+    elif _pending_waits_appointment_patient_name(last_entities) and _looks_like_patient_name_only(text):
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.9,
+            entities={"patient_name": str(text or "").strip()},
+            flags=local_flags | {"rule_appointment_patient_name"},
+            needs_handoff=False,
+            context_action="continue",
+        )
     elif detect_schedule_intent(text):
         entities: dict[str, Any] = {}
         doctor_name = _extract_schedule_doctor_name(text)
