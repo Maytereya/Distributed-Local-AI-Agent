@@ -1,0 +1,693 @@
+registry_version: 1
+description: >
+  Topic Registry for messenger router.
+  Central list of topic definitions with matching rules, source strategy,
+  context behavior, and fallback policy.
+
+defaults:
+  locale: "ru-RU"
+  city_default: "Самара"
+  resolver:
+    order: ["priority_desc", "score_desc", "topic_id_asc"]
+  context:
+    active_appointment_topic_switch_requires_confirm: true
+  output:
+    meili_output_mode: "content_only"
+    meili_max_chars: 12000
+  fallback:
+    action: "handoff"
+    reason: "knowledge_not_found"
+    message_key: "knowledge_not_found_operator"
+
+topics:
+  - topic_id: "prepare_fgds"
+    title: "Подготовка к ФГДС/гастроскопии"
+    enabled: true
+    priority: 260
+    label: "PREPARE"
+    marks:
+      domain: "knowledge"
+      subtype: "prepare_procedure"
+    match:
+      any_keywords: ["фгдс", "гастроскоп", "эзофагогастродуоденоскоп"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "knowledge_not_found"
+      message_key: "knowledge_not_found_operator"
+
+  - topic_id: "prepare_colonoscopy"
+    title: "Подготовка к колоноскопии"
+    enabled: true
+    priority: 260
+    label: "PREPARE"
+    marks:
+      domain: "knowledge"
+      subtype: "prepare_procedure"
+    match:
+      any_keywords: ["колоноскоп", "фкс", "фиброколоноскоп"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "knowledge_not_found"
+      message_key: "knowledge_not_found_operator"
+
+  - topic_id: "prepare_rectoromanoscopy"
+    title: "Подготовка к ректороманоскопии"
+    enabled: true
+    priority: 260
+    label: "PREPARE"
+    marks:
+      domain: "knowledge"
+      subtype: "prepare_procedure"
+    match:
+      any_keywords: ["ректороманоскоп", "ррс"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "knowledge_not_found"
+      message_key: "knowledge_not_found_operator"
+
+  - topic_id: "prepare_vulvo_colposcopy"
+    title: "Подготовка к вульвоскопии/кольпоскопии"
+    enabled: true
+    priority: 260
+    label: "PREPARE"
+    marks:
+      domain: "knowledge"
+      subtype: "prepare_procedure"
+    match:
+      any_keywords: ["вульвоскоп", "кольпоскоп"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "knowledge_not_found"
+      message_key: "knowledge_not_found_operator"
+
+  - topic_id: "prepare_biopsy_cervix"
+    title: "Подготовка к биопсии шейки матки"
+    enabled: true
+    priority: 260
+    label: "PREPARE"
+    marks:
+      domain: "knowledge"
+      subtype: "prepare_procedure"
+    match:
+      any_keywords: ["биопсия шейки матки", "биопс шейки", "биопсия цервик"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "knowledge_not_found"
+      message_key: "knowledge_not_found_operator"
+
+  - topic_id: "prepare_blood_analysis"
+    title: "Подготовка к анализам крови"
+    enabled: true
+    priority: 250
+    label: "PREPARE"
+    marks:
+      domain: "knowledge"
+      subtype: "prepare_analysis"
+    match:
+      any_keywords: ["анализ крови", "кровь на", "липидограмма", "холестерин", "натощак"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+        - kind: "api_cache_stub"
+          target: "serviceInfoAll.preparation"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "knowledge_not_found"
+      message_key: "knowledge_not_found_operator"
+
+  - topic_id: "prepare_urine_analysis"
+    title: "Подготовка к анализам мочи"
+    enabled: true
+    priority: 250
+    label: "PREPARE"
+    marks:
+      domain: "knowledge"
+      subtype: "prepare_analysis"
+    match:
+      any_keywords: ["анализ мочи", "моча", "оам", "бакпосев мочи"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+        - kind: "api_cache_stub"
+          target: "serviceInfoAll.preparation"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "knowledge_not_found"
+      message_key: "knowledge_not_found_operator"
+
+  - topic_id: "prepare_swab_throat"
+    title: "Подготовка к мазку из зева"
+    enabled: true
+    priority: 250
+    label: "PREPARE"
+    marks:
+      domain: "knowledge"
+      subtype: "prepare_analysis"
+    match:
+      any_keywords: ["мазок из зева", "мазок из горла", "посев из зева"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+        - kind: "api_cache_stub"
+          target: "serviceInfoAll.preparation"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "knowledge_not_found"
+      message_key: "knowledge_not_found_operator"
+
+  - topic_id: "prepare_swab_gyne"
+    title: "Подготовка к мазку из влагалища/шейки матки"
+    enabled: true
+    priority: 250
+    label: "PREPARE"
+    marks:
+      domain: "knowledge"
+      subtype: "prepare_analysis"
+    match:
+      any_keywords: ["мазок из влагалища", "мазок шейки матки", "цитология", "пап-тест", "мазок на флору"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+        - kind: "api_cache_stub"
+          target: "serviceInfoAll.preparation"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "knowledge_not_found"
+      message_key: "knowledge_not_found_operator"
+
+  - topic_id: "prepare_swab_sti"
+    title: "Подготовка к мазкам на ЗППП"
+    enabled: true
+    priority: 250
+    label: "PREPARE"
+    marks:
+      domain: "knowledge"
+      subtype: "prepare_analysis"
+    match:
+      any_keywords: ["зппп", "иппп", "мазок на зппп", "мазок на иппп", "пцр на инфекции"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+        - kind: "api_cache_stub"
+          target: "serviceInfoAll.preparation"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "knowledge_not_found"
+      message_key: "knowledge_not_found_operator"
+
+  - topic_id: "prepare_generic"
+    title: "Общий вопрос по подготовке"
+    enabled: true
+    priority: 240
+    label: "PREPARE"
+    marks:
+      domain: "knowledge"
+      subtype: "prepare_generic"
+    match:
+      any_keywords: ["подготов", "как подготовиться", "натощак", "перед исследованием", "перед процедурой"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: ["результат анализов", "стоимость", "цена"]
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "clarify"
+      reason: "prepare_target_required"
+      message_key: "clarify_prepare_target"
+
+  - topic_id: "doc_tax_certificate"
+    title: "Справка для налоговой/ФНС"
+    enabled: true
+    priority: 230
+    label: "OTHER"
+    marks:
+      domain: "service"
+      subtype: "tax_certificate"
+    match:
+      any_keywords:
+        - "справка для налоговой"
+        - "справка в налоговую"
+        - "справка в фнс"
+        - "налоговый вычет"
+        - "справка об оплате медицинских услуг"
+        - "налоговая справка"
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "doc_request_handoff"
+      message_key: "doc_request_handoff"
+
+  - topic_id: "service_home_visit"
+    title: "Вызов врача/медсестры на дом"
+    enabled: true
+    priority: 230
+    label: "OTHER"
+    marks:
+      domain: "service"
+      subtype: "home_visit"
+    match:
+      any_keywords: ["вызвать врача на дом", "вызов врача", "медсестра на дом", "анализы на дому"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "service_handoff"
+      message_key: "service_handoff"
+
+  - topic_id: "test_result_status"
+    title: "Получение результатов анализов"
+    enabled: true
+    priority: 220
+    label: "TEST_RESULT"
+    marks:
+      domain: "api"
+      subtype: "test_result"
+    match:
+      any_keywords: ["результат анализ", "результаты готовы", "код анализа", "номер анализа", "бланк анализа", "pdf анализ"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "api_only"
+      sources:
+        - kind: "api"
+          target: "resultForPatient"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "test_result_fallback"
+      message_key: "test_result_fallback"
+
+  - topic_id: "test_assist"
+    title: "Подбор анализов под цель"
+    enabled: true
+    priority: 210
+    label: "TEST_ASSIST"
+    marks:
+      domain: "api"
+      subtype: "test_assist"
+    match:
+      any_keywords: ["какие анализы", "какие сдать анализы", "чекап", "подобрать анализы", "анализы для"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: ["подготовиться", "как подготовиться"]
+    route:
+      strategy: "api_first"
+      sources:
+        - kind: "api"
+          target: "priceByRegion"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "service_error"
+      message_key: "service_error"
+
+  - topic_id: "price_analysis"
+    title: "Стоимость анализов"
+    enabled: true
+    priority: 205
+    label: "PRICE"
+    marks:
+      domain: "api"
+      subtype: "price_analysis"
+    match:
+      any_keywords: ["стоимость анализа", "цена анализа", "сколько стоит анализ", "цена на кровь", "цена липидограмм"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "api_only"
+      sources:
+        - kind: "api"
+          target: "priceByRegion"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "clarify"
+      reason: "service_name_required"
+      message_key: "clarify_service_name_for_price"
+
+  - topic_id: "price_medical_services"
+    title: "Стоимость услуг/консультаций"
+    enabled: true
+    priority: 205
+    label: "PRICE"
+    marks:
+      domain: "api"
+      subtype: "price_service"
+    match:
+      any_keywords: ["сколько стоит", "стоимость", "цена консультации", "цена услуги", "прайс"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: ["скидка", "акция", "новость"]
+    route:
+      strategy: "api_only"
+      sources:
+        - kind: "api"
+          target: "priceByRegion"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "clarify"
+      reason: "service_name_required"
+      message_key: "clarify_service_name_for_price"
+
+  - topic_id: "appointment_book_cancel_reschedule"
+    title: "Запись/отмена/перенос записи"
+    enabled: true
+    priority: 200
+    label: "APPOINTMENT"
+    marks:
+      domain: "api"
+      subtype: "appointment"
+    match:
+      any_keywords: ["записаться", "запишите", "перенести запись", "отменить запись", "прием завтра", "на какое время"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: ["результат анализов"]
+    route:
+      strategy: "api_only"
+      sources:
+        - kind: "api"
+          target: "doctorsInfoAll"
+        - kind: "api"
+          target: "doctorsScheduleWeek"
+    context:
+      interrupts_active_appointment: false
+      require_cancel_confirm_if_appointment_active: false
+    fallback:
+      action: "handoff"
+      reason: "service_error"
+      message_key: "service_error"
+
+  - topic_id: "doctor_schedule"
+    title: "Расписание врача"
+    enabled: true
+    priority: 195
+    label: "DOCTOR_SCHEDULE"
+    marks:
+      domain: "api"
+      subtype: "doctor_schedule"
+    match:
+      any_keywords: ["расписание врача", "когда принимает", "свободные окна", "свободно", "график врача"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "api_only"
+      sources:
+        - kind: "api"
+          target: "doctorsScheduleWeek"
+    context:
+      interrupts_active_appointment: false
+      require_cancel_confirm_if_appointment_active: false
+    fallback:
+      action: "clarify"
+      reason: "doctor_required"
+      message_key: "clarify_doctor_for_schedule"
+
+  - topic_id: "doctor_by_specialty"
+    title: "Врачи по специальности"
+    enabled: true
+    priority: 190
+    label: "DOCTOR_INFO"
+    marks:
+      domain: "api"
+      subtype: "doctor_by_specialty"
+    match:
+      any_keywords: ["уролог", "хирург", "кардиолог", "гинеколог", "эндокринолог", "кто из врачей"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "api_only"
+      sources:
+        - kind: "api"
+          target: "doctorsInfoAll"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "clarify"
+      reason: "specialty_required"
+      message_key: "clarify_specialty"
+
+  - topic_id: "doctor_by_service_or_procedure"
+    title: "Кто выполняет конкретную услугу/процедуру"
+    enabled: true
+    priority: 190
+    label: "DOCTOR_INFO"
+    marks:
+      domain: "api"
+      subtype: "doctor_by_service"
+    match:
+      any_keywords: ["кто делает", "кто выполняет", "кто принимает по", "торакоцентез", "фгдс", "кольпоскопия"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "api_only"
+      sources:
+        - kind: "api"
+          target: "doctorsInfoAll"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "clarify"
+      reason: "service_name_required"
+      message_key: "clarify_service_name_for_doctor_search"
+
+  - topic_id: "doctor_by_disease"
+    title: "Кто лечит по заболеванию/симптому"
+    enabled: true
+    priority: 185
+    label: "DOCTOR_INFO"
+    marks:
+      domain: "api"
+      subtype: "doctor_by_disease"
+    match:
+      any_keywords: ["кто лечит", "к кому обратиться", "аневризма аорты", "простатит", "геморрой", "повышенное ад"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "api_only"
+      sources:
+        - kind: "api"
+          target: "doctorsInfoAll"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "clarify"
+      reason: "disease_required"
+      message_key: "clarify_problem_for_doctor_search"
+
+  - topic_id: "address_branch_hours"
+    title: "Адреса филиалов и график работы"
+    enabled: true
+    priority: 180
+    label: "ADDRESS"
+    marks:
+      domain: "api"
+      subtype: "address"
+    match:
+      any_keywords: ["адрес", "филиал", "режим работы", "до скольки работаете", "где вы находитесь"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "api_only"
+      sources:
+        - kind: "api"
+          target: "regionsInfo"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "service_error"
+      message_key: "service_error"
+
+  - topic_id: "promo_news_offers"
+    title: "Акции, новости, скидки, предложения"
+    enabled: true
+    priority: 175
+    label: "NEWS"
+    marks:
+      domain: "marketing"
+      subtype: "promo_news"
+    match:
+      any_keywords: ["акция", "акции", "новость", "новости", "скидка", "скидки", "предложение", "спецпредложение"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: []
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "news"
+          max_chars: 8000
+        - kind: "meili"
+          index: "main_index"
+          max_chars: 8000
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "reply"
+      reason: "no_current_promos"
+      message_key: "no_current_promos"
+
+  - topic_id: "doc_generic"
+    title: "Прочие справки/документы"
+    enabled: true
+    priority: 170
+    label: "OTHER"
+    marks:
+      domain: "service"
+      subtype: "documents_generic"
+    match:
+      any_keywords: ["копия договора", "амбулаторная карта", "справка", "документы для"]
+      all_keywords: []
+      regex: []
+      exclude_keywords: ["налог", "фнс", "вычет"]
+    route:
+      strategy: "meili_first"
+      sources:
+        - kind: "meili"
+          index: "main_index"
+    context:
+      interrupts_active_appointment: true
+      require_cancel_confirm_if_appointment_active: true
+    fallback:
+      action: "handoff"
+      reason: "doc_request_handoff"
+      message_key: "doc_request_handoff"

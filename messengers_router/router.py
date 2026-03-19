@@ -96,6 +96,12 @@ from .renderer import (
 from .memory import MemoryStore
 from .text_templates import INTRO_TEXT, LOW_CONF_CLARIFY_TEXT
 from .city import match_city
+from .topic_registry import (
+    build_topic_flag,
+    extract_topic_id_from_flags,
+    get_topic as topic_registry_get_topic,
+    match_topic,
+)
 
 _DEFAULT_CITY = "Самара"
 _SAMARA_ONLY_OPERATOR_TEXT = "Сейчас могу помочь только по Самаре. Соединяю с оператором."
@@ -146,6 +152,86 @@ def _copy_decision(decision: RouteDecision, **overrides: Any) -> RouteDecision:
     }
     data.update(overrides)
     return RouteDecision(**data)
+
+
+def _apply_topic_registry_override(
+    decision: RouteDecision,
+    topic_match: Any,
+) -> RouteDecision:
+    topic_label = str(getattr(topic_match, "label", "") or "").strip().upper()
+    topic_id = str(getattr(topic_match, "topic_id", "") or "").strip()
+    if not topic_label or not topic_id:
+        return decision
+
+    flags = set(decision.flags)
+    flags.add("topic_registry_match")
+    flags.add(build_topic_flag(topic_id))
+
+    # Безопасный приоритет критичных лейблов: registry не перезатирает
+    # срочные/медицинские/жалобные контуры.
+    if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
+        return _copy_decision(decision, flags=flags)
+
+    if decision.label == topic_label:
+        return _copy_decision(decision, flags=flags)
+
+    return _copy_decision(
+        decision,
+        label=topic_label,  # type: ignore[arg-type]
+        confidence=max(decision.confidence, 0.88),
+        flags=flags | {"topic_registry_override"},
+        needs_handoff=False,
+        source="topic_registry",
+        context_action="continue",
+    )
+
+
+def _build_other_plan_from_topic_registry(
+    decision: RouteDecision,
+    user_text: str,
+    entities: dict[str, Any],
+) -> list[PlanStep]:
+    topic_id = extract_topic_id_from_flags(decision.flags)
+    if not topic_id:
+        return []
+    topic = topic_registry_get_topic(topic_id)
+    if not isinstance(topic, dict):
+        return []
+    route = topic.get("route")
+    if not isinstance(route, dict):
+        return []
+    sources = route.get("sources")
+    if not isinstance(sources, list):
+        return []
+
+    base_input = {"query": user_text, "entities": dict(entities)}
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        kind = str(source.get("kind") or "").strip().lower()
+        if kind == "meili":
+            index = str(source.get("index") or "main_index").strip().lower()
+            if index == "news":
+                return [PlanStep(tool="news_info", input=base_input)]
+            return [PlanStep(tool="main_index_info", input=base_input)]
+        if kind == "api":
+            target = str(source.get("target") or "").strip().lower()
+            if target == "pricebyregion":
+                return [PlanStep(tool="price_info", input=base_input)]
+            if target == "doctorsinfoall":
+                return [PlanStep(tool="doctors_info", input=base_input)]
+            if target == "doctorsscheduleweek":
+                return [PlanStep(tool="doctors_schedule_week", input=base_input)]
+            if target == "regionsinfo":
+                return [PlanStep(tool="address_info", input=base_input)]
+            if target == "resultforpatient":
+                return [PlanStep(tool="test_result_status", input=base_input, auth="none")]
+        if kind == "api_cache":
+            target = str(source.get("target") or "").strip().lower()
+            if "preparation" in target:
+                return [PlanStep(tool="test_prepare", input=base_input)]
+
+    return []
 
 
 def _remember_question(state: SessionState, kind: str, slots: list[str] | None = None) -> None:
@@ -455,6 +541,11 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
     label = effective_label
     steps: list[PlanStep] = []
 
+    if label == "OTHER":
+        topic_steps = _build_other_plan_from_topic_registry(decision, user_text, entities)
+        if topic_steps:
+            return Plan(label=label, steps=topic_steps)
+
     if "doc_request_main_index" in decision.flags or "doc_request_handoff" in decision.flags:
         steps.append(PlanStep(tool="main_index_info", input={"query": user_text, "entities": dict(entities)}))
         return Plan(label=label, steps=steps)
@@ -730,6 +821,19 @@ async def route_patient_message(
             }
     else:
         decision = await analyze(user_text, state.last_entities, runtime_options=runtime_options)
+
+    topic_match = match_topic(user_text)
+    if topic_match is not None:
+        decision = _apply_topic_registry_override(decision, topic_match)
+        nlu_debug["topic_registry"] = {
+            "topic_id": topic_match.topic_id,
+            "label": topic_match.label,
+            "priority": topic_match.priority,
+            "score": topic_match.score,
+            "matched_keywords": list(topic_match.matched_keywords),
+            "matched_regex": list(topic_match.matched_regex),
+        }
+
     decision = await _verify_doctor_entity(decision, services, user_text)
     # В активном APPOINTMENT flow короткий follow-up с датой/временем
     # считаем продолжением записи до применения context_action.

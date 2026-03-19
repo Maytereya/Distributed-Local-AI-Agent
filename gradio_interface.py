@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Union, Tuple, Literal, Any, Optional
 
 import gradio as gr
+import yaml
 from gradio_pdf import PDF
 
 import agent_logic_2.ollama_settings as ollama_settings
@@ -29,6 +30,7 @@ from agent_logic_2.prompts import load_prompt, write_prompt
 from agent_logic_2.router_preprocessor import routing
 from container_managenment import restart_container, system_data
 from converters import pdf_to_json_txt_tables_meili as pdf2json
+from messengers_router import topic_registry as mr_topic_registry
 from messengers_router.prompt_registry import load_prompt_text
 from whisper import whisper_dict as w
 from whisper.wisper_ws_client import ws_transcribe
@@ -2369,6 +2371,311 @@ def main():
                 return None
 
             # ------------------------------------------------------
+
+            def _mr_label_choices() -> list[str]:
+                return [
+                    "APPOINTMENT",
+                    "TEST_ASSIST",
+                    "TEST_RESULT",
+                    "DOCTOR_INFO",
+                    "DOCTOR_SCHEDULE",
+                    "PRICE",
+                    "ADDRESS",
+                    "PREPARE",
+                    "NEWS",
+                    "COMPLAINT",
+                    "URGENT",
+                    "MEDICAL_ADVICE",
+                    "OTHER",
+                ]
+
+            def _mr_registry_summary(data: dict[str, Any]) -> str:
+                topics = data.get("topics")
+                if not isinstance(topics, list):
+                    return "topics: 0 | enabled: 0"
+                total = 0
+                enabled = 0
+                labels: dict[str, int] = {}
+                for item in topics:
+                    if not isinstance(item, dict):
+                        continue
+                    total += 1
+                    if bool(item.get("enabled", True)):
+                        enabled += 1
+                    lbl = str(item.get("label") or "OTHER").strip().upper()
+                    labels[lbl] = labels.get(lbl, 0) + 1
+                chunks = [f"{k}:{v}" for k, v in sorted(labels.items())]
+                labels_text = ", ".join(chunks) if chunks else "-"
+                return f"topics: {total} | enabled: {enabled} | labels: {labels_text}"
+
+            def _mr_snapshot(selected_topic_id: str | None = None) -> tuple[str, Any, str, str]:
+                data = mr_topic_registry.load_registry(force_reload=True)
+                topics = mr_topic_registry.list_topics(enabled_only=False)
+                topic_ids = [str(t.get("topic_id") or "").strip() for t in topics if str(t.get("topic_id") or "").strip()]
+                if selected_topic_id and selected_topic_id in topic_ids:
+                    selected_id = selected_topic_id
+                else:
+                    selected_id = topic_ids[0] if topic_ids else None
+
+                selected_topic = mr_topic_registry.get_topic(selected_id) if selected_id else None
+                topic_json = json.dumps(selected_topic or {}, ensure_ascii=False, indent=2)
+                yaml_text = mr_topic_registry.load_registry_text()
+                summary = _mr_registry_summary(data)
+                return (
+                    yaml_text,
+                    gr.update(choices=topic_ids, value=selected_id),
+                    topic_json,
+                    summary,
+                )
+
+            def fn_mr_refresh(selected_topic_id: str | None = None):
+                try:
+                    return _mr_snapshot(selected_topic_id)
+                except Exception as e:
+                    gr.Error(f"❌ Ошибка загрузки topic registry: {e}")
+                    return "", gr.update(), "{}", "topics: 0 | enabled: 0"
+
+            def fn_mr_select_topic(topic_id: str | None):
+                try:
+                    return _mr_snapshot(topic_id)
+                except Exception as e:
+                    gr.Error(f"❌ Ошибка выбора topic: {e}")
+                    return "", gr.update(), "{}", "topics: 0 | enabled: 0"
+
+            def fn_mr_save_yaml(yaml_text: str, selected_topic_id: str | None):
+                try:
+                    # Проверка синтаксиса до сохранения дает понятную ошибку для UI.
+                    yaml.safe_load(yaml_text) if str(yaml_text or "").strip() else {}
+                    mr_topic_registry.save_registry_text(yaml_text)
+                    gr.Success(title="Успешно", message="topic_registry.yaml сохранен", duration=3)
+                    return _mr_snapshot(selected_topic_id)
+                except Exception as e:
+                    gr.Error(f"❌ Ошибка сохранения YAML: {e}")
+                    return fn_mr_refresh(selected_topic_id)
+
+            def fn_mr_save_topic(selected_topic_id: str | None, topic_json_text: str):
+                try:
+                    payload = json.loads(topic_json_text or "{}")
+                    if not isinstance(payload, dict):
+                        raise ValueError("Topic JSON должен быть объектом")
+                    tid_from_payload = str(payload.get("topic_id") or "").strip()
+                    tid = tid_from_payload or str(selected_topic_id or "").strip()
+                    if not tid:
+                        raise ValueError("Не указан topic_id")
+                    payload["topic_id"] = tid
+                    saved = mr_topic_registry.upsert_topic(payload)
+                    gr.Success(title="Успешно", message=f"Topic {saved.get('topic_id')} сохранен", duration=3)
+                    return _mr_snapshot(str(saved.get("topic_id") or ""))
+                except Exception as e:
+                    gr.Error(f"❌ Ошибка сохранения topic: {e}")
+                    return fn_mr_refresh(selected_topic_id)
+
+            def fn_mr_create_topic(topic_id: str, label: str, priority: float):
+                try:
+                    tid = str(topic_id or "").strip()
+                    if not tid:
+                        raise ValueError("Введите topic_id")
+                    saved = mr_topic_registry.create_topic(
+                        topic_id=tid,
+                        label=str(label or "OTHER"),
+                        priority=int(priority),
+                    )
+                    gr.Success(title="Успешно", message=f"Topic {saved.get('topic_id')} создан", duration=3)
+                    return _mr_snapshot(str(saved.get("topic_id") or ""))
+                except Exception as e:
+                    gr.Error(f"❌ Ошибка создания topic: {e}")
+                    return fn_mr_refresh(None)
+
+            def fn_mr_delete_topic(selected_topic_id: str | None):
+                try:
+                    tid = str(selected_topic_id or "").strip()
+                    if not tid:
+                        raise ValueError("Выберите topic для удаления")
+                    ok = mr_topic_registry.delete_topic(tid)
+                    if not ok:
+                        raise ValueError(f"Topic {tid} не найден")
+                    gr.Success(title="Успешно", message=f"Topic {tid} удален", duration=3)
+                    return _mr_snapshot(None)
+                except Exception as e:
+                    gr.Error(f"❌ Ошибка удаления topic: {e}")
+                    return fn_mr_refresh(selected_topic_id)
+
+            def fn_mr_toggle_topic(selected_topic_id: str | None, enabled: bool):
+                try:
+                    tid = str(selected_topic_id or "").strip()
+                    if not tid:
+                        raise ValueError("Выберите topic")
+                    saved = mr_topic_registry.set_topic_enabled(tid, enabled=bool(enabled))
+                    if saved is None:
+                        raise ValueError(f"Topic {tid} не найден")
+                    state_text = "включен" if bool(saved.get("enabled", True)) else "выключен"
+                    gr.Success(title="Успешно", message=f"Topic {tid} {state_text}", duration=3)
+                    return _mr_snapshot(tid)
+                except Exception as e:
+                    gr.Error(f"❌ Ошибка изменения статуса topic: {e}")
+                    return fn_mr_refresh(selected_topic_id)
+
+            with gr.Tab("🧭 messengers_router"):
+                gr.Markdown("""<h3>🧭 Настройки messengers_router: Topic Registry (CRUD)</h3>""")
+                gr.Markdown(
+                    "Реестр тем управляет маршрутизацией запросов: label, источник данных, fallback и приоритет."
+                )
+
+                with gr.Row():
+                    mr_refresh_btn = gr.Button("🔄 Обновить из файла", size="sm")
+                    mr_save_yaml_btn = gr.Button("💾 Сохранить YAML", size="sm", variant="primary")
+
+                mr_registry_summary_box = gr.Textbox(
+                    label="Сводка реестра",
+                    value="",
+                    interactive=False,
+                    lines=2,
+                )
+
+                mr_registry_yaml_code = gr.Code(
+                    label="topic_registry.yaml",
+                    language="yaml",
+                    value="",
+                    interactive=True,
+                    lines=24,
+                )
+
+                with gr.Row():
+                    mr_topic_selector = gr.Dropdown(
+                        choices=[],
+                        value=None,
+                        label="Выбор темы (topic_id)",
+                        allow_custom_value=False,
+                        interactive=True,
+                        scale=60,
+                    )
+                    mr_topic_enable_btn = gr.Button("🟢 Включить", size="sm", scale=20)
+                    mr_topic_disable_btn = gr.Button("⚪ Выключить", size="sm", scale=20)
+                    mr_topic_delete_btn = gr.Button("⛔ Удалить", size="sm", variant="stop", scale=20)
+
+                mr_topic_json_code = gr.Code(
+                    label="Topic JSON (редактирование выбранной темы)",
+                    language="json",
+                    value="{}",
+                    interactive=True,
+                    lines=20,
+                )
+
+                with gr.Row():
+                    mr_topic_save_btn = gr.Button("💾 Сохранить тему", size="sm", variant="primary")
+
+                with gr.Row():
+                    mr_new_topic_id = gr.Textbox(
+                        label="Новый topic_id",
+                        placeholder="например: prepare_ultrasound",
+                        value="",
+                        scale=45,
+                    )
+                    mr_new_topic_label = gr.Dropdown(
+                        choices=_mr_label_choices(),
+                        value="OTHER",
+                        label="Label",
+                        scale=20,
+                    )
+                    mr_new_topic_priority = gr.Number(
+                        label="Priority",
+                        value=100,
+                        precision=0,
+                        scale=15,
+                    )
+                    mr_create_topic_btn = gr.Button("✅ Создать тему", size="sm", scale=20)
+
+                mr_refresh_btn.click(
+                    fn=fn_mr_refresh,
+                    inputs=[mr_topic_selector],
+                    outputs=[
+                        mr_registry_yaml_code,
+                        mr_topic_selector,
+                        mr_topic_json_code,
+                        mr_registry_summary_box,
+                    ],
+                )
+                mr_save_yaml_btn.click(
+                    fn=fn_mr_save_yaml,
+                    inputs=[mr_registry_yaml_code, mr_topic_selector],
+                    outputs=[
+                        mr_registry_yaml_code,
+                        mr_topic_selector,
+                        mr_topic_json_code,
+                        mr_registry_summary_box,
+                    ],
+                )
+                mr_topic_selector.change(
+                    fn=fn_mr_select_topic,
+                    inputs=[mr_topic_selector],
+                    outputs=[
+                        mr_registry_yaml_code,
+                        mr_topic_selector,
+                        mr_topic_json_code,
+                        mr_registry_summary_box,
+                    ],
+                )
+                mr_topic_save_btn.click(
+                    fn=fn_mr_save_topic,
+                    inputs=[mr_topic_selector, mr_topic_json_code],
+                    outputs=[
+                        mr_registry_yaml_code,
+                        mr_topic_selector,
+                        mr_topic_json_code,
+                        mr_registry_summary_box,
+                    ],
+                )
+                mr_create_topic_btn.click(
+                    fn=fn_mr_create_topic,
+                    inputs=[mr_new_topic_id, mr_new_topic_label, mr_new_topic_priority],
+                    outputs=[
+                        mr_registry_yaml_code,
+                        mr_topic_selector,
+                        mr_topic_json_code,
+                        mr_registry_summary_box,
+                    ],
+                )
+                mr_topic_delete_btn.click(
+                    fn=fn_mr_delete_topic,
+                    inputs=[mr_topic_selector],
+                    outputs=[
+                        mr_registry_yaml_code,
+                        mr_topic_selector,
+                        mr_topic_json_code,
+                        mr_registry_summary_box,
+                    ],
+                )
+                mr_topic_enable_btn.click(
+                    fn=partial(fn_mr_toggle_topic, enabled=True),
+                    inputs=[mr_topic_selector],
+                    outputs=[
+                        mr_registry_yaml_code,
+                        mr_topic_selector,
+                        mr_topic_json_code,
+                        mr_registry_summary_box,
+                    ],
+                )
+                mr_topic_disable_btn.click(
+                    fn=partial(fn_mr_toggle_topic, enabled=False),
+                    inputs=[mr_topic_selector],
+                    outputs=[
+                        mr_registry_yaml_code,
+                        mr_topic_selector,
+                        mr_topic_json_code,
+                        mr_registry_summary_box,
+                    ],
+                )
+
+                blocks.load(
+                    fn=fn_mr_refresh,
+                    inputs=None,
+                    outputs=[
+                        mr_registry_yaml_code,
+                        mr_topic_selector,
+                        mr_topic_json_code,
+                        mr_registry_summary_box,
+                    ],
+                )
 
             with gr.Tab("⚙️ Настройки"):
                 gr.Markdown("""<h3>⚙️ Настройки нейросетей и серверов Ollama/Uvicorn</h3>""")

@@ -7,6 +7,7 @@ services:
       - "7860:7860"
     volumes:
       - ./app_data:/app_data
+      - ./messengers_router/data/topic_registry.yaml:/app/messengers_router/data/topic_registry.yaml
       - /var/run/docker.sock:/var/run/docker.sock
       # общий кэш Hugging Face
       - /opt/hf-cache:/root/.cache/huggingface
@@ -34,6 +35,7 @@ services:
       - "8010"
     volumes:
       - ./app_data:/app_data
+      - ./messengers_router/data/topic_registry.yaml:/app/messengers_router/data/topic_registry.yaml
     environment:
       - AGENT_API_KEY=${AGENT_API_KEY:-}
       - TOKENIZERS_PARALLELISM=false
