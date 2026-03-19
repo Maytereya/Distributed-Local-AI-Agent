@@ -126,6 +126,31 @@ class MemoryStore:
     def merge_entities(self, state: SessionState, new: dict[str, Any], label: str | None = None) -> None:
         old = state.last_entities
 
+        def _norm_name(value: Any) -> str:
+            return " ".join(str(value or "").replace("ё", "е").lower().split())
+
+        def _surname(value: Any) -> str:
+            norm = _norm_name(value)
+            if not norm:
+                return ""
+            return norm.split()[0]
+
+        def _doctor_names_equivalent(prev: Any, curr: Any) -> bool:
+            prev_norm = _norm_name(prev)
+            curr_norm = _norm_name(curr)
+            if not prev_norm or not curr_norm:
+                return False
+            if prev_norm == curr_norm:
+                return True
+            prev_surname = _surname(prev_norm)
+            curr_surname = _surname(curr_norm)
+            if not prev_surname or prev_surname != curr_surname:
+                return False
+            # "Дразнин" и "Дразнин Антон Владимирович" считаем одним врачом.
+            prev_parts = len(prev_norm.split())
+            curr_parts = len(curr_norm.split())
+            return prev_parts == 1 or curr_parts == 1
+
         # remove None/empty-string
         cleaned: dict[str, Any] = {}
         for k, v in (new or {}).items():
@@ -144,8 +169,17 @@ class MemoryStore:
         doctor_changed = False
         if "doctor_id" in cleaned and cleaned.get("doctor_id") != old.get("doctor_id"):
             doctor_changed = True
-        if "doctor_name" in cleaned and cleaned.get("doctor_name") != old.get("doctor_name"):
-            doctor_changed = True
+        if "doctor_name" in cleaned:
+            prev_name = old.get("doctor_name")
+            curr_name = cleaned.get("doctor_name")
+            if _doctor_names_equivalent(prev_name, curr_name):
+                # Сохраняем более полную форму ФИО и не считаем это сменой врача.
+                prev_norm = _norm_name(prev_name)
+                curr_norm = _norm_name(curr_name)
+                if len(prev_norm.split()) > len(curr_norm.split()):
+                    cleaned["doctor_name"] = prev_name
+            elif curr_name != prev_name:
+                doctor_changed = True
 
         if doctor_changed:
             for k in (

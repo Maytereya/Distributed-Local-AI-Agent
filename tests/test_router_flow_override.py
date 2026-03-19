@@ -351,6 +351,44 @@ def test_execute_plan_optional_step_exception_is_suppressed():
     assert "boom" in str(optional_err.get("message"))
 
 
+def test_merge_entities_keeps_appointment_context_for_same_doctor_short_name():
+    memory = MemoryStore()
+    state = SessionState(
+        session_id="merge-doctor-same",
+        last_entities={
+            "doctor_name": "Дразнин Антон Владимирович",
+            "appointment_flow_active": True,
+            "appointment_windows": [{"date": "2026-03-20", "time": "16:30", "branch": "Ленина 5"}],
+            "branch_name": "Ленина 5",
+        },
+    )
+
+    memory.merge_entities(state, {"doctor_name": "Дразнин"}, label="APPOINTMENT")
+
+    assert state.last_entities.get("doctor_name") == "Дразнин Антон Владимирович"
+    assert state.last_entities.get("appointment_flow_active") is True
+    assert state.last_entities.get("appointment_windows")
+
+
+def test_merge_entities_resets_appointment_context_for_different_doctor():
+    memory = MemoryStore()
+    state = SessionState(
+        session_id="merge-doctor-different",
+        last_entities={
+            "doctor_name": "Дразнин Антон Владимирович",
+            "appointment_flow_active": True,
+            "appointment_windows": [{"date": "2026-03-20", "time": "16:30", "branch": "Ленина 5"}],
+            "branch_name": "Ленина 5",
+        },
+    )
+
+    memory.merge_entities(state, {"doctor_name": "Хальметова Алина Алексеевна"}, label="APPOINTMENT")
+
+    assert state.last_entities.get("doctor_name") == "Хальметова Алина Алексеевна"
+    assert state.last_entities.get("appointment_flow_active") is None
+    assert state.last_entities.get("appointment_windows") is None
+
+
 def test_build_doctor_info_response_for_doctor_info_flow():
     state = SessionState(session_id="doc-info", last_entities={})
     evidence = Evidence(
