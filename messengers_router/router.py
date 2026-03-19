@@ -122,6 +122,8 @@ _DOCTOR_NOISE_TOKENS = {
     "да",
     "нет",
 }
+_TOPIC_OVERRIDE_ALLOW_FROM_OTHER = {"PREPARE", "NEWS"}
+_TOPIC_OVERRIDE_MIN_SCORE = 2
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -160,6 +162,7 @@ def _apply_topic_registry_override(
 ) -> RouteDecision:
     topic_label = str(getattr(topic_match, "label", "") or "").strip().upper()
     topic_id = str(getattr(topic_match, "topic_id", "") or "").strip()
+    topic_score = int(getattr(topic_match, "score", 0) or 0)
     if not topic_label or not topic_id:
         return decision
 
@@ -170,16 +173,33 @@ def _apply_topic_registry_override(
     # Безопасный приоритет критичных лейблов: registry не перезатирает
     # срочные/медицинские/жалобные контуры.
     if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
-        return _copy_decision(decision, flags=flags)
+        return _copy_decision(decision, flags=flags | {"topic_registry_hint_only"})
 
+    # Лучший сценарий: labels совпали -> считаем это подтверждением.
     if decision.label == topic_label:
-        return _copy_decision(decision, flags=flags)
+        return _copy_decision(
+            decision,
+            confidence=max(decision.confidence, 0.80),
+            flags=flags | {"topic_registry_confirm"},
+        )
+
+    # Расхождение labels:
+    # - по умолчанию registry работает как hint-only;
+    # - override разрешаем только из OTHER и только по ограниченному allowlist.
+    if decision.label != "OTHER":
+        return _copy_decision(decision, flags=flags | {"topic_registry_hint_only"})
+
+    if topic_label not in _TOPIC_OVERRIDE_ALLOW_FROM_OTHER:
+        return _copy_decision(decision, flags=flags | {"topic_registry_hint_only"})
+
+    if topic_score < _TOPIC_OVERRIDE_MIN_SCORE:
+        return _copy_decision(decision, flags=flags | {"topic_registry_hint_only"})
 
     return _copy_decision(
         decision,
         label=topic_label,  # type: ignore[arg-type]
-        confidence=max(decision.confidence, 0.88),
-        flags=flags | {"topic_registry_override"},
+        confidence=max(decision.confidence, 0.78),
+        flags=flags | {"topic_registry_override_from_other"},
         needs_handoff=False,
         source="topic_registry",
         context_action="continue",
@@ -214,22 +234,6 @@ def _build_other_plan_from_topic_registry(
             if index == "news":
                 return [PlanStep(tool="news_info", input=base_input)]
             return [PlanStep(tool="main_index_info", input=base_input)]
-        if kind == "api":
-            target = str(source.get("target") or "").strip().lower()
-            if target == "pricebyregion":
-                return [PlanStep(tool="price_info", input=base_input)]
-            if target == "doctorsinfoall":
-                return [PlanStep(tool="doctors_info", input=base_input)]
-            if target == "doctorsscheduleweek":
-                return [PlanStep(tool="doctors_schedule_week", input=base_input)]
-            if target == "regionsinfo":
-                return [PlanStep(tool="address_info", input=base_input)]
-            if target == "resultforpatient":
-                return [PlanStep(tool="test_result_status", input=base_input, auth="none")]
-        if kind == "api_cache":
-            target = str(source.get("target") or "").strip().lower()
-            if "preparation" in target:
-                return [PlanStep(tool="test_prepare", input=base_input)]
 
     return []
 
