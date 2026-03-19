@@ -1,7 +1,7 @@
 import asyncio
 
 from messengers_router.flow_policy import _apply_pending_override, _hydrate_appointment_context_from_schedule
-from messengers_router.mess_types import Evidence, SessionState
+from messengers_router.mess_types import Evidence, Plan, PlanStep, SessionState
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision
 from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
@@ -17,6 +17,7 @@ from messengers_router.router import (
     _build_price_response,
     _build_test_result_response,
     _should_keep_appointment_flow_override,
+    execute_plan,
 )
 from messengers_router import router as router_mod
 
@@ -207,6 +208,96 @@ def test_build_plan_legacy_doc_request_handoff_flag_also_uses_main_index_info():
 
     assert plan.steps
     assert plan.steps[0].tool == "main_index_info"
+
+
+def test_build_plan_appointment_with_cached_windows_skips_realtime_schedule():
+    state = SessionState(
+        session_id="appt-cached-windows",
+        last_entities={
+            "doctor_name": "Дразнин",
+            "appointment_windows": [{"branch": "Ленина 5", "date": "2026-03-21", "time": "16:30"}],
+            "branch_name": "Ленина 5",
+        },
+    )
+    memory = MemoryStore()
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.8,
+        entities={"doctor_name": "Дразнин"},
+        flags=set(),
+        needs_handoff=False,
+    )
+
+    plan = build_plan(decision, state, "на завтра на 16:30", memory)
+
+    assert plan.steps == []
+
+
+def test_build_plan_appointment_with_selected_datetime_skips_realtime_schedule():
+    state = SessionState(
+        session_id="appt-selected-datetime",
+        last_entities={
+            "doctor_name": "Дразнин",
+            "branch_name": "Ленина 5",
+            "date_from": "2026-03-21",
+            "time_from": "16:30",
+        },
+    )
+    memory = MemoryStore()
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.8,
+        entities={"doctor_name": "Дразнин"},
+        flags=set(),
+        needs_handoff=False,
+    )
+
+    plan = build_plan(decision, state, "Иванов Иван Иванович", memory)
+
+    assert plan.steps == []
+
+
+def test_execute_plan_optional_step_handoff_is_suppressed():
+    class _Svc:
+        async def price_info(self, _q, _e):
+            return {
+                "handoff_required": True,
+                "handoff_reason": "service_error",
+                "handoff_message": "fallback",
+                "note": "price unavailable",
+                "prices": [],
+            }
+
+    plan = Plan(
+        label="APPOINTMENT",
+        steps=[PlanStep(tool="price_info", input={"query": "Самара", "entities": {}}, required=False)],
+    )
+
+    ev = asyncio.run(execute_plan(plan, SessionState(session_id="opt-suppress"), _Svc()))
+
+    assert ev.get("handoff_required") is None
+    assert ev.get("price") is None
+    suppressed = ev.get("price_info_optional_suppressed")
+    assert isinstance(suppressed, dict)
+    assert suppressed.get("handoff_reason") == "service_error"
+
+
+def test_execute_plan_optional_step_exception_is_suppressed():
+    class _Svc:
+        async def price_info(self, _q, _e):
+            raise RuntimeError("boom")
+
+    plan = Plan(
+        label="APPOINTMENT",
+        steps=[PlanStep(tool="price_info", input={"query": "Самара", "entities": {}}, required=False)],
+    )
+
+    ev = asyncio.run(execute_plan(plan, SessionState(session_id="opt-exc"), _Svc()))
+
+    assert ev.get("handoff_required") is None
+    optional_err = ev.get("price_info_optional_error")
+    assert isinstance(optional_err, dict)
+    assert "boom" in str(optional_err.get("message"))
 
 
 def test_build_doctor_info_response_for_doctor_info_flow():
