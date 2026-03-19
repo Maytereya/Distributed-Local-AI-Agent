@@ -530,6 +530,12 @@ APPOINTMENT_REPLY_MAP: dict[str, str] = {
     "confirmed_handoff_suffix": "Передаю заявку оператору для окончательного подтверждения записи.",
     "reask_datetime": "Хорошо, тогда уточните новую дату и время для записи.",
     "reask_confirm": "Подтвердите запись, пожалуйста: ответьте «да» или «нет».",
+    "cancel_confirm": "Отменить текущий процесс записи? Ответьте «да» или «нет».",
+    "topic_switch_confirm": (
+        "Сейчас идет оформление записи. Отменить этот процесс и перейти к новому вопросу? "
+        "Ответьте «да» или «нет»."
+    ),
+    "cancelled": "Процесс записи отменён. Можете задать новый вопрос, и я помогу дальше.",
 }
 
 
@@ -1597,6 +1603,18 @@ def appointment_text_reask_datetime() -> str:
 
 def appointment_text_reask_confirm() -> str:
     return APPOINTMENT_REPLY_MAP["reask_confirm"]
+
+
+def appointment_text_cancel_confirm() -> str:
+    return APPOINTMENT_REPLY_MAP["cancel_confirm"]
+
+
+def appointment_text_topic_switch_confirm() -> str:
+    return APPOINTMENT_REPLY_MAP["topic_switch_confirm"]
+
+
+def appointment_text_cancelled() -> str:
+    return APPOINTMENT_REPLY_MAP["cancelled"]
 
 
 def appointment_service_display(entities: dict[str, Any]) -> str:

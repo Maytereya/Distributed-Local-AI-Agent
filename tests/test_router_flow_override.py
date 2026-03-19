@@ -9,6 +9,8 @@ from messengers_router.policies import quick_fill_core_entities
 from messengers_router.services import Services
 from messengers_router.router import (
     _DEFAULT_CITY,
+    _apply_appointment_continuity_overrides,
+    _build_first_structured_response,
     _build_address_response,
     _build_appointment_schedule_preview_response,
     _build_appointment_step_response,
@@ -23,6 +25,16 @@ from messengers_router.router import (
 from messengers_router import router as router_mod
 
 
+def _run_stream_once(user_text: str, state: SessionState, services: Services, memory: MemoryStore):
+    async def _collect():
+        out = []
+        async for env in router_mod.patient_routing_stream(user_text, state, services, memory):
+            out.append(env)
+        return out
+
+    return asyncio.run(_collect())
+
+
 def test_appointment_flow_override_allows_city_datetime_and_fio():
     assert _should_keep_appointment_flow_override("Самара") is True
     assert _should_keep_appointment_flow_override("на 16:30") is True
@@ -33,6 +45,42 @@ def test_appointment_flow_override_blocks_new_topics():
     assert _should_keep_appointment_flow_override("Как можно сдать анализы") is False
     assert _should_keep_appointment_flow_override("результаты анализов") is False
     assert _should_keep_appointment_flow_override("покажи расписание Казакова") is False
+
+
+def test_apply_appointment_continuity_overrides_prioritizes_datetime():
+    state = SessionState(session_id="appt-override-datetime", last_entities={"appointment_flow_active": True})
+    decision = RouteDecision(
+        label="DOCTOR_SCHEDULE",
+        confidence=0.35,
+        entities={},
+        flags={"low_confidence"},
+        needs_handoff=True,
+        context_action="new_topic",
+    )
+
+    out = _apply_appointment_continuity_overrides(decision, state, "на завтра на 9:00")
+
+    assert out.label == "APPOINTMENT"
+    assert "flow_datetime_appointment_override" in out.flags
+    assert out.context_action == "continue"
+    assert out.needs_handoff is False
+
+
+def test_apply_appointment_continuity_overrides_keeps_other_followup():
+    state = SessionState(session_id="appt-override-other", last_entities={"appointment_flow_active": True})
+    decision = RouteDecision(
+        label="OTHER",
+        confidence=0.3,
+        entities={},
+        flags={"low_confidence"},
+        needs_handoff=False,
+        context_action="continue",
+    )
+
+    out = _apply_appointment_continuity_overrides(decision, state, "Самара")
+
+    assert out.label == "APPOINTMENT"
+    assert "flow_appointment_override" in out.flags
 
 
 def test_default_city_is_samara_for_messenger_router():
@@ -192,6 +240,32 @@ def test_build_plan_doc_request_uses_main_index_info():
 
     assert plan.steps
     assert plan.steps[0].tool == "main_index_info"
+
+
+def test_build_first_structured_response_keeps_builder_priority():
+    state = SessionState(session_id="builder-priority", last_entities={})
+    evidence = Evidence(
+        items={
+            "main_index_info": {"content": "Справка для налоговой"},
+            "price": {"prices": [{"serviceName": "УЗИ", "cost": 1500}]},
+        }
+    )
+    services = Services()
+    memory = MemoryStore()
+    decision = RouteDecision(label="PRICE", confidence=0.9, entities={}, flags=set(), needs_handoff=False)
+
+    env = _build_first_structured_response(
+        flow_label="PRICE",
+        evidence=evidence,
+        state=state,
+        services=services,
+        memory=memory,
+        decision=decision,
+        user_text="Сколько стоит УЗИ?",
+    )
+
+    assert env is not None
+    assert env.text == "Справка для налоговой"
 
 
 def test_build_plan_legacy_doc_request_handoff_flag_also_uses_main_index_info():
@@ -568,3 +642,108 @@ def test_build_appointment_step_response_patient_step_sets_pending():
     pending = memory.get_pending(state)
     assert isinstance(pending, dict)
     assert pending.get("label") == "APPOINTMENT"
+
+
+def test_patient_routing_stream_requests_cancel_confirmation_for_active_appointment_flow():
+    state = SessionState(session_id="appt-cancel-confirm", last_entities={"appointment_flow_active": True})
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["date_from", "time_from"])
+
+    out = _run_stream_once("передумал, отменить запись", state, services, memory)
+
+    assert len(out) == 1
+    assert "Отменить текущий процесс записи" in out[0].text
+    assert state.last_entities.get("appointment_cancel_pending") is True
+
+
+def test_patient_routing_stream_cancel_rejected_resumes_appointment_flow():
+    state = SessionState(
+        session_id="appt-cancel-no",
+        last_entities={"appointment_flow_active": True, "appointment_cancel_pending": True},
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["patient_name"])
+
+    out = _run_stream_once("нет", state, services, memory)
+
+    assert len(out) == 1
+    assert "фио пациента" in out[0].text.lower()
+    assert state.last_entities.get("appointment_cancel_pending") is None
+    assert state.last_entities.get("appointment_flow_active") is True
+
+
+def test_patient_routing_stream_topic_switch_requests_confirmation():
+    state = SessionState(session_id="appt-topic-switch", last_entities={"appointment_flow_active": True})
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["date_from", "time_from"])
+
+    out = _run_stream_once("Сколько стоит общий анализ крови?", state, services, memory)
+
+    assert len(out) == 1
+    assert "Отменить этот процесс и перейти к новому вопросу" in out[0].text
+    assert state.last_entities.get("appointment_topic_switch_pending") is True
+
+
+def test_patient_routing_stream_topic_switch_confirm_yes_clears_appointment_flow():
+    state = SessionState(
+        session_id="appt-topic-switch-yes",
+        last_entities={
+            "appointment_flow_active": True,
+            "appointment_topic_switch_pending": True,
+            "doctor_name": "Ким Татьяна Александровна",
+            "date_from": "2026-03-20",
+            "time_from": "09:00",
+        },
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["patient_name"])
+
+    out = _run_stream_once("да", state, services, memory)
+
+    assert len(out) == 1
+    assert "Процесс записи отменён" in out[0].text
+    assert state.last_entities.get("appointment_flow_active") is None
+    assert state.last_entities.get("doctor_name") is None
+    assert memory.get_pending(state) is None
+
+
+def test_patient_routing_stream_manual_operator_clears_appointment_context():
+    state = SessionState(
+        session_id="appt-manual-operator",
+        last_entities={
+            "appointment_flow_active": True,
+            "appointment_confirm_pending": True,
+            "appointment_cancel_pending": True,
+            "doctor_name": "Ким Татьяна Александровна",
+            "service_name": "Прием врача",
+            "date_from": "2026-03-20",
+            "time_from": "09:00",
+            "city": "Самара",
+        },
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["patient_name"])
+
+    out = _run_stream_once("Соедините с оператором", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].handoff is True
+    assert state.last_entities.get("appointment_flow_active") is None
+    assert state.last_entities.get("appointment_confirm_pending") is None
+    assert state.last_entities.get("appointment_cancel_pending") is None
+    assert state.last_entities.get("doctor_name") is None
+    assert state.last_entities.get("service_name") is None
+    assert state.last_entities.get("date_from") is None
+    assert state.last_entities.get("time_from") is None
+    assert state.last_entities.get("city") == "Самара"
+    assert memory.get_pending(state) is None

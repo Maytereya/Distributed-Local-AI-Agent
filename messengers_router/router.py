@@ -14,7 +14,6 @@ recovery-политика и сервисные интеграции вынес�
 
 from __future__ import annotations
 
-import re
 from typing import AsyncGenerator, Any
 
 from agent_logic_2 import config as c
@@ -39,6 +38,12 @@ from .flow_policy import (
     _set_secondary_queue,
     quick_fill_entities_from_text,
 )
+from .appointment_flow_guard import (
+    clear_appointment_flow_context as _clear_appointment_flow_context,
+    reset_appointment_runtime_state as _reset_appointment_runtime_state,
+    run_appointment_precheck,
+    should_keep_appointment_flow_override as _should_keep_appointment_flow_override,
+)
 from .nlu_pipeline import analyze_with_candidates
 from .llm_mode_policy import RuntimeOptions
 from .policies import (
@@ -52,9 +57,6 @@ from .policies import (
     APPOINTMENT_STEP_DATETIME,
     APPOINTMENT_STEP_PATIENT,
     APPOINTMENT_STEP_CONFIRM,
-    APPOINTMENT_CONFIRM_YES,
-    APPOINTMENT_CONFIRM_NO,
-    appointment_confirmation_transition,
     extract_price_rub,
     appointment_summary,
     appointment_addresses_for_city,
@@ -62,9 +64,6 @@ from .policies import (
     appointment_text_datetime_prompt,
     appointment_text_patient_name_prompt,
     appointment_text_confirm_prompt,
-    appointment_text_confirmed_handoff,
-    appointment_text_reask_datetime,
-    appointment_text_reask_confirm,
     decision_handoff_text,
     apply_verified_doctor_override,
     detect_nonbookable_walkin_intent,
@@ -77,7 +76,6 @@ from .policies import (
     detect_schedule_intent,
     detect_doctor_info_intent,
     has_datetime_signal,
-    looks_like_branch_hint,
     nonbookable_service_hint,
     appointment_service_display,
 )
@@ -118,12 +116,6 @@ _DOCTOR_NOISE_TOKENS = {
     "да",
     "нет",
 }
-_PATIENT_NAME_FRAGMENT_RE = re.compile(r"^\s*[А-ЯЁа-яё\-]{2,}\s+[А-ЯЁа-яё\-]{1,}\s*$")
-
-
-def _reset_appointment_state_flags(state: SessionState) -> None:
-    for k in ("appointment_flow_active", "appointment_confirm_pending", "appointment_confirmed"):
-        state.last_entities.pop(k, None)
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -184,73 +176,6 @@ def _is_samara_city(city: str | None) -> bool:
     return str(city).strip().lower().replace("ё", "е") == "самара"
 
 
-def _should_keep_appointment_flow_override(user_text: str) -> bool:
-    """
-    Разрешаем мягкий OTHER->APPOINTMENT override только для реплик,
-    похожих на продолжение сценария записи (время/город/филиал/ФИО/да-нет).
-    Новые темы ("анализы", "результаты", "расписание") не должны
-    притягиваться назад в активный APPOINTMENT flow.
-    """
-    text = str(user_text or "").strip()
-    if not text:
-        return False
-
-    low = text.lower()
-    if (
-        detect_test_result_intent(low)
-        or detect_test_assist_intent(low)
-        or detect_prepare_intent(low)
-        or detect_price_intent(low)
-        or detect_address_intent(low)
-        or detect_doc_request_intent(low)
-        or detect_nonbookable_walkin_intent(text)
-        or detect_schedule_intent(low)
-        or detect_doctor_info_intent(low)
-    ):
-        return False
-
-    reply_kind = contextual_reply_kind(text)
-    if reply_kind in {"yes", "no"}:
-        return True
-    if has_datetime_signal(text):
-        return True
-    if match_city(text):
-        return True
-    if looks_like_branch_hint(text):
-        return True
-    if _looks_like_patient_fio(text):
-        return True
-    # На шаге ввода ФИО допускаем "Фамилия И" как продолжение потока записи.
-    if _PATIENT_NAME_FRAGMENT_RE.fullmatch(text):
-        return True
-    return False
-
-
-def _is_new_topic_while_confirm_pending(user_text: str) -> bool:
-    text = str(user_text or "").strip()
-    if not text:
-        return False
-    if contextual_reply_kind(text) in {"yes", "no"}:
-        return False
-
-    low = text.lower()
-    if (
-        detect_prepare_intent(low)
-        or detect_price_intent(low)
-        or detect_test_assist_intent(low)
-        or detect_test_result_intent(low)
-        or detect_address_intent(low)
-        or detect_schedule_intent(low)
-        or detect_doctor_info_intent(low)
-        or detect_doc_request_intent(low)
-        or detect_nonbookable_walkin_intent(text)
-    ):
-        return True
-
-    # Длинная вопросительная реплика с высокой вероятностью новая тема.
-    return ("?" in text) and (len(text.split()) >= 4)
-
-
 def _is_appointment_datetime_followup(user_text: str) -> bool:
     text = str(user_text or "").strip()
     if not text or not has_datetime_signal(text):
@@ -269,6 +194,61 @@ def _is_appointment_datetime_followup(user_text: str) -> bool:
     ):
         return False
     return True
+
+
+def _apply_appointment_continuity_overrides(
+    decision: RouteDecision,
+    state: SessionState,
+    user_text: str,
+) -> RouteDecision:
+    """
+    Единая post-policy точка удержания APPOINTMENT flow.
+    Приоритет:
+    1) реплика с датой/временем
+    2) OTHER + контекстное продолжение
+    3) guard для TEST_RESULT/DOCTOR_* при активной записи
+    """
+    if not state.last_entities.get("appointment_flow_active"):
+        return decision
+
+    if (
+        has_datetime_signal(user_text)
+        and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "ADDRESS", "PRICE"}
+        and not detect_prepare_intent(user_text)
+        and not detect_test_assist_intent(user_text)
+        and not detect_test_result_intent(user_text)
+        and not detect_doc_request_intent(user_text)
+    ):
+        return _copy_decision(
+            decision,
+            label="APPOINTMENT",
+            confidence=max(decision.confidence, 0.66),
+            flags=set(decision.flags) | {"flow_datetime_appointment_override"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+
+    if decision.label == "OTHER" and decision.context_action == "continue" and _should_keep_appointment_flow_override(user_text):
+        return _copy_decision(
+            decision,
+            label="APPOINTMENT",
+            confidence=max(decision.confidence, 0.51),
+            flags=set(decision.flags) | {"flow_appointment_override"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+
+    if decision.label in {"TEST_RESULT", "DOCTOR_SCHEDULE", "DOCTOR_INFO"} and _should_keep_appointment_flow_override(user_text):
+        return _copy_decision(
+            decision,
+            label="APPOINTMENT",
+            confidence=max(decision.confidence, 0.60),
+            flags=set(decision.flags) | {"flow_appointment_guard_override"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+
+    return decision
 
 
 def _early_debug_state_update(
@@ -823,76 +803,13 @@ async def route_patient_message(
             context_action="continue",
         )
 
-    # В активном сценарии записи реплики с датой/временем трактуем как
-    # продолжение APPOINTMENT, даже если NLU ушел в расписание/OTHER.
-    if (
-        state.last_entities.get("appointment_flow_active")
-        and has_datetime_signal(user_text)
-        and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "ADDRESS", "PRICE"}
-        and not detect_prepare_intent(user_text)
-        and not detect_test_assist_intent(user_text)
-        and not detect_test_result_intent(user_text)
-        and not detect_doc_request_intent(user_text)
-    ):
-        decision = _copy_decision(
-            decision,
-            label="APPOINTMENT",
-            confidence=max(decision.confidence, 0.66),
-            flags=set(decision.flags) | {"flow_datetime_appointment_override"},
-            needs_handoff=False,
-            context_action="continue",
-        )
-
-    # Сохраняем сценарий записи на операторских уточнениях (ветка "да/нет", короткие ответы и т.п.).
-    if (
-        decision.label == "OTHER"
-        and decision.context_action == "continue"
-        and state.last_entities.get("appointment_flow_active")
-        and _should_keep_appointment_flow_override(user_text)
-    ):
-        decision = _copy_decision(
-            decision,
-            label="APPOINTMENT",
-            confidence=max(decision.confidence, 0.51),
-            flags=set(decision.flags) | {"flow_appointment_override"},
-            needs_handoff=False,
-            context_action="continue",
-        )
-
-    # Защита активного APPOINTMENT flow: не даем случайной переклассификации
-    # увести реплику "дата/время/ФИО" в чужой интент.
-    if (
-        decision.label in {"TEST_RESULT", "DOCTOR_SCHEDULE", "DOCTOR_INFO"}
-        and state.last_entities.get("appointment_flow_active")
-        and _should_keep_appointment_flow_override(user_text)
-    ):
-        decision = _copy_decision(
-            decision,
-            label="APPOINTMENT",
-            confidence=max(decision.confidence, 0.60),
-            flags=set(decision.flags) | {"flow_appointment_guard_override"},
-            needs_handoff=False,
-            context_action="continue",
-        )
+    decision = _apply_appointment_continuity_overrides(decision, state, user_text)
 
     if decision.label == "DOCTOR_SCHEDULE":
         # Очищаем хвосты сценария записи, чтобы расписание не фильтровалось
         # старым branch/date/time из предыдущих шагов.
-        for k in (
-            "appointment_flow_active",
-            "appointment_confirm_pending",
-            "appointment_confirmed",
-            "appointment_branch_options",
-            "service_name",
-            "test_name",
-            "branch_id",
-            "branch_name",
-            "date_from",
-            "date_to",
-            "time_from",
-            "time_to",
-            "date_hint",
-        ):
+        _reset_appointment_runtime_state(state)
+        for k in ("service_name", "test_name"):
             state.last_entities.pop(k, None)
         city_hint = match_city(user_text)
         if city_hint and not decision.entities.get("city"):
@@ -911,7 +828,7 @@ async def route_patient_message(
             )
         )
         if not keep_appointment_flow:
-            _reset_appointment_state_flags(state)
+            _reset_appointment_runtime_state(state)
 
     # Entity grounding: принимаем только подтвержденные/разрешенные сущности.
     pending_before_merge = memory.get_pending(state)
@@ -1309,6 +1226,41 @@ def _build_appointment_step_response(
     return None
 
 
+def _build_first_structured_response(
+    *,
+    flow_label: str,
+    evidence: Evidence,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    decision: RouteDecision,
+    user_text: str,
+) -> ResponseEnvelope | None:
+    """
+    Упорядоченный реестр response-builder'ов.
+    Порядок важен: соответствует исторической последовательности в роутере.
+    """
+    builders = (
+        lambda: _build_main_index_info_response(evidence),
+        lambda: _build_service_bundle_response(flow_label, evidence, state),
+        lambda: _build_price_response(flow_label, evidence, state),
+        lambda: _build_test_result_response(flow_label, evidence),
+        lambda: _build_doctor_schedule_response(flow_label, evidence, state),
+        lambda: _build_doctor_info_response(flow_label, evidence, state),
+        lambda: _build_address_response(flow_label, evidence, state, memory, decision, user_text),
+        lambda: _build_news_response(flow_label, evidence, state),
+        # Если пользователь сразу хочет записаться к конкретному врачу, сначала
+        # показываем его актуальные окна, а не отправляем в общий сценарий "город -> филиал".
+        lambda: _build_appointment_schedule_preview_response(flow_label, evidence, state),
+        lambda: _build_appointment_step_response(flow_label, evidence, state, services, memory),
+    )
+    for build in builders:
+        env = build()
+        if env is not None:
+            return env
+    return None
+
+
 async def patient_routing_stream(
     user_text: str,
     state: SessionState,
@@ -1324,9 +1276,8 @@ async def patient_routing_stream(
 
     # Явный запрос оператора должен иметь абсолютный приоритет.
     if explicit_operator_requested(user_text):
-        memory.clear_pending(state)
+        _clear_appointment_flow_context(state, memory)
         state.last_entities["_nlu_unclear_count"] = 0
-        state.last_entities["appointment_flow_active"] = False
         yield ResponseEnvelope(
             text=handoff_message("manual_operator"),
             attachments=[],
@@ -1344,9 +1295,8 @@ async def patient_routing_stream(
 
     city_now = match_city(user_text)
     if city_now and not _is_samara_city(city_now):
-        memory.clear_pending(state)
+        _clear_appointment_flow_context(state, memory)
         state.last_entities.pop("city", None)
-        _reset_appointment_state_flags(state)
         update_summary(state, reason="handoff")
         yield ResponseEnvelope(
             text=_SAMARA_ONLY_OPERATOR_TEXT,
@@ -1363,73 +1313,16 @@ async def patient_routing_stream(
         )
         return
 
-    # Подтверждение записи обрабатываем до NLU/route, чтобы rich/hybrid режим
-    # не влиял на handoff-переход.
-    if state.last_entities.get("appointment_confirm_pending"):
-        confirm_transition = appointment_confirmation_transition(user_text)
-        if confirm_transition == APPOINTMENT_CONFIRM_YES:
-            summary = appointment_summary(state.last_entities)
-            state.last_entities["appointment_confirmed"] = True
-            state.last_entities.pop("appointment_confirm_pending", None)
-            state.last_entities.pop("appointment_flow_active", None)
-            yield ResponseEnvelope(
-                text=appointment_text_confirmed_handoff(summary),
-                handoff=True,
-                state_update=_early_debug_state_update(
-                    debug,
-                    label="APPOINTMENT",
-                    handoff=True,
-                    flags={"appointment_confirm_yes"},
-                    confidence=1.0,
-                ),
-            )
-            return
-        if confirm_transition == APPOINTMENT_CONFIRM_NO:
-            state.last_entities["appointment_confirmed"] = False
-            state.last_entities.pop("appointment_confirm_pending", None)
-            for k in ("date_from", "date_to", "time_from", "time_to", "date_hint"):
-                state.last_entities.pop(k, None)
-            state.last_entities["appointment_flow_active"] = True
-            yield ResponseEnvelope(
-                text=appointment_text_reask_datetime(),
-                handoff=False,
-                state_update=_early_debug_state_update(
-                    debug,
-                    label="APPOINTMENT",
-                    handoff=False,
-                    flags={"appointment_confirm_no"},
-                    confidence=1.0,
-                ),
-            )
-            return
-        if _is_new_topic_while_confirm_pending(user_text):
-            # Пользователь сменил тему: выходим из шага подтверждения.
-            state.last_entities.pop("appointment_confirm_pending", None)
-            state.last_entities.pop("appointment_flow_active", None)
-            for k in (
-                "date_from",
-                "date_to",
-                "time_from",
-                "time_to",
-                "date_hint",
-                "appointment_windows",
-                "appointment_branch_options",
-            ):
-                state.last_entities.pop(k, None)
-            memory.clear_pending(state)
-        else:
-            yield ResponseEnvelope(
-                text=appointment_text_reask_confirm(),
-                handoff=False,
-                state_update=_early_debug_state_update(
-                    debug,
-                    label="APPOINTMENT",
-                    handoff=False,
-                    flags={"appointment_confirm_reask"},
-                    confidence=1.0,
-                ),
-            )
-            return
+    precheck = run_appointment_precheck(
+        user_text=user_text,
+        state=state,
+        memory=memory,
+        debug=debug,
+        debug_state_update_factory=_early_debug_state_update,
+    )
+    if precheck is not None:
+        yield precheck
+        return
 
     try:
         decision, plan, evidence = await route_patient_message(
@@ -1506,27 +1399,6 @@ async def patient_routing_stream(
         yield ResponseEnvelope(text=recovery.text or LOW_CONF_CLARIFY_TEXT, handoff=False)
         return
 
-    if flow_label == "DOCTOR_SCHEDULE":
-        # есть специальность, но нет врача → уточняем
-        doctor_known = bool(
-            decision.entities.get("doctor_name")
-            or decision.entities.get("doctor_last_name")
-            or decision.entities.get("last_name")
-            or state.last_entities.get("doctor_name")
-            or state.last_entities.get("doctor_id")
-        )
-        specialty_known = bool(
-            decision.entities.get("specialty")
-            or state.last_entities.get("specialty")
-        )
-        if (
-                specialty_known
-                and not doctor_known
-        ):
-            # По specialty-сценарию (например, "гастроэнтеролог ближайший")
-            # даем пройти к сервису расписания, который сам подбирает врача.
-            pass
-
     pending = memory.get_pending(state)
     if not plan.steps and pending:
         missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
@@ -1548,56 +1420,17 @@ async def patient_routing_stream(
         yield ResponseEnvelope(text=handoff_message(handoff_reason, handoff_msg), handoff=True)
         return
 
-    main_index_resp = _build_main_index_info_response(evidence)
-    if main_index_resp is not None:
-        yield main_index_resp
-        return
-
-    service_bundle_resp = _build_service_bundle_response(flow_label, evidence, state)
-    if service_bundle_resp is not None:
-        yield service_bundle_resp
-        return
-
-    price_resp = _build_price_response(flow_label, evidence, state)
-    if price_resp is not None:
-        yield price_resp
-        return
-
-    test_result_resp = _build_test_result_response(flow_label, evidence)
-    if test_result_resp is not None:
-        yield test_result_resp
-        return
-
-    doctor_schedule_resp = _build_doctor_schedule_response(flow_label, evidence, state)
-    if doctor_schedule_resp is not None:
-        yield doctor_schedule_resp
-        return
-
-    doctor_info_resp = _build_doctor_info_response(flow_label, evidence, state)
-    if doctor_info_resp is not None:
-        yield doctor_info_resp
-        return
-
-    address_resp = _build_address_response(flow_label, evidence, state, memory, decision, user_text)
-    if address_resp is not None:
-        yield address_resp
-        return
-
-    news_resp = _build_news_response(flow_label, evidence, state)
-    if news_resp is not None:
-        yield news_resp
-        return
-
-    # Если пользователь сразу хочет записаться к конкретному врачу, сначала
-    # показываем его актуальные окна, а не отправляем в общий сценарий "город -> филиал".
-    appointment_preview_resp = _build_appointment_schedule_preview_response(flow_label, evidence, state)
-    if appointment_preview_resp is not None:
-        yield appointment_preview_resp
-        return
-
-    appointment_step_resp = _build_appointment_step_response(flow_label, evidence, state, services, memory)
-    if appointment_step_resp is not None:
-        yield appointment_step_resp
+    structured_response = _build_first_structured_response(
+        flow_label=flow_label,
+        evidence=evidence,
+        state=state,
+        services=services,
+        memory=memory,
+        decision=decision,
+        user_text=user_text,
+    )
+    if structured_response is not None:
+        yield structured_response
         return
 
     try:
