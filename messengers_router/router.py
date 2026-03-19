@@ -498,17 +498,34 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
         return Plan(label=label, steps=steps)
 
     if label == "APPOINTMENT":
+        flow_active = bool(state.last_entities.get("appointment_flow_active"))
         if entities.get("doctor_id") or entities.get("doctor_name"):
             has_cached_windows = bool(entities.get("appointment_windows"))
             has_selected_datetime = bool((entities.get("date_from") or entities.get("date_hint")) and entities.get("time_from"))
             # Не дергаем realtime-расписание повторно в уже идущем flow, если окна
             # уже есть в контексте или пациент выбрал дату/время.
             if not has_cached_windows and not has_selected_datetime:
-                steps.append(PlanStep(tool="doctors_schedule_week", input={"query": user_text, "entities": dict(entities)}))
+                # В активном flow не срываемся в handoff при кратковременных
+                # сетевых сбоях realtime-расписания.
+                steps.append(
+                    PlanStep(
+                        tool="doctors_schedule_week",
+                        input={"query": user_text, "entities": dict(entities)},
+                        required=not flow_active,
+                    )
+                )
         else:
             address_entities = dict(entities)
             address_entities["__appointment_mode"] = True
-            steps.append(PlanStep(tool="address_info", input={"query": user_text, "entities": address_entities}))
+            # В активном flow используем кэшированные branch options и
+            # не отправляем в handoff, если адресный источник временно недоступен.
+            steps.append(
+                PlanStep(
+                    tool="address_info",
+                    input={"query": user_text, "entities": address_entities},
+                    required=not flow_active,
+                )
+            )
             steps.append(PlanStep(tool="price_info", input={"query": user_text, "entities": dict(entities)}, required=False))
         return Plan(label=label, steps=steps)
 

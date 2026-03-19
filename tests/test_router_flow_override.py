@@ -257,6 +257,57 @@ def test_build_plan_appointment_with_selected_datetime_skips_realtime_schedule()
     assert plan.steps == []
 
 
+def test_build_plan_appointment_active_flow_makes_schedule_optional():
+    state = SessionState(
+        session_id="appt-flow-schedule-optional",
+        last_entities={
+            "doctor_name": "Дразнин",
+            "appointment_flow_active": True,
+        },
+    )
+    memory = MemoryStore()
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.8,
+        entities={"doctor_name": "Дразнин"},
+        flags=set(),
+        needs_handoff=False,
+    )
+
+    plan = build_plan(decision, state, "на завтра после 16:00", memory)
+
+    assert len(plan.steps) == 1
+    assert plan.steps[0].tool == "doctors_schedule_week"
+    assert plan.steps[0].required is False
+
+
+def test_build_plan_appointment_active_flow_makes_address_optional():
+    state = SessionState(
+        session_id="appt-flow-address-optional",
+        last_entities={
+            "appointment_flow_active": True,
+            "city": "Самара",
+            "service_name": "холтер",
+        },
+    )
+    memory = MemoryStore()
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.8,
+        entities={"service_name": "холтер"},
+        flags=set(),
+        needs_handoff=False,
+    )
+
+    plan = build_plan(decision, state, "Самара", memory)
+
+    assert len(plan.steps) == 2
+    assert plan.steps[0].tool == "address_info"
+    assert plan.steps[0].required is False
+    assert plan.steps[1].tool == "price_info"
+    assert plan.steps[1].required is False
+
+
 def test_execute_plan_optional_step_handoff_is_suppressed():
     class _Svc:
         async def price_info(self, _q, _e):
