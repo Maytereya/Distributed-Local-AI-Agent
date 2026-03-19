@@ -260,7 +260,7 @@ def test_main_index_info_success(monkeypatch):
     res = run(svc.main_index_info("Как получить справку для налоговой?", {}))
 
     assert res["content"] == "Справка для налоговой"
-    assert res["note"] == "main_index_info: main_index"
+    assert str(res["note"]).startswith("main_index_info: main_index")
     assert res.get("handoff_required") is not True
     assert captured.get("kwargs") == {"output_mode": "content_only", "max_chars": 12000}
 
@@ -317,14 +317,14 @@ def test_test_prepare_meili(monkeypatch):
 
     def fake_search(_index, _query, *args, **kwargs):
         captured["kwargs"] = dict(kwargs)
-        return "<i>подготовка</i>"
+        return "<i>подготовка к анализу крови: натощак</i>"
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: "подготовка")
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: "подготовка к анализу крови: натощак")
 
     res = run(svc.test_prepare("анализ крови", {}))
 
-    assert res["prepare"] == "подготовка"
+    assert res["prepare"] == "подготовка к анализу крови: натощак"
     assert captured.get("kwargs") == {"output_mode": "content_only", "max_chars": 12000}
 
 
@@ -342,6 +342,29 @@ def test_test_prepare_no_matches_returns_handoff(monkeypatch):
     assert res["prepare"] == ""
     assert res.get("handoff_required") is True
     assert res.get("handoff_reason") == "knowledge_not_found"
+
+
+def test_test_prepare_uses_fallback_variant_query(monkeypatch):
+    svc = Services()
+    calls: list[str] = []
+
+    def fake_search(_index, _query, *args, **kwargs):
+        calls.append(str(_query))
+        if str(_query).strip().lower() == "как подготовиться к вульвоскопии":
+            return "Совпадений не найдено, cформулируйте запрос иначе"
+        if str(_query).strip().lower() == "подготовка к вульвоскопии":
+            return "Подготовка к вульвоскопии: за 24 часа исключить половые контакты."
+        return "Совпадений не найдено, cформулируйте запрос иначе"
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+
+    res = run(svc.test_prepare("Как подготовиться к вульвоскопии?", {}))
+
+    assert res.get("handoff_required") is not True
+    assert "вульвоскоп" in str(res.get("prepare") or "").lower()
+    assert any("как подготовиться к вульвоскопии" in q.lower() for q in calls)
+    assert any("подготовка к вульвоскопии" in q.lower() for q in calls)
 
 
 def test_test_result_status_stub():

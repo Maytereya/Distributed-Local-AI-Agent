@@ -122,10 +122,147 @@ _PRICE_QUERY_STOPWORDS = {
     "доктора",
     "самара",
 }
+_PREPARE_QUERY_STOPWORDS = {
+    "как",
+    "подготовиться",
+    "подготовится",
+    "подготовка",
+    "подготовке",
+    "подготовки",
+    "к",
+    "для",
+    "перед",
+    "процедурой",
+    "процедуре",
+    "процедуры",
+    "процедуру",
+    "исследованием",
+    "исследованию",
+    "исследования",
+    "исследование",
+    "анализом",
+    "подскажите",
+    "скажите",
+    "пожалуйста",
+    "мне",
+    "нужно",
+    "надо",
+    "можно",
+    "ли",
+    "что",
+    "чтобы",
+    "когда",
+    "будет",
+}
+_PREPARE_LEADIN_RE = re.compile(
+    r"^\s*(?:подскажите[, ]+)?(?:как\s+)?подготов(?:иться|ится|ка)\s*(?:к|для)?\s+",
+    re.I,
+)
+_PREPARE_ENTITY_RE = re.compile(
+    r"(?:подготов(?:иться|ится|ка)\s*(?:к|для)\s+)(?P<entity>.+)$",
+    re.I,
+)
+_PREPARE_SYNONYM_HINTS: dict[str, tuple[str, ...]] = {
+    "фгдс": ("гастроскопия", "фиброгастродуоденоскопия"),
+    "гастроскоп": ("фгдс",),
+    "эгдс": ("фгдс",),
+    "фгс": ("фгдс",),
+    "ректороманоскоп": ("ректоскопия",),
+    "колоноскоп": ("колоноскопия",),
+    "кольпоскоп": ("кольпоскопия",),
+    "вульвоскоп": ("вульвоскопия",),
+}
 
 
 def _normalise_input(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
+
+
+def _normalise_prepare_text(text: str) -> str:
+    norm = _normalise_input(text).replace("ё", "е")
+    norm = re.sub(r"[\"'«»!?.,;:()]+", " ", norm)
+    return re.sub(r"\s+", " ", norm).strip()
+
+
+def _dedupe_queries(queries: list[str], *, max_items: int = 8) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in queries:
+        q = str(raw or "").strip()
+        if not q:
+            continue
+        key = _normalise_prepare_text(q)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(q)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _extract_prepare_entity_phrase(text: str) -> str:
+    norm = _normalise_prepare_text(text)
+    if not norm:
+        return ""
+    m = _PREPARE_ENTITY_RE.search(norm)
+    if m:
+        return str(m.group("entity") or "").strip(" ?!.,")
+    stripped = _PREPARE_LEADIN_RE.sub("", norm, count=1).strip(" ?!.,")
+    return stripped
+
+
+def _prepare_keyword_query(text: str) -> str:
+    norm = _normalise_prepare_text(text)
+    if not norm:
+        return ""
+    tokens = re.findall(r"[a-zа-я0-9]{2,}", norm)
+    if not tokens:
+        return ""
+    picked = [t for t in tokens if t not in _PREPARE_QUERY_STOPWORDS]
+    if not picked:
+        return ""
+    return " ".join(picked[:6]).strip()
+
+
+def _prepare_synonym_queries(text: str) -> list[str]:
+    norm = _normalise_prepare_text(text)
+    if not norm:
+        return []
+    out: list[str] = []
+    for hint, variants in _PREPARE_SYNONYM_HINTS.items():
+        if hint not in norm:
+            continue
+        for var in variants:
+            out.append(var)
+            out.append(f"подготовка к {var}")
+    return _dedupe_queries(out, max_items=6)
+
+
+def _prepare_query_variants(raw_query: str, entity_query: str = "") -> list[str]:
+    variants: list[str] = []
+    for src in (raw_query, entity_query):
+        src_clean = str(src or "").strip()
+        if not src_clean:
+            continue
+        variants.append(src_clean)
+
+        entity_phrase = _extract_prepare_entity_phrase(src_clean)
+        if entity_phrase:
+            variants.append(f"подготовка к {entity_phrase}")
+            variants.append(entity_phrase)
+            keyword_query = _prepare_keyword_query(entity_phrase)
+            if keyword_query and keyword_query != entity_phrase:
+                variants.append(keyword_query)
+                variants.append(f"подготовка к {keyword_query}")
+        else:
+            stripped = _PREPARE_LEADIN_RE.sub("", _normalise_prepare_text(src_clean), count=1).strip()
+            if stripped:
+                variants.append(stripped)
+                variants.append(f"подготовка к {stripped}")
+
+        variants.extend(_prepare_synonym_queries(" ".join(x for x in (src_clean, entity_phrase) if x)))
+    return _dedupe_queries(variants)
 
 
 def _is_samara_city_value(value: str | None) -> bool:
@@ -1860,38 +1997,43 @@ class Services:
                 "entities_used": entities,
             }
 
-        try:
-            raw = await asyncio.to_thread(
-                meilisearch.search_meili,
-                "main_index",
-                q,
-                output_mode="content_only",
-                max_chars=12000,
-            )
-            cleaned = html_cleaner.strip_html(raw)
-        except Exception:
-            return _service_fallback(
-                note="prepare source unavailable",
-                handoff_message="Сейчас не удалось получить правила подготовки автоматически. Соединяю с оператором.",
-                entities=entities,
-                extra={"prepare": ""},
-            )
-        if _is_meili_error_text(cleaned):
-            return _service_fallback(
-                note="prepare source unavailable",
-                handoff_message="Сейчас не удалось получить правила подготовки автоматически. Соединяю с оператором.",
-                entities=entities,
-                extra={"prepare": ""},
-            )
-        if _is_meili_no_matches_text(cleaned):
-            return _service_fallback(
-                note="prepare: no matches",
-                handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
-                entities=entities,
-                reason="knowledge_not_found",
-                extra={"prepare": ""},
-            )
-        if not _is_prepare_relevant(q, cleaned):
+        variants = _prepare_query_variants(q, entity_query)
+        if not variants:
+            variants = [q]
+
+        saw_no_matches = False
+        saw_non_empty = False
+        saw_service_error = False
+        for candidate in variants:
+            try:
+                raw = await asyncio.to_thread(
+                    meilisearch.search_meili,
+                    "main_index",
+                    candidate,
+                    output_mode="content_only",
+                    max_chars=12000,
+                )
+                cleaned = html_cleaner.strip_html(raw).strip()
+            except Exception:
+                saw_service_error = True
+                continue
+
+            if _is_meili_error_text(cleaned):
+                saw_service_error = True
+                continue
+
+            if _is_meili_no_matches_text(cleaned):
+                saw_no_matches = True
+                continue
+
+            if not cleaned:
+                continue
+
+            saw_non_empty = True
+            if _is_prepare_relevant(candidate, cleaned) or _is_prepare_relevant(q, cleaned):
+                return {"prepare": cleaned, "entities_used": entities}
+
+        if saw_non_empty:
             return _service_fallback(
                 note="prepare: weak relevance",
                 handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
@@ -1899,7 +2041,22 @@ class Services:
                 reason="knowledge_not_found",
                 extra={"prepare": ""},
             )
-        return {"prepare": cleaned, "entities_used": entities}
+
+        if saw_no_matches or not saw_service_error:
+            return _service_fallback(
+                note="prepare: no matches",
+                handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
+                entities=entities,
+                reason="knowledge_not_found",
+                extra={"prepare": ""},
+            )
+
+        return _service_fallback(
+            note="prepare source unavailable",
+            handoff_message="Сейчас не удалось получить правила подготовки автоматически. Соединяю с оператором.",
+            entities=entities,
+            extra={"prepare": ""},
+        )
 
     async def _prepare_from_analysis_api_cache_stub(self, query: str, entities: dict[str, Any]) -> str | None:
         """Заглушка под API-first: подготовка к анализам из serviceInfoAll/preparation."""
