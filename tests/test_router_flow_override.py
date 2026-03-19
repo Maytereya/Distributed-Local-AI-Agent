@@ -5,6 +5,7 @@ from messengers_router.mess_types import Evidence, Plan, PlanStep, SessionState
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision
 from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
+from messengers_router.policies import quick_fill_core_entities
 from messengers_router.services import Services
 from messengers_router.router import (
     _DEFAULT_CITY,
@@ -387,6 +388,17 @@ def test_merge_entities_resets_appointment_context_for_different_doctor():
     assert state.last_entities.get("doctor_name") == "Хальметова Алина Алексеевна"
     assert state.last_entities.get("appointment_flow_active") is None
     assert state.last_entities.get("appointment_windows") is None
+
+
+def test_quick_fill_patient_name_skips_datetime_phrase():
+    out = quick_fill_core_entities("на завтра на 9:00", {}, ["patient_name"])
+    assert "patient_name" not in out
+    assert out.get("time_from") == "09:00"
+
+
+def test_quick_fill_patient_name_accepts_real_fio():
+    out = quick_fill_core_entities("Рахманов Владимир", {}, ["patient_name"])
+    assert out.get("patient_name") == "Рахманов Владимир"
 
 
 def test_build_doctor_info_response_for_doctor_info_flow():

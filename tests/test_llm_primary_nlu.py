@@ -93,6 +93,31 @@ def test_structured_slot_request_recovery():
     assert "название услуги" in recovery.text.lower()
 
 
+def test_low_conf_recovery_first_clarify_uses_default_text():
+    decision = RouteDecision(
+        label="OTHER",
+        confidence=0.31,
+        source="llm_primary",
+        flags={"low_confidence"},
+        clarify_needed=False,
+    )
+
+    recovery = evaluate_recovery(
+        user_text="самара",
+        decision=decision,
+        flow_label="OTHER",
+        pending_exists=False,
+        flow_active=False,
+        state_entities={},
+        summary="",
+        max_unclear=3,
+    )
+
+    assert recovery.kind == "clarify"
+    assert isinstance(recovery.text, str)
+    assert recovery.text.strip() != ""
+
+
 def test_debug_meta_contains_nlu_fields():
     decision = RouteDecision(
         label="PRICE",

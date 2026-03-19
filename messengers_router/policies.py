@@ -370,6 +370,30 @@ _QF_PATIENT_NAME_PREFIX_RE = re.compile(
 )
 _QF_PLAIN_NAME_RE = re.compile(r"^\s*([А-ЯЁа-яё\-]{2,}(?:\s+[А-ЯЁа-яё\-]{2,}){1,2})\s*$")
 _QF_NAME_FRAGMENT_RE = re.compile(r"\b([А-ЯЁа-яё\-]{2,})\s+([А-ЯЁа-яё\-]{2,})\s+([А-ЯЁа-яё\-]{2,})\b")
+_QF_PATIENT_NAME_STOPWORDS = {
+    "на",
+    "в",
+    "во",
+    "к",
+    "с",
+    "со",
+    "до",
+    "после",
+    "утром",
+    "днем",
+    "днём",
+    "вечером",
+    "сегодня",
+    "завтра",
+    "послезавтра",
+    "понедельник",
+    "вторник",
+    "среда",
+    "четверг",
+    "пятница",
+    "суббота",
+    "воскресенье",
+}
 _QF_DOCTOR_CONTEXT_RE = re.compile(
     r"\b("
     r"расписани\w*|график|свободн\w*\s+(?:окн\w*|слот\w*)|"
@@ -1168,6 +1192,29 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
             except Exception:
                 pass
 
+    def _is_valid_patient_name_candidate(candidate_text: str) -> bool:
+        raw = str(candidate_text or "").strip()
+        if not raw:
+            return False
+        if has_datetime_signal(raw):
+            return False
+        if match_city(raw):
+            return False
+        low_raw = raw.lower()
+        if _QF_APPOINTMENT_WORD_RE.search(low_raw):
+            return False
+        if _QF_TIME_FRAGMENT_RE.search(low_raw):
+            return False
+        tokens = [w for w in re.split(r"\s+", low_raw) if w]
+        if len(tokens) < 2:
+            return False
+        if any(t in _QF_PATIENT_NAME_STOPWORDS for t in tokens):
+            return False
+        # "на завтра на" и подобные служебные фрагменты не считаем ФИО.
+        if not any(len(t) >= 3 for t in tokens):
+            return False
+        return True
+
     if "patient_name" in missing_rules:
         candidate: str | None = None
         m_name = _QF_PATIENT_NAME_PREFIX_RE.search(t)
@@ -1197,7 +1244,7 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
                     or match_city(low_raw)
                 ):
                     candidate = raw
-        if candidate:
+        if candidate and _is_valid_patient_name_candidate(candidate):
             normalized_tokens = [w.capitalize() for w in re.split(r"\s+", candidate) if w]
             if len(normalized_tokens) >= 2:
                 out["patient_name"] = " ".join(normalized_tokens)

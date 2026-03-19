@@ -96,12 +96,29 @@ _PATIENT_FIO_STOPWORDS = {
     "покажите",
     "да",
     "нет",
+    "на",
+    "в",
+    "во",
+    "к",
+    "с",
+    "со",
+    "до",
+    "после",
+    "сегодня",
+    "завтра",
+    "послезавтра",
+    "утром",
+    "днем",
+    "днём",
+    "вечером",
 }
 
 
 def _looks_like_patient_fio(text: str) -> bool:
     s = str(text or "").strip()
     if not _PATIENT_FIO_RE.fullmatch(s):
+        return False
+    if has_datetime_signal(s):
         return False
     tokens = [t for t in s.split() if t]
     if len(tokens) < 2:

@@ -174,7 +174,7 @@ def evaluate_recovery(
             kind="clarify",
             text=_structured_clarify_text(decision, flow_label, summary, user_text)
             if is_structured_clarify
-            else _LOW_CONF_CLARIFY_TEXT,
+            else LOW_CONF_CLARIFY_TEXT,
             handoff=False,
             reason=decision.clarify_reason or "low_confidence_clarify_1",
             unclear_count=n,
