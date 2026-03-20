@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from dataclasses import field
 
 
 @dataclass
@@ -22,6 +23,7 @@ class Step:
     user_text: str
     expect_any: tuple[str, ...]
     expect_handoff: bool
+    reject_any: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -35,7 +37,7 @@ FLOWS: list[Flow] = [
         "APPT_DOCTOR_STD",
         steps=[
             Step("расписание Дразнин", ("свободно", "если нужно записаться"), False),
-            Step("16:30", ("фио пациента",), False),
+            Step("20 марта, 16:30", ("фио пациента",), False),
             Step("Иванов Иван Иванович", ("подтверждаете", "запись:"), False),
             Step("да", ("передаю заявку оператору", "соединяю с оператором"), True),
         ],
@@ -43,9 +45,13 @@ FLOWS: list[Flow] = [
     Flow(
         "APPT_HOLTER_RESCHEDULE",
         steps=[
-            Step("Можно перенести запись на холтер?", ("город", "из какого города"), False),
-            Step("Самара", ("по адресам", "какой филиал"), False),
-            Step("Ленина 5", ("дату и время", "на какую дату"), False),
+            Step("Можно перенести запись на холтер?", ("по адресам", "какой филиал", "филиал вам удобен"), False),
+            Step(
+                "г. Самара, ул. Победы, 83",
+                ("дату и время", "на какую дату", "удобное время"),
+                False,
+                reject_any=("в городе самара доступны филиалы", "телефон:"),
+            ),
             Step("завтра после 16:00", ("фио пациента",), False),
             Step("Петров Петр Петрович", ("подтверждаете", "запись:"), False),
             Step("нет", ("уточните новую дату",), False),
@@ -83,6 +89,14 @@ def _contains_any(text: str, patterns: tuple[str, ...]) -> bool:
         if re.search(re.escape(p.lower()), t):
             return True
     return False
+
+
+def _contains_none(text: str, patterns: tuple[str, ...]) -> bool:
+    t = (text or "").lower()
+    for p in patterns:
+        if re.search(re.escape(p.lower()), t):
+            return False
+    return True
 
 
 def main() -> int:
@@ -123,7 +137,11 @@ def main() -> int:
                 data = post_json(args.url, payload)
                 bot_text = str(data.get("text") or "")
                 handoff = bool(data.get("handoff", False))
-                ok = _contains_any(bot_text, step.expect_any) and handoff == step.expect_handoff
+                ok = (
+                    _contains_any(bot_text, step.expect_any)
+                    and _contains_none(bot_text, step.reject_any)
+                    and handoff == step.expect_handoff
+                )
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
                 bot_text = f"ERROR:{type(e).__name__}"
                 handoff = False
