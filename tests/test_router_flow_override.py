@@ -85,6 +85,39 @@ def test_apply_appointment_continuity_overrides_keeps_other_followup():
     assert "flow_appointment_override" in out.flags
 
 
+def test_apply_appointment_continuity_overrides_keeps_address_like_branch_reply():
+    state = SessionState(session_id="appt-override-address", last_entities={"appointment_flow_active": True})
+    decision = RouteDecision(
+        label="ADDRESS",
+        confidence=0.72,
+        entities={},
+        flags={"rule_address"},
+        needs_handoff=False,
+        context_action="continue",
+    )
+
+    out = _apply_appointment_continuity_overrides(decision, state, "г. Самара, ул. Победы, 83")
+
+    assert out.label == "APPOINTMENT"
+    assert "flow_appointment_override" in out.flags
+
+
+def test_apply_appointment_continuity_overrides_allows_explicit_address_topic_switch():
+    state = SessionState(session_id="appt-override-address-topic", last_entities={"appointment_flow_active": True})
+    decision = RouteDecision(
+        label="ADDRESS",
+        confidence=0.72,
+        entities={},
+        flags={"rule_address"},
+        needs_handoff=False,
+        context_action="continue",
+    )
+
+    out = _apply_appointment_continuity_overrides(decision, state, "адрес в Самаре")
+
+    assert out.label == "ADDRESS"
+
+
 def test_default_city_is_samara_for_messenger_router():
     assert _DEFAULT_CITY == "Самара"
 

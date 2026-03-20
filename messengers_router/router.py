@@ -318,7 +318,11 @@ def _apply_appointment_continuity_overrides(
             context_action="continue",
         )
 
-    if decision.label == "OTHER" and decision.context_action == "continue" and _should_keep_appointment_flow_override(user_text):
+    if (
+        decision.label in {"OTHER", "ADDRESS"}
+        and decision.context_action == "continue"
+        and _should_keep_appointment_flow_override(user_text)
+    ):
         return _copy_decision(
             decision,
             label="APPOINTMENT",
