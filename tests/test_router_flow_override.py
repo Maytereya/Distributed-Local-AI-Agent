@@ -9,6 +9,7 @@ from messengers_router.policies import (
     quick_fill_core_entities,
     extract_branch_hint,
     appointment_service_display,
+    appointment_confirmation_transition,
     service_name_conflicts_with_doctor,
 )
 from messengers_router.services import Services
@@ -161,6 +162,16 @@ def test_verify_doctor_entity_drops_service_name_that_matches_doctor():
     assert out.entities.get("doctor_name") == "Дразнин Антон Владимирович"
     assert "service_name" not in out.entities
     assert "entity_dropped_doctor_like_service_name" in out.flags
+
+
+def test_appointment_confirmation_transition_accepts_common_yes_forms():
+    for text in ("да", "Да", "Да,", "Да?", "подтверждаю", "Подтверждаю"):
+        assert appointment_confirmation_transition(text) == "yes"
+
+
+def test_appointment_confirmation_transition_accepts_common_no_forms():
+    for text in ("нет", "Нет", "неа", "не правильно", "неправильно", "не подтверждаю"):
+        assert appointment_confirmation_transition(text) == "no"
 
 
 def test_default_city_is_samara_for_messenger_router():

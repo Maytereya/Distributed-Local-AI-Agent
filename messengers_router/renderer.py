@@ -115,10 +115,10 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
     t_to = _parse_time_hhmm(entities.get("time_to"))
 
     lines: list[str] = []
+    any_free_slots_global = False
 
     for i, doc in enumerate(docs[:3], 1):
         fio = str(doc.get("fio") or "Врач")
-        spec = str(doc.get("specialization") or "").strip()
         regions = doc.get("regions") or []
         schedule = doc.get("schedule") or {}
 
@@ -127,20 +127,18 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
             regions = [r for r in regions if target.lower() in str(r).lower()] or regions
             schedule = {k: v for k, v in schedule.items() if target.lower() in str(k).lower()} or schedule
 
-        if spec:
-            lines.append(f"{i}. {fio} — {spec}")
-        else:
-            lines.append(f"{i}. {fio}")
+        lines.append(f"{i}. {fio}")
 
         if regions:
             lines.append(f"Адреса приема: {', '.join(regions)}")
 
-        has_any = False
+        has_any_content = False
+        has_free_slots = False
         visible_regions: list[str] = []
         rendered_schedule_lines: list[str] = []
         for region_name, days in schedule.items():
             region_lines: list[str] = []
-            region_has_any = False
+            region_has_content = False
             if region_name:
                 region_lines.append(f"{region_name}:")
             for day in days or []:
@@ -158,16 +156,17 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
                 slots = _filter_slots(day.get("slots") or [], t_from, t_to)
                 if slots:
                     region_lines.append(f"• {day_date}: свободно {', '.join(slots)}")
-                    region_has_any = True
+                    region_has_content = True
+                    has_free_slots = True
                 else:
                     start = (day.get("start") or "")[:5]
                     end = (day.get("end") or "")[:5]
                     if start or end:
                         region_lines.append(f"• {day_date}: {start}-{end}")
-                        region_has_any = True
+                        region_has_content = True
 
-            if region_has_any:
-                has_any = True
+            if region_has_content:
+                has_any_content = True
                 if region_name:
                     visible_regions.append(str(region_name).strip())
                 rendered_schedule_lines.extend(region_lines)
@@ -184,14 +183,21 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
 
         lines.extend(rendered_schedule_lines)
 
-        if not has_any:
+        if not has_free_slots:
             if date_from:
                 lines.append("Свободных окон на выбранную дату не найдено.")
             else:
                 lines.append("Свободных окон в ближайшие дни не найдено.")
+        if has_free_slots:
+            any_free_slots_global = True
+        elif not has_any_content and not schedule:
+            lines.append("Расписание по этому врачу пока недоступно.")
         lines.append("")
 
-    lines.append("Если нужно записаться — напишите удобное время или уточните врача/филиал.")
+    if any_free_slots_global:
+        lines.append("Если нужно записаться — напишите удобное время или уточните врача/филиал.")
+    else:
+        lines.append("Могу подобрать другого врача или передать диалог оператору.")
     return "\n".join([l for l in lines if l is not None]).strip()
 
 
@@ -210,13 +216,15 @@ def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, 
         if narrowed:
             docs = narrowed
 
+    single_selected = bool(doctor_hint) and len(docs) == 1
+
     lines: list[str] = []
     for i, doc in enumerate(docs[:DOCTORS_TOP_N], 1):
         fio = str(doc.get("fio") or "Врач").strip()
         spec = str(doc.get("specialization") or "").strip()
         regions = doc.get("regions") or []
         lines.append(f"{i}. {fio}")
-        if spec:
+        if spec and not single_selected:
             # specialization уже сжат в services, оставляем человекочитаемый блок.
             lines.append(spec)
         if isinstance(regions, list) and regions:
@@ -225,7 +233,10 @@ def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, 
                 lines.append(f"Адреса приема: {', '.join(clean_regions)}")
         lines.append("")
 
-    lines.append("Если нужно — могу показать расписание этого врача или помочь с записью.")
+    if single_selected:
+        lines.append("Хотите записаться к этому врачу? Напишите «расписание» или «запись».")
+    else:
+        lines.append("Если нужно — могу показать расписание этого врача или помочь с записью.")
     return "\n".join([l for l in lines if l is not None]).strip()
 
 

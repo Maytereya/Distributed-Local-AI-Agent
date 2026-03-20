@@ -1515,26 +1515,97 @@ def appointment_step_policy(entities: dict[str, Any]) -> str:
 
 
 _YES_RE = re.compile(
-    r"^\s*(да|ага|угу|подтверждаю|подтверждаем|верно|ок|окей|конечно|давайте|наверное)\s*[!.]?\s*$",
+    r"^\s*(да|ага|угу|подтверждаю|подтверждаем|верно|ок|окей|конечно|давайте|наверное)\s*[!.,?;:]?\s*$",
     re.I,
 )
-_NO_RE = re.compile(r"^\s*(нет|неа|не подтверждаю|не подтверждаем|неверно|не надо|не нужно)\s*[!.]?\s*$", re.I)
+_NO_RE = re.compile(
+    r"^\s*(нет|неа|не\s+подтверждаю|не\s+подтверждаем|неверно|не\s+верно|не\s+надо|не\s+нужно|"
+    r"неправильно|не\s+правильно)\s*[!.,?;:]?\s*$",
+    re.I,
+)
+_CONFIRM_STRIP_QUOTES_RE = re.compile(r"[\"'`«»]+")
+_CONFIRM_PUNCT_RE = re.compile(r"[!.,?;:]+")
+_CONFIRM_SPACE_RE = re.compile(r"\s+")
+_CONFIRM_YES_EXACT = {
+    "да",
+    "ага",
+    "угу",
+    "ок",
+    "окей",
+    "верно",
+    "конечно",
+    "давайте",
+    "подтверждаю",
+    "подтверждаем",
+}
+_CONFIRM_NO_EXACT = {
+    "нет",
+    "неа",
+    "неверно",
+    "не верно",
+    "неправильно",
+    "не правильно",
+    "не надо",
+    "не нужно",
+    "не подтверждаю",
+    "не подтверждаем",
+}
+
+
+def _normalize_confirmation_text(text: str) -> str:
+    norm = str(text or "").lower().replace("ё", "е").strip()
+    if not norm:
+        return ""
+    norm = _CONFIRM_STRIP_QUOTES_RE.sub(" ", norm)
+    norm = _CONFIRM_PUNCT_RE.sub(" ", norm)
+    norm = _CONFIRM_SPACE_RE.sub(" ", norm).strip()
+    return norm
+
+
+def _is_affirmative_text(text: str) -> bool:
+    raw = str(text or "")
+    if _YES_RE.match(raw):
+        return True
+    norm = _normalize_confirmation_text(raw)
+    if not norm:
+        return False
+    if norm in _CONFIRM_YES_EXACT:
+        return True
+    if norm.startswith("да "):
+        return True
+    if "подтвержда" in norm and "не подтвержда" not in norm:
+        return True
+    return False
+
+
+def _is_negative_text(text: str) -> bool:
+    raw = str(text or "")
+    if _NO_RE.match(raw):
+        return True
+    norm = _normalize_confirmation_text(raw)
+    if not norm:
+        return False
+    if norm in _CONFIRM_NO_EXACT:
+        return True
+    if norm.startswith("не подтвержда"):
+        return True
+    return False
 
 
 def appointment_confirmation_transition(text: str) -> str:
-    if _YES_RE.match(text or ""):
+    if _is_affirmative_text(text):
         return APPOINTMENT_CONFIRM_YES
-    if _NO_RE.match(text or ""):
+    if _is_negative_text(text):
         return APPOINTMENT_CONFIRM_NO
     return APPOINTMENT_CONFIRM_OTHER
 
 
 def is_context_affirmative(text: str) -> bool:
-    return bool(_YES_RE.match(text or ""))
+    return _is_affirmative_text(text)
 
 
 def is_context_negative(text: str) -> bool:
-    return bool(_NO_RE.match(text or ""))
+    return _is_negative_text(text)
 
 
 def extract_price_rub(price_payload: dict[str, Any] | None) -> str | None:

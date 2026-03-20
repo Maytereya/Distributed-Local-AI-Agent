@@ -6,6 +6,7 @@ from messengers_router.nlu_pipeline import analyze_with_candidates
 from messengers_router.policies import missing_slots
 from messengers_router.renderer import (
     format_address_for_patient,
+    format_doctor_info_for_patient,
     format_doctor_schedule_for_patient,
     format_price_for_patient,
     format_service_bundle_for_patient,
@@ -75,6 +76,46 @@ def test_doctor_schedule_renderer_explains_visible_schedule_branches():
     assert "Ближайшее актуальное расписание сейчас есть в филиале: Ленина 5" in text
 
 
+def test_doctor_schedule_renderer_compact_header_without_specialization_dump():
+    payload = {
+        "schedule": [
+            {
+                "fio": "Дразнин Антон Владимирович",
+                "specialization": "Очень длинное описание специализации",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "schedule": {
+                    "г. Самара, пр. Ленина, 5": [{"date": "2026-03-23", "slots": ["15:30"]}],
+                },
+            }
+        ]
+    }
+    text = format_doctor_schedule_for_patient(payload, {})
+    first_line = text.splitlines()[0]
+    assert first_line == "1. Дразнин Антон Владимирович"
+    assert "Очень длинное описание" not in text
+
+
+def test_doctor_schedule_renderer_no_free_slots_uses_alternative_cta():
+    payload = {
+        "schedule": [
+            {
+                "fio": "Вахобов Абдуджалол Нозимович",
+                "specialization": "Уролог",
+                "regions": ["г.Самара, ул.Ново-Садовая, 106, кор. 82"],
+                "schedule": {
+                    "г.Самара, ул.Ново-Садовая, 106, кор. 82": [
+                        {"date": "2026-03-23", "start": "09:00:00", "end": "13:00:00", "slots": []}
+                    ],
+                },
+            }
+        ]
+    }
+    text = format_doctor_schedule_for_patient(payload, {})
+    assert "Свободных окон в ближайшие дни не найдено." in text
+    assert "Могу подобрать другого врача или передать диалог оператору." in text
+    assert "Если нужно записаться —" not in text
+
+
 def test_price_renderer_returns_cost_for_single_match():
     payload = {
         "note": "price_info: priceByRegion(3)",
@@ -86,6 +127,23 @@ def test_price_renderer_returns_cost_for_single_match():
     assert "УЗИ брюшной полости" in text
     assert "1 500 руб." in text
     assert "Источник цены: розничный прайс Самары." in text
+
+
+def test_doctor_info_renderer_single_selected_doctor_compact_followup():
+    payload = {
+        "doctors": [
+            {
+                "fio": "Вахобов Абдуджалол Нозимович",
+                "specialization": "Длинный блок услуг врача",
+                "regions": ["г.Самара, ул.Ново-Садовая, 106, кор. 82"],
+            }
+        ]
+    }
+    text = format_doctor_info_for_patient(payload, {"doctor_name": "Вахобов"})
+    assert "1. Вахобов Абдуджалол Нозимович" in text
+    assert "Адреса приема: г.Самара, ул.Ново-Садовая, 106, кор. 82" in text
+    assert "Длинный блок услуг врача" not in text
+    assert "Хотите записаться к этому врачу? Напишите «расписание» или «запись»." in text
 
 
 def test_price_renderer_doctor_context_single_match():
