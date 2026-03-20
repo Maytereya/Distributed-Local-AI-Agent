@@ -87,14 +87,29 @@ bash messengers_router/eval_suite/run_remote_eval.sh \
   --golden-version v2
 
 ### Если кастомный (или свой) набор критичных кейсов:
-
+```bash
 bash messengers_router/eval_suite/run_remote_eval.sh \
   --url http://172.16.0.16/api/messenger-generate-once \
   --session-prefix s_test \
   --cases messengers_router/eval_suite/critical_cases.jsonl
-
+```
 ### Где оценить логи после запуска: 
+```bash
 messengers_router/eval_suite/logs/<timestamp>/
-
+```
 ### Подсказка по параметрам:
+```bash
 bash messengers_router/eval_suite/run_remote_eval.sh --help
+```
+
+### run_remote_eval.sh берет тесты из локального checkout на той машине, где запущен.
+
+Что именно:
+
+• stage1/3/4 — кейсы зашиты прямо в скриптах: eval_stage1_cases.py, eval_stage3_appointment_flow.py, eval_stage4_reliability.py.
+
+• critical — файл по умолчанию critical_cases.jsonl, можно переопределить --cases.
+
+• stage5 — по умолчанию stage5_golden_cases.jsonl, либо версия через --golden-version vN из analysis/golden_versions.
+
+То есть “последняя версия тестов” = последний код/файлы в текущем коммите на сервере.

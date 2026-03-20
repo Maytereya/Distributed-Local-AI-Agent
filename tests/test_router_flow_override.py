@@ -1,6 +1,10 @@
 import asyncio
 
-from messengers_router.flow_policy import _apply_pending_override, _apply_context_action, _hydrate_appointment_context_from_schedule
+from messengers_router.flow_policy import (
+    apply_context_action,
+    apply_pending_override,
+    hydrate_appointment_context_from_schedule,
+)
 from messengers_router.mess_types import Evidence, Plan, PlanStep, SessionState
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision
@@ -194,7 +198,7 @@ def test_hydrate_schedule_sets_branch_when_windows_have_single_branch():
             }
         ]
     }
-    _hydrate_appointment_context_from_schedule(state, payload)
+    hydrate_appointment_context_from_schedule(state, payload)
     assert state.last_entities.get("branch_name") == "Ленина 5"
 
 
@@ -212,7 +216,7 @@ def test_hydrate_schedule_prefers_branches_from_actual_windows():
             }
         ]
     }
-    _hydrate_appointment_context_from_schedule(state, payload)
+    hydrate_appointment_context_from_schedule(state, payload)
     assert state.last_entities.get("appointment_branch_options") == ["Ленина 5", "Ново-Садовая 106"]
     assert not state.last_entities.get("branch_name")
 
@@ -699,7 +703,7 @@ def test_apply_pending_override_keeps_price_flow_on_city_reply():
     decision = RouteDecision(label="ADDRESS", confidence=0.72, flags={"rule_address"})
     pending = {"label": "PRICE", "missing": ["_any_of:city,branch_name,branch_id"]}
 
-    label = _apply_pending_override(decision, pending, user_text="Самара")
+    label = apply_pending_override(decision, pending, user_text="Самара")
 
     assert label == "PRICE"
 
@@ -708,7 +712,7 @@ def test_apply_pending_override_allows_address_switch_on_explicit_address_reques
     decision = RouteDecision(label="ADDRESS", confidence=0.72, flags={"rule_address"})
     pending = {"label": "PRICE", "missing": ["_any_of:city,branch_name,branch_id"]}
 
-    label = _apply_pending_override(decision, pending, user_text="адрес в Самаре")
+    label = apply_pending_override(decision, pending, user_text="адрес в Самаре")
 
     assert label == "ADDRESS"
 
@@ -717,7 +721,7 @@ def test_apply_pending_override_keeps_appointment_on_full_branch_address_reply()
     decision = RouteDecision(label="ADDRESS", confidence=0.78, flags={"rule_nonbookable_walkin"})
     pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
 
-    label = _apply_pending_override(decision, pending, user_text="г. Самара, ул. Победы, 83")
+    label = apply_pending_override(decision, pending, user_text="г. Самара, ул. Победы, 83")
 
     assert label == "APPOINTMENT"
 
@@ -726,7 +730,7 @@ def test_apply_pending_override_keeps_appointment_on_street_without_house():
     decision = RouteDecision(label="ADDRESS", confidence=0.78, flags={"rule_nonbookable_walkin"})
     pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
 
-    label = _apply_pending_override(decision, pending, user_text="на победе")
+    label = apply_pending_override(decision, pending, user_text="на победе")
 
     assert label == "APPOINTMENT"
 
@@ -735,7 +739,7 @@ def test_apply_pending_override_allows_non_samara_city_switch():
     decision = RouteDecision(label="ADDRESS", confidence=0.78, flags={"rule_nonbookable_walkin"})
     pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
 
-    label = _apply_pending_override(
+    label = apply_pending_override(
         decision,
         pending,
         user_text="мне вообще не в Самаре а в Сызрани надо!!! Сызрань! Слышите?",
@@ -792,7 +796,7 @@ def test_apply_context_action_blocks_new_topic_on_patient_name_step():
         context_action="new_topic",
     )
 
-    out = _apply_context_action(decision, state, "Рахманов Владимир")
+    out = apply_context_action(decision, state, "Рахманов Владимир")
 
     assert out.context_action == "continue"
     assert "context_action_new_topic_blocked_patient_name" in out.flags

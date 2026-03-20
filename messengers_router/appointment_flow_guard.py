@@ -10,7 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .city import match_city
-from .flow_policy import _looks_like_patient_fio
+from .flow_policy import looks_like_patient_fio
 from .memory import MemoryStore
 from .mess_types import ResponseEnvelope, SessionState
 from .policies import (
@@ -121,7 +121,7 @@ def should_keep_appointment_flow_override(user_text: str) -> bool:
         return True
     if looks_like_branch_hint(text):
         return True
-    if _looks_like_patient_fio(text):
+    if looks_like_patient_fio(text):
         return True
     if _PATIENT_NAME_FRAGMENT_RE.fullmatch(text):
         return True

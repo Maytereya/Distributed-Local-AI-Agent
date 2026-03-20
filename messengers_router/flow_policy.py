@@ -637,3 +637,53 @@ def quick_fill_entities_from_text(
                 out["branch_name"] = branch_hint[:80]
 
     return out
+
+
+# Public API for other modules. Wrappers preserve current behavior
+# while hiding implementation-specific `_...` names.
+def apply_context_action(decision: RouteDecision, state: SessionState, user_text: str) -> RouteDecision:
+    return _apply_context_action(decision, state, user_text)
+
+
+def apply_pending_override(decision: RouteDecision, pending: dict | None, user_text: str = "") -> str:
+    return _apply_pending_override(decision, pending, user_text=user_text)
+
+
+def fill_date_from_schedule_windows(state: SessionState, label: str) -> None:
+    _fill_date_from_schedule_windows(state, label)
+
+
+def get_secondary_queue(state: SessionState) -> list[str]:
+    return _get_secondary_queue(state)
+
+
+def hydrate_appointment_context_from_schedule(state: SessionState, schedule_payload: dict[str, Any]) -> None:
+    _hydrate_appointment_context_from_schedule(state, schedule_payload)
+
+
+def is_appointment_waiting_patient_name(pending: dict | None) -> bool:
+    return _is_appointment_waiting_patient_name(pending)
+
+
+def is_short_prepare_followup(text: str) -> bool:
+    return _is_short_prepare_followup(text)
+
+
+def looks_like_patient_fio(text: str) -> bool:
+    return _looks_like_patient_fio(text)
+
+
+def normalize_secondary_labels(value: Any) -> list[str]:
+    return _normalize_secondary_labels(value)
+
+
+def safe_get_branches(services: Services) -> list[dict[str, str]]:
+    return _safe_get_branches(services)
+
+
+def secondary_followup_text(labels: list[str]) -> str | None:
+    return _secondary_followup_text(labels)
+
+
+def set_secondary_queue(state: SessionState, labels: list[str]) -> None:
+    _set_secondary_queue(state, labels)

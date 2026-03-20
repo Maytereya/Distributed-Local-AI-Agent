@@ -49,10 +49,14 @@ def connect_to_meilisearch():
 try:
     client = connect_to_meilisearch()
     logger.info("✅ Успешное подключение к MeiliSearch!")
-    ver = client.get_version()  # dict
-    # прим.: {'pkgVersion': '1.11.0', 'commitSha': '...', 'buildDate': '...'}
-    pkg_version = ver.get("pkgVersion")
-    logger.info(f"Meilisearch server ver.: {pkg_version}")
+    skip_version_check = str(os.getenv("MEILI_SKIP_VERSION_CHECK", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if skip_version_check:
+        logger.warning("⏭️ Пропущена проверка версии MeiliSearch (MEILI_SKIP_VERSION_CHECK=1).")
+    else:
+        ver = client.get_version()  # dict
+        # прим.: {'pkgVersion': '1.11.0', 'commitSha': '...', 'buildDate': '...'}
+        pkg_version = ver.get("pkgVersion")
+        logger.info(f"Meilisearch server ver.: {pkg_version}")
 except Exception as e:
     logger.error(f"❌ Ошибка подключения к MeiliSearch: {e}")
 
