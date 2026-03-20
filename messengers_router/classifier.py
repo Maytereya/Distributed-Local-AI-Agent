@@ -54,6 +54,7 @@ from .policies import (
     extract_specialty,
     has_nearest_schedule_hint,
     missing_slots,
+    service_name_conflicts_with_doctor,
 )
 
 _CLASSIFY_TIMEOUT = 45
@@ -963,7 +964,7 @@ async def deterministic_rule_decision(
                 if doctor_name:
                     entities["doctor_name"] = doctor_name
                 svc = _extract_service_keyword(text)
-                if svc:
+                if svc and not service_name_conflicts_with_doctor(svc, doctor_name):
                     entities["service_name"] = svc
                 base = RouteDecision(
                     label="APPOINTMENT",

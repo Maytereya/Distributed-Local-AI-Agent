@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from agent_logic_2.doctor_name_matching import extract_doctor_name_candidate
+from agent_logic_2.doctor_name_matching import extract_doctor_name_candidate, surname_variants
 
 from .city import looks_like_address, match_city
 
@@ -1376,6 +1376,45 @@ def extract_service_phrase(text: str) -> str | None:
     return None
 
 
+def _normalize_alpha_token(value: str) -> str:
+    return re.sub(r"[^a-zа-яё\-]", "", str(value or "").lower().replace("ё", "е")).strip()
+
+
+def _first_alpha_token(value: str) -> str:
+    tokens = re.findall(r"[A-Za-zА-Яа-яЁё\-]{2,}", str(value or ""))
+    return _normalize_alpha_token(tokens[0]) if tokens else ""
+
+
+def service_name_conflicts_with_doctor(service_name: str, doctor_name: str | None) -> bool:
+    """
+    True, если service_name выглядит как фамилия того же врача
+    (включая падежные формы: "Дразнину" <-> "Дразнин").
+    """
+    service_token = _first_alpha_token(service_name)
+    doctor_token = _first_alpha_token(str(doctor_name or ""))
+    if len(service_token) < 3 or len(doctor_token) < 3:
+        return False
+
+    doctor_vars = {
+        _normalize_alpha_token(v)
+        for v in ([doctor_token] + surname_variants(doctor_token))
+        if _normalize_alpha_token(v)
+    }
+    if not doctor_vars:
+        return False
+
+    service_vars = {
+        _normalize_alpha_token(v)
+        for v in ([service_token] + surname_variants(service_token))
+        if _normalize_alpha_token(v)
+    }
+    if service_vars & doctor_vars:
+        return True
+
+    # Легкая страховка от опечаток/ё/и, но с высоким cutoff.
+    return bool(get_close_matches(service_token, list(doctor_vars), n=1, cutoff=0.92))
+
+
 def missing_slots(label: str, entities: dict[str, Any]) -> list[str]:
     req = REQUIRED_SLOTS.get(label, [])
     missing: list[str] = []
@@ -1638,12 +1677,14 @@ def appointment_text_cancelled() -> str:
 
 def appointment_service_display(entities: dict[str, Any]) -> str:
     service_raw = str(entities.get("service_name") or entities.get("test_name") or "").strip()
+    doctor_name = str(entities.get("doctor_name") or "").strip()
+    if service_raw and doctor_name and service_name_conflicts_with_doctor(service_raw, doctor_name):
+        service_raw = ""
     if (
         not service_raw
         or _QF_APPOINTMENT_WORD_RE.search(service_raw)
         or _QF_TIME_FRAGMENT_RE.search(service_raw)
     ):
-        doctor_name = str(entities.get("doctor_name") or "").strip()
         specialty = str(entities.get("specialty") or "").strip()
         if doctor_name:
             return f"приём к врачу {doctor_name}"

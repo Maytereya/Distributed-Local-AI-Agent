@@ -5,7 +5,12 @@ from messengers_router.mess_types import Evidence, Plan, PlanStep, SessionState
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision
 from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
-from messengers_router.policies import quick_fill_core_entities, extract_branch_hint
+from messengers_router.policies import (
+    quick_fill_core_entities,
+    extract_branch_hint,
+    appointment_service_display,
+    service_name_conflicts_with_doctor,
+)
 from messengers_router.services import Services
 from messengers_router import classifier as classifier_mod
 from messengers_router.city import match_city
@@ -22,6 +27,7 @@ from messengers_router.router import (
     _build_price_response,
     _build_test_result_response,
     _should_keep_appointment_flow_override,
+    _verify_doctor_entity,
     execute_plan,
 )
 from messengers_router import router as router_mod
@@ -116,6 +122,45 @@ def test_apply_appointment_continuity_overrides_allows_explicit_address_topic_sw
     out = _apply_appointment_continuity_overrides(decision, state, "адрес в Самаре")
 
     assert out.label == "ADDRESS"
+
+
+def test_service_name_conflicts_with_doctor_detects_surname_case():
+    assert service_name_conflicts_with_doctor("Дразнину", "Дразнин Антон Владимирович") is True
+    assert service_name_conflicts_with_doctor("Холтер", "Дразнин Антон Владимирович") is False
+
+
+def test_appointment_service_display_ignores_doctor_like_service_name():
+    text = appointment_service_display(
+        {
+            "service_name": "Дразнину",
+            "doctor_name": "Дразнин Антон Владимирович",
+        }
+    )
+
+    assert text == "приём к врачу Дразнин Антон Владимирович"
+
+
+def test_verify_doctor_entity_drops_service_name_that_matches_doctor():
+    class _FakeServices:
+        async def resolve_doctor_name(self, raw_text_or_name: str) -> str | None:
+            low = str(raw_text_or_name or "").lower()
+            if "дразнин" in low or "дразнину" in low:
+                return "Дразнин Антон Владимирович"
+            return None
+
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.75,
+        entities={"doctor_name": "Дразнину", "service_name": "Дразнину"},
+        flags={"rule_appointment"},
+        needs_handoff=False,
+    )
+
+    out = asyncio.run(_verify_doctor_entity(decision, _FakeServices(), "Записаться к Дразнину"))
+
+    assert out.entities.get("doctor_name") == "Дразнин Антон Владимирович"
+    assert "service_name" not in out.entities
+    assert "entity_dropped_doctor_like_service_name" in out.flags
 
 
 def test_default_city_is_samara_for_messenger_router():

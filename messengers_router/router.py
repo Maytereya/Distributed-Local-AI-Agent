@@ -78,6 +78,7 @@ from .policies import (
     has_datetime_signal,
     nonbookable_service_hint,
     appointment_service_display,
+    service_name_conflicts_with_doctor,
 )
 from .recovery_policy import contextual_reply_kind, evaluate_recovery, explicit_operator_requested
 from .services import Services
@@ -417,6 +418,10 @@ async def _verify_doctor_entity(
     if resolved:
         entities["doctor_name"] = resolved
         flags.add("doctor_name_verified")
+        service_name = str(entities.get("service_name") or "").strip()
+        if service_name and service_name_conflicts_with_doctor(service_name, resolved):
+            entities.pop("service_name", None)
+            flags.add("entity_dropped_doctor_like_service_name")
     elif raw:
         entities.pop("doctor_name", None)
         flags.add("doctor_name_unverified")

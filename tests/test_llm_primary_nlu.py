@@ -159,3 +159,19 @@ def test_secondary_intents_preserve_llm_metadata():
     assert out.clarify_reason == "slot_request"
     assert out.clarify_slots == ["city"]
     assert out.intent_candidates == ["PRICE", "APPOINTMENT"]
+
+
+def test_rule_appointment_does_not_keep_doctor_as_service_name():
+    decision = run(
+        classifier.deterministic_rule_decision(
+            "Записаться к Дразнину на Завтра",
+            {},
+            allow_refine=False,
+            attach_secondary=False,
+        )
+    )
+
+    assert decision is not None
+    assert decision.label == "APPOINTMENT"
+    assert decision.entities.get("doctor_name") == "Дразнину"
+    assert "service_name" not in decision.entities
