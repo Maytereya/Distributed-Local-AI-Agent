@@ -160,6 +160,52 @@ def _is_city_only_reply(text: str) -> bool:
     return city_stem in s_norm and len(s_norm.split()) <= 2
 
 
+def _is_samara_city_value(city: str | None) -> bool:
+    if not city:
+        return False
+    return str(city).strip().lower().replace("ё", "е") == "самара"
+
+
+def _is_appointment_branch_reply(text: str) -> bool:
+    s = str(text or "").strip()
+    if not s or len(s) > 160:
+        return False
+    if has_datetime_signal(s):
+        return False
+    if detect_prepare_intent(s) or detect_price_intent(s) or detect_doc_request_intent(s):
+        return False
+
+    city = match_city(s)
+    if city and not _is_samara_city_value(city):
+        return False
+
+    hint = extract_branch_hint(s, {"city": city or "Самара"})
+    if hint:
+        hint_norm = re.sub(r"\s+", " ", str(hint).strip())
+        if hint_norm and not _is_city_only_reply(hint_norm):
+            return True
+
+    if looks_like_branch_hint(s):
+        return True
+
+    low = re.sub(r"[\"'`]", "", s.lower()).replace("ё", "е")
+    low = re.sub(r"\s+", " ", low).strip()
+    # "на победе", "победы 83" без явного префикса "ул."
+    return bool(re.fullmatch(r"(?:на\s+)?[а-я\-]{4,40}(?:\s+\d{1,4}[a-zа-я]?)?", low))
+
+
+def _is_appointment_waiting_branch_or_city(pending: dict | None) -> bool:
+    if not isinstance(pending, dict):
+        return False
+    if pending.get("label") != "APPOINTMENT":
+        return False
+    missing = pending.get("missing")
+    if not isinstance(missing, list):
+        return False
+    as_text = " ".join(str(x or "").lower() for x in missing)
+    return ("branch" in as_text) or ("city" in as_text)
+
+
 def _is_short_prepare_followup(text: str) -> bool:
     s = str(text or "").strip()
     if not s or len(s) > 64:
@@ -186,6 +232,13 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
         and _is_city_only_reply(user_text)
     ):
         return pending_label
+    if (
+        pending_label == "APPOINTMENT"
+        and decision.label == "ADDRESS"
+        and _is_appointment_waiting_branch_or_city(pending)
+        and _is_appointment_branch_reply(user_text)
+    ):
+        return "APPOINTMENT"
     # В шаге добора ФИО пациента не даем случайной переклассификации
     # (например, в TEST_RESULT) перебить активный APPOINTMENT flow.
     if (

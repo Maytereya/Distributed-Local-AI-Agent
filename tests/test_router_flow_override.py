@@ -5,9 +5,10 @@ from messengers_router.mess_types import Evidence, Plan, PlanStep, SessionState
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision
 from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
-from messengers_router.policies import quick_fill_core_entities
+from messengers_router.policies import quick_fill_core_entities, extract_branch_hint
 from messengers_router.services import Services
 from messengers_router import classifier as classifier_mod
+from messengers_router.city import match_city
 from messengers_router.router import (
     _DEFAULT_CITY,
     _apply_appointment_continuity_overrides,
@@ -621,6 +622,49 @@ def test_apply_pending_override_allows_address_switch_on_explicit_address_reques
     label = _apply_pending_override(decision, pending, user_text="адрес в Самаре")
 
     assert label == "ADDRESS"
+
+
+def test_apply_pending_override_keeps_appointment_on_full_branch_address_reply():
+    decision = RouteDecision(label="ADDRESS", confidence=0.78, flags={"rule_nonbookable_walkin"})
+    pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
+
+    label = _apply_pending_override(decision, pending, user_text="г. Самара, ул. Победы, 83")
+
+    assert label == "APPOINTMENT"
+
+
+def test_apply_pending_override_keeps_appointment_on_street_without_house():
+    decision = RouteDecision(label="ADDRESS", confidence=0.78, flags={"rule_nonbookable_walkin"})
+    pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
+
+    label = _apply_pending_override(decision, pending, user_text="на победе")
+
+    assert label == "APPOINTMENT"
+
+
+def test_apply_pending_override_allows_non_samara_city_switch():
+    decision = RouteDecision(label="ADDRESS", confidence=0.78, flags={"rule_nonbookable_walkin"})
+    pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
+
+    label = _apply_pending_override(
+        decision,
+        pending,
+        user_text="мне вообще не в Самаре а в Сызрани надо!!! Сызрань! Слышите?",
+    )
+
+    assert label == "ADDRESS"
+
+
+def test_match_city_prefers_city_after_negation_switch():
+    city = match_city("мне вообще не в Самаре а в Сызрани надо!!! Сызрань! Слышите?")
+    assert str(city or "").lower().replace("ё", "е").startswith("сызран")
+
+
+def test_extract_branch_hint_parses_full_address_reply():
+    hint = extract_branch_hint("г. Самара, ул. Победы, 83", {"city": "Самара"})
+    low = str(hint or "").lower()
+    assert "побед" in low
+    assert "83" in low
 
 
 def test_deterministic_rule_uses_patient_name_when_pending_appointment():

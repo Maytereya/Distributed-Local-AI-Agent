@@ -309,6 +309,13 @@ _QF_CHILD_RE = re.compile(r"\bдет(и|ям|ский|ская|ского|ски
 _QF_AGE_RE = re.compile(r"\b(\d{1,2})\s*(?:лет|года|год)\b", re.I)
 _QF_BRANCH_EXPLICIT_RE = re.compile(r"\bфилиал\b[:\s]*([^\n,;.]{2,80})", re.I)
 _QF_BRANCH_ON_RE = re.compile(r"\bна\s+([А-ЯЁа-яё0-9\-]{3,40})(?:\s+([0-9]{1,4}))?\b")
+_QF_BRANCH_CITY_PREFIX_RE = re.compile(r"^\s*(?:г(?:ород)?\.?\s*)?[А-ЯЁа-яё\-]{3,40}\s*,\s*", re.I)
+_QF_BRANCH_IN_CITY_PREFIX_RE = re.compile(r"^\s*в\s+[А-ЯЁа-яё\-]{3,40}\s*,\s*", re.I)
+_QF_BRANCH_FREEFORM_RE = re.compile(
+    r"^\s*(?:на\s+)?(?:ул\.?|улица|пр\.?|проспект|пр-?т|шоссе|бульвар|пер\.?|переулок)?\s*"
+    r"([А-ЯЁа-яё\-]{4,40})(?:\s*,?\s*([0-9]{1,4}[A-Za-zА-Яа-яЁё]?))?\s*$",
+    re.I,
+)
 _SPECIALTY_CANONICAL = (
     "гастроэнтеролог",
     "эндокринолог",
@@ -1279,11 +1286,23 @@ def extract_branch_hint(text: str, state_entities: dict[str, Any]) -> str | None
             candidate = f"{street} {num}".strip()
             if num and street.isdigit():
                 candidate = ""
-            if candidate and (num or looks_like_address(t)):
+            cand_norm = normalize_loose_text(candidate)
+            if candidate and (num or looks_like_address(t) or (len(cand_norm) >= 5 and not has_datetime_signal(cand_norm))):
                 branch_hint = candidate
     if not branch_hint:
+        probe = _QF_BRANCH_CITY_PREFIX_RE.sub("", t, count=1)
+        probe = _QF_BRANCH_IN_CITY_PREFIX_RE.sub("", probe, count=1)
+        probe = re.sub(r"^\s*(?:в\s+)", "", probe, count=1, flags=re.I)
+        probe = probe.strip(" ,.;")
+        m_free = _QF_BRANCH_FREEFORM_RE.match(probe)
+        if m_free:
+            street = (m_free.group(1) or "").strip()
+            num = (m_free.group(2) or "").strip()
+            if street and not has_datetime_signal(street):
+                branch_hint = f"{street} {num}".strip()
+    if not branch_hint:
         words = [w for w in re.split(r"\s+", t) if w]
-        if 1 <= len(words) <= 3 and len(t) <= 30:
+        if 1 <= len(words) <= 6 and len(t) <= 120:
             city_guess = match_city(t)
             is_city_only = bool(city_guess and normalize_loose_text(city_guess) == normalize_loose_text(t))
             if (state_entities.get("city") or looks_like_branch_hint(t)) and not is_city_only:

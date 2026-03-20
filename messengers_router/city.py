@@ -17,6 +17,8 @@ ADDRESS_WORD_RE = re.compile(
     re.I,
 )
 CITY_HINT_RE = re.compile(r"\b(в|из|по)\s+([А-ЯЁа-яё\-]{3,})\b")
+_CITY_SWITCH_RE = re.compile(r"\bне\s+в\s+([a-zа-яё\-]{3,})\b.*?\bа\s+в\s+([a-zа-яё\-]{3,})\b", re.I)
+_CITY_SWITCH_SOFT_RE = re.compile(r"\bне\s+в\s+([a-zа-яё\-]{3,})\b[\s,;:.!\-]+в\s+([a-zа-яё\-]{3,})\b", re.I)
 _CITY_FUZZY_CUTOFF = 0.82
 
 _CITIES_PATH = Path(__file__).resolve().parent / "data" / "cities.txt"
@@ -175,6 +177,19 @@ def match_city(text: str) -> str | None:
 
     mapping = city_variants_map()
     t_norm = norm_city_text(text)
+
+    # В конструкциях вида "не в Самаре, а в Сызрани" предпочитаем целевой город после "а в ...".
+    for rx in (_CITY_SWITCH_RE, _CITY_SWITCH_SOFT_RE):
+        sw = rx.search(t_norm)
+        if not sw:
+            continue
+        target_raw = norm_city_text(sw.group(2))
+        if target_raw in mapping:
+            return mapping[target_raw]
+        target_fuzzy = fuzzy_match_city(target_raw)
+        if target_fuzzy:
+            return target_fuzzy
+
     m = city_regex().search(t_norm)
     if m:
         key = norm_city_text(m.group(2))
