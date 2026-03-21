@@ -3,6 +3,108 @@
 Этот файл — единая точка входа для разработчиков и их Codex при работе с `messengers_router`.
 Цель: быстро понять текущую архитектуру, отличие от старой версии, болевые точки и безопасные направления рефакторинга.
 
+> Актуализация: **2026-03-21** (повторная инвентаризация пунктов 1-3 архитектурной проверки).
+> Текущим источником правды для ближайших работ считается раздел **0** ниже.
+
+## 0) Актуализация архитектуры (2026-03-21)
+
+### 0.1 Критерии архитектурной состоятельности (зафиксировано)
+
+Архитектуру считаем состоятельной, если одновременно выполняется:
+
+1. Четкие границы слоев:
+   - transport/API слой не содержит бизнес-решений;
+   - оркестрация не тянет инфраструктуру напрямую.
+2. Отсутствуют циклические зависимости между core-модулями пакета.
+3. Интеграции изолированы в сервисном/адаптерном слое.
+4. Расширяемость:
+   - добавление канала/провайдера не требует правок ядра роутинга.
+5. Наблюдаемость:
+   - debug-trace и причины fallback/handoff доступны без чтения внутренностей кода.
+
+### 0.2 Фактическая карта модулей (по коду)
+
+Инвентаризация выполнена по всем `messengers_router/*.py` (26 core-модулей).
+
+- Точки входа: `endpoint.py` (`/api/messenger-generate`, `/api/messenger-generate-once`).
+- Оркестрация: `router.py`, `nlu_pipeline.py`, `planner.py`, `executor.py`, `response_builder.py`.
+- Flow-guard: `appointment_flow_guard.py`, `flow_policy.py`, `dialog_graph.py`, `memory.py`.
+- NLU/Recovery/Render: `classifier.py`, `entity_grounder.py`, `recovery_policy.py`, `renderer.py`, `self_check.py`.
+- Интеграции: `services.py`, `llm_runtime.py`, `prompt_registry.py`.
+- Базовые политики и типы: `policies.py`, `mess_types.py`, `city.py`, `topic_registry.py`, `text_templates.py`.
+
+### 0.3 Проверка зависимостей и нарушений границ
+
+#### Что в порядке
+
+- Циклы импортов между core-модулями: **не обнаружены** (`0` SCC > 1 узла).
+- Debug/eval контуры стабильны: последний remote eval (`run_id=1774038182`) прошел `100%` по всем стадиям.
+
+#### Что требует исправления (актуальные нарушения)
+
+1. **God-модули / концентрация ответственности**:
+   - `services.py` (~2455 LOC),
+   - `policies.py` (~1808 LOC),
+   - `classifier.py` (~1156 LOC),
+   - `router.py` (~1109 LOC).
+
+2. **Сильная централизация оркестратора**:
+   - `router.py` имеет fan-out `20` модулей (наибольшее в пакете).
+
+3. **Утечки инфраструктуры в ядро**:
+   - direct import `agent_logic_2.config` в `router.py`, `renderer.py`, `nlu_pipeline.py`, `llm_runtime.py`, `services.py`;
+   - `policies.py` импортирует `agent_logic_2.doctor_name_matching` (смешение policy и внешнего utility-слоя).
+
+4. **Дубли ответственности**:
+   - валидация/каноникализация `doctor_name` есть и в `router.py`, и в `entity_grounder.py`.
+
+5. **Неявные контрактные связи**:
+   - тесты активно используют приватные функции `router.py` (`_...`), что фиксирует внутреннюю реализацию вместо публичного контракта.
+
+6. **Расширяемость каналов ограничена**:
+   - глобальные singleton-зависимости в `endpoint.py` (`memory`, `services`) усложняют DI и подключение альтернативных провайдеров/каналов.
+
+### 0.4 Реестр проблем (приоритизация)
+
+- `P1`: дубли doctor-validation (`router.py` + `entity_grounder.py`).
+  Риск: средний/высокий; Цена: средняя; Эффект: снижение скрытых регрессий entity-merge.
+- `P1`: чрезмерная связанность `router.py`.
+  Риск: высокий; Цена: средняя; Эффект: ускорение безопасных изменений.
+- `P1`: infra-утечки (`agent_logic_2.*`) в policy/orchestration слои.
+  Риск: высокий; Цена: средняя; Эффект: четкие границы и переносимость.
+- `P2`: god-модули `services.py` и `policies.py`.
+  Риск: высокий; Цена: высокая; Эффект: управляемость и тестопригодность.
+- `P2`: приватные контракты в тестах.
+  Риск: средний; Цена: низкая/средняя; Эффект: устойчивость рефакторинга.
+- `P3`: ограниченная DI-расширяемость endpoint слоя.
+  Риск: средний; Цена: средняя; Эффект: проще добавлять новые каналы.
+
+### 0.5 План рефакторинга (2 волны, текущий)
+
+#### Волна 1 — быстрые исправления без смены поведения
+
+1. Консолидировать doctor-validation в одном месте (`entity_grounder.py`), убрать дубли из `router.py`.
+2. Ввести тонкий слой runtime-settings/ports для `agent_logic_2.config`, убрать прямые импорты из orchestration/policy модулей.
+3. Ослабить связанность endpoint: вынести `memory/services` в фабрику зависимостей (подготовка к DI).
+4. Добавить архитектурную автопроверку зависимостей (скрипт + CI gate):
+   - запрет циклов,
+   - whitelist межслойных импортов.
+
+#### Волна 2 — структурные изменения
+
+1. Выделить полноценный `appointment_flow` engine из `router.py` (router = coordinator only).
+2. Декомпозировать `services.py` на адаптеры (schedule/pricing/knowledge/documents) с явными интерфейсами.
+3. Декомпозировать `policies.py` на подмодули (`intent_detectors`, `slot_policy`, `appointment_texts`).
+4. Перевести тесты на контрактный уровень:
+   - меньше прямых проверок `_private` функций,
+   - больше сценарных/контрактных тестов.
+
+### 0.6 Обязательные quality-gates после каждого шага
+
+1. `pytest` по модульным тестам.
+2. `bash messengers_router/eval_suite/run_remote_eval.sh --url <server>/api/messenger-generate-once` — целевой результат `100%`.
+3. Проверка архитектурного gate (после появления CI-правила): no-cycles + no-cross-layer violations.
+
 ## 1) Что это за контур
 
 `messengers_router` — самостоятельный диалоговый контур пациентского бота (Telegram/WhatsApp), который:
@@ -55,12 +157,16 @@
 
 - `endpoint.py`: только HTTP-контракт + стрим/once режим.
 - `router.py`: orchestration pipeline, без “heavy text parsing”.
+- `appointment_flow_guard.py`: guard/state-политики для активного APPOINTMENT flow.
 - `nlu_pipeline.py`: выбор engine (`legacy_v2` vs `llm_primary`) и debug-trace.
 - `llm_mode_policy.py`: нормализация runtime-опций (`strict/hybrid/rich`, self-check, queue timeout).
 - `classifier.py`: guardrails, primary LLM JSON classification, deterministic postprocess.
 - `llm_runtime.py`: единый runtime-слой вызовов LLM (очередь, таймауты, stream/text генерация).
 - `entity_grounder.py`: валидация/нормализация сущностей перед merge в state.
 - `flow_policy.py`: stateful-хелперы APPOINTMENT/pending/quick-fill.
+- `planner.py`: сборка tool/service плана из `RouteDecision`.
+- `executor.py`: исполнение plan steps и сбор evidence.
+- `response_builder.py`: детерминированная сборка структурированных ответов по лейблам.
 - `policies.py`: детекторы интентов, clarify-тексты, slot-политики, quick-fill.
 - `dialog_graph.py`: FSM переходы (`IDLE/APPOINTMENT_FLOW/...`).
 - `recovery_policy.py`: low-confidence clarify/escalation logic.
@@ -71,6 +177,7 @@
 - `prompt_registry.py`: runtime-загрузка prompt-шаблонов из `app_data/prompts` с fallback на bundle-файлы в `messengers_router/prompts`.
 - `prompt_contracts.py`: проверка/санитизация LLM JSON-контракта.
 - `city.py`: распознавание города, fuzzy-матч.
+- `topic_registry.py`: rule-based topic fallback/override (`topic_id -> label`).
 - `mess_types.py`: доменные dataclass-типы.
 
 ## 4.1) Структура папок (сжатая карта)
@@ -79,12 +186,16 @@
 messengers_router/
   endpoint.py
   router.py
+  appointment_flow_guard.py
   nlu_pipeline.py
   llm_mode_policy.py
   classifier.py
   llm_runtime.py
   entity_grounder.py
   flow_policy.py
+  planner.py
+  executor.py
+  response_builder.py
   policies.py
   dialog_graph.py
   recovery_policy.py
@@ -95,6 +206,7 @@ messengers_router/
   renderer.py
   text_templates.py
   city.py
+  topic_registry.py
   mess_types.py
   prompt_registry.py
   prompt_contracts.py

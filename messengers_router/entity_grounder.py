@@ -14,8 +14,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .city import looks_like_address, match_city
+from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
-from .policies import extract_service_phrase
+from .policies import extract_service_phrase, service_name_conflicts_with_doctor
 from .services import Services
 
 _CONTROL_KEYS = {
@@ -30,6 +31,22 @@ _GENERIC_SERVICE_FALLBACK_RE = re.compile(
     r"\b(запис\w*|врач\w*|доктор\w*|специалист\w*|услуг\w*|хочу|нужно|надо|можно)\b",
     re.I,
 )
+_DOCTOR_NOISE_TOKENS = {
+    "хочу",
+    "нужно",
+    "надо",
+    "можно",
+    "запись",
+    "записаться",
+    "прием",
+    "приём",
+    "подскажите",
+    "скажите",
+    "когда",
+    "где",
+    "да",
+    "нет",
+}
 
 _LABEL_ENTITY_WHITELIST: dict[str, set[str]] = {
     "APPOINTMENT": {
@@ -121,6 +138,114 @@ def _is_allowed_key(key: str, label: str, pending: dict[str, Any] | None) -> boo
 class GroundingResult:
     entities: dict[str, Any] = field(default_factory=dict)
     flags: set[str] = field(default_factory=set)
+
+
+def _sanitize_raw_doctor_name(raw: str, flags: set[str], entities: dict[str, Any]) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    norm = " ".join(value.lower().replace("ё", "е").split())
+    tokens = [t for t in norm.split(" ") if t]
+    if len(tokens) == 1 and tokens[0] in _DOCTOR_NOISE_TOKENS:
+        entities.pop("doctor_name", None)
+        flags.add("doctor_name_unverified")
+        return ""
+    return value
+
+
+async def verify_doctor_entities_in_decision(
+    decision: RouteDecision,
+    user_text: str,
+    services: Services,
+) -> RouteDecision:
+    """
+    Единая точка doctor-name валидации для decision.
+
+    Поведение синхронизировано с историческим router pre-ground шагом:
+    - doctor_name подтверждается только через `resolve_doctor_name`;
+    - неподтвержденный doctor_name удаляется;
+    - для APPOINTMENT возможна конверсия неподтвержденного doctor_name -> patient_name;
+    - при `overwrite_doctor` и отсутствии подтверждения снимается переключение контекста.
+    """
+    entities = dict(decision.entities)
+    flags = set(decision.flags)
+    needs_doctor_verification = bool(entities.get("doctor_name")) or decision.label in {
+        "DOCTOR_SCHEDULE",
+        "DOCTOR_INFO",
+        "APPOINTMENT",
+    } or (decision.context_action == "overwrite_doctor")
+    if not needs_doctor_verification:
+        return decision
+
+    raw = _sanitize_raw_doctor_name(str(entities.get("doctor_name") or ""), flags, entities)
+    resolved: str | None = None
+    if raw:
+        resolved = await services.resolve_doctor_name(raw)
+    if not resolved and decision.context_action == "overwrite_doctor":
+        resolved = await services.resolve_doctor_name(user_text)
+
+    context_action = decision.context_action
+    if resolved:
+        entities["doctor_name"] = resolved
+        flags.add("doctor_name_verified")
+        service_name = str(entities.get("service_name") or "").strip()
+        if service_name and service_name_conflicts_with_doctor(service_name, resolved):
+            entities.pop("service_name", None)
+            flags.add("entity_dropped_doctor_like_service_name")
+    elif raw:
+        entities.pop("doctor_name", None)
+        flags.add("doctor_name_unverified")
+        if decision.label == "APPOINTMENT" and looks_like_patient_fio(raw):
+            entities["patient_name"] = raw
+            flags.add("patient_name_from_unverified_doctor")
+            context_action = "continue"
+    elif decision.context_action == "overwrite_doctor" and decision.label == "OTHER":
+        # Не подтвердили нового врача по кэшу — считаем, что это не переключение врача.
+        context_action = "continue"
+
+    return RouteDecision(
+        label=decision.label,
+        confidence=decision.confidence,
+        entities=entities,
+        flags=flags,
+        needs_handoff=decision.needs_handoff,
+        context_action=context_action,
+        source=decision.source,
+        clarify_needed=decision.clarify_needed,
+        clarify_reason=decision.clarify_reason,
+        clarify_slots=list(decision.clarify_slots),
+        intent_candidates=list(decision.intent_candidates),
+    )
+
+
+async def sanitize_doctor_entities(
+    entities: dict[str, Any],
+    services: Services,
+    *,
+    label: str,
+) -> dict[str, Any]:
+    """
+    Санитизация doctor_name в произвольном entities-словаре перед merge в state.
+
+    Используется для quick-fill/pending merge шагов.
+    """
+    out = dict(entities or {})
+    raw = str(out.get("doctor_name") or "").strip()
+    if not raw:
+        return out
+
+    resolved = await services.resolve_doctor_name(raw)
+    if resolved:
+        out["doctor_name"] = resolved
+        service_name = str(out.get("service_name") or "").strip()
+        if service_name and service_name_conflicts_with_doctor(service_name, resolved):
+            out.pop("service_name", None)
+        return out
+
+    out.pop("doctor_name", None)
+    if label == "APPOINTMENT" and looks_like_patient_fio(raw) and not out.get("patient_name"):
+        out["patient_name"] = raw
+    return out
 
 
 async def ground_decision_entities(

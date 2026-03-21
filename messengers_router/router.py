@@ -22,7 +22,11 @@ from .mess_types import Evidence, Plan, ResponseEnvelope, RouteDecision, Session
 from .classifier import analyze
 from .context_summary import update_summary
 from .dialog_graph import GraphEngine
-from .entity_grounder import ground_decision_entities
+from .entity_grounder import (
+    ground_decision_entities,
+    sanitize_doctor_entities,
+    verify_doctor_entities_in_decision,
+)
 from .flow_policy import (
     apply_context_action,
     fill_date_from_schedule_windows,
@@ -76,7 +80,6 @@ from .policies import (
     detect_doctor_info_intent,
     has_datetime_signal,
     nonbookable_service_hint,
-    service_name_conflicts_with_doctor,
 )
 from .recovery_policy import contextual_reply_kind, evaluate_recovery, explicit_operator_requested
 from .services import Services
@@ -97,22 +100,6 @@ from .topic_registry import (
 _DEFAULT_CITY = "Самара"
 _SAMARA_ONLY_OPERATOR_TEXT = "Сейчас могу помочь только по Самаре. Соединяю с оператором."
 _GRAPH_ENGINE = GraphEngine()
-_DOCTOR_NOISE_TOKENS = {
-    "хочу",
-    "нужно",
-    "надо",
-    "можно",
-    "запись",
-    "записаться",
-    "прием",
-    "приём",
-    "подскажите",
-    "скажите",
-    "когда",
-    "где",
-    "да",
-    "нет",
-}
 _TOPIC_OVERRIDE_ALLOW_FROM_OTHER = {"PREPARE", "NEWS"}
 _TOPIC_OVERRIDE_MIN_SCORE = 2
 
@@ -344,68 +331,11 @@ async def _verify_doctor_entity(
     services: Services,
     user_text: str,
 ) -> RouteDecision:
-    """
-    Подтверждает doctor_name только через кэш врачей.
-    Если совпадения нет — doctor_name удаляется из entities.
-    """
-    entities = dict(decision.entities)
-    flags = set(decision.flags)
-    # Верифицируем doctor_name в любом label, если поле присутствует.
-    # Это защищает flow-override OTHER -> APPOINTMENT от ложного "врача"
-    # из ФИО пациента (например: "12 февраля 09:00 Тен Максим Александрович").
-    needs_doctor_verification = bool(entities.get("doctor_name")) or decision.label in {
-        "DOCTOR_SCHEDULE",
-        "DOCTOR_INFO",
-        "APPOINTMENT",
-    } or (decision.context_action == "overwrite_doctor")
-    if not needs_doctor_verification:
-        return decision
-
-    raw = str(entities.get("doctor_name") or "").strip()
-    if raw:
-        raw_norm = " ".join(raw.lower().replace("ё", "е").split())
-        raw_tokens = [t for t in raw_norm.split(" ") if t]
-        if len(raw_tokens) == 1 and raw_tokens[0] in _DOCTOR_NOISE_TOKENS:
-            entities.pop("doctor_name", None)
-            flags.add("doctor_name_unverified")
-            raw = ""
-    resolved: str | None = None
-    if raw:
-        resolved = await services.resolve_doctor_name(raw)
-    if not resolved and decision.context_action == "overwrite_doctor":
-        resolved = await services.resolve_doctor_name(user_text)
-
-    context_action = decision.context_action
-    if resolved:
-        entities["doctor_name"] = resolved
-        flags.add("doctor_name_verified")
-        service_name = str(entities.get("service_name") or "").strip()
-        if service_name and service_name_conflicts_with_doctor(service_name, resolved):
-            entities.pop("service_name", None)
-            flags.add("entity_dropped_doctor_like_service_name")
-    elif raw:
-        entities.pop("doctor_name", None)
-        flags.add("doctor_name_unverified")
-        if decision.label == "APPOINTMENT" and looks_like_patient_fio(raw):
-            entities["patient_name"] = raw
-            flags.add("patient_name_from_unverified_doctor")
-            context_action = "continue"
-    elif decision.context_action == "overwrite_doctor" and decision.label == "OTHER":
-        # Не подтвердили нового врача по кэшу — считаем, что это не переключение врача.
-        context_action = "continue"
-
-    return RouteDecision(
-        label=decision.label,
-        confidence=decision.confidence,
-        entities=entities,
-        flags=flags,
-        needs_handoff=decision.needs_handoff,
-        context_action=context_action,
-        source=decision.source,
-        clarify_needed=decision.clarify_needed,
-        clarify_reason=decision.clarify_reason,
-        clarify_slots=list(decision.clarify_slots),
-        intent_candidates=list(decision.intent_candidates),
+    # Backward-compatible wrapper: реализация живет в entity_grounder.
+    return await verify_doctor_entities_in_decision(
+        decision=decision,
+        user_text=user_text,
+        services=services,
     )
 
 
@@ -415,24 +345,8 @@ async def _sanitize_doctor_in_entities(
     *,
     label: str,
 ) -> dict[str, Any]:
-    """
-    Любой doctor_name, появившийся после quick-fill/merge, должен быть
-    подтвержден через кэш врачей.
-    """
-    out = dict(entities or {})
-    raw = str(out.get("doctor_name") or "").strip()
-    if not raw:
-        return out
-
-    resolved = await services.resolve_doctor_name(raw)
-    if resolved:
-        out["doctor_name"] = resolved
-        return out
-
-    out.pop("doctor_name", None)
-    if label == "APPOINTMENT" and looks_like_patient_fio(raw) and not out.get("patient_name"):
-        out["patient_name"] = raw
-    return out
+    # Backward-compatible wrapper: реализация живет в entity_grounder.
+    return await sanitize_doctor_entities(entities=entities, services=services, label=label)
 
 
 async def _backfill_appointment_doctor_from_text(
