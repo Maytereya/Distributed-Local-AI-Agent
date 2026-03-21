@@ -4,9 +4,11 @@
 
 ## Что внутри
 
-- `run_remote_eval.sh` — единый запуск stage-скриптов + critical checks.
+- `run_remote_eval.sh` — единый запуск stage-скриптов + critical checks + coverage_ext.
 - `eval_critical_cases.py` — строгая проверка критичных сценариев (turn-by-turn).
 - `critical_cases.jsonl` — список критичных кейсов, которые нельзя ломать.
+- `critical_cases_extended.jsonl` — расширенный набор критичных сценариев (P2 coverage, optional).
+- `EVAL_EXPANSION_DOD.md` — критерии готовности и команды для расширенного eval-покрытия.
 - `logs/` — сюда складываются логи прогонов.
 
 ## Быстрый старт
@@ -35,6 +37,34 @@ bash messengers_router/eval_suite/run_remote_eval.sh \
   --url http://172.16.0.16/api/messenger-generate-once \
   --session-prefix s_test \
   --cases messengers_router/eval_suite/critical_cases.jsonl
+```
+
+Отключить только coverage_ext этап (если нужен временный обход):
+
+```bash
+bash messengers_router/eval_suite/run_remote_eval.sh \
+  --url http://172.16.0.16/api/messenger-generate-once \
+  --session-prefix s_test \
+  --skip-coverage-check
+```
+
+Запуск расширенного critical-набора:
+
+```bash
+python3 messengers_router/eval_suite/eval_critical_cases.py \
+  --url http://172.16.0.16/api/messenger-generate-once \
+  --cases messengers_router/eval_suite/critical_cases_extended.jsonl \
+  --session-prefix s_test_ext \
+  --llm-mode hybrid
+```
+
+Запуск расширенного stage5 golden:
+
+```bash
+python3 messengers_router/scripts/eval_stage5_corpus.py \
+  --url http://172.16.0.16/api/messenger-generate-once \
+  --golden messengers_router/messengers_mds_to_collect_thoughts/analysis/golden_versions/stage5_golden_extension_v3.jsonl \
+  --session-prefix s_test_stage5_ext
 ```
 
 ## Как редактировать критичные проверки
@@ -111,5 +141,7 @@ bash messengers_router/eval_suite/run_remote_eval.sh --help
 • critical — файл по умолчанию critical_cases.jsonl, можно переопределить --cases.
 
 • stage5 — по умолчанию stage5_golden_cases.jsonl, либо версия через --golden-version vN из analysis/golden_versions.
+
+• coverage_ext — проверка полноты extension-наборов (`check_eval_coverage.py`), запускается автоматически после `critical`.
 
 То есть “последняя версия тестов” = последний код/файлы в текущем коммите на сервере.

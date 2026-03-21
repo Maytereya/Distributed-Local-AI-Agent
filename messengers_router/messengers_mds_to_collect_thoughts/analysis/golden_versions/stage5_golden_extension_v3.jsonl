@@ -1,0 +1,12 @@
+{"case_id":"EX001","source_label":"DOCTOR_INFO","expected_label":"DOCTOR_INFO","expected_handoff":false,"text":"Скажите, кто из кардиологов принимает и по какому адресу в Самаре?"}
+{"case_id":"EX002","source_label":"DOCTOR_INFO","expected_label":"DOCTOR_INFO","expected_handoff":false,"text":"Подскажите, какие кардиологи ведут прием в Самаре?"}
+{"case_id":"EX003","source_label":"DOCTOR_SCHEDULE","expected_label":"DOCTOR_SCHEDULE","expected_handoff":false,"text":"Покажите расписание Хальметовой Алины Алексеевны в Самаре"}
+{"case_id":"EX004","source_label":"DOCTOR_SCHEDULE","expected_label":"DOCTOR_SCHEDULE","expected_handoff":false,"text":"Нужно расписание Дразнина Антона Владимировича на ближайшие дни"}
+{"case_id":"EX005","source_label":"PREPARE","expected_label":"PREPARE","expected_handoff":false,"text":"Как подготовиться к ФГДС?"}
+{"case_id":"EX006","source_label":"PREPARE","expected_label":"PREPARE","expected_handoff":false,"text":"Как подготовиться к биопсии шейки матки?"}
+{"case_id":"EX007","source_label":"PREPARE","expected_label":"PREPARE","expected_handoff":false,"text":"Как подготовиться к пайпель-биопсии?"}
+{"case_id":"EX008","source_label":"OTHER","expected_label":"OTHER","expected_handoff":false,"text":"Мне нужна справка для налогового вычета"}
+{"case_id":"EX009","source_label":"OTHER","expected_label":"OTHER","expected_handoff":false,"text":"Хотим заключить договор на медосмотры для сотрудников"}
+{"case_id":"EX010","source_label":"OTHER","expected_label":"OTHER","expected_handoff":true,"text":"Нужна копия договора с печатью"}
+{"case_id":"EX011","source_label":"ADDRESS_NON_SAMARA","expected_label":"ADDRESS","expected_handoff":true,"text":"Где у вас филиал в Тольятти?"}
+{"case_id":"EX012","source_label":"ADDRESS_NON_SAMARA","expected_label":"ADDRESS","expected_handoff":true,"text":"Можно узнать расписание кардиолога в Ульяновске?"}

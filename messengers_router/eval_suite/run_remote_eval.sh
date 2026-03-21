@@ -14,6 +14,7 @@ GOLDEN_VERSION=""
 HOST_HEADER=""
 LLM_MODE="hybrid"
 CASES_PATH="${SCRIPT_DIR}/critical_cases.jsonl"
+COVERAGE_CHECK_ENABLED=1
 
 if command -v python >/dev/null 2>&1; then
   PY_BIN="python"
@@ -38,6 +39,8 @@ while [[ $# -gt 0 ]]; do
       LLM_MODE="$2"; shift 2;;
     --cases)
       CASES_PATH="$2"; shift 2;;
+    --skip-coverage-check)
+      COVERAGE_CHECK_ENABLED=0; shift 1;;
     -h|--help)
       cat <<'EOF'
 Usage:
@@ -50,6 +53,7 @@ Options:
   --host-header <host>       Optional Host header for critical eval script
   --llm-mode <mode>          strict|hybrid|rich (used by critical eval script)
   --cases <path>             Critical cases JSONL path (default: messengers_router/eval_suite/critical_cases.jsonl)
+  --skip-coverage-check      Skip extension coverage stage (enabled by default)
 EOF
       exit 0;;
     *)
@@ -68,6 +72,7 @@ echo "SESSION_PREFIX: ${SESSION_PREFIX}"
 echo "RUN_ID: ${RUN_ID}"
 echo "LOG_DIR: ${LOG_DIR}"
 echo "CASES_PATH: ${CASES_PATH}"
+echo "COVERAGE_CHECK_ENABLED: ${COVERAGE_CHECK_ENABLED}"
 echo
 
 OVERALL=0
@@ -133,6 +138,15 @@ if [[ -n "${HOST_HEADER}" ]]; then
   CRIT_CMD+=(--host-header "${HOST_HEADER}")
 fi
 run_stage critical "${CRIT_CMD[@]}"
+
+if [[ ${COVERAGE_CHECK_ENABLED} -eq 1 ]]; then
+  run_stage coverage_ext \
+    "${PY_BIN}" messengers_router/scripts/check_eval_coverage.py
+else
+  echo "---- coverage_ext ----"
+  echo "[skip] coverage_ext (--skip-coverage-check)"
+  echo
+fi
 
 echo "== Summary =="
 if [[ ${OVERALL} -eq 0 ]]; then

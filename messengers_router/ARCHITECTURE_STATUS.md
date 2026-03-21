@@ -128,6 +128,10 @@
 - 2026-03-21: P3 policy-решения обновлены:
   - пункт 7 ТЗ зафиксирован как `handoff-only` (без прямого CRM commit);
   - пункт 8 ТЗ остается `pending` до юридического решения заказчика.
+- 2026-03-21: подготовлен расширенный eval coverage-kit (P2, без включения в default gate):
+  - stage5 extension golden: `analysis/golden_versions/stage5_golden_extension_v3.jsonl`;
+  - critical extension cases: `eval_suite/critical_cases_extended.jsonl`;
+  - DoD + coverage-check: `eval_suite/EVAL_EXPANSION_DOD.md`, `scripts/check_eval_coverage.py`.
 
 ## 1) Что это за контур
 
@@ -510,7 +514,9 @@ messengers_router/
    - fallback: `Meili main_index`.
 4. Реализовать загрузку/обновление `serviceInfoAll` в файловый кэш.
 5. Подключить API-кэш подготовки в runtime и покрыть тестами + eval-кейсами.
-6. Расширить eval/golden на `DOCTOR_INFO`, `DOCTOR_SCHEDULE`, `PREPARE`, `OTHER`, non-Samara, follow-up turns.
+6. [in progress] Расширить eval/golden на `DOCTOR_INFO`, `DOCTOR_SCHEDULE`, `PREPARE`, `OTHER`, non-Samara, follow-up turns.
+   - подготовлены extension-наборы и DoD;
+   - подключение в default gate отложено до решения команды.
 
 ### P3 (стратегические решения)
 
