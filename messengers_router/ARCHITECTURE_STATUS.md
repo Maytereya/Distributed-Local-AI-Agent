@@ -61,8 +61,8 @@
 5. **Неявные контрактные связи**:
    - тесты активно используют приватные функции `router.py` (`_...`), что фиксирует внутреннюю реализацию вместо публичного контракта.
 
-6. **Расширяемость каналов ограничена**:
-   - глобальные singleton-зависимости в `endpoint.py` (`memory`, `services`) усложняют DI и подключение альтернативных провайдеров/каналов.
+6. **Расширяемость каналов была ограничена**:
+   - проблема закрыта в Wave1/Step3: `endpoint.py` переведен на dependency-factory (`Depends` + провайдеры `get_memory_store/get_services`) вместо module-level singleton.
 
 ### 0.4 Реестр проблем (приоритизация)
 
@@ -76,19 +76,20 @@
   Риск: высокий; Цена: высокая; Эффект: управляемость и тестопригодность.
 - `P2`: приватные контракты в тестах.
   Риск: средний; Цена: низкая/средняя; Эффект: устойчивость рефакторинга.
-- `P3`: ограниченная DI-расширяемость endpoint слоя.
-  Риск: средний; Цена: средняя; Эффект: проще добавлять новые каналы.
+- `[closed]`: ограниченная DI-расширяемость endpoint слоя (закрыто Wave1/Step3, 2026-03-21).
+  Эффект: endpoint готов к dependency overrides и альтернативным провайдерам без правок core-router.
 
 ### 0.5 План рефакторинга (2 волны, текущий)
 
 #### Волна 1 — быстрые исправления без смены поведения
 
-1. Консолидировать doctor-validation в одном месте (`entity_grounder.py`), убрать дубли из `router.py`.
-2. Ввести тонкий слой runtime-settings/ports для `agent_logic_2.config`, убрать прямые импорты из orchestration/policy модулей.
-3. Ослабить связанность endpoint: вынести `memory/services` в фабрику зависимостей (подготовка к DI).
-4. Добавить архитектурную автопроверку зависимостей (скрипт + CI gate):
+1. [done] Консолидировать doctor-validation в одном месте (`entity_grounder.py`), убрать дубли из `router.py`.
+2. [done] Ввести тонкий слой runtime-settings/ports для `agent_logic_2.config`, убрать прямые импорты из orchestration/policy модулей.
+3. [done] Ослабить связанность endpoint: `memory/services` вынесены в dependency-factory (DI-ready).
+4. [done] Добавить архитектурную автопроверку зависимостей (скрипт + CI gate):
    - запрет циклов,
-   - whitelist межслойных импортов.
+   - whitelist межслойных импортов;
+   - запрет прямых `agent_logic_2.*` импортов вне адаптеров/портов.
 
 #### Волна 2 — структурные изменения
 
@@ -103,7 +104,30 @@
 
 1. `pytest` по модульным тестам.
 2. `bash messengers_router/eval_suite/run_remote_eval.sh --url <server>/api/messenger-generate-once` — целевой результат `100%`.
-3. Проверка архитектурного gate (после появления CI-правила): no-cycles + no-cross-layer violations.
+3. Проверка архитектурного gate:
+   - локально: `python3 messengers_router/scripts/check_architecture_imports.py`;
+   - в CI: `.github/workflows/messengers_router_arch_guardrails.yml`.
+
+### 0.7 Прогресс выполнения (оперативно)
+
+- 2026-03-21: Wave1/Step1 завершен (doctor-validation перенесен в `entity_grounder`, дубли в `router` убраны).
+- 2026-03-21: Wave1/Step2 завершен:
+  - добавлен `runtime_config` порт;
+  - добавлен `doctor_name_port`;
+  - orchestration/policy модули переведены на внутренние порты;
+  - quality-gate пройден: `run_remote_eval` `run_id=1774086292`, `All stages passed`.
+- 2026-03-21: Wave1/Step3 завершен:
+  - `endpoint.py` переведен с module-level singleton на dependency factories (`get_memory_store`, `get_services`);
+  - локальный `pytest`: `140 passed`;
+  - quality-gate пройден: `run_remote_eval` `run_id=1774088264`, `All stages passed`.
+- 2026-03-21: Wave1/Step4 завершен:
+  - добавлен guardrail-скрипт `messengers_router/scripts/check_architecture_imports.py`;
+  - добавлен обязательный CI job `.github/workflows/messengers_router_arch_guardrails.yml`;
+  - локальная проверка: `ARCHITECTURE CHECK PASSED`;
+  - quality-gate пройден: `run_remote_eval` `run_id=1774089602`, `All stages passed`.
+- 2026-03-21: P3 policy-решения обновлены:
+  - пункт 7 ТЗ зафиксирован как `handoff-only` (без прямого CRM commit);
+  - пункт 8 ТЗ остается `pending` до юридического решения заказчика.
 
 ## 1) Что это за контур
 
@@ -450,35 +474,49 @@ messengers_router/
 5. **Врачи выбранной специальности с учетом ord** — `PARTIAL`
    - Сортировка по `ord` есть; нужно закрепить правило top-4 + availability.
 6. **Расписание врача по ФИО** — `READY`
-7. **Запись к врачу по ФИО** — `PARTIAL`
-   - Flow записи есть, финал сейчас через handoff оператору (не прямой CRM commit).
+7. **Запись к врачу по ФИО** — `READY (handoff-policy)`
+   - Flow записи и подтверждения работает.
+   - Политика зафиксирована: финал только через handoff оператору; прямой CRM commit намеренно не используется как anti-scam/anti-spam защита.
 8. **Справка в налоговую / документальные запросы** — `PARTIAL`
    - `DOC_REQUEST` работает через `main_index`.
    - При отсутствии совпадений (`no matches`) — автоматический перевод на оператора.
    - Дальнейшая доработка: расширение покрытия knowledge-контента и качество матчинга формулировок.
 
-## 13) Что брать коллеге в работу (приоритет)
+## 13) Что брать коллеге в работу (приоритет, актуально на 2026-03-21)
 
-### P1 (сразу)
+### Уже закрыто в текущем цикле
 
-1. Довести пункт 3 ТЗ как единый use-case:
-   - услуга -> retail price -> top-4 врачей (`ord asc`) -> проверка доступности расписания -> подготовка.
-2. Зафиксировать пункт 5 ТЗ:
-   - выдача врачей по специальности строго top-4 с deterministic сортом.
-3. Закрепить knowledge policy:
-   - при `no matches` в knowledge-поиске переводить на оператора единым сообщением.
+1. [done] Wave1 / Step1: консолидирована doctor-validation логика в `entity_grounder`, дубли в `router` убраны.
+2. [done] Wave1 / Step2: добавлены внутренние порты `runtime_config` и `doctor_name_port`, core-модули переведены на них.
+3. [done] Wave1 / Step3: `endpoint.py` переведен на DI-фабрики зависимостей (`get_memory_store`, `get_services`) вместо module-level singleton.
+4. [done] Wave1 / Step4: добавлен архитектурный guardrail (проверка циклов, whitelist межслойных импортов, контроль direct host-imports) + CI gate в GitHub Actions.
+5. [done] Quality-gate после текущего цикла: `run_remote_eval` прошел на `100%` (run_id `1774089602`).
+
+### P1 (сразу, следующий спринт)
+
+Временный статус: отложено до готовности API серверов заказчика.
+
+1. Довести пункт 3 ТЗ как единый сценарий:
+   - услуга -> retail price -> top-4 врачей (`ord asc`) -> availability -> подготовка.
+2. Довести пункт 5 ТЗ:
+   - выдача врачей по специальности строго top-4 с deterministic сортировкой.
 
 ### P2 (следом)
 
-4. Блок подготовки к анализам перевести в `API-first`:
+Временный статус: отложено до готовности API серверов заказчика.
+
+3. Перевести блок подготовки к анализам в `API-first`:
    - основной источник: `serviceInfoAll/preparation`;
    - fallback: `Meili main_index`.
-5. Реализовать загрузку/обновление `serviceInfoAll` в файловый кэш.
-6. Подключить API-кэш подготовки в runtime и покрыть тестами.
+4. Реализовать загрузку/обновление `serviceInfoAll` в файловый кэш.
+5. Подключить API-кэш подготовки в runtime и покрыть тестами + eval-кейсами.
+6. Расширить eval/golden на `DOCTOR_INFO`, `DOCTOR_SCHEDULE`, `PREPARE`, `OTHER`, non-Samara, follow-up turns.
 
-### P3 (архитектурно)
+### P3 (стратегические решения)
 
-7. Решить policy по пункту 7:
-   - остается handoff или делаем прямой commit записи в CRM.
-8. Уточнить security policy по пункту 1:
-   - обязательна ли строгая авторизация перед выдачей ссылки на результат.
+7. [done] Policy по пункту 7 ТЗ зафиксирована:
+   - финал записи только через handoff оператору;
+   - прямой CRM commit не реализуется (anti-scam/anti-spam guardrail).
+8. [pending] Security policy по выдаче результатов анализов:
+   - решение отложено до юридической проработки у заказчика;
+   - текущий режим оставляем без изменений до финального решения.

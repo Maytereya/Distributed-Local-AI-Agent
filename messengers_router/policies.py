@@ -13,9 +13,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from agent_logic_2.doctor_name_matching import extract_doctor_name_candidate, surname_variants
-
 from .city import looks_like_address, match_city
+from .doctor_name_port import extract_doctor_name_candidate, surname_variants
 
 # ---------------------------
 # Fast detectors (cheap gates)

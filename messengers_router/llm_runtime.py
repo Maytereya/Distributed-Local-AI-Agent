@@ -12,8 +12,10 @@ from typing import Any, AsyncGenerator
 
 from ollama import AsyncClient
 
-from agent_logic_2 import config as c, ollama_settings
+from agent_logic_2 import ollama_settings
 from agent_logic_2.ollama_settings import LLMName
+
+from .runtime_config import config as c
 
 _DEFAULT_MAX_CONCURRENCY = 5
 try:

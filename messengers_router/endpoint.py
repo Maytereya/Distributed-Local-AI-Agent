@@ -8,9 +8,10 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -22,8 +23,15 @@ from .policies import handoff_message
 
 router = APIRouter()
 
-memory = MemoryStore(ttl_seconds=3600, pending_ttl_seconds=900)
-services = Services()
+
+@lru_cache(maxsize=1)
+def get_memory_store() -> MemoryStore:
+    return MemoryStore(ttl_seconds=3600, pending_ttl_seconds=900)
+
+
+@lru_cache(maxsize=1)
+def get_services() -> Services:
+    return Services()
 
 
 # ---------------------------------------------------------------------
@@ -149,7 +157,11 @@ class ResponseEnvelopeLine(BaseModel):
         422: {"description": "Validation error: неверный JSON или отсутствуют обязательные поля."},
     },
 )
-async def messenger_generate(payload: MessengerGenerateRequest):
+async def messenger_generate(
+    payload: MessengerGenerateRequest,
+    memory: MemoryStore = Depends(get_memory_store),
+    services: Services = Depends(get_services),
+):
     session_id = payload.session_id or "anon"
 
     # Защищаемся от строк, содержащих внезапные символьные суррогаты.
@@ -224,7 +236,11 @@ async def messenger_generate(payload: MessengerGenerateRequest):
     response_model=ResponseEnvelopeOut,
     responses={422: {"description": "Validation error: неверный JSON или отсутствуют обязательные поля."}},
 )
-async def messenger_generate_once(payload: MessengerGenerateRequest):
+async def messenger_generate_once(
+    payload: MessengerGenerateRequest,
+    memory: MemoryStore = Depends(get_memory_store),
+    services: Services = Depends(get_services),
+):
     session_id = payload.session_id or "anon"
     text = payload.text.strip()
     text = text.encode("utf-8", "ignore").decode("utf-8")

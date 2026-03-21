@@ -16,8 +16,6 @@ from __future__ import annotations
 
 from typing import AsyncGenerator, Any
 
-from agent_logic_2 import config as c
-
 from .mess_types import Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
 from .context_summary import update_summary
@@ -96,6 +94,7 @@ from .topic_registry import (
     build_topic_flag,
     match_topic,
 )
+from .runtime_config import config as c
 
 _DEFAULT_CITY = "Самара"
 _SAMARA_ONLY_OPERATOR_TEXT = "Сейчас могу помочь только по Самаре. Соединяю с оператором."
@@ -471,12 +470,12 @@ async def route_patient_message(
         decision = nlu_result.decision
         nlu_debug["candidates"] = [
             {
-                "source": c.source,
-                "label": c.label,
-                "confidence": c.confidence,
-                "flags": c.flags[:8],
+                "source": cand.source,
+                "label": cand.label,
+                "confidence": cand.confidence,
+                "flags": cand.flags[:8],
             }
-            for c in nlu_result.candidates
+            for cand in nlu_result.candidates
         ]
         nlu_debug["merged_from"] = nlu_result.merged_from
         if nlu_result.trace:

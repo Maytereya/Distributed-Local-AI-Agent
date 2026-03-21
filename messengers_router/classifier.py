@@ -16,10 +16,9 @@ import json
 import re
 from typing import Any, cast
 
-from agent_logic_2.doctor_name_matching import extract_doctor_name_candidate
-
 from .llm_mode_policy import RuntimeOptions
 from .llm_runtime import generate_text
+from .doctor_name_port import extract_doctor_name_candidate
 from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision, ContextAction
 from .prompt_contracts import sanitize_classifier_json
 from .prompt_registry import load_prompt_text

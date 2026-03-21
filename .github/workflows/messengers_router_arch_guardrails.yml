@@ -1,0 +1,22 @@
+name: Messengers Router Architecture Guardrails
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+jobs:
+  architecture-guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run architecture checks
+        run: python3 messengers_router/scripts/check_architecture_imports.py

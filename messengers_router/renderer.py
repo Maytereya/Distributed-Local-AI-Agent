@@ -16,14 +16,13 @@ import re
 from datetime import datetime, date, time
 from typing import Any, AsyncGenerator
 
-from agent_logic_2 import config as c
-
 from .llm_mode_policy import RuntimeOptions
 from .llm_runtime import generate_stream_text, generate_text
 from .mess_types import Evidence, RouteDecision, ResponseEnvelope
 from .policies import sanitize_for_patient
 from .prompt_registry import load_prompt_text
 from .self_check import build_critic_prompt, parse_critic_result, should_regenerate
+from .runtime_config import config as c
 
 timeout = 300
 try:

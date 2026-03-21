@@ -16,12 +16,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent_logic_2 import config as c
-
 from . import classifier
 from .context_summary import seeded_context_for_nlu
 from .llm_mode_policy import RuntimeOptions
 from .mess_types import RouteDecision, SessionState
+from .runtime_config import config as c
 
 _SAFETY_LABELS = {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
 

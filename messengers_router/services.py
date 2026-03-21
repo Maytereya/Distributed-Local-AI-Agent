@@ -25,14 +25,15 @@ from pathlib import Path
 from typing import Any, Optional
 
 from agent_logic_1 import meilisearch_client as meilisearch
-from agent_logic_2 import config as c
-from agent_logic_2.doctor_name_matching import (
+from agent_logic_2.nayka_api import api_nayka, api_price
+from converters import html_cleaner
+
+from .doctor_name_port import (
     extract_doctor_name_candidate,
     resolve_schedule_surname,
     surname_variants,
 )
-from agent_logic_2.nayka_api import api_nayka, api_price
-from converters import html_cleaner
+from .runtime_config import config as c
 
 _ADDRESS_HINT_RE = re.compile(
     r"\b(ул\.?|улица|пр\.?|проспект|пр-?т|тракт|б-р|бульвар|шоссе|пер\.?|переулок|наб\.?|площадь|дом|д\.|корп\.?|к\.|пом\.?)\b",
