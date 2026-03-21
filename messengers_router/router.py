@@ -14,6 +14,7 @@ recovery-политика и сервисные интеграции вынес�
 
 from __future__ import annotations
 
+import re
 from typing import AsyncGenerator, Any
 
 from .mess_types import Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
@@ -101,6 +102,11 @@ _SAMARA_ONLY_OPERATOR_TEXT = "Сейчас могу помочь только п
 _GRAPH_ENGINE = GraphEngine()
 _TOPIC_OVERRIDE_ALLOW_FROM_OTHER = {"PREPARE", "NEWS"}
 _TOPIC_OVERRIDE_MIN_SCORE = 2
+_SECONDARY_SOFT_YES_RE = re.compile(
+    r"^\s*(?:(?:да|ок|окей|хорошо|ладно)(?:\s+(?:спасибо|благодарю|благодарствую|спс))?|"
+    r"(?:спасибо|благодарю|благодарствую|спс))\s*[!.,?;:]*\s*$",
+    re.I,
+)
 
 # Backward-compat alias for tests/internal callers.
 _should_keep_appointment_flow_override = should_keep_appointment_flow_override
@@ -116,6 +122,10 @@ def _env_flag(name: str, default: bool) -> bool:
     if isinstance(raw, bool):
         return raw
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_secondary_soft_yes(text: str) -> bool:
+    return bool(_SECONDARY_SOFT_YES_RE.match(str(text or "")))
 
 
 def _copy_decision(decision: RouteDecision, **overrides: Any) -> RouteDecision:
@@ -436,6 +446,8 @@ async def route_patient_message(
         and not state.last_entities.get("appointment_flow_active")
     ):
         reply_kind = contextual_reply_kind(user_text)
+        if reply_kind == "other" and _is_secondary_soft_yes(user_text):
+            reply_kind = "yes"
         if reply_kind == "yes":
             next_label = queue.pop(0)
             set_secondary_queue(state, queue)
@@ -546,7 +558,7 @@ async def route_patient_message(
         if detect_nonbookable_walkin_intent(user_text, merged_ctx):
             entities = dict(decision.entities)
             if not entities.get("service_name"):
-                svc = nonbookable_service_hint(user_text)
+                svc = nonbookable_service_hint(user_text, merged_ctx)
                 if svc:
                     entities["service_name"] = svc
             decision = _copy_decision(

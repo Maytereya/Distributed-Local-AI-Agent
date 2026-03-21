@@ -83,15 +83,15 @@ TEST_RESULT_PATTERNS = [
 TEST_ASSIST_PATTERNS = [
     r"\bподскажите\s+пожалуйста\b",
     r"\bанализ\w*",
-    r"\bсдат\w*\s+(?:кров\w*|моч\w*|анализ\w*)",
+    r"\b[сз]дат\w*\s+(?:кров\w*|моч\w*|анализ\w*)",
     r"\bкров\w*\s+на\s+анализ\w*",
     r"\bподобрат(ь|ь)\s+анализ",
-    r"\bкакие анализ(ы)?\s+сдат(ь|ь)\b",
-    r"\bчто сдат(ь|ь)\b.*\bанализ",
+    r"\bкакие анализ(ы)?\s+[сз]дат(ь|ь)\b",
+    r"\bчто\s+[сз]дат(ь|ь)\b.*\bанализ",
     r"\bчекап\b",
     r"\bкомплекс\b.*\bанализ",
     r"\bскрининг\b",
-    r"\bдо\s+скольки\b.*\bсдат\w*",
+    r"\bдо\s+скольки\b.*\b[сз]дат\w*",
     r"\bнатощак\b",
     r"\bреференд\w*",
     r"\bнорм\w*\s+значени\w*",
@@ -107,6 +107,10 @@ PREPARE_PATTERNS = [
     r"\bперед\b.*\b(анализ\w*|узи|фгдс|гастроскоп\w*|кольпоскоп\w*|вульвоскоп\w*)\b",
     r"\b(натощак|на\s+голодный\s+желудок)\b",
     r"\bможно\s+ли\s+(есть|пить)\b.*\bперед\b",
+    r"\b(утром|вечером|в\s+первую\s+половину\s+дня)\b.*\b[сз]дат\w*\b",
+    r"\bможно\s+вечером\s+[сз]дат\w*\b",
+    r"\bобязател\w*\s+ли\b.*\b(утром|в\s+первую\s+половину\s+дня)\b",
+    r"\b(когда|во\s+сколько)\b.*\b[сз]дат\w*\b.*\b(анализ\w*|кров\w*|моч\w*)?\b",
 ]
 
 SCHEDULE_PATTERNS = [
@@ -288,11 +292,13 @@ _ASSIST_PRICE_CONTEXT_RE = re.compile(
     re.I,
 )
 _NONBOOKABLE_ANALYSIS_RE = re.compile(
-    r"\b(анализ\w*|лаборатор\w*|биоматериал\w*|сдат\w*\s+(?:кров\w*|моч\w*|анализ\w*))\b",
+    r"\b(анализ\w*|лаборатор\w*|биоматериал\w*|[сз]дат\w*\s+(?:кров\w*|моч\w*|анализ\w*))\b",
     re.I,
 )
 _NONBOOKABLE_ECG_RE = re.compile(r"\b(экг|электрокардиограм\w*)\b", re.I)
-_NONBOOKABLE_VISIT_RE = re.compile(r"\b(запис\w*|сдат\w*|пройти|сделат\w*|хочу|нуж\w*|можно)\b", re.I)
+_NONBOOKABLE_VISIT_RE = re.compile(r"\b(запис\w*|[сз]дат\w*|пройти|сделат\w*|хочу|нуж\w*|можно)\b", re.I)
+_NONBOOKABLE_SUBMIT_RE = re.compile(r"\b[сз]дат\w*\b", re.I)
+_NONBOOKABLE_PROFILE_RE = re.compile(r"\b(профил\w*|панел\w*)\b", re.I)
 _DIAGNOSTIC_BOOKING_RE = re.compile(
     r"\b(сделат\w*|пройти|провест\w*|хочу|нуж\w*|можно|требует\w*|нужно)\b",
     re.I,
@@ -757,9 +763,29 @@ def should_treat_result_delivery_as_test_assist(text: str) -> bool:
     )
 
 
-def nonbookable_service_hint(text: str) -> str | None:
+def _has_analysis_context_entities(entities: dict[str, Any] | None = None) -> bool:
+    ent = entities or {}
+    if ent.get("test_name") or ent.get("test_goal"):
+        return True
+    service_name = str(ent.get("service_name") or "").strip()
+    if not service_name:
+        return False
+    if _NONBOOKABLE_ANALYSIS_RE.search(service_name):
+        return True
+    if _NONBOOKABLE_PROFILE_RE.search(service_name):
+        return True
+    if _QF_TEST_WORDS_RE.search(service_name):
+        return True
+    return False
+
+
+def nonbookable_service_hint(text: str, entities: dict[str, Any] | None = None) -> str | None:
     t = text or ""
     has_analysis = bool(_NONBOOKABLE_ANALYSIS_RE.search(t))
+    if not has_analysis and _NONBOOKABLE_PROFILE_RE.search(t):
+        has_analysis = True
+    if not has_analysis and _has_analysis_context_entities(entities):
+        has_analysis = True
     has_ecg = bool(_NONBOOKABLE_ECG_RE.search(t))
     if has_analysis and has_ecg:
         return "анализы и ЭКГ"
@@ -785,7 +811,16 @@ def detect_nonbookable_walkin_intent(text: str, entities: dict[str, Any] | None 
         return False
     if _TEST_SELECTION_RE.search(t):
         return False
+    ent = entities or {}
     has_nonbookable = bool(_NONBOOKABLE_ANALYSIS_RE.search(t) or _NONBOOKABLE_ECG_RE.search(t))
+    if not has_nonbookable:
+        # Контекстный кейс follow-up:
+        # "Диабетический профиль 1 где можно сдать?" после подбора анализов.
+        has_profile_hint = bool(_NONBOOKABLE_PROFILE_RE.search(t))
+        has_submit_verb = bool(_NONBOOKABLE_SUBMIT_RE.search(t))
+        has_analysis_context = _has_analysis_context_entities(ent)
+        if has_submit_verb and (has_profile_hint or has_analysis_context):
+            has_nonbookable = True
     if not has_nonbookable:
         return False
     compact = [w for w in re.split(r"\s+", t.strip()) if w]
@@ -793,7 +828,6 @@ def detect_nonbookable_walkin_intent(text: str, entities: dict[str, Any] | None 
     if not short_direct and not (_NONBOOKABLE_VISIT_RE.search(t) or _BOOK_ACTION_STRICT_RE.search(t)):
         return False
 
-    ent = entities or {}
     has_doctor_context = bool(ent.get("doctor_name") or ent.get("doctor_id") or ent.get("specialty"))
     if _BOOK_ACTION_STRICT_RE.search(t) and _DOCTOR_WORDS_RE.search(t):
         return False
@@ -1514,7 +1548,7 @@ def appointment_step_policy(entities: dict[str, Any]) -> str:
 
 
 _YES_RE = re.compile(
-    r"^\s*(да|ага|угу|подтверждаю|подтверждаем|верно|ок|окей|конечно|давайте|наверное)\s*[!.,?;:]?\s*$",
+    r"^\s*(да|ага|угу|подтверждаю|подтверждаем|верно|ок|окей|конечно|давайте|наверное|хорошо|ладно)\s*[!.,?;:]?\s*$",
     re.I,
 )
 _NO_RE = re.compile(
@@ -1531,6 +1565,8 @@ _CONFIRM_YES_EXACT = {
     "угу",
     "ок",
     "окей",
+    "хорошо",
+    "ладно",
     "верно",
     "конечно",
     "давайте",
@@ -1571,6 +1607,10 @@ def _is_affirmative_text(text: str) -> bool:
     if norm in _CONFIRM_YES_EXACT:
         return True
     if norm.startswith("да "):
+        return True
+    if norm.startswith("хорошо "):
+        return True
+    if norm.startswith("ладно "):
         return True
     if "подтвержда" in norm and "не подтвержда" not in norm:
         return True

@@ -171,7 +171,7 @@ def build_address_response(
 
     walkin_hint: str | None = None
     if any("nonbookable" in str(f) for f in decision.flags):
-        walkin_hint = nonbookable_service_hint(user_text) or str(state.last_entities.get("service_name") or "").strip()
+        walkin_hint = nonbookable_service_hint(user_text, state.last_entities) or str(state.last_entities.get("service_name") or "").strip()
         if walkin_hint == "":
             walkin_hint = None
     text = format_address_for_patient(

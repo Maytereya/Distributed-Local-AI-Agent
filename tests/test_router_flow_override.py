@@ -15,6 +15,9 @@ from messengers_router.policies import (
     appointment_service_display,
     appointment_confirmation_transition,
     service_name_conflicts_with_doctor,
+    detect_nonbookable_walkin_intent,
+    nonbookable_service_hint,
+    detect_prepare_intent,
 )
 from messengers_router.services import Services
 from messengers_router import classifier as classifier_mod
@@ -173,6 +176,11 @@ def test_appointment_confirmation_transition_accepts_common_yes_forms():
         assert appointment_confirmation_transition(text) == "yes"
 
 
+def test_appointment_confirmation_transition_accepts_soft_yes_forms():
+    for text in ("хорошо", "Ладно", "хорошо, спасибо"):
+        assert appointment_confirmation_transition(text) == "yes"
+
+
 def test_appointment_confirmation_transition_accepts_common_no_forms():
     for text in ("нет", "Нет", "неа", "не правильно", "неправильно", "не подтверждаю"):
         assert appointment_confirmation_transition(text) == "no"
@@ -267,6 +275,84 @@ def test_route_message_keeps_nlu_debug_out_of_state(monkeypatch):
     assert "_nlu_merged_from" not in state.last_entities
     assert "_nlu_shadow" not in state.last_entities
     assert any(isinstance(t, dict) and "nlu" in t for t in evidence.debug_trace)
+
+
+def test_route_message_promotes_profile_followup_to_nonbookable_address(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="TEST_ASSIST",
+                confidence=0.72,
+                entities={},
+                flags={"rule_test_assist"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence()
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="walkin-profile-followup",
+        last_entities={"test_goal": "Какие анализы сдать на сахарный диабет"},
+    )
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "Диабетический профиль 1 где можно сдать?",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "ADDRESS"
+    assert "policy_nonbookable_walkin" in decision.flags
+    assert plan.label == "ADDRESS"
+    assert str(state.last_entities.get("service_name") or "").lower() == "анализы"
+
+
+def test_route_message_secondary_offer_accepts_thanks_as_soft_yes():
+    state = SessionState(
+        session_id="secondary-thanks-yes",
+        last_entities={
+            "_secondary_offer_pending": True,
+            "_secondary_queue": ["ADDRESS"],
+            "secondary_intents": ["ADDRESS"],
+        },
+    )
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "спасибо",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "ADDRESS"
+    assert decision.entities.get("secondary_intent_from_queue") is True
+    assert plan.label == "ADDRESS"
+    assert state.last_entities.get("_secondary_offer_pending") is False
 
 
 def test_build_price_response_for_price_flow():
@@ -746,6 +832,61 @@ def test_apply_pending_override_allows_non_samara_city_switch():
     )
 
     assert label == "ADDRESS"
+
+
+def test_detect_nonbookable_walkin_intent_uses_test_context_for_profile_followup():
+    ok = detect_nonbookable_walkin_intent(
+        "Диабетический профиль 1 где можно сдать?",
+        {"test_goal": "Какие анализы сдать на сахарный диабет"},
+    )
+
+    assert ok is True
+
+
+def test_detect_nonbookable_walkin_intent_supports_typo_zdat_with_context():
+    ok = detect_nonbookable_walkin_intent(
+        "хорошо, где здать?",
+        {"test_goal": "Какие анализы сдать на сахарный диабет"},
+    )
+
+    assert ok is True
+
+
+def test_nonbookable_service_hint_uses_test_context_for_profile_followup():
+    hint = nonbookable_service_hint(
+        "Диабетический профиль 1 где можно сдать?",
+        {"test_goal": "Какие анализы сдать на сахарный диабет"},
+    )
+
+    assert hint == "анализы"
+
+
+def test_detect_prepare_intent_covers_time_of_day_questions():
+    assert detect_prepare_intent("обязательно ли в первую половину дня сдавать анализ?") is True
+    assert detect_prepare_intent("а можно вечером сдать анализ?") is True
+
+
+def test_detect_nonbookable_walkin_intent_covers_how_to_submit_with_context():
+    ok = detect_nonbookable_walkin_intent(
+        "как сдать?",
+        {"test_goal": "Какие анализы сдать на сахарный диабет"},
+    )
+
+    assert ok is True
+
+
+def test_detect_nonbookable_walkin_intent_covers_where_and_how_to_submit_with_context():
+    ok = detect_nonbookable_walkin_intent(
+        "где и как сдать?",
+        {"test_goal": "Какие анализы сдать на сахарный диабет"},
+    )
+
+    assert ok is True
+
+
+def test_detect_prepare_intent_covers_fasting_and_prepare_questions():
+    assert detect_prepare_intent("нужно ли натощак?") is True
+    assert detect_prepare_intent("как подготовиться к анализу?") is True
 
 
 def test_match_city_prefers_city_after_negation_switch():
