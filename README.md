@@ -1,215 +1,142 @@
-# Distributed Local / Hybrid AI Agent
+# LocalRAGagent / Neiry Agent API
 
-Локальный или гибридный RAG-агент для автоматизированной работы колл-центра.
-Поддерживает работу на одном или двух серверах, с видеокартами или без,
-используя локальные или облачные LLM/ASR-сервисы.
+Текущая версия проекта: production-ориентированный API-контур для клиники с двумя независимыми сценариями:
 
----
+- `for-messengers` — пациентский роутер (`messengers_router`) с stateful flow-логикой.
+- `for-call-center` — SSE-стрим для операторского интерфейса.
 
-## 🧩 Ключевые особенности системы
+Основной фокус текущего цикла: стабильность `messengers_router` v2, архитектурные guardrails и воспроизводимый remote eval.
 
-### ✔ Работает **на одном** или **на двух** физических серверах
+## Что сейчас умеет система
 
-Архитектура масштабируется:
+### 1) Контур мессенджеров (`messengers_router`)
 
-* **Один сервер** — если используется только логика, система индексирования Meilisearch и облачные модели.
-* **Два сервера** — для использования локальной LLM в составе Ollama + локального сервера Whisper в Uvicorn.
+- Интенты: `APPOINTMENT`, `DOCTOR_SCHEDULE`, `DOCTOR_INFO`, `PRICE`, `ADDRESS`, `TEST_ASSIST`, `TEST_RESULT`, `PREPARE`, `NEWS`, `OTHER`, `URGENT`, `COMPLAINT`, `MEDICAL_ADVICE`.
+- Stateful-диалог: память сессии, pending-слоты, подтверждение/отмена записи, topic-switch guardrails.
+- NLU v2 pipeline с feature flags (`legacy_v2` / `llm_primary`) и debug trace.
+- Entity grounding перед merge в state.
+- Детерминированная сборка ответов через `response_builder.py`.
+- Handoff-политики для high-risk сценариев.
+- Архитектурный gate (циклы/границы импортов) + CI workflow.
 
-### ✔ Может работать **без видеокарт**
+### 2) Контур колл-центра (`/v1/agent/stream`)
 
-В этом режиме сервер выполняет только:
+- SSE-стрим ответа для операторов.
+- Отдельный протокол от мессенджеров.
+- Защита `X-API-Key`.
 
-* логику агента;
-* автоматическое ежедневное кэширование данных по API из CRM/ERP/МИС (например, списки услуг, сотрудников, прайс, скрипты);
-*  обращение по API к CRM/ERP/МИС в случае использования некэшируемых данных (например, расписание работы конкретного сотрудника)
-* сервер Meilisearch;
-* сервер nginx;
-* сервер Gradio UI.
+## HTTP API (актуально)
 
-LLM и ASR берутся из облака (Sber Salut / GigaChat / др.).
+### For Messengers
 
-### ✔ Может работать **полностью локально**
+- `POST /api/messenger-generate`
+  - NDJSON stream (`application/x-ndjson`)
+  - для Telegram/WhatsApp/Web-chat интеграций
 
-При наличии GPU:
+- `POST /api/messenger-generate-once`
+  - единый JSON-ответ
+  - поддерживает `debug=true` и возвращает `state_update.debug`
 
-* локальная LLM через **Ollama** (Mistral Small 3.2 + любые другие модели из репозитория),
-* локальное ASR Whisper-GPU,
-* резервная ChromaDB,
-* быстрый Meilisearch.
-* Неограниченный доступ к новым генеративным моделям (LLM) с возможностью бенчмаркинга и тестирования на практике.
+### For Call Center
 
-### ✔ **Без LangGraph**
+- `POST /v1/agent/stream`
+  - SSE (`text/event-stream`)
+  - требует `X-API-Key`
 
-Изначально архитектура проектировалась на LangGraph,
-но в текущей стабильной версии используется **чистая Python-логика с состояниями**.
+## Быстрый старт (локально)
 
-Главный модуль логики:
-`router_preprocessor.py`
-Он:
-
-* принимает входящее сообщение,
-* определяет стратегию ответа,
-* решает, где искать данные,
-* управляет состояниями диалога и маршрутизацией.
-
-### ✔ Источники данных
-
-1. **CRM API клиента** — все данные кешируются локально (ускоряет фильтрацию и поиск).
-2. **Meilisearch** — основной индексатор и классификатор (корпоративные данные классифицируются в индексах для организации поиска и снижения вероятности ошибок)
-3. **ChromaDB** — система векторного поиска. Содержится как **резервная** для поиска в документах по смыслу, а не релевантности. 
-
-### ✔ Аудиораспознавание
-
-* **Whisper-GPU** — основной локальный модуль. Поддерживает настраиваемые словари — подсказки для распознавания специфической лексики.
-* **VOSK** — оставлен в резерве.
-* **Sber Salut** — подключаемая альтернатива для бюджетного (без GPU) режима.
-
-### ✔ Графический интерфейс
-
-**Gradio UI**.
-Поддерживает:
-
-* простой, лаконичный чат оператора колл-центра,
-* аудиораспознавание сообщений оператора/клиента/ или обоих участников разговора с передачей в поиск сформулированного текста,
-* загрузку файлов (PDF/JSON) или прямой полуструктурированный ввод данных в базу знаний RAG-Агента,
-* настройки промптов/логики RAG-Агента,
-* выбор и настройка LLM,
-* настройка словаря Whisper,
-* бенчмаркинг и сравнительный анализ эффективности LLM
-
----
-
-## 🖥 Аппаратные профили
-
-### **I. Основной сервер (локальная LLM + Meilisearch + логика)**
-
-* **3 × NVIDIA GEFORCE RTX 4090 24Gb**
-  Используется для:
-* работы Ollama (любые LLM),
-* Whisper-GPU (при необходимости),
-* логического модуля,
-* Meilisearch,
-* Nginx,
-* Gradio.
-
-### **II. Второй сервер (ASR/LLM, если требуется разделить нагрузку)**
-
-Варианты:
-
-* **2 × AMD Radeon 7900 XTX 24Gb**, или
-* **1 × NVIDIA RTX 5090 32Gb**
-
-Используется для:
-
-* Whisper-GPU (ASR)
-
-### Поддерживаемые нагрузки
-
-Система протестирована при **одновременной работе 8 операторов колл-центра**.
-
----
-
-## 🧱 Архитектурный обзор
-
-### Основные сервисы в docker-compose:
-
-| Сервис             | Назначение                                       |
-| ------------------ | ------------------------------------------------ |
-| `nginx_proxy`      | HTTPS + проксирование Gradio, API                |
-| `bookworm-agent`   | основной агент + логика (router_preprocessor.py) |
-| `whisper-gpu`      | локальный Whisper ASR                            |
-| `ollama`           | локальная LLM                                    |
-| `vosk-ru`          | резервный VOSK ASR                               |
-| `meili_server`     | основной поисковый движок                        |
-| `chroma_container` | резервная векторная БД                           |
-
-## 🔍 Процесс обработки запроса
-
-1. **Получение сообщения**
-   Gradio - интерфейс → bookworm-agent → `router_preprocessor.py`
-
-2. **Выбор стратегии ответа**
-   На основе:
-
-   * ключевых слов, выбранных из текста входящего запроса 
-   *  данных в кеше CRM,
-   * наличия релевантных документов в Meilisearch.
-
-3. **Получение данных**
-   Приоритет:
-
-   1. CRM кеш
-   2. Meilisearch
-   3. ChromaDB (резерв)
-
-4. **Формирование ответа**
-
-   * Локальная LLM через Ollama *(если есть GPU)*
-   * Или облачная LLM *(если GPU отсутствует)*
-
-5. **Отправка ответа пользователю**
-
----
-
-## 🎤 Аудиомодуль
-
-### Whisper-GPU
-
-* Docker-контейнер
-* Передаёт потоковые блоки операторской речи
-* Быстрое распознавание в реальном времени
-
-### Sber Salut ASR
-
-Используется когда:
-
-* нет GPU
-* нужно бюджетное распознавание с компромиссной безопасностью
-
-### VOSK
-
-Оставлен только как резерв.
-
----
-
-## 📁 Структура репозитория (актуальная)
-
-```
-agent_logic_2/          — основная логика и состояния
-router_preprocessor.py — главный модуль маршрутизации запросов
-Upload/                 — агрегация файлов на загрузку в Meilisearch
-VOSK/                   — резервный модуль ASR
-whisper/                — конфигурация запросов к uvicorn/Whisper
-converters/             — обработка PDF/TXT/URL
-container_managenment/  — Docker модули
-static/                 — статические файлы
-gradio_interface.py    — визуальный интерфейс
-docker-compose.yml      — основной оркестратор
-```
-* Cервер Uvicorn/Whisper с API в репозитории https://github.com/Maytereya/whisper-server
----
-
-## 🔧 Развёртывание
-
-1. Установить Docker + Docker Compose
-2.  Настроить `agent_logic_2/config.ini` (ключи CRM / облака / GigaChat / Sber)
-3. Запуск:
+### 1) Установка зависимостей
 
 ```bash
-docker compose up -d --build
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-4. Интерфейс доступен через Nginx (порт 80/443)
+### 2) Конфигурация
 
----
+- Основная конфигурация: `agent_logic_2/config.ini`
+- API-ключ для call-center endpoint: `AGENT_API_KEY` (используется в `agent_api.py`)
+- Prompt override каталог: `app_data/prompts/` (опционально)
 
-## 📄 Лицензия
+### 3) Запуск API
 
-Проект распространяется под лицензией **Apache-2.0**.
+```bash
+uvicorn agent_api:app --host 0.0.0.0 --port 8000 --reload
+```
 
----
+### 4) Smoke-проверка мессенджерного endpoint
 
-## 🤝 Контрибьюции
+```bash
+curl -s http://localhost:8000/api/messenger-generate-once \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "session_id":"s_local_smoke",
+    "text":"покажи расписание уролога",
+    "debug":true,
+    "llm_mode":"hybrid"
+  }' | jq .
+```
 
-Pull-request’ы приветствуются.
-По вопросам и улучшениям — создавайте issue.
+## Качество и регрессия
+
+### Локальные тесты
+
+```bash
+PYTHONPATH=. pytest -q tests
+```
+
+### Архитектурный guardrail
+
+```bash
+python3 messengers_router/scripts/check_architecture_imports.py
+```
+
+### Remote eval (целевой gate: 100%)
+
+```bash
+bash messengers_router/eval_suite/run_remote_eval.sh \
+  --url http://<server>/api/messenger-generate-once
+```
+
+`run_remote_eval.sh` запускает `stage1`, `stage3`, `stage4`, `stage5`, `critical` и затем `coverage_ext`.
+Логи складываются в `messengers_router/eval_suite/logs/<run_id>/`.
+
+## Текущий статус качества (2026-03-21)
+
+- Локальный `pytest`: `150 passed`
+- Последний server remote eval: `run_id=1774094099`
+  - `stage1`: 20/20
+  - `stage3`: 9/9
+  - `stage4`: 15/15
+  - `stage5`: 49/49
+  - `critical`: 21/21
+  - `coverage_ext`: passed
+
+## Репозиторий: что важно читать первым
+
+- API вход: `agent_api.py`
+- Мессенджерные endpoint: `messengers_router/endpoint.py`
+- Оркестратор: `messengers_router/router.py`
+- Политики/слоты: `messengers_router/policies.py`
+- Интеграции: `messengers_router/services.py`
+- Архитектурный статус: `messengers_router/ARCHITECTURE_STATUS.md`
+- Remote eval docs: `messengers_router/eval_suite/README.md`
+
+## Docker / Infra
+
+В `docker-compose.yml` описаны основные сервисы:
+
+- `bookworm-agent`
+- `agent-api`
+- `nginx`
+- `certbot`
+
+Перед запуском docker-контура проверьте mount-paths и внешнюю сеть `local_net` под ваш хост.
+
+## Важно для разработки
+
+- Не правьте только `app_data/prompts/*`, если изменение должно жить в git.
+  Канонический набор prompt-файлов для ревью: `messengers_router/prompts/*`.
+- Для проверок поведения в мессенджерах используйте `.../api/messenger-generate-once` с `debug=true`.
+- Для серверной репрезентативности используйте только remote eval с той машины, где развернут текущий коммит.

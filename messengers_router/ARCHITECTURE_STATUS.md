@@ -3,7 +3,7 @@
 Этот файл — единая точка входа для разработчиков и их Codex при работе с `messengers_router`.
 Цель: быстро понять текущую архитектуру, отличие от старой версии, болевые точки и безопасные направления рефакторинга.
 
-> Актуализация: **2026-03-21** (повторная инвентаризация пунктов 1-3 архитектурной проверки).
+> Актуализация: **2026-03-21** (повторная сверка после Wave1 + server eval).
 > Текущим источником правды для ближайших работ считается раздел **0** ниже.
 
 ## 0) Актуализация архитектуры (2026-03-21)
@@ -24,7 +24,7 @@
 
 ### 0.2 Фактическая карта модулей (по коду)
 
-Инвентаризация выполнена по всем `messengers_router/*.py` (26 core-модулей).
+Инвентаризация выполнена по всем `messengers_router/*.py` (**28** core-модулей).
 
 - Точки входа: `endpoint.py` (`/api/messenger-generate`, `/api/messenger-generate-once`).
 - Оркестрация: `router.py`, `nlu_pipeline.py`, `planner.py`, `executor.py`, `response_builder.py`.
@@ -38,46 +38,43 @@
 #### Что в порядке
 
 - Циклы импортов между core-модулями: **не обнаружены** (`0` SCC > 1 узла).
-- Debug/eval контуры стабильны: последний remote eval (`run_id=1774038182`) прошел `100%` по всем стадиям.
+- Архитектурный guardrail локально проходит: `ARCHITECTURE CHECK PASSED` (`modules checked: 28`, `internal edges: 89`).
+- Debug/eval контуры стабильны: последний remote eval (`run_id=1774094099`) прошел `100%` по всем стадиям, включая `critical` и `coverage_ext`.
 
 #### Что требует исправления (актуальные нарушения)
 
 1. **God-модули / концентрация ответственности**:
-   - `services.py` (~2455 LOC),
-   - `policies.py` (~1808 LOC),
-   - `classifier.py` (~1156 LOC),
-   - `router.py` (~1109 LOC).
+   - `services.py` (~2456 LOC),
+   - `policies.py` (~1847 LOC),
+   - `classifier.py` (~1155 LOC),
+   - `router.py` (~1034 LOC).
 
 2. **Сильная централизация оркестратора**:
-   - `router.py` имеет fan-out `20` модулей (наибольшее в пакете).
+   - `router.py` имеет fan-out `21` модуль (наибольшее в пакете).
 
-3. **Утечки инфраструктуры в ядро**:
-   - direct import `agent_logic_2.config` в `router.py`, `renderer.py`, `nlu_pipeline.py`, `llm_runtime.py`, `services.py`;
-   - `policies.py` импортирует `agent_logic_2.doctor_name_matching` (смешение policy и внешнего utility-слоя).
-
-4. **Дубли ответственности**:
-   - валидация/каноникализация `doctor_name` есть и в `router.py`, и в `entity_grounder.py`.
-
-5. **Неявные контрактные связи**:
+3. **Неявные контрактные связи**:
    - тесты активно используют приватные функции `router.py` (`_...`), что фиксирует внутреннюю реализацию вместо публичного контракта.
 
-6. **Расширяемость каналов была ограничена**:
+4. **Расширяемость каналов была ограничена**:
    - проблема закрыта в Wave1/Step3: `endpoint.py` переведен на dependency-factory (`Depends` + провайдеры `get_memory_store/get_services`) вместо module-level singleton.
+
+5. **Infra-границы в core закрыты (контроль включен)**:
+   - прямые `agent_logic_2.*` импорты убраны из orchestration/policy;
+   - оставлены только в адаптерах/портах (`runtime_config`, `doctor_name_port`, `services`, `llm_runtime`, `prompt_registry`);
+   - правило закреплено архитектурным guardrail-скриптом и CI gate.
 
 ### 0.4 Реестр проблем (приоритизация)
 
-- `P1`: дубли doctor-validation (`router.py` + `entity_grounder.py`).
-  Риск: средний/высокий; Цена: средняя; Эффект: снижение скрытых регрессий entity-merge.
 - `P1`: чрезмерная связанность `router.py`.
   Риск: высокий; Цена: средняя; Эффект: ускорение безопасных изменений.
-- `P1`: infra-утечки (`agent_logic_2.*`) в policy/orchestration слои.
-  Риск: высокий; Цена: средняя; Эффект: четкие границы и переносимость.
 - `P2`: god-модули `services.py` и `policies.py`.
   Риск: высокий; Цена: высокая; Эффект: управляемость и тестопригодность.
 - `P2`: приватные контракты в тестах.
   Риск: средний; Цена: низкая/средняя; Эффект: устойчивость рефакторинга.
 - `[closed]`: ограниченная DI-расширяемость endpoint слоя (закрыто Wave1/Step3, 2026-03-21).
   Эффект: endpoint готов к dependency overrides и альтернативным провайдерам без правок core-router.
+- `[closed]`: infra-утечки (`agent_logic_2.*`) в orchestration/policy слоях (закрыто Wave1/Step2, закреплено guardrail в CI).
+  Эффект: границы слоев формализованы и автоматически контролируются.
 
 ### 0.5 План рефакторинга (2 волны, текущий)
 
@@ -125,6 +122,12 @@
   - добавлен обязательный CI job `.github/workflows/messengers_router_arch_guardrails.yml`;
   - локальная проверка: `ARCHITECTURE CHECK PASSED`;
   - quality-gate пройден: `run_remote_eval` `run_id=1774089602`, `All stages passed`.
+- 2026-03-21: закрыт регресс nonbookable follow-up (`TEST_ASSIST -> ADDRESS`):
+  - усилены intent-детекторы (`сдать/здать`, profile-follow-up с контекстом `test_goal`, prepare-вопросы по времени/натощак);
+  - добавлен soft-yes для secondary-offer (`спасибо`, `хорошо`, `ладно`, `окей`);
+  - добавлены регрессионные тесты на формулировки и typo-cases;
+  - локальный quality-gate: `pytest` `150 passed`;
+  - server quality-gate: `run_remote_eval` `run_id=1774094099`, `All stages passed`.
 - 2026-03-21: P3 policy-решения обновлены:
   - пункт 7 ТЗ зафиксирован как `handoff-only` (без прямого CRM commit);
   - пункт 8 ТЗ остается `pending` до юридического решения заказчика.
@@ -388,7 +391,7 @@ messengers_router/
 ## 7) Известные слабые места (актуально)
 
 1. `APPOINTMENT` логика все еще распределена между `router.py`, `flow_policy.py`, `policies.py`.
-2. Есть overlap проверок `doctor_name` (`router._verify_doctor_entity` и `entity_grounder`).
+2. `router.py` все еще большой coordinator (feature-rich), что увеличивает цену точечных изменений.
 3. `llm_primary` улучшает free-form recall, но качество все еще ограничено grounding и качеством live data.
 4. При недоступности live `/regions` адресная выдача деградирует до doctor-cache fallback.
 5. Latency в сценариях расписания чаще упирается во внешние API, а не в локальную логику.
@@ -396,11 +399,10 @@ messengers_router/
 
 ## 8) Что рефакторить дальше (рекомендуемый порядок)
 
-1. Убрать дубли doctor-validation в один слой (`entity_grounder` как единственный source of truth).
-2. Перенести APPOINTMENT step-machine целиком в отдельный модуль (`appointment_flow.py`) и держать `router.py` только как coordinator.
-3. Унифицировать quick-fill правила через “ожидаемый слот” (pending-driven extraction only).
-4. Расширить golden/eval на `DOCTOR_INFO`, `DOCTOR_SCHEDULE`, `PREPARE`, `OTHER`, non-Samara и follow-up turns.
-5. После стабилизации удалить legacy-shadow ветки и лишний rule-duplication.
+1. Перенести APPOINTMENT step-machine целиком в отдельный модуль (`appointment_flow.py`) и держать `router.py` только как coordinator.
+2. Унифицировать quick-fill правила через “ожидаемый слот” (pending-driven extraction only).
+3. Расширить golden/eval на `DOCTOR_INFO`, `DOCTOR_SCHEDULE`, `PREPARE`, `OTHER`, non-Samara и follow-up turns.
+4. После стабилизации удалить legacy-shadow ветки и лишний rule-duplication.
 
 ## 9) Аудит перед пушем: что лишнее/шумное
 
@@ -494,7 +496,7 @@ messengers_router/
 2. [done] Wave1 / Step2: добавлены внутренние порты `runtime_config` и `doctor_name_port`, core-модули переведены на них.
 3. [done] Wave1 / Step3: `endpoint.py` переведен на DI-фабрики зависимостей (`get_memory_store`, `get_services`) вместо module-level singleton.
 4. [done] Wave1 / Step4: добавлен архитектурный guardrail (проверка циклов, whitelist межслойных импортов, контроль direct host-imports) + CI gate в GitHub Actions.
-5. [done] Quality-gate после текущего цикла: `run_remote_eval` прошел на `100%` (run_id `1774089602`).
+5. [done] Quality-gate после текущего цикла: `run_remote_eval` прошел на `100%` (run_id `1774094099`).
 
 ### P1 (сразу, следующий спринт)
 
