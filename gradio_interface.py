@@ -7,10 +7,11 @@ import os
 import shutil
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
-from typing import Dict, List, Union, Tuple, Literal, Any, Optional
+from typing import AsyncGenerator, Dict, List, Union, Literal, Any, Optional
 
 import gradio as gr
 import yaml
@@ -32,6 +33,7 @@ from container_managenment import restart_container, system_data
 from converters import pdf_to_json_txt_tables_meili as pdf2json
 from messengers_router import topic_registry as mr_topic_registry
 from messengers_router.prompt_registry import load_prompt_text
+from messenger_simulator import RuntimeOptions as MessengerRuntimeOptions, stream_message as stream_messenger_message
 from whisper import whisper_dict as w
 from whisper.wisper_ws_client import ws_transcribe
 
@@ -179,7 +181,168 @@ async def echo_ai_router(message, history, session_state, ai_feed: Literal["loca
 
     except Exception as e:
         # При ошибке тоже стримим её сразу
-        yield f"⚠️ Ошибка обработки запроса в ai-router: {e}", session_state
+        yield f"⚠️ Ошибка обработки запроса в Call-Center-Ai: {e}", session_state
+
+
+def _resolve_messenger_api_url() -> str:
+    value = os.getenv("MESSENGER_API_URL", "").strip()
+    if value:
+        return value
+
+    env_name = str(getattr(c, "environment", "")).strip().upper()
+    if env_name == "DOCKER_PRODUCTION":
+        return "http://agent-api:8010/api/messenger-generate"
+    if env_name in {"PRODUCTION", "DEVELOPMENT", "LOCAL"}:
+        return "http://127.0.0.1:8000/api/messenger-generate"
+    return "http://localhost:8000/api/messenger-generate"
+
+
+def _resolve_messenger_host_header() -> Optional[str]:
+    value = os.getenv("MESSENGER_API_HOST_HEADER", "").strip()
+    return value or None
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    txt = raw.strip().lower()
+    if txt in {"1", "true", "yes", "on"}:
+        return True
+    if txt in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _build_messenger_runtime_options() -> MessengerRuntimeOptions:
+    llm_mode = os.getenv("MESSENGER_LLM_MODE", "hybrid").strip().lower()
+    if llm_mode not in {"strict", "hybrid", "rich"}:
+        llm_mode = "hybrid"
+
+    try:
+        retries = int(os.getenv("MESSENGER_SELF_CHECK_MAX_RETRIES", "1").strip())
+    except Exception:
+        retries = 1
+    retries = min(2, max(0, retries))
+
+    try:
+        queue_timeout_ms = int(os.getenv("MESSENGER_QUEUE_TIMEOUT_MS", "30000").strip())
+    except Exception:
+        queue_timeout_ms = 30000
+    queue_timeout_ms = min(120000, max(1000, queue_timeout_ms))
+
+    return MessengerRuntimeOptions(
+        llm_mode=llm_mode,
+        self_check=_env_bool("MESSENGER_SELF_CHECK", default=False),
+        self_check_max_retries=retries,
+        queue_timeout_ms=queue_timeout_ms,
+    )
+
+
+def _is_flush_boundary(chunk_text: str) -> bool:
+    if not chunk_text:
+        return False
+    return chunk_text[-1] in {".", "!", "?", "\n", ";", ":", "…"}
+
+
+def _format_messenger_attachments(attachments: List[Dict[str, Any]]) -> str:
+    if not attachments:
+        return ""
+
+    lines = ["", "", "Вложения:"]
+    for att in attachments:
+        if not isinstance(att, dict):
+            continue
+        raw_url = att.get("url")
+        raw_name = att.get("name")
+        raw_type = att.get("type")
+        url = str(raw_url or "").strip()
+        name = str(raw_name or "").strip() or (url if url else "attachment")
+        att_type = str(raw_type or "file").strip() or "file"
+        if url:
+            lines.append(f"- [{name}]({url}) ({att_type})")
+        else:
+            lines.append(f"- {name} ({att_type})")
+
+    return "\n".join(lines) if len(lines) > 3 else ""
+
+
+async def echo_messenger_ai(message: str, session_id: str) -> AsyncGenerator[str, None]:
+    full_text = ""
+    pending = ""
+    attachments: List[Dict[str, Any]] = []
+    seen_attachments: set[str] = set()
+    handoff = False
+    emitted = False
+    last_flush = time.monotonic()
+
+    flush_interval_s = 0.12
+    flush_min_chars = 24
+
+    try:
+        async for chunk in stream_messenger_message(
+                url=_resolve_messenger_api_url(),
+                session_id=session_id,
+                text=message,
+                host_header=_resolve_messenger_host_header(),
+                runtime_options=_build_messenger_runtime_options(),
+        ):
+            if chunk.error:
+                raise RuntimeError(chunk.error)
+
+            if chunk.text:
+                pending += chunk.text
+
+            if chunk.attachments:
+                for att in chunk.attachments:
+                    try:
+                        key = json.dumps(att, ensure_ascii=False, sort_keys=True)
+                    except Exception:
+                        key = str(att)
+                    if key in seen_attachments:
+                        continue
+                    seen_attachments.add(key)
+                    attachments.append(att)
+
+            if chunk.handoff:
+                handoff = True
+
+            now = time.monotonic()
+            should_flush = bool(
+                pending and (
+                    _is_flush_boundary(pending)
+                    or len(pending) >= flush_min_chars
+                    or (now - last_flush) >= flush_interval_s
+                )
+            )
+            if should_flush:
+                full_text += pending
+                pending = ""
+                last_flush = now
+                emitted = True
+                yield full_text
+
+        if pending:
+            full_text += pending
+            emitted = True
+            yield full_text
+
+        tail = _format_messenger_attachments(attachments)
+        if handoff:
+            tail += "\n\n[Система] Диалог передан оператору."
+        if tail:
+            final_text = f"{full_text}{tail}".strip()
+            if final_text != full_text:
+                emitted = True
+                yield final_text
+
+        if not emitted:
+            yield "(no text)"
+
+    except (asyncio.CancelledError, GeneratorExit):
+        raise
+    except Exception as e:
+        yield f"⚠️ Ошибка обработки запроса в Messengers-Ai: {e}"
 
 
 async def chroma_echo(message: str, history: List[Dict], collection: str, threshold_value: float,
@@ -227,19 +390,32 @@ async def meili_echo(
 async def universal_echo(
         message: str,
         history: List[Dict],
-        radio_value: str,  # "ai-router", "gigachat", "meilisearch", "vectorstore", "db"
+        radio_value: str,  # "Call-Center-Ai", "gigachat", "meilisearch", "vectorstore", "db"
         threshold_value: float,
         slider_value_n_results: int,
         slider_value_k: int,
         collection: str,
         meili_index: str,
+        messenger_session_id: Optional[str] = None,
 ):
-    if radio_value == "ai-router":
+    messenger_session_id = str(messenger_session_id or "").strip() or None
+
+    if radio_value == "Call-Center-Ai":
         session_state: dict = {}
         ai_feed: Literal["local", "cloud"] = "local"
         # стримим
         async for partial, session_state in echo_ai_router(message, history, session_state, ai_feed=ai_feed):
-            yield partial
+            yield partial, messenger_session_id
+        # после завершения стрима — выходим
+        return
+
+    if radio_value == "Messengers-Ai":
+        if not history:
+            session_id = f"gr_mr_{uuid.uuid4().hex[:12]}"
+        else:
+            session_id = messenger_session_id or f"gr_mr_{uuid.uuid4().hex[:12]}"
+        async for partial in echo_messenger_ai(message, session_id=session_id):
+            yield partial, session_id
         # после завершения стрима — выходим
         return
 
@@ -249,7 +425,7 @@ async def universal_echo(
 
         # стримим
         async for partial, session_state in echo_ai_router(message, history, session_state, ai_feed=ai_feed):
-            yield partial
+            yield partial, messenger_session_id
         # после завершения стрима — выходим
         return
 
@@ -260,7 +436,7 @@ async def universal_echo(
             index=meili_index,
             limit=slider_value_k
         )
-        yield result
+        yield result, messenger_session_id
         return
 
     else:
@@ -274,7 +450,7 @@ async def universal_echo(
             slider_value_k=slider_value_k,
             radio_value=radio_value
         )
-        yield result
+        yield result, messenger_session_id
         return
 
 
@@ -873,13 +1049,20 @@ def main():
                                      scale=70,
                                      html_attributes=gr.InputHTMLAttributes(autocorrect="off", spellcheck=True)
                                      )
+                messenger_session_state = gr.State(value=None)
 
-                radio_type_of_search = gr.Radio(["ai-router", "gigachat", "meilisearch", "vectorstore", "db", ],
-                                                label="Способы поиска в базе знаний",
-                                                value="ai-router",
-                                                container=True,
-                                                render=False,
-                                                info="Выберите алгоритм поиска")
+                radio_type_of_search = gr.Radio(
+                    ["Call-Center-Ai",
+                     "Messengers-Ai",
+                     "gigachat",
+                     "meilisearch",
+                     "vectorstore",
+                     "db", ],
+                    label="Способы поиска в базе знаний, выбор нейросети или канала связи (для администраторов или клиентов)",
+                    value="Call-Center-Ai",
+                    container=True,
+                    render=False,
+                    info="Выберите алгоритм/канал")
 
                 meili_search_indexes_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
                                                             label=INDEXES_IN_MEILI,
@@ -935,8 +1118,10 @@ def main():
                         value_k_slider,
                         chroma_search_collection_dropdown,
                         meili_search_indexes_dropdown,
+                        messenger_session_state,
 
                     ],
+                    additional_outputs=[messenger_session_state],
 
                     show_progress="full",
 
@@ -2259,7 +2444,6 @@ def main():
                     gr.Error(title="Ошибка загрузки options", message=str(e))
                     return ""
 
-
             def fn_save_options(text: str) -> None:
                 """
                 Сохраняет измененные настройки Ollama в файл JSON.
@@ -2284,9 +2468,9 @@ def main():
 
                 text, msg = load_prompt(name, inform=True)
                 gr.Info(title="Загружен успешно",
-                           duration=3,
-                           message=msg,
-                           )
+                        duration=3,
+                        message=msg,
+                        )
                 return text
 
             def fn_load_prompt_with_fallback(name: str, fallback_key: str) -> str:
@@ -2411,7 +2595,8 @@ def main():
             def _mr_snapshot(selected_topic_id: str | None = None) -> tuple[str, Any, str, str]:
                 data = mr_topic_registry.load_registry(force_reload=True)
                 topics = mr_topic_registry.list_topics(enabled_only=False)
-                topic_ids = [str(t.get("topic_id") or "").strip() for t in topics if str(t.get("topic_id") or "").strip()]
+                topic_ids = [str(t.get("topic_id") or "").strip() for t in topics if
+                             str(t.get("topic_id") or "").strip()]
                 if selected_topic_id and selected_topic_id in topic_ids:
                     selected_id = selected_topic_id
                 else:
@@ -2515,10 +2700,10 @@ def main():
                     gr.Error(f"❌ Ошибка изменения статуса topic: {e}")
                     return fn_mr_refresh(selected_topic_id)
 
-            with gr.Tab("🧭 messengers_router"):
-                gr.Markdown("""<h3>🧭 Настройки messengers_router: Topic Registry (CRUD)</h3>""")
+            with gr.Tab("🧭 Настройки мессенджера"):
+                gr.Markdown("""<h3>🧭 Настройки роутера входящих сообщений: Topic Registry/Реестр тем (CRUD)</h3>""")
                 gr.Markdown(
-                    "Реестр тем управляет маршрутизацией запросов: label, источник данных, fallback и приоритет."
+                    "Реестр тем управляет маршрутизацией запросов: label/маркер темы, источник данных, fallback/резервный ход и приоритет."
                 )
 
                 with gr.Row():
@@ -2820,11 +3005,11 @@ def main():
                             btn_save_mr_rich = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
                 btn_load_mr_rich.click(
-                                       lambda: fn_load_prompt_with_fallback(
-                                           "mr_renderer_patient_rich",
-                                           "renderer_patient_rich",
-                                       ),
-                                       [], [prompt_code_mr_rich, ])
+                    lambda: fn_load_prompt_with_fallback(
+                        "mr_renderer_patient_rich",
+                        "renderer_patient_rich",
+                    ),
+                    [], [prompt_code_mr_rich, ])
                 btn_save_mr_rich.click(lambda txt: fn_save_prompt("mr_renderer_patient_rich", txt),
                                        prompt_code_mr_rich, )
 
@@ -2846,11 +3031,11 @@ def main():
                             btn_save_mr_critic = gr.Button("💾 Сохранить", size="sm", variant="primary")
 
                 btn_load_mr_critic.click(
-                                         lambda: fn_load_prompt_with_fallback(
-                                             "mr_renderer_critic_patient_alignment",
-                                             "renderer_critic_patient_alignment",
-                                         ),
-                                         [], [prompt_code_mr_critic, ])
+                    lambda: fn_load_prompt_with_fallback(
+                        "mr_renderer_critic_patient_alignment",
+                        "renderer_critic_patient_alignment",
+                    ),
+                    [], [prompt_code_mr_critic, ])
                 btn_save_mr_critic.click(lambda txt: fn_save_prompt("mr_renderer_critic_patient_alignment", txt),
                                          prompt_code_mr_critic, )
 
