@@ -60,12 +60,12 @@ def _section_candidates(section: str, env: str | None = None) -> list[str]:
 
 
 def _raw_value(
-    section: str,
-    key: str,
-    default: str | None = None,
-    *,
-    env: str | None = None,
-    legacy_key: str | None = None,
+        section: str,
+        key: str,
+        default: str | None = None,
+        *,
+        env: str | None = None,
+        legacy_key: str | None = None,
 ) -> str | None:
     opt = str(key or "").strip()
     if not opt:
@@ -90,26 +90,26 @@ def _raw_value(
 
 
 def _get_str(
-    section: str,
-    key: str,
-    default: str = "",
-    *,
-    env: str | None = None,
-    legacy_key: str | None = None,
+        section: str,
+        key: str,
+        default: str = "",
+        *,
+        env: str | None = None,
+        legacy_key: str | None = None,
 ) -> str:
     raw = _raw_value(section, key, default=default, env=env, legacy_key=legacy_key)
     return str(raw if raw is not None else default).strip()
 
 
 def _get_int(
-    section: str,
-    key: str,
-    default: int,
-    *,
-    env: str | None = None,
-    legacy_key: str | None = None,
-    min_value: int | None = None,
-    max_value: int | None = None,
+        section: str,
+        key: str,
+        default: int,
+        *,
+        env: str | None = None,
+        legacy_key: str | None = None,
+        min_value: int | None = None,
+        max_value: int | None = None,
 ) -> int:
     raw = _raw_value(section, key, default=str(default), env=env, legacy_key=legacy_key)
     try:
@@ -125,25 +125,25 @@ def _get_int(
 
 
 def _get_bool(
-    section: str,
-    key: str,
-    default: bool,
-    *,
-    env: str | None = None,
-    legacy_key: str | None = None,
+        section: str,
+        key: str,
+        default: bool,
+        *,
+        env: str | None = None,
+        legacy_key: str | None = None,
 ) -> bool:
     raw = _raw_value(section, key, default="true" if default else "false", env=env, legacy_key=legacy_key)
     return _as_bool(raw, default=default)
 
 
 def _get_enum(
-    section: str,
-    key: str,
-    default: str,
-    allowed: set[str],
-    *,
-    env: str | None = None,
-    legacy_key: str | None = None,
+        section: str,
+        key: str,
+        default: str,
+        allowed: set[str],
+        *,
+        env: str | None = None,
+        legacy_key: str | None = None,
 ) -> str:
     raw = _get_str(section, key, default=default, env=env, legacy_key=legacy_key).lower()
     return raw if raw in allowed else default
@@ -175,6 +175,7 @@ class MessengerRouterConfig:
     debug_raw_output: bool
     llm_procedure_normalization: bool
     debug_final_input: bool
+    url: str
 
 
 @dataclass(frozen=True)
@@ -293,6 +294,10 @@ settings = Settings(
             default=False,
             legacy_key="DEBUG_FINAL_INPUT",
         ),
+        url=_get_str(
+            "MESSENGER_ROUTER",
+            "url", default="http://172.16.0.16/api/messenger-generate",
+            legacy_key="MESSENGER_API_URL"),
     ),
     router=RouterConfig(
         router_v2_enable=_get_bool("ROUTER", "router_v2_enable", default=True, legacy_key="MR_ROUTER_V2_ENABLE"),
@@ -315,7 +320,8 @@ settings = Settings(
         nlu_shadow=_get_bool("NLU", "nlu_shadow", default=False, legacy_key="MR_NLU_SHADOW"),
     ),
     sber_cloud=SberCloudConfig(
-        giga_authorization_key=_get_str("SBER_CLOUD", "giga_authorization_key", default="", legacy_key="giga_authorization_key"),
+        giga_authorization_key=_get_str("SBER_CLOUD", "giga_authorization_key", default="",
+                                        legacy_key="giga_authorization_key"),
     ),
     nauka=NaukaConfig(
         base_url=_get_str("NAUKA", "base_url", default="", legacy_key="base_url"),
@@ -357,7 +363,6 @@ settings = Settings(
     ),
 )
 
-
 # Legacy aliases (keep old import style intact across the project).
 environment = settings.app.environment
 
@@ -391,6 +396,7 @@ MR_DOCTORS_TOP_N = settings.messenger_router.mr_doctors_top_n
 DEBUG_RAW_OUTPUT = settings.messenger_router.debug_raw_output
 LLM_PROCEDURE_NORMALIZATION = settings.messenger_router.llm_procedure_normalization
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
+MESSENGER_API_URL = settings.messenger_router.url
 
 MR_ROUTER_V2_ENABLE = settings.router.router_v2_enable
 MR_ROUTER_V2_SHADOW = settings.router.router_v2_shadow

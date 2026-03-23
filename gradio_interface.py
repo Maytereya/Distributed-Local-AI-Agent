@@ -185,15 +185,24 @@ async def echo_ai_router(message, history, session_state, ai_feed: Literal["loca
 
 
 def _resolve_messenger_api_url() -> str:
-    value = os.getenv("MESSENGER_API_URL", "").strip()
-    if value:
-        return value
+    # 1) Явный override через env (если нужен быстрый hotfix без правки config.ini)
+    env_value = os.getenv("MESSENGER_API_URL", "").strip()
+    if env_value:
+        return env_value
 
-    env_name = str(getattr(c, "environment", "")).strip().upper()
-    if env_name == "DOCKER_PRODUCTION":
-        return "http://agent-api:8010/api/messenger-generate"
-    if env_name in {"PRODUCTION", "DEVELOPMENT", "LOCAL"}:
-        return "http://127.0.0.1:8000/api/messenger-generate"
+    # 2) Канонический источник: [MESSENGER_ROUTER.<ENV>] в config.ini
+    cfg_value = str(getattr(c, "MESSENGER_API_URL", "") or "").strip()
+    if cfg_value:
+        return cfg_value
+
+    # 3) Доп. fallback через structured settings
+    structured = getattr(getattr(c, "settings", None), "messenger_router", None)
+    if structured is not None:
+        value = str(getattr(structured, "url", "") or "").strip()
+        if value:
+            return value
+
+    # 4) Последний защитный fallback
     return "http://localhost:8000/api/messenger-generate"
 
 
