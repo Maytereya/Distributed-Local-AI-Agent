@@ -66,6 +66,33 @@ _UZI_FALSE_POSITIVE_RE = re.compile(
     r"в\s+рамках\s+при(е|ё)м\w*|интерпретац\w*|разъяснен\w*)\b",
     re.I,
 )
+_UZI_ROLE_HINT_RE = re.compile(
+    r"\b(узист\w*|врач\w*\s+узи|врач\w*\s+ультразвуков\w*\s+диагностик\w*|"
+    r"каки\w*\s+узист\w*|каки\w*\s+врач\w*\s+узи)\b",
+    re.I,
+)
+_UZI_PROCEDURE_HINT_RE = re.compile(
+    r"\b(сдела\w*|дела\w*|провест\w*|процедур\w*|исследован\w*|"
+    r"брюшн\w*|щитовид\w*|мал\w*\s+таз\w*|молочн\w*|почек|печен\w*|сердц\w*|сосуд\w*)\b",
+    re.I,
+)
+_SPECIALTY_ROLE_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "кардиолог": ("кардиолог",),
+    "эндокринолог": ("эндокринолог",),
+    "педиатр": ("педиатр",),
+    "хирург": ("хирург",),
+    "терапевт": ("терапевт",),
+    "травматолог": ("травматолог", "ортопед"),
+    "проктолог": ("проктолог", "колопроктолог"),
+    "уролог": ("уролог",),
+    "онколог": ("онколог",),
+    "гинеколог": ("гинеколог",),
+    "невролог": ("невролог",),
+    "гастроэнтеролог": ("гастроэнтеролог",),
+    "дерматолог": ("дерматолог",),
+    "лор": ("лор", "оториноларинг"),
+    "узи": ("узи", "ультразвук"),
+}
 _SPECIALTY_CANONICAL = (
     "гастроэнтеролог",
     "эндокринолог",
@@ -371,6 +398,149 @@ def _matches_uzi_doctor_profile(doc: dict[str, Any]) -> bool:
         if line.startswith("узи "):
             return True
     return False
+
+
+def _specialty_terms(specialty: str) -> tuple[str, ...]:
+    """
+    Возвращает нормализованные термины специальности для role-матчинга.
+
+    :param specialty: каноническая специальность (например, "хирург", "лор", "узи")
+    :return: кортеж терминов/синонимов для подстрочного поиска
+    """
+    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    if not spec_norm:
+        return tuple()
+    terms = _SPECIALTY_ROLE_SYNONYMS.get(spec_norm, (spec_norm,))
+    out: list[str] = []
+    for term in terms:
+        term_norm = _normalise_input(term).replace("ё", "е")
+        if term_norm and term_norm not in out:
+            out.append(term_norm)
+    return tuple(out)
+
+
+def _matches_specialty_terms(text: str, specialty: str) -> bool:
+    """
+    Проверяет совпадение текста с role-терминами специальности.
+
+    :param text: произвольный текст (подразделение/специализация)
+    :param specialty: искомая специальность
+    :return: True, если найдено совпадение по одному из терминов
+    """
+    norm = _normalise_input(text).replace("ё", "е")
+    if not norm:
+        return False
+    for term in _specialty_terms(specialty):
+        if term in norm:
+            return True
+    return False
+
+
+def _doctor_main_payload(doc: dict[str, Any]) -> tuple[list[str], list[str], bool]:
+    """
+    Извлекает main-поля врача из нового и старого формата кэша.
+
+    :param doc: карточка врача из doctors.jsonl
+    :return: (main_units, main_specializations, has_any_main_links)
+    """
+    main_units: list[str] = []
+    for raw in (doc.get("main_units") or []):
+        value = str(raw or "").strip()
+        if value and value not in main_units:
+            main_units.append(value)
+
+    main_specs: list[str] = []
+    for raw in (doc.get("main_specializations") or []):
+        value = str(raw or "").strip()
+        if value and value not in main_specs:
+            main_specs.append(value)
+
+    has_main_links = False
+    unit_links = doc.get("unit_links") or []
+    if isinstance(unit_links, list):
+        for raw_link in unit_links:
+            if not isinstance(raw_link, dict):
+                continue
+            if not bool(raw_link.get("main")):
+                continue
+            has_main_links = True
+            unit_name = str(raw_link.get("company_unit_name") or "").strip()
+            link_spec = str(raw_link.get("specialization") or "").strip()
+            if unit_name and unit_name not in main_units:
+                main_units.append(unit_name)
+            if link_spec and link_spec not in main_specs:
+                main_specs.append(link_spec)
+
+    if main_units or main_specs:
+        has_main_links = True
+    return main_units, main_specs, has_main_links
+
+
+def _is_role_specialty_query(query_text: str, specialty: str) -> bool:
+    """
+    Определяет, является ли запрос ролевым (по специальности), а не процедурным.
+
+    Логика:
+    - Для большинства специальностей считаем запрос ролевым.
+    - Для УЗИ различаем:
+      - role: "какие узисты", "врач узи";
+      - procedure: "узи брюшной полости", "сделать узи ...".
+
+    :param query_text: текст запроса пользователя
+    :param specialty: распознанная специальность
+    :return: True для ролевого сценария, False для процедурного
+    """
+    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    query_norm = _normalise_input(query_text).replace("ё", "е")
+    if not spec_norm:
+        return False
+    if spec_norm != "узи":
+        return True
+    if _UZI_ROLE_HINT_RE.search(query_norm) and not _UZI_PROCEDURE_HINT_RE.search(query_norm):
+        return True
+    return False
+
+
+def _doctor_matches_specialty(doc: dict[str, Any], specialty: str, query_text: str) -> bool:
+    """
+    Проверяет соответствие врача специальности с учетом нового поля main.
+
+    Правило:
+    - role-запрос (например, "какие хирурги"): сначала матчим по main=true;
+      если main-связей у врача нет, используем fallback по старому текстовому профилю.
+    - процедурный запрос (например, "узи брюшной полости"): используем старый путь
+      по specialization/эвристикам процедуры.
+
+    :param doc: карточка врача
+    :param specialty: искомая специальность
+    :param query_text: исходный запрос пользователя
+    :return: True, если врач подходит под фильтр
+    """
+    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    if not spec_norm:
+        return False
+
+    role_query = _is_role_specialty_query(query_text, spec_norm)
+    if spec_norm == "узи" and not role_query:
+        return _matches_uzi_doctor_profile(doc)
+
+    main_units, main_specs, has_main_links = _doctor_main_payload(doc)
+    if role_query and has_main_links:
+        for value in (*main_units, *main_specs):
+            if _matches_specialty_terms(value, spec_norm):
+                return True
+        return False
+
+    fio = _normalise_input(str(doc.get("fio", "")))
+    spec_text = _normalise_input(str(doc.get("specialization", "")))
+    regions = " ".join([_normalise_input(str(x)) for x in (doc.get("regions") or []) if str(x).strip()])
+    units = " ".join([_normalise_input(str(x)) for x in (doc.get("units") or []) if str(x).strip()])
+    hay = " | ".join([fio, spec_text, regions, units])
+    if spec_norm == "узи":
+        return _matches_uzi_doctor_profile(doc)
+    if spec_norm in hay:
+        return True
+    return _matches_specialty_terms(hay, spec_norm)
 
 
 def _iter_slot_datetimes(schedule: dict[str, Any]) -> list[datetime]:
@@ -1141,6 +1311,10 @@ class Services:
                 if doctors_loaded:
                     preview = doctors_loaded[:20]
                     has_ord = any(isinstance(row, dict) and "ord" in row for row in preview)
+                    has_main_fields = any(
+                        isinstance(row, dict) and ("unit_links" in row or "main_units" in row)
+                        for row in preview
+                    )
                     has_placeholder_region = any(
                         isinstance(row, dict)
                         and any(
@@ -1149,7 +1323,7 @@ class Services:
                         )
                         for row in preview
                     )
-                    schema_outdated = (not has_ord) or has_placeholder_region
+                    schema_outdated = (not has_ord) or (not has_main_fields) or has_placeholder_region
 
                 if schema_outdated:
                     doctors = await asyncio.to_thread(api_nayka.get_all_doctors)
@@ -1225,15 +1399,12 @@ class Services:
         if not spec:
             return []
 
-        is_uzi_query = _is_uzi_query_text(spec)
         samara_tokens = await self._samara_region_tokens()
         candidates = sorted(
             [
             d for d in doctors
             if (
-                _matches_uzi_doctor_profile(d)
-                if is_uzi_query
-                else spec in _normalise_input(str(d.get("specialization") or ""))
+                _doctor_matches_specialty(d, spec, specialty)
             )
             and not _has_explicit_non_samara_regions([str(x) for x in (d.get("regions") or []) if str(x).strip()])
             and (
@@ -1612,16 +1783,15 @@ class Services:
             keyword = q
 
         keyword = keyword.strip()
-        is_uzi_query = _is_uzi_query_text(spec_q or keyword)
 
         def match_doc(doc: dict[str, Any], ) -> bool:
             fio = _normalise_input(str(doc.get("fio", "")))
-            spec = _normalise_input(str(doc.get("specialization", "")))
+            spec_text = _normalise_input(str(doc.get("specialization", "")))
             raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
             regions = " ".join([_normalise_input(x) for x in raw_regions])
             units = " ".join([_normalise_input(str(x)) for x in (doc.get("units") or [])])
 
-            hay = " | ".join([fio, spec, regions, units])
+            hay = " | ".join([fio, spec_text, regions, units])
             # Даже без live /regions не допускаем в выдачу явно не-самарские площадки.
             if _has_explicit_non_samara_regions(raw_regions):
                 return False
@@ -1632,10 +1802,7 @@ class Services:
                 if not _doctor_matches_fio(fio, fio_q, resolved_surname):
                     return False
             if spec_q:
-                if is_uzi_query:
-                    if not _matches_uzi_doctor_profile(doc):
-                        return False
-                elif spec_q not in hay:
+                if not _doctor_matches_specialty(doc, spec_q, query):
                     return False
             if region_q and region_q not in hay:
                 return False

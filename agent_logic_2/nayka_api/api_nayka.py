@@ -81,6 +81,70 @@ SPECIAL_REGION_NAMES: Dict[int, str] = {
     8502: "Выезд на дом",
 }
 
+_ROLE_SPECIALTY_SYNONYMS: Dict[str, Tuple[str, ...]] = {
+    "кардиолог": ("кардиолог",),
+    "эндокринолог": ("эндокринолог",),
+    "педиатр": ("педиатр",),
+    "хирург": ("хирург",),
+    "терапевт": ("терапевт",),
+    "травматолог": ("травматолог", "ортопед"),
+    "проктолог": ("проктолог", "колопроктолог"),
+    "уролог": ("уролог",),
+    "онколог": ("онколог",),
+    "гинеколог": ("гинеколог",),
+    "невролог": ("невролог",),
+    "гастроэнтеролог": ("гастроэнтеролог",),
+    "дерматолог": ("дерматолог",),
+    "лор": ("лор", "оториноларинг"),
+    "узи": ("узи", "ультразвук"),
+}
+
+
+def _normalise_text(text: str) -> str:
+    """
+    Нормализует текст для безопасного подстрочного сравнения.
+
+    :param text: исходная строка
+    :return: строка в lower-case с заменой "ё" -> "е" и схлопнутыми пробелами
+    """
+    return " ".join(str(text or "").replace("ё", "е").lower().split())
+
+
+def _role_terms_for_keyword(keyword: str) -> Tuple[str, ...]:
+    """
+    Возвращает набор терминов специальности для ролевого поиска.
+
+    :param keyword: ключевое слово пользователя
+    :return: кортеж терминов, по которым матчатся подразделения/специализации
+    """
+    key = _normalise_text(keyword)
+    if not key:
+        return tuple()
+    if key in _ROLE_SPECIALTY_SYNONYMS:
+        return _ROLE_SPECIALTY_SYNONYMS[key]
+    for canonical, terms in _ROLE_SPECIALTY_SYNONYMS.items():
+        if key.startswith(canonical):
+            return terms
+    return (key,)
+
+
+def _matches_role_term(text: str, keyword: str) -> bool:
+    """
+    Проверяет, соответствует ли текст ролевому ключу специальности.
+
+    :param text: текст подразделения или специализации
+    :param keyword: ключ поиска (например, "хирург", "узи")
+    :return: True, если найдено совпадение по синонимам специальности
+    """
+    norm = _normalise_text(text)
+    if not norm:
+        return False
+    for term in _role_terms_for_keyword(keyword):
+        term_norm = _normalise_text(term)
+        if term_norm and term_norm in norm:
+            return True
+    return False
+
 
 def _region_display_name(region: Dict[str, Any]) -> str:
     """Берем максимально человекочитаемое имя региона."""
@@ -173,6 +237,37 @@ def _file_has_doctors(file: Path) -> bool:
     return False
 
 
+def _doctors_schema_outdated(doctors: List[Dict[str, Any]]) -> bool:
+    """
+    Проверяет, устарел ли формат кэша doctors_*.jsonl.
+
+    Устаревшим считаем кэш, если:
+    - нет поля ord,
+    - нет новых main-полей (unit_links/main_units),
+    - есть placeholder-адреса вида ID 8502.
+
+    :param doctors: загруженные карточки врачей
+    :return: True, если требуется перегенерация кэша
+    """
+    if not doctors:
+        return False
+    preview = doctors[:20]
+    has_ord = any(isinstance(row, dict) and "ord" in row for row in preview)
+    has_main_fields = any(
+        isinstance(row, dict) and ("unit_links" in row or "main_units" in row)
+        for row in preview
+    )
+    has_placeholder_region = any(
+        isinstance(row, dict)
+        and any(
+            str(addr).strip().startswith(("ID ", "[ID "))
+            for addr in (row.get("regions") or [])
+        )
+        for row in preview
+    )
+    return (not has_ord) or (not has_main_fields) or has_placeholder_region
+
+
 def find_existing_doctors_file() -> Union[Path, None]:
     """Находит актуальный непустой файл данных: сначала за активную дату, иначе самый свежий непустой."""
     active = DATA_DIR / f"doctors_{get_active_date_str()}.jsonl"
@@ -237,7 +332,12 @@ def cleanup_old_doctors_files(keep_dates: Union[None, set, List[str]] = None):
 def get_all_doctors() -> List[Dict]:
     """Строит сводные карточки врачей из нескольких эндпоинтов CRM.
     Returns:
-        Список словарей: {id, fio, specialization, regions, region_ids, units}.
+        Список словарей:
+        {
+          id, fio, ord, specialization, regions, region_ids, units,
+          unit_links[{company_unit_id, company_unit_name, main, specialization}],
+          main_units, main_specializations
+        }.
     """
     _SCHEDULE_CACHE.clear()
     # Получаем все данные через API
@@ -318,6 +418,13 @@ def get_all_doctors() -> List[Dict]:
             unit_ids_from_regions = {
                 entry.get("companyUnit") for entry in valid_region_links if entry.get("companyUnit")
             }
+        # Для role-матчинга используем весь валидный самарский контур врача, а не только
+        # площадки с ближайшими слотами, иначе можно потерять "main" специализацию.
+        unit_ids_from_valid_regions = {
+            entry.get("companyUnit") for entry in valid_region_links if entry.get("companyUnit")
+        }
+        if not unit_ids_from_valid_regions:
+            unit_ids_from_valid_regions = {entry.get("companyUnit") for entry in unit_links if entry.get("companyUnit")}
 
         doc_units: List[str] = []
         for link in unit_links:
@@ -336,6 +443,51 @@ def get_all_doctors() -> List[Dict]:
         if not doc_units:
             continue
 
+        unit_links_payload: List[Dict[str, Any]] = []
+        seen_link_keys: Set[Tuple[int, bool, str]] = set()
+        for link in unit_links:
+            unit_id = link.get("companyUnit")
+            if unit_id is None:
+                continue
+            if unit_ids_from_valid_regions and unit_id not in unit_ids_from_valid_regions:
+                continue
+            unit_name = units_dict.get(unit_id)
+            if not unit_name:
+                continue
+            link_specialization = str(link.get("specialization") or "").strip()
+            link_main = bool(link.get("main"))
+            dedupe_key = (int(unit_id), link_main, _normalise_text(link_specialization))
+            if dedupe_key in seen_link_keys:
+                continue
+            seen_link_keys.add(dedupe_key)
+            unit_links_payload.append(
+                {
+                    "company_unit_id": int(unit_id),
+                    "company_unit_name": unit_name,
+                    "main": link_main,
+                    "specialization": link_specialization,
+                }
+            )
+
+        main_units = list(
+            dict.fromkeys(
+                [
+                    str(link.get("company_unit_name") or "").strip()
+                    for link in unit_links_payload
+                    if bool(link.get("main")) and str(link.get("company_unit_name") or "").strip()
+                ]
+            )
+        )
+        main_specializations = list(
+            dict.fromkeys(
+                [
+                    str(link.get("specialization") or "").strip()
+                    for link in unit_links_payload
+                    if bool(link.get("main")) and str(link.get("specialization") or "").strip()
+                ]
+            )
+        )
+
         doctor_data = {
             "id": doctor_id,
             "fio": doctor["fio"],
@@ -344,6 +496,9 @@ def get_all_doctors() -> List[Dict]:
             "regions": doc_regions,
             "region_ids": doc_region_ids,
             "units": doc_units,
+            "unit_links": unit_links_payload,
+            "main_units": main_units,
+            "main_specializations": main_specializations,
         }
 
         result.append(doctor_data)
@@ -361,7 +516,10 @@ def get_cached_doctors_data() -> list:
     existing_file = DATA_DIR / f"doctors_{active}.jsonl"
     if _file_has_doctors(existing_file):
         print(f"✅ Нашли кэш за активную дату {active}: {existing_file.name}")
-        return load_doctors_data(existing_file)
+        cached = load_doctors_data(existing_file)
+        if not _doctors_schema_outdated(cached):
+            return cached
+        print(f"ℹ️ Кэш {existing_file.name} в старом формате — перегенерируем через API")
 
     if existing_file.exists():
         print(f"⚠️ Кэш за активную дату {active} пустой/битый: {existing_file.name}")
@@ -383,7 +541,11 @@ def get_cached_doctors_data() -> list:
     fallback_file = find_existing_doctors_file()
     if fallback_file is not None:
         print(f"⚠️ Используем последний непустой кэш врачей: {fallback_file.name}")
-        return load_doctors_data(fallback_file)
+        cached = load_doctors_data(fallback_file)
+        if not _doctors_schema_outdated(cached):
+            return cached
+        print(f"ℹ️ Фолбэк-кэш {fallback_file.name} в старом формате — верну как временный запас")
+        return cached
 
     return []
 
@@ -512,7 +674,7 @@ def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
       • тексту specialization («кардиолог», «ультразвук»)
     Возвращаем краткий список врачей.
     """
-    kw = keyword.lower()
+    kw = _normalise_text(keyword)
     print(f"\nИщем врачей по ключевому слову: {kw}")
 
     # Загружаем кэшированные данные
@@ -525,16 +687,48 @@ def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
     doctors = {d["id"]: d["fio"] for d in data}
 
     matched_workers = set()
+
+    # Ролевое совпадение по main=true (новый контракт doctorCompanyUnits.main).
+    # Если main-связи есть и они совпали по keyword, считаем это приоритетным попаданием.
+    main_role_workers: Set[int] = set()
+    for doc in data:
+        if not isinstance(doc, dict):
+            continue
+        doctor_id = doc.get("id")
+        if doctor_id is None:
+            continue
+        doc_links = doc.get("unit_links") or []
+        if not isinstance(doc_links, list):
+            continue
+        has_main_links = False
+        for link in doc_links:
+            if not isinstance(link, dict):
+                continue
+            if not bool(link.get("main")):
+                continue
+            has_main_links = True
+            unit_name = str(link.get("company_unit_name") or "")
+            link_spec = str(link.get("specialization") or "")
+            if _matches_role_term(unit_name, kw) or _matches_role_term(link_spec, kw):
+                try:
+                    main_role_workers.add(int(doctor_id))
+                except Exception:
+                    pass
+                break
+        # Если main-связей нет вовсе — оставляем врача для fallback ниже.
+        if has_main_links:
+            continue
+
     for link in links:
         spec = link.get("specialization", "") or ""
-        spec_lower = spec.lower()
-        unit = unit_name_by_id.get(link["companyUnit"], "").lower()
+        spec_lower = _normalise_text(spec)
+        unit = _normalise_text(unit_name_by_id.get(link["companyUnit"], ""))
 
         is_match = False
 
-        if kw in unit:
+        if _matches_role_term(unit, kw):
             is_match = True
-        elif kw in spec_lower:
+        elif _matches_role_term(spec_lower, kw):
             if not any(other in spec_lower for other in [
                 "ультразвуковая", "функциональная", "терапевт",
                 "в ревматологии", "по ревматологии", "ревматологический"
@@ -543,6 +737,9 @@ def find_doctors_by_keyword(keyword: str) -> Union[List[Dict], str]:
 
         if is_match:
             matched_workers.add(link["worker"])
+
+    if main_role_workers:
+        matched_workers = main_role_workers
 
     if not matched_workers:
         return []

@@ -44,12 +44,19 @@
 Правила:
 - Не выдумывай doctor_id/order_id/branch_id, если их нет в тексте.
 - Не выдумывай city/branch_name/doctor_name/patient_name, если их нет в тексте.
+- Не трактуй служебные слова как фамилию врача: "хочу", "можно", "нужно", "здравствуйте", "привет", "покажите", "скажите".
 - Если не уверен, выбирай label OTHER и confidence <= 0.4.
 - Запросы про справки/договоры/копии документов/налоговый вычет: label OTHER.
 - Не придумывай labels вне списка <<ALLOWED_LABELS>>.
 - Для приветствий/малого разговора используй label OTHER и confidence 0.9+.
 - Для TEST_RESULT при наличии в тексте извлекай поля: surname, year, filial, number.
 - Если в тексте про результаты нет всех полей, все равно ставь label TEST_RESULT (бот продолжит сбор недостающих полей).
+- Если запрос о списке врачей по специальности ("какие хирурги", "выведи всех дерматологов", "кто из кардиологов принимает"),
+  ставь label DOCTOR_INFO и заполняй entities.specialty в каноническом виде (единственное число).
+- Если запрос о записи к специальности ("хочу записаться к кардиологу"), ставь label APPOINTMENT и заполняй entities.specialty.
+- Если запрос про "узи-врача"/"узиста" как про специалиста, ставь label DOCTOR_INFO, specialty="узи".
+- Если запрос про выполнение конкретного УЗИ-исследования ("сделать узи брюшной полости"), это запись/услуга:
+  label APPOINTMENT (или ADDRESS для ЭКГ/анализов без записи), с заполнением service_name при наличии конкретики.
 
 Правила context_action:
 - overwrite_doctor: пользователь явно переключается на другого врача
@@ -128,6 +135,34 @@ context_action: continue
 
 Текст: расскажите про врача Ким
 Label: DOCTOR_INFO
+context_action: continue
+
+Текст: выведи всех хирургов
+Label: DOCTOR_INFO
+context_action: continue
+
+Текст: какие дерматологи у вас принимают
+Label: DOCTOR_INFO
+context_action: continue
+
+Текст: кто из кардиологов принимает в клинике
+Label: DOCTOR_INFO
+context_action: continue
+
+Текст: хочу записаться к кардиологу
+Label: APPOINTMENT
+context_action: continue
+
+Текст: хочу записаться к хирургу
+Label: APPOINTMENT
+context_action: continue
+
+Текст: какие у вас есть узисты
+Label: DOCTOR_INFO
+context_action: continue
+
+Текст: хочу сделать узи брюшной полости
+Label: APPOINTMENT
 context_action: continue
 
 Текст: передумал, покажи расписание Ким
