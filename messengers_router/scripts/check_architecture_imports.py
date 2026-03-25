@@ -46,6 +46,7 @@ LAYER_BY_MODULE: dict[str, str] = {
     "text_templates": "domain",
     "llm_mode_policy": "domain",
     "prompt_contracts": "domain",
+    "service_phrase": "domain",
     # Infrastructure / adapters
     "services": "infrastructure",
     "memory": "infrastructure",

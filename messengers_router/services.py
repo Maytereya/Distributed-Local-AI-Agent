@@ -33,7 +33,7 @@ from .doctor_name_port import (
     resolve_schedule_surname,
     surname_variants,
 )
-from .policies import extract_service_phrase
+from .service_phrase import extract_service_phrase
 from .runtime_config import config as c
 
 _ADDRESS_HINT_RE = re.compile(
