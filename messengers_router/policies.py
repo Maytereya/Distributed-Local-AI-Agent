@@ -271,6 +271,10 @@ _SERVICE_FOLLOWUP_RE = re.compile(
     r"\b(?:услуг\w*|процедур\w*|обследовани\w*|на|по|к)\s+([a-zа-яё0-9\- ]{2,80})",
     re.I,
 )
+_SERVICE_ACTION_RE = re.compile(
+    r"\b(?:выполняет|делает|проводит|сделать|провести|выполнить)\s+([a-zа-яё0-9\- ]{2,80})",
+    re.I,
+)
 _SERVICE_SINGLE_WORD_RE = re.compile(r"^\s*([a-zа-яё][a-zа-яё0-9\-]{3,})\s*$", re.I)
 
 _DIAGNOSTIC_RE = re.compile(r"\b(экг|узи|мрт|кт|фгдс|фкс|рентген|флюорограф|колоноскоп|холтер)\b", re.I)
@@ -1394,6 +1398,16 @@ def extract_service_phrase(text: str) -> str | None:
     f = _SERVICE_FOLLOWUP_RE.search(low)
     if f:
         cand = f.group(1).strip()
+        cand_tokens = re.findall(r"[a-zа-яё0-9:-]+", cand)
+        normalized = _normalize_tokens(cand_tokens)
+        if normalized and not match_city(normalized):
+            return normalized
+
+    # Дополнительный fallback для фраз вида:
+    # "какой врач выполняет кольпоскопию".
+    a = _SERVICE_ACTION_RE.search(low)
+    if a:
+        cand = a.group(1).strip()
         cand_tokens = re.findall(r"[a-zа-яё0-9:-]+", cand)
         normalized = _normalize_tokens(cand_tokens)
         if normalized and not match_city(normalized):

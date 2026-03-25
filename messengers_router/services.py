@@ -33,6 +33,7 @@ from .doctor_name_port import (
     resolve_schedule_surname,
     surname_variants,
 )
+from .policies import extract_service_phrase
 from .runtime_config import config as c
 
 _ADDRESS_HINT_RE = re.compile(
@@ -93,6 +94,37 @@ _SPECIALTY_ROLE_SYNONYMS: dict[str, tuple[str, ...]] = {
     "лор": ("лор", "оториноларинг"),
     "узи": ("узи", "ультразвук"),
 }
+_SERVICE_FILTER_STOPWORDS = {
+    "хочу",
+    "нужно",
+    "надо",
+    "можно",
+    "сделать",
+    "пройти",
+    "провести",
+    "выполняет",
+    "выполняют",
+    "делает",
+    "делают",
+    "какой",
+    "какие",
+    "врач",
+    "врачи",
+    "доктор",
+    "доктора",
+    "процедура",
+    "процедуры",
+    "услуга",
+    "услуги",
+    "исследование",
+    "исследования",
+}
+_SERVICE_QUERY_SIGNAL_RE = re.compile(
+    r"\b(услуг\w*|процедур\w*|исследован\w*|анализ\w*|сда[тч]\w*|"
+    r"сдела\w*|провед\w*|провод\w*|выполня\w*|дела\w*|"
+    r"узи|экг|мрт|кт|фгдс|фкс|кольпоскоп\w*|колоноскоп\w*|рентген\w*|холтер\w*)\b",
+    re.I,
+)
 _SPECIALTY_CANONICAL = (
     "гастроэнтеролог",
     "эндокринолог",
@@ -436,6 +468,75 @@ def _matches_specialty_terms(text: str, specialty: str) -> bool:
     return False
 
 
+def _collect_role_unit_names(doc: dict[str, Any], *, main_value: bool) -> list[str]:
+    """
+    Возвращает список названий подразделений врача по признаку main.
+
+    :param doc: карточка врача из doctors.jsonl
+    :param main_value: True для main=true, False для main=false fallback
+    :return: уникализированный список unit names
+    """
+    out: list[str] = []
+    unit_links = doc.get("unit_links") or []
+    if isinstance(unit_links, list):
+        for raw_link in unit_links:
+            if not isinstance(raw_link, dict):
+                continue
+            if bool(raw_link.get("main")) != main_value:
+                continue
+            unit_name = str(raw_link.get("company_unit_name") or "").strip()
+            if unit_name and unit_name not in out:
+                out.append(unit_name)
+    if main_value:
+        # Поддержка старого формата кэша, где main-характеристика уже агрегирована в main_units.
+        for raw in (doc.get("main_units") or []):
+            unit_name = str(raw or "").strip()
+            if unit_name and unit_name not in out:
+                out.append(unit_name)
+    if not main_value:
+        # Для legacy-кэшей без unit_links/main берем units как fallback-связи.
+        main_units_norm = {
+            _normalise_input(str(x or ""))
+            for x in (doc.get("main_units") or [])
+            if str(x or "").strip()
+        }
+        for raw in (doc.get("units") or []):
+            unit_name = str(raw or "").strip()
+            if main_units_norm and _normalise_input(unit_name) in main_units_norm:
+                continue
+            if unit_name and unit_name not in out:
+                out.append(unit_name)
+    return out
+
+
+def _doctor_role_specialty_match_level(doc: dict[str, Any], specialty: str) -> int:
+    """
+    Матчинг ролевого запроса по специальности с приоритетом main-полей.
+
+    Уровни:
+    - 2: найдено совпадение в unit name с main=true
+    - 1: найдено совпадение в unit name с main=false / legacy units
+    - 0: совпадений нет
+
+    :param doc: карточка врача
+    :param specialty: каноническая специальность (например, "хирург")
+    :return: целочисленный приоритет совпадения
+    """
+    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    if not spec_norm:
+        return 0
+
+    main_true_units = _collect_role_unit_names(doc, main_value=True)
+    if any(_matches_specialty_terms(unit_name, spec_norm) for unit_name in main_true_units):
+        return 2
+
+    main_false_units = _collect_role_unit_names(doc, main_value=False)
+    if any(_matches_specialty_terms(unit_name, spec_norm) for unit_name in main_false_units):
+        return 1
+
+    return 0
+
+
 def _doctor_main_payload(doc: dict[str, Any]) -> tuple[list[str], list[str], bool]:
     """
     Извлекает main-поля врача из нового и старого формата кэша.
@@ -524,12 +625,8 @@ def _doctor_matches_specialty(doc: dict[str, Any], specialty: str, query_text: s
     if spec_norm == "узи" and not role_query:
         return _matches_uzi_doctor_profile(doc)
 
-    main_units, main_specs, has_main_links = _doctor_main_payload(doc)
-    if role_query and has_main_links:
-        for value in (*main_units, *main_specs):
-            if _matches_specialty_terms(value, spec_norm):
-                return True
-        return False
+    if role_query:
+        return _doctor_role_specialty_match_level(doc, spec_norm) > 0
 
     fio = _normalise_input(str(doc.get("fio", "")))
     spec_text = _normalise_input(str(doc.get("specialization", "")))
@@ -541,6 +638,110 @@ def _doctor_matches_specialty(doc: dict[str, Any], specialty: str, query_text: s
     if spec_norm in hay:
         return True
     return _matches_specialty_terms(hay, spec_norm)
+
+
+def _stem_service_token(token: str) -> str:
+    """
+    Упрощенный стемминг русских слов для match процедур (без NLP-библиотек).
+
+    :param token: токен услуги
+    :return: укороченный вариант токена
+    """
+    t = str(token or "").strip().lower().replace("ё", "е")
+    if len(t) < 5:
+        return t
+    endings = (
+        "иями",
+        "ями",
+        "ами",
+        "иями",
+        "ией",
+        "ия",
+        "ие",
+        "ию",
+        "ии",
+        "ой",
+        "ей",
+        "ом",
+        "ем",
+        "ах",
+        "ях",
+        "ам",
+        "ям",
+        "ый",
+        "ий",
+        "ая",
+        "ое",
+        "ые",
+        "ую",
+        "ого",
+        "ему",
+        "ым",
+        "им",
+        "у",
+        "а",
+        "я",
+    )
+    for suffix in endings:
+        if t.endswith(suffix) and len(t) - len(suffix) >= 4:
+            return t[: -len(suffix)]
+    return t
+
+
+def _service_tokens(service_name: str) -> list[str]:
+    """
+    Нормализует service_name в информативные токены.
+
+    :param service_name: название услуги/процедуры
+    :return: список токенов для поиска в специализации врача
+    """
+    raw_tokens = re.findall(r"[a-zа-яё0-9]{2,}", _normalise_input(service_name))
+    out: list[str] = []
+    for tok in raw_tokens:
+        t = tok.lower().replace("ё", "е")
+        if t in _SERVICE_FILTER_STOPWORDS:
+            continue
+        if len(t) < 3:
+            continue
+        if t not in out:
+            out.append(t)
+    return out
+
+
+def _doctor_matches_service(doc: dict[str, Any], service_name: str) -> bool:
+    """
+    Проверяет, выполняет ли врач конкретную процедуру/услугу.
+
+    В этом фильтре используем только профильные текстовые поля врача
+    (specialization и link-level specialization), т.к. запрос процедурный.
+
+    :param doc: карточка врача
+    :param service_name: название услуги от NLU/эвристики
+    :return: True, если в профиле врача найдено совпадение по услуге
+    """
+    tokens = _service_tokens(service_name)
+    if not tokens:
+        return False
+
+    parts: list[str] = [str(doc.get("specialization") or "")]
+    for raw in (doc.get("main_specializations") or []):
+        parts.append(str(raw or ""))
+    for raw_link in (doc.get("unit_links") or []):
+        if isinstance(raw_link, dict):
+            parts.append(str(raw_link.get("specialization") or ""))
+    hay = _normalise_input(" ".join(parts)).replace("ё", "е")
+    if not hay:
+        return False
+
+    matched = 0
+    for tok in tokens:
+        stem = _stem_service_token(tok)
+        if tok in hay or (stem and stem in hay):
+            matched += 1
+
+    if len(tokens) == 1:
+        return matched >= 1
+    return matched >= min(len(tokens), 2)
 
 
 def _iter_slot_datetimes(schedule: dict[str, Any]) -> list[datetime]:
@@ -1391,6 +1592,7 @@ class Services:
         entities: dict[str, Any],
         *,
         nearest_only: bool,
+        query_text: str = "",
     ) -> list[dict[str, Any]]:
         doctors = await self._ensure_doctors_cache_loaded()
         if not doctors:
@@ -1400,11 +1602,18 @@ class Services:
             return []
 
         samara_tokens = await self._samara_region_tokens()
+        role_query = _is_role_specialty_query(query_text or specialty, spec)
+        role_levels = {
+            id(d): _doctor_role_specialty_match_level(d, spec)
+            for d in doctors
+        } if role_query else {}
         candidates = sorted(
             [
             d for d in doctors
             if (
-                _doctor_matches_specialty(d, spec, specialty)
+                (role_levels.get(id(d), 0) > 0)
+                if role_query
+                else _doctor_matches_specialty(d, spec, query_text or specialty)
             )
             and not _has_explicit_non_samara_regions([str(x) for x in (d.get("regions") or []) if str(x).strip()])
             and (
@@ -1416,7 +1625,11 @@ class Services:
                 )
             )
             ],
-            key=_doctor_sort_key,
+            key=(
+                (lambda d: (-role_levels.get(id(d), 0), *_doctor_sort_key(d)))
+                if role_query
+                else _doctor_sort_key
+            ),
         )[:8]
         if not candidates:
             return []
@@ -1755,6 +1968,14 @@ class Services:
         spec_q = _normalise_input(_get_first_present(entities, ["specialty", "specialization", "spec"]) or "")
         if not spec_q:
             spec_q = _extract_specialty_from_text(query)
+        service_q = _normalise_input(_get_first_present(entities, ["service_name", "test_name"]) or "")
+        if not service_q:
+            # Доверяем LLM в первую очередь, но если сущность не извлечена —
+            # мягко подхватываем процедурную фразу только при явном сигнале услуг/процедур.
+            if _SERVICE_QUERY_SIGNAL_RE.search(_normalise_input(query)):
+                extracted_service = extract_service_phrase(query)
+                if extracted_service:
+                    service_q = _normalise_input(extracted_service)
         region_q = _normalise_input(_get_first_present(entities, ["region", "branch", " филиал", "company_unit"]) or "")
         resolved_surname = resolve_schedule_surname(doctor_raw, doctors) if doctor_raw else None
 
@@ -1769,6 +1990,11 @@ class Services:
             resolved_surname = None
 
         samara_tokens = await self._samara_region_tokens()
+        role_query = bool(spec_q and _is_role_specialty_query(query, spec_q))
+        role_levels = {
+            id(d): _doctor_role_specialty_match_level(d, spec_q)
+            for d in doctors
+        } if role_query else {}
 
         # если из entities пусто — попробуем хотя бы query как ключ
         # (но аккуратно: не хотим показывать всех врачей по любому вопросу)
@@ -1802,13 +2028,19 @@ class Services:
                 if not _doctor_matches_fio(fio, fio_q, resolved_surname):
                     return False
             if spec_q:
-                if not _doctor_matches_specialty(doc, spec_q, query):
+                if role_query:
+                    if role_levels.get(id(doc), 0) <= 0:
+                        return False
+                elif not _doctor_matches_specialty(doc, spec_q, query):
+                    return False
+            if service_q:
+                if not _doctor_matches_service(doc, service_q):
                     return False
             if region_q and region_q not in hay:
                 return False
 
             # если ничего конкретного не задано — используем keyword, но требуем хотя бы 3 символа
-            if not (fio_q or spec_q or region_q):
+            if not (fio_q or spec_q or region_q or service_q):
                 if len(keyword) < 3:
                     return False
                 return keyword in hay
@@ -1817,7 +2049,10 @@ class Services:
 
         filtered = [d for d in doctors if match_doc(d)]
         filtered = _dedupe_doctors_by_fio(filtered)
-        filtered = sorted(filtered, key=_doctor_sort_key)
+        if role_query:
+            filtered = sorted(filtered, key=lambda d: (-role_levels.get(id(d), 0), *_doctor_sort_key(d)))
+        else:
+            filtered = sorted(filtered, key=_doctor_sort_key)
 
         limit = _coerce_top_n(output_max, default=DOCTORS_TOP_N)
         if resolved_surname:
@@ -1842,6 +2077,7 @@ class Services:
                 "doctor_query": fio_q,
                 "doctor_resolved": resolved_surname,
                 "specialty_query": spec_q,
+                "service_query": service_q,
                 "region_query": region_q,
                 "output_limit": limit,
             },
@@ -1896,6 +2132,7 @@ class Services:
                 specialty,
                 entities,
                 nearest_only=_has_nearest_hint(query),
+                query_text=query,
             )
             return {
                 "schedule": schedule_by_spec,

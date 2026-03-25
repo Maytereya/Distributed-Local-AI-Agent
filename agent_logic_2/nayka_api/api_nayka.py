@@ -978,7 +978,6 @@ def find_doctor_schedule(
             company_unit = region_entry["companyUnit"]
             reg_id = region_entry["region"]
             region_name_val = region_map.get(reg_id) or SPECIAL_REGION_NAMES.get(reg_id) or f"[ID {reg_id}]"
-            region_names.add(region_name_val)
             # --- Запрашиваем расписание ---
             schedule_url = (
                 f"{base_url}/doctorSchedule?doctor={doctor_id}&companyUnit={company_unit}&region={reg_id}"
@@ -990,6 +989,7 @@ def find_doctor_schedule(
                 schedule_days = schedule_resp.json()
             except (requests.RequestException, ValueError):
                 continue
+            region_rows: list[dict[str, Any]] = []
             for day in schedule_days:
                 # --- Слоты ---
                 cells_url = f"{base_url}/doctorScheduleCells?doctorSchedule={day['id']}"
@@ -1000,12 +1000,17 @@ def find_doctor_schedule(
                     free_slots = [cell.get("startTime") for cell in cells if isinstance(cell, dict) and cell.get("free")]
                 except (requests.RequestException, ValueError):
                     free_slots = []
-                schedules_by_region[region_name_val].append({
+                if not free_slots:
+                    continue
+                region_rows.append({
                     "date": day.get("curDate"),
                     "start": day.get("startTime"),
                     "end": day.get("endTime"),
                     "slots": free_slots
                 })
+            if region_rows:
+                region_names.add(region_name_val)
+                schedules_by_region[region_name_val].extend(region_rows)
 
         # Специализация
         spec = None
@@ -1013,6 +1018,9 @@ def find_doctor_schedule(
             if m.get("specialization"):
                 spec = m["specialization"]
                 break
+
+        if not schedules_by_region:
+            continue
 
         result.append({
             "id": doctor_id,
