@@ -36,11 +36,18 @@ def _bytes_to_mb(x: int) -> float:
 
 def get_host_cpu_count() -> int:
     # docker info знает NCPU хоста
+    client = None
     try:
         client = docker.DockerClient(base_url="unix://var/run/docker.sock")
         return int(client.info().get("NCPU", 1) or 1)
     except Exception:
         return 1
+    finally:
+        if client:
+            try:
+                client.close()
+            except Exception:
+                pass
 
 def compute_alerts(payload: Dict[str, Any], thresholds: Dict[str, Any]) -> List[str]:
     warns: List[str] = []
@@ -223,40 +230,55 @@ def get_nvidia_gpu_summary() -> Optional[Dict[str, Any]]:
         return None
 
 def get_docker_containers_stats(container_names: List[str]) -> Dict[str, Any]:
-    client = docker.DockerClient(base_url="unix://var/run/docker.sock")
+    client = None
     out: Dict[str, Any] = {}
 
-    for name in container_names:
-        try:
-            c = client.containers.get(name)
-            s = c.stats(stream=False)
+    try:
+        client = docker.DockerClient(base_url="unix://var/run/docker.sock")
+    except Exception as e:
+        err = f"Docker недоступен: {e}"
+        for name in container_names:
+            out[name] = {"error": err}
+        return out
 
-            mem = s.get("memory_stats", {})
-            mem_usage = int(mem.get("usage", 0) or 0)
-            mem_limit = int(mem.get("limit", 0) or 0)
+    try:
+        for name in container_names:
+            try:
+                c = client.containers.get(name)
+                s = c.stats(stream=False)
 
-            net = s.get("networks", {}) or {}
-            net_rx = sum(int(v.get("rx_bytes", 0) or 0) for v in net.values())
-            net_tx = sum(int(v.get("tx_bytes", 0) or 0) for v in net.values())
+                mem = s.get("memory_stats", {})
+                mem_usage = int(mem.get("usage", 0) or 0)
+                mem_limit = int(mem.get("limit", 0) or 0)
 
-            blkio = s.get("blkio_stats", {}).get("io_service_bytes_recursive", []) or []
-            blk_r = sum(int(x.get("value", 0) or 0) for x in blkio if x.get("op") == "Read")
-            blk_w = sum(int(x.get("value", 0) or 0) for x in blkio if x.get("op") == "Write")
+                net = s.get("networks", {}) or {}
+                net_rx = sum(int(v.get("rx_bytes", 0) or 0) for v in net.values())
+                net_tx = sum(int(v.get("tx_bytes", 0) or 0) for v in net.values())
 
-            out[name] = {
-                "container_id": c.short_id,
-                "cpu_%": _calc_cpu_percent(s), # Убрать!
-                "ram_used_mb": _bytes_to_mb(mem_usage),
-                "ram_limit_mb": _bytes_to_mb(mem_limit) if mem_limit else None,
-                "ram_%": round((mem_usage / mem_limit * 100.0), 1) if mem_limit else None,
-                "net_in_mb": _bytes_to_mb(net_rx),
-                "net_out_mb": _bytes_to_mb(net_tx),
-                "disk_read_mb": _bytes_to_mb(blk_r),
-                "disk_write_mb": _bytes_to_mb(blk_w),
-                "pids": (s.get("pids_stats", {}) or {}).get("current"),
-            }
-        except Exception as e:
-            out[name] = {"error": str(e)}
+                blkio = s.get("blkio_stats", {}).get("io_service_bytes_recursive", []) or []
+                blk_r = sum(int(x.get("value", 0) or 0) for x in blkio if x.get("op") == "Read")
+                blk_w = sum(int(x.get("value", 0) or 0) for x in blkio if x.get("op") == "Write")
+
+                out[name] = {
+                    "container_id": c.short_id,
+                    "cpu_%": _calc_cpu_percent(s), # Убрать!
+                    "ram_used_mb": _bytes_to_mb(mem_usage),
+                    "ram_limit_mb": _bytes_to_mb(mem_limit) if mem_limit else None,
+                    "ram_%": round((mem_usage / mem_limit * 100.0), 1) if mem_limit else None,
+                    "net_in_mb": _bytes_to_mb(net_rx),
+                    "net_out_mb": _bytes_to_mb(net_tx),
+                    "disk_read_mb": _bytes_to_mb(blk_r),
+                    "disk_write_mb": _bytes_to_mb(blk_w),
+                    "pids": (s.get("pids_stats", {}) or {}).get("current"),
+                }
+            except Exception as e:
+                out[name] = {"error": str(e)}
+    finally:
+        if client:
+            try:
+                client.close()
+            except Exception:
+                pass
 
     return out
 
@@ -431,4 +453,3 @@ def make_human_monitor_payload(container_names: List[str], top_k: int = 5) -> Di
         "containers": containers,
         "legend": legend,
     }
-
