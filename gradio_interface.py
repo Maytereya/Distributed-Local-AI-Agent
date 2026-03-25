@@ -21,7 +21,7 @@ import agent_logic_2.ollama_settings as ollama_settings
 from agent_logic_1 import aretrieve as retrieve
 from agent_logic_1 import meilisearch_client as meilisearch
 from agent_logic_2 import config as c
-from agent_logic_2.benchmark_tab import gradio_benchmark as benchmark
+from agent_logic_2.benchmark_tab import gradio_benchmark_stream
 from agent_logic_2.benchmark_tab import ollama_client as ollama
 from agent_logic_2.direct_upload_meili_tab import build_blocks, TABLE_HEADERS
 from agent_logic_2.id_validation import is_valid_id, sanitize_id
@@ -70,6 +70,7 @@ PASSWORD = c.AUTH_PASS
 os.environ["USER_AGENT"] = "NEIRY.Agent/1.0"
 
 ALL_MODELS = []
+BENCHMARK_CONTROL = {"running": False, "stop": False}
 
 
 def check_auth(username, password):
@@ -469,40 +470,47 @@ async def universal_echo(
 
 def gr_create_collection(c_name: str):
     """
-    Создает коллекцию и возвращает ее имя в качестве строки.
-    Warning: in the next releases Chroma .name parameter will be removed!
-    :param c_name: String, passed new name of the collection.
-    :return: String, name of the collection.
+    Создает коллекцию и обновляет выпадающие списки коллекций.
     """
-    if c_name:
+    if not c_name:
+        gr.Warning("Введите имя коллекции", title="Предупреждение")
+        return gr.update(), gr.update()
+
+    try:
         result = retrieve.create_collection(c_name)
-        time.sleep(3)
-        new_collections = gr_existed_collections()
-        return (
-            f"Коллекция {result.name} создана",
-            gr.update(choices=new_collections, value=c_name, ),
-            gr.update(choices=new_collections, value=c_name, ),
-        )
-    else:
-        return (
-            f"Ошибка: введите имя коллекции",
-            gr.update(),
-            gr.update(),
-        )
+    except Exception as e:
+        gr.Error(f"Ошибка при создании коллекции: {e}", title="Ошибка!")
+        return gr.update(), gr.update()
+
+    time.sleep(3)
+    new_collections = gr_existed_collections()
+    gr.Success(message=f"Коллекция {result.name} создана", title="Успешно")
+    return (
+        gr.update(choices=new_collections, value=c_name),
+        gr.update(choices=new_collections, value=c_name),
+    )
 
 
 def gr_remove_collection(c_name: str):
     """
-    Удаляет коллекцию по имени.
-    :param c_name:
-    :return: String - сообщение и обновление объектов Gradio.
+    Удаляет коллекцию по имени и обновляет выпадающие списки коллекций.
     """
-    retrieve.remove_collection(c_name)
+    if not c_name:
+        gr.Warning("Выберите коллекцию для удаления", title="Предупреждение")
+        return gr.update(), gr.update()
+
+    try:
+        retrieve.remove_collection(c_name)
+    except Exception as e:
+        gr.Error(f"Ошибка при удалении коллекции: {e}", title="Ошибка!")
+        return gr.update(), gr.update()
+
     new_collections = gr_existed_collections()
+    gr.Success(message=f"Коллекция {c_name} удалена", title="Успешно")
+    new_value = new_collections[0] if new_collections else None
     return (
-        gr.update(choices=new_collections, value=None),
-        gr.update(choices=new_collections, ),
-        "Коллекция удалена",
+        gr.update(choices=new_collections, value=new_value),
+        gr.update(choices=new_collections, value=new_value),
     )
 
 
@@ -537,23 +545,24 @@ def gr_add_to_collection(collection: str, file_path: str):
     :return:
     """
     if not collection:
-        return (
-            gr.update(value=None),
-            "Ошибка: не выбрана Коллекция. Создайте или определите Коллекцию для ChromaDB.",
+        gr.Warning(
+            "Не выбрана коллекция. Создайте или выберите коллекцию для ChromaDB.",
+            title="Предупреждение"
         )
+        return gr.update(value=None)
 
     if not file_path:
-        return (
-            gr.update(value=None),
-            "Ошибка: PDF не загружен, загрузите документ."
-        )
+        gr.Warning("PDF не загружен, загрузите документ.", title="Предупреждение")
+        return gr.update(value=None)
 
-    retrieve.add_data(exist_collection_name=collection, upload_type="PDF", add_path=file_path, model="default")
-    return (
-        PDF(
-            value=None, label="Загрузить PDF", interactive=True, scale=80),
-        "Файл добавлен в коллекцию",
-    )
+    try:
+        retrieve.add_data(exist_collection_name=collection, upload_type="PDF", add_path=file_path, model="default")
+    except Exception as e:
+        gr.Error(f"Ошибка при загрузке в коллекцию: {e}", title="Ошибка!")
+        return gr.update(value=None)
+
+    gr.Success(message="Файл добавлен в коллекцию", title="Успешно")
+    return gr.update(value=None)
 
 
 # ----------------
@@ -821,7 +830,7 @@ def update_docs_in_meili_index(
         empty_ids: list[str] = []
         if output == "full":
             return (
-                gr.update(value=[]),  # таблица
+                gr.update(value=[], row_count=(1, "dynamic")),  # таблица
                 gr.update(choices=empty_ids, value="")  # dropdown
             )
         else:
@@ -842,18 +851,30 @@ def update_docs_in_meili_index(
         value = id_list[0] if id_list else ""
 
     if output == "full":
+        rows_for_view = max(1, min(len(full_list), 20))
         # 1) таблица, 2) dropdown по ID
         return (
-            gr.update(value=full_list, headers=["ID документа", "Заголовок", "Фрагмент"], col_count=(3, "fixed"), ),
+            gr.update(
+                value=full_list,
+                headers=["ID документа", "Заголовок", "Фрагмент"],
+                col_count=(3, "fixed"),
+                row_count=(rows_for_view, "dynamic"),
+                max_height=420,
+            ),
             gr.update(choices=id_list, value=value),
         )
 
     if output == "full_news":
+        rows_for_view = max(1, min(len(full_news_list), 20))
         # 1) таблица, 2) dropdown по ID
         return (
-            gr.update(value=full_news_list,
-                      headers=["ID документа", "Заголовок", "Срок", "Дата начала", "Дата окончания", "Фрагмент"],
-                      col_count=(6, "fixed"), ),
+            gr.update(
+                value=full_news_list,
+                headers=["ID документа", "Заголовок", "Срок", "Дата начала", "Дата окончания", "Фрагмент"],
+                col_count=(6, "fixed"),
+                row_count=(rows_for_view, "dynamic"),
+                max_height=420,
+            ),
             gr.update(choices=id_list, value=value),
         )
     else:
@@ -935,7 +956,7 @@ def radio_search_engine_change(choice):
             gr.update(visible=True, interactive=True),
             gr.update(visible=False),
             gr.update(visible=False),
-            gr.Button(visible=True),
+            gr.update(visible=True),
             gr.update(visible=True),
             gr.update(visible=False),
             gr.update(visible=True),
@@ -948,7 +969,7 @@ def radio_search_engine_change(choice):
             gr.update(visible=True),
             gr.update(visible=True),
             gr.update(visible=False),
-            gr.Button(visible=False),
+            gr.update(visible=False),
             gr.update(visible=True),
             gr.update(visible=False),
             gr.update(visible=False),
@@ -1177,12 +1198,17 @@ def main():
             # --------------------------------------------------
 
             with gr.Tab("\U0001F4E4 Документы"):
+                gr.Markdown(
+                    "**Шаг 1:** выберите базу и индекс/коллекцию. "
+                    "**Шаг 2:** загрузите PDF/JSON или заполните форму конструктора. "
+                    "**Шаг 3:** обновите список ниже и при необходимости удалите документ."
+                )
                 with gr.Accordion(label="Загрузка готовых документов в базы знаний Meilisearch и ChromaDB",
-                                  open=False, ):
+                                  open=True, ):
                     with gr.Row():
                         radio_type_of_db = gr.Radio(["ChromaDB", "Meilisearch"],
                                                     label="Тип базы данных",
-                                                    value="ChromaDB",
+                                                    value="Meilisearch",
                                                     container=True,
                                                     # info="для добавления документа"
                                                     )
@@ -1192,7 +1218,7 @@ def main():
                                                           value="PDF",
                                                           container=True,
                                                           # info="для загрузки в MEILISEARCH",
-                                                          visible=False)
+                                                          visible=True)
 
                         upload_collections_dropdown = gr.Dropdown(choices=gr_existed_collections(),
                                                                   # value=None,
@@ -1200,7 +1226,7 @@ def main():
                                                                   filterable=True,
                                                                   label=COLLECTIONS_IN_CHROMA,
                                                                   # info="Коллекции документов",
-                                                                  visible=True, )
+                                                                  visible=False, )
 
                         upload_indices_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
                                                               # value=None,
@@ -1208,32 +1234,32 @@ def main():
                                                               filterable=True,
                                                               label=INDEXES_IN_MEILI,
                                                               # info="Индексы документов",
-                                                              visible=False)
+                                                              visible=True)
 
                         # Кнопки для работы с коллекциями или индексами
                         with gr.Column():
                             add_collection_button = gr.Button("✅ Добавить коллекцию",
-                                                              visible=True,
+                                                              visible=False,
                                                               size="sm",
                                                               variant="primary",
                                                               scale=10,
 
                                                               )
                             rm_collection_button = gr.Button("⛔ Удалить коллекцию",
-                                                             visible=True,
+                                                             visible=False,
                                                              size="sm",
                                                              variant="stop",
                                                              scale=10,
                                                              )
 
                             add_index_button = gr.Button("✅ Добавить индекс",
-                                                         visible=False,
+                                                         visible=True,
                                                          size="sm",
                                                          variant="primary",
                                                          scale=10,
                                                          )
                             rm_index_button = gr.Button("⛔ Удалить индекс",
-                                                        visible=False,
+                                                        visible=True,
                                                         size="sm",
                                                         variant="stop",
                                                         scale=10,
@@ -1253,12 +1279,12 @@ def main():
 
                         with gr.Column():
                             add_to_collection_button = gr.Button("Добавить в коллекцию",
-                                                                 visible=True,
+                                                                 visible=False,
                                                                  size="sm",
                                                                  variant="primary",
                                                                  )
                             add_to_index_button = gr.Button("Добавить в индекс",
-                                                            visible=False,
+                                                            visible=True,
                                                             size="sm",
                                                             variant="primary",
                                                             )
@@ -1279,7 +1305,7 @@ def main():
                 table_state = gr.State(value=DEFAULT_EMPTY_TABLE)
 
                 with gr.Accordion(label="Форма для добавления информации в базу знаний Meilisearch",
-                                  open=False, ):
+                                  open=True, ):
                     with gr.Column():
                         with gr.Row():
                             io_radio = gr.Radio(
@@ -1320,7 +1346,7 @@ def main():
                                 info="Выберите для редактирования документа",
                                 choices=existed_docs_in_selected_index(index_dropdown.value, "ID"),
                                 # value="",
-                                allow_custom_value=True,
+                                allow_custom_value=False,
                                 visible=False,
                                 interactive=True,
                                 scale=50,
@@ -1413,6 +1439,7 @@ def main():
 
                         content_input = gr.Textbox(label="Основной текст, content *", lines=20, max_lines=80)
                         keywords_input = gr.Textbox(label="Ключевые слова, keywords (через запятую)")
+                        show_table_cb = gr.Checkbox(label="Добавить таблицу", value=False)
 
                         # опциональная таблица
                         table_df = gr.Dataframe(
@@ -1427,6 +1454,11 @@ def main():
                             interactive=True,
                             show_fullscreen_button=True,
                         )
+
+                        def on_show_table_change(use_table: bool):
+                            return gr.update(visible=bool(use_table))
+
+                        show_table_cb.change(on_show_table_change, inputs=[show_table_cb], outputs=[table_df])
 
                         def _passthrough_table(t):
                             # t — это list[list]; чисто прокидываем в State
@@ -1526,7 +1558,8 @@ def main():
                         и обновляет UI:
 
                           - id_select в конструкторе
-                          - dropdown и таблицу в секции просмотра/удаления (если индекс совпадает)
+                          - таблицу в секции просмотра/удаления (если индекс совпадает)
+                          - поле выбранного ID для удаления (сбрасывается)
                           - очищает поля конструктора (ID, заголовок, контент, keywords)
                           - очищает и скрывает preview_json
                           - сбрасывает meta_state
@@ -1535,11 +1568,14 @@ def main():
                         # нет подготовленных данных
                         if not meta:
                             gr.Warning("Нет данных (сделайте Предпросмотр)", title="Предупреждение")
-                            # порядок: id_select, dropdown_del, table, id_input, title, content, keywords, preview_json, permanent_cb, meta_state
+                            # порядок:
+                            # id_select, meili_indices_table, meili_selected_doc_id_box,
+                            # id_input, title_input, content_input, keywords_input,
+                            # preview_json, permanent_cb, meta_state
                             return (
                                 gr.update(),  # id_select
-                                gr.update(),  # meili_content_of_index_dropdown
                                 gr.update(),  # meili_indices_table
+                                gr.update(),  # meili_selected_doc_id_box
                                 gr.update(),  # id_input
                                 gr.update(),  # title_input
                                 gr.update(),  # content_input
@@ -1595,13 +1631,14 @@ def main():
 
                         # 2) если выбранный в секции просмотра индекс совпадает — обновляем и её
                         if meili_view_index == index_name:
-                            table_update, dropdown_update = update_docs_in_meili_index(
+                            table_update, _ = update_docs_in_meili_index(
                                 index_name,
                                 output="full",
                             )
                         else:
                             table_update = gr.update()
-                            dropdown_update = gr.update()
+
+                        selected_for_delete_update = gr.update(value="")
 
                         # 3) очищаем поля конструктора
                         id_input_update = gr.update(value="")
@@ -1617,13 +1654,13 @@ def main():
                         meta_out = None
 
                         # порядок outputs:
-                        # [id_select, meili_content_of_index_dropdown, meili_indices_table,
+                        # [id_select, meili_indices_table, meili_selected_doc_id_box,
                         #  id_input, title_input, content_input, keywords_input,
                         #  preview_json, permanent_cb, meta_state]
                         return (
                             id_select_update,
-                            dropdown_update,
                             table_update,
+                            selected_for_delete_update,
                             id_input_update,
                             title_update,
                             content_update,
@@ -1687,7 +1724,8 @@ def main():
                             "",  # title_input
                             "",  # content_input
                             "",  # keywords_input
-                            DEFAULT_EMPTY_TABLE,  # table_df
+                            gr.update(value=DEFAULT_EMPTY_TABLE, visible=False),  # table_df
+                            False,  # show_table_cb
                             "static",  # doc_type_radio
                             None,  # valid_from_dp
                             None,  # valid_to_dp
@@ -1706,6 +1744,7 @@ def main():
                             content_input,
                             keywords_input,
                             table_df,
+                            show_table_cb,
                             doc_type_radio,
                             valid_from_dp,
                             valid_to_dp,
@@ -1738,17 +1777,17 @@ def main():
                         if not index_name:
                             gr.Warning("Укажите индекс", title="Предупреждение")
                             # НИЧЕГО не меняем в форме, в т.ч. не трогаем id_select
-                            return (gr.update(),) * 10 + (gr.update(),)
+                            return (gr.update(),) * 13
 
                         if not doc_id:
                             gr.Warning("Укажите ID", title="Предупреждение")
-                            return (gr.update(),) * 10 + (gr.update(),)
+                            return (gr.update(),) * 13
 
                         # 1. Получаем документ из Meilisearch
                         doc = meilisearch.get_document_by_id(index_name, doc_id)
                         if not doc:
                             gr.Warning("❌ Документ не найден", title="Предупреждение")
-                            return (gr.update(),) * 10 + (gr.update(),)
+                            return (gr.update(),) * 13
 
                         # 2. Заголовок и контент (защита от None)
                         title = doc.get("title") or ""
@@ -1797,6 +1836,11 @@ def main():
 
                         # 6. Таблица: если нет или None - ставим дефолтную
                         table_val = doc.get("table") or DEFAULT_EMPTY_TABLE
+                        table_has_data = any(
+                            str(cell).strip()
+                            for row in table_val if isinstance(row, list)
+                            for cell in row
+                        )
 
                         # 7. Сообщение об успехе
                         gr.Success(message="✅ Документ загружен", title="Успешно")
@@ -1805,7 +1849,7 @@ def main():
                         #    Порядок должен соответствовать outputs в .click:
                         #    [id_input, title_input, content_input,
                         #     valid_from_dp, valid_to_dp, permanent_cb,
-                        #     keywords_input, table_df,
+                        #     keywords_input, table_df, show_table_cb,
                         #     doc_type_radio, news_dates_row,
                         #     id_select]  ← последний - выпадайка с ID
                         return (
@@ -1818,7 +1862,8 @@ def main():
                             gr.update(value=is_perm, visible=is_news),  # permanent_cb
 
                             gr.update(value=keywords),  # keywords_input
-                            gr.update(value=table_val),  # table_df
+                            gr.update(value=table_val, visible=table_has_data),  # table_df
+                            gr.update(value=table_has_data),  # show_table_cb
 
                             gr.update(value=doc_type),  # doc_type_radio
                             gr.update(visible=is_news),  # news_dates_row
@@ -1841,6 +1886,7 @@ def main():
                             permanent_cb,
                             keywords_input,
                             table_df,
+                            show_table_cb,
                             doc_type_radio,
                             news_dates_row,
                             id_select,  # ← добавили сюда
@@ -2074,7 +2120,7 @@ def main():
                 formatted_full = now.strftime("%A, %d %B %Y, %H:%M")  # Понедельник, 15 Декабрь 2025, 14:30
 
                 with gr.Accordion(label="База знаний Meilisearch (просмотр и удаление)",
-                                  open=True, ):
+                                  open=False, ):
 
                     with gr.Row():
                         meili_ind_for_cont_dropdown = gr.Dropdown(choices=gr_existed_indexes(),
@@ -2086,13 +2132,12 @@ def main():
                                                                   scale=4,
                                                                   )
 
-                        meili_content_of_index_dropdown = gr.Dropdown(
-                            choices=existed_docs_in_selected_index(meili_ind_for_cont_dropdown.value, "ID"),
+                        meili_selected_doc_id_box = gr.Textbox(
                             value="",
-                            allow_custom_value=True,
-                            label="Выбрать документ по ID для удаления",
+                            label="ID для удаления (клик по строке таблицы)",
+                            placeholder="Кликните по строке ниже, чтобы выбрать документ",
+                            interactive=False,
                             visible=True,
-                            interactive=True,
                             scale=4,
                         )
 
@@ -2117,12 +2162,28 @@ def main():
                         label="Содержание выбранного Индекса" + " на сегодня: " + formatted_full,
                         headers=["ID документа", "Заголовок",
                                  "Фрагмент"],
-                        row_count=(200, "dynamic"),
+                        row_count=(1, "dynamic"),
                         col_count=(3, "fixed"),
                         datatype="str",
                         interactive=False,
+                        max_height=420,
                         show_row_numbers=True,
-                        show_search="filter"
+                        show_search="filter",
+                        max_chars=160,
+                        pinned_columns=1,
+                    )
+
+                    def on_meili_table_select(evt: gr.SelectData):
+                        row = evt.row_value or []
+                        if not row:
+                            return gr.update(value="")
+                        doc_id = str(row[0] if row[0] is not None else "").strip()
+                        return gr.update(value=doc_id)
+
+                    meili_indices_table.select(
+                        on_meili_table_select,
+                        inputs=None,
+                        outputs=[meili_selected_doc_id_box],
                     )
 
                 with gr.Accordion(label="База знаний Chroma DB (просмотр и удаление)", open=False, ):
@@ -2235,8 +2296,8 @@ def main():
                     inputs=[meta_state, meili_ind_for_cont_dropdown],
                     outputs=[
                         id_select,  # 1
-                        meili_content_of_index_dropdown,  # 2
-                        meili_indices_table,  # 3
+                        meili_indices_table,  # 2
+                        meili_selected_doc_id_box,  # 3
                         id_input,  # 4 — очистить ID
                         title_input,  # 5 — очистить заголовок
                         content_input,  # 6 — очистить текст
@@ -2288,9 +2349,9 @@ def main():
                     """
                     1) Удаляет документ (через gr_rm_doc_from_index).
                     2) Обновляет:
-                       - dropdown "Выбрать документ по ID для удаления"
                        - таблицу содержимого индекса
                        - dropdown id_select в конструкторе (если индекс тот же).
+                       - поле выбранного ID для удаления (сбрасывает).
                     """
 
                     # 1. Удаляем документ (сообщения об успехе/ошибке внутри)
@@ -2298,17 +2359,14 @@ def main():
 
                     if not index_for_delete:
                         # Индекса нет — ничего не трогаем
-                        return gr.update(), gr.update(), gr.update()
+                        return gr.update(), gr.update(), gr.update(value="")
 
                     # 2. Обновляем содержимое индекса (просмотр/удаление)
                     # update_docs_in_meili_index(output="full") возвращает (table_update, dropdown_update)
-                    table_update, dropdown_update = update_docs_in_meili_index(
+                    table_update, _ = update_docs_in_meili_index(
                         index_for_delete,
                         output="full",
                     )
-
-                    # В .click порядок outputs: [meili_content_of_index_dropdown, meili_indices_table, id_select]
-                    # Поэтому dropdown_update пойдёт первым, а table_update — вторым.
 
                     # 3. Обновляем конструктор, если он смотрит на тот же индекс
                     if constructor_index == index_for_delete:
@@ -2321,23 +2379,23 @@ def main():
                         constructor_dd_update = gr.update()
 
                     return (
-                        dropdown_update,  # meili_content_of_index_dropdown
                         table_update,  # meili_indices_table
                         constructor_dd_update,  # id_select (конструктор)
+                        gr.update(value=""),  # meili_selected_doc_id_box
                     )
 
                 rm_doc_from_index_button.click(
                     rm_doc_and_refresh_all,
                     inputs=[
                         meili_ind_for_cont_dropdown,  # индекс для удаления
-                        meili_content_of_index_dropdown,  # ID документа для удаления
+                        meili_selected_doc_id_box,  # ID документа для удаления (из выбранной строки таблицы)
                         index_dropdown,  # индекс из конструктора
                         id_select,  # текущий ID в конструкторе
                     ],
                     outputs=[
-                        meili_content_of_index_dropdown,  # dropdown "Выбрать документ по ID для удаления"
                         meili_indices_table,  # таблица "Содержание выбранного Индекса"
                         id_select,  # dropdown ID в конструкторе
+                        meili_selected_doc_id_box,  # поле выбранного ID для удаления
                     ],
                 )
 
@@ -2360,28 +2418,29 @@ def main():
                         constructor_current_id: str | None,
                 ):
                     """
-                    Функция обновления выпадаек ID в просмотре/удалении, конструкторе
-                    и таблицы документов в просмотре/удалении
+                    Функция обновления таблицы в просмотре/удалении,
+                    выпадайки ID в конструкторе и сброса выбранного ID для удаления.
 
                     Обновляет:
-                      - таблицу и выпадайку ID в секции просмотра/удаления
+                      - таблицу в секции просмотра/удаления
                       - выпадайку ID в конструкторе (если выбран тот же индекс)
+                      - поле выбранного ID для удаления
                     """
 
                     # если индекс в секции просмотра не выбран — ничего не ломаем
                     if not index_for_view:
-                        return gr.update(), gr.update(), gr.update()
+                        return gr.update(), gr.update(), gr.update(value="")
 
-                    # 1) Обновляем таблицу + выпадайку удаления для выбранного индекса
+                    # 1) Обновляем таблицу для выбранного индекса
                     if index_for_view == "news":
-                        table_update, dropdown_del_update = update_docs_in_meili_index(
+                        table_update, _ = update_docs_in_meili_index(
                             # еще одна версия обновляющей функции?
                             index_for_view,
                             output="full_news",
                         )
 
                     else:
-                        table_update, dropdown_del_update = update_docs_in_meili_index(
+                        table_update, _ = update_docs_in_meili_index(
                             # еще одна версия обновляющей функции?
                             index_for_view,
                             output="full",
@@ -2397,7 +2456,7 @@ def main():
                         constructor_dd_update = gr.update()
 
                     # порядок соответствует outputs
-                    return table_update, dropdown_del_update, constructor_dd_update
+                    return table_update, constructor_dd_update, gr.update(value="")
 
             refresh_data_btn.click(
                 refresh_meili_views,
@@ -2407,8 +2466,8 @@ def main():
                         ],
                 outputs=[
                     meili_indices_table,  # таблица просмотра всех документов с превью
-                    meili_content_of_index_dropdown,  # выпадайка выбора ID в секции просмотра/удаления
                     id_select,  # выбор документа для редактирования в конструкторе документа
+                    meili_selected_doc_id_box,  # выбранный ID для удаления
                 ],
             )
 
@@ -2416,7 +2475,7 @@ def main():
             meili_ind_for_cont_dropdown.change(
                 fn=refresh_meili_views,
                 inputs=[meili_ind_for_cont_dropdown, index_dropdown, id_select],
-                outputs=[meili_indices_table, meili_content_of_index_dropdown, id_select],
+                outputs=[meili_indices_table, id_select, meili_selected_doc_id_box],
             )
 
             # -------- FUNCTIONS SECTION ------------
@@ -3225,10 +3284,11 @@ def main():
 
             with gr.Tab("🚀️ Тестирование производительности"):
                 gr.Markdown("""<h3>⚙️ Тестирование производительности генеративных моделей и сервера Ollama</h3>""")
-                # models_list = reassert_main_model_dropdown(True)
                 with gr.Row():
+                    initial_benchmark_models = fn_load_main_model()
                     model_selector = gr.Dropdown(
-                        choices=fn_load_main_model(),
+                        choices=initial_benchmark_models,
+                        value=initial_benchmark_models,
                         multiselect=True,
                         label="Выберите модели для тестирования",
                         interactive=True,
@@ -3244,12 +3304,20 @@ def main():
                     with gr.Column():
                         refresh_models_btn = gr.Button("🔄 Загрузить/обновить список моделей", scale=20, size="md")
                         start_benchmark_btn = gr.Button("🚀 Запустить тестирование", scale=20, size="md")
+                        stop_benchmark_btn = gr.Button(
+                            "🛑 Остановить тест",
+                            scale=20,
+                            size="md",
+                            variant="stop",
+                            interactive=False,
+                        )
 
                 with gr.Column():
                     log_output = gr.Textbox(
                         label="Ход выполнения",
                         autoscroll=False,
-                        lines=40, )
+                        lines=28,
+                    )
 
                 gr.Markdown("""### ℹ️ Пояснение к метрикам
                     - **Wall Avg(s)** – среднее полное время ответа (что видит пользователь).
@@ -3258,52 +3326,229 @@ def main():
                     - **σ** — стандартное отклонение (разброс значений).
                     """)
 
+                benchmark_kpi_md = gr.Markdown(
+                    "**Статус:** Ожидание запуска  \n"
+                    "**Лучший Wall Avg:** —  \n"
+                    "**Лучший TPS:** —"
+                )
+
                 result_table = gr.DataFrame(
                     headers=["Модель", "Тип", "Wall Avg (s)", "Wall σ", "Eval Avg (s)", "Eval σ", "TPS Avg", "TPS σ"],
-                    row_count=(6, "dynamic"),
+                    row_count=(1, "dynamic"),
                     interactive=False,
                     label="Результаты замеров",
                     show_copy_button=True,
+                    show_search="filter",
+                    pinned_columns=1,
                 )
 
-                # previous_log_file = gr.File(label="📥 Загрузить старый отчёт (JSON)", file_types=[".json"])
-
                 with gr.Row():
-                    # load_prev_btn = gr.Button("📥 Загрузить старый отчёт", size="md")
                     json_view = gr.JSON(label="📄 JSON‑отчёт", visible=True, scale=3)
-                    # download_log_btn = gr.File(label="📤 Скачать отчёт (JSON)", interactive=False, scale=1, height=10)
+                    with gr.Column(scale=1):
+                        json_download_btn = gr.DownloadButton(
+                            "⬇️ Скачать JSON",
+                            value=None,
+                            interactive=False,
+                            size="sm",
+                            variant="secondary",
+                        )
+                        csv_download_btn = gr.DownloadButton(
+                            "⬇️ Скачать CSV",
+                            value=None,
+                            interactive=False,
+                            size="sm",
+                            variant="secondary",
+                        )
 
                 # --- Функции ---
 
-                async def update_dropdown():
-                    models_response = await ollama.list()
-                    models = sorted([m["model"] for m in models_response["models"]])
-                    return gr.update(choices=models, value=models[-1] if models else [])
+                async def update_dropdown(current_models):
+                    try:
+                        models_response = await ollama.list()
+                        models = sorted([m["model"] for m in models_response.get("models", [])])
+                    except Exception as e:
+                        gr.Error(f"Ошибка загрузки списка моделей: {e}", title="Ошибка!")
+                        return gr.update()
 
-                async def wrapped_benchmark(models, laps, think: bool):
-                    if not models:
+                    current_list = current_models if isinstance(current_models, list) else [current_models] if current_models else []
+                    selected = [m for m in current_list if m in models][:2]
+                    if not selected:
+                        current_main = LLMName.get()
+                        if current_main in models:
+                            selected = [current_main]
+                        elif models:
+                            selected = [models[-1]]
+                        else:
+                            selected = []
+                    return gr.update(choices=models, value=selected)
+
+                def table_update_for_benchmark(rows: list[list[Any]]):
+                    rows = rows or []
+                    visible_rows = max(1, min(len(rows), 8))
+                    return gr.update(value=rows, row_count=(visible_rows, "dynamic"))
+
+                def build_benchmark_kpi(results: list[dict[str, Any]], status: str) -> str:
+                    if not results:
                         return (
-                            "🟡 Сначала загрузите и выберите модели для тестирования.",
-                            [],
-                            {},
-                            None
+                            f"**Статус:** {status}  \n"
+                            "**Лучший Wall Avg:** —  \n"
+                            "**Лучший TPS:** —"
                         )
-                    logs, table, json_data, path = await benchmark(models, laps, think)
-                    return logs, table, json_data, path
 
-                # --- Привязка кнопок ---
+                    best_wall = min(results, key=lambda x: float(x.get("wall_avg", float("inf"))))
+                    best_tps = max(results, key=lambda x: float(x.get("tps_avg", float("-inf"))))
+                    return (
+                        f"**Статус:** {status}  \n"
+                        f"**Лучший Wall Avg:** `{best_wall.get('model')} ({best_wall.get('type')})` = "
+                        f"`{best_wall.get('wall_avg')}s`  \n"
+                        f"**Лучший TPS:** `{best_tps.get('model')} ({best_tps.get('type')})` = "
+                        f"`{best_tps.get('tps_avg')}`"
+                    )
 
-                refresh_models_btn.click(fn=update_dropdown, inputs=[], outputs=model_selector)
+                def request_stop_benchmark(current_log: str):
+                    if not BENCHMARK_CONTROL["running"]:
+                        txt = (current_log or "").rstrip()
+                        msg = "🟡 Тест не запущен."
+                        return (
+                            f"{txt}\n{msg}" if txt else msg,
+                            gr.update(interactive=False, value="🛑 Остановить тест"),
+                        )
+
+                    BENCHMARK_CONTROL["stop"] = True
+                    txt = (current_log or "").rstrip()
+                    msg = "🛑 Получен запрос на остановку. Завершаю текущий прогон..."
+                    return (
+                        f"{txt}\n{msg}" if txt else msg,
+                        gr.update(interactive=False, value="⏳ Остановка..."),
+                    )
+
+                async def wrapped_benchmark_stream(models, laps, think: bool):
+                    if BENCHMARK_CONTROL["running"]:
+                        yield (
+                            "🟡 Тест уже выполняется. Дождитесь завершения или нажмите «Остановить тест».",
+                            table_update_for_benchmark([]),
+                            [],
+                            build_benchmark_kpi([], "Выполняется"),
+                            gr.update(value=None, interactive=False),
+                            gr.update(value=None, interactive=False),
+                            gr.update(interactive=False, value="⏳ Тест выполняется..."),
+                            gr.update(interactive=True, value="🛑 Остановить тест"),
+                        )
+                        return
+
+                    selected_models = [m for m in (models or []) if m]
+                    if not selected_models:
+                        yield (
+                            "🟡 Сначала загрузите и выберите модели для тестирования.",
+                            table_update_for_benchmark([]),
+                            [],
+                            build_benchmark_kpi([], "Ожидание запуска"),
+                            gr.update(value=None, interactive=False),
+                            gr.update(value=None, interactive=False),
+                            gr.update(interactive=True, value="🚀 Запустить тестирование"),
+                            gr.update(interactive=False, value="🛑 Остановить тест"),
+                        )
+                        return
+
+                    BENCHMARK_CONTROL["running"] = True
+                    BENCHMARK_CONTROL["stop"] = False
+                    try:
+                        yield (
+                            "🚀 Тестирование запущено...",
+                            table_update_for_benchmark([]),
+                            [],
+                            build_benchmark_kpi([], "Выполняется"),
+                            gr.update(value=None, interactive=False),
+                            gr.update(value=None, interactive=False),
+                            gr.update(interactive=False, value="⏳ Тест выполняется..."),
+                            gr.update(interactive=True, value="🛑 Остановить тест"),
+                        )
+
+                        async for snapshot in gradio_benchmark_stream(
+                                selected_models,
+                                laps,
+                                think,
+                                stop_checker=lambda: BENCHMARK_CONTROL["stop"],
+                        ):
+                            log_text = snapshot.get("log", "")
+                            table_rows = snapshot.get("table", []) or []
+                            json_data = snapshot.get("results", []) or []
+                            done = bool(snapshot.get("done", False))
+                            stopped = bool(snapshot.get("stopped", False))
+                            stop_requested = BENCHMARK_CONTROL["stop"]
+
+                            if done:
+                                status = "Остановлено" if stopped else "Завершено"
+                            else:
+                                status = "Остановка..." if stop_requested else "Выполняется"
+
+                            if done:
+                                json_download_update = gr.update(
+                                    value=snapshot.get("json_path"),
+                                    interactive=bool(snapshot.get("json_path")),
+                                )
+                                csv_download_update = gr.update(
+                                    value=snapshot.get("csv_path"),
+                                    interactive=bool(snapshot.get("csv_path")),
+                                )
+                                start_btn_update = gr.update(interactive=True, value="🚀 Запустить тестирование")
+                                stop_btn_update = gr.update(interactive=False, value="🛑 Остановить тест")
+                            else:
+                                json_download_update = gr.update(value=None, interactive=False)
+                                csv_download_update = gr.update(value=None, interactive=False)
+                                start_btn_update = gr.update(interactive=False, value="⏳ Тест выполняется...")
+                                stop_btn_update = gr.update(
+                                    interactive=not stop_requested,
+                                    value="⏳ Остановка..." if stop_requested else "🛑 Остановить тест",
+                                )
+
+                            yield (
+                                log_text,
+                                table_update_for_benchmark(table_rows),
+                                json_data,
+                                build_benchmark_kpi(json_data, status),
+                                json_download_update,
+                                csv_download_update,
+                                start_btn_update,
+                                stop_btn_update,
+                            )
+                    except Exception as e:
+                        yield (
+                            f"❌ Ошибка тестирования: {e}",
+                            table_update_for_benchmark([]),
+                            [],
+                            build_benchmark_kpi([], "Ошибка"),
+                            gr.update(value=None, interactive=False),
+                            gr.update(value=None, interactive=False),
+                            gr.update(interactive=True, value="🚀 Запустить тестирование"),
+                            gr.update(interactive=False, value="🛑 Остановить тест"),
+                        )
+                    finally:
+                        BENCHMARK_CONTROL["running"] = False
+                        BENCHMARK_CONTROL["stop"] = False
+
+                refresh_models_btn.click(fn=update_dropdown, inputs=[model_selector], outputs=model_selector)
+
+                stop_benchmark_btn.click(
+                    fn=request_stop_benchmark,
+                    inputs=[log_output],
+                    outputs=[log_output, stop_benchmark_btn],
+                    queue=False,
+                )
 
                 start_benchmark_btn.click(
-                    fn=wrapped_benchmark,
+                    fn=wrapped_benchmark_stream,
                     inputs=[model_selector, laps_slider, think_checkbox],
-                    outputs=[log_output,
-                             result_table,
-                             json_view,
-                             # download_log_btn,
-
-                             ]
+                    outputs=[
+                        log_output,
+                        result_table,
+                        json_view,
+                        benchmark_kpi_md,
+                        json_download_btn,
+                        csv_download_btn,
+                        start_benchmark_btn,
+                        stop_benchmark_btn,
+                    ],
                 )
 
             # --------------------------------------------

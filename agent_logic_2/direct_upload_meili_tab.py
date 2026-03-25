@@ -69,8 +69,8 @@ def _normalize_table(table_value: Any, headers: Optional[List[str]] = None) -> O
     norm_rows = [(list(r) + [""] * width)[:width] for r in rows]
 
     df = pd.DataFrame(norm_rows, columns=headers)
-    # None -> "", str(), strip()
-    df = df.applymap(lambda x: ("" if x is None else str(x)).strip())
+    # None -> "", str(), strip() (applymap deprecated in pandas 2.2+)
+    df = df.map(lambda x: ("" if x is None else str(x)).strip())
     # удаляем только полностью пустые строки
     mask_nonempty = df.apply(lambda r: any(bool(cell) for cell in r), axis=1)
     df = df[mask_nonempty]
