@@ -9,7 +9,8 @@
 - how to mark and classify the topic,
 - how to fallback if data is missing.
 
-This file is designed to be editable by humans now and by Gradio UI later.
+This file is editable both manually and via Gradio tab:
+`🧭 Настройки мессенджера`.
 
 ## File
 
@@ -24,7 +25,8 @@ Each topic in `topics` should contain:
 1. `topic_id` - stable unique key (snake_case).
 2. `enabled` - toggle without deleting topic.
 3. `priority` - integer, higher means checked earlier.
-4. `label` - router target label (`PREPARE`, `PRICE`, `APPOINTMENT`, etc.).
+4. `label` - router target label (`PREPARE`, `PRICE`, `APPOINTMENT`, etc.); validated against
+   `topic_registry.list_valid_labels()`.
 5. `match` - trigger rules (`any_keywords` / `all_keywords` / `regex` / `exclude_keywords`).
 6. `route` - source strategy and source list.
 7. `fallback` - action when no relevant data is found.
@@ -38,6 +40,9 @@ Allowed `route.strategy`:
 - `api_first` - API first, then fallback sources.
 - `meili_only` - only Meili index.
 - `meili_first` - Meili first, then fallback sources.
+
+Note:
+`route.strategy` is currently stored as metadata and is not used by runtime planner yet.
 
 ## Fallback Actions
 
@@ -76,7 +81,7 @@ Recommended default for non-booking topics:
   - `prepare_fgds` > `prepare_generic`
   - `doc_tax_certificate` > `doc_generic`
 
-## Gradio Editor (next stage)
+## Gradio Editor
 
 For UI editing, expose these operations:
 
@@ -87,7 +92,39 @@ For UI editing, expose these operations:
 5. validate YAML schema before save
 6. dry-run route preview for test phrase
 
-## Current Scope
+Implemented in current UI:
 
-Current registry is not yet hard-wired into router logic.
-It is an initial canonical dataset for the next integration step.
+1. list topics
+2. create topic
+3. update topic JSON
+4. enable/disable topic
+5. delete topic
+6. save full YAML in expert mode
+
+## Runtime Integration Status
+
+Topic registry is integrated into router logic now.
+
+- Router matching: `match_topic(...)` in `router.py`
+- Decision flags: `topic_registry:<topic_id>` via `build_topic_flag(...)`
+- OTHER-plan routing: `planner.py` uses topic `route.sources`
+
+### Fields used by runtime now
+
+- `topic_id`
+- `enabled`
+- `priority`
+- `label`
+- `match.any_keywords`
+- `match.all_keywords`
+- `match.regex`
+- `match.exclude_keywords`
+- `route.sources` (currently `kind=meili`, with `index=news` or default main index behavior)
+
+### Fields currently not used by runtime logic
+
+- `route.strategy`
+- `context.*`
+- `fallback.*`
+- `marks.*`
+- `defaults.*`

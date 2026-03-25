@@ -2584,6 +2584,41 @@ def main():
 
             # ------------ ASSERT(ACCEPT/VALIDATE/CHOOSE) MAIN LLM ---------------
 
+            def _extract_ollama_model_names(models_response: Any) -> list[str]:
+                """
+                Унификация формата ответа ollama.list():
+                поддержка dict, pydantic-объектов и смешанных элементов.
+                """
+                if isinstance(models_response, dict):
+                    raw_models = models_response.get("models", []) or []
+                else:
+                    raw_models = getattr(models_response, "models", []) or []
+
+                names: list[str] = []
+                for item in raw_models:
+                    name = None
+                    if isinstance(item, str):
+                        name = item
+                    elif isinstance(item, dict):
+                        name = item.get("model") or item.get("name")
+                    else:
+                        name = getattr(item, "model", None) or getattr(item, "name", None)
+                        if not name:
+                            try:
+                                name = item["model"]  # type: ignore[index]
+                            except Exception:
+                                try:
+                                    name = item["name"]  # type: ignore[index]
+                                except Exception:
+                                    name = None
+
+                    if name:
+                        norm = str(name).strip()
+                        if norm:
+                            names.append(norm)
+
+                return sorted(set(names))
+
             def fn_load_main_model() -> List[str]:
                 # gr.Success(title="Выбор сохранен",
                 #            duration=3,
@@ -2607,7 +2642,7 @@ def main():
 
             async def reassert_main_model_dropdown(only_list: bool = False) -> Union[gr.update(), List[str]]:
                 models_response = await LLMName.list_all_models()
-                models = sorted([m["model"] for m in models_response["models"]])
+                models = _extract_ollama_model_names(models_response)
                 if only_list:
                     return models
                 return gr.update(choices=models, value=models[-1] if models else [])
@@ -2625,6 +2660,13 @@ def main():
             # ------------------------------------------------------
 
             def _mr_label_choices() -> list[str]:
+                try:
+                    labels = mr_topic_registry.list_valid_labels()
+                    normalized = [str(x).strip().upper() for x in labels if str(x).strip()]
+                    if normalized:
+                        return normalized
+                except Exception:
+                    pass
                 return [
                     "APPOINTMENT",
                     "TEST_ASSIST",
@@ -2644,7 +2686,7 @@ def main():
             def _mr_registry_summary(data: dict[str, Any]) -> str:
                 topics = data.get("topics")
                 if not isinstance(topics, list):
-                    return "topics: 0 | enabled: 0"
+                    return "Всего тем: 0 | Активных: 0\nПо типам: -"
                 total = 0
                 enabled = 0
                 labels: dict[str, int] = {}
@@ -2656,11 +2698,93 @@ def main():
                         enabled += 1
                     lbl = str(item.get("label") or "OTHER").strip().upper()
                     labels[lbl] = labels.get(lbl, 0) + 1
-                chunks = [f"{k}:{v}" for k, v in sorted(labels.items())]
+                chunks = [f"{k}={v}" for k, v in sorted(labels.items())]
                 labels_text = ", ".join(chunks) if chunks else "-"
-                return f"topics: {total} | enabled: {enabled} | labels: {labels_text}"
+                return f"Всего тем: {total} | Активных: {enabled}\nПо типам: {labels_text}"
 
-            def _mr_snapshot(selected_topic_id: str | None = None) -> tuple[str, Any, str, str]:
+            def _mr_runtime_scope_report(data: dict[str, Any]) -> str:
+                topics = data.get("topics")
+                if not isinstance(topics, list):
+                    topics = []
+
+                total = 0
+                disabled = 0
+                no_match_rules: list[str] = []
+                no_sources: list[str] = []
+                unsupported_kinds: list[str] = []
+                unknown_meili_indexes: list[str] = []
+                other_without_meili: list[str] = []
+
+                for topic in topics:
+                    if not isinstance(topic, dict):
+                        continue
+                    total += 1
+                    tid = str(topic.get("topic_id") or f"topic_{total}").strip() or f"topic_{total}"
+                    if not bool(topic.get("enabled", True)):
+                        disabled += 1
+
+                    match = topic.get("match") if isinstance(topic.get("match"), dict) else {}
+                    any_keywords = match.get("any_keywords") if isinstance(match.get("any_keywords"), list) else []
+                    all_keywords = match.get("all_keywords") if isinstance(match.get("all_keywords"), list) else []
+                    regex_rules = match.get("regex") if isinstance(match.get("regex"), list) else []
+                    if not any_keywords and not all_keywords and not regex_rules:
+                        no_match_rules.append(tid)
+
+                    route = topic.get("route") if isinstance(topic.get("route"), dict) else {}
+                    sources = route.get("sources") if isinstance(route.get("sources"), list) else []
+                    if not sources:
+                        no_sources.append(tid)
+
+                    has_meili_source = False
+                    for source in sources:
+                        if not isinstance(source, dict):
+                            unsupported_kinds.append(f"{tid}:<invalid>")
+                            continue
+                        kind = str(source.get("kind") or "").strip().lower()
+                        index = str(source.get("index") or "").strip().lower()
+                        if kind != "meili":
+                            unsupported_kinds.append(f"{tid}:{kind or '?'}")
+                            continue
+                        has_meili_source = True
+                        if index and index not in {"main_index", "news"}:
+                            unknown_meili_indexes.append(f"{tid}:{index}")
+
+                    label = str(topic.get("label") or "OTHER").strip().upper()
+                    if label == "OTHER" and not has_meili_source:
+                        other_without_meili.append(tid)
+
+                lines = [
+                    "Runtime (текущий код):",
+                    "Используются: topic_id, enabled, priority, label, match.any_keywords/all_keywords/regex/exclude_keywords.",
+                    "Частично: route.sources (kind=meili; index='news' -> news_info, иначе -> main_index_info).",
+                    "Не используются роутером сейчас: route.strategy, context.*, fallback.*, marks.*, defaults.*.",
+                    "",
+                    (
+                        f"Проверка реестра: тем={total}, отключено={disabled}, "
+                        f"без match-правил={len(no_match_rules)}, без route.sources={len(no_sources)}."
+                    ),
+                ]
+                if unsupported_kinds:
+                    sample = ", ".join(unsupported_kinds[:4])
+                    suffix = " ..." if len(unsupported_kinds) > 4 else ""
+                    lines.append(f"Игнорируемые route.sources.kind: {len(unsupported_kinds)} ({sample}{suffix})")
+                if unknown_meili_indexes:
+                    sample = ", ".join(unknown_meili_indexes[:4])
+                    suffix = " ..." if len(unknown_meili_indexes) > 4 else ""
+                    lines.append(
+                        f"Неизвестные meili index: {len(unknown_meili_indexes)} "
+                        f"(сейчас уйдут в main_index_info) ({sample}{suffix})"
+                    )
+                if other_without_meili:
+                    sample = ", ".join(other_without_meili[:4])
+                    suffix = " ..." if len(other_without_meili) > 4 else ""
+                    lines.append(
+                        f"Темы OTHER без meili-source: {len(other_without_meili)} "
+                        f"(планировщик не построит tool-шаги) ({sample}{suffix})"
+                    )
+                return "\n".join(lines)
+
+            def _mr_snapshot(selected_topic_id: str | None = None) -> tuple[str, Any, str, str, str]:
                 data = mr_topic_registry.load_registry(force_reload=True)
                 topics = mr_topic_registry.list_topics(enabled_only=False)
                 topic_ids = [str(t.get("topic_id") or "").strip() for t in topics if
@@ -2674,11 +2798,13 @@ def main():
                 topic_json = json.dumps(selected_topic or {}, ensure_ascii=False, indent=2)
                 yaml_text = mr_topic_registry.load_registry_text()
                 summary = _mr_registry_summary(data)
+                runtime_scope = _mr_runtime_scope_report(data)
                 return (
                     yaml_text,
                     gr.update(choices=topic_ids, value=selected_id),
                     topic_json,
                     summary,
+                    runtime_scope,
                 )
 
             def fn_mr_refresh(selected_topic_id: str | None = None):
@@ -2686,14 +2812,26 @@ def main():
                     return _mr_snapshot(selected_topic_id)
                 except Exception as e:
                     gr.Error(f"❌ Ошибка загрузки topic registry: {e}")
-                    return "", gr.update(), "{}", "topics: 0 | enabled: 0"
+                    return (
+                        "",
+                        gr.update(),
+                        "{}",
+                        "Всего тем: 0 | Активных: 0\nПо типам: -",
+                        _mr_runtime_scope_report({}),
+                    )
 
             def fn_mr_select_topic(topic_id: str | None):
                 try:
                     return _mr_snapshot(topic_id)
                 except Exception as e:
                     gr.Error(f"❌ Ошибка выбора topic: {e}")
-                    return "", gr.update(), "{}", "topics: 0 | enabled: 0"
+                    return (
+                        "",
+                        gr.update(),
+                        "{}",
+                        "Всего тем: 0 | Активных: 0\nПо типам: -",
+                        _mr_runtime_scope_report({}),
+                    )
 
             def fn_mr_save_yaml(yaml_text: str, selected_topic_id: str | None):
                 try:
@@ -2769,57 +2907,117 @@ def main():
                     return fn_mr_refresh(selected_topic_id)
 
             with gr.Tab("🧭 Настройки мессенджера"):
-                gr.Markdown("""<h3>🧭 Настройки роутера входящих сообщений: Topic Registry/Реестр тем (CRUD)</h3>""")
+                gr.Markdown("""<h3>🧭 Настройки роутера входящих сообщений</h3>""")
                 gr.Markdown(
-                    "Реестр тем управляет маршрутизацией запросов: label/маркер темы, источник данных, fallback/резервный ход и приоритет."
+                    "Здесь управляется пакет `messengers_router`: промпты рендера и реестр тем маршрутизации."
+                )
+
+                with gr.Accordion("🧠 Промпты пакета messengers_router", open=False):
+                    gr.Markdown(
+                        "Изменяйте только если понимаете влияние на стиль ответа и self-check. "
+                        "Промпты сохраняются в `app_data/prompts`."
+                    )
+
+                    with gr.Row():
+                        with gr.Accordion(label="MR Rich Generator Prompt", open=False):
+                            prompt_code_mr_rich = gr.Code(
+                                value="",
+                                language=None,
+                                label="messengers_router: mr_renderer_patient_rich",
+                                interactive=True,
+                                lines=18,
+                                scale=4,
+                            )
+                            with gr.Row():
+                                btn_load_mr_rich = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
+                                btn_save_mr_rich = gr.Button("💾 Сохранить", size="sm", variant="primary")
+
+                    btn_load_mr_rich.click(
+                        lambda: fn_load_prompt_with_fallback(
+                            "mr_renderer_patient_rich",
+                            "renderer_patient_rich",
+                        ),
+                        [], [prompt_code_mr_rich, ])
+                    btn_save_mr_rich.click(lambda txt: fn_save_prompt("mr_renderer_patient_rich", txt),
+                                           prompt_code_mr_rich, )
+
+                    with gr.Row():
+                        with gr.Accordion(label="MR Critic Prompt (JSON)", open=False):
+                            prompt_code_mr_critic = gr.Code(
+                                value="",
+                                language=None,
+                                label="messengers_router: mr_renderer_critic_patient_alignment",
+                                interactive=True,
+                                lines=18,
+                                scale=4,
+                            )
+                            with gr.Row():
+                                btn_load_mr_critic = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
+                                btn_save_mr_critic = gr.Button("💾 Сохранить", size="sm", variant="primary")
+
+                    btn_load_mr_critic.click(
+                        lambda: fn_load_prompt_with_fallback(
+                            "mr_renderer_critic_patient_alignment",
+                            "renderer_critic_patient_alignment",
+                        ),
+                        [], [prompt_code_mr_critic, ])
+                    btn_save_mr_critic.click(lambda txt: fn_save_prompt("mr_renderer_critic_patient_alignment", txt),
+                                             prompt_code_mr_critic, )
+
+                gr.Markdown(
+                    "Рабочий режим: выберите тему, правьте JSON и сохраняйте. "
+                    "YAML ниже нужен только для массового редактирования."
                 )
 
                 with gr.Row():
-                    mr_refresh_btn = gr.Button("🔄 Обновить из файла", size="sm")
-                    mr_save_yaml_btn = gr.Button("💾 Сохранить YAML", size="sm", variant="primary")
+                    mr_refresh_btn = gr.Button("🔄 Обновить данные из файла", size="sm")
 
                 mr_registry_summary_box = gr.Textbox(
-                    label="Сводка реестра",
+                    label="Краткая сводка реестра (всего/активно/по label)",
                     value="",
                     interactive=False,
-                    lines=2,
+                    lines=3,
                 )
-
-                mr_registry_yaml_code = gr.Code(
-                    label="topic_registry.yaml",
-                    language="yaml",
+                mr_runtime_scope_box = gr.Textbox(
+                    label="Актуальность настроек для текущего runtime",
                     value="",
-                    interactive=True,
-                    lines=24,
+                    interactive=False,
+                    lines=8,
                 )
 
                 with gr.Row():
                     mr_topic_selector = gr.Dropdown(
                         choices=[],
                         value=None,
-                        label="Выбор темы (topic_id)",
+                        label="Тема для редактирования (topic_id)",
                         allow_custom_value=False,
                         interactive=True,
                         scale=60,
                     )
-                    mr_topic_enable_btn = gr.Button("🟢 Включить", size="sm", scale=20)
-                    mr_topic_disable_btn = gr.Button("⚪ Выключить", size="sm", scale=20)
+                    mr_topic_enable_btn = gr.Button("🟢 Включить тему", size="sm", scale=20)
+                    mr_topic_disable_btn = gr.Button("⚪ Выключить тему", size="sm", scale=20)
                     mr_topic_delete_btn = gr.Button("⛔ Удалить", size="sm", variant="stop", scale=20)
 
+                gr.Markdown(
+                    "🟢 Включить: тема участвует в матчинге. "
+                    "⚪ Выключить: тема остается в файле, но не используется. "
+                    "⛔ Удалить: удаляет тему из реестра."
+                )
+
                 mr_topic_json_code = gr.Code(
-                    label="Topic JSON (редактирование выбранной темы)",
+                    label="Карточка темы (JSON): редактирование выбранного topic",
                     language="json",
                     value="{}",
                     interactive=True,
-                    lines=20,
+                    lines=18,
                 )
 
                 with gr.Row():
-                    mr_topic_save_btn = gr.Button("💾 Сохранить тему", size="sm", variant="primary")
+                    mr_topic_save_btn = gr.Button("💾 Сохранить изменения темы", size="sm", variant="primary")
 
                 with gr.Row():
                     mr_new_topic_id = gr.Textbox(
-                        label="Новый topic_id",
+                        label="ID новой темы (topic_id)",
                         placeholder="например: prepare_ultrasound",
                         value="",
                         scale=45,
@@ -2827,16 +3025,30 @@ def main():
                     mr_new_topic_label = gr.Dropdown(
                         choices=_mr_label_choices(),
                         value="OTHER",
-                        label="Label",
+                        label="Целевой label",
                         scale=20,
                     )
                     mr_new_topic_priority = gr.Number(
-                        label="Priority",
+                        label="Приоритет",
                         value=100,
                         precision=0,
                         scale=15,
                     )
                     mr_create_topic_btn = gr.Button("✅ Создать тему", size="sm", scale=20)
+
+                with gr.Accordion("🛠 Режим эксперта: прямое редактирование topic_registry.yaml", open=False):
+                    gr.Markdown(
+                        "Используйте при массовых правках. Перед сохранением YAML проверяется на синтаксис."
+                    )
+                    mr_registry_yaml_code = gr.Code(
+                        label="topic_registry.yaml (экспертный режим)",
+                        language="yaml",
+                        value="",
+                        interactive=True,
+                        lines=16,
+                    )
+                    with gr.Row():
+                        mr_save_yaml_btn = gr.Button("💾 Сохранить YAML", size="sm", variant="primary")
 
                 mr_refresh_btn.click(
                     fn=fn_mr_refresh,
@@ -2846,6 +3058,7 @@ def main():
                         mr_topic_selector,
                         mr_topic_json_code,
                         mr_registry_summary_box,
+                        mr_runtime_scope_box,
                     ],
                 )
                 mr_save_yaml_btn.click(
@@ -2856,6 +3069,7 @@ def main():
                         mr_topic_selector,
                         mr_topic_json_code,
                         mr_registry_summary_box,
+                        mr_runtime_scope_box,
                     ],
                 )
                 mr_topic_selector.change(
@@ -2866,6 +3080,7 @@ def main():
                         mr_topic_selector,
                         mr_topic_json_code,
                         mr_registry_summary_box,
+                        mr_runtime_scope_box,
                     ],
                 )
                 mr_topic_save_btn.click(
@@ -2876,6 +3091,7 @@ def main():
                         mr_topic_selector,
                         mr_topic_json_code,
                         mr_registry_summary_box,
+                        mr_runtime_scope_box,
                     ],
                 )
                 mr_create_topic_btn.click(
@@ -2886,6 +3102,7 @@ def main():
                         mr_topic_selector,
                         mr_topic_json_code,
                         mr_registry_summary_box,
+                        mr_runtime_scope_box,
                     ],
                 )
                 mr_topic_delete_btn.click(
@@ -2896,6 +3113,7 @@ def main():
                         mr_topic_selector,
                         mr_topic_json_code,
                         mr_registry_summary_box,
+                        mr_runtime_scope_box,
                     ],
                 )
                 mr_topic_enable_btn.click(
@@ -2906,6 +3124,7 @@ def main():
                         mr_topic_selector,
                         mr_topic_json_code,
                         mr_registry_summary_box,
+                        mr_runtime_scope_box,
                     ],
                 )
                 mr_topic_disable_btn.click(
@@ -2916,6 +3135,7 @@ def main():
                         mr_topic_selector,
                         mr_topic_json_code,
                         mr_registry_summary_box,
+                        mr_runtime_scope_box,
                     ],
                 )
 
@@ -2927,6 +3147,7 @@ def main():
                         mr_topic_selector,
                         mr_topic_json_code,
                         mr_registry_summary_box,
+                        mr_runtime_scope_box,
                     ],
                 )
 
@@ -3054,58 +3275,6 @@ def main():
                                  [], [prompt_code_1, ])
                 btn_save_1.click(lambda txt: fn_save_prompt("final_answer", txt),
                                  prompt_code_1, )
-
-                # -----------------------------------------------------
-                # Messenger Router Rich Prompt секция
-                # -----------------------------------------------------
-                with gr.Row():
-                    with gr.Accordion(label="MR Rich Generator Prompt", open=False):
-                        prompt_code_mr_rich = gr.Code(
-                            value="",
-                            language=None,
-                            label="messengers_router: mr_renderer_patient_rich",
-                            interactive=True,
-                            lines=20,
-                            scale=4,
-                        )
-                        with gr.Row():
-                            btn_load_mr_rich = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
-                            btn_save_mr_rich = gr.Button("💾 Сохранить", size="sm", variant="primary")
-
-                btn_load_mr_rich.click(
-                    lambda: fn_load_prompt_with_fallback(
-                        "mr_renderer_patient_rich",
-                        "renderer_patient_rich",
-                    ),
-                    [], [prompt_code_mr_rich, ])
-                btn_save_mr_rich.click(lambda txt: fn_save_prompt("mr_renderer_patient_rich", txt),
-                                       prompt_code_mr_rich, )
-
-                # -----------------------------------------------------
-                # Messenger Router Critic Prompt секция
-                # -----------------------------------------------------
-                with gr.Row():
-                    with gr.Accordion(label="MR Critic Prompt (JSON)", open=False):
-                        prompt_code_mr_critic = gr.Code(
-                            value="",
-                            language=None,
-                            label="messengers_router: mr_renderer_critic_patient_alignment",
-                            interactive=True,
-                            lines=20,
-                            scale=4,
-                        )
-                        with gr.Row():
-                            btn_load_mr_critic = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
-                            btn_save_mr_critic = gr.Button("💾 Сохранить", size="sm", variant="primary")
-
-                btn_load_mr_critic.click(
-                    lambda: fn_load_prompt_with_fallback(
-                        "mr_renderer_critic_patient_alignment",
-                        "renderer_critic_patient_alignment",
-                    ),
-                    [], [prompt_code_mr_critic, ])
-                btn_save_mr_critic.click(lambda txt: fn_save_prompt("mr_renderer_critic_patient_alignment", txt),
-                                         prompt_code_mr_critic, )
 
                 # ---------------------------------------
                 #     CONSTANTS секция
@@ -3339,37 +3508,6 @@ def main():
                 benchmark_backend_status_md = gr.Markdown(
                     "**Backend Ollama:** ⏳ Проверка доступности..."
                 )
-                with gr.Row():
-                    refresh_ollama_diag_btn = gr.Button(
-                        "🩺 Обновить диагностику контейнера Ollama",
-                        size="sm",
-                        variant="secondary",
-                    )
-                    ollama_diag_tick_slider = gr.Slider(
-                        label="Автообновление диагностики, сек",
-                        minimum=2,
-                        maximum=60,
-                        step=1,
-                        value=10,
-                    )
-                ollama_diag_timer = gr.Timer(10.0)
-                ollama_container_diag_md = gr.Markdown(
-                    "**Контейнер Ollama:** ⏳ Проверка доступности..."
-                )
-                ollama_container_metrics_df = gr.DataFrame(
-                    headers=["Параметр", "Значение"],
-                    value=[["Статус", "Ожидание диагностики"]],
-                    row_count=(9, "fixed"),
-                    interactive=False,
-                    label="Ключевые параметры контейнера Ollama",
-                )
-                ollama_container_logs_tb = gr.Textbox(
-                    label="Важные сообщения из логов контейнера (error/warn/oom)",
-                    lines=8,
-                    max_lines=12,
-                    interactive=False,
-                    autoscroll=False,
-                )
 
                 result_table = gr.DataFrame(
                     headers=["Модель", "Тип", "Wall Avg (s)", "Wall σ", "Eval Avg (s)", "Eval σ", "TPS Avg", "TPS σ"],
@@ -3436,9 +3574,7 @@ def main():
                 async def probe_backend(current_models):
                     try:
                         models_response = await ollama.list()
-                        models = sorted(
-                            [m.get("model") for m in models_response.get("models", []) if isinstance(m, dict) and m.get("model")]
-                        )
+                        models = _extract_ollama_model_names(models_response)
                         selected = choose_selected_models(current_models, models)
                         return True, models, selected, build_backend_status(True, models_count=len(models)), None
                     except Exception as e:
@@ -3766,43 +3902,6 @@ def main():
                         log_output,
                     ],
                 )
-                refresh_models_evt.then(
-                    fn=update_ollama_container_diag,
-                    inputs=None,
-                    outputs=[
-                        ollama_container_diag_md,
-                        ollama_container_metrics_df,
-                        ollama_container_logs_tb,
-                    ],
-                )
-
-                refresh_ollama_diag_btn.click(
-                    fn=update_ollama_container_diag,
-                    inputs=None,
-                    outputs=[
-                        ollama_container_diag_md,
-                        ollama_container_metrics_df,
-                        ollama_container_logs_tb,
-                    ],
-                    queue=False,
-                )
-
-                ollama_diag_tick_slider.change(
-                    fn=lambda value: float(value),
-                    inputs=[ollama_diag_tick_slider],
-                    outputs=[ollama_diag_timer],
-                    queue=False,
-                )
-                ollama_diag_timer.tick(
-                    fn=update_ollama_container_diag,
-                    inputs=None,
-                    outputs=[
-                        ollama_container_diag_md,
-                        ollama_container_metrics_df,
-                        ollama_container_logs_tb,
-                    ],
-                    queue=False,
-                )
 
                 blocks.load(
                     fn=update_dropdown,
@@ -3813,15 +3912,6 @@ def main():
                         start_benchmark_btn,
                         stop_benchmark_btn,
                         log_output,
-                    ],
-                )
-                blocks.load(
-                    fn=update_ollama_container_diag,
-                    inputs=None,
-                    outputs=[
-                        ollama_container_diag_md,
-                        ollama_container_metrics_df,
-                        ollama_container_logs_tb,
                     ],
                 )
 
@@ -3884,6 +3974,39 @@ def main():
                 warnings_md = gr.Markdown()
                 gpu_note = gr.Markdown()
 
+                with gr.Accordion("🩺 Диагностика контейнера Ollama", open=False):
+                    with gr.Row():
+                        mon_refresh_ollama_diag_btn = gr.Button(
+                            "🩺 Обновить диагностику контейнера Ollama",
+                            size="sm",
+                            variant="secondary",
+                        )
+                        mon_ollama_diag_tick_slider = gr.Slider(
+                            label="Автообновление диагностики, сек",
+                            minimum=2,
+                            maximum=60,
+                            step=1,
+                            value=10,
+                        )
+                    mon_ollama_diag_timer = gr.Timer(10.0)
+                    mon_ollama_container_diag_md = gr.Markdown(
+                        "**Контейнер Ollama:** ⏳ Проверка доступности..."
+                    )
+                    mon_ollama_container_metrics_df = gr.DataFrame(
+                        headers=["Параметр", "Значение"],
+                        value=[["Статус", "Ожидание диагностики"]],
+                        row_count=(12, "fixed"),
+                        interactive=False,
+                        label="Ключевые параметры контейнера Ollama",
+                    )
+                    mon_ollama_container_logs_tb = gr.Textbox(
+                        label="Важные сообщения из логов контейнера (error/warn/oom)",
+                        lines=8,
+                        max_lines=12,
+                        interactive=False,
+                        autoscroll=False,
+                    )
+
                 with gr.Row():
                     gpu_table = gr.Dataframe(label="Видеокарты (Общее использование / Загрузка памяти)",
                                              interactive=False, wrap=False)
@@ -3893,11 +4016,11 @@ def main():
                     top_cpu = gr.Dataframe(label="Топ контейнеров по загрузке процессора", interactive=False, wrap=True)
 
                 # графики по серверу
-                cpu_plot = gr.LinePlot(x="time", y="cpu_host_%", title="Загрузка центрального процессора (CPU), %",
+                cpu_plot = gr.LinePlot(x="tick", y="cpu_host_%", title="Загрузка центрального процессора (CPU), %",
                                        height=260)
-                ram_plot = gr.LinePlot(x="time", y="ram_mb", title="Оперативка, RAM (занятая контейнерами), MB",
+                ram_plot = gr.LinePlot(x="tick", y="ram_mb", title="Оперативка, RAM (занятая контейнерами), MB",
                                        height=260)
-                vram_plot = gr.LinePlot(x="time", y="vram_free_mb_min",
+                vram_plot = gr.LinePlot(x="tick", y="vram_free_mb_min",
                                         title="Свободная видеопамять у самой загруженной видеокарты, MB", height=260)
 
                 with gr.Accordion("Детальный отчет JSON", open=False):
@@ -3961,7 +4084,7 @@ def main():
                     history = system_data.update_history(history, payload, max_points=180)
                     df = system_data.history_to_df(history)
 
-                    # важно: df должен содержать колонки time, cpu_host_%, ram_mb, vram_free_mb_min
+                    # важно: df должен содержать колонки tick, cpu_host_%, ram_mb, vram_free_mb_min
                     return summary, warnings_text, top_ram_df, top_cpu_df, gpu_df, gpu_note_, df, df, df, payload, history
 
                 def tick(history):
@@ -4001,6 +4124,43 @@ def main():
                         vram_plot,
                         details_json,
                         history_state
+                    ],
+                )
+
+                mon_refresh_ollama_diag_btn.click(
+                    fn=update_ollama_container_diag,
+                    inputs=None,
+                    outputs=[
+                        mon_ollama_container_diag_md,
+                        mon_ollama_container_metrics_df,
+                        mon_ollama_container_logs_tb,
+                    ],
+                    queue=False,
+                )
+
+                mon_ollama_diag_tick_slider.change(
+                    fn=lambda value: float(value),
+                    inputs=[mon_ollama_diag_tick_slider],
+                    outputs=[mon_ollama_diag_timer],
+                    queue=False,
+                )
+                mon_ollama_diag_timer.tick(
+                    fn=update_ollama_container_diag,
+                    inputs=None,
+                    outputs=[
+                        mon_ollama_container_diag_md,
+                        mon_ollama_container_metrics_df,
+                        mon_ollama_container_logs_tb,
+                    ],
+                    queue=False,
+                )
+                blocks.load(
+                    fn=update_ollama_container_diag,
+                    inputs=None,
+                    outputs=[
+                        mon_ollama_container_diag_md,
+                        mon_ollama_container_metrics_df,
+                        mon_ollama_container_logs_tb,
                     ],
                 )
 

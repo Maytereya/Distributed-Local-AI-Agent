@@ -22,7 +22,7 @@ _CACHE_LOCK = threading.RLock()
 _CACHE_DATA: dict[str, Any] | None = None
 _CACHE_MTIME: float = -1.0
 _TOPIC_FLAG_PREFIX = "topic_registry:"
-_VALID_LABELS = {
+_VALID_LABELS_ORDER: tuple[str, ...] = (
     "APPOINTMENT",
     "TEST_ASSIST",
     "TEST_RESULT",
@@ -36,7 +36,13 @@ _VALID_LABELS = {
     "URGENT",
     "MEDICAL_ADVICE",
     "OTHER",
-}
+)
+_VALID_LABELS = set(_VALID_LABELS_ORDER)
+
+
+def list_valid_labels() -> list[str]:
+    """Единый список допустимых labels для UI/валидации."""
+    return list(_VALID_LABELS_ORDER)
 
 
 @dataclass(frozen=True)

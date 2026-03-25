@@ -92,9 +92,11 @@ def update_history(history: List[Dict[str, Any]], payload: Dict[str, Any], max_p
     """
     ts = time.strftime("%H:%M:%S")
     s = payload.get("summary", {})
+    next_tick = int(history[-1].get("tick", -1)) + 1 if history else 0
 
     point = {
         "time": ts,
+        "tick": next_tick,
         "cpu_host_%": s.get("cpu_host_%", 0.0),
         "ram_mb": s.get("total_ram_used_mb", 0.0),
     }
@@ -112,9 +114,15 @@ def update_history(history: List[Dict[str, Any]], payload: Dict[str, Any], max_p
     return history
 
 def history_to_df(history: List[Dict[str, Any]]) -> pd.DataFrame:
+    expected_cols = ["time", "tick", "cpu_host_%", "ram_mb", "vram_free_mb_min"]
     if not history:
-        return pd.DataFrame({"time": [], "cpu_host_%": [], "ram_mb": [], "vram_free_mb_min": []})
-    return pd.DataFrame(history)
+        return pd.DataFrame({col: [] for col in expected_cols})
+
+    df = pd.DataFrame(history)
+    for col in expected_cols:
+        if col not in df.columns:
+            df[col] = None
+    return df[expected_cols]
 
 
 def _calc_cpu_percent(stats: dict) -> float:
