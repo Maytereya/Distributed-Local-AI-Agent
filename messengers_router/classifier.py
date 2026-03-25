@@ -83,6 +83,37 @@ _PATIENT_NAME_STOPWORDS = {
     "нет",
     "самара",
 }
+_SPECIALTY_LIKE_NAME_TOKENS = {
+    "кардиолог",
+    "эндокринолог",
+    "педиатр",
+    "хирург",
+    "терапевт",
+    "травматолог",
+    "ортопед",
+    "проктолог",
+    "колопроктолог",
+    "уролог",
+    "онколог",
+    "гинеколог",
+    "невролог",
+    "гастроэнтеролог",
+    "дерматолог",
+    "лор",
+    "оториноларинголог",
+    "узи",
+    "узист",
+    "мрт",
+    "кт",
+    "фгдс",
+    "фкс",
+    "экг",
+}
+_PROCEDURE_DOCTOR_INFO_RE = re.compile(
+    r"\b((кто|какой|какая|какие)\b.*\b(врач|специалист|доктор)\b|"
+    r"(кто|какой|какая|какие)\b.*\b(делает|выполняет|проводит)\b)\b",
+    re.I,
+)
 
 def _extract_json(text: str) -> dict[str, Any] | None:
     if not text:
@@ -201,7 +232,10 @@ def _extract_service_keyword(text: str) -> str | None:
 
 
 def _extract_schedule_doctor_name(text: str) -> str | None:
-    return extract_doctor_name_candidate(text, prefer_schedule=True)
+    candidate = extract_doctor_name_candidate(text, prefer_schedule=True)
+    if candidate and _looks_like_specialty_or_service_token(candidate, text):
+        return None
+    return candidate
 
 
 def _extract_appointment_doctor_name(text: str) -> str | None:
@@ -216,6 +250,53 @@ def _extract_price_doctor_name(text: str) -> str | None:
     if candidate and _INVALID_DOCTOR_TOKEN_RE.search(candidate):
         return None
     return candidate
+
+
+def _looks_like_specialty_or_service_token(token: str, text: str = "") -> bool:
+    """
+    Отсекает псевдо-ФИО, когда в doctor_name попала специальность/услуга.
+
+    :param token: кандидат на фамилию врача
+    :param text: исходный текст пользователя
+    :return: True, если токен похож на специальность/услугу, а не на фамилию
+    """
+    norm = str(token or "").strip().lower().replace("ё", "е")
+    if not norm:
+        return False
+    if norm in _SPECIALTY_LIKE_NAME_TOKENS:
+        return True
+    spec = str(extract_specialty(text or "") or "").strip().lower().replace("ё", "е")
+    if spec and norm == spec:
+        return True
+    return False
+
+
+def _extract_schedule_specialty(text: str) -> str | None:
+    """
+    Извлекает специальность для запросов расписания.
+
+    :param text: текст запроса
+    :return: специальность или None
+    """
+    spec = extract_specialty(text or "")
+    if spec:
+        return spec
+    if re.search(r"\bузи\b", text or "", re.I):
+        return "узи"
+    return None
+
+
+def _is_procedure_doctor_info_query(text: str, service_name: str | None) -> bool:
+    """
+    Определяет запрос "какой врач делает конкретную процедуру".
+
+    :param text: текст пользователя
+    :param service_name: извлеченная услуга
+    :return: True, если это поиск врача по процедуре
+    """
+    if not service_name:
+        return False
+    return bool(_PROCEDURE_DOCTOR_INFO_RE.search(text or ""))
 
 
 def _pending_waits_appointment_patient_name(last_entities: dict[str, Any]) -> bool:
@@ -844,9 +925,12 @@ async def deterministic_rule_decision(
         )
     elif detect_schedule_intent(text):
         entities: dict[str, Any] = {}
+        specialty = _extract_schedule_specialty(text)
         doctor_name = _extract_schedule_doctor_name(text)
         if doctor_name:
             entities["doctor_name"] = doctor_name
+        if specialty:
+            entities["specialty"] = specialty
         base = RouteDecision(
             label="DOCTOR_SCHEDULE",
             confidence=0.74,
@@ -877,6 +961,19 @@ async def deterministic_rule_decision(
             await _maybe_refine_live_intent(text, last_entities, base, runtime_options=runtime_options)
             if allow_refine
             else base
+        )
+    elif _is_procedure_doctor_info_query(text, _extract_service_keyword(text)):
+        svc = _extract_service_keyword(text)
+        entities = {}
+        if svc:
+            entities["service_name"] = svc
+        decision = RouteDecision(
+            label="DOCTOR_INFO",
+            confidence=0.71,
+            entities=entities,
+            flags=local_flags | {"rule_doctor_info_service"},
+            needs_handoff=False,
+            context_action="continue",
         )
     else:
         appointment_intent = detect_appointment_intent(text)

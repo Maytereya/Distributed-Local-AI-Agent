@@ -409,7 +409,7 @@ REQUIRED_SLOTS: dict[str, list[str]] = {
         "_any_of:test_goal,test_name",
     ],
     "TEST_RESULT": ["surname", "year", "filial", "number"],
-    "DOCTOR_INFO": ["_any_of:specialty,doctor_id,doctor_name"],
+    "DOCTOR_INFO": ["_any_of:specialty,doctor_id,doctor_name,service_name"],
     # Для расписания поддерживаем:
     # - конкретного врача (doctor_id/doctor_name)
     # - или специальность (specialty), если пользователь просит ближайшего врача по профилю.

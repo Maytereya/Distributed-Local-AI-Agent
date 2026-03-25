@@ -146,6 +146,7 @@ _SPECIALTY_CANONICAL = (
     "ортопед",
     "лор",
 )
+_SCHEDULE_SPECIALTY_TOKENS = set(_SPECIALTY_CANONICAL) | {"узи", "узист", "экг", "мрт", "кт", "фгдс", "фкс"}
 _SPECIALTY_RE = re.compile(
     r"\b(" + "|".join(re.escape(x) for x in _SPECIALTY_CANONICAL) + r")\w*\b",
     re.I,
@@ -395,6 +396,20 @@ def _extract_specialty_from_text(text: str) -> str:
     if not m:
         return ""
     return str(m.group(1) or "").strip().lower().replace("ё", "е")
+
+
+def _looks_like_schedule_specialty_token(value: str) -> bool:
+    """
+    Проверяет, является ли токен названием специальности/исследования,
+    а не фамилией врача.
+
+    :param value: кандидат на фамилию
+    :return: True, если это specialty-like токен
+    """
+    norm = _normalise_input(value).replace("ё", "е")
+    if not norm:
+        return False
+    return norm in _SCHEDULE_SPECIALTY_TOKENS
 
 
 def _has_nearest_hint(text: str) -> bool:
@@ -2099,10 +2114,11 @@ class Services:
             ["last_name", "doctor_last_name", "doctor", "doctor_name", "fio"],
         )
         specialty = _normalise_input(_get_first_present(entities, ["specialty", "specialization", "spec"]) or "")
-        if not specialty:
-            specialty = _extract_specialty_from_text(query)
-        if not raw_name:
-            raw_name = query
+        query_specialty = _extract_specialty_from_text(query)
+        if query_specialty:
+            specialty = query_specialty
+        if raw_name and _looks_like_schedule_specialty_token(str(raw_name)):
+            raw_name = ""
 
         doctors = await self._ensure_doctors_cache_loaded()
         raw_for_match = str(raw_name or "").strip()
@@ -2113,6 +2129,8 @@ class Services:
             raw_for_match = first or raw_for_match
 
         query_doctor_candidate = extract_doctor_name_candidate(str(query or ""), prefer_schedule=True) if query else None
+        if query_doctor_candidate and _looks_like_schedule_specialty_token(str(query_doctor_candidate)):
+            query_doctor_candidate = None
         query_name = resolve_schedule_surname(str(query_doctor_candidate), doctors) if query_doctor_candidate else None
         last_name = resolve_schedule_surname(raw_for_match, doctors)
         # Если в текущей реплике явно фигурирует другая фамилия по расписанию,
@@ -2125,7 +2143,10 @@ class Services:
         ):
             last_name = query_name
         elif not last_name and query and query != raw_name:
-            last_name = query_name or resolve_schedule_surname(query, doctors)
+            # Для запросов вида "расписание онколог/узи" не пытаемся
+            # резолвить фамилию из всей фразы: это ведет к ложным doctor_name.
+            if not specialty:
+                last_name = query_name or resolve_schedule_surname(query, doctors)
 
         if not last_name and specialty:
             schedule_by_spec = await self._schedule_by_specialty(
