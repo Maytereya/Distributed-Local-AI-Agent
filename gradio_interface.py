@@ -3303,7 +3303,12 @@ def main():
 
                     with gr.Column():
                         refresh_models_btn = gr.Button("🔄 Загрузить/обновить список моделей", scale=20, size="md")
-                        start_benchmark_btn = gr.Button("🚀 Запустить тестирование", scale=20, size="md")
+                        start_benchmark_btn = gr.Button(
+                            "⏳ Проверка backend...",
+                            scale=20,
+                            size="md",
+                            interactive=False,
+                        )
                         stop_benchmark_btn = gr.Button(
                             "🛑 Остановить тест",
                             scale=20,
@@ -3330,6 +3335,40 @@ def main():
                     "**Статус:** Ожидание запуска  \n"
                     "**Лучший Wall Avg:** —  \n"
                     "**Лучший TPS:** —"
+                )
+                benchmark_backend_status_md = gr.Markdown(
+                    "**Backend Ollama:** ⏳ Проверка доступности..."
+                )
+                with gr.Row():
+                    refresh_ollama_diag_btn = gr.Button(
+                        "🩺 Обновить диагностику контейнера Ollama",
+                        size="sm",
+                        variant="secondary",
+                    )
+                    ollama_diag_tick_slider = gr.Slider(
+                        label="Автообновление диагностики, сек",
+                        minimum=2,
+                        maximum=60,
+                        step=1,
+                        value=10,
+                    )
+                ollama_diag_timer = gr.Timer(10.0)
+                ollama_container_diag_md = gr.Markdown(
+                    "**Контейнер Ollama:** ⏳ Проверка доступности..."
+                )
+                ollama_container_metrics_df = gr.DataFrame(
+                    headers=["Параметр", "Значение"],
+                    value=[["Статус", "Ожидание диагностики"]],
+                    row_count=(9, "fixed"),
+                    interactive=False,
+                    label="Ключевые параметры контейнера Ollama",
+                )
+                ollama_container_logs_tb = gr.Textbox(
+                    label="Важные сообщения из логов контейнера (error/warn/oom)",
+                    lines=8,
+                    max_lines=12,
+                    interactive=False,
+                    autoscroll=False,
                 )
 
                 result_table = gr.DataFrame(
@@ -3362,25 +3401,187 @@ def main():
 
                 # --- Функции ---
 
-                async def update_dropdown(current_models):
+                def normalize_selected_models(current_models: Any) -> list[str]:
+                    if isinstance(current_models, list):
+                        return [m for m in current_models if m]
+                    if current_models:
+                        return [str(current_models)]
+                    return []
+
+                def choose_selected_models(current_models: Any, models: list[str]) -> list[str]:
+                    selected = [m for m in normalize_selected_models(current_models) if m in models][:2]
+                    if selected:
+                        return selected
+
+                    current_main = LLMName.get()
+                    if current_main in models:
+                        return [current_main]
+                    if models:
+                        return [models[-1]]
+                    return []
+
+                def build_backend_status(available: bool, models_count: int = 0, error_text: str | None = None) -> str:
+                    if available:
+                        return (
+                            f"**Backend Ollama:** ✅ Доступен (`{c.ollama_url}`)  \n"
+                            f"**Моделей обнаружено:** `{models_count}`"
+                        )
+                    details = (error_text or "не удалось подключиться").strip()
+                    return (
+                        f"**Backend Ollama:** 🚫 Недоступен (`{c.ollama_url}`)  \n"
+                        f"**Окружение:** `{c.environment}`  \n"
+                        f"**Причина:** `{details}`"
+                    )
+
+                async def probe_backend(current_models):
                     try:
                         models_response = await ollama.list()
-                        models = sorted([m["model"] for m in models_response.get("models", [])])
+                        models = sorted(
+                            [m.get("model") for m in models_response.get("models", []) if isinstance(m, dict) and m.get("model")]
+                        )
+                        selected = choose_selected_models(current_models, models)
+                        return True, models, selected, build_backend_status(True, models_count=len(models)), None
                     except Exception as e:
-                        gr.Error(f"Ошибка загрузки списка моделей: {e}", title="Ошибка!")
-                        return gr.update()
+                        error_text = str(e).strip() or e.__class__.__name__
+                        return False, [], [], build_backend_status(False, error_text=error_text), error_text
 
-                    current_list = current_models if isinstance(current_models, list) else [current_models] if current_models else []
-                    selected = [m for m in current_list if m in models][:2]
-                    if not selected:
-                        current_main = LLMName.get()
-                        if current_main in models:
-                            selected = [current_main]
-                        elif models:
-                            selected = [models[-1]]
+                async def update_dropdown(current_models):
+                    backend_ok, models, selected, backend_status, error_text = await probe_backend(current_models)
+                    if backend_ok:
+                        start_enabled = bool(selected)
+                        if not models:
+                            log_text = "⚠️ Backend Ollama доступен, но список моделей пуст."
+                            start_caption = "🚫 Нет моделей в Ollama"
+                        elif not start_enabled:
+                            log_text = "🟡 Выберите модель для запуска тестирования."
+                            start_caption = "🚀 Выберите модель для запуска"
                         else:
-                            selected = []
-                    return gr.update(choices=models, value=selected)
+                            log_text = f"✅ Backend Ollama доступен. Найдено моделей: {len(models)}."
+                            start_caption = "🚀 Запустить тестирование"
+
+                        return (
+                            gr.update(choices=models, value=selected),
+                            backend_status,
+                            gr.update(interactive=start_enabled, value=start_caption),
+                            gr.update(interactive=False, value="🛑 Остановить тест"),
+                            log_text,
+                        )
+
+                    local_hint = (
+                        "🚫 Backend Ollama недоступен. "
+                        "Для локального запуска переключите `[APP] environment = LOCAL` "
+                        "или поднимите Ollama по URL из текущего окружения."
+                    )
+                    if error_text:
+                        local_hint = f"{local_hint}\nТехническая причина: {error_text}"
+
+                    return (
+                        gr.update(choices=[], value=[]),
+                        backend_status,
+                        gr.update(interactive=False, value="🚫 Backend недоступен"),
+                        gr.update(interactive=False, value="🛑 Остановить тест"),
+                        local_hint,
+                    )
+
+                def update_ollama_container_diag():
+                    diag = system_data.get_container_diagnostics(
+                        container_name="ollama",
+                        log_tail=400,
+                        important_limit=25,
+                    )
+
+                    def fmt(value: Any, suffix: str = "") -> str:
+                        if value is None or value == "":
+                            return "—"
+                        return f"{value}{suffix}" if suffix else str(value)
+
+                    if not diag.get("available"):
+                        error_text = str(diag.get("error") or "контейнер недоступен")
+                        hint_text = str(diag.get("hint") or "")
+                        md = (
+                            "**Контейнер Ollama:** 🚫 Недоступен  \n"
+                            f"**Причина:** `{error_text}`"
+                        )
+                        if hint_text:
+                            md += f"  \n**Подсказка:** {hint_text}"
+
+                        rows = [
+                            ["Контейнер", diag.get("container_name", "ollama")],
+                            ["Статус", "Недоступен"],
+                            ["CPU, %", "—"],
+                            ["RAM used, MB", "—"],
+                            ["RAM limit, MB", "—"],
+                            ["RAM, %", "—"],
+                            ["PIDs", "—"],
+                            ["OOMKilled", "—"],
+                            ["RestartCount", "—"],
+                            ["Model total memory (log)", "—"],
+                            ["System free (log)", "—"],
+                            ["GPU min free (log)", "—"],
+                        ]
+                        messages = f"Ошибка: {error_text}"
+                        if hint_text:
+                            messages = f"{messages}\nПодсказка: {hint_text}"
+                        return md, gr.update(value=rows, row_count=(len(rows), "fixed")), messages
+
+                    status = str(diag.get("status") or "unknown")
+                    if status == "running":
+                        icon = "✅"
+                    elif status in {"restarting", "paused", "created"}:
+                        icon = "🟡"
+                    else:
+                        icon = "🚫"
+
+                    metrics = diag.get("metrics", {}) or {}
+                    runtime_memory = diag.get("runtime_memory", {}) or {}
+
+                    system_free_log = "—"
+                    if runtime_memory.get("system_free") and runtime_memory.get("system_total"):
+                        system_free_log = f"{runtime_memory.get('system_free')} / {runtime_memory.get('system_total')}"
+                    elif runtime_memory.get("system_free"):
+                        system_free_log = str(runtime_memory.get("system_free"))
+
+                    rows = [
+                        ["Контейнер", diag.get("container_name", "ollama")],
+                        ["Container ID", fmt(diag.get("container_id"))],
+                        ["Статус", status],
+                        ["Health", fmt(diag.get("health"))],
+                        ["CPU, %", fmt(metrics.get("cpu_%"))],
+                        ["RAM used, MB", fmt(metrics.get("ram_used_mb"))],
+                        ["RAM limit, MB", fmt(metrics.get("ram_limit_mb"))],
+                        ["RAM, %", fmt(metrics.get("ram_%"))],
+                        ["PIDs", fmt(metrics.get("pids"))],
+                        ["OOMKilled", str(bool(diag.get("oom_killed", False)))],
+                        ["RestartCount", fmt(diag.get("restart_count"))],
+                        ["Model total memory (log)", fmt(runtime_memory.get("model_total_memory"))],
+                        ["System free (log)", system_free_log],
+                        ["GPU min free (log)", fmt(runtime_memory.get("gpu_min_free"))],
+                    ]
+
+                    important_logs = diag.get("important_logs") or []
+                    important_count = len(important_logs)
+                    md = (
+                        f"**Контейнер Ollama:** {icon} `{status}`  \n"
+                        f"**Важных сообщений (tail):** `{important_count}`"
+                    )
+
+                    if important_logs:
+                        messages = "\n".join(important_logs[-25:])
+                    else:
+                        last_log = str(diag.get("last_log") or "").strip()
+                        messages = "Критичных сообщений в последних логах не найдено."
+                        if last_log:
+                            messages = f"{messages}\nПоследняя строка лога:\n{last_log}"
+
+                    diag_error = str(diag.get("error") or "").strip()
+                    if diag_error:
+                        messages = f"⚠️ Ошибка метрик: {diag_error}\n\n{messages}"
+
+                    log_error = str(diag.get("log_error") or "").strip()
+                    if log_error:
+                        messages = f"{messages}\n\n⚠️ Ошибка чтения логов: {log_error}"
+
+                    return md, gr.update(value=rows, row_count=(len(rows), "fixed")), messages
 
                 def table_update_for_benchmark(rows: list[list[Any]]):
                     rows = rows or []
@@ -3423,12 +3624,14 @@ def main():
                     )
 
                 async def wrapped_benchmark_stream(models, laps, think: bool):
+                    backend_status = build_backend_status(False, error_text="проверка не выполнялась")
                     if BENCHMARK_CONTROL["running"]:
                         yield (
                             "🟡 Тест уже выполняется. Дождитесь завершения или нажмите «Остановить тест».",
                             table_update_for_benchmark([]),
                             [],
                             build_benchmark_kpi([], "Выполняется"),
+                            gr.update(),
                             gr.update(value=None, interactive=False),
                             gr.update(value=None, interactive=False),
                             gr.update(interactive=False, value="⏳ Тест выполняется..."),
@@ -3436,16 +3639,38 @@ def main():
                         )
                         return
 
-                    selected_models = [m for m in (models or []) if m]
+                    backend_ok, available_models, _, backend_status, backend_error = await probe_backend(models)
+                    if not backend_ok:
+                        log_text = (
+                            "🚫 Тестирование недоступно: backend Ollama не отвечает. "
+                            "Используйте `LOCAL` окружение для локального запуска или проверьте URL сервера."
+                        )
+                        if backend_error:
+                            log_text = f"{log_text}\nТехническая причина: {backend_error}"
+                        yield (
+                            log_text,
+                            table_update_for_benchmark([]),
+                            [],
+                            build_benchmark_kpi([], "Backend недоступен"),
+                            backend_status,
+                            gr.update(value=None, interactive=False),
+                            gr.update(value=None, interactive=False),
+                            gr.update(interactive=False, value="🚫 Backend недоступен"),
+                            gr.update(interactive=False, value="🛑 Остановить тест"),
+                        )
+                        return
+
+                    selected_models = [m for m in normalize_selected_models(models) if m in available_models][:2]
                     if not selected_models:
                         yield (
                             "🟡 Сначала загрузите и выберите модели для тестирования.",
                             table_update_for_benchmark([]),
                             [],
                             build_benchmark_kpi([], "Ожидание запуска"),
+                            backend_status,
                             gr.update(value=None, interactive=False),
                             gr.update(value=None, interactive=False),
-                            gr.update(interactive=True, value="🚀 Запустить тестирование"),
+                            gr.update(interactive=False, value="🚀 Выберите модель для запуска"),
                             gr.update(interactive=False, value="🛑 Остановить тест"),
                         )
                         return
@@ -3458,6 +3683,7 @@ def main():
                             table_update_for_benchmark([]),
                             [],
                             build_benchmark_kpi([], "Выполняется"),
+                            backend_status,
                             gr.update(value=None, interactive=False),
                             gr.update(value=None, interactive=False),
                             gr.update(interactive=False, value="⏳ Тест выполняется..."),
@@ -3507,6 +3733,7 @@ def main():
                                 table_update_for_benchmark(table_rows),
                                 json_data,
                                 build_benchmark_kpi(json_data, status),
+                                backend_status,
                                 json_download_update,
                                 csv_download_update,
                                 start_btn_update,
@@ -3518,6 +3745,7 @@ def main():
                             table_update_for_benchmark([]),
                             [],
                             build_benchmark_kpi([], "Ошибка"),
+                            backend_status,
                             gr.update(value=None, interactive=False),
                             gr.update(value=None, interactive=False),
                             gr.update(interactive=True, value="🚀 Запустить тестирование"),
@@ -3527,7 +3755,75 @@ def main():
                         BENCHMARK_CONTROL["running"] = False
                         BENCHMARK_CONTROL["stop"] = False
 
-                refresh_models_btn.click(fn=update_dropdown, inputs=[model_selector], outputs=model_selector)
+                refresh_models_evt = refresh_models_btn.click(
+                    fn=update_dropdown,
+                    inputs=[model_selector],
+                    outputs=[
+                        model_selector,
+                        benchmark_backend_status_md,
+                        start_benchmark_btn,
+                        stop_benchmark_btn,
+                        log_output,
+                    ],
+                )
+                refresh_models_evt.then(
+                    fn=update_ollama_container_diag,
+                    inputs=None,
+                    outputs=[
+                        ollama_container_diag_md,
+                        ollama_container_metrics_df,
+                        ollama_container_logs_tb,
+                    ],
+                )
+
+                refresh_ollama_diag_btn.click(
+                    fn=update_ollama_container_diag,
+                    inputs=None,
+                    outputs=[
+                        ollama_container_diag_md,
+                        ollama_container_metrics_df,
+                        ollama_container_logs_tb,
+                    ],
+                    queue=False,
+                )
+
+                ollama_diag_tick_slider.change(
+                    fn=lambda value: float(value),
+                    inputs=[ollama_diag_tick_slider],
+                    outputs=[ollama_diag_timer],
+                    queue=False,
+                )
+                ollama_diag_timer.tick(
+                    fn=update_ollama_container_diag,
+                    inputs=None,
+                    outputs=[
+                        ollama_container_diag_md,
+                        ollama_container_metrics_df,
+                        ollama_container_logs_tb,
+                    ],
+                    queue=False,
+                )
+
+                blocks.load(
+                    fn=update_dropdown,
+                    inputs=[model_selector],
+                    outputs=[
+                        model_selector,
+                        benchmark_backend_status_md,
+                        start_benchmark_btn,
+                        stop_benchmark_btn,
+                        log_output,
+                    ],
+                )
+                blocks.load(
+                    fn=update_ollama_container_diag,
+                    inputs=None,
+                    outputs=[
+                        ollama_container_diag_md,
+                        ollama_container_metrics_df,
+                        ollama_container_logs_tb,
+                    ],
+                )
 
                 stop_benchmark_btn.click(
                     fn=request_stop_benchmark,
@@ -3544,6 +3840,7 @@ def main():
                         result_table,
                         json_view,
                         benchmark_kpi_md,
+                        benchmark_backend_status_md,
                         json_download_btn,
                         csv_download_btn,
                         start_benchmark_btn,

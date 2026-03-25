@@ -2,7 +2,34 @@ from typing import Dict, Any, List, Optional, Tuple
 import pandas as pd
 
 import time
+import re
 import docker
+
+
+IMPORTANT_LOG_KEYWORDS = (
+    "error",
+    "err",
+    "exception",
+    "traceback",
+    "fatal",
+    "critical",
+    "panic",
+    "fail",
+    "failed",
+    "unable",
+    "cannot",
+    "denied",
+    "timeout",
+    "killed",
+    "oom",
+    "warn",
+    "warning",
+)
+
+
+_TOTAL_MEMORY_RE = re.compile(r'msg="total memory"\s+size="([^"]+)"')
+_SYSTEM_MEMORY_RE = re.compile(r'msg="system memory"\s+total="([^"]+)"\s+free="([^"]+)"\s+free_swap="([^"]+)"')
+_GPU_MEMORY_RE = re.compile(r'msg="gpu memory".*id=([^\s]+).*available="([^"]+)".*free="([^"]+)"')
 
 def _bytes_to_mb(x: int) -> float:
     return round(x / 1024 / 1024, 1)
@@ -95,6 +122,74 @@ def _calc_cpu_percent(stats: dict) -> float:
         return round((cpu_delta / sys_delta) * online_cpus * 100.0, 1)
     return 0.0
 
+
+def _decode_log_lines(raw_logs: bytes | str | None) -> List[str]:
+    if not raw_logs:
+        return []
+    if isinstance(raw_logs, (bytes, bytearray)):
+        text = raw_logs.decode("utf-8", errors="replace")
+    else:
+        text = str(raw_logs)
+    return [line.rstrip() for line in text.splitlines() if line and line.strip()]
+
+
+def _extract_important_lines(log_lines: List[str], limit: int = 30) -> List[str]:
+    if not log_lines:
+        return []
+    selected: List[str] = []
+    for line in log_lines:
+        low = line.lower()
+        if any(keyword in low for keyword in IMPORTANT_LOG_KEYWORDS):
+            selected.append(line)
+    if limit <= 0:
+        return selected
+    return selected[-limit:]
+
+
+def _extract_runtime_memory_from_logs(log_lines: List[str]) -> Dict[str, Any]:
+    runtime: Dict[str, Any] = {
+        "model_total_memory": None,
+        "system_total": None,
+        "system_free": None,
+        "system_free_swap": None,
+        "gpu_min_free": None,
+        "gpu_free_by_id": {},
+    }
+
+    gpu_map: Dict[str, str] = {}
+    for line in log_lines:
+        total_match = _TOTAL_MEMORY_RE.search(line)
+        if total_match:
+            runtime["model_total_memory"] = total_match.group(1)
+
+        system_match = _SYSTEM_MEMORY_RE.search(line)
+        if system_match:
+            runtime["system_total"] = system_match.group(1)
+            runtime["system_free"] = system_match.group(2)
+            runtime["system_free_swap"] = system_match.group(3)
+
+        gpu_match = _GPU_MEMORY_RE.search(line)
+        if gpu_match:
+            gpu_id = gpu_match.group(1)
+            gpu_free = gpu_match.group(3)
+            gpu_map[gpu_id] = gpu_free
+
+    if gpu_map:
+        runtime["gpu_free_by_id"] = gpu_map
+        # Значения в логах вида "23.5 GiB", берём минимальный free как консервативный индикатор.
+        min_gpu: tuple[float, str] | None = None
+        for gpu_id, free_txt in gpu_map.items():
+            num_match = re.search(r"([0-9]+(?:\.[0-9]+)?)", free_txt)
+            if not num_match:
+                continue
+            val = float(num_match.group(1))
+            if min_gpu is None or val < min_gpu[0]:
+                min_gpu = (val, f"{gpu_id}: {free_txt}")
+        if min_gpu:
+            runtime["gpu_min_free"] = min_gpu[1]
+
+    return runtime
+
 def get_nvidia_gpu_summary() -> Optional[Dict[str, Any]]:
     """
     Возвращает VRAM/UTIL по GPU, если NVML доступен в текущем контейнере.
@@ -164,6 +259,107 @@ def get_docker_containers_stats(container_names: List[str]) -> Dict[str, Any]:
             out[name] = {"error": str(e)}
 
     return out
+
+
+def get_container_diagnostics(
+    container_name: str = "ollama",
+    *,
+    log_tail: int = 400,
+    important_limit: int = 30,
+) -> Dict[str, Any]:
+    """
+    Диагностика одного docker-контейнера:
+    - статус/health/restart/OOM;
+    - CPU/RAM/PIDs;
+    - важные строки из последних логов (error/warn/fatal/oom/...).
+    """
+    base: Dict[str, Any] = {
+        "available": False,
+        "container_name": container_name,
+        "container_id": None,
+        "status": "unknown",
+        "health": None,
+        "restart_count": 0,
+        "oom_killed": False,
+        "metrics": {
+            "cpu_%": None,
+            "ram_used_mb": None,
+            "ram_limit_mb": None,
+            "ram_%": None,
+            "pids": None,
+        },
+        "important_logs": [],
+        "last_log": None,
+        "runtime_memory": {},
+        "log_error": None,
+        "error": None,
+        "hint": None,
+    }
+
+    client = None
+    try:
+        client = docker.DockerClient(base_url="unix://var/run/docker.sock")
+        container = client.containers.get(container_name)
+    except docker.errors.NotFound:
+        base["error"] = f"Контейнер '{container_name}' не найден."
+        base["hint"] = "Локальный запуск возможен без контейнера; в этом режиме docker-метрики недоступны."
+        if client:
+            client.close()
+        return base
+    except Exception as e:
+        base["error"] = f"Docker недоступен: {e}"
+        base["hint"] = "Проверьте, что Docker запущен и доступен socket /var/run/docker.sock."
+        if client:
+            client.close()
+        return base
+
+    try:
+        stats = container.stats(stream=False)
+        mem = stats.get("memory_stats", {}) or {}
+        mem_usage = int(mem.get("usage", 0) or 0)
+        mem_limit = int(mem.get("limit", 0) or 0)
+        base["metrics"] = {
+            "cpu_%": _calc_cpu_percent(stats),
+            "ram_used_mb": _bytes_to_mb(mem_usage),
+            "ram_limit_mb": _bytes_to_mb(mem_limit) if mem_limit else None,
+            "ram_%": round((mem_usage / mem_limit * 100.0), 1) if mem_limit else None,
+            "pids": (stats.get("pids_stats", {}) or {}).get("current"),
+        }
+    except Exception as e:
+        base["error"] = f"Не удалось получить stats контейнера '{container_name}': {e}"
+
+    try:
+        attrs = container.attrs or {}
+        state = attrs.get("State", {}) or {}
+        health = (state.get("Health", {}) or {}).get("Status")
+        restart_count = attrs.get("RestartCount", 0)
+        oom_killed = bool(state.get("OOMKilled", False))
+        base["container_id"] = container.short_id
+        base["status"] = state.get("Status") or container.status or "unknown"
+        base["health"] = health
+        base["restart_count"] = int(restart_count or 0)
+        base["oom_killed"] = oom_killed
+    except Exception:
+        pass
+
+    try:
+        raw_logs = container.logs(
+            stdout=True,
+            stderr=True,
+            timestamps=True,
+            tail=max(1, int(log_tail)),
+        )
+        lines = _decode_log_lines(raw_logs)
+        base["runtime_memory"] = _extract_runtime_memory_from_logs(lines)
+        base["important_logs"] = _extract_important_lines(lines, limit=important_limit)
+        base["last_log"] = lines[-1] if lines else None
+    except Exception as e:
+        base["log_error"] = str(e)
+
+    base["available"] = True
+    if client:
+        client.close()
+    return base
 
 def make_human_monitor_payload(container_names: List[str], top_k: int = 5) -> Dict[str, Any]:
     containers = get_docker_containers_stats(container_names)
@@ -235,6 +431,4 @@ def make_human_monitor_payload(container_names: List[str], top_k: int = 5) -> Di
         "containers": containers,
         "legend": legend,
     }
-
-
 
