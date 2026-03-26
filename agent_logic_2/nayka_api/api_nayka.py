@@ -488,11 +488,16 @@ def get_all_doctors() -> List[Dict]:
             )
         )
 
+        # Каноническое описание врача для кэша:
+        # сначала берем specialization из main=true связей (как на сайте),
+        # и только при отсутствии main-описания используем legacy первый spec.
+        canonical_specialization = main_specializations[0] if main_specializations else (specs[0] if specs else None)
+
         doctor_data = {
             "id": doctor_id,
             "fio": doctor["fio"],
             "ord": doctor.get("ord"),
-            "specialization": specs[0] if specs else None,
+            "specialization": canonical_specialization,
             "regions": doc_regions,
             "region_ids": doc_region_ids,
             "units": doc_units,

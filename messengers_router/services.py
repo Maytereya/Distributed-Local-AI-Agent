@@ -94,6 +94,10 @@ _SPECIALTY_ROLE_SYNONYMS: dict[str, tuple[str, ...]] = {
     "лор": ("лор", "оториноларинг"),
     "узи": ("узи", "ультразвук"),
 }
+_SPECIALTY_PRIORITY_SURNAMES: dict[str, tuple[str, ...]] = {
+    # Бизнес-приоритет списка хирургов в выдаче.
+    "хирург": ("тюрин", "джарар", "алимназаров", "губский"),
+}
 _SERVICE_FILTER_STOPWORDS = {
     "хочу",
     "нужно",
@@ -477,8 +481,25 @@ def _matches_specialty_terms(text: str, specialty: str) -> bool:
     norm = _normalise_input(text).replace("ё", "е")
     if not norm:
         return False
+    tokens = re.findall(r"[a-zа-я0-9]+", norm)
+    if not tokens:
+        return False
+
     for term in _specialty_terms(specialty):
-        if term in norm:
+        t = _normalise_input(term).replace("ё", "е")
+        if not t:
+            continue
+        # Короткие термины должны совпадать целиком (например, "узи", "лор"),
+        # иначе получаем ложные срабатывания по подстрокам.
+        if len(t) <= 4:
+            if any(tok == t for tok in tokens):
+                return True
+            continue
+
+        # Для длинных терминов допускаем:
+        # - точное совпадение токена ("эндокринолог")
+        # - префиксное совпадение ("ультразвук" -> "ультразвуковой").
+        if any(tok == t or tok.startswith(t) for tok in tokens):
             return True
     return False
 
@@ -590,6 +611,115 @@ def _doctor_main_payload(doc: dict[str, Any]) -> tuple[list[str], list[str], boo
     if main_units or main_specs:
         has_main_links = True
     return main_units, main_specs, has_main_links
+
+
+def _iter_unit_link_specs(doc: dict[str, Any]) -> list[tuple[str, str, bool]]:
+    """
+    Возвращает список описаний из unit_links в виде (unit_name, specialization, main_flag).
+
+    :param doc: карточка врача
+    :return: список описаний по связям подразделений
+    """
+    out: list[tuple[str, str, bool]] = []
+    unit_links = doc.get("unit_links") or []
+    if not isinstance(unit_links, list):
+        return out
+    for raw_link in unit_links:
+        if not isinstance(raw_link, dict):
+            continue
+        unit_name = str(raw_link.get("company_unit_name") or "").strip()
+        link_spec = str(raw_link.get("specialization") or "").strip()
+        if not link_spec:
+            continue
+        out.append((unit_name, link_spec, bool(raw_link.get("main"))))
+    return out
+
+
+def _specialization_matches_specialty(unit_name: str, link_spec: str, specialty: str) -> bool:
+    """
+    Проверяет, относится ли specialization-блок к нужной специальности.
+
+    :param unit_name: имя подразделения врача (company_unit_name)
+    :param link_spec: текст specialization для связи
+    :param specialty: целевая специальность
+    :return: True, если specialization релевантен специальности
+    """
+    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    if not spec_norm:
+        return False
+    # В ролевом режиме (по специальности) опираемся именно на unit_name.
+    # Иначе длинный текст specialization может содержать "чужие" термины
+    # и подмешивать нерелевантные блоки описания.
+    return _matches_specialty_terms(unit_name, spec_norm)
+
+
+def _pick_display_specialization(
+    doc: dict[str, Any],
+    *,
+    preferred_specialty: str = "",
+    preferred_service: str = "",
+) -> str:
+    """
+    Выбирает описание врача для UI без «перепутанных» блоков специализации.
+
+    Приоритет:
+    1) main=true + совпадение с запрошенной специальностью/услугой
+    2) main=false + совпадение с запрошенной специальностью/услугой
+    3) любой main=true specialization
+    4) любой main=false specialization
+    5) top-level specialization из кэша
+
+    :param doc: карточка врача
+    :param preferred_specialty: специальность из запроса (если есть)
+    :param preferred_service: услуга/процедура из запроса (если есть)
+    :return: выбранный текст specialization
+    """
+    spec_norm = _normalise_input(preferred_specialty).replace("ё", "е")
+    service_norm = _normalise_input(preferred_service)
+    link_specs = _iter_unit_link_specs(doc)
+
+    main_true_matched: list[str] = []
+    main_false_matched: list[str] = []
+    main_true_any: list[str] = []
+    main_false_any: list[str] = []
+
+    for unit_name, link_spec, is_main in link_specs:
+        if is_main:
+            if link_spec not in main_true_any:
+                main_true_any.append(link_spec)
+        else:
+            if link_spec not in main_false_any:
+                main_false_any.append(link_spec)
+
+        is_match = False
+        if spec_norm and _specialization_matches_specialty(unit_name, link_spec, spec_norm):
+            is_match = True
+        if not is_match and service_norm:
+            # Для процедурных запросов match по тексту specialization.
+            if _doctor_matches_service({"specialization": link_spec, "unit_links": [], "main_specializations": []}, service_norm):
+                is_match = True
+
+        if is_match:
+            if is_main:
+                if link_spec not in main_true_matched:
+                    main_true_matched.append(link_spec)
+            else:
+                if link_spec not in main_false_matched:
+                    main_false_matched.append(link_spec)
+
+    if main_true_matched:
+        return main_true_matched[0]
+    if main_false_matched:
+        return main_false_matched[0]
+
+    _, main_specs, _ = _doctor_main_payload(doc)
+    if main_specs:
+        return main_specs[0]
+    if main_true_any:
+        return main_true_any[0]
+    if main_false_any:
+        return main_false_any[0]
+    return str(doc.get("specialization") or "")
 
 
 def _is_role_specialty_query(query_text: str, specialty: str) -> bool:
@@ -1111,6 +1241,33 @@ def _doctor_sort_key(doc: dict[str, Any]) -> tuple[int, str]:
         ord_value = 10**9
     fio = _normalise_input(str(doc.get("fio") or ""))
     return ord_value, fio
+
+
+def _specialty_priority_rank(doc: dict[str, Any], specialty: str) -> int:
+    """
+    Возвращает приоритет врача внутри специальности по бизнес-списку фамилий.
+
+    :param doc: карточка врача
+    :param specialty: специальность запроса
+    :return: индекс приоритета (0..N-1), либо большой ранг если врач не в приоритете
+    """
+    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    priorities = _SPECIALTY_PRIORITY_SURNAMES.get(spec_norm)
+    if not priorities:
+        return 10**6
+
+    fio_norm = _normalise_input(str(doc.get("fio") or "")).replace("ё", "е")
+    if not fio_norm:
+        return 10**6
+    fio_tokens = [token for token in re.findall(r"[a-zа-я0-9]+", fio_norm) if token]
+    if not fio_tokens:
+        return 10**6
+    surname = fio_tokens[0]
+
+    for idx, wanted in enumerate(priorities):
+        if surname.startswith(wanted):
+            return idx
+    return 10**6
 
 
 def _coerce_top_n(value: Any, *, default: int = DOCTORS_TOP_N) -> int:
@@ -1641,7 +1798,11 @@ class Services:
             )
             ],
             key=(
-                (lambda d: (-role_levels.get(id(d), 0), *_doctor_sort_key(d)))
+                (lambda d: (
+                    -role_levels.get(id(d), 0),
+                    _specialty_priority_rank(d, spec),
+                    *_doctor_sort_key(d),
+                ))
                 if role_query
                 else _doctor_sort_key
             ),
@@ -1668,7 +1829,11 @@ class Services:
                 if row_fio and _normalise_input(row_fio) != _normalise_input(fio):
                     continue
                 item = dict(row)
-                item["specialization"] = _compact_specialization(str(item.get("specialization") or ""))
+                display_spec = _pick_display_specialization(
+                    doc,
+                    preferred_specialty=spec,
+                )
+                item["specialization"] = _compact_specialization(display_spec)
                 slots = _iter_slot_datetimes(item.get("schedule") or {})
                 if slots:
                     item["_nearest_slot"] = min(slots)
@@ -2065,7 +2230,14 @@ class Services:
         filtered = [d for d in doctors if match_doc(d)]
         filtered = _dedupe_doctors_by_fio(filtered)
         if role_query:
-            filtered = sorted(filtered, key=lambda d: (-role_levels.get(id(d), 0), *_doctor_sort_key(d)))
+            filtered = sorted(
+                filtered,
+                key=lambda d: (
+                    -role_levels.get(id(d), 0),
+                    _specialty_priority_rank(d, spec_q),
+                    *_doctor_sort_key(d),
+                ),
+            )
         else:
             filtered = sorted(filtered, key=_doctor_sort_key)
 
@@ -2081,7 +2253,12 @@ class Services:
         compact: list[dict[str, Any]] = []
         for d in filtered:
             row = dict(d)
-            row["specialization"] = _compact_specialization(str(row.get("specialization") or ""))
+            display_spec = _pick_display_specialization(
+                row,
+                preferred_specialty=spec_q,
+                preferred_service=service_q,
+            )
+            row["specialization"] = _compact_specialization(display_spec)
             compact.append(row)
 
         return {
@@ -2233,11 +2410,25 @@ class Services:
         if isinstance(data, list):
             compact_data: list[dict[str, Any]] = []
             samara_tokens = await self._samara_region_tokens()
+            doctor_by_fio = {
+                _normalise_input(str(d.get("fio") or "")): d
+                for d in doctors
+                if isinstance(d, dict) and str(d.get("fio") or "").strip()
+            }
             for row in data:
                 if not isinstance(row, dict):
                     continue
                 item = dict(row)
-                item["specialization"] = _compact_specialization(str(item.get("specialization") or ""))
+                row_fio_key = _normalise_input(str(item.get("fio") or ""))
+                cache_doc = doctor_by_fio.get(row_fio_key)
+                if cache_doc:
+                    display_spec = _pick_display_specialization(
+                        cache_doc,
+                        preferred_specialty=specialty,
+                    )
+                else:
+                    display_spec = str(item.get("specialization") or "")
+                item["specialization"] = _compact_specialization(display_spec)
                 regions_src = [str(x) for x in (item.get("regions") or []) if str(x).strip()]
                 if _has_explicit_non_samara_regions(regions_src):
                     continue
