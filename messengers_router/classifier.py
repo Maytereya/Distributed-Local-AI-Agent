@@ -60,7 +60,11 @@ _CLASSIFY_TIMEOUT = 45
 _TOPIC_SWITCH_RE = re.compile(r"\b(передумал\w*|передумала\w*|друг(ой|ая)\s+врач\w*|нуж\w+)\b", re.I)
 _CANCEL_FLOW_RE = re.compile(r"\b(отмен\w*|не\s+надо|не\s+хочу)\b", re.I)
 _DOCTOR_SWITCH_SIGNAL_RE = re.compile(r"\b(расписани\w*|график|врач\w*|доктор\w*|когда\b.*\bпринима\w*)\b", re.I)
-_INVALID_DOCTOR_TOKEN_RE = re.compile(r"^(отмен|перен|запис|покаж|подскаж|скажи|нуж|хоч|надо)", re.I)
+_INVALID_DOCTOR_TOKEN_RE = re.compile(
+    r"^(отмен|перен|запис|покаж|подскаж|скажи|нуж|хоч|надо|"
+    r"сдел|дела|прове|пройд|где|можно)",
+    re.I,
+)
 _REFINE_INTENTS = {"DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
 _REFINE_SIGNAL_RE = re.compile(r"\b(передумал\w*|передумала\w*|лучше|или|а\s+если|а\s+вот|уточн\w*)\b", re.I)
 _ALLOWED_CLARIFY_REASONS = {"", "intent_disambiguation", "slot_request", "context_repair", "low_confidence"}
@@ -99,6 +103,9 @@ _SPECIALTY_LIKE_NAME_TOKENS = {
     "невролог",
     "гастроэнтеролог",
     "дерматолог",
+    "дерматовенеролог",
+    "эндоскопист",
+    "эндоскопия",
     "лор",
     "оториноларинголог",
     "узи",
@@ -281,6 +288,13 @@ def _extract_schedule_specialty(text: str) -> str | None:
     spec = extract_specialty(text or "")
     if spec:
         return spec
+    if re.search(
+        r"\b(фгдс|фдгс|фгс|егдс|эгдс|фкс|эндоскоп\w*|гастроскоп\w*|колоноскоп\w*|"
+        r"ректороманоскоп\w*|эзофагогастродуоденоскоп\w*)\b",
+        text or "",
+        re.I,
+    ):
+        return "эндоскопист"
     if re.search(r"\bузи\b", text or "", re.I):
         return "узи"
     return None
@@ -1009,10 +1023,14 @@ async def deterministic_rule_decision(
                 context_action="continue",
             )
         elif address_dominant:
+            entities: dict[str, Any] = {}
+            svc = _extract_service_keyword(text)
+            if svc:
+                entities["service_name"] = svc
             decision = RouteDecision(
                 label="ADDRESS",
                 confidence=0.72,
-                entities={},
+                entities=entities,
                 flags=local_flags | {"rule_address"},
                 needs_handoff=False,
                 context_action="continue",
@@ -1119,10 +1137,14 @@ async def deterministic_rule_decision(
                     context_action="continue",
                 )
             elif detect_address_intent(text):
+                entities = {}
+                svc = _extract_service_keyword(text)
+                if svc:
+                    entities["service_name"] = svc
                 decision = RouteDecision(
                     label="ADDRESS",
                     confidence=0.72,
-                    entities={},
+                    entities=entities,
                     flags=local_flags | {"rule_address"},
                     needs_handoff=False,
                     context_action="continue",
