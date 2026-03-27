@@ -17,7 +17,13 @@ SERVICE_ANCHORS = (
     "мрт",
     "кт",
     "фгдс",
+    "фдгс",
     "фкс",
+    "эндоскоп",
+    "эндоскопия",
+    "гастроскоп",
+    "ректороманоскоп",
+    "эзофагогастродуоденоскоп",
     "рентген",
     "флюорограф",
     "колоноскоп",
@@ -33,6 +39,12 @@ SERVICE_BOUNDARY_WORDS = {
 }
 
 SERVICE_UPPERCASE = {"узи", "экг", "мрт", "кт", "фгдс", "фкс", "уздг"}
+SERVICE_CANONICAL_TOKENS = {
+    "фдгс": "фгдс",
+    "фгс": "фгдс",
+    "егдс": "фгдс",
+    "эгдс": "фгдс",
+}
 SERVICE_GENERIC_STOPWORDS = {
     "хочу",
     "хотел",
@@ -67,7 +79,7 @@ _SERVICE_FOLLOWUP_RE = re.compile(
     re.I,
 )
 _SERVICE_ACTION_RE = re.compile(
-    r"\b(?:выполняет|делает|проводит|сделать|провести|выполнить)\s+([a-zа-яё0-9\- ]{2,80})",
+    r"\b(?:выполняет|делает|проводит|сделать|провести|выполнить|удалить|удаление|убрать)\s+([a-zа-яё0-9\- ]{2,80})",
     re.I,
 )
 _SERVICE_SINGLE_WORD_RE = re.compile(r"^\s*([a-zа-яё][a-zа-яё0-9\-]{3,})\s*$", re.I)
@@ -96,6 +108,7 @@ def extract_service_phrase(text: str) -> str | None:
         service_tokens: list[str] = []
         for idx, tok in enumerate(tokens):
             token = tok.strip().lower()
+            token = SERVICE_CANONICAL_TOKENS.get(token, token)
             if not token:
                 continue
             if len(service_tokens) >= 5:
@@ -148,8 +161,8 @@ def extract_service_phrase(text: str) -> str | None:
     sw = _SERVICE_SINGLE_WORD_RE.match(raw)
     if sw:
         token = sw.group(1).strip().lower()
+        token = SERVICE_CANONICAL_TOKENS.get(token, token)
         if token not in SERVICE_GENERIC_STOPWORDS and not match_city(token):
-            return token.capitalize()
+            return token.upper() if token in SERVICE_UPPERCASE else token.capitalize()
 
     return None
-

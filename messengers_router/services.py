@@ -83,14 +83,17 @@ _SPECIALTY_ROLE_SYNONYMS: dict[str, tuple[str, ...]] = {
     "педиатр": ("педиатр",),
     "хирург": ("хирург",),
     "терапевт": ("терапевт",),
-    "травматолог": ("травматолог", "ортопед"),
+    "травматолог": ("травматолог",),
     "проктолог": ("проктолог", "колопроктолог"),
     "уролог": ("уролог",),
     "онколог": ("онколог",),
     "гинеколог": ("гинеколог",),
     "невролог": ("невролог",),
     "гастроэнтеролог": ("гастроэнтеролог",),
-    "дерматолог": ("дерматолог",),
+    "дерматолог": ("дерматолог", "дерматовенеролог"),
+    "дерматовенеролог": ("дерматовенеролог", "дерматолог"),
+    "эндоскопист": ("эндоскопист", "эндоскоп"),
+    "эндоскопия": ("эндоскопист", "эндоскоп"),
     "лор": ("лор", "оториноларинг"),
     "узи": ("узи", "ультразвук"),
 }
@@ -125,8 +128,18 @@ _SERVICE_FILTER_STOPWORDS = {
 }
 _SERVICE_QUERY_SIGNAL_RE = re.compile(
     r"\b(услуг\w*|процедур\w*|исследован\w*|анализ\w*|сда[тч]\w*|"
-    r"сдела\w*|провед\w*|провод\w*|выполня\w*|дела\w*|"
-    r"узи|экг|мрт|кт|фгдс|фкс|кольпоскоп\w*|колоноскоп\w*|рентген\w*|холтер\w*)\b",
+    r"сдела\w*|провед\w*|провод\w*|выполня\w*|дела\w*|удали\w*|удалени\w*|"
+    r"узи|экг|мрт|кт|фгдс|фкс|эндоскоп\w*|гастроскоп\w*|"
+    r"кольпоскоп\w*|колоноскоп\w*|рентген\w*|холтер\w*)\b",
+    re.I,
+)
+_ENDOSCOPY_SERVICE_RE = re.compile(
+    r"\b(эндоскоп\w*|фгдс|фдгс|фгс|егдс|эгдс|фкс|гастроскоп\w*|колоноскоп\w*|"
+    r"ректороманоскоп\w*|эзофагогастродуоденоскоп\w*)\b",
+    re.I,
+)
+_PROCEDURE_BRANCH_LOOKUP_RE = re.compile(
+    r"\b(где|сдела\w*|пройти|провест\w*|выполня\w*|дела\w*|можно|пройти\s+диагностик\w*)\b",
     re.I,
 )
 _SPECIALTY_CANONICAL = (
@@ -134,6 +147,9 @@ _SPECIALTY_CANONICAL = (
     "эндокринолог",
     "офтальмолог",
     "дерматолог",
+    "дерматовенеролог",
+    "эндоскопист",
+    "эндоскопия",
     "кардиолог",
     "невролог",
     "проктолог",
@@ -155,6 +171,10 @@ _SPECIALTY_RE = re.compile(
     r"\b(" + "|".join(re.escape(x) for x in _SPECIALTY_CANONICAL) + r")\w*\b",
     re.I,
 )
+# Fallback-карта для процедур, где API не отдает надежный branch-level match.
+_STATIC_PROCEDURE_BRANCH_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "флюорограф": ("г. Самара, пр. Ленина, 5",),
+}
 # Важно: для /priceByRegion нужен city-level regionId (Самара = 3),
 # а для /doctorServicePricesByRegion используются branch-level regionId из doctorRegions.
 SAMARA_PRICE_REGION_ID = 3
@@ -396,10 +416,27 @@ def _has_explicit_non_samara_regions(values: list[str]) -> bool:
 def _extract_specialty_from_text(text: str) -> str:
     if _UZI_QUERY_RE.search(text or ""):
         return "узи"
+    if _ENDOSCOPY_SERVICE_RE.search(text or ""):
+        return "эндоскопист"
     m = _SPECIALTY_RE.search(text or "")
     if not m:
         return ""
     return str(m.group(1) or "").strip().lower().replace("ё", "е")
+
+
+def _procedure_query_role_specialty(text: str) -> str:
+    """
+    Возвращает ролевую специальность для процедурного запроса.
+
+    Пример:
+    - "фгдс", "эндоскопия", "колоноскопия" -> "эндоскопист"
+
+    :param text: текст запроса или service_name
+    :return: каноническая специальность или пустая строка
+    """
+    if _ENDOSCOPY_SERVICE_RE.search(text or ""):
+        return "эндоскопист"
+    return ""
 
 
 def _looks_like_schedule_specialty_token(value: str) -> bool:
@@ -1099,6 +1136,101 @@ def _service_query_matches(service_q: str, service_name: str) -> bool:
     return False
 
 
+def _is_procedure_branch_lookup_query(query_text: str, service_q: str) -> bool:
+    """
+    Определяет, что пользователь ищет филиал под конкретную процедуру.
+
+    :param query_text: исходный текст запроса
+    :param service_q: нормализованная процедура/услуга
+    :return: True, если это адресный lookup по процедуре
+    """
+    if not str(service_q or "").strip():
+        return False
+    q = _normalise_input(query_text or "")
+    if not q:
+        return False
+    return bool(_PROCEDURE_BRANCH_LOOKUP_RE.search(q))
+
+
+def _soft_address_match(left: str, right: str) -> bool:
+    """
+    Мягко сопоставляет два адреса из разных источников (API/кэш).
+
+    :param left: адрес из первого источника
+    :param right: адрес из второго источника
+    :return: True, если строки похожи и описывают один филиал
+    """
+    l = _normalise_input(left)
+    r = _normalise_input(right)
+    if not l or not r:
+        return False
+    if l == r or l in r or r in l:
+        return True
+    lc = re.sub(r"[^a-zа-я0-9]+", "", l)
+    rc = re.sub(r"[^a-zа-я0-9]+", "", r)
+    if not lc or not rc:
+        return False
+    return lc == rc or lc in rc or rc in lc
+
+
+def _static_procedure_addresses(service_q: str) -> list[str]:
+    """
+    Возвращает статические адреса для процедур с известными API-пробелами.
+
+    :param service_q: нормализованное имя процедуры
+    :return: список адресов филиалов
+    """
+    sq = _normalise_input(service_q or "")
+    if not sq:
+        return []
+    out: list[str] = []
+    for needle, addresses in _STATIC_PROCEDURE_BRANCH_OVERRIDES.items():
+        if needle in sq:
+            for addr in addresses:
+                if addr not in out:
+                    out.append(addr)
+    return out
+
+
+def _addresses_to_branch_payload(
+    addresses: list[str],
+    regions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    Преобразует список адресов в унифицированный branch payload.
+
+    Если адрес находится в live `/regions`, дополняем id/phone/work_time.
+    Иначе возвращаем минимальную карточку адреса.
+
+    :param addresses: адреса филиалов
+    :param regions: live-список филиалов
+    :return: список branches для `address_info`
+    """
+    out: list[dict[str, Any]] = []
+    for addr in addresses:
+        best_region: dict[str, Any] | None = None
+        for region in regions:
+            if not isinstance(region, dict):
+                continue
+            disp = _region_display_name(region)
+            if not disp:
+                continue
+            if _soft_address_match(addr, disp):
+                best_region = region
+                break
+
+        out.append(
+            {
+                "id": _as_int(best_region.get("id")) if isinstance(best_region, dict) else None,
+                "address": _region_display_name(best_region) if isinstance(best_region, dict) else addr,
+                "city": str(best_region.get("city") or "").strip() if isinstance(best_region, dict) else "Самара",
+                "phone": _extract_region_phone(best_region) if isinstance(best_region, dict) else "",
+                "work_time": _extract_region_work_time(best_region) if isinstance(best_region, dict) else "",
+            }
+        )
+    return out
+
+
 def _extract_homecode_query(text: str) -> str:
     s = _normalise_input(text)
     m = _PRICE_HOMECODE_DOTTED_RE.search(s)
@@ -1636,14 +1768,18 @@ class Services:
     _doctors_cache_loaded_at: float = field(default=0.0, init=False)
     _regions_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
     _regions_cache_loaded_at: float = field(default=0.0, init=False)
+    _procedure_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
+    _procedure_rows_loaded_at: float = field(default=0.0, init=False)
 
     # блокировка, чтобы несколько запросов параллельно не перегенерировали кэш
     _doctors_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _regions_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    _procedure_rows_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     # TTL in-memory кэша (латентность, сек, определят свежесть кэша)
     doctors_mem_ttl_seconds: int = 300
     regions_mem_ttl_seconds: int = 300
+    procedure_rows_mem_ttl_seconds: int = 300
 
     # -----------------------------
     # Low-level helpers (async)
@@ -1757,6 +1893,102 @@ class Services:
                 if n:
                     tokens.add(n)
         return tokens
+
+    async def _ensure_procedure_rows_loaded(self) -> list[dict[str, Any]]:
+        """
+        Готовит in-memory индекс процедур по филиалам из doctor_prices.
+
+        Источник: `api_price.load_doctor_prices()` (кэш по branch-level regionId).
+        Для защиты от мусора оставляем только самарские строки с реальными адресами.
+
+        :return: строки вида {"serviceName": str, "regionName": str}
+        """
+        now = time.time()
+        if self._procedure_rows_cache and (now - self._procedure_rows_loaded_at) < self.procedure_rows_mem_ttl_seconds:
+            return self._procedure_rows_cache
+
+        async with self._procedure_rows_lock:
+            now = time.time()
+            if self._procedure_rows_cache and (now - self._procedure_rows_loaded_at) < self.procedure_rows_mem_ttl_seconds:
+                return self._procedure_rows_cache
+
+            try:
+                rows = await asyncio.to_thread(api_price.load_doctor_prices)
+            except Exception:
+                rows = []
+            if not isinstance(rows, list):
+                rows = []
+
+            samara_tokens = await self._samara_region_tokens()
+            filtered: list[dict[str, Any]] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                service_name = str(row.get("serviceName") or "").strip()
+                region_name = str(row.get("regionName") or "").strip()
+                if not service_name or not region_name:
+                    continue
+                if not _looks_like_real_address(region_name):
+                    continue
+                if _is_explicit_non_samara_region(region_name):
+                    continue
+                if samara_tokens and not _region_matches_samara_tokens(region_name, samara_tokens):
+                    continue
+                filtered.append({"serviceName": service_name, "regionName": region_name})
+
+            self._procedure_rows_cache = filtered
+            self._procedure_rows_loaded_at = time.time()
+            return self._procedure_rows_cache
+
+    async def _procedure_branches_from_index(
+        self,
+        service_q: str,
+        regions: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Находит филиалы для процедуры по индексу `doctor_prices`.
+
+        :param service_q: нормализованная процедура
+        :param regions: live-список филиалов /regions (для phone/work_time)
+        :return: список branches в формате address_info
+        """
+        role_specialty = _procedure_query_role_specialty(service_q)
+        if role_specialty:
+            doctors = await self._ensure_doctors_cache_loaded()
+            samara_tokens = await self._samara_region_tokens()
+            role_addresses: list[str] = []
+            for doc in doctors:
+                if not isinstance(doc, dict):
+                    continue
+                if _doctor_role_specialty_match_level(doc, role_specialty) <= 0:
+                    continue
+                regions_src = [str(x).strip() for x in (doc.get("regions") or []) if str(x).strip()]
+                if _has_explicit_non_samara_regions(regions_src):
+                    continue
+                for addr in regions_src:
+                    if not _looks_like_real_address(addr):
+                        continue
+                    if samara_tokens and not _region_matches_samara_tokens(addr, samara_tokens):
+                        continue
+                    if addr not in role_addresses:
+                        role_addresses.append(addr)
+            if role_addresses:
+                return _addresses_to_branch_payload(role_addresses, regions)
+
+        rows = await self._ensure_procedure_rows_loaded()
+        ranked = _rank_price_rows(rows, service_q, limit=200)
+
+        addresses: list[str] = []
+        for row in ranked:
+            addr = str(row.get("regionName") or "").strip()
+            if not addr or not _looks_like_real_address(addr):
+                continue
+            if addr not in addresses:
+                addresses.append(addr)
+
+        if not addresses:
+            addresses = _static_procedure_addresses(service_q)
+        return _addresses_to_branch_payload(addresses, regions)
 
     async def _schedule_by_specialty(
         self,
@@ -2292,8 +2524,11 @@ class Services:
         )
         specialty = _normalise_input(_get_first_present(entities, ["specialty", "specialization", "spec"]) or "")
         query_specialty = _extract_specialty_from_text(query)
+        query_procedure_specialty = _procedure_query_role_specialty(query or "")
         if query_specialty:
             specialty = query_specialty
+        elif query_procedure_specialty:
+            specialty = query_procedure_specialty
         if raw_name and _looks_like_schedule_specialty_token(str(raw_name)):
             raw_name = ""
 
@@ -2324,6 +2559,12 @@ class Services:
             # резолвить фамилию из всей фразы: это ведет к ложным doctor_name.
             if not specialty:
                 last_name = query_name or resolve_schedule_surname(query, doctors)
+
+        query_has_specialty_signal = bool(query_specialty or query_procedure_specialty)
+        if query_has_specialty_signal and specialty and not query_name:
+            # Текущая реплика явно про специальность/процедуру (например, ФГДС),
+            # поэтому не используем "залипшую" фамилию из прошлых сообщений.
+            last_name = None
 
         if not last_name and specialty:
             schedule_by_spec = await self._schedule_by_specialty(
@@ -2866,6 +3107,10 @@ class Services:
                 branch = raw_query
         branch_q = _normalise_input(branch)
         service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
+        if not service_name:
+            extracted = extract_service_phrase(query or "")
+            if extracted:
+                service_name = extracted
         service_q = _normalise_input(service_name)
         city_for_static = _get_first_present(entities, ["city"])
         if city_for_static and _is_non_samara_city_value(city_for_static):
@@ -2891,6 +3136,23 @@ class Services:
                     if not a or not _looks_like_real_address(a):
                         continue
                     allowed_doctor_addresses_norm.add(_normalise_input(a))
+
+        if service_q and _is_procedure_branch_lookup_query(query, service_q):
+            procedure_branches = await self._procedure_branches_from_index(service_q, regions)
+            if procedure_branches:
+                if branch_q:
+                    procedure_branches = [
+                        b
+                        for b in procedure_branches
+                        if branch_q in _normalise_input(str(b.get("address") or ""))
+                    ]
+                if procedure_branches:
+                    return {
+                        "addresses": [str(b.get("address") or "").strip() for b in procedure_branches if str(b.get("address") or "").strip()],
+                        "branches": procedure_branches,
+                        "note": "address_info: procedure->branches (doctor_prices index)",
+                        "entities_used": entities,
+                    }
 
         if service_q:
             regions = _filter_regions_by_service_flags(regions, service_q)
