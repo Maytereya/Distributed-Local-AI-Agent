@@ -32,16 +32,12 @@ async def formulate(sentence: str, ):
     aresult = await ollama_aclient.generate(
         model=llm,
         prompt=prompt,
-        # format="json",
         options=options,
         keep_alive=-1,
 
     )
 
     print(f"Eval_duration of answer generation: {aresult['eval_duration'] / 1_000_000_000}")
-    #
-    # print("Формулировка: ")
-    # print(aresult['response'])
     return aresult['response']
 
 
@@ -131,16 +127,11 @@ async def extract_keyword(query: str, extract_type: Literal["sentence", "word"] 
     aresult = await ollama_aclient.generate(
         model=llm,
         prompt=prompt,
-        # format="json",
         options=options,
-        # keep_alive=-1,
 
     )
 
     print(f"Eval_duration of answer generation: {aresult['eval_duration'] / 1_000_000_000}")
-    #
-    # print("Ключевое слово: ")
-    # print(aresult['response'])
 
     return aresult['response']
 

@@ -1,5 +1,4 @@
 import asyncio
-from typing import Literal
 
 from ollama import AsyncClient, Options
 
@@ -33,16 +32,12 @@ async def formulate(sentence: str, ):
     aresult = await ollama_aclient.generate(
         model=llm,
         prompt=prompt,
-        # format="json",
         options=options,
         keep_alive=-1,
 
     )
 
     print(f"Eval_duration of answer generation: {aresult['eval_duration'] / 1_000_000_000}")
-    #
-    # print("Формулировка: ")
-    # print(aresult['response'])
     return aresult['response']
 
 
@@ -54,7 +49,6 @@ async def main(question: str, ):
 
 
 if __name__ == "__main__":
-    # q = input("Question: ")
     hardcoded_question = """
     Расскажи о себе. 
     """

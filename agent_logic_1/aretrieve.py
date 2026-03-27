@@ -11,13 +11,8 @@ import uuid
 from typing import List, Optional
 from typing import Literal
 
-# <<< ВАЖНО >>> тяжёлые модули импортируем позже, внутри функций
-# from langchain_huggingface import HuggingFaceEmbeddings
-# from sentence_transformers import SentenceTransformer
-
 import chromadb
 from chromadb import Documents, EmbeddingFunction, Embeddings, Collection
-from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.document_loaders import TextLoader, DirectoryLoader
 from langchain_community.document_loaders import WebBaseLoader
@@ -28,27 +23,6 @@ from tenacity import retry, stop_after_attempt, wait_fixed  # Для автом�
 
 from agent_logic_2 import config as c
 from agent_logic_1 import formulate, embedding_filtration
-
-# Model loading for embeddings
-# from InstructorEmbedding import INSTRUCTOR
-# i_model = INSTRUCTOR('hkunlp/instructor-large')
-# model_only = "cointegrated/LaBSE-en-ru"
-# model_only = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2' # эффективность под вопросом
-# model_only = 'sentence-transformers/LaBSE'
-# model_only = "sentence-transformers/distiluse-base-multilingual-cased-v1"
-# ==== Medical models =====
-# model_only = "dmis-lab/biobert-v1.1"
-# model_only = "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb"
-# ==== Russian models =====
-# model_only = "ai-forever/sbert_large_nlu_ru"
-#
-
-# --------------------------------------
-# Отключение предупреждений о грядущем
-# --------------------------------------
-# warnings.filterwarnings(
-#     "ignore", category=FutureWarning, module="transformers.tokenization_utils_base"
-# )
 
 # --------------------------------------
 # Функционал подключения к
@@ -78,13 +52,22 @@ def connect_to_chroma():
     return chromadb.HttpClient(host=c.chroma_host, port=c.chroma_port)
 
 
-# Инициализация Chroma - клиента
-try:
-    chroma_client = connect_to_chroma()
-    logger.info("✅ Успешное подключение к ChromaDB!")
-    print(f"Chroma host: {c.chroma_host}, Chroma port: {c.chroma_port}")
-except Exception as e:
-    logger.error(f"❌ Ошибка подключения к ChromaDB: {e}")
+_chroma_client = None
+chroma_client = None  # Backward compatibility
+
+
+def get_chroma_client():
+    global _chroma_client, chroma_client
+    if _chroma_client is None:
+        try:
+            _chroma_client = connect_to_chroma()
+            chroma_client = _chroma_client
+            logger.info("✅ Успешное подключение к ChromaDB!")
+            print(f"Chroma host: {c.chroma_host}, Chroma port: {c.chroma_port}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка подключения к ChromaDB: {e}")
+            raise
+    return _chroma_client
 
 
 # -----------------------------
@@ -144,7 +127,6 @@ class ChromaService:
         """
         print("Chroma current version: " + str(self.chroma_client.get_version()))
         print("Collections count: " + str(self.chroma_client.count_collections()))
-        # print("Chroma heartbeat: " + str(round(self.chroma_client.heartbeat() / 3_600_000_000_000, 2)), " hours")
 
     def reset_chroma(self):
         """
@@ -345,25 +327,18 @@ def handle_collection(existed_collection: str) -> List[str] | str:
              сообщение о том, что коллекция/документы недоступны.
     """
     try:
-        collection = chroma_client.get_collection(name=existed_collection,
-                                                  embedding_function=HuggingFaceEmbeddingFunction())
+        collection = get_chroma_client().get_collection(
+            name=existed_collection,
+            embedding_function=HuggingFaceEmbeddingFunction(),
+        )
         if collection.count() == 0:
             return ["Коллекция не содержит документов"]
 
-        # print("Common collection info:")
         peek = collection.peek(limit=300)  # returns a list of the first 300 items in the collection
-
-        # Only get documents and ids
-        # collection_info = collection.get(
-        #     include=["uris"],
-        # )
 
         documents_metadata = peek["metadatas"]
         if not documents_metadata:
             return ["Документы в коллекции не найдены"]
-
-        # for metadata in documents_metadata:
-        # print(documents_metadata)
 
         file_list = []
         for item in documents_metadata:
@@ -375,7 +350,7 @@ def handle_collection(existed_collection: str) -> List[str] | str:
 
         return file_list if file_list else ["Не найдено подходящих документов"]
 
-    except Exception as e:
+    except Exception:
         return ["Доступ к коллекции невозможен"]
 
 
@@ -395,7 +370,7 @@ def create_collection(
     embedding_function.set_model(model)  # Set the embedding model.
 
     try:
-        chroma_collection = chroma_client.create_collection(
+        chroma_collection = get_chroma_client().create_collection(
             name=new_collection_name,
             embedding_function=embedding_function,
             metadata={"hnsw:space": "cosine"})  # Use cosine similarity as the default metric.
@@ -417,10 +392,10 @@ def remove_collection(collection_name: str, ):
         Удаляет коллекцию из ChromaDB по имени.
 
         :param collection_name: Имя коллекции, которую необходимо удалить.
-        :return: None. В случае ошибки выводит сообщение в консоль.
+    :return: None. В случае ошибки выводит сообщение в консоль.
         """
     try:
-        chroma_client.delete_collection(name=collection_name)
+        get_chroma_client().delete_collection(name=collection_name)
     except Exception as erc:
         print(f"An error occurred while deleting the collection: {erc}, stop |")
         return None
@@ -483,8 +458,10 @@ def add_data(
         embedding_function.set_model(model)
 
         # Fetch the collection
-        collection = chroma_client.get_collection(name=exist_collection_name,
-                                                  embedding_function=embedding_function)
+        collection = get_chroma_client().get_collection(
+            name=exist_collection_name,
+            embedding_function=embedding_function,
+        )
         if not collection:
             print(f"Collection {exist_collection_name} not found.")
             return
@@ -539,13 +516,14 @@ def query_collection(
     embedding_function = HuggingFaceEmbeddingFunction()
     embedding_function.set_model(model)
 
-    collection = chroma_client.get_collection(name=existed_collection,
-                                              embedding_function=embedding_function)
+    collection = get_chroma_client().get_collection(
+        name=existed_collection,
+        embedding_function=embedding_function,
+    )
 
     result = collection.query(
         query_texts=question,
         n_results=n_results,
-        # where={"metadata_field": "is_equal_to_this"},
         where_document={"$contains": contains}  # Filter documents containing the specified text.
     )
 
@@ -610,7 +588,7 @@ def vs_query(
         )
 
         vector_store_from_client = Chroma(
-            client=chroma_client,
+            client=get_chroma_client(),
             collection_name=existed_collection,
             embedding_function=embedding_function,
         )
@@ -619,14 +597,6 @@ def vs_query(
         if filters is None:
             filters = {"source": "pdf/side_effects_guidelines.pdf"}
 
-        def print_results(all_results):
-            for c_res in all_results:
-                if isinstance(c_res, tuple):
-                    c_res, score = c_res
-                    print(f"* [SIM={score:.3f}] {c_res.page_content} [{c_res.metadata}]")
-                else:
-                    print(f"* {c_res.page_content} [{c_res.metadata}]")
-
         if search_type == "simil":
             documents = vector_store_from_client.similarity_search(
                 question,
@@ -634,7 +604,6 @@ def vs_query(
                 filter=filters,
             )
             print("Search type: similarity search")
-            # print_results(documents)
 
         elif search_type == "simil_score":
             results = vector_store_from_client.similarity_search_with_score(
@@ -643,7 +612,6 @@ def vs_query(
                 filter=filters,
             )
             print("Search type: similarity search with scores")
-            # print_results(results)
             documents = [
                 Document(page_content=doc.page_content, metadata=score)
                 for doc, score in results
@@ -654,7 +622,6 @@ def vs_query(
                 embedding=embedding_function.embed_query(question), k=k
             )
             print("Search type: search by vector")
-            # print_results(documents)
 
         elif search_type == "mmr":
             retriever = vector_store_from_client.as_retriever(
@@ -663,7 +630,6 @@ def vs_query(
             )
             print("Search type: Maximal Marginal Relevance (MMR)")
             documents = retriever.invoke(question, )
-            # print_results(documents)
 
     except Exception as e:
         print(f"An error occurred during vector store search using def vs_query(): {e}")
@@ -750,7 +716,6 @@ async def main_retrieve_async(collection: str,
 
 
 def main_add_to_chroma(
-        # filename: str = "side_effects_guideline_for_RAG_paged.pdf",
         path_to_file: str = None,
         collection: str = "main_collection",
         doc_type: Literal["URL", "PDF", "TXT"] = "PDF",
@@ -781,18 +746,6 @@ def main_add_to_chroma(
 #
 if __name__ == '__main__':
     print(':: TESTING ::')
-
-    # PDF document to load pass
-    # file_path = "pdf/taking_guidelines.pdf"
-    # txt document directory pass
-    # file_path = "../Upload/"
-
-    # urls_rus = [
-    #     "https://neiro-psy.ru/blog/monopobiya-kak-nazyvaetsya-strah-ostavatsya-odnomu-i-kak-s-nim-spravitsya",
-    #     "https://neiro-psy.ru/blog/bipolyarnoe-rasstrojstvo-i-depressiya-ponimanie-razlichij",
-    #     "https://neiro-psy.ru/blog/razdvoenie-lichnosti-kak-raspoznat-simptomy-i-obratitsya-za-pomoshchyu",
-    # ]
-
     cs = ChromaService(c.chroma_host, c.chroma_port)
     collections = cs.display_collections(output_format="list")
     print(collections)

@@ -40,7 +40,6 @@ BATCH_SIZE = int(_cfg("FILTRATION", "batch_size", "16"))
 TOKENIZERS_PARALLELISM = _cfg("FILTRATION", "tokenizers_parallelism", "false")
 os.environ["TOKENIZERS_PARALLELISM"] = TOKENIZERS_PARALLELISM
 
-# Синглтоны (лениво)
 _TOKENIZER: AutoTokenizer | None = None
 _MODEL: AutoModel | None = None
 _DEVICE: torch.device | None = None

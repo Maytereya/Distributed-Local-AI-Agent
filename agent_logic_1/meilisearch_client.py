@@ -10,8 +10,6 @@ This module provides two ways to work with Meilisearch:
 from __future__ import annotations
 
 import json
-# Retry section
-# import time
 import logging
 import os
 import time
@@ -22,13 +20,9 @@ from typing import Union
 
 import meilisearch
 import requests
-# from httpx import AsyncClient, ConnectError
 from tenacity import retry, stop_after_attempt, wait_fixed  # Для автоматических ретраев
 
-#
 from agent_logic_2 import config as c
-
-# from gradio_interface import waiter
 
 # --------------------------------------
 # Секция загрузки и ретраев для отладки
@@ -46,19 +40,50 @@ def connect_to_meilisearch():
     return meilisearch.Client(c.MEILI_URL, c.MASTER_KEY)
 
 
-try:
-    client = connect_to_meilisearch()
-    logger.info("✅ Успешное подключение к MeiliSearch!")
-    skip_version_check = str(os.getenv("MEILI_SKIP_VERSION_CHECK", "")).strip().lower() in {"1", "true", "yes", "on"}
-    if skip_version_check:
-        logger.warning("⏭️ Пропущена проверка версии MeiliSearch (MEILI_SKIP_VERSION_CHECK=1).")
-    else:
-        ver = client.get_version()  # dict
-        # прим.: {'pkgVersion': '1.11.0', 'commitSha': '...', 'buildDate': '...'}
-        pkg_version = ver.get("pkgVersion")
-        logger.info(f"Meilisearch server ver.: {pkg_version}")
-except Exception as e:
-    logger.error(f"❌ Ошибка подключения к MeiliSearch: {e}")
+_client: meilisearch.Client | None = None
+client: meilisearch.Client | None = None  # Backward compatibility
+_version_checked = False
+_defaults_ensured = False
+
+
+def get_meilisearch_client() -> meilisearch.Client:
+    global _client, client, _version_checked
+    if _client is None:
+        _client = connect_to_meilisearch()
+        client = _client
+        logger.info("✅ Успешное подключение к MeiliSearch!")
+
+    if not _version_checked:
+        try:
+            skip_version_check = str(os.getenv("MEILI_SKIP_VERSION_CHECK", "")).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            if skip_version_check:
+                logger.warning("⏭️ Пропущена проверка версии MeiliSearch (MEILI_SKIP_VERSION_CHECK=1).")
+            else:
+                ver = _client.get_version()  # dict
+                pkg_version = ver.get("pkgVersion")
+                logger.info(f"Meilisearch server ver.: {pkg_version}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка проверки версии MeiliSearch: {e}")
+        finally:
+            _version_checked = True
+
+    return _client
+
+
+def ensure_default_indexes_once() -> None:
+    global _defaults_ensured
+    if _defaults_ensured:
+        return
+    ms_client = get_meilisearch_client()
+    waiter = lambda task: wait_for_task_completion(ms_client, task)
+    ensure_index(ms_client, "main_index", "id", MAIN_SETTINGS, wait_fn=waiter)
+    ensure_index(ms_client, "news", "id", NEWS_SETTINGS, wait_fn=waiter)
+    _defaults_ensured = True
 
 # -----------------------------------------------------------
 # Настройки для индексов двух типов: скриптовый и новостной.
@@ -271,9 +296,11 @@ def add_doc_to_meili(
 
     # 3) Отправка + ожидание завершения
     try:
-        task_info = client.index(index_name).add_documents(blocks)
+        ms_client = get_meilisearch_client()
+        ensure_default_indexes_once()
+        task_info = ms_client.index(index_name).add_documents(blocks)
         status, task = wait_for_task_completion(
-            client, task_info, timeout=timeout, poll_interval=poll_interval
+            ms_client, task_info, timeout=timeout, poll_interval=poll_interval
         )
 
         if status == "succeeded":
@@ -318,8 +345,17 @@ def meili_list_documents(
     # Поля, которые важны в документе
     fields = ['id', 'title', 'content', 'valid_from', 'valid_to', 'is_permanent']
 
-    data = client.index(index_name).get_documents({'limit': doc_count_limit, 'fields': fields})
-    array_of_docs = data.results
+    try:
+        ms_client = get_meilisearch_client()
+        ensure_default_indexes_once()
+        data = ms_client.index(index_name).get_documents({'limit': doc_count_limit, 'fields': fields})
+        array_of_docs = data.results
+    except Exception as e:
+        msg = f"Ошибка получения документов из Meilisearch: {e}"
+        logger.error(msg)
+        if return_type in {"All", "All_News"}:
+            return [[msg]]
+        return [msg]
 
     def safe_get(doc: Any, key: str, default: str = "") -> str:
         # 1) атрибут
@@ -358,7 +394,6 @@ def meili_list_documents(
         out_all.append([doc_id, title, content, ])
         out_all_news.append([doc_id, title, is_permanent, valid_from, valid_to, content, ])
 
-    # return out_all if return_type == "All" else out_ids
     if return_type == "All":
         return out_all
     elif return_type == "All_News":
@@ -416,10 +451,10 @@ def search_meili(
         )
 
     try:
-        search_result = client.index(index_name).search(query, {
+        ms_client = get_meilisearch_client()
+        ensure_default_indexes_once()
+        search_result = ms_client.index(index_name).search(query, {
             "limit": limit,
-            # "highlightPreTag": highlight,
-            # "highlightPostTag": highlight,
             "attributesToHighlight": [highlight_fields],
         })
 
@@ -533,7 +568,6 @@ def show_list_indexes(detail_mode: str = "full") -> list:
             if detail_mode == "uid":
                 # Extract just the 'uid' fields
                 uids = [idx.get("uid") for idx in indexes]
-                # print("Index UIDs found:", uids)
                 return uids
             else:
                 # detail_mode == "full" or any other unexpected value
@@ -585,9 +619,6 @@ def delete_index(index_uid: str) -> None:
 
     try:
         response = requests.delete(endpoint, headers=headers, timeout=10)
-        # if response.status_code == 204:
-        #     print(f"Index '{index_uid}' deleted successfully.")
-        # else:
         print(f"Info about deleting index '{index_uid}': {response.text}")
     except requests.exceptions.RequestException as e:
         print(f"Error deleting index '{index_uid}': {e}")
@@ -609,13 +640,8 @@ def get_meili_list_documents(index_uid: str, limit: int = 20, offset: int = 0) -
     try:
         response = requests.get(endpoint, headers=headers, params=params, timeout=10)
         if response.status_code == 200:
-            # print("Response status code:", str(response.status_code))
             data = response.json()
             documents = data.get("results", [])
-
-            # print(f"Documents in index '{index_uid}':")
-            # print(json.dumps(data, indent=2, ensure_ascii=False))
-
             return documents
         else:
             print(f"Error listing documents for index (without rising an exception) '{index_uid}': {response.text}")
@@ -742,22 +768,19 @@ def search_news_active(
     # + явный тип документа для чистоты
     flt = f'from_ts <= {ts} AND to_ts >= {ts} AND doc_type = "news"'
 
-    # -------------------example-----------------------
-
-    # search_result = client.index(index_name).search(query, {
-    #     "limit": limit,
-    #     # "highlightPreTag": highlight,
-    #     # "highlightPostTag": highlight,
-    #     "attributesToHighlight": [highlight_fields],
-    # })
-
-    res = client.index(index_name).search(keyword or "", {
-        "filter": flt,
-        "limit": limit,
-        "sort": sort or ["from_ts:desc"],  # сначала свежие старты
-    })
-    # res["hits"] — список документов
-    return res.get("hits", [])
+    try:
+        ms_client = get_meilisearch_client()
+        ensure_default_indexes_once()
+        res = ms_client.index(index_name).search(keyword or "", {
+            "filter": flt,
+            "limit": limit,
+            "sort": sort or ["from_ts:desc"],  # сначала свежие старты
+        })
+        # res["hits"] — список документов
+        return res.get("hits", [])
+    except Exception as e:
+        logger.error(f"Ошибка поиска активных новостей в Meilisearch: {e}")
+        return []
 
 
 # -----поиск новостей за период-----------------------------------
@@ -785,12 +808,18 @@ def search_news_by_period(
     """
     # Пересечение интервалов: [from_ts, to_ts] ∩ [start_ts, end_ts] ≠ Ø
     flt = f"from_ts <= {end_ts} AND to_ts >= {start_ts} AND doc_type = 'news'"
-    res = client.index(index_name).search(keyword or "", {
-        "filter": flt,
-        "limit": limit,
-        "sort": sort or ["from_ts:asc"],
-    })
-    return res.get("hits", [])
+    try:
+        ms_client = get_meilisearch_client()
+        ensure_default_indexes_once()
+        res = ms_client.index(index_name).search(keyword or "", {
+            "filter": flt,
+            "limit": limit,
+            "sort": sort or ["from_ts:asc"],
+        })
+        return res.get("hits", [])
+    except Exception as e:
+        logger.error(f"Ошибка поиска новостей за период в Meilisearch: {e}")
+        return []
 
 
 def main():
@@ -801,13 +830,11 @@ def main():
     from datetime import datetime, timezone
     now_ts = int(datetime.now(timezone.utc).timestamp())
     flt = f'from_ts <= {now_ts} AND to_ts >= {now_ts} AND doc_type = "news"'
-    search_result = client.index("news").search("торакоцентез", {
+    ms_client = get_meilisearch_client()
+    ensure_default_indexes_once()
+    search_result = ms_client.index("news").search("торакоцентез", {
         "limit": 10,
         "filter": flt,
-
-        # "highlightPreTag": highlight,
-        # "highlightPostTag": highlight,
-        # "attributesToHighlight": [highlight_fields],
     })
     print(json.dumps(search_result, indent=2, ensure_ascii=False))
 
@@ -817,31 +844,14 @@ def main():
         "filterableAttributes": ["from_ts", "to_ts", "is_permanent", "doc_type", "keywords"],
         "sortableAttributes": ["from_ts", "to_ts"],
     }
-    ensure_index(client, "news", "id", NEWS_SETTINGS, )
+    ensure_index(ms_client, "news", "id", NEWS_SETTINGS, )
 
-    s = client.index("news").get_settings()
+    s = ms_client.index("news").get_settings()
     print("searchable:", s.get("searchableAttributes"))
 
-    # idx = client.index("news").search( {})
-    # print(idx.search("", filter='doc_type = "news"', limit=3))
-    #
-    # # 2) есть ли документы с from_ts/to_ts (и какие значения)
-    # hits = idx.search("", filter='doc_type = "news"', limit=50).get("hits", [])
-    # print([(h.get("id"), h.get("from_ts"), h.get("to_ts")) for h in hits])
-    #
-    # # 3) что даёт «активные сейчас» без keyword
-
-    # print(idx.search("", filter=flt, limit=3))
-
     print("=======")
-    # doc: dict = {'id': 'skidka_50_na_manipulyaciyu_lor_hirurgiya_p1_b1', 'doc_id': 'skidka_50_na_manipulyaciyu_lor_hirurgiya', 'page': 1, 'block_id': 1, 'type': 'text', 'title': 'Скидка 50% на манипуляцию ЛОР, хирургия (+ check)', 'content': 'Скидка 50% на манипуляцию ЛОР, хирургия (+check2).\n_\nСкидка предоставляется на прием специалиста при прохождения данных манипуляций у доктора.\n_\nВНИМАНИЕ!   Пациент должен иметь на руках  протокол консультации врача, где указано, что  рекомендовано та или иная манипуляция (с него снимают копию и вклеивают в карту пациентки).\n  Если  протокола/направления от врача нет (и соответственно нет рекомендации для проведения данной манипуляции), то пациент оплачивает полную стоимость приема!\n_\nЗапись в Мед.центре: в примечании пишем 50%манипуляция\n_\nПродолжительность акции: не указана.', 'html': None, 'csv': None, 'keywords': [], 'created_at': '2025-10-13T17:12:38Z'}
-    #
     print("=======")
     print(get_document_by_id("main_index", "obsluzhivanie_sotrudnikov_t_banka_po_chekapam_renessans_p1_b1"))
-    # print(upsert_document("news", doc))
-    # s_r = search_meili("news", "прием флеболога бесплатно")
-    # print("=======")
-    # print(s_r)
 
 
 if __name__ == '__main__':
