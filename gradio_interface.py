@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import os
 from typing import Any
@@ -29,7 +30,8 @@ from agent_logic_2.gradio_ui.handlers.kb_ops import (
     update_docs_in_meili_index,
     validate_id_live,
 )
-from agent_logic_2.gradio_ui.shared.auth import check_auth, get_user_role
+from agent_logic_2.gradio_ui.shared.auth import check_auth, get_reserved_logins, get_user_role
+from agent_logic_2.gradio_ui.shared import user_store
 from agent_logic_2.gradio_ui.shared.bootstrap import bootstrap_files
 from agent_logic_2.gradio_ui.shared.constants import (
     COLLECTIONS_IN_CHROMA,
@@ -48,6 +50,7 @@ from agent_logic_2.gradio_ui.tabs.documents_tab import (
 from agent_logic_2.gradio_ui.tabs.messenger_settings_tab import build_messenger_settings_tab
 from agent_logic_2.gradio_ui.tabs.monitoring_tab import build_monitoring_tab
 from agent_logic_2.gradio_ui.tabs.system_settings_tab import build_system_settings_tab
+from agent_logic_2.gradio_ui.tabs.users_tab import build_users_tab
 from agent_logic_2.id_validation import is_valid_id, sanitize_id
 from agent_logic_2.ollama_settings import LLMName
 from agent_logic_2.prompts import load_prompt, write_prompt
@@ -88,11 +91,20 @@ def main():
     """
     with (gr.Blocks(css=custom_css, title="Neiry.ai", head=OG_HEAD) as blocks):
         with gr.Row(elem_id="logo-row"):
-            gr.HTML(
-                "<div id='logo-bar'>"
-                "<img id='brand-logo' src='/gradio_api/file=static/logo.png' alt='Логотип'>"
-                "</div>"
-            )
+            with gr.Column(scale=0, min_width=180):
+                gr.HTML(
+                    "<div id='logo-bar'>"
+                    "<img id='brand-logo' src='/gradio_api/file=static/logo.png' alt='Логотип'>"
+                    "</div>"
+                )
+            with gr.Column(scale=1, min_width=0, elem_id="top-user-col"):
+                top_user_identity = gr.HTML(
+                    "<div id='top-user-box'>"
+                    "<span class='top-user-icon'>👤</span>"
+                    "<span class='top-user-name'>—</span>"
+                    "<a class='top-user-logout' href='logout'>выйти</a>"
+                    "</div>"
+                )
 
         with gr.Tabs(elem_id="main-tabs"):
             # --------------------------------------------------
@@ -377,12 +389,90 @@ def main():
             )
             monitor_tab = monitoring_tab_refs["tab"]
 
+            def _users_rows() -> list[list[str]]:
+                users = user_store.list_users()
+                return [
+                    [
+                        str(user.get("name") or ""),
+                        str(user.get("login") or ""),
+                        "Да" if bool(user.get("active", True)) else "Нет",
+                        str(user.get("created_at") or ""),
+                    ]
+                    for user in users
+                ]
+
+            def _is_admin_request(request: gr.Request | None) -> bool:
+                username = getattr(request, "username", None) if request else None
+                return get_user_role(username) == "admin"
+
+            def fn_users_list(request: gr.Request | None = None) -> tuple[list[list[str]], str]:
+                if not _is_admin_request(request):
+                    return [], "Доступ к списку пользователей только для администратора"
+                try:
+                    rows = _users_rows()
+                    return rows, f"Пользователей: {len(rows)}"
+                except Exception as e:
+                    msg = f"Ошибка чтения users_db: {e}"
+                    gr.Error(title="Пользователи", message=msg)
+                    return [], msg
+
+            def fn_users_create(
+                display_name: str,
+                login: str,
+                password: str,
+                request: gr.Request | None = None,
+            ) -> tuple[list[list[str]], str, str, str, str]:
+                if not _is_admin_request(request):
+                    msg = "Создавать пользователей может только администратор"
+                    gr.Error(title="Недостаточно прав", message=msg)
+                    return [], msg, display_name, login, ""
+                try:
+                    created = user_store.create_basic_user(
+                        name=display_name,
+                        login=login,
+                        password=password,
+                        deny_logins=get_reserved_logins(),
+                    )
+                    gr.Success(
+                        title="Пользователь создан",
+                        message=f"Создан пользователь: {created['login']}",
+                        duration=3,
+                    )
+                    rows = _users_rows()
+                    return rows, f"Пользователей: {len(rows)}", "", "", ""
+                except Exception as e:
+                    msg = str(e)
+                    gr.Error(title="Ошибка создания пользователя", message=msg)
+                    rows = _users_rows()
+                    status = f"Пользователей: {len(rows)}"
+                    return rows, f"{status}. Ошибка: {msg}", display_name, login, ""
+
+            users_tab_refs = build_users_tab(
+                blocks=blocks,
+                list_users_fn=fn_users_list,
+                create_user_fn=fn_users_create,
+                tab_visible=False,
+            )
+            users_tab = users_tab_refs["tab"]
+
+            def render_top_user_identity(request: gr.Request | None = None) -> str:
+                username = str(getattr(request, "username", None) or "").strip()
+                safe_username = html.escape(username if username else "user")
+                return (
+                    "<div id='top-user-box'>"
+                    "<span class='top-user-icon'>👤</span>"
+                    f"<span class='top-user-name'>{safe_username}</span>"
+                    "<a class='top-user-logout' href='logout'>выйти</a>"
+                    "</div>"
+                )
+
             def apply_tab_visibility_by_role(request: gr.Request | None = None):
                 username = getattr(request, "username", None) if request else None
                 is_admin = get_user_role(username) == "admin"
                 return (
                     gr.update(visible=True),  # assistant_tab
                     gr.update(visible=True),  # documents_tab
+                    gr.update(visible=is_admin),  # users_tab
                     gr.update(visible=is_admin),  # messenger_tab
                     gr.update(visible=is_admin),  # settings_tab
                     gr.update(visible=is_admin),  # benchmark_tab
@@ -395,11 +485,18 @@ def main():
                 outputs=[
                     assistant_tab,
                     documents_tab,
+                    users_tab,
                     messenger_tab,
                     settings_tab,
                     benchmark_tab,
                     monitor_tab,
                 ],
+                queue=False,
+            )
+            blocks.load(
+                fn=render_top_user_identity,
+                inputs=None,
+                outputs=[top_user_identity],
                 queue=False,
             )
 

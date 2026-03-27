@@ -52,6 +52,47 @@ custom_css = """
 #logo-row {
   margin-bottom: 0 !important;
   padding-bottom: 0 !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 100% !important;
+}
+
+#top-user-col {
+  display: flex !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+}
+
+#top-user-box {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  color: #58606a !important;
+  font-size: 13px !important;
+  line-height: 1 !important;
+  justify-content: flex-end !important;
+  width: 100% !important;
+}
+
+#top-user-icon {
+  font-size: 14px !important;
+  opacity: 0.75 !important;
+}
+
+#top-user-name {
+  font-weight: 500 !important;
+}
+
+.top-user-logout {
+  color: #6b7280 !important;
+  font-size: 12px !important;
+  text-decoration: none !important;
+  border-bottom: 1px solid transparent !important;
+}
+
+.top-user-logout:hover {
+  color: #374151 !important;
+  border-bottom-color: #9ca3af !important;
 }
 
 /* Само изображение: фикс. высота, без кликов, без baseline-отступа */
@@ -77,4 +118,3 @@ custom_css = """
   padding-top: 0 !important;
 }
 """
-

@@ -4,6 +4,7 @@ from functools import lru_cache
 from typing import Literal
 
 from agent_logic_2 import config as c
+from agent_logic_2.gradio_ui.shared import user_store
 
 
 def _norm(value: str | None) -> str:
@@ -43,15 +44,18 @@ def check_auth(username, password):
     username_norm = _norm(username)
     password_str = str(password or "")
 
+    if admin:
+        admin_name, admin_pass = admin
+        if password_str == admin_pass and username_norm in {_norm(admin_name), "admin", "root"}:
+            return True
+
     if basic:
         basic_name, basic_pass = basic
         if username_norm == _norm(basic_name) and password_str == basic_pass:
             return True
 
-    if admin:
-        admin_name, admin_pass = admin
-        if password_str == admin_pass and username_norm in {_norm(admin_name), "admin", "root"}:
-            return True
+    if user_store.verify_basic_user(username_norm, password_str):
+        return True
 
     return False
 
@@ -70,4 +74,20 @@ def get_user_role(username: str | None) -> Literal["admin", "basic"]:
     if basic and user_norm == _norm(basic[0]):
         return "admin"
 
+    if user_store.is_basic_user(user_norm):
+        return "basic"
+
     return "basic"
+
+
+def get_reserved_logins() -> set[str]:
+    out: set[str] = {"admin", "root"}
+    basic = _basic_creds()
+    admin = _admin_creds()
+
+    if basic:
+        out.add(_norm(basic[0]))
+    if admin:
+        out.add(_norm(admin[0]))
+
+    return {item for item in out if item}
