@@ -49,7 +49,7 @@ def test_doctors_info_sorts_by_ord(monkeypatch):
                 "ord": 20,
                 "specialization": "терапевт",
                 "regions": ["Ленина 5"],
-                "units": ["Терапия"],
+                "units": ["Терапевт"],
             },
             {
                 "id": 2,
@@ -57,11 +57,15 @@ def test_doctors_info_sorts_by_ord(monkeypatch):
                 "ord": 5,
                 "specialization": "терапевт",
                 "regions": ["Ленина 5"],
-                "units": ["Терапия"],
+                "units": ["Терапевт"],
             },
         ]
 
+    async def fake_samara_tokens():
+        return set()
+
     monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
 
     res = run(svc.doctors_info("терапевт", {"specialty": "терапевт"}))
 
@@ -227,6 +231,199 @@ def test_doctors_schedule_week_excludes_explicit_non_samara_rows(monkeypatch):
 
     assert len(res["schedule"]) == 1
     assert "Оренбург" not in str(res["schedule"][0].get("regions"))
+
+
+def test_doctors_schedule_week_cache_hit(monkeypatch):
+    svc = Services(
+        schedule_fresh_ttl_seconds=30,
+        schedule_stale_ttl_seconds=600,
+        schedule_negative_ttl_seconds=15,
+        schedule_cache_max_keys=100,
+    )
+    calls = {"count": 0}
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Тестов Тест",
+                "specialization": "терапевт",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "units": ["Терапия"],
+            }
+        ]
+
+    async def fake_samara_tokens():
+        return {"г. самара, пр. ленина, 5"}
+
+    def fake_schedule(_name, _branch=None):
+        calls["count"] += 1
+        return [
+            {
+                "fio": "Тестов Тест",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "schedule": {"г. Самара, пр. Ленина, 5": [{"date": "2026-03-20", "slots": ["09:00"]}]},
+            }
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+    monkeypatch.setattr(svc_mod.api_nayka, "find_doctor_schedule", fake_schedule)
+
+    res1 = run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
+    res2 = run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
+
+    assert calls["count"] == 1
+    assert res1["schedule"]
+    assert res2["schedule"]
+
+
+def test_doctors_schedule_week_cache_miss_after_fresh_ttl(monkeypatch):
+    svc = Services(
+        schedule_fresh_ttl_seconds=10,
+        schedule_stale_ttl_seconds=600,
+        schedule_negative_ttl_seconds=5,
+        schedule_cache_max_keys=100,
+    )
+    calls = {"count": 0}
+    clock = {"ts": 1000.0}
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Тестов Тест",
+                "specialization": "терапевт",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "units": ["Терапия"],
+            }
+        ]
+
+    async def fake_samara_tokens():
+        return {"г. самара, пр. ленина, 5"}
+
+    def fake_schedule(_name, _branch=None):
+        calls["count"] += 1
+        return [
+            {
+                "fio": "Тестов Тест",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "schedule": {"г. Самара, пр. Ленина, 5": [{"date": "2026-03-20", "slots": ["09:00"]}]},
+            }
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+    monkeypatch.setattr(svc_mod.api_nayka, "find_doctor_schedule", fake_schedule)
+    monkeypatch.setattr(svc_mod.time, "time", lambda: clock["ts"])
+
+    run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
+    assert calls["count"] == 1
+
+    clock["ts"] += 11
+    run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
+    assert calls["count"] == 2
+
+
+def test_doctors_schedule_week_returns_stale_on_source_error(monkeypatch):
+    svc = Services(
+        schedule_fresh_ttl_seconds=10,
+        schedule_stale_ttl_seconds=120,
+        schedule_negative_ttl_seconds=5,
+        schedule_cache_max_keys=100,
+    )
+    calls = {"count": 0}
+    clock = {"ts": 2000.0}
+    fail = {"enabled": False}
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Тестов Тест",
+                "specialization": "терапевт",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "units": ["Терапия"],
+            }
+        ]
+
+    async def fake_samara_tokens():
+        return {"г. самара, пр. ленина, 5"}
+
+    def fake_schedule(_name, _branch=None):
+        calls["count"] += 1
+        if fail["enabled"]:
+            raise RuntimeError("source unavailable")
+        return [
+            {
+                "fio": "Тестов Тест",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "schedule": {"г. Самара, пр. Ленина, 5": [{"date": "2026-03-20", "slots": ["09:00"]}]},
+            }
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+    monkeypatch.setattr(svc_mod.api_nayka, "find_doctor_schedule", fake_schedule)
+    monkeypatch.setattr(svc_mod.time, "time", lambda: clock["ts"])
+
+    first = run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
+    assert first["schedule"]
+    assert calls["count"] == 1
+
+    fail["enabled"] = True
+    clock["ts"] += 11
+    second = run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
+
+    # Вторая проверка делает 2 попытки запроса (retry), затем отдает stale из кэша.
+    assert calls["count"] == 3
+    assert second["schedule"], "Expected stale schedule when source is unavailable"
+    assert not second.get("handoff_required", False)
+
+
+def test_doctors_schedule_week_negative_cache_ttl(monkeypatch):
+    svc = Services(
+        schedule_fresh_ttl_seconds=30,
+        schedule_stale_ttl_seconds=120,
+        schedule_negative_ttl_seconds=5,
+        schedule_cache_max_keys=100,
+    )
+    calls = {"count": 0}
+    clock = {"ts": 3000.0}
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Тестов Тест",
+                "specialization": "терапевт",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "units": ["Терапия"],
+            }
+        ]
+
+    async def fake_samara_tokens():
+        return {"г. самара, пр. ленина, 5"}
+
+    def fake_schedule(_name, _branch=None):
+        calls["count"] += 1
+        return []
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+    monkeypatch.setattr(svc_mod.api_nayka, "find_doctor_schedule", fake_schedule)
+    monkeypatch.setattr(svc_mod.time, "time", lambda: clock["ts"])
+
+    run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
+    assert calls["count"] == 1
+
+    clock["ts"] += 2
+    run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
+    assert calls["count"] == 1, "Expected negative cache hit within negative TTL"
+
+    clock["ts"] += 4
+    run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
+    assert calls["count"] == 2, "Expected cache miss after negative TTL expiry"
 
 
 def test_appointment_help_meili(monkeypatch):

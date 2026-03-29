@@ -14,7 +14,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import logging
 import re
 import time
 from datetime import datetime
@@ -35,6 +37,8 @@ from .doctor_name_port import (
 )
 from .service_phrase import extract_service_phrase
 from .runtime_config import config as c
+
+logger = logging.getLogger(__name__)
 
 _ADDRESS_HINT_RE = re.compile(
     r"\b(ул\.?|улица|пр\.?|проспект|пр-?т|тракт|б-р|бульвар|шоссе|пер\.?|переулок|наб\.?|площадь|дом|д\.|корп\.?|к\.|пом\.?)\b",
@@ -182,6 +186,23 @@ try:
     DOCTORS_TOP_N = max(1, int(c.MR_DOCTORS_TOP_N))
 except Exception:
     DOCTORS_TOP_N = 4
+
+
+def _runtime_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    try:
+        value = int(getattr(c, name))
+    except Exception:
+        value = int(default)
+    value = max(min_value, value)
+    value = min(max_value, value)
+    return value
+
+
+def _runtime_bool(name: str, default: bool) -> bool:
+    try:
+        return bool(getattr(c, name))
+    except Exception:
+        return bool(default)
 _PRICE_QUERY_STOPWORDS = {
     "сколько",
     "стоит",
@@ -1750,12 +1771,21 @@ _KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = "В моей базе данных инфо�
 
 
 @dataclass
+class _ScheduleCacheEntry:
+    payload: list[Any]
+    cached_at: float
+    fresh_until: float
+    stale_until: float
+    is_negative: bool
+
+
+@dataclass
 class Services:
     """
     Сервисный слой для patient/messenger router.
 
     - doctors_info: использует ФАЙЛОВЫЙ кэш врачей (JSONL) + in-memory кэш.
-    - doctors_schedule_week: всегда ходит в API (реалтайм расписание).
+    - doctors_schedule_week: realtime с коротким TTL-кэшем и stale-fallback при сбоях API.
     """
 
     # in-memory кэш врачей
@@ -1770,16 +1800,54 @@ class Services:
     _regions_cache_loaded_at: float = field(default=0.0, init=False)
     _procedure_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
     _procedure_rows_loaded_at: float = field(default=0.0, init=False)
+    _schedule_cache: dict[tuple[str, str], _ScheduleCacheEntry] = field(default_factory=dict, init=False)
 
     # блокировка, чтобы несколько запросов параллельно не перегенерировали кэш
     _doctors_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _regions_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _procedure_rows_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    _schedule_locks: dict[tuple[str, str], asyncio.Lock] = field(default_factory=dict, init=False)
+    _schedule_locks_guard: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     # TTL in-memory кэша (латентность, сек, определят свежесть кэша)
     doctors_mem_ttl_seconds: int = 300
     regions_mem_ttl_seconds: int = 300
     procedure_rows_mem_ttl_seconds: int = 300
+    schedule_fresh_ttl_seconds: int = field(
+        default_factory=lambda: _runtime_int(
+            "MR_SCHEDULE_FRESH_TTL_SECONDS",
+            30,
+            min_value=1,
+            max_value=300,
+        )
+    )
+    schedule_stale_ttl_seconds: int = field(
+        default_factory=lambda: _runtime_int(
+            "MR_SCHEDULE_STALE_TTL_SECONDS",
+            600,
+            min_value=1,
+            max_value=3600,
+        )
+    )
+    schedule_negative_ttl_seconds: int = field(
+        default_factory=lambda: _runtime_int(
+            "MR_SCHEDULE_NEGATIVE_TTL_SECONDS",
+            15,
+            min_value=1,
+            max_value=120,
+        )
+    )
+    schedule_cache_max_keys: int = field(
+        default_factory=lambda: _runtime_int(
+            "MR_SCHEDULE_CACHE_MAX_KEYS",
+            1000,
+            min_value=50,
+            max_value=10000,
+        )
+    )
+    schedule_cache_log_events: bool = field(
+        default_factory=lambda: _runtime_bool("MR_SCHEDULE_CACHE_LOG_EVENTS", False)
+    )
 
     # -----------------------------
     # Low-level helpers (async)
@@ -1791,6 +1859,168 @@ class Services:
             api_price.ensure_daily_price_refresh_started()
         except Exception:
             pass
+
+    @staticmethod
+    def _schedule_cache_key(last_name: str, region_name: str | None = None) -> tuple[str, str]:
+        return _normalise_input(last_name), _normalise_input(region_name or "")
+
+    def _log_schedule_cache_event(self, event: str, key: tuple[str, str], **details: Any) -> None:
+        if not self.schedule_cache_log_events:
+            return
+        detail_chunks = [
+            f"{name}={details[name]!r}"
+            for name in sorted(details)
+            if details[name] is not None
+        ]
+        suffix = (" " + " ".join(detail_chunks)) if detail_chunks else ""
+        logger.info(
+            "schedule_cache event=%s last_name=%r region=%r%s",
+            event,
+            key[0],
+            key[1],
+            suffix,
+        )
+
+    async def _get_schedule_key_lock(self, key: tuple[str, str]) -> asyncio.Lock:
+        async with self._schedule_locks_guard:
+            existing = self._schedule_locks.get(key)
+            if existing is not None:
+                return existing
+            created = asyncio.Lock()
+            self._schedule_locks[key] = created
+            return created
+
+    @staticmethod
+    def _clone_schedule_payload(payload: list[Any]) -> list[Any]:
+        return copy.deepcopy(payload)
+
+    async def _prune_schedule_cache(self, now: float) -> None:
+        max_keys = max(1, int(self.schedule_cache_max_keys))
+        if len(self._schedule_cache) <= max_keys:
+            return
+
+        evicted_keys: list[tuple[str, str]] = []
+        for key, entry in list(self._schedule_cache.items()):
+            if now > entry.stale_until:
+                self._schedule_cache.pop(key, None)
+                evicted_keys.append(key)
+
+        if len(self._schedule_cache) > max_keys:
+            overflow = len(self._schedule_cache) - max_keys
+            oldest = sorted(self._schedule_cache.items(), key=lambda kv: kv[1].cached_at)[:overflow]
+            for key, _ in oldest:
+                self._schedule_cache.pop(key, None)
+                evicted_keys.append(key)
+
+        if evicted_keys:
+            async with self._schedule_locks_guard:
+                for key in evicted_keys:
+                    self._schedule_locks.pop(key, None)
+
+    async def _cache_schedule_payload(self, key: tuple[str, str], payload: list[Any]) -> None:
+        now = time.time()
+        is_negative = not payload
+        fresh_ttl = self.schedule_negative_ttl_seconds if is_negative else self.schedule_fresh_ttl_seconds
+        stale_ttl = max(self.schedule_stale_ttl_seconds, fresh_ttl)
+        self._schedule_cache[key] = _ScheduleCacheEntry(
+            payload=self._clone_schedule_payload(payload),
+            cached_at=now,
+            fresh_until=now + fresh_ttl,
+            stale_until=now + stale_ttl,
+            is_negative=is_negative,
+        )
+        self._log_schedule_cache_event(
+            "store_negative" if is_negative else "store_positive",
+            key,
+            size=len(payload),
+            fresh_ttl=fresh_ttl,
+            stale_ttl=stale_ttl,
+        )
+        await self._prune_schedule_cache(now)
+
+    async def _fetch_schedule_source(self, last_name: str, region_name: str | None = None) -> Any:
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                if region_name:
+                    try:
+                        return await asyncio.to_thread(api_nayka.find_doctor_schedule, last_name, region_name)
+                    except TypeError:
+                        return await asyncio.to_thread(api_nayka.find_doctor_schedule, last_name)
+                return await asyncio.to_thread(api_nayka.find_doctor_schedule, last_name)
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 0:
+                    await asyncio.sleep(0.12)
+                    continue
+        if last_exc is not None:
+            raise last_exc
+        return []
+
+    async def _get_schedule_payload_cached(self, last_name: str, region_name: str | None = None) -> Any:
+        key = self._schedule_cache_key(last_name, region_name)
+        now = time.time()
+        entry = self._schedule_cache.get(key)
+        if entry and now <= entry.fresh_until:
+            self._log_schedule_cache_event(
+                "hit_fresh",
+                key,
+                age_sec=max(0, int(now - entry.cached_at)),
+                negative=entry.is_negative,
+            )
+            return self._clone_schedule_payload(entry.payload)
+
+        self._log_schedule_cache_event(
+            "miss_cold" if entry is None else "miss_expired",
+            key,
+            age_sec=(None if entry is None else max(0, int(now - entry.cached_at))),
+        )
+
+        lock = await self._get_schedule_key_lock(key)
+        async with lock:
+            now = time.time()
+            entry = self._schedule_cache.get(key)
+            if entry and now <= entry.fresh_until:
+                self._log_schedule_cache_event(
+                    "hit_fresh_after_lock",
+                    key,
+                    age_sec=max(0, int(now - entry.cached_at)),
+                    negative=entry.is_negative,
+                )
+                return self._clone_schedule_payload(entry.payload)
+
+            try:
+                payload = await self._fetch_schedule_source(last_name, region_name)
+            except Exception as exc:
+                if entry and not entry.is_negative and now <= entry.stale_until:
+                    self._log_schedule_cache_event(
+                        "hit_stale_on_error",
+                        key,
+                        error=type(exc).__name__,
+                        age_sec=max(0, int(now - entry.cached_at)),
+                    )
+                    return self._clone_schedule_payload(entry.payload)
+                self._log_schedule_cache_event("source_error_no_stale", key, error=type(exc).__name__)
+                raise
+
+            if isinstance(payload, list):
+                await self._cache_schedule_payload(key, payload)
+                return self._clone_schedule_payload(payload)
+
+            if entry and not entry.is_negative and now <= entry.stale_until:
+                self._log_schedule_cache_event(
+                    "hit_stale_on_non_list",
+                    key,
+                    payload_type=type(payload).__name__,
+                    age_sec=max(0, int(now - entry.cached_at)),
+                )
+                return self._clone_schedule_payload(entry.payload)
+            self._log_schedule_cache_event(
+                "source_non_list_no_cache",
+                key,
+                payload_type=type(payload).__name__,
+            )
+            return payload
 
     async def _ensure_doctors_cache_loaded(self) -> list[dict[str, Any]]:
         """
@@ -2049,7 +2279,7 @@ class Services:
                 continue
             surname = fio.split()[0]
             try:
-                data = await asyncio.to_thread(api_nayka.find_doctor_schedule, surname)
+                data = await self._get_schedule_payload_cached(surname)
             except Exception:
                 continue
             if not isinstance(data, list) or not data:
@@ -2097,7 +2327,7 @@ class Services:
             }
 
         try:
-            data = await asyncio.to_thread(api_nayka.find_doctor_schedule, surname)
+            data = await self._get_schedule_payload_cached(surname)
         except Exception:
             return {
                 "available": False,
@@ -2597,7 +2827,6 @@ class Services:
                 extra={"schedule": []},
             )
 
-        # api_nayka.find_doctor_schedule блокирующая (requests) — уводим в thread.
         # Пробуем несколько вариантов фамилии (родительный падеж -> именительный).
         data = None
         candidates = surname_variants(str(last_name))
@@ -2608,34 +2837,15 @@ class Services:
                 if qv not in candidates:
                     candidates.append(qv)
 
-        async def _schedule_call(candidate_value: str, region_value: str | None = None) -> Any:
-            last_exc: Exception | None = None
-            for attempt in range(2):
-                try:
-                    if region_value:
-                        try:
-                            return await asyncio.to_thread(api_nayka.find_doctor_schedule, candidate_value, region_value)
-                        except TypeError:
-                            return await asyncio.to_thread(api_nayka.find_doctor_schedule, candidate_value)
-                    return await asyncio.to_thread(api_nayka.find_doctor_schedule, candidate_value)
-                except Exception as exc:
-                    last_exc = exc
-                    if attempt == 0:
-                        await asyncio.sleep(0.12)
-                        continue
-            if last_exc is not None:
-                raise last_exc
-            return []
-
         try:
             for candidate in candidates:
-                data = await _schedule_call(candidate, region_name)
+                data = await self._get_schedule_payload_cached(candidate, region_name)
                 if isinstance(data, list) and data:
                     last_name = candidate
                     break
                 # fallback: если регионный фильтр дал пусто, пробуем без региона
                 if region_name:
-                    data = await _schedule_call(candidate, None)
+                    data = await self._get_schedule_payload_cached(candidate, None)
                     if isinstance(data, list) and data:
                         last_name = candidate
                         break

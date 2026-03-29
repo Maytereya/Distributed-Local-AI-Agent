@@ -172,6 +172,11 @@ class AppConfig:
 class MessengerRouterConfig:
     use_doctor_prices_for_procedures: bool
     mr_doctors_top_n: int
+    mr_schedule_fresh_ttl_seconds: int
+    mr_schedule_stale_ttl_seconds: int
+    mr_schedule_negative_ttl_seconds: int
+    mr_schedule_cache_max_keys: int
+    mr_schedule_cache_log_events: bool
     debug_raw_output: bool
     llm_procedure_normalization: bool
     debug_final_input: bool
@@ -275,6 +280,44 @@ settings = Settings(
             legacy_key="MR_DOCTORS_TOP_N",
             min_value=1,
             max_value=20,
+        ),
+        mr_schedule_fresh_ttl_seconds=_get_int(
+            "MESSENGER_ROUTER",
+            "mr_schedule_fresh_ttl_seconds",
+            default=30,
+            legacy_key="MR_SCHEDULE_FRESH_TTL_SECONDS",
+            min_value=1,
+            max_value=300,
+        ),
+        mr_schedule_stale_ttl_seconds=_get_int(
+            "MESSENGER_ROUTER",
+            "mr_schedule_stale_ttl_seconds",
+            default=600,
+            legacy_key="MR_SCHEDULE_STALE_TTL_SECONDS",
+            min_value=1,
+            max_value=3600,
+        ),
+        mr_schedule_negative_ttl_seconds=_get_int(
+            "MESSENGER_ROUTER",
+            "mr_schedule_negative_ttl_seconds",
+            default=15,
+            legacy_key="MR_SCHEDULE_NEGATIVE_TTL_SECONDS",
+            min_value=1,
+            max_value=120,
+        ),
+        mr_schedule_cache_max_keys=_get_int(
+            "MESSENGER_ROUTER",
+            "mr_schedule_cache_max_keys",
+            default=1000,
+            legacy_key="MR_SCHEDULE_CACHE_MAX_KEYS",
+            min_value=50,
+            max_value=10000,
+        ),
+        mr_schedule_cache_log_events=_get_bool(
+            "MESSENGER_ROUTER",
+            "mr_schedule_cache_log_events",
+            default=False,
+            legacy_key="MR_SCHEDULE_CACHE_LOG_EVENTS",
         ),
         debug_raw_output=_get_bool(
             "MESSENGER_ROUTER",
@@ -393,6 +436,11 @@ ll_model_small = settings.ollama.model_small
 
 USE_DOCTOR_PRICES_FOR_PROCEDURES = settings.messenger_router.use_doctor_prices_for_procedures
 MR_DOCTORS_TOP_N = settings.messenger_router.mr_doctors_top_n
+MR_SCHEDULE_FRESH_TTL_SECONDS = settings.messenger_router.mr_schedule_fresh_ttl_seconds
+MR_SCHEDULE_STALE_TTL_SECONDS = settings.messenger_router.mr_schedule_stale_ttl_seconds
+MR_SCHEDULE_NEGATIVE_TTL_SECONDS = settings.messenger_router.mr_schedule_negative_ttl_seconds
+MR_SCHEDULE_CACHE_MAX_KEYS = settings.messenger_router.mr_schedule_cache_max_keys
+MR_SCHEDULE_CACHE_LOG_EVENTS = settings.messenger_router.mr_schedule_cache_log_events
 DEBUG_RAW_OUTPUT = settings.messenger_router.debug_raw_output
 LLM_PROCEDURE_NORMALIZATION = settings.messenger_router.llm_procedure_normalization
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
