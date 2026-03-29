@@ -372,16 +372,35 @@ def _prepare_query_variants(raw_query: str, entity_query: str = "") -> list[str]
 
 
 def _is_samara_city_value(value: str | None) -> bool:
-    if not value:
-        return False
-    norm = _normalise_input(value).replace("ё", "е")
-    return norm == "самара"
+    city = _extract_city_token(value)
+    return city == "самара"
 
 
 def _is_non_samara_city_value(value: str | None) -> bool:
+    city = _extract_city_token(value)
+    return bool(city and city != "самара")
+
+
+def _extract_city_token(value: str | None) -> str | None:
     if not value:
-        return False
-    return not _is_samara_city_value(value)
+        return None
+    norm = _normalise_input(value).replace("ё", "е")
+    if not norm:
+        return None
+    if _ADDRESS_HINT_RE.search(norm):
+        return None
+    norm = re.sub(r"[^a-zа-я0-9\-]+", " ", norm).strip()
+    if not norm or any(ch.isdigit() for ch in norm):
+        return None
+    parts = norm.split()
+    if not parts:
+        return None
+    if parts[0] in {"г", "город"}:
+        parts = parts[1:]
+    if len(parts) != 1:
+        return None
+    city = parts[0].strip()
+    return city or None
 
 
 def _normalize_region_text(value: str) -> str:
@@ -2826,6 +2845,10 @@ class Services:
                 reason="city_not_supported",
                 extra={"schedule": []},
             )
+        if region_name and _is_samara_city_value(region_name):
+            # Для города Самара не применяем region-фильтр в Nayka API:
+            # endpoint ожидает branch-level region name, а city-value дает пустой/строковый ответ.
+            region_name = None
 
         # Пробуем несколько вариантов фамилии (родительный падеж -> именительный).
         data = None

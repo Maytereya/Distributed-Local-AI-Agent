@@ -233,6 +233,46 @@ def test_doctors_schedule_week_excludes_explicit_non_samara_rows(monkeypatch):
     assert "Оренбург" not in str(res["schedule"][0].get("regions"))
 
 
+def test_doctors_schedule_week_city_samara_calls_unfiltered_region(monkeypatch):
+    svc = Services()
+    calls: list[object] = []
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Иванов Иван",
+                "specialization": "терапевт",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "units": ["Терапия"],
+            }
+        ]
+
+    async def fake_samara_tokens():
+        return {"г. самара, пр. ленина, 5"}
+
+    def fake_schedule(_name, _branch=None):
+        calls.append(_branch)
+        return [
+            {
+                "fio": "Иванов Иван",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "schedule": {"г. Самара, пр. Ленина, 5": [{"date": "2026-03-09", "slots": ["09:00"]}]},
+            }
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+    monkeypatch.setattr(svc_mod.api_nayka, "find_doctor_schedule", fake_schedule)
+
+    res = run(svc.doctors_schedule_week("Иванов", {"doctor_name": "Иванов", "region": "Самара"}))
+
+    assert res["schedule"], "Expected schedule list"
+    assert calls, "Expected at least one schedule source call"
+    assert all(call is None for call in calls), "Samara city should be normalized to unfiltered region call"
+    assert res["entities_used"].get("region_name") is None
+
+
 def test_doctors_schedule_week_cache_hit(monkeypatch):
     svc = Services(
         schedule_fresh_ttl_seconds=30,
