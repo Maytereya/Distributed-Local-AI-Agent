@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from difflib import SequenceMatcher
 from functools import wraps
@@ -38,6 +39,7 @@ from agent_logic_2.nayka_api.api_nayka import find_doctors_by_keyword, find_doct
 from nayka_api.api_price import load_doctor_prices, update_price_all, load_price_all
 # from nayka_api.api_price_all import update_price_all, load_price_all
 from nayka_api.doctors_cc_info import get_doctors_cc_info
+from schedule_ttl_cache import AsyncListTTLStaleCache
 
 # Package-relative import to work reliably when this module is imported as part of agent_logic_2
 try:
@@ -55,6 +57,27 @@ except ImportError:
 # ── Конфигурация ───────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _runtime_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    try:
+        value = int(getattr(c, name))
+    except Exception:
+        value = int(default)
+    value = max(min_value, value)
+    value = min(max_value, value)
+    return value
+
+
+def _runtime_bool(name: str, default: bool) -> bool:
+    try:
+        return bool(getattr(c, name))
+    except Exception:
+        return bool(default)
+
+
+def _schedule_cache_key(last_name: str) -> str:
+    return re.sub(r"\s+", " ", str(last_name or "").strip()).lower()
 
 # Путь к данным о врачах
 DATA_DIR = os.path.join(os.path.dirname(__file__), "nayka_api", "apidata")
@@ -690,7 +713,6 @@ CC_TTL: int = 600  # seconds
 
 async def get_cc_map_cached() -> Dict[int, str]:
     """Кэширует заметки call‑центра по id врача с TTL, снижая нагрузку на API."""
-    import time
     global _cc_map, _cc_ts
     now = time.time()
     if _cc_map is None or (now - _cc_ts) > CC_TTL or (_cc_map is not None and len(_cc_map) == 0):
@@ -939,14 +961,47 @@ repo = DoctorsRepository(DATA_DIR)
 
 FORMATTER = "\n\n---\n\n"
 
+_SCHEDULE_CACHE = AsyncListTTLStaleCache(
+    fresh_ttl_seconds=_runtime_int("MR_SCHEDULE_FRESH_TTL_SECONDS", 30, min_value=1, max_value=300),
+    stale_ttl_seconds=_runtime_int("MR_SCHEDULE_STALE_TTL_SECONDS", 600, min_value=1, max_value=3600),
+    negative_ttl_seconds=_runtime_int("MR_SCHEDULE_NEGATIVE_TTL_SECONDS", 15, min_value=1, max_value=120),
+    max_keys=_runtime_int("MR_SCHEDULE_CACHE_MAX_KEYS", 1000, min_value=50, max_value=10000),
+    logger=logger,
+    log_events=_runtime_bool("MR_SCHEDULE_CACHE_LOG_EVENTS", False),
+    name="schedule_cache",
+    time_func=lambda: time.time(),
+)
+
 
 # ── Асинхронные обёртки для синхронных I/O/API ────────────────────────────────
 async def find_doctors_by_keyword_async(q: str):
     return await asyncio.to_thread(find_doctors_by_keyword, q)
 
 
+async def _find_doctor_schedule_source_async(surname: str) -> Any:
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            return await asyncio.to_thread(find_doctor_schedule, surname)
+        except Exception as exc:
+            last_exc = exc
+            if attempt == 0:
+                await asyncio.sleep(0.12)
+                continue
+    if last_exc is not None:
+        raise last_exc
+    return []
+
+
 async def find_doctor_schedule_async(surname: str):
-    return await asyncio.to_thread(find_doctor_schedule, surname)
+    key = _schedule_cache_key(surname)
+    if not key:
+        return []
+    return await _SCHEDULE_CACHE.get_or_fetch(
+        key,
+        lambda: _find_doctor_schedule_source_async(surname),
+        key_details={"last_name": key},
+    )
 
 
 async def load_doctor_prices_async():
