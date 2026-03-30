@@ -25,6 +25,7 @@ from urllib3.util.retry import Retry
 import requests
 
 from agent_logic_2 import config as c
+from agent_logic_2.nayka_api.cache_paths import resolve_cache_data_dir
 
 try:
     from zoneinfo import ZoneInfo  # Python 3.9+
@@ -68,8 +69,8 @@ def _session_get(url: str, **kwargs):
     kwargs.setdefault("verify", VERIFY_ARG)
     return SESSION.get(url, **kwargs)
 
-# Директория для кэширования данных
-DATA_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "apidata"
+# Директория для кэширования данных (общая для всех контейнеров через APP_DATA_DIR)
+DATA_DIR = resolve_cache_data_dir()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # регионы, которые исключаем из кэша (Оренбургская область и её потомки)

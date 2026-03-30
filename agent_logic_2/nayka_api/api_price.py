@@ -15,6 +15,7 @@ from urllib3.util.retry import Retry
 
 from agent_logic_2 import config as c
 from agent_logic_2.nayka_api import api_nayka
+from agent_logic_2.nayka_api.cache_paths import resolve_cache_data_dir
 
 try:
     from zoneinfo import ZoneInfo
@@ -24,8 +25,7 @@ except Exception:  # pragma: no cover
 # -----------------------------------------------------------------------------
 # Конфиг
 # -----------------------------------------------------------------------------
-SCRIPT_DIR = Path(__file__).parent
-DATA_DIR = SCRIPT_DIR / "apidata"
+DATA_DIR = resolve_cache_data_dir()
 
 DOCTORS_DIR = DATA_DIR                      # содержит doctors_*.jsonl
 PRICES_DIR = DATA_DIR / "doctor_prices"     # кэш по врачам

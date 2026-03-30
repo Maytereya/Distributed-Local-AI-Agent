@@ -8,7 +8,7 @@
 - Простую нормализацию специальностей и фильтрацию по ФИО.
 - Репозиторий врачей с локальным кэшем JSONL и ежедневным обновлением.
 - Форматирование карточек врача/расписания, обогащение заметками call‑центра.
-Внешние эффекты: сетевые запросы к CRM, чтение/запись в agent_logic_2/nayka_api/apidata.
+Внешние эффекты: сетевые запросы к CRM, чтение/запись в APP_DATA_DIR/nayka_api/apidata.
 """
 
 import asyncio
@@ -36,6 +36,7 @@ from ollama import AsyncClient
 
 from agent_logic_2.nayka_api.api_nayka import find_doctors_by_keyword, find_doctor_schedule, \
     cleanup_old_doctors_files, get_all_doctors, get_active_date_str
+from agent_logic_2.nayka_api.cache_paths import resolve_cache_data_dir
 from nayka_api.api_price import load_doctor_prices, update_price_all, load_price_all
 # from nayka_api.api_price_all import update_price_all, load_price_all
 from nayka_api.doctors_cc_info import get_doctors_cc_info
@@ -79,8 +80,8 @@ def _runtime_bool(name: str, default: bool) -> bool:
 def _schedule_cache_key(last_name: str) -> str:
     return re.sub(r"\s+", " ", str(last_name or "").strip()).lower()
 
-# Путь к данным о врачах
-DATA_DIR = os.path.join(os.path.dirname(__file__), "nayka_api", "apidata")
+# Путь к данным о врачах (общий через APP_DATA_DIR с fallback на legacy-path)
+DATA_DIR = str(resolve_cache_data_dir())
 # Инициализация Ollama
 ollama_client = AsyncClient(c.ollama_url)
 # Таймаут обращения к ollama

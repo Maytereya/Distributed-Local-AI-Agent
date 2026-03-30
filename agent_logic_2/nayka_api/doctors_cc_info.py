@@ -11,6 +11,7 @@ import glob
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent_logic_2 import config as c
 from agent_logic_2.nayka_api.api_nayka import get_today_str
+from agent_logic_2.nayka_api.cache_paths import resolve_cache_data_dir
 import urllib3
 
 # Настройка логирования
@@ -18,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Константы для кэширования
-CACHE_DIR = os.path.join(os.path.dirname(__file__), 'apidata')
+CACHE_DIR = str(resolve_cache_data_dir())
 CACHE_EXPIRY = timedelta(hours=24)  # Кэш действителен 24 часа
 BASE_URL = c.nayka_base_url_no_site.rstrip("/")
 
