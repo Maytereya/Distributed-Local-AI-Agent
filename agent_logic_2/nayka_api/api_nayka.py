@@ -244,8 +244,7 @@ def _doctors_schema_outdated(doctors: List[Dict[str, Any]]) -> bool:
 
     Устаревшим считаем кэш, если:
     - нет поля ord,
-    - нет новых main-полей (unit_links/main_units),
-    - есть placeholder-адреса вида ID 8502.
+    - нет новых main-полей (unit_links/main_units).
 
     :param doctors: загруженные карточки врачей
     :return: True, если требуется перегенерация кэша
@@ -258,15 +257,7 @@ def _doctors_schema_outdated(doctors: List[Dict[str, Any]]) -> bool:
         isinstance(row, dict) and ("unit_links" in row or "main_units" in row)
         for row in preview
     )
-    has_placeholder_region = any(
-        isinstance(row, dict)
-        and any(
-            str(addr).strip().startswith(("ID ", "[ID "))
-            for addr in (row.get("regions") or [])
-        )
-        for row in preview
-    )
-    return (not has_ord) or (not has_main_fields) or has_placeholder_region
+    return (not has_ord) or (not has_main_fields)
 
 
 def find_existing_doctors_file() -> Union[Path, None]:
@@ -526,8 +517,7 @@ def get_cached_doctors_data() -> list:
         if not _doctors_schema_outdated(cached):
             return cached
         print(f"ℹ️ Кэш {existing_file.name} в старом формате — перегенерируем через API")
-
-    if existing_file.exists():
+    elif existing_file.exists():
         print(f"⚠️ Кэш за активную дату {active} пустой/битый: {existing_file.name}")
     else:
         print(f"[DEBUG] Кэш за активную дату {active} не найден — обновляем через API!")

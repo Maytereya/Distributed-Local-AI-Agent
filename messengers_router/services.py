@@ -1932,34 +1932,6 @@ class Services:
             try:
                 doctors_loaded = await asyncio.to_thread(api_nayka.get_cached_doctors_data)
                 file_path = await asyncio.to_thread(api_nayka.find_existing_doctors_file)
-
-                # Миграция старого кеша: ранние JSONL могли не содержать ord и
-                # могли хранить placeholder-адреса вида "ID 8502".
-                schema_outdated = False
-                if doctors_loaded:
-                    preview = doctors_loaded[:20]
-                    has_ord = any(isinstance(row, dict) and "ord" in row for row in preview)
-                    has_main_fields = any(
-                        isinstance(row, dict) and ("unit_links" in row or "main_units" in row)
-                        for row in preview
-                    )
-                    has_placeholder_region = any(
-                        isinstance(row, dict)
-                        and any(
-                            str(addr).strip().startswith(("ID ", "[ID "))
-                            for addr in (row.get("regions") or [])
-                        )
-                        for row in preview
-                    )
-                    schema_outdated = (not has_ord) or (not has_main_fields) or has_placeholder_region
-
-                if schema_outdated:
-                    doctors = await asyncio.to_thread(api_nayka.get_all_doctors)
-                    await asyncio.to_thread(api_nayka.save_doctors_data, doctors)
-                    file_path = await asyncio.to_thread(api_nayka.find_existing_doctors_file)
-                    doctors_loaded = []
-                    if file_path is not None:
-                        doctors_loaded = await asyncio.to_thread(api_nayka.load_doctors_data, file_path)
             except Exception:
                 return self._doctors_cache or []
 

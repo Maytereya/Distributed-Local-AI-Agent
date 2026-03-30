@@ -43,3 +43,34 @@ def test_save_doctors_data_does_not_create_empty_active_cache(tmp_path, monkeypa
     api_nayka.save_doctors_data([])
 
     assert not (tmp_path / "doctors_20260307.jsonl").exists()
+
+
+def test_get_cached_doctors_data_does_not_refresh_when_placeholder_regions_present(tmp_path, monkeypatch):
+    active = tmp_path / "doctors_20260307.jsonl"
+    rows = [
+        {
+            "id": 1,
+            "fio": "Трубин Алексей Юрьевич",
+            "ord": None,
+            "unit_links": [],
+            "main_units": [],
+            "regions": ["ID 8502"],
+        }
+    ]
+    _write_jsonl(active, rows)
+
+    monkeypatch.setattr(api_nayka, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(api_nayka, "get_active_date_str", lambda: "20260307")
+
+    calls = {"refresh": 0}
+
+    def fake_get_all_doctors():
+        calls["refresh"] += 1
+        return []
+
+    monkeypatch.setattr(api_nayka, "get_all_doctors", fake_get_all_doctors)
+
+    result = api_nayka.get_cached_doctors_data()
+
+    assert result == rows
+    assert calls["refresh"] == 0
