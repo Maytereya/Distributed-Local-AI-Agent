@@ -87,6 +87,18 @@ _PATIENT_NAME_STOPWORDS = {
     "нет",
     "самара",
 }
+_DOCTOR_FOLLOWUP_FILLERS = {
+    "да",
+    "угу",
+    "ок",
+    "окей",
+    "хорошо",
+    "ладно",
+    "подходит",
+    "подойдет",
+    "подойдёт",
+    "именно",
+}
 _SPECIALTY_LIKE_NAME_TOKENS = {
     "кардиолог",
     "эндокринолог",
@@ -276,6 +288,61 @@ def _looks_like_specialty_or_service_token(token: str, text: str = "") -> bool:
     if spec and norm == spec:
         return True
     return False
+
+
+def _doctor_followup_name_in_context(text: str, last_entities: dict[str, Any]) -> str | None:
+    """
+    Возвращает фамилию врача для короткого follow-up в doctor-flow.
+
+    Пример: после "кто из кардиологов принимает?" пользователь пишет "Хальметова, да".
+    Такой ответ должен продолжать doctor/appointment сценарий, а не уходить в TEST_RESULT.
+    """
+    s = str(text or "").strip()
+    if not s or len(s) > 64:
+        return None
+
+    pending = last_entities.get("_pending")
+    if isinstance(pending, dict) and str(pending.get("label") or "").strip() == "TEST_RESULT":
+        return None
+
+    ctx_last_label = str(last_entities.get("_last_label") or "").strip()
+    has_doctor_context = bool(
+        ctx_last_label in {"DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
+        or last_entities.get("doctor_name")
+        or last_entities.get("doctor_id")
+        or last_entities.get("specialty")
+        or last_entities.get("appointment_flow_active")
+    )
+    if not has_doctor_context:
+        return None
+
+    if (
+        detect_test_result_intent(s)
+        or detect_prepare_intent(s)
+        or detect_doc_request_intent(s)
+        or detect_price_intent(s)
+        or detect_address_intent(s)
+        or detect_news_intent(s)
+    ):
+        return None
+
+    low = s.lower().replace("ё", "е")
+    if re.search(r"\b(результат\w*|анализ\w*|год\b|номер\b|код\b|филиал\w*)\b", low):
+        return None
+
+    tokens = re.findall(r"[A-Za-zА-Яа-яЁё0-9\-]+", s)
+    if not tokens or len(tokens) > 4:
+        return None
+    core_tokens = [t.lower().replace("ё", "е") for t in tokens if t.lower().replace("ё", "е") not in _DOCTOR_FOLLOWUP_FILLERS]
+    if not core_tokens:
+        return None
+
+    candidate = _extract_schedule_doctor_name(s) or _extract_appointment_doctor_name(s)
+    if not candidate:
+        return None
+    if _looks_like_specialty_or_service_token(candidate, s):
+        return None
+    return candidate
 
 
 def _extract_schedule_specialty(text: str) -> str | None:
@@ -904,6 +971,19 @@ async def deterministic_rule_decision(
             flags=local_flags | {"doc_request_main_index", kind_flag},
             needs_handoff=False,
             context_action="new_topic",
+        )
+    elif (doctor_name_followup := _doctor_followup_name_in_context(text, last_entities)):
+        entities: dict[str, Any] = {"doctor_name": doctor_name_followup}
+        specialty = str(last_entities.get("specialty") or "").strip()
+        if specialty:
+            entities["specialty"] = specialty
+        decision = RouteDecision(
+            label="DOCTOR_SCHEDULE",
+            confidence=0.79,
+            entities=entities,
+            flags=local_flags | {"rule_schedule_doctor_followup"},
+            needs_handoff=False,
+            context_action=_derive_context_action(text, "DOCTOR_SCHEDULE", entities, last_entities),
         )
     elif detect_test_result_intent(text):
         if should_treat_result_delivery_as_test_assist(text):

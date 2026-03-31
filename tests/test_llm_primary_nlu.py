@@ -175,3 +175,37 @@ def test_rule_appointment_does_not_keep_doctor_as_service_name():
     assert decision.label == "APPOINTMENT"
     assert decision.entities.get("doctor_name") == "Дразнину"
     assert "service_name" not in decision.entities
+
+
+def test_rule_doctor_followup_in_doctor_context_not_misclassified_as_test_result():
+    decision = run(
+        classifier.deterministic_rule_decision(
+            "Хальметова, да",
+            {
+                "_last_label": "DOCTOR_INFO",
+                "specialty": "кардиолог",
+                "city": "Самара",
+            },
+            allow_refine=False,
+            attach_secondary=False,
+        )
+    )
+
+    assert decision is not None
+    assert decision.label == "DOCTOR_SCHEDULE"
+    assert decision.entities.get("doctor_name") == "Хальметова"
+    assert decision.entities.get("specialty") == "кардиолог"
+    assert "rule_schedule_doctor_followup" in decision.flags
+
+
+def test_rule_doctor_followup_without_doctor_context_returns_none():
+    decision = run(
+        classifier.deterministic_rule_decision(
+            "Хальметова, да",
+            {},
+            allow_refine=False,
+            attach_secondary=False,
+        )
+    )
+
+    assert decision is None
