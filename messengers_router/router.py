@@ -639,7 +639,7 @@ async def route_patient_message(
     city_hint_now = match_city(user_text)
     if city_hint_now and decision.label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
         memory.merge_entities(state, {"city": city_hint_now}, label=decision.label)
-    elif decision.label in {"APPOINTMENT", "ADDRESS", "TEST_ASSIST", "DOCTOR_INFO", "DOCTOR_SCHEDULE"}:
+    elif decision.label in {"APPOINTMENT", "ADDRESS", "TEST_ASSIST", "DOCTOR_INFO", "DOCTOR_SCHEDULE", "PRICE"}:
         if not str(state.last_entities.get("city") or "").strip():
             memory.merge_entities(state, {"city": _DEFAULT_CITY}, label=decision.label)
     sec_now = normalize_secondary_labels(decision.entities.get("secondary_intents"))

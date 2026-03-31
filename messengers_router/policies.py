@@ -189,6 +189,30 @@ DOCTOR_INFO_PATTERNS = [
 ]
 _DOCTOR_INFO_HINT_RE = re.compile(r"\b(инф\w*|расскаж\w*|о\s+врач\w*|про\s+врач\w*|кто\s+так\w*)\b", re.I)
 _DOCTOR_SCHEDULE_HINT_RE = re.compile(r"\b(расписани\w*|график|окн\w*|слот\w*|когда\b.*\bпринима\w*)\b", re.I)
+_UNAVAILABLE_SERVICE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bмрт\b", re.I),
+    re.compile(r"\bкт\b", re.I),
+    re.compile(r"\bрентген\w*\b", re.I),
+    re.compile(r"\bвакцинац\w*\b", re.I),
+    re.compile(r"\bпрививк\w*\b", re.I),
+)
+_UNAVAILABLE_SPECIALIST_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bофтальмолог\w*\b", re.I),
+    re.compile(r"\bдетск\w+\s+хирург\w*\b", re.I),
+    re.compile(r"\bдетск\w+\s+уролог\w*\b", re.I),
+    re.compile(r"\bдетск\w+\s+кардиолог\w*\b", re.I),
+    re.compile(r"\bкосметолог\w*\b", re.I),
+    re.compile(r"\bчелюстно[-\s]лицев\w*\s+хирург\w*\b", re.I),
+    re.compile(r"\bсурдолог\w*\b", re.I),
+    re.compile(r"\bпсихиатр\w*\b", re.I),
+    re.compile(r"\bнарколог\w*\b", re.I),
+)
+_UNAVAILABLE_DOC_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bсправк\w*\s+(?:в|для)\s+гибдд\b", re.I),
+    re.compile(r"\bгибдд\b", re.I),
+    re.compile(r"\bмед\s*комис\w*\s+(?:для|по)\s+спортсмен\w*\b", re.I),
+    re.compile(r"\bспортсмен\w*\b.*\bмед\s*комис\w*\b", re.I),
+)
 
 
 def _compile_patterns(patterns: list[str]) -> tuple[re.Pattern[str], ...]:
@@ -610,6 +634,36 @@ def detect_news_intent(text: str) -> bool:
 
 def detect_doctor_info_intent(text: str) -> bool:
     return _matches_any(text, _DOCTOR_INFO_RE)
+
+
+def detect_unavailable_catalog_request(text: str) -> tuple[str, str] | None:
+    """
+    Определяет запросы по заведомо недоступным услугам, специалистам и справкам.
+
+    :param text: текст пользователя
+    :return:
+        - ("service", "Наша клиника не оказывает данную услугу.")
+        - ("specialist", "Данные врачи не ведут прием.")
+        - ("document", "Наша клиника не оказывает данные услуги.")
+        - None, если совпадения нет
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+
+    for pattern in _UNAVAILABLE_DOC_PATTERNS:
+        if pattern.search(raw):
+            return ("document", "Наша клиника не оказывает данные услуги.")
+
+    for pattern in _UNAVAILABLE_SPECIALIST_PATTERNS:
+        if pattern.search(raw):
+            return ("specialist", "Данные врачи не ведут прием.")
+
+    for pattern in _UNAVAILABLE_SERVICE_PATTERNS:
+        if pattern.search(raw):
+            return ("service", "Наша клиника не оказывает данную услугу.")
+
+    return None
 
 
 def extract_specialty(text: str) -> str | None:
