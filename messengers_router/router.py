@@ -31,6 +31,7 @@ from .flow_policy import (
     fill_date_from_schedule_windows,
     get_secondary_queue,
     is_appointment_waiting_patient_name,
+    is_city_only_reply,
     is_short_prepare_followup,
     looks_like_patient_fio,
     normalize_secondary_labels,
@@ -112,6 +113,20 @@ _SECONDARY_SOFT_YES_RE = re.compile(
 _should_keep_appointment_flow_override = should_keep_appointment_flow_override
 
 
+def _unsupported_catalog_kind(flags: set[str]) -> str | None:
+    """
+    Возвращает subtype детерминированного unavailable-кейса из набора флагов.
+
+    :param flags: флаги RouteDecision
+    :return: тип unavailable-кейса или None
+    """
+
+    for kind in ("unsupported_service", "unsupported_specialist", "unsupported_document_service"):
+        if kind in flags:
+            return kind
+    return None
+
+
 def _env_flag(name: str, default: bool) -> bool:
     cfg_flags = {
         "MR_ROUTER_V2_ENABLE": c.MR_ROUTER_V2_ENABLE,
@@ -126,6 +141,43 @@ def _env_flag(name: str, default: bool) -> bool:
 
 def _is_secondary_soft_yes(text: str) -> bool:
     return bool(_SECONDARY_SOFT_YES_RE.match(str(text or "")))
+
+
+async def _resolve_secondary_queue_doctor_reply(
+    user_text: str,
+    next_label: str,
+    services: Services,
+) -> dict[str, Any]:
+    """
+    Пытается извлечь выбранного врача из краткого follow-up по secondary-очереди.
+
+    :param user_text: текущая реплика пользователя
+    :param next_label: активируемый secondary intent
+    :param services: сервисный слой
+    :return: сущности для вторичного интента
+    """
+
+    if next_label not in {"DOCTOR_SCHEDULE", "DOCTOR_INFO", "APPOINTMENT"}:
+        return {}
+
+    raw_text = str(user_text or "").strip()
+    probes = [raw_text]
+    for sep in (",", "—", "-", ";"):
+        if sep in raw_text:
+            head = str(raw_text.split(sep, 1)[0] or "").strip()
+            if head:
+                probes.append(head)
+
+    seen: set[str] = set()
+    for probe in probes:
+        key = probe.lower()
+        if not probe or key in seen:
+            continue
+        seen.add(key)
+        resolved = await services.resolve_doctor_name(probe)
+        if resolved:
+            return {"doctor_name": resolved}
+    return {}
 
 
 def _copy_decision(decision: RouteDecision, **overrides: Any) -> RouteDecision:
@@ -240,6 +292,31 @@ def _is_appointment_datetime_followup(user_text: str) -> bool:
         or detect_price_intent(low)
         or detect_nonbookable_walkin_intent(text)
     ):
+        return False
+    return True
+
+
+def _is_short_verified_doctor_followup(decision: RouteDecision, user_text: str) -> bool:
+    """
+    Определяет, что пользователь короткой репликой выбрал конкретного врача из списка.
+
+    :param decision: текущее решение маршрутизатора
+    :param user_text: исходный текст пользователя
+    :return: True, если это короткий follow-up по врачу
+    """
+
+    text = str(user_text or "").strip()
+    if not text or len(text) > 64:
+        return False
+    if "doctor_name_verified" not in set(decision.flags):
+        return False
+    if not any(decision.entities.get(k) for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name")):
+        return False
+    if detect_prepare_intent(text) or detect_price_intent(text) or detect_address_intent(text) or detect_doc_request_intent(text):
+        return False
+    if detect_test_result_intent(text) or detect_test_assist_intent(text):
+        return False
+    if has_datetime_signal(text):
         return False
     return True
 
@@ -448,14 +525,20 @@ async def route_patient_message(
         reply_kind = contextual_reply_kind(user_text)
         if reply_kind == "other" and _is_secondary_soft_yes(user_text):
             reply_kind = "yes"
+        next_label = queue[0]
+        secondary_entities = await _resolve_secondary_queue_doctor_reply(user_text, next_label, services)
+        if reply_kind == "other" and secondary_entities:
+            reply_kind = "yes"
         if reply_kind == "yes":
             next_label = queue.pop(0)
             set_secondary_queue(state, queue)
             state.last_entities["_secondary_offer_pending"] = False
+            if secondary_entities:
+                memory.merge_entities(state, secondary_entities, label=next_label)
             decision = RouteDecision(
                 label=next_label,  # type: ignore[arg-type]
                 confidence=0.9,
-                entities={"secondary_intent_from_queue": True},
+                entities={"secondary_intent_from_queue": True, **secondary_entities},
                 flags={"secondary_intent_activated"},
                 needs_handoff=False,
             )
@@ -533,6 +616,23 @@ async def route_patient_message(
             context_action="continue",
         )
     decision = apply_context_action(decision, state, user_text)
+
+    pending_before_overrides = memory.get_pending(state)
+    if (
+        isinstance(pending_before_overrides, dict)
+        and pending_before_overrides.get("label") == "PRICE"
+        and decision.label == "ADDRESS"
+        and is_city_only_reply(user_text)
+    ):
+        decision = _copy_decision(
+            decision,
+            label="PRICE",
+            confidence=max(decision.confidence, 0.72),
+            flags=set(decision.flags) | {"flow_price_city_reply_override"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+
     promoted_label, promoted_flags = apply_verified_doctor_override(decision.label, set(decision.flags), user_text)
     if promoted_label != decision.label or promoted_flags != decision.flags:
         decision = _copy_decision(
@@ -576,15 +676,73 @@ async def route_patient_message(
     # в подготовке, чтобы не сваливаться обратно в TEST_ASSIST.
     if (
         str(state.last_entities.get("_last_label") or "") == "PREPARE"
-        and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE"}
+        and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE", "DOCTOR_INFO", "DOCTOR_SCHEDULE"}
         and is_short_prepare_followup(user_text)
         and not detect_prepare_intent(user_text)
+        and not detect_nonbookable_walkin_intent(user_text, state.last_entities)
+        and not any(decision.entities.get(k) for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"))
     ):
         decision = _copy_decision(
             decision,
             label="PREPARE",
             confidence=max(decision.confidence, 0.62),
             flags=set(decision.flags) | {"flow_prepare_followup_override"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+
+    last_label = str(state.last_entities.get("_last_label") or "")
+    if last_label == "DOCTOR_INFO" and decision.label in {"OTHER", "DOCTOR_INFO", "TEST_RESULT"}:
+        doctor_followup_entities: dict[str, Any] = {}
+        if (
+            not detect_schedule_intent(user_text)
+            and not has_datetime_signal(user_text)
+            and not detect_prepare_intent(user_text)
+            and not detect_price_intent(user_text)
+            and not detect_address_intent(user_text)
+            and not detect_doc_request_intent(user_text)
+            and not detect_test_result_intent(user_text)
+            and not detect_test_assist_intent(user_text)
+        ):
+            doctor_followup_entities = await _resolve_secondary_queue_doctor_reply(
+                user_text,
+                "DOCTOR_SCHEDULE",
+                services,
+            )
+        if doctor_followup_entities or (
+            _is_short_verified_doctor_followup(decision, user_text)
+            and not detect_schedule_intent(user_text)
+        ):
+            entities = dict(decision.entities)
+            entities.update(doctor_followup_entities)
+            state.last_entities["_secondary_offer_pending"] = False
+            set_secondary_queue(state, [])
+            decision = _copy_decision(
+                decision,
+                label="DOCTOR_SCHEDULE",
+                confidence=max(decision.confidence, 0.74),
+                entities=entities,
+                flags=set(decision.flags) | {"flow_doctor_info_to_schedule"},
+                needs_handoff=False,
+                context_action="continue",
+            )
+
+    if (
+        last_label == "DOCTOR_SCHEDULE"
+        and (state.last_entities.get("doctor_name") or state.last_entities.get("doctor_id"))
+        and _is_appointment_datetime_followup(user_text)
+        and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "ADDRESS", "PRICE"}
+    ):
+        entities = dict(decision.entities)
+        for key in ("doctor_id", "doctor_name", "branch_id", "branch_name"):
+            if not entities.get(key) and state.last_entities.get(key):
+                entities[key] = state.last_entities.get(key)
+        decision = _copy_decision(
+            decision,
+            label="APPOINTMENT",
+            confidence=max(decision.confidence, 0.72),
+            entities=entities,
+            flags=set(decision.flags) | {"flow_schedule_to_appointment"},
             needs_handoff=False,
             context_action="continue",
         )
@@ -693,6 +851,18 @@ async def route_patient_message(
             await _backfill_appointment_doctor_from_text(user_text, state, services, memory)
 
     fill_date_from_schedule_windows(state, decision.label)
+
+    unsupported_kind = _unsupported_catalog_kind(set(decision.flags))
+    if unsupported_kind:
+        update_summary(
+            state,
+            reason="topic_switch" if decision.context_action in {"new_topic", "overwrite_doctor"} else "",
+        )
+        return (
+            decision,
+            Plan(label=decision.label),
+            Evidence(items={"unsupported_catalog": {"kind": unsupported_kind}}),
+        )
 
     plan = build_plan(decision, state, user_text, memory=memory)
     evidence = await execute_plan(plan, state, services)
@@ -1005,6 +1175,15 @@ async def patient_routing_stream(
         user_text=user_text,
     )
     if structured_response is not None:
+        secondary = get_secondary_queue(state)
+        followup = secondary_followup_text(secondary)
+        if (
+            followup
+            and not state.last_entities.get("_secondary_offer_pending")
+            and not decision.needs_handoff
+            and flow_label not in {"APPOINTMENT", "URGENT", "COMPLAINT", "MEDICAL_ADVICE", "TEST_RESULT"}
+        ):
+            state.last_entities["_secondary_offer_pending"] = True
         yield structured_response
         return
 

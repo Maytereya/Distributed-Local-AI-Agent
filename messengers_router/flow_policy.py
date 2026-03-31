@@ -665,6 +665,10 @@ def is_appointment_waiting_patient_name(pending: dict | None) -> bool:
     return _is_appointment_waiting_patient_name(pending)
 
 
+def is_city_only_reply(text: str) -> bool:
+    return _is_city_only_reply(text)
+
+
 def is_short_prepare_followup(text: str) -> bool:
     return _is_short_prepare_followup(text)
 

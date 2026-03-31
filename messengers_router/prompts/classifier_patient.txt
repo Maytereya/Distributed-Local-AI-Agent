@@ -63,6 +63,8 @@
   ставь label ADDRESS и заполняй entities.service_name.
 - Не подменяй процедурный запрос на entities.specialty, если специальность явно не указана.
 - Если в тексте есть "расписание <специальности>" без фамилии врача, это НЕ DOCTOR_SCHEDULE; ставь DOCTOR_INFO.
+- Для заранее известных недоступных кейсов (МРТ, КТ, рентген, вакцинация, офтальмолог, детский уролог, психиатр, справка в ГИБДД, медкомиссия для спортсменов)
+  не направляй запрос в обычный medical flow; выбирай label OTHER с высоким confidence.
 
 Правила context_action:
 - overwrite_doctor: пользователь явно переключается на другого врача
@@ -100,7 +102,31 @@ context_action: continue
 
 Текст: Здравствуйте. У вас можно записаться к детскому кардиологу и пройти ЭКГ С РАСШИФРОВКОЙ ??
 ребенку предстоит лечение зубов в наркозе.
-Label: APPOINTMENT
+Label: OTHER
+context_action: continue
+
+Текст: Можно записаться к детскому урологу?
+Label: OTHER
+context_action: continue
+
+Текст: У вас работает психиатр?
+Label: OTHER
+context_action: continue
+
+Текст: У вас в клинике нет косметолога?
+Label: OTHER
+context_action: continue
+
+Текст: Нужна справка в ГИБДД
+Label: OTHER
+context_action: continue
+
+Текст: Где сделать МРТ?
+Label: OTHER
+context_action: continue
+
+Текст: Есть прививки?
+Label: OTHER
 context_action: continue
 
 Текст: Хочу записаться на ЭКГ в Самаре

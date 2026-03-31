@@ -528,11 +528,26 @@ def test_main_index_info_source_unavailable_returns_handoff(monkeypatch):
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
 
-    res = run(svc.main_index_info("справка для ФНС", {}))
+    res = run(svc.main_index_info("копия договора с печатью", {}))
 
     assert res.get("handoff_required") is True
     assert res.get("handoff_reason") == "service_error"
     assert "не удалось найти информацию" in str(res.get("handoff_message") or "").lower()
+
+
+def test_main_index_info_tax_source_unavailable_returns_guidance_without_handoff(monkeypatch):
+    svc = Services()
+
+    def fake_search(_index, _query, *args, **kwargs):
+        raise RuntimeError("meili unavailable")
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+
+    res = run(svc.main_index_info("справка для ФНС", {}))
+
+    assert res.get("handoff_required") is not True
+    assert "справк" in str(res.get("content") or "").lower()
+    assert "налог" in str(res.get("content") or "").lower()
 
 
 def test_test_assist_price_by_region(monkeypatch):
@@ -552,6 +567,8 @@ def test_test_prepare_meili(monkeypatch):
     svc = Services()
     captured: dict[str, object] = {}
 
+    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
+
     def fake_search(_index, _query, *args, **kwargs):
         captured["kwargs"] = dict(kwargs)
         return "<i>подготовка к анализу крови: натощак</i>"
@@ -565,8 +582,115 @@ def test_test_prepare_meili(monkeypatch):
     assert captured.get("kwargs") == {"output_mode": "content_only", "max_chars": 12000}
 
 
-def test_test_prepare_no_matches_returns_handoff(monkeypatch):
+def test_test_prepare_prefers_service_info_preparation(monkeypatch):
     svc = Services()
+
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [
+            {
+                "serviceName": "Анализ крови на холестерин",
+                "preparation": "Кровь сдаётся натощак, желательно утром.",
+            }
+        ],
+    )
+
+    def fail_meili(*_args, **_kwargs):
+        raise AssertionError("Meili fallback must not run when serviceInfoAll matched")
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fail_meili)
+
+    res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {"service_name": "Холестерин"}))
+
+    assert "натощак" in str(res.get("prepare") or "").lower()
+    assert res["note"] == "prepare: serviceInfoAll"
+
+
+def test_test_prepare_prefers_service_info_for_analysis_name_query(monkeypatch):
+    svc = Services()
+
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [
+            {
+                "serviceName": "Анализ крови на холестерин",
+                "preparation": "Кровь сдаётся натощак, желательно утром.",
+            }
+        ],
+    )
+
+    def fail_meili(*_args, **_kwargs):
+        raise AssertionError("Meili fallback must not run when serviceInfoAll matched")
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fail_meili)
+
+    res = run(svc.test_prepare("Анализ крови на холестерин", {"service_name": "Холестерин"}))
+
+    assert "натощак" in str(res.get("prepare") or "").lower()
+    assert res["note"] == "prepare: serviceInfoAll"
+
+
+def test_test_prepare_does_not_match_unrelated_service_info_by_generic_prepare_token(monkeypatch):
+    svc = Services()
+
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [
+            {
+                "serviceName": "ЭЛИ-В-6-Тест (общее состояние иммунной системы, подготовка к вакцинации, 6 антигенов)",
+                "preparation": "Специальной подготовки не требуется. Взятие крови производится натощак.",
+            }
+        ],
+    )
+
+    def fake_search(_index, _query, *args, **kwargs):
+        return "Подготовка к ЭКГ: специальной подготовки не требуется."
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+
+    res = run(svc.test_prepare("ЭКГ подскажите", {"service_name": "ЭКГ"}))
+
+    assert "к экг" in str(res.get("prepare") or "").lower()
+    assert "взятие крови производится натощак" not in str(res.get("prepare") or "").lower()
+
+
+def test_test_prepare_prefers_exact_service_info_row_over_generic_similar_name(monkeypatch):
+    svc = Services()
+
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [
+            {
+                "serviceName": "ЭЛИ-В-6-Тест (общее состояние иммунной системы, подготовка к вакцинации, 6 антигенов)",
+                "preparation": "Подготовка к анализу крови натощак.",
+            },
+            {
+                "serviceName": "ЭКГ",
+                "preparation": "Подготовка к ЭКГ: специальной подготовки не требуется.",
+            },
+        ],
+    )
+
+    def fail_meili(*_args, **_kwargs):
+        raise AssertionError("Meili fallback must not run when exact serviceInfoAll matched")
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fail_meili)
+
+    res = run(svc.test_prepare("ЭКГ подскажите", {"service_name": "ЭКГ"}))
+
+    assert "к экг" in str(res.get("prepare") or "").lower()
+    assert res["note"] == "prepare: serviceInfoAll"
+
+
+def test_test_prepare_no_matches_returns_clarify_without_handoff(monkeypatch):
+    svc = Services()
+
+    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
 
     def fake_search(_index, _query, *args, **kwargs):
         return "Совпадений не найдено, cформулируйте запрос иначе"
@@ -576,14 +700,15 @@ def test_test_prepare_no_matches_returns_handoff(monkeypatch):
 
     res = run(svc.test_prepare("подготовка к анализу крови", {}))
 
-    assert res["prepare"] == ""
-    assert res.get("handoff_required") is True
-    assert res.get("handoff_reason") == "knowledge_not_found"
+    assert "подготов" in str(res.get("prepare") or "").lower()
+    assert res.get("handoff_required") is not True
 
 
 def test_test_prepare_uses_fallback_variant_query(monkeypatch):
     svc = Services()
     calls: list[str] = []
+
+    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
 
     def fake_search(_index, _query, *args, **kwargs):
         calls.append(str(_query))
@@ -602,6 +727,40 @@ def test_test_prepare_uses_fallback_variant_query(monkeypatch):
     assert "вульвоскоп" in str(res.get("prepare") or "").lower()
     assert any("как подготовиться к вульвоскопии" in q.lower() for q in calls)
     assert any("подготовка к вульвоскопии" in q.lower() for q in calls)
+
+
+def test_test_assist_source_unavailable_returns_clarify_without_handoff(monkeypatch):
+    svc = Services()
+
+    def fail_price(*_args, **_kwargs):
+        raise RuntimeError("price unavailable")
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fail_price)
+
+    res = run(svc.test_assist("Какие анализы сдать на щитовидку?", {}))
+
+    assert res.get("handoff_required") is not True
+    assert "подобрать анализы" in str(res.get("message") or "").lower()
+
+
+def test_test_prepare_falls_back_to_meili_when_service_info_has_no_preparation(monkeypatch):
+    svc = Services()
+
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [{"serviceName": "Анализ крови на холестерин", "preparation": ""}],
+    )
+
+    def fake_search(_index, _query, *args, **kwargs):
+        return "Подготовка к анализу крови на холестерин: кровь сдают натощак."
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+
+    res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {"service_name": "Холестерин"}))
+
+    assert "натощак" in str(res.get("prepare") or "").lower()
 
 
 def test_test_result_status_stub():
@@ -709,6 +868,25 @@ def test_price_info_ranks_analysis_matches(monkeypatch):
     assert "витамин d" in top_name
 
 
+def test_price_info_ranks_endoscopy_matches(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "ЭКГ", "cost": 650},
+            {"serviceName": "Эндоскопия диагностическая", "cost": 2100},
+            {"serviceName": "Консультация гастроэнтеролога", "cost": 1800},
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("Сколько стоит эндоскопия?", {}))
+
+    assert res["prices"], "Expected ranked prices for endoscopy"
+    top_name = str(res["prices"][0].get("serviceName") or "").lower()
+    assert "эндоскоп" in top_name
+
+
 def test_price_info_matches_service_homecode(monkeypatch):
     svc = Services()
 
@@ -724,6 +902,24 @@ def test_price_info_matches_service_homecode(monkeypatch):
 
     assert res["prices"], "Expected homecode match"
     assert str(res["prices"][0].get("serviceHomecode") or "") == "5001"
+
+
+def test_price_info_keeps_service_name_on_city_only_reply(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [{"serviceName": "ЭКГ", "cost": 650}]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("Самара", {"service_name": "ЭКГ"}))
+
+    assert res["prices"], "Expected prices when city-only follow-up keeps previous service"
+    assert str(res["entities_used"].get("service_name_effective") or "").lower() == "экг"
+
+
+def test_extract_price_service_from_query_strips_politeness_tail():
+    assert svc_mod._extract_price_service_from_query("стоимость экг подскажите") == "экг"
 
 
 def test_price_info_resolves_doctor_name_to_doctor_prices(monkeypatch):
@@ -953,6 +1149,23 @@ def test_address_info_does_not_treat_generic_query_as_branch_filter(monkeypatch)
     assert any("Победы" in a for a in res["addresses"])
 
 
+def test_address_info_filters_regions_for_ekg(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_regions():
+        return [
+            {"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара", "ecg": True},
+            {"id": 2, "addressForSite": "г. Самара, ул. Победы, 83", "city": "Самара", "ecg": False},
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+
+    res = run(svc.address_info("Где пройти ЭКГ?", {"service_name": "ЭКГ"}))
+
+    assert any("Ленина" in a for a in res["addresses"])
+    assert not any("Победы" in a for a in res["addresses"])
+
+
 def test_news_info(monkeypatch):
     svc = Services()
 
@@ -1059,3 +1272,26 @@ def test_service_bundle_info_builds_topn_with_availability_and_prepare(monkeypat
     assert res["doctors"][0]["available"] is True
     assert res["doctors"][1]["available"] is False
     assert "Натощак" in str(res.get("prepare") or "")
+
+
+def test_service_bundle_info_keeps_service_name_on_city_only_reply(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_regions():
+        return [{"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"}]
+
+    async def fake_ensure_doctors_cache():
+        return []
+
+    async def fake_prepare(_query, _entities):
+        return {"prepare": "", "entities_used": {"service_name": "ЭКГ"}}
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", lambda _region_id: [{"serviceName": "ЭКГ", "cost": 650}])
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", lambda: [])
+    monkeypatch.setattr(svc, "test_prepare", fake_prepare)
+
+    res = run(svc.service_bundle_info("Самара", {"service_name": "ЭКГ"}))
+
+    assert str(res.get("service_name") or "").lower() == "экг"

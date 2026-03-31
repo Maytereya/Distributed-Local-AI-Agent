@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 
 from messengers_router.flow_policy import (
     apply_context_action,
@@ -18,6 +19,7 @@ from messengers_router.policies import (
     detect_nonbookable_walkin_intent,
     nonbookable_service_hint,
     detect_prepare_intent,
+    detect_unsupported_catalog,
 )
 from messengers_router.services import Services
 from messengers_router import classifier as classifier_mod
@@ -188,6 +190,166 @@ def test_appointment_confirmation_transition_accepts_common_no_forms():
 
 def test_default_city_is_samara_for_messenger_router():
     assert _DEFAULT_CITY == "Самара"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_kind"),
+    [
+        ("Где сделать МРТ?", "unsupported_service"),
+        ("А КТ у вас есть?", "unsupported_service"),
+        ("Можно сделать рентген?", "unsupported_service"),
+        ("Есть прививки?", "unsupported_service"),
+        ("Можно записаться к детскому урологу?", "unsupported_specialist"),
+        ("Нужен психиатр", "unsupported_specialist"),
+        ("У вас работает косметолог?", "unsupported_specialist"),
+        ("Нужна справка в ГИБДД", "unsupported_document_service"),
+        ("Нужна медкомиссия для спортсменов", "unsupported_document_service"),
+    ],
+)
+def test_detect_unsupported_catalog_matches_catalog_entries(text, expected_kind):
+    match = detect_unsupported_catalog(text)
+    assert match is not None
+    assert match.kind == expected_kind
+
+
+def test_patient_routing_stream_short_circuits_unsupported_catalog(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="PRICE",
+                confidence=0.95,
+                entities={"service_name": "мрт"},
+                flags={"unsupported_catalog", "unsupported_service"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    async def fake_execute_plan(_plan, _state, _services):
+        raise AssertionError("execute_plan must not run for unsupported catalog")
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+
+    state = SessionState(session_id="unsupported-short-circuit")
+    services = Services()
+    memory = MemoryStore()
+
+    out = _run_stream_once("Где сделать МРТ?", state, services, memory)
+
+    assert out
+    assert out[0].text == "Наша клиника не оказывает данную услугу."
+    assert out[0].handoff is False
+
+
+def test_route_message_prepare_followup_to_blooddraw_keeps_address(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="ADDRESS",
+                confidence=0.82,
+                entities={"service_name": "Анализы"},
+                flags={"rule_nonbookable_walkin"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence()
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="prepare-followup-address",
+        last_entities={"_last_label": "PREPARE", "service_name": "Анализ крови на холестерин"},
+    )
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "Где можно сдать кровь?",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "ADDRESS"
+    assert "flow_prepare_followup_override" not in decision.flags
+    assert plan.label == "ADDRESS"
+
+
+def test_route_message_prepare_short_followup_overrides_doctor_info(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="DOCTOR_INFO",
+                confidence=0.7,
+                entities={"specialty": "вульвоскопия"},
+                flags={"rule_doctor_info"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence()
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="prepare-followup-keep-prepare",
+        last_entities={"_last_label": "PREPARE", "service_name": "ФГДС"},
+    )
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "А к вульвоскопии?",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "PREPARE"
+    assert "flow_prepare_followup_override" in decision.flags
+    assert plan.label == "PREPARE"
 
 
 def test_hydrate_schedule_sets_branch_when_windows_have_single_branch():
@@ -1069,3 +1231,321 @@ def test_patient_routing_stream_manual_operator_clears_appointment_context():
     assert state.last_entities.get("time_from") is None
     assert state.last_entities.get("city") == "Самара"
     assert memory.get_pending(state) is None
+
+
+def test_patient_routing_stream_structured_doctor_info_sets_secondary_offer_pending(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="DOCTOR_INFO",
+                confidence=0.85,
+                entities={"secondary_intents": ["DOCTOR_SCHEDULE"]},
+                flags={"rule_doctor_info"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence(
+            items={
+                "doctors_info": {
+                    "doctors": [
+                        {
+                            "fio": "Хальметова Алина Алексеевна",
+                            "specialization": "Кардиолог",
+                            "regions": ["г. Самара, пр. Ленина, 5"],
+                        }
+                    ]
+                }
+            }
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+
+    state = SessionState(session_id="secondary-structured", last_entities={})
+    services = Services()
+    memory = MemoryStore()
+
+    out = _run_stream_once("Какие кардиологи принимают?", state, services, memory)
+
+    assert out
+    assert "Хальметова" in out[0].text
+    assert state.last_entities.get("_secondary_offer_pending") is True
+
+
+def test_route_message_secondary_offer_doctor_reply_activates_schedule(monkeypatch):
+    async def fake_resolve_doctor_name(_text: str):
+        return "Хальметова Алина Алексеевна"
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence(
+            items={
+                "doctor_schedule": {
+                    "schedule": [
+                        {
+                            "fio": "Хальметова Алина Алексеевна",
+                            "regions": ["Ленина 5"],
+                            "schedule": {"Ленина 5": [{"date": "2026-03-19", "slots": ["12:00"]}]},
+                        }
+                    ]
+                }
+            }
+        )
+
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="secondary-doctor-reply",
+        last_entities={
+            "_secondary_offer_pending": True,
+            "_secondary_queue": ["DOCTOR_SCHEDULE"],
+            "secondary_intents": ["DOCTOR_SCHEDULE"],
+        },
+    )
+    services = Services()
+    services.resolve_doctor_name = fake_resolve_doctor_name
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message("Хальметова, да", state, services, memory)
+    )
+
+    assert decision.label == "DOCTOR_SCHEDULE"
+    assert decision.entities.get("doctor_name") == "Хальметова Алина Алексеевна"
+    assert plan.label == "DOCTOR_SCHEDULE"
+    assert state.last_entities.get("_secondary_offer_pending") is False
+
+
+def test_route_message_verified_doctor_reply_after_doctor_info_promotes_schedule(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="TEST_RESULT",
+                confidence=0.62,
+                entities={"doctor_name": "Хальметова Алина Алексеевна"},
+                flags={"doctor_name_verified"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence()
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="doctor-info-to-schedule",
+        last_entities={"_last_label": "DOCTOR_INFO"},
+    )
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "Хальметова, да",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "DOCTOR_SCHEDULE"
+    assert "flow_doctor_info_to_schedule" in decision.flags
+    assert plan.label == "DOCTOR_SCHEDULE"
+
+
+def test_route_message_resolves_short_doctor_reply_after_doctor_info(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="OTHER",
+                confidence=0.9,
+                entities={},
+                flags=set(),
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="llm",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence()
+
+    class _FakeServices(Services):
+        async def resolve_doctor_name(self, raw_text_or_name: str) -> str | None:
+            if "хальметова" in str(raw_text_or_name or "").lower():
+                return "Хальметова Алина Алексеевна"
+            return None
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="doctor-info-short-reply-resolve",
+        last_entities={"_last_label": "DOCTOR_INFO"},
+    )
+    services = _FakeServices()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "Хальметова, да",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "DOCTOR_SCHEDULE"
+    assert decision.entities.get("doctor_name") == "Хальметова Алина Алексеевна"
+    assert "flow_doctor_info_to_schedule" in decision.flags
+    assert plan.label == "DOCTOR_SCHEDULE"
+
+
+def test_route_message_datetime_after_doctor_schedule_promotes_appointment(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="OTHER",
+                confidence=0.9,
+                entities={},
+                flags=set(),
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="llm",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence()
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="schedule-to-appointment-datetime",
+        last_entities={
+            "_last_label": "DOCTOR_SCHEDULE",
+            "appointment_flow_active": True,
+            "doctor_name": "Хальметова Алина Алексеевна",
+            "branch_name": "г. Самара, пр. Ленина, 5",
+            "appointment_windows": [
+                {"date": "2026-03-19", "time": "12:00", "branch": "г. Самара, пр. Ленина, 5"},
+            ],
+        },
+    )
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "2026-03-19 в 12:00!",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "APPOINTMENT"
+    assert (
+        "flow_schedule_to_appointment" in decision.flags
+        or "flow_datetime_appointment_override" in decision.flags
+        or "flow_datetime_appointment_prelock" in decision.flags
+    )
+    assert state.last_entities.get("doctor_name") == "Хальметова Алина Алексеевна"
+    assert state.last_entities.get("date_from") == "2026-03-19"
+    assert state.last_entities.get("time_from") == "12:00"
+    assert plan.label == "APPOINTMENT"
+
+
+def test_route_message_city_only_reply_keeps_price_label(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="ADDRESS",
+                confidence=0.9,
+                entities={},
+                flags={"rule_address"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="llm",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence()
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="price-city-followup",
+        last_entities={"service_name": "ЭКГ"},
+    )
+    services = Services()
+    memory = MemoryStore()
+    memory.set_pending(state, label="PRICE", missing_slots=["_any_of:city,branch_name,branch_id"])
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "Самара",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "PRICE"
+    assert "flow_price_city_reply_override" in decision.flags
+    assert plan.label == "PRICE"

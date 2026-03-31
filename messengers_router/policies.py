@@ -508,6 +508,46 @@ class DoctorIntentOverridePolicy:
 
 DOCTOR_INTENT_OVERRIDE_POLICY = DoctorIntentOverridePolicy()
 
+
+@dataclass(frozen=True)
+class UnsupportedCatalogMatch:
+    """
+    Результат точечного матчинга недоступных услуг/специалистов.
+
+    :param kind: тип недоступного запроса
+    :param canonical_name: каноническое имя услуги/роли/документа
+    """
+
+    kind: str
+    canonical_name: str
+
+
+_UNSUPPORTED_SERVICE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("мрт", re.compile(r"\bмрт\b", re.I)),
+    ("кт", re.compile(r"\bкт\b", re.I)),
+    ("рентген", re.compile(r"\bрентген\w*\b", re.I)),
+    ("вакцинация", re.compile(r"\bвакцин\w*\b", re.I)),
+    ("вакцинация", re.compile(r"\bпривив\w*\b", re.I)),
+)
+_UNSUPPORTED_SPECIALIST_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("офтальмолог", re.compile(r"\bофтальмолог\w*\b", re.I)),
+    ("детский хирург", re.compile(r"\bдет\w*\s+хирург\w*\b", re.I)),
+    ("детский уролог", re.compile(r"\bдет\w*\s+уролог\w*\b", re.I)),
+    ("детский кардиолог", re.compile(r"\bдет\w*\s+кардиолог\w*\b", re.I)),
+    ("косметолог", re.compile(r"\bкосметолог\w*\b", re.I)),
+    ("челюстно-лицевой хирург", re.compile(r"\bчелюстно[-\s]*лицев\w*\s+хирург\w*\b", re.I)),
+    ("сурдолог", re.compile(r"\bсурдолог\w*\b", re.I)),
+    ("психиатр", re.compile(r"\bпсихиатр\w*\b", re.I)),
+    ("нарколог", re.compile(r"\bнарколог\w*\b", re.I)),
+)
+_UNSUPPORTED_DOCUMENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("справка в гибдд", re.compile(r"\bгибдд\b", re.I)),
+    ("справка в гибдд", re.compile(r"\bсправк\w*\b[^.!?\n]{0,40}\bгибдд\b", re.I)),
+    ("медкомиссия для спортсменов", re.compile(r"\bмед\s*комисс\w*\b[^.!?\n]{0,40}\b(?:спортсмен\w*|соревнован\w*)\b", re.I)),
+    ("медкомиссия для спортсменов", re.compile(r"\bмедкомисс\w*\b[^.!?\n]{0,40}\b(?:спортсмен\w*|соревнован\w*)\b", re.I)),
+    ("медкомиссия для спортсменов", re.compile(r"\b(?:спортсмен\w*|соревнован\w*)\b[^.!?\n]{0,60}\b(справк\w*|допуск\w*|медкомисс\w*)\b", re.I)),
+)
+
 # ---------------------------
 # Simple PII detector (MVP)
 # ---------------------------
@@ -610,6 +650,45 @@ def detect_news_intent(text: str) -> bool:
 
 def detect_doctor_info_intent(text: str) -> bool:
     return _matches_any(text, _DOCTOR_INFO_RE)
+
+
+def detect_unsupported_catalog(text: str) -> UnsupportedCatalogMatch | None:
+    """
+    Определяет запросы по услугам/врачам, которых в клинике нет.
+
+    Матчер намеренно узкий и опирается только на заранее утвержденный
+    бизнес-каталог, чтобы не перехватывать обычные медицинские запросы.
+
+    :param text: исходный текст пользователя
+    :return: описание найденного недоступного кейса или None
+    """
+
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+
+    for canonical_name, pattern in _UNSUPPORTED_DOCUMENT_PATTERNS:
+        if pattern.search(raw):
+            return UnsupportedCatalogMatch(
+                kind="unsupported_document_service",
+                canonical_name=canonical_name,
+            )
+
+    for canonical_name, pattern in _UNSUPPORTED_SPECIALIST_PATTERNS:
+        if pattern.search(raw):
+            return UnsupportedCatalogMatch(
+                kind="unsupported_specialist",
+                canonical_name=canonical_name,
+            )
+
+    for canonical_name, pattern in _UNSUPPORTED_SERVICE_PATTERNS:
+        if pattern.search(raw):
+            return UnsupportedCatalogMatch(
+                kind="unsupported_service",
+                canonical_name=canonical_name,
+            )
+
+    return None
 
 
 def extract_specialty(text: str) -> str | None:

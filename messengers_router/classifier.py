@@ -54,6 +54,7 @@ from .policies import (
     has_nearest_schedule_hint,
     missing_slots,
     service_name_conflicts_with_doctor,
+    detect_unsupported_catalog,
 )
 
 _CLASSIFY_TIMEOUT = 45
@@ -610,6 +611,63 @@ def _collect_rule_intent_hints(text: str, last_entities: dict[str, Any] | None =
     return sorted(labels, key=lambda x: _LABEL_RANK.get(x, 10**9))
 
 
+def _unsupported_catalog_label(text: str, kind: str) -> Label:
+    """
+    Выбирает максимально естественный label для недоступного кейса.
+
+    :param text: исходный текст пользователя
+    :param kind: тип недоступного кейса
+    :return: label, близкий к сценарию пользователя
+    """
+
+    if kind == "unsupported_document_service":
+        return "OTHER"
+
+    if kind == "unsupported_specialist":
+        if detect_appointment_intent(text):
+            return "APPOINTMENT"
+        return "DOCTOR_INFO"
+
+    if detect_price_intent(text):
+        return "PRICE"
+    if detect_address_intent(text) or detect_nonbookable_walkin_intent(text):
+        return "ADDRESS"
+    if detect_appointment_intent(text):
+        return "APPOINTMENT"
+    return "OTHER"
+
+
+def _build_unsupported_catalog_decision(text: str, local_flags: set[str]) -> RouteDecision | None:
+    """
+    Создает детерминированное решение для каталога недоступных услуг/специалистов.
+
+    :param text: исходный текст пользователя
+    :param local_flags: уже найденные служебные флаги
+    :return: RouteDecision или None, если совпадение не найдено
+    """
+
+    match = detect_unsupported_catalog(text)
+    if match is None:
+        return None
+
+    label = _unsupported_catalog_label(text, match.kind)
+    entities: dict[str, Any] = {}
+    if match.kind == "unsupported_specialist":
+        entities["specialty"] = match.canonical_name
+    elif match.kind == "unsupported_service":
+        entities["service_name"] = match.canonical_name
+
+    return RouteDecision(
+        label=label,
+        confidence=0.95,
+        entities=entities,
+        flags=set(local_flags) | {"unsupported_catalog", match.kind},
+        needs_handoff=False,
+        context_action="continue",
+        source="guardrail",
+    )
+
+
 async def guardrail_precheck(
     text: str,
     last_entities: dict[str, Any],
@@ -660,6 +718,9 @@ async def guardrail_precheck(
             context_action="new_topic",
             source="guardrail",
         )
+    unsupported = _build_unsupported_catalog_decision(text, local_flags)
+    if unsupported is not None:
+        return unsupported
     if detect_doc_request_intent(text):
         doc_kind = "tax" if detect_tax_doc_request_intent(text) else "generic"
         kind_flag = "doc_request_tax" if doc_kind == "tax" else "doc_request_generic"
@@ -894,6 +955,8 @@ async def deterministic_rule_decision(
             needs_handoff=True,
             context_action="new_topic",
         )
+    elif (unsupported := _build_unsupported_catalog_decision(text, local_flags)) is not None:
+        decision = unsupported
     elif detect_doc_request_intent(text):
         doc_kind = "tax" if detect_tax_doc_request_intent(text) else "generic"
         kind_flag = "doc_request_tax" if doc_kind == "tax" else "doc_request_generic"

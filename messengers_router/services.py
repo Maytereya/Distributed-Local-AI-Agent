@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from agent_logic_1 import meilisearch_client as meilisearch
-from agent_logic_2.nayka_api import api_nayka, api_price
+from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info
 from converters import html_cleaner
 from schedule_ttl_cache import AsyncListTTLStaleCache
 
@@ -227,6 +227,12 @@ _PRICE_QUERY_STOPWORDS = {
     "доктор",
     "доктора",
     "самара",
+    "подскажите",
+    "скажите",
+    "пожалуйста",
+    "мне",
+    "нужно",
+    "надо",
 }
 _PREPARE_QUERY_STOPWORDS = {
     "как",
@@ -369,6 +375,143 @@ def _prepare_query_variants(raw_query: str, entity_query: str = "") -> list[str]
 
         variants.extend(_prepare_synonym_queries(" ".join(x for x in (src_clean, entity_phrase) if x)))
     return _dedupe_queries(variants)
+
+
+_PREPARE_SERVICE_INFO_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "холестерин": (
+        "холестерин",
+        "общий холестерин",
+        "анализ крови на холестерин",
+        "липидный профиль",
+        "липидограмма",
+    ),
+    "фгдс": ("фгдс", "фдгс", "фгс", "гастроскопия"),
+    "фкс": ("фкс", "колоноскопия"),
+}
+_PREPARE_SERVICE_INFO_GENERIC_TOKENS = {
+    "подготовка",
+    "исследование",
+    "исследованию",
+    "исследования",
+    "процедура",
+    "процедуре",
+    "процедуры",
+    "процедуру",
+    "анализ",
+    "анализа",
+    "анализу",
+    "анализом",
+    "анализы",
+    "кровь",
+    "крови",
+    "подскажите",
+    "скажите",
+}
+
+
+def _prepare_service_info_queries(raw_query: str, entity_query: str = "") -> list[str]:
+    """
+    Расширяет prepare-запрос для поиска по serviceInfoAll.
+
+    :param raw_query: исходный текст пользователя
+    :param entity_query: ранее извлеченная услуга/анализ
+    :return: список нормализованных поисковых вариантов
+    """
+
+    variants = _prepare_query_variants(raw_query, entity_query)
+    expanded = list(variants)
+    for item in variants:
+        norm = _normalise_prepare_text(item)
+        for hint, synonyms in _PREPARE_SERVICE_INFO_SYNONYMS.items():
+            if hint not in norm:
+                continue
+            expanded.extend(synonyms)
+            expanded.extend(f"подготовка к {syn}" for syn in synonyms)
+    return _dedupe_queries(expanded, max_items=16)
+
+
+def _prepare_service_info_core_tokens(text: str) -> set[str]:
+    """
+    Возвращает смысловые токены prepare-запроса для матчинга serviceInfoAll.
+
+    Убирает общие слова вроде "подготовка" и "анализ", чтобы выбор записи
+    опирался на саму услугу/процедуру, а не на шаблонный текст поля.
+
+    :param text: текст запроса или варианта запроса
+    :return: множество смысловых токенов
+    """
+
+    norm = _normalise_prepare_text(text)
+    if not norm:
+        return set()
+    tokens = _doc_tokens(norm)
+    return {t for t in tokens if t not in _PREPARE_SERVICE_INFO_GENERIC_TOKENS}
+
+
+def _service_info_row_score(queries: list[str], row: dict[str, Any]) -> tuple[int, int]:
+    """
+    Считает релевантность строки serviceInfoAll для prepare-запроса.
+
+    :param queries: подготовленные варианты запроса
+    :param row: строка из serviceInfoAll
+    :return: кортеж score для сортировки по убыванию
+    """
+
+    service_name = _normalise_input(str(row.get("serviceName") or "")).replace("ё", "е")
+    preparation = str(row.get("preparation") or "").strip()
+    if not service_name or not preparation:
+        return (0, 0)
+
+    best = 0
+    service_tokens = _doc_tokens(service_name)
+    for query in queries:
+        query_norm = _normalise_prepare_text(query)
+        if not query_norm:
+            continue
+        query_core_tokens = _prepare_service_info_core_tokens(query_norm)
+        if not query_core_tokens:
+            continue
+
+        if service_name == query_norm:
+            best = max(best, 12)
+        elif query_norm in service_name or service_name in query_norm:
+            best = max(best, 9)
+
+        overlap = len(query_core_tokens & service_tokens)
+        if overlap:
+            best = max(best, overlap * 3 + 4)
+
+    return (best, len(preparation))
+
+
+def _choose_service_info_preparation(
+    rows: list[dict[str, Any]],
+    queries: list[str],
+) -> str | None:
+    """
+    Выбирает лучший текст подготовки из serviceInfoAll.
+
+    :param rows: записи serviceInfoAll
+    :param queries: варианты запроса пользователя
+    :return: текст preparation или None
+    """
+
+    ranked: list[tuple[tuple[int, int], dict[str, Any]]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        score = _service_info_row_score(queries, row)
+        if score[0] <= 0:
+            continue
+        ranked.append((score, row))
+
+    if not ranked:
+        return None
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    best = ranked[0][1]
+    preparation = str(best.get("preparation") or "").strip()
+    return preparation or None
 
 
 def _is_samara_city_value(value: str | None) -> bool:
@@ -1316,8 +1459,27 @@ def _extract_price_service_from_query(query: str) -> str | None:
     words = [w for w in q.split() if w]
     if not words:
         return None
+    filtered_words = [w for w in words if w not in _PRICE_QUERY_STOPWORDS]
+    if filtered_words:
+        words = filtered_words
     # Ограничиваем длину candidate, чтобы не тянуть в ranking целый диалог.
     return " ".join(words[:8])
+
+
+def _is_city_only_reply(query: str) -> bool:
+    """
+    Проверяет, что реплика состоит только из города без новой услуги.
+
+    :param query: текст текущей реплики
+    :return: True, если пользователь просто ответил названием города
+    """
+
+    city = _extract_city_token(query)
+    if not city:
+        return False
+    tokens = [t for t in re.findall(r"[a-zа-яё]+", _normalise_input(query)) if t]
+    tokens = [t for t in tokens if t not in {"г", "город"}]
+    return len(tokens) == 1 and tokens[0] == city
 
 
 def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], homecode_query: str) -> tuple[int, int]:
@@ -1662,6 +1824,84 @@ def _service_fallback(
     return out
 
 
+def _prepare_subject_hint(query: str, entities: dict[str, Any]) -> str:
+    """
+    Возвращает краткое название исследования/процедуры для fallback-ответа по подготовке.
+
+    :param query: текст текущего запроса пользователя
+    :param entities: текущие сущности роутера
+    :return: короткая фраза с названием анализа или процедуры
+    """
+
+    entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
+    for raw in (entity_query, query):
+        phrase = _extract_prepare_entity_phrase(str(raw or "").strip())
+        if phrase:
+            return phrase
+    return str(entity_query or query or "исследованию").strip()
+
+
+def _prepare_clarify_response(query: str, entities: dict[str, Any], *, note: str) -> dict[str, Any]:
+    """
+    Возвращает безопасный non-handoff fallback для PREPARE, если точной инструкции не найдено.
+
+    :param query: текст запроса пользователя
+    :param entities: текущие сущности роутера
+    :param note: диагностическая пометка источника
+    :return: payload PREPARE без handoff_required
+    """
+
+    subject = _prepare_subject_hint(query, entities)
+    return {
+        "prepare": (
+            f"Пока не удалось автоматически найти точные правила подготовки к «{subject}». "
+            "Уточните полное название анализа или процедуры, и я попробую ещё раз."
+        ),
+        "note": note,
+        "entities_used": entities,
+    }
+
+
+def _test_assist_clarify_response(entities: dict[str, Any], *, note: str) -> dict[str, Any]:
+    """
+    Возвращает безопасный non-handoff fallback для подбора анализов.
+
+    :param entities: текущие сущности роутера
+    :param note: диагностическая пометка источника
+    :return: payload TEST_ASSIST без handoff_required
+    """
+
+    return {
+        "tests": [],
+        "promos": [],
+        "message": (
+            "Уточните, пожалуйста, какие симптомы, жалобы или цель обследования вас интересуют, "
+            "и я помогу подобрать анализы."
+        ),
+        "note": note,
+        "entities_used": entities,
+    }
+
+
+def _tax_doc_guidance_response(entities: dict[str, Any], *, note: str) -> dict[str, Any]:
+    """
+    Возвращает базовую подсказку по налоговым документам без перевода на оператора.
+
+    :param entities: текущие сущности роутера
+    :param note: диагностическая пометка источника
+    :return: payload OTHER/doc без handoff_required
+    """
+
+    return {
+        "content": (
+            "Для налогового вычета обычно нужна справка об оплате медицинских услуг для налоговой. "
+            "Если нужно, могу подсказать, какой именно документ запросить: справку для налоговой или копию договора."
+        ),
+        "note": note,
+        "entities_used": entities,
+    }
+
+
 def _is_meili_error_text(text: Any) -> bool:
     if not isinstance(text, str):
         return False
@@ -1762,21 +2002,20 @@ def _is_prepare_relevant(query: str, content: str) -> bool:
     if not any(x in content_norm for x in ("подготов", "натощак", "перед процедур", "перед исследован")):
         return False
 
-    anchors = (
-        "фгдс",
-        "гастроскоп",
-        "кольпоскоп",
-        "вульвоскоп",
-        "биопс",
-        "узи",
-        "анализ",
-        "кров",
-        "моч",
-        "сперм",
-        "холестерин",
+    anchor_groups = (
+        ("фгдс", "фдгс", "фгс", "гастроскоп"),
+        ("кольпоскоп",),
+        ("вульвоскоп",),
+        ("биопс",),
+        ("узи",),
+        ("анализ",),
+        ("кров",),
+        ("моч",),
+        ("сперм",),
+        ("холестерин", "липид", "липидограмма"),
     )
-    query_anchors = [a for a in anchors if a in query_norm]
-    if query_anchors and not any(a in content_norm for a in query_anchors):
+    query_groups = [group for group in anchor_groups if any(anchor in query_norm for anchor in group)]
+    if query_groups and not all(any(anchor in content_norm for anchor in group) for group in query_groups):
         return False
 
     q_tokens = _doc_tokens(query_norm)
@@ -1877,6 +2116,10 @@ class Services:
         """Запускает фоновые refresh-задачи кэшей (idempotent)."""
         try:
             api_price.ensure_daily_price_refresh_started()
+        except Exception:
+            pass
+        try:
+            api_service_info.ensure_daily_service_info_refresh_started()
         except Exception:
             pass
 
@@ -2261,8 +2504,12 @@ class Services:
     ) -> dict[str, Any]:
         top_limit = _coerce_top_n(top_n, default=DOCTORS_TOP_N)
         entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
-        query_service_name = _extract_price_service_from_query(query)
-        service_name = query_service_name or entity_service_name or str(query or "").strip()
+        query_text = str(query or "").strip()
+        if entity_service_name and _is_city_only_reply(query_text):
+            query_service_name = None
+        else:
+            query_service_name = _extract_price_service_from_query(query_text)
+        service_name = query_service_name or entity_service_name or query_text
         needle = _normalise_input(service_name)
 
         out: dict[str, Any] = {
@@ -2818,6 +3065,8 @@ class Services:
                     relevant_hit = True
                     break
         except Exception:
+            if doc_kind == "tax":
+                return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback unavailable")
             return _service_fallback(
                 note="main_index_info source unavailable",
                 handoff_message="Сейчас не удалось найти информацию автоматически. Соединяю с оператором.",
@@ -2826,6 +3075,8 @@ class Services:
             )
 
         if _is_meili_error_text(cleaned):
+            if doc_kind == "tax":
+                return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback error")
             return _service_fallback(
                 note="main_index_info source unavailable",
                 handoff_message="Сейчас не удалось найти информацию автоматически. Соединяю с оператором.",
@@ -2834,6 +3085,8 @@ class Services:
             )
 
         if _is_meili_no_matches_text(cleaned):
+            if doc_kind == "tax":
+                return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback no matches")
             return _service_fallback(
                 note="main_index_info: no matches",
                 handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
@@ -2843,6 +3096,8 @@ class Services:
             )
 
         if not relevant_hit:
+            if doc_kind == "tax":
+                return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback weak relevance")
             return _service_fallback(
                 note=f"main_index_info: weak relevance ({doc_kind})",
                 handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
@@ -2892,18 +3147,16 @@ class Services:
         test_name = _get_first_present(entities, ["test_name", "service_name"]) or query
         needle = _normalise_input(test_name)
         if not needle:
-            return {"tests": [], "promos": [], "note": "no test query", "entities_used": entities}
+            return _test_assist_clarify_response(entities, note="test_assist: no test query")
 
         try:
             price_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
         except Exception:
-            return _service_fallback(
-                note="test_assist source unavailable",
-                handoff_message="Сейчас не удалось подобрать анализы автоматически. Соединяю с оператором.",
-                entities=entities,
-                extra={"tests": [], "promos": []},
-            )
+            return _test_assist_clarify_response(entities, note="test_assist source unavailable")
         matches = _rank_price_rows([p for p in price_rows if isinstance(p, dict)], test_name, limit=10)
+
+        if not matches:
+            return _test_assist_clarify_response(entities, note=f"test_assist: no matches ({SAMARA_PRICE_REGION_ID})")
 
         return {
             "tests": matches,
@@ -2920,13 +3173,11 @@ class Services:
         if not q:
             return {"prepare": "", "note": "no query", "entities_used": entities}
 
-        # TODO(API-FIRST): здесь должна быть основная ветка поиска подготовки по анализам
-        # из API-кэша serviceInfoAll/preparation. Пока это осознанная заглушка.
-        api_cached_prepare = await self._prepare_from_analysis_api_cache_stub(q, entities)
+        api_cached_prepare = await self._prepare_from_analysis_api_cache(q, entities)
         if api_cached_prepare:
             return {
                 "prepare": api_cached_prepare,
-                "note": "prepare: api cache",
+                "note": "prepare: serviceInfoAll",
                 "entities_used": entities,
             }
 
@@ -2967,34 +3218,33 @@ class Services:
                 return {"prepare": cleaned, "entities_used": entities}
 
         if saw_non_empty:
-            return _service_fallback(
-                note="prepare: weak relevance",
-                handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
-                entities=entities,
-                reason="knowledge_not_found",
-                extra={"prepare": ""},
-            )
+            return _prepare_clarify_response(q, entities, note="prepare: weak relevance")
 
         if saw_no_matches or not saw_service_error:
-            return _service_fallback(
-                note="prepare: no matches",
-                handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
-                entities=entities,
-                reason="knowledge_not_found",
-                extra={"prepare": ""},
-            )
+            return _prepare_clarify_response(q, entities, note="prepare: no matches")
 
-        return _service_fallback(
-            note="prepare source unavailable",
-            handoff_message="Сейчас не удалось получить правила подготовки автоматически. Соединяю с оператором.",
-            entities=entities,
-            extra={"prepare": ""},
-        )
+        return _prepare_clarify_response(q, entities, note="prepare source unavailable")
 
-    async def _prepare_from_analysis_api_cache_stub(self, query: str, entities: dict[str, Any]) -> str | None:
-        """Заглушка под API-first: подготовка к анализам из serviceInfoAll/preparation."""
-        _ = query, entities
-        return None
+    async def _prepare_from_analysis_api_cache(self, query: str, entities: dict[str, Any]) -> str | None:
+        """
+        Ищет подготовку к анализу в кэше `serviceInfoAll`.
+
+        :param query: текст запроса пользователя
+        :param entities: текущие сущности роутера
+        :return: текст поля `preparation` или None
+        """
+
+        entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
+        queries = _prepare_service_info_queries(query, entity_query)
+        if not queries:
+            return None
+
+        try:
+            rows = await asyncio.to_thread(api_service_info.load_service_info)
+        except Exception:
+            return None
+
+        return _choose_service_info_preparation(rows, queries)
 
     async def test_result_status(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         def _result_fallback(note: str, message: str = "Сейчас не удалось получить результаты автоматически. Соединяю с оператором.") -> dict[str, Any]:
@@ -3087,7 +3337,10 @@ class Services:
                 doctor_name = q_resolved_fio
         entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
         query_text = str(query or "").strip()
-        query_service_name = _extract_price_service_from_query(query_text)
+        if entity_service_name and _is_city_only_reply(query_text):
+            query_service_name = None
+        else:
+            query_service_name = _extract_price_service_from_query(query_text)
         # Для явного нового price-запроса не тянем старую услугу из entities.
         if query_service_name:
             service_name = query_service_name

@@ -40,6 +40,23 @@ from .services import Services
 
 _DEFAULT_CITY = "Самара"
 
+_UNSUPPORTED_CATALOG_TEXT: dict[str, str] = {
+    "unsupported_service": "Наша клиника не оказывает данную услугу.",
+    "unsupported_specialist": "Данные врачи не ведут прием.",
+    "unsupported_document_service": "Наша клиника не оказывает данные услуги.",
+}
+
+
+def build_unsupported_catalog_response(evidence: Evidence) -> ResponseEnvelope | None:
+    payload = evidence.get("unsupported_catalog")
+    if not isinstance(payload, dict):
+        return None
+    kind = str(payload.get("kind") or "").strip()
+    text = _UNSUPPORTED_CATALOG_TEXT.get(kind)
+    if not text:
+        return None
+    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
 
 def build_price_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "PRICE":
@@ -299,6 +316,7 @@ def build_first_structured_response(
     user_text: str,
 ) -> ResponseEnvelope | None:
     builders = (
+        lambda: build_unsupported_catalog_response(evidence),
         lambda: build_main_index_info_response(evidence),
         lambda: build_service_bundle_response(flow_label, evidence, state),
         lambda: build_price_response(flow_label, evidence, state),

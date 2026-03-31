@@ -31,7 +31,12 @@ def get_memory_store() -> MemoryStore:
 
 @lru_cache(maxsize=1)
 def get_services() -> Services:
-    return Services()
+    services = Services()
+    try:
+        services.ensure_background_refresh_started()
+    except Exception:
+        pass
+    return services
 
 
 # ---------------------------------------------------------------------

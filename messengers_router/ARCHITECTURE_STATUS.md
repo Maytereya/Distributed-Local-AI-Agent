@@ -3,7 +3,7 @@
 Этот файл — актуальная техническая сводка по `messengers_router` после последнего цикла рефакторинга.
 Фокус: архитектура, границы слоёв, фактические метрики, риски и безопасные направления следующих изменений.
 
-> Обновлено: **2026-03-31**
+> Обновлено: **2026-04-01**
 > Область проверки: `messengers_router/*`, `tests/*`, архитектурные и eval-скрипты.
 
 ## 0) Короткий срез состояния (на сегодня)
@@ -20,6 +20,12 @@
 3. Расширенное eval-покрытие:
    - `python3 messengers_router/scripts/check_eval_coverage.py`
    - результат: `COVERAGE CHECK PASSED` (stage5 extension/critical extension/follow-up/non-Samara/DOCTOR_INFO/DOCTOR_SCHEDULE/PREPARE/OTHER покрыты).
+4. Актуальный локальный parity на свежем API-процессе:
+   - `critical`: **46/46 (100%)**
+   - `stage1`: **20/20 (100%)**
+   - `stage3`: **9/9 (100%)**
+   - `stage4`: **14/15 (93.3%)**, один `timeout_error`
+   - `stage5`: **46/49 intent (93.9%)**, `handoff_accuracy 100%`, остаток — transport/json errors, а не логические label-регрессии.
 
 ### 0.2 Что изменилось относительно ревизии 2026-03-21
 
@@ -31,6 +37,12 @@
 4. Объём интеграционного слоя вырос:
    - `services.py` теперь ~3409 LOC (главный источник технического долга).
 5. Документ приведён к текущему формату без устаревших допущений по структуре пакета.
+6. Восстановлена диалоговая continuity без deterministic-рендера:
+   - `DOCTOR_INFO -> DOCTOR_SCHEDULE` по короткому выбору врача,
+   - `DOCTOR_SCHEDULE -> APPOINTMENT` по follow-up с датой/временем,
+   - `PRICE -> city-only reply` больше не уезжает в `ADDRESS`.
+7. `run_remote_eval.sh` возвращен к серверному default (`critical_cases.jsonl`);
+   `critical_cases_server_parity.jsonl` оставлен как opt-in набор для локального parity-прогона.
 
 ## 1) Карта архитектуры по слоям
 
@@ -106,8 +118,8 @@
 3. Knowledge fallback:
    - Meili (`main_index`) для информационных/подготовительных сценариев.
 4. PREPARE:
-   - `API-first` ветка пока заглушена в `services.py` (`_prepare_from_analysis_api_cache_stub`),
-   - рабочий путь сейчас — Meili + relevance/fallback policy.
+   - `API-first` ветка теперь использует `serviceInfoAll.preparation`,
+   - Meili остается fallback-источником, если в `serviceInfoAll` нет релевантной подготовки.
 
 ## 5) Фактические узкие места
 
@@ -123,7 +135,14 @@
 - `router.py` остаётся центральным координатором с fan-out ≈ 21 internal module.
 - Это даёт удобство orchestration, но повышает стоимость локальных правок.
 
-### 5.3 Тестовый контракт
+### 5.3 Текущий остаточный риск
+
+- Основные логические critical-регрессии закрыты.
+- Оставшийся риск перед серверным пушем — не routing, а стабильность внешних зависимостей:
+  - `site/regions`,
+  - редкие timeout/transport ошибки в stage4/stage5.
+
+### 5.4 Тестовый контракт
 
 - Часть тестов всё ещё импортирует private API роутера:
   - `tests/test_specialty_nlu.py` (`_is_samara_city`)
@@ -228,4 +247,3 @@ messengers_router/
 2. Не допускать роста ложного handoff на простых пользовательских сценариях.
 3. Не записывать неподтверждённые сущности в `state.last_entities`.
 4. Не обходить слой портов/адаптеров прямыми host-import в core-слоях.
-
