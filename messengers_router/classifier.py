@@ -39,6 +39,7 @@ from .policies import (
     detect_address_intent,
     detect_news_intent,
     detect_doctor_info_intent,
+    detect_unavailable_catalog_request,
     normalize_appointment_action,
     has_appointment_context,
     has_datetime_signal,
@@ -657,6 +658,18 @@ async def guardrail_precheck(
             entities={},
             flags=local_flags | {"medical_advice"},
             needs_handoff=True,
+            context_action="new_topic",
+            source="guardrail",
+        )
+    unavailable = detect_unavailable_catalog_request(text)
+    if unavailable is not None:
+        kind, _message = unavailable
+        return RouteDecision(
+            label="OTHER",
+            confidence=1.0,
+            entities={},
+            flags=local_flags | {f"unsupported_catalog_{kind}"},
+            needs_handoff=False,
             context_action="new_topic",
             source="guardrail",
         )

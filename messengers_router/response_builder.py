@@ -41,6 +41,23 @@ from .services import Services
 _DEFAULT_CITY = "Самара"
 
 
+def build_unavailable_catalog_response(decision: RouteDecision) -> ResponseEnvelope | None:
+    """
+    Возвращает детерминированный ответ для заведомо недоступных услуг/специалистов/справок.
+
+    :param decision: итоговое решение роутера
+    :return: готовый ответ или None
+    """
+    flags = set(decision.flags or set())
+    if "unsupported_catalog_service" in flags:
+        return ResponseEnvelope(text="Наша клиника не оказывает данную услугу.", attachments=[], handoff=False)
+    if "unsupported_catalog_specialist" in flags:
+        return ResponseEnvelope(text="Данные врачи не ведут прием.", attachments=[], handoff=False)
+    if "unsupported_catalog_document" in flags:
+        return ResponseEnvelope(text="Наша клиника не оказывает данные услуги.", attachments=[], handoff=False)
+    return None
+
+
 def build_price_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "PRICE":
         return None
@@ -299,6 +316,7 @@ def build_first_structured_response(
     user_text: str,
 ) -> ResponseEnvelope | None:
     builders = (
+        lambda: build_unavailable_catalog_response(decision),
         lambda: build_main_index_info_response(evidence),
         lambda: build_service_bundle_response(flow_label, evidence, state),
         lambda: build_price_response(flow_label, evidence, state),
