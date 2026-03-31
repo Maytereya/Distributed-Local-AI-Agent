@@ -74,12 +74,12 @@ custom_css = """
   width: 100% !important;
 }
 
-#top-user-icon {
+.top-user-icon {
   font-size: 14px !important;
   opacity: 0.75 !important;
 }
 
-#top-user-name {
+.top-user-name {
   font-weight: 500 !important;
 }
 
@@ -116,5 +116,16 @@ custom_css = """
 #main-tabs .tabs {
   margin-top: 0 !important;
   padding-top: 0 !important;
+}
+
+#assistant-chatbot {
+  height: min(68vh, 760px) !important;
+}
+
+@media (max-width: 900px) {
+  #assistant-chatbot {
+    height: 56vh !important;
+    max-height: 65vh !important;
+  }
 }
 """

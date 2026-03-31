@@ -9,6 +9,7 @@ from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
 from agent_logic_1 import aretrieve as retrieve
 from agent_logic_1 import meilisearch_client as meilisearch
+from agent_logic_2 import config as c
 from agent_logic_2.router_preprocessor import routing
 from messenger_simulator import RuntimeOptions as MessengerRuntimeOptions
 from messenger_simulator import stream_message as stream_messenger_message
@@ -111,6 +112,19 @@ def _is_flush_boundary(chunk_text: str) -> bool:
     if not chunk_text:
         return False
     return chunk_text[-1] in {".", "!", "?", "\n", ";", ":", "…"}
+
+
+def _collection_exists(collection_name: str) -> bool:
+    name = str(collection_name or "").strip()
+    if not name:
+        return False
+    try:
+        chroma_service = retrieve.ChromaService(c.chroma_host, c.chroma_port)
+        return name in chroma_service.display_collections(output_format="list")
+    except Exception:
+        # Если проверить не удалось (например, временно недоступен Chroma),
+        # не блокируем запрос на этом уровне.
+        return True
 
 
 def _format_messenger_attachments(attachments: List[Dict[str, Any]]) -> str:
@@ -309,6 +323,13 @@ async def universal_echo(
         return
 
     # сюда попадём только если radio_value == "vectorstore" или "db"
+    if not collection:
+        yield "⚠️ Не выбрана коллекция для поиска в Chroma.", messenger_session_id
+        return
+    if not _collection_exists(collection):
+        yield f"⚠️ Коллекция '{collection}' не найдена. Обновите список коллекций.", messenger_session_id
+        return
+
     result = await chroma_echo(
         message=message,
         history=history,
@@ -319,4 +340,3 @@ async def universal_echo(
         radio_value=radio_value,
     )
     yield result, messenger_session_id
-

@@ -28,9 +28,10 @@ def build_assistant_tab(
             type="messages",
             autoscroll=False,
             placeholder="<strong>🧠 ИИ - помощник</strong><br>Знает всю информацию о врачах и услугах клиники Наука",
-            height=700,
+            height=620,
             max_height=1000,
             label="Моя Наука",
+            elem_id="assistant-chatbot",
         )
 
         textbox = gr.Textbox(
@@ -69,8 +70,7 @@ def build_assistant_tab(
             label=collection_label,
             info="Выберите Коллекцию для поиска информации",
             interactive=False,
-            allow_custom_value=True,
-            # крайне желательно этого избежать
+            allow_custom_value=False,
             render=False,
         )
 
@@ -108,7 +108,7 @@ def build_assistant_tab(
             interactive=False,
             render=False,
         )
-        settings_accordion = gr.Accordion("⚙️ Настройки поиска", open=False, visible=True, render=False)
+        settings_accordion = gr.Accordion("⚙️ Выбор режима диалога", open=False, visible=True, render=False)
 
         gr.ChatInterface(
             fn=universal_echo_fn,
@@ -131,20 +131,23 @@ def build_assistant_tab(
 
         # ====== ЗАХВАТ АУДИО И РАСШИФРОВКА ======
 
-        mic = gr.Audio(
-            sources=["microphone"],
-            type="numpy",
-            streaming=False,
-            label="Микрофон",
-            interactive=True,
-            format="wav",
-            min_width=150,
-            show_download_button=False,
-            show_share_button=False,
-            editable=False,
-            show_label=False,
-            visible=True,
-        )
+        with gr.Row():
+            mic = gr.Audio(
+                sources=["microphone"],
+                type="numpy",
+                streaming=False,
+                label="Микрофон",
+                interactive=True,
+                format="wav",
+                min_width=150,
+                show_download_button=False,
+                show_share_button=False,
+                editable=False,
+                show_label=True,
+                visible=True,
+            )
+        gr.Markdown(
+            "`🎙️ Голосовой ввод: запишите вопрос, дождитесь распознавания и при необходимости отредактируйте текст`")
 
         async def ws_transcribe_to(audio):
             """
@@ -153,7 +156,15 @@ def build_assistant_tab(
             """
             if audio is None:
                 return gr.update(), gr.update()
-            text = await ws_transcribe_fn(audio)  # функция уровнем ниже
+            try:
+                text = await ws_transcribe_fn(audio)  # функция уровнем ниже
+            except Exception as e:
+                gr.Error(title="Ошибка распознавания речи", message=str(e))
+                return gr.update(), gr.update(value=None)
+            text = str(text or "").strip()
+            if not text:
+                gr.Warning("Не удалось распознать речь. Попробуйте записать ещё раз.", title="Предупреждение")
+                return gr.update(), gr.update(value=None)
             return gr.update(value=text), gr.update(value=None)
 
         # Автотранскрипция по окончании записи и очистка по клику на крестик
@@ -161,6 +172,18 @@ def build_assistant_tab(
             fn=ws_transcribe_to,
             inputs=mic,
             outputs=[textbox, mic],
+        )
+
+        def reset_session_on_mode_change(mode: str, current_session: Any):
+            if mode == "Messengers-Ai":
+                return current_session
+            return None
+
+        radio_type_of_search.change(
+            fn=reset_session_on_mode_change,
+            inputs=[radio_type_of_search, messenger_session_state],
+            outputs=[messenger_session_state],
+            queue=False,
         )
 
     return {

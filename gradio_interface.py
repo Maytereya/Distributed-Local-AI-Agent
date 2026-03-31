@@ -120,6 +120,12 @@ def main():
                 collection_label=COLLECTIONS_IN_CHROMA,
             )
             assistant_tab = assistant_tab_refs["tab"]
+            assistant_mode_radio = assistant_tab_refs["radio_type_of_search"]
+            assistant_value_n_results_slider = assistant_tab_refs["value_n_results_slider"]
+            assistant_thresholdvalue_slider = assistant_tab_refs["thresholdvalue_slider"]
+            assistant_value_k_slider = assistant_tab_refs["value_k_slider"]
+            assistant_meili_indexes_dropdown = assistant_tab_refs["meili_search_indexes_dropdown"]
+            assistant_chroma_collection_dropdown = assistant_tab_refs["chroma_search_collection_dropdown"]
 
             # --------------------------------------------------
             # Вкладка 2 - Upload PDF to MEILI or CHROMA DB
@@ -469,6 +475,9 @@ def main():
             def apply_tab_visibility_by_role(request: gr.Request | None = None):
                 username = getattr(request, "username", None) if request else None
                 is_admin = get_user_role(username) == "admin"
+                user_choices = ["Call-Center-Ai", "Messengers-Ai"]
+                admin_choices = ["Call-Center-Ai", "Messengers-Ai", "gigachat", "meilisearch", "vectorstore", "db"]
+                allowed_choices = admin_choices if is_admin else user_choices
                 return (
                     gr.update(visible=True),  # assistant_tab
                     gr.update(visible=True),  # documents_tab
@@ -477,6 +486,12 @@ def main():
                     gr.update(visible=is_admin),  # settings_tab
                     gr.update(visible=is_admin),  # benchmark_tab
                     gr.update(visible=is_admin),  # monitor_tab
+                    gr.update(choices=allowed_choices, value=allowed_choices[0]),  # assistant mode radio
+                    gr.update(visible=is_admin),  # value_n_results_slider
+                    gr.update(visible=is_admin),  # thresholdvalue_slider
+                    gr.update(visible=is_admin),  # value_k_slider
+                    gr.update(visible=is_admin),  # meili dropdown
+                    gr.update(visible=is_admin),  # chroma dropdown
                 )
 
             blocks.load(
@@ -490,6 +505,12 @@ def main():
                     settings_tab,
                     benchmark_tab,
                     monitor_tab,
+                    assistant_mode_radio,
+                    assistant_value_n_results_slider,
+                    assistant_thresholdvalue_slider,
+                    assistant_value_k_slider,
+                    assistant_meili_indexes_dropdown,
+                    assistant_chroma_collection_dropdown,
                 ],
                 queue=False,
             )
