@@ -449,6 +449,28 @@ def test_build_first_structured_response_keeps_builder_priority():
     assert env.text == "Справка для налоговой"
 
 
+def test_build_first_structured_response_returns_prepare_payload_for_prepare_flow():
+    state = SessionState(session_id="builder-prepare", last_entities={})
+    evidence = Evidence(items={"prepare": {"prepare": "Сдавайте анализ натощак, воду пить можно."}})
+    services = Services()
+    memory = MemoryStore()
+    decision = RouteDecision(label="PREPARE", confidence=0.9, entities={}, flags=set(), needs_handoff=False)
+
+    env = _build_first_structured_response(
+        flow_label="PREPARE",
+        evidence=evidence,
+        state=state,
+        services=services,
+        memory=memory,
+        decision=decision,
+        user_text="Как подготовиться к анализу на холестерин?",
+    )
+
+    assert env is not None
+    assert "натощак" in env.text.lower()
+    assert env.handoff is False
+
+
 def test_build_plan_legacy_doc_request_handoff_flag_also_uses_main_index_info():
     state = SessionState(session_id="doc-request-legacy", last_entities={})
     memory = MemoryStore()

@@ -277,6 +277,12 @@ _PREPARE_SYNONYM_HINTS: dict[str, tuple[str, ...]] = {
     "колоноскоп": ("колоноскопия",),
     "кольпоскоп": ("кольпоскопия",),
     "вульвоскоп": ("вульвоскопия",),
+    # Частый кейс: в Meili статья может быть размечена как "липидный профиль",
+    # а вопрос пользователя сформулирован через "холестерин".
+    "холестерин": ("липидный профиль", "липиды крови", "липопротеиды крови"),
+    "липидный профиль": ("холестерин", "липиды крови", "липопротеиды крови"),
+    "липопротеид": ("липиды крови", "липидный профиль", "холестерин"),
+    "липидограмм": ("липидный профиль", "холестерин"),
 }
 
 
@@ -1774,15 +1780,28 @@ def _is_prepare_relevant(query: str, content: str) -> bool:
         "моч",
         "сперм",
         "холестерин",
+        "липид",
+        "липопротеид",
+        "липидограмм",
     )
     query_anchors = [a for a in anchors if a in query_norm]
     if query_anchors and not any(a in content_norm for a in query_anchors):
-        return False
+        # Если пользователь спросил про холестерин, допускаем лексические варианты
+        # из карточки "липидный профиль".
+        if "холестерин" in query_norm and any(x in content_norm for x in ("липид", "липопротеид", "липидограмм")):
+            pass
+        else:
+            return False
 
     q_tokens = _doc_tokens(query_norm)
     c_tokens = _doc_tokens(content_norm)
     if q_tokens and not (q_tokens & c_tokens):
-        return False
+        # Мягкая проверка для русской морфологии:
+        # "липидный профиль" ~= "липидному профилю".
+        q_stems = {t[:5] for t in q_tokens if len(t) >= 4}
+        c_stems = {t[:5] for t in c_tokens if len(t) >= 4}
+        if not (q_stems & c_stems):
+            return False
     return True
 
 

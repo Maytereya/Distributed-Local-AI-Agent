@@ -604,6 +604,34 @@ def test_test_prepare_uses_fallback_variant_query(monkeypatch):
     assert any("подготовка к вульвоскопии" in q.lower() for q in calls)
 
 
+def test_test_prepare_uses_cholesterol_synonym_variant_query(monkeypatch):
+    svc = Services()
+    calls: list[str] = []
+
+    def fake_search(_index, _query, *args, **kwargs):
+        calls.append(str(_query))
+        q = str(_query).strip().lower()
+        if "липидный профиль" in q:
+            return "Подготовка к липидному профилю: анализ сдают натощак."
+        return "Совпадений не найдено, cформулируйте запрос иначе"
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+
+    res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {}))
+
+    assert res.get("handoff_required") is not True
+    assert "натощак" in str(res.get("prepare") or "").lower()
+    assert any("липидный профиль" in q.lower() for q in calls)
+
+
+def test_prepare_relevance_accepts_lipid_profile_for_cholesterol_query():
+    query = "подготовка к анализу на холестерин"
+    content = "Подготовка к липидному профилю: сдавать натощак, воду пить можно."
+
+    assert svc_mod._is_prepare_relevant(query, content) is True
+
+
 def test_test_result_status_stub():
     svc = Services()
     res = run(svc.test_result_status("результаты", {}))

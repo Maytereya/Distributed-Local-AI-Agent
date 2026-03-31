@@ -150,6 +150,18 @@ def build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseE
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 
+def build_prepare_response(flow_label: str, evidence: Evidence) -> ResponseEnvelope | None:
+    if flow_label != "PREPARE":
+        return None
+    payload = evidence.get("prepare")
+    if not isinstance(payload, dict):
+        return None
+    text = str(payload.get("prepare") or "").strip()
+    if not text:
+        return None
+    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+
 def build_doctor_schedule_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "DOCTOR_SCHEDULE":
         return None
@@ -321,6 +333,7 @@ def build_first_structured_response(
         lambda: build_service_bundle_response(flow_label, evidence, state),
         lambda: build_price_response(flow_label, evidence, state),
         lambda: build_test_result_response(flow_label, evidence),
+        lambda: build_prepare_response(flow_label, evidence),
         lambda: build_doctor_schedule_response(flow_label, evidence, state),
         lambda: build_doctor_info_response(flow_label, evidence, state),
         lambda: build_address_response(flow_label, evidence, state, memory, decision, user_text),
