@@ -632,6 +632,36 @@ def test_test_prepare_prefers_service_info_for_analysis_name_query(monkeypatch):
     assert res["note"] == "prepare: serviceInfoAll"
 
 
+def test_test_prepare_falls_back_to_meili_when_service_info_prepare_is_generic_heading(monkeypatch):
+    svc = Services()
+
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [
+            {
+                "serviceName": "Пайпель-биопсия",
+                "preparation": "<h1>Подготовка к исследованию</h1>",
+            }
+        ],
+    )
+
+    def fake_search(_index, _query, *args, **kwargs):
+        return "Подготовка к пайпель-биопсии: забор проводится на 7-11 день цикла."
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(
+        svc_mod.html_cleaner,
+        "strip_html",
+        lambda s: str(s).replace("<h1>", "").replace("</h1>", "").strip(),
+    )
+
+    res = run(svc.test_prepare("Как подготовиться к пайпель-биопсии?", {"service_name": "Пайпель-биопсия"}))
+
+    assert "пайпель-биопс" in str(res.get("prepare") or "").lower()
+    assert res.get("note") != "prepare: serviceInfoAll"
+
+
 def test_test_prepare_does_not_match_unrelated_service_info_by_generic_prepare_token(monkeypatch):
     svc = Services()
 

@@ -2025,6 +2025,109 @@ def _is_prepare_relevant(query: str, content: str) -> bool:
     return True
 
 
+_PREPARE_GENERIC_HEADINGS = {
+    "подготовка к исследованию",
+    "подготовка к анализу",
+    "подготовка к процедуре",
+    "подготовка к обследованию",
+}
+_PREPARE_ACTIONABLE_HINTS = (
+    "натощак",
+    "за ",
+    "час",
+    "день",
+    "сутк",
+    "исключ",
+    "воздерж",
+    "перед",
+    "утром",
+    "вечером",
+    "не ",
+    "нельзя",
+    "можно",
+    "нужно",
+    "рекоменду",
+)
+_PREPARE_TARGET_HINTS = (
+    "фгдс",
+    "фдгс",
+    "фгс",
+    "гастроскоп",
+    "кольпоскоп",
+    "вульвоскоп",
+    "биопс",
+    "пайпел",
+    "узи",
+    "анализ",
+    "кров",
+    "моч",
+    "мазок",
+    "холестерин",
+    "липид",
+    "пцр",
+)
+_PREPARE_CONTENT_TARGET_ANCHORS = (
+    "кров",
+    "моч",
+    "биопс",
+    "фгдс",
+    "фдгс",
+    "фгс",
+    "гастроскоп",
+    "кольпоскоп",
+    "вульвоскоп",
+    "мазок",
+    "пцр",
+    "липид",
+    "холестерин",
+    "эндоскоп",
+)
+
+
+def _is_prepare_content_actionable(content: str) -> bool:
+    """
+    Отсекает слишком общий/шаблонный текст подготовки.
+
+    :param content: кандидатный текст подготовки
+    :return: True, если текст выглядит содержательным
+    """
+
+    norm = _normalise_input(content).replace("ё", "е")
+    if not norm:
+        return False
+    if norm in _PREPARE_GENERIC_HEADINGS:
+        return False
+
+    tokens = re.findall(r"[a-zа-я0-9]{3,}", norm)
+    if len(tokens) <= 5 and ("подготовк" in norm and ("исследован" in norm or "анализ" in norm or "процедур" in norm)):
+        return False
+
+    if any(hint in norm for hint in _PREPARE_ACTIONABLE_HINTS):
+        return True
+    return len(tokens) >= 20
+
+
+def _is_prepare_service_info_usable(query: str, content: str) -> bool:
+    """
+    Решает, можно ли принимать API-first результат `serviceInfoAll` без fallback.
+
+    :param query: исходный пользовательский запрос
+    :param content: текст подготовки из API-кэша
+    :return: True, если ответ достаточно качественный и релевантный
+    """
+
+    if not _is_prepare_content_actionable(content):
+        return False
+
+    query_norm = _normalise_input(query).replace("ё", "е")
+    has_specific_target = any(anchor in query_norm for anchor in _PREPARE_TARGET_HINTS)
+    if has_specific_target and not _is_prepare_relevant(query, content):
+        content_norm = _normalise_input(content).replace("ё", "е")
+        if not any(anchor in content_norm for anchor in _PREPARE_CONTENT_TARGET_ANCHORS):
+            return False
+    return True
+
+
 _KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = "В моей базе данных информации недостаточно, перевожу на оператора."
 
 
@@ -3174,6 +3277,12 @@ class Services:
             return {"prepare": "", "note": "no query", "entities_used": entities}
 
         api_cached_prepare = await self._prepare_from_analysis_api_cache(q, entities)
+        if api_cached_prepare:
+            api_cached_cleaned = html_cleaner.strip_html(api_cached_prepare).strip()
+            if not _is_prepare_service_info_usable(q, api_cached_cleaned):
+                api_cached_prepare = None
+            else:
+                api_cached_prepare = api_cached_cleaned
         if api_cached_prepare:
             return {
                 "prepare": api_cached_prepare,
