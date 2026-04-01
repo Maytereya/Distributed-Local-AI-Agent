@@ -840,6 +840,11 @@ def test_quick_fill_patient_name_accepts_real_fio():
     assert out.get("patient_name") == "Рахманов Владимир"
 
 
+def test_quick_fill_patient_name_rejects_soft_pause_phrase():
+    out = quick_fill_core_entities("подождите пока", {}, ["patient_name"])
+    assert "patient_name" not in out
+
+
 def test_build_doctor_info_response_for_doctor_info_flow():
     state = SessionState(session_id="doc-info", last_entities={})
     evidence = Evidence(
@@ -1164,6 +1169,35 @@ def test_patient_routing_stream_requests_cancel_confirmation_for_active_appointm
     assert state.last_entities.get("appointment_cancel_pending") is True
 
 
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "Нет",
+        "подождите",
+        "пока нет",
+        "пока не буду",
+        "ладно",
+        "извините",
+        "не то",
+        "не это",
+        "я другое хотел",
+        "подождите пока",
+    ],
+)
+def test_patient_routing_stream_soft_pause_requests_cancel_confirmation(phrase: str):
+    state = SessionState(session_id=f"appt-soft-pause-{phrase}", last_entities={"appointment_flow_active": True})
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["patient_name"])
+
+    out = _run_stream_once(phrase, state, services, memory)
+
+    assert len(out) == 1
+    assert "Отменить текущий процесс записи" in out[0].text
+    assert state.last_entities.get("appointment_cancel_pending") is True
+
+
 def test_patient_routing_stream_cancel_rejected_resumes_appointment_flow():
     state = SessionState(
         session_id="appt-cancel-no",
@@ -1179,6 +1213,31 @@ def test_patient_routing_stream_cancel_rejected_resumes_appointment_flow():
     assert len(out) == 1
     assert "фио пациента" in out[0].text.lower()
     assert state.last_entities.get("appointment_cancel_pending") is None
+    assert state.last_entities.get("appointment_flow_active") is True
+
+
+def test_patient_routing_stream_confirm_pending_no_keeps_confirm_transition():
+    state = SessionState(
+        session_id="appt-confirm-no",
+        last_entities={
+            "appointment_flow_active": True,
+            "appointment_confirm_pending": True,
+            "doctor_name": "Хальметова Алина Алексеевна",
+            "date_from": "2026-03-19",
+            "time_from": "12:00",
+            "patient_name": "Рахманов Владимир",
+        },
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    out = _run_stream_once("нет", state, services, memory)
+
+    assert len(out) == 1
+    assert "уточните новую дату" in out[0].text.lower()
+    assert state.last_entities.get("appointment_cancel_pending") is None
+    assert state.last_entities.get("appointment_confirm_pending") is None
     assert state.last_entities.get("appointment_flow_active") is True
 
 

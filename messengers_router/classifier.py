@@ -87,14 +87,40 @@ _PATIENT_NAME_STOPWORDS = {
     "да",
     "нет",
     "самара",
+    "подождите",
+    "подожди",
+    "пока",
+    "ладно",
+    "извините",
+    "не",
+    "то",
+    "это",
+    "другое",
+    "другой",
+    "хотел",
+    "хотела",
+    "буду",
 }
 _DOCTOR_FOLLOWUP_FILLERS = {
     "да",
+    "нет",
     "угу",
     "ок",
     "окей",
     "хорошо",
     "ладно",
+    "подождите",
+    "подожди",
+    "пока",
+    "извините",
+    "не",
+    "то",
+    "это",
+    "другое",
+    "другой",
+    "хотел",
+    "хотела",
+    "буду",
     "подходит",
     "подойдет",
     "подойдёт",
@@ -304,6 +330,10 @@ def _doctor_followup_name_in_context(text: str, last_entities: dict[str, Any]) -
 
     pending = last_entities.get("_pending")
     if isinstance(pending, dict) and str(pending.get("label") or "").strip() == "TEST_RESULT":
+        return None
+    if _pending_waits_appointment_patient_name(last_entities):
+        # На шаге ожидания ФИО пациента не даем short doctor-followup
+        # перехватывать реплику и срывать APPOINTMENT flow.
         return None
 
     ctx_last_label = str(last_entities.get("_last_label") or "").strip()
@@ -1035,6 +1065,15 @@ async def deterministic_rule_decision(
             needs_handoff=False,
             context_action="new_topic",
         )
+    elif _pending_waits_appointment_patient_name(last_entities) and _looks_like_patient_name_only(text):
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.9,
+            entities={"patient_name": str(text or "").strip()},
+            flags=local_flags | {"rule_appointment_patient_name"},
+            needs_handoff=False,
+            context_action="continue",
+        )
     elif (doctor_name_followup := _doctor_followup_name_in_context(text, last_entities)):
         entities: dict[str, Any] = {"doctor_name": doctor_name_followup}
         specialty = str(last_entities.get("specialty") or "").strip()
@@ -1071,15 +1110,6 @@ async def deterministic_rule_decision(
                 needs_handoff=False,
                 context_action="continue",
             )
-    elif _pending_waits_appointment_patient_name(last_entities) and _looks_like_patient_name_only(text):
-        decision = RouteDecision(
-            label="APPOINTMENT",
-            confidence=0.9,
-            entities={"patient_name": str(text or "").strip()},
-            flags=local_flags | {"rule_appointment_patient_name"},
-            needs_handoff=False,
-            context_action="continue",
-        )
     elif detect_schedule_intent(text):
         entities: dict[str, Any] = {}
         specialty = _extract_schedule_specialty(text)

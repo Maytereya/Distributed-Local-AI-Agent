@@ -209,3 +209,21 @@ def test_rule_doctor_followup_without_doctor_context_returns_none():
     )
 
     assert decision is None
+
+
+def test_rule_doctor_followup_ignored_while_waiting_patient_name():
+    decision = run(
+        classifier.deterministic_rule_decision(
+            "Хальметова, да",
+            {
+                "_last_label": "APPOINTMENT",
+                "appointment_flow_active": True,
+                "doctor_name": "Хальметова Алина Алексеевна",
+                "_pending": {"label": "APPOINTMENT", "missing": ["patient_name"]},
+            },
+            allow_refine=False,
+            attach_secondary=False,
+        )
+    )
+
+    assert decision is None or decision.label != "DOCTOR_SCHEDULE"

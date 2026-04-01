@@ -50,6 +50,20 @@ _APPOINTMENT_CANCEL_OR_RESTART_RE = re.compile(
     r")\b",
     re.I,
 )
+_APPOINTMENT_SOFT_PAUSE_RE = re.compile(
+    r"\b("
+    r"подожд(?:ите|и)\w*|"
+    r"пока\s+нет|"
+    r"пока\s+не\s+буду|"
+    r"извините|"
+    r"не\s+то|"
+    r"не\s+это|"
+    r"я\s+друг(ое|ой)\s+хотел\w*"
+    r")\b",
+    re.I,
+)
+_APPOINTMENT_SOFT_PAUSE_EXACT = {"нет", "ладно"}
+_APPOINTMENT_SOFT_PAUSE_PUNCT_RE = re.compile(r"[!.,?;:]+")
 
 _APPOINTMENT_RUNTIME_KEYS: tuple[str, ...] = (
     "appointment_flow_active",
@@ -159,6 +173,17 @@ def is_appointment_cancel_or_restart_request(user_text: str) -> bool:
     return bool(_APPOINTMENT_CANCEL_OR_RESTART_RE.search(text))
 
 
+def is_appointment_soft_pause_request(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    norm = _APPOINTMENT_SOFT_PAUSE_PUNCT_RE.sub(" ", text.lower().replace("ё", "е")).strip()
+    norm = re.sub(r"\s+", " ", norm)
+    if norm in _APPOINTMENT_SOFT_PAUSE_EXACT:
+        return True
+    return bool(_APPOINTMENT_SOFT_PAUSE_RE.search(norm))
+
+
 def is_likely_topic_switch_from_appointment(user_text: str) -> bool:
     text = str(user_text or "").strip()
     if not text:
@@ -166,6 +191,8 @@ def is_likely_topic_switch_from_appointment(user_text: str) -> bool:
     if should_keep_appointment_flow_override(text):
         return False
     if is_appointment_cancel_or_restart_request(text):
+        return False
+    if is_appointment_soft_pause_request(text):
         return False
     low = text.lower()
     if (
@@ -265,7 +292,7 @@ def run_appointment_precheck(
     appointment_pending = isinstance(pending, dict) and pending.get("label") == "APPOINTMENT"
     appointment_flow_active = bool(state.last_entities.get("appointment_flow_active"))
     if (appointment_flow_active or appointment_pending) and not state.last_entities.get("appointment_confirm_pending"):
-        if is_appointment_cancel_or_restart_request(user_text):
+        if is_appointment_cancel_or_restart_request(user_text) or is_appointment_soft_pause_request(user_text):
             state.last_entities["appointment_cancel_pending"] = True
             return ResponseEnvelope(
                 text=appointment_text_cancel_confirm(),
@@ -295,21 +322,6 @@ def run_appointment_precheck(
             )
 
     if state.last_entities.get("appointment_confirm_pending"):
-        if is_appointment_cancel_or_restart_request(user_text):
-            state.last_entities["appointment_cancel_pending"] = True
-            return ResponseEnvelope(
-                text=appointment_text_cancel_confirm(),
-                handoff=False,
-                state_update=debug_state_update_factory(
-                    debug,
-                    label="APPOINTMENT",
-                    handoff=False,
-                    flags={"appointment_flow_cancel_requested"},
-                    context_action="continue",
-                    confidence=1.0,
-                ),
-            )
-
         confirm_transition = appointment_confirmation_transition(user_text)
         if confirm_transition == APPOINTMENT_CONFIRM_YES:
             summary = appointment_summary(state.last_entities)
@@ -341,6 +353,20 @@ def run_appointment_precheck(
                     label="APPOINTMENT",
                     handoff=False,
                     flags={"appointment_confirm_no"},
+                    confidence=1.0,
+                ),
+            )
+        if is_appointment_cancel_or_restart_request(user_text) or is_appointment_soft_pause_request(user_text):
+            state.last_entities["appointment_cancel_pending"] = True
+            return ResponseEnvelope(
+                text=appointment_text_cancel_confirm(),
+                handoff=False,
+                state_update=debug_state_update_factory(
+                    debug,
+                    label="APPOINTMENT",
+                    handoff=False,
+                    flags={"appointment_flow_cancel_requested"},
+                    context_action="continue",
                     confidence=1.0,
                 ),
             )
