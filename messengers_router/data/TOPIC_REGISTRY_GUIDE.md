@@ -70,15 +70,17 @@ Recommended default for non-booking topics:
 2. Set a unique `topic_id`.
 3. Adjust `priority` and `label`.
 4. Add keywords in `match`.
-5. Define source order in `route.sources`.
-6. Set explicit `fallback` policy.
-7. Keep `marks.domain/subtype` consistent for analytics.
+5. Prefer extending an existing topic for the same intent group (`PREPARE`, `PRICE`, `DOCTOR_INFO`)
+   instead of creating a new narrow topic for each document/procedure.
+6. Define source order in `route.sources`.
+7. Set explicit `fallback` policy.
+8. Keep `marks.domain/subtype` consistent for analytics.
 
 ## Priority Rules
 
-- Specific topics must have higher priority than generic topics.
+- Prefer one unified topic per intent group and control behavior with keyword quality.
+- If two topics with same label still exist, specific topics must have higher priority than generic topics.
 - Example:
-  - `prepare_fgds` > `prepare_generic`
   - `doc_tax_certificate` > `doc_generic`
 
 ## Gradio Editor
