@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 from agent_logic_2.nayka_api import api_nayka
 
@@ -74,3 +75,49 @@ def test_get_cached_doctors_data_does_not_refresh_when_placeholder_regions_prese
 
     assert result == rows
     assert calls["refresh"] == 0
+
+
+def test_find_doctor_schedule_uses_extended_lookahead_window(monkeypatch):
+    class _FakeResp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class _FakeDate:
+        @classmethod
+        def today(cls):
+            return date(2026, 4, 1)
+
+    seen_schedule_urls: list[str] = []
+
+    def fake_session_get(url: str, **kwargs):
+        _ = kwargs
+        if url.endswith("/doctors"):
+            return _FakeResp([{"id": 1, "fio": "Куршина Марина Владимировна", "ord": 1}])
+        if url.endswith("/doctorCompanyUnits"):
+            return _FakeResp([{"worker": 1, "specialization": "педиатр"}])
+        if url.endswith("/doctorRegions"):
+            return _FakeResp([{"worker": 1, "companyUnit": 38, "region": 8882}])
+        if "/doctorSchedule?" in url:
+            seen_schedule_urls.append(url)
+            return _FakeResp([{"id": 501, "curDate": "2026-04-14", "startTime": "09:00", "endTime": "12:00"}])
+        if "/doctorScheduleCells?" in url:
+            return _FakeResp([{"startTime": "09:30", "free": True}])
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(api_nayka, "site_regions", lambda: [{"id": 8882, "name": "Самара", "addressForSite": "г. Самара, пр. Ленина, 5"}])
+    monkeypatch.setattr(api_nayka, "_session_get", fake_session_get)
+    monkeypatch.setattr(api_nayka, "date", _FakeDate)
+    monkeypatch.setattr(api_nayka, "SCHEDULE_LOOKAHEAD_DAYS", 14)
+
+    result = api_nayka.find_doctor_schedule("Куршина")
+
+    assert isinstance(result, list)
+    assert seen_schedule_urls, "Expected doctorSchedule requests"
+    assert any("startDate=2026-04-01" in url for url in seen_schedule_urls)
+    assert any("endDate=2026-04-15" in url for url in seen_schedule_urls)

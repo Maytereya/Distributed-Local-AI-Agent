@@ -1,10 +1,13 @@
 import asyncio
 
+import pytest
+
 from messengers_router import services as svc_mod
 from messengers_router.city import match_city
 from messengers_router.services import Services
 from messengers_router.policies import (
     build_branch_index,
+    extract_specialty,
     extract_service_phrase,
     match_branch_hint,
     quick_fill_core_entities,
@@ -190,6 +193,77 @@ def test_doctors_schedule_week(monkeypatch):
     assert res["schedule"], "Expected schedule list"
     assert "entities_used" in res
     assert str(res["entities_used"].get("last_name") or "").lower().startswith("иванов")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("расписание нейрохирурга", "нейрохирург"),
+        ("расписание нейрохирургов", "нейрохирург"),
+        ("расписание флеболога", "флеболог"),
+        ("расписание флебологов", "флеболог"),
+    ],
+)
+def test_extract_specialty_supports_inflected_neurosurgeon_and_phlebologist(text, expected):
+    assert extract_specialty(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("query", "unit_name", "expected_specialty"),
+    [
+        ("расписание нейрохирург", "Врач-нейрохирург", "нейрохирург"),
+        ("расписание флеболог", "Врач-флеболог", "флеболог"),
+    ],
+)
+def test_doctors_schedule_week_by_expanded_specialty_catalog(monkeypatch, query, unit_name, expected_specialty):
+    svc = Services()
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Тестов Тест",
+                "ord": 1,
+                "specialization": expected_specialty,
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "units": [unit_name],
+                "unit_links": [
+                    {
+                        "company_unit_name": unit_name,
+                        "main": True,
+                        "specialization": expected_specialty,
+                    }
+                ],
+                "main_units": [unit_name],
+                "main_specializations": [expected_specialty],
+            }
+        ]
+
+    async def fake_samara_tokens():
+        return {"г. самара, пр. ленина, 5"}
+
+    def fake_schedule(_name, _branch=None):
+        return [
+            {
+                "fio": "Тестов Тест",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "schedule": {
+                    "г. Самара, пр. Ленина, 5": [
+                        {"date": "2026-03-20", "slots": ["09:00"]}
+                    ]
+                },
+            }
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+    monkeypatch.setattr(svc_mod.api_nayka, "find_doctor_schedule", fake_schedule)
+
+    res = run(svc.doctors_schedule_week(query, {}))
+
+    assert res["note"] == "doctors_schedule_week: by specialty"
+    assert res["schedule"], "Expected schedule rows for specialty query"
+    assert res["entities_used"].get("specialty") == expected_specialty
 
 
 def test_doctors_schedule_week_excludes_explicit_non_samara_rows(monkeypatch):
