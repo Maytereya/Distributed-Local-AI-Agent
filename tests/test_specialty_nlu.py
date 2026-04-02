@@ -1,6 +1,7 @@
 import asyncio
 
 from messengers_router.mess_types import SessionState
+from messengers_router import classifier as classifier_mod
 from messengers_router.classifier import deterministic_rule_decision
 from messengers_router.nlu_pipeline import analyze_with_candidates
 from messengers_router.policies import missing_slots
@@ -184,7 +185,13 @@ def test_deterministic_rule_decision_price():
     assert out.label == "PRICE"
 
 
-def test_deterministic_rule_decision_price_with_doctor_name():
+def test_deterministic_rule_decision_price_with_doctor_name(monkeypatch):
+    monkeypatch.setattr(
+        classifier_mod,
+        "resolve_cached_doctor_name_candidate",
+        lambda text, prefer_schedule=False: "Иванова" if "иванов" in text.lower() else None,
+    )
+
     out = run(
         deterministic_rule_decision(
             "Сколько стоит УЗИ брюшной полости у Иванова?",

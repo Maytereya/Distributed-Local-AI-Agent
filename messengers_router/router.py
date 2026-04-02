@@ -830,6 +830,18 @@ async def route_patient_message(
         if not keep_appointment_flow:
             reset_appointment_runtime_state(state)
 
+    unsupported_kind = _unsupported_catalog_kind(set(decision.flags))
+    if unsupported_kind:
+        update_summary(
+            state,
+            reason="topic_switch" if decision.context_action in {"new_topic", "overwrite_doctor"} else "",
+        )
+        return (
+            decision,
+            Plan(label=decision.label),
+            Evidence(items={"unsupported_catalog": {"kind": unsupported_kind}}),
+        )
+
     # Entity grounding: принимаем только подтвержденные/разрешенные сущности.
     pending_before_merge = memory.get_pending(state)
     grounding = await ground_decision_entities(
@@ -907,18 +919,6 @@ async def route_patient_message(
             await _backfill_appointment_doctor_from_text(user_text, state, services, memory)
 
     fill_date_from_schedule_windows(state, decision.label)
-
-    unsupported_kind = _unsupported_catalog_kind(set(decision.flags))
-    if unsupported_kind:
-        update_summary(
-            state,
-            reason="topic_switch" if decision.context_action in {"new_topic", "overwrite_doctor"} else "",
-        )
-        return (
-            decision,
-            Plan(label=decision.label),
-            Evidence(items={"unsupported_catalog": {"kind": unsupported_kind}}),
-        )
 
     plan = build_plan(decision, state, user_text, memory=memory)
     evidence = await execute_plan(plan, state, services)

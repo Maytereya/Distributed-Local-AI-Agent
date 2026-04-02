@@ -4,7 +4,7 @@ import pytest
 
 from messengers_router import services as svc_mod
 from messengers_router.city import match_city
-from messengers_router.services import Services
+from messengers_router.services import Services, resolve_price_service_name_from_catalog
 from messengers_router.policies import (
     build_branch_index,
     extract_specialty,
@@ -563,14 +563,14 @@ def test_main_index_info_success(monkeypatch):
 
     def fake_search(_index, _query, *args, **kwargs):
         captured["kwargs"] = dict(kwargs)
-        return "<b>Справка для налоговой</b>"
+        return "<b>Копия договора с печатью</b>"
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: "Справка для налоговой")
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: "Копия договора с печатью")
 
-    res = run(svc.main_index_info("Как получить справку для налоговой?", {}))
+    res = run(svc.main_index_info("Как получить копию договора с печатью?", {}))
 
-    assert res["content"] == "Справка для налоговой"
+    assert res["content"] == "Копия договора с печатью"
     assert str(res["note"]).startswith("main_index_info: main_index")
     assert res.get("handoff_required") is not True
     assert captured.get("kwargs") == {"output_mode": "content_only", "max_chars": 12000}
@@ -620,8 +620,22 @@ def test_main_index_info_tax_source_unavailable_returns_guidance_without_handoff
     res = run(svc.main_index_info("справка для ФНС", {}))
 
     assert res.get("handoff_required") is not True
-    assert "справк" in str(res.get("content") or "").lower()
-    assert "налог" in str(res.get("content") or "").lower()
+    assert str(res.get("content") or "") == "Заказ справки на налоговый вычет осуществляется на сайте https://naykalab.ru/spravka-nalogoviy-vichet"
+
+
+def test_main_index_info_tax_returns_direct_link_without_meili(monkeypatch):
+    svc = Services()
+
+    def fake_search(_index, _query, *args, **kwargs):
+        raise AssertionError("tax doc request must not call main_index search")
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+
+    res = run(svc.main_index_info("Как получить справку для налогового вычета?", {}))
+
+    assert res.get("handoff_required") is not True
+    assert res["note"] == "main_index_info: tax direct link"
+    assert str(res.get("content") or "") == "Заказ справки на налоговый вычет осуществляется на сайте https://naykalab.ru/spravka-nalogoviy-vichet"
 
 
 def test_test_assist_price_by_region(monkeypatch):
@@ -1020,6 +1034,83 @@ def test_price_info_keeps_service_name_on_city_only_reply(monkeypatch):
 
     assert res["prices"], "Expected prices when city-only follow-up keeps previous service"
     assert str(res["entities_used"].get("service_name_effective") or "").lower() == "экг"
+
+
+def test_resolve_price_service_name_from_catalog_matches_biochemistry():
+    rows = [
+        {"serviceName": "Бодилифт 1 категория", "cost": 400000},
+        {"serviceName": "Биохимия крови", "cost": 2690},
+    ]
+
+    resolved = resolve_price_service_name_from_catalog("биохимия крови", rows=rows)
+
+    assert resolved == "Биохимия крови"
+
+
+def test_resolve_price_service_name_from_catalog_matches_alat_alias():
+    rows = [
+        {"serviceName": "АсАТ", "cost": 190},
+        {"serviceName": "АлАТ", "cost": 190},
+    ]
+
+    resolved = resolve_price_service_name_from_catalog("Стоимость АЛТ", rows=rows)
+
+    assert resolved == "АлАТ"
+
+
+def test_price_info_resolves_biochemistry_catalog_query(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "Бодилифт 1 категория", "cost": 400000},
+            {"serviceName": "Биохимия крови", "cost": 2690},
+            {"serviceName": "Биохимический анализ кала", "cost": 1980},
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("Сколько стоит биохимия крови?", {}))
+
+    assert res["prices"], "Expected prices from catalog-grounded price matching"
+    top_name = str(res["prices"][0].get("serviceName") or "").lower()
+    assert "биохимия крови" in top_name
+
+
+def test_price_info_resolves_alat_alias_from_catalog(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "АсАТ", "cost": 190},
+            {"serviceName": "АлАТ", "cost": 190},
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("Стоимость АЛТ", {}))
+
+    assert res["prices"], "Expected price row for АлАТ/АЛТ alias"
+    top_name = str(res["prices"][0].get("serviceName") or "").lower()
+    assert "алат" in top_name
+
+
+def test_price_info_resolves_mixed_ecg_question_to_catalog_service(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "Бодилифт 1 категория", "cost": 400000},
+            {"serviceName": "ЭКГ", "cost": 650},
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("как пройти экг и его стоимость?", {}))
+
+    assert res["prices"], "Expected price row for mixed ECG price/address wording"
+    top_name = str(res["prices"][0].get("serviceName") or "").lower()
+    assert top_name == "экг"
 
 
 def test_extract_price_service_from_query_strips_politeness_tail():

@@ -3682,12 +3682,19 @@ class Services:
                 doctor_name = q_resolved_fio
         entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
         query_text = str(query or "").strip()
+        doctor_price_query = bool(
+            doctor_id
+            and query_text
+            and _DOCTOR_PRICE_HINT_RE.search(query_text)
+            and _PRICE_REQUEST_RE.search(query_text)
+        )
+        current_service_name_for_resolution = "" if doctor_price_query else entity_service_name
         if entity_service_name and _is_city_only_reply(query_text):
             query_service_name = None
         else:
             query_service_name = resolve_price_service_name_from_catalog(
                 query_text,
-                current_service_name=entity_service_name,
+                current_service_name=current_service_name_for_resolution,
             ) or _extract_price_service_from_query(query_text)
         # Для явного нового price-запроса не тянем старую услугу из entities.
         if query_service_name:
@@ -3698,13 +3705,7 @@ class Services:
             service_name = entity_service_name or query_text
         # Если вопрос явно doctor-specific и сформулирован как новый price-запрос,
         # не тянем "залипшую" услугу из прошлого контекста.
-        if (
-            doctor_id
-            and not query_service_name
-            and query_text
-            and _DOCTOR_PRICE_HINT_RE.search(query_text)
-            and _PRICE_REQUEST_RE.search(query_text)
-        ):
+        if doctor_price_query and not query_service_name:
             service_name = query_text
         needle = _normalise_input(service_name)
 

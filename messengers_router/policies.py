@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from .city import looks_like_address, match_city
-from .doctor_name_port import extract_doctor_name_candidate, surname_variants
+from .doctor_name_port import resolve_cached_doctor_name_candidate, surname_variants
 from .service_phrase import extract_service_phrase
 
 # ---------------------------
@@ -569,6 +569,30 @@ _UNSUPPORTED_SERVICE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("рентген", re.compile(r"\bрентген\w*\b", re.I)),
     ("вакцинация", re.compile(r"\bвакцин\w*\b", re.I)),
     ("вакцинация", re.compile(r"\bпривив\w*\b", re.I)),
+    ("вакцинация", re.compile(r"\bакдс(?:[-\s]*м)?\b", re.I)),
+    ("вакцинация", re.compile(r"\bадс(?:[-\s]*м)?\b", re.I)),
+    ("вакцинация", re.compile(r"\bкпк\b", re.I)),
+    (
+        "вакцинация",
+        re.compile(
+            r"\b(?:пентаксим|инфанрикс|полиорикс|имовакс\s+полио|превенар|приорикс|варилрикс|менактра|менвео|хиберикс|ротатек|ротарикс)\b",
+            re.I,
+        ),
+    ),
+    (
+        "вакцинация",
+        re.compile(
+            r"\b(?:привив\w*|вакцин\w*|постав\w*|сдела\w*)\b[^.!?\n]{0,40}\b(?:полиомиелит\w*|полио\b|кор(?:ь|и)\b|краснух\w*|паротит\w*|ветрян\w*|пневмокок\w*|грипп\w*|гепатит(?:а|в|с|b|c)?)\b",
+            re.I,
+        ),
+    ),
+    (
+        "вакцинация",
+        re.compile(
+            r"\b(?:полиомиелит\w*|полио\b|кор(?:ь|и)\b|краснух\w*|паротит\w*|ветрян\w*|пневмокок\w*|грипп\w*|гепатит(?:а|в|с|b|c)?)\b[^.!?\n]{0,40}\b(?:привив\w*|вакцин\w*|постав\w*|сдела\w*)\b",
+            re.I,
+        ),
+    ),
 )
 _UNSUPPORTED_SPECIALIST_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("офтальмолог", re.compile(r"\bофтальмолог\w*\b", re.I)),
@@ -1281,7 +1305,7 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
     # из свободного текста пациента (там часто его собственное ФИО).
     doctor_already_selected = bool(state_entities.get("doctor_name") or state_entities.get("doctor_id"))
     if needs_doctor_or_spec and not patient_name_like_text and not doctor_already_selected:
-        extracted_name = extract_doctor_name_candidate(t)
+        extracted_name = resolve_cached_doctor_name_candidate(t)
         if extracted_name and _doctor_candidate_is_contextual(t, extracted_name):
             out["doctor_name"] = extracted_name
 

@@ -129,6 +129,14 @@ context_action: continue
 Label: OTHER
 context_action: continue
 
+Текст: Нужно сделать АКДС-М ребенку
+Label: OTHER
+context_action: continue
+
+Текст: Можно поставить прививку от полиомиелита?
+Label: OTHER
+context_action: continue
+
 Текст: Хочу записаться на ЭКГ в Самаре
 Label: ADDRESS
 context_action: continue

@@ -173,7 +173,7 @@ def test_rule_appointment_does_not_keep_doctor_as_service_name():
 
     assert decision is not None
     assert decision.label == "APPOINTMENT"
-    assert decision.entities.get("doctor_name") == "Дразнину"
+    assert decision.entities.get("doctor_name") == "Дразнин"
     assert "service_name" not in decision.entities
 
 

@@ -5,6 +5,7 @@ from messengers_router.flow_policy import (
     apply_context_action,
     apply_pending_override,
     hydrate_appointment_context_from_schedule,
+    quick_fill_entities_from_text,
 )
 from messengers_router.mess_types import Evidence, Plan, PlanStep, SessionState
 from messengers_router.memory import MemoryStore
@@ -23,6 +24,7 @@ from messengers_router.policies import (
 )
 from messengers_router.services import Services
 from messengers_router import classifier as classifier_mod
+from messengers_router import doctor_name_port as doctor_name_port_mod
 from messengers_router.city import match_city
 from messengers_router.router import (
     _DEFAULT_CITY,
@@ -41,6 +43,7 @@ from messengers_router.router import (
     execute_plan,
 )
 from messengers_router import router as router_mod
+from messengers_router import flow_policy as flow_policy_mod
 
 
 def _run_stream_once(user_text: str, state: SessionState, services: Services, memory: MemoryStore):
@@ -173,6 +176,40 @@ def test_verify_doctor_entity_drops_service_name_that_matches_doctor():
     assert "entity_dropped_doctor_like_service_name" in out.flags
 
 
+def test_resolve_cached_doctor_name_candidate_uses_local_doctors_cache(monkeypatch):
+    doctor_name_port_mod._DOCTOR_CACHE_SIGNATURE = None
+    doctor_name_port_mod._DOCTOR_SURNAMES_MAP = {}
+    doctor_name_port_mod._DOCTOR_FIO_MAP = {}
+
+    monkeypatch.setattr(doctor_name_port_mod, "_find_existing_doctors_file", lambda: object())
+    monkeypatch.setattr(
+        doctor_name_port_mod,
+        "_doctor_cache_signature",
+        lambda _file: ("fake-doctors.jsonl", 1),
+    )
+    monkeypatch.setattr(
+        doctor_name_port_mod,
+        "_load_doctors_data",
+        lambda _file: [
+            {"fio": "Дразнин Антон Владимирович"},
+            {"fio": "Карасев Виталий Валерьевич"},
+        ],
+    )
+
+    assert doctor_name_port_mod.resolve_cached_doctor_name_candidate("к Дразнину") == "Дразнин"
+    assert doctor_name_port_mod.resolve_cached_doctor_name_candidate("подскажите к кому записаться") is None
+
+
+def test_classifier_does_not_extract_unmatched_question_word_as_doctor_name(monkeypatch):
+    monkeypatch.setattr(
+        classifier_mod,
+        "resolve_cached_doctor_name_candidate",
+        lambda _text, prefer_schedule=False: None,
+    )
+
+    assert classifier_mod._extract_appointment_doctor_name("подскажите к кому записаться") is None
+
+
 def test_appointment_confirmation_transition_accepts_common_yes_forms():
     for text in ("да", "Да", "Да,", "Да?", "подтверждаю", "Подтверждаю"):
         assert appointment_confirmation_transition(text) == "yes"
@@ -199,11 +236,16 @@ def test_default_city_is_samara_for_messenger_router():
         ("А КТ у вас есть?", "unsupported_service"),
         ("Можно сделать рентген?", "unsupported_service"),
         ("Есть прививки?", "unsupported_service"),
+        ("Нужно сделать АКДС-М ребенку", "unsupported_service"),
+        ("Можно поставить прививку от полиомиелита?", "unsupported_service"),
+        ("Есть Пентаксим?", "unsupported_service"),
         ("Можно записаться к детскому урологу?", "unsupported_specialist"),
+        ("Здравствуйте! К детскому кардиологу можно попасть?", "unsupported_specialist"),
         ("Нужен психиатр", "unsupported_specialist"),
         ("У вас работает косметолог?", "unsupported_specialist"),
         ("Нужна справка в ГИБДД", "unsupported_document_service"),
         ("Нужна медкомиссия для спортсменов", "unsupported_document_service"),
+        ("Заказать справку для спортсменов", "unsupported_document_service"),
     ],
 )
 def test_detect_unsupported_catalog_matches_catalog_entries(text, expected_kind):
@@ -248,8 +290,50 @@ def test_patient_routing_stream_short_circuits_unsupported_catalog(monkeypatch):
     out = _run_stream_once("Где сделать МРТ?", state, services, memory)
 
     assert out
-    assert out[0].text == "Наша клиника не оказывает данную услугу."
+    assert out[0].text == "К сожалению, в данный момент клиника не оказывает данную услугу. Приносим извинения за неудобства."
     assert out[0].handoff is False
+
+
+def test_patient_routing_stream_unsupported_specialist_does_not_pollute_state(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="DOCTOR_INFO",
+                confidence=0.95,
+                entities={"specialty": "детский кардиолог"},
+                flags={"unsupported_catalog", "unsupported_specialist"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    async def fake_execute_plan(_plan, _state, _services):
+        raise AssertionError("execute_plan must not run for unsupported specialist")
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+
+    state = SessionState(session_id="unsupported-specialist-clean-state")
+    services = Services()
+    memory = MemoryStore()
+
+    out = _run_stream_once("Здравствуйте! К детскому кардиологу можно попасть?", state, services, memory)
+
+    assert out
+    assert out[0].text == "Данные врачи не ведут прием."
+    assert out[0].handoff is False
+    assert state.last_entities.get("specialty") is None
+    assert state.last_entities.get("_last_label") is None
 
 
 def test_route_message_prepare_followup_to_blooddraw_keeps_address(monkeypatch):
@@ -932,10 +1016,35 @@ def test_build_doctor_schedule_response_sets_flow_active():
             }
         }
     )
-    env = _build_doctor_schedule_response("DOCTOR_SCHEDULE", evidence, state)
+    env = _build_doctor_schedule_response("DOCTOR_SCHEDULE", evidence, state, MemoryStore())
     assert env is not None
     assert state.last_entities.get("appointment_flow_active") is True
     assert "Трубин Алексей Юрьевич" in env.text
+
+
+def test_build_doctor_schedule_response_offers_operator_when_no_slots_for_two_weeks():
+    state = SessionState(session_id="doc-schedule-no-slots", last_entities={})
+    memory = MemoryStore()
+    evidence = Evidence(
+        items={
+            "doctor_schedule": {
+                "schedule": [],
+                "schedule_unavailable_reason": "no_free_slots_2_weeks",
+            }
+        }
+    )
+
+    env = _build_doctor_schedule_response("DOCTOR_SCHEDULE", evidence, state, memory)
+
+    assert env is not None
+    assert "Врач найден, но свободных слотов нет в ближайшие 2 недели." in env.text
+    assert "Перевести на оператора?" in env.text
+    assert env.handoff is False
+    assert state.last_entities.get("_operator_offer_pending") is True
+    pending = memory.get_pending(state)
+    assert isinstance(pending, dict)
+    assert pending.get("label") == "OTHER"
+    assert "operator_offer_confirm" in (pending.get("missing") or [])
 
 
 def test_build_address_response_sets_pending_when_empty():
@@ -983,6 +1092,21 @@ def test_apply_pending_override_keeps_price_flow_on_city_reply():
     assert label == "PRICE"
 
 
+def test_apply_pending_override_keeps_price_flow_on_catalog_service_reply(monkeypatch):
+    decision = RouteDecision(label="TEST_ASSIST", confidence=0.71, flags={"rule_test_assist"})
+    pending = {"label": "PRICE", "missing": ["service_name"]}
+
+    monkeypatch.setattr(
+        flow_policy_mod,
+        "resolve_price_service_name_from_catalog",
+        lambda text, current_service_name="": "Биохимия крови" if "биохим" in text.lower() else None,
+    )
+
+    label = apply_pending_override(decision, pending, user_text="биохимия крови")
+
+    assert label == "PRICE"
+
+
 def test_apply_pending_override_allows_address_switch_on_explicit_address_request():
     decision = RouteDecision(label="ADDRESS", confidence=0.72, flags={"rule_address"})
     pending = {"label": "PRICE", "missing": ["_any_of:city,branch_name,branch_id"]}
@@ -990,6 +1114,23 @@ def test_apply_pending_override_allows_address_switch_on_explicit_address_reques
     label = apply_pending_override(decision, pending, user_text="адрес в Самаре")
 
     assert label == "ADDRESS"
+
+
+def test_quick_fill_entities_from_text_resolves_catalog_service_for_price_followup(monkeypatch):
+    monkeypatch.setattr(
+        flow_policy_mod,
+        "resolve_price_service_name_from_catalog",
+        lambda text, current_service_name="": "Биохимия крови" if "биохим" in text.lower() else None,
+    )
+
+    out = quick_fill_entities_from_text(
+        "биохимия крови",
+        {"_last_label": "PRICE"},
+        ["service_name"],
+        Services(),
+    )
+
+    assert out.get("service_name") == "Биохимия крови"
 
 
 def test_apply_pending_override_keeps_appointment_on_full_branch_address_reply():
@@ -1630,3 +1771,41 @@ def test_route_message_city_only_reply_keeps_price_label(monkeypatch):
     assert decision.label == "PRICE"
     assert "flow_price_city_reply_override" in decision.flags
     assert plan.label == "PRICE"
+
+
+def test_route_message_operator_offer_yes_handoffs():
+    state = SessionState(session_id="operator-offer-yes", last_entities={"_operator_offer_pending": True})
+    services = Services()
+    memory = MemoryStore()
+    memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+
+    decision, plan, evidence = asyncio.run(router_mod.route_patient_message("да", state, services, memory))
+
+    assert decision.label == "OTHER"
+    assert "operator_offer_confirmed" in decision.flags
+    assert plan.label == "OTHER"
+    payload = evidence.get("operator_offer_response")
+    assert isinstance(payload, dict)
+    assert payload.get("handoff") is True
+    assert "Соединяю с оператором" in str(payload.get("text") or "")
+    assert state.last_entities.get("_operator_offer_pending") is None
+    assert memory.get_pending(state) is None
+
+
+def test_route_message_operator_offer_no_keeps_dialog_without_handoff():
+    state = SessionState(session_id="operator-offer-no", last_entities={"_operator_offer_pending": True})
+    services = Services()
+    memory = MemoryStore()
+    memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+
+    decision, plan, evidence = asyncio.run(router_mod.route_patient_message("нет", state, services, memory))
+
+    assert decision.label == "OTHER"
+    assert "operator_offer_declined" in decision.flags
+    assert plan.label == "OTHER"
+    payload = evidence.get("operator_offer_response")
+    assert isinstance(payload, dict)
+    assert payload.get("handoff") is False
+    assert "Хорошо, продолжаем диалог." in str(payload.get("text") or "")
+    assert state.last_entities.get("_operator_offer_pending") is None
+    assert memory.get_pending(state) is None

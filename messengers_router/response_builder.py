@@ -41,7 +41,7 @@ from .services import Services
 _DEFAULT_CITY = "Самара"
 
 _UNSUPPORTED_CATALOG_TEXT: dict[str, str] = {
-    "unsupported_service": "Наша клиника не оказывает данную услугу.",
+    "unsupported_service": "К сожалению, в данный момент клиника не оказывает данную услугу. Приносим извинения за неудобства.",
     "unsupported_specialist": "Данные врачи не ведут прием.",
     "unsupported_document_service": "Наша клиника не оказывает данные услуги.",
 }
