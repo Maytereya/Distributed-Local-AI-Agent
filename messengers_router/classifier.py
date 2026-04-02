@@ -1203,7 +1203,7 @@ async def deterministic_rule_decision(
                 needs_handoff=False,
                 context_action="continue",
             )
-        elif specialty and not appointment_intent:
+        elif specialty and not appointment_intent and not price_intent:
             decision = RouteDecision(
                 label="DOCTOR_INFO",
                 confidence=0.70,

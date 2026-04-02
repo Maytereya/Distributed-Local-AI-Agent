@@ -257,6 +257,23 @@ def _remember_question(state: SessionState, kind: str, slots: list[str] | None =
         state.last_entities.pop("last_clarify_slots", None)
 
 
+def _clear_operator_offer_pending(state: SessionState, memory: MemoryStore) -> None:
+    """
+    Сбрасывает локальный pending-флаг подтверждения перевода на оператора.
+
+    :param state: текущее состояние сессии
+    :param memory: хранилище pending-слотов
+    :return: None
+    """
+
+    state.last_entities.pop("_operator_offer_pending", None)
+    pending = memory.get_pending(state)
+    if isinstance(pending, dict):
+        missing = pending.get("missing")
+        if pending.get("label") == "OTHER" and isinstance(missing, list) and "operator_offer_confirm" in missing:
+            memory.clear_pending(state)
+
+
 def _extract_nlu_trace(evidence: Evidence) -> dict[str, Any]:
     for item in reversed(evidence.debug_trace or []):
         if not isinstance(item, dict):
@@ -514,6 +531,45 @@ async def route_patient_message(
     memory: MemoryStore,
     runtime_options: RuntimeOptions | None = None,
 ) -> tuple[RouteDecision, Plan, Evidence]:
+    if state.last_entities.get("_operator_offer_pending"):
+        reply_kind = contextual_reply_kind(user_text)
+        if explicit_operator_requested(user_text):
+            reply_kind = "yes"
+        if reply_kind == "yes":
+            _clear_operator_offer_pending(state, memory)
+            return (
+                RouteDecision(
+                    label="OTHER",
+                    confidence=0.95,
+                    entities={},
+                    flags={"operator_offer_confirmed"},
+                    needs_handoff=False,
+                ),
+                Plan(label="OTHER"),
+                Evidence(items={"operator_offer_response": {"text": handoff_message("manual_operator"), "handoff": True}}),
+            )
+        if reply_kind == "no":
+            _clear_operator_offer_pending(state, memory)
+            return (
+                RouteDecision(
+                    label="OTHER",
+                    confidence=0.95,
+                    entities={},
+                    flags={"operator_offer_declined"},
+                    needs_handoff=False,
+                ),
+                Plan(label="OTHER"),
+                Evidence(
+                    items={
+                        "operator_offer_response": {
+                            "text": "Хорошо, продолжаем диалог. Можете задать другой вопрос.",
+                            "handoff": False,
+                        }
+                    }
+                ),
+            )
+        _clear_operator_offer_pending(state, memory)
+
     # Вежливое переключение на вторичный интент по короткому "да/нет".
     queue = get_secondary_queue(state)
     if (
@@ -944,8 +1000,13 @@ def _build_test_result_response(flow_label: str, evidence: Evidence) -> Response
     return response_build_test_result_response(flow_label, evidence)
 
 
-def _build_doctor_schedule_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
-    return response_build_doctor_schedule_response(flow_label, evidence, state)
+def _build_doctor_schedule_response(
+    flow_label: str,
+    evidence: Evidence,
+    state: SessionState,
+    memory: MemoryStore,
+) -> ResponseEnvelope | None:
+    return response_build_doctor_schedule_response(flow_label, evidence, state, memory)
 
 
 def _build_address_response(

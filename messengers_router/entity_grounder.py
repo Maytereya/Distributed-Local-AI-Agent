@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -17,7 +18,7 @@ from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
 from .policies import extract_service_phrase, service_name_conflicts_with_doctor
-from .services import Services
+from .services import Services, resolve_price_service_name_from_catalog
 
 _CONTROL_KEYS = {
     "secondary_intents",
@@ -294,7 +295,15 @@ async def ground_decision_entities(
         if key == "service_name":
             # Стараемся брать услугу из текущей реплики, а не "как есть" из LLM,
             # чтобы не залипали ложные service_name.
-            phrase = extract_service_phrase(user_text) or extract_service_phrase(str(value or ""))
+            phrase: str | None = None
+            if label == "PRICE":
+                phrase = await asyncio.to_thread(
+                    resolve_price_service_name_from_catalog,
+                    user_text,
+                    current_service_name=str(value or ""),
+                )
+            if not phrase:
+                phrase = extract_service_phrase(user_text) or extract_service_phrase(str(value or ""))
             if phrase:
                 out[key] = phrase
                 if str(value or "").strip() and phrase != str(value).strip():

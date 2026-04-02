@@ -26,7 +26,7 @@ from .policies import (
     match_branch_hint,
     quick_fill_core_entities,
 )
-from .services import Services
+from .services import Services, resolve_price_service_name_from_catalog
 
 
 def _should_break_pending(decision: RouteDecision, pending_label: str) -> bool:
@@ -231,6 +231,27 @@ def _is_short_prepare_followup(text: str) -> bool:
     return True
 
 
+def _looks_like_price_service_reply(text: str) -> bool:
+    """
+    Проверяет, что короткая реплика похожа на ответ с названием услуги для PRICE-flow.
+
+    :param text: текущая реплика пользователя
+    :return: True, если это похоже на название услуги/анализа, а не новый вопрос
+    """
+
+    s = str(text or "").strip()
+    if not s or len(s) > 96:
+        return False
+    if has_datetime_signal(s) or _is_city_only_reply(s):
+        return False
+    if detect_prepare_intent(s) or detect_address_intent(s) or detect_doc_request_intent(s):
+        return False
+    if detect_schedule_intent(s):
+        return False
+    tokens = [t for t in re.findall(r"[A-Za-zА-Яа-яЁё0-9\-]+", s) if t]
+    return 1 <= len(tokens) <= 6
+
+
 def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_text: str = "") -> str:
     if not pending:
         return decision.label
@@ -245,6 +266,14 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
         and _is_city_only_reply(user_text)
     ):
         return pending_label
+    if (
+        pending_label == "PRICE"
+        and decision.label in {"TEST_ASSIST", "OTHER"}
+        and any("service_name" in str(item or "") for item in (pending.get("missing") or []))
+        and _looks_like_price_service_reply(user_text)
+        and resolve_price_service_name_from_catalog(user_text)
+    ):
+        return "PRICE"
     if (
         pending_label == "APPOINTMENT"
         and decision.label == "ADDRESS"
@@ -611,6 +640,22 @@ def quick_fill_entities_from_text(
     """
     t = text.strip()
     out: dict[str, Any] = quick_fill_core_entities(t, state_entities, missing_rules)
+
+    if (
+        not out.get("service_name")
+        and any("service_name" in str(rule or "") for rule in missing_rules)
+        and (
+            detect_price_intent(t)
+            or str(state_entities.get("_last_label") or "") == "PRICE"
+        )
+    ):
+        current_service_name = str(state_entities.get("service_name") or state_entities.get("test_name") or "")
+        resolved_service_name = resolve_price_service_name_from_catalog(
+            t,
+            current_service_name=current_service_name,
+        )
+        if resolved_service_name:
+            out["service_name"] = resolved_service_name
 
     # ----------------------------
     # Branch resolution

@@ -986,6 +986,7 @@ def find_doctor_schedule(
 
     # --- Собираем расписания ---
     result = []
+    matched_but_without_slots = False
     for doctor_id, doctor_obj in matched_doctors.items():
         doctor_mappings = [m for m in mappings if m["worker"] == doctor_id]
         doctor_reg_entries = [r for r in dr_regions if r["worker"] == doctor_id]
@@ -1043,6 +1044,7 @@ def find_doctor_schedule(
                 break
 
         if not schedules_by_region:
+            matched_but_without_slots = True
             continue
 
         result.append({
@@ -1054,6 +1056,8 @@ def find_doctor_schedule(
             "schedule": dict(schedules_by_region)
         })
 
+    if not result and matched_but_without_slots:
+        return "Врач найден, но свободных слотов нет в ближайшие 2 недели."
     if not result:
         return f"Врач с фамилией '{last_name}' не найден."
     return result

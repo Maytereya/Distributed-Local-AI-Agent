@@ -58,6 +58,27 @@ def build_unsupported_catalog_response(evidence: Evidence) -> ResponseEnvelope |
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 
+def build_operator_offer_response(evidence: Evidence) -> ResponseEnvelope | None:
+    """
+    Возвращает ответ для подтверждения/обработки перевода на оператора.
+
+    :param evidence: собранные evidence текущего шага
+    :return: готовый envelope или None
+    """
+
+    payload = evidence.get("operator_offer_response")
+    if not isinstance(payload, dict):
+        return None
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        return None
+    return ResponseEnvelope(
+        text=text,
+        attachments=[],
+        handoff=bool(payload.get("handoff")),
+    )
+
+
 def build_price_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "PRICE":
         return None
@@ -162,12 +183,28 @@ def build_prepare_response(flow_label: str, evidence: Evidence) -> ResponseEnvel
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 
-def build_doctor_schedule_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
+def build_doctor_schedule_response(
+    flow_label: str,
+    evidence: Evidence,
+    state: SessionState,
+    memory: MemoryStore,
+) -> ResponseEnvelope | None:
     if flow_label != "DOCTOR_SCHEDULE":
         return None
     schedule_payload = evidence.get("doctor_schedule")
     if not isinstance(schedule_payload, dict):
         return None
+    if str(schedule_payload.get("schedule_unavailable_reason") or "").strip() == "no_free_slots_2_weeks":
+        state.last_entities["_operator_offer_pending"] = True
+        memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+        return ResponseEnvelope(
+            text=(
+                "Врач найден, но свободных слотов нет в ближайшие 2 недели. "
+                "Для уточнения могу перевести на оператора. Перевести на оператора?"
+            ),
+            attachments=[],
+            handoff=False,
+        )
     hydrate_appointment_context_from_schedule(state, schedule_payload)
     state.last_entities["appointment_flow_active"] = True
     text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
@@ -328,13 +365,14 @@ def build_first_structured_response(
     user_text: str,
 ) -> ResponseEnvelope | None:
     builders = (
+        lambda: build_operator_offer_response(evidence),
         lambda: build_unsupported_catalog_response(evidence),
         lambda: build_main_index_info_response(evidence),
         lambda: build_service_bundle_response(flow_label, evidence, state),
         lambda: build_price_response(flow_label, evidence, state),
         lambda: build_test_result_response(flow_label, evidence),
         lambda: build_prepare_response(flow_label, evidence),
-        lambda: build_doctor_schedule_response(flow_label, evidence, state),
+        lambda: build_doctor_schedule_response(flow_label, evidence, state, memory),
         lambda: build_doctor_info_response(flow_label, evidence, state),
         lambda: build_address_response(flow_label, evidence, state, memory, decision, user_text),
         lambda: build_news_response(flow_label, evidence, state),

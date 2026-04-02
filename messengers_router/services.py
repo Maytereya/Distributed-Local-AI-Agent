@@ -287,9 +287,28 @@ _PRICE_QUERY_STOPWORDS = {
     "подскажите",
     "скажите",
     "пожалуйста",
+    "как",
+    "его",
+    "ее",
+    "её",
+    "пройти",
+    "сдать",
+    "сделать",
+    "узнать",
     "мне",
     "нужно",
     "надо",
+    "хочу",
+    "можно",
+}
+_PRICE_QUERY_CANONICAL_TOKENS = {
+    "алт": "алат",
+    "алат": "алат",
+    "alat": "алат",
+    "ast": "асат",
+    "аст": "асат",
+    "асат": "асат",
+    "asat": "асат",
 }
 _PREPARE_QUERY_STOPWORDS = {
     "как",
@@ -323,6 +342,20 @@ _PREPARE_QUERY_STOPWORDS = {
     "когда",
     "будет",
 }
+
+
+def _is_schedule_no_slots_text(payload: Any) -> bool:
+    """
+    Определяет текстовый ответ Nayka API, когда врач найден, но свободных слотов нет.
+
+    :param payload: ответ из find_doctor_schedule
+    :return: True, если это кейс отсутствия свободных слотов, а не отсутствия врача
+    """
+
+    if not isinstance(payload, str):
+        return False
+    norm = _normalise_input(payload).replace("ё", "е")
+    return "свободных слотов нет" in norm
 _PREPARE_LEADIN_RE = re.compile(
     r"^\s*(?:подскажите[, ]+)?(?:как\s+)?подготов(?:иться|ится|ка)\s*(?:к|для)?\s+",
     re.I,
@@ -1492,6 +1525,7 @@ def _price_query_tokens(text: str) -> list[str]:
     out: list[str] = []
     for t in _PRICE_TOKEN_RE.findall(s):
         token = str(t or "").strip().lower().replace("ё", "е")
+        token = _PRICE_QUERY_CANONICAL_TOKENS.get(token, token)
         if len(token) < 2:
             continue
         if token in _PRICE_QUERY_STOPWORDS:
@@ -1526,6 +1560,121 @@ def _extract_price_service_from_query(query: str) -> str | None:
         words = filtered_words
     # Ограничиваем длину candidate, чтобы не тянуть в ranking целый диалог.
     return " ".join(words[:8])
+
+
+def _dedupe_price_queries(queries: list[str], *, max_items: int = 8) -> list[str]:
+    """
+    Дедуплицирует варианты price-запроса перед поиском по каталогу услуг.
+
+    :param queries: список сырых вариантов запроса
+    :param max_items: максимальное количество вариантов
+    :return: очищенный список уникальных запросов
+    """
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in queries:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        key = _normalise_input(value).replace("ё", "е")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _build_price_catalog_queries(query_text: str, *, current_service_name: str = "") -> list[str]:
+    """
+    Собирает варианты запроса для поиска услуги в price-каталоге.
+
+    :param query_text: исходный текст пользователя
+    :param current_service_name: уже известная услуга из state
+    :return: список поисковых вариантов от самых полезных к запасным
+    """
+
+    raw = str(query_text or "").strip()
+    queries: list[str] = []
+    if current_service_name:
+        queries.append(current_service_name)
+    extracted = _extract_price_service_from_query(raw)
+    if extracted:
+        queries.append(extracted)
+    phrase = extract_service_phrase(raw)
+    if phrase:
+        queries.append(phrase)
+    compact = " ".join(_price_query_tokens(raw)).strip()
+    if compact:
+        queries.append(compact)
+    if raw:
+        queries.append(raw)
+    return _dedupe_price_queries(queries)
+
+
+def resolve_price_service_name_from_catalog(
+    query_text: str,
+    *,
+    current_service_name: str = "",
+    rows: list[dict[str, Any]] | None = None,
+) -> str | None:
+    """
+    Приземляет пользовательский price-запрос на реальную услугу из price-каталога.
+
+    Используется как узкий catalog-grounded слой для `PRICE`, чтобы не
+    перечислять лабораторные анализы и процедуры в regex/anchors.
+
+    :param query_text: исходный текст пользователя
+    :param current_service_name: услуга из текущего state, если уже есть
+    :param rows: опционально заранее загруженные строки priceByRegion
+    :return: каноническое название услуги из каталога либо None
+    """
+
+    queries = _build_price_catalog_queries(query_text, current_service_name=current_service_name)
+    if not queries:
+        return None
+
+    catalog_rows = rows
+    if catalog_rows is None:
+        try:
+            loaded = api_price.load_price_by_region(SAMARA_PRICE_REGION_ID)
+        except Exception:
+            return None
+        catalog_rows = [row for row in loaded if isinstance(row, dict)]
+    else:
+        catalog_rows = [row for row in rows if isinstance(row, dict)]
+
+    if not catalog_rows:
+        return None
+
+    best_row: dict[str, Any] | None = None
+    best_score = 0
+    best_matched = 0
+    for query in queries:
+        ranked = _rank_price_rows(catalog_rows, query, limit=3)
+        if not ranked:
+            continue
+        row = ranked[0]
+        score, matched = _price_row_score(
+            row,
+            query=_normalise_input(query).replace("ё", "е"),
+            tokens=_price_query_tokens(query),
+            homecode_query=_extract_homecode_query(query),
+        )
+        if score <= 0:
+            continue
+        if score > best_score or (score == best_score and matched > best_matched):
+            best_row = row
+            best_score = score
+            best_matched = matched
+
+    if not best_row:
+        return None
+    if best_score < 100:
+        return None
+    return str(best_row.get("serviceName") or best_row.get("name") or "").strip() or None
 
 
 def _is_city_only_reply(query: str) -> bool:
@@ -1947,7 +2096,7 @@ def _test_assist_clarify_response(entities: dict[str, Any], *, note: str) -> dic
 
 def _tax_doc_guidance_response(entities: dict[str, Any], *, note: str) -> dict[str, Any]:
     """
-    Возвращает базовую подсказку по налоговым документам без перевода на оператора.
+    Возвращает детерминированную ссылку на оформление справки для налогового вычета.
 
     :param entities: текущие сущности роутера
     :param note: диагностическая пометка источника
@@ -1955,10 +2104,7 @@ def _tax_doc_guidance_response(entities: dict[str, Any], *, note: str) -> dict[s
     """
 
     return {
-        "content": (
-            "Для налогового вычета обычно нужна справка об оплате медицинских услуг для налоговой. "
-            "Если нужно, могу подсказать, какой именно документ запросить: справку для налоговой или копию договора."
-        ),
+        "content": "Заказ справки на налоговый вычет осуществляется на сайте https://naykalab.ru/spravka-nalogoviy-vichet",
         "note": note,
         "entities_used": entities,
     }
@@ -2496,13 +2642,22 @@ class Services:
         *,
         nearest_only: bool,
         query_text: str = "",
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """
+        Ищет расписание по специальности и возвращает найденные строки вместе с причиной пустой выдачи.
+
+        :param specialty: каноническая специальность
+        :param entities: текущие сущности диалога
+        :param nearest_only: вернуть только ближайшего врача при наличии слотов
+        :param query_text: исходный текст запроса пользователя
+        :return: кортеж (список строк расписания, причина пустой выдачи или None)
+        """
         doctors = await self._ensure_doctors_cache_loaded()
         if not doctors:
-            return []
+            return [], None
         spec = _normalise_input(specialty)
         if not spec:
-            return []
+            return [], None
 
         samara_tokens = await self._samara_region_tokens()
         role_query = _is_role_specialty_query(query_text or specialty, spec)
@@ -2539,9 +2694,10 @@ class Services:
             ),
         )[:8]
         if not candidates:
-            return []
+            return [], None
 
         out_rows: list[dict[str, Any]] = []
+        matched_but_without_slots = False
         for doc in candidates:
             fio = str(doc.get("fio") or "").strip()
             if not fio:
@@ -2550,6 +2706,9 @@ class Services:
             try:
                 data = await self._get_schedule_payload_cached(surname)
             except Exception:
+                continue
+            if _is_schedule_no_slots_text(data):
+                matched_but_without_slots = True
                 continue
             if not isinstance(data, list) or not data:
                 continue
@@ -2572,7 +2731,9 @@ class Services:
                 break
 
         if not out_rows:
-            return []
+            if matched_but_without_slots:
+                return [], "no_free_slots_2_weeks"
+            return [], None
         with_slots = [x for x in out_rows if isinstance(x.get("_nearest_slot"), datetime)]
         if with_slots:
             with_slots.sort(key=lambda x: x["_nearest_slot"])  # type: ignore[index]
@@ -2582,7 +2743,7 @@ class Services:
 
         for item in chosen:
             item.pop("_nearest_slot", None)
-        return chosen
+        return chosen, None
 
     async def _doctor_availability_snapshot(self, fio: str, *, samara_tokens: set[str]) -> dict[str, Any]:
         fio_clean = str(fio or "").strip()
@@ -2673,7 +2834,10 @@ class Services:
         if entity_service_name and _is_city_only_reply(query_text):
             query_service_name = None
         else:
-            query_service_name = _extract_price_service_from_query(query_text)
+            query_service_name = resolve_price_service_name_from_catalog(
+                query_text,
+                current_service_name=entity_service_name,
+            ) or _extract_price_service_from_query(query_text)
         service_name = query_service_name or entity_service_name or query_text
         needle = _normalise_input(service_name)
 
@@ -3070,7 +3234,7 @@ class Services:
             last_name = None
 
         if not last_name and specialty:
-            schedule_by_spec = await self._schedule_by_specialty(
+            schedule_by_spec, schedule_unavailable_reason = await self._schedule_by_specialty(
                 specialty,
                 entities,
                 nearest_only=_has_nearest_hint(query),
@@ -3079,6 +3243,7 @@ class Services:
             return {
                 "schedule": schedule_by_spec,
                 "note": "doctors_schedule_week: by specialty",
+                "schedule_unavailable_reason": schedule_unavailable_reason,
                 "entities_used": {"specialty": specialty, "raw_name": raw_name},
             }
 
@@ -3106,6 +3271,7 @@ class Services:
 
         # Пробуем несколько вариантов фамилии (родительный падеж -> именительный).
         data = None
+        schedule_unavailable_reason: str | None = None
         candidates = surname_variants(str(last_name))
         if not candidates:
             candidates = [str(last_name)]
@@ -3120,12 +3286,16 @@ class Services:
                 if isinstance(data, list) and data:
                     last_name = candidate
                     break
+                if _is_schedule_no_slots_text(data):
+                    schedule_unavailable_reason = "no_free_slots_2_weeks"
                 # fallback: если регионный фильтр дал пусто, пробуем без региона
                 if region_name:
                     data = await self._get_schedule_payload_cached(candidate, None)
                     if isinstance(data, list) and data:
                         last_name = candidate
                         break
+                    if _is_schedule_no_slots_text(data):
+                        schedule_unavailable_reason = "no_free_slots_2_weeks"
         except Exception:
             return _service_fallback(
                 note="doctors_schedule_week unavailable",
@@ -3179,6 +3349,7 @@ class Services:
         return {
             "schedule": data or [],
             "note": "doctors_schedule_week: realtime from Nayka API",
+            "schedule_unavailable_reason": schedule_unavailable_reason,
             "entities_used": {"last_name": last_name, "raw_name": raw_name, "region_name": region_name},
         }
 
@@ -3195,6 +3366,9 @@ class Services:
         if doc_kind not in {"tax", "generic"}:
             norm_q = _normalise_input(q)
             doc_kind = "tax" if any(k in norm_q for k in ("налог", "вычет", "фнс")) else "generic"
+
+        if doc_kind == "tax":
+            return _tax_doc_guidance_response(entities, note="main_index_info: tax direct link")
 
         normalized_q = _normalise_input(q)
         fallback_queries: list[str] = []
@@ -3511,7 +3685,10 @@ class Services:
         if entity_service_name and _is_city_only_reply(query_text):
             query_service_name = None
         else:
-            query_service_name = _extract_price_service_from_query(query_text)
+            query_service_name = resolve_price_service_name_from_catalog(
+                query_text,
+                current_service_name=entity_service_name,
+            ) or _extract_price_service_from_query(query_text)
         # Для явного нового price-запроса не тянем старую услугу из entities.
         if query_service_name:
             service_name = query_service_name
