@@ -847,6 +847,96 @@ def test_test_prepare_uses_fallback_variant_query(monkeypatch):
     assert any("подготовка к вульвоскопии" in q.lower() for q in calls)
 
 
+def test_test_prepare_compacts_long_meili_answer_with_llm_wrap(monkeypatch):
+    svc = Services()
+    calls: dict[str, int] = {"llm": 0}
+
+    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
+
+    source_text = (
+        "Подготовка к пайпель-биопсии эндометрия: процедура проводится на 7-11 день цикла. "
+        "За 48 часов необходимо исключить половые контакты. За 24 часа не использовать "
+        "вагинальные свечи и спринцевания. В день процедуры не применять кремы в интимной зоне. "
+        "За 2-3 часа желательно опорожнить мочевой пузырь. При наличии анализов возьмите их с собой."
+    )
+
+    def fake_search(_index, _query, *args, **kwargs):
+        return source_text
+
+    async def fake_generate_text(prompt, *, timeout_s, queue_timeout_ms, fmt=None, llm=None, think=None):
+        calls["llm"] += 1
+        assert "пайпель" in str(prompt).lower()
+        return (
+            "Для подготовки к пайпель-биопсии:\n"
+            "- Проводите исследование на 7-11 день цикла.\n"
+            "- За 48 часов исключите половые контакты.\n"
+            "- За 24 часа не используйте вагинальные свечи и спринцевания."
+        )
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+    monkeypatch.setattr(svc_mod, "generate_text", fake_generate_text)
+    monkeypatch.setattr(svc, "_prepare_wrap_llm_available_now", lambda: asyncio.sleep(0, result=True))
+
+    def fake_runtime_bool(name: str, default: bool) -> bool:
+        if name == "MR_PREPARE_LLM_WRAP_ENABLED":
+            return True
+        return default
+
+    def fake_runtime_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+        if name == "MR_PREPARE_LLM_WRAP_MIN_CHARS":
+            return 1
+        return default
+
+    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
+    monkeypatch.setattr(svc_mod, "_runtime_int", fake_runtime_int)
+
+    res = run(svc.test_prepare("Как подготовиться к пайпель-биопсии?", {"service_name": "Пайпель-биопсия"}))
+
+    assert calls["llm"] == 1
+    assert "за 48 часов" in str(res.get("prepare") or "").lower()
+    assert len(str(res.get("prepare") or "")) < len(source_text)
+
+
+def test_test_prepare_llm_wrap_fallbacks_to_source_on_invalid_compaction(monkeypatch):
+    svc = Services()
+
+    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
+
+    source_text = (
+        "Подготовка к анализу крови на холестерин: кровь сдаётся натощак 8-12 часов, "
+        "разрешена негазированная вода, за сутки исключить алкоголь и жирную пищу."
+    )
+
+    def fake_search(_index, _query, *args, **kwargs):
+        return source_text
+
+    async def fake_generate_text(*args, **kwargs):
+        return "NO_RELEVANT_CONTENT"
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+    monkeypatch.setattr(svc_mod, "generate_text", fake_generate_text)
+    monkeypatch.setattr(svc, "_prepare_wrap_llm_available_now", lambda: asyncio.sleep(0, result=True))
+
+    def fake_runtime_bool(name: str, default: bool) -> bool:
+        if name == "MR_PREPARE_LLM_WRAP_ENABLED":
+            return True
+        return default
+
+    def fake_runtime_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+        if name == "MR_PREPARE_LLM_WRAP_MIN_CHARS":
+            return 1
+        return default
+
+    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
+    monkeypatch.setattr(svc_mod, "_runtime_int", fake_runtime_int)
+
+    res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {"service_name": "Холестерин"}))
+
+    assert str(res.get("prepare") or "") == source_text
+
+
 def test_test_assist_source_unavailable_returns_clarify_without_handoff(monkeypatch):
     svc = Services()
 

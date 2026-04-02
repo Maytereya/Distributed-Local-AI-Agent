@@ -19,7 +19,7 @@ import logging
 import re
 import time
 from datetime import datetime
-from urllib.parse import quote_from_bytes
+from urllib.parse import quote_from_bytes, urlparse
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -35,6 +35,8 @@ from .doctor_name_port import (
     resolve_schedule_surname,
     surname_variants,
 )
+from .llm_runtime import generate_text
+from .prompt_registry import load_prompt_text
 from .service_phrase import extract_service_phrase
 from .runtime_config import config as c
 
@@ -2290,6 +2292,104 @@ _PREPARE_CONTENT_TARGET_ANCHORS = (
     "холестерин",
     "эндоскоп",
 )
+_PREPARE_LLM_WRAP_NO_RELEVANT = "NO_RELEVANT_CONTENT"
+_PREPARE_LLM_WRAP_FALLBACK_PROMPT = (
+    "Ты ассистент клиники. Сократи ответ по подготовке к исследованию.\n"
+    "Используй только факты из блока ИСТОЧНИК, ничего не выдумывай.\n"
+    "Оставь только то, что релевантно запросу пациента.\n"
+    "Формат ответа:\n"
+    "- краткая вводная (1 предложение);\n"
+    "- 2-6 пунктов с конкретными шагами.\n"
+    "Если релевантной информации нет, верни строго: NO_RELEVANT_CONTENT.\n\n"
+    "ЗАПРОС ПАЦИЕНТА:\n<<USER_QUERY>>\n\n"
+    "ИСТОЧНИК:\n<<SOURCE_TEXT>>\n"
+)
+_PREPARE_CODE_FENCE_START_RE = re.compile(r"^\s*```(?:\w+)?\s*", re.I)
+_PREPARE_CODE_FENCE_END_RE = re.compile(r"\s*```\s*$", re.I)
+
+
+def _prepare_wrap_prompt(query: str, source_text: str) -> str:
+    """
+    Формирует prompt для LLM-компактора ответа PREPARE.
+
+    :param query: исходный запрос пользователя
+    :param source_text: сырой текст подготовки из источника
+    :return: итоговый prompt
+    """
+
+    try:
+        tmpl = load_prompt_text("prepare_wrap_patient")
+    except Exception:
+        tmpl = _PREPARE_LLM_WRAP_FALLBACK_PROMPT
+    return (
+        str(tmpl or "")
+        .replace("<<USER_QUERY>>", str(query or "").strip())
+        .replace("<<SOURCE_TEXT>>", str(source_text or "").strip())
+        .strip()
+    )
+
+
+def _prepare_wrap_clean(text: str) -> str:
+    """
+    Нормализует ответ LLM после компактирования.
+
+    :param text: raw-ответ модели
+    :return: очищенный текст
+    """
+
+    out = str(text or "").strip()
+    if not out:
+        return ""
+    out = _PREPARE_CODE_FENCE_START_RE.sub("", out, count=1)
+    out = _PREPARE_CODE_FENCE_END_RE.sub("", out, count=1)
+    out = html_cleaner.strip_html(out).strip()
+    out = re.sub(r"^\s*(?:ответ|краткий ответ|результат)\s*:\s*", "", out, flags=re.I)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
+
+
+def _prepare_query_has_specific_target(query: str) -> bool:
+    """
+    Проверяет, есть ли в запросе пациента конкретный объект подготовки.
+
+    :param query: текст запроса
+    :return: True при наличии таргета (например, ФГДС/биопсия/холестерин)
+    """
+
+    query_norm = _normalise_input(query).replace("ё", "е")
+    return any(anchor in query_norm for anchor in _PREPARE_TARGET_HINTS)
+
+
+def _is_prepare_wrap_output_usable(query: str, source_text: str, wrapped: str) -> bool:
+    """
+    Валидация ответа LLM-компактора, чтобы не ухудшить качество PREPARE.
+
+    :param query: исходный запрос пользователя
+    :param source_text: исходный текст подготовки
+    :param wrapped: компактный ответ LLM
+    :return: True, если результат можно отдавать пациенту
+    """
+
+    wrapped_text = str(wrapped or "").strip()
+    if not wrapped_text:
+        return False
+    if _PREPARE_LLM_WRAP_NO_RELEVANT.lower() in wrapped_text.lower():
+        return False
+    if len(wrapped_text) > max(2200, len(source_text) + 250):
+        return False
+    if not _is_prepare_content_actionable(wrapped_text):
+        return False
+    if _prepare_query_has_specific_target(query) and not _is_prepare_relevant(query, wrapped_text):
+        return False
+
+    source_tokens = _doc_tokens(source_text)
+    wrapped_tokens = _doc_tokens(wrapped_text)
+    if source_tokens and wrapped_tokens and not (source_tokens & wrapped_tokens):
+        return False
+
+    if len(source_text) >= 900 and len(wrapped_text) >= int(len(source_text) * 0.95):
+        return False
+    return True
 
 
 def _is_prepare_content_actionable(content: str) -> bool:
@@ -2366,6 +2466,9 @@ class Services:
     _doctors_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _regions_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _procedure_rows_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    _prepare_wrap_probe_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    _prepare_wrap_llm_available: bool | None = field(default=None, init=False)
+    _prepare_wrap_llm_checked_at: float = field(default=0.0, init=False)
 
     # TTL in-memory кэша (латентность, сек, определят свежесть кэша)
     doctors_mem_ttl_seconds: int = 300
@@ -3504,6 +3607,132 @@ class Services:
             "entities_used": entities,
         }
 
+    async def _maybe_compact_prepare_text(self, query: str, source_text: str) -> str:
+        """
+        Компактирует длинный PREPARE-текст через LLM с безопасным fallback.
+
+        :param query: исходный запрос пациента
+        :param source_text: текст подготовки из источника
+        :return: компактный релевантный ответ или исходный текст при любом риске
+        """
+
+        text = str(source_text or "").strip()
+        if not text:
+            return ""
+        if not _runtime_bool("MR_PREPARE_LLM_WRAP_ENABLED", True):
+            return text
+
+        min_chars = _runtime_int(
+            "MR_PREPARE_LLM_WRAP_MIN_CHARS",
+            700,
+            min_value=120,
+            max_value=12000,
+        )
+        if len(text) < min_chars:
+            return text
+        if not await self._prepare_wrap_llm_available_now():
+            return text
+
+        source_max_chars = _runtime_int(
+            "MR_PREPARE_LLM_WRAP_SOURCE_MAX_CHARS",
+            9000,
+            min_value=500,
+            max_value=30000,
+        )
+        source_for_prompt = text[:source_max_chars].strip()
+        prompt = _prepare_wrap_prompt(query, source_for_prompt)
+        if not prompt:
+            return text
+
+        timeout_s = _runtime_int(
+            "MR_PREPARE_LLM_WRAP_TIMEOUT_S",
+            15,
+            min_value=3,
+            max_value=90,
+        )
+        queue_timeout_ms = _runtime_int(
+            "MR_PREPARE_LLM_WRAP_QUEUE_TIMEOUT_MS",
+            1500,
+            min_value=300,
+            max_value=30000,
+        )
+        try:
+            raw = await generate_text(
+                prompt,
+                timeout_s=timeout_s,
+                queue_timeout_ms=queue_timeout_ms,
+                think=False,
+            )
+        except Exception as e:
+            logger.info("prepare llm wrap skipped: %s", e.__class__.__name__)
+            return text
+
+        wrapped = _prepare_wrap_clean(str(raw or ""))
+        if not _is_prepare_wrap_output_usable(query, source_for_prompt, wrapped):
+            return text
+        return wrapped
+
+    async def _prepare_wrap_llm_available_now(self) -> bool:
+        """
+        Быстрый health-check доступности локальной LLM перед compact-step.
+
+        :return: True, если Ollama endpoint доступен по TCP
+        """
+
+        ttl_s = _runtime_int(
+            "MR_PREPARE_LLM_WRAP_PROBE_TTL_SECONDS",
+            90,
+            min_value=1,
+            max_value=600,
+        )
+        now = time.time()
+        cached = self._prepare_wrap_llm_available
+        if cached is not None and (now - self._prepare_wrap_llm_checked_at) <= ttl_s:
+            return bool(cached)
+
+        timeout_ms = _runtime_int(
+            "MR_PREPARE_LLM_WRAP_PROBE_TIMEOUT_MS",
+            250,
+            min_value=50,
+            max_value=2000,
+        )
+
+        ollama_url = str(getattr(c, "ollama_url", "") or "").strip()
+        parsed = urlparse(ollama_url)
+        host = parsed.hostname
+        port = parsed.port
+        if not host or not port:
+            self._prepare_wrap_llm_available = False
+            self._prepare_wrap_llm_checked_at = now
+            return False
+
+        async with self._prepare_wrap_probe_lock:
+            now = time.time()
+            cached = self._prepare_wrap_llm_available
+            if cached is not None and (now - self._prepare_wrap_llm_checked_at) <= ttl_s:
+                return bool(cached)
+
+            timeout_s = max(0.05, float(timeout_ms) / 1000.0)
+            ok = False
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, int(port)),
+                    timeout=timeout_s,
+                )
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+                del reader
+                ok = True
+            except Exception:
+                ok = False
+
+            self._prepare_wrap_llm_available = ok
+            self._prepare_wrap_llm_checked_at = time.time()
+            return ok
+
     async def test_prepare(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         raw_query = str(query or "").strip()
         entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
@@ -3520,8 +3749,9 @@ class Services:
             else:
                 api_cached_prepare = api_cached_cleaned
         if api_cached_prepare:
+            compacted = await self._maybe_compact_prepare_text(q, api_cached_prepare)
             return {
-                "prepare": api_cached_prepare,
+                "prepare": compacted,
                 "note": "prepare: serviceInfoAll",
                 "entities_used": entities,
             }
@@ -3560,7 +3790,8 @@ class Services:
 
             saw_non_empty = True
             if _is_prepare_relevant(candidate, cleaned) or _is_prepare_relevant(q, cleaned):
-                return {"prepare": cleaned, "entities_used": entities}
+                compacted = await self._maybe_compact_prepare_text(q, cleaned)
+                return {"prepare": compacted, "entities_used": entities}
 
         if saw_non_empty:
             return _prepare_clarify_response(q, entities, note="prepare: weak relevance")

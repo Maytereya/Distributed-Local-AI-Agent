@@ -1,6 +1,5 @@
 #START: python messenger_simulator.py "http://172.16.0.16/api/messenger-generate" s_test
 # Модуль тестирования роутера для общения с пациентами через месенджеры.
-# STADALONE - формат. Подключается к MESSENGERS API, но не является частью какой-либо библиотеки проекта.
 
 import json
 import sys
