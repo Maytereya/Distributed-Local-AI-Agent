@@ -56,7 +56,10 @@ _DOCTOR_PRICE_HINT_RE = re.compile(r"\b(?:у|врач\w*|доктор\w*)\s+[а-
 _PRICE_REQUEST_RE = re.compile(r"\b(стоим\w*|цен\w*|сколько)\b", re.I)
 _PRICE_CONSULT_HINT_RE = re.compile(r"\b(при[её]м\w*|консультаци\w*)\b", re.I)
 _PRICE_SERVICE_PREFIX_RE = re.compile(
-    r"^\s*(?:а\s+)?(?:сколько\s+стоит|сколько\s+будет\s+стоить|цена|стоимость)\s+",
+    r"^\s*(?:а\s+)?(?:сколько\s+стоит|сколько\s+будет\s+стоить|"
+    r"каков(?:а|о|ы)?\s+стоимость|каков(?:а|о|ы)?\s+цена|"
+    r"кака(?:я|ое|ие)\s+стоимость|кака(?:я|ое|ие)\s+цена|"
+    r"цена|стоимость)\s+",
     re.I,
 )
 _PRICE_DOCTOR_SUFFIX_RE = re.compile(
@@ -267,6 +270,14 @@ _PRICE_QUERY_STOPWORDS = {
     "стоит",
     "стоимость",
     "цена",
+    "какой",
+    "какая",
+    "какое",
+    "какие",
+    "каков",
+    "какова",
+    "каково",
+    "каковы",
     "цена",
     "на",
     "в",
@@ -279,8 +290,6 @@ _PRICE_QUERY_STOPWORDS = {
     "услуги",
     "процедура",
     "процедуры",
-    "анализ",
-    "анализы",
     "врач",
     "врача",
     "доктор",
@@ -311,6 +320,15 @@ _PRICE_QUERY_CANONICAL_TOKENS = {
     "аст": "асат",
     "асат": "асат",
     "asat": "асат",
+    "общего": "общий",
+    "общем": "общий",
+    "общую": "общий",
+    "общая": "общий",
+    "общей": "общий",
+    "анализа": "анализ",
+    "анализу": "анализ",
+    "анализом": "анализ",
+    "анализе": "анализ",
 }
 _PREPARE_QUERY_STOPWORDS = {
     "как",
@@ -1589,6 +1607,65 @@ def _dedupe_price_queries(queries: list[str], *, max_items: int = 8) -> list[str
     return out
 
 
+def _should_prefer_current_price_query_over_context(query_text: str, current_service_name: str) -> bool:
+    """
+    Определяет, что новый `PRICE`-запрос содержит собственную услугу и должен
+    иметь приоритет над услугой из прошлого контекста.
+
+    Правило нужно против stale-context кейсов вида:
+    1. PREPARE по одному анализу,
+    2. затем новый явный вопрос о цене по другому анализу.
+
+    В таких репликах старый `current_service_name` полезен только как fallback,
+    но не должен доминировать над текущим текстом пользователя.
+
+    :param query_text: текущая реплика пользователя
+    :param current_service_name: услуга из state предыдущего шага
+    :return: True, если текущий текст должен иметь приоритет над контекстом
+    """
+
+    raw = str(query_text or "").strip()
+    current = str(current_service_name or "").strip()
+    if not raw or not current:
+        return False
+    if not _PRICE_REQUEST_RE.search(raw):
+        return False
+    if _is_city_only_reply(raw):
+        return False
+
+    current_norm = _normalise_input(current).replace("ё", "е")
+    current_tokens = set(_price_query_tokens(current))
+    query_variants: list[str] = []
+
+    extracted = _extract_price_service_from_query(raw)
+    if extracted:
+        query_variants.append(extracted)
+
+    phrase = extract_service_phrase(raw)
+    if phrase:
+        query_variants.append(phrase)
+
+    compact = " ".join(_price_query_tokens(raw)).strip()
+    if compact:
+        query_variants.append(compact)
+
+    for candidate in query_variants:
+        cand_norm = _normalise_input(candidate).replace("ё", "е")
+        if not cand_norm or cand_norm == current_norm:
+            continue
+        cand_tokens = set(_price_query_tokens(candidate))
+        if len(cand_tokens) >= 2 and not cand_tokens.issubset(current_tokens):
+            return True
+        if (
+            len(cand_norm.split()) >= 2
+            and cand_norm not in current_norm
+            and current_norm not in cand_norm
+        ):
+            return True
+
+    return False
+
+
 def _build_price_catalog_queries(query_text: str, *, current_service_name: str = "") -> list[str]:
     """
     Собирает варианты запроса для поиска услуги в price-каталоге.
@@ -1616,40 +1693,20 @@ def _build_price_catalog_queries(query_text: str, *, current_service_name: str =
     return _dedupe_price_queries(queries)
 
 
-def resolve_price_service_name_from_catalog(
-    query_text: str,
-    *,
-    current_service_name: str = "",
-    rows: list[dict[str, Any]] | None = None,
-) -> str | None:
+def _resolve_best_price_row_from_queries(
+    queries: list[str],
+    catalog_rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, int, int]:
     """
-    Приземляет пользовательский price-запрос на реальную услугу из price-каталога.
+    Находит лучшую строку price-каталога по набору query-вариантов.
 
-    Используется как узкий catalog-grounded слой для `PRICE`, чтобы не
-    перечислять лабораторные анализы и процедуры в regex/anchors.
-
-    :param query_text: исходный текст пользователя
-    :param current_service_name: услуга из текущего state, если уже есть
-    :param rows: опционально заранее загруженные строки priceByRegion
-    :return: каноническое название услуги из каталога либо None
+    :param queries: список вариантов пользовательского запроса
+    :param catalog_rows: строки priceByRegion
+    :return:
+        - лучшая строка каталога либо None,
+        - её итоговый score,
+        - количество совпавших токенов
     """
-
-    queries = _build_price_catalog_queries(query_text, current_service_name=current_service_name)
-    if not queries:
-        return None
-
-    catalog_rows = rows
-    if catalog_rows is None:
-        try:
-            loaded = api_price.load_price_by_region(SAMARA_PRICE_REGION_ID)
-        except Exception:
-            return None
-        catalog_rows = [row for row in loaded if isinstance(row, dict)]
-    else:
-        catalog_rows = [row for row in rows if isinstance(row, dict)]
-
-    if not catalog_rows:
-        return None
 
     best_row: dict[str, Any] | None = None
     best_score = 0
@@ -1671,6 +1728,53 @@ def resolve_price_service_name_from_catalog(
             best_row = row
             best_score = score
             best_matched = matched
+    return best_row, best_score, best_matched
+
+
+def resolve_price_service_name_from_catalog(
+    query_text: str,
+    *,
+    current_service_name: str = "",
+    rows: list[dict[str, Any]] | None = None,
+) -> str | None:
+    """
+    Приземляет пользовательский price-запрос на реальную услугу из price-каталога.
+
+    Используется как узкий catalog-grounded слой для `PRICE`, чтобы не
+    перечислять лабораторные анализы и процедуры в regex/anchors.
+
+    :param query_text: исходный текст пользователя
+    :param current_service_name: услуга из текущего state, если уже есть
+    :param rows: опционально заранее загруженные строки priceByRegion
+    :return: каноническое название услуги из каталога либо None
+    """
+
+    catalog_rows = rows
+    if catalog_rows is None:
+        try:
+            loaded = api_price.load_price_by_region(SAMARA_PRICE_REGION_ID)
+        except Exception:
+            return None
+        catalog_rows = [row for row in loaded if isinstance(row, dict)]
+    else:
+        catalog_rows = [row for row in rows if isinstance(row, dict)]
+
+    if not catalog_rows:
+        return None
+
+    prefer_query_over_context = _should_prefer_current_price_query_over_context(query_text, current_service_name)
+    if prefer_query_over_context:
+        text_only_queries = _build_price_catalog_queries(query_text, current_service_name="")
+        if text_only_queries:
+            best_row, best_score, _ = _resolve_best_price_row_from_queries(text_only_queries, catalog_rows)
+            if best_row and best_score >= 100:
+                return str(best_row.get("serviceName") or best_row.get("name") or "").strip() or None
+
+    queries = _build_price_catalog_queries(query_text, current_service_name=current_service_name)
+    if not queries:
+        return None
+
+    best_row, best_score, _ = _resolve_best_price_row_from_queries(queries, catalog_rows)
 
     if not best_row:
         return None
