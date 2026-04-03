@@ -3630,8 +3630,6 @@ class Services:
         )
         if len(text) < min_chars:
             return text
-        if not await self._prepare_wrap_llm_available_now():
-            return text
 
         source_max_chars = _runtime_int(
             "MR_PREPARE_LLM_WRAP_SOURCE_MAX_CHARS",

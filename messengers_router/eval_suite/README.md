@@ -7,6 +7,7 @@
 - `run_remote_eval.sh` — единый запуск stage-скриптов + critical checks + coverage_ext.
 - `eval_critical_cases.py` — строгая проверка критичных сценариев (turn-by-turn).
 - `critical_cases.jsonl` — серверный default-набор critical-кейсов для `run_remote_eval.sh`.
+- `prepare_wrap_cases.jsonl` — отдельный quality-gate для PREPARE LLM-wrapper (релевантность + компактность).
 - `critical_cases_server_parity.jsonl` — канонический локальный parity-набор на 21 кейс, запускается явно через `--cases`.
 - `critical_cases_extended.jsonl` — расширенный набор критичных сценариев (P2 coverage, optional).
 - `EVAL_EXPANSION_DOD.md` — критерии готовности и команды для расширенного eval-покрытия.
@@ -21,6 +22,16 @@ bash messengers_router/eval_suite/run_remote_eval.sh \
   --url http://172.16.0.16/api/messenger-generate-once \
   --session-prefix s_test
 ```
+
+Порядок этапов в логе:
+
+- `01_stage1_intent_smoke`
+- `02_stage3_appointment_flow`
+- `03_stage4_reliability`
+- `04_stage5_golden_corpus`
+- `05_critical_safety_gate`
+- `06_prepare_wrap_quality`
+- `07_coverage_ext_assets`
 
 Опционально указать golden-версию:
 
@@ -38,6 +49,15 @@ bash messengers_router/eval_suite/run_remote_eval.sh \
   --url http://172.16.0.16/api/messenger-generate-once \
   --session-prefix s_test \
   --cases messengers_router/eval_suite/critical_cases_server_parity.jsonl
+```
+
+Подменить отдельный набор кейсов для `prepare_wrap` stage:
+
+```bash
+bash messengers_router/eval_suite/run_remote_eval.sh \
+  --url http://172.16.0.16/api/messenger-generate-once \
+  --session-prefix s_test \
+  --prepare-wrap-cases messengers_router/eval_suite/prepare_wrap_cases.jsonl
 ```
 
 Отключить только coverage_ext этап (если нужен временный обход):
@@ -105,7 +125,9 @@ python3 messengers_router/scripts/eval_stage5_corpus.py \
 - `expected_label` — ожидаемый интент (из debug decision.label).
 - `expected_handoff` — ожидаемый handoff.
 - `required_any` — хотя бы один паттерн должен встретиться в тексте ответа.
+- `required_all` — все паттерны должны встретиться в тексте ответа.
 - `forbidden_any` — ни один паттерн не должен встретиться в тексте ответа.
+- `max_chars` — верхняя граница длины ответа в символах (для контроля избыточных ответов).
 
 Паттерны проверяются как подстроки, регистронезависимо.
 

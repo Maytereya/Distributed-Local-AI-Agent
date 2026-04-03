@@ -43,6 +43,17 @@ def _contains_any(text: str, patterns: list[str]) -> bool:
     return False
 
 
+def _contains_all(text: str, patterns: list[str]) -> bool:
+    if not patterns:
+        return True
+    low = (text or "").lower()
+    for p in patterns:
+        needle = str(p or "").strip().lower()
+        if needle and needle not in low:
+            return False
+    return True
+
+
 def _contains_forbidden(text: str, patterns: list[str]) -> str | None:
     if not patterns:
         return None
@@ -71,7 +82,10 @@ def _build_turns(case: dict[str, Any]) -> list[dict[str, Any]]:
     case_expected_label = case.get("expected_label")
     case_expected_handoff = case.get("expected_handoff")
     case_required = case.get("required_any") if isinstance(case.get("required_any"), list) else []
+    case_required_all = case.get("required_all") if isinstance(case.get("required_all"), list) else []
     case_forbidden = case.get("forbidden_any") if isinstance(case.get("forbidden_any"), list) else []
+    case_max_chars_raw = case.get("max_chars")
+    case_max_chars = int(case_max_chars_raw) if isinstance(case_max_chars_raw, int) and case_max_chars_raw > 0 else None
 
     turns_raw = case.get("turns")
     if isinstance(turns_raw, list) and turns_raw:
@@ -86,8 +100,12 @@ def _build_turns(case: dict[str, Any]) -> list[dict[str, Any]]:
                 turn["expected_handoff"] = case_expected_handoff
             if "required_any" not in turn and case_required:
                 turn["required_any"] = list(case_required)
+            if "required_all" not in turn and case_required_all:
+                turn["required_all"] = list(case_required_all)
             if "forbidden_any" not in turn and case_forbidden:
                 turn["forbidden_any"] = list(case_forbidden)
+            if "max_chars" not in turn and case_max_chars is not None:
+                turn["max_chars"] = case_max_chars
             turns.append(turn)
         return turns
 
@@ -101,7 +119,9 @@ def _build_turns(case: dict[str, Any]) -> list[dict[str, Any]]:
             "expected_label": case_expected_label,
             "expected_handoff": case_expected_handoff,
             "required_any": list(case_required),
+            "required_all": list(case_required_all),
             "forbidden_any": list(case_forbidden),
+            "max_chars": case_max_chars,
         }
     ]
 
@@ -168,7 +188,10 @@ def main() -> int:
             exp_label = str(exp_label_raw).strip() if exp_label_raw is not None else ""
             exp_handoff = turn.get("expected_handoff")
             required_any = turn.get("required_any") if isinstance(turn.get("required_any"), list) else []
+            required_all = turn.get("required_all") if isinstance(turn.get("required_all"), list) else []
             forbidden_any = turn.get("forbidden_any") if isinstance(turn.get("forbidden_any"), list) else []
+            max_chars_raw = turn.get("max_chars")
+            max_chars = int(max_chars_raw) if isinstance(max_chars_raw, int) and max_chars_raw > 0 else None
 
             payload: dict[str, Any] = {
                 "session_id": session_id,
@@ -217,12 +240,20 @@ def main() -> int:
                 ok = False
                 reason = "required_any_missing"
                 fail_reasons["required_any_missing"] += 1
+            if ok and required_all and not _contains_all(bot_text, required_all):
+                ok = False
+                reason = "required_all_missing"
+                fail_reasons["required_all_missing"] += 1
             if ok:
                 forbidden_hit = _contains_forbidden(bot_text, forbidden_any)
                 if forbidden_hit is not None:
                     ok = False
                     reason = f"forbidden_hit({forbidden_hit})"
                     fail_reasons["forbidden_pattern_hit"] += 1
+            if ok and isinstance(max_chars, int) and len(bot_text) > max_chars:
+                ok = False
+                reason = f"max_chars_exceeded({len(bot_text)}>{max_chars})"
+                fail_reasons["max_chars_exceeded"] += 1
 
             if ok:
                 passed_turns += 1
