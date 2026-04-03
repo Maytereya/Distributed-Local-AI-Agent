@@ -876,7 +876,6 @@ def test_test_prepare_compacts_long_meili_answer_with_llm_wrap(monkeypatch):
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
     monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
     monkeypatch.setattr(svc_mod, "generate_text", fake_generate_text)
-    monkeypatch.setattr(svc, "_prepare_wrap_llm_available_now", lambda: asyncio.sleep(0, result=True))
 
     def fake_runtime_bool(name: str, default: bool) -> bool:
         if name == "MR_PREPARE_LLM_WRAP_ENABLED":
@@ -917,7 +916,6 @@ def test_test_prepare_llm_wrap_fallbacks_to_source_on_invalid_compaction(monkeyp
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
     monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
     monkeypatch.setattr(svc_mod, "generate_text", fake_generate_text)
-    monkeypatch.setattr(svc, "_prepare_wrap_llm_available_now", lambda: asyncio.sleep(0, result=True))
 
     def fake_runtime_bool(name: str, default: bool) -> bool:
         if name == "MR_PREPARE_LLM_WRAP_ENABLED":

@@ -19,7 +19,7 @@ import logging
 import re
 import time
 from datetime import datetime
-from urllib.parse import quote_from_bytes, urlparse
+from urllib.parse import quote_from_bytes
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -2570,9 +2570,6 @@ class Services:
     _doctors_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _regions_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _procedure_rows_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
-    _prepare_wrap_probe_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
-    _prepare_wrap_llm_available: bool | None = field(default=None, init=False)
-    _prepare_wrap_llm_checked_at: float = field(default=0.0, init=False)
 
     # TTL in-memory кэша (латентность, сек, определят свежесть кэша)
     doctors_mem_ttl_seconds: int = 300
@@ -3773,67 +3770,6 @@ class Services:
         if not _is_prepare_wrap_output_usable(query, source_for_prompt, wrapped):
             return text
         return wrapped
-
-    async def _prepare_wrap_llm_available_now(self) -> bool:
-        """
-        Быстрый health-check доступности локальной LLM перед compact-step.
-
-        :return: True, если Ollama endpoint доступен по TCP
-        """
-
-        ttl_s = _runtime_int(
-            "MR_PREPARE_LLM_WRAP_PROBE_TTL_SECONDS",
-            90,
-            min_value=1,
-            max_value=600,
-        )
-        now = time.time()
-        cached = self._prepare_wrap_llm_available
-        if cached is not None and (now - self._prepare_wrap_llm_checked_at) <= ttl_s:
-            return bool(cached)
-
-        timeout_ms = _runtime_int(
-            "MR_PREPARE_LLM_WRAP_PROBE_TIMEOUT_MS",
-            250,
-            min_value=50,
-            max_value=2000,
-        )
-
-        ollama_url = str(getattr(c, "ollama_url", "") or "").strip()
-        parsed = urlparse(ollama_url)
-        host = parsed.hostname
-        port = parsed.port
-        if not host or not port:
-            self._prepare_wrap_llm_available = False
-            self._prepare_wrap_llm_checked_at = now
-            return False
-
-        async with self._prepare_wrap_probe_lock:
-            now = time.time()
-            cached = self._prepare_wrap_llm_available
-            if cached is not None and (now - self._prepare_wrap_llm_checked_at) <= ttl_s:
-                return bool(cached)
-
-            timeout_s = max(0.05, float(timeout_ms) / 1000.0)
-            ok = False
-            try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(host, int(port)),
-                    timeout=timeout_s,
-                )
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except Exception:
-                    pass
-                del reader
-                ok = True
-            except Exception:
-                ok = False
-
-            self._prepare_wrap_llm_available = ok
-            self._prepare_wrap_llm_checked_at = time.time()
-            return ok
 
     async def test_prepare(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         raw_query = str(query or "").strip()
