@@ -8,7 +8,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-URL="http://localhost:8000/api/messenger-generate-once"
+URL="http://172.16.0.16/api/messenger-generate-once"
 SESSION_PREFIX="s_eval_remote"
 GOLDEN_VERSION=""
 HOST_HEADER=""

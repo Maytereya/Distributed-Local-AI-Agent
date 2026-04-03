@@ -1148,6 +1148,27 @@ def test_resolve_price_service_name_from_catalog_matches_alat_alias():
     assert resolved == "АлАТ"
 
 
+def test_resolve_price_service_name_from_catalog_prefers_new_price_query_over_stale_context():
+    rows = [
+        {
+            "serviceName": "Семейная гиперхолестеринемия, ген LDLR (Familial Hypercholesterolemia, Gene LDLR)",
+            "cost": 8990,
+        },
+        {
+            "serviceName": "Cito Общий анализ крови (Le, Er,Hb)",
+            "cost": 580,
+        },
+    ]
+
+    resolved = resolve_price_service_name_from_catalog(
+        "Какова стоимость общего анализа крови?",
+        current_service_name="холестерин",
+        rows=rows,
+    )
+
+    assert resolved == "Cito Общий анализ крови (Le, Er,Hb)"
+
+
 def test_price_info_resolves_biochemistry_catalog_query(monkeypatch):
     svc = Services()
 
@@ -1183,6 +1204,35 @@ def test_price_info_resolves_alat_alias_from_catalog(monkeypatch):
     assert res["prices"], "Expected price row for АлАТ/АЛТ alias"
     top_name = str(res["prices"][0].get("serviceName") or "").lower()
     assert "алат" in top_name
+
+
+def test_price_info_drops_stale_prepare_service_for_new_price_query(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {
+                "serviceName": "Семейная гиперхолестеринемия, ген LDLR (Familial Hypercholesterolemia, Gene LDLR)",
+                "cost": 8990,
+            },
+            {
+                "serviceName": "Cito Общий анализ крови (Le, Er,Hb)",
+                "cost": 580,
+            },
+            {
+                "serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+                "cost": 390,
+            },
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("Какова стоимость общего анализа крови?", {"service_name": "холестерин"}))
+
+    assert res["prices"], "Expected OAK prices instead of stale cholesterol context"
+    top_name = str(res["prices"][0].get("serviceName") or "").lower()
+    assert "общий анализ крови" in top_name
+    assert "холестерин" not in str(res["entities_used"].get("service_name_effective") or "").lower()
 
 
 def test_price_info_resolves_mixed_ecg_question_to_catalog_service(monkeypatch):
