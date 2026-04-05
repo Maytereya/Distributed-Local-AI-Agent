@@ -35,6 +35,7 @@ from .doctor_name_port import (
     resolve_schedule_surname,
     surname_variants,
 )
+from .llm_doesnt_work_fallback import build_prepare_fallback_answer
 from .llm_runtime import generate_text
 from .prompt_registry import load_prompt_text
 from .service_phrase import extract_service_phrase
@@ -4008,13 +4009,13 @@ class Services:
 
         timeout_s = _runtime_int(
             "MR_PREPARE_RELEVANCE_LLM_TIMEOUT_S",
-            8,
+            15,
             min_value=1,
             max_value=60,
         )
         queue_timeout_ms = _runtime_int(
             "MR_PREPARE_RELEVANCE_LLM_QUEUE_TIMEOUT_MS",
-            900,
+            3000,
             min_value=200,
             max_value=20000,
         )
@@ -4164,20 +4165,20 @@ class Services:
 
         return _dedupe_prepare_candidates(candidates, limit=16)
 
-    async def _maybe_compact_prepare_text(self, query: str, source_text: str) -> str:
+    async def _maybe_compact_prepare_text(self, query: str, source_text: str) -> tuple[str, str, str]:
         """
         Компактирует длинный PREPARE-текст через LLM с безопасным fallback.
 
         :param query: исходный запрос пациента
         :param source_text: текст подготовки из источника
-        :return: компактный релевантный ответ или исходный текст при любом риске
+        :return: (итоговый текст, статус wrap, причина/диагностика)
         """
 
         text = str(source_text or "").strip()
         if not text:
-            return ""
+            return "", "empty_source", "no_source_text"
         if not _runtime_bool("MR_PREPARE_LLM_WRAP_ENABLED", True):
-            return text
+            return text, "disabled", "llm_wrap_disabled"
 
         min_chars = _runtime_int(
             "MR_PREPARE_LLM_WRAP_MIN_CHARS",
@@ -4186,7 +4187,7 @@ class Services:
             max_value=12000,
         )
         if len(text) < min_chars:
-            return text
+            return text, "short_source", "below_min_chars"
 
         source_max_chars = _runtime_int(
             "MR_PREPARE_LLM_WRAP_SOURCE_MAX_CHARS",
@@ -4195,19 +4196,43 @@ class Services:
             max_value=30000,
         )
         source_for_prompt = text[:source_max_chars].strip()
+
+        def _fallback_or_source(reason: str) -> tuple[str, str, str]:
+            compacted = build_prepare_fallback_answer(
+                query,
+                source_for_prompt,
+                max_chars=_runtime_int(
+                    "MR_PREPARE_FALLBACK_MAX_CHARS",
+                    1600,
+                    min_value=400,
+                    max_value=4000,
+                ),
+                max_points=_runtime_int(
+                    "MR_PREPARE_FALLBACK_MAX_POINTS",
+                    7,
+                    min_value=3,
+                    max_value=10,
+                ),
+            )
+            if compacted and len(compacted) < len(text):
+                return compacted, "fallback_compact", reason
+            if compacted:
+                return text, "fallback_not_shorter", reason
+            return text, "fallback_failed", reason
+
         prompt = _prepare_wrap_prompt(query, source_for_prompt)
         if not prompt:
-            return text
+            return _fallback_or_source("empty_prompt")
 
         timeout_s = _runtime_int(
             "MR_PREPARE_LLM_WRAP_TIMEOUT_S",
-            15,
+            30,
             min_value=3,
             max_value=90,
         )
         queue_timeout_ms = _runtime_int(
             "MR_PREPARE_LLM_WRAP_QUEUE_TIMEOUT_MS",
-            1500,
+            6000,
             min_value=300,
             max_value=30000,
         )
@@ -4220,12 +4245,12 @@ class Services:
             )
         except Exception as e:
             logger.info("prepare llm wrap skipped: %s", e.__class__.__name__)
-            return text
+            return _fallback_or_source(f"llm_wrap_error:{e.__class__.__name__}")
 
         wrapped = _prepare_wrap_clean(str(raw or ""))
         if not _is_prepare_wrap_output_usable(query, source_for_prompt, wrapped):
-            return text
-        return wrapped
+            return _fallback_or_source("llm_wrap_invalid_output")
+        return wrapped, "llm_wrapped", "ok"
 
     async def test_prepare(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         raw_query = str(query or "").strip()
@@ -4244,11 +4269,13 @@ class Services:
             else:
                 api_best.text = api_cached_cleaned
         if api_best:
-            compacted = await self._maybe_compact_prepare_text(q, api_best.text)
+            compacted, wrap_status, wrap_reason = await self._maybe_compact_prepare_text(q, api_best.text)
             return {
                 "prepare": compacted,
                 "note": "prepare: serviceInfoAll",
                 "entities_used": entities,
+                "prepare_wrap_status": wrap_status,
+                "prepare_wrap_reason": wrap_reason,
             }
 
         variants = _prepare_query_variants(q, entity_query)
@@ -4303,11 +4330,13 @@ class Services:
 
         meili_best = await self._pick_prepare_candidate(q, meili_candidates)
         if meili_best:
-            compacted = await self._maybe_compact_prepare_text(q, meili_best.text)
+            compacted, wrap_status, wrap_reason = await self._maybe_compact_prepare_text(q, meili_best.text)
             return {
                 "prepare": compacted,
                 "note": "prepare: main_index",
                 "entities_used": entities,
+                "prepare_wrap_status": wrap_status,
+                "prepare_wrap_reason": wrap_reason,
             }
 
         if saw_non_empty:

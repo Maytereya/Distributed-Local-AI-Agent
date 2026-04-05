@@ -1121,9 +1121,10 @@ def test_test_prepare_compacts_long_meili_answer_with_llm_wrap(monkeypatch):
     assert calls["llm"] >= 2
     assert "за 48 часов" in str(res.get("prepare") or "").lower()
     assert len(str(res.get("prepare") or "")) < len(source_text)
+    assert res.get("prepare_wrap_status") == "llm_wrapped"
 
 
-def test_test_prepare_llm_wrap_fallbacks_to_source_on_invalid_compaction(monkeypatch):
+def test_test_prepare_llm_wrap_uses_deterministic_fallback_on_invalid_compaction(monkeypatch):
     svc = Services()
 
     monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
@@ -1158,7 +1159,61 @@ def test_test_prepare_llm_wrap_fallbacks_to_source_on_invalid_compaction(monkeyp
 
     res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {"service_name": "Холестерин"}))
 
-    assert str(res.get("prepare") or "") == source_text
+    answer = str(res.get("prepare") or "")
+    assert "холестерин" in answer.lower()
+    assert "натощак" in answer.lower()
+    assert "стоим" not in answer.lower()
+    assert res.get("prepare_wrap_status") in {"fallback_compact", "fallback_not_shorter"}
+    assert res.get("prepare_wrap_reason") == "llm_wrap_invalid_output"
+
+
+def test_test_prepare_llm_wrap_timeout_uses_deterministic_fallback(monkeypatch):
+    svc = Services()
+
+    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
+
+    source_text = (
+        "Подготовка к анализу крови на холестерин: кровь сдают натощак 8-12 часов. "
+        "Разрешена только негазированная вода. За сутки исключить алкоголь и жирную пищу. "
+        "Стоимость услуги 490 руб. Адреса и запись уточняйте у администратора."
+    )
+
+    def fake_search(_index, _query, *args, **kwargs):
+        return source_text
+
+    async def fake_generate_text(*args, **kwargs):
+        raise TimeoutError("llm timeout")
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+    monkeypatch.setattr(svc_mod, "generate_text", fake_generate_text)
+
+    def fake_runtime_bool(name: str, default: bool) -> bool:
+        if name == "MR_PREPARE_LLM_WRAP_ENABLED":
+            return True
+        if name == "MR_PREPARE_RELEVANCE_LLM_ENABLED":
+            return False
+        return default
+
+    def fake_runtime_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+        if name == "MR_PREPARE_LLM_WRAP_MIN_CHARS":
+            return 1
+        if name == "MR_PREPARE_FALLBACK_MAX_CHARS":
+            return 800
+        return default
+
+    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
+    monkeypatch.setattr(svc_mod, "_runtime_int", fake_runtime_int)
+
+    res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {"service_name": "Холестерин"}))
+
+    answer = str(res.get("prepare") or "")
+    assert "натощак" in answer.lower()
+    assert "стоим" not in answer.lower()
+    assert "руб" not in answer.lower()
+    assert len(answer) < len(source_text)
+    assert res.get("prepare_wrap_status") == "fallback_compact"
+    assert "TimeoutError" in str(res.get("prepare_wrap_reason") or "")
 
 
 def test_test_assist_source_unavailable_returns_clarify_without_handoff(monkeypatch):
