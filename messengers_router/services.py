@@ -582,7 +582,24 @@ def _prepare_service_info_core_tokens(text: str) -> set[str]:
     if not norm:
         return set()
     tokens = _doc_tokens(norm)
-    return {t for t in tokens if t not in _PREPARE_SERVICE_INFO_GENERIC_TOKENS}
+    has_empty_stomach_phrase = re.search(r"голод\w*\s+желуд", norm) is not None
+    out: set[str] = set()
+    for token in tokens:
+        if token in _PREPARE_SERVICE_INFO_GENERIC_TOKENS:
+            continue
+        # Формы "подготов..." не несут предметного смысла и размывают match.
+        if token.startswith("подготов"):
+            continue
+        # "сдают/сдать/сдача" — служебные слова для формулировки вопроса.
+        if token.startswith("сда"):
+            continue
+        # Фразу "на голодный желудок" приводим к каноничному "натощак".
+        if has_empty_stomach_phrase and (token.startswith("голод") or token.startswith("желуд")):
+            continue
+        out.add(token)
+    if has_empty_stomach_phrase:
+        out.add("натощак")
+    return out
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
@@ -650,16 +667,16 @@ def _prepare_term_roots(text: str) -> set[str]:
 def _prepare_roots_match(query_root: str, candidate_roots: set[str]) -> bool:
     if query_root in candidate_roots:
         return True
-    if len(query_root) < 4:
+    query_root = str(query_root or "").strip()
+    if len(query_root) < 5:
         return False
-    q4 = query_root[:4]
-    q5 = query_root[:5]
     for cand in candidate_roots:
-        if len(cand) < 4:
+        cand = str(cand or "").strip()
+        if len(cand) < 5:
             continue
-        if cand.startswith(q4) or query_root.startswith(cand[:4]):
+        if query_root.startswith(cand) or cand.startswith(query_root):
             return True
-        if len(query_root) >= 6 and len(cand) >= 6 and (q5 in cand or cand[:5] in query_root):
+        if len(query_root) >= 7 and len(cand) >= 7 and query_root[:6] == cand[:6]:
             return True
     return False
 
@@ -694,6 +711,12 @@ def _prepare_fast_relevance_score(query: str, content: str, *, title: str = "") 
 
     query_roots = _prepare_term_roots(query)
     if not query_roots:
+        query_norm = _normalise_input(query).replace("ё", "е")
+        content_norm = _normalise_input(content).replace("ё", "е")
+        generic_prepare_query = any(x in query_norm for x in ("подготов", "анализ", "исслед", "натощак"))
+        if generic_prepare_query and _is_prepare_content_actionable(content):
+            # Generic query без таргета: разрешаем умеренный score для fallback по main_index.
+            return 0.40 if content_norm else 0.0
         return 0.0
 
     content_roots = _prepare_term_roots(content)
@@ -728,9 +751,10 @@ def _prepare_relevance_thresholds() -> tuple[float, float, float]:
     :return: (low_threshold, high_threshold, margin_threshold)
     """
 
-    low = _runtime_float("MR_PREPARE_RELEVANCE_LOW_THRESHOLD", 0.34, min_value=0.05, max_value=0.95)
-    high = _runtime_float("MR_PREPARE_RELEVANCE_HIGH_THRESHOLD", 0.62, min_value=0.10, max_value=0.99)
-    margin = _runtime_float("MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD", 0.08, min_value=0.01, max_value=0.60)
+    # Quality-first defaults: шире серая зона, чтобы чаще подключать LLM-валидатор.
+    low = _runtime_float("MR_PREPARE_RELEVANCE_LOW_THRESHOLD", 0.28, min_value=0.05, max_value=0.95)
+    high = _runtime_float("MR_PREPARE_RELEVANCE_HIGH_THRESHOLD", 0.78, min_value=0.10, max_value=0.99)
+    margin = _runtime_float("MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD", 0.18, min_value=0.01, max_value=0.60)
     if low >= high:
         low = max(0.05, high - 0.10)
     return low, high, margin
@@ -2622,7 +2646,20 @@ _PREPARE_ACTIONABLE_HINTS = (
     "нельзя",
     "можно",
     "нужно",
+    "необходим",
     "рекоменду",
+)
+_PREPARE_STRONG_HINTS = (
+    "натощак",
+    "за час",
+    "за сутки",
+    "утром",
+    "вечером",
+    "воздерж",
+    "исключ",
+    "не кур",
+    "не употреб",
+    "пить воду",
 )
 _PREPARE_LLM_WRAP_NO_RELEVANT = "NO_RELEVANT_CONTENT"
 _PREPARE_LLM_WRAP_FALLBACK_PROMPT = (
@@ -2738,15 +2775,22 @@ def _is_prepare_content_actionable(content: str) -> bool:
         return False
 
     tokens = re.findall(r"[a-zа-я0-9]{3,}", norm)
-    if len(tokens) <= 5 and ("подготовк" in norm and ("исследован" in norm or "анализ" in norm or "процедур" in norm)):
-        return False
 
     if any(hint in norm for hint in _PREPARE_ACTIONABLE_HINTS):
         return True
+    if len(tokens) <= 5 and ("подготовк" in norm and ("исследован" in norm or "анализ" in norm or "процедур" in norm)):
+        return False
     return len(tokens) >= 20
 
 
-def _is_prepare_service_info_usable(query: str, content: str) -> bool:
+def _has_prepare_strong_hints(content: str) -> bool:
+    norm = _normalise_input(content).replace("ё", "е")
+    if not norm:
+        return False
+    return any(h in norm for h in _PREPARE_STRONG_HINTS)
+
+
+def _is_prepare_service_info_usable(query: str, content: str, *, title: str = "") -> bool:
     """
     Решает, можно ли принимать API-first результат `serviceInfoAll` без fallback.
 
@@ -2758,8 +2802,12 @@ def _is_prepare_service_info_usable(query: str, content: str) -> bool:
     if not _is_prepare_content_actionable(content):
         return False
 
-    score = _prepare_fast_relevance_score(query, content)
+    score = _prepare_fast_relevance_score(query, content, title=title)
     low, _, _ = _prepare_relevance_thresholds()
+    if score < low and title and _prepare_term_roots(query):
+        title_cov = _prepare_roots_coverage(_prepare_term_roots(query), _prepare_term_roots(title))
+        if title_cov >= 0.99 and _has_prepare_strong_hints(content):
+            return True
     return score >= low
 
 
@@ -4006,6 +4054,7 @@ class Services:
             max_value=8,
         )
         llm_checks = 0
+        query_roots = _prepare_term_roots(query)
         for idx, cand in enumerate(ranked):
             next_score = ranked[idx + 1].score if idx + 1 < len(ranked) else 0.0
             margin = max(0.0, float(cand.score) - float(next_score))
@@ -4017,6 +4066,16 @@ class Services:
             if gate == "reject":
                 cand.note = (cand.note + "; " if cand.note else "") + "prepare_fast_gate=reject"
                 continue
+
+            if cand.source == "serviceInfoAll" and query_roots:
+                title_roots = _prepare_term_roots(cand.service_title)
+                title_cov = _prepare_roots_coverage(query_roots, title_roots)
+                if title_cov >= 0.99 and _has_prepare_strong_hints(cand.text):
+                    cand.note = (
+                        (cand.note + "; " if cand.note else "")
+                        + "prepare_fast_gate=accept_service_title_anchor"
+                    )
+                    return cand
 
             if llm_checks >= max_llm_checks:
                 cand.note = (cand.note + "; " if cand.note else "") + "prepare_llm_skipped=max_checks"
@@ -4032,6 +4091,17 @@ class Services:
             )
             if ok:
                 return cand
+
+            if reason in {"llm_unavailable", "llm_non_json", "llm_disabled", "empty_prompt"}:
+                fallback_score = _runtime_float(
+                    "MR_PREPARE_RELEVANCE_LLM_UNAVAILABLE_ACCEPT_SCORE",
+                    0.40,
+                    min_value=0.10,
+                    max_value=0.95,
+                )
+                if cand.score >= fallback_score:
+                    cand.note = (cand.note + "; " if cand.note else "") + "prepare_llm_fallback_fast_accept"
+                    return cand
         return None
 
     async def _prepare_candidates_from_analysis_api_cache(
@@ -4048,6 +4118,8 @@ class Services:
         """
 
         entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
+        if not _prepare_term_roots(" ".join(x for x in (query, entity_query) if x)):
+            return []
         queries = _prepare_service_info_queries(query, entity_query)
         if not queries:
             return []
@@ -4165,7 +4237,7 @@ class Services:
         api_best = await self._pick_prepare_candidate(q, api_candidates)
         if api_best:
             api_cached_cleaned = html_cleaner.strip_html(api_best.text).strip()
-            if not _is_prepare_service_info_usable(q, api_cached_cleaned):
+            if not _is_prepare_service_info_usable(q, api_cached_cleaned, title=api_best.service_title):
                 api_best = None
             else:
                 api_best.text = api_cached_cleaned

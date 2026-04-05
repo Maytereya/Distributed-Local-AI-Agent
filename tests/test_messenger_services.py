@@ -845,6 +845,65 @@ def test_test_prepare_rejects_unrelated_hormone_service_info_and_falls_back_to_m
     assert res.get("note") != "prepare: serviceInfoAll"
 
 
+def test_prepare_roots_match_does_not_match_holesterol_with_sterile_substring():
+    assert svc_mod._prepare_roots_match("холестерин", {"стерильн"}) is False
+    assert svc_mod._prepare_roots_match("холестерин", {"холестерин"}) is True
+
+
+def test_test_prepare_cholesterol_not_confused_by_urogenital_soskob(monkeypatch):
+    svc = Services()
+
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [
+            {
+                "serviceName": "Gardnerella vaginalis [кач.]",
+                "preparation": (
+                    "Подготовка к исследованию. "
+                    "Соскоб урогенитальный берется в стерильный контейнер."
+                ),
+            },
+            {
+                "serviceName": "Анализ крови на холестерин",
+                "preparation": (
+                    "Для анализа на холестерин кровь сдают утром натощак, "
+                    "через 8-14 часов после еды."
+                ),
+            },
+        ],
+    )
+
+    def fail_meili(*_args, **_kwargs):
+        raise AssertionError("Meili fallback must not run when serviceInfoAll matched")
+
+    def fake_runtime_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
+        values = {
+            "MR_PREPARE_RELEVANCE_LOW_THRESHOLD": 0.30,
+            "MR_PREPARE_RELEVANCE_HIGH_THRESHOLD": 0.60,
+            "MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD": 0.08,
+        }
+        return values.get(name, default)
+
+    def fake_runtime_bool(name: str, default: bool) -> bool:
+        if name in {"MR_PREPARE_LLM_WRAP_ENABLED", "MR_PREPARE_RELEVANCE_LLM_ENABLED"}:
+            return False
+        return default
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fail_meili)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+    monkeypatch.setattr(svc_mod, "_runtime_float", fake_runtime_float)
+    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
+
+    res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {}))
+    answer = str(res.get("prepare") or "").lower()
+    assert "холестерин" in answer
+    assert "натощак" in answer
+    assert "урогениталь" not in answer
+    assert "стерильн" not in answer
+    assert res.get("note") == "prepare: serviceInfoAll"
+
+
 def test_prepare_relevance_gate_thresholds(monkeypatch):
     def fake_runtime_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
         values = {
@@ -932,7 +991,12 @@ def test_test_prepare_mid_score_llm_reject_falls_back_to_meili(monkeypatch):
     async def fake_generate_text(prompt, *, timeout_s, queue_timeout_ms, fmt=None, llm=None, think=None):
         llm_calls["n"] += 1
         assert fmt == "json"
-        return '{"verdict":"IRRELEVANT","confidence":0.91,"reason":"нет конкретной подготовки по запросу"}'
+        p = str(prompt or "").lower()
+        if "необходимо заполнить анкету" in p:
+            return '{"verdict":"IRRELEVANT","confidence":0.91,"reason":"нет конкретной подготовки по запросу"}'
+        if "кровь сдаётся утром натощак" in p:
+            return '{"verdict":"RELEVANT","confidence":0.89,"reason":"релевантная подготовка к анализу"}'
+        return '{"verdict":"IRRELEVANT","confidence":0.60,"reason":"неуверенно"}'
 
     def fake_search(_index, _query, *args, **kwargs):
         meili_calls["n"] += 1
@@ -961,7 +1025,7 @@ def test_test_prepare_mid_score_llm_reject_falls_back_to_meili(monkeypatch):
 
     res = run(svc.test_prepare("Кровь на гормоны сдают натощак?", {}))
 
-    assert llm_calls["n"] >= 1
+    assert llm_calls["n"] >= 2
     assert meili_calls["n"] >= 1
     assert "натощак" in str(res.get("prepare") or "").lower()
     assert res.get("note") == "prepare: main_index"
@@ -1054,7 +1118,7 @@ def test_test_prepare_compacts_long_meili_answer_with_llm_wrap(monkeypatch):
 
     res = run(svc.test_prepare("Как подготовиться к пайпель-биопсии?", {"service_name": "Пайпель-биопсия"}))
 
-    assert calls["llm"] == 1
+    assert calls["llm"] >= 2
     assert "за 48 часов" in str(res.get("prepare") or "").lower()
     assert len(str(res.get("prepare") or "")) < len(source_text)
 
