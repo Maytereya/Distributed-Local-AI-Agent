@@ -327,33 +327,6 @@ def build_messenger_settings_tab(
             )
 
             with gr.Row():
-                with gr.Accordion(label="MR Prepare Wrap Prompt", open=False):
-                    prompt_code_mr_prepare_wrap = gr.Code(
-                        value="",
-                        language=None,
-                        label="messengers_router: mr_prepare_wrap_patient",
-                        interactive=True,
-                        lines=18,
-                        scale=4,
-                    )
-                    with gr.Row():
-                        btn_load_mr_prepare_wrap = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
-                        btn_save_mr_prepare_wrap = gr.Button("💾 Сохранить", size="sm", variant="primary")
-
-            btn_load_mr_prepare_wrap.click(
-                lambda: fn_load_prompt_with_fallback_fn(
-                    "mr_prepare_wrap_patient",
-                    "prepare_wrap_patient",
-                ),
-                [],
-                [prompt_code_mr_prepare_wrap],
-            )
-            btn_save_mr_prepare_wrap.click(
-                lambda txt: fn_save_prompt_fn("mr_prepare_wrap_patient", txt),
-                prompt_code_mr_prepare_wrap,
-            )
-
-            with gr.Row():
                 with gr.Accordion(label="MR Messenger Final Answer Prompt", open=False):
                     prompt_code_mr_final_answer = gr.Code(
                         value="",
@@ -568,14 +541,6 @@ def build_messenger_settings_tab(
         )
         blocks.load(
             fn=lambda: fn_load_prompt_with_fallback_fn(
-                "mr_prepare_wrap_patient",
-                "prepare_wrap_patient",
-            ),
-            inputs=None,
-            outputs=[prompt_code_mr_prepare_wrap],
-        )
-        blocks.load(
-            fn=lambda: fn_load_prompt_with_fallback_fn(
                 "mr_messenger_final_answer",
                 "messenger_final_answer",
             ),
@@ -587,6 +552,5 @@ def build_messenger_settings_tab(
         "tab": messenger_tab,
         "prompt_code_mr_rich": prompt_code_mr_rich,
         "prompt_code_mr_critic": prompt_code_mr_critic,
-        "prompt_code_mr_prepare_wrap": prompt_code_mr_prepare_wrap,
         "prompt_code_mr_final_answer": prompt_code_mr_final_answer,
     }

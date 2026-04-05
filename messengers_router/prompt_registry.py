@@ -53,16 +53,16 @@ def _try_migrate_legacy_override(key: str) -> Path | None:
         return current
 
     legacy = _host_legacy_v2_path(key)
-    if not legacy.exists():
-        return None
+    if legacy.exists():
+        try:
+            current.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")
+            logger.info("migrated legacy prompt override %s -> %s", legacy.name, current.name)
+            return current
+        except Exception:
+            logger.exception("failed to migrate legacy prompt override: %s", legacy)
+            return legacy
 
-    try:
-        current.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")
-        logger.info("migrated legacy prompt override %s -> %s", legacy.name, current.name)
-        return current
-    except Exception:
-        logger.exception("failed to migrate legacy prompt override: %s", legacy)
-        return legacy
+    return None
 
 
 def load_prompt_text(key: str) -> str:
