@@ -805,6 +805,168 @@ def test_test_prepare_prefers_exact_service_info_row_over_generic_similar_name(m
     assert res["note"] == "prepare: serviceInfoAll"
 
 
+def test_test_prepare_rejects_unrelated_hormone_service_info_and_falls_back_to_meili(monkeypatch):
+    svc = Services()
+    calls = {"meili": 0}
+
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [
+            {
+                "serviceName": "Анализ крови на гормоны",
+                "preparation": (
+                    "Подготовка к исследованию. "
+                    "Гистологическое исследование предварительной подготовки не требует. "
+                    "Доставка материала осуществляется в емкости с 10% формалином."
+                ),
+            }
+        ],
+    )
+
+    def fake_search(_index, _query, *args, **kwargs):
+        calls["meili"] += 1
+        return "Подготовка к анализу крови на гормоны: кровь сдаётся утром натощак."
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+
+    res = run(
+        svc.test_prepare(
+            "Здравствуйте скажите пожалуйста а кровь на гормоны сдают на голодный желудок?",
+            {},
+        )
+    )
+
+    answer = str(res.get("prepare") or "").lower()
+    assert calls["meili"] >= 1
+    assert "натощак" in answer
+    assert "формалин" not in answer
+    assert res.get("note") != "prepare: serviceInfoAll"
+
+
+def test_prepare_relevance_gate_thresholds(monkeypatch):
+    def fake_runtime_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
+        values = {
+            "MR_PREPARE_RELEVANCE_LOW_THRESHOLD": 0.30,
+            "MR_PREPARE_RELEVANCE_HIGH_THRESHOLD": 0.60,
+            "MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD": 0.10,
+        }
+        return values.get(name, default)
+
+    monkeypatch.setattr(svc_mod, "_runtime_float", fake_runtime_float)
+
+    assert svc_mod._prepare_relevance_gate(0.20, 0.30) == "reject"
+    assert svc_mod._prepare_relevance_gate(0.72, 0.12) == "accept"
+    assert svc_mod._prepare_relevance_gate(0.72, 0.01) == "llm"
+    assert svc_mod._prepare_relevance_gate(0.45, 0.30) == "llm"
+
+
+def test_test_prepare_mid_score_uses_llm_validator_and_accepts_api(monkeypatch):
+    svc = Services()
+    llm_calls = {"n": 0}
+
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [
+            {
+                "serviceName": "Гормональный профиль",
+                "preparation": "Кровь рекомендуется сдавать утром натощак, воду пить можно.",
+            }
+        ],
+    )
+
+    def fail_meili(*_args, **_kwargs):
+        raise AssertionError("Meili fallback must not run when API candidate approved by LLM")
+
+    async def fake_generate_text(prompt, *, timeout_s, queue_timeout_ms, fmt=None, llm=None, think=None):
+        llm_calls["n"] += 1
+        assert fmt == "json"
+        assert "гормон" in str(prompt).lower()
+        return '{"verdict":"RELEVANT","confidence":0.86,"reason":"тема подготовки совпадает"}'
+
+    def fake_runtime_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
+        values = {
+            "MR_PREPARE_RELEVANCE_LOW_THRESHOLD": 0.25,
+            "MR_PREPARE_RELEVANCE_HIGH_THRESHOLD": 0.95,
+            "MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD": 0.20,
+        }
+        return values.get(name, default)
+
+    def fake_runtime_bool(name: str, default: bool) -> bool:
+        if name == "MR_PREPARE_LLM_WRAP_ENABLED":
+            return False
+        if name == "MR_PREPARE_RELEVANCE_LLM_ENABLED":
+            return True
+        return default
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fail_meili)
+    monkeypatch.setattr(svc_mod, "generate_text", fake_generate_text)
+    monkeypatch.setattr(svc_mod, "_runtime_float", fake_runtime_float)
+    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
+
+    res = run(svc.test_prepare("Кровь на гормоны сдают натощак?", {}))
+
+    assert llm_calls["n"] == 1
+    assert "натощак" in str(res.get("prepare") or "").lower()
+    assert res.get("note") == "prepare: serviceInfoAll"
+
+
+def test_test_prepare_mid_score_llm_reject_falls_back_to_meili(monkeypatch):
+    svc = Services()
+    llm_calls = {"n": 0}
+    meili_calls = {"n": 0}
+
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [
+            {
+                "serviceName": "Анализ крови на гормоны",
+                "preparation": "Подготовка к исследованию. Необходимо заполнить анкету пациента.",
+            }
+        ],
+    )
+
+    async def fake_generate_text(prompt, *, timeout_s, queue_timeout_ms, fmt=None, llm=None, think=None):
+        llm_calls["n"] += 1
+        assert fmt == "json"
+        return '{"verdict":"IRRELEVANT","confidence":0.91,"reason":"нет конкретной подготовки по запросу"}'
+
+    def fake_search(_index, _query, *args, **kwargs):
+        meili_calls["n"] += 1
+        return "Подготовка к анализу крови на гормоны: кровь сдаётся утром натощак."
+
+    def fake_runtime_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
+        values = {
+            "MR_PREPARE_RELEVANCE_LOW_THRESHOLD": 0.15,
+            "MR_PREPARE_RELEVANCE_HIGH_THRESHOLD": 0.95,
+            "MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD": 0.20,
+        }
+        return values.get(name, default)
+
+    def fake_runtime_bool(name: str, default: bool) -> bool:
+        if name == "MR_PREPARE_LLM_WRAP_ENABLED":
+            return False
+        if name == "MR_PREPARE_RELEVANCE_LLM_ENABLED":
+            return True
+        return default
+
+    monkeypatch.setattr(svc_mod, "generate_text", fake_generate_text)
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+    monkeypatch.setattr(svc_mod, "_runtime_float", fake_runtime_float)
+    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
+
+    res = run(svc.test_prepare("Кровь на гормоны сдают натощак?", {}))
+
+    assert llm_calls["n"] >= 1
+    assert meili_calls["n"] >= 1
+    assert "натощак" in str(res.get("prepare") or "").lower()
+    assert res.get("note") == "prepare: main_index"
+
+
 def test_test_prepare_no_matches_returns_clarify_without_handoff(monkeypatch):
     svc = Services()
 

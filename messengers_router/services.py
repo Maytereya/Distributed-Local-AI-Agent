@@ -260,6 +260,16 @@ def _runtime_int(name: str, default: int, *, min_value: int, max_value: int) -> 
     return value
 
 
+def _runtime_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
+    try:
+        value = float(getattr(c, name))
+    except Exception:
+        value = float(default)
+    value = max(min_value, value)
+    value = min(max_value, value)
+    return value
+
+
 def _runtime_bool(name: str, default: bool) -> bool:
     try:
         return bool(getattr(c, name))
@@ -487,17 +497,7 @@ def _prepare_query_variants(raw_query: str, entity_query: str = "") -> list[str]
     return _dedupe_queries(variants)
 
 
-_PREPARE_SERVICE_INFO_SYNONYMS: dict[str, tuple[str, ...]] = {
-    "холестерин": (
-        "холестерин",
-        "общий холестерин",
-        "анализ крови на холестерин",
-        "липидный профиль",
-        "липидограмма",
-    ),
-    "фгдс": ("фгдс", "фдгс", "фгс", "гастроскопия"),
-    "фкс": ("фкс", "колоноскопия"),
-}
+_PREPARE_SERVICE_INFO_SYNONYMS: dict[str, tuple[str, ...]] = {}
 _PREPARE_SERVICE_INFO_GENERIC_TOKENS = {
     "подготовка",
     "исследование",
@@ -517,6 +517,33 @@ _PREPARE_SERVICE_INFO_GENERIC_TOKENS = {
     "подскажите",
     "скажите",
 }
+_PREPARE_RELEVANCE_VALIDATOR_FALLBACK_PROMPT = (
+    "Ты валидатор релевантности ответа по подготовке к анализу/процедуре.\n"
+    "Проверь, соответствует ли КАНДИДАТ запросу пациента.\n"
+    "Требования:\n"
+    "1) Используй только смысл запроса и кандидата.\n"
+    "2) Если тема не совпадает или ответ слишком общий — IRRELEVANT.\n"
+    "3) Верни строго JSON без markdown.\n"
+    "Формат JSON:\n"
+    "{\"verdict\":\"RELEVANT|IRRELEVANT\",\"confidence\":0.0,\"reason\":\"кратко\"}\n\n"
+    "ЗАПРОС:\n<<USER_QUERY>>\n\n"
+    "ИСТОЧНИК:\n<<SOURCE_KIND>>\n\n"
+    "СЕРВИС:\n<<SERVICE_TITLE>>\n\n"
+    "КАНДИДАТ:\n<<CANDIDATE_TEXT>>\n"
+)
+_PREPARE_RELEVANCE_VERDICT_RELEVANT = "RELEVANT"
+_PREPARE_RELEVANCE_VERDICT_IRRELEVANT = "IRRELEVANT"
+
+
+@dataclass
+class _PrepareCandidate:
+    source: str
+    text: str
+    query_variant: str
+    service_title: str = ""
+    score: float = 0.0
+    margin: float = 0.0
+    note: str = ""
 
 
 def _prepare_service_info_queries(raw_query: str, entity_query: str = "") -> list[str]:
@@ -558,40 +585,282 @@ def _prepare_service_info_core_tokens(text: str) -> set[str]:
     return {t for t in tokens if t not in _PREPARE_SERVICE_INFO_GENERIC_TOKENS}
 
 
-def _service_info_row_score(queries: list[str], row: dict[str, Any]) -> tuple[int, int]:
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    """
+    Извлекает первый JSON-объект из произвольного текстового ответа модели.
+
+    :param text: raw-ответ LLM
+    :return: dict или None
+    """
+
+    s = str(text or "").strip()
+    if not s:
+        return None
+    start = s.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    escaped = False
+    for idx in range(start, len(s)):
+        ch = s[idx]
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            depth += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            if depth == 0:
+                chunk = s[start : idx + 1]
+                try:
+                    obj = json.loads(chunk)
+                except Exception:
+                    return None
+                return obj if isinstance(obj, dict) else None
+    return None
+
+
+def _prepare_term_roots(text: str) -> set[str]:
+    """
+    Возвращает корни смысловых токенов для query/content matching.
+
+    :param text: исходный текст
+    :return: множество токенов-корней
+    """
+
+    roots: set[str] = set()
+    for token in _prepare_service_info_core_tokens(text):
+        stem = _stem_service_token(token)
+        root = str(stem or token).strip()
+        if len(root) >= 3:
+            roots.add(root)
+    return roots
+
+
+def _prepare_roots_match(query_root: str, candidate_roots: set[str]) -> bool:
+    if query_root in candidate_roots:
+        return True
+    if len(query_root) < 4:
+        return False
+    q4 = query_root[:4]
+    q5 = query_root[:5]
+    for cand in candidate_roots:
+        if len(cand) < 4:
+            continue
+        if cand.startswith(q4) or query_root.startswith(cand[:4]):
+            return True
+        if len(query_root) >= 6 and len(cand) >= 6 and (q5 in cand or cand[:5] in query_root):
+            return True
+    return False
+
+
+def _prepare_roots_coverage(query_roots: set[str], candidate_roots: set[str]) -> float:
+    """
+    Покрытие корней запроса в кандидате (0..1).
+
+    :param query_roots: корни запроса
+    :param candidate_roots: корни кандидата
+    :return: доля покрытых корней
+    """
+
+    if not query_roots or not candidate_roots:
+        return 0.0
+    matched = 0
+    for q in query_roots:
+        if _prepare_roots_match(q, candidate_roots):
+            matched += 1
+    return float(matched) / float(len(query_roots))
+
+
+def _prepare_fast_relevance_score(query: str, content: str, *, title: str = "") -> float:
+    """
+    Быстрый score релевантности без доменных словарей.
+
+    :param query: запрос пациента
+    :param content: текст подготовки
+    :param title: заголовок услуги/сервиса (если есть)
+    :return: score 0..1
+    """
+
+    query_roots = _prepare_term_roots(query)
+    if not query_roots:
+        return 0.0
+
+    content_roots = _prepare_term_roots(content)
+    title_roots = _prepare_term_roots(title)
+    if not content_roots and not title_roots:
+        return 0.0
+
+    body_cov = _prepare_roots_coverage(query_roots, content_roots)
+    title_cov = _prepare_roots_coverage(query_roots, title_roots)
+    actionable = 1.0 if _is_prepare_content_actionable(content) else 0.0
+
+    score = 0.62 * body_cov + 0.28 * title_cov + 0.10 * actionable
+    if actionable < 1.0:
+        score -= 0.08
+
+    query_norm = _normalise_input(query).replace("ё", "е")
+    content_norm = _normalise_input(content).replace("ё", "е")
+    title_norm = _normalise_input(title).replace("ё", "е")
+    if query_norm and len(query_norm) >= 6:
+        if query_norm in content_norm:
+            score += 0.05
+        if title_norm and query_norm in title_norm:
+            score += 0.08
+
+    return max(0.0, min(1.0, score))
+
+
+def _prepare_relevance_thresholds() -> tuple[float, float, float]:
+    """
+    Возвращает пороги релевантности для fast gate.
+
+    :return: (low_threshold, high_threshold, margin_threshold)
+    """
+
+    low = _runtime_float("MR_PREPARE_RELEVANCE_LOW_THRESHOLD", 0.34, min_value=0.05, max_value=0.95)
+    high = _runtime_float("MR_PREPARE_RELEVANCE_HIGH_THRESHOLD", 0.62, min_value=0.10, max_value=0.99)
+    margin = _runtime_float("MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD", 0.08, min_value=0.01, max_value=0.60)
+    if low >= high:
+        low = max(0.05, high - 0.10)
+    return low, high, margin
+
+
+def _prepare_relevance_gate(score: float, margin: float) -> str:
+    """
+    Решает fast gate для кандидата подготовки.
+
+    :param score: fast relevance score
+    :param margin: разрыв между top1 и top2
+    :return: "accept" | "llm" | "reject"
+    """
+
+    low, high, margin_threshold = _prepare_relevance_thresholds()
+    value = max(0.0, min(1.0, float(score)))
+    gap = max(0.0, float(margin))
+    if value < low:
+        return "reject"
+    if value >= high and gap >= margin_threshold:
+        return "accept"
+    return "llm"
+
+
+def _prepare_relevance_prompt(
+    query: str,
+    candidate_text: str,
+    *,
+    source_kind: str,
+    service_title: str = "",
+) -> str:
+    """
+    Формирует prompt для LLM-валидации релевантности prepare-кандидата.
+
+    :param query: исходный запрос пациента
+    :param candidate_text: кандидатный текст ответа
+    :param source_kind: источник кандидата (serviceInfoAll/main_index)
+    :param service_title: serviceName для API-кандидата
+    :return: prompt string
+    """
+
+    try:
+        tmpl = load_prompt_text("prepare_relevance_validator")
+    except Exception:
+        tmpl = _PREPARE_RELEVANCE_VALIDATOR_FALLBACK_PROMPT
+    return (
+        str(tmpl or "")
+        .replace("<<USER_QUERY>>", str(query or "").strip())
+        .replace("<<SOURCE_KIND>>", str(source_kind or "").strip())
+        .replace("<<SERVICE_TITLE>>", str(service_title or "").strip())
+        .replace("<<CANDIDATE_TEXT>>", str(candidate_text or "").strip())
+        .strip()
+    )
+
+
+def _parse_prepare_relevance_validator(raw: str) -> tuple[bool, float, str]:
+    """
+    Парсит JSON-ответ LLM-валидатора релевантности.
+
+    :param raw: raw-ответ LLM
+    :return: (is_relevant, confidence, reason)
+    """
+
+    obj = _extract_json_object(raw)
+    if not isinstance(obj, dict):
+        return False, 0.0, "llm_non_json"
+
+    verdict = str(obj.get("verdict") or "").strip().upper()
+    try:
+        confidence = float(obj.get("confidence"))
+    except Exception:
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    reason = str(obj.get("reason") or "").strip()
+    return verdict == _PREPARE_RELEVANCE_VERDICT_RELEVANT, confidence, reason
+
+
+def _dedupe_prepare_candidates(candidates: list[_PrepareCandidate], *, limit: int = 12) -> list[_PrepareCandidate]:
+    """
+    Удаляет дубли prepare-кандидатов по тексту и сортирует по score.
+
+    :param candidates: список кандидатов
+    :param limit: максимальное число кандидатов
+    :return: отсортированный дедуплицированный список
+    """
+
+    ranked = sorted(
+        candidates,
+        key=lambda item: (item.score, len(str(item.text or ""))),
+        reverse=True,
+    )
+    out: list[_PrepareCandidate] = []
+    seen: set[str] = set()
+    for item in ranked:
+        key = _normalise_prepare_text(str(item.text or ""))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+        if len(out) >= max(1, limit):
+            break
+    return out
+
+
+def _service_info_row_score(queries: list[str], row: dict[str, Any]) -> tuple[float, str]:
     """
     Считает релевантность строки serviceInfoAll для prepare-запроса.
 
     :param queries: подготовленные варианты запроса
     :param row: строка из serviceInfoAll
-    :return: кортеж score для сортировки по убыванию
+    :return: (score, лучшая query-вариация)
     """
 
     service_name = _normalise_input(str(row.get("serviceName") or "")).replace("ё", "е")
     preparation = str(row.get("preparation") or "").strip()
     if not service_name or not preparation:
-        return (0, 0)
+        return 0.0, ""
 
-    best = 0
-    service_tokens = _doc_tokens(service_name)
+    best = 0.0
+    best_query = ""
     for query in queries:
         query_norm = _normalise_prepare_text(query)
         if not query_norm:
             continue
-        query_core_tokens = _prepare_service_info_core_tokens(query_norm)
-        if not query_core_tokens:
-            continue
+        score = _prepare_fast_relevance_score(query_norm, preparation, title=service_name)
+        if score > best:
+            best = score
+            best_query = query_norm
 
-        if service_name == query_norm:
-            best = max(best, 12)
-        elif query_norm in service_name or service_name in query_norm:
-            best = max(best, 9)
-
-        overlap = len(query_core_tokens & service_tokens)
-        if overlap:
-            best = max(best, overlap * 3 + 4)
-
-    return (best, len(preparation))
+    return best, best_query
 
 
 def _choose_service_info_preparation(
@@ -606,20 +875,21 @@ def _choose_service_info_preparation(
     :return: текст preparation или None
     """
 
-    ranked: list[tuple[tuple[int, int], dict[str, Any]]] = []
+    ranked: list[tuple[float, int, dict[str, Any]]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
-        score = _service_info_row_score(queries, row)
-        if score[0] <= 0:
+        score, _ = _service_info_row_score(queries, row)
+        if score <= 0.0:
             continue
-        ranked.append((score, row))
+        preparation_len = len(str(row.get("preparation") or "").strip())
+        ranked.append((score, preparation_len, row))
 
     if not ranked:
         return None
 
-    ranked.sort(key=lambda item: item[0], reverse=True)
-    best = ranked[0][1]
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    best = ranked[0][2]
     preparation = str(best.get("preparation") or "").strip()
     return preparation or None
 
@@ -2309,32 +2579,24 @@ def _is_main_index_relevant(query: str, content: str, *, doc_kind: str) -> bool:
 
 
 def _is_prepare_relevant(query: str, content: str) -> bool:
-    query_norm = _normalise_input(query).replace("ё", "е")
     content_norm = _normalise_input(content).replace("ё", "е")
     if not content_norm:
         return False
-    if not any(x in content_norm for x in ("подготов", "натощак", "перед процедур", "перед исследован")):
+    if not any(x in content_norm for x in ("подготов", "натощак", "перед", "за ")):
         return False
 
-    anchor_groups = (
-        ("фгдс", "фдгс", "фгс", "гастроскоп"),
-        ("кольпоскоп",),
-        ("вульвоскоп",),
-        ("биопс",),
-        ("узи",),
-        ("анализ",),
-        ("кров",),
-        ("моч",),
-        ("сперм",),
-        ("холестерин", "липид", "липидограмма"),
-    )
-    query_groups = [group for group in anchor_groups if any(anchor in query_norm for anchor in group)]
-    if query_groups and not all(any(anchor in content_norm for anchor in group) for group in query_groups):
+    score = _prepare_fast_relevance_score(query, content)
+    low, _, _ = _prepare_relevance_thresholds()
+    dynamic_cutoff = max(0.20, low * 0.85)
+    if score < dynamic_cutoff:
         return False
 
-    q_tokens = _doc_tokens(query_norm)
-    c_tokens = _doc_tokens(content_norm)
-    if q_tokens and not (q_tokens & c_tokens):
+    query_roots = _prepare_term_roots(query)
+    if query_roots:
+        content_roots = _prepare_term_roots(content)
+        if _prepare_roots_coverage(query_roots, content_roots) <= 0.0:
+            return False
+    if not _is_prepare_content_actionable(content):
         return False
     return True
 
@@ -2361,40 +2623,6 @@ _PREPARE_ACTIONABLE_HINTS = (
     "можно",
     "нужно",
     "рекоменду",
-)
-_PREPARE_TARGET_HINTS = (
-    "фгдс",
-    "фдгс",
-    "фгс",
-    "гастроскоп",
-    "кольпоскоп",
-    "вульвоскоп",
-    "биопс",
-    "пайпел",
-    "узи",
-    "анализ",
-    "кров",
-    "моч",
-    "мазок",
-    "холестерин",
-    "липид",
-    "пцр",
-)
-_PREPARE_CONTENT_TARGET_ANCHORS = (
-    "кров",
-    "моч",
-    "биопс",
-    "фгдс",
-    "фдгс",
-    "фгс",
-    "гастроскоп",
-    "кольпоскоп",
-    "вульвоскоп",
-    "мазок",
-    "пцр",
-    "липид",
-    "холестерин",
-    "эндоскоп",
 )
 _PREPARE_LLM_WRAP_NO_RELEVANT = "NO_RELEVANT_CONTENT"
 _PREPARE_LLM_WRAP_FALLBACK_PROMPT = (
@@ -2460,8 +2688,7 @@ def _prepare_query_has_specific_target(query: str) -> bool:
     :return: True при наличии таргета (например, ФГДС/биопсия/холестерин)
     """
 
-    query_norm = _normalise_input(query).replace("ё", "е")
-    return any(anchor in query_norm for anchor in _PREPARE_TARGET_HINTS)
+    return bool(_prepare_term_roots(query))
 
 
 def _is_prepare_wrap_output_usable(query: str, source_text: str, wrapped: str) -> bool:
@@ -2531,13 +2758,9 @@ def _is_prepare_service_info_usable(query: str, content: str) -> bool:
     if not _is_prepare_content_actionable(content):
         return False
 
-    query_norm = _normalise_input(query).replace("ё", "е")
-    has_specific_target = any(anchor in query_norm for anchor in _PREPARE_TARGET_HINTS)
-    if has_specific_target and not _is_prepare_relevant(query, content):
-        content_norm = _normalise_input(content).replace("ё", "е")
-        if not any(anchor in content_norm for anchor in _PREPARE_CONTENT_TARGET_ANCHORS):
-            return False
-    return True
+    score = _prepare_fast_relevance_score(query, content)
+    low, _, _ = _prepare_relevance_thresholds()
+    return score >= low
 
 
 _KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = "В моей базе данных информации недостаточно, перевожу на оператора."
@@ -3708,6 +3931,165 @@ class Services:
             "entities_used": entities,
         }
 
+    async def _prepare_llm_validate_candidate(
+        self,
+        query: str,
+        candidate: _PrepareCandidate,
+    ) -> tuple[bool, float, str]:
+        """
+        LLM-валидация релевантности для кандидата PREPARE в серой зоне score.
+
+        :param query: запрос пользователя
+        :param candidate: кандидат из API/Meili
+        :return: (релевантно, confidence, reason)
+        """
+
+        if not _runtime_bool("MR_PREPARE_RELEVANCE_LLM_ENABLED", True):
+            return False, 0.0, "llm_disabled"
+
+        prompt = _prepare_relevance_prompt(
+            query,
+            candidate.text,
+            source_kind=candidate.source,
+            service_title=candidate.service_title,
+        )
+        if not prompt:
+            return False, 0.0, "empty_prompt"
+
+        timeout_s = _runtime_int(
+            "MR_PREPARE_RELEVANCE_LLM_TIMEOUT_S",
+            8,
+            min_value=1,
+            max_value=60,
+        )
+        queue_timeout_ms = _runtime_int(
+            "MR_PREPARE_RELEVANCE_LLM_QUEUE_TIMEOUT_MS",
+            900,
+            min_value=200,
+            max_value=20000,
+        )
+        try:
+            raw = await generate_text(
+                prompt,
+                timeout_s=timeout_s,
+                queue_timeout_ms=queue_timeout_ms,
+                fmt="json",
+                think=False,
+            )
+        except Exception as e:
+            logger.info("prepare relevance llm skipped: %s", e.__class__.__name__)
+            return False, 0.0, "llm_unavailable"
+
+        return _parse_prepare_relevance_validator(str(raw or ""))
+
+    async def _pick_prepare_candidate(
+        self,
+        query: str,
+        candidates: list[_PrepareCandidate],
+    ) -> _PrepareCandidate | None:
+        """
+        Выбирает лучший кандидат PREPARE по fast-score + LLM в серой зоне.
+
+        :param query: запрос пользователя
+        :param candidates: кандидаты из источников
+        :return: лучший релевантный кандидат или None
+        """
+
+        ranked = _dedupe_prepare_candidates(candidates, limit=12)
+        if not ranked:
+            return None
+
+        max_llm_checks = _runtime_int(
+            "MR_PREPARE_RELEVANCE_LLM_MAX_CHECKS",
+            2,
+            min_value=1,
+            max_value=8,
+        )
+        llm_checks = 0
+        for idx, cand in enumerate(ranked):
+            next_score = ranked[idx + 1].score if idx + 1 < len(ranked) else 0.0
+            margin = max(0.0, float(cand.score) - float(next_score))
+            cand.margin = margin
+            gate = _prepare_relevance_gate(cand.score, cand.margin)
+            if gate == "accept":
+                cand.note = (cand.note + "; " if cand.note else "") + "prepare_fast_gate=accept"
+                return cand
+            if gate == "reject":
+                cand.note = (cand.note + "; " if cand.note else "") + "prepare_fast_gate=reject"
+                continue
+
+            if llm_checks >= max_llm_checks:
+                cand.note = (cand.note + "; " if cand.note else "") + "prepare_llm_skipped=max_checks"
+                continue
+
+            llm_checks += 1
+            ok, confidence, reason = await self._prepare_llm_validate_candidate(query, cand)
+            cand.note = (
+                (cand.note + "; " if cand.note else "")
+                + f"prepare_llm={_PREPARE_RELEVANCE_VERDICT_RELEVANT if ok else _PREPARE_RELEVANCE_VERDICT_IRRELEVANT}"
+                + f"({confidence:.2f})"
+                + (f":{reason}" if reason else "")
+            )
+            if ok:
+                return cand
+        return None
+
+    async def _prepare_candidates_from_analysis_api_cache(
+        self,
+        query: str,
+        entities: dict[str, Any],
+    ) -> list[_PrepareCandidate]:
+        """
+        Возвращает отсортированные prepare-кандидаты из serviceInfoAll.
+
+        :param query: исходный запрос пользователя
+        :param entities: сущности роутера
+        :return: список кандидатов
+        """
+
+        entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
+        queries = _prepare_service_info_queries(query, entity_query)
+        if not queries:
+            return []
+
+        try:
+            rows = await asyncio.to_thread(api_service_info.load_service_info)
+        except Exception:
+            return []
+
+        candidates: list[_PrepareCandidate] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            service_name = str(row.get("serviceName") or "").strip()
+            preparation = str(row.get("preparation") or "").strip()
+            if not service_name or not preparation:
+                continue
+
+            best_score = 0.0
+            best_query = ""
+            for query_variant in queries:
+                score = _prepare_fast_relevance_score(query_variant, preparation, title=service_name)
+                if score > best_score:
+                    best_score = score
+                    best_query = query_variant
+
+            if best_score <= 0.0:
+                continue
+
+            candidates.append(
+                _PrepareCandidate(
+                    source="serviceInfoAll",
+                    text=preparation,
+                    query_variant=best_query or query,
+                    service_title=service_name,
+                    score=best_score,
+                    note="prepare: serviceInfoAll candidate",
+                )
+            )
+
+        return _dedupe_prepare_candidates(candidates, limit=16)
+
     async def _maybe_compact_prepare_text(self, query: str, source_text: str) -> str:
         """
         Компактирует длинный PREPARE-текст через LLM с безопасным fallback.
@@ -3779,15 +4161,16 @@ class Services:
         if not q:
             return {"prepare": "", "note": "no query", "entities_used": entities}
 
-        api_cached_prepare = await self._prepare_from_analysis_api_cache(q, entities)
-        if api_cached_prepare:
-            api_cached_cleaned = html_cleaner.strip_html(api_cached_prepare).strip()
+        api_candidates = await self._prepare_candidates_from_analysis_api_cache(q, entities)
+        api_best = await self._pick_prepare_candidate(q, api_candidates)
+        if api_best:
+            api_cached_cleaned = html_cleaner.strip_html(api_best.text).strip()
             if not _is_prepare_service_info_usable(q, api_cached_cleaned):
-                api_cached_prepare = None
+                api_best = None
             else:
-                api_cached_prepare = api_cached_cleaned
-        if api_cached_prepare:
-            compacted = await self._maybe_compact_prepare_text(q, api_cached_prepare)
+                api_best.text = api_cached_cleaned
+        if api_best:
+            compacted = await self._maybe_compact_prepare_text(q, api_best.text)
             return {
                 "prepare": compacted,
                 "note": "prepare: serviceInfoAll",
@@ -3798,6 +4181,7 @@ class Services:
         if not variants:
             variants = [q]
 
+        meili_candidates: list[_PrepareCandidate] = []
         saw_no_matches = False
         saw_non_empty = False
         saw_service_error = False
@@ -3827,9 +4211,30 @@ class Services:
                 continue
 
             saw_non_empty = True
-            if _is_prepare_relevant(candidate, cleaned) or _is_prepare_relevant(q, cleaned):
-                compacted = await self._maybe_compact_prepare_text(q, cleaned)
-                return {"prepare": compacted, "entities_used": entities}
+            score = max(
+                _prepare_fast_relevance_score(q, cleaned),
+                _prepare_fast_relevance_score(candidate, cleaned),
+            )
+            if score <= 0.0:
+                continue
+            meili_candidates.append(
+                _PrepareCandidate(
+                    source="main_index",
+                    text=cleaned,
+                    query_variant=candidate,
+                    score=score,
+                    note="prepare: main_index candidate",
+                )
+            )
+
+        meili_best = await self._pick_prepare_candidate(q, meili_candidates)
+        if meili_best:
+            compacted = await self._maybe_compact_prepare_text(q, meili_best.text)
+            return {
+                "prepare": compacted,
+                "note": "prepare: main_index",
+                "entities_used": entities,
+            }
 
         if saw_non_empty:
             return _prepare_clarify_response(q, entities, note="prepare: weak relevance")
@@ -3848,17 +4253,11 @@ class Services:
         :return: текст поля `preparation` или None
         """
 
-        entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
-        queries = _prepare_service_info_queries(query, entity_query)
-        if not queries:
+        candidates = await self._prepare_candidates_from_analysis_api_cache(query, entities)
+        best = await self._pick_prepare_candidate(query, candidates)
+        if not best:
             return None
-
-        try:
-            rows = await asyncio.to_thread(api_service_info.load_service_info)
-        except Exception:
-            return None
-
-        return _choose_service_info_preparation(rows, queries)
+        return str(best.text or "").strip() or None
 
     async def test_result_status(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         def _result_fallback(note: str, message: str = "Сейчас не удалось получить результаты автоматически. Соединяю с оператором.") -> dict[str, Any]:
