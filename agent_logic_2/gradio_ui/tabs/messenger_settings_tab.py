@@ -353,6 +353,33 @@ def build_messenger_settings_tab(
                 prompt_code_mr_prepare_wrap,
             )
 
+            with gr.Row():
+                with gr.Accordion(label="MR Messenger Final Answer Prompt", open=False):
+                    prompt_code_mr_final_answer = gr.Code(
+                        value="",
+                        language=None,
+                        label="messengers_router: mr_messenger_final_answer",
+                        interactive=True,
+                        lines=18,
+                        scale=4,
+                    )
+                    with gr.Row():
+                        btn_load_mr_final_answer = gr.Button("⬇️ Загрузить", size="sm", variant="secondary")
+                        btn_save_mr_final_answer = gr.Button("💾 Сохранить", size="sm", variant="primary")
+
+            btn_load_mr_final_answer.click(
+                lambda: fn_load_prompt_with_fallback_fn(
+                    "mr_messenger_final_answer",
+                    "messenger_final_answer",
+                ),
+                [],
+                [prompt_code_mr_final_answer],
+            )
+            btn_save_mr_final_answer.click(
+                lambda txt: fn_save_prompt_fn("mr_messenger_final_answer", txt),
+                prompt_code_mr_final_answer,
+            )
+
         gr.Markdown(
             "Рабочий режим: выберите тему, правьте JSON и сохраняйте. "
             "YAML ниже нужен только для массового редактирования."
@@ -547,10 +574,19 @@ def build_messenger_settings_tab(
             inputs=None,
             outputs=[prompt_code_mr_prepare_wrap],
         )
+        blocks.load(
+            fn=lambda: fn_load_prompt_with_fallback_fn(
+                "mr_messenger_final_answer",
+                "messenger_final_answer",
+            ),
+            inputs=None,
+            outputs=[prompt_code_mr_final_answer],
+        )
 
     return {
         "tab": messenger_tab,
         "prompt_code_mr_rich": prompt_code_mr_rich,
         "prompt_code_mr_critic": prompt_code_mr_critic,
         "prompt_code_mr_prepare_wrap": prompt_code_mr_prepare_wrap,
+        "prompt_code_mr_final_answer": prompt_code_mr_final_answer,
     }

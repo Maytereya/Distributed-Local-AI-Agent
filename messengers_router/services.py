@@ -2686,9 +2686,15 @@ def _prepare_wrap_prompt(query: str, source_text: str) -> str:
     :return: итоговый prompt
     """
 
-    try:
-        tmpl = load_prompt_text("prepare_wrap_patient")
-    except Exception:
+    tmpl = ""
+    for key in ("messenger_final_answer", "prepare_wrap_patient"):
+        try:
+            tmpl = load_prompt_text(key)
+            if str(tmpl or "").strip():
+                break
+        except Exception:
+            tmpl = ""
+    if not str(tmpl or "").strip():
         tmpl = _PREPARE_LLM_WRAP_FALLBACK_PROMPT
     return (
         str(tmpl or "")
