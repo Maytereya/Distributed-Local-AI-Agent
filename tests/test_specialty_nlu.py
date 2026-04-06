@@ -362,3 +362,47 @@ def test_service_bundle_renderer_availability_source_unavailable():
     }
     text = format_service_bundle_for_patient(payload, {})
     assert "расписание временно недоступно" in text
+
+
+def test_service_bundle_renderer_consultation_hides_prepare_and_internal_ord():
+    payload = {
+        "service_name": "Прием (осмотр, консультация) врача-уролога первичный",
+        "retail_prices": [{"serviceName": "Прием (осмотр, консультация) врача-уролога первичный", "cost": 2000}],
+        "doctors": [
+            {
+                "fio": "Иванов Иван Иванович",
+                "ord": 1,
+                "service_price": 1900,
+                "available": False,
+                "availability_note": "availability_unmatched",
+            }
+        ],
+        "prepare": "Служебный блок не должен выводиться для консультации",
+    }
+    text = format_service_bundle_for_patient(payload, {})
+    assert "ord=" not in text
+    assert "Подготовка:" not in text
+
+
+def test_service_bundle_renderer_hides_prepare_without_explicit_flag():
+    payload = {
+        "service_name": "УЗИ брюшной полости",
+        "retail_prices": [{"serviceName": "УЗИ брюшной полости", "cost": 1500}],
+        "doctors": [],
+        "prepare": "Натощак 6 часов.",
+        "show_prepare": False,
+    }
+    text = format_service_bundle_for_patient(payload, {})
+    assert "Подготовка:" not in text
+
+
+def test_service_bundle_renderer_no_doctors_uses_alternative_hint():
+    payload = {
+        "service_name": "Шунтирование желудка",
+        "retail_prices": [{"serviceName": "Шунтирование желудка", "cost": 199000}],
+        "doctors": [],
+        "show_prepare": False,
+    }
+    text = format_service_bundle_for_patient(payload, {})
+    assert "альтернативные варианты" in text.lower()
+    assert "подробное расписание выбранного врача" not in text.lower()

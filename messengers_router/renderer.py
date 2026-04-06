@@ -332,6 +332,8 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
     retail_prices_raw = payload.get("retail_prices")
     doctors_raw = payload.get("doctors")
     prepare_text = str(payload.get("prepare") or "").strip()
+    show_prepare = bool(payload.get("show_prepare"))
+    is_consult = bool(re.search(r"\b(при[её]м\w*|консультац\w*)\b", service_name.lower()))
     doctors = doctors_raw if isinstance(doctors_raw, list) else []
     retail_prices = retail_prices_raw if isinstance(retail_prices_raw, list) else []
 
@@ -354,20 +356,24 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
             if not isinstance(doc, dict):
                 continue
             fio = str(doc.get("fio") or "Врач").strip()
-            ord_value = doc.get("ord")
-            ord_txt = f", ord={ord_value}" if isinstance(ord_value, int) else ""
             price_txt = _format_rub(_extract_price_amount(doc))
             avail_txt = _availability_text_for_doctor(doc)
-            lines.append(f"{i}. {fio}{ord_txt} — {price_txt}; {avail_txt}.")
+            lines.append(f"{i}. {fio} — {price_txt}; {avail_txt}.")
     else:
         lines.append("2) Подходящих врачей по этой услуге сейчас не нашёл.")
 
-    if prepare_text:
-        lines.append(f"3) Подготовка: {prepare_text}")
-    else:
-        lines.append("3) Подготовку по этой услуге сейчас не удалось получить автоматически.")
+    if not is_consult and show_prepare:
+        if prepare_text:
+            lines.append(f"3) Подготовка: {prepare_text}")
+        else:
+            lines.append("3) Подготовку по этой услуге сейчас не удалось получить автоматически.")
 
-    lines.append("Если нужно, покажу подробное расписание выбранного врача.")
+    if not doctors:
+        lines.append("Если нужно, могу уточнить формулировку услуги и проверить альтернативные варианты.")
+    elif len(doctors) == 1:
+        lines.append("Если нужно, покажу подробное расписание этого врача.")
+    else:
+        lines.append("Если нужно, покажу подробное расписание любого из этих врачей.")
     return "\n".join(lines).strip()
 
 

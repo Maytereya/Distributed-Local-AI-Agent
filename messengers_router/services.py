@@ -67,6 +67,14 @@ _PRICE_DOCTOR_SUFFIX_RE = re.compile(
     r"\bу\s+[а-яё\-]{3,}(?:\s+[а-яё\-]{2,}){0,2}\b.*$",
     re.I,
 )
+_PRICE_PREPARE_HINT_RE = re.compile(
+    r"\b(подготов\w*|натощак|перед\s+(анализ\w*|исследован\w*|процедур\w*))\b",
+    re.I,
+)
+_PRICE_CONSULT_EXCLUDE_RE = re.compile(
+    r"\b(подготов\w*|узи|анализ\w*|пакет\w*|комплекс\w*|программ\w*|терап\w*)\b",
+    re.I,
+)
 _NONBOOKABLE_POINTS_PATH = Path(__file__).resolve().parent / "data" / "nonbookable_points.json"
 _NEAREST_HINT_RE = re.compile(r"\b(ближайш\w*|сам\w*\s+ранн\w*|раньше|поскорее|свободн\w*\s+окн\w*)\b", re.I)
 _UZI_QUERY_RE = re.compile(r"\b(узи|узист|ультразвук\w*|ультразвуков\w*)\b", re.I)
@@ -1859,6 +1867,9 @@ def _extract_price_service_from_query(query: str) -> str | None:
     if not raw:
         return None
     if _PRICE_CONSULT_HINT_RE.search(raw):
+        specialty = _extract_specialty_from_text(raw)
+        if specialty:
+            return f"прием {specialty}"
         return "прием"
     q = _normalise_input(raw)
     q = _PRICE_DOCTOR_SUFFIX_RE.sub("", q).strip(" ?!.,;:")
@@ -1875,6 +1886,33 @@ def _extract_price_service_from_query(query: str) -> str | None:
         words = filtered_words
     # Ограничиваем длину candidate, чтобы не тянуть в ranking целый диалог.
     return " ".join(words[:8])
+
+
+def _is_consultation_service_query(value: str) -> bool:
+    """
+    Проверяет, что service_name относится к приему/консультации врача.
+
+    :param value: строка услуги
+    :return: True для консультационных услуг
+    """
+
+    norm = _normalise_input(str(value or ""))
+    return bool(norm and _PRICE_CONSULT_HINT_RE.search(norm))
+
+
+def _is_clean_consultation_row_name(value: str) -> bool:
+    """
+    Проверяет, что строка прайса похожа именно на услугу приема/консультации,
+    а не на пакет/подготовку с вкраплением слова "прием".
+
+    :param value: имя услуги из прайса
+    :return: True для чистого консультационного тарифа
+    """
+
+    norm = _normalise_input(str(value or ""))
+    if not norm or not _PRICE_CONSULT_HINT_RE.search(norm):
+        return False
+    return _PRICE_CONSULT_EXCLUDE_RE.search(norm) is None
 
 
 def _dedupe_price_queries(queries: list[str], *, max_items: int = 8) -> list[str]:
@@ -1961,6 +1999,75 @@ def _should_prefer_current_price_query_over_context(query_text: str, current_ser
     return False
 
 
+def _service_name_matches_specialty(service_name: str, specialty: str) -> bool:
+    """
+    Проверяет, что имя услуги относится к нужной специальности.
+
+    :param service_name: строка услуги из каталога/контекста
+    :param specialty: каноническая специальность
+    :return: True, если в названии услуги есть термин специальности
+    """
+
+    svc = _normalise_input(service_name).replace("ё", "е")
+    spec = _normalise_input(specialty).replace("ё", "е")
+    if not svc or not spec:
+        return False
+    terms = _specialty_terms(spec) or (spec,)
+    return any(term and term in svc for term in terms)
+
+
+def _is_prepare_requested_in_price_query(query_text: str) -> bool:
+    """
+    Проверяет, просит ли пользователь именно подготовку в PRICE-реплике.
+
+    :param query_text: текст запроса пользователя
+    :return: True, если запрошены правила подготовки
+    """
+
+    return bool(_PRICE_PREPARE_HINT_RE.search(str(query_text or "")))
+
+
+def _is_strong_doctor_price_match(
+    *,
+    query_norm: str,
+    query_tokens: list[str],
+    row_name_norm: str,
+    matched_tokens: int,
+    target_homecode: str,
+    row_homecode: str,
+) -> bool:
+    """
+    Решает, достаточно ли сильное соответствие doctor_price-строки услуге.
+
+    Для процедурных запросов блокирует «случайные» совпадения по одному слову
+    (например, `желудка`), из-за которых в хирургии всплывают УЗИ-врачи.
+
+    :param query_norm: нормализованная целевая услуга
+    :param query_tokens: токены целевой услуги
+    :param row_name_norm: нормализованное имя строки doctor_price
+    :param matched_tokens: число совпавших токенов из score-функции
+    :param target_homecode: homecode целевой услуги из retail
+    :param row_homecode: homecode строки doctor_price
+    :return: True, если строка релевантна целевой услуге
+    """
+
+    if target_homecode and row_homecode and target_homecode == row_homecode:
+        return True
+    if not query_norm or not row_name_norm:
+        return False
+    if query_norm == row_name_norm or query_norm in row_name_norm:
+        return True
+    if len(row_name_norm) >= 12 and row_name_norm in query_norm:
+        return True
+
+    token_count = len([t for t in query_tokens if t])
+    if token_count <= 1:
+        return matched_tokens >= 1
+    if token_count == 2:
+        return matched_tokens >= 2
+    return matched_tokens >= max(2, token_count - 1)
+
+
 def _build_price_catalog_queries(query_text: str, *, current_service_name: str = "") -> list[str]:
     """
     Собирает варианты запроса для поиска услуги в price-каталоге.
@@ -1972,7 +2079,15 @@ def _build_price_catalog_queries(query_text: str, *, current_service_name: str =
 
     raw = str(query_text or "").strip()
     queries: list[str] = []
-    if current_service_name:
+    consult_specialty = ""
+    if raw and _PRICE_CONSULT_HINT_RE.search(raw):
+        consult_specialty = _extract_specialty_from_text(raw)
+
+    # При запросах "стоимость приема <специальность>" не даем stale-контексту
+    # другой специальности доминировать над текущим запросом.
+    if current_service_name and (
+        not consult_specialty or _service_name_matches_specialty(current_service_name, consult_specialty)
+    ):
         queries.append(current_service_name)
     extracted = _extract_price_service_from_query(raw)
     if extracted:
@@ -2099,6 +2214,15 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
     homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
     if not name:
         return 0, 0
+
+    # Жесткий фильтр для консультационных price-запросов по специальности:
+    # "стоимость приема уролога" не должен матчиться на фониатра/терапевта.
+    query_specialty = _extract_specialty_from_text(query)
+    if _PRICE_CONSULT_HINT_RE.search(query):
+        if not _is_clean_consultation_row_name(name):
+            return 0, 0
+        if query_specialty and not _service_name_matches_specialty(name, query_specialty):
+            return 0, 0
 
     score = 0
     if homecode_query:
@@ -3328,6 +3452,7 @@ class Services:
             "retail_prices": [],
             "doctors": [],
             "prepare": "",
+            "show_prepare": False,
             "top_n_applied": top_limit,
             "note": "service_bundle_info",
             "entities_used": {
@@ -3352,6 +3477,11 @@ class Services:
             out["note"] = "service_bundle_info: retail source unavailable"
 
         # 2) Top-N doctors by ord among doctors that have the matched service in doctor prices.
+        top_retail = out["retail_prices"][0] if isinstance(out.get("retail_prices"), list) and out["retail_prices"] else {}
+        target_homecode = _normalise_input(
+            str(top_retail.get("serviceHomecode") or top_retail.get("homecode") or "")
+        )
+        is_consult_query = _is_consultation_service_query(service_name)
         samara_tokens = await self._samara_region_tokens()
         doctors = await self._ensure_doctors_cache_loaded()
         by_id: dict[int, dict[str, Any]] = {}
@@ -3382,18 +3512,33 @@ class Services:
             doctor_id = _as_int(row.get("doctorId"))
             if doctor_id is None or doctor_id not in by_id:
                 continue
+            row_name_norm = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
+            row_homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
             score, matched = _price_row_score(
                 row,
                 query=query_norm,
                 tokens=query_tokens,
                 homecode_query=homecode_query,
             )
+            if not is_consult_query and target_homecode and row_homecode and target_homecode == row_homecode:
+                score = max(score, 260)
+                matched = max(matched, 1)
             if score <= 0:
+                continue
+            if not is_consult_query and not _is_strong_doctor_price_match(
+                query_norm=query_norm,
+                query_tokens=query_tokens,
+                row_name_norm=row_name_norm,
+                matched_tokens=matched,
+                target_homecode=target_homecode,
+                row_homecode=row_homecode,
+            ):
                 continue
             cost = _as_int(row.get("cost")) or 0
             matched_price_rows.append((score, matched, -cost, doctor_id, row))
 
-        if not matched_price_rows and query_norm:
+        allow_soft_substring_fallback = is_consult_query or len(query_tokens) <= 1
+        if not matched_price_rows and query_norm and allow_soft_substring_fallback:
             # Мягкий fallback на substring, если ranker не дал совпадений.
             for row in doctor_prices:
                 if not isinstance(row, dict):
@@ -3444,9 +3589,14 @@ class Services:
         out["doctors"] = out_doctors
 
         # 3) Preparation guidance by service/test name.
-        prepare_payload = await self.test_prepare(service_name, {"service_name": service_name})
-        if isinstance(prepare_payload, dict) and not prepare_payload.get("handoff_required"):
-            out["prepare"] = str(prepare_payload.get("prepare") or "").strip()
+        # В PRICE показываем подготовку только по явному запросу пациента.
+        # Иначе блок шумит и мешает основной задаче (цена/врач/расписание).
+        show_prepare = _is_prepare_requested_in_price_query(query_text)
+        out["show_prepare"] = show_prepare
+        if show_prepare and not is_consult_query:
+            prepare_payload = await self.test_prepare(service_name, {"service_name": service_name})
+            if isinstance(prepare_payload, dict) and not prepare_payload.get("handoff_required"):
+                out["prepare"] = str(prepare_payload.get("prepare") or "").strip()
 
         return out
 
@@ -4486,8 +4636,13 @@ class Services:
             and _DOCTOR_PRICE_HINT_RE.search(query_text)
             and _PRICE_REQUEST_RE.search(query_text)
         )
+        doctor_query_specialty = _extract_specialty_from_text(query_text) if doctor_price_query else ""
         current_service_name_for_resolution = "" if doctor_price_query else entity_service_name
-        if entity_service_name and _is_city_only_reply(query_text):
+        if doctor_price_query and not doctor_query_specialty:
+            # В doctor-specific price-вопросах без явной специальности
+            # не приземляемся в catalog (иначе ловим случайные "фониатр").
+            query_service_name = _extract_price_service_from_query(query_text)
+        elif entity_service_name and _is_city_only_reply(query_text):
             query_service_name = None
         else:
             query_service_name = resolve_price_service_name_from_catalog(

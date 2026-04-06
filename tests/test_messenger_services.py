@@ -1493,6 +1493,37 @@ def test_resolve_price_service_name_from_catalog_prefers_new_price_query_over_st
     assert resolved == "Cito Общий анализ крови (Le, Er,Hb)"
 
 
+def test_resolve_price_service_name_from_catalog_consult_specialty_ignores_stale_context():
+    rows = [
+        {"serviceName": "Прием (осмотр, консультация) врача-фониатра", "cost": 4000},
+        {"serviceName": "Прием (осмотр, консультация) врача-терапевта", "cost": 2500},
+        {"serviceName": "Прием (осмотр, консультация) врача-уролога первичный", "cost": 2000},
+    ]
+
+    resolved = resolve_price_service_name_from_catalog(
+        "Какая стоимость приема уролога?",
+        current_service_name="Прием (осмотр, консультация) врача-фониатра",
+        rows=rows,
+    )
+
+    assert resolved == "Прием (осмотр, консультация) врача-уролога первичный"
+
+
+def test_resolve_price_service_name_from_catalog_consult_specialty_cardio():
+    rows = [
+        {"serviceName": "Прием (осмотр, консультация) врача-фониатра", "cost": 4000},
+        {"serviceName": "Прием (осмотр, консультация) врача-кардиолога первичный", "cost": 1200},
+    ]
+
+    resolved = resolve_price_service_name_from_catalog(
+        "Какова стоимость приема у кардиолога?",
+        current_service_name="Прием (осмотр, консультация) врача-фониатра",
+        rows=rows,
+    )
+
+    assert resolved == "Прием (осмотр, консультация) врача-кардиолога первичный"
+
+
 def test_price_info_resolves_biochemistry_catalog_query(monkeypatch):
     svc = Services()
 
@@ -1919,7 +1950,7 @@ def test_service_bundle_info_builds_topn_with_availability_and_prepare(monkeypat
 
     res = run(
         svc.service_bundle_info(
-            "Сколько стоит УЗИ брюшной полости?",
+            "Сколько стоит УЗИ брюшной полости и как подготовиться?",
             {"service_name": "УЗИ брюшной полости"},
             top_n=2,
         )
@@ -1930,6 +1961,7 @@ def test_service_bundle_info_builds_topn_with_availability_and_prepare(monkeypat
     assert [d["fio"] for d in res["doctors"]] == ["Альфа Доктор", "Бета Доктор"]
     assert res["doctors"][0]["available"] is True
     assert res["doctors"][1]["available"] is False
+    assert res["show_prepare"] is True
     assert "Натощак" in str(res.get("prepare") or "")
 
 
@@ -1954,3 +1986,154 @@ def test_service_bundle_info_keeps_service_name_on_city_only_reply(monkeypatch):
     res = run(svc.service_bundle_info("Самара", {"service_name": "ЭКГ"}))
 
     assert str(res.get("service_name") or "").lower() == "экг"
+
+
+def test_service_bundle_info_skips_prepare_for_consult_service(monkeypatch):
+    svc = Services()
+    prepare_called = {"v": False}
+
+    async def fake_ensure_regions():
+        return [{"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"}]
+
+    async def fake_ensure_doctors_cache():
+        return []
+
+    def fake_retail(_region_id):
+        return [{"serviceName": "Прием (осмотр, консультация) врача-уролога первичный", "cost": 2000}]
+
+    def fake_doctor_prices():
+        return []
+
+    async def fake_prepare(_query, _entities):
+        prepare_called["v"] = True
+        return {"prepare": "Не должно вызываться"}
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_retail)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+    monkeypatch.setattr(svc, "test_prepare", fake_prepare)
+
+    res = run(
+        svc.service_bundle_info(
+            "Самара",
+            {"service_name": "Прием (осмотр, консультация) врача-уролога первичный"},
+        )
+    )
+
+    assert prepare_called["v"] is False
+    assert str(res.get("prepare") or "").strip() == ""
+
+
+def test_service_bundle_info_does_not_request_prepare_for_price_only_query(monkeypatch):
+    svc = Services()
+    prepare_called = {"v": False}
+
+    async def fake_ensure_regions():
+        return [{"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"}]
+
+    async def fake_ensure_doctors_cache():
+        return []
+
+    def fake_retail(_region_id):
+        return [{"serviceName": "УЗИ брюшной полости", "cost": 1800}]
+
+    def fake_doctor_prices():
+        return []
+
+    async def fake_prepare(_query, _entities):
+        prepare_called["v"] = True
+        return {"prepare": "Не должно вызываться"}
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_retail)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+    monkeypatch.setattr(svc, "test_prepare", fake_prepare)
+
+    res = run(svc.service_bundle_info("Сколько стоит УЗИ брюшной полости?", {"service_name": "УЗИ брюшной полости"}))
+
+    assert prepare_called["v"] is False
+    assert res["show_prepare"] is False
+    assert str(res.get("prepare") or "").strip() == ""
+
+
+def test_service_bundle_info_filters_weak_partial_doctor_matches_for_surgery(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_regions():
+        return [{"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"}]
+
+    async def fake_ensure_doctors_cache():
+        return [
+            {
+                "id": 10,
+                "fio": "Казакова Ирина Михайловна",
+                "ord": 1,
+                "specialization": "УЗИ",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+            },
+            {
+                "id": 11,
+                "fio": "Свиридова Елена Александровна",
+                "ord": 1,
+                "specialization": "УЗИ",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+            },
+        ]
+
+    def fake_retail(_region_id):
+        return [{"serviceName": "Шунтирование желудка", "serviceHomecode": "83.9.2.22", "cost": 199000}]
+
+    def fake_doctor_prices():
+        return [
+            {"doctorId": 10, "serviceName": "УЗИ желудка", "serviceHomecode": "12.1.1", "cost": 1100},
+            {"doctorId": 11, "serviceName": "УЗИ органов брюшной полости", "serviceHomecode": "12.1.2", "cost": 1100},
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_retail)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+
+    res = run(svc.service_bundle_info("Сколько стоит шунтирование желудка?", {"service_name": "Шунтирование желудка"}))
+
+    assert res["retail_prices"], "Expected surgery retail row"
+    assert res["doctors"] == [], "Weak one-token overlaps must not leak unrelated doctors"
+
+
+def test_service_bundle_info_accepts_doctor_by_exact_homecode_match(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_regions():
+        return [{"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"}]
+
+    async def fake_ensure_doctors_cache():
+        return [
+            {
+                "id": 20,
+                "fio": "Хирург Иванов И.И.",
+                "ord": 1,
+                "specialization": "Хирург",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+            }
+        ]
+
+    def fake_retail(_region_id):
+        return [{"serviceName": "Шунтирование желудка", "serviceHomecode": "83.9.2.22", "cost": 199000}]
+
+    def fake_doctor_prices():
+        # Имя услуги у врача может отличаться, но код совпадает с retail.
+        return [
+            {"doctorId": 20, "serviceName": "Бариатрическая операция", "serviceHomecode": "83.9.2.22", "cost": 170000},
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_retail)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+
+    res = run(svc.service_bundle_info("Сколько стоит шунтирование желудка?", {"service_name": "Шунтирование желудка"}))
+
+    assert len(res["doctors"]) == 1
+    assert res["doctors"][0]["fio"] == "Хирург Иванов И.И."
