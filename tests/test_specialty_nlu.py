@@ -406,3 +406,17 @@ def test_service_bundle_renderer_no_doctors_uses_operator_handoff_hint():
     text = format_service_bundle_for_patient(payload, {})
     assert "передам запрос оператору" in text.lower()
     assert "подробное расписание выбранного врача" not in text.lower()
+
+
+def test_service_bundle_renderer_lab_hides_doctor_schedule_suffix():
+    payload = {
+        "service_name": "Общий анализ крови",
+        "service_kind": "lab",
+        "retail_prices": [{"serviceName": "Общий анализ крови", "cost": 490}],
+        "doctors": [],
+        "show_prepare": False,
+    }
+    text = format_service_bundle_for_patient(payload, {})
+    low = text.lower()
+    assert "запись к конкретному врачу обычно не требуется" in low
+    assert "подробное расписание" not in low

@@ -75,6 +75,23 @@ _PRICE_CONSULT_EXCLUDE_RE = re.compile(
     r"\b(подготов\w*|узи|анализ\w*|пакет\w*|комплекс\w*|программ\w*|терап\w*)\b",
     re.I,
 )
+_LAB_SERVICE_HINT_RE = re.compile(
+    r"\b("
+    r"анализ\w*|лаборатор\w*|кров\w*|моч\w*|кал\w*|мазок\w*|соскоб\w*|"
+    r"пцр|антител\w*|антиген\w*|гормон\w*|биохим\w*|коагул\w*|гемостаз\w*|"
+    r"глюкоз\w*|холестерин\w*|липид\w*|оак|оам|бакпосев\w*|чекап\w*|панел\w*|профил\w*"
+    r")\b",
+    re.I,
+)
+_DOCTOR_SERVICE_HINT_RE = re.compile(
+    r"\b("
+    r"при[её]м\w*|консультац\w*|осмотр\w*|врач\w*|доктор\w*|"
+    r"операц\w*|хирург\w*|узи|ультразвук\w*|эндоскоп\w*|фгдс|фкс|гастроскоп\w*|"
+    r"колоноскоп\w*|рентген\w*|мрт|кт|флюорограф\w*|экг"
+    r")\b",
+    re.I,
+)
+_LAB_DEADLINE_HINT_RE = re.compile(r"\b\d+\s*(?:-\s*\d+)?\s*(?:дн|дней|нед|час)\b", re.I)
 _NONBOOKABLE_POINTS_PATH = Path(__file__).resolve().parent / "data" / "nonbookable_points.json"
 _NEAREST_HINT_RE = re.compile(r"\b(ближайш\w*|сам\w*\s+ранн\w*|раньше|поскорее|свободн\w*\s+окн\w*)\b", re.I)
 _UZI_QUERY_RE = re.compile(r"\b(узи|узист|ультразвук\w*|ультразвуков\w*)\b", re.I)
@@ -380,6 +397,12 @@ _PREPARE_QUERY_STOPWORDS = {
     "чтобы",
     "когда",
     "будет",
+    "правила",
+    "памятка",
+    "инструкция",
+    "условия",
+    "сдать",
+    "сдавать",
 }
 
 
@@ -422,11 +445,22 @@ def _schedule_payload_matches_doctor(data: Any, doctor_name: str) -> bool:
             return True
     return False
 _PREPARE_LEADIN_RE = re.compile(
-    r"^\s*(?:подскажите[, ]+)?(?:как\s+)?подготов(?:иться|ится|ка)\s*(?:к|для)?\s+",
+    r"^\s*(?:(?:здравствуй(?:те)?|добрый\s+день)[, ]+)?"
+    r"(?:(?:подскажите|скажите)[, ]+)?"
+    r"(?:(?:пожалуйста)[, ]+)?"
+    r"(?:(?:как|каким\s+образом|каковы?)\s+)?"
+    r"(?:(?:правила|памятка|инструкц(?:ия|ии)|условия)\s+)?"
+    r"(?:подготов(?:иться|ится|ка|ки)|готовиться|сдать|сдавать)\s*"
+    r"(?:(?:к|для|перед|по)\s+)?",
     re.I,
 )
 _PREPARE_ENTITY_RE = re.compile(
-    r"(?:подготов(?:иться|ится|ка)\s*(?:к|для)\s+)(?P<entity>.+)$",
+    r"(?:"
+    r"(?:правила|памятка|инструкц(?:ия|ии)|условия)\s+подготов(?:ки|ка)?\s*(?:к|для|перед|по)?\s+|"
+    r"подготов(?:иться|ится|ка|ки)\s*(?:к|для|перед|по)?\s+|"
+    r"готовиться\s*(?:к|для|перед|по)?\s+|"
+    r"(?:как\s+)?(?:сдать|сдавать)\s+"
+    r")(?P<entity>.+)$",
     re.I,
 )
 _PREPARE_SYNONYM_HINTS: dict[str, tuple[str, ...]] = {
@@ -476,6 +510,7 @@ def _extract_prepare_entity_phrase(text: str) -> str:
     if m:
         return str(m.group("entity") or "").strip(" ?!.,")
     stripped = _PREPARE_LEADIN_RE.sub("", norm, count=1).strip(" ?!.,")
+    stripped = re.sub(r"^(?:мне\s+)?(?:нужно|надо|хочу)\s+", "", stripped, count=1, flags=re.I).strip(" ?!.,")
     return stripped
 
 
@@ -2013,6 +2048,53 @@ def _is_consultation_service_query(value: str) -> bool:
 
     norm = _normalise_input(str(value or ""))
     return bool(norm and _PRICE_CONSULT_HINT_RE.search(norm))
+
+
+def _detect_service_kind(
+    service_name: str,
+    *,
+    query_text: str = "",
+    top_retail: dict[str, Any] | None = None,
+    is_consult_query: bool = False,
+) -> str:
+    """
+    Определяет тип услуги для PRICE-bundle:
+    - `lab` для лабораторных анализов;
+    - `doctor` для врачебных услуг/процедур/диагностики.
+
+    :param service_name: итоговое название услуги
+    :param query_text: исходный запрос пользователя
+    :param top_retail: верхняя retail-строка (если есть)
+    :param is_consult_query: заранее вычисленный признак консультации
+    :return: `lab` | `doctor`
+    """
+
+    norm_name = _normalise_input(str(service_name or "")).replace("ё", "е")
+    norm_query = _normalise_input(str(query_text or "")).replace("ё", "е")
+
+    if is_consult_query:
+        return "doctor"
+
+    if norm_name and _DOCTOR_SERVICE_HINT_RE.search(norm_name):
+        return "doctor"
+
+    if norm_name and _LAB_SERVICE_HINT_RE.search(norm_name):
+        return "lab"
+
+    if isinstance(top_retail, dict):
+        homecode = _normalise_input(
+            str(top_retail.get("serviceHomecode") or top_retail.get("homecode") or "")
+        )
+        deadline = _normalise_input(str(top_retail.get("deadline") or ""))
+        if homecode.isdigit() and len(homecode) >= 4 and not _DOCTOR_SERVICE_HINT_RE.search(norm_name):
+            return "lab"
+        if deadline and _LAB_DEADLINE_HINT_RE.search(deadline) and not _DOCTOR_SERVICE_HINT_RE.search(norm_name):
+            return "lab"
+
+    if norm_query and _LAB_SERVICE_HINT_RE.search(norm_query) and not _DOCTOR_SERVICE_HINT_RE.search(norm_query):
+        return "lab"
+
+    return "doctor"
 
 
 def _is_clean_consultation_row_name(value: str) -> bool:
@@ -3592,114 +3674,128 @@ class Services:
             str(top_retail.get("serviceHomecode") or top_retail.get("homecode") or "")
         )
         is_consult_query = _is_consultation_service_query(service_name)
-        samara_tokens = await self._samara_region_tokens()
-        doctors = await self._ensure_doctors_cache_loaded()
-        by_id: dict[int, dict[str, Any]] = {}
-        for doc in doctors:
-            if not isinstance(doc, dict):
-                continue
-            doc_id = _as_int(doc.get("id"))
-            if doc_id is None:
-                continue
-            raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
-            if _has_explicit_non_samara_regions(raw_regions):
-                continue
-            if samara_tokens and raw_regions and not any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
-                continue
-            by_id[doc_id] = doc
+        service_kind = _detect_service_kind(
+            service_name,
+            query_text=query_text,
+            top_retail=top_retail if isinstance(top_retail, dict) else None,
+            is_consult_query=is_consult_query,
+        )
+        out["service_kind"] = service_kind
 
-        matched_price_rows: list[tuple[int, int, int, int, dict[str, Any]]] = []
-        try:
-            doctor_prices = await asyncio.to_thread(api_price.load_doctor_prices)
-        except Exception:
-            doctor_prices = []
-        query_norm = _normalise_input(service_name).replace("ё", "е")
-        query_tokens = _price_query_tokens(service_name)
-        homecode_query = _extract_homecode_query(service_name)
-        for row in doctor_prices:
-            if not isinstance(row, dict):
-                continue
-            doctor_id = _as_int(row.get("doctorId"))
-            if doctor_id is None or doctor_id not in by_id:
-                continue
-            row_name_norm = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
-            row_homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
-            score, matched = _price_row_score(
-                row,
-                query=query_norm,
-                tokens=query_tokens,
-                homecode_query=homecode_query,
-            )
-            if not is_consult_query and target_homecode and row_homecode and target_homecode == row_homecode:
-                score = max(score, 260)
-                matched = max(matched, 1)
-            if score <= 0:
-                continue
-            if not is_consult_query and not _is_strong_doctor_price_match(
-                query_norm=query_norm,
-                query_tokens=query_tokens,
-                row_name_norm=row_name_norm,
-                matched_tokens=matched,
-                target_homecode=target_homecode,
-                row_homecode=row_homecode,
-            ):
-                continue
-            cost = _as_int(row.get("cost")) or 0
-            matched_price_rows.append((score, matched, -cost, doctor_id, row))
+        if service_kind != "lab":
+            samara_tokens = await self._samara_region_tokens()
+            doctors = await self._ensure_doctors_cache_loaded()
+            by_id: dict[int, dict[str, Any]] = {}
+            for doc in doctors:
+                if not isinstance(doc, dict):
+                    continue
+                doc_id = _as_int(doc.get("id"))
+                if doc_id is None:
+                    continue
+                raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
+                if _has_explicit_non_samara_regions(raw_regions):
+                    continue
+                if samara_tokens and raw_regions and not any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
+                    continue
+                by_id[doc_id] = doc
 
-        allow_soft_substring_fallback = is_consult_query or len(query_tokens) <= 1
-        if not matched_price_rows and query_norm and allow_soft_substring_fallback:
-            # Мягкий fallback на substring, если ranker не дал совпадений.
+            matched_price_rows: list[tuple[int, int, int, int, dict[str, Any]]] = []
+            try:
+                doctor_prices = await asyncio.to_thread(api_price.load_doctor_prices)
+            except Exception:
+                doctor_prices = []
+            query_norm = _normalise_input(service_name).replace("ё", "е")
+            query_tokens = _price_query_tokens(service_name)
+            homecode_query = _extract_homecode_query(service_name)
             for row in doctor_prices:
                 if not isinstance(row, dict):
                     continue
                 doctor_id = _as_int(row.get("doctorId"))
                 if doctor_id is None or doctor_id not in by_id:
                     continue
-                service_row_name = _normalise_input(str(row.get("serviceName") or ""))
-                if query_norm and query_norm in service_row_name:
-                    cost = _as_int(row.get("cost")) or 0
-                    matched_price_rows.append((1, 1, -cost, doctor_id, row))
+                row_name_norm = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
+                row_homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
+                score, matched = _price_row_score(
+                    row,
+                    query=query_norm,
+                    tokens=query_tokens,
+                    homecode_query=homecode_query,
+                )
+                if not is_consult_query and target_homecode and row_homecode and target_homecode == row_homecode:
+                    score = max(score, 260)
+                    matched = max(matched, 1)
+                if score <= 0:
+                    continue
+                if not is_consult_query and not _is_strong_doctor_price_match(
+                    query_norm=query_norm,
+                    query_tokens=query_tokens,
+                    row_name_norm=row_name_norm,
+                    matched_tokens=matched,
+                    target_homecode=target_homecode,
+                    row_homecode=row_homecode,
+                ):
+                    continue
+                cost = _as_int(row.get("cost")) or 0
+                matched_price_rows.append((score, matched, -cost, doctor_id, row))
 
-        matched_price_rows.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
-        best_row_by_doctor: dict[int, dict[str, Any]] = {}
-        for _, _, _, doctor_id, row in matched_price_rows:
-            if doctor_id not in best_row_by_doctor:
-                best_row_by_doctor[doctor_id] = row
+            allow_soft_substring_fallback = is_consult_query or len(query_tokens) <= 1
+            if not matched_price_rows and query_norm and allow_soft_substring_fallback:
+                # Мягкий fallback на substring, если ranker не дал совпадений.
+                for row in doctor_prices:
+                    if not isinstance(row, dict):
+                        continue
+                    doctor_id = _as_int(row.get("doctorId"))
+                    if doctor_id is None or doctor_id not in by_id:
+                        continue
+                    service_row_name = _normalise_input(str(row.get("serviceName") or ""))
+                    if query_norm and query_norm in service_row_name:
+                        cost = _as_int(row.get("cost")) or 0
+                        matched_price_rows.append((1, 1, -cost, doctor_id, row))
 
-        doctor_cards = sorted(
-            [by_id[doctor_id] for doctor_id in best_row_by_doctor if doctor_id in by_id],
-            key=_doctor_sort_key,
-        )[:top_limit]
+            matched_price_rows.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
+            best_row_by_doctor: dict[int, dict[str, Any]] = {}
+            for _, _, _, doctor_id, row in matched_price_rows:
+                if doctor_id not in best_row_by_doctor:
+                    best_row_by_doctor[doctor_id] = row
 
-        out_doctors: list[dict[str, Any]] = []
-        query_specialty = _extract_specialty_from_text(query_text) or _extract_specialty_from_text(service_name)
-        for doc in doctor_cards:
-            doctor_id = _as_int(doc.get("id"))
-            if doctor_id is None:
-                continue
-            if is_consult_query and query_specialty and not _doctor_matches_primary_specialty(doc, query_specialty):
-                continue
-            price_row = best_row_by_doctor.get(doctor_id, {})
-            availability = await self._doctor_availability_snapshot(
-                str(doc.get("fio") or ""),
-                samara_tokens=samara_tokens,
-            )
-            out_doctors.append(
-                {
-                    "id": doctor_id,
-                    "fio": str(doc.get("fio") or "").strip(),
-                    "ord": _as_int(doc.get("ord")),
-                    "specialization": _compact_specialization(str(doc.get("specialization") or "")),
-                    "regions": [str(x).strip() for x in (doc.get("regions") or []) if str(x).strip()],
-                    "service_price": _as_int(price_row.get("cost")),
-                    "available": bool(availability.get("available")),
-                    "nearest_slot": str(availability.get("nearest_slot") or ""),
-                    "regions_with_slots": list(availability.get("regions_with_slots") or []),
-                    "availability_note": str(availability.get("note") or ""),
-                }
-            )
-        out["doctors"] = out_doctors
+            doctor_cards = sorted(
+                [by_id[doctor_id] for doctor_id in best_row_by_doctor if doctor_id in by_id],
+                key=_doctor_sort_key,
+            )[:top_limit]
+
+            out_doctors: list[dict[str, Any]] = []
+            query_specialty = _extract_specialty_from_text(query_text) or _extract_specialty_from_text(service_name)
+            for doc in doctor_cards:
+                doctor_id = _as_int(doc.get("id"))
+                if doctor_id is None:
+                    continue
+                if is_consult_query and query_specialty and not _doctor_matches_primary_specialty(doc, query_specialty):
+                    continue
+                price_row = best_row_by_doctor.get(doctor_id, {})
+                availability = await self._doctor_availability_snapshot(
+                    str(doc.get("fio") or ""),
+                    samara_tokens=samara_tokens,
+                )
+                out_doctors.append(
+                    {
+                        "id": doctor_id,
+                        "fio": str(doc.get("fio") or "").strip(),
+                        "ord": _as_int(doc.get("ord")),
+                        "specialization": _compact_specialization(str(doc.get("specialization") or "")),
+                        "regions": [str(x).strip() for x in (doc.get("regions") or []) if str(x).strip()],
+                        "service_price": _as_int(price_row.get("cost")),
+                        "available": bool(availability.get("available")),
+                        "nearest_slot": str(availability.get("nearest_slot") or ""),
+                        "regions_with_slots": list(availability.get("regions_with_slots") or []),
+                        "availability_note": str(availability.get("note") or ""),
+                    }
+                )
+            out["doctors"] = out_doctors
+        else:
+            out["doctors"] = []
+            out["note"] = (
+                f"{out['note']}; " if str(out.get("note") or "").strip() else ""
+            ) + "service_bundle_info: lab service_kind (doctors skipped)"
 
         # 3) Preparation guidance by service/test name.
         # В PRICE показываем подготовку только по явному запросу пациента.

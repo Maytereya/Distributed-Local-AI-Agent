@@ -92,9 +92,13 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
 
     if label == "APPOINTMENT":
         flow_active = bool(state.last_entities.get("appointment_flow_active"))
+        selection_mode = str(state.last_entities.get("appointment_selection_mode") or "").strip().lower()
         if entities.get("doctor_id") or entities.get("doctor_name"):
             has_cached_windows = bool(entities.get("appointment_windows"))
-            has_selected_datetime = bool((entities.get("date_from") or entities.get("date_hint")) and entities.get("time_from"))
+            has_selected_datetime = bool(
+                (entities.get("date_from") or entities.get("date_hint"))
+                and (entities.get("time_from") or entities.get("time_flexible"))
+            )
             if not has_cached_windows and not has_selected_datetime:
                 steps.append(
                     PlanStep(
@@ -104,16 +108,34 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
                     )
                 )
         else:
-            address_entities = dict(entities)
-            address_entities["__appointment_mode"] = True
-            steps.append(
-                PlanStep(
-                    tool="address_info",
-                    input={"query": user_text, "entities": address_entities},
-                    required=not flow_active,
+            if selection_mode == "doctor":
+                steps.append(
+                    PlanStep(
+                        tool="doctors_info",
+                        input={"query": user_text, "entities": dict(entities)},
+                        required=not flow_active,
+                    )
                 )
-            )
-            steps.append(PlanStep(tool="price_info", input={"query": user_text, "entities": dict(entities)}, required=False))
+                address_entities = dict(entities)
+                address_entities["__appointment_mode"] = True
+                steps.append(
+                    PlanStep(
+                        tool="address_info",
+                        input={"query": user_text, "entities": address_entities},
+                        required=False,
+                    )
+                )
+            else:
+                address_entities = dict(entities)
+                address_entities["__appointment_mode"] = True
+                steps.append(
+                    PlanStep(
+                        tool="address_info",
+                        input={"query": user_text, "entities": address_entities},
+                        required=not flow_active,
+                    )
+                )
+                steps.append(PlanStep(tool="price_info", input={"query": user_text, "entities": dict(entities)}, required=False))
         return Plan(label=label, steps=steps)
 
     if label == "PRICE":

@@ -1113,6 +1113,27 @@ def test_test_prepare_uses_fallback_variant_query(monkeypatch):
     assert any("подготовка к вульвоскопии" in q.lower() for q in calls)
 
 
+def test_test_prepare_handles_noisy_prefix_rules_of_prepare(monkeypatch):
+    svc = Services()
+    calls: list[str] = []
+
+    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
+
+    def fake_search(_index, _query, *args, **kwargs):
+        calls.append(str(_query))
+        if str(_query).strip().lower() == "подготовка к фгдс с наркозом":
+            return "Подготовка к ФГДС с наркозом: натощак, без курения за 3 часа."
+        return "Совпадений не найдено, cформулируйте запрос иначе"
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+
+    res = run(svc.test_prepare("Здравствуйте! Какие правила подготовки к ФГДС с наркозом?", {}))
+
+    assert "фгдс" in str(res.get("prepare") or "").lower()
+    assert any("подготовка к фгдс с наркозом" in q.lower() for q in calls)
+
+
 def test_test_prepare_compacts_long_meili_answer_with_llm_wrap(monkeypatch):
     svc = Services()
     calls: dict[str, int] = {"llm": 0}
@@ -2110,6 +2131,50 @@ def test_service_bundle_info_does_not_request_prepare_for_price_only_query(monke
     assert prepare_called["v"] is False
     assert res["show_prepare"] is False
     assert str(res.get("prepare") or "").strip() == ""
+
+
+def test_service_bundle_info_marks_lab_and_skips_doctors(monkeypatch):
+    svc = Services()
+    calls = {"doctor_prices": 0, "doctors_cache": 0}
+
+    async def fake_ensure_regions():
+        return [{"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"}]
+
+    async def fake_ensure_doctors_cache():
+        calls["doctors_cache"] += 1
+        return [
+            {
+                "id": 7,
+                "fio": "Иванов Иван Иванович",
+                "ord": 1,
+                "specialization": "Терапевт",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+            }
+        ]
+
+    def fake_retail(_region_id):
+        return [{"serviceName": "Общий анализ крови", "serviceHomecode": "501", "cost": 490}]
+
+    def fake_doctor_prices():
+        calls["doctor_prices"] += 1
+        return [{"doctorId": 7, "serviceName": "Прием терапевта", "cost": 2000}]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_retail)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+
+    res = run(
+        svc.service_bundle_info(
+            "Сколько стоит общий анализ крови?",
+            {"service_name": "Общий анализ крови"},
+        )
+    )
+
+    assert str(res.get("service_kind") or "") == "lab"
+    assert res.get("doctors") == []
+    assert calls["doctor_prices"] == 0
+    assert calls["doctors_cache"] == 0
 
 
 def test_service_bundle_info_filters_weak_partial_doctor_matches_for_surgery(monkeypatch):

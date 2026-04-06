@@ -330,6 +330,15 @@ _NEAREST_SCHEDULE_HINT_RE = re.compile(
 )
 _QF_TIME_FRAGMENT_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
 _QF_APPOINTMENT_WORD_RE = re.compile(r"\b(запис\w*|перен\w*|отмен\w*|при(е|ё)м\w*)\b", re.I)
+_QF_APPOINTMENT_CHOICE_DOCTOR_RE = re.compile(
+    r"\b(врач\w*|доктор\w*|специалист\w*|кто\s+принима\w*|покажи\s+врач\w*)\b",
+    re.I,
+)
+_QF_APPOINTMENT_CHOICE_BRANCH_RE = re.compile(
+    r"\b(филиал\w*|адрес\w*|отделени\w*|покажи\s+адрес\w*)\b",
+    re.I,
+)
+_QF_TIME_FLEXIBLE_RE = re.compile(r"\b(люб\w+\s+время|когда\s+угодно|в\s+любое\s+время)\b", re.I)
 _QF_ORDER_ID_RE = re.compile(r"(?:заказ|order|№)\s*([0-9]{4,})", re.I)
 _QF_RESULT_SURNAME_RE = re.compile(r"\bфамили[яиюе]\s*[:\-]?\s*([А-ЯЁа-яё\-]{2,})", re.I)
 _QF_RESULT_YEAR_RE = re.compile(r"\b(?:год\s*рождени[яея]|г\.?\s*р\.?)\s*[:\-]?\s*((?:19|20)\d{2})\b", re.I)
@@ -1226,6 +1235,8 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
 
     dt = parse_date_time_ru(t)
     out.update({k: v for k, v in dt.items() if v is not None})
+    if _QF_TIME_FLEXIBLE_RE.search(low):
+        out["time_flexible"] = True
 
     m_oid = _QF_ORDER_ID_RE.search(t)
     if m_oid:
@@ -1398,6 +1409,18 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
         if city:
             out["city"] = city.strip()
 
+    # APPOINTMENT ветка выбора способа подбора:
+    # "врачи" -> сначала список врачей, "филиалы/адреса" -> сначала список филиалов.
+    # Не привязываем к конкретному интенту, чтобы quick-fill срабатывал и в pending-режиме.
+    needs_branch_or_city = any("branch" in str(r or "").lower() or "city" in str(r or "").lower() for r in missing_rules)
+    if needs_branch_or_city and not (out.get("branch_id") or out.get("branch_name")):
+        doctor_choice = bool(_QF_APPOINTMENT_CHOICE_DOCTOR_RE.search(t))
+        branch_choice = bool(_QF_APPOINTMENT_CHOICE_BRANCH_RE.search(t))
+        if doctor_choice and not branch_choice:
+            out["appointment_selection_mode"] = "doctor"
+        elif branch_choice and not doctor_choice:
+            out["appointment_selection_mode"] = "branch"
+
     return out
 
 
@@ -1563,7 +1586,10 @@ def handoff_message(reason: str | None = None, override: str | None = None) -> s
 
 def appointment_step_policy(entities: dict[str, Any]) -> str:
     branch_selected = bool(entities.get("branch_id") or entities.get("branch_name"))
-    has_date_time = bool((entities.get("date_from") or entities.get("date_hint")) and entities.get("time_from"))
+    has_date_time = bool(
+        (entities.get("date_from") or entities.get("date_hint"))
+        and (entities.get("time_from") or entities.get("time_flexible"))
+    )
     has_patient_name = bool(str(entities.get("patient_name") or "").strip())
     if not branch_selected:
         return APPOINTMENT_STEP_BRANCH
@@ -1744,6 +1770,8 @@ def appointment_summary(entities: dict[str, Any]) -> str:
         time_part = f"{time_from}-{time_to}"
     elif time_from:
         time_part = time_from
+    elif entities.get("time_flexible"):
+        time_part = "любое время"
     else:
         time_part = "уточним время"
     if patient_name:
@@ -1790,15 +1818,26 @@ def appointment_addresses_for_city(
     return [x for x in fallback if x][:limit]
 
 
-def appointment_text_branch_prompt(service: str, city: str, addresses: list[str]) -> str:
+def appointment_text_branch_prompt(
+    service: str,
+    city: str,
+    addresses: list[str],
+    *,
+    allow_doctor_option: bool = False,
+) -> str:
     if addresses:
         lines = "\n".join([f"- {a}" for a in addresses])
         city_part = f" в городе {city}" if city else ""
+        tail = "Какой филиал вам удобен?"
+        if allow_doctor_option:
+            tail = "Какой филиал вам удобен? Или написать список врачей по этой услуге?"
         return (
             f"Есть возможность записи на {service}{city_part} по адресам:\n"
             f"{lines}\n"
-            "Какой филиал вам удобен?"
+            f"{tail}"
         )
+    if allow_doctor_option:
+        return "Уточните, пожалуйста, удобный филиал/адрес для записи. Если удобнее, могу показать врачей по этой услуге."
     return "Уточните, пожалуйста, удобный филиал/адрес для записи."
 
 

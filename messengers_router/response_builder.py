@@ -329,8 +329,27 @@ def build_appointment_step_response(
     appointment_step = appointment_step_policy(entities)
     service = appointment_service_display(entities)
     city = str(entities.get("city") or "").strip()
+    selection_mode = str(entities.get("appointment_selection_mode") or "").strip().lower()
+    doctor_selected = bool(entities.get("doctor_name") or entities.get("doctor_id"))
+    if doctor_selected:
+        state.last_entities.pop("appointment_selection_mode", None)
+        selection_mode = ""
 
     if appointment_step == APPOINTMENT_STEP_BRANCH:
+        if selection_mode == "doctor" and not doctor_selected:
+            doctors_info_payload = evidence.get("doctors_info")
+            doctors_raw = doctors_info_payload.get("doctors") if isinstance(doctors_info_payload, dict) else None
+            doctors = doctors_raw if isinstance(doctors_raw, list) else []
+            if doctors:
+                state.last_entities.pop("appointment_branch_options", None)
+                return ResponseEnvelope(
+                    text=format_doctor_info_for_patient(doctors_info_payload, entities),  # type: ignore[arg-type]
+                    handoff=False,
+                )
+            # Если список врачей не найден, мягко возвращаемся к выбору филиала.
+            state.last_entities["appointment_selection_mode"] = "branch"
+            selection_mode = "branch"
+
         if not city:
             city = _DEFAULT_CITY
             state.last_entities["city"] = city
@@ -347,8 +366,16 @@ def build_appointment_step_response(
                 limit=5,
             )
         state.last_entities["appointment_branch_options"] = addresses
+        allow_doctor_option = not doctor_selected and bool(
+            str(entities.get("service_name") or entities.get("test_name") or entities.get("specialty") or "").strip()
+        )
         return ResponseEnvelope(
-            text=appointment_text_branch_prompt(service, city, addresses),
+            text=appointment_text_branch_prompt(
+                service,
+                city,
+                addresses,
+                allow_doctor_option=allow_doctor_option,
+            ),
             handoff=False,
         )
 

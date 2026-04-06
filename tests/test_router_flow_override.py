@@ -15,6 +15,8 @@ from messengers_router.policies import (
     quick_fill_core_entities,
     extract_branch_hint,
     appointment_service_display,
+    appointment_step_policy,
+    appointment_summary,
     appointment_confirmation_transition,
     service_name_conflicts_with_doctor,
     detect_nonbookable_walkin_intent,
@@ -832,6 +834,31 @@ def test_build_plan_appointment_active_flow_makes_address_optional():
     assert plan.steps[1].required is False
 
 
+def test_build_plan_appointment_selection_mode_doctor_uses_doctors_info_first():
+    state = SessionState(
+        session_id="appt-doctor-mode",
+        last_entities={
+            "city": "Самара",
+            "service_name": "УЗИ брюшной полости",
+            "appointment_selection_mode": "doctor",
+        },
+    )
+    memory = MemoryStore()
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.8,
+        entities={"service_name": "УЗИ брюшной полости"},
+        flags=set(),
+        needs_handoff=False,
+    )
+
+    plan = build_plan(decision, state, "покажите врачей", memory)
+
+    assert plan.steps
+    assert plan.steps[0].tool == "doctors_info"
+    assert any(step.tool == "address_info" for step in plan.steps)
+
+
 def test_execute_plan_optional_step_handoff_is_suppressed():
     class _Svc:
         async def price_info(self, _q, _e):
@@ -1177,6 +1204,15 @@ def test_apply_pending_override_keeps_appointment_on_street_without_house():
     assert label == "APPOINTMENT"
 
 
+def test_apply_pending_override_keeps_appointment_on_selection_mode_reply():
+    decision = RouteDecision(label="DOCTOR_INFO", confidence=0.74, flags={"rule_doctor_info"})
+    pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
+
+    label = apply_pending_override(decision, pending, user_text="врачи")
+
+    assert label == "APPOINTMENT"
+
+
 def test_apply_pending_override_allows_non_samara_city_switch():
     decision = RouteDecision(label="ADDRESS", confidence=0.78, flags={"rule_nonbookable_walkin"})
     pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
@@ -1243,6 +1279,31 @@ def test_detect_nonbookable_walkin_intent_covers_where_and_how_to_submit_with_co
 def test_detect_prepare_intent_covers_fasting_and_prepare_questions():
     assert detect_prepare_intent("нужно ли натощак?") is True
     assert detect_prepare_intent("как подготовиться к анализу?") is True
+
+
+def test_appointment_step_policy_accepts_time_flexible_as_datetime():
+    step = appointment_step_policy(
+        {
+            "branch_name": "Ленина 5",
+            "date_hint": "tomorrow",
+            "time_flexible": True,
+            "patient_name": "Иванов Иван Иванович",
+        }
+    )
+    assert step == "confirm"
+
+
+def test_appointment_summary_renders_time_flexible():
+    summary = appointment_summary(
+        {
+            "service_name": "Прием кардиолога",
+            "branch_name": "Ленина 5",
+            "date_hint": "tomorrow",
+            "time_flexible": True,
+            "patient_name": "Иванов Иван Иванович",
+        }
+    )
+    assert "любое время" in summary.lower()
 
 
 def test_match_city_prefers_city_after_negation_switch():
@@ -1320,6 +1381,39 @@ def test_build_appointment_step_response_patient_step_sets_pending():
     pending = memory.get_pending(state)
     assert isinstance(pending, dict)
     assert pending.get("label") == "APPOINTMENT"
+
+
+def test_build_appointment_step_response_doctor_selection_mode_renders_doctors():
+    state = SessionState(
+        session_id="appt-step-doctor-mode",
+        last_entities={
+            "city": "Самара",
+            "service_name": "УЗИ брюшной полости",
+            "appointment_selection_mode": "doctor",
+        },
+    )
+    evidence = Evidence(
+        items={
+            "doctors_info": {
+                "doctors": [
+                    {
+                        "id": 1,
+                        "fio": "Иванов Иван Иванович",
+                        "specialization": "УЗИ",
+                        "regions": ["г. Самара, пр. Ленина, 5"],
+                    }
+                ]
+            }
+        }
+    )
+    memory = MemoryStore()
+    services = Services()
+
+    env = _build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
+
+    assert env is not None
+    assert "Иванов Иван Иванович" in env.text
+    assert "расписание" in env.text.lower()
 
 
 def test_patient_routing_stream_requests_cancel_confirmation_for_active_appointment_flow():

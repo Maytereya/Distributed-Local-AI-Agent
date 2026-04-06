@@ -268,7 +268,7 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
         return pending_label
     if (
         pending_label == "PRICE"
-        and decision.label in {"TEST_ASSIST", "OTHER"}
+        and decision.label in {"TEST_ASSIST", "OTHER", "APPOINTMENT"}
         and any("service_name" in str(item or "") for item in (pending.get("missing") or []))
         and _looks_like_price_service_reply(user_text)
         and resolve_price_service_name_from_catalog(user_text)
@@ -281,6 +281,17 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
         and _is_appointment_branch_reply(user_text)
     ):
         return "APPOINTMENT"
+    if (
+        pending_label == "APPOINTMENT"
+        and _is_appointment_waiting_branch_or_city(pending)
+    ):
+        quick = quick_fill_core_entities(
+            user_text,
+            {},
+            ["_any_of:city,branch_name,branch_id"],
+        )
+        if quick.get("appointment_selection_mode") in {"doctor", "branch"}:
+            return "APPOINTMENT"
     # В шаге добора ФИО пациента не даем случайной переклассификации
     # (например, в TEST_RESULT) перебить активный APPOINTMENT flow.
     if (

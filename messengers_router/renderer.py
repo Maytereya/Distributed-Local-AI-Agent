@@ -331,6 +331,7 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
     service_name = str(payload.get("service_name") or entities.get("service_name") or entities.get("test_name") or "").strip()
     retail_prices_raw = payload.get("retail_prices")
     doctors_raw = payload.get("doctors")
+    service_kind = str(payload.get("service_kind") or "").strip().lower()
     prepare_text = str(payload.get("prepare") or "").strip()
     show_prepare = bool(payload.get("show_prepare"))
     is_consult = bool(re.search(r"\b(при[её]м\w*|консультац\w*)\b", service_name.lower()))
@@ -350,17 +351,20 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
     else:
         lines.append("1) Розничную цену сейчас точно определить не удалось.")
 
-    if doctors:
-        lines.append("2) Врачи (по приоритету):")
-        for i, doc in enumerate(doctors, 1):
-            if not isinstance(doc, dict):
-                continue
-            fio = str(doc.get("fio") or "Врач").strip()
-            price_txt = _format_rub(_extract_price_amount(doc))
-            avail_txt = _availability_text_for_doctor(doc)
-            lines.append(f"{i}. {fio} — {price_txt}; {avail_txt}.")
+    if service_kind == "lab":
+        lines.append("2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.")
     else:
-        lines.append("2) Подходящих врачей по этой услуге сейчас не нашёл.")
+        if doctors:
+            lines.append("2) Врачи (по приоритету):")
+            for i, doc in enumerate(doctors, 1):
+                if not isinstance(doc, dict):
+                    continue
+                fio = str(doc.get("fio") or "Врач").strip()
+                price_txt = _format_rub(_extract_price_amount(doc))
+                avail_txt = _availability_text_for_doctor(doc)
+                lines.append(f"{i}. {fio} — {price_txt}; {avail_txt}.")
+        else:
+            lines.append("2) Подходящих врачей по этой услуге сейчас не нашёл.")
 
     if not is_consult and show_prepare:
         if prepare_text:
@@ -368,7 +372,9 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
         else:
             lines.append("3) Подготовку по этой услуге сейчас не удалось получить автоматически.")
 
-    if not doctors:
+    if service_kind == "lab":
+        lines.append("Если нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.")
+    elif not doctors:
         lines.append("Если нужно, передам запрос оператору для уточнения по этой услуге.")
     elif len(doctors) == 1:
         lines.append("Если нужно, покажу подробное расписание этого врача.")
