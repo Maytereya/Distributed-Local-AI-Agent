@@ -516,6 +516,22 @@ async def _maybe_refine_live_intent(
 ) -> RouteDecision:
     if base.label not in _REFINE_INTENTS:
         return base
+    if base.label == "APPOINTMENT":
+        # Не позволяем refine перетирать неоднозначный action (отмена/перенос) —
+        # для таких реплик нужен явный follow-up вопрос пациенту.
+        inferred_action = normalize_appointment_action(detect_appointment_action(text), text)
+        if inferred_action == "unknown":
+            entities = dict(base.entities or {})
+            if not entities.get("appointment_action"):
+                entities["appointment_action"] = "unknown"
+            return RouteDecision(
+                label=base.label,
+                confidence=base.confidence,
+                entities=entities,
+                flags=set(base.flags),
+                needs_handoff=base.needs_handoff,
+                context_action=base.context_action,
+            )
     # Не гоняем лишний LLM-call на понятных фразах, чтобы не ухудшать стабильность.
     # Рефайн включаем только для "серых" кейсов: нет ключевых сущностей или явное переключение/уточнение.
     if base.label == "DOCTOR_SCHEDULE" and base.entities.get("doctor_name") and not _REFINE_SIGNAL_RE.search(text or ""):

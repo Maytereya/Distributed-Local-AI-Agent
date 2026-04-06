@@ -92,7 +92,7 @@ def build_plan(decision: RouteDecision, state: SessionState, user_text: str, mem
 
     if label == "APPOINTMENT":
         action = str(entities.get("appointment_action") or "").strip().lower()
-        if action in {"cancel", "reschedule"}:
+        if action == "cancel":
             return Plan(label=label, steps=steps)
         flow_active = bool(state.last_entities.get("appointment_flow_active"))
         selection_mode = str(state.last_entities.get("appointment_selection_mode") or "").strip().lower()

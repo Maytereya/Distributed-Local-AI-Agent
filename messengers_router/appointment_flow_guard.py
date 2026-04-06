@@ -293,7 +293,18 @@ def run_appointment_precheck(
     pending = memory.get_pending(state)
     appointment_pending = isinstance(pending, dict) and pending.get("label") == "APPOINTMENT"
     appointment_flow_active = bool(state.last_entities.get("appointment_flow_active"))
+    pending_missing: list[str] = []
+    if appointment_pending:
+        raw_missing = pending.get("missing")
+        if isinstance(raw_missing, list):
+            pending_missing = [str(x) for x in raw_missing if str(x).strip()]
+    waiting_action_choice = "appointment_action" in pending_missing
+    reply_kind = contextual_reply_kind(user_text)
     if (appointment_flow_active or appointment_pending) and not state.last_entities.get("appointment_confirm_pending"):
+        # Когда ждем именно выбор действия (отмена/перенос), короткие "да/нет"
+        # не считаем soft-pause/cancel, чтобы обработка шла в pending-ветке роутера.
+        if waiting_action_choice and reply_kind in {"yes", "no"}:
+            return None
         if is_appointment_cancel_or_restart_request(user_text) or is_appointment_soft_pause_request(user_text):
             state.last_entities["appointment_cancel_pending"] = True
             return ResponseEnvelope(

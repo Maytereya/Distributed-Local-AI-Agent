@@ -1517,13 +1517,6 @@ def _appointment_required_slots(entities: dict[str, Any]) -> list[str]:
             "_any_of:doctor_id,doctor_name,service_name",
             "patient_name",
         ]
-    if action == "reschedule":
-        return [
-            "appointment_action",
-            "_any_of:doctor_id,doctor_name,service_name",
-            "_any_of:date_from,time_from,date_hint",
-            "patient_name",
-        ]
     return REQUIRED_SLOTS.get("APPOINTMENT", [])
 
 
@@ -1563,6 +1556,13 @@ def clarification_question(label: str, missing: list[str], entities: dict[str, A
         "doctor_id" in m or "doctor_name" in m or "specialty" in m or "service_name" in m
         for m in missing
     )
+    need_datetime = any(
+        m in {"date_from", "date_to", "time_from", "time_to", "date_hint"}
+        or ("date_from" in m)
+        or ("time_from" in m)
+        or ("date_hint" in m)
+        for m in missing
+    )
 
     if "child_age" in missing:
         return "Сколько полных лет ребенку?"
@@ -1583,7 +1583,7 @@ def clarification_question(label: str, missing: list[str], entities: dict[str, A
         if action == "reschedule":
             if need_service:
                 return "Уточните, пожалуйста, ФИО врача или услугу, запись по которой нужно перенести."
-            if "date_from" in missing or "time_from" in missing:
+            if need_datetime:
                 return APPOINTMENT_CLARIFY_MAP["need_datetime"]
             if "patient_name" in missing:
                 return APPOINTMENT_CLARIFY_MAP["need_patient"]
@@ -1594,7 +1594,7 @@ def clarification_question(label: str, missing: list[str], entities: dict[str, A
             return APPOINTMENT_CLARIFY_MAP["need_service"]
         if "patient_name" in missing:
             return APPOINTMENT_CLARIFY_MAP["need_patient"]
-        if "date_from" in missing or "time_from" in missing:
+        if need_datetime:
             return APPOINTMENT_CLARIFY_MAP["need_datetime"]
         return APPOINTMENT_CLARIFY_MAP["default"]
     if label == "TEST_RESULT":

@@ -326,7 +326,7 @@ def build_appointment_step_response(
     entities = state.last_entities
     state.last_entities["appointment_flow_active"] = True
     action = str(entities.get("appointment_action") or "").strip().lower()
-    if action in {"cancel", "reschedule"}:
+    if action == "cancel":
         patient_name = str(entities.get("patient_name") or "").strip()
         doctor_name = str(entities.get("doctor_name") or "").strip()
         service_name = str(entities.get("service_name") or entities.get("test_name") or "").strip()

@@ -1228,6 +1228,12 @@ def test_missing_slots_appointment_unknown_action_requests_action_first():
     )
 
 
+def test_clarification_question_reschedule_anyof_datetime_prefers_datetime_prompt():
+    missing = ["_any_of:date_from,time_from,date_hint", "patient_name"]
+    text = clarification_question("APPOINTMENT", missing, {"appointment_action": "reschedule"}).lower()
+    assert "дат" in text and "время" in text
+
+
 def test_apply_pending_override_keeps_appointment_on_full_branch_address_reply():
     decision = RouteDecision(label="ADDRESS", confidence=0.78, flags={"rule_nonbookable_walkin"})
     pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
@@ -1378,6 +1384,32 @@ def test_deterministic_rule_uses_patient_name_when_pending_appointment():
     assert "rule_appointment_patient_name" in decision.flags
 
 
+def test_refine_skips_ambiguous_appointment_action(monkeypatch):
+    async def _must_not_call(*_args, **_kwargs):
+        raise AssertionError("ollama refine should be skipped for ambiguous appointment action")
+
+    monkeypatch.setattr(classifier_mod, "ollama_classify_json", _must_not_call)
+    base = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.75,
+        entities={"appointment_action": "unknown"},
+        flags={"rule_appointment"},
+        needs_handoff=False,
+        context_action="continue",
+    )
+
+    out = asyncio.run(
+        classifier_mod._maybe_refine_live_intent(
+            "нужно отменить или перенести запись",
+            {},
+            base,
+        )
+    )
+
+    assert out.entities.get("appointment_action") == "unknown"
+    assert "llm_refine_used" not in out.flags
+
+
 def test_apply_context_action_blocks_new_topic_on_patient_name_step():
     state = SessionState(
         session_id="appt-new-topic-block",
@@ -1458,6 +1490,30 @@ def test_build_appointment_step_response_doctor_selection_mode_renders_doctors()
     assert "расписание" in env.text.lower()
 
 
+def test_build_appointment_step_response_reschedule_full_data_requests_confirmation():
+    state = SessionState(
+        session_id="appt-step-reschedule-confirm",
+        last_entities={
+            "appointment_action": "reschedule",
+            "service_name": "Холтер",
+            "branch_name": "г. Самара, ул. Победы, 83",
+            "date_hint": "tomorrow",
+            "time_from": "16:00",
+            "patient_name": "Петров Петр Петрович",
+        },
+    )
+    evidence = Evidence(items={})
+    memory = MemoryStore()
+    services = Services()
+
+    env = _build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
+
+    assert env is not None
+    assert env.handoff is False
+    assert "подтверждаете" in env.text.lower()
+    assert state.last_entities.get("appointment_confirm_pending") is True
+
+
 def test_patient_routing_stream_requests_cancel_confirmation_for_active_appointment_flow():
     state = SessionState(session_id="appt-cancel-confirm", last_entities={"appointment_flow_active": True})
     services = Services()
@@ -1499,6 +1555,47 @@ def test_patient_routing_stream_soft_pause_requests_cancel_confirmation(phrase: 
     assert len(out) == 1
     assert "Отменить текущий процесс записи" in out[0].text
     assert state.last_entities.get("appointment_cancel_pending") is True
+
+
+def test_patient_routing_stream_waiting_action_no_handoffs_to_operator(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="OTHER",
+                confidence=0.4,
+                entities={},
+                flags={"low_confidence"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+
+    state = SessionState(
+        session_id="appt-wait-action-no",
+        last_entities={"appointment_flow_active": True, "appointment_action": "unknown"},
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["appointment_action"])
+
+    out = _run_stream_once("нет", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].handoff is True
+    assert "оператор" in out[0].text.lower()
 
 
 def test_patient_routing_stream_cancel_rejected_resumes_appointment_flow():
