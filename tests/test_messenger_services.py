@@ -1216,6 +1216,51 @@ def test_test_prepare_llm_wrap_timeout_uses_deterministic_fallback(monkeypatch):
     assert "TimeoutError" in str(res.get("prepare_wrap_reason") or "")
 
 
+def test_prepare_subject_hint_prefers_full_phrase_from_query_over_truncated_entity():
+    hint = svc_mod._prepare_subject_hint(
+        "Как подготовиться к гастроскопии?",
+        {"service_name": "гастроскопи"},
+    )
+    assert hint == "гастроскопии"
+
+
+def test_test_prepare_main_index_override_after_llm_reject(monkeypatch):
+    svc = Services()
+
+    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
+
+    meili_text = (
+        "ПАМЯТКА ПАЦИЕНТУ ФКС + ФГДС с наркозом. "
+        "Подготовка к исследованию: за день исключить тяжелую пищу, "
+        "утром в день исследования не есть и не пить, "
+        "воду можно за 3 часа до процедуры."
+    )
+
+    def fake_search(_index, _query, *args, **kwargs):
+        return meili_text
+
+    async def fake_llm_reject(_query, _candidate):
+        return False, 0.90, "mixed_document"
+
+    def fake_runtime_bool(name: str, default: bool) -> bool:
+        if name == "MR_PREPARE_LLM_WRAP_ENABLED":
+            return False
+        if name == "MR_PREPARE_RELEVANCE_LLM_ENABLED":
+            return True
+        return default
+
+    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
+    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+    monkeypatch.setattr(svc, "_prepare_llm_validate_candidate", fake_llm_reject)
+    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
+
+    res = run(svc.test_prepare("Как подготовиться к ФГДС?", {"service_name": "ФГДС"}))
+
+    assert res.get("note") == "prepare: main_index"
+    assert "подготов" in str(res.get("prepare") or "").lower()
+    assert "фгдс" in str(res.get("prepare") or "").lower()
+
+
 def test_test_assist_source_unavailable_returns_clarify_without_handoff(monkeypatch):
     svc = Services()
 

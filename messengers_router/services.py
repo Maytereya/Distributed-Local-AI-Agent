@@ -2446,11 +2446,15 @@ def _prepare_subject_hint(query: str, entities: dict[str, Any]) -> str:
     """
 
     entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
-    for raw in (entity_query, query):
+    candidates: list[str] = []
+    for raw in (query, entity_query):
         phrase = _extract_prepare_entity_phrase(str(raw or "").strip())
         if phrase:
-            return phrase
-    return str(entity_query or query or "исследованию").strip()
+            candidates.append(str(phrase).strip())
+    if candidates:
+        # Предпочитаем более полную форму из запроса пользователя.
+        return max(candidates, key=lambda x: len(str(x or "").strip()))
+    return str(query or entity_query or "исследованию").strip()
 
 
 def _prepare_clarify_response(query: str, entities: dict[str, Any], *, note: str) -> dict[str, Any]:
@@ -4094,6 +4098,29 @@ class Services:
             )
             if ok:
                 return cand
+
+            # Quality-first override for Meili mixed-docs:
+            # если LLM отверг из-за "смешанности", но у кандидата высокий fast-score,
+            # полное покрытие корней запроса и actionable-текст, пропускаем в wrapper.
+            if cand.source == "main_index" and query_roots:
+                body_roots = _prepare_term_roots(cand.text)
+                body_cov = _prepare_roots_coverage(query_roots, body_roots)
+                override_score = _runtime_float(
+                    "MR_PREPARE_MAIN_INDEX_OVERRIDE_SCORE",
+                    0.70,
+                    min_value=0.30,
+                    max_value=0.95,
+                )
+                if (
+                    cand.score >= override_score
+                    and body_cov >= 0.99
+                    and _is_prepare_content_actionable(cand.text)
+                ):
+                    cand.note = (
+                        (cand.note + "; " if cand.note else "")
+                        + "prepare_llm_reject_override_main_index"
+                    )
+                    return cand
 
             if reason in {"llm_unavailable", "llm_non_json", "llm_disabled", "empty_prompt"}:
                 fallback_score = _runtime_float(
