@@ -18,6 +18,8 @@ from messengers_router.policies import (
     appointment_step_policy,
     appointment_summary,
     appointment_confirmation_transition,
+    clarification_question,
+    missing_slots,
     service_name_conflicts_with_doctor,
     detect_nonbookable_walkin_intent,
     nonbookable_service_hint,
@@ -1160,6 +1162,21 @@ def test_apply_pending_override_keeps_price_flow_on_catalog_service_reply(monkey
     assert label == "PRICE"
 
 
+def test_apply_pending_override_keeps_price_flow_on_short_specialty_reply_without_catalog_match(monkeypatch):
+    decision = RouteDecision(label="DOCTOR_INFO", confidence=0.74, flags={"rule_doctor_info"})
+    pending = {"label": "PRICE", "missing": ["service_name"]}
+
+    monkeypatch.setattr(
+        flow_policy_mod,
+        "resolve_price_service_name_from_catalog",
+        lambda text, current_service_name="": None,
+    )
+
+    label = apply_pending_override(decision, pending, user_text="терапевт")
+
+    assert label == "PRICE"
+
+
 def test_apply_pending_override_allows_address_switch_on_explicit_address_request():
     decision = RouteDecision(label="ADDRESS", confidence=0.72, flags={"rule_address"})
     pending = {"label": "PRICE", "missing": ["_any_of:city,branch_name,branch_id"]}
@@ -1184,6 +1201,31 @@ def test_quick_fill_entities_from_text_resolves_catalog_service_for_price_follow
     )
 
     assert out.get("service_name") == "Биохимия крови"
+
+
+def test_quick_fill_entities_from_text_builds_consult_service_from_specialty_when_catalog_miss(monkeypatch):
+    monkeypatch.setattr(
+        flow_policy_mod,
+        "resolve_price_service_name_from_catalog",
+        lambda text, current_service_name="": None,
+    )
+
+    out = quick_fill_entities_from_text(
+        "терапевт",
+        {"_last_label": "PRICE"},
+        ["service_name"],
+        Services(),
+    )
+
+    assert out.get("service_name") == "прием терапевт"
+
+
+def test_missing_slots_appointment_unknown_action_requests_action_first():
+    missing = missing_slots("APPOINTMENT", {"appointment_action": "unknown"})
+    assert missing == ["appointment_action"]
+    assert clarification_question("APPOINTMENT", missing, {"appointment_action": "unknown"}).lower().startswith(
+        "хотите отменить или перенести"
+    )
 
 
 def test_apply_pending_override_keeps_appointment_on_full_branch_address_reply():

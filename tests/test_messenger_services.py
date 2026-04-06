@@ -1461,6 +1461,27 @@ def test_price_info_ranks_analysis_matches(monkeypatch):
     assert "витамин d" in top_name
 
 
+def test_price_info_does_not_return_random_rows_for_noisy_generic_price_question(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "Лечение периодонтита более чем 3 канального зуба", "cost": 2500},
+            {"serviceName": "Ген рецептора витамина D (VDR). Выявление мутации G283A", "cost": 980},
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(
+        svc.price_info(
+            "Здравствуйте! Скажите пожалуйста, как рассчитывается стоимость анализы!? По выходным дешевле чем в будни?",
+            {},
+        )
+    )
+
+    assert res.get("prices") == []
+
+
 def test_price_info_ranks_endoscopy_matches(monkeypatch):
     svc = Services()
 
@@ -1533,6 +1554,31 @@ def test_resolve_price_service_name_from_catalog_matches_alat_alias():
     assert resolved == "АлАТ"
 
 
+def test_resolve_price_service_name_from_catalog_matches_oak_alias():
+    rows = [
+        {"serviceName": "Общий анализ мочи", "cost": 240},
+        {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "cost": 490},
+    ]
+
+    resolved = resolve_price_service_name_from_catalog("ОАК", rows=rows)
+
+    assert resolved == "Общий анализ крови (Le, Er, Hb, СОЭ)"
+
+
+def test_resolve_price_service_name_from_catalog_returns_none_for_noisy_generic_query():
+    rows = [
+        {"serviceName": "Лечение периодонтита более чем 3 канального зуба", "cost": 2500},
+        {"serviceName": "Ген рецептора витамина D (VDR). Выявление мутации G283A", "cost": 980},
+    ]
+
+    resolved = resolve_price_service_name_from_catalog(
+        "Здравствуйте! Скажите пожалуйста, как рассчитывается стоимость анализы!? По выходным дешевле чем в будни?",
+        rows=rows,
+    )
+
+    assert resolved is None
+
+
 def test_resolve_price_service_name_from_catalog_prefers_new_price_query_over_stale_context():
     rows = [
         {
@@ -1583,6 +1629,10 @@ def test_resolve_price_service_name_from_catalog_consult_specialty_cardio():
     )
 
     assert resolved == "Прием (осмотр, консультация) врача-кардиолога первичный"
+
+
+def test_extract_price_service_from_query_consult_without_specialty_returns_none():
+    assert svc_mod._extract_price_service_from_query("Сколько стоит консультация?") is None
 
 
 def test_service_name_matches_specialty_does_not_match_substring_therapist_in_hirudotherapist():

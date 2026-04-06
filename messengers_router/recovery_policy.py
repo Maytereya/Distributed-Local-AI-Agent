@@ -98,7 +98,7 @@ def _intent_disambiguation_text(candidates: list[str]) -> str:
 
 def _structured_clarify_text(decision: RouteDecision, flow_label: str, summary: str, user_text: str) -> str:
     if decision.clarify_reason in {"slot_request", "context_repair"} and decision.clarify_slots:
-        return clarification_question(flow_label or decision.label, list(decision.clarify_slots))
+        return clarification_question(flow_label or decision.label, list(decision.clarify_slots), decision.entities)
     if decision.clarify_reason in {"intent_disambiguation", "low_confidence"}:
         candidates = list(decision.intent_candidates)
         if decision.label != "OTHER" and decision.label not in candidates:

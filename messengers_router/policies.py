@@ -707,11 +707,16 @@ def detect_appointment_intent(text: str) -> bool:
 
 def detect_appointment_action(text: str) -> str | None:
     t = text.lower()
-    if re.search(r"\bотмен\w*", t):
+    has_cancel = bool(re.search(r"\bотмен\w*", t))
+    has_reschedule = bool(re.search(r"\bперен\w*|\bперезапис\w*|\bсмест\w*", t))
+    has_book = bool(re.search(r"\bзапис\w*|\bзапиш\w*", t))
+    if has_cancel and has_reschedule:
+        return "ambiguous"
+    if has_cancel:
         return "cancel"
-    if re.search(r"\bперен\w*|\bперезапис\w*|\bсмест\w*", t):
+    if has_reschedule:
         return "reschedule"
-    if re.search(r"\bзапис\w*|\bзапиш\w*", t):
+    if has_book:
         return "book"
     return None
 
@@ -809,6 +814,8 @@ def apply_verified_doctor_override(label: str, flags: set[str], text: str) -> tu
 
 
 def normalize_appointment_action(action: str | None, text: str) -> str | None:
+    if action == "ambiguous":
+        return "unknown"
     if action == "book" and not _BOOK_ACTION_STRICT_RE.search(text or ""):
         return None
     return action
@@ -1500,19 +1507,47 @@ def service_name_conflicts_with_doctor(service_name: str, doctor_name: str | Non
     return bool(get_close_matches(service_token, list(doctor_vars), n=1, cutoff=0.92))
 
 
+def _appointment_required_slots(entities: dict[str, Any]) -> list[str]:
+    action = str(entities.get("appointment_action") or "").strip().lower()
+    if action in {"unknown", "ambiguous"}:
+        return ["appointment_action"]
+    if action == "cancel":
+        return [
+            "appointment_action",
+            "_any_of:doctor_id,doctor_name,service_name",
+            "patient_name",
+        ]
+    if action == "reschedule":
+        return [
+            "appointment_action",
+            "_any_of:doctor_id,doctor_name,service_name",
+            "_any_of:date_from,time_from,date_hint",
+            "patient_name",
+        ]
+    return REQUIRED_SLOTS.get("APPOINTMENT", [])
+
+
 def missing_slots(label: str, entities: dict[str, Any]) -> list[str]:
-    req = REQUIRED_SLOTS.get(label, [])
+    req = _appointment_required_slots(entities) if label == "APPOINTMENT" else REQUIRED_SLOTS.get(label, [])
     missing: list[str] = []
     for r in req:
         if r.startswith("_any_of:"):
             keys = [k.strip() for k in r.split(":", 1)[1].split(",") if k.strip()]
             if not any(entities.get(k) for k in keys):
                 missing.append(r)
+        elif r == "appointment_action":
+            action = str(entities.get("appointment_action") or "").strip().lower()
+            if action in {"", "unknown", "ambiguous"}:
+                missing.append(r)
         elif not entities.get(r):
             missing.append(r)
     # Если уже известен конкретный врач, город не обязателен:
     # расписание/адреса берем из live расписания врача.
-    if label == "APPOINTMENT" and (entities.get("doctor_id") or entities.get("doctor_name")):
+    if (
+        label == "APPOINTMENT"
+        and str(entities.get("appointment_action") or "").strip().lower() not in {"cancel", "reschedule"}
+        and (entities.get("doctor_id") or entities.get("doctor_name"))
+    ):
         missing = [m for m in missing if m != "_any_of:city,branch_name,branch_id"]
     if label == "PRICE" and (entities.get("doctor_id") or entities.get("doctor_name")):
         missing = [m for m in missing if m not in {"_any_of:city,branch_name,branch_id", "service_name"}]
@@ -1521,7 +1556,8 @@ def missing_slots(label: str, entities: dict[str, Any]) -> list[str]:
     return missing
 
 
-def clarification_question(label: str, missing: list[str]) -> str:
+def clarification_question(label: str, missing: list[str], entities: dict[str, Any] | None = None) -> str:
+    entities = entities or {}
     need_city = any(m.startswith("_any_of:city") for m in missing)
     need_service = any(
         "doctor_id" in m or "doctor_name" in m or "specialty" in m or "service_name" in m
@@ -1535,6 +1571,23 @@ def clarification_question(label: str, missing: list[str]) -> str:
     if label in CLARIFY_TEXT_MAP:
         return CLARIFY_TEXT_MAP[label]
     if label == "APPOINTMENT":
+        action = str(entities.get("appointment_action") or "").strip().lower()
+        if "appointment_action" in missing:
+            return "Хотите отменить или перенести запись?"
+        if action == "cancel":
+            if need_service:
+                return "Уточните, пожалуйста, ФИО врача или услугу, запись на которую нужно отменить."
+            if "patient_name" in missing:
+                return APPOINTMENT_CLARIFY_MAP["need_patient"]
+            return "Уточните, пожалуйста, детали записи для отмены."
+        if action == "reschedule":
+            if need_service:
+                return "Уточните, пожалуйста, ФИО врача или услугу, запись по которой нужно перенести."
+            if "date_from" in missing or "time_from" in missing:
+                return APPOINTMENT_CLARIFY_MAP["need_datetime"]
+            if "patient_name" in missing:
+                return APPOINTMENT_CLARIFY_MAP["need_patient"]
+            return "Уточните, пожалуйста, детали записи для переноса."
         if need_city:
             return APPOINTMENT_CLARIFY_MAP["need_city"]
         if need_service:

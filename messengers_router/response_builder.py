@@ -325,6 +325,34 @@ def build_appointment_step_response(
 
     entities = state.last_entities
     state.last_entities["appointment_flow_active"] = True
+    action = str(entities.get("appointment_action") or "").strip().lower()
+    if action in {"cancel", "reschedule"}:
+        patient_name = str(entities.get("patient_name") or "").strip()
+        doctor_name = str(entities.get("doctor_name") or "").strip()
+        service_name = str(entities.get("service_name") or entities.get("test_name") or "").strip()
+        date_text = str(entities.get("date_from") or entities.get("date_hint") or "").strip()
+        time_text = str(entities.get("time_from") or "").strip()
+
+        subject = doctor_name or service_name or "выбранной записи"
+        header = "Перенос записи" if action == "reschedule" else "Отмена записи"
+        details: list[str] = []
+        if patient_name:
+            details.append(f"пациент: {patient_name}")
+        if subject:
+            details.append(f"запись: {subject}")
+        if date_text:
+            details.append(f"дата: {date_text}")
+        if time_text:
+            details.append(f"время: {time_text}")
+
+        state.last_entities.pop("appointment_flow_active", None)
+        state.last_entities.pop("appointment_confirm_pending", None)
+        state.last_entities.pop("appointment_confirmed", None)
+        state.last_entities.pop("appointment_cancel_pending", None)
+        state.last_entities.pop("appointment_topic_switch_pending", None)
+        text_lines = [f"{header}: " + ", ".join(details) + "."] if details else [f"{header}: данные получены."]
+        text_lines.append("Передаю заявку оператору для подтверждения и дальнейшего оформления.")
+        return ResponseEnvelope(text="\n".join(text_lines), handoff=True)
 
     appointment_step = appointment_step_policy(entities)
     service = appointment_service_display(entities)

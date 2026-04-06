@@ -15,15 +15,18 @@ from .city import match_city
 from .policies import (
     branch_options_to_indexable,
     build_branch_index,
+    detect_appointment_action,
     detect_address_intent,
     detect_doc_request_intent,
     detect_prepare_intent,
     detect_price_intent,
     detect_schedule_intent,
+    extract_specialty,
     has_datetime_signal,
     extract_branch_hint,
     looks_like_branch_hint,
     match_branch_hint,
+    normalize_appointment_action,
     quick_fill_core_entities,
 )
 from .services import Services, resolve_price_service_name_from_catalog
@@ -268,10 +271,9 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
         return pending_label
     if (
         pending_label == "PRICE"
-        and decision.label in {"TEST_ASSIST", "OTHER", "APPOINTMENT"}
+        and decision.label in {"TEST_ASSIST", "OTHER", "APPOINTMENT", "DOCTOR_INFO", "ADDRESS"}
         and any("service_name" in str(item or "") for item in (pending.get("missing") or []))
         and _looks_like_price_service_reply(user_text)
-        and resolve_price_service_name_from_catalog(user_text)
     ):
         return "PRICE"
     if (
@@ -653,8 +655,7 @@ def quick_fill_entities_from_text(
     out: dict[str, Any] = quick_fill_core_entities(t, state_entities, missing_rules)
 
     if (
-        not out.get("service_name")
-        and any("service_name" in str(rule or "") for rule in missing_rules)
+        any("service_name" in str(rule or "") for rule in missing_rules)
         and (
             detect_price_intent(t)
             or str(state_entities.get("_last_label") or "") == "PRICE"
@@ -667,6 +668,18 @@ def quick_fill_entities_from_text(
         )
         if resolved_service_name:
             out["service_name"] = resolved_service_name
+        else:
+            specialty = extract_specialty(t.lower())
+            if specialty:
+                existing = str(out.get("service_name") or "").strip().lower().replace("ё", "е")
+                spec_norm = specialty.strip().lower().replace("ё", "е")
+                if not existing or existing == spec_norm:
+                    out["service_name"] = f"прием {specialty}"
+
+    if "appointment_action" in missing_rules and not out.get("appointment_action"):
+        appt_action = normalize_appointment_action(detect_appointment_action(t), t)
+        if appt_action:
+            out["appointment_action"] = appt_action
 
     # ----------------------------
     # Branch resolution

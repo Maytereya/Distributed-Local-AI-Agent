@@ -220,7 +220,7 @@ def _appointment_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
         missing = missing_slots("APPOINTMENT", state.last_entities)
     if missing:
         memory.set_pending(state, label="APPOINTMENT", missing_slots=missing)
-        return clarification_question("APPOINTMENT", missing)
+        return clarification_question("APPOINTMENT", missing, state.last_entities)
 
     if state.last_entities.get("appointment_confirm_pending"):
         return appointment_text_reask_confirm()

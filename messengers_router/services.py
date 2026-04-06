@@ -72,7 +72,7 @@ _PRICE_PREPARE_HINT_RE = re.compile(
     re.I,
 )
 _PRICE_CONSULT_EXCLUDE_RE = re.compile(
-    r"\b(подготов\w*|узи|анализ\w*|пакет\w*|комплекс\w*|программ\w*|терап\w*)\b",
+    r"\b(подготов\w*|узи|анализ\w*|пакет\w*|комплекс\w*|программ\w*)\b",
     re.I,
 )
 _LAB_SERVICE_HINT_RE = re.compile(
@@ -310,6 +310,11 @@ _PRICE_QUERY_STOPWORDS = {
     "какая",
     "какое",
     "какие",
+    "какую",
+    "какого",
+    "какому",
+    "каким",
+    "каких",
     "каков",
     "какова",
     "каково",
@@ -347,6 +352,30 @@ _PRICE_QUERY_STOPWORDS = {
     "надо",
     "хочу",
     "можно",
+    "ли",
+    "здравствуйте",
+    "добрый",
+    "день",
+    "данный",
+    "данную",
+    "данных",
+    "пакет",
+    "рассчитывается",
+    "выходным",
+    "выходные",
+    "выходной",
+    "будни",
+    "будний",
+    "дешевле",
+    "будет",
+    "чем",
+    "это",
+    "возможно",
+    "сейчас",
+    "сегодня",
+    "подскажите",
+    "скажите",
+    "пожалуйста",
 }
 _PRICE_QUERY_CANONICAL_TOKENS = {
     "алт": "алат",
@@ -365,6 +394,54 @@ _PRICE_QUERY_CANONICAL_TOKENS = {
     "анализу": "анализ",
     "анализом": "анализ",
     "анализе": "анализ",
+    "лпвп": "лпвп",
+    "лпнп": "лпнп",
+    "лпонп": "лпнп",
+}
+_PRICE_SHORT_TOKEN_WHITELIST = {
+    "оак",
+    "оам",
+    "алт",
+    "аст",
+    "т3",
+    "т4",
+    "пса",
+    "лпнп",
+    "лпвп",
+    "срб",
+    "мно",
+    "пцр",
+    "вич",
+    "rw",
+    "рв",
+}
+_PRICE_GENERIC_SERVICE_TOKENS = {
+    "анализ",
+    "анализы",
+    "анализов",
+    "прием",
+    "приемы",
+    "консультация",
+    "консультации",
+    "осмотр",
+    "услуга",
+    "услуги",
+    "процедура",
+    "процедуры",
+    "пакет",
+    "комплекс",
+}
+_PRICE_SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
+    "оак": ("общий анализ крови",),
+    "общий анализ крови": ("общий анализ крови",),
+    "оам": ("общий анализ мочи",),
+    "общий анализ мочи": ("общий анализ мочи",),
+    "липидограмма": ("липидограмма", "липидный профиль", "кровь на холестерин"),
+    "липидный профиль": ("липидограмма", "липидный профиль", "кровь на холестерин"),
+    "холестерин": ("кровь на холестерин", "липидограмма", "липидный профиль"),
+    "лпнп": ("лпнп", "липопротеиды низкой плотности"),
+    "лпвп": ("лпвп", "липопротеиды высокой плотности"),
+    "копрология": ("копрологическое исследование", "копрология"),
 }
 _PREPARE_QUERY_STOPWORDS = {
     "как",
@@ -2001,6 +2078,8 @@ def _price_query_tokens(text: str) -> list[str]:
         token = _PRICE_QUERY_CANONICAL_TOKENS.get(token, token)
         if len(token) < 2:
             continue
+        if len(token) < 3 and token not in _PRICE_SHORT_TOKEN_WHITELIST and not token.isdigit():
+            continue
         if token in _PRICE_QUERY_STOPWORDS:
             continue
         out.append(token)
@@ -2012,6 +2091,48 @@ def _price_query_tokens(text: str) -> list[str]:
     return out
 
 
+def _price_alias_candidates(query_text: str) -> list[str]:
+    raw = _normalise_input(str(query_text or "")).replace("ё", "е")
+    if not raw:
+        return []
+    out: list[str] = []
+    direct = raw.strip(" ?!.,;:")
+    if direct:
+        out.append(direct)
+    extracted = _extract_price_service_from_query(raw)
+    if extracted:
+        out.append(_normalise_input(extracted).replace("ё", "е"))
+    compact = " ".join(_price_query_tokens(raw)).strip()
+    if compact:
+        out.append(compact)
+    dedup: list[str] = []
+    seen: set[str] = set()
+    for cand in out:
+        key = str(cand or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        dedup.append(key)
+    return dedup[:5]
+
+
+def _resolve_price_alias_from_catalog(query_text: str, rows: list[dict[str, Any]]) -> str | None:
+    if not rows:
+        return None
+    for candidate in _price_alias_candidates(query_text):
+        variants = _PRICE_SERVICE_ALIASES.get(candidate, ())
+        if not variants:
+            continue
+        for variant in variants:
+            ranked = _rank_price_rows(rows, variant, limit=1)
+            if not ranked:
+                continue
+            resolved = str(ranked[0].get("serviceName") or ranked[0].get("name") or "").strip()
+            if resolved:
+                return resolved
+    return None
+
+
 def _extract_price_service_from_query(query: str) -> str | None:
     raw = str(query or "").strip()
     if not raw:
@@ -2020,7 +2141,7 @@ def _extract_price_service_from_query(query: str) -> str | None:
         specialty = _extract_specialty_from_text(raw)
         if specialty:
             return f"прием {specialty}"
-        return "прием"
+        return None
     q = _normalise_input(raw)
     q = _PRICE_DOCTOR_SUFFIX_RE.sub("", q).strip(" ?!.,;:")
     q = _PRICE_SERVICE_PREFIX_RE.sub("", q).strip(" ?!.,;:")
@@ -2028,12 +2149,19 @@ def _extract_price_service_from_query(query: str) -> str | None:
         return None
     if q in {"цена", "стоимость"}:
         return None
-    words = [w for w in q.split() if w]
+    words = [w for w in _PRICE_TOKEN_RE.findall(q) if w]
     if not words:
         return None
     filtered_words = [w for w in words if w not in _PRICE_QUERY_STOPWORDS]
     if filtered_words:
         words = filtered_words
+    significant_words = [w for w in words if w not in _PRICE_GENERIC_SERVICE_TOKENS]
+    if not significant_words:
+        return None
+    if len(significant_words) == 1 and significant_words[0].startswith("анализ"):
+        return None
+    if len(words) >= 6 and not any(_LAB_SERVICE_HINT_RE.search(w) or _DOCTOR_SERVICE_HINT_RE.search(w) for w in words):
+        return None
     # Ограничиваем длину candidate, чтобы не тянуть в ranking целый диалог.
     return " ".join(words[:8])
 
@@ -2260,6 +2388,13 @@ def _is_strong_doctor_price_match(
     return matched_tokens >= max(2, token_count - 1)
 
 
+def _has_specific_price_tokens(text: str) -> bool:
+    tokens = _price_query_tokens(text)
+    if not tokens:
+        return False
+    return any(tok not in _PRICE_GENERIC_SERVICE_TOKENS for tok in tokens)
+
+
 def _build_price_catalog_queries(query_text: str, *, current_service_name: str = "") -> list[str]:
     """
     Собирает варианты запроса для поиска услуги в price-каталоге.
@@ -2288,9 +2423,9 @@ def _build_price_catalog_queries(query_text: str, *, current_service_name: str =
     if phrase:
         queries.append(phrase)
     compact = " ".join(_price_query_tokens(raw)).strip()
-    if compact:
+    if compact and _has_specific_price_tokens(compact):
         queries.append(compact)
-    if raw:
+    if raw and _has_specific_price_tokens(raw):
         queries.append(raw)
     return _dedupe_price_queries(queries)
 
@@ -2364,6 +2499,10 @@ def resolve_price_service_name_from_catalog(
     if not catalog_rows:
         return None
 
+    alias_hit = _resolve_price_alias_from_catalog(query_text, catalog_rows)
+    if alias_hit:
+        return alias_hit
+
     prefer_query_over_context = _should_prefer_current_price_query_over_context(query_text, current_service_name)
     if prefer_query_over_context:
         text_only_queries = _build_price_catalog_queries(query_text, current_service_name="")
@@ -2406,6 +2545,8 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
     homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
     if not name:
         return 0, 0
+    row_tokens = [tok for tok in _PRICE_TOKEN_RE.findall(name) if tok]
+    row_tokens_set = set(row_tokens)
 
     # Жесткий фильтр для консультационных price-запросов по специальности:
     # "стоимость приема уролога" не должен матчиться на фониатра/терапевта.
@@ -2432,7 +2573,11 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
     matched = 0
     if tokens:
         for tok in tokens:
-            if tok in name:
+            if tok in row_tokens_set:
+                matched += 1
+                continue
+            # Для длинных токенов допускаем умеренно мягкий префиксный матч.
+            if len(tok) >= 5 and any(rt.startswith(tok[:4]) or tok.startswith(rt[:4]) for rt in row_tokens):
                 matched += 1
         score += matched * 25
         if matched == len(tokens):
@@ -2447,6 +2592,22 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
     return score, matched
 
 
+def _is_price_match_strong(*, score: int, matched: int, query: str, tokens: list[str], homecode_query: str) -> bool:
+    if homecode_query and score >= 180:
+        return True
+    token_count = len([t for t in tokens if t])
+    if token_count == 0:
+        return bool(query and score >= 170)
+    if token_count == 1:
+        tok = tokens[0]
+        if len(tok) <= 3:
+            return matched >= 1 and score >= 220
+        return matched >= 1 and score >= 170
+    if token_count == 2:
+        return matched >= 2 or score >= 220
+    return matched >= max(2, token_count - 1) or score >= 260
+
+
 def _rank_price_rows(rows: list[dict[str, Any]], query_text: str, *, limit: int = 10) -> list[dict[str, Any]]:
     query = _normalise_input(query_text).replace("ё", "е")
     tokens = _price_query_tokens(query_text)
@@ -2458,6 +2619,14 @@ def _rank_price_rows(rows: list[dict[str, Any]], query_text: str, *, limit: int 
             continue
         score, matched = _price_row_score(row, query=query, tokens=tokens, homecode_query=homecode_query)
         if score <= 0:
+            continue
+        if not _is_price_match_strong(
+            score=score,
+            matched=matched,
+            query=query,
+            tokens=tokens,
+            homecode_query=homecode_query,
+        ):
             continue
         name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
         name_gap = abs(len(name) - len(query)) if query else len(name)
@@ -3636,7 +3805,7 @@ class Services:
                 query_text,
                 current_service_name=entity_service_name,
             ) or _extract_price_service_from_query(query_text)
-        service_name = query_service_name or entity_service_name or query_text
+        service_name = query_service_name or entity_service_name
         needle = _normalise_input(service_name)
 
         out: dict[str, Any] = {
@@ -4843,36 +5012,34 @@ class Services:
                 doctor_name = q_resolved_fio
         entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
         query_text = str(query or "").strip()
-        doctor_price_query = bool(
-            doctor_id
-            and query_text
-            and _DOCTOR_PRICE_HINT_RE.search(query_text)
-            and _PRICE_REQUEST_RE.search(query_text)
-        )
-        doctor_query_specialty = _extract_specialty_from_text(query_text) if doctor_price_query else ""
-        current_service_name_for_resolution = "" if doctor_price_query else entity_service_name
-        if doctor_price_query and not doctor_query_specialty:
-            # В doctor-specific price-вопросах без явной специальности
-            # не приземляемся в catalog (иначе ловим случайные "фониатр").
-            query_service_name = _extract_price_service_from_query(query_text)
-        elif entity_service_name and _is_city_only_reply(query_text):
-            query_service_name = None
+        has_price_request = bool(query_text and _PRICE_REQUEST_RE.search(query_text))
+        doctor_query_specialty = _extract_specialty_from_text(query_text) if (doctor_id and has_price_request) else ""
+
+        if doctor_id:
+            # Для doctor-specific PRICE не приземляемся в городский retail-catalog:
+            # иначе вопрос "у Иванова" может маппиться в случайную услугу по всему прайсу.
+            query_service_name = _extract_price_service_from_query(query_text) if query_text else None
+            if not query_service_name:
+                query_service_name = entity_service_name
+            # "сколько стоит прием у <врач>" без специальности:
+            # принудительно удерживаем консультационный контекст вместо stale service_name.
+            if has_price_request and _PRICE_CONSULT_HINT_RE.search(query_text) and not doctor_query_specialty:
+                if not _is_consultation_service_query(str(query_service_name or "")):
+                    query_service_name = "консультация"
+            service_name = query_service_name or ""
+            # Если это doctor-specific price без явной услуги, оставляем query как fallback
+            # (для редких строк doctor_price, где нет стандартных маркеров).
+            if not service_name and has_price_request and _DOCTOR_PRICE_HINT_RE.search(query_text):
+                service_name = query_text
         else:
-            query_service_name = resolve_price_service_name_from_catalog(
-                query_text,
-                current_service_name=current_service_name_for_resolution,
-            ) or _extract_price_service_from_query(query_text)
-        # Для явного нового price-запроса не тянем старую услугу из entities.
-        if query_service_name:
-            service_name = query_service_name
-        elif query_text and _PRICE_REQUEST_RE.search(query_text):
-            service_name = query_text
-        else:
-            service_name = entity_service_name or query_text
-        # Если вопрос явно doctor-specific и сформулирован как новый price-запрос,
-        # не тянем "залипшую" услугу из прошлого контекста.
-        if doctor_price_query and not query_service_name:
-            service_name = query_text
+            if entity_service_name and _is_city_only_reply(query_text):
+                query_service_name = None
+            else:
+                query_service_name = resolve_price_service_name_from_catalog(
+                    query_text,
+                    current_service_name=entity_service_name,
+                ) or _extract_price_service_from_query(query_text)
+            service_name = query_service_name or entity_service_name
         needle = _normalise_input(service_name)
 
         if doctor_id:
@@ -4888,8 +5055,25 @@ class Services:
                 )
             doc_prices = [p for p in prices if _as_int(p.get("doctorId")) == doctor_id]
             if needle:
-                doc_prices = _rank_price_rows(doc_prices, service_name, limit=10)
+                ranked = _rank_price_rows(doc_prices, service_name, limit=10)
+                if (
+                    not ranked
+                    and has_price_request
+                    and _PRICE_CONSULT_HINT_RE.search(query_text)
+                ):
+                    ranked = [
+                        p for p in doc_prices
+                        if _is_clean_consultation_row_name(str(p.get("serviceName") or p.get("name") or ""))
+                    ]
+                doc_prices = ranked
             if not needle:
+                if has_price_request and _PRICE_CONSULT_HINT_RE.search(query_text):
+                    consult_rows = [
+                        p for p in doc_prices
+                        if _is_clean_consultation_row_name(str(p.get("serviceName") or p.get("name") or ""))
+                    ]
+                    if consult_rows:
+                        doc_prices = consult_rows
                 doc_prices = sorted(
                     [p for p in doc_prices if isinstance(p, dict)],
                     key=lambda p: (_normalise_input(str(p.get("serviceName") or "")), _as_int(p.get("cost")) or 0),

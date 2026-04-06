@@ -656,6 +656,48 @@ async def route_patient_message(
         }
 
     decision = await _verify_doctor_entity(decision, services, user_text)
+    last_label_before = str(state.last_entities.get("_last_label") or "")
+    service_context = str(state.last_entities.get("service_name") or state.last_entities.get("test_name") or "").strip()
+    if (
+        last_label_before == "PRICE"
+        and service_context
+        and detect_prepare_intent(user_text)
+        and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE"}
+    ):
+        entities = dict(decision.entities)
+        if not entities.get("service_name"):
+            entities["service_name"] = service_context
+        decision = _copy_decision(
+            decision,
+            label="PREPARE",
+            confidence=max(decision.confidence, 0.72),
+            entities=entities,
+            flags=set(decision.flags) | {"flow_price_followup_prepare"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+    if (
+        last_label_before == "PRICE"
+        and service_context
+        and decision.label in {"OTHER", "TEST_ASSIST", "DOCTOR_INFO", "APPOINTMENT"}
+    ):
+        merged_ctx = dict(state.last_entities)
+        merged_ctx.update(decision.entities or {})
+        followup_address_hint = bool(re.search(r"\b(где|адрес|филиал|сдать|сдавать)\b", user_text or "", re.I))
+        if followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
+            entities = dict(decision.entities)
+            if not entities.get("service_name"):
+                entities["service_name"] = service_context
+            decision = _copy_decision(
+                decision,
+                label="ADDRESS",
+                confidence=max(decision.confidence, 0.76),
+                entities=entities,
+                flags=set(decision.flags) | {"flow_price_followup_address"},
+                needs_handoff=False,
+                context_action="continue",
+                source="guardrail_post",
+            )
     # В активном APPOINTMENT flow короткий follow-up с датой/временем
     # считаем продолжением записи до применения context_action.
     if (
@@ -1208,11 +1250,20 @@ async def patient_routing_stream(
     pending = memory.get_pending(state)
     if not plan.steps and pending:
         missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
+        if (
+            flow_label == "APPOINTMENT"
+            and isinstance(missing, list)
+            and "appointment_action" in missing
+            and contextual_reply_kind(user_text) == "no"
+        ):
+            update_summary(state, reason="handoff")
+            yield ResponseEnvelope(text=handoff_message("manual_operator"), handoff=True)
+            return
         if flow_label == "APPOINTMENT":
             state.last_entities["appointment_flow_active"] = True
         _remember_question(state, f"pending:{flow_label}", missing if isinstance(missing, list) else [])
         yield ResponseEnvelope(
-            text=clarification_question(flow_label, missing if isinstance(missing, list) else []),
+            text=clarification_question(flow_label, missing if isinstance(missing, list) else [], state.last_entities),
             handoff=False,
         )
         return
