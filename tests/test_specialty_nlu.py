@@ -396,7 +396,7 @@ def test_service_bundle_renderer_hides_prepare_without_explicit_flag():
     assert "Подготовка:" not in text
 
 
-def test_service_bundle_renderer_no_doctors_uses_alternative_hint():
+def test_service_bundle_renderer_no_doctors_uses_operator_handoff_hint():
     payload = {
         "service_name": "Шунтирование желудка",
         "retail_prices": [{"serviceName": "Шунтирование желудка", "cost": 199000}],
@@ -404,5 +404,5 @@ def test_service_bundle_renderer_no_doctors_uses_alternative_hint():
         "show_prepare": False,
     }
     text = format_service_bundle_for_patient(payload, {})
-    assert "альтернативные варианты" in text.lower()
+    assert "передам запрос оператору" in text.lower()
     assert "подробное расписание выбранного врача" not in text.lower()

@@ -1524,6 +1524,20 @@ def test_resolve_price_service_name_from_catalog_consult_specialty_cardio():
     assert resolved == "Прием (осмотр, консультация) врача-кардиолога первичный"
 
 
+def test_service_name_matches_specialty_does_not_match_substring_therapist_in_hirudotherapist():
+    assert svc_mod._service_name_matches_specialty(
+        "Прием (осмотр, консультация) гирудотерапевта первичный",
+        "терапевт",
+    ) is False
+
+
+def test_service_name_matches_specialty_rejects_hybrid_specialty_for_direct_query():
+    assert svc_mod._service_name_matches_specialty(
+        "Прием (осмотр, консультация) врача-кардиолога-ревматолога первичный",
+        "кардиолог",
+    ) is False
+
+
 def test_price_info_resolves_biochemistry_catalog_query(monkeypatch):
     svc = Services()
 
@@ -2137,3 +2151,62 @@ def test_service_bundle_info_accepts_doctor_by_exact_homecode_match(monkeypatch)
 
     assert len(res["doctors"]) == 1
     assert res["doctors"][0]["fio"] == "Хирург Иванов И.И."
+
+
+def test_service_bundle_info_consult_filters_doctors_by_primary_specialty(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_regions():
+        return [{"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"}]
+
+    async def fake_ensure_doctors_cache():
+        return [
+            {
+                "id": 101,
+                "fio": "Кардиолог Основной",
+                "ord": 1,
+                "specialization": "Кардиолог",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "unit_links": [{"company_unit_name": "Врач-кардиолог", "main": True, "specialization": "Кардиолог"}],
+                "main_units": ["Врач-кардиолог"],
+            },
+            {
+                "id": 102,
+                "fio": "Ревматолог Смежный",
+                "ord": 1,
+                "specialization": "Ревматолог",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "unit_links": [{"company_unit_name": "Врач-ревматолог", "main": True, "specialization": "Ревматолог"}],
+                "main_units": ["Врач-ревматолог"],
+            },
+            {
+                "id": 103,
+                "fio": "Гибрид Кардио-Ревма",
+                "ord": 1,
+                "specialization": "Кардиолог-ревматолог",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "unit_links": [{"company_unit_name": "Врач-кардиолог-ревматолог", "main": True, "specialization": "Кардиолог-ревматолог"}],
+                "main_units": ["Врач-кардиолог-ревматолог"],
+            },
+        ]
+
+    def fake_retail(_region_id):
+        return [{"serviceName": "Прием (осмотр, консультация) врача-кардиолога первичный", "serviceHomecode": "30.1", "cost": 3000}]
+
+    def fake_doctor_prices():
+        # Источник может отдать "грязные" строки по serviceName, поэтому фильтруем по primary specialty.
+        return [
+            {"doctorId": 101, "serviceName": "Прием (осмотр, консультация) врача-кардиолога первичный", "serviceHomecode": "30.1", "cost": 3000},
+            {"doctorId": 102, "serviceName": "Прием (осмотр, консультация) врача-кардиолога первичный", "serviceHomecode": "30.1", "cost": 2700},
+            {"doctorId": 103, "serviceName": "Прием (осмотр, консультация) врача-кардиолога первичный", "serviceHomecode": "30.1", "cost": 2800},
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_retail)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+
+    res = run(svc.service_bundle_info("Сколько стоит прием кардиолога?", {"service_name": "Прием (осмотр, консультация) врача-кардиолога первичный"}))
+    names = [str(row.get("fio") or "") for row in (res.get("doctors") or [])]
+
+    assert names == ["Кардиолог Основной"]

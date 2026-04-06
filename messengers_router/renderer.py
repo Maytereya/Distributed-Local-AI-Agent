@@ -369,7 +369,7 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
             lines.append("3) Подготовку по этой услуге сейчас не удалось получить автоматически.")
 
     if not doctors:
-        lines.append("Если нужно, могу уточнить формулировку услуги и проверить альтернативные варианты.")
+        lines.append("Если нужно, передам запрос оператору для уточнения по этой услуге.")
     elif len(doctors) == 1:
         lines.append("Если нужно, покажу подробное расписание этого врача.")
     else:

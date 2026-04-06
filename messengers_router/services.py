@@ -1103,6 +1103,95 @@ def _specialty_terms(specialty: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _specialty_norm(value: str) -> str:
+    return _normalise_input(value).replace("ё", "е")
+
+
+def _specialty_equivalent(left: str, right: str) -> bool:
+    """
+    Проверяет эквивалентность двух обозначений специальности.
+
+    Пример: "лор" ~= "оториноларинголог".
+
+    :param left: первая специальность
+    :param right: вторая специальность
+    :return: True, если обозначения эквивалентны
+    """
+
+    left_norm = _specialty_norm(left)
+    right_norm = _specialty_norm(right)
+    if not left_norm or not right_norm:
+        return False
+    if left_norm == right_norm:
+        return True
+    left_terms = {left_norm, *_specialty_terms(left_norm)}
+    right_terms = {right_norm, *_specialty_terms(right_norm)}
+    return bool(left_terms & right_terms)
+
+
+def _extract_specialties_from_text(text: str) -> tuple[str, ...]:
+    """
+    Извлекает все распознанные специальности из произвольного текста.
+
+    :param text: исходный текст
+    :return: кортеж нормализованных специальностей
+    """
+
+    norm = _specialty_norm(text)
+    if not norm:
+        return tuple()
+    found: list[str] = []
+    for raw in _SPECIALTY_CANONICAL:
+        spec = _specialty_norm(raw)
+        if spec and _matches_specialty_terms(norm, spec) and spec not in found:
+            found.append(spec)
+    return tuple(found)
+
+
+def _is_direct_specialty_text_match(text: str, specialty: str) -> bool:
+    """
+    Строго проверяет соответствие текста конкретной специальности.
+
+    Важно для прямых запросов по врачу:
+    - "терапевт" не должен матчиться на "гирудотерапевт";
+    - гибриды вида "кардиолог-ревматолог" не должны попадать в чистый запрос
+      "кардиолог".
+
+    :param text: текст для проверки (serviceName/unit_name)
+    :param specialty: целевая специальность
+    :return: True для чистого соответствия специальности
+    """
+
+    target = _specialty_norm(specialty)
+    if not target:
+        return False
+    found = _extract_specialties_from_text(text)
+    if not found:
+        return False
+    if not any(_specialty_equivalent(spec, target) for spec in found):
+        return False
+    for spec in found:
+        if not _specialty_equivalent(spec, target):
+            return False
+    return True
+
+
+def _doctor_matches_primary_specialty(doc: dict[str, Any], specialty: str) -> bool:
+    """
+    Проверяет, что врач относится к специальности именно по primary/main профилю.
+
+    :param doc: карточка врача
+    :param specialty: целевая специальность
+    :return: True, если есть релевантный main-unit для этой специальности
+    """
+
+    main_units = _collect_role_unit_names(doc, main_value=True)
+    if main_units:
+        return any(_is_direct_specialty_text_match(unit_name, specialty) for unit_name in main_units)
+    # Legacy fallback: если main-структуры нет, используем любой unit-level match.
+    return _doctor_role_specialty_match_level(doc, specialty) >= 1
+
+
 def _matches_specialty_terms(text: str, specialty: str) -> bool:
     """
     Проверяет совпадение текста с role-терминами специальности.
@@ -2008,12 +2097,7 @@ def _service_name_matches_specialty(service_name: str, specialty: str) -> bool:
     :return: True, если в названии услуги есть термин специальности
     """
 
-    svc = _normalise_input(service_name).replace("ё", "е")
-    spec = _normalise_input(specialty).replace("ё", "е")
-    if not svc or not spec:
-        return False
-    terms = _specialty_terms(spec) or (spec,)
-    return any(term and term in svc for term in terms)
+    return _is_direct_specialty_text_match(service_name, specialty)
 
 
 def _is_prepare_requested_in_price_query(query_text: str) -> bool:
@@ -3563,9 +3647,12 @@ class Services:
         )[:top_limit]
 
         out_doctors: list[dict[str, Any]] = []
+        query_specialty = _extract_specialty_from_text(query_text) or _extract_specialty_from_text(service_name)
         for doc in doctor_cards:
             doctor_id = _as_int(doc.get("id"))
             if doctor_id is None:
+                continue
+            if is_consult_query and query_specialty and not _doctor_matches_primary_specialty(doc, query_specialty):
                 continue
             price_row = best_row_by_doctor.get(doctor_id, {})
             availability = await self._doctor_availability_snapshot(
