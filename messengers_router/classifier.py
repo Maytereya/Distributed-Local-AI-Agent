@@ -1096,13 +1096,17 @@ async def deterministic_rule_decision(
         specialty = str(last_entities.get("specialty") or "").strip()
         if specialty:
             entities["specialty"] = specialty
+        pending = last_entities.get("_pending")
+        pending_label = str(pending.get("label") or "").strip() if isinstance(pending, dict) else ""
+        followup_label = "DOCTOR_INFO" if (pending_label == "DOCTOR_INFO" or detect_doctor_info_intent(text)) else "DOCTOR_SCHEDULE"
+        followup_flag = "rule_doctor_info_followup" if followup_label == "DOCTOR_INFO" else "rule_schedule_doctor_followup"
         decision = RouteDecision(
-            label="DOCTOR_SCHEDULE",
+            label=followup_label,
             confidence=0.79,
             entities=entities,
-            flags=local_flags | {"rule_schedule_doctor_followup"},
+            flags=local_flags | {followup_flag},
             needs_handoff=False,
-            context_action=_derive_context_action(text, "DOCTOR_SCHEDULE", entities, last_entities),
+            context_action=_derive_context_action(text, followup_label, entities, last_entities),
         )
     elif detect_test_result_intent(text):
         if should_treat_result_delivery_as_test_assist(text):

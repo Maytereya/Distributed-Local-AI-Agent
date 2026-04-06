@@ -195,6 +195,46 @@ def test_doctors_schedule_week(monkeypatch):
     assert str(res["entities_used"].get("last_name") or "").lower().startswith("иванов")
 
 
+def test_doctors_schedule_week_ignores_unrelated_payload_rows_for_requested_doctor(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Просвиров Евгений Юрьевич",
+                "specialization": "ревматолог",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "units": ["Врач-ревматолог"],
+            }
+        ]
+
+    async def fake_samara_tokens():
+        return {"г. самара, пр. ленина, 5"}
+
+    async def fake_schedule_payload(last_name, _region_name=None):
+        # Симулируем некачественный ответ API:
+        # запросили Просвирова, а вернулась Рязанова.
+        if str(last_name).lower().startswith("просвиров"):
+            return [
+                {
+                    "fio": "Рязанова Валерия Владимировна",
+                    "regions": ["г. Самара, пр. Ленина, 5"],
+                    "schedule": {"г. Самара, пр. Ленина, 5": [{"date": "2026-04-06", "slots": ["14:30"]}]},
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+    monkeypatch.setattr(svc, "_get_schedule_payload_cached", fake_schedule_payload)
+
+    res = run(svc.doctors_schedule_week("Покажите расписание Просвирова", {"doctor_name": "Просвиров"}))
+
+    assert res["schedule"] == []
+    assert "doctors_schedule_week" in str(res.get("note") or "")
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [

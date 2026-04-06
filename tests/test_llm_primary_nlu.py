@@ -227,3 +227,40 @@ def test_rule_doctor_followup_ignored_while_waiting_patient_name():
     )
 
     assert decision is None or decision.label != "DOCTOR_SCHEDULE"
+
+
+def test_rule_doctor_followup_uses_doctor_info_when_pending_doctor_info():
+    decision = run(
+        classifier.deterministic_rule_decision(
+            "Рязанова",
+            {
+                "_last_label": "DOCTOR_INFO",
+                "_pending": {"label": "DOCTOR_INFO", "missing": ["_any_of:specialty,doctor_id,doctor_name,service_name"]},
+            },
+            allow_refine=False,
+            attach_secondary=False,
+        )
+    )
+
+    assert decision is not None
+    assert decision.label == "DOCTOR_INFO"
+    assert decision.entities.get("doctor_name") == "Рязанова"
+    assert "rule_doctor_info_followup" in decision.flags
+
+
+def test_rule_doctor_followup_prefers_doctor_info_for_about_doctor_question():
+    decision = run(
+        classifier.deterministic_rule_decision(
+            "Рязанова чем занимается?",
+            {
+                "_last_label": "DOCTOR_SCHEDULE",
+                "doctor_name": "Рязанова Валерия Владимировна",
+            },
+            allow_refine=False,
+            attach_secondary=False,
+        )
+    )
+
+    assert decision is not None
+    assert decision.label == "DOCTOR_INFO"
+    assert decision.entities.get("doctor_name") == "Рязанова"

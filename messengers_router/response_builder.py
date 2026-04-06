@@ -118,6 +118,29 @@ def build_doctor_info_response(flow_label: str, evidence: Evidence, state: Sessi
     doctors_info_payload = evidence.get("doctors_info")
     if not isinstance(doctors_info_payload, dict):
         return None
+    doctors_raw = doctors_info_payload.get("doctors")
+    doctors = doctors_raw if isinstance(doctors_raw, list) else []
+    used = doctors_info_payload.get("entities_used")
+    explicit_doctor_query = False
+    if isinstance(used, dict):
+        explicit_doctor_query = bool(str(used.get("doctor_query") or "").strip() or str(used.get("doctor_resolved") or "").strip())
+
+    # Синхронизируем doctor-context после выдачи списка:
+    # - 1 врач -> закрепляем его как текущего для follow-up "расписание";
+    # - >1 врача и без явной фамилии в запросе -> убираем stale doctor_name,
+    #   чтобы не показывать расписание "чужого" врача из старого контекста.
+    if len(doctors) == 1 and isinstance(doctors[0], dict):
+        only = doctors[0]
+        fio = str(only.get("fio") or "").strip()
+        if fio:
+            state.last_entities["doctor_name"] = fio
+        did = only.get("id")
+        if did is not None:
+            state.last_entities["doctor_id"] = did
+    elif len(doctors) > 1 and not explicit_doctor_query:
+        state.last_entities.pop("doctor_name", None)
+        state.last_entities.pop("doctor_id", None)
+
     text = format_doctor_info_for_patient(doctors_info_payload, state.last_entities)
     price_payload = evidence.get("price")
     if isinstance(price_payload, dict):
@@ -206,7 +229,6 @@ def build_doctor_schedule_response(
             handoff=False,
         )
     hydrate_appointment_context_from_schedule(state, schedule_payload)
-    state.last_entities["appointment_flow_active"] = True
     text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 

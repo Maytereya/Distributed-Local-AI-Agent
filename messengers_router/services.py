@@ -395,6 +395,32 @@ def _is_schedule_no_slots_text(payload: Any) -> bool:
         return False
     norm = _normalise_input(payload).replace("ё", "е")
     return "свободных слотов нет" in norm
+
+
+def _schedule_payload_matches_doctor(data: Any, doctor_name: str) -> bool:
+    """
+    Проверяет, что payload расписания действительно относится к нужному врачу.
+
+    Защищает от ответов API, где по фамилии может вернуться "общий" список
+    других врачей (ложный позитив на первом непустом list).
+
+    :param data: ответ find_doctor_schedule
+    :param doctor_name: ожидаемая фамилия/ФИО
+    :return: True, если в payload есть совпадающий врач
+    """
+
+    target = str(doctor_name or "").strip()
+    if not target or not isinstance(data, list):
+        return False
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        row_fio = str(row.get("fio") or "").strip()
+        if not row_fio:
+            continue
+        if _doctor_matches_fio(row_fio, target, resolved_surname=target):
+            return True
+    return False
 _PREPARE_LEADIN_RE = re.compile(
     r"^\s*(?:подскажите[, ]+)?(?:как\s+)?подготов(?:иться|ится|ка)\s*(?:к|для)?\s+",
     re.I,
@@ -4002,7 +4028,7 @@ class Services:
         try:
             for candidate in candidates:
                 data = await self._get_schedule_payload_cached(candidate, region_name)
-                if isinstance(data, list) and data:
+                if isinstance(data, list) and data and _schedule_payload_matches_doctor(data, candidate):
                     last_name = candidate
                     break
                 if _is_schedule_no_slots_text(data):
@@ -4010,7 +4036,7 @@ class Services:
                 # fallback: если регионный фильтр дал пусто, пробуем без региона
                 if region_name:
                     data = await self._get_schedule_payload_cached(candidate, None)
-                    if isinstance(data, list) and data:
+                    if isinstance(data, list) and data and _schedule_payload_matches_doctor(data, candidate):
                         last_name = candidate
                         break
                     if _is_schedule_no_slots_text(data):
@@ -4036,6 +4062,10 @@ class Services:
                 if not isinstance(row, dict):
                     continue
                 item = dict(row)
+                if last_name:
+                    row_fio = str(item.get("fio") or "").strip()
+                    if row_fio and not _doctor_matches_fio(row_fio, str(last_name), resolved_surname=str(last_name)):
+                        continue
                 row_fio_key = _normalise_input(str(item.get("fio") or ""))
                 cache_doc = doctor_by_fio.get(row_fio_key)
                 if cache_doc:

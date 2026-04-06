@@ -950,6 +950,7 @@ def test_build_doctor_info_response_for_doctor_info_flow():
     assert env is not None
     assert "Иванов Иван Иванович" in env.text
     assert env.handoff is False
+    assert state.last_entities.get("doctor_name") == "Иванов Иван Иванович"
 
 
 def test_build_doctor_info_response_appends_price_block():
@@ -985,6 +986,30 @@ def test_build_doctor_info_response_appends_price_block():
     assert "1 200 руб." in env.text
 
 
+def test_build_doctor_info_response_clears_stale_doctor_for_multi_specialty_list():
+    state = SessionState(
+        session_id="doc-info-multi",
+        last_entities={"doctor_name": "Рязанова Валерия Владимировна", "doctor_id": 999},
+    )
+    evidence = Evidence(
+        items={
+            "doctors_info": {
+                "doctors": [
+                    {"id": 1, "fio": "Просвиров Евгений Юрьевич", "specialization": "Ревматолог"},
+                    {"id": 2, "fio": "Другой Врач", "specialization": "Ревматолог"},
+                ],
+                "entities_used": {"specialty_query": "ревматолог"},
+            }
+        }
+    )
+
+    env = _build_doctor_info_response("DOCTOR_INFO", evidence, state)
+
+    assert env is not None
+    assert state.last_entities.get("doctor_name") is None
+    assert state.last_entities.get("doctor_id") is None
+
+
 def test_build_test_result_response_with_ready_link():
     evidence = Evidence(
         items={
@@ -1001,7 +1026,7 @@ def test_build_test_result_response_with_ready_link():
     assert "https://example.com/result.pdf" in env.text
 
 
-def test_build_doctor_schedule_response_sets_flow_active():
+def test_build_doctor_schedule_response_hydrates_context_without_forcing_flow_active():
     state = SessionState(session_id="doc-schedule", last_entities={})
     evidence = Evidence(
         items={
@@ -1018,7 +1043,8 @@ def test_build_doctor_schedule_response_sets_flow_active():
     )
     env = _build_doctor_schedule_response("DOCTOR_SCHEDULE", evidence, state, MemoryStore())
     assert env is not None
-    assert state.last_entities.get("appointment_flow_active") is True
+    assert state.last_entities.get("appointment_flow_active") is None
+    assert state.last_entities.get("doctor_name") == "Трубин Алексей Юрьевич"
     assert "Трубин Алексей Юрьевич" in env.text
 
 

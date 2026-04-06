@@ -186,8 +186,12 @@ DOCTOR_INFO_PATTERNS = [
     r"\bрасскаж\w*\b.*\b(о|про)\b.*\b(врач\w*|доктор\w*)\b",
     r"\b(о|про)\b\s+(врач\w*|доктор\w*)\b",
     r"\bкто\b.*\b(врач\w*|доктор\w*)\b",
+    r"\bчем\b.*\bзанима\w*\b",
 ]
-_DOCTOR_INFO_HINT_RE = re.compile(r"\b(инф\w*|расскаж\w*|о\s+врач\w*|про\s+врач\w*|кто\s+так\w*)\b", re.I)
+_DOCTOR_INFO_HINT_RE = re.compile(
+    r"\b(инф\w*|расскаж\w*|о\s+врач\w*|про\s+врач\w*|кто\s+так\w*|чем\s+занима\w*)\b",
+    re.I,
+)
 _DOCTOR_SCHEDULE_HINT_RE = re.compile(r"\b(расписани\w*|график|окн\w*|слот\w*|когда\b.*\bпринима\w*)\b", re.I)
 
 
