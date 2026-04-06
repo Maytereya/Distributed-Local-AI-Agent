@@ -5,6 +5,7 @@ from messengers_router import classifier as classifier_mod
 from messengers_router.classifier import deterministic_rule_decision
 from messengers_router.nlu_pipeline import analyze_with_candidates
 from messengers_router.policies import missing_slots
+from messengers_router.policies import appointment_summary
 from messengers_router.renderer import (
     format_address_for_patient,
     format_doctor_info_for_patient,
@@ -145,6 +146,77 @@ def test_doctor_info_renderer_single_selected_doctor_compact_followup():
     assert "Адреса приема: г.Самара, ул.Ново-Садовая, 106, кор. 82" in text
     assert "Длинный блок услуг врача" not in text
     assert "Хотите записаться к этому врачу? Напишите «расписание» или «запись»." in text
+
+
+def test_doctor_info_renderer_plural_followup_for_multiple_doctors():
+    payload = {
+        "doctors": [
+            {"fio": "Иванов Иван Иванович", "specialization": "Кардиолог", "regions": ["Ленина 5"]},
+            {"fio": "Петров Петр Петрович", "specialization": "Кардиолог", "regions": ["Ленина 5"]},
+        ]
+    }
+    text = format_doctor_info_for_patient(payload, {"specialty": "кардиолог"})
+    assert "Если нужно — могу показать расписание любого из этих врачей или помочь с записью." in text
+    assert "этого врача" not in text
+
+
+def test_doctor_schedule_renderer_russian_date_and_no_extra_clarifications_when_context_fixed():
+    payload = {
+        "schedule": [
+            {
+                "fio": "Хальметова Алина Алексеевна",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "schedule": {
+                    "г. Самара, пр. Ленина, 5": [
+                        {"date": "2026-04-11", "slots": ["12:30", "13:30", "15:00"]},
+                    ]
+                },
+            }
+        ]
+    }
+    entities = {"doctor_name": "Хальметова", "branch_name": "г. Самара, пр. Ленина, 5"}
+    text = format_doctor_schedule_for_patient(payload, entities)
+    assert "• 11 апреля: свободно в 12:30, 13:30, 15:00" in text
+    assert "Если нужно записаться — напишите удобное время." in text
+    assert "уточните врача" not in text
+    assert "уточните филиал" not in text
+
+
+def test_doctor_schedule_renderer_asks_to_clarify_both_when_not_fixed():
+    payload = {
+        "schedule": [
+            {
+                "fio": "Иванов Иван Иванович",
+                "regions": ["Ленина 5", "Победы 83"],
+                "schedule": {
+                    "Ленина 5": [{"date": "2026-04-11", "slots": ["10:00"]}],
+                },
+            },
+            {
+                "fio": "Петров Петр Петрович",
+                "regions": ["Ленина 5", "Победы 83"],
+                "schedule": {
+                    "Победы 83": [{"date": "2026-04-11", "slots": ["11:00"]}],
+                },
+            },
+        ]
+    }
+    text = format_doctor_schedule_for_patient(payload, {})
+    assert "Если нужно записаться — напишите удобное время или уточните врача/филиал." in text
+
+
+def test_appointment_summary_translates_relative_date_hints_to_russian():
+    summary = appointment_summary(
+        {
+            "patient_name": "Петров Петр Петрович",
+            "service_name": "Холтер",
+            "branch_name": "ул. Победы, 83",
+            "date_hint": "tomorrow",
+            "time_from": "11:00",
+        }
+    )
+    assert "tomorrow" not in summary
+    assert ", завтра, 11:00." in summary
 
 
 def test_price_renderer_doctor_context_single_match():

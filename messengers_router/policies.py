@@ -1690,24 +1690,50 @@ def extract_price_rub(price_payload: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _render_appointment_date_part(date_raw: str) -> str:
+    raw = str(date_raw or "").strip()
+    if not raw:
+        return "уточним дату"
+
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        try:
+            d = datetime.strptime(raw, "%Y-%m-%d").date()
+            month = {
+                1: "января",
+                2: "февраля",
+                3: "марта",
+                4: "апреля",
+                5: "мая",
+                6: "июня",
+                7: "июля",
+                8: "августа",
+                9: "сентября",
+                10: "октября",
+                11: "ноября",
+                12: "декабря",
+            }[d.month]
+            return f"{d.day} {month}"
+        except Exception:
+            return raw
+
+    hint_map = {
+        "today": "сегодня",
+        "tomorrow": "завтра",
+        "after tomorrow": "послезавтра",
+        "after_tomorrow": "послезавтра",
+        "this_week": "на этой неделе",
+        "next_week": "на следующей неделе",
+    }
+    return hint_map.get(raw.lower(), raw)
+
+
 def appointment_summary(entities: dict[str, Any]) -> str:
     patient_name = str(entities.get("patient_name") or "").strip()
     doctor_name = str(entities.get("doctor_name") or "").strip()
     service = appointment_service_display(entities)
     place = str(entities.get("branch_name") or entities.get("city") or "выбранный филиал").strip()
-    date_part_raw = str(entities.get("date_from") or entities.get("date_hint") or "уточним дату").strip()
-    date_part = date_part_raw
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_part_raw):
-        try:
-            d = datetime.strptime(date_part_raw, "%Y-%m-%d").date()
-            month = {
-                1: "января", 2: "февраля", 3: "марта", 4: "апреля",
-                5: "мая", 6: "июня", 7: "июля", 8: "августа",
-                9: "сентября", 10: "октября", 11: "ноября", 12: "декабря",
-            }[d.month]
-            date_part = f"{d.day} {month}"
-        except Exception:
-            date_part = date_part_raw
+    date_part_raw = str(entities.get("date_from") or entities.get("date_hint") or "").strip()
+    date_part = _render_appointment_date_part(date_part_raw)
     time_from = str(entities.get("time_from") or "").strip()
     time_to = str(entities.get("time_to") or "").strip()
     if time_from and time_to and time_from != time_to:

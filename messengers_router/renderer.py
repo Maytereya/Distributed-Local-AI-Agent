@@ -30,6 +30,21 @@ try:
 except Exception:
     DOCTORS_TOP_N = 4
 
+_RU_MONTH_GEN = {
+    1: "января",
+    2: "февраля",
+    3: "марта",
+    4: "апреля",
+    5: "мая",
+    6: "июня",
+    7: "июля",
+    8: "августа",
+    9: "сентября",
+    10: "октября",
+    11: "ноября",
+    12: "декабря",
+}
+
 
 def _final_prompt(user_text: str, decision: RouteDecision, evidence: Evidence) -> str:
     tmpl = load_prompt_text("renderer_patient")
@@ -79,6 +94,19 @@ def _parse_time_hhmm(s: str | None) -> time | None:
         return None
 
 
+def _format_date_ru_short(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return raw
+    parsed = _parse_date_iso(raw)
+    if not parsed:
+        return raw
+    month = _RU_MONTH_GEN.get(parsed.month)
+    if not month:
+        return raw
+    return f"{parsed.day} {month}"
+
+
 def _filter_slots(slots: list[str], t_from: time | None, t_to: time | None) -> list[str]:
     if not slots:
         return []
@@ -115,6 +143,10 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
 
     lines: list[str] = []
     any_free_slots_global = False
+    rendered_doctors_count = 0
+    visible_regions_global: set[str] = set()
+    known_doctor = bool(str(entities.get("doctor_name") or entities.get("doctor_id") or "").strip())
+    known_branch = bool(str(entities.get("branch_name") or "").strip())
 
     for i, doc in enumerate(docs[:3], 1):
         fio = str(doc.get("fio") or "Врач")
@@ -127,6 +159,7 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
             schedule = {k: v for k, v in schedule.items() if target.lower() in str(k).lower()} or schedule
 
         lines.append(f"{i}. {fio}")
+        rendered_doctors_count += 1
 
         if regions:
             lines.append(f"Адреса приема: {', '.join(regions)}")
@@ -153,21 +186,25 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
                         continue
 
                 slots = _filter_slots(day.get("slots") or [], t_from, t_to)
+                day_label = _format_date_ru_short(str(day_date))
                 if slots:
-                    region_lines.append(f"• {day_date}: свободно {', '.join(slots)}")
+                    region_lines.append(f"• {day_label}: свободно в {', '.join(slots)}")
                     region_has_content = True
                     has_free_slots = True
                 else:
                     start = (day.get("start") or "")[:5]
                     end = (day.get("end") or "")[:5]
                     if start or end:
-                        region_lines.append(f"• {day_date}: {start}-{end}")
+                        region_lines.append(f"• {day_label}: {start}-{end}")
                         region_has_content = True
 
             if region_has_content:
                 has_any_content = True
                 if region_name:
-                    visible_regions.append(str(region_name).strip())
+                    region_clean = str(region_name).strip()
+                    visible_regions.append(region_clean)
+                    if region_clean:
+                        visible_regions_global.add(region_clean)
                 rendered_schedule_lines.extend(region_lines)
 
         if visible_regions:
@@ -194,7 +231,16 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
         lines.append("")
 
     if any_free_slots_global:
-        lines.append("Если нужно записаться — напишите удобное время или уточните врача/филиал.")
+        need_doctor_clarify = rendered_doctors_count > 1 and not known_doctor
+        need_branch_clarify = len(visible_regions_global) > 1 and not known_branch
+        if need_doctor_clarify and need_branch_clarify:
+            lines.append("Если нужно записаться — напишите удобное время или уточните врача/филиал.")
+        elif need_doctor_clarify:
+            lines.append("Если нужно записаться — напишите удобное время или уточните врача.")
+        elif need_branch_clarify:
+            lines.append("Если нужно записаться — напишите удобное время или уточните филиал.")
+        else:
+            lines.append("Если нужно записаться — напишите удобное время.")
     else:
         lines.append("Могу подобрать другого врача или передать диалог оператору.")
     return "\n".join([l for l in lines if l is not None]).strip()
@@ -217,8 +263,11 @@ def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, 
 
     single_selected = bool(doctor_hint) and len(docs) == 1
 
+    shown_docs = docs[:DOCTORS_TOP_N]
+    shown_count = len(shown_docs)
+
     lines: list[str] = []
-    for i, doc in enumerate(docs[:DOCTORS_TOP_N], 1):
+    for i, doc in enumerate(shown_docs, 1):
         fio = str(doc.get("fio") or "Врач").strip()
         spec = str(doc.get("specialization") or "").strip()
         regions = doc.get("regions") or []
@@ -235,7 +284,10 @@ def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, 
     if single_selected:
         lines.append("Хотите записаться к этому врачу? Напишите «расписание» или «запись».")
     else:
-        lines.append("Если нужно — могу показать расписание этого врача или помочь с записью.")
+        if shown_count <= 1:
+            lines.append("Если нужно — могу показать расписание этого врача или помочь с записью.")
+        else:
+            lines.append("Если нужно — могу показать расписание любого из этих врачей или помочь с записью.")
     return "\n".join([l for l in lines if l is not None]).strip()
 
 
