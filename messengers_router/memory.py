@@ -183,6 +183,7 @@ class MemoryStore:
                 ):
                     old.pop(k, None)
 
+        effective_action = str(cleaned.get("appointment_action") or old.get("appointment_action") or "").strip().lower()
         specialty_changed = (
             "specialty" in cleaned
             and cleaned.get("specialty") != old.get("specialty")
@@ -193,25 +194,30 @@ class MemoryStore:
         )
         explicit_doctor_in_update = bool(cleaned.get("doctor_id") or cleaned.get("doctor_name"))
         if (specialty_changed or service_changed) and not explicit_doctor_in_update:
-            for k in (
-                "doctor_id",
-                "doctor_name",
-                "appointment_windows",
-                "appointment_branch_options",
-                "appointment_flow_active",
-                "appointment_confirm_pending",
-                "appointment_confirmed",
-                "appointment_selection_mode",
-                "branch_id",
-                "branch_name",
-                "date_from",
-                "date_to",
-                "time_from",
-                "time_to",
-                "time_flexible",
-                "date_hint",
-            ):
-                old.pop(k, None)
+            # В active cancel/reschedule не роняем doctor-context из-за случайного
+            # service_name в коротких ответах пользователя (адрес/дата/время).
+            if effective_action in {"cancel", "reschedule"} and service_changed and not specialty_changed:
+                cleaned.pop("service_name", None)
+            else:
+                for k in (
+                    "doctor_id",
+                    "doctor_name",
+                    "appointment_windows",
+                    "appointment_branch_options",
+                    "appointment_flow_active",
+                    "appointment_confirm_pending",
+                    "appointment_confirmed",
+                    "appointment_selection_mode",
+                    "branch_id",
+                    "branch_name",
+                    "date_from",
+                    "date_to",
+                    "time_from",
+                    "time_to",
+                    "time_flexible",
+                    "date_hint",
+                ):
+                    old.pop(k, None)
 
         # object change rules
         doctor_changed = False

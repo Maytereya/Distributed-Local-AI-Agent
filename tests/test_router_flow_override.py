@@ -1647,6 +1647,26 @@ def test_memory_merge_entities_service_change_drops_stale_doctor_context():
     assert state.last_entities.get("service_name") == "Прием врача-кардиолога первичный"
 
 
+def test_memory_merge_entities_reschedule_service_noise_keeps_doctor_context():
+    state = SessionState(
+        session_id="mem-reschedule-service-noise-keeps-doctor",
+        last_entities={
+            "appointment_action": "reschedule",
+            "doctor_name": "Трубин Алексей Юрьевич",
+            "doctor_id": 1001,
+            "service_name": "Суточное мониторирование ЭКГ (по Холтеру1/по Холтеру2)",
+            "branch_name": "г. Самара, ул. Победы, 83",
+        },
+    )
+    memory = MemoryStore()
+
+    memory.merge_entities(state, {"service_name": "ЭКГ"}, label="APPOINTMENT")
+
+    assert state.last_entities.get("doctor_name") == "Трубин Алексей Юрьевич"
+    assert state.last_entities.get("doctor_id") == 1001
+    assert state.last_entities.get("service_name") == "Суточное мониторирование ЭКГ (по Холтеру1/по Холтеру2)"
+
+
 def test_apply_pending_override_keeps_appointment_on_full_branch_address_reply():
     decision = RouteDecision(label="ADDRESS", confidence=0.78, flags={"rule_nonbookable_walkin"})
     pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
@@ -2694,6 +2714,42 @@ def test_entity_grounder_drops_doctor_like_service_without_doctor_unverified_fla
 
     assert grounded.entities.get("service_name") is None
     assert "entity_dropped_doctor_like_service_name" in grounded.flags
+
+
+def test_entity_grounder_drops_stale_service_name_in_reschedule_branch_reply():
+    class _NeverCalledServices:
+        async def match_catalog_service(self, *_args, **_kwargs):  # pragma: no cover - should not be called
+            raise AssertionError("catalog lookup must not run for stale service in reschedule")
+
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.8,
+        entities={"service_name": "ЭКГ"},
+        flags={"flow_appointment_override"},
+        needs_handoff=False,
+    )
+    state = SessionState(
+        session_id="eg_drop_stale_service_reschedule",
+        last_entities={
+            "appointment_action": "reschedule",
+            "doctor_name": "Трубин",
+            "service_name": "Суточное мониторирование ЭКГ (по Холтеру1/по Холтеру2)",
+        },
+    )
+    services = _NeverCalledServices()
+
+    grounded = asyncio.run(
+        ground_decision_entities(
+            decision=decision,
+            user_text="г. Самара, ул. Победы, 83",
+            state=state,
+            services=services,  # type: ignore[arg-type]
+            pending=None,
+        )
+    )
+
+    assert grounded.entities.get("service_name") is None
+    assert "entity_dropped_stale_service_name_in_reschedule" in grounded.flags
 
 
 def test_entity_grounder_keeps_service_with_explicit_service_anchor_even_if_doctor_unverified():

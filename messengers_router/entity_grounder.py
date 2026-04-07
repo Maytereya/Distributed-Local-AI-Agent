@@ -17,7 +17,7 @@ from typing import Any
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
-from .policies import extract_service_phrase, service_name_conflicts_with_doctor
+from .policies import extract_service_phrase, has_datetime_signal, service_name_conflicts_with_doctor
 from .services import Services, resolve_price_service_name_from_catalog
 
 _CONTROL_KEYS = {
@@ -189,6 +189,53 @@ def _is_doctor_like_service_collision(
     return True
 
 
+def _should_drop_service_name_in_active_reschedule(
+    *,
+    label: str,
+    user_text: str,
+    raw_entities: dict[str, Any],
+    state: SessionState,
+) -> bool:
+    """
+    В активном cancel/reschedule сценарии не даем случайному service grounding
+    перетирать doctor-context на репликах-слотах (адрес/дата/ФИО пациента).
+    """
+
+    if label != "APPOINTMENT":
+        return False
+
+    action = str(
+        raw_entities.get("appointment_action")
+        or state.last_entities.get("appointment_action")
+        or ""
+    ).strip().lower()
+    if action not in {"cancel", "reschedule"}:
+        return False
+
+    has_doctor_context = bool(
+        raw_entities.get("doctor_name")
+        or raw_entities.get("doctor_id")
+        or state.last_entities.get("doctor_name")
+        or state.last_entities.get("doctor_id")
+    )
+    if not has_doctor_context:
+        return False
+
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    # Если пользователь явно говорит про услугу/процедуру — разрешаем update.
+    if _SERVICE_ANCHOR_HINT_RE.search(text):
+        return False
+
+    return (
+        looks_like_patient_fio(text)
+        or has_datetime_signal(text)
+        or bool(match_city(text))
+        or looks_like_address(text)
+    )
+
+
 async def verify_doctor_entities_in_decision(
     decision: RouteDecision,
     user_text: str,
@@ -328,6 +375,15 @@ async def ground_decision_entities(
             continue
 
         if key == "service_name":
+            if _should_drop_service_name_in_active_reschedule(
+                label=label,
+                user_text=user_text,
+                raw_entities=raw,
+                state=state,
+            ):
+                flags.add("entity_dropped_stale_service_name_in_reschedule")
+                continue
+
             # Стараемся брать услугу из текущей реплики, а не "как есть" из LLM,
             # чтобы не залипали ложные service_name.
             phrase: str | None = None
