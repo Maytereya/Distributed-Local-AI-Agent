@@ -40,7 +40,6 @@ from .flow_policy import (
     set_secondary_queue,
 )
 from .appointment_flow_guard import (
-    clear_appointment_flow_context,
     reset_appointment_runtime_state,
     run_appointment_precheck,
     should_keep_appointment_flow_override,
@@ -291,6 +290,20 @@ def _is_samara_city(city: str | None) -> bool:
     if not city:
         return False
     return str(city).strip().lower().replace("ё", "е") == "самара"
+
+
+def _reset_state_after_handoff(state: SessionState, memory: MemoryStore) -> None:
+    """
+    Сбрасывает transient/focus state после передачи диалога оператору.
+    Сохраняем только устойчивый профильный контекст города (Самара).
+    """
+
+    city = str(state.last_entities.get("city") or "").strip()
+    keep_city = city if _is_samara_city(city) else ""
+    memory.clear_pending(state)
+    state.last_entities.clear()
+    if keep_city:
+        state.last_entities["city"] = keep_city
 
 
 def _is_appointment_datetime_followup(user_text: str) -> bool:
@@ -1124,8 +1137,7 @@ async def patient_routing_stream(
 
     # Явный запрос оператора должен иметь абсолютный приоритет.
     if explicit_operator_requested(user_text):
-        clear_appointment_flow_context(state, memory)
-        state.last_entities["_nlu_unclear_count"] = 0
+        _reset_state_after_handoff(state, memory)
         yield ResponseEnvelope(
             text=handoff_message("manual_operator"),
             attachments=[],
@@ -1143,8 +1155,7 @@ async def patient_routing_stream(
 
     city_now = match_city(user_text)
     if city_now and not _is_samara_city(city_now):
-        clear_appointment_flow_context(state, memory)
-        state.last_entities.pop("city", None)
+        _reset_state_after_handoff(state, memory)
         update_summary(state, reason="handoff")
         yield ResponseEnvelope(
             text=_SAMARA_ONLY_OPERATOR_TEXT,
@@ -1169,6 +1180,8 @@ async def patient_routing_stream(
         debug_state_update_factory=_early_debug_state_update,
     )
     if precheck is not None:
+        if precheck.handoff:
+            _reset_state_after_handoff(state, memory)
         yield precheck
         return
 
@@ -1185,6 +1198,7 @@ async def patient_routing_stream(
         state_update: dict[str, Any] = {}
         if debug:
             state_update = {"debug": {"route_error": str(e)}}
+        _reset_state_after_handoff(state, memory)
         yield ResponseEnvelope(
             text=fallback_text,
             attachments=[],
@@ -1236,6 +1250,7 @@ async def patient_routing_stream(
     )
     if recovery.kind == "handoff":
         update_summary(state, reason="handoff")
+        _reset_state_after_handoff(state, memory)
         yield ResponseEnvelope(text=recovery.text or handoff_message("low_confidence"), handoff=True)
         return
     if recovery.kind == "clarify":
@@ -1257,6 +1272,7 @@ async def patient_routing_stream(
             and contextual_reply_kind(user_text) == "no"
         ):
             update_summary(state, reason="handoff")
+            _reset_state_after_handoff(state, memory)
             yield ResponseEnvelope(text=handoff_message("manual_operator"), handoff=True)
             return
         if flow_label == "APPOINTMENT" and isinstance(missing, list):
@@ -1276,6 +1292,7 @@ async def patient_routing_stream(
                 if attempts >= 3:
                     state.last_entities.pop("_appointment_doctor_lookup_attempts", None)
                     update_summary(state, reason="handoff")
+                    _reset_state_after_handoff(state, memory)
                     yield ResponseEnvelope(
                         text="Не удалось точно определить врача для этой записи. Соединяю с оператором.",
                         handoff=True,
@@ -1290,6 +1307,7 @@ async def patient_routing_stream(
                 if attempts >= 3:
                     state.last_entities.pop("_appointment_datetime_attempts", None)
                     update_summary(state, reason="handoff")
+                    _reset_state_after_handoff(state, memory)
                     yield ResponseEnvelope(
                         text="Не удалось точно определить дату или время записи. Соединяю с оператором.",
                         handoff=True,
@@ -1312,6 +1330,7 @@ async def patient_routing_stream(
 
     handoff_required, handoff_msg, handoff_reason = evidence_requires_handoff(evidence)
     if handoff_required:
+        _reset_state_after_handoff(state, memory)
         yield ResponseEnvelope(text=handoff_message(handoff_reason, handoff_msg), handoff=True)
         return
 
@@ -1334,6 +1353,8 @@ async def patient_routing_stream(
             and flow_label not in {"APPOINTMENT", "URGENT", "COMPLAINT", "MEDICAL_ADVICE", "TEST_RESULT"}
         ):
             state.last_entities["_secondary_offer_pending"] = True
+        if structured_response.handoff:
+            _reset_state_after_handoff(state, memory)
         yield structured_response
         return
 
@@ -1341,6 +1362,7 @@ async def patient_routing_stream(
         async for chunk in render_stream(user_text, decision, evidence, runtime_options=runtime_options):
             yield ResponseEnvelope(text=chunk, attachments=[], handoff=False)
     except Exception:
+        _reset_state_after_handoff(state, memory)
         yield ResponseEnvelope(
             text=handoff_message("renderer_error"),
             attachments=[],
@@ -1349,6 +1371,7 @@ async def patient_routing_stream(
         return
 
     if decision.needs_handoff:
+        _reset_state_after_handoff(state, memory)
         yield ResponseEnvelope(text=decision_handoff_text(decision.flags), attachments=[], handoff=True)
 
     secondary = get_secondary_queue(state)

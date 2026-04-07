@@ -66,6 +66,7 @@ _APPOINTMENT_SOFT_PAUSE_EXACT = {"нет", "ладно"}
 _APPOINTMENT_SOFT_PAUSE_PUNCT_RE = re.compile(r"[!.,?;:]+")
 
 _APPOINTMENT_RUNTIME_KEYS: tuple[str, ...] = (
+    "appointment_action",
     "appointment_flow_active",
     "appointment_confirm_pending",
     "appointment_confirmed",

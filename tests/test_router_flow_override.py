@@ -1305,6 +1305,50 @@ def test_memory_merge_entities_reschedule_clears_stale_specialty_context():
     assert state.last_entities.get("appointment_branch_options") is None
 
 
+def test_memory_merge_entities_specialty_change_drops_stale_doctor_context():
+    state = SessionState(
+        session_id="mem-specialty-change-drop-doctor",
+        last_entities={
+            "doctor_name": "Трубин Алексей Юрьевич",
+            "doctor_id": 1001,
+            "specialty": "уролог",
+            "branch_name": "г. Самара, ул. Победы, 83",
+            "date_from": "2026-04-20",
+            "time_from": "11:00",
+        },
+    )
+    memory = MemoryStore()
+
+    memory.merge_entities(state, {"specialty": "кардиолог"}, label="PRICE")
+
+    assert state.last_entities.get("doctor_name") is None
+    assert state.last_entities.get("doctor_id") is None
+    assert state.last_entities.get("branch_name") is None
+    assert state.last_entities.get("date_from") is None
+    assert state.last_entities.get("time_from") is None
+    assert state.last_entities.get("specialty") == "кардиолог"
+
+
+def test_memory_merge_entities_service_change_drops_stale_doctor_context():
+    state = SessionState(
+        session_id="mem-service-change-drop-doctor",
+        last_entities={
+            "doctor_name": "Трубин Алексей Юрьевич",
+            "doctor_id": 1001,
+            "service_name": "Прием врача-уролога",
+            "branch_name": "г. Самара, ул. Победы, 83",
+        },
+    )
+    memory = MemoryStore()
+
+    memory.merge_entities(state, {"service_name": "Прием врача-кардиолога первичный"}, label="PRICE")
+
+    assert state.last_entities.get("doctor_name") is None
+    assert state.last_entities.get("doctor_id") is None
+    assert state.last_entities.get("branch_name") is None
+    assert state.last_entities.get("service_name") == "Прием врача-кардиолога первичный"
+
+
 def test_apply_pending_override_keeps_appointment_on_full_branch_address_reply():
     decision = RouteDecision(label="ADDRESS", confidence=0.78, flags={"rule_nonbookable_walkin"})
     pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
@@ -1836,6 +1880,37 @@ def test_patient_routing_stream_confirm_pending_no_keeps_confirm_transition():
     assert state.last_entities.get("appointment_cancel_pending") is None
     assert state.last_entities.get("appointment_confirm_pending") is None
     assert state.last_entities.get("appointment_flow_active") is True
+
+
+def test_patient_routing_stream_confirm_pending_yes_handoff_resets_state():
+    state = SessionState(
+        session_id="appt-confirm-yes-reset",
+        last_entities={
+            "appointment_flow_active": True,
+            "appointment_confirm_pending": True,
+            "appointment_action": "book",
+            "doctor_name": "Трубин Алексей Юрьевич",
+            "service_name": "Прием врача-уролога",
+            "specialty": "уролог",
+            "branch_name": "г. Самара, ул. Победы, 83",
+            "date_hint": "next_week",
+            "time_flexible": True,
+            "patient_name": "Игорь Трубник",
+            "city": "Самара",
+        },
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["patient_name"])
+
+    out = _run_stream_once("да", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].handoff is True
+    assert "передаю заявку оператору" in out[0].text.lower()
+    assert memory.get_pending(state) is None
+    assert state.last_entities == {"city": "Самара"}
 
 
 def test_patient_routing_stream_topic_switch_requests_confirmation():
