@@ -222,6 +222,50 @@ def _is_appointment_waiting_branch_or_city(pending: dict | None) -> bool:
     return ("branch" in as_text) or ("city" in as_text)
 
 
+def _is_appointment_waiting_doctor_or_service(pending: dict | None) -> bool:
+    if not isinstance(pending, dict):
+        return False
+    if pending.get("label") != "APPOINTMENT":
+        return False
+    missing = pending.get("missing")
+    if not isinstance(missing, list):
+        return False
+    as_text = " ".join(str(x or "").lower() for x in missing)
+    return (
+        "doctor_id" in as_text
+        or "doctor_name" in as_text
+        or "specialty" in as_text
+        or "service_name" in as_text
+    )
+
+
+def _looks_like_appointment_doctor_reply(text: str) -> bool:
+    s = str(text or "").strip()
+    if not s or len(s) > 64:
+        return False
+    if _looks_like_patient_fio(s):
+        return False
+    if _is_city_only_reply(s):
+        return False
+    # Явные признаки адреса/филиала не считаем ответом с фамилией врача.
+    if re.search(r"\b(ул\.?|улиц\w*|пр\.?|просп\w*|дом|д\.)\b", s, re.I):
+        return False
+    if re.search(r"^\s*на\s+[А-Яа-яЁёA-Za-z\-]{3,}", s):
+        return False
+    if has_datetime_signal(s):
+        return False
+    if (
+        detect_schedule_intent(s)
+        or detect_prepare_intent(s)
+        or detect_price_intent(s)
+        or detect_address_intent(s)
+        or detect_doc_request_intent(s)
+    ):
+        return False
+    tokens = [t for t in re.findall(r"[A-Za-zА-Яа-яЁё\-]+", s) if t]
+    return 1 <= len(tokens) <= 3
+
+
 def _is_short_prepare_followup(text: str) -> bool:
     s = str(text or "").strip()
     if not s or len(s) > 64:
@@ -294,6 +338,13 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
         )
         if quick.get("appointment_selection_mode") in {"doctor", "branch"}:
             return "APPOINTMENT"
+    if (
+        pending_label == "APPOINTMENT"
+        and _is_appointment_waiting_doctor_or_service(pending)
+        and decision.label in {"DOCTOR_SCHEDULE", "DOCTOR_INFO", "OTHER"}
+        and _looks_like_appointment_doctor_reply(user_text)
+    ):
+        return "APPOINTMENT"
     # В шаге добора ФИО пациента не даем случайной переклассификации
     # (например, в TEST_RESULT) перебить активный APPOINTMENT flow.
     if (

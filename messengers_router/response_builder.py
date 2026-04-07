@@ -303,6 +303,9 @@ def build_appointment_schedule_preview_response(
         return None
     if not (state.last_entities.get("doctor_name") or state.last_entities.get("doctor_id")):
         return None
+    action = str(state.last_entities.get("appointment_action") or "").strip().lower()
+    if action in {"cancel", "reschedule"}:
+        return None
     if state.last_entities.get("date_from") or state.last_entities.get("date_hint"):
         return None
     if state.last_entities.get("time_from"):

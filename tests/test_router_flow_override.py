@@ -1138,6 +1138,30 @@ def test_build_appointment_schedule_preview_response():
     assert "Трубин Алексей Юрьевич" in env.text
 
 
+def test_build_appointment_schedule_preview_response_skips_for_reschedule_action():
+    state = SessionState(
+        session_id="appt-preview-reschedule-skip",
+        last_entities={"doctor_name": "Трубин", "appointment_action": "reschedule"},
+    )
+    evidence = Evidence(
+        items={
+            "doctor_schedule": {
+                "schedule": [
+                    {
+                        "fio": "Трубин Алексей Юрьевич",
+                        "regions": ["Ленина 5"],
+                        "schedule": {"Ленина 5": [{"date": "2026-03-09", "slots": ["10:00"]}]},
+                    }
+                ]
+            }
+        }
+    )
+
+    env = _build_appointment_schedule_preview_response("APPOINTMENT", evidence, state)
+
+    assert env is None
+
+
 def test_apply_pending_override_keeps_price_flow_on_city_reply():
     decision = RouteDecision(label="ADDRESS", confidence=0.72, flags={"rule_address"})
     pending = {"label": "PRICE", "missing": ["_any_of:city,branch_name,branch_id"]}
@@ -1273,6 +1297,15 @@ def test_apply_pending_override_keeps_appointment_on_selection_mode_reply():
     pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
 
     label = apply_pending_override(decision, pending, user_text="врачи")
+
+    assert label == "APPOINTMENT"
+
+
+def test_apply_pending_override_keeps_appointment_on_doctor_reply_when_waiting_doctor():
+    decision = RouteDecision(label="DOCTOR_SCHEDULE", confidence=0.82, flags={"rule_schedule_doctor_followup"})
+    pending = {"label": "APPOINTMENT", "missing": ["_any_of:doctor_id,doctor_name,specialty,service_name"]}
+
+    label = apply_pending_override(decision, pending, user_text="Трубин")
 
     assert label == "APPOINTMENT"
 
