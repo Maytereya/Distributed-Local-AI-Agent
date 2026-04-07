@@ -71,6 +71,8 @@ _APPOINTMENT_RUNTIME_KEYS: tuple[str, ...] = (
     "appointment_confirmed",
     "appointment_cancel_pending",
     "appointment_topic_switch_pending",
+    "_appointment_doctor_lookup_attempts",
+    "_appointment_datetime_attempts",
     "appointment_selection_mode",
     "appointment_windows",
     "appointment_branch_options",

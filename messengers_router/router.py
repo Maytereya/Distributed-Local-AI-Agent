@@ -1259,6 +1259,44 @@ async def patient_routing_stream(
             update_summary(state, reason="handoff")
             yield ResponseEnvelope(text=handoff_message("manual_operator"), handoff=True)
             return
+        if flow_label == "APPOINTMENT" and isinstance(missing, list):
+            action = str(state.last_entities.get("appointment_action") or "").strip().lower()
+            needs_doctor = any(
+                str(item).startswith("_any_of:")
+                and ("doctor_id" in str(item) or "doctor_name" in str(item))
+                for item in missing
+            )
+            needs_datetime = any(
+                "date_from" in str(item) or "time_from" in str(item) or "date_hint" in str(item)
+                for item in missing
+            )
+            if action in {"cancel", "reschedule"} and needs_doctor:
+                attempts = int(state.last_entities.get("_appointment_doctor_lookup_attempts") or 0) + 1
+                state.last_entities["_appointment_doctor_lookup_attempts"] = attempts
+                if attempts >= 2:
+                    state.last_entities.pop("_appointment_doctor_lookup_attempts", None)
+                    update_summary(state, reason="handoff")
+                    yield ResponseEnvelope(
+                        text="Не удалось точно определить врача для этой записи. Соединяю с оператором.",
+                        handoff=True,
+                    )
+                    return
+            else:
+                state.last_entities.pop("_appointment_doctor_lookup_attempts", None)
+
+            if action in {"cancel", "reschedule"} and needs_datetime:
+                attempts = int(state.last_entities.get("_appointment_datetime_attempts") or 0) + 1
+                state.last_entities["_appointment_datetime_attempts"] = attempts
+                if attempts >= 2:
+                    state.last_entities.pop("_appointment_datetime_attempts", None)
+                    update_summary(state, reason="handoff")
+                    yield ResponseEnvelope(
+                        text="Не удалось точно определить дату или время записи. Соединяю с оператором.",
+                        handoff=True,
+                    )
+                    return
+            else:
+                state.last_entities.pop("_appointment_datetime_attempts", None)
         if flow_label == "APPOINTMENT":
             state.last_entities["appointment_flow_active"] = True
         _remember_question(state, f"pending:{flow_label}", missing if isinstance(missing, list) else [])

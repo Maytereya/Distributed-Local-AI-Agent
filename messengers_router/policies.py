@@ -1576,13 +1576,13 @@ def clarification_question(label: str, missing: list[str], entities: dict[str, A
             return "Хотите отменить или перенести запись?"
         if action == "cancel":
             if need_service:
-                return "Уточните, пожалуйста, ФИО врача или услугу, запись на которую нужно отменить."
+                return "Здравствуйте! Укажите ФИО врача, запись к которому нужно отменить."
             if "patient_name" in missing:
-                return APPOINTMENT_CLARIFY_MAP["need_patient"]
+                return "Здравствуйте! Для отмены записи укажите ФИО пациента."
             return "Уточните, пожалуйста, детали записи для отмены."
         if action == "reschedule":
             if need_service:
-                return "Уточните, пожалуйста, ФИО врача или услугу, запись по которой нужно перенести."
+                return "Здравствуйте! Укажите ФИО врача, запись к которому нужно перенести."
             if need_datetime:
                 return APPOINTMENT_CLARIFY_MAP["need_datetime"]
             if "patient_name" in missing:

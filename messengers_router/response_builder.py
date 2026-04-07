@@ -24,6 +24,7 @@ from .policies import (
     appointment_text_confirm_prompt,
     appointment_text_datetime_prompt,
     appointment_text_patient_name_prompt,
+    _render_appointment_date_part,
     clarification_question,
     extract_price_rub,
     nonbookable_service_hint,
@@ -330,7 +331,8 @@ def build_appointment_step_response(
         patient_name = str(entities.get("patient_name") or "").strip()
         doctor_name = str(entities.get("doctor_name") or "").strip()
         service_name = str(entities.get("service_name") or entities.get("test_name") or "").strip()
-        date_text = str(entities.get("date_from") or entities.get("date_hint") or "").strip()
+        date_raw = str(entities.get("date_from") or entities.get("date_hint") or "").strip()
+        date_text = _render_appointment_date_part(date_raw) if date_raw else ""
         time_text = str(entities.get("time_from") or "").strip()
 
         subject = doctor_name or service_name or "выбранной записи"
@@ -409,6 +411,8 @@ def build_appointment_step_response(
 
     if appointment_step == APPOINTMENT_STEP_DATETIME:
         state.last_entities.pop("appointment_branch_options", None)
+        if action in {"cancel", "reschedule"}:
+            memory.set_pending(state, label="APPOINTMENT", missing_slots=["_any_of:date_from,time_from,date_hint"])
         price_rub = extract_price_rub(evidence.get("price"))
         branch = str(entities.get("branch_name") or entities.get("city") or "выбранном филиале").strip()
         return ResponseEnvelope(

@@ -1234,6 +1234,22 @@ def test_clarification_question_reschedule_anyof_datetime_prefers_datetime_promp
     assert "дат" in text and "время" in text
 
 
+def test_clarification_question_cancel_patient_name_is_action_specific():
+    text = clarification_question("APPOINTMENT", ["patient_name"], {"appointment_action": "cancel"}).lower()
+    assert "для отмены записи" in text
+    assert "фио пациента" in text
+
+
+def test_clarification_question_reschedule_doctor_prompt_has_no_service_word():
+    text = clarification_question(
+        "APPOINTMENT",
+        ["_any_of:doctor_id,doctor_name,service_name"],
+        {"appointment_action": "reschedule"},
+    ).lower()
+    assert "фио врача" in text
+    assert "услуг" not in text
+
+
 def test_apply_pending_override_keeps_appointment_on_full_branch_address_reply():
     decision = RouteDecision(label="ADDRESS", confidence=0.78, flags={"rule_nonbookable_walkin"})
     pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
@@ -1514,6 +1530,29 @@ def test_build_appointment_step_response_reschedule_full_data_requests_confirmat
     assert state.last_entities.get("appointment_confirm_pending") is True
 
 
+def test_build_appointment_step_response_cancel_renders_russian_date_hint():
+    state = SessionState(
+        session_id="appt-step-cancel-russian-date",
+        last_entities={
+            "appointment_action": "cancel",
+            "service_name": "Холтер",
+            "date_hint": "tomorrow",
+            "time_from": "16:00",
+            "patient_name": "Петров Петр Петрович",
+        },
+    )
+    evidence = Evidence(items={})
+    memory = MemoryStore()
+    services = Services()
+
+    env = _build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
+
+    assert env is not None
+    assert env.handoff is True
+    assert "завтра" in env.text.lower()
+    assert "tomorrow" not in env.text.lower()
+
+
 def test_patient_routing_stream_requests_cancel_confirmation_for_active_appointment_flow():
     state = SessionState(session_id="appt-cancel-confirm", last_entities={"appointment_flow_active": True})
     services = Services()
@@ -1596,6 +1635,51 @@ def test_patient_routing_stream_waiting_action_no_handoffs_to_operator(monkeypat
     assert len(out) == 1
     assert out[0].handoff is True
     assert "оператор" in out[0].text.lower()
+
+
+def test_patient_routing_stream_reschedule_unknown_doctor_handoffs_after_second_attempt(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="OTHER",
+                confidence=0.4,
+                entities={},
+                flags={"low_confidence"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+
+    state = SessionState(
+        session_id="appt-reschedule-unknown-doctor",
+        last_entities={"appointment_flow_active": True, "appointment_action": "reschedule"},
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["_any_of:doctor_id,doctor_name,service_name"])
+
+    first = _run_stream_once("не знаю фамилию", state, services, memory)
+    assert len(first) == 1
+    assert first[0].handoff is False
+    assert "фио врача" in first[0].text.lower()
+
+    second = _run_stream_once("все равно не помню", state, services, memory)
+    assert len(second) == 1
+    assert second[0].handoff is True
+    assert "оператор" in second[0].text.lower()
 
 
 def test_patient_routing_stream_cancel_rejected_resumes_appointment_flow():
