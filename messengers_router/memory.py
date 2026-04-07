@@ -165,6 +165,24 @@ class MemoryStore:
                 old["_last_label"] = label
             return
 
+        action = str(cleaned.get("appointment_action") or "").strip().lower()
+        if action in {"cancel", "reschedule"}:
+            has_explicit_target = bool(
+                cleaned.get("doctor_id")
+                or cleaned.get("doctor_name")
+            )
+            # Если пользователь только запускает отмену/перенос без конкретного врача,
+            # чистим прилипший контекст специальности/услуги из прошлой темы.
+            if not has_explicit_target:
+                for k in (
+                    "specialty",
+                    "service_name",
+                    "test_name",
+                    "appointment_selection_mode",
+                    "appointment_branch_options",
+                ):
+                    old.pop(k, None)
+
         # object change rules
         doctor_changed = False
         if "doctor_id" in cleaned and cleaned.get("doctor_id") != old.get("doctor_id"):

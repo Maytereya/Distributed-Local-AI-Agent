@@ -1511,10 +1511,10 @@ def _appointment_required_slots(entities: dict[str, Any]) -> list[str]:
     action = str(entities.get("appointment_action") or "").strip().lower()
     if action in {"unknown", "ambiguous"}:
         return ["appointment_action"]
-    if action == "cancel":
+    if action in {"cancel", "reschedule"}:
         return [
             "appointment_action",
-            "_any_of:doctor_id,doctor_name,service_name",
+            "_any_of:doctor_id,doctor_name",
             "patient_name",
         ]
     return REQUIRED_SLOTS.get("APPOINTMENT", [])

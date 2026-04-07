@@ -1267,11 +1267,42 @@ def test_clarification_question_cancel_patient_name_is_action_specific():
 def test_clarification_question_reschedule_doctor_prompt_has_no_service_word():
     text = clarification_question(
         "APPOINTMENT",
-        ["_any_of:doctor_id,doctor_name,service_name"],
+        ["_any_of:doctor_id,doctor_name"],
         {"appointment_action": "reschedule"},
     ).lower()
     assert "фио врача" in text
     assert "услуг" not in text
+
+
+def test_missing_slots_reschedule_requires_concrete_doctor_even_with_specialty():
+    missing = missing_slots(
+        "APPOINTMENT",
+        {"appointment_action": "reschedule", "specialty": "кардиолог"},
+    )
+    assert "_any_of:doctor_id,doctor_name" in missing
+    assert "patient_name" in missing
+
+
+def test_memory_merge_entities_reschedule_clears_stale_specialty_context():
+    state = SessionState(
+        session_id="appt-reschedule-stale-specialty",
+        last_entities={
+            "specialty": "кардиолог",
+            "service_name": "прием кардиолога",
+            "test_name": "общий анализ крови",
+            "appointment_selection_mode": "doctor",
+            "appointment_branch_options": ["г. Самара, пр. Ленина, 5"],
+        },
+    )
+    memory = MemoryStore()
+
+    memory.merge_entities(state, {"appointment_action": "reschedule"}, label="APPOINTMENT")
+
+    assert state.last_entities.get("specialty") is None
+    assert state.last_entities.get("service_name") is None
+    assert state.last_entities.get("test_name") is None
+    assert state.last_entities.get("appointment_selection_mode") is None
+    assert state.last_entities.get("appointment_branch_options") is None
 
 
 def test_apply_pending_override_keeps_appointment_on_full_branch_address_reply():
@@ -1702,7 +1733,7 @@ def test_patient_routing_stream_reschedule_unknown_doctor_handoffs_after_repeat_
     services = Services()
     services.ensure_background_refresh_started = lambda: None
     memory = MemoryStore()
-    memory.set_pending(state, label="APPOINTMENT", missing_slots=["_any_of:doctor_id,doctor_name,service_name"])
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["_any_of:doctor_id,doctor_name"])
 
     first = _run_stream_once("не знаю фамилию", state, services, memory)
     assert len(first) == 1
@@ -1718,6 +1749,50 @@ def test_patient_routing_stream_reschedule_unknown_doctor_handoffs_after_repeat_
     assert len(third) == 1
     assert third[0].handoff is True
     assert "оператор" in third[0].text.lower()
+
+
+def test_patient_routing_stream_reschedule_with_stale_specialty_requests_doctor(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="APPOINTMENT",
+                confidence=0.8,
+                entities={"appointment_action": "reschedule"},
+                flags={"rule_appointment"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+
+    state = SessionState(
+        session_id="appt-reschedule-stale-specialty-flow",
+        last_entities={"specialty": "кардиолог", "_last_label": "DOCTOR_INFO"},
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    out = _run_stream_once("Перенесите запись, пожалуйста", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].handoff is False
+    assert "фио врача" in out[0].text.lower()
+    pending = memory.get_pending(state)
+    assert isinstance(pending, dict)
+    assert pending.get("label") == "APPOINTMENT"
+    assert "_any_of:doctor_id,doctor_name" in (pending.get("missing") or [])
 
 
 def test_patient_routing_stream_cancel_rejected_resumes_appointment_flow():
