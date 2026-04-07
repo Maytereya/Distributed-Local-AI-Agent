@@ -1637,7 +1637,7 @@ def test_patient_routing_stream_waiting_action_no_handoffs_to_operator(monkeypat
     assert "оператор" in out[0].text.lower()
 
 
-def test_patient_routing_stream_reschedule_unknown_doctor_handoffs_after_second_attempt(monkeypatch):
+def test_patient_routing_stream_reschedule_unknown_doctor_handoffs_after_repeat_attempts(monkeypatch):
     async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
         _ = runtime_options
         return NLUResult(
@@ -1678,8 +1678,13 @@ def test_patient_routing_stream_reschedule_unknown_doctor_handoffs_after_second_
 
     second = _run_stream_once("все равно не помню", state, services, memory)
     assert len(second) == 1
-    assert second[0].handoff is True
-    assert "оператор" in second[0].text.lower()
+    assert second[0].handoff is False
+    assert "фио врача" in second[0].text.lower()
+
+    third = _run_stream_once("все равно не помню", state, services, memory)
+    assert len(third) == 1
+    assert third[0].handoff is True
+    assert "оператор" in third[0].text.lower()
 
 
 def test_patient_routing_stream_cancel_rejected_resumes_appointment_flow():

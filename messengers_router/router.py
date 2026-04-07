@@ -1273,7 +1273,7 @@ async def patient_routing_stream(
             if action in {"cancel", "reschedule"} and needs_doctor:
                 attempts = int(state.last_entities.get("_appointment_doctor_lookup_attempts") or 0) + 1
                 state.last_entities["_appointment_doctor_lookup_attempts"] = attempts
-                if attempts >= 2:
+                if attempts >= 3:
                     state.last_entities.pop("_appointment_doctor_lookup_attempts", None)
                     update_summary(state, reason="handoff")
                     yield ResponseEnvelope(
@@ -1287,7 +1287,7 @@ async def patient_routing_stream(
             if action in {"cancel", "reschedule"} and needs_datetime:
                 attempts = int(state.last_entities.get("_appointment_datetime_attempts") or 0) + 1
                 state.last_entities["_appointment_datetime_attempts"] = attempts
-                if attempts >= 2:
+                if attempts >= 3:
                     state.last_entities.pop("_appointment_datetime_attempts", None)
                     update_summary(state, reason="handoff")
                     yield ResponseEnvelope(
