@@ -27,6 +27,7 @@ from messengers_router.policies import (
     detect_unsupported_catalog,
 )
 from messengers_router.services import Services
+from messengers_router.entity_grounder import ground_decision_entities
 from messengers_router import classifier as classifier_mod
 from messengers_router import doctor_name_port as doctor_name_port_mod
 from messengers_router.city import match_city
@@ -1927,6 +1928,34 @@ def test_patient_routing_stream_topic_switch_requests_confirmation():
     assert state.last_entities.get("appointment_topic_switch_pending") is True
 
 
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "не туда",
+        "ты несешь бред",
+        "остановись",
+        "не так",
+        "бред",
+        "ошибка",
+    ],
+)
+def test_patient_routing_stream_soft_pause_triggers_cancel_confirm(phrase: str):
+    state = SessionState(
+        session_id=f"appt-soft-pause-{phrase}",
+        last_entities={"appointment_flow_active": True},
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["date_from", "time_from"])
+
+    out = _run_stream_once(phrase, state, services, memory)
+
+    assert len(out) == 1
+    assert "отменить текущий процесс записи" in out[0].text.lower()
+    assert state.last_entities.get("appointment_cancel_pending") is True
+
+
 def test_patient_routing_stream_topic_switch_confirm_yes_clears_appointment_flow():
     state = SessionState(
         session_id="appt-topic-switch-yes",
@@ -2251,6 +2280,109 @@ def test_route_message_datetime_after_doctor_schedule_promotes_appointment(monke
     assert state.last_entities.get("date_from") == "2026-03-19"
     assert state.last_entities.get("time_from") == "12:00"
     assert plan.label == "APPOINTMENT"
+
+
+def test_route_message_datetime_after_doctor_schedule_promotes_from_test_assist(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="TEST_ASSIST",
+                confidence=0.88,
+                entities={},
+                flags={"rule_test_assist"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="llm",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence()
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="schedule-to-appointment-datetime-test-assist",
+        last_entities={
+            "_last_label": "DOCTOR_SCHEDULE",
+            "doctor_name": "Дразнин Антон Владимирович",
+            "branch_name": "г. Самара, пр. Ленина, 5",
+        },
+    )
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "Да, мне удобно на 10 апреля, на 16:00",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "APPOINTMENT"
+    assert "flow_schedule_to_appointment" in decision.flags
+    assert plan.label == "APPOINTMENT"
+
+
+def test_entity_grounder_drops_doctor_like_service_on_unverified_doctor():
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.8,
+        entities={"service_name": "Евграфову"},
+        flags={"doctor_name_unverified"},
+        needs_handoff=False,
+    )
+    state = SessionState(session_id="eg_doctor_like_service_drop", last_entities={})
+    services = Services()
+
+    grounded = asyncio.run(
+        ground_decision_entities(
+            decision=decision,
+            user_text="Запишите к Евграфову",
+            state=state,
+            services=services,
+            pending=None,
+        )
+    )
+
+    assert grounded.entities.get("service_name") is None
+    assert "entity_dropped_doctor_like_service_name" in grounded.flags
+
+
+def test_entity_grounder_keeps_service_with_explicit_service_anchor_even_if_doctor_unverified():
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.8,
+        entities={"service_name": "Холтер"},
+        flags={"doctor_name_unverified"},
+        needs_handoff=False,
+    )
+    state = SessionState(session_id="eg_keep_service_with_anchor", last_entities={})
+    services = Services()
+
+    grounded = asyncio.run(
+        ground_decision_entities(
+            decision=decision,
+            user_text="Запишите к Евграфову на холтер",
+            state=state,
+            services=services,
+            pending=None,
+        )
+    )
+
+    assert grounded.entities.get("service_name") == "Холтер"
 
 
 def test_route_message_city_only_reply_keeps_price_label(monkeypatch):

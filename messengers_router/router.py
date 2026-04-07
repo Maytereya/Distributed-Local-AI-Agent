@@ -842,7 +842,7 @@ async def route_patient_message(
         last_label == "DOCTOR_SCHEDULE"
         and (state.last_entities.get("doctor_name") or state.last_entities.get("doctor_id"))
         and _is_appointment_datetime_followup(user_text)
-        and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "ADDRESS", "PRICE"}
+        and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "TEST_ASSIST", "ADDRESS", "PRICE"}
     ):
         entities = dict(decision.entities)
         for key in ("doctor_id", "doctor_name", "branch_id", "branch_name"):

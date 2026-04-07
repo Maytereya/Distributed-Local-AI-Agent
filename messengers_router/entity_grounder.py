@@ -32,6 +32,10 @@ _GENERIC_SERVICE_FALLBACK_RE = re.compile(
     r"\b(запис\w*|врач\w*|доктор\w*|специалист\w*|услуг\w*|хочу|нужно|надо|можно)\b",
     re.I,
 )
+_SERVICE_ANCHOR_HINT_RE = re.compile(
+    r"\b(узи|экг|холтер|мрт|кт|фгдс|фкс|эндоскоп|гастроскоп|колоноскоп|анализ|биопс|рентген|флюорограф)\b",
+    re.I,
+)
 _DOCTOR_NOISE_TOKENS = {
     "хочу",
     "нужно",
@@ -152,6 +156,29 @@ def _sanitize_raw_doctor_name(raw: str, flags: set[str], entities: dict[str, Any
         flags.add("doctor_name_unverified")
         return ""
     return value
+
+
+def _is_doctor_like_service_collision(
+    *,
+    label: str,
+    user_text: str,
+    phrase: str,
+    decision_flags: set[str],
+) -> bool:
+    """
+    Отсекает ложный service_name в APPOINTMENT, когда пользователь просит
+    запись "к <фамилии>", а врача не удалось подтвердить.
+    """
+    if label != "APPOINTMENT":
+        return False
+    if "doctor_name_unverified" not in decision_flags:
+        return False
+    if _SERVICE_ANCHOR_HINT_RE.search(user_text or ""):
+        return False
+    # Для многословных и явно процедурных формулировок риск ниже.
+    if len((phrase or "").split()) > 1:
+        return False
+    return True
 
 
 async def verify_doctor_entities_in_decision(
@@ -305,6 +332,14 @@ async def ground_decision_entities(
             if not phrase:
                 phrase = extract_service_phrase(user_text) or extract_service_phrase(str(value or ""))
             if phrase:
+                if _is_doctor_like_service_collision(
+                    label=label,
+                    user_text=user_text,
+                    phrase=phrase,
+                    decision_flags=set(decision.flags),
+                ):
+                    flags.add("entity_dropped_doctor_like_service_name")
+                    continue
                 out[key] = phrase
                 if str(value or "").strip() and phrase != str(value).strip():
                     flags.add("entity_grounded_service_name")
