@@ -40,6 +40,7 @@ _SERVICE_ANCHOR_HINT_RE = re.compile(
     r"\b(узи|экг|холтер|мрт|кт|фгдс|фкс|эндоскоп|гастроскоп|колоноскоп|анализ|биопс|рентген|флюорограф)\b",
     re.I,
 )
+_DOCTOR_LIKE_REQUEST_RE = re.compile(r"\bк\s+[А-Яа-яЁёA-Za-z\-]{3,}\b")
 _DOCTOR_NOISE_TOKENS = {
     "хочу",
     "нужно",
@@ -175,9 +176,12 @@ def _is_doctor_like_service_collision(
     """
     if label != "APPOINTMENT":
         return False
-    if "doctor_name_unverified" not in decision_flags:
+    has_doctor_like_request = bool(_DOCTOR_LIKE_REQUEST_RE.search(user_text or ""))
+    if "doctor_name_unverified" not in decision_flags and not has_doctor_like_request:
         return False
     if _SERVICE_ANCHOR_HINT_RE.search(user_text or ""):
+        return False
+    if _SERVICE_ANCHOR_HINT_RE.search(phrase or ""):
         return False
     # Для многословных и явно процедурных формулировок риск ниже.
     if len((phrase or "").split()) > 1:
@@ -370,7 +374,18 @@ async def ground_decision_entities(
                             flags.add("entity_dropped_unverified_service_name")
                         continue
                     if status == "unavailable":
-                        if phrase and not match_city(phrase):
+                        if nonbookable_keep and phrase and not match_city(phrase):
+                            out[key] = phrase
+                            flags.add("entity_kept_nonbookable_service_name")
+                            continue
+                        if (
+                            phrase
+                            and not match_city(phrase)
+                            and (
+                                _SERVICE_ANCHOR_HINT_RE.search(phrase)
+                                or _SERVICE_ANCHOR_HINT_RE.search(user_text or "")
+                            )
+                        ):
                             out[key] = phrase
                             flags.add("entity_kept_service_without_catalog")
                             continue

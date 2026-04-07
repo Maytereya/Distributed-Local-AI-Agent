@@ -341,7 +341,7 @@ def _apply_pending_override(decision: RouteDecision, pending: dict | None, user_
     if (
         pending_label == "APPOINTMENT"
         and _is_appointment_waiting_doctor_or_service(pending)
-        and decision.label in {"DOCTOR_SCHEDULE", "DOCTOR_INFO", "OTHER"}
+        and decision.label in {"DOCTOR_SCHEDULE", "DOCTOR_INFO", "OTHER", "TEST_RESULT"}
         and _looks_like_appointment_doctor_reply(user_text)
     ):
         return "APPOINTMENT"

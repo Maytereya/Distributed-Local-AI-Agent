@@ -3466,6 +3466,8 @@ class Services:
     _procedure_rows_loaded_at: float = field(default=0.0, init=False)
     _service_catalog_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
     _service_catalog_rows_loaded_at: float = field(default=0.0, init=False)
+    _service_catalog_last_error: str = field(default="", init=False)
+    _service_catalog_last_source_counts: dict[str, int] = field(default_factory=dict, init=False)
     _schedule_cache_client: AsyncListTTLStaleCache = field(init=False)
 
     # блокировка, чтобы несколько запросов параллельно не перегенерировали кэш
@@ -3713,13 +3715,16 @@ class Services:
                 return self._service_catalog_rows_cache
 
             merged_rows: list[dict[str, Any]] = []
+            source_errors: list[str] = []
             try:
                 retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
-            except Exception:
+            except Exception as exc:
+                source_errors.append(f"price_by_region:{type(exc).__name__}")
                 retail_rows = []
             try:
                 doctor_rows = await asyncio.to_thread(api_price.load_doctor_prices)
-            except Exception:
+            except Exception as exc:
+                source_errors.append(f"doctor_prices:{type(exc).__name__}")
                 doctor_rows = []
 
             for src in (retail_rows, doctor_rows):
@@ -3755,7 +3760,43 @@ class Services:
 
             self._service_catalog_rows_cache = deduped
             self._service_catalog_rows_loaded_at = time.time()
+            self._service_catalog_last_error = ";".join(source_errors)
+            self._service_catalog_last_source_counts = {
+                "retail_rows": len(retail_rows) if isinstance(retail_rows, list) else 0,
+                "doctor_rows": len(doctor_rows) if isinstance(doctor_rows, list) else 0,
+                "catalog_rows": len(deduped),
+            }
             return self._service_catalog_rows_cache
+
+    async def get_catalog_health(self) -> dict[str, Any]:
+        """
+        Централизованный health-check каталога для роутера.
+
+        Возвращает сводный статус каталогов, которые используются для
+        service/doctor grounding в мессенджерном контуре.
+        """
+
+        service_rows = await self._ensure_service_catalog_rows_loaded()
+        doctors = await self._ensure_doctors_cache_loaded()
+        service_ok = len(service_rows) > 0
+        doctors_ok = len(doctors) > 0
+        ok = service_ok and doctors_ok
+
+        reasons: list[str] = []
+        if not service_ok:
+            reasons.append(self._service_catalog_last_error or "service_catalog_empty")
+        if not doctors_ok:
+            reasons.append("doctors_catalog_empty")
+
+        return {
+            "ok": ok,
+            "status": "ok" if ok else "degraded",
+            "service_catalog_ok": service_ok,
+            "doctors_catalog_ok": doctors_ok,
+            "reason": ";".join(reasons),
+            "checked_at": int(time.time()),
+            "source_counts": dict(self._service_catalog_last_source_counts or {}),
+        }
 
     async def match_catalog_doctor(self, raw_text_or_name: str) -> dict[str, Any]:
         """
@@ -3834,7 +3875,12 @@ class Services:
 
         catalog_rows = await self._ensure_service_catalog_rows_loaded()
         if not catalog_rows:
-            return {"status": "unavailable", "query": queries[0], "canonical": ""}
+            return {
+                "status": "unavailable",
+                "query": queries[0],
+                "canonical": "",
+                "reason": self._service_catalog_last_error or "service_catalog_empty",
+            }
 
         for query in queries:
             exact = resolve_price_service_name_from_catalog(

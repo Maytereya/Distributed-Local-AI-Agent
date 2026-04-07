@@ -130,6 +130,130 @@ def _unsupported_catalog_kind(flags: set[str]) -> str | None:
     return None
 
 
+def _catalog_health_requirements(
+    decision: RouteDecision,
+    state: SessionState,
+    memory: MemoryStore,
+) -> tuple[bool, bool]:
+    """
+    Определяет, какие каталоги обязательны для текущего решения.
+
+    :return: (need_service_catalog, need_doctors_catalog)
+    """
+
+    label = str(decision.label or "").strip().upper()
+    entities = dict(state.last_entities or {})
+    entities.update(decision.entities or {})
+
+    has_doctor_context = any(
+        str(entities.get(k) or "").strip()
+        for k in (
+            "doctor_id",
+            "doctor_name",
+            "last_name",
+            "doctor_last_name",
+            "specialty",
+            "_catalog_doctor_candidate",
+        )
+    )
+    has_service_context = any(
+        str(entities.get(k) or "").strip()
+        for k in ("service_name", "test_name", "_catalog_service_candidate")
+    )
+
+    if label == "DOCTOR_INFO":
+        return False, True
+
+    if label == "DOCTOR_SCHEDULE":
+        # Если врач уже однозначно определен, расписание можно пробовать получить
+        # без обязательного catalog-lookup.
+        return False, not has_doctor_context
+
+    if label == "APPOINTMENT":
+        pending = memory.get_pending(state)
+        if isinstance(pending, dict) and pending.get("label") == "APPOINTMENT":
+            missing = pending.get("missing")
+            if isinstance(missing, list):
+                core_slots = (
+                    "doctor_id",
+                    "doctor_name",
+                    "last_name",
+                    "doctor_last_name",
+                    "specialty",
+                    "service_name",
+                    "test_name",
+                )
+                needs_core_lookup = any(
+                    isinstance(item, str) and any(slot in item for slot in core_slots)
+                    for item in missing
+                )
+                if not needs_core_lookup:
+                    return False, False
+        need_doctors = has_doctor_context or not has_service_context
+        need_service = has_service_context or not has_doctor_context
+        return need_service, need_doctors
+
+    if label == "PRICE":
+        pending = memory.get_pending(state)
+        if isinstance(pending, dict) and pending.get("label") == "PRICE":
+            missing = pending.get("missing")
+            if isinstance(missing, list):
+                core_slots = (
+                    "doctor_id",
+                    "doctor_name",
+                    "last_name",
+                    "doctor_last_name",
+                    "specialty",
+                    "service_name",
+                    "test_name",
+                )
+                needs_core_lookup = any(
+                    isinstance(item, str) and any(slot in item for slot in core_slots)
+                    for item in missing
+                )
+                if not needs_core_lookup:
+                    return False, False
+        if has_doctor_context:
+            return False, True
+        return True, False
+
+    if label == "ADDRESS":
+        # ADDRESS может корректно работать по уже выбранному контексту без
+        # catalog-grounding (например, follow-up по филиалам/забору).
+        return False, False
+
+    return False, False
+
+
+def _catalog_health_degraded_text(
+    *,
+    need_service_catalog: bool,
+    need_doctors_catalog: bool,
+) -> str:
+    if need_service_catalog and need_doctors_catalog:
+        return (
+            "Сейчас временно недоступен каталог услуг и врачей. "
+            "Я не смогу надежно подобрать услугу или врача. "
+            "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
+        )
+    if need_service_catalog:
+        return (
+            "Сейчас временно недоступен каталог услуг. "
+            "Я не смогу надежно подобрать нужную услугу. "
+            "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
+        )
+    if need_doctors_catalog:
+        return (
+            "Сейчас временно недоступен каталог врачей. "
+            "Я не смогу надежно подобрать врача или расписание. "
+            "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
+        )
+    return (
+        "Сейчас временно недоступен каталог клиники. "
+        "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
+    )
+
+
 def _env_flag(name: str, default: bool) -> bool:
     cfg_flags = {
         "MR_ROUTER_V2_ENABLE": c.MR_ROUTER_V2_ENABLE,
@@ -1253,6 +1377,56 @@ async def route_patient_message(
             Plan(label=decision.label),
             Evidence(items={"unsupported_catalog": {"kind": unsupported_kind}}),
         )
+
+    need_service_catalog, need_doctors_catalog = _catalog_health_requirements(
+        decision=decision,
+        state=state,
+        memory=memory,
+    )
+    if need_service_catalog or need_doctors_catalog:
+        health = await services.get_catalog_health()
+        service_catalog_ok = bool(health.get("service_catalog_ok"))
+        doctors_catalog_ok = bool(health.get("doctors_catalog_ok"))
+        is_blocked = (
+            (need_service_catalog and not service_catalog_ok)
+            or (need_doctors_catalog and not doctors_catalog_ok)
+        )
+        if is_blocked:
+            degraded_flags = set(decision.flags) | {"catalog_health_degraded"}
+            if need_service_catalog and not service_catalog_ok:
+                degraded_flags.add("catalog_service_unavailable")
+            if need_doctors_catalog and not doctors_catalog_ok:
+                degraded_flags.add("catalog_doctors_unavailable")
+            return (
+                _copy_decision(
+                    decision,
+                    label="OTHER",
+                    confidence=max(decision.confidence, 0.92),
+                    entities={},
+                    flags=degraded_flags,
+                    needs_handoff=False,
+                    source="catalog_health",
+                    context_action="continue",
+                ),
+                Plan(label="OTHER"),
+                Evidence(
+                    items={
+                        "catalog_health_response": {
+                            "text": _catalog_health_degraded_text(
+                                need_service_catalog=need_service_catalog,
+                                need_doctors_catalog=need_doctors_catalog,
+                            ),
+                            "handoff": False,
+                            "status": str(health.get("status") or "degraded"),
+                            "reason": str(health.get("reason") or "").strip(),
+                            "need_service_catalog": need_service_catalog,
+                            "need_doctors_catalog": need_doctors_catalog,
+                            "service_catalog_ok": service_catalog_ok,
+                            "doctors_catalog_ok": doctors_catalog_ok,
+                        }
+                    }
+                ),
+            )
 
     # Entity grounding: принимаем только подтвержденные/разрешенные сущности.
     pending_before_merge = memory.get_pending(state)

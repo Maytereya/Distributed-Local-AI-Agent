@@ -509,6 +509,135 @@ def test_patient_routing_stream_unsupported_specialist_does_not_pollute_state(mo
     assert state.last_entities.get("_last_label") is None
 
 
+def test_route_message_short_circuits_on_catalog_health_degraded(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="PRICE",
+                confidence=0.91,
+                entities={"service_name": "Прием уролога"},
+                flags={"rule_price"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_verify_doctor(decision, _services, _user_text):
+        return decision
+
+    async def fake_inject_catalog(decision, *, user_text, state, services):
+        _ = user_text, state, services
+        return decision
+
+    async def fake_get_catalog_health(self):
+        _ = self
+        return {
+            "ok": False,
+            "status": "degraded",
+            "service_catalog_ok": False,
+            "doctors_catalog_ok": True,
+            "reason": "service_catalog_empty",
+        }
+
+    async def fake_execute_plan(_plan, _state, _services):
+        raise AssertionError("execute_plan must not run when catalog health is degraded")
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "_verify_doctor_entity", fake_verify_doctor)
+    monkeypatch.setattr(router_mod, "_inject_catalog_candidates", fake_inject_catalog)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+    monkeypatch.setattr(Services, "get_catalog_health", fake_get_catalog_health)
+
+    state = SessionState(session_id="catalog-health-degraded")
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "Сколько стоит прием уролога?",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "OTHER"
+    assert plan.label == "OTHER"
+    assert "catalog_health_degraded" in decision.flags
+    payload = evidence.get("catalog_health_response")
+    assert isinstance(payload, dict)
+    assert "каталог услуг" in str(payload.get("text") or "").lower()
+    assert payload.get("handoff") is False
+
+
+def test_patient_routing_stream_renders_catalog_health_response(monkeypatch):
+    async def fake_route_patient_message(_user_text, _state, _services, _memory, runtime_options=None):
+        _ = runtime_options
+        return (
+            RouteDecision(
+                label="OTHER",
+                confidence=0.95,
+                entities={},
+                flags={"catalog_health_degraded"},
+                needs_handoff=False,
+            ),
+            Plan(label="OTHER"),
+            Evidence(
+                items={
+                    "catalog_health_response": {
+                        "text": (
+                            "Сейчас временно недоступен каталог услуг. "
+                            "Попробуйте повторить запрос через 5 минут или напишите «оператор»."
+                        ),
+                        "handoff": False,
+                    }
+                }
+            ),
+        )
+
+    monkeypatch.setattr(router_mod, "route_patient_message", fake_route_patient_message)
+
+    state = SessionState(session_id="catalog-health-stream")
+    services = Services()
+    memory = MemoryStore()
+
+    out = _run_stream_once("Сколько стоит прием уролога?", state, services, memory)
+
+    assert out
+    assert out[0].handoff is False
+    assert "временно недоступен каталог услуг" in out[0].text.lower()
+
+
+def test_catalog_health_requirements_doctor_schedule_with_selected_doctor():
+    state = SessionState(
+        session_id="catalog-health-schedule-selected-doctor",
+        last_entities={"doctor_name": "Хальметова"},
+    )
+    memory = MemoryStore()
+    decision = RouteDecision(
+        label="DOCTOR_SCHEDULE",
+        confidence=0.8,
+        entities={"doctor_name": "Хальметова"},
+        flags={"rule_schedule"},
+        needs_handoff=False,
+    )
+
+    need_service, need_doctors = router_mod._catalog_health_requirements(decision, state, memory)
+
+    assert need_service is False
+    assert need_doctors is False
+
+
 def test_route_message_prepare_followup_to_blooddraw_keeps_address(monkeypatch):
     async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
         _ = runtime_options
@@ -1554,6 +1683,15 @@ def test_apply_pending_override_keeps_appointment_on_doctor_reply_when_waiting_d
     assert label == "APPOINTMENT"
 
 
+def test_apply_pending_override_keeps_appointment_on_doctor_reply_when_misclassified_as_test_result():
+    decision = RouteDecision(label="TEST_RESULT", confidence=0.82, flags={"rule_test_result"})
+    pending = {"label": "APPOINTMENT", "missing": ["_any_of:doctor_id,doctor_name,specialty,service_name"]}
+
+    label = apply_pending_override(decision, pending, user_text="Белохвостикова")
+
+    assert label == "APPOINTMENT"
+
+
 def test_apply_pending_override_allows_non_samara_city_switch():
     decision = RouteDecision(label="ADDRESS", confidence=0.78, flags={"rule_nonbookable_walkin"})
     pending = {"label": "APPOINTMENT", "missing": ["_any_of:city,branch_name,branch_id"]}
@@ -2521,6 +2659,35 @@ def test_entity_grounder_drops_doctor_like_service_on_unverified_doctor():
             user_text="Запишите к Евграфову",
             state=state,
             services=services,
+            pending=None,
+        )
+    )
+
+    assert grounded.entities.get("service_name") is None
+    assert "entity_dropped_doctor_like_service_name" in grounded.flags
+
+
+def test_entity_grounder_drops_doctor_like_service_without_doctor_unverified_flag():
+    class _NeverCalledServices:
+        async def match_catalog_service(self, *_args, **_kwargs):  # pragma: no cover - should not be called
+            raise AssertionError("catalog lookup must not run for doctor-like service collision")
+
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.8,
+        entities={"service_name": "Кузнецову"},
+        flags={"rule_appointment"},
+        needs_handoff=False,
+    )
+    state = SessionState(session_id="eg_doctor_like_service_drop_no_flag", last_entities={})
+    services = _NeverCalledServices()
+
+    grounded = asyncio.run(
+        ground_decision_entities(
+            decision=decision,
+            user_text="Можно записаться к Кузнецову на завтра?",
+            state=state,
+            services=services,  # type: ignore[arg-type]
             pending=None,
         )
     )
