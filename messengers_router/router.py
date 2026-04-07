@@ -79,6 +79,7 @@ from .policies import (
     detect_doctor_info_intent,
     has_datetime_signal,
     nonbookable_service_hint,
+    service_name_conflicts_with_doctor,
 )
 from .recovery_policy import contextual_reply_kind, evaluate_recovery, explicit_operator_requested
 from .services import Services
@@ -107,6 +108,9 @@ _SECONDARY_SOFT_YES_RE = re.compile(
     r"(?:спасибо|благодарю|благодарствую|спс))\s*[!.,?;:]*\s*$",
     re.I,
 )
+_CATALOG_CONFIRM_STATE_KEY = "_catalog_confirm_pending"
+_CATALOG_CONFIRM_REJECTS_KEY = "_catalog_confirm_rejects"
+_CATALOG_CONFIRM_MAX_REJECTS = 2
 
 # Backward-compat alias for tests/internal callers.
 _should_keep_appointment_flow_override = should_keep_appointment_flow_override
@@ -271,6 +275,209 @@ def _clear_operator_offer_pending(state: SessionState, memory: MemoryStore) -> N
         missing = pending.get("missing")
         if pending.get("label") == "OTHER" and isinstance(missing, list) and "operator_offer_confirm" in missing:
             memory.clear_pending(state)
+
+
+def _get_catalog_confirm_pending(state: SessionState) -> dict[str, Any] | None:
+    payload = state.last_entities.get(_CATALOG_CONFIRM_STATE_KEY)
+    if not isinstance(payload, dict):
+        return None
+    canonical = str(payload.get("canonical") or "").strip()
+    entity_key = str(payload.get("entity_key") or "").strip()
+    label = str(payload.get("label") or "").strip()
+    if not canonical or entity_key not in {"doctor_name", "service_name"} or not label:
+        return None
+    kind = str(payload.get("kind") or "").strip().lower()
+    if kind not in {"doctor", "service"}:
+        return None
+    return payload
+
+
+def _clear_catalog_confirm_pending(state: SessionState, memory: MemoryStore) -> None:
+    state.last_entities.pop(_CATALOG_CONFIRM_STATE_KEY, None)
+    pending = memory.get_pending(state)
+    if not isinstance(pending, dict):
+        return
+    missing = pending.get("missing")
+    if pending.get("label") == "OTHER" and isinstance(missing, list) and "catalog_confirm" in missing:
+        memory.clear_pending(state)
+
+
+def _catalog_confirm_prompt(kind: str, query: str, canonical: str) -> str:
+    query_text = str(query or "").strip() or "ваш запрос"
+    if kind == "doctor":
+        return (
+            f"Похоже, вы имели в виду врача «{canonical}» (по запросу «{query_text}»). "
+            "Это верно? Ответьте «да» или «нет»."
+        )
+    return (
+        f"Похоже, вы имели в виду услугу «{canonical}» (по запросу «{query_text}»). "
+        "Это верно? Ответьте «да» или «нет»."
+    )
+
+
+def _catalog_refine_missing_slots(kind: str, label: str) -> list[str]:
+    if kind == "doctor":
+        if label == "APPOINTMENT":
+            return ["_any_of:doctor_id,doctor_name,specialty,service_name"]
+        if label in {"DOCTOR_SCHEDULE", "DOCTOR_INFO"}:
+            return ["_any_of:doctor_id,doctor_name,specialty"]
+        if label == "PRICE":
+            return ["_any_of:doctor_name,service_name"]
+        return ["doctor_name"]
+    if label == "APPOINTMENT":
+        return ["_any_of:doctor_id,doctor_name,specialty,service_name"]
+    if label == "PRICE":
+        return ["service_name"]
+    if label == "ADDRESS":
+        return ["_any_of:service_name,branch_name,branch_id,city"]
+    return ["service_name"]
+
+
+def _catalog_refine_prompt(kind: str, label: str) -> str:
+    if kind == "doctor":
+        if label == "APPOINTMENT":
+            return "Хорошо. Уточните, пожалуйста, фамилию врача для записи."
+        if label == "DOCTOR_SCHEDULE":
+            return "Хорошо. Уточните, пожалуйста, фамилию врача, чтобы показать расписание."
+        return "Хорошо. Уточните, пожалуйста, фамилию врача."
+    if label == "PRICE":
+        return "Хорошо. Уточните, пожалуйста, точное название услуги или анализа для расчёта цены."
+    if label == "APPOINTMENT":
+        return "Хорошо. Уточните, пожалуйста, точное название услуги для записи."
+    return "Хорошо. Уточните, пожалуйста, точное название услуги."
+
+
+async def _handle_catalog_confirm_pending(
+    *,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    pending = _get_catalog_confirm_pending(state)
+    if not pending:
+        return None
+
+    label = str(pending.get("label") or "OTHER").strip()
+    kind = str(pending.get("kind") or "").strip().lower()
+    entity_key = str(pending.get("entity_key") or "").strip()
+    canonical = str(pending.get("canonical") or "").strip()
+
+    if explicit_operator_requested(user_text):
+        _clear_catalog_confirm_pending(state, memory)
+        state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
+        return (
+            RouteDecision(
+                label="OTHER",
+                confidence=0.95,
+                entities={},
+                flags={"catalog_confirm_operator"},
+                needs_handoff=False,
+                source="catalog_confirm",
+            ),
+            Plan(label="OTHER"),
+            Evidence(
+                items={
+                    "catalog_confirm_response": {
+                        "text": handoff_message("manual_operator"),
+                        "handoff": True,
+                    }
+                }
+            ),
+        )
+
+    reply_kind = contextual_reply_kind(user_text)
+    if reply_kind == "yes":
+        _clear_catalog_confirm_pending(state, memory)
+        state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
+        memory.merge_entities(state, {entity_key: canonical}, label=label)
+        if entity_key == "doctor_name":
+            service_name = str(state.last_entities.get("service_name") or "").strip()
+            if service_name and service_name_conflicts_with_doctor(service_name, canonical):
+                state.last_entities.pop("service_name", None)
+        decision = RouteDecision(
+            label=label,  # type: ignore[arg-type]
+            confidence=0.93,
+            entities={entity_key: canonical},
+            flags={"catalog_confirmed"},
+            needs_handoff=False,
+            context_action="continue",
+            source="catalog_confirm",
+        )
+        plan = build_plan(decision, state, user_text, memory=memory)
+        evidence = await execute_plan(plan, state, services)
+        return decision, plan, evidence
+
+    if reply_kind == "no":
+        _clear_catalog_confirm_pending(state, memory)
+        rejects = int(state.last_entities.get(_CATALOG_CONFIRM_REJECTS_KEY) or 0) + 1
+        state.last_entities[_CATALOG_CONFIRM_REJECTS_KEY] = rejects
+        if rejects >= _CATALOG_CONFIRM_MAX_REJECTS:
+            state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
+            return (
+                RouteDecision(
+                    label="OTHER",
+                    confidence=0.95,
+                    entities={},
+                    flags={"catalog_confirm_rejected_handoff"},
+                    needs_handoff=False,
+                    source="catalog_confirm",
+                ),
+                Plan(label="OTHER"),
+                Evidence(
+                    items={
+                        "catalog_confirm_response": {
+                            "text": "Не удалось точно сопоставить запрос с каталогом. Соединяю с оператором.",
+                            "handoff": True,
+                        }
+                    }
+                ),
+            )
+        missing_slots = _catalog_refine_missing_slots(kind, label)
+        memory.set_pending(state, label=label, missing_slots=missing_slots)
+        return (
+            RouteDecision(
+                label="OTHER",
+                confidence=0.9,
+                entities={},
+                flags={"catalog_confirm_rejected"},
+                needs_handoff=False,
+                source="catalog_confirm",
+            ),
+            Plan(label="OTHER"),
+            Evidence(
+                items={
+                    "catalog_confirm_response": {
+                        "text": _catalog_refine_prompt(kind, label),
+                        "handoff": False,
+                    }
+                }
+            ),
+        )
+
+    return (
+        RouteDecision(
+            label="OTHER",
+            confidence=0.9,
+            entities={},
+            flags={"catalog_confirm_reask"},
+            needs_handoff=False,
+            source="catalog_confirm",
+        ),
+        Plan(label="OTHER"),
+        Evidence(
+            items={
+                "catalog_confirm_response": {
+                    "text": _catalog_confirm_prompt(
+                        kind=kind,
+                        query=str(pending.get("query") or ""),
+                        canonical=canonical,
+                    ),
+                    "handoff": False,
+                }
+            }
+        ),
+    )
 
 
 def _extract_nlu_trace(evidence: Evidence) -> dict[str, Any]:
@@ -465,6 +672,141 @@ async def _sanitize_doctor_in_entities(
     return await sanitize_doctor_entities(entities=entities, services=services, label=label)
 
 
+async def _inject_catalog_candidates(
+    decision: RouteDecision,
+    *,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+) -> RouteDecision:
+    entities = dict(decision.entities or {})
+    flags = set(decision.flags or set())
+    updated = False
+
+    should_try_doctor = (
+        decision.label in {"APPOINTMENT", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "PRICE"}
+        and not entities.get("doctor_name")
+        and (
+            "doctor_name_unverified" in flags
+            or decision.context_action == "overwrite_doctor"
+        )
+    )
+    if should_try_doctor:
+        doctor_match = await services.match_catalog_doctor(
+            str(entities.get("doctor_name") or user_text or ""),
+        )
+        status = str(doctor_match.get("status") or "")
+        canonical = str(doctor_match.get("canonical") or "").strip()
+        if status == "exact" and canonical:
+            entities["doctor_name"] = canonical
+            flags.discard("doctor_name_unverified")
+            flags.add("doctor_name_verified")
+            flags.add("catalog_doctor_exact")
+            updated = True
+        elif status == "fuzzy" and canonical:
+            entities["_catalog_doctor_candidate"] = canonical
+            entities["_catalog_doctor_query"] = str(doctor_match.get("query") or "").strip()
+            flags.add("catalog_doctor_fuzzy_candidate")
+            updated = True
+
+    should_try_service = (
+        decision.label in {"APPOINTMENT", "PRICE", "ADDRESS", "TEST_ASSIST"}
+        and not entities.get("service_name")
+    )
+    if should_try_service:
+        if (
+            decision.label == "PRICE"
+            and (entities.get("specialty") or state.last_entities.get("specialty"))
+            and not entities.get("doctor_name")
+        ):
+            should_try_service = False
+        if (
+            decision.label == "APPOINTMENT"
+            and (entities.get("doctor_name") or state.last_entities.get("doctor_name"))
+        ):
+            should_try_service = False
+    if should_try_service:
+        service_match = await services.match_catalog_service(
+            str(entities.get("service_name") or entities.get("test_name") or user_text or ""),
+            current_service_name=str(state.last_entities.get("service_name") or ""),
+        )
+        status = str(service_match.get("status") or "")
+        canonical = str(service_match.get("canonical") or "").strip()
+        if status == "exact" and canonical:
+            entities["service_name"] = canonical
+            entities.pop("test_name", None)
+            flags.add("catalog_service_exact")
+            updated = True
+        elif status == "fuzzy" and canonical:
+            entities["_catalog_service_candidate"] = canonical
+            entities["_catalog_service_query"] = str(service_match.get("query") or "").strip()
+            flags.add("catalog_service_fuzzy_candidate")
+            updated = True
+
+    if not updated:
+        return decision
+    return _copy_decision(
+        decision,
+        entities=entities,
+        flags=flags,
+    )
+
+
+def _maybe_start_catalog_confirm(
+    *,
+    decision: RouteDecision,
+    state: SessionState,
+    memory: MemoryStore,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    entities = dict(decision.entities or {})
+    doctor_candidate = str(entities.get("_catalog_doctor_candidate") or "").strip()
+    service_candidate = str(entities.get("_catalog_service_candidate") or "").strip()
+    if not doctor_candidate and not service_candidate:
+        return None
+
+    if doctor_candidate:
+        kind = "doctor"
+        entity_key = "doctor_name"
+        canonical = doctor_candidate
+        query = str(entities.get("_catalog_doctor_query") or "").strip()
+    else:
+        kind = "service"
+        entity_key = "service_name"
+        canonical = service_candidate
+        query = str(entities.get("_catalog_service_query") or "").strip()
+
+    state.last_entities[_CATALOG_CONFIRM_STATE_KEY] = {
+        "kind": kind,
+        "label": decision.label,
+        "entity_key": entity_key,
+        "canonical": canonical,
+        "query": query,
+    }
+    memory.clear_pending(state)
+    memory.set_pending(state, label="OTHER", missing_slots=["catalog_confirm"])
+
+    return (
+        _copy_decision(
+            decision,
+            label="OTHER",
+            entities={},
+            flags=set(decision.flags) | {"catalog_confirm_requested"},
+            source="catalog_confirm",
+            confidence=max(decision.confidence, 0.9),
+            needs_handoff=False,
+        ),
+        Plan(label="OTHER"),
+        Evidence(
+            items={
+                "catalog_confirm_response": {
+                    "text": _catalog_confirm_prompt(kind=kind, query=query, canonical=canonical),
+                    "handoff": False,
+                }
+            }
+        ),
+    )
+
+
 async def _backfill_appointment_doctor_from_text(
     user_text: str,
     state: SessionState,
@@ -583,6 +925,15 @@ async def route_patient_message(
             )
         _clear_operator_offer_pending(state, memory)
 
+    catalog_pending_result = await _handle_catalog_confirm_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+    )
+    if catalog_pending_result is not None:
+        return catalog_pending_result
+
     # Вежливое переключение на вторичный интент по короткому "да/нет".
     queue = get_secondary_queue(state)
     if (
@@ -669,6 +1020,12 @@ async def route_patient_message(
         }
 
     decision = await _verify_doctor_entity(decision, services, user_text)
+    decision = await _inject_catalog_candidates(
+        decision,
+        user_text=user_text,
+        state=state,
+        services=services,
+    )
     last_label_before = str(state.last_entities.get("_last_label") or "")
     service_context = str(state.last_entities.get("service_name") or state.last_entities.get("test_name") or "").strip()
     if (
@@ -912,6 +1269,21 @@ async def route_patient_message(
             entities=grounding.entities,
             flags=set(decision.flags) | set(grounding.flags),
         )
+
+    catalog_confirm = _maybe_start_catalog_confirm(
+        decision=decision,
+        state=state,
+        memory=memory,
+    )
+    if catalog_confirm is not None:
+        return catalog_confirm
+
+    # Служебные каталожные ключи не должны попадать в долгоживущий state.
+    if any(k in decision.entities for k in ("_catalog_doctor_candidate", "_catalog_doctor_query", "_catalog_service_candidate", "_catalog_service_query")):
+        clean_entities = dict(decision.entities)
+        for key in ("_catalog_doctor_candidate", "_catalog_doctor_query", "_catalog_service_candidate", "_catalog_service_query"):
+            clean_entities.pop(key, None)
+        decision = _copy_decision(decision, entities=clean_entities)
 
     # merge entities from LLM+rules
     memory.merge_entities(state, decision.entities, label=decision.label)
@@ -1265,64 +1637,73 @@ async def patient_routing_stream(
     pending = memory.get_pending(state)
     if not plan.steps and pending:
         missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
-        if (
-            flow_label == "APPOINTMENT"
+        catalog_pending_reply = (
+            flow_label == "OTHER"
             and isinstance(missing, list)
-            and "appointment_action" in missing
-            and contextual_reply_kind(user_text) == "no"
-        ):
-            update_summary(state, reason="handoff")
-            _reset_state_after_handoff(state, memory)
-            yield ResponseEnvelope(text=handoff_message("manual_operator"), handoff=True)
-            return
-        if flow_label == "APPOINTMENT" and isinstance(missing, list):
-            action = str(state.last_entities.get("appointment_action") or "").strip().lower()
-            needs_doctor = any(
-                str(item).startswith("_any_of:")
-                and ("doctor_id" in str(item) or "doctor_name" in str(item))
-                for item in missing
-            )
-            needs_datetime = any(
-                "date_from" in str(item) or "time_from" in str(item) or "date_hint" in str(item)
-                for item in missing
-            )
-            if action in {"cancel", "reschedule"} and needs_doctor:
-                attempts = int(state.last_entities.get("_appointment_doctor_lookup_attempts") or 0) + 1
-                state.last_entities["_appointment_doctor_lookup_attempts"] = attempts
-                if attempts >= 3:
-                    state.last_entities.pop("_appointment_doctor_lookup_attempts", None)
-                    update_summary(state, reason="handoff")
-                    _reset_state_after_handoff(state, memory)
-                    yield ResponseEnvelope(
-                        text="Не удалось точно определить врача для этой записи. Соединяю с оператором.",
-                        handoff=True,
-                    )
-                    return
-            else:
-                state.last_entities.pop("_appointment_doctor_lookup_attempts", None)
-
-            if action in {"cancel", "reschedule"} and needs_datetime:
-                attempts = int(state.last_entities.get("_appointment_datetime_attempts") or 0) + 1
-                state.last_entities["_appointment_datetime_attempts"] = attempts
-                if attempts >= 3:
-                    state.last_entities.pop("_appointment_datetime_attempts", None)
-                    update_summary(state, reason="handoff")
-                    _reset_state_after_handoff(state, memory)
-                    yield ResponseEnvelope(
-                        text="Не удалось точно определить дату или время записи. Соединяю с оператором.",
-                        handoff=True,
-                    )
-                    return
-            else:
-                state.last_entities.pop("_appointment_datetime_attempts", None)
-        if flow_label == "APPOINTMENT":
-            state.last_entities["appointment_flow_active"] = True
-        _remember_question(state, f"pending:{flow_label}", missing if isinstance(missing, list) else [])
-        yield ResponseEnvelope(
-            text=clarification_question(flow_label, missing if isinstance(missing, list) else [], state.last_entities),
-            handoff=False,
+            and "catalog_confirm" in missing
+            and isinstance(evidence.get("catalog_confirm_response"), dict)
         )
-        return
+        if catalog_pending_reply:
+            pass
+        else:
+            if (
+                flow_label == "APPOINTMENT"
+                and isinstance(missing, list)
+                and "appointment_action" in missing
+                and contextual_reply_kind(user_text) == "no"
+            ):
+                update_summary(state, reason="handoff")
+                _reset_state_after_handoff(state, memory)
+                yield ResponseEnvelope(text=handoff_message("manual_operator"), handoff=True)
+                return
+            if flow_label == "APPOINTMENT" and isinstance(missing, list):
+                action = str(state.last_entities.get("appointment_action") or "").strip().lower()
+                needs_doctor = any(
+                    str(item).startswith("_any_of:")
+                    and ("doctor_id" in str(item) or "doctor_name" in str(item))
+                    for item in missing
+                )
+                needs_datetime = any(
+                    "date_from" in str(item) or "time_from" in str(item) or "date_hint" in str(item)
+                    for item in missing
+                )
+                if action in {"cancel", "reschedule"} and needs_doctor:
+                    attempts = int(state.last_entities.get("_appointment_doctor_lookup_attempts") or 0) + 1
+                    state.last_entities["_appointment_doctor_lookup_attempts"] = attempts
+                    if attempts >= 3:
+                        state.last_entities.pop("_appointment_doctor_lookup_attempts", None)
+                        update_summary(state, reason="handoff")
+                        _reset_state_after_handoff(state, memory)
+                        yield ResponseEnvelope(
+                            text="Не удалось точно определить врача для этой записи. Соединяю с оператором.",
+                            handoff=True,
+                        )
+                        return
+                else:
+                    state.last_entities.pop("_appointment_doctor_lookup_attempts", None)
+
+                if action in {"cancel", "reschedule"} and needs_datetime:
+                    attempts = int(state.last_entities.get("_appointment_datetime_attempts") or 0) + 1
+                    state.last_entities["_appointment_datetime_attempts"] = attempts
+                    if attempts >= 3:
+                        state.last_entities.pop("_appointment_datetime_attempts", None)
+                        update_summary(state, reason="handoff")
+                        _reset_state_after_handoff(state, memory)
+                        yield ResponseEnvelope(
+                            text="Не удалось точно определить дату или время записи. Соединяю с оператором.",
+                            handoff=True,
+                        )
+                        return
+                else:
+                    state.last_entities.pop("_appointment_datetime_attempts", None)
+            if flow_label == "APPOINTMENT":
+                state.last_entities["appointment_flow_active"] = True
+            _remember_question(state, f"pending:{flow_label}", missing if isinstance(missing, list) else [])
+            yield ResponseEnvelope(
+                text=clarification_question(flow_label, missing if isinstance(missing, list) else [], state.last_entities),
+                handoff=False,
+            )
+            return
 
     if evidence.get("auth_required"):
         yield ResponseEnvelope(text=evidence.get("auth_message", "Нужна авторизация."), handoff=False)

@@ -426,6 +426,8 @@ def _clear_topic_state(state: SessionState) -> None:
         "secondary_intents",
         "_secondary_queue",
         "_secondary_offer_pending",
+        "_catalog_confirm_pending",
+        "_catalog_confirm_rejects",
     ):
         state.last_entities.pop(k, None)
 

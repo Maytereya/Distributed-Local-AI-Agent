@@ -21,6 +21,7 @@ import time
 from datetime import datetime
 from urllib.parse import quote_from_bytes
 from dataclasses import dataclass, field
+from difflib import get_close_matches
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
@@ -190,6 +191,68 @@ _SERVICE_FILTER_STOPWORDS = {
     "услуги",
     "исследование",
     "исследования",
+}
+_CATALOG_DOCTOR_STOPWORDS = {
+    "запишите",
+    "записать",
+    "записаться",
+    "расписание",
+    "расписание",
+    "врач",
+    "доктор",
+    "специалист",
+    "прием",
+    "приеме",
+    "приём",
+    "приёме",
+    "да",
+    "нет",
+    "пожалуйста",
+    "будьте",
+    "добры",
+}
+_CATALOG_SERVICE_LEADIN_RE = re.compile(
+    r"^\s*(?:(?:пожалуйста|будьте\s+добры|подскажите|скажите|мне)\s+)?"
+    r"(?:(?:запишите|записать|записаться|можно|хочу|нужно|надо)\s+)?"
+    r"(?:(?:на|к)\s+)?",
+    re.I,
+)
+_CATALOG_SERVICE_TRAILING_TIME_RE = re.compile(
+    r"\b(?:сегодня|завтра|послезавтра|\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{1,2}:\d{2})\b.*$",
+    re.I,
+)
+_CATALOG_WORD_RE = re.compile(r"[a-zа-яё0-9\-]+", re.I)
+_CATALOG_SERVICE_SIGNAL_RE = re.compile(
+    r"\b(услуг\w*|процедур\w*|исследован\w*|анализ\w*|сда[тч]\w*|"
+    r"узи|экг|холтер|мрт|кт|фгдс|фкс|эндоскоп\w*|гастроскоп\w*|кольпоскоп\w*|"
+    r"колоноскоп\w*|рентген\w*|флюорограф\w*|биопс\w*|пункц\w*|"
+    r"при[её]м\w*|консультац\w*|операц\w*|липид\w*|холестерин\w*|оак|оам)\b",
+    re.I,
+)
+_CATALOG_SERVICE_STOPWORDS = _SERVICE_FILTER_STOPWORDS | {
+    "мне",
+    "бы",
+    "пож",
+    "пожалуйста",
+    "будьте",
+    "добры",
+    "здравствуйте",
+    "добрый",
+    "день",
+    "запишите",
+    "записаться",
+    "запись",
+    "к",
+    "на",
+    "в",
+    "во",
+    "по",
+    "из",
+    "могу",
+    "можете",
+    "покажите",
+    "подскажите",
+    "скажите",
 }
 _SERVICE_QUERY_SIGNAL_RE = re.compile(
     r"\b(услуг\w*|процедур\w*|исследован\w*|анализ\w*|сда[тч]\w*|"
@@ -554,6 +617,80 @@ _PREPARE_SYNONYM_HINTS: dict[str, tuple[str, ...]] = {
 
 def _normalise_input(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
+
+
+def _normalise_catalog_text(s: str) -> str:
+    norm = _normalise_input(s).replace("ё", "е")
+    norm = re.sub(r"[^a-zа-я0-9\- ]+", " ", norm)
+    return re.sub(r"\s+", " ", norm).strip()
+
+
+def _dedupe_str(items: list[str], *, max_items: int = 8) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in items:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        key = _normalise_catalog_text(value)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _doctor_catalog_query_candidates(raw_text_or_name: str) -> list[str]:
+    raw = str(raw_text_or_name or "").strip()
+    if not raw:
+        return []
+    candidate = extract_doctor_name_candidate(raw, prefer_schedule=True)
+    probes = _dedupe_str([candidate or "", raw], max_items=4)
+    out: list[str] = []
+    for probe in probes:
+        norm = _normalise_catalog_text(probe)
+        if not norm:
+            continue
+        tokens = [
+            token
+            for token in _CATALOG_WORD_RE.findall(norm)
+            if len(token) >= 3 and token not in _CATALOG_DOCTOR_STOPWORDS
+        ]
+        if not tokens:
+            continue
+        out.append(tokens[0])
+        if len(tokens) > 1:
+            out.append(" ".join(tokens[:2]))
+    return _dedupe_str(out, max_items=6)
+
+
+def _service_catalog_query_candidates(raw_text_or_name: str, *, current_service_name: str = "") -> list[str]:
+    raw = str(raw_text_or_name or "").strip()
+    if not raw and not current_service_name:
+        return []
+    service_phrase = extract_service_phrase(raw) if raw else None
+    stripped = _CATALOG_SERVICE_LEADIN_RE.sub("", raw).strip()
+    stripped = _CATALOG_SERVICE_TRAILING_TIME_RE.sub("", stripped).strip(" ,.;:-")
+    base_candidates = [service_phrase or "", stripped, raw, str(current_service_name or "")]
+    candidates = _dedupe_str(base_candidates, max_items=8)
+
+    out: list[str] = []
+    for item in candidates:
+        norm = _normalise_catalog_text(item)
+        if not norm:
+            continue
+        has_service_signal = bool(service_phrase and item == service_phrase) or bool(_CATALOG_SERVICE_SIGNAL_RE.search(item))
+        tokens = [token for token in _CATALOG_WORD_RE.findall(norm) if len(token) >= 2]
+        core_tokens = [token for token in tokens if token not in _CATALOG_SERVICE_STOPWORDS]
+        if not has_service_signal and not core_tokens:
+            continue
+        if core_tokens:
+            out.append(" ".join(core_tokens[:8]))
+        if has_service_signal:
+            out.append(item)
+    return _dedupe_str(out, max_items=8)
 
 
 def _normalise_prepare_text(text: str) -> str:
@@ -3327,17 +3464,21 @@ class Services:
     _regions_cache_loaded_at: float = field(default=0.0, init=False)
     _procedure_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
     _procedure_rows_loaded_at: float = field(default=0.0, init=False)
+    _service_catalog_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
+    _service_catalog_rows_loaded_at: float = field(default=0.0, init=False)
     _schedule_cache_client: AsyncListTTLStaleCache = field(init=False)
 
     # блокировка, чтобы несколько запросов параллельно не перегенерировали кэш
     _doctors_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _regions_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _procedure_rows_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    _service_catalog_rows_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     # TTL in-memory кэша (латентность, сек, определят свежесть кэша)
     doctors_mem_ttl_seconds: int = 300
     regions_mem_ttl_seconds: int = 300
     procedure_rows_mem_ttl_seconds: int = 300
+    service_catalog_mem_ttl_seconds: int = 300
     schedule_fresh_ttl_seconds: int = field(
         default_factory=lambda: _runtime_int(
             "MR_SCHEDULE_FRESH_TTL_SECONDS",
@@ -3551,6 +3692,190 @@ class Services:
             self._procedure_rows_cache = filtered
             self._procedure_rows_loaded_at = time.time()
             return self._procedure_rows_cache
+
+    async def _ensure_service_catalog_rows_loaded(self) -> list[dict[str, Any]]:
+        """
+        Готовит объединенный каталог услуг клиники для exact/fuzzy матчинга.
+
+        Источники:
+        - city retail прайс `priceByRegion` (анализы и общие услуги);
+        - doctor prices (doctorServicePricesByRegion) для услуг, которые бывают
+          только в doctor-строках.
+        """
+
+        now = time.time()
+        if self._service_catalog_rows_loaded_at and (now - self._service_catalog_rows_loaded_at) < self.service_catalog_mem_ttl_seconds:
+            return self._service_catalog_rows_cache
+
+        async with self._service_catalog_rows_lock:
+            now = time.time()
+            if self._service_catalog_rows_loaded_at and (now - self._service_catalog_rows_loaded_at) < self.service_catalog_mem_ttl_seconds:
+                return self._service_catalog_rows_cache
+
+            merged_rows: list[dict[str, Any]] = []
+            try:
+                retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
+            except Exception:
+                retail_rows = []
+            try:
+                doctor_rows = await asyncio.to_thread(api_price.load_doctor_prices)
+            except Exception:
+                doctor_rows = []
+
+            for src in (retail_rows, doctor_rows):
+                if not isinstance(src, list):
+                    continue
+                for row in src:
+                    if not isinstance(row, dict):
+                        continue
+                    name = str(row.get("serviceName") or row.get("name") or "").strip()
+                    if len(name) < 3:
+                        continue
+                    merged_rows.append(
+                        {
+                            "serviceName": name,
+                            "name": name,
+                            "serviceHomecode": str(row.get("serviceHomecode") or row.get("homecode") or "").strip(),
+                            "cost": _as_int(row.get("cost")) or 0,
+                        }
+                    )
+
+            deduped: list[dict[str, Any]] = []
+            seen: set[tuple[str, str]] = set()
+            for row in merged_rows:
+                name_norm = _normalise_catalog_text(str(row.get("serviceName") or row.get("name") or ""))
+                if not name_norm:
+                    continue
+                code_norm = _normalise_input(str(row.get("serviceHomecode") or "")).replace("ё", "е")
+                key = (name_norm, code_norm)
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(row)
+
+            self._service_catalog_rows_cache = deduped
+            self._service_catalog_rows_loaded_at = time.time()
+            return self._service_catalog_rows_cache
+
+    async def match_catalog_doctor(self, raw_text_or_name: str) -> dict[str, Any]:
+        """
+        Матчит врача по каталогу doctors-cache:
+        1) exact (resolve_schedule_surname)
+        2) fuzzy (difflib по фамилии)
+        """
+
+        doctors = await self._ensure_doctors_cache_loaded()
+        if not doctors:
+            return {"status": "miss", "query": "", "canonical": ""}
+
+        queries = _doctor_catalog_query_candidates(raw_text_or_name)
+        if not queries:
+            return {"status": "miss", "query": "", "canonical": ""}
+
+        for query in queries:
+            exact = resolve_schedule_surname(query, doctors)
+            if exact:
+                return {
+                    "status": "exact",
+                    "query": query,
+                    "canonical": str(exact).strip(),
+                }
+
+        surname_map: dict[str, str] = {}
+        for doc in doctors:
+            if not isinstance(doc, dict):
+                continue
+            fio = str(doc.get("fio") or "").strip()
+            if not fio:
+                continue
+            surname = str(fio.split()[0] or "").strip()
+            norm = _normalise_catalog_text(surname)
+            if norm and norm not in surname_map:
+                surname_map[norm] = surname
+        surname_keys = list(surname_map.keys())
+        if not surname_keys:
+            return {"status": "miss", "query": "", "canonical": ""}
+
+        for query in queries:
+            norm = _normalise_catalog_text(query)
+            if len(norm) < 4:
+                continue
+            hit = get_close_matches(norm, surname_keys, n=1, cutoff=0.84)
+            if not hit:
+                continue
+            canonical = surname_map.get(hit[0], "").strip()
+            if canonical and _normalise_catalog_text(canonical) != norm:
+                return {
+                    "status": "fuzzy",
+                    "query": query,
+                    "canonical": canonical,
+                    "matched_key": hit[0],
+                }
+        return {"status": "miss", "query": queries[0], "canonical": ""}
+
+    async def match_catalog_service(
+        self,
+        raw_text_or_name: str,
+        *,
+        current_service_name: str = "",
+    ) -> dict[str, Any]:
+        """
+        Матчит услугу по объединенному каталогу услуг клиники:
+        1) exact через resolver price-catalog
+        2) fuzzy через difflib по нормализованным названиям услуг
+        """
+
+        queries = _service_catalog_query_candidates(
+            raw_text_or_name,
+            current_service_name=current_service_name,
+        )
+        if not queries:
+            return {"status": "miss", "query": "", "canonical": ""}
+
+        catalog_rows = await self._ensure_service_catalog_rows_loaded()
+        if not catalog_rows:
+            return {"status": "unavailable", "query": queries[0], "canonical": ""}
+
+        for query in queries:
+            exact = resolve_price_service_name_from_catalog(
+                query,
+                current_service_name="",
+                rows=catalog_rows,
+            )
+            if exact:
+                return {
+                    "status": "exact",
+                    "query": query,
+                    "canonical": str(exact).strip(),
+                }
+
+        name_map: dict[str, str] = {}
+        for row in catalog_rows:
+            name = str(row.get("serviceName") or row.get("name") or "").strip()
+            norm = _normalise_catalog_text(name)
+            if norm and norm not in name_map:
+                name_map[norm] = name
+        name_keys = list(name_map.keys())
+        if not name_keys:
+            return {"status": "miss", "query": "", "canonical": ""}
+
+        for query in queries:
+            norm = _normalise_catalog_text(query)
+            if len(norm) < 4:
+                continue
+            hit = get_close_matches(norm, name_keys, n=1, cutoff=0.86)
+            if not hit:
+                continue
+            canonical = str(name_map.get(hit[0]) or "").strip()
+            if canonical and _normalise_catalog_text(canonical) != norm:
+                return {
+                    "status": "fuzzy",
+                    "query": query,
+                    "canonical": canonical,
+                    "matched_key": hit[0],
+                }
+
+        return {"status": "miss", "query": queries[0], "canonical": ""}
 
     async def _procedure_branches_from_index(
         self,

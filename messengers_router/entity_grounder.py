@@ -26,6 +26,10 @@ _CONTROL_KEYS = {
     "appointment_action",
     "result_action",
     "query_terms",
+    "_catalog_doctor_candidate",
+    "_catalog_doctor_query",
+    "_catalog_service_candidate",
+    "_catalog_service_query",
 }
 
 _GENERIC_SERVICE_FALLBACK_RE = re.compile(
@@ -331,6 +335,7 @@ async def ground_decision_entities(
                 )
             if not phrase:
                 phrase = extract_service_phrase(user_text) or extract_service_phrase(str(value or ""))
+            strict_catalog_labels = {"APPOINTMENT", "PRICE", "ADDRESS", "TEST_ASSIST"}
             if phrase:
                 if _is_doctor_like_service_collision(
                     label=label,
@@ -340,12 +345,56 @@ async def ground_decision_entities(
                 ):
                     flags.add("entity_dropped_doctor_like_service_name")
                     continue
+                if label in strict_catalog_labels:
+                    match = await services.match_catalog_service(
+                        phrase,
+                        current_service_name=str(state.last_entities.get("service_name") or ""),
+                    )
+                    status = str(match.get("status") or "")
+                    nonbookable_keep = "policy_nonbookable_walkin" in set(decision.flags)
+                    if status == "exact":
+                        canonical = str(match.get("canonical") or "").strip()
+                        if canonical:
+                            out[key] = canonical
+                            if canonical != phrase:
+                                flags.add("entity_grounded_service_name")
+                            continue
+                    if status == "fuzzy":
+                        candidate = str(match.get("canonical") or "").strip()
+                        query = str(match.get("query") or phrase).strip()
+                        if candidate:
+                            out["_catalog_service_candidate"] = candidate
+                            out["_catalog_service_query"] = query
+                            flags.add("entity_catalog_service_fuzzy_candidate")
+                        else:
+                            flags.add("entity_dropped_unverified_service_name")
+                        continue
+                    if status == "unavailable":
+                        if phrase and not match_city(phrase):
+                            out[key] = phrase
+                            flags.add("entity_kept_service_without_catalog")
+                            continue
+                        flags.add("entity_dropped_unverified_service_name")
+                        continue
+                    if nonbookable_keep and phrase and not match_city(phrase):
+                        out[key] = phrase
+                        flags.add("entity_kept_nonbookable_service_name")
+                        continue
+                    flags.add("entity_dropped_unverified_service_name")
+                    continue
+
                 out[key] = phrase
                 if str(value or "").strip() and phrase != str(value).strip():
                     flags.add("entity_grounded_service_name")
             elif isinstance(value, str):
                 fallback = value.strip()
-                if fallback and not match_city(fallback) and not _GENERIC_SERVICE_FALLBACK_RE.search(fallback):
+                if label in strict_catalog_labels:
+                    if "policy_nonbookable_walkin" in set(decision.flags) and fallback and not match_city(fallback):
+                        out[key] = fallback
+                        flags.add("entity_kept_nonbookable_service_name")
+                    else:
+                        flags.add("entity_dropped_unverified_service_name")
+                elif fallback and not match_city(fallback) and not _GENERIC_SERVICE_FALLBACK_RE.search(fallback):
                     out[key] = fallback
                     flags.add("entity_kept_llm_service_name")
                 else:

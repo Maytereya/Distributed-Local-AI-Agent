@@ -80,6 +80,20 @@ def build_operator_offer_response(evidence: Evidence) -> ResponseEnvelope | None
     )
 
 
+def build_catalog_confirm_response(evidence: Evidence) -> ResponseEnvelope | None:
+    payload = evidence.get("catalog_confirm_response")
+    if not isinstance(payload, dict):
+        return None
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        return None
+    return ResponseEnvelope(
+        text=text,
+        attachments=[],
+        handoff=bool(payload.get("handoff")),
+    )
+
+
 def build_price_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "PRICE":
         return None
@@ -449,6 +463,7 @@ def build_first_structured_response(
     user_text: str,
 ) -> ResponseEnvelope | None:
     builders = (
+        lambda: build_catalog_confirm_response(evidence),
         lambda: build_operator_offer_response(evidence),
         lambda: build_unsupported_catalog_response(evidence),
         lambda: build_main_index_info_response(evidence),

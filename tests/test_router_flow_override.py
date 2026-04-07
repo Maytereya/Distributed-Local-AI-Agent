@@ -234,6 +234,174 @@ def test_default_city_is_samara_for_messenger_router():
     assert _DEFAULT_CITY == "Самара"
 
 
+def test_route_message_starts_catalog_confirm_for_fuzzy_doctor(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="APPOINTMENT",
+                confidence=0.74,
+                entities={},
+                flags={"rule_appointment", "doctor_name_unverified"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_match_catalog_doctor(self, raw_text_or_name: str):
+        _ = self, raw_text_or_name
+        return {"status": "fuzzy", "query": "евграфова", "canonical": "Евграфова"}
+
+    async def fake_match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = ""):
+        _ = self, raw_text_or_name, current_service_name
+        return {"status": "miss", "query": "", "canonical": ""}
+
+    async def fake_execute_plan(_plan, _state, _services):
+        raise AssertionError("execute_plan must not run while waiting catalog confirmation")
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+    monkeypatch.setattr(Services, "match_catalog_doctor", fake_match_catalog_doctor)
+    monkeypatch.setattr(Services, "match_catalog_service", fake_match_catalog_service)
+
+    state = SessionState(session_id="catalog-confirm-fuzzy-doctor")
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "Запишите к Евграфовой",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "OTHER"
+    assert plan.label == "OTHER"
+    payload = evidence.get("catalog_confirm_response")
+    assert isinstance(payload, dict)
+    assert "Евграфова" in str(payload.get("text") or "")
+    pending = state.last_entities.get("_catalog_confirm_pending")
+    assert isinstance(pending, dict)
+    assert pending.get("canonical") == "Евграфова"
+
+
+def test_route_message_accepts_catalog_confirm_yes_and_continues_flow(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="OTHER",
+                confidence=0.2,
+                entities={},
+                flags={"low_confidence"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence(items={"doctor_schedule": {"schedule": []}})
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="catalog-confirm-yes",
+        last_entities={
+            "_catalog_confirm_pending": {
+                "kind": "doctor",
+                "label": "DOCTOR_SCHEDULE",
+                "entity_key": "doctor_name",
+                "canonical": "Евграфова",
+                "query": "евграфова",
+            }
+        },
+    )
+    services = Services()
+    memory = MemoryStore()
+    memory.set_pending(state, label="OTHER", missing_slots=["catalog_confirm"])
+
+    decision, plan, evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "да",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "DOCTOR_SCHEDULE"
+    assert plan.label == "DOCTOR_SCHEDULE"
+    assert state.last_entities.get("doctor_name") == "Евграфова"
+    assert state.last_entities.get("_catalog_confirm_pending") is None
+    assert evidence.get("doctor_schedule") is not None
+
+
+def test_patient_routing_stream_renders_catalog_confirm_response(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="APPOINTMENT",
+                confidence=0.74,
+                entities={},
+                flags={"rule_appointment", "doctor_name_unverified"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_match_catalog_doctor(self, raw_text_or_name: str):
+        _ = self, raw_text_or_name
+        return {"status": "fuzzy", "query": "евграфова", "canonical": "Евграфова"}
+
+    async def fake_match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = ""):
+        _ = self, raw_text_or_name, current_service_name
+        return {"status": "miss", "query": "", "canonical": ""}
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(Services, "match_catalog_doctor", fake_match_catalog_doctor)
+    monkeypatch.setattr(Services, "match_catalog_service", fake_match_catalog_service)
+
+    state = SessionState(session_id="catalog-confirm-stream")
+    services = Services()
+    memory = MemoryStore()
+    out = _run_stream_once("Запишите к Евграфовой", state, services, memory)
+
+    assert out
+    assert "Это верно? Ответьте «да» или «нет»." in out[0].text
+    assert out[0].handoff is False
+
+
 @pytest.mark.parametrize(
     ("text", "expected_kind"),
     [
