@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import logging
 import re
 from typing import Any
@@ -531,6 +532,18 @@ class FreeTalkAgent:
                 )
                 continue
 
+            if result.tool_name == "doctors_schedule_week":
+                stats = self._schedule_payload_stats(result.payload)
+                log_event(
+                    "medical_schedule_payload_stats",
+                    session_id=context.session_id,
+                    doctors_count=stats["doctors_count"],
+                    regions_count=stats["regions_count"],
+                    days_count=stats["days_count"],
+                    slots_count=stats["slots_count"],
+                    schedule_unavailable_reason=stats["schedule_unavailable_reason"],
+                )
+
             answer = await self._render_tool_reply(
                 user_message=user_message,
                 tool_name=result.tool_name,
@@ -903,6 +916,138 @@ class FreeTalkAgent:
         chunks = [chunk for chunk in chunks if chunk]
         return _top_list(chunks, limit=5)
 
+    @staticmethod
+    def _format_iso_date_short(value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        try:
+            parsed = datetime.fromisoformat(raw)
+            return parsed.strftime("%d.%m")
+        except Exception:
+            pass
+        if len(raw) >= 10:
+            return raw[:10]
+        return raw
+
+    @classmethod
+    def _schedule_day_line(cls, day: dict[str, Any]) -> tuple[str, bool]:
+        if not isinstance(day, dict):
+            return "", False
+
+        date_label = cls._format_iso_date_short(str(day.get("date") or ""))
+        slots_raw = day.get("slots")
+        slots: list[str] = []
+        if isinstance(slots_raw, list):
+            for item in slots_raw:
+                text = str(item or "").strip()
+                if not text:
+                    continue
+                slots.append(text[:5] if len(text) >= 5 else text)
+
+        if slots:
+            title = date_label or "Ближайшая дата"
+            return f"{title}: {', '.join(_top_list(slots, limit=6))}", True
+
+        start = str(day.get("start") or "").strip()
+        end = str(day.get("end") or "").strip()
+        if start or end:
+            title = date_label or "Ближайшая дата"
+            interval = f"{start[:5] if start else ''}-{end[:5] if end else ''}".strip("-")
+            if interval:
+                return f"{title}: {interval}", False
+
+        return "", False
+
+    @classmethod
+    def _render_schedule_details(cls, payload: dict[str, Any]) -> str:
+        schedule = payload.get("schedule")
+        if not isinstance(schedule, list) or not schedule:
+            return ""
+
+        lines: list[str] = ["Нашел расписание:"]
+        rendered = 0
+        has_free_slots = False
+        for row in _top_list(schedule, 3):
+            if not isinstance(row, dict):
+                continue
+
+            rendered += 1
+            fio = str(row.get("fio") or "").strip() or "Врач"
+            lines.append(f"{rendered}. {fio}")
+
+            row_schedule = row.get("schedule")
+            row_lines = 0
+            if isinstance(row_schedule, dict):
+                for region_name, days in list(row_schedule.items())[:2]:
+                    day_lines: list[str] = []
+                    if isinstance(days, list):
+                        for day in days[:4]:
+                            preview, day_has_free = cls._schedule_day_line(day)
+                            if not preview:
+                                continue
+                            day_lines.append(preview)
+                            if day_has_free:
+                                has_free_slots = True
+                    if not day_lines:
+                        continue
+
+                    region = str(region_name or "").strip()
+                    if region:
+                        lines.append(f"   {region}")
+                    for preview in day_lines:
+                        lines.append(f"   • {preview}")
+                    row_lines += len(day_lines)
+
+            if row_lines == 0:
+                lines.append("   Свободные окна по этому врачу не найдены, уточните дату или филиал.")
+            lines.append("")
+
+        if rendered == 0:
+            return ""
+
+        reason = str(payload.get("schedule_unavailable_reason") or "").strip().lower()
+        if not has_free_slots and reason == "no_free_slots_2_weeks":
+            lines.append("На ближайшие две недели свободных слотов по этому запросу нет.")
+        elif has_free_slots:
+            lines.append("Если нужно, уточню ближайшие окна по филиалу и дате.")
+
+        return "\n".join([line for line in lines if str(line).strip()]).strip()
+
+    @staticmethod
+    def _schedule_payload_stats(payload: dict[str, Any]) -> dict[str, Any]:
+        schedule = payload.get("schedule")
+        doctors_count = 0
+        regions_count = 0
+        days_count = 0
+        slots_count = 0
+        if isinstance(schedule, list):
+            for row in schedule:
+                if not isinstance(row, dict):
+                    continue
+                doctors_count += 1
+                row_schedule = row.get("schedule")
+                if not isinstance(row_schedule, dict):
+                    continue
+                for _, days in row_schedule.items():
+                    regions_count += 1
+                    if not isinstance(days, list):
+                        continue
+                    for day in days:
+                        if not isinstance(day, dict):
+                            continue
+                        days_count += 1
+                        day_slots = day.get("slots")
+                        if isinstance(day_slots, list):
+                            slots_count += sum(1 for slot in day_slots if str(slot or "").strip())
+        return {
+            "doctors_count": doctors_count,
+            "regions_count": regions_count,
+            "days_count": days_count,
+            "slots_count": slots_count,
+            "schedule_unavailable_reason": str(payload.get("schedule_unavailable_reason") or "").strip(),
+        }
+
     def _fallback_render(self, tool_name: str, payload: dict[str, Any]) -> str:
         clarify_text = str(payload.get("clarify_text") or "").strip()
         if clarify_text:
@@ -977,16 +1122,9 @@ class FreeTalkAgent:
             return "Врачей по вашему запросу в данных клиники не найдено."
 
         if tool_name == "doctors_schedule_week":
-            schedule = payload.get("schedule")
-            if isinstance(schedule, list) and schedule:
-                lines = ["Нашел расписание:"]
-                for row in _top_list(schedule, 4):
-                    if not isinstance(row, dict):
-                        continue
-                    fio = str(row.get("fio") or "").strip()
-                    lines.append(f"- {fio or 'Врач'}: есть доступные слоты")
-                if len(lines) > 1:
-                    return "\n".join(lines)
+            detailed = self._render_schedule_details(payload)
+            if detailed:
+                return detailed
             reason = str(payload.get("schedule_unavailable_reason") or "").strip().lower()
             if reason == "no_free_slots_2_weeks":
                 return "На ближайшие две недели свободных слотов по этому запросу нет."

@@ -195,3 +195,30 @@ def test_catalog_resolution_reply_not_triggered_for_specialty_miss():
         },
     )
     assert reply is None
+
+
+def test_render_schedule_details_includes_region_dates_and_slots():
+    payload = {
+        "schedule": [
+            {
+                "fio": "Дразнин Антон Владимирович",
+                "schedule": {
+                    "г. Самара, пр. Ленина, 5": [
+                        {
+                            "date": "2026-04-10",
+                            "slots": ["09:00", "09:30", "10:00"],
+                            "start": "09:00",
+                            "end": "18:00",
+                        }
+                    ]
+                },
+            }
+        ],
+        "note": "doctors_schedule_week: realtime from Nayka API",
+    }
+
+    text = FreeTalkAgent._render_schedule_details(payload)
+    assert "Дразнин Антон Владимирович" in text
+    assert "Самара" in text
+    assert "09:00" in text
+    assert "10.04" in text
