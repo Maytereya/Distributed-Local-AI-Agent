@@ -43,6 +43,28 @@ services:
     networks:
       - local_net
 
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      - BASE_URL=http://searxng:8080/
+      - INSTANCE_NAME=bookworm-searxng
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://localhost:8080/',timeout=3).status < 500 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - local_net
+
   nginx:
     image: nginx:latest
     container_name: nginx_proxy

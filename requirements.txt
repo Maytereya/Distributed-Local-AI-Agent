@@ -247,6 +247,7 @@ Quart==0.20.0
 RapidFuzz==3.13.0
 referencing==0.36.2
 regex==2024.11.6
+redis==5.2.1
 requests==2.32.3
 requests-oauthlib==2.0.0
 requests-toolbelt==1.0.0

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "localragagent"
+version = "0.1.0"
+description = "LocalRAGagent package facade with layered architecture contracts."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+  { name = "LocalRAGagent Team" }
+]
+
+[tool.setuptools]
+include-package-data = true
+py-modules = ["agent_api", "gradio_interface", "messenger_simulator", "schedule_ttl_cache"]
+
+[tool.setuptools.package-data]
+localragagent = ["freetalk/config.ini", "freetalk/*.txt"]
+
+[tool.setuptools.packages.find]
+where = [".", "src"]
+include = [
+  "localragagent*",
+  "agent_logic_1*",
+  "agent_logic_2*",
+  "messengers_router*",
+  "converters*",
+  "container_managenment*",
+  "openclaw*",
+  "VOSK*",
+  "whisper*",
+]
+exclude = [
+  "tests*",
+  "docs*",
+  ".venv*",
+  ".agent_venv*",
+]

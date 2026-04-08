@@ -50,7 +50,7 @@ def build_assistant_tab(
         messenger_session_state = gr.State(value=None)
 
         radio_type_of_search = gr.Radio(
-            ["Call-Center-Ai", "Messengers-Ai", "gigachat", "meilisearch", "vectorstore", "db"],
+            ["Free-talk-Ai", "Call-Center-Ai", "Messengers-Ai", "gigachat", "meilisearch", "vectorstore", "db"],
             label="Способы поиска в базе знаний, выбор нейросети или канала связи (для администраторов или клиентов)",
             value="Call-Center-Ai",
             container=True,
@@ -175,7 +175,7 @@ def build_assistant_tab(
         )
 
         def reset_session_on_mode_change(mode: str, current_session: Any):
-            if mode == "Messengers-Ai":
+            if mode in {"Messengers-Ai", "Free-talk-Ai"}:
                 return current_session
             return None
 

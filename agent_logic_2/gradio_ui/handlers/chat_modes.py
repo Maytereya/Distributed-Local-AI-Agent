@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import time
 import uuid
+from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
 from agent_logic_1 import aretrieve as retrieve
@@ -276,10 +278,38 @@ async def meili_echo(
     return meilisearch.search_meili(query=message, index_name=index, limit=limit)
 
 
+def _resolve_free_talk_stream():
+    """
+    Импортирует stream_free_talk(_with_state) из package `localragagent`.
+
+    В dev-режиме проект часто запускается без editable install,
+    поэтому добавляем `<repo>/src` в sys.path как fallback.
+    """
+    try:
+        from localragagent.freetalk import runner as free_talk_runner
+
+        stream = getattr(free_talk_runner, "stream_free_talk_with_state", None)
+        if callable(stream):
+            return stream
+        return free_talk_runner.stream_free_talk
+    except ModuleNotFoundError:
+        src_dir = Path(__file__).resolve().parents[3] / "src"
+        if src_dir.exists():
+            src_str = str(src_dir)
+            if src_str not in sys.path:
+                sys.path.insert(0, src_str)
+        from localragagent.freetalk import runner as free_talk_runner
+
+        stream = getattr(free_talk_runner, "stream_free_talk_with_state", None)
+        if callable(stream):
+            return stream
+        return free_talk_runner.stream_free_talk
+
+
 async def universal_echo(
     message: str,
     history: List[Dict],
-    radio_value: str,  # "Call-Center-Ai", "gigachat", "meilisearch", "vectorstore", "db"
+    radio_value: str,  # "Free-talk-Ai", "Call-Center-Ai", "gigachat", "meilisearch", "vectorstore", "db"
     threshold_value: float,
     slider_value_n_results: int,
     slider_value_k: int,
@@ -288,6 +318,29 @@ async def universal_echo(
     messenger_session_id: Optional[str] = None,
 ):
     messenger_session_id = str(messenger_session_id or "").strip() or None
+
+    if radio_value == "Free-talk-Ai":
+        if not history:
+            session_id = f"gr_ft_{uuid.uuid4().hex[:12]}"
+        else:
+            current = str(messenger_session_id or "").strip()
+            session_id = current if current.startswith("gr_ft_") else f"gr_ft_{uuid.uuid4().hex[:12]}"
+        stream_free_talk = _resolve_free_talk_stream()
+        current_session_id = session_id
+        async for item in stream_free_talk(
+            message=message,
+            history=history,
+            session_id=session_id,
+        ):
+            if isinstance(item, tuple) and len(item) == 2:
+                partial = str(item[0] or "")
+                candidate = str(item[1] or "").strip()
+                if candidate.startswith("gr_ft_"):
+                    current_session_id = candidate
+            else:
+                partial = str(item or "")
+            yield partial, current_session_id
+        return
 
     if radio_value == "Call-Center-Ai":
         session_state: dict = {}
@@ -300,7 +353,8 @@ async def universal_echo(
         if not history:
             session_id = f"gr_mr_{uuid.uuid4().hex[:12]}"
         else:
-            session_id = messenger_session_id or f"gr_mr_{uuid.uuid4().hex[:12]}"
+            current = str(messenger_session_id or "").strip()
+            session_id = current if current.startswith("gr_mr_") else f"gr_mr_{uuid.uuid4().hex[:12]}"
         async for partial in echo_messenger_ai(message, session_id=session_id):
             yield partial, session_id
         return

@@ -475,8 +475,8 @@ def main():
             def apply_tab_visibility_by_role(request: gr.Request | None = None):
                 username = getattr(request, "username", None) if request else None
                 is_admin = get_user_role(username) == "admin"
-                user_choices = ["Call-Center-Ai", "Messengers-Ai"]
-                admin_choices = ["Call-Center-Ai", "Messengers-Ai", "gigachat", "meilisearch", "vectorstore", "db"]
+                user_choices = ["Free-talk-Ai", "Call-Center-Ai", "Messengers-Ai"]
+                admin_choices = ["Free-talk-Ai", "Call-Center-Ai", "Messengers-Ai", "gigachat", "meilisearch", "vectorstore", "db"]
                 allowed_choices = admin_choices if is_admin else user_choices
                 return (
                     gr.update(visible=True),  # assistant_tab
