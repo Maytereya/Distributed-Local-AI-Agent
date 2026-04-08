@@ -166,7 +166,6 @@ class FreeTalkAgent:
         if is_about_agent_query(user_message):
             return AgentReply(text=_capabilities_brief(), source="general_knowledge")
 
-        web_search_unavailable = False
         if self.web_search and should_use_web_search(user_message):
             web_payload = await self.web_search.search(user_message, entities={})
             web_results = web_payload.get("results") if isinstance(web_payload, dict) else []
@@ -185,7 +184,6 @@ class FreeTalkAgent:
                     )
             note = str(web_payload.get("note") or "") if isinstance(web_payload, dict) else ""
             if "source unavailable" in note.lower():
-                web_search_unavailable = True
                 log_event(
                     "web_search_unavailable_fallback",
                     level=logging.WARNING,
@@ -450,6 +448,16 @@ class FreeTalkAgent:
         return entities
 
     async def _render_tool_reply(self, *, user_message: str, tool_name: str, tool_payload: dict[str, Any]) -> str:
+        rendered = self._fallback_render(tool_name, tool_payload).strip()
+        if _is_non_empty_text(rendered):
+            return rendered
+        log_event(
+            "tool_render_fallback",
+            level=logging.WARNING,
+            user_message=user_message[:120],
+            tool_name=tool_name,
+            payload_note=str(tool_payload.get("note") or "")[:120],
+        )
         prompt = build_tool_result_prompt(
             system_prompt=self.system_prompt,
             user_message=user_message,
@@ -459,13 +467,7 @@ class FreeTalkAgent:
         llm_text = await self._llm_text(prompt)
         if _is_non_empty_text(llm_text):
             return llm_text
-        log_event(
-            "tool_render_fallback",
-            level=logging.WARNING,
-            tool_name=tool_name,
-            payload_note=str(tool_payload.get("note") or "")[:120],
-        )
-        return self._fallback_render(tool_name, tool_payload)
+        return "Нашел данные, но не удалось корректно сформировать ответ. Уточните запрос, и я отвечу точнее."
 
     async def _maybe_compact(self, session_id: str) -> None:
         turn_count = await self.memory.get_turn_count(session_id)
@@ -549,6 +551,14 @@ class FreeTalkAgent:
         return _top_list(chunks, limit=5)
 
     def _fallback_render(self, tool_name: str, payload: dict[str, Any]) -> str:
+        clarify_text = str(payload.get("clarify_text") or "").strip()
+        if clarify_text:
+            return clarify_text
+
+        handoff_text = str(payload.get("handoff_message") or "").strip()
+        if handoff_text:
+            return handoff_text
+
         if tool_name == "test_result_status":
             links = [str(x).strip() for x in (payload.get("result_links") or []) if str(x).strip()]
             if payload.get("ready") and links:
@@ -575,6 +585,7 @@ class FreeTalkAgent:
                     elif name:
                         lines.append(f"- {name}")
                 return "\n".join(lines)
+            return "По вашему запросу цены в данных клиники не найдены."
 
         if tool_name == "test_assist":
             tests = [x for x in (payload.get("tests") or []) if isinstance(x, dict)]
@@ -588,6 +599,7 @@ class FreeTalkAgent:
                     elif name:
                         lines.append(f"- {name}")
                 return "\n".join(lines)
+            return "Подходящие анализы в данных клиники не найдены."
 
         if tool_name == "address_info":
             addresses = [str(x).strip() for x in (payload.get("addresses") or []) if str(x).strip()]
@@ -595,6 +607,7 @@ class FreeTalkAgent:
                 lines = ["Нашел адреса филиалов:"]
                 lines.extend(f"- {addr}" for addr in _top_list(addresses, 6))
                 return "\n".join(lines)
+            return "Адреса по вашему запросу в данных клиники не найдены."
 
         if tool_name == "doctors_info":
             doctors = [x for x in (payload.get("doctors") or []) if isinstance(x, dict)]
@@ -608,6 +621,7 @@ class FreeTalkAgent:
                     elif fio:
                         lines.append(f"- {fio}")
                 return "\n".join(lines)
+            return "Врачей по вашему запросу в данных клиники не найдено."
 
         if tool_name == "doctors_schedule_week":
             schedule = payload.get("schedule")
@@ -620,6 +634,10 @@ class FreeTalkAgent:
                     lines.append(f"- {fio or 'Врач'}: есть доступные слоты")
                 if len(lines) > 1:
                     return "\n".join(lines)
+            reason = str(payload.get("schedule_unavailable_reason") or "").strip().lower()
+            if reason == "no_free_slots_2_weeks":
+                return "На ближайшие две недели свободных слотов по этому запросу нет."
+            return "Расписание по вашему запросу в данных клиники не найдено."
 
         if tool_name == "service_bundle_info":
             prices = [x for x in (payload.get("retail_prices") or []) if isinstance(x, dict)]
@@ -644,6 +662,29 @@ class FreeTalkAgent:
                 lines.append(prepare)
             if lines:
                 return "\n".join(lines)
+            return "По этой услуге в данных клиники сейчас нет релевантной информации."
+
+        if tool_name == "main_index_info":
+            content = str(payload.get("content") or "").strip()
+            if content:
+                return content
+            return "По вашему запросу в базе знаний клиники ничего не найдено."
+
+        if tool_name == "news_info":
+            news = [x for x in (payload.get("news") or []) if isinstance(x, dict)]
+            if news:
+                lines = ["Нашел новости клиники:"]
+                for item in _top_list(news, 5):
+                    title = str(item.get("title") or item.get("name") or "").strip()
+                    url = str(item.get("url") or item.get("link") or "").strip()
+                    if title and url:
+                        lines.append(f"- {title} ({url})")
+                    elif title:
+                        lines.append(f"- {title}")
+                    elif url:
+                        lines.append(f"- {url}")
+                return "\n".join(lines)
+            return "Новости по вашему запросу не найдены."
 
         if tool_name == "web_search":
             results = [x for x in (payload.get("results") or []) if isinstance(x, dict)]
@@ -669,6 +710,7 @@ class FreeTalkAgent:
                 lines.append("")
                 lines.append("Это общая информация из интернет-поиска, не из данных клиники.")
                 return "\n".join(lines)
+            return "В интернет-поиске по этому запросу не найдено релевантных результатов."
 
         content = str(payload.get("content") or "").strip()
         if content:

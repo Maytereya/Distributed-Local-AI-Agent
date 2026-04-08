@@ -26,7 +26,21 @@ def _has_useful_data(value: Any) -> bool:
             return False
         return True
     if isinstance(value, dict):
-        ignored = {"note", "entities_used", "status", "reason", "checked_at", "source_counts", "handoff_required"}
+        ignored = {
+            "note",
+            "entities_used",
+            "status",
+            "reason",
+            "checked_at",
+            "source_counts",
+            "handoff_required",
+            "cache_file",
+            "top_n_applied",
+            "service_kind",
+            "service_name",
+            "prepare_wrap_status",
+            "prepare_wrap_reason",
+        }
         for key, item in value.items():
             if key in ignored:
                 continue

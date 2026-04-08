@@ -1,0 +1,30 @@
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from localragagent.freetalk.tool_registry import is_medical_query, select_tool_plan, should_use_web_search
+
+
+def test_therapist_query_is_medical_and_routes_to_doctors_tools():
+    text = "Кто из терапевтов принимает в клинике?"
+    assert is_medical_query(text) is True
+    plan = select_tool_plan(text, include_meili_tools=False)
+    assert plan[:2] == ["doctors_info", "doctors_schedule_week"]
+
+
+def test_freeform_find_request_prefers_web_search():
+    text = "Поищи стоимость альскирена в РФ"
+    assert is_medical_query(text) is False
+    assert should_use_web_search(text) is True
+
+
+def test_medical_query_does_not_trigger_web_search_by_default():
+    text = "Поищи в интернете, кто из терапевтов принимает в клинике"
+    assert is_medical_query(text) is True
+    assert should_use_web_search(text) is False
