@@ -4,6 +4,7 @@ import pytest
 
 from messengers_router import services as svc_mod
 from messengers_router.city import match_city
+from messengers_router.renderer import format_price_for_patient, format_service_bundle_for_patient
 from messengers_router.services import Services, resolve_price_service_name_from_catalog
 from messengers_router.policies import (
     build_branch_index,
@@ -1715,6 +1716,55 @@ def test_price_info_drops_stale_prepare_service_for_new_price_query(monkeypatch)
     assert "холестерин" not in str(res["entities_used"].get("service_name_effective") or "").lower()
 
 
+def test_price_info_general_oak_returns_base_variants_without_special_modifiers(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "Cito Общий анализ крови (Le, Er,Hb)", "serviceHomecode": "802", "cost": 580},
+            {
+                "serviceName": "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты)",
+                "serviceHomecode": "501",
+                "cost": 520,
+            },
+            {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "serviceHomecode": "502", "cost": 390},
+            {
+                "serviceName": "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) капиллярная кровь",
+                "serviceHomecode": "501к",
+                "cost": 470,
+            },
+            {
+                "serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ) капиллярная кровь",
+                "serviceHomecode": "502к",
+                "cost": 380,
+            },
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("Сколько стоит общий анализ крови?", {}))
+
+    codes = [str(row.get("serviceHomecode") or "") for row in res["prices"]]
+    assert codes == ["502", "501"]
+
+
+def test_price_info_keeps_cito_variant_when_user_requests_it_explicitly(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "Cito Общий анализ крови (Le, Er,Hb)", "serviceHomecode": "802", "cost": 580},
+            {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "serviceHomecode": "502", "cost": 390},
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("Сколько стоит cito общий анализ крови?", {}))
+
+    assert res["prices"]
+    assert str(res["prices"][0].get("serviceHomecode") or "") == "802"
+
+
 def test_price_info_resolves_mixed_ecg_question_to_catalog_service(monkeypatch):
     svc = Services()
 
@@ -1731,6 +1781,105 @@ def test_price_info_resolves_mixed_ecg_question_to_catalog_service(monkeypatch):
     assert res["prices"], "Expected price row for mixed ECG price/address wording"
     top_name = str(res["prices"][0].get("serviceName") or "").lower()
     assert top_name == "экг"
+
+
+def test_price_info_generic_uzi_returns_clarify():
+    svc = Services()
+
+    res = run(svc.price_info("Сколько стоит УЗИ?", {}))
+
+    assert res.get("prices") == []
+    assert "узи брюшной полости" in str(res.get("clarify_text") or "").lower()
+    assert "молочной железы" in str(res.get("clarify_text") or "").lower()
+
+
+def test_service_bundle_info_generic_uzi_returns_clarify():
+    svc = Services()
+
+    res = run(svc.service_bundle_info("Сколько стоит УЗИ?", {}))
+
+    assert res.get("retail_prices") == []
+    assert res.get("doctors") == []
+    assert "узи брюшной полости" in str(res.get("clarify_text") or "").lower()
+    assert "молочной железы" in str(res.get("clarify_text") or "").lower()
+
+
+def test_format_price_for_patient_prefers_clarify_text():
+    text = format_price_for_patient(
+        {
+            "prices": [],
+            "clarify_text": (
+                "Введите конкретное название процедуры, например: "
+                "стоимость УЗИ брюшной полости или цена УЗИ молочной железы."
+            ),
+        },
+        {},
+    )
+
+    assert "узи брюшной полости" in text.lower()
+    assert "молочной железы" in text.lower()
+
+
+def test_format_service_bundle_for_patient_prefers_clarify_text():
+    text = format_service_bundle_for_patient(
+        {
+            "clarify_text": (
+                "Введите конкретное название процедуры, например: "
+                "стоимость УЗИ брюшной полости или цена УЗИ молочной железы."
+            ),
+            "retail_prices": [],
+            "doctors": [],
+        },
+        {},
+    )
+
+    assert "узи брюшной полости" in text.lower()
+    assert "молочной железы" in text.lower()
+
+
+def test_format_service_bundle_for_patient_lists_multiple_lab_price_variants():
+    text = format_service_bundle_for_patient(
+        {
+            "service_name": "общий анализ крови",
+            "service_kind": "lab",
+            "retail_prices": [
+                {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "serviceHomecode": "502", "cost": 390},
+                {
+                    "serviceName": "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты)",
+                    "serviceHomecode": "501",
+                    "cost": 490,
+                },
+            ],
+            "doctors": [],
+            "show_prepare": False,
+        },
+        {},
+    )
+
+    low = text.lower()
+    assert "розничные варианты" in low
+    assert "общий анализ крови (le, er, hb, соэ) — 390 руб." in low
+    assert "общий анализ крови (полный)" in low
+    assert "490 руб." in low
+
+
+def test_format_service_bundle_for_patient_limits_lab_variants_to_five():
+    payload = {
+        "service_name": "анализ крови",
+        "service_kind": "lab",
+        "retail_prices": [
+            {"serviceName": f"Вариант {idx}", "cost": 100 + idx}
+            for idx in range(1, 7)
+        ],
+        "doctors": [],
+        "show_prepare": False,
+    }
+
+    text = format_service_bundle_for_patient(payload, {})
+
+    assert "Вариант 1" in text
+    assert "Вариант 5" in text
+    assert "Вариант 6" not in text
 
 
 def test_extract_price_service_from_query_strips_politeness_tail():
@@ -2225,6 +2374,47 @@ def test_service_bundle_info_marks_lab_and_skips_doctors(monkeypatch):
     assert res.get("doctors") == []
     assert calls["doctor_prices"] == 0
     assert calls["doctors_cache"] == 0
+
+
+def test_service_bundle_info_general_oak_returns_base_variants_without_special_modifiers(monkeypatch):
+    svc = Services()
+    calls = {"doctor_prices": 0}
+
+    def fake_retail(_region_id):
+        return [
+            {"serviceName": "Cito Общий анализ крови (Le, Er,Hb)", "serviceHomecode": "802", "cost": 580},
+            {
+                "serviceName": "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты)",
+                "serviceHomecode": "501",
+                "cost": 520,
+            },
+            {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "serviceHomecode": "502", "cost": 390},
+            {
+                "serviceName": "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) капиллярная кровь",
+                "serviceHomecode": "501к",
+                "cost": 470,
+            },
+            {
+                "serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ) капиллярная кровь",
+                "serviceHomecode": "502к",
+                "cost": 380,
+            },
+        ]
+
+    def fake_doctor_prices():
+        calls["doctor_prices"] += 1
+        return []
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_retail)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+
+    res = run(svc.service_bundle_info("Сколько стоит общий анализ крови?", {}))
+
+    codes = [str(row.get("serviceHomecode") or "") for row in res["retail_prices"]]
+    assert codes == ["502", "501"]
+    assert str(res.get("service_kind") or "") == "lab"
+    assert str(res.get("service_name") or "").lower() == "общий анализ крови"
+    assert calls["doctor_prices"] == 0
 
 
 def test_service_bundle_info_filters_weak_partial_doctor_matches_for_surgery(monkeypatch):
