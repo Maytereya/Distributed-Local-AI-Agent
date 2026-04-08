@@ -328,6 +328,9 @@ def _availability_text_for_doctor(doc: dict[str, Any]) -> str:
 
 
 def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
+    clarify_text = str(payload.get("clarify_text") or "").strip()
+    if clarify_text:
+        return clarify_text
     service_name = str(payload.get("service_name") or entities.get("service_name") or entities.get("test_name") or "").strip()
     retail_prices_raw = payload.get("retail_prices")
     doctors_raw = payload.get("doctors")

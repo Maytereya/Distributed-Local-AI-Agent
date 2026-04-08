@@ -1793,6 +1793,17 @@ def test_price_info_generic_uzi_returns_clarify():
     assert "молочной железы" in str(res.get("clarify_text") or "").lower()
 
 
+def test_service_bundle_info_generic_uzi_returns_clarify():
+    svc = Services()
+
+    res = run(svc.service_bundle_info("Сколько стоит УЗИ?", {}))
+
+    assert res.get("retail_prices") == []
+    assert res.get("doctors") == []
+    assert "узи брюшной полости" in str(res.get("clarify_text") or "").lower()
+    assert "молочной железы" in str(res.get("clarify_text") or "").lower()
+
+
 def test_format_price_for_patient_prefers_clarify_text():
     text = format_price_for_patient(
         {
@@ -1801,6 +1812,23 @@ def test_format_price_for_patient_prefers_clarify_text():
                 "Введите конкретное название процедуры, например: "
                 "стоимость УЗИ брюшной полости или цена УЗИ молочной железы."
             ),
+        },
+        {},
+    )
+
+    assert "узи брюшной полости" in text.lower()
+    assert "молочной железы" in text.lower()
+
+
+def test_format_service_bundle_for_patient_prefers_clarify_text():
+    text = format_service_bundle_for_patient(
+        {
+            "clarify_text": (
+                "Введите конкретное название процедуры, например: "
+                "стоимость УЗИ брюшной полости или цена УЗИ молочной железы."
+            ),
+            "retail_prices": [],
+            "doctors": [],
         },
         {},
     )

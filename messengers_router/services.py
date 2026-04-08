@@ -4345,6 +4345,21 @@ class Services:
         top_limit = _coerce_top_n(top_n, default=DOCTORS_TOP_N)
         entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
         query_text = str(query or "").strip()
+        if _is_generic_uzi_price_request(query_text):
+            return {
+                "service_name": "УЗИ",
+                "retail_prices": [],
+                "doctors": [],
+                "prepare": "",
+                "show_prepare": False,
+                "top_n_applied": top_limit,
+                "clarify_text": (
+                    "Введите конкретное название процедуры, например: "
+                    "стоимость УЗИ брюшной полости или цена УЗИ молочной железы."
+                ),
+                "note": "service_bundle_info: generic_uzi_clarify",
+                "entities_used": entities,
+            }
         if entity_service_name and _is_city_only_reply(query_text):
             query_service_name = None
         else:
