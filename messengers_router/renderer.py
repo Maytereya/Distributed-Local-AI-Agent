@@ -344,10 +344,19 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
     lines: list[str] = [f"По услуге «{service_name}» нашёл следующее:"]
 
     if retail_prices:
-        top_price = retail_prices[0] if isinstance(retail_prices[0], dict) else {}
-        amount = _format_rub(_extract_price_amount(top_price))
-        price_name = str(top_price.get("serviceName") or top_price.get("name") or service_name).strip()
-        lines.append(f"1) Розничная цена: {price_name} — {amount}.")
+        if service_kind == "lab" and len(retail_prices) > 1:
+            lines.append("1) Розничные варианты:")
+            for price_row in retail_prices[:5]:
+                if not isinstance(price_row, dict):
+                    continue
+                amount = _format_rub(_extract_price_amount(price_row))
+                price_name = str(price_row.get("serviceName") or price_row.get("name") or service_name).strip()
+                lines.append(f"- {price_name} — {amount}.")
+        else:
+            top_price = retail_prices[0] if isinstance(retail_prices[0], dict) else {}
+            amount = _format_rub(_extract_price_amount(top_price))
+            price_name = str(top_price.get("serviceName") or top_price.get("name") or service_name).strip()
+            lines.append(f"1) Розничная цена: {price_name} — {amount}.")
     else:
         lines.append("1) Розничную цену сейчас точно определить не удалось.")
 
@@ -418,6 +427,7 @@ def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) 
     prices_raw = payload.get("prices")
     prices = prices_raw if isinstance(prices_raw, list) else []
     service_hint = str(entities.get("service_name") or entities.get("test_name") or "").strip()
+    clarify_text = str(payload.get("clarify_text") or "").strip()
     source_marker = _price_source_marker(payload)
 
     def _finish(text: str) -> str:
@@ -427,6 +437,9 @@ def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) 
         if source_marker:
             return f"{txt}\nИсточник цены: {source_marker}."
         return txt
+
+    if clarify_text:
+        return _finish(clarify_text)
 
     if not prices:
         if service_hint:

@@ -93,6 +93,12 @@ _DOCTOR_SERVICE_HINT_RE = re.compile(
     re.I,
 )
 _LAB_DEADLINE_HINT_RE = re.compile(r"\b\d+\s*(?:-\s*\d+)?\s*(?:дн|дней|нед|час)\b", re.I)
+_PRICE_CITO_QUERY_RE = re.compile(r"\b(cito|сроч\w*|экспресс\w*)\b", re.I)
+_PRICE_CAPILLARY_QUERY_RE = re.compile(r"\b(капилляр\w*|из\s+пальца|палец)\b", re.I)
+_PRICE_CHILD_QUERY_RE = re.compile(r"\b(дет\w*|ребен\w*|ребён\w*)\b", re.I)
+_PRICE_CITO_ROW_RE = re.compile(r"\b(cito|сроч\w*|экспресс\w*)\b", re.I)
+_PRICE_CAPILLARY_ROW_RE = re.compile(r"\bкапилляр\w*\b", re.I)
+_PRICE_CHILD_ROW_RE = re.compile(r"\b(дет\w*|ребен\w*|ребён\w*)\b", re.I)
 _NONBOOKABLE_POINTS_PATH = Path(__file__).resolve().parent / "data" / "nonbookable_points.json"
 _NEAREST_HINT_RE = re.compile(r"\b(ближайш\w*|сам\w*\s+ранн\w*|раньше|поскорее|свободн\w*\s+окн\w*)\b", re.I)
 _UZI_QUERY_RE = re.compile(r"\b(узи|узист|ультразвук\w*|ультразвуков\w*)\b", re.I)
@@ -2303,6 +2309,26 @@ def _extract_price_service_from_query(query: str) -> str | None:
     return " ".join(words[:8])
 
 
+def _is_generic_uzi_price_request(query_text: str) -> bool:
+    """
+    Определяет, что пользователь спрашивает цену только по общему термину УЗИ.
+
+    В таком сценарии нельзя надежно выбирать первую попавшуюся услугу из каталога,
+    потому что в прайсе десятки видов УЗИ. Нужен дополнительный clarify.
+
+    :param query_text: исходный текст запроса пользователя
+    :return: True, если требуется уточнение конкретного вида УЗИ
+    """
+
+    raw = str(query_text or "").strip()
+    if not raw or not _PRICE_REQUEST_RE.search(raw):
+        return False
+
+    extracted = str(_extract_price_service_from_query(raw) or "").strip()
+    norm = _normalise_input(extracted).replace("ё", "е")
+    return norm in {"узи", "ультразвук", "ультразвуковое исследование"}
+
+
 def _is_consultation_service_query(value: str) -> bool:
     """
     Проверяет, что service_name относится к приему/консультации врача.
@@ -2800,6 +2826,156 @@ def _rank_price_rows(rows: list[dict[str, Any]], query_text: str, *, limit: int 
         if len(out) >= limit:
             break
     return out
+
+
+def _lab_price_variant_flags(row: dict[str, Any]) -> set[str]:
+    """
+    Выделяет специальные модификаторы лабораторной строки прайса.
+
+    Нужен для patient-facing выдачи, чтобы без явного запроса не подмешивать
+    срочные, капиллярные и детские варианты в базовый список цен.
+
+    :param row: строка прайса
+    :return: набор флагов варианта (`cito`, `capillary`, `child`)
+    """
+
+    name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
+    homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
+    flags: set[str] = set()
+    if _PRICE_CITO_ROW_RE.search(name):
+        flags.add("cito")
+    if _PRICE_CAPILLARY_ROW_RE.search(name) or homecode.endswith("к"):
+        flags.add("capillary")
+    if _PRICE_CHILD_ROW_RE.search(name):
+        flags.add("child")
+    return flags
+
+
+def _query_price_variant_flags(query_text: str) -> set[str]:
+    """
+    Извлекает из запроса признаки явно запрошенного модификатора анализа.
+
+    :param query_text: исходный запрос пользователя
+    :return: набор флагов (`cito`, `capillary`, `child`)
+    """
+
+    query = _normalise_input(str(query_text or ""))
+    flags: set[str] = set()
+    if _PRICE_CITO_QUERY_RE.search(query):
+        flags.add("cito")
+    if _PRICE_CAPILLARY_QUERY_RE.search(query):
+        flags.add("capillary")
+    if _PRICE_CHILD_QUERY_RE.search(query):
+        flags.add("child")
+    return flags
+
+
+def _is_lab_price_query_for_catalog(query_text: str) -> bool:
+    """
+    Определяет, что ценовой запрос относится к лабораторным анализам.
+
+    :param query_text: текст пользовательского запроса
+    :return: True для лабораторного price-запроса
+    """
+
+    query = _normalise_input(str(query_text or ""))
+    if not query:
+        return False
+    return bool(_LAB_SERVICE_HINT_RE.search(query) and not _DOCTOR_SERVICE_HINT_RE.search(query))
+
+
+def _select_patient_price_rows(
+    rows: list[dict[str, Any]],
+    query_text: str,
+    *,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """
+    Возвращает patient-facing список цен с мягкой развилкой для лабораторных tie-case.
+
+    Если у лабораторного запроса несколько базовых услуг с одинаковой высокой
+    релевантностью, показываем их все, но без специальных модификаторов
+    (`Cito`, капиллярная кровь, детские версии), если они не были явно
+    запрошены пользователем.
+
+    :param rows: строки прайса
+    :param query_text: текст, по которому ранжируем выдачу
+    :param limit: максимальное количество строк
+    :return: список строк для ответа пациенту
+    """
+
+    ranked = _rank_price_rows(rows, query_text, limit=max(limit, 20))
+    if not ranked:
+        return []
+    if not _is_lab_price_query_for_catalog(query_text):
+        return ranked[:limit]
+
+    query = _normalise_input(query_text).replace("ё", "е")
+    tokens = _price_query_tokens(query_text)
+    homecode_query = _extract_homecode_query(query_text)
+    top_score, top_matched = _price_row_score(
+        ranked[0],
+        query=query,
+        tokens=tokens,
+        homecode_query=homecode_query,
+    )
+    tied_rows: list[dict[str, Any]] = []
+    for row in ranked:
+        score, matched = _price_row_score(
+            row,
+            query=query,
+            tokens=tokens,
+            homecode_query=homecode_query,
+        )
+        if score != top_score or matched != top_matched:
+            break
+        tied_rows.append(row)
+
+    if len(tied_rows) < 2:
+        return ranked[:limit]
+
+    requested_flags = _query_price_variant_flags(query_text)
+    filtered: list[dict[str, Any]] = []
+    for row in tied_rows:
+        row_flags = _lab_price_variant_flags(row)
+        if row_flags and not row_flags.issubset(requested_flags):
+            continue
+        filtered.append(row)
+
+    if filtered:
+        return filtered[:limit]
+    return tied_rows[:limit]
+
+
+def _should_prefer_retail_query_candidate(query_candidate: str, service_name: str) -> bool:
+    """
+    Решает, когда для retail-поиска лучше взять текст из текущего запроса,
+    а не уже резолвленную услугу.
+
+    Это нужно для лабораторных случаев, где catalog-grounding может приземлить
+    запрос в специальный вариант (`Cito`, капиллярная кровь), а пациент спросил
+    про базовый анализ без уточняющих модификаторов.
+
+    :param query_candidate: очищенная услуга из текущего запроса
+    :param service_name: каноническая услуга после grounding
+    :return: True, если для retail-ranking полезнее текущий текст запроса
+    """
+
+    query_candidate_norm = _normalise_input(str(query_candidate or ""))
+    service_name_norm = _normalise_input(str(service_name or ""))
+    if not query_candidate_norm:
+        return False
+    if not service_name_norm:
+        return True
+    if query_candidate_norm == service_name_norm:
+        return False
+
+    service_flags = _lab_price_variant_flags({"serviceName": service_name})
+    if not service_flags:
+        return False
+
+    query_flags = _query_price_variant_flags(query_candidate)
+    return not service_flags.issubset(query_flags)
 
 
 def _doctor_sort_key(doc: dict[str, Any]) -> tuple[int, str]:
@@ -4197,16 +4373,28 @@ class Services:
             return out
 
         # 1) Retail price by city-level regionId (Самара = 3).
+        retail_query = service_name
+        retail_prefers_query_candidate = False
+        if query_text and not _is_city_only_reply(query_text):
+            query_candidate = _extract_price_service_from_query(query_text)
+            retail_prefers_query_candidate = _should_prefer_retail_query_candidate(
+                query_candidate or "",
+                service_name,
+            )
+            if retail_prefers_query_candidate:
+                retail_query = query_candidate or service_name
         try:
             retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
-            out["retail_prices"] = _rank_price_rows(
+            out["retail_prices"] = _select_patient_price_rows(
                 [p for p in retail_rows if isinstance(p, dict)],
-                service_name,
+                retail_query,
                 limit=5,
             )
         except Exception:
             out["retail_prices"] = []
             out["note"] = "service_bundle_info: retail source unavailable"
+        if retail_prefers_query_candidate and retail_query:
+            out["service_name"] = retail_query
 
         # 2) Top-N doctors by ord among doctors that have the matched service in doctor prices.
         top_retail = out["retail_prices"][0] if isinstance(out.get("retail_prices"), list) and out["retail_prices"] else {}
@@ -5384,6 +5572,16 @@ class Services:
         entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
         query_text = str(query or "").strip()
         has_price_request = bool(query_text and _PRICE_REQUEST_RE.search(query_text))
+        if _is_generic_uzi_price_request(query_text):
+            return {
+                "prices": [],
+                "clarify_text": (
+                    "Введите конкретное название процедуры, например: "
+                    "стоимость УЗИ брюшной полости или цена УЗИ молочной железы."
+                ),
+                "note": "price_info: generic_uzi_clarify",
+                "entities_used": entities,
+            }
         doctor_query_specialty = _extract_specialty_from_text(query_text) if (doctor_id and has_price_request) else ""
 
         if doctor_id:
@@ -5472,7 +5670,16 @@ class Services:
             )
         if not needle:
             return {"prices": [], "note": "no service query", "entities_used": entities}
-        matches = _rank_price_rows([p for p in price_rows if isinstance(p, dict)], service_name, limit=10)
+        retail_query = service_name
+        if query_text and not _is_city_only_reply(query_text):
+            query_candidate = _extract_price_service_from_query(query_text)
+            if _should_prefer_retail_query_candidate(query_candidate or "", service_name):
+                retail_query = query_candidate or service_name
+        matches = _select_patient_price_rows(
+            [p for p in price_rows if isinstance(p, dict)],
+            retail_query,
+            limit=10,
+        )
         return {
             "prices": matches,
             "note": f"price_info: priceByRegion({SAMARA_PRICE_REGION_ID})",
