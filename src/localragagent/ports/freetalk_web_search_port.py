@@ -55,19 +55,12 @@ class WebSearchPort:
         url = str(self._settings.base_url or "").rstrip("/")
         if not url:
             return False
-        endpoint = f"{url}/search"
-        params = {
-            "q": "healthcheck",
-            "format": "json",
-            "language": self._settings.language,
-            "safesearch": "1",
-        }
+        endpoint = f"{url}/"
         headers = {"X-Real-IP": "127.0.0.1"}
         try:
             async with httpx.AsyncClient(timeout=max(1, int(self._settings.healthcheck_timeout_s))) as client:
-                response = await client.get(endpoint, params=params, headers=headers)
+                response = await client.get(endpoint, headers=headers)
                 response.raise_for_status()
-                payload = response.json()
         except Exception as exc:
             log_port_event(
                 "web_search_healthcheck_failed",
@@ -77,9 +70,7 @@ class WebSearchPort:
             )
             return False
 
-        if not isinstance(payload, dict):
-            return False
-        return isinstance(payload.get("results"), list)
+        return True
 
     async def search(self, query: str, entities: dict[str, Any] | None = None) -> dict[str, Any]:
         """

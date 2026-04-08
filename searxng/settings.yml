@@ -19,3 +19,9 @@ engines:
     disabled: true
   - name: torch
     disabled: true
+  - name: karmasearch
+    disabled: true
+  - name: "karmasearch videos"
+    disabled: true
+  - name: aol
+    disabled: true
