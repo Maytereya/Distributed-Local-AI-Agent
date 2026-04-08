@@ -62,9 +62,10 @@ class WebSearchPort:
             "language": self._settings.language,
             "safesearch": "1",
         }
+        headers = {"X-Real-IP": "127.0.0.1"}
         try:
             async with httpx.AsyncClient(timeout=max(1, int(self._settings.healthcheck_timeout_s))) as client:
-                response = await client.get(endpoint, params=params)
+                response = await client.get(endpoint, params=params, headers=headers)
                 response.raise_for_status()
                 payload = response.json()
         except Exception as exc:
@@ -113,10 +114,11 @@ class WebSearchPort:
             "language": self._settings.language,
             "safesearch": "1",
         }
+        headers = {"X-Real-IP": "127.0.0.1"}
 
         try:
             async with httpx.AsyncClient(timeout=max(2, int(self._settings.timeout_s))) as client:
-                response = await client.get(endpoint, params=params)
+                response = await client.get(endpoint, params=params, headers=headers)
                 response.raise_for_status()
                 payload = response.json()
         except Exception as exc:
