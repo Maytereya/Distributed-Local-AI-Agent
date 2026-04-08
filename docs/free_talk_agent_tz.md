@@ -149,6 +149,7 @@
    - `web_search_url = http://searxng:8080`
    - `enable_web_search_tool = true`
    - для SearXNG обязательно включить `search.formats: [html, json]` в `settings.yml`
+   - для SearXNG обязательно задать `server.secret_key` (не `ultrasecretkey`)
    - `web_search_healthcheck_timeout_s = 3`
    - `web_search_healthcheck_ttl_s = 30`
    - `context_window_tokens = 24576`

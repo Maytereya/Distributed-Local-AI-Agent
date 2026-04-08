@@ -191,6 +191,13 @@ class FreeTalkAgent:
                     level=logging.WARNING,
                     note=note,
                 )
+                return AgentReply(
+                    text=(
+                        "Интернет-поиск сейчас недоступен. "
+                        "Повторите запрос позже или задайте вопрос без требования актуальных данных."
+                    ),
+                    source="general_knowledge",
+                )
 
         prompt = build_general_prompt(
             system_prompt=self.system_prompt,
@@ -201,8 +208,6 @@ class FreeTalkAgent:
         text = await self._llm_text(prompt)
         if not _is_non_empty_text(text):
             text = "Уточните, пожалуйста, вопрос. Если это медицинская тема клиники, я запрошу данные через инструменты."
-        if web_search_unavailable:
-            text = "Интернет-поиск сейчас недоступен, отвечаю по общим знаниям без проверки актуальности.\n\n" + text
         return AgentReply(text=text, source="general_knowledge")
 
     async def _handle_guard_decision(
