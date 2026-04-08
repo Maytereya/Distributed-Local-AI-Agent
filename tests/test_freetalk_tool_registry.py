@@ -35,3 +35,27 @@ def test_typo_therapist_in_clinic_query_still_routes_to_doctors_tools():
     assert is_medical_query(text) is True
     plan = select_tool_plan(text, include_meili_tools=False)
     assert plan[:2] == ["doctors_info", "doctors_schedule_week"]
+
+
+def test_explicit_meili_query_routes_to_main_and_news_tools():
+    text = "Поищи в meiisearch информацию по налоговому вычету"
+    assert is_medical_query(text) is True
+    assert should_use_web_search(text) is False
+    plan = select_tool_plan(text, include_meili_tools=True)
+    assert plan[:2] == ["main_index_info", "news_info"]
+
+
+def test_clinic_news_query_routes_to_news_meili_tool():
+    text = "Новости клиники Наука за этот месяц"
+    assert is_medical_query(text) is True
+    assert should_use_web_search(text) is False
+    plan = select_tool_plan(text, include_meili_tools=True)
+    assert plan[:2] == ["news_info", "main_index_info"]
+
+
+def test_loaded_documents_command_routes_to_main_index_tool():
+    text = "Поищи в загруженных документах клиники информацию о подготовке к МРТ"
+    assert is_medical_query(text) is True
+    assert should_use_web_search(text) is False
+    plan = select_tool_plan(text, include_meili_tools=True)
+    assert plan[:2] == ["main_index_info", "news_info"]

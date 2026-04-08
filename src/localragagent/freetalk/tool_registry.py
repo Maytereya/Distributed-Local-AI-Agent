@@ -62,6 +62,16 @@ _ANALYSIS_RE = _compile(r"\b(анализ|тест|лаборатор)\w*\b")
 _SERVICE_RE = _compile(r"\b(услуг|процедур|исследован|узи|мрт|кт)\w*\b")
 _NEWS_RE = _compile(r"\b(новост|акц|объявлен)\w*\b")
 _DOC_RE = _compile(r"\b(документ|справк|налог|вычет|договор|лиценз)\w*\b")
+_CLINIC_ALIAS_RE = _compile(r"\b(клиник\w*|наук\w*|мед[\s\-]?центр\w*)\b")
+_SEARCH_VERB_RE = _compile(r"\b(поищи|найди|ищи|поиск\w*|покажи|посмотри|проверь)\b")
+_MEILI_EXPLICIT_RE = _compile(
+    r"\b("
+    r"meilisearch|meiilisearch|meiisearch|melisearch|mellisearch|"
+    r"меилисеарч|мелисеарч|мейлисеарч|мейлис[еэ]арч|меилиsearch"
+    r")\b"
+)
+_CLINIC_DOCS_RE = _compile(r"\b(документ\w*|загруженн\w+\s+документ\w*|стать\w*|материал\w*)\b")
+_LOADED_DOCS_RE = _compile(r"\b(загруженн\w+\s+документ\w*|в\s+документ\w*|в\s+стать\w*)\b")
 _WEB_SIGNAL_RE = _compile(
     r"\b("
     r"найди\s+в\s+интернет|поищи\s+в\s+интернет|поиск\s+в\s+сети|в\s+сети|"
@@ -82,13 +92,44 @@ _CLINIC_DOCTOR_LIST_RE = _compile(
 )
 
 
+def _is_clinic_news_query(text: str) -> bool:
+    q = str(text or "")
+    return bool(_NEWS_RE.search(q) and _CLINIC_ALIAS_RE.search(q))
+
+
+def _is_clinic_documents_query(text: str) -> bool:
+    q = str(text or "")
+    if _CLINIC_DOCS_RE.search(q) and _CLINIC_ALIAS_RE.search(q):
+        return True
+    if _LOADED_DOCS_RE.search(q) and _SEARCH_VERB_RE.search(q):
+        return True
+    return False
+
+
+def _is_explicit_meili_query(text: str) -> bool:
+    return bool(_MEILI_EXPLICIT_RE.search(str(text or "")))
+
+
 def is_medical_query(text: str) -> bool:
-    return bool(_MEDICAL_TOPIC_RE.search(str(text or "")))
+    q = str(text or "")
+    if _is_explicit_meili_query(q):
+        return True
+    if _is_clinic_news_query(q):
+        return True
+    if _is_clinic_documents_query(q):
+        return True
+    return bool(_MEDICAL_TOPIC_RE.search(q))
 
 
 def should_use_web_search(text: str, *, allow_for_medical: bool = False) -> bool:
     q = str(text or "")
     if not q.strip():
+        return False
+    if _is_explicit_meili_query(q):
+        return False
+    if _is_clinic_documents_query(q):
+        return False
+    if _is_clinic_news_query(q):
         return False
     if not allow_for_medical and is_medical_query(q):
         return False
@@ -106,6 +147,17 @@ def is_about_agent_query(text: str) -> bool:
 
 def select_tool_plan(text: str, *, include_meili_tools: bool) -> list[str]:
     q = str(text or "")
+
+    explicit_meili = _is_explicit_meili_query(q)
+    clinic_news_query = _is_clinic_news_query(q)
+    clinic_documents_query = _is_clinic_documents_query(q)
+
+    if explicit_meili or clinic_news_query or clinic_documents_query:
+        if not include_meili_tools:
+            return []
+        if _NEWS_RE.search(q):
+            return ["news_info", "main_index_info"]
+        return ["main_index_info", "news_info"]
 
     if _CLINIC_DOCTOR_LIST_RE.search(q):
         return ["doctors_info", "doctors_schedule_week"]

@@ -31,6 +31,7 @@ def _top_list(values: list[Any], limit: int = 5) -> list[Any]:
 
 
 _CTX_GUARD_STATE_KEY = "ctx_guard_state"
+_LAST_DOCTOR_NAME_KEY = "last_doctor_name"
 _CTX_GUARD_NONE = ""
 _CTX_GUARD_AWAITING_IMMEDIATE = "awaiting_immediate"
 _CTX_GUARD_ONE_MORE = "one_more"
@@ -38,6 +39,7 @@ _CTX_GUARD_AWAITING_FINAL = "awaiting_final"
 
 _YES_RE = re.compile(r"^\s*(да|угу|ага|yes|yep|ok|ок|конечно)\s*[.!?]?\s*$", re.I)
 _NO_RE = re.compile(r"^\s*(нет|неа|no|nope|not now|пока нет)\s*[.!?]?\s*$", re.I)
+_DOCTOR_ANAPHORA_RE = re.compile(r"\b(его|него|нему|ним|он|у\s+него|у\s+него\s+же|у\s+неё|ее|её|она)\b", re.I)
 
 
 def _merge_text(primary: str, appendix: str) -> str:
@@ -418,6 +420,12 @@ class FreeTalkAgent:
 
         entities = await self._ground_entities(user_message)
         tool_plan = select_tool_plan(user_message, include_meili_tools=self.config.include_meili_tools)
+        entities = await self._enrich_entities_from_session_memory(
+            session_id=context.session_id,
+            user_message=user_message,
+            tool_plan=tool_plan,
+            entities=entities,
+        )
         log_event(
             "medical_plan_selected",
             session_id=context.session_id,
@@ -462,6 +470,11 @@ class FreeTalkAgent:
                 tool_name=result.tool_name,
                 payload_keys=",".join(sorted(str(k) for k in result.payload.keys())),
                 answer_chars=len(answer),
+            )
+            await self._remember_doctor_from_tool_result(
+                session_id=context.session_id,
+                tool_name=result.tool_name,
+                payload=result.payload,
             )
             return AgentReply(
                 text=answer,
@@ -515,6 +528,92 @@ class FreeTalkAgent:
                 entities["doctor_name"] = canonical
 
         return entities
+
+    async def _enrich_entities_from_session_memory(
+        self,
+        *,
+        session_id: str,
+        user_message: str,
+        tool_plan: list[str],
+        entities: dict[str, Any],
+    ) -> dict[str, Any]:
+        out = dict(entities or {})
+        if "doctors_schedule_week" not in tool_plan:
+            return out
+
+        current_doctor = str(out.get("doctor_name") or "").strip()
+        if current_doctor:
+            return out
+
+        if not _DOCTOR_ANAPHORA_RE.search(str(user_message or "")):
+            return out
+
+        remembered = await self.memory.get_meta_str(session_id, _LAST_DOCTOR_NAME_KEY, "")
+        remembered = str(remembered or "").strip()
+        if not remembered:
+            return out
+
+        out["doctor_name"] = remembered
+        out["doctor_name_source"] = "session_memory"
+        log_event(
+            "medical_entities_enriched_from_memory",
+            session_id=session_id,
+            doctor_name=remembered,
+            message=user_message[:140],
+        )
+        return out
+
+    async def _remember_doctor_from_tool_result(
+        self,
+        *,
+        session_id: str,
+        tool_name: str,
+        payload: dict[str, Any],
+    ) -> None:
+        doctor = self._extract_primary_doctor_name(tool_name, payload)
+        if not doctor:
+            return
+        await self.memory.set_meta_str(session_id, _LAST_DOCTOR_NAME_KEY, doctor)
+        log_event(
+            "doctor_context_stored",
+            session_id=session_id,
+            tool_name=tool_name,
+            doctor_name=doctor,
+        )
+
+    @staticmethod
+    def _extract_primary_doctor_name(tool_name: str, payload: dict[str, Any]) -> str:
+        entities_used = payload.get("entities_used") if isinstance(payload, dict) else {}
+        if isinstance(entities_used, dict):
+            for key in ("doctor_name_resolved", "doctor_name", "doctor_query", "doctor_resolved"):
+                value = str(entities_used.get(key) or "").strip()
+                if value:
+                    return value
+
+        doctors = payload.get("doctors") if isinstance(payload, dict) else []
+        if isinstance(doctors, list):
+            for row in doctors:
+                if not isinstance(row, dict):
+                    continue
+                fio = str(row.get("fio") or "").strip()
+                if fio:
+                    return fio
+
+        schedule = payload.get("schedule") if isinstance(payload, dict) else []
+        if isinstance(schedule, list):
+            for row in schedule:
+                if not isinstance(row, dict):
+                    continue
+                fio = str(row.get("fio") or "").strip()
+                if fio:
+                    return fio
+
+        if tool_name == "doctors_schedule_week":
+            direct = str(payload.get("doctor_name") or payload.get("fio") or "").strip()
+            if direct:
+                return direct
+
+        return ""
 
     async def _render_tool_reply(self, *, user_message: str, tool_name: str, tool_payload: dict[str, Any]) -> str:
         rendered = self._fallback_render(tool_name, tool_payload).strip()

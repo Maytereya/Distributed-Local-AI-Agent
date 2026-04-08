@@ -122,3 +122,14 @@ def test_clinic_data_fallback_detector_handles_typo_and_clinic_context():
         web_search=None,
     )
     assert agent._looks_like_clinic_data_query("Выведи пожалуйста теарапевтов клиники") is True
+
+
+def test_extract_primary_doctor_name_from_tool_payload():
+    payload = {
+        "doctors": [
+            {"fio": "Трубин Алексей Юрьевич", "specialization": "Уролог"},
+        ],
+        "note": "doctors_info",
+    }
+    name = FreeTalkAgent._extract_primary_doctor_name("doctors_info", payload)
+    assert name == "Трубин Алексей Юрьевич"
