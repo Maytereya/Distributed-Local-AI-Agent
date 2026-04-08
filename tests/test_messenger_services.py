@@ -2,9 +2,12 @@ import asyncio
 
 import pytest
 
+from messengers_router import classifier as classifier_mod
 from messengers_router import services as svc_mod
 from messengers_router.city import match_city
+from messengers_router.mess_types import Evidence, SessionState
 from messengers_router.renderer import format_price_for_patient, format_service_bundle_for_patient
+from messengers_router.response_builder import build_price_response
 from messengers_router.services import Services, resolve_price_service_name_from_catalog
 from messengers_router.policies import (
     build_branch_index,
@@ -1880,6 +1883,261 @@ def test_format_service_bundle_for_patient_limits_lab_variants_to_five():
     assert "Вариант 1" in text
     assert "Вариант 5" in text
     assert "Вариант 6" not in text
+
+
+def test_price_info_plomba_does_not_match_cmv(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "Цитомегаловирус [п\\кол.]", "cost": 560, "serviceHomecode": "cmv"},
+            {"serviceName": "Постановка пломбы светоотверждаемой", "cost": 4500, "serviceHomecode": "dent1"},
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("стоимость постановки пломбы", {}))
+
+    assert res["prices"]
+    top_name = str(res["prices"][0].get("serviceName") or "").lower()
+    assert "пломб" in top_name
+    assert "цитомегаловирус" not in top_name
+
+
+def test_service_bundle_info_alat_classified_as_lab_without_doctors(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {
+                "serviceName": "АлАТ (аланинаминотрансфераза)",
+                "serviceHomecode": "184",
+                "deadline": "1-2",
+                "cost": 320,
+            }
+        ]
+
+    def fake_doctor_prices():
+        return [
+            {
+                "doctorId": 11,
+                "serviceName": "Прием терапевта первичный",
+                "serviceHomecode": "999.1",
+                "cost": 2000,
+            }
+        ]
+
+    async def fake_doctors():
+        return [{"id": 11, "fio": "Иванов Иван Иванович", "ord": 1, "regions": ["г. Самара, пр. Ленина, 5"]}]
+
+    async def fake_samara_tokens():
+        return {"г. самара, пр. ленина, 5"}
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_doctors)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+
+    res = run(svc.service_bundle_info("стоимость алат", {}))
+
+    assert res["service_kind"] == "lab"
+    assert res["doctors"] == []
+    assert res["retail_prices"]
+    assert "алат" in str(res["retail_prices"][0].get("serviceName") or "").lower()
+
+
+def test_service_bundle_info_ecg_skips_doctors_even_with_exact_link(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {
+                "serviceName": "ЭКГ",
+                "serviceHomecode": "39.10.9",
+                "cost": 650,
+            }
+        ]
+
+    def fake_doctor_prices():
+        return [
+            {
+                "doctorId": 21,
+                "serviceName": "ЭКГ",
+                "serviceHomecode": "39.10.9",
+                "cost": 650,
+            }
+        ]
+
+    async def fake_doctors():
+        return [{"id": 21, "fio": "Просвиров Евгений Юрьевич", "ord": 1, "regions": ["г. Самара, пр. Ленина, 5"]}]
+
+    async def fake_samara_tokens():
+        return {"г. самара, пр. ленина, 5"}
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_doctors)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+
+    res = run(svc.service_bundle_info("стоимость экг", {}))
+
+    assert res["service_kind"] == "diagnostic_no_doctor"
+    assert res["doctors"] == []
+
+
+def test_price_info_hepatitis_returns_family_query_with_hint(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": f"Гепатит вариант {idx}", "serviceHomecode": f"hep-{idx}", "cost": 300 + idx}
+            for idx in range(1, 13)
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("стоимость гепатита", {}))
+    text = format_price_for_patient(res, {})
+
+    assert res["service_kind"] == "family_query"
+    assert len(res["family_variants"]) == 12
+    assert res["remaining_count"] == 2
+    assert "напишите: \"все\"" in text.lower()
+    assert "Гепатит вариант 10" in text
+    assert "Гепатит вариант 11" not in text
+
+
+def test_resolve_price_service_name_prefers_adult_uzi_over_child():
+    rows = [
+        {
+            "serviceName": "УЗИ печени и желчного пузыря (детское)",
+            "serviceHomecode": "u1",
+            "cost": 2100,
+        },
+        {
+            "serviceName": "Ультразвуковое исследование печени и желчного пузыря",
+            "serviceHomecode": "u2",
+            "cost": 1800,
+        },
+    ]
+
+    resolved = resolve_price_service_name_from_catalog("стоимость узи печени", rows=rows)
+
+    assert resolved == "Ультразвуковое исследование печени и желчного пузыря"
+
+
+def test_price_info_vitamin_d_prefers_non_genetic_variant(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {
+                "serviceName": "Ген рецептора витамина D (VDR). Выявление мутации G283A",
+                "serviceHomecode": "gen-vdr",
+                "cost": 3100,
+            },
+            {
+                "serviceName": "Витамин D суммарный (25-OH D2 и D3, общий результат)",
+                "serviceHomecode": "vit-d",
+                "cost": 1600,
+            },
+            {
+                "serviceName": "Витамин B12",
+                "serviceHomecode": "vit-b12",
+                "cost": 690,
+            },
+            {
+                "serviceName": "«Витамин D – COMBO»",
+                "serviceHomecode": "vit-d-combo",
+                "cost": 2280,
+            },
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("стоимость витамина д", {}))
+
+    assert res["prices"]
+    top_name = str(res["prices"][0].get("serviceName") or "").lower()
+    assert "витамин d суммарный" in top_name
+    assert "мутац" not in top_name
+
+
+def test_classifier_price_family_show_all_followup_returns_price():
+    decision = run(
+        classifier_mod.deterministic_rule_decision(
+            "все",
+            {
+                "_last_label": "PRICE",
+                "_price_family_context": {
+                    "service_name": "гепатит",
+                    "family_variants": [{"serviceName": "Гепатит A", "cost": 300}],
+                    "visible_limit": 10,
+                },
+            },
+        )
+    )
+
+    assert decision is not None
+    assert decision.label == "PRICE"
+    assert "rule_price_family_show_all" in decision.flags
+
+
+def test_build_price_response_stores_and_clears_price_family_context():
+    state = SessionState(session_id="sid")
+
+    family = build_price_response(
+        "PRICE",
+        Evidence(
+            {
+                "price": {
+                    "service_kind": "family_query",
+                    "service_name": "гепатит",
+                    "family_variants": [{"serviceName": "Гепатит A", "cost": 300}],
+                    "visible_limit": 10,
+                    "showing_all": False,
+                }
+            }
+        ),
+        state,
+    )
+    assert family is not None
+    assert "_price_family_context" in state.last_entities
+
+    single = build_price_response(
+        "PRICE",
+        Evidence({"price": {"prices": [{"serviceName": "АлАТ", "cost": 320}]}}),
+        state,
+    )
+    assert single is not None
+    assert "_price_family_context" not in state.last_entities
+
+
+def test_ambiguous_price_kind_llm_fallback_respects_exact_link(monkeypatch):
+    async def fake_generate(*_args, **_kwargs):
+        return '{"kind":"procedure_with_doctor","reason":"exact service match"}'
+
+    monkeypatch.setattr(svc_mod, "generate_text", fake_generate)
+
+    good = run(
+        svc_mod._resolve_ambiguous_price_kind_with_llm(
+            "стоимость узи печени",
+            [{"serviceName": "УЗИ печени"}],
+            has_exact_doctor_link=True,
+            runtime_llm_mode="hybrid",
+        )
+    )
+    bad = run(
+        svc_mod._resolve_ambiguous_price_kind_with_llm(
+            "стоимость узи печени",
+            [{"serviceName": "УЗИ печени"}],
+            has_exact_doctor_link=False,
+            runtime_llm_mode="hybrid",
+        )
+    )
+
+    assert good == "procedure_with_doctor"
+    assert bad == "ambiguous"
 
 
 def test_extract_price_service_from_query_strips_politeness_tail():

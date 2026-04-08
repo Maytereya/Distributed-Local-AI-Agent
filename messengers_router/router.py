@@ -477,6 +477,7 @@ async def _handle_catalog_confirm_pending(
     state: SessionState,
     services: Services,
     memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
 ) -> tuple[RouteDecision, Plan, Evidence] | None:
     pending = _get_catalog_confirm_pending(state)
     if not pending:
@@ -528,7 +529,7 @@ async def _handle_catalog_confirm_pending(
             context_action="continue",
             source="catalog_confirm",
         )
-        plan = build_plan(decision, state, user_text, memory=memory)
+        plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
         evidence = await execute_plan(plan, state, services)
         return decision, plan, evidence
 
@@ -995,8 +996,14 @@ async def _backfill_appointment_doctor_from_text(
 # Planning & execution
 # ----------------------------
 
-def build_plan(decision: RouteDecision, state: SessionState, user_text: str, memory: MemoryStore) -> Plan:
-    return planner_build_plan(decision, state, user_text, memory)
+def build_plan(
+    decision: RouteDecision,
+    state: SessionState,
+    user_text: str,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> Plan:
+    return planner_build_plan(decision, state, user_text, memory, runtime_options=runtime_options)
 
 
 async def execute_plan(plan: Plan, state: SessionState, services: Services) -> Evidence:
@@ -1054,6 +1061,7 @@ async def route_patient_message(
         state=state,
         services=services,
         memory=memory,
+        runtime_options=runtime_options,
     )
     if catalog_pending_result is not None:
         return catalog_pending_result
@@ -1086,7 +1094,7 @@ async def route_patient_message(
                 flags={"secondary_intent_activated"},
                 needs_handoff=False,
             )
-            plan = build_plan(decision, state, user_text, memory=memory)
+            plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
             evidence = await execute_plan(plan, state, services)
             return decision, plan, evidence
         if reply_kind == "no":
@@ -1521,7 +1529,7 @@ async def route_patient_message(
 
     fill_date_from_schedule_windows(state, decision.label)
 
-    plan = build_plan(decision, state, user_text, memory=memory)
+    plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
     evidence = await execute_plan(plan, state, services)
     if nlu_debug:
         evidence.debug_trace.append({"nlu": nlu_debug})

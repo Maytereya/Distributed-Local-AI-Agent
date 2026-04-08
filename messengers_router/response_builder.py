@@ -108,12 +108,34 @@ def build_catalog_health_response(evidence: Evidence) -> ResponseEnvelope | None
     )
 
 
+def _sync_price_family_context(state: SessionState, payload: dict[str, Any]) -> None:
+    """
+    Сохраняет или очищает family-query контекст для follow-up `все`.
+
+    :param state: состояние сессии
+    :param payload: payload `price` или `service_bundle`
+    :return: None
+    """
+
+    kind = str(payload.get("service_kind") or "").strip().lower()
+    variants = payload.get("family_variants")
+    if kind == "family_query" and isinstance(variants, list) and variants and not payload.get("showing_all"):
+        state.last_entities["_price_family_context"] = {
+            "service_name": str(payload.get("service_name") or "").strip(),
+            "family_variants": variants,
+            "visible_limit": int(payload.get("visible_limit") or 10),
+        }
+        return
+    state.last_entities.pop("_price_family_context", None)
+
+
 def build_price_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "PRICE":
         return None
     price_payload = evidence.get("price")
     if not isinstance(price_payload, dict):
         return None
+    _sync_price_family_context(state, price_payload)
     render_entities = dict(state.last_entities or {})
     used = price_payload.get("entities_used")
     if isinstance(used, dict):
@@ -137,6 +159,7 @@ def build_service_bundle_response(flow_label: str, evidence: Evidence, state: Se
     payload = evidence.get("service_bundle")
     if not isinstance(payload, dict):
         return None
+    _sync_price_family_context(state, payload)
     text = format_service_bundle_for_patient(payload, state.last_entities)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from .flow_policy import apply_pending_override
+from .llm_mode_policy import RuntimeOptions
 from .memory import MemoryStore
 from .mess_types import Plan, PlanStep, RouteDecision, SessionState
 from .policies import missing_slots
@@ -47,11 +48,19 @@ def _build_other_plan_from_topic_registry(
     return []
 
 
-def build_plan(decision: RouteDecision, state: SessionState, user_text: str, memory: MemoryStore) -> Plan:
+def build_plan(
+    decision: RouteDecision,
+    state: SessionState,
+    user_text: str,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> Plan:
     pending = memory.get_pending(state)
     effective_label = apply_pending_override(decision, pending, user_text=user_text)
 
     entities = state.last_entities
+    if runtime_options is not None:
+        entities = {**entities, "__runtime_llm_mode": runtime_options.llm_mode}
     missing = missing_slots(effective_label, entities)
 
     if missing:

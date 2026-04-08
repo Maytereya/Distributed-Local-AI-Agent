@@ -454,6 +454,29 @@ def _looks_like_patient_name_only(text: str) -> bool:
     return True
 
 
+def _is_price_family_show_all_followup(text: str, last_entities: dict[str, Any]) -> bool:
+    """
+    Определяет короткий follow-up `все` для активной family price-выдачи.
+
+    :param text: текущая реплика пользователя
+    :param last_entities: сессионный контекст
+    :return: True, если нужно продолжить PRICE и показать все варианты
+    """
+
+    ctx = last_entities.get("_price_family_context")
+    if not isinstance(ctx, dict) or not isinstance(ctx.get("family_variants"), list):
+        return False
+    if str(last_entities.get("_last_label") or "").strip().upper() != "PRICE":
+        return False
+    return bool(
+        re.fullmatch(
+            r"\s*(?:все|всё|покажи\s+все|показать\s+все|все\s+варианты|все\s+услуги|все\s+анализы)\s*[!.,?]*\s*",
+            str(text or ""),
+            flags=re.I,
+        )
+    )
+
+
 def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
     keep = (
         "doctor_id", "doctor_name", "specialty",
@@ -1104,6 +1127,15 @@ async def deterministic_rule_decision(
             confidence=0.9,
             entities={"patient_name": str(text or "").strip()},
             flags=local_flags | {"rule_appointment_patient_name"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+    elif _is_price_family_show_all_followup(text, last_entities):
+        decision = RouteDecision(
+            label="PRICE",
+            confidence=0.86,
+            entities={},
+            flags=local_flags | {"rule_price_family_show_all"},
             needs_handoff=False,
             context_action="continue",
         )

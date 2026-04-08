@@ -236,6 +236,64 @@ def _should_drop_service_name_in_active_reschedule(
     )
 
 
+def _should_keep_nonbookable_service_name_as_is(
+    *,
+    raw_value: str,
+    decision_flags: set[str],
+) -> bool:
+    """
+    Сохраняет generic service_name как есть в ADDRESS-flow для услуг без записи.
+
+    Это нужно для сценариев вида "где можно сдать диабетический профиль",
+    где роутеру важен сам класс услуги (`анализы`/`ЭКГ`), а не жесткая
+    каталожная канонизация до конкретной строки прайса.
+
+    :param raw_value: исходное service_name из решения/guardrail
+    :param decision_flags: флаги текущего решения
+    :return: True, если service_name нужно оставить без catalog-grounding
+    """
+
+    value = str(raw_value or "").strip()
+    if not value or match_city(value):
+        return False
+    if "policy_nonbookable_walkin" not in decision_flags:
+        return False
+    return True
+
+
+def _should_keep_raw_service_anchor_for_unverified_doctor(
+    *,
+    label: str,
+    raw_value: str,
+    user_text: str,
+    decision_flags: set[str],
+) -> bool:
+    """
+    Сохраняет явный service anchor при неподтвержденной фамилии врача.
+
+    Сценарий: "запишите к Евграфову на холтер". Здесь doctor_name может быть
+    неподтвержден, но сама услуга названа явно, поэтому её не нужно
+    пере-ground'ивать в длинную каноническую строку.
+
+    :param label: текущий label
+    :param raw_value: исходный service_name из решения
+    :param user_text: текст пользователя
+    :param decision_flags: флаги решения
+    :return: True, если service_name следует сохранить как есть
+    """
+
+    value = str(raw_value or "").strip()
+    if label != "APPOINTMENT" or not value:
+        return False
+    if "doctor_name_unverified" not in decision_flags:
+        return False
+    if not _SERVICE_ANCHOR_HINT_RE.search(value):
+        return False
+    if service_name_conflicts_with_doctor(value, user_text):
+        return False
+    return True
+
+
 async def verify_doctor_entities_in_decision(
     decision: RouteDecision,
     user_text: str,
@@ -375,6 +433,25 @@ async def ground_decision_entities(
             continue
 
         if key == "service_name":
+            raw_value = str(value or "").strip()
+            if _should_keep_nonbookable_service_name_as_is(
+                raw_value=raw_value,
+                decision_flags=set(decision.flags),
+            ):
+                out[key] = raw_value
+                flags.add("entity_kept_nonbookable_service_name")
+                continue
+
+            if _should_keep_raw_service_anchor_for_unverified_doctor(
+                label=label,
+                raw_value=raw_value,
+                user_text=user_text,
+                decision_flags=set(decision.flags),
+            ):
+                out[key] = raw_value
+                flags.add("entity_kept_explicit_service_anchor")
+                continue
+
             if _should_drop_service_name_in_active_reschedule(
                 label=label,
                 user_text=user_text,

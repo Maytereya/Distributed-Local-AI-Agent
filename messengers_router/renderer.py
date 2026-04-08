@@ -327,6 +327,40 @@ def _availability_text_for_doctor(doc: dict[str, Any]) -> str:
     return "статус расписания уточняется"
 
 
+def _format_price_family_variants(payload: dict[str, Any], fallback_service_name: str = "") -> str:
+    """
+    Формирует patient-facing текст для family-query price-выдачи.
+
+    :param payload: payload семейства price-вариантов
+    :param fallback_service_name: запасное название запроса
+    :return: отформатированный текст
+    """
+
+    variants_raw = payload.get("family_variants")
+    variants = variants_raw if isinstance(variants_raw, list) else []
+    if not variants:
+        return ""
+
+    service_name = str(payload.get("service_name") or fallback_service_name or "услуга").strip()
+    showing_all = bool(payload.get("showing_all"))
+    visible_limit = max(1, int(payload.get("visible_limit") or 10))
+    shown = variants if showing_all else variants[:visible_limit]
+
+    lines = [f"По запросу «{service_name}» нашёл варианты стоимости:"]
+    for i, row in enumerate(shown, 1):
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("serviceName") or row.get("name") or service_name).strip()
+        amount = _format_rub(_extract_price_amount(row))
+        lines.append(f"{i}. {name} — {amount}.")
+
+    hint = str(payload.get("show_all_hint") or "").strip()
+    if hint:
+        lines.append(hint)
+    lines.append("Если нужно, помогу выбрать подходящий вариант или подскажу подготовку.")
+    return "\n".join(lines).strip()
+
+
 def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
     clarify_text = str(payload.get("clarify_text") or "").strip()
     if clarify_text:
@@ -343,6 +377,8 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
 
     if not service_name:
         service_name = "услуга"
+    if service_kind == "family_query":
+        return _format_price_family_variants(payload, service_name)
 
     lines: list[str] = [f"По услуге «{service_name}» нашёл следующее:"]
 
@@ -365,6 +401,8 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
 
     if service_kind == "lab":
         lines.append("2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.")
+    elif service_kind == "diagnostic_no_doctor":
+        lines.append("2) Для этой диагностической услуги список врачей автоматически не показываю.")
     else:
         if doctors:
             lines.append("2) Врачи (по приоритету):")
@@ -386,6 +424,8 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
 
     if service_kind == "lab":
         lines.append("Если нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.")
+    elif service_kind == "diagnostic_no_doctor":
+        lines.append("Если нужно, подскажу подходящие филиалы для прохождения исследования.")
     elif not doctors:
         lines.append("Если нужно, передам запрос оператору для уточнения по этой услуге.")
     elif len(doctors) == 1:
@@ -443,6 +483,11 @@ def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) 
 
     if clarify_text:
         return _finish(clarify_text)
+
+    if str(payload.get("service_kind") or "").strip().lower() == "family_query":
+        family_text = _format_price_family_variants(payload, service_hint)
+        if family_text:
+            return _finish(family_text)
 
     if not prices:
         if service_hint:

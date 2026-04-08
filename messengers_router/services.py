@@ -96,9 +96,36 @@ _LAB_DEADLINE_HINT_RE = re.compile(r"\b\d+\s*(?:-\s*\d+)?\s*(?:дн|дней|н�
 _PRICE_CITO_QUERY_RE = re.compile(r"\b(cito|сроч\w*|экспресс\w*)\b", re.I)
 _PRICE_CAPILLARY_QUERY_RE = re.compile(r"\b(капилляр\w*|из\s+пальца|палец)\b", re.I)
 _PRICE_CHILD_QUERY_RE = re.compile(r"\b(дет\w*|ребен\w*|ребён\w*)\b", re.I)
+_PRICE_REPEAT_QUERY_RE = re.compile(r"\b(повторн\w*|повтор)\b", re.I)
+_PRICE_KMN_QUERY_RE = re.compile(r"\b(к\.?\s*м\.?\s*н\.?|кандидат\w*\s+медицин\w*\s+наук)\b", re.I)
+_PRICE_HOME_QUERY_RE = re.compile(r"\b(на\s+дому|домой|выезд\w*\s+на\s+дом)\b", re.I)
+_PRICE_PACKAGE_QUERY_RE = re.compile(r"\b(совместно|комплекс\w*|пакет\w*|программ\w*|combo|комбо|с\s+узи)\b", re.I)
+_PRICE_GENETIC_QUERY_RE = re.compile(r"\b(ген\w*|мутац\w*|полиморф\w*|генет\w*|vdr)\b", re.I)
 _PRICE_CITO_ROW_RE = re.compile(r"\b(cito|сроч\w*|экспресс\w*)\b", re.I)
 _PRICE_CAPILLARY_ROW_RE = re.compile(r"\bкапилляр\w*\b", re.I)
 _PRICE_CHILD_ROW_RE = re.compile(r"\b(дет\w*|ребен\w*|ребён\w*)\b", re.I)
+_PRICE_REPEAT_ROW_RE = re.compile(r"\b(повторн\w*|повтор)\b", re.I)
+_PRICE_KMN_ROW_RE = re.compile(r"\b(к\.?\s*м\.?\s*н\.?|кандидат\w*\s+медицин\w*\s+наук)\b", re.I)
+_PRICE_HOME_ROW_RE = re.compile(r"\b(на\s+дому|домой|выезд\w*\s+на\s+дом)\b", re.I)
+_PRICE_PACKAGE_ROW_RE = re.compile(r"\b(совместно|комплекс\w*|пакет\w*|программ\w*|combo|комбо|регулярн\w*)\b", re.I)
+_PRICE_GENETIC_ROW_RE = re.compile(r"\b(ген\w*|мутац\w*|полиморф\w*|генет\w*|vdr)\b", re.I)
+_PRICE_SHOW_ALL_RE = re.compile(
+    r"^\s*(?:все|всё|покажи\s+все|показать\s+все|все\s+варианты|все\s+услуги|все\s+анализы)\s*[!.,?]*\s*$",
+    re.I,
+)
+_PRICE_DIAGNOSTIC_NO_DOCTOR_RE = re.compile(
+    r"\b(экг|флюорограф\w*|маммограф\w*|рентген\w*|мрт|кт)\b",
+    re.I,
+)
+_PRICE_PROCEDURE_LIKE_RE = re.compile(
+    r"\b("
+    r"при[её]м\w*|консультац\w*|осмотр\w*|узи|ультразвук\w*|эндоскоп\w*|фгдс|фкс|гастроскоп\w*|"
+    r"колоноскоп\w*|рентген\w*|мрт|кт|флюорограф\w*|маммограф\w*|экг|операц\w*|удалени\w*|"
+    r"массаж\w*|пломб\w*|зуб\w*|подтяжк\w*|хирург\w*|травматолог\w*|ортопед\w*|стоматолог\w*|"
+    r"анестези\w*|имплант\w*|протез\w*|сустав\w*"
+    r")\b",
+    re.I,
+)
 _NONBOOKABLE_POINTS_PATH = Path(__file__).resolve().parent / "data" / "nonbookable_points.json"
 _NEAREST_HINT_RE = re.compile(r"\b(ближайш\w*|сам\w*\s+ранн\w*|раньше|поскорее|свободн\w*\s+окн\w*)\b", re.I)
 _UZI_QUERY_RE = re.compile(r"\b(узи|узист|ультразвук\w*|ультразвуков\w*)\b", re.I)
@@ -463,6 +490,9 @@ _PRICE_QUERY_CANONICAL_TOKENS = {
     "анализу": "анализ",
     "анализом": "анализ",
     "анализе": "анализ",
+    "витамина": "витамин",
+    "витамину": "витамин",
+    "витамине": "витамин",
     "лпвп": "лпвп",
     "лпнп": "лпнп",
     "лпонп": "лпнп",
@@ -511,6 +541,20 @@ _PRICE_SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
     "лпнп": ("лпнп", "липопротеиды низкой плотности"),
     "лпвп": ("лпвп", "липопротеиды высокой плотности"),
     "копрология": ("копрологическое исследование", "копрология"),
+}
+_VITAMIN_CODE_MAP = {
+    "а": "a",
+    "a": "a",
+    "в": "b",
+    "b": "b",
+    "с": "c",
+    "c": "c",
+    "д": "d",
+    "d": "d",
+    "е": "e",
+    "e": "e",
+    "к": "k",
+    "k": "k",
 }
 _PREPARE_QUERY_STOPWORDS = {
     "как",
@@ -2213,12 +2257,84 @@ def _extract_homecode_query(text: str) -> str:
     return ""
 
 
+def _normalise_price_token(token: str) -> str:
+    """
+    Приводит price-токен к каноническому виду для устойчивого ранжирования.
+
+    :param token: исходный токен из запроса или строки прайса
+    :return: нормализованный токен
+    """
+
+    norm = str(token or "").strip().lower().replace("ё", "е")
+    if not norm:
+        return ""
+    if norm.startswith("ультразвук"):
+        return "узи"
+    return _PRICE_QUERY_CANONICAL_TOKENS.get(norm, norm)
+
+
+def _extract_vitamin_designator(text: str) -> str:
+    """
+    Извлекает буквенно-цифровой код витамина из запроса или строки прайса.
+
+    Примеры:
+    - `витамин Д` -> `d`
+    - `витамин B12` -> `b12`
+
+    :param text: исходный текст
+    :return: канонический код витамина или пустая строка
+    """
+
+    raw = _normalise_input(text).replace("ё", "е")
+    m = re.search(r"\bвитамин\w*\s+([a-zа-я]\d{0,2})\b", raw, re.I)
+    if not m:
+        return ""
+    token = str(m.group(1) or "").strip().lower()
+    if not token:
+        return ""
+    head = _VITAMIN_CODE_MAP.get(token[0], token[0])
+    return f"{head}{token[1:]}"
+
+
+def _augment_price_tokens(tokens: list[str], *, raw_text: str = "") -> list[str]:
+    """
+    Добавляет безопасные alias-токены к price-выражению.
+
+    Сейчас нужен в первую очередь для кейса `УЗИ` -> `ультразвуковое исследование`,
+    чтобы взрослая строка не проигрывала детской только из-за буквального матча.
+
+    :param tokens: уже выделенные и нормализованные токены
+    :param raw_text: исходный текст, из которого токены были получены
+    :return: список токенов с alias-дополнениями без дублей
+    """
+
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _push(value: str) -> None:
+        norm = _normalise_price_token(value)
+        if not norm or norm in seen:
+            return
+        seen.add(norm)
+        out.append(norm)
+
+    for token in tokens:
+        _push(token)
+
+    raw = _normalise_input(raw_text).replace("ё", "е")
+    if raw and _UZI_LINE_RE.search(raw):
+        _push("узи")
+    vitamin_code = _extract_vitamin_designator(raw)
+    if vitamin_code:
+        _push(f"витамин_{vitamin_code}")
+    return out
+
+
 def _price_query_tokens(text: str) -> list[str]:
     s = _normalise_input(text).replace("ё", "е")
     out: list[str] = []
     for t in _PRICE_TOKEN_RE.findall(s):
-        token = str(t or "").strip().lower().replace("ё", "е")
-        token = _PRICE_QUERY_CANONICAL_TOKENS.get(token, token)
+        token = _normalise_price_token(str(t or ""))
         if len(token) < 2:
             continue
         if len(token) < 3 and token not in _PRICE_SHORT_TOKEN_WHITELIST and not token.isdigit():
@@ -2231,7 +2347,7 @@ def _price_query_tokens(text: str) -> list[str]:
             out.append("консультац")
         elif token.startswith("консультац") and "прием" not in out:
             out.append("прием")
-    return out
+    return _augment_price_tokens(out, raw_text=s)
 
 
 def _price_alias_candidates(query_text: str) -> list[str]:
@@ -2703,12 +2819,169 @@ def _is_city_only_reply(query: str) -> bool:
     return len(tokens) == 1 and tokens[0] == city
 
 
+def _query_nonbase_price_flags(query_text: str) -> set[str]:
+    """
+    Выделяет из запроса модификаторы, которые пациент запросил явно.
+
+    :param query_text: исходный текст пользователя
+    :return: набор флагов модификаторов
+    """
+
+    query = _normalise_input(str(query_text or ""))
+    flags = _query_price_variant_flags(query_text)
+    if _PRICE_REPEAT_QUERY_RE.search(query):
+        flags.add("repeat")
+    if _PRICE_KMN_QUERY_RE.search(query):
+        flags.add("kmn")
+    if _PRICE_HOME_QUERY_RE.search(query):
+        flags.add("home")
+    if _PRICE_PACKAGE_QUERY_RE.search(query):
+        flags.add("package")
+    if _PRICE_GENETIC_QUERY_RE.search(query):
+        flags.add("genetic")
+    return flags
+
+
+def _row_nonbase_price_flags(row: dict[str, Any]) -> set[str]:
+    """
+    Выделяет модификаторы из конкретной строки прайса.
+
+    :param row: строка прайса
+    :return: набор флагов модификаторов
+    """
+
+    name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
+    flags = _lab_price_variant_flags(row)
+    if _PRICE_REPEAT_ROW_RE.search(name):
+        flags.add("repeat")
+    if _PRICE_KMN_ROW_RE.search(name):
+        flags.add("kmn")
+    if _PRICE_HOME_ROW_RE.search(name):
+        flags.add("home")
+    if _PRICE_PACKAGE_ROW_RE.search(name):
+        flags.add("package")
+    if _PRICE_GENETIC_ROW_RE.search(name):
+        flags.add("genetic")
+    return flags
+
+
+def _price_row_modifier_penalty(row: dict[str, Any], query_text: str) -> int:
+    """
+    Считает штраф для специальных модификаторов, которые пользователь не просил.
+
+    Нужен, чтобы generic-запросы не выбирали детские, Cito, повторные,
+    `к.м.н.` и пакетные строки раньше базовых тарифов.
+
+    :param row: строка прайса
+    :param query_text: исходный пользовательский запрос
+    :return: отрицательный штраф или 0
+    """
+
+    requested = _query_nonbase_price_flags(query_text)
+    row_flags = _row_nonbase_price_flags(row)
+    if not row_flags:
+        return 0
+
+    penalties = {
+        "child": -100,
+        "cito": -35,
+        "capillary": -30,
+        "repeat": -28,
+        "kmn": -40,
+        "home": -45,
+        "package": -40,
+        "genetic": -120,
+    }
+    penalty = 0
+    for flag in row_flags:
+        if flag in requested:
+            continue
+        penalty += penalties.get(flag, 0)
+    return penalty
+
+
+def _score_price_rows(
+    rows: list[dict[str, Any]],
+    query_text: str,
+    *,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """
+    Возвращает отсортированные candidate-строки прайса вместе с debug score.
+
+    :param rows: строки прайса
+    :param query_text: текст пользовательского запроса
+    :param limit: максимум уникальных строк на выходе
+    :return: список словарей вида `{"row": ..., "score": ..., "matched": ...}`
+    """
+
+    query = _normalise_input(query_text).replace("ё", "е")
+    tokens = _price_query_tokens(query_text)
+    homecode_query = _extract_homecode_query(query_text)
+
+    scored: list[tuple[int, int, int, int, dict[str, Any]]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        score, matched = _price_row_score(row, query=query, tokens=tokens, homecode_query=homecode_query)
+        if score <= 0:
+            continue
+        if not _is_price_match_strong(
+            score=score,
+            matched=matched,
+            query=query,
+            tokens=tokens,
+            homecode_query=homecode_query,
+        ):
+            continue
+        name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
+        name_gap = abs(len(name) - len(query)) if query else len(name)
+        cost = _as_int(row.get("cost")) or 0
+        scored.append((score, matched, -name_gap, -cost, row))
+
+    if not scored:
+        fallback_rows: list[dict[str, Any]] = []
+        if query:
+            fallback_rows = [
+                r for r in rows if isinstance(r, dict) and query in _normalise_input(str(r.get("serviceName") or ""))
+            ]
+        elif homecode_query:
+            fallback_rows = [
+                r
+                for r in rows
+                if isinstance(r, dict)
+                and homecode_query in _normalise_input(str(r.get("serviceHomecode") or r.get("homecode") or ""))
+            ]
+        return [
+            {"row": row, "score": 0, "matched": 0}
+            for row in fallback_rows[:limit]
+        ]
+
+    scored.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for score, matched, _, _, row in scored:
+        name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
+        code = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
+        key = (name, code)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"row": row, "score": score, "matched": matched})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], homecode_query: str) -> tuple[int, int]:
     name = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
     homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
     if not name:
         return 0, 0
-    row_tokens = [tok for tok in _PRICE_TOKEN_RE.findall(name) if tok]
+    row_tokens = _augment_price_tokens(
+        [_normalise_price_token(tok) for tok in _PRICE_TOKEN_RE.findall(name) if tok],
+        raw_text=name,
+    )
     row_tokens_set = set(row_tokens)
 
     # Жесткий фильтр для консультационных price-запросов по специальности:
@@ -2739,8 +3012,13 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
             if tok in row_tokens_set:
                 matched += 1
                 continue
+            if "_" in tok:
+                continue
             # Для длинных токенов допускаем умеренно мягкий префиксный матч.
-            if len(tok) >= 5 and any(rt.startswith(tok[:4]) or tok.startswith(rt[:4]) for rt in row_tokens):
+            if len(tok) >= 5 and any(
+                len(rt) >= 4 and (rt.startswith(tok[:4]) or tok.startswith(rt[:4]))
+                for rt in row_tokens
+            ):
                 matched += 1
         score += matched * 25
         if matched == len(tokens):
@@ -2751,6 +3029,9 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
     # Слегка понижаем заведомо нерелевантный общий тариф.
     if "выезд на дом" in name and not any(tok in name for tok in tokens):
         score -= 30
+    if "узи" in tokens and "ультразвук" in name and not _PRICE_CHILD_QUERY_RE.search(query):
+        score += 160
+    score += _price_row_modifier_penalty(row, query)
 
     return score, matched
 
@@ -2765,67 +3046,18 @@ def _is_price_match_strong(*, score: int, matched: int, query: str, tokens: list
         tok = tokens[0]
         if len(tok) <= 3:
             return matched >= 1 and score >= 220
-        return matched >= 1 and score >= 170
+        return matched >= 1 and score >= 100
     if token_count == 2:
         return matched >= 2 or score >= 220
     return matched >= max(2, token_count - 1) or score >= 260
 
 
 def _rank_price_rows(rows: list[dict[str, Any]], query_text: str, *, limit: int = 10) -> list[dict[str, Any]]:
-    query = _normalise_input(query_text).replace("ё", "е")
-    tokens = _price_query_tokens(query_text)
-    homecode_query = _extract_homecode_query(query_text)
-
-    scored: list[tuple[int, int, int, int, dict[str, Any]]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        score, matched = _price_row_score(row, query=query, tokens=tokens, homecode_query=homecode_query)
-        if score <= 0:
-            continue
-        if not _is_price_match_strong(
-            score=score,
-            matched=matched,
-            query=query,
-            tokens=tokens,
-            homecode_query=homecode_query,
-        ):
-            continue
-        name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
-        name_gap = abs(len(name) - len(query)) if query else len(name)
-        cost = _as_int(row.get("cost")) or 0
-        scored.append((score, matched, -name_gap, -cost, row))
-
-    if not scored:
-        if query:
-            fallback = [r for r in rows if isinstance(r, dict) and query in _normalise_input(str(r.get("serviceName") or ""))]
-            if fallback:
-                return fallback[:limit]
-        if homecode_query:
-            fallback = [
-                r
-                for r in rows
-                if isinstance(r, dict)
-                and homecode_query in _normalise_input(str(r.get("serviceHomecode") or r.get("homecode") or ""))
-            ]
-            if fallback:
-                return fallback[:limit]
-        return []
-
-    scored.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
-    out: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for _, _, _, _, row in scored:
-        name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
-        code = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
-        key = (name, code)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(row)
-        if len(out) >= limit:
-            break
-    return out
+    return [
+        item["row"]
+        for item in _score_price_rows(rows, query_text, limit=limit)
+        if isinstance(item, dict) and isinstance(item.get("row"), dict)
+    ]
 
 
 def _lab_price_variant_flags(row: dict[str, Any]) -> set[str]:
@@ -2910,6 +3142,16 @@ def _select_patient_price_rows(
     if not _is_lab_price_query_for_catalog(query_text):
         return ranked[:limit]
 
+    requested_flags = _query_price_variant_flags(query_text)
+    filtered_ranked: list[dict[str, Any]] = []
+    for row in ranked:
+        row_flags = _lab_price_variant_flags(row)
+        if row_flags and not row_flags.issubset(requested_flags):
+            continue
+        filtered_ranked.append(row)
+    if filtered_ranked:
+        ranked = filtered_ranked
+
     query = _normalise_input(query_text).replace("ё", "е")
     tokens = _price_query_tokens(query_text)
     homecode_query = _extract_homecode_query(query_text)
@@ -2934,7 +3176,6 @@ def _select_patient_price_rows(
     if len(tied_rows) < 2:
         return ranked[:limit]
 
-    requested_flags = _query_price_variant_flags(query_text)
     filtered: list[dict[str, Any]] = []
     for row in tied_rows:
         row_flags = _lab_price_variant_flags(row)
@@ -2946,6 +3187,422 @@ def _select_patient_price_rows(
         return filtered[:limit]
     return tied_rows[:limit]
 
+
+def _normalise_family_variant_name(value: str) -> str:
+    """
+    Приводит название услуги к "базовому" виду для family-кластеризации.
+
+    :param value: имя услуги из прайса
+    :return: нормализованное имя без модификаторов
+    """
+
+    norm = _normalise_input(str(value or "")).replace("ё", "е")
+    norm = _PRICE_CITO_ROW_RE.sub(" ", norm)
+    norm = _PRICE_CAPILLARY_ROW_RE.sub(" ", norm)
+    norm = _PRICE_CHILD_ROW_RE.sub(" ", norm)
+    norm = _PRICE_REPEAT_ROW_RE.sub(" ", norm)
+    norm = _PRICE_KMN_ROW_RE.sub(" ", norm)
+    norm = _PRICE_HOME_ROW_RE.sub(" ", norm)
+    norm = _PRICE_PACKAGE_ROW_RE.sub(" ", norm)
+    norm = re.sub(r"[\[\]()]+", " ", norm)
+    return re.sub(r"\s+", " ", norm).strip()
+
+
+def _is_family_query_candidate(query_text: str, rows: list[dict[str, Any]]) -> bool:
+    """
+    Определяет, нужен ли для price-запроса режим выдачи семейства вариантов.
+
+    :param query_text: исходный запрос пользователя
+    :param rows: строки прайса
+    :return: True, если лучше показать набор вариантов вместо single best match
+    """
+
+    if not query_text or not rows:
+        return False
+    if _is_generic_uzi_price_request(query_text):
+        return False
+    if _is_consultation_service_query(query_text):
+        return False
+    if _extract_vitamin_designator(query_text):
+        return False
+    if _query_nonbase_price_flags(query_text):
+        return False
+
+    family_query = str(_extract_price_service_from_query(query_text) or query_text).strip()
+    tokens = [tok for tok in _price_query_tokens(family_query) if tok not in _PRICE_GENERIC_SERVICE_TOKENS]
+    if not tokens or len(tokens) > 4:
+        return False
+
+    scored = _score_price_rows(rows, family_query, limit=40)
+    if not scored and len(tokens) == 1:
+        needle = tokens[0][:4]
+        loose_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
+            row_tokens = [_normalise_price_token(tok) for tok in _PRICE_TOKEN_RE.findall(name)]
+            if any(len(rt) >= 4 and (rt.startswith(needle) or needle.startswith(rt[:4])) for rt in row_tokens):
+                loose_rows.append(row)
+        scored = [{"row": row, "score": 100, "matched": 1} for row in loose_rows[:40]]
+    if len(scored) < 2:
+        return False
+
+    top_score = int(scored[0].get("score") or 0)
+    top_matched = int(scored[0].get("matched") or 0)
+    tied_like: list[dict[str, Any]] = []
+    for item in scored:
+        score = int(item.get("score") or 0)
+        matched = int(item.get("matched") or 0)
+        if score < max(0, top_score - 25):
+            break
+        if matched < max(1, top_matched - 1):
+            continue
+        row = item.get("row")
+        if isinstance(row, dict):
+            tied_like.append(row)
+
+    filtered = _select_patient_price_rows(tied_like, family_query, limit=20)
+    if len(filtered) < 2:
+        return False
+
+    family_root_query = bool(re.search(r"\b(гепатит\w*|вич|витамин\w*|удалени\w*\s+зуб\w*|зуб\w*)\b", query_text, re.I))
+    base_names = {
+        _normalise_family_variant_name(str(row.get("serviceName") or row.get("name") or ""))
+        for row in filtered
+        if isinstance(row, dict)
+    }
+    base_names.discard("")
+    if len(base_names) >= 3:
+        return True
+    return family_root_query and len(base_names) >= 2 and len(tokens) <= 2
+
+
+def _build_price_family_payload(
+    query_text: str,
+    rows: list[dict[str, Any]],
+    *,
+    show_all: bool = False,
+    visible_limit: int = 10,
+) -> dict[str, Any] | None:
+    """
+    Формирует payload для family-query режима price-поиска.
+
+    :param query_text: исходный price-запрос
+    :param rows: строки прайса
+    :param show_all: нужно ли показать все найденные варианты
+    :param visible_limit: лимит строк в первом ответе
+    :return: payload family-query либо None
+    """
+
+    family_query = str(_extract_price_service_from_query(query_text) or query_text).strip()
+    if not _is_family_query_candidate(query_text, rows):
+        return None
+
+    ranked = _select_patient_price_rows(rows, family_query, limit=50)
+    if len(ranked) < 2 and family_query:
+        token_candidates = [tok for tok in _price_query_tokens(family_query) if tok not in _PRICE_GENERIC_SERVICE_TOKENS]
+        if len(token_candidates) == 1:
+            needle = token_candidates[0][:4]
+            ranked = [
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and any(
+                    len(rt) >= 4 and (rt.startswith(needle) or needle.startswith(rt[:4]))
+                    for rt in _augment_price_tokens(
+                        [_normalise_price_token(tok) for tok in _PRICE_TOKEN_RE.findall(str(row.get("serviceName") or row.get("name") or ""))],
+                        raw_text=str(row.get("serviceName") or row.get("name") or ""),
+                    )
+                )
+            ]
+    if len(ranked) < 2:
+        return None
+
+    service_name = family_query
+    visible_count = len(ranked) if show_all else min(len(ranked), visible_limit)
+    remaining_count = max(0, len(ranked) - visible_count)
+    show_all_hint = ""
+    if remaining_count > 0 and not show_all:
+        show_all_hint = (
+            f"По вашему запросу найдено еще {remaining_count} вариантов. "
+            'Чтобы показать их, напишите: "все".'
+        )
+
+    return {
+        "service_name": service_name,
+        "service_kind": "family_query",
+        "family_variants": ranked,
+        "showing_all": show_all,
+        "visible_limit": visible_limit,
+        "remaining_count": remaining_count,
+        "show_all_hint": show_all_hint,
+        "note": "price_family_query",
+    }
+
+
+def _price_family_payload_from_context(entities: dict[str, Any], *, show_all: bool = False) -> dict[str, Any] | None:
+    """
+    Восстанавливает family-query payload из сохраненного сессионного контекста.
+
+    :param entities: текущие сущности/state
+    :param show_all: нужно ли отдать все варианты
+    :return: восстановленный payload либо None
+    """
+
+    raw_ctx = entities.get("_price_family_context")
+    if not isinstance(raw_ctx, dict):
+        return None
+    variants = raw_ctx.get("family_variants")
+    if not isinstance(variants, list) or not variants:
+        return None
+    service_name = str(raw_ctx.get("service_name") or "").strip()
+    visible_limit = int(raw_ctx.get("visible_limit") or 10)
+    visible_count = len(variants) if show_all else min(len(variants), visible_limit)
+    remaining_count = max(0, len(variants) - visible_count)
+    show_all_hint = ""
+    if remaining_count > 0 and not show_all:
+        show_all_hint = (
+            f"По вашему запросу найдено еще {remaining_count} вариантов. "
+            'Чтобы показать их, напишите: "все".'
+        )
+    return {
+        "service_name": service_name,
+        "service_kind": "family_query",
+        "family_variants": variants,
+        "showing_all": show_all,
+        "visible_limit": visible_limit,
+        "remaining_count": remaining_count,
+        "show_all_hint": show_all_hint,
+        "note": "price_family_context",
+    }
+
+
+def _is_price_show_all_request(query_text: str) -> bool:
+    """
+    Проверяет короткий follow-up пациента с просьбой показать все варианты.
+
+    :param query_text: текст реплики
+    :return: True для `все` / `покажи все` / `все варианты`
+    """
+
+    return bool(_PRICE_SHOW_ALL_RE.fullmatch(str(query_text or "").strip()))
+
+
+def _is_lab_like_service_name(value: str) -> bool:
+    """
+    Определяет, похожа ли строка прайса на лабораторный анализ.
+
+    :param value: название услуги
+    :return: True для lab-like строки
+    """
+
+    norm = _normalise_input(str(value or "")).replace("ё", "е")
+    if not norm:
+        return False
+    if _PRICE_PROCEDURE_LIKE_RE.search(norm):
+        return False
+    return True
+
+
+def _classify_catalog_service_kind(
+    service_name: str,
+    *,
+    query_text: str,
+    retail_rows: list[dict[str, Any]],
+    has_exact_doctor_link: bool,
+    is_consult_query: bool = False,
+) -> str:
+    """
+    Классифицирует тип услуги по matched catalog rows, а не только по regex запроса.
+
+    :param service_name: эффективное имя услуги
+    :param query_text: исходный пользовательский запрос
+    :param retail_rows: релевантные retail-строки
+    :param has_exact_doctor_link: найден ли надежный exact-link в doctor_prices
+    :param is_consult_query: является ли запрос консультационным
+    :return: `lab`, `doctor_consult`, `procedure_with_doctor`, `diagnostic_no_doctor` или `ambiguous`
+    """
+
+    if is_consult_query:
+        return "doctor_consult"
+
+    top_name = str(
+        (retail_rows[0].get("serviceName") or retail_rows[0].get("name") or service_name)
+        if retail_rows else service_name
+    ).strip()
+    top_norm = _normalise_input(top_name).replace("ё", "е")
+    service_norm = _normalise_input(service_name).replace("ё", "е")
+    query_norm = _normalise_input(query_text).replace("ё", "е")
+    top_rows = retail_rows[:3] if retail_rows else []
+    lab_signal = bool(
+        _LAB_SERVICE_HINT_RE.search(service_norm)
+        or _LAB_SERVICE_HINT_RE.search(query_norm)
+        or any(
+            _LAB_SERVICE_HINT_RE.search(_normalise_input(str(row.get("serviceName") or row.get("name") or "")))
+            or str(row.get("deadline") or "").strip()
+            for row in top_rows
+            if isinstance(row, dict)
+        )
+    )
+
+    if _PRICE_DIAGNOSTIC_NO_DOCTOR_RE.search(top_norm) or _PRICE_DIAGNOSTIC_NO_DOCTOR_RE.search(service_norm):
+        return "diagnostic_no_doctor"
+
+    if has_exact_doctor_link:
+        return "procedure_with_doctor"
+
+    if top_rows and all(
+        _is_lab_like_service_name(str(row.get("serviceName") or row.get("name") or ""))
+        for row in top_rows
+    ) and lab_signal:
+        return "lab"
+
+    if _is_lab_like_service_name(service_name) and not _PRICE_PROCEDURE_LIKE_RE.search(query_norm) and lab_signal:
+        return "lab"
+
+    if _PRICE_PROCEDURE_LIKE_RE.search(top_norm) or _PRICE_PROCEDURE_LIKE_RE.search(service_norm):
+        return "procedure_with_doctor" if has_exact_doctor_link else "ambiguous"
+
+    return "ambiguous"
+
+
+def _has_reliable_doctor_service_link(
+    matched_rows: list[tuple[int, int, int, int, dict[str, Any]]],
+    query_norm: str,
+) -> bool:
+    """
+    Проверяет, что doctor-price linkage достаточно надежный для показа врачей.
+
+    Exact homecode остаётся самым сильным сигналом, но для старых кэшей иногда
+    нет homecode на retail-строке. Тогда допускаем показ врачей только если
+    строки doctor_prices почти буквально совпадают с целевой услугой.
+
+    :param matched_rows: уже отфильтрованные matched doctor rows
+    :param query_norm: нормализованное имя целевой услуги
+    :return: True, если linkage можно считать надежным
+    """
+
+    if not matched_rows or not query_norm:
+        return False
+    strong_hits = 0
+    for _, matched, _, _, row in matched_rows[:3]:
+        row_name = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
+        if not row_name:
+            continue
+        if query_norm == row_name or query_norm in row_name or row_name in query_norm:
+            strong_hits += 1
+            continue
+        if matched >= max(2, len(_price_query_tokens(query_norm)) - 1):
+            strong_hits += 1
+    return strong_hits >= 1
+
+
+def _build_price_kind_ambiguous_prompt(
+    query_text: str,
+    retail_rows: list[dict[str, Any]],
+    *,
+    has_exact_doctor_link: bool,
+) -> str:
+    """
+    Собирает prompt для LLM fallback по ambiguous PRICE-кейсам.
+
+    :param query_text: исходный пользовательский запрос
+    :param retail_rows: top retail rows
+    :param has_exact_doctor_link: найден ли надежный doctor linkage
+    :return: готовый prompt
+    """
+
+    tmpl = load_prompt_text("price_kind_ambiguous")
+    sample_rows = []
+    for row in retail_rows[:5]:
+        if not isinstance(row, dict):
+            continue
+        sample_rows.append(
+            {
+                "serviceName": str(row.get("serviceName") or row.get("name") or "").strip(),
+                "serviceHomecode": str(row.get("serviceHomecode") or row.get("homecode") or "").strip(),
+                "deadline": str(row.get("deadline") or "").strip(),
+                "cost": _as_int(row.get("cost")),
+            }
+        )
+    return (
+        tmpl.replace("<<USER_QUERY>>", str(query_text or "").strip())
+        .replace("<<TOP_ROWS>>", json.dumps(sample_rows, ensure_ascii=False))
+        .replace("<<HAS_EXACT_DOCTOR_LINK>>", json.dumps(bool(has_exact_doctor_link), ensure_ascii=False))
+    ).strip()
+
+
+def _parse_price_kind_ambiguous_result(raw: str) -> str | None:
+    """
+    Разбирает ответ LLM fallback для ambiguous PRICE-классификации.
+
+    :param raw: сырой текст модели
+    :return: допустимый kind либо None
+    """
+
+    try:
+        data = json.loads(str(raw or "").strip())
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    kind = str(data.get("kind") or "").strip()
+    if kind in {
+        "lab",
+        "doctor_consult",
+        "procedure_with_doctor",
+        "diagnostic_no_doctor",
+        "family_query",
+        "operator",
+    }:
+        return kind
+    return None
+
+
+async def _resolve_ambiguous_price_kind_with_llm(
+    query_text: str,
+    retail_rows: list[dict[str, Any]],
+    *,
+    has_exact_doctor_link: bool,
+    runtime_llm_mode: str = "",
+) -> str:
+    """
+    Запускает LLM fallback только для ambiguous PRICE-кейсов.
+
+    :param query_text: исходный пользовательский запрос
+    :param retail_rows: top retail rows
+    :param has_exact_doctor_link: найден ли надежный doctor linkage
+    :param runtime_llm_mode: текущий llm_mode (`strict|hybrid|rich`)
+    :return: выбранный kind либо `ambiguous`
+    """
+
+    mode = str(runtime_llm_mode or "").strip().lower()
+    if mode not in {"hybrid", "rich"}:
+        return "ambiguous"
+    prompt = _build_price_kind_ambiguous_prompt(
+        query_text,
+        retail_rows,
+        has_exact_doctor_link=has_exact_doctor_link,
+    )
+    if not prompt:
+        return "ambiguous"
+    try:
+        raw = await generate_text(
+            prompt,
+            timeout_s=20,
+            queue_timeout_ms=4000,
+            fmt="json",
+            think=False,
+        )
+    except Exception:
+        return "ambiguous"
+    kind = _parse_price_kind_ambiguous_result(raw)
+    if not kind:
+        return "ambiguous"
+    if kind == "procedure_with_doctor" and not has_exact_doctor_link:
+        return "ambiguous"
+    return kind
 
 def _should_prefer_retail_query_candidate(query_candidate: str, service_name: str) -> bool:
     """
@@ -2969,6 +3626,8 @@ def _should_prefer_retail_query_candidate(query_candidate: str, service_name: st
         return True
     if query_candidate_norm == service_name_norm:
         return False
+    if query_candidate_norm in service_name_norm and len(query_candidate_norm) < len(service_name_norm):
+        return True
 
     service_flags = _lab_price_variant_flags({"serviceName": service_name})
     if not service_flags:
@@ -4345,6 +5004,11 @@ class Services:
         top_limit = _coerce_top_n(top_n, default=DOCTORS_TOP_N)
         entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
         query_text = str(query or "").strip()
+        if _is_price_show_all_request(query_text):
+            family_payload = _price_family_payload_from_context(entities, show_all=True)
+            if family_payload:
+                family_payload["entities_used"] = entities
+                return family_payload
         if _is_generic_uzi_price_request(query_text):
             return {
                 "service_name": "УЗИ",
@@ -4360,6 +5024,22 @@ class Services:
                 "note": "service_bundle_info: generic_uzi_clarify",
                 "entities_used": entities,
             }
+        try:
+            retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
+        except Exception:
+            retail_rows = []
+        retail_rows = [p for p in retail_rows if isinstance(p, dict)]
+
+        family_payload = _build_price_family_payload(
+            query_text,
+            retail_rows,
+            show_all=False,
+            visible_limit=10,
+        )
+        if family_payload:
+            family_payload["top_n_applied"] = top_limit
+            family_payload["entities_used"] = entities
+            return family_payload
         if entity_service_name and _is_city_only_reply(query_text):
             query_service_name = None
         else:
@@ -4399,9 +5079,8 @@ class Services:
             if retail_prefers_query_candidate:
                 retail_query = query_candidate or service_name
         try:
-            retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
             out["retail_prices"] = _select_patient_price_rows(
-                [p for p in retail_rows if isinstance(p, dict)],
+                retail_rows,
                 retail_query,
                 limit=5,
             )
@@ -4417,18 +5096,25 @@ class Services:
             str(top_retail.get("serviceHomecode") or top_retail.get("homecode") or "")
         )
         is_consult_query = _is_consultation_service_query(service_name)
-        service_kind = _detect_service_kind(
+        preliminary_kind = _classify_catalog_service_kind(
             service_name,
             query_text=query_text,
-            top_retail=top_retail if isinstance(top_retail, dict) else None,
+            retail_rows=out["retail_prices"] if isinstance(out.get("retail_prices"), list) else [],
+            has_exact_doctor_link=False,
             is_consult_query=is_consult_query,
         )
-        out["service_kind"] = service_kind
-
-        if service_kind != "lab":
+        query_norm = _normalise_input(service_name).replace("ё", "е")
+        query_tokens = _price_query_tokens(service_name)
+        homecode_query = _extract_homecode_query(service_name)
+        matched_price_rows: list[tuple[int, int, int, int, dict[str, Any]]] = []
+        exact_link_rows: list[tuple[int, int, int, int, dict[str, Any]]] = []
+        samara_tokens: set[str] = set()
+        by_id: dict[int, dict[str, Any]] = {}
+        doctor_prices: list[dict[str, Any]] = []
+        service_kind = preliminary_kind
+        if preliminary_kind not in {"lab", "diagnostic_no_doctor"}:
             samara_tokens = await self._samara_region_tokens()
             doctors = await self._ensure_doctors_cache_loaded()
-            by_id: dict[int, dict[str, Any]] = {}
             for doc in doctors:
                 if not isinstance(doc, dict):
                     continue
@@ -4442,14 +5128,11 @@ class Services:
                     continue
                 by_id[doc_id] = doc
 
-            matched_price_rows: list[tuple[int, int, int, int, dict[str, Any]]] = []
             try:
                 doctor_prices = await asyncio.to_thread(api_price.load_doctor_prices)
             except Exception:
                 doctor_prices = []
-            query_norm = _normalise_input(service_name).replace("ё", "е")
-            query_tokens = _price_query_tokens(service_name)
-            homecode_query = _extract_homecode_query(service_name)
+
             for row in doctor_prices:
                 if not isinstance(row, dict):
                     continue
@@ -4479,11 +5162,64 @@ class Services:
                 ):
                     continue
                 cost = _as_int(row.get("cost")) or 0
-                matched_price_rows.append((score, matched, -cost, doctor_id, row))
+                item = (score, matched, -cost, doctor_id, row)
+                matched_price_rows.append(item)
+                if target_homecode and row_homecode and target_homecode == row_homecode:
+                    exact_link_rows.append(item)
 
-            allow_soft_substring_fallback = is_consult_query or len(query_tokens) <= 1
-            if not matched_price_rows and query_norm and allow_soft_substring_fallback:
-                # Мягкий fallback на substring, если ranker не дал совпадений.
+            has_reliable_doctor_link = bool(exact_link_rows) or _has_reliable_doctor_service_link(
+                matched_price_rows,
+                query_norm,
+            )
+            service_kind = _classify_catalog_service_kind(
+                service_name,
+                query_text=query_text,
+                retail_rows=out["retail_prices"] if isinstance(out.get("retail_prices"), list) else [],
+                has_exact_doctor_link=has_reliable_doctor_link,
+                is_consult_query=is_consult_query,
+            )
+        if service_kind == "ambiguous":
+            service_kind = await _resolve_ambiguous_price_kind_with_llm(
+                query_text,
+                out["retail_prices"] if isinstance(out.get("retail_prices"), list) else [],
+                has_exact_doctor_link=bool(exact_link_rows) or _has_reliable_doctor_service_link(
+                    matched_price_rows,
+                    query_norm,
+                ),
+                runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
+            )
+        if service_kind == "operator":
+            return _service_fallback(
+                note="service_bundle_info ambiguous operator fallback",
+                handoff_message="Сейчас по этой услуге безопаснее уточнить у оператора. Соединяю с оператором.",
+                entities=entities,
+                reason="ambiguous_price_service",
+                extra={
+                    "retail_prices": out.get("retail_prices") or [],
+                    "service_name": service_name,
+                },
+            )
+        if service_kind == "family_query":
+            family_payload = _build_price_family_payload(
+                query_text,
+                retail_rows,
+                show_all=False,
+                visible_limit=10,
+            )
+            if family_payload:
+                family_payload["entities_used"] = entities
+                family_payload["top_n_applied"] = top_limit
+                return family_payload
+        out["service_kind"] = service_kind
+
+        if service_kind in {"doctor_consult", "procedure_with_doctor"}:
+            candidate_rows = (
+                exact_link_rows
+                if service_kind == "procedure_with_doctor" and exact_link_rows
+                else matched_price_rows
+            )
+            allow_soft_substring_fallback = service_kind == "doctor_consult" and len(query_tokens) <= 1
+            if not candidate_rows and query_norm and allow_soft_substring_fallback:
                 for row in doctor_prices:
                     if not isinstance(row, dict):
                         continue
@@ -4493,11 +5229,11 @@ class Services:
                     service_row_name = _normalise_input(str(row.get("serviceName") or ""))
                     if query_norm and query_norm in service_row_name:
                         cost = _as_int(row.get("cost")) or 0
-                        matched_price_rows.append((1, 1, -cost, doctor_id, row))
+                        candidate_rows.append((1, 1, -cost, doctor_id, row))
 
-            matched_price_rows.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
+            candidate_rows.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
             best_row_by_doctor: dict[int, dict[str, Any]] = {}
-            for _, _, _, doctor_id, row in matched_price_rows:
+            for _, _, _, doctor_id, row in candidate_rows:
                 if doctor_id not in best_row_by_doctor:
                     best_row_by_doctor[doctor_id] = row
 
@@ -4512,7 +5248,7 @@ class Services:
                 doctor_id = _as_int(doc.get("id"))
                 if doctor_id is None:
                     continue
-                if is_consult_query and query_specialty and not _doctor_matches_primary_specialty(doc, query_specialty):
+                if service_kind == "doctor_consult" and query_specialty and not _doctor_matches_primary_specialty(doc, query_specialty):
                     continue
                 price_row = best_row_by_doctor.get(doctor_id, {})
                 availability = await self._doctor_availability_snapshot(
@@ -4538,7 +5274,7 @@ class Services:
             out["doctors"] = []
             out["note"] = (
                 f"{out['note']}; " if str(out.get("note") or "").strip() else ""
-            ) + "service_bundle_info: lab service_kind (doctors skipped)"
+            ) + f"service_bundle_info: {service_kind or 'no_doctors'}"
 
         # 3) Preparation guidance by service/test name.
         # В PRICE показываем подготовку только по явному запросу пациента.
@@ -5587,6 +6323,11 @@ class Services:
         entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
         query_text = str(query or "").strip()
         has_price_request = bool(query_text and _PRICE_REQUEST_RE.search(query_text))
+        if _is_price_show_all_request(query_text):
+            family_payload = _price_family_payload_from_context(entities, show_all=True)
+            if family_payload:
+                family_payload["entities_used"] = entities
+                return family_payload
         if _is_generic_uzi_price_request(query_text):
             return {
                 "prices": [],
@@ -5683,6 +6424,18 @@ class Services:
                 entities=entities,
                 extra={"prices": []},
             )
+        family_payload = _build_price_family_payload(
+            query_text,
+            [p for p in price_rows if isinstance(p, dict)],
+            show_all=False,
+            visible_limit=10,
+        )
+        if family_payload and not doctor_id:
+            family_payload["entities_used"] = {
+                **entities,
+                "service_name_effective": str(family_payload.get("service_name") or "").strip(),
+            }
+            return family_payload
         if not needle:
             return {"prices": [], "note": "no service query", "entities_used": entities}
         retail_query = service_name
@@ -5697,6 +6450,13 @@ class Services:
         )
         return {
             "prices": matches,
+            "service_kind": "lab" if _classify_catalog_service_kind(
+                service_name,
+                query_text=query_text,
+                retail_rows=matches,
+                has_exact_doctor_link=False,
+                is_consult_query=False,
+            ) == "lab" else "",
             "note": f"price_info: priceByRegion({SAMARA_PRICE_REGION_ID})",
             "entities_used": {
                 **entities,
