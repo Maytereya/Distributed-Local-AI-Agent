@@ -217,6 +217,10 @@ v2 (опционально): индексировать summary в отдель�
    - `source=clinic_data`
    - `source=general_knowledge`
    - `source=mixed`
+4. Формат событий:
+   - префикс: `FreeTalkAI`
+   - `component=freetalk|ports`
+   - ключи вида `event=... session_id=... error_type=...`
 
 ## 10. Тесты (минимальный DoD)
 

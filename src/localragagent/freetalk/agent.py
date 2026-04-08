@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import re
 from typing import Any
 import uuid
@@ -15,6 +16,7 @@ from .config import FreeTalkConfig
 from .contracts import AgentReply, SessionContext
 from .memory_persist import PersistentSummaryStore
 from .memory_redis import RedisMemoryStore
+from .observability import log_event
 from .prompts import build_general_prompt, build_summary_prompt, build_tool_result_prompt, load_system_prompt
 from .tool_dispatcher import ToolDispatcher
 from .tool_registry import is_about_agent_query, is_medical_query, select_tool_plan, should_use_web_search
@@ -113,6 +115,12 @@ class FreeTalkAgent:
             context=context,
         )
         if guard_reply is not None:
+            log_event(
+                "context_guard_decision_handled",
+                session_id=sid,
+                state=guard_state or "none",
+                next_session_id=guard_reply.next_session_id or "",
+            )
             if not guard_reply.next_session_id:
                 await self.memory.append_exchange(
                     sid,
@@ -133,8 +141,17 @@ class FreeTalkAgent:
             reply.text = _merge_text(reply.text, self._guard_final_choice_prompt())
         elif guard_state == _CTX_GUARD_NONE and not reply.next_session_id:
             if self._is_context_guard_needed(context=context, user_message=user_message):
+                est_tokens = self._estimate_context_tokens(context=context, user_message=user_message)
                 await self.memory.set_meta_str(sid, _CTX_GUARD_STATE_KEY, _CTX_GUARD_AWAITING_IMMEDIATE)
                 reply.text = _merge_text(reply.text, self._guard_near_limit_prompt())
+                log_event(
+                    "context_guard_triggered",
+                    level=logging.WARNING,
+                    session_id=sid,
+                    estimated_tokens=est_tokens,
+                    prompt_eval_count=self._last_prompt_eval_count,
+                    context_window=self.config.context_window_tokens,
+                )
 
         await self.memory.append_exchange(
             sid,
@@ -169,6 +186,11 @@ class FreeTalkAgent:
             note = str(web_payload.get("note") or "") if isinstance(web_payload, dict) else ""
             if "source unavailable" in note.lower():
                 web_search_unavailable = True
+                log_event(
+                    "web_search_unavailable_fallback",
+                    level=logging.WARNING,
+                    note=note,
+                )
 
         prompt = build_general_prompt(
             system_prompt=self.system_prompt,
@@ -197,6 +219,7 @@ class FreeTalkAgent:
         if state == _CTX_GUARD_AWAITING_IMMEDIATE:
             if decision == "yes":
                 await self.memory.clear_session(session_id)
+                log_event("context_guard_clear_now", session_id=session_id)
                 return AgentReply(
                     text="Диалог завершен и удален. Начинаем новую сессию.",
                     source="system",
@@ -204,6 +227,7 @@ class FreeTalkAgent:
                 )
             if decision == "no":
                 await self.memory.set_meta_str(session_id, _CTX_GUARD_STATE_KEY, _CTX_GUARD_ONE_MORE)
+                log_event("context_guard_one_more_accepted", session_id=session_id)
                 return AgentReply(
                     text=(
                         "Принято. Я приму еще одно сообщение в текущем диалоге, "
@@ -222,6 +246,7 @@ class FreeTalkAgent:
         if state == _CTX_GUARD_AWAITING_FINAL:
             if decision == "yes":
                 await self.memory.clear_session(session_id)
+                log_event("context_guard_clear_final_yes", session_id=session_id)
                 return AgentReply(
                     text="Диалог удален полностью. Начинаем новую сессию.",
                     source="system",
@@ -232,6 +257,12 @@ class FreeTalkAgent:
                 new_session_id = _new_session_id()
                 if compact_summary:
                     await self.memory.save_summary(new_session_id, compact_summary)
+                log_event(
+                    "context_guard_rollover_with_summary",
+                    session_id=session_id,
+                    next_session_id=new_session_id,
+                    summary_chars=len(compact_summary),
+                )
                 return AgentReply(
                     text=(
                         "Диалог сохранен в компактной памяти. "
@@ -321,11 +352,21 @@ class FreeTalkAgent:
                 open_loops=[],
                 extra={"reason": "context_rollover"},
             )
+            log_event(
+                "context_rollover_snapshot_saved",
+                session_id=session_id,
+                summary_chars=len(summary),
+            )
         return summary
 
     async def _medical_reply(self, user_message: str, context: SessionContext) -> AgentReply:
         health = await self.services.get_catalog_health()
         if isinstance(health, dict) and not bool(health.get("ok", True)):
+            log_event(
+                "catalog_health_not_ok",
+                level=logging.WARNING,
+                details=str(health)[:300],
+            )
             return AgentReply(
                 text="Сейчас источник данных клиники недоступен. Попробуйте повторить запрос позже.",
                 source="clinic_data",
@@ -351,6 +392,11 @@ class FreeTalkAgent:
                 tool_name=result.tool_name,
                 tool_payload=result.payload,
             )
+            log_event(
+                "medical_tool_success",
+                session_id=context.session_id,
+                tool_name=result.tool_name,
+            )
             return AgentReply(
                 text=answer,
                 source="clinic_data",
@@ -368,7 +414,12 @@ class FreeTalkAgent:
 
         try:
             service_match = await self.services.match_catalog_service(user_message, current_service_name="")
-        except Exception:
+        except Exception as exc:
+            log_event(
+                "entity_ground_service_failed",
+                level=logging.WARNING,
+                error_type=type(exc).__name__,
+            )
             service_match = {}
         if isinstance(service_match, dict):
             status = str(service_match.get("status") or "")
@@ -378,7 +429,12 @@ class FreeTalkAgent:
 
         try:
             doctor_match = await self.services.match_catalog_doctor(user_message)
-        except Exception:
+        except Exception as exc:
+            log_event(
+                "entity_ground_doctor_failed",
+                level=logging.WARNING,
+                error_type=type(exc).__name__,
+            )
             doctor_match = {}
         if isinstance(doctor_match, dict):
             status = str(doctor_match.get("status") or "")
@@ -398,6 +454,12 @@ class FreeTalkAgent:
         llm_text = await self._llm_text(prompt)
         if _is_non_empty_text(llm_text):
             return llm_text
+        log_event(
+            "tool_render_fallback",
+            level=logging.WARNING,
+            tool_name=tool_name,
+            payload_note=str(tool_payload.get("note") or "")[:120],
+        )
         return self._fallback_render(tool_name, tool_payload)
 
     async def _maybe_compact(self, session_id: str) -> None:
@@ -431,6 +493,12 @@ class FreeTalkAgent:
             open_loops=[],
             extra={"turn_count": turn_count},
         )
+        log_event(
+            "dialog_compacted",
+            session_id=session_id,
+            turn_count=turn_count,
+            summary_chars=len(summary),
+        )
 
     async def _llm_text(self, prompt: str) -> str:
         self._last_prompt_eval_count = 0
@@ -442,7 +510,12 @@ class FreeTalkAgent:
                 fmt=None,
                 think=False,
             )
-        except Exception:
+        except Exception as exc:
+            log_event(
+                "llm_generate_failed",
+                level=logging.ERROR,
+                error_type=type(exc).__name__,
+            )
             return ""
         try:
             self._last_prompt_eval_count = int(usage.get("prompt_eval_count", 0))

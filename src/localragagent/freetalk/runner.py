@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from functools import lru_cache
 from typing import Any, AsyncGenerator
@@ -13,6 +14,7 @@ from .agent import FreeTalkAgent
 from .config import load_config
 from .memory_persist import PersistSettings, PersistentSummaryStore
 from .memory_redis import RedisMemoryStore, RedisSettings
+from .observability import log_event
 
 
 @lru_cache(maxsize=1)
@@ -35,6 +37,13 @@ def _agent() -> FreeTalkAgent:
                 healthcheck_ttl_s=cfg.web_search_healthcheck_ttl_s,
             )
         )
+    log_event(
+        "freetalk_agent_initialized",
+        mode_key=cfg.mode_key,
+        redis_url=cfg.redis_url,
+        web_search_enabled=cfg.enable_web_search_tool,
+        web_search_url=cfg.web_search_url if cfg.enable_web_search_tool else "",
+    )
     return FreeTalkAgent.build(
         config=cfg,
         services=services,
@@ -76,6 +85,13 @@ async def run_free_talk_with_state(
     reply = await _agent().chat(message, sid)
     text = str(reply.text or "").strip()
     next_session_id = str(reply.next_session_id or "").strip() or sid
+    if next_session_id != sid:
+        log_event(
+            "freetalk_session_rotated",
+            level=logging.WARNING,
+            old_session_id=sid,
+            next_session_id=next_session_id,
+        )
     return text, next_session_id
 
 

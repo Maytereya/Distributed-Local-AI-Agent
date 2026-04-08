@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Awaitable, Callable
 
 from .contracts import ToolCallResult
+from .observability import log_event
 
 ToolHandler = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
@@ -47,6 +49,11 @@ class ToolDispatcher:
         args = dict(entities or {})
         handler = self._handlers.get(tool_name)
         if handler is None:
+            log_event(
+                "tool_not_registered",
+                level=logging.ERROR,
+                tool_name=tool_name,
+            )
             return ToolCallResult(tool_name=tool_name, payload={}, found=False, error=f"tool_not_registered:{tool_name}")
         try:
             raw_payload = await handler(query, args)
@@ -55,6 +62,12 @@ class ToolDispatcher:
             else:
                 payload = {"result": raw_payload}
         except Exception as exc:
+            log_event(
+                "tool_call_failed",
+                level=logging.ERROR,
+                tool_name=tool_name,
+                error_type=type(exc).__name__,
+            )
             return ToolCallResult(tool_name=tool_name, payload={}, found=False, error=f"{type(exc).__name__}:{exc}")
 
         return ToolCallResult(
@@ -63,4 +76,3 @@ class ToolDispatcher:
             found=_has_useful_data(payload),
             error="",
         )
-

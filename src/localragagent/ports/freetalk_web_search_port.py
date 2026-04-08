@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import time
 from typing import Any
 
 import httpx
+
+from .observability import log_port_event
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +67,13 @@ class WebSearchPort:
                 response = await client.get(endpoint, params=params)
                 response.raise_for_status()
                 payload = response.json()
-        except Exception:
+        except Exception as exc:
+            log_port_event(
+                "web_search_healthcheck_failed",
+                level=logging.WARNING,
+                base_url=url,
+                error_type=type(exc).__name__,
+            )
             return False
 
         if not isinstance(payload, dict):
@@ -87,8 +96,14 @@ class WebSearchPort:
 
         url = str(self._settings.base_url or "").rstrip("/")
         if not url:
+            log_port_event("web_search_empty_base_url", level=logging.ERROR)
             return {"query": q, "results": [], "note": "web_search: empty base_url"}
         if not await self.is_healthy():
+            log_port_event(
+                "web_search_unavailable",
+                level=logging.WARNING,
+                base_url=url,
+            )
             return {"query": q, "results": [], "note": "web_search source unavailable"}
 
         endpoint = f"{url}/search"
@@ -104,8 +119,14 @@ class WebSearchPort:
                 response = await client.get(endpoint, params=params)
                 response.raise_for_status()
                 payload = response.json()
-        except Exception:
+        except Exception as exc:
             self._mark_unhealthy()
+            log_port_event(
+                "web_search_request_failed",
+                level=logging.WARNING,
+                base_url=url,
+                error_type=type(exc).__name__,
+            )
             return {
                 "query": q,
                 "results": [],
@@ -138,6 +159,11 @@ class WebSearchPort:
                 break
 
         self._mark_healthy()
+        log_port_event(
+            "web_search_ok",
+            query=q[:120],
+            results_count=len(out),
+        )
         return {
             "query": q,
             "results": out,

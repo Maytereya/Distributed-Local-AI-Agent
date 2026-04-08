@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from types import ModuleType
+
+from .observability import log_port_event
 
 
 @dataclass(frozen=True)
@@ -52,8 +55,19 @@ def import_legacy_alias(alias: str, *, package_name: str = "localragagent") -> M
     if existing is not None:
         return existing
 
-    module = importlib.import_module(target)
+    try:
+        module = importlib.import_module(target)
+    except Exception as exc:
+        log_port_event(
+            "legacy_alias_import_failed",
+            level=logging.ERROR,
+            alias=alias,
+            target=target,
+            error_type=type(exc).__name__,
+        )
+        raise
     sys.modules[alias_fqn] = module
+    log_port_event("legacy_alias_import_ok", alias=alias, target=target)
     return module
 
 
@@ -101,4 +115,3 @@ def install_legacy_aliases(
             if strict:
                 raise
     return errors
-
