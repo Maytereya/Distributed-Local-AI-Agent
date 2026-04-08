@@ -89,3 +89,58 @@ def build_summary_prompt(*, previous_summary: str, turns: list[dict[str, Any]]) 
         f"Новые реплики:\n{history or '(нет)'}\n\n"
         "Обновленное summary:"
     )
+
+
+def build_clinical_router_prompt(
+    *,
+    system_prompt: str,
+    summary: str,
+    turns: list[dict[str, Any]],
+    user_message: str,
+    pending_intent: str = "",
+    pending_slots: list[str] | None = None,
+    remembered_doctor: str = "",
+) -> str:
+    history = _history_lines(turns, max_turns=12)
+    summary_text = str(summary or "").strip() or "(нет)"
+    pending_intent_text = str(pending_intent or "").strip() or "(нет)"
+    pending_slots_text = ", ".join([str(x).strip() for x in (pending_slots or []) if str(x).strip()]) or "(нет)"
+    doctor_hint = str(remembered_doctor or "").strip() or "(нет)"
+    schema = {
+        "intent": "doctor_schedule|doctor_info|price|prepare|tests|test_result|address|clinic_documents|clinic_news|service_info|unknown",
+        "confidence": 0.0,
+        "entities": {
+            "doctor_name": "",
+            "specialty": "",
+            "service_name": "",
+            "test_name": "",
+            "city": "",
+            "branch_name": "",
+            "date_from": "",
+            "date_to": "",
+            "time_from": "",
+            "time_to": "",
+        },
+        "missing_slots": ["doctor_name_or_specialty"],
+        "clarify_question": "",
+        "tool_plan": ["doctors_schedule_week", "doctors_info"],
+    }
+    schema_text = json.dumps(schema, ensure_ascii=False, indent=2)
+    return (
+        f"{system_prompt}\n\n"
+        "Ты роутер клинических интентов. Выбери intent и сущности для tool_call.\n"
+        "Если данных недостаточно, заполни missing_slots и короткий clarify_question.\n"
+        "Если пользователь пишет \"о нем/его/этот врач\", используй контекст и remembered_doctor.\n"
+        "Не выдумывай конкретные фамилии/услуги, если их нет в сообщении/контексте.\n"
+        "Верни ТОЛЬКО JSON без markdown.\n\n"
+        "Summary:\n"
+        f"{summary_text}\n\n"
+        "Последние реплики:\n"
+        f"{history or '(нет)'}\n\n"
+        f"Pending intent: {pending_intent_text}\n"
+        f"Pending slots: {pending_slots_text}\n"
+        f"Remembered doctor: {doctor_hint}\n\n"
+        f"Пользователь: {user_message}\n\n"
+        "JSON schema example:\n"
+        f"{schema_text}\n"
+    )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import json
 import logging
 import re
 from typing import Any
@@ -13,12 +14,24 @@ from localragagent.ports import freetalk_llm_port
 from localragagent.ports.freetalk_services_port import LegacyServicesPort
 from localragagent.ports.freetalk_web_search_port import WebSearchPort
 
+from .clinical_router import (
+    ClinicalDecision,
+    clarify_question_for_slots,
+    merge_missing_slots_from_plan,
+    parse_clinical_decision,
+)
 from .config import FreeTalkConfig
 from .contracts import AgentReply, SessionContext
 from .memory_persist import PersistentSummaryStore
 from .memory_redis import RedisMemoryStore
 from .observability import log_event
-from .prompts import build_general_prompt, build_summary_prompt, build_tool_result_prompt, load_system_prompt
+from .prompts import (
+    build_clinical_router_prompt,
+    build_general_prompt,
+    build_summary_prompt,
+    build_tool_result_prompt,
+    load_system_prompt,
+)
 from .tool_dispatcher import ToolDispatcher
 from .tool_registry import is_about_agent_query, is_medical_query, select_tool_plan, should_use_web_search
 
@@ -33,14 +46,21 @@ def _top_list(values: list[Any], limit: int = 5) -> list[Any]:
 
 _CTX_GUARD_STATE_KEY = "ctx_guard_state"
 _LAST_DOCTOR_NAME_KEY = "last_doctor_name"
+_CLINICAL_PENDING_STATE_KEY = "clinical_pending_state"
 _CTX_GUARD_NONE = ""
 _CTX_GUARD_AWAITING_IMMEDIATE = "awaiting_immediate"
 _CTX_GUARD_ONE_MORE = "one_more"
 _CTX_GUARD_AWAITING_FINAL = "awaiting_final"
+_CLINICAL_MIN_CONFIDENCE = 0.58
+_CLINICAL_MAX_CLARIFY_RETRIES = 2
 
 _YES_RE = re.compile(r"^\s*(да|угу|ага|yes|yep|ok|ок|конечно)\s*[.!?]?\s*$", re.I)
 _NO_RE = re.compile(r"^\s*(нет|неа|no|nope|not now|пока нет)\s*[.!?]?\s*$", re.I)
 _DOCTOR_ANAPHORA_RE = re.compile(r"\b(его|него|нему|ним|он|у\s+него|у\s+него\s+же|у\s+неё|ее|её|она)\b", re.I)
+_DOCTOR_FOLLOWUP_RE = re.compile(
+    r"\b(доктор|врач|расписан|график|при(е|ё)м|слот|окн|чем\s+занима|о\s+нем|о\s+враче|инфо)\b",
+    re.I,
+)
 _TOKEN_RE = re.compile(r"[a-zа-яё0-9\-]+", re.I)
 _DOCTOR_NON_PERSON_TOKENS = {
     "врач",
@@ -164,24 +184,30 @@ class FreeTalkAgent:
         if not user_message:
             return AgentReply(text="Напишите сообщение текстом.", source="general_knowledge")
 
+        context = await self.memory.load_context(
+            sid,
+            history_tail_turns=self.config.history_tail_turns,
+        )
+        remembered_doctor = await self.memory.get_meta_str(sid, _LAST_DOCTOR_NAME_KEY, "")
+        doctor_followup_hint = self._looks_like_doctor_followup_message(
+            user_message=user_message,
+            remembered_doctor=remembered_doctor,
+        )
         medical_regex = is_medical_query(user_message)
         medical_fallback = self._looks_like_clinic_data_query(user_message)
-        medical_intent = bool(medical_regex or medical_fallback)
+        medical_intent = bool(medical_regex or medical_fallback or doctor_followup_hint)
         web_search_signal = should_use_web_search(user_message, allow_for_medical=True)
         log_event(
             "route_intent_evaluated",
             session_id=sid,
             medical_regex=medical_regex,
             medical_fallback=medical_fallback,
+            doctor_followup_hint=doctor_followup_hint,
+            remembered_doctor=bool(str(remembered_doctor or "").strip()),
             medical_intent=medical_intent,
             web_search_signal=web_search_signal,
             about_agent=is_about_agent_query(user_message),
             message=user_message[:180],
-        )
-
-        context = await self.memory.load_context(
-            sid,
-            history_tail_turns=self.config.history_tail_turns,
         )
         guard_state = await self.memory.get_meta_str(sid, _CTX_GUARD_STATE_KEY, _CTX_GUARD_NONE)
 
@@ -213,6 +239,7 @@ class FreeTalkAgent:
             reply = await self._medical_reply(user_message, context)
         else:
             log_event("route_selected", session_id=sid, route="general")
+            await self._clear_clinical_pending_state(sid)
             reply = await self._general_reply(user_message, context)
 
         if guard_state == _CTX_GUARD_ONE_MORE and not reply.next_session_id:
@@ -470,21 +497,93 @@ class FreeTalkAgent:
                 tool_payload=health,
             )
 
-        entities = await self._ground_entities(user_message)
-        tool_plan = select_tool_plan(user_message, include_meili_tools=self.config.include_meili_tools)
+        pending_state = await self._load_clinical_pending_state(context.session_id)
+        remembered_doctor = await self.memory.get_meta_str(context.session_id, _LAST_DOCTOR_NAME_KEY, "")
+        decision = await self._route_clinical_decision(
+            user_message=user_message,
+            context=context,
+            pending_state=pending_state,
+            remembered_doctor=remembered_doctor,
+        )
+        entities = await self._ground_entities(user_message, intent_hint=decision.intent)
+        merged_entities = dict(decision.entities)
+        merged_entities.update(entities)
+        entities = self._apply_intent_entity_policy(
+            user_message=user_message,
+            intent=decision.intent,
+            entities=merged_entities,
+        )
+        tool_plan = self._build_tool_plan_from_decision(
+            user_message=user_message,
+            decision=decision,
+        )
         entities = await self._enrich_entities_from_session_memory(
             session_id=context.session_id,
             user_message=user_message,
             tool_plan=tool_plan,
             entities=entities,
         )
+
+        missing_from_plan = merge_missing_slots_from_plan(tool_plan, entities)
+        missing_slots = self._merge_missing_slots(decision.missing_slots, missing_from_plan)
+        if "doctor_name_or_specialty" in missing_slots and remembered_doctor:
+            entities["doctor_name"] = str(remembered_doctor).strip()
+            missing_slots = [slot for slot in missing_slots if slot != "doctor_name_or_specialty"]
+
+        needs_clarification = bool(missing_slots)
+        if not needs_clarification and decision.confidence < _CLINICAL_MIN_CONFIDENCE and not tool_plan:
+            needs_clarification = True
+
         log_event(
             "medical_plan_selected",
             session_id=context.session_id,
             tool_plan=",".join(tool_plan),
             entities=self._public_entities(entities),
+            router_intent=decision.intent,
+            router_confidence=decision.confidence,
+            router_source=decision.source,
+            missing_slots=",".join(missing_slots),
             message=user_message[:160],
         )
+        if needs_clarification:
+            clarify_text = str(decision.clarify_question or "").strip()
+            if not clarify_text:
+                clarify_text = clarify_question_for_slots(decision.intent, missing_slots)
+            attempts = int(pending_state.get("attempts") or 0)
+            same_pending = self._is_same_pending_request(
+                pending_state=pending_state,
+                intent=decision.intent,
+                missing_slots=missing_slots,
+            )
+            next_attempt = attempts + 1 if same_pending else 1
+            if next_attempt > _CLINICAL_MAX_CLARIFY_RETRIES:
+                await self._clear_clinical_pending_state(context.session_id)
+                return AgentReply(
+                    text="Не удалось однозначно уточнить запрос. Укажите, пожалуйста, фамилию врача или точное название услуги.",
+                    source="clinic_data",
+                )
+            await self._save_clinical_pending_state(
+                context.session_id,
+                {
+                    "intent": decision.intent,
+                    "missing_slots": missing_slots,
+                    "clarify_question": clarify_text,
+                    "attempts": next_attempt,
+                    "phase": "pre_tool",
+                },
+            )
+            log_event(
+                "medical_clarification_requested",
+                level=logging.WARNING,
+                session_id=context.session_id,
+                intent=decision.intent,
+                attempts=next_attempt,
+                missing_slots=",".join(missing_slots),
+                question=clarify_text[:180],
+            )
+            return AgentReply(text=clarify_text, source="clinic_data")
+
+        await self._clear_clinical_pending_state(context.session_id)
         if not tool_plan:
             log_event("medical_plan_empty_not_found", level=logging.WARNING, session_id=context.session_id)
             return AgentReply(
@@ -498,6 +597,7 @@ class FreeTalkAgent:
         catalog_resolution_reply = self._catalog_resolution_reply_if_needed(
             tool_plan=tool_plan,
             entities=entities,
+            fallback_only=False,
         )
         if catalog_resolution_reply is not None:
             log_event(
@@ -581,27 +681,58 @@ class FreeTalkAgent:
         )
         if exhausted_reply is not None:
             return exhausted_reply
+
+        retry_after_not_found = bool(
+            tool_plan
+            and str(pending_state.get("phase") or "").strip().lower() != "post_not_found"
+        )
+        if retry_after_not_found:
+            clarify_text = clarify_question_for_slots(decision.intent, missing_slots)
+            await self._save_clinical_pending_state(
+                context.session_id,
+                {
+                    "intent": decision.intent,
+                    "missing_slots": missing_slots,
+                    "clarify_question": clarify_text,
+                    "attempts": 1,
+                    "phase": "post_not_found",
+                },
+            )
+            return AgentReply(
+                text=f"В данных клиники по текущему запросу ничего не найдено. {clarify_text}",
+                source="clinic_data",
+            )
+
+        await self._clear_clinical_pending_state(context.session_id)
         return AgentReply(text="В данных клиники по вашему запросу ничего не найдено.", source="clinic_data")
 
-    async def _ground_entities(self, user_message: str) -> dict[str, Any]:
+    async def _ground_entities(self, user_message: str, *, intent_hint: str = "") -> dict[str, Any]:
         entities: dict[str, Any] = {}
+        intent = str(intent_hint or "").strip().lower()
+        doctor_focus = intent in {"doctor_info", "doctor_schedule"}
+        service_focus = intent in {"price", "prepare", "tests", "service_info"}
+        should_try_service = service_focus or not doctor_focus
 
-        try:
-            service_match = await self.services.match_catalog_service(user_message, current_service_name="")
-        except Exception as exc:
-            log_event(
-                "entity_ground_service_failed",
-                level=logging.WARNING,
-                error_type=type(exc).__name__,
-            )
-            service_match = {}
-        if isinstance(service_match, dict):
-            status = str(service_match.get("status") or "")
-            canonical = str(service_match.get("canonical") or "").strip()
-            entities["_ft_service_match_status"] = status
-            entities["_ft_service_match_query"] = str(service_match.get("query") or "").strip()
-            if status == "exact" and canonical:
-                entities["service_name"] = canonical
+        if should_try_service:
+            try:
+                service_match = await self.services.match_catalog_service(user_message, current_service_name="")
+            except Exception as exc:
+                log_event(
+                    "entity_ground_service_failed",
+                    level=logging.WARNING,
+                    error_type=type(exc).__name__,
+                )
+                service_match = {}
+            if isinstance(service_match, dict):
+                status = str(service_match.get("status") or "")
+                canonical = str(service_match.get("canonical") or "").strip()
+                entities["_ft_service_match_status"] = status
+                entities["_ft_service_match_query"] = str(service_match.get("query") or "").strip()
+                if status == "exact" and canonical:
+                    entities["service_name"] = canonical
+        else:
+            entities["_ft_service_match_status"] = "skipped_doctor_focus"
+            entities["_ft_service_match_query"] = ""
 
         try:
             doctor_match = await self.services.match_catalog_doctor(user_message)
@@ -622,6 +753,186 @@ class FreeTalkAgent:
                 entities["doctor_name_match_status"] = status
 
         return entities
+
+    async def _route_clinical_decision(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        pending_state: dict[str, Any],
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        prompt = build_clinical_router_prompt(
+            system_prompt=self.system_prompt,
+            summary=context.summary,
+            turns=context.turns,
+            user_message=user_message,
+            pending_intent=str(pending_state.get("intent") or ""),
+            pending_slots=[
+                str(slot).strip()
+                for slot in (pending_state.get("missing_slots") or [])
+                if str(slot).strip()
+            ],
+            remembered_doctor=str(remembered_doctor or "").strip(),
+        )
+        payload = await self._llm_json(prompt)
+        decision = parse_clinical_decision(
+            payload,
+            include_meili_tools=self.config.include_meili_tools,
+        )
+        if not decision.tool_plan:
+            decision.tool_plan = select_tool_plan(
+                user_message,
+                include_meili_tools=self.config.include_meili_tools,
+            )
+            if decision.intent == "unknown" and decision.tool_plan:
+                decision.intent = self._infer_intent_from_tool_plan(decision.tool_plan)
+            if not decision.source:
+                decision.source = "heuristic"
+        return decision
+
+    async def _llm_json(self, prompt: str) -> dict[str, Any]:
+        self._last_prompt_eval_count = 0
+        try:
+            text, usage = await freetalk_llm_port.generate_text_with_usage(
+                prompt,
+                timeout_s=self.config.llm_timeout_s,
+                queue_timeout_ms=self.config.llm_queue_timeout_ms,
+                fmt="json",
+                think=False,
+            )
+        except Exception as exc:
+            log_event(
+                "llm_json_generate_failed",
+                level=logging.WARNING,
+                error_type=type(exc).__name__,
+            )
+            return {}
+        try:
+            self._last_prompt_eval_count = int(usage.get("prompt_eval_count", 0))
+        except Exception:
+            self._last_prompt_eval_count = 0
+        parsed = self._parse_json_object(text)
+        if not parsed:
+            log_event(
+                "llm_json_parse_empty",
+                level=logging.WARNING,
+                payload_preview=str(text or "")[:220],
+            )
+        return parsed
+
+    @staticmethod
+    def _parse_json_object(raw: str) -> dict[str, Any]:
+        text = str(raw or "").strip()
+        if not text:
+            return {}
+        candidates: list[str] = [text]
+        start = text.find("{")
+        end = text.rfind("}")
+        if 0 <= start < end:
+            candidates.append(text[start : end + 1])
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+            if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+                return dict(parsed[0])
+        return {}
+
+    @staticmethod
+    def _merge_missing_slots(primary: list[str], secondary: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for source in (primary or [], secondary or []):
+            slot = str(source or "").strip().lower()
+            if not slot or slot in seen:
+                continue
+            seen.add(slot)
+            out.append(slot)
+        return out
+
+    @staticmethod
+    def _is_same_pending_request(
+        *,
+        pending_state: dict[str, Any],
+        intent: str,
+        missing_slots: list[str],
+    ) -> bool:
+        old_intent = str(pending_state.get("intent") or "").strip().lower()
+        old_slots = sorted(str(slot or "").strip().lower() for slot in (pending_state.get("missing_slots") or []))
+        new_slots = sorted(str(slot or "").strip().lower() for slot in (missing_slots or []))
+        return bool(old_intent and old_intent == str(intent or "").strip().lower() and old_slots == new_slots)
+
+    async def _load_clinical_pending_state(self, session_id: str) -> dict[str, Any]:
+        raw = await self.memory.get_meta_str(session_id, _CLINICAL_PENDING_STATE_KEY, "")
+        text = str(raw or "").strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    async def _save_clinical_pending_state(self, session_id: str, state: dict[str, Any]) -> None:
+        payload = state if isinstance(state, dict) else {}
+        try:
+            encoded = json.dumps(payload, ensure_ascii=False)
+        except Exception:
+            encoded = "{}"
+        await self.memory.set_meta_str(session_id, _CLINICAL_PENDING_STATE_KEY, encoded)
+
+    async def _clear_clinical_pending_state(self, session_id: str) -> None:
+        await self.memory.set_meta_str(session_id, _CLINICAL_PENDING_STATE_KEY, "")
+
+    @staticmethod
+    def _infer_intent_from_tool_plan(tool_plan: list[str]) -> str:
+        plan = list(tool_plan or [])
+        if "doctors_schedule_week" in plan:
+            return "doctor_schedule"
+        if "doctors_info" in plan:
+            return "doctor_info"
+        if "price_info" in plan:
+            return "price"
+        if "test_prepare" in plan:
+            return "prepare"
+        if "test_assist" in plan:
+            return "tests"
+        if "test_result_status" in plan:
+            return "test_result"
+        if "address_info" in plan:
+            return "address"
+        if "news_info" in plan:
+            return "clinic_news"
+        if "main_index_info" in plan:
+            return "clinic_documents"
+        if "service_bundle_info" in plan:
+            return "service_info"
+        return "unknown"
+
+    def _build_tool_plan_from_decision(self, *, user_message: str, decision: ClinicalDecision) -> list[str]:
+        from_router = [tool for tool in (decision.tool_plan or []) if isinstance(tool, str)]
+        if from_router:
+            return from_router
+        return select_tool_plan(user_message, include_meili_tools=self.config.include_meili_tools)
+
+    def _apply_intent_entity_policy(self, *, user_message: str, intent: str, entities: dict[str, Any]) -> dict[str, Any]:
+        out = dict(entities or {})
+        route_intent = str(intent or "").strip().lower()
+        if route_intent in {"doctor_info", "doctor_schedule"}:
+            if str(out.get("doctor_name") or "").strip():
+                out.pop("service_name", None)
+                out.pop("test_name", None)
+        if route_intent in {"clinic_news", "clinic_documents"}:
+            out.pop("doctor_name", None)
+            out.pop("specialty", None)
+        if route_intent in {"price", "prepare", "tests", "service_info"} and not str(out.get("service_name") or "").strip():
+            if str(out.get("doctor_name") or "").strip() and re.search(r"\b(врач|доктор|у\s+[а-яё\-]{3,})\b", user_message, re.I):
+                out.pop("service_name", None)
+        return out
 
     @staticmethod
     def _public_entities(entities: dict[str, Any]) -> dict[str, Any]:
@@ -657,7 +968,7 @@ class FreeTalkAgent:
                     text="Сейчас каталог врачей клиники недоступен. Повторите запрос немного позже.",
                     source="clinic_data",
                 )
-            if doctor_status == "miss" and self._looks_like_specific_doctor_lookup(doctor_query):
+            if doctor_status == "miss" and fallback_only and self._looks_like_specific_doctor_lookup(doctor_query):
                 label = _clean_user_fragment(doctor_query)
                 suffix = f" «{label}»" if label else ""
                 return AgentReply(
@@ -674,7 +985,7 @@ class FreeTalkAgent:
                     text="Сейчас каталог услуг клиники недоступен. Повторите запрос немного позже.",
                     source="clinic_data",
                 )
-            if service_status == "miss" and self._looks_like_specific_service_lookup(service_query):
+            if service_status == "miss" and fallback_only and self._looks_like_specific_service_lookup(service_query):
                 label = _clean_user_fragment(service_query)
                 suffix = f" «{label}»" if label else ""
                 return AgentReply(
@@ -693,7 +1004,8 @@ class FreeTalkAgent:
         entities: dict[str, Any],
     ) -> dict[str, Any]:
         out = dict(entities or {})
-        if "doctors_schedule_week" not in tool_plan:
+        uses_doctor_tools = bool({"doctors_schedule_week", "doctors_info"} & set(tool_plan or []))
+        if not uses_doctor_tools:
             return out
 
         current_doctor = str(out.get("doctor_name") or "").strip()
@@ -834,6 +1146,25 @@ class FreeTalkAgent:
             "наука",
         )
         return any(token in text for token in signals)
+
+    def _looks_like_doctor_followup_message(self, *, user_message: str, remembered_doctor: str) -> bool:
+        text = str(user_message or "").strip()
+        if not text:
+            return False
+        remembered = str(remembered_doctor or "").strip()
+        if not remembered:
+            return False
+        if _DOCTOR_ANAPHORA_RE.search(text):
+            return True
+        if _DOCTOR_FOLLOWUP_RE.search(text):
+            return True
+        lowered = text.lower().replace("ё", "е")
+        remembered_parts = [part.strip().lower().replace("ё", "е") for part in remembered.split() if part.strip()]
+        if not remembered_parts:
+            return False
+        if len(lowered.split()) <= 3:
+            return any(part in lowered for part in remembered_parts)
+        return False
 
     async def _maybe_compact(self, session_id: str) -> None:
         turn_count = await self.memory.get_turn_count(session_id)

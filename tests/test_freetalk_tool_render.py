@@ -10,6 +10,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from localragagent.freetalk.agent import FreeTalkAgent
+from localragagent.freetalk.clinical_router import ClinicalDecision
 from localragagent.freetalk.config import FreeTalkConfig
 from localragagent.freetalk.tool_dispatcher import ToolDispatcher
 
@@ -173,6 +174,7 @@ def test_catalog_resolution_reply_for_missing_specific_doctor():
             "_ft_doctor_match_status": "miss",
             "_ft_doctor_match_query": "Дразнин",
         },
+        fallback_only=True,
     )
     assert reply is not None
     assert "не найден" in str(reply.text).lower()
@@ -222,3 +224,65 @@ def test_render_schedule_details_includes_region_dates_and_slots():
     assert "Самара" in text
     assert "09:00" in text
     assert "10.04" in text
+
+
+def test_doctor_followup_message_detected_with_pronoun_and_memory():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    assert (
+        agent._looks_like_doctor_followup_message(
+            user_message="Лучше напиши, чем он занимается",
+            remembered_doctor="Дразнин Антон Владимирович",
+        )
+        is True
+    )
+
+
+def test_apply_intent_entity_policy_drops_service_for_doctor_intent():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    entities = {
+        "doctor_name": "Дразнин",
+        "service_name": "Оформление медицинского заключения",
+    }
+    out = agent._apply_intent_entity_policy(
+        user_message="информация о враче Дразнине",
+        intent="doctor_info",
+        entities=entities,
+    )
+    assert out.get("doctor_name") == "Дразнин"
+    assert "service_name" not in out
+
+
+def test_build_tool_plan_from_decision_uses_router_plan():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    decision = ClinicalDecision(
+        intent="doctor_info",
+        confidence=0.8,
+        entities={"doctor_name": "Дразнин"},
+        tool_plan=["doctors_info", "doctors_schedule_week"],
+    )
+    plan = agent._build_tool_plan_from_decision(
+        user_message="инфо о враче",
+        decision=decision,
+    )
+    assert plan[:2] == ["doctors_info", "doctors_schedule_week"]
