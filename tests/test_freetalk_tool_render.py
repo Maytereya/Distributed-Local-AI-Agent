@@ -110,3 +110,15 @@ def test_tool_dispatcher_treats_clarify_text_as_useful_data():
     result = asyncio.run(dispatcher.call("price_info", "цена узи", entities={}))
 
     assert result.found is True
+
+
+def test_clinic_data_fallback_detector_handles_typo_and_clinic_context():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    assert agent._looks_like_clinic_data_query("Выведи пожалуйста теарапевтов клиники") is True

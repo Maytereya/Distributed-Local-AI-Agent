@@ -65,6 +65,14 @@ def _capabilities_brief() -> str:
     )
 
 
+def _normalise_match_text(value: str) -> str:
+    text = str(value or "").lower().strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
 @dataclass(slots=True)
 class FreeTalkAgent:
     config: FreeTalkConfig
@@ -102,6 +110,21 @@ class FreeTalkAgent:
         if not user_message:
             return AgentReply(text="Напишите сообщение текстом.", source="general_knowledge")
 
+        medical_regex = is_medical_query(user_message)
+        medical_fallback = self._looks_like_clinic_data_query(user_message)
+        medical_intent = bool(medical_regex or medical_fallback)
+        web_search_signal = should_use_web_search(user_message, allow_for_medical=True)
+        log_event(
+            "route_intent_evaluated",
+            session_id=sid,
+            medical_regex=medical_regex,
+            medical_fallback=medical_fallback,
+            medical_intent=medical_intent,
+            web_search_signal=web_search_signal,
+            about_agent=is_about_agent_query(user_message),
+            message=user_message[:180],
+        )
+
         context = await self.memory.load_context(
             sid,
             history_tail_turns=self.config.history_tail_turns,
@@ -131,9 +154,11 @@ class FreeTalkAgent:
                 await self._maybe_compact(sid)
             return guard_reply
 
-        if is_medical_query(user_message):
+        if medical_intent:
+            log_event("route_selected", session_id=sid, route="medical")
             reply = await self._medical_reply(user_message, context)
         else:
+            log_event("route_selected", session_id=sid, route="general")
             reply = await self._general_reply(user_message, context)
 
         if guard_state == _CTX_GUARD_ONE_MORE and not reply.next_session_id:
@@ -164,9 +189,11 @@ class FreeTalkAgent:
 
     async def _general_reply(self, user_message: str, context: SessionContext) -> AgentReply:
         if is_about_agent_query(user_message):
+            log_event("general_about_agent", session_id=context.session_id)
             return AgentReply(text=_capabilities_brief(), source="general_knowledge")
 
         if self.web_search and should_use_web_search(user_message):
+            log_event("general_web_search_triggered", session_id=context.session_id, message=user_message[:140])
             web_payload = await self.web_search.search(user_message, entities={})
             web_results = web_payload.get("results") if isinstance(web_payload, dict) else []
             if isinstance(web_results, list) and web_results:
@@ -176,6 +203,11 @@ class FreeTalkAgent:
                     tool_payload=web_payload,
                 )
                 if _is_non_empty_text(answer):
+                    log_event(
+                        "general_web_search_success",
+                        session_id=context.session_id,
+                        results_count=len(web_results),
+                    )
                     return AgentReply(
                         text=answer,
                         source="mixed",
@@ -206,6 +238,13 @@ class FreeTalkAgent:
         text = await self._llm_text(prompt)
         if not _is_non_empty_text(text):
             text = "Уточните, пожалуйста, вопрос. Если это медицинская тема клиники, я запрошу данные через инструменты."
+            log_event("general_llm_empty_fallback", level=logging.WARNING, session_id=context.session_id)
+        else:
+            log_event(
+                "general_llm_answered",
+                session_id=context.session_id,
+                answer_chars=len(text),
+            )
         return AgentReply(text=text, source="general_knowledge")
 
     async def _handle_guard_decision(
@@ -379,15 +418,37 @@ class FreeTalkAgent:
 
         entities = await self._ground_entities(user_message)
         tool_plan = select_tool_plan(user_message, include_meili_tools=self.config.include_meili_tools)
+        log_event(
+            "medical_plan_selected",
+            session_id=context.session_id,
+            tool_plan=",".join(tool_plan),
+            entities=entities,
+            message=user_message[:160],
+        )
         if not tool_plan:
+            log_event("medical_plan_empty_fallback_general", level=logging.WARNING, session_id=context.session_id)
             return await self._general_reply(user_message, context)
 
         dispatcher = ToolDispatcher(self.services.tool_handlers(include_meili_tools=self.config.include_meili_tools))
         for tool_name in tool_plan[: self.config.max_tool_steps]:
+            log_event("medical_tool_call_start", session_id=context.session_id, tool_name=tool_name)
             result = await dispatcher.call(tool_name, user_message, entities=entities)
             if result.error:
+                log_event(
+                    "medical_tool_call_error",
+                    level=logging.WARNING,
+                    session_id=context.session_id,
+                    tool_name=tool_name,
+                    error=result.error[:200],
+                )
                 continue
             if not result.found:
+                log_event(
+                    "medical_tool_call_not_found",
+                    session_id=context.session_id,
+                    tool_name=tool_name,
+                    payload_note=str(result.payload.get("note") or "")[:160],
+                )
                 continue
 
             answer = await self._render_tool_reply(
@@ -399,6 +460,8 @@ class FreeTalkAgent:
                 "medical_tool_success",
                 session_id=context.session_id,
                 tool_name=result.tool_name,
+                payload_keys=",".join(sorted(str(k) for k in result.payload.keys())),
+                answer_chars=len(answer),
             )
             return AgentReply(
                 text=answer,
@@ -407,6 +470,12 @@ class FreeTalkAgent:
                 tool_payload=result.payload,
             )
 
+        log_event(
+            "medical_all_tools_exhausted",
+            level=logging.WARNING,
+            session_id=context.session_id,
+            tool_plan=",".join(tool_plan[: self.config.max_tool_steps]),
+        )
         return AgentReply(
             text="В данных клиники по вашему запросу ничего не найдено.",
             source="clinic_data",
@@ -450,6 +519,12 @@ class FreeTalkAgent:
     async def _render_tool_reply(self, *, user_message: str, tool_name: str, tool_payload: dict[str, Any]) -> str:
         rendered = self._fallback_render(tool_name, tool_payload).strip()
         if _is_non_empty_text(rendered):
+            log_event(
+                "tool_rendered_deterministic",
+                tool_name=tool_name,
+                answer_chars=len(rendered),
+                payload_note=str(tool_payload.get("note") or "")[:120],
+            )
             return rendered
         log_event(
             "tool_render_fallback",
@@ -466,8 +541,45 @@ class FreeTalkAgent:
         )
         llm_text = await self._llm_text(prompt)
         if _is_non_empty_text(llm_text):
+            log_event(
+                "tool_rendered_by_llm_fallback",
+                level=logging.WARNING,
+                tool_name=tool_name,
+                answer_chars=len(llm_text),
+            )
             return llm_text
         return "Нашел данные, но не удалось корректно сформировать ответ. Уточните запрос, и я отвечу точнее."
+
+    def _looks_like_clinic_data_query(self, user_message: str) -> bool:
+        text = _normalise_match_text(user_message)
+        if not text:
+            return False
+        if "клиник" not in text and "наука" not in text:
+            return False
+        signals = (
+            "кто",
+            "выведи",
+            "покажи",
+            "спис",
+            "врач",
+            "доктор",
+            "терап",
+            "специал",
+            "принима",
+            "распис",
+            "услуг",
+            "процед",
+            "анализ",
+            "подготов",
+            "цена",
+            "прайс",
+            "стоим",
+            "филиал",
+            "адрес",
+            "результат",
+            "наука",
+        )
+        return any(token in text for token in signals)
 
     async def _maybe_compact(self, session_id: str) -> None:
         turn_count = await self.memory.get_turn_count(session_id)

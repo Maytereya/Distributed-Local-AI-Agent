@@ -28,3 +28,10 @@ def test_medical_query_does_not_trigger_web_search_by_default():
     text = "Поищи в интернете, кто из терапевтов принимает в клинике"
     assert is_medical_query(text) is True
     assert should_use_web_search(text) is False
+
+
+def test_typo_therapist_in_clinic_query_still_routes_to_doctors_tools():
+    text = "Выведи пожалуйста теарапевтов клиники"
+    assert is_medical_query(text) is True
+    plan = select_tool_plan(text, include_meili_tools=False)
+    assert plan[:2] == ["doctors_info", "doctors_schedule_week"]

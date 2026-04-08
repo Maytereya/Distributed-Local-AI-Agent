@@ -15,6 +15,7 @@ from .config import load_config
 from .memory_persist import PersistSettings, PersistentSummaryStore
 from .memory_redis import RedisMemoryStore, RedisSettings
 from .observability import log_event
+from .tool_registry import is_medical_query
 
 
 @lru_cache(maxsize=1)
@@ -43,6 +44,8 @@ def _agent() -> FreeTalkAgent:
         redis_url=cfg.redis_url,
         web_search_enabled=cfg.enable_web_search_tool,
         web_search_url=cfg.web_search_url if cfg.enable_web_search_tool else "",
+        runner_file=__file__,
+        medical_probe=is_medical_query("клиника терапевт"),
     )
     return FreeTalkAgent.build(
         config=cfg,
@@ -82,6 +85,7 @@ async def run_free_talk_with_state(
 ) -> tuple[str, str]:
     _ = history  # history is stored in Redis by session_id
     sid = ensure_session_id(session_id)
+    log_event("freetalk_request_received", session_id=sid, message=str(message or "")[:180])
     reply = await _agent().chat(message, sid)
     text = str(reply.text or "").strip()
     next_session_id = str(reply.next_session_id or "").strip() or sid
