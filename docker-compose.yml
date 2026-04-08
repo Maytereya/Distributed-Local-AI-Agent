@@ -49,9 +49,13 @@ services:
     restart: unless-stopped
     expose:
       - "8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
       - BASE_URL=http://searxng:8080/
+      - SEARXNG_BASE_URL=http://searxng:8080/
       - INSTANCE_NAME=bookworm-searxng
+      - SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml
     healthcheck:
       test:
         - CMD

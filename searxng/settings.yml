@@ -1,0 +1,9 @@
+use_default_settings: true
+
+general:
+  instance_name: "bookworm-searxng"
+
+search:
+  formats:
+    - html
+    - json
