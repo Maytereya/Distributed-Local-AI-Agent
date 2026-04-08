@@ -8,7 +8,12 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from localragagent.freetalk.tool_registry import is_medical_query, select_tool_plan, should_use_web_search
+from localragagent.freetalk.tool_registry import (
+    is_about_agent_query,
+    is_medical_query,
+    select_tool_plan,
+    should_use_web_search,
+)
 
 
 def test_therapist_query_is_medical_and_routes_to_doctors_tools():
@@ -59,3 +64,27 @@ def test_loaded_documents_command_routes_to_main_index_tool():
     assert should_use_web_search(text) is False
     plan = select_tool_plan(text, include_meili_tools=True)
     assert plan[:2] == ["main_index_info", "news_info"]
+
+
+def test_schedule_short_query_routes_to_schedule_tools():
+    text = "Расписание Дразнин"
+    assert is_medical_query(text) is True
+    plan = select_tool_plan(text, include_meili_tools=True)
+    assert plan[:2] == ["doctors_schedule_week", "doctors_info"]
+
+
+def test_slots_query_routes_to_schedule_tools():
+    text = "Есть свободные слоты у Дразнина?"
+    assert is_medical_query(text) is True
+    plan = select_tool_plan(text, include_meili_tools=True)
+    assert plan[:2] == ["doctors_schedule_week", "doctors_info"]
+
+
+def test_about_agent_query_with_zanimaeshsya_is_detected():
+    text = "Чем ты занимаешься?"
+    assert is_about_agent_query(text) is True
+
+
+def test_about_agent_query_does_not_steal_doctor_question():
+    text = "Чем занимается врач Дразнин в клинике?"
+    assert is_about_agent_query(text) is False

@@ -40,6 +40,47 @@ _CTX_GUARD_AWAITING_FINAL = "awaiting_final"
 _YES_RE = re.compile(r"^\s*(да|угу|ага|yes|yep|ok|ок|конечно)\s*[.!?]?\s*$", re.I)
 _NO_RE = re.compile(r"^\s*(нет|неа|no|nope|not now|пока нет)\s*[.!?]?\s*$", re.I)
 _DOCTOR_ANAPHORA_RE = re.compile(r"\b(его|него|нему|ним|он|у\s+него|у\s+него\s+же|у\s+неё|ее|её|она)\b", re.I)
+_TOKEN_RE = re.compile(r"[a-zа-яё0-9\-]+", re.I)
+_DOCTOR_NON_PERSON_TOKENS = {
+    "врач",
+    "доктор",
+    "специалист",
+    "терапевт",
+    "кардиолог",
+    "невролог",
+    "гастроэнтеролог",
+    "эндокринолог",
+    "гинеколог",
+    "уролог",
+    "онколог",
+    "педиатр",
+    "хирург",
+    "дерматолог",
+    "аллерголог",
+    "иммунолог",
+    "офтальмолог",
+    "лор",
+    "отоларинголог",
+}
+_SERVICE_NON_SPECIFIC_TOKENS = {
+    "услуга",
+    "услуги",
+    "процедура",
+    "процедуры",
+    "анализ",
+    "анализы",
+    "исследование",
+    "исследования",
+    "цена",
+    "стоимость",
+    "сколько",
+    "стоит",
+    "прайс",
+    "подготовка",
+    "врач",
+    "доктор",
+    "клиника",
+}
 
 
 def _merge_text(primary: str, appendix: str) -> str:
@@ -72,6 +113,16 @@ def _normalise_match_text(value: str) -> str:
     if not text:
         return ""
     text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _clean_user_fragment(value: str, *, max_len: int = 80) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    if len(text) > max_len:
+        return text[: max_len - 1].rstrip() + "…"
     return text
 
 
@@ -430,17 +481,38 @@ class FreeTalkAgent:
             "medical_plan_selected",
             session_id=context.session_id,
             tool_plan=",".join(tool_plan),
-            entities=entities,
+            entities=self._public_entities(entities),
             message=user_message[:160],
         )
         if not tool_plan:
-            log_event("medical_plan_empty_fallback_general", level=logging.WARNING, session_id=context.session_id)
-            return await self._general_reply(user_message, context)
+            log_event("medical_plan_empty_not_found", level=logging.WARNING, session_id=context.session_id)
+            return AgentReply(
+                text=(
+                    "Не удалось однозначно определить медицинский запрос. "
+                    "Уточните врача, услугу, анализ или тип вопроса (цена/подготовка/расписание)."
+                ),
+                source="clinic_data",
+            )
+
+        catalog_resolution_reply = self._catalog_resolution_reply_if_needed(
+            tool_plan=tool_plan,
+            entities=entities,
+        )
+        if catalog_resolution_reply is not None:
+            log_event(
+                "medical_catalog_resolution_reply",
+                level=logging.WARNING,
+                session_id=context.session_id,
+                tool_plan=",".join(tool_plan),
+                entities=self._public_entities(entities),
+            )
+            return catalog_resolution_reply
 
         dispatcher = ToolDispatcher(self.services.tool_handlers(include_meili_tools=self.config.include_meili_tools))
+        tool_entities = self._public_entities(entities)
         for tool_name in tool_plan[: self.config.max_tool_steps]:
             log_event("medical_tool_call_start", session_id=context.session_id, tool_name=tool_name)
-            result = await dispatcher.call(tool_name, user_message, entities=entities)
+            result = await dispatcher.call(tool_name, user_message, entities=tool_entities)
             if result.error:
                 log_event(
                     "medical_tool_call_error",
@@ -489,10 +561,14 @@ class FreeTalkAgent:
             session_id=context.session_id,
             tool_plan=",".join(tool_plan[: self.config.max_tool_steps]),
         )
-        return AgentReply(
-            text="В данных клиники по вашему запросу ничего не найдено.",
-            source="clinic_data",
+        exhausted_reply = self._catalog_resolution_reply_if_needed(
+            tool_plan=tool_plan,
+            entities=entities,
+            fallback_only=True,
         )
+        if exhausted_reply is not None:
+            return exhausted_reply
+        return AgentReply(text="В данных клиники по вашему запросу ничего не найдено.", source="clinic_data")
 
     async def _ground_entities(self, user_message: str) -> dict[str, Any]:
         entities: dict[str, Any] = {}
@@ -509,6 +585,8 @@ class FreeTalkAgent:
         if isinstance(service_match, dict):
             status = str(service_match.get("status") or "")
             canonical = str(service_match.get("canonical") or "").strip()
+            entities["_ft_service_match_status"] = status
+            entities["_ft_service_match_query"] = str(service_match.get("query") or "").strip()
             if status == "exact" and canonical:
                 entities["service_name"] = canonical
 
@@ -524,10 +602,74 @@ class FreeTalkAgent:
         if isinstance(doctor_match, dict):
             status = str(doctor_match.get("status") or "")
             canonical = str(doctor_match.get("canonical") or "").strip()
-            if status == "exact" and canonical:
+            entities["_ft_doctor_match_status"] = status
+            entities["_ft_doctor_match_query"] = str(doctor_match.get("query") or "").strip()
+            if status in {"exact", "fuzzy"} and canonical:
                 entities["doctor_name"] = canonical
+                entities["doctor_name_match_status"] = status
 
         return entities
+
+    @staticmethod
+    def _public_entities(entities: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in (entities or {}).items() if not str(k).startswith("_ft_")}
+
+    @staticmethod
+    def _looks_like_specific_doctor_lookup(value: str) -> bool:
+        tokens = [t.lower() for t in _TOKEN_RE.findall(str(value or "")) if len(t) >= 3]
+        if not tokens:
+            return False
+        return any(token not in _DOCTOR_NON_PERSON_TOKENS for token in tokens)
+
+    @staticmethod
+    def _looks_like_specific_service_lookup(value: str) -> bool:
+        tokens = [t.lower() for t in _TOKEN_RE.findall(str(value or "")) if len(t) >= 3]
+        if not tokens:
+            return False
+        return any(token not in _SERVICE_NON_SPECIFIC_TOKENS for token in tokens)
+
+    def _catalog_resolution_reply_if_needed(
+        self,
+        *,
+        tool_plan: list[str],
+        entities: dict[str, Any],
+        fallback_only: bool = False,
+    ) -> AgentReply | None:
+        doctor_tools = {"doctors_info", "doctors_schedule_week"}
+        if any(tool in doctor_tools for tool in tool_plan):
+            doctor_status = str(entities.get("_ft_doctor_match_status") or "").strip().lower()
+            doctor_query = str(entities.get("_ft_doctor_match_query") or "").strip()
+            if doctor_status == "unavailable" and not fallback_only:
+                return AgentReply(
+                    text="Сейчас каталог врачей клиники недоступен. Повторите запрос немного позже.",
+                    source="clinic_data",
+                )
+            if doctor_status == "miss" and self._looks_like_specific_doctor_lookup(doctor_query):
+                label = _clean_user_fragment(doctor_query)
+                suffix = f" «{label}»" if label else ""
+                return AgentReply(
+                    text=f"В данных клиники врач{suffix} не найден. Проверьте фамилию или уточните специальность.",
+                    source="clinic_data",
+                )
+
+        service_tools = {"price_info", "service_bundle_info", "test_prepare", "test_assist"}
+        if any(tool in service_tools for tool in tool_plan):
+            service_status = str(entities.get("_ft_service_match_status") or "").strip().lower()
+            service_query = str(entities.get("_ft_service_match_query") or "").strip()
+            if service_status == "unavailable" and not fallback_only:
+                return AgentReply(
+                    text="Сейчас каталог услуг клиники недоступен. Повторите запрос немного позже.",
+                    source="clinic_data",
+                )
+            if service_status == "miss" and self._looks_like_specific_service_lookup(service_query):
+                label = _clean_user_fragment(service_query)
+                suffix = f" «{label}»" if label else ""
+                return AgentReply(
+                    text=f"В данных клиники услуга или анализ{suffix} не найдены. Уточните название.",
+                    source="clinic_data",
+                )
+
+        return None
 
     async def _enrich_entities_from_session_memory(
         self,

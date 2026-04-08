@@ -133,3 +133,65 @@ def test_extract_primary_doctor_name_from_tool_payload():
     }
     name = FreeTalkAgent._extract_primary_doctor_name("doctors_info", payload)
     assert name == "Трубин Алексей Юрьевич"
+
+
+def test_ground_entities_accepts_fuzzy_doctor_match():
+    class _StubServices:
+        async def match_catalog_service(self, _raw: str, *, current_service_name: str = "") -> dict[str, str]:
+            _ = current_service_name
+            return {"status": "miss", "canonical": ""}
+
+        async def match_catalog_doctor(self, _raw: str) -> dict[str, str]:
+            return {"status": "fuzzy", "canonical": "Дразнин"}
+
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=_StubServices(),  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+
+    entities = asyncio.run(agent._ground_entities("врач дразнин"))
+    assert entities.get("doctor_name") == "Дразнин"
+    assert entities.get("doctor_name_match_status") == "fuzzy"
+
+
+def test_catalog_resolution_reply_for_missing_specific_doctor():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    reply = agent._catalog_resolution_reply_if_needed(
+        tool_plan=["doctors_info", "doctors_schedule_week"],
+        entities={
+            "_ft_doctor_match_status": "miss",
+            "_ft_doctor_match_query": "Дразнин",
+        },
+    )
+    assert reply is not None
+    assert "не найден" in str(reply.text).lower()
+
+
+def test_catalog_resolution_reply_not_triggered_for_specialty_miss():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    reply = agent._catalog_resolution_reply_if_needed(
+        tool_plan=["doctors_info"],
+        entities={
+            "_ft_doctor_match_status": "miss",
+            "_ft_doctor_match_query": "уролог",
+        },
+    )
+    assert reply is None
