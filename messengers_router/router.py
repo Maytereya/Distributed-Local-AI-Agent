@@ -70,6 +70,7 @@ from .policies import (
     decision_handoff_text,
     apply_verified_doctor_override,
     detect_nonbookable_walkin_intent,
+    detect_appointment_action,
     detect_test_assist_intent,
     detect_test_result_intent,
     detect_prepare_intent,
@@ -79,6 +80,7 @@ from .policies import (
     detect_schedule_intent,
     detect_doctor_info_intent,
     has_datetime_signal,
+    normalize_appointment_action,
     nonbookable_service_hint,
     service_name_conflicts_with_doctor,
 )
@@ -464,6 +466,127 @@ def _clear_compound_price_pending(state: SessionState) -> None:
     """
 
     state.last_entities.pop(_COMPOUND_PRICE_PENDING_KEY, None)
+
+
+def _is_appointment_action_pending(pending: dict[str, Any] | None) -> bool:
+    """
+    Проверяет, что pending ждет выбор действия записи: отмена или перенос.
+
+    :param pending: pending-объект из memory
+    :return: True, если активен шаг выбора appointment_action
+    """
+
+    if not isinstance(pending, dict):
+        return False
+    if pending.get("label") != "APPOINTMENT":
+        return False
+    missing = pending.get("missing")
+    return isinstance(missing, list) and "appointment_action" in missing
+
+
+async def _handle_appointment_action_pending(
+    *,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """
+    Детерминированно обрабатывает шаг выбора действия записи.
+
+    Это узкий pre-NLU handler для pending `appointment_action`, чтобы короткие
+    ответы вроде `нет` или `перенести` не уезжали в общий OTHER-flow.
+
+    :param user_text: текущая реплика пользователя
+    :param state: состояние сессии
+    :param services: сервисный слой
+    :param memory: хранилище pending/state
+    :param runtime_options: runtime-параметры роутера
+    :return: decision/plan/evidence либо None, если шаг не активен
+    """
+
+    pending = memory.get_pending(state)
+    if not _is_appointment_action_pending(pending):
+        return None
+
+    if explicit_operator_requested(user_text):
+        return (
+            RouteDecision(
+                label="APPOINTMENT",
+                confidence=0.95,
+                entities={},
+                flags={"manual_operator", "appointment_action_pending_operator"},
+                needs_handoff=False,
+                source="appointment_action_pending",
+            ),
+            Plan(label="APPOINTMENT"),
+            Evidence(
+                items={
+                    "operator_offer_response": {
+                        "text": handoff_message("manual_operator"),
+                        "handoff": True,
+                    }
+                }
+            ),
+        )
+
+    normalized_action = normalize_appointment_action(detect_appointment_action(user_text), user_text)
+    if normalized_action in {"cancel", "reschedule"}:
+        memory.merge_entities(state, {"appointment_action": normalized_action}, label="APPOINTMENT")
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.95,
+            entities={"appointment_action": normalized_action},
+            flags={"appointment_action_selected"},
+            needs_handoff=False,
+            context_action="continue",
+            source="appointment_action_pending",
+        )
+        plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
+        evidence = await execute_plan(plan, state, services)
+        return decision, plan, evidence
+
+    if contextual_reply_kind(user_text) == "no":
+        return (
+            RouteDecision(
+                label="APPOINTMENT",
+                confidence=0.95,
+                entities={},
+                flags={"appointment_action_declined"},
+                needs_handoff=False,
+                source="appointment_action_pending",
+            ),
+            Plan(label="APPOINTMENT"),
+            Evidence(
+                items={
+                    "operator_offer_response": {
+                        "text": handoff_message("manual_operator"),
+                        "handoff": True,
+                    }
+                }
+            ),
+        )
+
+    return (
+        RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.9,
+            entities={},
+            flags={"appointment_action_reask"},
+            needs_handoff=False,
+            source="appointment_action_pending",
+        ),
+        Plan(label="APPOINTMENT"),
+        Evidence(
+            items={
+                "operator_offer_response": {
+                    "text": "Хотите отменить или перенести запись?",
+                    "handoff": False,
+                }
+            }
+        ),
+    )
 
 
 async def _handle_compound_price_pending(
@@ -1202,6 +1325,16 @@ async def route_patient_message(
     )
     if catalog_pending_result is not None:
         return catalog_pending_result
+
+    appointment_action_result = await _handle_appointment_action_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if appointment_action_result is not None:
+        return appointment_action_result
 
     compound_price_result = await _handle_compound_price_pending(
         user_text=user_text,

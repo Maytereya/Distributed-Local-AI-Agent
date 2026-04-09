@@ -2122,6 +2122,66 @@ def test_patient_routing_stream_waiting_action_no_handoffs_to_operator(monkeypat
     assert "оператор" in out[0].text.lower()
 
 
+def test_patient_routing_stream_waiting_action_no_handoffs_without_flow_active(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="OTHER",
+                confidence=0.4,
+                entities={},
+                flags={"low_confidence"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+
+    state = SessionState(session_id="appt-wait-action-no-no-flow", last_entities={})
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["appointment_action"])
+
+    out = _run_stream_once("нет", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].handoff is True
+    assert "оператор" in out[0].text.lower()
+
+
+def test_route_message_waiting_action_reschedule_continues_flow(monkeypatch):
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence(items={"appointment_schedule_preview": {"text": "preview"}})
+
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(session_id="appt-action-reschedule", last_entities={})
+    services = Services()
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["appointment_action"])
+
+    decision, plan, evidence = asyncio.run(
+        router_mod.route_patient_message("перенести", state, services, memory)
+    )
+
+    assert decision.label == "APPOINTMENT"
+    assert decision.entities.get("appointment_action") == "reschedule"
+    assert plan.label == "APPOINTMENT"
+    assert state.last_entities.get("appointment_action") == "reschedule"
+    assert evidence.get("appointment_schedule_preview") is not None
+
+
 def test_patient_routing_stream_reschedule_unknown_doctor_handoffs_after_repeat_attempts(monkeypatch):
     async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
         _ = runtime_options
