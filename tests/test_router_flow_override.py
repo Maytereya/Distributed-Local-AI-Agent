@@ -2216,6 +2216,40 @@ def test_patient_routing_stream_reschedule_with_stale_specialty_requests_doctor(
     assert "_any_of:doctor_id,doctor_name" in (pending.get("missing") or [])
 
 
+def test_patient_routing_stream_prelocks_reschedule_doctor_reply_before_nlu(monkeypatch):
+    async def _must_not_call(*_args, **_kwargs):
+        raise AssertionError("primary NLU should be skipped for slot reply inside APPOINTMENT flow")
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_resolve_doctor_name(_text: str):
+        return "Трубин Алексей Юрьевич"
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", _must_not_call)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+
+    state = SessionState(
+        session_id="appt-reschedule-prelock-doctor",
+        last_entities={"appointment_flow_active": True, "appointment_action": "reschedule"},
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    services.resolve_doctor_name = fake_resolve_doctor_name  # type: ignore[method-assign]
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["_any_of:doctor_id,doctor_name", "patient_name"])
+
+    out = _run_stream_once("Трубин", state, services, memory)
+
+    assert len(out) == 1
+    assert "фио пациента" in out[0].text.lower()
+    assert state.last_entities.get("doctor_name") == "Трубин Алексей Юрьевич"
+
+
 def test_patient_routing_stream_cancel_rejected_resumes_appointment_flow():
     state = SessionState(
         session_id="appt-cancel-no",
@@ -2302,6 +2336,58 @@ def test_patient_routing_stream_topic_switch_requests_confirmation():
     assert len(out) == 1
     assert "Отменить этот процесс и перейти к новому вопросу" in out[0].text
     assert state.last_entities.get("appointment_topic_switch_pending") is True
+
+
+def test_patient_routing_stream_datetime_after_schedule_resets_stale_patient_name(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="OTHER",
+                confidence=0.82,
+                entities={},
+                flags={"low_confidence"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="llm",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence()
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="schedule-to-appointment-stale-patient",
+        last_entities={
+            "_last_label": "DOCTOR_SCHEDULE",
+            "doctor_name": "Хальметова Алина Алексеевна",
+            "branch_name": "г. Самара, пр. Ленина, 5",
+            "patient_name": "Старый Пациент",
+            "appointment_windows": [
+                {"date": "2026-03-19", "time": "12:00", "branch": "г. Самара, пр. Ленина, 5"},
+            ],
+        },
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    out = _run_stream_once("на завтра на 12:00", state, services, memory)
+
+    assert len(out) == 1
+    assert "фио пациента" in out[0].text.lower()
+    assert state.last_entities.get("patient_name") is None
 
 
 @pytest.mark.parametrize(
@@ -2651,6 +2737,7 @@ def test_route_message_datetime_after_doctor_schedule_promotes_appointment(monke
         "flow_schedule_to_appointment" in decision.flags
         or "flow_datetime_appointment_override" in decision.flags
         or "flow_datetime_appointment_prelock" in decision.flags
+        or "appointment_slot_prelock" in decision.flags
     )
     assert state.last_entities.get("doctor_name") == "Хальметова Алина Алексеевна"
     assert state.last_entities.get("date_from") == "2026-03-19"
@@ -2708,7 +2795,10 @@ def test_route_message_datetime_after_doctor_schedule_promotes_from_test_assist(
     )
 
     assert decision.label == "APPOINTMENT"
-    assert "flow_schedule_to_appointment" in decision.flags
+    assert (
+        "flow_schedule_to_appointment" in decision.flags
+        or "appointment_slot_prelock" in decision.flags
+    )
     assert plan.label == "APPOINTMENT"
 
 

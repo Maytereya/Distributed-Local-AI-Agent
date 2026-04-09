@@ -35,6 +35,7 @@ from .flow_policy import (
     is_short_prepare_followup,
     looks_like_patient_fio,
     normalize_secondary_labels,
+    prelock_active_appointment_turn,
     quick_fill_entities_from_text,
     secondary_followup_text,
     set_secondary_queue,
@@ -1110,34 +1111,66 @@ async def route_patient_message(
         state.last_entities.pop(key, None)
 
     nlu_debug: dict[str, Any] = {}
-    use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
-    shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False) or _env_flag("MR_NLU_SHADOW", False)
-    if use_v2_nlu:
-        nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
-        decision = nlu_result.decision
-        nlu_debug["candidates"] = [
-            {
-                "source": cand.source,
-                "label": cand.label,
-                "confidence": cand.confidence,
-                "flags": cand.flags[:8],
-            }
-            for cand in nlu_result.candidates
-        ]
-        nlu_debug["merged_from"] = nlu_result.merged_from
-        if nlu_result.trace:
-            nlu_debug["nlu_trace"] = nlu_result.trace
-            nlu_debug["trace"] = nlu_result.trace
-        if shadow_nlu:
-            legacy = await analyze(user_text, state.last_entities)
-            nlu_debug["shadow"] = {
-                "legacy_label": legacy.label,
-                "legacy_conf": legacy.confidence,
-                "v2_label": decision.label,
-                "v2_conf": decision.confidence,
-            }
+    pending_before_nlu = memory.get_pending(state)
+    appointment_prelock = await prelock_active_appointment_turn(
+        user_text,
+        state.last_entities,
+        pending_before_nlu if isinstance(pending_before_nlu, dict) else None,
+        services,
+    )
+    if appointment_prelock is not None:
+        clear_service_name = bool(appointment_prelock.pop("__clear_service_name", False))
+        clear_patient_name = bool(appointment_prelock.pop("__clear_patient_name", False))
+        if clear_service_name:
+            state.last_entities.pop("service_name", None)
+            state.last_entities.pop("test_name", None)
+        if clear_patient_name:
+            state.last_entities.pop("patient_name", None)
+            state.last_entities.pop("appointment_confirm_pending", None)
+            state.last_entities.pop("appointment_confirmed", None)
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.91,
+            entities=appointment_prelock,
+            flags={"appointment_slot_prelock"},
+            needs_handoff=False,
+            context_action="continue",
+            source="flow_prelock",
+        )
+        nlu_debug["appointment_prelock"] = {
+            "hit": True,
+            "entities": dict(appointment_prelock),
+            "pending_label": str((pending_before_nlu or {}).get("label") or ""),
+        }
     else:
-        decision = await analyze(user_text, state.last_entities, runtime_options=runtime_options)
+        use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
+        shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False) or _env_flag("MR_NLU_SHADOW", False)
+        if use_v2_nlu:
+            nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
+            decision = nlu_result.decision
+            nlu_debug["candidates"] = [
+                {
+                    "source": cand.source,
+                    "label": cand.label,
+                    "confidence": cand.confidence,
+                    "flags": cand.flags[:8],
+                }
+                for cand in nlu_result.candidates
+            ]
+            nlu_debug["merged_from"] = nlu_result.merged_from
+            if nlu_result.trace:
+                nlu_debug["nlu_trace"] = nlu_result.trace
+                nlu_debug["trace"] = nlu_result.trace
+            if shadow_nlu:
+                legacy = await analyze(user_text, state.last_entities)
+                nlu_debug["shadow"] = {
+                    "legacy_label": legacy.label,
+                    "legacy_conf": legacy.confidence,
+                    "v2_label": decision.label,
+                    "v2_conf": decision.confidence,
+                }
+        else:
+            decision = await analyze(user_text, state.last_entities, runtime_options=runtime_options)
 
     topic_match = match_topic(user_text)
     if topic_match is not None:
@@ -1333,6 +1366,10 @@ async def route_patient_message(
         and _is_appointment_datetime_followup(user_text)
         and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "TEST_ASSIST", "ADDRESS", "PRICE"}
     ):
+        if not bool(state.last_entities.get("appointment_flow_active")) and not looks_like_patient_fio(user_text):
+            state.last_entities.pop("patient_name", None)
+            state.last_entities.pop("appointment_confirm_pending", None)
+            state.last_entities.pop("appointment_confirmed", None)
         entities = dict(decision.entities)
         for key in ("doctor_id", "doctor_name", "branch_id", "branch_name"):
             if not entities.get(key) and state.last_entities.get(key):

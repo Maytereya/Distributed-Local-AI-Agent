@@ -2808,6 +2808,52 @@ def test_service_bundle_info_keeps_service_name_on_city_only_reply(monkeypatch):
     assert str(res.get("service_name") or "").lower() == "экг"
 
 
+def test_service_bundle_info_enriches_tonsillotomy_with_care_setting(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_regions():
+        return [
+            {"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"},
+            {"id": 2, "addressForSite": "г. Самара, ул. Ново-Садовая, 106, кор. 82", "city": "Самара"},
+        ]
+
+    async def fake_ensure_doctors_cache():
+        return []
+
+    def fake_retail(_region_id):
+        return [
+            {"serviceName": "Тонзиллотомия", "cost": 20000, "priceUnitId": 195},
+            {"serviceName": "Тонзиллотомия 2 категория", "cost": 50000, "priceUnitId": 489},
+        ]
+
+    def fake_doctor_prices():
+        return []
+
+    def fake_price_units():
+        return [
+            {"id": 311, "parent": 190, "name": "Дневной стационар"},
+            {"id": 312, "parent": 190, "name": "Круглосуточный стационар"},
+            {"id": 195, "parent": 311, "name": "Дневной стационар (Оториноларингология)"},
+            {"id": 489, "parent": 312, "name": "Круглосуточный стационар (Оториноларингология)"},
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_retail)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_units", fake_price_units)
+
+    res = run(svc.service_bundle_info("Стоимость тонзиллотомии", {"service_name": "Тонзиллотомия"}))
+
+    variants = [row for row in (res.get("family_variants") or []) if isinstance(row, dict)]
+    retail = [row for row in (res.get("retail_prices") or []) if isinstance(row, dict)]
+    rows = variants or retail
+
+    assert rows, "Expected price rows with care-setting context"
+    assert any("Ленина" in str(row.get("care_setting_address") or "") for row in rows)
+    assert any("Ново-Садовая" in str(row.get("care_setting_address") or "") for row in rows)
+
+
 def test_service_bundle_info_skips_prepare_for_consult_service(monkeypatch):
     svc = Services()
     prepare_called = {"v": False}
