@@ -25,4 +25,4 @@ jobs:
         run: python3 tools/check_localragagent_architecture.py
 
       - name: Run FreeTalk eval quality gate
-        run: python3 tools/freetalk_quality_gate.py --dataset tests/eval/freetalk_dialogs.jsonl --thresholds tests/eval/freetalk_quality_gate.json
+        run: python3 tools/freetalk_quality_gate.py --profile deterministic

@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +22,7 @@ from localragagent.freetalk.agent import FreeTalkAgent
 from localragagent.freetalk.clinical_router import parse_clinical_decision
 from localragagent.freetalk.config import FreeTalkConfig
 from localragagent.freetalk.contracts import SessionContext
+from localragagent.ports import freetalk_llm_port
 
 
 def _norm(value: str) -> str:
@@ -432,20 +432,30 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     return items
 
 
-async def _run_eval(dataset_path: Path) -> list[StepEval]:
+async def _run_eval(dataset_path: Path, *, profile: str) -> list[StepEval]:
     sessions = _load_jsonl(dataset_path)
     memory = InMemoryMemory()
     persist = InMemoryPersist()
     services = StubServices()
     web = StubWebSearch()
-    agent = EvalFreeTalkAgent(
-        config=_config(),
-        services=services,  # type: ignore[arg-type]
-        memory=memory,  # type: ignore[arg-type]
-        persist=persist,  # type: ignore[arg-type]
-        system_prompt="FT eval",
-        web_search=web,  # type: ignore[arg-type]
-    )
+    if profile == "deterministic":
+        agent: FreeTalkAgent = EvalFreeTalkAgent(
+            config=_config(),
+            services=services,  # type: ignore[arg-type]
+            memory=memory,  # type: ignore[arg-type]
+            persist=persist,  # type: ignore[arg-type]
+            system_prompt="FT eval",
+            web_search=web,  # type: ignore[arg-type]
+        )
+    else:
+        agent = FreeTalkAgent(
+            config=_config(),
+            services=services,  # type: ignore[arg-type]
+            memory=memory,  # type: ignore[arg-type]
+            persist=persist,  # type: ignore[arg-type]
+            system_prompt="FT eval",
+            web_search=web,  # type: ignore[arg-type]
+        )
     results: list[StepEval] = []
     for session in sessions:
         sid = str(session.get("session_id") or "").strip()
@@ -457,11 +467,12 @@ async def _run_eval(dataset_path: Path) -> list[StepEval]:
                 continue
             message = str(step.get("message") or "").strip()
             expected = step.get("expected") if isinstance(step.get("expected"), dict) else {}
-            agent.set_eval_step(
-                router_payload=step.get("router_decision") if isinstance(step.get("router_decision"), dict) else None,
-                verifier_payload=step.get("verifier_decision") if isinstance(step.get("verifier_decision"), dict) else None,
-                general_answer=str(step.get("general_answer") or ""),
-            )
+            if isinstance(agent, EvalFreeTalkAgent):
+                agent.set_eval_step(
+                    router_payload=step.get("router_decision") if isinstance(step.get("router_decision"), dict) else None,
+                    verifier_payload=step.get("verifier_decision") if isinstance(step.get("verifier_decision"), dict) else None,
+                    general_answer=str(step.get("general_answer") or ""),
+                )
             reply = await agent.chat(message, sid)
             pending_raw = await memory.get_meta_str(sid, "clinical_pending_state", "")
             clarification = bool(str(pending_raw or "").strip()) or _looks_like_clarification(reply.text)
@@ -593,6 +604,22 @@ def _check_gate(metrics: dict[str, float], thresholds: dict[str, Any]) -> list[s
     return errors
 
 
+async def _probe_llm() -> tuple[bool, str]:
+    try:
+        text, _usage = await freetalk_llm_port.generate_text_with_usage(
+            "Ответь одним словом: ok",
+            timeout_s=10,
+            queue_timeout_ms=5000,
+            fmt=None,
+            think=False,
+        )
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    if not str(text or "").strip():
+        return False, "empty_llm_response"
+    return True, "ok"
+
+
 def _print_report(results: list[StepEval], metrics: dict[str, float], gate_errors: list[str]) -> None:
     print("FT EVAL REPORT")
     print(f"steps_total={int(metrics['steps_total'])}")
@@ -623,23 +650,32 @@ def _print_report(results: list[StepEval], metrics: dict[str, float], gate_error
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run FreeTalk in-process eval and enforce quality gate thresholds.")
     parser.add_argument(
+        "--profile",
+        choices=["deterministic", "production-like"],
+        default="deterministic",
+        help="deterministic: uses router_decision from dataset; production-like: uses live LLM router/verifier.",
+    )
+    parser.add_argument(
         "--dataset",
-        default="tests/eval/freetalk_dialogs.jsonl",
+        default="",
         help="Path to FT eval dataset (.jsonl).",
     )
     parser.add_argument(
         "--thresholds",
-        default="tests/eval/freetalk_quality_gate.json",
+        default="",
         help="Path to quality gate thresholds (json).",
     )
     args = parser.parse_args()
 
-    dataset_path = (PROJECT_ROOT / str(args.dataset)).resolve() if not Path(str(args.dataset)).is_absolute() else Path(str(args.dataset))
-    thresholds_path = (
-        (PROJECT_ROOT / str(args.thresholds)).resolve()
-        if not Path(str(args.thresholds)).is_absolute()
-        else Path(str(args.thresholds))
-    )
+    if str(args.profile) == "production-like":
+        dataset_arg = str(args.dataset or "tests/eval/freetalk_dialogs_production_like.jsonl")
+        thresholds_arg = str(args.thresholds or "tests/eval/freetalk_quality_gate_production_like.json")
+    else:
+        dataset_arg = str(args.dataset or "tests/eval/freetalk_dialogs.jsonl")
+        thresholds_arg = str(args.thresholds or "tests/eval/freetalk_quality_gate.json")
+
+    dataset_path = (PROJECT_ROOT / dataset_arg).resolve() if not Path(dataset_arg).is_absolute() else Path(dataset_arg)
+    thresholds_path = (PROJECT_ROOT / thresholds_arg).resolve() if not Path(thresholds_arg).is_absolute() else Path(thresholds_arg)
     if not dataset_path.exists():
         print(f"Dataset not found: {dataset_path}")
         return 2
@@ -647,7 +683,16 @@ def main() -> int:
         print(f"Thresholds file not found: {thresholds_path}")
         return 2
 
-    results = asyncio.run(_run_eval(dataset_path))
+    profile = str(args.profile)
+    if profile == "production-like":
+        ok, probe = asyncio.run(_probe_llm())
+        if not ok:
+            print("LLM probe failed for production-like profile.")
+            print(f"Reason: {probe}")
+            print("Run this profile inside runtime environment where messengers_router.llm_runtime can access Ollama.")
+            return 2
+
+    results = asyncio.run(_run_eval(dataset_path, profile=profile))
     metrics = _compute_metrics(results)
     thresholds = _load_thresholds(thresholds_path)
     gate_errors = _check_gate(metrics, thresholds)

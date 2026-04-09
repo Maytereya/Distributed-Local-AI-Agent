@@ -280,6 +280,12 @@ v2 (опционально): индексировать summary в отдель�
    - если ответ не из клиники, обязательная метка в тексте.
 4. Router:
    - тесты `clinical_router` на intent mapping/missing slots/clarification.
+5. Eval профили:
+   - `deterministic` (без внешней LLM, фиксированные `router_decision` из датасета):
+     - `python3 tools/freetalk_quality_gate.py --profile deterministic`
+   - `production-like` (live LLM-router/verifier, без фиксированных `router_decision`):
+     - `python3 tools/freetalk_quality_gate.py --profile production-like`
+   - для `production-like` требование: рабочий `messengers_router.llm_runtime` с доступом к Ollama.
 
 ## 12. Следующие шаги (v1.1)
 
