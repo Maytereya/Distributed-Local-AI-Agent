@@ -83,7 +83,7 @@ from .policies import (
     service_name_conflicts_with_doctor,
 )
 from .recovery_policy import contextual_reply_kind, evaluate_recovery, explicit_operator_requested
-from .services import Services
+from .services import Services, match_compound_price_service_option
 from .renderer import (
     render_urgent,
     render_complaint,
@@ -112,6 +112,11 @@ _SECONDARY_SOFT_YES_RE = re.compile(
 _CATALOG_CONFIRM_STATE_KEY = "_catalog_confirm_pending"
 _CATALOG_CONFIRM_REJECTS_KEY = "_catalog_confirm_rejects"
 _CATALOG_CONFIRM_MAX_REJECTS = 2
+_COMPOUND_PRICE_PENDING_KEY = "_compound_price_pending"
+_COMPOUND_PRICE_SOFT_YES_RE = re.compile(
+    r"^\s*(?:хочу|можно|давай|давайте|покажи|покажите)\b",
+    re.I,
+)
 
 # Backward-compat alias for tests/internal callers.
 _should_keep_appointment_flow_override = should_keep_appointment_flow_override
@@ -425,6 +430,137 @@ def _clear_catalog_confirm_pending(state: SessionState, memory: MemoryStore) -> 
     missing = pending.get("missing")
     if pending.get("label") == "OTHER" and isinstance(missing, list) and "catalog_confirm" in missing:
         memory.clear_pending(state)
+
+
+def _get_compound_price_pending(state: SessionState) -> dict[str, Any] | None:
+    """
+    Возвращает валидный pending-контекст compound PRICE-уточнения.
+
+    :param state: состояние сессии
+    :return: payload с услугами либо None
+    """
+
+    payload = state.last_entities.get(_COMPOUND_PRICE_PENDING_KEY)
+    if not isinstance(payload, dict):
+        return None
+    services = [str(item).strip() for item in (payload.get("services") or []) if str(item).strip()]
+    default_service = str(payload.get("default_service") or "").strip()
+    if len(services) < 2:
+        return None
+    if default_service not in services:
+        default_service = services[0]
+    return {
+        "services": services[:4],
+        "default_service": default_service,
+    }
+
+
+def _clear_compound_price_pending(state: SessionState) -> None:
+    """
+    Сбрасывает transient-состояние compound PRICE-уточнения.
+
+    :param state: состояние сессии
+    :return: None
+    """
+
+    state.last_entities.pop(_COMPOUND_PRICE_PENDING_KEY, None)
+
+
+async def _handle_compound_price_pending(
+    *,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """
+    Обрабатывает follow-up после compound PRICE-уточнения.
+
+    Поведение узкое и предсказуемое:
+    - `да/хочу/можно` -> берем первую услугу из списка;
+    - явное название одной из услуг -> берем выбранную услугу;
+    - `нет` -> просим назвать услугу явно;
+    - любая другая новая тема -> просто снимаем pending и отдаем ход общему NLU.
+
+    :param user_text: текущая реплика пользователя
+    :param state: состояние сессии
+    :param services: сервисный слой
+    :param memory: хранилище state/pending
+    :param runtime_options: runtime-параметры роутера
+    :return: decision/plan/evidence либо None
+    """
+
+    pending = _get_compound_price_pending(state)
+    if not pending:
+        return None
+
+    if explicit_operator_requested(user_text):
+        _clear_compound_price_pending(state)
+        return None
+
+    options = list(pending.get("services") or [])
+    default_service = str(pending.get("default_service") or options[0]).strip()
+    reply_kind = contextual_reply_kind(user_text)
+    if reply_kind == "other" and (
+        _is_secondary_soft_yes(user_text) or _COMPOUND_PRICE_SOFT_YES_RE.match(str(user_text or ""))
+    ):
+        reply_kind = "yes"
+
+    if reply_kind == "yes":
+        selected_service = default_service
+    else:
+        selected_service = match_compound_price_service_option(user_text, options)
+
+    if selected_service:
+        _clear_compound_price_pending(state)
+        set_secondary_queue(state, [])
+        state.last_entities["_secondary_offer_pending"] = False
+        state.last_entities.pop("secondary_intents", None)
+        memory.merge_entities(state, {"service_name": selected_service}, label="PRICE")
+        decision = RouteDecision(
+            label="PRICE",
+            confidence=0.92,
+            entities={"service_name": selected_service, "compound_price_selected": True},
+            flags={"compound_price_selected"},
+            needs_handoff=False,
+            context_action="continue",
+            source="compound_price",
+        )
+        plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
+        evidence = await execute_plan(plan, state, services)
+        return decision, plan, evidence
+
+    if reply_kind == "no":
+        _clear_compound_price_pending(state)
+        set_secondary_queue(state, [])
+        state.last_entities["_secondary_offer_pending"] = False
+        options_text = " или ".join(f"«{item}»" for item in options[:3])
+        return (
+            RouteDecision(
+                label="PRICE",
+                confidence=0.9,
+                entities={},
+                flags={"compound_price_declined"},
+                needs_handoff=False,
+                source="compound_price",
+            ),
+            Plan(label="PRICE"),
+            Evidence(
+                items={
+                    "service_bundle": {
+                        "clarify_text": (
+                            f"Хорошо. Тогда напишите, какую из услуг проверить первой: {options_text}."
+                        )
+                    }
+                }
+            ),
+        )
+
+    _clear_compound_price_pending(state)
+    set_secondary_queue(state, [])
+    state.last_entities["_secondary_offer_pending"] = False
+    return None
 
 
 def _catalog_confirm_prompt(kind: str, query: str, canonical: str) -> str:
@@ -1066,6 +1202,16 @@ async def route_patient_message(
     )
     if catalog_pending_result is not None:
         return catalog_pending_result
+
+    compound_price_result = await _handle_compound_price_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if compound_price_result is not None:
+        return compound_price_result
 
     # Вежливое переключение на вторичный интент по короткому "да/нет".
     queue = get_secondary_queue(state)
@@ -1949,6 +2095,7 @@ async def patient_routing_stream(
         if (
             followup
             and not state.last_entities.get("_secondary_offer_pending")
+            and not state.last_entities.get(_COMPOUND_PRICE_PENDING_KEY)
             and not decision.needs_handoff
             and flow_label not in {"APPOINTMENT", "URGENT", "COMPLAINT", "MEDICAL_ADVICE", "TEST_RESULT"}
         ):
@@ -1979,6 +2126,7 @@ async def patient_routing_stream(
     if (
         followup
         and not state.last_entities.get("_secondary_offer_pending")
+        and not state.last_entities.get(_COMPOUND_PRICE_PENDING_KEY)
         and not decision.needs_handoff
         and flow_label not in {"APPOINTMENT", "URGENT", "COMPLAINT", "MEDICAL_ADVICE", "TEST_RESULT"}
     ):

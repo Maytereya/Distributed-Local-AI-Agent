@@ -13,6 +13,7 @@ SESSION_PREFIX="s_eval_remote"
 GOLDEN_VERSION=""
 HOST_HEADER=""
 LLM_MODE="hybrid"
+TIMEOUT_SEC="75"
 CASES_PATH="${SCRIPT_DIR}/critical_cases.jsonl"
 PREPARE_WRAP_CASES_PATH="${SCRIPT_DIR}/prepare_wrap_cases.jsonl"
 COVERAGE_CHECK_ENABLED=1
@@ -38,6 +39,8 @@ while [[ $# -gt 0 ]]; do
       HOST_HEADER="$2"; shift 2;;
     --llm-mode)
       LLM_MODE="$2"; shift 2;;
+    --timeout-sec)
+      TIMEOUT_SEC="$2"; shift 2;;
     --cases)
       CASES_PATH="$2"; shift 2;;
     --prepare-wrap-cases)
@@ -55,6 +58,7 @@ Options:
   --golden-version <vN>      Stage5 golden version, e.g. v2
   --host-header <host>       Optional Host header for critical eval script
   --llm-mode <mode>          strict|hybrid|rich (used by critical eval script)
+  --timeout-sec <sec>        HTTP timeout per request/turn for stage5 and critical scripts
   --cases <path>             Critical cases JSONL path (default: messengers_router/eval_suite/critical_cases.jsonl)
   --prepare-wrap-cases <path>
                              PREPARE wrapping JSONL path (default: messengers_router/eval_suite/prepare_wrap_cases.jsonl)
@@ -78,6 +82,7 @@ echo "RUN_ID: ${RUN_ID}"
 echo "LOG_DIR: ${LOG_DIR}"
 echo "CASES_PATH: ${CASES_PATH}"
 echo "PREPARE_WRAP_CASES_PATH: ${PREPARE_WRAP_CASES_PATH}"
+echo "TIMEOUT_SEC: ${TIMEOUT_SEC}"
 echo "COVERAGE_CHECK_ENABLED: ${COVERAGE_CHECK_ENABLED}"
 echo
 
@@ -123,13 +128,15 @@ if [[ -n "${GOLDEN_VERSION}" ]]; then
       --url "${URL}" \
       --session-prefix "${SESSION_PREFIX}_stage5_${RUN_ID}" \
       --run-id "${RUN_ID}" \
+      --timeout-sec "${TIMEOUT_SEC}" \
       --golden-version "${GOLDEN_VERSION}"
 else
   run_stage 04_stage5_golden_corpus \
     "${PY_BIN}" messengers_router/scripts/eval_stage5_corpus.py \
       --url "${URL}" \
       --session-prefix "${SESSION_PREFIX}_stage5_${RUN_ID}" \
-      --run-id "${RUN_ID}"
+      --run-id "${RUN_ID}" \
+      --timeout-sec "${TIMEOUT_SEC}"
 fi
 
 CRIT_CMD=(
@@ -139,6 +146,7 @@ CRIT_CMD=(
   --session-prefix "${SESSION_PREFIX}_critical_${RUN_ID}"
   --run-id "${RUN_ID}"
   --llm-mode "${LLM_MODE}"
+  --timeout-sec "${TIMEOUT_SEC}"
 )
 if [[ -n "${HOST_HEADER}" ]]; then
   CRIT_CMD+=(--host-header "${HOST_HEADER}")
@@ -152,6 +160,7 @@ PREP_WRAP_CMD=(
   --session-prefix "${SESSION_PREFIX}_prepare_wrap_${RUN_ID}"
   --run-id "${RUN_ID}"
   --llm-mode "${LLM_MODE}"
+  --timeout-sec "${TIMEOUT_SEC}"
 )
 if [[ -n "${HOST_HEADER}" ]]; then
   PREP_WRAP_CMD+=(--host-header "${HOST_HEADER}")

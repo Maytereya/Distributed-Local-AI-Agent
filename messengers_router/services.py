@@ -113,6 +113,10 @@ _PRICE_SHOW_ALL_RE = re.compile(
     r"^\s*(?:все|всё|покажи\s+все|показать\s+все|все\s+варианты|все\s+услуги|все\s+анализы)\s*[!.,?]*\s*$",
     re.I,
 )
+_PRICE_COMPOUND_LAB_FRAGMENT_RE = re.compile(
+    r"\b(?:сдать\s+кровь\s+на|кровь\s+на|анализ(?:ы)?\s+на|сдать\s+анализ(?:ы)?\s+на)\s+([a-zа-яё0-9\-/ ]{2,80})",
+    re.I,
+)
 _PRICE_DIAGNOSTIC_NO_DOCTOR_RE = re.compile(
     r"\b(экг|флюорограф\w*|маммограф\w*|рентген\w*|мрт|кт)\b",
     re.I,
@@ -4078,6 +4082,185 @@ def _select_effective_price_service_name(entity_service_name: str, query_service
     return query
 
 
+def _compound_price_secondary_lab_service(
+    query_text: str,
+    *,
+    primary_service_name: str,
+    retail_rows: list[dict[str, Any]],
+) -> str | None:
+    """
+    Пытается выделить вторую лабораторную услугу из mixed PRICE-запроса.
+
+    Используем только консервативные сигналы:
+    - явные конструкции вида `кровь на ...` / `анализ на ...`;
+    - короткие alias из справочника `_PRICE_SERVICE_ALIASES`.
+
+    :param query_text: исходный запрос пользователя
+    :param primary_service_name: уже выбранная primary-услуга
+    :param retail_rows: строки retail-прайса для catalog-grounding
+    :return: каноническое имя второй лабораторной услуги либо None
+    """
+
+    query_norm = _normalise_input(str(query_text or "")).replace("ё", "е")
+    primary_norm = _normalise_input(str(primary_service_name or "")).replace("ё", "е")
+    if not query_norm or not primary_norm or " и " not in f" {query_norm} ":
+        return None
+
+    fragments: list[str] = []
+    fragment_from_lab_phrase = False
+    match = _PRICE_COMPOUND_LAB_FRAGMENT_RE.search(query_norm)
+    if match:
+        fragment = str(match.group(1) or "").strip(" -")
+        if fragment:
+            fragments.append(fragment)
+            fragment_from_lab_phrase = True
+
+    for alias in sorted(_PRICE_SERVICE_ALIASES.keys(), key=len, reverse=True):
+        alias_norm = _normalise_input(alias).replace("ё", "е")
+        if not alias_norm or alias_norm in primary_norm or alias_norm not in query_norm:
+            continue
+        fragments.append(alias)
+
+    seen: set[str] = set()
+    for idx, fragment in enumerate(fragments):
+        key = _normalise_input(fragment).replace("ё", "е")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        candidate = resolve_price_service_name_from_catalog(fragment, rows=retail_rows)
+        if not candidate:
+            variants = _PRICE_SERVICE_ALIASES.get(key, ())
+            candidate = str(variants[0] or "").strip() if variants else ""
+        candidate_norm = _normalise_input(candidate).replace("ё", "е")
+        if not candidate_norm or candidate_norm == primary_norm:
+            continue
+        top_rows = _select_patient_price_rows(retail_rows, candidate, limit=3)
+        if not top_rows:
+            continue
+        if idx == 0 and fragment_from_lab_phrase:
+            return candidate
+        kind = _classify_catalog_service_kind(
+            candidate,
+            query_text=candidate,
+            retail_rows=top_rows,
+            has_exact_doctor_link=False,
+            is_consult_query=False,
+        )
+        if kind == "lab":
+            return candidate
+    return None
+
+
+def _build_compound_price_clarify_payload(
+    *,
+    query_text: str,
+    entities: dict[str, Any],
+    primary_service_name: str,
+    retail_rows: list[dict[str, Any]],
+    primary_retail_prices: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """
+    Строит clarify-payload для mixed PRICE-запроса с двумя услугами.
+
+    Мы не пытаемся сразу оркестрировать сложный multi-service ответ. Вместо
+    этого честно просим выбрать, какую услугу разобрать первой, если видим
+    надежную primary-услугу и отдельную вторую лабораторную цель.
+
+    :param query_text: исходный запрос пользователя
+    :param entities: текущие сущности роутера
+    :param primary_service_name: уже выбранная основная услуга
+    :param retail_rows: все строки retail-прайса региона
+    :param primary_retail_prices: top retail rows для основной услуги
+    :return: payload для clarify либо None
+    """
+
+    secondary_labels = {
+        str(label or "").strip().upper()
+        for label in (entities.get("secondary_intents") or [])
+        if str(label or "").strip()
+    }
+    if "TEST_ASSIST" not in secondary_labels:
+        return None
+
+    secondary_service = _compound_price_secondary_lab_service(
+        query_text,
+        primary_service_name=primary_service_name,
+        retail_rows=retail_rows,
+    )
+    if not secondary_service:
+        return None
+
+    primary_kind = _classify_catalog_service_kind(
+        primary_service_name,
+        query_text=primary_service_name,
+        retail_rows=primary_retail_prices,
+        has_exact_doctor_link=False,
+        is_consult_query=_is_consultation_service_query(primary_service_name),
+    )
+    if primary_kind == "lab":
+        return None
+
+    clarify_text = (
+        "Вижу в запросе две услуги:\n"
+        f"1. {primary_service_name}\n"
+        f"2. {secondary_service}\n\n"
+        "Чтобы не смешать цену и доступность по разным услугам, лучше проверить их по очереди.\n"
+        f"Если хотите, сначала покажу по {primary_service_name}. "
+        f"Также можно сразу написать: «{secondary_service}»."
+    )
+    return {
+        "service_name": primary_service_name,
+        "retail_prices": primary_retail_prices,
+        "doctors": [],
+        "prepare": "",
+        "show_prepare": False,
+        "service_kind": "compound_clarify",
+        "clarify_text": clarify_text,
+        "compound_price_services": [primary_service_name, secondary_service],
+        "compound_price_default_service": primary_service_name,
+        "note": "service_bundle_info: compound_price_clarify",
+    }
+
+
+def match_compound_price_service_option(user_text: str, options: list[str]) -> str | None:
+    """
+    Сопоставляет короткий follow-up пользователя с одной из услуг compound PRICE.
+
+    :param user_text: текущая реплика пользователя
+    :param options: допустимые услуги из pending compound flow
+    :return: выбранная услуга либо None
+    """
+
+    reply_norm = _normalise_input(str(user_text or "")).replace("ё", "е")
+    if not reply_norm:
+        return None
+    reply_tokens = set(_meaningful_price_service_tokens(reply_norm))
+
+    alias_hits: set[str] = set()
+    for alias, variants in _PRICE_SERVICE_ALIASES.items():
+        alias_norm = _normalise_input(alias).replace("ё", "е")
+        if alias_norm and alias_norm in reply_norm:
+            alias_hits.add(alias_norm)
+            for variant in variants:
+                variant_norm = _normalise_input(variant).replace("ё", "е")
+                if variant_norm:
+                    alias_hits.add(variant_norm)
+
+    for option in options:
+        option_text = str(option or "").strip()
+        option_norm = _normalise_input(option_text).replace("ё", "е")
+        if not option_norm:
+            continue
+        if reply_norm == option_norm or reply_norm in option_norm or option_norm in reply_norm:
+            return option_text
+        option_tokens = set(_meaningful_price_service_tokens(option_text))
+        if reply_tokens and option_tokens and (reply_tokens.issubset(option_tokens) or option_tokens.issubset(reply_tokens)):
+            return option_text
+        if alias_hits and any(alias in option_norm for alias in alias_hits):
+            return option_text
+    return None
+
+
 def _doctor_sort_key(doc: dict[str, Any]) -> tuple[int, str]:
     try:
         ord_value = int(doc.get("ord"))
@@ -5534,6 +5717,21 @@ class Services:
             out["note"] = "service_bundle_info: retail source unavailable"
         if retail_prefers_query_candidate and retail_query:
             out["service_name"] = retail_query
+
+        compound_payload = _build_compound_price_clarify_payload(
+            query_text=query_text,
+            entities=entities,
+            primary_service_name=service_name,
+            retail_rows=retail_rows,
+            primary_retail_prices=out["retail_prices"] if isinstance(out.get("retail_prices"), list) else [],
+        )
+        if compound_payload:
+            compound_payload["top_n_applied"] = top_limit
+            compound_payload["entities_used"] = {
+                **entities,
+                "service_name_effective": service_name,
+            }
+            return compound_payload
 
         # 2) Top-N doctors by ord among doctors that have the matched service in doctor prices.
         top_retail = out["retail_prices"][0] if isinstance(out.get("retail_prices"), list) and out["retail_prices"] else {}

@@ -3003,3 +3003,156 @@ def test_route_message_operator_offer_no_keeps_dialog_without_handoff():
     assert "Хорошо, продолжаем диалог." in str(payload.get("text") or "")
     assert state.last_entities.get("_operator_offer_pending") is None
     assert memory.get_pending(state) is None
+
+
+def test_build_first_structured_response_compound_price_sets_pending():
+    state = SessionState(session_id="compound-price-builder", last_entities={})
+    evidence = Evidence(
+        items={
+            "service_bundle": {
+                "clarify_text": (
+                    "Вижу в запросе две услуги:\n"
+                    "1. УЗДГ сосудов шеи\n"
+                    "2. ЛПНП\n\n"
+                    "Если хотите, сначала покажу по УЗДГ сосудов шеи."
+                ),
+                "compound_price_services": ["УЗДГ сосудов шеи", "ЛПНП"],
+                "compound_price_default_service": "УЗДГ сосудов шеи",
+            }
+        }
+    )
+    services = Services()
+    memory = MemoryStore()
+    decision = RouteDecision(label="PRICE", confidence=0.9, entities={}, flags=set(), needs_handoff=False)
+
+    env = _build_first_structured_response(
+        flow_label="PRICE",
+        evidence=evidence,
+        state=state,
+        services=services,
+        memory=memory,
+        decision=decision,
+        user_text="Сколько стоит УЗДГ и ЛПНП?",
+    )
+
+    assert env is not None
+    pending = state.last_entities.get("_compound_price_pending")
+    assert isinstance(pending, dict)
+    assert pending.get("default_service") == "УЗДГ сосудов шеи"
+    assert pending.get("services") == ["УЗДГ сосудов шеи", "ЛПНП"]
+
+
+def test_route_message_compound_price_pending_yes_selects_default_service(monkeypatch):
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence(items={"service_bundle": {"service_name": "УЗДГ сосудов шеи"}})
+
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="compound-price-yes",
+        last_entities={
+            "_compound_price_pending": {
+                "services": ["УЗДГ сосудов шеи", "ЛПНП"],
+                "default_service": "УЗДГ сосудов шеи",
+            },
+            "city": "Самара",
+            "_secondary_queue": ["TEST_ASSIST", "ADDRESS"],
+            "_secondary_offer_pending": True,
+        },
+    )
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message("можно", state, services, memory)
+    )
+
+    assert decision.label == "PRICE"
+    assert decision.entities.get("service_name") == "УЗДГ сосудов шеи"
+    assert plan.label == "PRICE"
+    assert plan.steps and plan.steps[0].tool == "service_bundle_info"
+    assert state.last_entities.get("service_name") == "УЗДГ сосудов шеи"
+    assert state.last_entities.get("_compound_price_pending") is None
+    assert state.last_entities.get("_secondary_queue") is None
+
+
+def test_route_message_compound_price_pending_specific_service_reply_selects_that_service(monkeypatch):
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence(items={"service_bundle": {"service_name": "ЛПНП"}})
+
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="compound-price-lpnp",
+        last_entities={
+            "_compound_price_pending": {
+                "services": ["УЗДГ сосудов шеи", "ЛПНП"],
+                "default_service": "УЗДГ сосудов шеи",
+            },
+            "city": "Самара",
+        },
+    )
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message("ЛПНП", state, services, memory)
+    )
+
+    assert decision.label == "PRICE"
+    assert decision.entities.get("service_name") == "ЛПНП"
+    assert plan.label == "PRICE"
+    assert state.last_entities.get("service_name") == "ЛПНП"
+    assert state.last_entities.get("_compound_price_pending") is None
+
+
+def test_route_message_compound_price_pending_other_question_clears_and_routes_normally(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="NEWS",
+                confidence=0.85,
+                entities={},
+                flags={"rule_news"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence(items={"news": {"items": []}})
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+
+    state = SessionState(
+        session_id="compound-price-other",
+        last_entities={
+            "_compound_price_pending": {
+                "services": ["УЗДГ сосудов шеи", "ЛПНП"],
+                "default_service": "УЗДГ сосудов шеи",
+            },
+            "_secondary_queue": ["TEST_ASSIST", "ADDRESS"],
+        },
+    )
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message("Какие сейчас акции?", state, services, memory)
+    )
+
+    assert decision.label == "NEWS"
+    assert plan.label == "NEWS"
+    assert state.last_entities.get("_compound_price_pending") is None
+    assert state.last_entities.get("_secondary_queue") is None

@@ -2972,6 +2972,39 @@ def test_service_bundle_info_keeps_entity_service_name_when_query_extraction_is_
     assert str(res.get("entities_used", {}).get("service_name_effective") or "") == "УЗДГ сосудов шеи"
 
 
+def test_service_bundle_info_compound_price_query_returns_clarify(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_regions():
+        return [{"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"}]
+
+    async def fake_ensure_doctors_cache():
+        return []
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(
+        svc_mod.api_price,
+        "load_price_by_region",
+        lambda _region_id: [
+            {"serviceName": "УЗДГ сосудов шеи", "cost": 1800},
+            {"serviceName": "ЛПНП", "cost": 450},
+        ],
+    )
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", lambda: [])
+
+    res = run(
+        svc.service_bundle_info(
+            "День добрый!\nСамара. Победы 83.\nНам нужно пройти обследование уздг сосудов шеи и сдать кровь на ЛПНП.\nЭто возможно сделать по данному адресу?\nКакова стоимость услуг?",
+            {"service_name": "УЗДГ сосудов шеи", "secondary_intents": ["TEST_ASSIST", "ADDRESS"]},
+        )
+    )
+
+    assert str(res.get("service_kind") or "") == "compound_clarify"
+    assert "Вижу в запросе две услуги" in str(res.get("clarify_text") or "")
+    assert list(res.get("compound_price_services") or []) == ["УЗДГ сосудов шеи", "ЛПНП"]
+
+
 def test_service_bundle_info_enriches_tonsillotomy_with_care_setting(monkeypatch):
     svc = Services()
 

@@ -34,13 +34,14 @@
 | P10 | стоимость удаления зуба | `single_top_variant_instead_of_family` | `FIXED_LOCAL` | unit + service | data-driven family-mode показывает основные варианты удаления |
 | P11 | стоимость массажа | `stale_context` | `OPEN` | нет | подозрение на залипший `service_name` из state |
 | P12 | стоимость постановки пломбы | `soft_token_fuzzy_false_positive` | `FIXED_SERVER` | unit + service + endpoint smoke + server eval | short-token fuzzy больше не матчится в `ЦМВ` |
-| P13 | стоимость подтяжки бедер | `doctor_prices_source_pollution` | `OPEN` | нет | после нормального retail-match всплывают нерелевантные врачи |
+| P13 | стоимость подтяжки бедер | `doctor_prices_source_pollution` | `FIXED_LOCAL` | unit + service | после retail-match doctor-layer очищен от нерелевантных врачей |
+| P14 | УЗДГ сосудов шеи + ЛПНП на Победы 83 | `multi_service_query_cross_contamination` | `FIXED_LOCAL` | unit + router | mixed-query больше не схлопывается молча: бот честно просит выбрать, какую услугу разобрать первой |
 
 ## Подробные кейсы
 
 ## P01. Стоимость гепатита
 
-**Статус:** `FIXED_LOCAL`
+**Статус:** `FIXED_SERVER`
 
 **Запрос:** `стоимость гепатита`
 
@@ -144,7 +145,7 @@ Generic disease-query приземлялся в одну каноническу�
 
 ## P04. Стоимость витамина Д
 
-**Статус:** `OPEN`
+**Статус:** `FIXED_SERVER`
 
 **Запрос:** `стоимость витамина д`
 
@@ -180,7 +181,7 @@ Query-кандидаты типа `витамина` слишком общие, 
 
 ## P05. Анализы на витамины
 
-**Статус:** `FIXED_LOCAL`
+**Статус:** `FIXED_SERVER`
 
 **Запрос:** `анализы на витамины`
 
@@ -348,7 +349,7 @@ Generic query по группе витаминов не распадается �
 
 ## P10. Стоимость удаления зуба
 
-**Статус:** `OPEN`
+**Статус:** `FIXED_LOCAL`
 
 **Запрос:** `стоимость удаления зуба`
 
@@ -379,7 +380,7 @@ Ranking находит несколько релевантных стомато�
 
 ## P11. Стоимость массажа
 
-**Статус:** `OPEN`
+**Статус:** `FIXED_SERVER`
 
 **Запрос:** `стоимость массажа`
 
@@ -408,7 +409,7 @@ Ranking находит несколько релевантных стомато�
 
 ## P12. Стоимость постановки пломбы
 
-**Статус:** `OPEN`
+**Статус:** `FIXED_LOCAL`
 
 **Запрос:** `стоимость постановки пломбы`
 
@@ -443,7 +444,7 @@ Ranking находит несколько релевантных стомато�
 
 ## P13. Стоимость подтяжки бедер
 
-**Статус:** `OPEN`
+**Статус:** `FIXED_LOCAL`
 
 **Запрос:** `стоимость подтяжки бедер`
 
@@ -470,6 +471,48 @@ Doctor-layer пропускает нерелевантные строки `docto
 **Примечание:**
 Проблема комбинированная: и scoring, и грязный `doctor_prices`.
 
+## P14. УЗДГ сосудов шеи + ЛПНП на Победы 83
+
+**Статус:** `OPEN`
+
+**Запрос:**  
+`Самара. Победы 83. Нам нужно пройти обследование уздг сосудов шеи и сдать кровь на ЛПНП. Это возможно сделать по данному адресу? Какова стоимость услуг?`
+
+**Факт:**
+Бот выбирает один primary `PRICE`-сценарий, схлопывает mixed-query в `УЗДГ сосудов шеи`, но:
+- retail-match уходит в нерелевантное `УЗИ орбит с допплерографией ... сосудов`;
+- `service_kind` определяется как `lab`;
+- ответ пишет шаблон `Для этого лабораторного анализа...`, хотя речь о диагностике;
+- второй service (`ЛПНП`) и branch-constraint (`Победы, 83`) не попадают в нормальный составной ответ.
+
+**Ожидание:**
+Система должна либо:
+- честно разложить запрос на две услуги (`УЗДГ сосудов шеи` и `ЛПНП`) и ответить по каждой отдельно;
+- либо дать явное уточнение, что обнаружено несколько услуг и адресная проверка будет выполнена по каждой.
+
+**Класс дефекта:** `multi_service_query_cross_contamination`
+
+**Корневая причина:**
+- mixed-query с несколькими услугами схлопывается в одну primary-service;
+- лабораторные сигналы из второй услуги загрязняют `service_kind` первой;
+- ranking по `УЗДГ` недостаточно строго учитывает анатомическую часть (`сосуды шеи`);
+- branch-question и price-question не собираются в составной ответ.
+
+**Что изменили:**
+- добавили узкий compound-price clarify flow в `service_bundle_info()`: если в одном `PRICE`-запросе надежно видны primary-услуга и отдельная lab-цель, бот не смешивает их в один ответ, а просит выбрать, какую услугу разбирать первой;
+- запретили загрязнение `service_kind` secondary-lab сигналами в этом сценарии: primary `УЗДГ` больше не превращается в `lab` только потому, что в той же фразе есть `ЛПНП`;
+- добавили follow-up policy в router: `да/можно/хочу` выбирает первую услугу, явное `ЛПНП` выбирает вторую, а новая тема сбрасывает compound pending и идет в обычный NLU.
+
+**Тесты:**
+- unit/service: `test_service_bundle_info_compound_price_query_returns_clarify`;
+- router: `test_build_first_structured_response_compound_price_sets_pending`;
+- router: `test_route_message_compound_price_pending_yes_selects_default_service`;
+- router: `test_route_message_compound_price_pending_specific_service_reply_selects_that_service`;
+- router: `test_route_message_compound_price_pending_other_question_clears_and_routes_normally`.
+
+**Примечание:**
+Это отдельный класс дефекта от timeout в `G008`: даже при успешном ответе семантика остаётся неверной.
+
 ## Общие классы дефектов
 
 Подтвержденные системные проблемы:
@@ -481,6 +524,7 @@ Doctor-layer пропускает нерелевантные строки `docto
 - `doctor_prices` содержит нерелевантные привязки врачей к услугам;
 - stale-context всё ещё может доминировать над новым `PRICE`-запросом;
 - у `УЗИ` не хватает нормализации синонимов и детского/взрослого приоритета.
+- mixed multi-service запросы пока не разбираются как составные и загрязняют `service_kind`.
 
 ## Порядок реализации
 
@@ -534,3 +578,5 @@ Doctor-layer пропускает нерелевантные строки `docto
 | 2026-04-09 | P03, P05, P10 | Добавлен family-root expansion для generic vitamin-query; зафиксированы локальные регрессии по `ВИЧ` и `удалению зуба`; добавлены critical cases на стационарные адреса через `priceUnits` | `test_price_info_hiv_returns_multiple_relevant_variants`, `test_price_info_generic_vitamins_returns_family_query_variants`, `test_price_info_tooth_removal_returns_family_query_variants` | `FIXED_LOCAL` | не проверялось |
 | 2026-04-09 | P08, P09 | Исправлено извлечение составной специальности `травматолог-ортопед`; подтвержден локальный приоритет `первичный > к.м.н. > повторный > на дому` для консультаций | `test_extract_specialty_from_text_prefers_compound_traumatologist_orthopedist`, `test_price_info_trauma_orthopedist_prefers_base_consultation_over_kmn_uzi`, `test_price_info_surgeon_prefers_primary_before_repeat_and_home` | `FIXED_LOCAL` | не проверялось |
 | 2026-04-09 | family-mode engine | Family-trigger переведен с root-regex на data-driven кластеризацию по candidate rows и нормализованным family-вариантам; добавлена защита от ложного family на `общий анализ крови` | `test_price_info_generic_family_mode_is_data_driven_without_root_regex`, `test_price_info_general_oak_returns_base_variants_without_special_modifiers` | `FIXED_LOCAL` | не проверялось |
+| 2026-04-09 | P10, P13, tracker sync | Синхронизированы статусы трекера с фактическими локальными фиксами; оформлен новый semantic-case для mixed-query `УЗДГ сосудов шеи + ЛПНП + филиал` | без новых тестов | `P10/P13 = FIXED_LOCAL`, `P14 = OPEN` | не проверялось |
+| 2026-04-09 | P14 | Добавлен узкий compound-price clarify flow без общего multi-service planner; primary-service больше не загрязняется второй lab-услугой, а follow-up `да/ЛПНП` обрабатывается детерминированно | `test_service_bundle_info_compound_price_query_returns_clarify`, `test_build_first_structured_response_compound_price_sets_pending`, `test_route_message_compound_price_pending_yes_selects_default_service`, `test_route_message_compound_price_pending_specific_service_reply_selects_that_service`, `test_route_message_compound_price_pending_other_question_clears_and_routes_normally` | `FIXED_LOCAL` | не проверялось |

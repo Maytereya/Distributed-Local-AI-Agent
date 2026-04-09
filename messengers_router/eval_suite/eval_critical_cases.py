@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-def _post_json(url: str, payload: dict[str, Any], timeout_sec: int = 50, host_header: str = "") -> dict[str, Any]:
+def _post_json(url: str, payload: dict[str, Any], timeout_sec: int = 75, host_header: str = "") -> dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if host_header:
@@ -141,7 +141,7 @@ def main() -> int:
     )
     parser.add_argument("--session-prefix", default="s_eval_critical", help="Session id prefix")
     parser.add_argument("--run-id", default="", help="Optional run id, default unix timestamp")
-    parser.add_argument("--timeout-sec", type=int, default=50, help="HTTP timeout in seconds")
+    parser.add_argument("--timeout-sec", type=int, default=75, help="HTTP timeout in seconds")
     parser.add_argument("--host-header", default="", help="Optional Host header")
     parser.add_argument("--llm-mode", default="hybrid", choices=["strict", "hybrid", "rich"], help="llm_mode in payload")
     args = parser.parse_args()

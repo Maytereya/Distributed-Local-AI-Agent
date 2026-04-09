@@ -40,6 +40,7 @@ from .renderer import (
 from .services import Services
 
 _DEFAULT_CITY = "Самара"
+_COMPOUND_PRICE_PENDING_KEY = "_compound_price_pending"
 
 _UNSUPPORTED_CATALOG_TEXT: dict[str, str] = {
     "unsupported_service": "К сожалению, в данный момент клиника не оказывает данную услугу. Приносим извинения за неудобства.",
@@ -129,6 +130,31 @@ def _sync_price_family_context(state: SessionState, payload: dict[str, Any]) -> 
     state.last_entities.pop("_price_family_context", None)
 
 
+def _sync_compound_price_pending(state: SessionState, payload: dict[str, Any]) -> None:
+    """
+    Сохраняет короткий pending-контекст для compound PRICE-уточнения.
+
+    :param state: состояние сессии
+    :param payload: payload `service_bundle` / `price`
+    :return: None
+    """
+
+    services_raw = payload.get("compound_price_services")
+    services = [str(item).strip() for item in services_raw] if isinstance(services_raw, list) else []
+    services = [item for item in services if item]
+    default_service = str(payload.get("compound_price_default_service") or "").strip()
+    clarify_text = str(payload.get("clarify_text") or "").strip()
+    if len(services) >= 2 and clarify_text:
+        if default_service not in services:
+            default_service = services[0]
+        state.last_entities[_COMPOUND_PRICE_PENDING_KEY] = {
+            "services": services[:4],
+            "default_service": default_service,
+        }
+        return
+    state.last_entities.pop(_COMPOUND_PRICE_PENDING_KEY, None)
+
+
 def build_price_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "PRICE":
         return None
@@ -136,6 +162,7 @@ def build_price_response(flow_label: str, evidence: Evidence, state: SessionStat
     if not isinstance(price_payload, dict):
         return None
     _sync_price_family_context(state, price_payload)
+    _sync_compound_price_pending(state, price_payload)
     render_entities = dict(state.last_entities or {})
     used = price_payload.get("entities_used")
     if isinstance(used, dict):
@@ -160,6 +187,7 @@ def build_service_bundle_response(flow_label: str, evidence: Evidence, state: Se
     if not isinstance(payload, dict):
         return None
     _sync_price_family_context(state, payload)
+    _sync_compound_price_pending(state, payload)
     text = format_service_bundle_for_patient(payload, state.last_entities)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
