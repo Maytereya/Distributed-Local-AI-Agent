@@ -530,6 +530,12 @@ _PRICE_GENERIC_SERVICE_TOKENS = {
     "пакет",
     "комплекс",
 }
+_PRICE_GENERIC_FAMILY_ROOT_TOKENS = {
+    "удален",
+    "подтяжк",
+    "операц",
+    "пластик",
+}
 _PRICE_SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
     "оак": ("общий анализ крови",),
     "общий анализ крови": ("общий анализ крови",),
@@ -3327,6 +3333,14 @@ def _family_query_root_tokens(query_text: str) -> list[str]:
             continue
         seen.add(norm)
         tokens.append(norm)
+    if len(tokens) > 1:
+        narrowed = [
+            tok
+            for tok in tokens
+            if not any(tok.startswith(stem) for stem in _PRICE_GENERIC_FAMILY_ROOT_TOKENS)
+        ]
+        if narrowed:
+            tokens = narrowed
     tokens.sort(key=len, reverse=True)
     return tokens
 
@@ -3645,6 +3659,46 @@ def _care_setting_addresses_from_price_rows(rows: list[dict[str, Any]]) -> list[
     return addresses
 
 
+def _select_address_price_rows(
+    rows: list[dict[str, Any]],
+    query_text: str,
+    *,
+    limit: int = 10,
+    family_limit: int = 50,
+) -> list[dict[str, Any]]:
+    """
+    Подбирает строки прайса для адресного ответа по услуге.
+
+    Сначала берет обычные top-match строки, затем при необходимости расширяет
+    выборку family-кандидатами. Расширение применяется только если добавляет
+    новые care-setting адреса, а не просто раздувает список однотипных строк.
+
+    :param rows: строки прайса региона
+    :param query_text: текст услуги / исходный запрос пользователя
+    :param limit: лимит обычного top-match отбора
+    :param family_limit: лимит family-расширения
+    :return: обогащенные строки прайса с care-setting полями
+    """
+
+    ranked_rows = _select_patient_price_rows(rows, query_text, limit=limit)
+    if not ranked_rows:
+        return []
+
+    ranked_annotated = _annotate_price_rows_with_care_context(ranked_rows)
+    ranked_addresses = _care_setting_addresses_from_price_rows(ranked_annotated)
+
+    family_rows = _build_family_candidate_rows(query_text, rows, limit=family_limit)
+    if len(family_rows) < 2:
+        return ranked_annotated
+
+    merged_rows = _dedupe_price_rows(ranked_rows + family_rows)
+    merged_annotated = _annotate_price_rows_with_care_context(merged_rows)
+    merged_addresses = _care_setting_addresses_from_price_rows(merged_annotated)
+    if len(merged_addresses) > len(ranked_addresses):
+        return merged_annotated
+    return ranked_annotated
+
+
 def _is_price_show_all_request(query_text: str) -> bool:
     """
     Проверяет короткий follow-up пациента с просьбой показать все варианты.
@@ -3895,6 +3949,28 @@ def _should_prefer_retail_query_candidate(query_candidate: str, service_name: st
         return False
     if query_candidate_norm in service_name_norm and len(query_candidate_norm) < len(service_name_norm):
         return True
+
+    candidate_tokens = [tok for tok in _price_query_tokens(query_candidate_norm) if tok not in _PRICE_GENERIC_SERVICE_TOKENS]
+    service_tokens = [tok for tok in _price_query_tokens(service_name_norm) if tok not in _PRICE_GENERIC_SERVICE_TOKENS]
+    if candidate_tokens and len(service_tokens) > len(candidate_tokens):
+        candidate_covers_service_base = True
+        for candidate_token in candidate_tokens:
+            if not any(
+                service_token == candidate_token
+                or (
+                    len(candidate_token) >= 4
+                    and len(service_token) >= 4
+                    and (
+                        service_token.startswith(candidate_token[:4])
+                        or candidate_token.startswith(service_token[:4])
+                    )
+                )
+                for service_token in service_tokens
+            ):
+                candidate_covers_service_base = False
+                break
+        if candidate_covers_service_base:
+            return True
 
     service_flags = _lab_price_variant_flags({"serviceName": service_name})
     if not service_flags:
@@ -6793,12 +6869,13 @@ class Services:
             except Exception:
                 retail_rows = []
             if isinstance(retail_rows, list) and retail_rows:
-                retail_matches = _select_patient_price_rows(
+                care_query = str(service_name or query or "").strip()
+                retail_matches = _select_address_price_rows(
                     [row for row in retail_rows if isinstance(row, dict)],
-                    service_name,
+                    care_query,
                     limit=10,
+                    family_limit=50,
                 )
-                retail_matches = _annotate_price_rows_with_care_context(retail_matches)
                 care_addresses = _care_setting_addresses_from_price_rows(retail_matches)
                 if branch_q:
                     care_addresses = [

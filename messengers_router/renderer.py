@@ -360,6 +360,7 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
 
     hint = str(payload.get("show_all_hint") or "").strip()
     if hint:
+        lines.append("")
         lines.append(hint)
     lines.append("Если нужно, помогу выбрать подходящий вариант или подскажу подготовку.")
     return "\n".join(lines).strip()

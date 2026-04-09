@@ -275,6 +275,20 @@ def test_deterministic_rule_decision_price():
     assert out.label == "PRICE"
 
 
+def test_deterministic_rule_decision_branch_hours_routes_to_address():
+    out = run(
+        deterministic_rule_decision(
+            "Здравствуйте, вы завтра работаете?",
+            {},
+            allow_refine=False,
+            attach_secondary=False,
+        )
+    )
+    assert out is not None
+    assert out.label == "ADDRESS"
+    assert "rule_address_work_hours" in out.flags
+
+
 def test_deterministic_rule_decision_price_with_doctor_name(monkeypatch):
     monkeypatch.setattr(
         classifier_mod,

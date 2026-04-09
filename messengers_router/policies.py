@@ -172,6 +172,14 @@ ADDRESS_PATTERNS = [
     r"\bгде\b.*\bнаходит\w*",
 ]
 
+WORK_HOURS_PATTERNS = [
+    r"\bработа(ет|ете|ют)\b",
+    r"\b(открыт\w*|закрыт\w*)\b",
+    r"\b(до|со)\s+скольки\b",
+    r"\bграфик\w*.*\bработ\w*",
+    r"\bрежим\w*.*\bработ\w*",
+]
+
 NEWS_PATTERNS = [
     r"\bакци\w*",
     r"\bскидк\w*",
@@ -212,6 +220,7 @@ _TAX_DOC_REQUEST_RE = _compile_patterns(TAX_DOC_REQUEST_PATTERNS)
 _APPOINTMENT_INTENT_RE = _compile_patterns(APPOINTMENT_INTENT_PATTERNS)
 _PRICE_RE = _compile_patterns(PRICE_PATTERNS)
 _ADDRESS_RE = _compile_patterns(ADDRESS_PATTERNS)
+_WORK_HOURS_RE = _compile_patterns(WORK_HOURS_PATTERNS)
 _NEWS_RE = _compile_patterns(NEWS_PATTERNS)
 _DOCTOR_INFO_RE = _compile_patterns(DOCTOR_INFO_PATTERNS)
 
@@ -727,6 +736,22 @@ def detect_price_intent(text: str) -> bool:
 
 def detect_address_intent(text: str) -> bool:
     return _matches_any(text, _ADDRESS_RE)
+
+
+def detect_branch_hours_intent(text: str) -> bool:
+    """
+    Определяет вопросы о графике работы филиалов без явного слова `адрес`.
+
+    :param text: текст пользователя
+    :return: True, если вопрос похож на запрос о режиме работы/открытии филиала
+    """
+
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    if detect_price_intent(raw):
+        return False
+    return _matches_any(raw, _WORK_HOURS_RE)
 
 
 def detect_news_intent(text: str) -> bool:

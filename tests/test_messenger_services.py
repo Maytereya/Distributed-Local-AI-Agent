@@ -2028,6 +2028,7 @@ def test_price_info_hepatitis_returns_family_query_with_hint(monkeypatch):
     assert len(res["family_variants"]) == 12
     assert res["remaining_count"] == 2
     assert "напишите: \"все\"" in text.lower()
+    assert "\n\nПо вашему запросу найдено еще 2 вариантов." in text
     assert "Гепатит вариант 10" in text
     assert "Гепатит вариант 11" not in text
 
@@ -2169,6 +2170,8 @@ def test_price_info_tooth_removal_returns_family_query_variants(monkeypatch):
             {"serviceName": "Простое удаление зуба", "serviceHomecode": "tooth-1", "cost": 3000},
             {"serviceName": "Сложное удаление зуба", "serviceHomecode": "tooth-2", "cost": 6000},
             {"serviceName": "Удаление зуба мудрости", "serviceHomecode": "tooth-3", "cost": 10000},
+            {"serviceName": "Удаление серной пробки", "serviceHomecode": "ent-1", "cost": 1200},
+            {"serviceName": "Удаление полипа уретры", "serviceHomecode": "uro-1", "cost": 4500},
         ]
 
     monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
@@ -2179,6 +2182,8 @@ def test_price_info_tooth_removal_returns_family_query_variants(monkeypatch):
     names = [str(row.get("serviceName") or "").lower() for row in (res.get("family_variants") or []) if isinstance(row, dict)]
     assert any("простое удаление зуба" in name for name in names)
     assert any("сложное удаление зуба" in name for name in names)
+    assert not any("серной пробки" in name for name in names)
+    assert not any("полипа уретры" in name for name in names)
 
 
 def test_price_info_trauma_orthopedist_prefers_base_consultation_over_kmn_uzi(monkeypatch):
@@ -2254,6 +2259,29 @@ def test_price_info_surgeon_prefers_primary_before_repeat_and_home(monkeypatch):
     assert "первичный" in top_name
     assert "повторный" not in top_name
     assert "на дому" not in top_name
+
+
+def test_price_info_thigh_lift_family_does_not_leak_other_plastic_or_unrelated_services(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "Подтяжка бедер 1 категория", "serviceHomecode": "hip-1", "cost": 150000},
+            {"serviceName": "Подтяжка бедер 2 категория", "serviceHomecode": "hip-2", "cost": 250000},
+            {"serviceName": "Подтяжка ягодиц 1 категория", "serviceHomecode": "butt-1", "cost": 150000},
+            {"serviceName": "Гепатит В - HBsAg", "serviceHomecode": "hep", "cost": 410},
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("стоимость подтяжки бедер", {}))
+
+    rows = res.get("family_variants") or res.get("prices") or []
+    names = [str(row.get("serviceName") or "").lower() for row in rows if isinstance(row, dict)]
+    assert names
+    assert any("подтяжка бедер" in name for name in names)
+    assert not any("подтяжка ягодиц" in name for name in names)
+    assert not any("гепатит" in name for name in names)
 
 
 def test_classifier_price_family_show_all_followup_returns_price():
@@ -2674,6 +2702,57 @@ def test_address_info_price_units_keeps_precise_inpatient_address_when_regions_h
         for branch in (res.get("branches") or [])
         if isinstance(branch, dict)
     )
+
+
+def test_address_info_uses_family_expansion_when_top_price_rows_hide_second_care_setting(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_regions():
+        return [
+            {"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"},
+            {"id": 2, "addressForSite": "г. Самара, ул. Ново-Садовая, 106, кор. 82", "city": "Самара"},
+            {"id": 3, "addressForSite": "г. Самара, ул. Победы, 83", "city": "Самара"},
+        ]
+
+    def fake_price_by_region(_region_id):
+        day_rows = [
+            {
+                "serviceName": f"Тонзиллэктомия {idx} категория",
+                "serviceHomecode": f"tonsil-day-{idx}",
+                "cost": 20000 + idx,
+                "priceUnitId": 195,
+            }
+            for idx in range(1, 11)
+        ]
+        inpatient_rows = [
+            {
+                "serviceName": "Тонзиллэктомия двусторонняя",
+                "serviceHomecode": "tonsil-inpatient-1",
+                "cost": 80000,
+                "priceUnitId": 489,
+            }
+        ]
+        return day_rows + inpatient_rows
+
+    def fake_price_units():
+        return [
+            {"id": 190, "parent": None, "name": "Медицинская помощь"},
+            {"id": 311, "parent": 190, "name": "Дневной стационар"},
+            {"id": 312, "parent": 190, "name": "Круглосуточный стационар"},
+            {"id": 195, "parent": 311, "name": "Дневной стационар (Оториноларингология)"},
+            {"id": 489, "parent": 312, "name": "Круглосуточный стационар (Оториноларингология)"},
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_units", fake_price_units)
+
+    res = run(svc.address_info("Где можно сделать тонзиллэктомию?", {"service_name": "Тонзиллэктомия"}))
+
+    assert res["addresses"] == [
+        "г. Самара, пр. Ленина, 5",
+        "г. Самара, ул. Ново-Садовая, 106, кор. 82",
+    ]
 
 
 def test_news_info(monkeypatch):
