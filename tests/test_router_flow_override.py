@@ -738,6 +738,56 @@ def test_route_message_prepare_short_followup_overrides_doctor_info(monkeypatch)
     assert plan.label == "PREPARE"
 
 
+def test_route_message_prepare_short_followup_overrides_appointment(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="APPOINTMENT",
+                confidence=0.8,
+                entities={"service_name": "Вульвоскопия"},
+                flags={"rule_appointment"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence()
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+
+    state = SessionState(
+        session_id="prepare-followup-appointment-to-prepare",
+        last_entities={"_last_label": "PREPARE", "service_name": "Вульвоскопия"},
+    )
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "Вульвоскопия",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "PREPARE"
+    assert "flow_prepare_followup_override" in decision.flags
+    assert plan.label == "PREPARE"
+
+
 def test_hydrate_schedule_sets_branch_when_windows_have_single_branch():
     state = SessionState(session_id="t1")
     payload = {

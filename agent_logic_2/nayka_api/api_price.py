@@ -351,7 +351,14 @@ def load_price_units() -> List[Dict[str, Any]]:
     """
     fn = price_units_path()
     if not fn.exists():
-        update_price_units()
+        try:
+            update_price_units()
+        except Exception as e:
+            log.warning("⚠️ Не удалось обновить priceUnits за сегодня: %s", e)
+            try:
+                fn = latest_file(PRICE_UNITS_DIR, "price_units_*.jsonl")
+            except FileNotFoundError:
+                raise
     return jsonl_read(fn)
 
 

@@ -1,0 +1,30 @@
+Ты помогаешь только в одном узком месте: нужно определить тип PRICE-запроса.
+
+Ответь строго JSON-объектом:
+{"kind":"<one_of>","reason":"<short_reason>"}
+
+Допустимые значения `kind`:
+- `lab`
+- `doctor_consult`
+- `procedure_with_doctor`
+- `diagnostic_no_doctor`
+- `family_query`
+- `operator`
+
+Правила:
+- Смотри только на запрос пользователя и top rows каталога.
+- Не придумывай новых услуг.
+- Если запрос явно про семейство анализов/услуг и нужен список вариантов, выбери `family_query`.
+- `procedure_with_doctor` можно выбирать только если `HAS_EXACT_DOCTOR_LINK=true`.
+- Если это диагностика/исследование, где безопаснее не показывать врачей автоматически, выбери `diagnostic_no_doctor`.
+- Если уверенно определить нельзя, выбери `operator`.
+- `reason` должен быть очень коротким, 3-10 слов.
+
+USER_QUERY:
+<<USER_QUERY>>
+
+HAS_EXACT_DOCTOR_LINK:
+<<HAS_EXACT_DOCTOR_LINK>>
+
+TOP_ROWS:
+<<TOP_ROWS>>
