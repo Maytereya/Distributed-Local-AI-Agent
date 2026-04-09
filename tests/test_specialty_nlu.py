@@ -131,6 +131,24 @@ def test_price_renderer_returns_cost_for_single_match():
     assert "Источник цены: розничный прайс Самары." in text
 
 
+def test_price_renderer_shows_care_setting_and_address_when_present():
+    payload = {
+        "note": "price_info: priceByRegion(3)",
+        "prices": [
+            {
+                "serviceName": "Тонзиллотомия",
+                "cost": 20000.0,
+                "care_setting_label": "дневной стационар",
+                "care_setting_address": "г. Самара, пр. Ленина, 5",
+            },
+        ],
+    }
+    text = format_price_for_patient(payload, {"service_name": "Тонзиллотомия"})
+    assert "Тонзиллотомия" in text
+    assert "Формат: дневной стационар." in text
+    assert "Адрес: г. Самара, пр. Ленина, 5." in text
+
+
 def test_doctor_info_renderer_single_selected_doctor_compact_followup():
     payload = {
         "doctors": [

@@ -1335,10 +1335,24 @@ def _has_explicit_non_samara_regions(values: list[str]) -> bool:
 
 
 def _extract_specialty_from_text(text: str) -> str:
+    """
+    Извлекает каноническую специальность из пользовательского текста.
+
+    Сначала пытается найти составную специальность через role-синонимы
+    (`травматолог ортопед`, `уролог андролог` и т.п.), затем использует
+    legacy-regex fallback.
+
+    :param text: исходный текст пользователя
+    :return: каноническая специальность или пустая строка
+    """
+
     if _UZI_QUERY_RE.search(text or ""):
         return "узи"
     if _ENDOSCOPY_SERVICE_RE.search(text or ""):
         return "эндоскопист"
+    for specialty in sorted(_SPECIALTY_CANONICAL, key=len, reverse=True):
+        if _matches_specialty_terms(text, specialty):
+            return specialty
     m = _SPECIALTY_RE.search(text or "")
     if not m:
         return ""
@@ -2229,6 +2243,11 @@ def _addresses_to_branch_payload(
                 continue
             disp = _region_display_name(region)
             if not disp:
+                continue
+            # В branch payload подмешиваем только реальные адреса филиалов.
+            # Иначе generic live-region вроде "Самара" может перехватить точный
+            # адрес из priceUnits и испортить patient-facing рендер.
+            if not _looks_like_real_address(disp):
                 continue
             if _soft_address_match(addr, disp):
                 best_region = region
@@ -3208,6 +3227,259 @@ def _normalise_family_variant_name(value: str) -> str:
     return re.sub(r"\s+", " ", norm).strip()
 
 
+def _expand_family_rows_by_root_token(
+    rows: list[dict[str, Any]],
+    *,
+    family_query: str,
+    root_token: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """
+    Расширяет семейную выдачу по одному корневому токену запроса.
+
+    Используется для generic family-query, когда обычный ranker видит только
+    один широкий комплекс, но в каталоге есть целое семейство строк с тем же
+    корнем (`витамин*`, `гепатит*`, `зуб*`).
+
+    :param rows: полный список строк прайса
+    :param family_query: нормализованный family-query пользователя
+    :param root_token: значимый корневой токен запроса
+    :param limit: максимальный размер расширенной выдачи
+    :return: список строк прайса, сгруппированных вокруг root-token
+    """
+
+    token = _normalise_price_token(root_token)
+    if len(token) < 4:
+        return []
+    needle = token[:4]
+    candidate_rows: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str]] = set()
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw_name = str(row.get("serviceName") or row.get("name") or "").strip()
+        if not raw_name:
+            continue
+        row_tokens = _augment_price_tokens(
+            [_normalise_price_token(tok) for tok in _PRICE_TOKEN_RE.findall(raw_name)],
+            raw_text=raw_name,
+        )
+        if not any(
+            len(rt) >= 4 and (rt.startswith(needle) or needle.startswith(rt[:4]))
+            for rt in row_tokens
+        ):
+            continue
+        dedup_key = (
+            _normalise_input(raw_name),
+            str(row.get("serviceHomecode") or row.get("homecode") or "").strip(),
+        )
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
+        candidate_rows.append(row)
+
+    if len(candidate_rows) < 2:
+        return []
+
+    ranked = _rank_price_rows(candidate_rows, token, limit=max(limit, 20))
+    if not ranked:
+        return []
+
+    if _is_lab_price_query_for_catalog(family_query):
+        requested_flags = _query_price_variant_flags(family_query)
+        filtered_ranked = [
+            row
+            for row in ranked
+            if not _lab_price_variant_flags(row) or _lab_price_variant_flags(row).issubset(requested_flags)
+        ]
+        if filtered_ranked:
+            ranked = filtered_ranked
+
+    return ranked[:limit]
+
+
+def _family_query_root_tokens(query_text: str) -> list[str]:
+    """
+    Выделяет из price-запроса информативные токены для family-кластеризации.
+
+    В отличие от ручного списка корней, функция опирается на уже очищенные
+    токены запроса и подходит для новых семейств услуг без пополнения regex.
+
+    :param query_text: исходный пользовательский запрос
+    :return: список значимых токенов, отсортированных по длине
+    """
+
+    family_query = str(_extract_price_service_from_query(query_text) or query_text).strip()
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for token in _price_query_tokens(family_query):
+        norm = _normalise_price_token(token)
+        if (
+            not norm
+            or norm in _PRICE_GENERIC_SERVICE_TOKENS
+            or len(norm) < 4
+            or norm.isdigit()
+            or "_" in norm
+        ):
+            continue
+        if norm in seen:
+            continue
+        seen.add(norm)
+        tokens.append(norm)
+    tokens.sort(key=len, reverse=True)
+    return tokens
+
+
+def _dedupe_price_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Удаляет дубли строк прайса по названию и homecode.
+
+    :param rows: список строк прайса
+    :return: список уникальных строк в исходном порядке
+    """
+
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = (
+            _normalise_input(str(row.get("serviceName") or row.get("name") or "")),
+            _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or "")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def _select_family_variant_rows(
+    rows: list[dict[str, Any]],
+    family_query: str,
+    *,
+    ranking_query: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """
+    Отбирает patient-facing строки для family-режима без жесткой привязки к одному кейсу.
+
+    Для лабораторных запросов сохраняет уже существующую фильтрацию модификаторов,
+    а для остальных услуг использует обычный price-ranking.
+
+    :param rows: candidate-строки прайса
+    :param family_query: очищенный family-query пользователя
+    :param ranking_query: текст, по которому ранжируем family-кандидаты
+    :param limit: максимум строк на выходе
+    :return: список вариантов для family-выдачи
+    """
+
+    unique_rows = _dedupe_price_rows(rows)
+    if not unique_rows:
+        return []
+    effective_query = str(ranking_query or family_query).strip() or family_query
+    if _is_lab_price_query_for_catalog(family_query):
+        ranked = _rank_price_rows(unique_rows, effective_query, limit=max(limit, 20))
+        requested_flags = _query_price_variant_flags(family_query)
+        filtered_ranked: list[dict[str, Any]] = []
+        for row in ranked:
+            row_flags = _lab_price_variant_flags(row)
+            if row_flags and not row_flags.issubset(requested_flags):
+                continue
+            filtered_ranked.append(row)
+        if filtered_ranked:
+            ranked = filtered_ranked
+        return ranked[:limit]
+    return _rank_price_rows(unique_rows, effective_query, limit=limit)
+
+
+def _family_variant_base_names(rows: list[dict[str, Any]]) -> set[str]:
+    """
+    Выделяет множество нормализованных "базовых" названий family-вариантов.
+
+    :param rows: candidate-строки family-выдачи
+    :return: множество нормализованных названий без служебных модификаторов
+    """
+
+    base_names = {
+        _normalise_family_variant_name(str(row.get("serviceName") or row.get("name") or ""))
+        for row in rows
+        if isinstance(row, dict)
+    }
+    base_names.discard("")
+    return base_names
+
+
+def _build_family_candidate_rows(
+    query_text: str,
+    rows: list[dict[str, Any]],
+    *,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """
+    Собирает family-кандидаты по структуре каталога, а не по списку корневых слов.
+
+    Логика сначала берет близкие top-scored строки, а затем при необходимости
+    расширяет кластер по информативным токенам запроса и выбирает набор с
+    наибольшим разнообразием базовых вариантов.
+
+    :param query_text: исходный пользовательский запрос
+    :param rows: полный список строк прайса
+    :param limit: максимум family-вариантов на выходе
+    :return: candidate-строки family-кластера
+    """
+
+    family_query = str(_extract_price_service_from_query(query_text) or query_text).strip()
+    if not family_query:
+        return []
+
+    scored = _score_price_rows(rows, family_query, limit=40)
+    if not scored:
+        return []
+
+    top_score = int(scored[0].get("score") or 0)
+    top_matched = int(scored[0].get("matched") or 0)
+    direct_rows: list[dict[str, Any]] = []
+    for item in scored:
+        score = int(item.get("score") or 0)
+        matched = int(item.get("matched") or 0)
+        if score < max(0, top_score - 25):
+            break
+        if matched < max(1, top_matched - 1):
+            continue
+        row = item.get("row")
+        if isinstance(row, dict):
+            direct_rows.append(row)
+
+    best_rows = _select_family_variant_rows(direct_rows, family_query, limit=limit)
+    best_base_names = _family_variant_base_names(best_rows)
+
+    for token in _family_query_root_tokens(query_text):
+        expanded_rows = _expand_family_rows_by_root_token(
+            rows,
+            family_query=family_query,
+            root_token=token,
+            limit=max(limit, 40),
+        )
+        if len(expanded_rows) < 2:
+            continue
+        candidate_rows = _select_family_variant_rows(
+            direct_rows + expanded_rows,
+            family_query,
+            ranking_query=token,
+            limit=limit,
+        )
+        candidate_base_names = _family_variant_base_names(candidate_rows)
+        if len(candidate_base_names) > len(best_base_names) or (
+            len(candidate_base_names) == len(best_base_names) and len(candidate_rows) > len(best_rows)
+        ):
+            best_rows = candidate_rows
+            best_base_names = candidate_base_names
+
+    return best_rows
+
+
 def _is_family_query_candidate(query_text: str, rows: list[dict[str, Any]]) -> bool:
     """
     Определяет, нужен ли для price-запроса режим выдачи семейства вариантов.
@@ -3233,49 +3505,12 @@ def _is_family_query_candidate(query_text: str, rows: list[dict[str, Any]]) -> b
     if not tokens or len(tokens) > 4:
         return False
 
-    scored = _score_price_rows(rows, family_query, limit=40)
-    if not scored and len(tokens) == 1:
-        needle = tokens[0][:4]
-        loose_rows: list[dict[str, Any]] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            name = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
-            row_tokens = [_normalise_price_token(tok) for tok in _PRICE_TOKEN_RE.findall(name)]
-            if any(len(rt) >= 4 and (rt.startswith(needle) or needle.startswith(rt[:4])) for rt in row_tokens):
-                loose_rows.append(row)
-        scored = [{"row": row, "score": 100, "matched": 1} for row in loose_rows[:40]]
-    if len(scored) < 2:
+    candidate_rows = _build_family_candidate_rows(query_text, rows, limit=20)
+    if len(candidate_rows) < 2:
         return False
 
-    top_score = int(scored[0].get("score") or 0)
-    top_matched = int(scored[0].get("matched") or 0)
-    tied_like: list[dict[str, Any]] = []
-    for item in scored:
-        score = int(item.get("score") or 0)
-        matched = int(item.get("matched") or 0)
-        if score < max(0, top_score - 25):
-            break
-        if matched < max(1, top_matched - 1):
-            continue
-        row = item.get("row")
-        if isinstance(row, dict):
-            tied_like.append(row)
-
-    filtered = _select_patient_price_rows(tied_like, family_query, limit=20)
-    if len(filtered) < 2:
-        return False
-
-    family_root_query = bool(re.search(r"\b(гепатит\w*|вич|витамин\w*|удалени\w*\s+зуб\w*|зуб\w*)\b", query_text, re.I))
-    base_names = {
-        _normalise_family_variant_name(str(row.get("serviceName") or row.get("name") or ""))
-        for row in filtered
-        if isinstance(row, dict)
-    }
-    base_names.discard("")
-    if len(base_names) >= 3:
-        return True
-    return family_root_query and len(base_names) >= 2 and len(tokens) <= 2
+    base_names = _family_variant_base_names(candidate_rows)
+    return len(base_names) >= 3
 
 
 def _build_price_family_payload(
@@ -3299,25 +3534,11 @@ def _build_price_family_payload(
     if not _is_family_query_candidate(query_text, rows):
         return None
 
-    ranked = _select_patient_price_rows(rows, family_query, limit=50)
-    if len(ranked) < 2 and family_query:
-        token_candidates = [tok for tok in _price_query_tokens(family_query) if tok not in _PRICE_GENERIC_SERVICE_TOKENS]
-        if len(token_candidates) == 1:
-            needle = token_candidates[0][:4]
-            ranked = [
-                row
-                for row in rows
-                if isinstance(row, dict)
-                and any(
-                    len(rt) >= 4 and (rt.startswith(needle) or needle.startswith(rt[:4]))
-                    for rt in _augment_price_tokens(
-                        [_normalise_price_token(tok) for tok in _PRICE_TOKEN_RE.findall(str(row.get("serviceName") or row.get("name") or ""))],
-                        raw_text=str(row.get("serviceName") or row.get("name") or ""),
-                    )
-                )
-            ]
+    ranked = _build_family_candidate_rows(query_text, rows, limit=50)
     if len(ranked) < 2:
         return None
+
+    ranked = _annotate_price_rows_with_care_context(ranked)
 
     service_name = family_query
     visible_count = len(ranked) if show_all else min(len(ranked), visible_limit)
@@ -3376,6 +3597,52 @@ def _price_family_payload_from_context(entities: dict[str, Any], *, show_all: bo
         "show_all_hint": show_all_hint,
         "note": "price_family_context",
     }
+
+
+def _annotate_price_rows_with_care_context(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Обогащает строки прайса контекстом оказания услуги из справочника priceUnits.
+
+    :param rows: найденные строки прайса
+    :return: копии строк с полями care-setting/address, если контекст удалось определить
+    """
+    if not rows:
+        return []
+    try:
+        units_index = api_price.build_price_units_index(api_price.load_price_units())
+    except Exception:
+        return [row for row in rows if isinstance(row, dict)]
+
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        annotated = dict(row)
+        annotated.update(
+            api_price.resolve_price_unit_context(
+                row.get("priceUnitId"),
+                units_index=units_index,
+            )
+        )
+        enriched.append(annotated)
+    return enriched
+
+
+def _care_setting_addresses_from_price_rows(rows: list[dict[str, Any]]) -> list[str]:
+    """
+    Извлекает уникальные адреса care-setting из уже обогащенных строк прайса.
+
+    :param rows: строки прайса с полем care_setting_address
+    :return: список уникальных адресов в порядке появления
+    """
+    addresses: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        address = str(row.get("care_setting_address") or "").strip()
+        if address and address not in addresses:
+            addresses.append(address)
+    return addresses
 
 
 def _is_price_show_all_request(query_text: str) -> bool:
@@ -5084,6 +5351,7 @@ class Services:
                 retail_query,
                 limit=5,
             )
+            out["retail_prices"] = _annotate_price_rows_with_care_context(out["retail_prices"])
         except Exception:
             out["retail_prices"] = []
             out["note"] = "service_bundle_info: retail source unavailable"
@@ -6403,8 +6671,9 @@ class Services:
                     [p for p in doc_prices if isinstance(p, dict)],
                     key=lambda p: (_normalise_input(str(p.get("serviceName") or "")), _as_int(p.get("cost")) or 0),
                 )
+            doc_prices = _annotate_price_rows_with_care_context(doc_prices[:10])
             return {
-                "prices": doc_prices[:10],
+                "prices": doc_prices,
                 "note": "price_info: doctorServicePricesByRegion (branch-level regionId)",
                 "entities_used": {
                     **entities,
@@ -6448,6 +6717,7 @@ class Services:
             retail_query,
             limit=10,
         )
+        matches = _annotate_price_rows_with_care_context(matches)
         return {
             "prices": matches,
             "service_kind": "lab" if _classify_catalog_service_kind(
@@ -6516,6 +6786,32 @@ class Services:
                     if not a or not _looks_like_real_address(a):
                         continue
                     allowed_doctor_addresses_norm.add(_normalise_input(a))
+
+        if service_q and (appointment_mode or _is_procedure_branch_lookup_query(query, service_q)):
+            try:
+                retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
+            except Exception:
+                retail_rows = []
+            if isinstance(retail_rows, list) and retail_rows:
+                retail_matches = _select_patient_price_rows(
+                    [row for row in retail_rows if isinstance(row, dict)],
+                    service_name,
+                    limit=10,
+                )
+                retail_matches = _annotate_price_rows_with_care_context(retail_matches)
+                care_addresses = _care_setting_addresses_from_price_rows(retail_matches)
+                if branch_q:
+                    care_addresses = [
+                        addr for addr in care_addresses
+                        if branch_q in _normalise_input(addr)
+                    ]
+                if care_addresses:
+                    return {
+                        "addresses": care_addresses,
+                        "branches": _addresses_to_branch_payload(care_addresses, regions),
+                        "note": "address_info: priceUnits care-setting",
+                        "entities_used": entities,
+                    }
 
         if service_q and _is_procedure_branch_lookup_query(query, service_q):
             procedure_branches = await self._procedure_branches_from_index(service_q, regions)

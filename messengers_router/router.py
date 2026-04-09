@@ -1276,7 +1276,7 @@ async def route_patient_message(
     # в подготовке, чтобы не сваливаться обратно в TEST_ASSIST.
     if (
         str(state.last_entities.get("_last_label") or "") == "PREPARE"
-        and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE", "DOCTOR_INFO", "DOCTOR_SCHEDULE"}
+        and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE", "DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
         and is_short_prepare_followup(user_text)
         and not detect_prepare_intent(user_text)
         and not detect_nonbookable_walkin_intent(user_text, state.last_entities)
