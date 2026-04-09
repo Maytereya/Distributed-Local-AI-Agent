@@ -536,6 +536,17 @@ _PRICE_GENERIC_FAMILY_ROOT_TOKENS = {
     "операц",
     "пластик",
 }
+_PRICE_QUERY_SERVICE_NOISE_TOKENS = {
+    "г",
+    "город",
+    "адрес",
+    "филиал",
+    "обследование",
+    "осбледование",
+    "нам",
+    "там",
+    "тут",
+}
 _PRICE_SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
     "оак": ("общий анализ крови",),
     "общий анализ крови": ("общий анализ крови",),
@@ -3980,6 +3991,93 @@ def _should_prefer_retail_query_candidate(query_candidate: str, service_name: st
     return not service_flags.issubset(query_flags)
 
 
+def _meaningful_price_service_tokens(value: str) -> list[str]:
+    """
+    Возвращает информативные токены service_name без общих служебных слов.
+
+    :param value: строка услуги
+    :return: список нормализованных токенов
+    """
+
+    return [
+        tok
+        for tok in _price_query_tokens(value)
+        if tok not in _PRICE_GENERIC_SERVICE_TOKENS
+    ]
+
+
+def _is_price_service_noise_token(token: str) -> bool:
+    """
+    Проверяет, что токен не добавляет предметной специфики к услуге.
+
+    :param token: нормализованный токен услуги
+    :return: True для шумового токена
+    """
+
+    norm = _normalise_price_token(token)
+    if not norm:
+        return True
+    if norm.isdigit():
+        return True
+    return norm in _PRICE_QUERY_SERVICE_NOISE_TOKENS
+
+
+def _select_effective_price_service_name(entity_service_name: str, query_service_name: str) -> str:
+    """
+    Выбирает итоговое имя услуги между извлеченной entity и candidate из query.
+
+    Правило защищает от деградации, когда нижний слой повторно извлекает услугу
+    из полного текста и получает более шумную строку с адресом, вторым интентом
+    или служебными словами. При этом новый query-candidate все еще может
+    победить, если он действительно задает другую или более точную услугу.
+
+    :param entity_service_name: service_name, уже выделенный NLU/grounding слоем
+    :param query_service_name: service_name, извлеченный из полного query
+    :return: наиболее надежное имя услуги для дальнейшей обработки
+    """
+
+    entity = str(entity_service_name or "").strip()
+    query = str(query_service_name or "").strip()
+    if not entity:
+        return query
+    if not query:
+        return entity
+
+    entity_norm = _normalise_input(entity).replace("ё", "е")
+    query_norm = _normalise_input(query).replace("ё", "е")
+    if not query_norm or entity_norm == query_norm:
+        return entity
+
+    entity_tokens = _meaningful_price_service_tokens(entity)
+    query_tokens = _meaningful_price_service_tokens(query)
+    if not entity_tokens:
+        return query
+    if not query_tokens:
+        return entity
+
+    entity_set = set(entity_tokens)
+    query_set = set(query_tokens)
+    if not entity_set.intersection(query_set):
+        return query
+    if query_set.issubset(entity_set):
+        return entity
+
+    query_extra = [tok for tok in query_tokens if tok not in entity_set]
+    if not query_extra:
+        return entity
+
+    if entity_set.issubset(query_set):
+        if any(_is_price_service_noise_token(tok) for tok in query_extra):
+            return entity
+        entity_kind = _detect_service_kind(entity, query_text=entity)
+        query_kind = _detect_service_kind(query, query_text=query)
+        if entity_kind != query_kind:
+            return entity
+        return query
+
+    return query
+
+
 def _doctor_sort_key(doc: dict[str, Any]) -> tuple[int, str]:
     try:
         ord_value = int(doc.get("ord"))
@@ -5390,7 +5488,10 @@ class Services:
                 query_text,
                 current_service_name=entity_service_name,
             ) or _extract_price_service_from_query(query_text)
-        service_name = query_service_name or entity_service_name
+        service_name = _select_effective_price_service_name(
+            entity_service_name,
+            query_service_name,
+        )
         needle = _normalise_input(service_name)
 
         out: dict[str, Any] = {
@@ -6708,7 +6809,10 @@ class Services:
                     query_text,
                     current_service_name=entity_service_name,
                 ) or _extract_price_service_from_query(query_text)
-            service_name = query_service_name or entity_service_name
+            service_name = _select_effective_price_service_name(
+                entity_service_name,
+                query_service_name,
+            )
         needle = _normalise_input(service_name)
 
         if doctor_id:

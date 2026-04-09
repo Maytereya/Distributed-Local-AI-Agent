@@ -1560,6 +1560,26 @@ def test_price_info_keeps_service_name_on_city_only_reply(monkeypatch):
     assert str(res["entities_used"].get("service_name_effective") or "").lower() == "экг"
 
 
+def test_price_info_keeps_entity_service_name_when_query_candidate_is_noisy(monkeypatch):
+    svc = Services()
+
+    monkeypatch.setattr(
+        svc_mod.api_price,
+        "load_price_by_region",
+        lambda _region_id: [{"serviceName": "УЗДГ сосудов шеи", "cost": 1800}],
+    )
+
+    res = run(
+        svc.price_info(
+            "День добрый!\nСамара. Победы 83.\nНам нужно пройти обследование  уздг сосудов шеи и сдать кровь на ЛПНП .\nЭто возможно сделать по данному адресу?\nКакова стоимость услуг?",
+            {"service_name": "УЗДГ сосудов шеи", "secondary_intents": ["TEST_ASSIST", "ADDRESS"]},
+        )
+    )
+
+    assert res["prices"], "Expected retail match for grounded diagnostic service"
+    assert str(res["entities_used"].get("service_name_effective") or "") == "УЗДГ сосудов шеи"
+
+
 def test_resolve_price_service_name_from_catalog_matches_biochemistry():
     rows = [
         {"serviceName": "Бодилифт 1 категория", "cost": 400000},
@@ -1661,6 +1681,42 @@ def test_resolve_price_service_name_from_catalog_consult_specialty_cardio():
 
 def test_extract_price_service_from_query_consult_without_specialty_returns_none():
     assert svc_mod._extract_price_service_from_query("Сколько стоит консультация?") is None
+
+
+def test_select_effective_price_service_name_keeps_clean_entity_over_noisy_query():
+    selected = svc_mod._select_effective_price_service_name(
+        "Rv-вич гепатит",
+        "сдачи анализа rv вич гепатит г",
+    )
+
+    assert selected == "Rv-вич гепатит"
+
+
+def test_select_effective_price_service_name_keeps_doctor_entity_when_query_has_address_noise():
+    selected = svc_mod._select_effective_price_service_name(
+        "УЗДГ сосудов шеи",
+        "победы 83 нам обследование уздг сосудов шеи кровь",
+    )
+
+    assert selected == "УЗДГ сосудов шеи"
+
+
+def test_select_effective_price_service_name_prefers_new_query_over_stale_context():
+    selected = svc_mod._select_effective_price_service_name(
+        "ЭКГ",
+        "холестерин",
+    )
+
+    assert selected == "холестерин"
+
+
+def test_select_effective_price_service_name_accepts_more_specific_query_variant():
+    selected = svc_mod._select_effective_price_service_name(
+        "УЗДГ сосудов",
+        "УЗДГ сосудов шеи",
+    )
+
+    assert selected == "УЗДГ сосудов шеи"
 
 
 def test_service_name_matches_specialty_does_not_match_substring_therapist_in_hirudotherapist():
@@ -2885,6 +2941,35 @@ def test_service_bundle_info_keeps_service_name_on_city_only_reply(monkeypatch):
     res = run(svc.service_bundle_info("Самара", {"service_name": "ЭКГ"}))
 
     assert str(res.get("service_name") or "").lower() == "экг"
+
+
+def test_service_bundle_info_keeps_entity_service_name_when_query_extraction_is_noisy(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_regions():
+        return [{"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"}]
+
+    async def fake_ensure_doctors_cache():
+        return []
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(
+        svc_mod.api_price,
+        "load_price_by_region",
+        lambda _region_id: [{"serviceName": "УЗДГ сосудов шеи", "cost": 1800}],
+    )
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", lambda: [])
+
+    res = run(
+        svc.service_bundle_info(
+            "День добрый!\nСамара. Победы 83.\nНам нужно пройти обследование  уздг сосудов шеи и сдать кровь на ЛПНП .\nЭто возможно сделать по данному адресу?\nКакова стоимость услуг?",
+            {"service_name": "УЗДГ сосудов шеи", "secondary_intents": ["TEST_ASSIST", "ADDRESS"]},
+        )
+    )
+
+    assert str(res.get("service_name") or "") == "УЗДГ сосудов шеи"
+    assert str(res.get("entities_used", {}).get("service_name_effective") or "") == "УЗДГ сосудов шеи"
 
 
 def test_service_bundle_info_enriches_tonsillotomy_with_care_setting(monkeypatch):
