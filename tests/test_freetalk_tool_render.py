@@ -12,6 +12,7 @@ if str(SRC_ROOT) not in sys.path:
 from localragagent.freetalk.agent import FreeTalkAgent
 from localragagent.freetalk.clinical_router import ClinicalDecision
 from localragagent.freetalk.config import FreeTalkConfig
+from localragagent.freetalk.contracts import AgentReply
 from localragagent.freetalk.tool_dispatcher import ToolDispatcher
 
 
@@ -286,3 +287,230 @@ def test_build_tool_plan_from_decision_uses_router_plan():
         decision=decision,
     )
     assert plan[:2] == ["doctors_info", "doctors_schedule_week"]
+
+
+def test_build_dialog_act_uses_llm_router_when_confident(monkeypatch):
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+
+    async def fake_route(
+        self: FreeTalkAgent,
+        *,
+        user_message: str,
+        context,
+        pending_state: dict[str, object],
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        _ = user_message, context, pending_state, remembered_doctor
+        return ClinicalDecision(
+            intent="doctor_schedule",
+            confidence=0.9,
+            entities={"doctor_name": "Дразнин"},
+            tool_plan=["doctors_schedule_week", "doctors_info"],
+            source="llm_router",
+        )
+
+    monkeypatch.setattr(FreeTalkAgent, "_route_clinical_decision", fake_route)
+    act = asyncio.run(
+        agent._build_dialog_act(
+            user_message="Расписание Дразнина",
+            context=type("Ctx", (), {"session_id": "s1", "summary": "", "turns": []})(),
+            pending_state={},
+            remembered_doctor="",
+        )
+    )
+    assert act.route == "clinical"
+    assert act.intent == "doctor_schedule"
+    assert act.fallback_reason == ""
+    assert act.source == "llm_router"
+    assert act.tool_plan[:2] == ["doctors_schedule_week", "doctors_info"]
+
+
+def test_build_dialog_act_uses_regex_only_as_fallback(monkeypatch):
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+
+    async def fake_route(
+        self: FreeTalkAgent,
+        *,
+        user_message: str,
+        context,
+        pending_state: dict[str, object],
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        _ = user_message, context, pending_state, remembered_doctor
+        return ClinicalDecision(
+            intent="unknown",
+            confidence=0.05,
+            entities={},
+            tool_plan=[],
+            source="llm_router",
+        )
+
+    monkeypatch.setattr(FreeTalkAgent, "_route_clinical_decision", fake_route)
+    act = asyncio.run(
+        agent._build_dialog_act(
+            user_message="Расписание Дразнина",
+            context=type("Ctx", (), {"session_id": "s2", "summary": "", "turns": []})(),
+            pending_state={},
+            remembered_doctor="",
+        )
+    )
+    assert act.route == "clinical"
+    assert act.source == "heuristic_fallback"
+    assert act.fallback_reason == "unknown_intent"
+    assert act.tool_plan[:2] == ["doctors_schedule_week", "doctors_info"]
+
+
+def test_heuristic_post_tool_verifier_uses_clarify_text_from_payload():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    verification = agent._heuristic_post_tool_verification(
+        intent="price",
+        tool_name="price_info",
+        drafted_answer="",
+        tool_payload={"clarify_text": "Уточните название услуги."},
+        missing_slots=["service_or_analysis_name"],
+    )
+    assert verification.answer_policy == "clarify"
+    assert verification.should_clarify is True
+    assert "уточните" in verification.clarify_question.lower()
+
+
+def test_parse_post_tool_verification_normalizes_invalid_policy_to_clarify():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    fallback = agent._heuristic_post_tool_verification(
+        intent="doctor_info",
+        tool_name="doctors_info",
+        drafted_answer="Нашел врача.",
+        tool_payload={},
+        missing_slots=[],
+    )
+    verification = agent._parse_post_tool_verification(
+        {
+            "enough_data": False,
+            "should_clarify": True,
+            "clarify_question": "Уточните фамилию врача.",
+            "answer_policy": "something_else",
+        },
+        fallback=fallback,
+    )
+    assert verification.answer_policy == "clarify"
+    assert verification.should_clarify is True
+    assert "фамили" in verification.clarify_question.lower()
+
+
+def test_post_tool_verifier_uses_llm_json_decision(monkeypatch):
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+
+    async def fake_llm_json(self: FreeTalkAgent, _prompt: str) -> dict[str, object]:
+        return {
+            "enough_data": False,
+            "should_clarify": True,
+            "clarify_question": "Уточните, про какого врача идет речь.",
+            "answer_policy": "clarify",
+        }
+
+    monkeypatch.setattr(FreeTalkAgent, "_llm_json", fake_llm_json)
+    verification = asyncio.run(
+        agent._post_tool_verify(
+            user_message="Расписание врача",
+            intent="doctor_schedule",
+            tool_name="doctors_schedule_week",
+            drafted_answer="Нашел расписание",
+            tool_payload={"schedule": [{"fio": "Дразнин"}]},
+            missing_slots=["doctor_name_or_specialty"],
+        )
+    )
+    assert verification.source == "llm"
+    assert verification.answer_policy == "clarify"
+    assert "врача" in verification.clarify_question.lower()
+
+
+def test_source_fragments_for_clinic_reply():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    reply = AgentReply(text="Нашел расписание врача.", source="clinic_data")
+    fragments = agent._source_fragments_for_reply(reply)
+    assert fragments == [{"text": "Нашел расписание врача.", "source": "clinic_data"}]
+
+
+def test_source_fragments_for_web_search_reply():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    reply = AgentReply(
+        text="Нашел в интернете: ...\nЭто общая информация из интернет-поиска, не из данных клиники.",
+        source="mixed",
+        tool_name="web_search",
+    )
+    fragments = agent._source_fragments_for_reply(reply)
+    assert len(fragments) == 1
+    assert fragments[0]["source"] == "web_search"
+
+
+def test_source_fragments_for_mixed_reply_with_general_marker():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    reply = AgentReply(
+        text=(
+            "По данным клиники найдено 2 врача.\n"
+            "Это общая информация, не из данных клиники.\n"
+            "В целом направление связано с УЗИ."
+        ),
+        source="mixed",
+    )
+    fragments = agent._source_fragments_for_reply(reply)
+    assert len(fragments) == 3
+    assert fragments[0]["source"] == "clinic_data"
+    assert fragments[1]["source"] == "general_knowledge"
+    assert fragments[2]["source"] == "general_knowledge"

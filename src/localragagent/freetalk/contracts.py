@@ -22,9 +22,33 @@ class ToolCallResult:
 
 
 @dataclass(slots=True)
+class DialogAct:
+    route: str = "general"
+    intent: str = "unknown"
+    entities: dict[str, Any] = field(default_factory=dict)
+    confidence: float = 0.0
+    missing_slots: list[str] = field(default_factory=list)
+    clarify_question: str = ""
+    tool_plan: list[str] = field(default_factory=list)
+    response_policy: str = "general_only"
+    source: str = "llm_router"
+    fallback_reason: str = ""
+
+
+@dataclass(slots=True)
+class PostToolVerification:
+    enough_data: bool = True
+    should_clarify: bool = False
+    clarify_question: str = ""
+    answer_policy: str = "direct"
+    source: str = "heuristic"
+
+
+@dataclass(slots=True)
 class AgentReply:
     text: str
     source: str
     tool_name: str = ""
     tool_payload: dict[str, Any] = field(default_factory=dict)
+    source_fragments: list[dict[str, str]] = field(default_factory=list)
     next_session_id: str = ""

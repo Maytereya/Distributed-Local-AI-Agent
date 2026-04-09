@@ -1,7 +1,7 @@
-# ТЗ Draft: Free Talk Agent
+# ТЗ: Free Talk Agent
 
-Статус: draft v0.2  
-Дата: 2026-04-08  
+Статус: v0.3 (актуализировано по фактической реализации)  
+Дата: 2026-04-09  
 Контекст: новый режим для вкладки `AI - ассистент` в Gradio.
 
 ## 1. Цель
@@ -42,7 +42,41 @@
 
 Вывод: новый режим строим поверх `Services`, не дублируем API-логику из `agent_logic_2/llama_func_call.py`.
 
-## 3. UX/функциональные требования
+## 3. Фактическая реализация (на 2026-04-09)
+
+1. Основной package FT:
+   - `src/localragagent/freetalk/agent.py`
+   - `src/localragagent/freetalk/runner.py`
+   - `src/localragagent/freetalk/tool_registry.py`
+   - `src/localragagent/freetalk/tool_dispatcher.py`
+   - `src/localragagent/freetalk/memory_redis.py`
+   - `src/localragagent/freetalk/memory_persist.py`
+   - `src/localragagent/freetalk/prompts.py`
+   - `src/localragagent/freetalk/system_prompt.txt`
+   - `src/localragagent/freetalk/config.ini`
+2. Порты FT:
+   - `src/localragagent/ports/freetalk_services_port.py` (к `messengers_router.Services`)
+   - `src/localragagent/ports/freetalk_web_search_port.py` (SearXNG)
+   - `src/localragagent/ports/freetalk_llm_port.py` (LLM runtime)
+3. Введен `clarification-first` контур с клиническим роутером:
+   - `src/localragagent/freetalk/clinical_router.py`
+   - intent/confidence/entities/missing_slots/clarify_question/tool_plan
+   - обязательный уточняющий шаг при недостатке данных
+   - мягкий retry после пустого результата инструментов
+4. Добавлено контекстное doctor-followup поведение:
+   - хранение текущего врача в Redis meta
+   - корректная обработка запросов вида «о нем», «чем он занимается», коротких продолжений.
+5. Введен source-tagging ответов:
+   - внутренние `source_fragments` с тегами `clinic_data | general_knowledge | web_search`
+   - запись тегов в trace/логи (`event=answer_source_trace`)
+   - сохранение тегированных фрагментов в turn-историю Redis (UI при этом остается текстовым).
+6. Добавлен eval quality-gate FT (in-process):
+   - датасет: `tests/eval/freetalk_dialogs.jsonl`
+   - пороги: `tests/eval/freetalk_quality_gate.json`
+   - раннер: `tools/freetalk_quality_gate.py`
+   - запуск в CI: `.github/workflows/messengers_router_arch_guardrails.yml`.
+
+## 4. UX/функциональные требования
 
 1. На вкладке `AI - ассистент` добавить режим:
    - `Free talk` (или `Свободное общение`)
@@ -54,22 +88,22 @@
    - опционально дать общее знание с меткой, что это не данные клиники.
 3. Ответ должен быть коротко релевантным вопросу (без вываливания всего payload инструмента).
 
-## 4. Предлагаемая архитектура (v1)
+## 5. Архитектура (v1, актуальная)
 
-### 4.1 Новые модули
+### 5.1 Модули
 
-1. `agent_logic_2/free_talk/agent.py`  
-   Оркестратор диалога: prompt -> tool loop -> финальный ответ.
-2. `agent_logic_2/free_talk/tool_registry.py`  
-   JSON-схемы инструментов + диспетчер вызовов в `Services`.
-3. `agent_logic_2/free_talk/memory_redis.py`  
+1. `src/localragagent/freetalk/agent.py`  
+   Оркестратор диалога: routing -> clarification -> tool loop -> финальный ответ.
+2. `src/localragagent/freetalk/clinical_router.py`  
+   Нормализация клинического решения (`intent/confidence/entities/missing_slots/tool_plan`).
+3. `src/localragagent/freetalk/tool_registry.py`  
+   Эвристический fallback-планировщик и маршрутизация meili/web-сигналов.
+4. `src/localragagent/freetalk/memory_redis.py`  
    Оперативная память диалога в Redis.
-4. `agent_logic_2/free_talk/memory_persist.py`  
+5. `src/localragagent/freetalk/memory_persist.py`  
    Компактизация и запись long-term памяти.
-5. `agent_logic_2/free_talk/prompts.py`  
-   Загрузка системного промпта и prompt-шаблонов для summary.
 
-### 4.2 Интеграция в существующий flow
+### 5.2 Интеграция в существующий flow
 
 1. Добавить режим в `assistant_tab.py` (`radio_type_of_search`).
 2. Добавить ветку в `universal_echo` (`chat_modes.py`):
@@ -77,33 +111,38 @@
 3. Для этого режима хранить отдельный `free_talk_session_state` (ID сессии) через `gr.State`.
 4. Переиспользовать singleton `Services` (аналогично `messengers_router.endpoint.get_services`).
 
-### 4.3 Алгоритм хода диалога
+### 5.3 Алгоритм хода диалога (clarification-first)
 
 1. Принять `message`, `session_id`.
-2. Прочитать Redis-контекст (tail истории + summary + user profile минимально).
-3. Сформировать input для LLM: system prompt + context + user message.
-4. Запросить у LLM JSON-действие:
-   - `answer`
-   - `tool_call` (tool + arguments)
-5. Если `tool_call`:
-   - провалидировать аргументы;
-   - вызвать `Services.<tool>`;
-   - положить tool result в контекст;
-   - повторить цикл (не более `MAX_TOOL_STEPS`, например 3).
-6. Сгенерировать финальный ответ пользователю.
+2. Прочитать Redis-контекст (tail истории + summary + session meta/pending).
+3. Сформировать input для LLM clinical-router и получить JSON-решение:
+   - `intent`, `confidence`, `entities`,
+   - `missing_slots`, `clarify_question`, `tool_plan`.
+4. Если `missing_slots` не пустой или уверенность ниже порога:
+   - задать уточняющий вопрос;
+   - сохранить pending-state в Redis;
+   - завершить текущий ход.
+5. Если данных достаточно:
+   - выполнить tool-plan (до `MAX_TOOL_STEPS`);
+   - рендерить ответ строго из tool payload.
+6. Если tools не дали результата:
+   - один мягкий уточняющий шаг;
+   - при повторном пустом результате — честный `not found`.
 7. Сохранить user/assistant turns в Redis.
-8. Если достигнут порог compaction (по числу ходов/символов) - обновить summary и записать snapshot в постоянную память.
+8. При пороге compaction обновить summary и записать snapshot в постоянную память.
 
-## 5. Tool-calling контракт (v1)
+## 6. Tool-calling контракт (v1)
 
-Контракт действия LLM в JSON:
+Контракт решения clinical-router (JSON):
 
 ```json
 {
-  "action": "answer | tool_call",
-  "answer": "string",
-  "tool": "string",
-  "arguments": {}
+  "intent": "doctor_schedule | doctor_info | price | prepare | tests | test_result | address | clinic_documents | clinic_news | service_info | unknown",
+  "confidence": 0.0,
+  "entities": {},
+  "missing_slots": [],
+  "clarify_question": "",
+  "tool_plan": []
 }
 ```
 
@@ -134,9 +173,9 @@
 
 Примечание: `entities` заполняем минимально и безопасно (без попытки продублировать весь NLU `messengers_router`).
 
-## 6. Память
+## 7. Память
 
-### 6.1 Оперативная память (Redis)
+### 7.1 Оперативная память (Redis)
 
 Технически:
 
@@ -160,7 +199,7 @@
    - `ft:session:{session_id}:summary` (string)
    - `ft:session:{session_id}:meta` (hash/json)
 
-### 6.2 Постоянная память (long-term)
+### 7.2 Постоянная память (long-term)
 
 v1 (простой и надежный):
 
@@ -175,7 +214,7 @@ v1 (простой и надежный):
 
 v2 (опционально): индексировать summary в отдельную коллекцию Chroma для retrieval между долгими диалогами.
 
-## 7. Системный промпт (черновик)
+## 8. Системный промпт (черновик)
 
 ```text
 Ты разговорный AI-ассистент клиники.
@@ -199,17 +238,17 @@ v2 (опционально): индексировать summary в отдель�
     затем финальный выбор: удалить диалог или сохранить compact summary и начать новую сессию.
 ```
 
-## 8. Изменения по файлам (план)
+## 9. Изменения по файлам (актуально)
 
 1. `agent_logic_2/gradio_ui/tabs/assistant_tab.py`
 2. `agent_logic_2/gradio_ui/handlers/chat_modes.py`
 3. `gradio_interface.py` (список доступных режимов для ролей)
 4. `src/localragagent/freetalk/config.ini` + `src/localragagent/freetalk/config.py` (Redis и runtime конфиги)
 5. `requirements.txt` (добавить `redis`, если отсутствует)
-6. Новые файлы `agent_logic_2/free_talk/*`
+6. Новые файлы `src/localragagent/freetalk/*`
 7. `agent_logic_2/data/prompts/` + `app_data/prompts/` (seed prompt файлов)
 
-## 9. Логи и наблюдаемость
+## 10. Логи и наблюдаемость
 
 Минимум логов для `Free talk`:
 
@@ -223,8 +262,11 @@ v2 (опционально): индексировать summary в отдель�
    - префикс: `FreeTalkAI`
    - `component=freetalk|ports`
    - ключи вида `event=... session_id=... error_type=...`
+5. Для расписания добавлена диагностика payload:
+   - `event=medical_schedule_payload_stats`
+   - поля: `doctors_count`, `regions_count`, `days_count`, `slots_count`.
 
-## 10. Тесты (минимальный DoD)
+## 11. Тесты (минимальный DoD)
 
 1. Unit:
    - выбор/валидация `tool_call`;
@@ -236,20 +278,125 @@ v2 (опционально): индексировать summary в отдель�
    - переключение mode не ломает `Call-Center-Ai` и `Messengers-Ai`.
 3. Contract:
    - если ответ не из клиники, обязательная метка в тексте.
+4. Router:
+   - тесты `clinical_router` на intent mapping/missing slots/clarification.
 
-## 11. План внедрения
+## 12. Следующие шаги (v1.1)
 
-1. Этап 1: skeleton + mode switch + базовый разговор без tools.
-2. Этап 2: tool loop + интеграция `Services` (API/cache-first инструменты).
-3. Этап 3: Redis memory + compaction + persist summary в jsonl.
-4. Этап 4: тесты + стабилизация + эксплуатационные логи.
-5. Этап 5 (после v1): опциональные инструменты на Meili и retrieval по Chroma.
+1. Стабилизировать intent-router на реальных диалогах (doctor/service follow-up).
+2. Уточнить пороги confidence/clarify-retries для выбранной модели.
+3. Добавить A/B-профили параметров Ollama для разных моделей.
+4. После стабилизации — рассмотреть retrieval-слой Chroma (v2).
 
-## 12. Зафиксированные решения и открытые вопросы
+## 13. Зафиксированные решения и открытые вопросы
 
 1. UI mode key: `Free-talk-Ai` (фиксируем).
 2. UI label для пользователя: `Свободное общение` (англ. `Free talk` можно оставить в скобках).
 3. v1: только Gradio-режим, без отдельного API endpoint.
 4. v1: handoff на оператора не требуется.
 5. v1: Chroma не используем; только запись summary в постоянную память.
-6. Открытый вопрос: включать ли в v1 `main_index_info/news_info` как опциональные Meili-инструменты или оставить их полностью выключенными до v2.
+6. `main_index_info/news_info` поддерживаются как опциональные и управляются через `include_meili_tools`.
+7. Открытый вопрос: оставить ли LLM-router + heuristic fallback или перейти на pure LLM-router без regex-предмаршрутизации.
+
+## 14. План улучшений (приоритетный, согласованный)
+
+### 14.1 Единый контракт `dialog_act` на каждый ход
+
+Цель: убрать разрозненные решения по ходу и централизовать исполнение такта диалога.
+
+Базовый контракт:
+
+```json
+{
+  "route": "general | clinical | web",
+  "intent": "doctor_schedule | doctor_info | price | prepare | tests | service_info | clinic_news | clinic_documents | unknown",
+  "entities": {},
+  "confidence": 0.0,
+  "missing_slots": [],
+  "clarify_question": "",
+  "tool_plan": [],
+  "response_policy": "tool_only | mixed | general_only"
+}
+```
+
+Правила исполнения:
+
+1. Один ход -> один `dialog_act`.
+2. Исполнитель (`dialog_act executor`) является единственной точкой, где решается:
+   - задаем уточнение;
+   - вызываем tools;
+   - отвечаем сразу;
+   - делаем fallback.
+3. Никаких параллельных "скрытых" веток принятия решения вне исполнителя.
+
+### 14.2 Regex-эвристики только как fallback
+
+Цель: снизить ложные срабатывания и конфликт между эвристикой и LLM-router.
+
+Правило:
+
+1. Основное решение: LLM-router (`dialog_act`).
+2. Regex/keyword слой включается только если:
+   - LLM вернула `unknown`;
+   - confidence ниже порога;
+   - JSON невалиден.
+3. Любая эвристическая коррекция должна логироваться отдельным событием:
+   - `event=router_fallback_applied`
+   - `reason=low_confidence|invalid_json|unknown_intent`.
+
+### 14.3 Обязательный `post-tool verifier`
+
+Цель: после tool-вызовов гарантировать корректный тип ответа: финальный ответ vs уточнение.
+
+Контракт verifier (короткая проверка):
+
+```json
+{
+  "enough_data": true,
+  "should_clarify": false,
+  "clarify_question": "",
+  "answer_policy": "direct | clarify | not_found"
+}
+```
+
+Правила:
+
+1. Если `enough_data=true` -> прямой ответ только по payload.
+2. Если `should_clarify=true` -> один уточняющий вопрос.
+3. Если данных нет и уточнять нечего -> честный `not_found` без галлюцинаций.
+
+### 14.4 Eval-набор FT и quality gate в CI
+
+Цель: оценивать качество FT на реальных диалогах до merge.
+
+Решение v1:
+
+1. Собрать набор анонимизированных реальных FT-диалогов (`tests/eval/freetalk_dialogs.jsonl`).
+2. Ввести метрики:
+   - `tool_call_recall` для клинических интентов;
+   - `hallucination_rate_clinic`;
+   - `clarification_appropriateness`;
+   - `answer_grounded_rate`.
+3. Добавить CI-job, который прогоняет eval и фейлит pipeline при деградации выше порога.
+
+Примечание: отдельный HTTP endpoint для этого не обязателен на первом этапе; достаточно in-process harness в тестах/скрипте CI.
+
+### 14.5 Source-tagging на уровне фрагментов ответа
+
+Цель: структурно разделить источники, чтобы снизить смешение "данные клиники" и "общие знания".
+
+Внутренний формат фрагментов:
+
+```json
+[
+  {"text": "...", "source": "clinic_data"},
+  {"text": "...", "source": "general_knowledge"},
+  {"text": "...", "source": "web_search"}
+]
+```
+
+Правила:
+
+1. Рендер в UI может оставаться текстовым, но tags сохраняются в лог/trace.
+2. Для `general_knowledge` и `web_search` обязательна явная пометка в тексте ответа.
+3. Source-tagging повышает управляемость и проверяемость ответов, но не заменяет NLU модели; это механизм контроля качества, а не "ускоритель понимания".

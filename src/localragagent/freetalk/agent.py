@@ -21,13 +21,14 @@ from .clinical_router import (
     parse_clinical_decision,
 )
 from .config import FreeTalkConfig
-from .contracts import AgentReply, SessionContext
+from .contracts import AgentReply, DialogAct, PostToolVerification, SessionContext
 from .memory_persist import PersistentSummaryStore
 from .memory_redis import RedisMemoryStore
 from .observability import log_event
 from .prompts import (
     build_clinical_router_prompt,
     build_general_prompt,
+    build_post_tool_verifier_prompt,
     build_summary_prompt,
     build_tool_result_prompt,
     load_system_prompt,
@@ -123,7 +124,7 @@ def _capabilities_brief() -> str:
         "- По вопросам клиники (врачи, услуги, подготовка, цены, анализы, расписание, филиалы) искать ответ через инструменты данных.\n"
         "- По запросу искать информацию в интернете.\n\n"
         "Примеры:\n"
-        "- \"Сколько стоит МРТ поясницы?\"\n"
+        "- \"Кто делает УЗИ шеи?\"\n"
         "- \"Как подготовиться к общему анализу крови?\"\n"
         "- \"Поищи в интернете последние новости по теме ...\""
     )
@@ -188,27 +189,6 @@ class FreeTalkAgent:
             sid,
             history_tail_turns=self.config.history_tail_turns,
         )
-        remembered_doctor = await self.memory.get_meta_str(sid, _LAST_DOCTOR_NAME_KEY, "")
-        doctor_followup_hint = self._looks_like_doctor_followup_message(
-            user_message=user_message,
-            remembered_doctor=remembered_doctor,
-        )
-        medical_regex = is_medical_query(user_message)
-        medical_fallback = self._looks_like_clinic_data_query(user_message)
-        medical_intent = bool(medical_regex or medical_fallback or doctor_followup_hint)
-        web_search_signal = should_use_web_search(user_message, allow_for_medical=True)
-        log_event(
-            "route_intent_evaluated",
-            session_id=sid,
-            medical_regex=medical_regex,
-            medical_fallback=medical_fallback,
-            doctor_followup_hint=doctor_followup_hint,
-            remembered_doctor=bool(str(remembered_doctor or "").strip()),
-            medical_intent=medical_intent,
-            web_search_signal=web_search_signal,
-            about_agent=is_about_agent_query(user_message),
-            message=user_message[:180],
-        )
         guard_state = await self.memory.get_meta_str(sid, _CTX_GUARD_STATE_KEY, _CTX_GUARD_NONE)
 
         guard_reply = await self._handle_guard_decision(
@@ -225,22 +205,41 @@ class FreeTalkAgent:
                 next_session_id=guard_reply.next_session_id or "",
             )
             if not guard_reply.next_session_id:
+                guard_fragments = self._source_fragments_for_reply(guard_reply)
+                guard_reply.source_fragments = guard_fragments
+                self._log_source_trace(session_id=sid, reply=guard_reply)
                 await self.memory.append_exchange(
                     sid,
                     user_text=user_message,
                     assistant_text=guard_reply.text,
                     source=guard_reply.source,
+                    source_fragments=guard_reply.source_fragments,
                 )
                 await self._maybe_compact(sid)
             return guard_reply
 
-        if medical_intent:
-            log_event("route_selected", session_id=sid, route="medical")
-            reply = await self._medical_reply(user_message, context)
-        else:
-            log_event("route_selected", session_id=sid, route="general")
-            await self._clear_clinical_pending_state(sid)
-            reply = await self._general_reply(user_message, context)
+        pending_state = await self._load_clinical_pending_state(sid)
+        remembered_doctor = await self.memory.get_meta_str(sid, _LAST_DOCTOR_NAME_KEY, "")
+        dialog_act = await self._build_dialog_act(
+            user_message=user_message,
+            context=context,
+            pending_state=pending_state,
+            remembered_doctor=remembered_doctor,
+        )
+        log_event(
+            "route_selected",
+            session_id=sid,
+            route=dialog_act.route,
+            intent=dialog_act.intent,
+            source=dialog_act.source,
+            fallback_reason=dialog_act.fallback_reason or "",
+        )
+        reply = await self._execute_dialog_act(
+            user_message=user_message,
+            context=context,
+            dialog_act=dialog_act,
+            pending_state=pending_state,
+        )
 
         if guard_state == _CTX_GUARD_ONE_MORE and not reply.next_session_id:
             await self.memory.set_meta_str(sid, _CTX_GUARD_STATE_KEY, _CTX_GUARD_AWAITING_FINAL)
@@ -259,14 +258,257 @@ class FreeTalkAgent:
                     context_window=self.config.context_window_tokens,
                 )
 
+        source_fragments = self._source_fragments_for_reply(reply)
+        reply.source_fragments = source_fragments
+        self._log_source_trace(session_id=sid, reply=reply)
         await self.memory.append_exchange(
             sid,
             user_text=user_message,
             assistant_text=reply.text,
             source=reply.source,
+            source_fragments=source_fragments,
         )
         await self._maybe_compact(sid)
         return reply
+
+    async def _build_dialog_act(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        pending_state: dict[str, Any],
+        remembered_doctor: str,
+    ) -> DialogAct:
+        if is_about_agent_query(user_message):
+            log_event(
+                "route_intent_evaluated",
+                session_id=context.session_id,
+                route="general",
+                llm_intent="about_agent",
+                llm_confidence=1.0,
+                llm_source="heuristic",
+                medical_regex=False,
+                medical_fallback=False,
+                doctor_followup_hint=False,
+                remembered_doctor=bool(str(remembered_doctor or "").strip()),
+                web_search_signal=False,
+                fallback_reason="",
+                message=user_message[:180],
+            )
+            return DialogAct(
+                route="general",
+                intent="about_agent",
+                response_policy="general_only",
+                source="heuristic",
+            )
+
+        web_search_signal = should_use_web_search(user_message, allow_for_medical=True)
+        decision = await self._route_clinical_decision(
+            user_message=user_message,
+            context=context,
+            pending_state=pending_state,
+            remembered_doctor=remembered_doctor,
+        )
+
+        route = "general"
+        fallback_reason = ""
+        if decision.intent != "unknown" or decision.tool_plan or decision.missing_slots:
+            route = "clinical"
+        elif web_search_signal and self.web_search is not None:
+            route = "web"
+
+        medical_regex = is_medical_query(user_message)
+        medical_fallback = self._looks_like_clinic_data_query(user_message)
+        doctor_followup_hint = self._looks_like_doctor_followup_message(
+            user_message=user_message,
+            remembered_doctor=remembered_doctor,
+        )
+        fallback_medical_signal = bool(medical_regex or medical_fallback or doctor_followup_hint)
+
+        if route != "clinical" and fallback_medical_signal:
+            if decision.source == "llm_router_invalid_json":
+                fallback_reason = "invalid_json"
+            elif decision.intent == "unknown" and not decision.tool_plan:
+                fallback_reason = "unknown_intent"
+            elif decision.confidence < _CLINICAL_MIN_CONFIDENCE:
+                fallback_reason = "low_confidence"
+            else:
+                fallback_reason = "heuristic_fallback"
+            fallback_tool_plan = select_tool_plan(
+                user_message,
+                include_meili_tools=self.config.include_meili_tools,
+            )
+            fallback_intent = decision.intent
+            if fallback_intent == "unknown" and fallback_tool_plan:
+                fallback_intent = self._infer_intent_from_tool_plan(fallback_tool_plan)
+            decision.intent = fallback_intent
+            decision.tool_plan = fallback_tool_plan
+            route = "clinical"
+            decision.source = "heuristic_fallback"
+            log_event(
+                "router_fallback_applied",
+                level=logging.WARNING,
+                session_id=context.session_id,
+                reason=fallback_reason,
+                llm_intent=decision.intent,
+                llm_confidence=decision.confidence,
+                tool_plan=",".join(fallback_tool_plan),
+            )
+
+        log_event(
+            "route_intent_evaluated",
+            session_id=context.session_id,
+            route=route,
+            llm_intent=decision.intent,
+            llm_confidence=decision.confidence,
+            llm_source=decision.source,
+            medical_regex=medical_regex,
+            medical_fallback=medical_fallback,
+            doctor_followup_hint=doctor_followup_hint,
+            remembered_doctor=bool(str(remembered_doctor or "").strip()),
+            web_search_signal=web_search_signal,
+            fallback_reason=fallback_reason,
+            message=user_message[:180],
+        )
+
+        response_policy = "general_only"
+        if route == "clinical":
+            response_policy = "tool_only"
+        elif route == "web":
+            response_policy = "mixed"
+
+        return DialogAct(
+            route=route,
+            intent=decision.intent,
+            entities=dict(decision.entities or {}),
+            confidence=decision.confidence,
+            missing_slots=list(decision.missing_slots or []),
+            clarify_question=str(decision.clarify_question or "").strip(),
+            tool_plan=list(decision.tool_plan or []),
+            response_policy=response_policy,
+            source=decision.source,
+            fallback_reason=fallback_reason,
+        )
+
+    async def _execute_dialog_act(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        dialog_act: DialogAct,
+        pending_state: dict[str, Any],
+    ) -> AgentReply:
+        route = str(dialog_act.route or "").strip().lower()
+        if route == "clinical":
+            return await self._medical_reply(
+                user_message,
+                context,
+                dialog_act=dialog_act,
+                pending_state=pending_state,
+            )
+        if route == "web":
+            await self._clear_clinical_pending_state(context.session_id)
+            return await self._web_reply(user_message, context)
+        await self._clear_clinical_pending_state(context.session_id)
+        return await self._general_reply(user_message, context)
+
+    async def _web_reply(self, user_message: str, context: SessionContext) -> AgentReply:
+        if not self.web_search:
+            return await self._general_reply(user_message, context)
+        log_event("general_web_search_triggered", session_id=context.session_id, message=user_message[:140])
+        web_payload = await self.web_search.search(user_message, entities={})
+        web_results = web_payload.get("results") if isinstance(web_payload, dict) else []
+        if isinstance(web_results, list) and web_results:
+            answer = await self._render_tool_reply(
+                user_message=user_message,
+                tool_name="web_search",
+                tool_payload=web_payload,
+            )
+            if _is_non_empty_text(answer):
+                log_event(
+                    "general_web_search_success",
+                    session_id=context.session_id,
+                    results_count=len(web_results),
+                )
+                return AgentReply(
+                    text=answer,
+                    source="mixed",
+                    tool_name="web_search",
+                    tool_payload=web_payload,
+                )
+        note = str(web_payload.get("note") or "") if isinstance(web_payload, dict) else ""
+        if "source unavailable" in note.lower():
+            log_event(
+                "web_search_unavailable_fallback",
+                level=logging.WARNING,
+                note=note,
+            )
+            return AgentReply(
+                text=(
+                    "Интернет-поиск сейчас недоступен. "
+                    "Повторите запрос позже или задайте вопрос без требования актуальных данных."
+                ),
+                source="general_knowledge",
+            )
+        return AgentReply(
+            text="В интернет-поиске по этому запросу не найдено релевантных результатов.",
+            source="general_knowledge",
+            tool_name="web_search",
+            tool_payload=web_payload if isinstance(web_payload, dict) else {},
+        )
+
+    def _source_fragments_for_reply(self, reply: AgentReply) -> list[dict[str, str]]:
+        text = str(reply.text or "").strip()
+        if not text:
+            return []
+        source = str(reply.source or "").strip().lower()
+        if source == "clinic_data":
+            return [{"text": text, "source": "clinic_data"}]
+        if source == "general_knowledge":
+            return [{"text": text, "source": "general_knowledge"}]
+        if source == "mixed":
+            if str(reply.tool_name or "").strip() == "web_search":
+                return [{"text": text, "source": "web_search"}]
+            marker = "Это общая информация, не из данных клиники."
+            if marker in text:
+                head, _, tail = text.partition(marker)
+                fragments: list[dict[str, str]] = []
+                if str(head or "").strip():
+                    fragments.append({"text": str(head).strip(), "source": "clinic_data"})
+                fragments.append({"text": marker, "source": "general_knowledge"})
+                if str(tail or "").strip():
+                    fragments.append({"text": str(tail).strip(), "source": "general_knowledge"})
+                return fragments
+            return [{"text": text, "source": "general_knowledge"}]
+        if source == "system":
+            return [{"text": text, "source": "general_knowledge"}]
+        return [{"text": text, "source": "general_knowledge"}]
+
+    def _log_source_trace(self, *, session_id: str, reply: AgentReply) -> None:
+        fragments = list(reply.source_fragments or [])
+        if not fragments:
+            return
+        tags: list[str] = []
+        total_chars = 0
+        for frag in fragments:
+            if not isinstance(frag, dict):
+                continue
+            tag = str(frag.get("source") or "").strip().lower()
+            text = str(frag.get("text") or "")
+            if not tag:
+                continue
+            total_chars += len(text)
+            if tag not in tags:
+                tags.append(tag)
+        log_event(
+            "answer_source_trace",
+            session_id=session_id,
+            reply_source=reply.source,
+            tags=",".join(tags),
+            fragments_count=len(fragments),
+            total_chars=total_chars,
+            tool_name=reply.tool_name or "",
+        )
 
     async def _general_reply(self, user_message: str, context: SessionContext) -> AgentReply:
         if is_about_agent_query(user_message):
@@ -482,7 +724,14 @@ class FreeTalkAgent:
             )
         return summary
 
-    async def _medical_reply(self, user_message: str, context: SessionContext) -> AgentReply:
+    async def _medical_reply(
+        self,
+        user_message: str,
+        context: SessionContext,
+        *,
+        dialog_act: DialogAct | None = None,
+        pending_state: dict[str, Any] | None = None,
+    ) -> AgentReply:
         health = await self.services.get_catalog_health()
         if isinstance(health, dict) and not bool(health.get("ok", True)):
             log_event(
@@ -497,26 +746,38 @@ class FreeTalkAgent:
                 tool_payload=health,
             )
 
-        pending_state = await self._load_clinical_pending_state(context.session_id)
-        remembered_doctor = await self.memory.get_meta_str(context.session_id, _LAST_DOCTOR_NAME_KEY, "")
-        decision = await self._route_clinical_decision(
-            user_message=user_message,
-            context=context,
-            pending_state=pending_state,
-            remembered_doctor=remembered_doctor,
-        )
-        entities = await self._ground_entities(user_message, intent_hint=decision.intent)
-        merged_entities = dict(decision.entities)
+        effective_pending = dict(pending_state or {})
+        if dialog_act is None:
+            remembered_doctor = await self.memory.get_meta_str(context.session_id, _LAST_DOCTOR_NAME_KEY, "")
+            if not effective_pending:
+                effective_pending = await self._load_clinical_pending_state(context.session_id)
+            dialog_act = await self._build_dialog_act(
+                user_message=user_message,
+                context=context,
+                pending_state=effective_pending,
+                remembered_doctor=remembered_doctor,
+            )
+            if str(dialog_act.route or "").strip().lower() != "clinical":
+                return await self._execute_dialog_act(
+                    user_message=user_message,
+                    context=context,
+                    dialog_act=dialog_act,
+                    pending_state=effective_pending,
+                )
+
+        entities = await self._ground_entities(user_message, intent_hint=dialog_act.intent)
+        merged_entities = dict(dialog_act.entities)
         merged_entities.update(entities)
         entities = self._apply_intent_entity_policy(
             user_message=user_message,
-            intent=decision.intent,
+            intent=dialog_act.intent,
             entities=merged_entities,
         )
-        tool_plan = self._build_tool_plan_from_decision(
-            user_message=user_message,
-            decision=decision,
-        )
+        tool_plan = [tool for tool in (dialog_act.tool_plan or []) if isinstance(tool, str)]
+        if not tool_plan:
+            tool_plan = select_tool_plan(user_message, include_meili_tools=self.config.include_meili_tools)
+            if dialog_act.intent == "unknown" and tool_plan:
+                dialog_act.intent = self._infer_intent_from_tool_plan(tool_plan)
         entities = await self._enrich_entities_from_session_memory(
             session_id=context.session_id,
             user_message=user_message,
@@ -525,13 +786,14 @@ class FreeTalkAgent:
         )
 
         missing_from_plan = merge_missing_slots_from_plan(tool_plan, entities)
-        missing_slots = self._merge_missing_slots(decision.missing_slots, missing_from_plan)
+        missing_slots = self._merge_missing_slots(dialog_act.missing_slots, missing_from_plan)
+        remembered_doctor = await self.memory.get_meta_str(context.session_id, _LAST_DOCTOR_NAME_KEY, "")
         if "doctor_name_or_specialty" in missing_slots and remembered_doctor:
             entities["doctor_name"] = str(remembered_doctor).strip()
             missing_slots = [slot for slot in missing_slots if slot != "doctor_name_or_specialty"]
 
         needs_clarification = bool(missing_slots)
-        if not needs_clarification and decision.confidence < _CLINICAL_MIN_CONFIDENCE and not tool_plan:
+        if not needs_clarification and dialog_act.confidence < _CLINICAL_MIN_CONFIDENCE and not tool_plan:
             needs_clarification = True
 
         log_event(
@@ -539,20 +801,20 @@ class FreeTalkAgent:
             session_id=context.session_id,
             tool_plan=",".join(tool_plan),
             entities=self._public_entities(entities),
-            router_intent=decision.intent,
-            router_confidence=decision.confidence,
-            router_source=decision.source,
+            router_intent=dialog_act.intent,
+            router_confidence=dialog_act.confidence,
+            router_source=dialog_act.source,
             missing_slots=",".join(missing_slots),
             message=user_message[:160],
         )
         if needs_clarification:
-            clarify_text = str(decision.clarify_question or "").strip()
+            clarify_text = str(dialog_act.clarify_question or "").strip()
             if not clarify_text:
-                clarify_text = clarify_question_for_slots(decision.intent, missing_slots)
-            attempts = int(pending_state.get("attempts") or 0)
+                clarify_text = clarify_question_for_slots(dialog_act.intent, missing_slots)
+            attempts = int(effective_pending.get("attempts") or 0)
             same_pending = self._is_same_pending_request(
-                pending_state=pending_state,
-                intent=decision.intent,
+                pending_state=effective_pending,
+                intent=dialog_act.intent,
                 missing_slots=missing_slots,
             )
             next_attempt = attempts + 1 if same_pending else 1
@@ -565,7 +827,7 @@ class FreeTalkAgent:
             await self._save_clinical_pending_state(
                 context.session_id,
                 {
-                    "intent": decision.intent,
+                    "intent": dialog_act.intent,
                     "missing_slots": missing_slots,
                     "clarify_question": clarify_text,
                     "attempts": next_attempt,
@@ -576,7 +838,7 @@ class FreeTalkAgent:
                 "medical_clarification_requested",
                 level=logging.WARNING,
                 session_id=context.session_id,
-                intent=decision.intent,
+                intent=dialog_act.intent,
                 attempts=next_attempt,
                 missing_slots=",".join(missing_slots),
                 question=clarify_text[:180],
@@ -656,11 +918,56 @@ class FreeTalkAgent:
                 payload_keys=",".join(sorted(str(k) for k in result.payload.keys())),
                 answer_chars=len(answer),
             )
+            verification = await self._post_tool_verify(
+                user_message=user_message,
+                intent=dialog_act.intent,
+                tool_name=result.tool_name,
+                drafted_answer=answer,
+                tool_payload=result.payload,
+                missing_slots=missing_slots,
+            )
+            log_event(
+                "post_tool_verifier_decision",
+                session_id=context.session_id,
+                tool_name=result.tool_name,
+                answer_policy=verification.answer_policy,
+                enough_data=verification.enough_data,
+                should_clarify=verification.should_clarify,
+                source=verification.source,
+            )
             await self._remember_doctor_from_tool_result(
                 session_id=context.session_id,
                 tool_name=result.tool_name,
                 payload=result.payload,
             )
+            if verification.answer_policy == "clarify":
+                clarify_text = str(verification.clarify_question or "").strip()
+                if not clarify_text:
+                    clarify_text = clarify_question_for_slots(dialog_act.intent, missing_slots)
+                await self._save_clinical_pending_state(
+                    context.session_id,
+                    {
+                        "intent": dialog_act.intent,
+                        "missing_slots": missing_slots,
+                        "clarify_question": clarify_text,
+                        "attempts": 1,
+                        "phase": "post_verify",
+                    },
+                )
+                return AgentReply(
+                    text=clarify_text,
+                    source="clinic_data",
+                    tool_name=result.tool_name,
+                    tool_payload=result.payload,
+                )
+            if verification.answer_policy == "not_found":
+                await self._clear_clinical_pending_state(context.session_id)
+                return AgentReply(
+                    text="В данных клиники по вашему запросу ничего не найдено.",
+                    source="clinic_data",
+                    tool_name=result.tool_name,
+                    tool_payload=result.payload,
+                )
             return AgentReply(
                 text=answer,
                 source="clinic_data",
@@ -684,14 +991,14 @@ class FreeTalkAgent:
 
         retry_after_not_found = bool(
             tool_plan
-            and str(pending_state.get("phase") or "").strip().lower() != "post_not_found"
+            and str(effective_pending.get("phase") or "").strip().lower() != "post_not_found"
         )
         if retry_after_not_found:
-            clarify_text = clarify_question_for_slots(decision.intent, missing_slots)
+            clarify_text = clarify_question_for_slots(dialog_act.intent, missing_slots)
             await self._save_clinical_pending_state(
                 context.session_id,
                 {
-                    "intent": decision.intent,
+                    "intent": dialog_act.intent,
                     "missing_slots": missing_slots,
                     "clarify_question": clarify_text,
                     "attempts": 1,
@@ -780,16 +1087,154 @@ class FreeTalkAgent:
             payload,
             include_meili_tools=self.config.include_meili_tools,
         )
-        if not decision.tool_plan:
-            decision.tool_plan = select_tool_plan(
-                user_message,
-                include_meili_tools=self.config.include_meili_tools,
-            )
-            if decision.intent == "unknown" and decision.tool_plan:
-                decision.intent = self._infer_intent_from_tool_plan(decision.tool_plan)
-            if not decision.source:
-                decision.source = "heuristic"
+        if not payload:
+            decision.source = "llm_router_invalid_json"
+        else:
+            decision.source = "llm_router"
         return decision
+
+    async def _post_tool_verify(
+        self,
+        *,
+        user_message: str,
+        intent: str,
+        tool_name: str,
+        drafted_answer: str,
+        tool_payload: dict[str, Any],
+        missing_slots: list[str],
+    ) -> PostToolVerification:
+        fallback = self._heuristic_post_tool_verification(
+            intent=intent,
+            tool_name=tool_name,
+            drafted_answer=drafted_answer,
+            tool_payload=tool_payload,
+            missing_slots=missing_slots,
+        )
+        prompt = build_post_tool_verifier_prompt(
+            user_message=user_message,
+            intent=intent,
+            tool_name=tool_name,
+            drafted_answer=drafted_answer,
+            tool_payload=tool_payload,
+        )
+        payload = await self._llm_json(prompt)
+        if not payload:
+            return fallback
+        verified = self._parse_post_tool_verification(
+            payload,
+            fallback=fallback,
+        )
+        if verified.answer_policy == "clarify" and not str(verified.clarify_question or "").strip():
+            question = clarify_question_for_slots(intent, missing_slots)
+            verified.clarify_question = question
+        if verified.answer_policy == "direct" and not verified.enough_data:
+            verified.answer_policy = "clarify" if verified.should_clarify else "not_found"
+        return verified
+
+    def _heuristic_post_tool_verification(
+        self,
+        *,
+        intent: str,
+        tool_name: str,
+        drafted_answer: str,
+        tool_payload: dict[str, Any],
+        missing_slots: list[str],
+    ) -> PostToolVerification:
+        clarify_text = str(tool_payload.get("clarify_text") or "").strip()
+        if clarify_text:
+            return PostToolVerification(
+                enough_data=False,
+                should_clarify=True,
+                clarify_question=clarify_text,
+                answer_policy="clarify",
+                source="heuristic",
+            )
+
+        if tool_name == "test_result_status":
+            missing_fields = tool_payload.get("missing_fields") or []
+            if isinstance(missing_fields, list) and missing_fields:
+                question = "Чтобы проверить результат, уточните: " + ", ".join(str(x) for x in missing_fields)
+                return PostToolVerification(
+                    enough_data=False,
+                    should_clarify=True,
+                    clarify_question=question,
+                    answer_policy="clarify",
+                    source="heuristic",
+                )
+
+        reason = str(tool_payload.get("schedule_unavailable_reason") or "").strip().lower()
+        if tool_name == "doctors_schedule_week" and reason == "no_free_slots_2_weeks":
+            return PostToolVerification(
+                enough_data=True,
+                should_clarify=False,
+                clarify_question="",
+                answer_policy="direct",
+                source="heuristic",
+            )
+
+        text = str(drafted_answer or "").strip().lower()
+        if not text or "не удалось корректно сформировать ответ" in text:
+            question = clarify_question_for_slots(intent, missing_slots)
+            return PostToolVerification(
+                enough_data=False,
+                should_clarify=True,
+                clarify_question=question,
+                answer_policy="clarify",
+                source="heuristic",
+            )
+
+        return PostToolVerification(
+            enough_data=True,
+            should_clarify=False,
+            clarify_question="",
+            answer_policy="direct",
+            source="heuristic",
+        )
+
+    def _parse_post_tool_verification(
+        self,
+        payload: dict[str, Any],
+        *,
+        fallback: PostToolVerification,
+    ) -> PostToolVerification:
+        if not isinstance(payload, dict):
+            return fallback
+
+        enough_data = self._coerce_bool(payload.get("enough_data"), fallback.enough_data)
+        should_clarify = self._coerce_bool(payload.get("should_clarify"), fallback.should_clarify)
+        clarify_question = str(payload.get("clarify_question") or "").strip()
+        answer_policy = str(payload.get("answer_policy") or "").strip().lower()
+        if answer_policy not in {"direct", "clarify", "not_found"}:
+            if should_clarify:
+                answer_policy = "clarify"
+            elif enough_data:
+                answer_policy = "direct"
+            else:
+                answer_policy = "not_found"
+
+        if should_clarify and answer_policy != "clarify":
+            answer_policy = "clarify"
+        if answer_policy == "clarify" and not clarify_question:
+            clarify_question = fallback.clarify_question
+
+        return PostToolVerification(
+            enough_data=enough_data,
+            should_clarify=should_clarify,
+            clarify_question=clarify_question,
+            answer_policy=answer_policy,
+            source="llm",
+        )
+
+    @staticmethod
+    def _coerce_bool(value: Any, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().lower()
+        if text in {"true", "1", "yes", "y"}:
+            return True
+        if text in {"false", "0", "no", "n"}:
+            return False
+        return bool(default)
 
     async def _llm_json(self, prompt: str) -> dict[str, Any]:
         self._last_prompt_eval_count = 0

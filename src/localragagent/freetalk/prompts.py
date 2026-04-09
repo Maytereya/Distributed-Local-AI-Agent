@@ -144,3 +144,42 @@ def build_clinical_router_prompt(
         "JSON schema example:\n"
         f"{schema_text}\n"
     )
+
+
+def build_post_tool_verifier_prompt(
+    *,
+    user_message: str,
+    intent: str,
+    tool_name: str,
+    drafted_answer: str,
+    tool_payload: dict[str, Any],
+) -> str:
+    payload_text = json.dumps(tool_payload, ensure_ascii=False, default=str)
+    if len(payload_text) > 8000:
+        payload_text = payload_text[:8000] + "...(truncated)"
+    answer_text = str(drafted_answer or "").strip()
+    if len(answer_text) > 1200:
+        answer_text = answer_text[:1200] + "...(truncated)"
+    schema = {
+        "enough_data": True,
+        "should_clarify": False,
+        "clarify_question": "",
+        "answer_policy": "direct|clarify|not_found",
+    }
+    schema_text = json.dumps(schema, ensure_ascii=False, indent=2)
+    return (
+        "Ты post-tool verifier для медицинского ассистента клиники.\n"
+        "Задача: после tool_call определить, можно ли давать финальный ответ.\n"
+        "Не выдумывай факты. Верни ТОЛЬКО JSON без markdown.\n\n"
+        "Правила:\n"
+        "1) direct: данных достаточно для прямого ответа.\n"
+        "2) clarify: данных недостаточно, но можно задать один уточняющий вопрос.\n"
+        "3) not_found: данных недостаточно и уточнение не поможет.\n\n"
+        f"Intent: {intent}\n"
+        f"Tool: {tool_name}\n"
+        f"User message: {user_message}\n\n"
+        f"Drafted answer: {answer_text or '(empty)'}\n\n"
+        f"Tool payload: {payload_text}\n\n"
+        "JSON schema example:\n"
+        f"{schema_text}\n"
+    )

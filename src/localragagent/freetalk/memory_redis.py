@@ -32,6 +32,24 @@ class RedisSettings:
     ttl_sec: int
 
 
+def _normalize_source_fragments(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    allowed_sources = {"clinic_data", "general_knowledge", "web_search"}
+    out: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        source = str(item.get("source") or "").strip().lower()
+        if not text or source not in allowed_sources:
+            continue
+        out.append({"text": text, "source": source})
+        if len(out) >= 16:
+            break
+    return out
+
+
 class RedisMemoryStore:
     def __init__(self, settings: RedisSettings) -> None:
         self._settings = settings
@@ -120,14 +138,31 @@ class RedisMemoryStore:
             turns=turns,
         )
 
-    async def append_exchange(self, session_id: str, *, user_text: str, assistant_text: str, source: str) -> None:
+    async def append_exchange(
+        self,
+        session_id: str,
+        *,
+        user_text: str,
+        assistant_text: str,
+        source: str,
+        source_fragments: list[dict[str, str]] | None = None,
+    ) -> None:
         sid = str(session_id or "").strip()
         if not sid:
             return
         now = int(time.time())
+        fragments = _normalize_source_fragments(source_fragments or [])
+        assistant_turn: dict[str, Any] = {
+            "role": "assistant",
+            "content": str(assistant_text or ""),
+            "ts": now,
+            "source": str(source or ""),
+        }
+        if fragments:
+            assistant_turn["source_fragments"] = fragments
         turns = [
             {"role": "user", "content": str(user_text or ""), "ts": now},
-            {"role": "assistant", "content": str(assistant_text or ""), "ts": now, "source": str(source or "")},
+            assistant_turn,
         ]
         client = await self._redis()
         if client is None:

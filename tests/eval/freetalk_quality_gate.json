@@ -1,0 +1,8 @@
+{
+  "min_steps": 8,
+  "tool_call_recall_min": 0.90,
+  "clarification_appropriateness_min": 0.90,
+  "answer_grounded_rate_min": 0.90,
+  "hallucination_rate_clinic_max": 0.10,
+  "step_pass_rate_min": 0.90
+}
