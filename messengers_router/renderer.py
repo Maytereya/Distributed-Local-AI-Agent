@@ -352,7 +352,11 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
             continue
         name = str(row.get("serviceName") or row.get("name") or service_name).strip()
         amount = _format_rub(_extract_price_amount(row))
-        lines.append(f"{i}. {name} — {amount}.")
+        care_suffix = _format_care_setting_suffix(row)
+        line = f"{i}. {name} — {amount}."
+        if care_suffix:
+            line = f"{line} {care_suffix}"
+        lines.append(line)
 
     hint = str(payload.get("show_all_hint") or "").strip()
     if hint:
@@ -390,12 +394,20 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
                     continue
                 amount = _format_rub(_extract_price_amount(price_row))
                 price_name = str(price_row.get("serviceName") or price_row.get("name") or service_name).strip()
-                lines.append(f"- {price_name} — {amount}.")
+                care_suffix = _format_care_setting_suffix(price_row)
+                line = f"- {price_name} — {amount}."
+                if care_suffix:
+                    line = f"{line} {care_suffix}"
+                lines.append(line)
         else:
             top_price = retail_prices[0] if isinstance(retail_prices[0], dict) else {}
             amount = _format_rub(_extract_price_amount(top_price))
             price_name = str(top_price.get("serviceName") or top_price.get("name") or service_name).strip()
-            lines.append(f"1) Розничная цена: {price_name} — {amount}.")
+            care_suffix = _format_care_setting_suffix(top_price)
+            line = f"1) Розничная цена: {price_name} — {amount}."
+            if care_suffix:
+                line = f"{line} {care_suffix}"
+            lines.append(line)
     else:
         lines.append("1) Розничную цену сейчас точно определить не удалось.")
 
@@ -457,6 +469,18 @@ def _format_rub(amount: int | None) -> str:
     return f"{amount:,}".replace(",", " ") + " руб."
 
 
+def _format_care_setting_suffix(row: dict[str, Any]) -> str:
+    label = str(row.get("care_setting_label") or "").strip()
+    address = str(row.get("care_setting_address") or "").strip()
+    if label and address:
+        return f"Формат: {label}. Адрес: {address}."
+    if label:
+        return f"Формат: {label}."
+    if address:
+        return f"Адрес: {address}."
+    return ""
+
+
 def _price_source_marker(payload: dict[str, Any]) -> str | None:
     note = str(payload.get("note") or "").lower()
     if "doctorservicepricesbyregion" in note:
@@ -510,7 +534,16 @@ def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) 
         if key in seen:
             continue
         seen.add(key)
-        rows.append({"name": name, "fio": fio, "branch": branch, "amount": amount})
+        rows.append(
+            {
+                "name": name,
+                "fio": fio,
+                "branch": branch,
+                "amount": amount,
+                "care_setting_label": str(row.get("care_setting_label") or "").strip(),
+                "care_setting_address": str(row.get("care_setting_address") or "").strip(),
+            }
+        )
         if len(rows) >= 5:
             break
 
@@ -535,6 +568,9 @@ def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) 
             parts.insert(0, f"{fio}:")
         if branch:
             parts.append(f"({branch})")
+        care_suffix = _format_care_setting_suffix(item)
+        if care_suffix:
+            parts.append(care_suffix)
         return " ".join(parts)
 
     if doctor_context:
@@ -550,6 +586,9 @@ def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) 
                 base = f"Услуга «{name}» стоит {amount_txt}."
             if branch:
                 base = f"{base} ({branch})"
+            care_suffix = _format_care_setting_suffix(one)
+            if care_suffix:
+                base = f"{base} {care_suffix}"
             return _finish(base)
         if doctor_display:
             lines = [f"По врачу {doctor_display} нашёл такие варианты стоимости:"]

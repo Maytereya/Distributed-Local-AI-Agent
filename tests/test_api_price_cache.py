@@ -67,6 +67,43 @@ def test_load_doctor_prices_builds_today_cache_on_first_access(monkeypatch, tmp_
     assert rows and rows[0]["doctorId"] == 1
 
 
+def test_update_price_units_writes_today_cache(monkeypatch, tmp_path: Path):
+    target = tmp_path / "price_units_20260409.jsonl"
+    monkeypatch.setattr(api_price, "price_units_path", lambda date=None: target)
+    monkeypatch.setattr(api_price, "cleanup_old", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        api_price,
+        "fetch_price_units",
+        lambda: [{"id": 158, "name": "Дневной стационар"}],
+    )
+
+    out = api_price.update_price_units(force=True)
+
+    assert out == target
+    rows = api_price.jsonl_read(target)
+    assert rows == [{"id": 158, "name": "Дневной стационар"}]
+
+
+def test_load_price_units_builds_today_cache_on_first_access(monkeypatch, tmp_path: Path):
+    target = tmp_path / "price_units_20260409.jsonl"
+    calls = {"update": 0}
+
+    monkeypatch.setattr(api_price, "price_units_path", lambda date=None: target)
+
+    def fake_update(force: bool = False):
+        _ = force
+        calls["update"] += 1
+        target.write_text('{"id":158,"name":"Дневной стационар"}\n', encoding="utf-8")
+        return target
+
+    monkeypatch.setattr(api_price, "update_price_units", fake_update)
+
+    rows = api_price.load_price_units()
+
+    assert calls["update"] == 1
+    assert rows == [{"id": 158, "name": "Дневной стационар"}]
+
+
 def test_update_doctor_prices_uses_company_unit_from_doctor_regions(monkeypatch, tmp_path: Path):
     target = tmp_path / "doctor_prices_20260305.jsonl"
     monkeypatch.setattr(api_price, "doctor_prices_path", lambda date=None: target)

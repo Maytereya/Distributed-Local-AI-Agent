@@ -22,18 +22,18 @@
 
 | ID | Кейс | Класс | Статус | Тесты | Комментарий |
 |---|---|---|---|---|---|
-| P01 | стоимость гепатита | `family_query_collapse` | `FIXED_LOCAL` | unit + service + endpoint smoke | включен family-mode `top 10 + "все"` |
-| P02 | стоимость алат | `lab_kind_misclassified_as_doctor` | `FIXED_LOCAL` | unit + service + endpoint smoke | catalog-driven kind уводит кейс в `lab` |
-| P03 | стоимость вич | `family_query_collapse` | `OPEN` | нет | показывается экспресс вместо релевантного семейства вариантов |
-| P04 | стоимость витамина Д | `soft_token_fuzzy_false_positive` | `FIXED_LOCAL` | unit + service + endpoint smoke | введён token `витамин_<код>` и штраф на генетику/пакеты |
-| P05 | анализы на витамины | `family_query_collapse` | `OPEN` | нет | generic vitamin-query схлопывается в один широкий комплекс |
-| P06 | стоимость экг | `doctor_prices_source_pollution` | `FIXED_LOCAL` | unit + service + endpoint smoke | `ЭКГ` переведён в `diagnostic_no_doctor` |
-| P07 | стоимость узи печени | `uzi_synonym_gap` | `FIXED_LOCAL` | unit + service + endpoint smoke | добавлена alias-нормализация `УЗИ` и штраф `child` |
-| P08 | стоимость приема травматолога ортопеда | `specialty_extraction_loss` | `OPEN` | нет | составная специальность теряется при извлечении |
-| P09 | стоимость приема хирурга | `consultation_priority_missing` | `OPEN` | нет | нет приоритета `первичный > повторный > к.м.н. > дом` |
-| P10 | стоимость удаления зуба | `single_top_variant_instead_of_family` | `OPEN` | нет | есть несколько услуг, но пользователю показывается только top-1 |
+| P01 | стоимость гепатита | `family_query_collapse` | `FIXED_SERVER` | unit + service + endpoint smoke + server eval | включен family-mode `top 10 + "все"` |
+| P02 | стоимость алат | `lab_kind_misclassified_as_doctor` | `FIXED_SERVER` | unit + service + endpoint smoke + server eval | catalog-driven kind уводит кейс в `lab` |
+| P03 | стоимость вич | `family_query_collapse` | `FIXED_LOCAL` | unit + service | multi-variant выдача строится через data-driven family/ranking слой |
+| P04 | стоимость витамина Д | `soft_token_fuzzy_false_positive` | `FIXED_SERVER` | unit + service + endpoint smoke + server eval | введён token `витамин_<код>` и штраф на генетику/пакеты |
+| P05 | анализы на витамины | `family_query_collapse` | `FIXED_LOCAL` | unit + service | generic vitamin-query уходит в data-driven family-mode с подсказкой `все` |
+| P06 | стоимость экг | `doctor_prices_source_pollution` | `FIXED_SERVER` | unit + service + endpoint smoke + server eval | `ЭКГ` переведён в `diagnostic_no_doctor` |
+| P07 | стоимость узи печени | `uzi_synonym_gap` | `FIXED_SERVER` | unit + service + endpoint smoke + server eval | добавлена alias-нормализация `УЗИ` и штраф `child` |
+| P08 | стоимость приема травматолога ортопеда | `specialty_extraction_loss` | `FIXED_LOCAL` | unit + service | составная специальность корректно извлекается как `травматолог-ортопед` |
+| P09 | стоимость приема хирурга | `consultation_priority_missing` | `FIXED_LOCAL` | unit + service | первичный приём удерживается выше повторного и `на дому` |
+| P10 | стоимость удаления зуба | `single_top_variant_instead_of_family` | `FIXED_LOCAL` | unit + service | data-driven family-mode показывает основные варианты удаления |
 | P11 | стоимость массажа | `stale_context` | `OPEN` | нет | подозрение на залипший `service_name` из state |
-| P12 | стоимость постановки пломбы | `soft_token_fuzzy_false_positive` | `FIXED_LOCAL` | unit + service + endpoint smoke | short-token fuzzy больше не матчится в `ЦМВ` |
+| P12 | стоимость постановки пломбы | `soft_token_fuzzy_false_positive` | `FIXED_SERVER` | unit + service + endpoint smoke + server eval | short-token fuzzy больше не матчится в `ЦМВ` |
 | P13 | стоимость подтяжки бедер | `doctor_prices_source_pollution` | `OPEN` | нет | после нормального retail-match всплывают нерелевантные врачи |
 
 ## Подробные кейсы
@@ -73,9 +73,12 @@ Generic disease-query приземлялся в одну каноническу�
 **Примечание:**
 В прайсе много строк по гепатитам; проблема не в отсутствии данных.
 
+**Серверная проверка:**
+Подтверждено прогоном `run_remote_eval.sh` (`run_id=1775676454`): `stage5 PRICE 13/13`, `critical 46/46`.
+
 ## P02. Стоимость АлАТ
 
-**Статус:** `FIXED_LOCAL`
+**Статус:** `FIXED_SERVER`
 
 **Запрос:** `стоимость алат`
 
@@ -105,14 +108,20 @@ Generic disease-query приземлялся в одну каноническу�
 **Примечание:**
 Кейс относится к системной проблеме с короткими биохимическими анализами.
 
+**Серверная проверка:**
+Подтверждено прогоном `run_remote_eval.sh` (`run_id=1775676454`): `stage5` и `critical` прошли без price-регрессий.
+
 ## P03. Стоимость ВИЧ
 
-**Статус:** `FIXED_LOCAL`
+**Статус:** `FIXED_SERVER`
 
 **Запрос:** `стоимость вич`
 
-**Факт:**
-Бот показывает экспресс-тест как один основной вариант, хотя в прайсе есть и обычный анализ крови на ВИЧ.
+**Факт до фикса:**
+Бот показывал экспресс-тест как один основной вариант, хотя в прайсе есть и обычный анализ крови на ВИЧ.
+
+**Локальный результат после фикса:**
+`price_info("стоимость вич")` возвращает оба релевантных варианта: кровь на ВИЧ и экспресс-тест. Экспресс больше не доминирует в одиночку.
 
 **Ожидание:**
 Бот должен показывать релевантные варианты по ВИЧ, а не только экспресс.
@@ -127,9 +136,8 @@ Generic disease-query приземлялся в одну каноническу�
 - понижение приоритета `экспресс`, если его явно не просили.
 
 **Тесты:**
-- unit: ranking `ВИЧ` без доминирования `экспресс`;
-- service: `price_info()` / `service_bundle_info()` на `стоимость вич`;
-- server/manual: smoke на endpoint.
+- unit/service: `test_price_info_hiv_returns_multiple_relevant_variants`;
+- локальный smoke: `price_info("стоимость вич")`.
 
 **Примечание:**
 Это не data issue: в прайсе есть как минимум экспресс и обычная кровь на ВИЧ.
@@ -167,14 +175,20 @@ Query-кандидаты типа `витамина` слишком общие, 
 **Примечание:**
 Тут нужен не regex-костыль, а нормальная бизнес-приоритизация типа анализа.
 
+**Серверная проверка:**
+Подтверждено прогоном `run_remote_eval.sh` (`run_id=1775676454`): `stage5 PRICE 13/13`, `critical 46/46`.
+
 ## P05. Анализы на витамины
 
 **Статус:** `FIXED_LOCAL`
 
 **Запрос:** `анализы на витамины`
 
-**Факт:**
-Бот схлопывает generic vitamin-query в один широкий комплекс, что выглядит неинформативно и неочевидно для пациента.
+**Факт до фикса:**
+Бот схлопывал generic vitamin-query в один широкий комплекс, что выглядело неинформативно и неочевидно для пациента.
+
+**Локальный результат после фикса:**
+Generic query `анализы на витамины` уходит в family-mode: бот показывает до 10 витаминных вариантов и подсказку `Чтобы показать их, напишите: "все"`.
 
 **Ожидание:**
 Бот должен либо:
@@ -187,20 +201,19 @@ Query-кандидаты типа `витамина` слишком общие, 
 Generic query по группе витаминов не распадается на family-mode и уходит в один top-match.
 
 **Что менять:**
-- family-mode для `витамин*`;
+- data-driven family-mode по структуре candidate rows, а не по словарю корней;
 - clarify policy для широких vitamin-queries.
 
 **Тесты:**
-- unit: ranking family query `витамины`;
-- service: `test_assist` / `price_info` в зависимости от выбранной политики;
-- server/manual: smoke.
+- unit/service: `test_price_info_generic_vitamins_returns_family_query_variants`;
+- локальный smoke: `price_info("анализы на витамины")`.
 
 **Примечание:**
 Отдельно нужно следить за patient-facing формулировкой цены и названия комплекса.
 
 ## P06. Стоимость ЭКГ
 
-**Статус:** `OPEN`
+**Статус:** `FIXED_LOCAL`
 
 **Запрос:** `стоимость экг`
 
@@ -230,9 +243,12 @@ Generic query по группе витаминов не распадается �
 **Примечание:**
 Это partly data issue, но код должен уметь его экранировать.
 
+**Серверная проверка:**
+Подтверждено прогоном `run_remote_eval.sh` (`run_id=1775676454`): обновлённый parity-кейс по `ЭКГ` соответствует прямому price-ответу без мусорных врачей.
+
 ## P07. Стоимость УЗИ печени
 
-**Статус:** `FIXED_LOCAL`
+**Статус:** `FIXED_SERVER`
 
 **Запрос:** `стоимость узи печени`
 
@@ -262,14 +278,20 @@ Generic query по группе витаминов не распадается �
 **Примечание:**
 Похожая проблема может быть на других УЗИ-услугах.
 
+**Серверная проверка:**
+Подтверждено прогоном `run_remote_eval.sh` (`run_id=1775676454`): `stage5 PRICE 13/13`, критикал зелёный.
+
 ## P08. Стоимость приема травматолога-ортопеда
 
 **Статус:** `FIXED_LOCAL`
 
 **Запрос:** `стоимость приема травматолога ортопеда`
 
-**Факт:**
-Бот выбирает `к.м.н. совместно с УЗИ` вместо базовых консультационных тарифов.
+**Факт до фикса:**
+Бот выбирал `к.м.н. совместно с УЗИ` вместо базовых консультационных тарифов.
+
+**Локальный результат после фикса:**
+Составная специальность извлекается как `травматолог-ортопед`, а `price_info()` выводит обычный первичный прием первым, без доминирования `к.м.н. + УЗИ`.
 
 **Ожидание:**
 В ответе должны приоритетно быть обычные первичные/повторные приемы травматолога-ортопеда.
@@ -284,21 +306,24 @@ Generic query по группе витаминов не распадается �
 - consultation ranking для `травматолог-ортопед`.
 
 **Тесты:**
-- unit: specialty extraction `травматолог-ортопед`;
-- service: `price_info()` / `service_bundle_info()` на запрос приема;
-- server/manual: smoke.
+- unit: `test_extract_specialty_from_text_prefers_compound_traumatologist_orthopedist`;
+- service: `test_price_info_trauma_orthopedist_prefers_base_consultation_over_kmn_uzi`;
+- local smoke: `price_info("стоимость приема травматолога ортопеда")`.
 
 **Примечание:**
 Этот фикс может затронуть и другие составные специальности.
 
 ## P09. Стоимость приема хирурга
 
-**Статус:** `OPEN`
+**Статус:** `FIXED_LOCAL`
 
 **Запрос:** `стоимость приема хирурга`
 
-**Факт:**
-По умолчанию бот показывает `повторный` прием, а не `первичный`.
+**Факт до фикса:**
+По умолчанию бот показывал `повторный` прием, а не `первичный`.
+
+**Локальный результат после фикса:**
+`price_info("стоимость приема хирурга")` выводит `первичный` прием первым, затем `к.м.н.` и только после этого повторный/домашние варианты.
 
 **Ожидание:**
 Для голого запроса приема по специальности первичным дефолтом должен быть `первичный` прием.
@@ -315,9 +340,8 @@ Generic query по группе витаминов не распадается �
   - очный > `на дому`
 
 **Тесты:**
-- unit: priority ordering для консультаций;
-- service: `price_info()` / `service_bundle_info()` на `стоимость приема хирурга`;
-- server/manual: smoke.
+- unit/service: `test_price_info_surgeon_prefers_primary_before_repeat_and_home`;
+- local smoke: `price_info("стоимость приема хирурга")`.
 
 **Примечание:**
 Тот же класс дефекта влияет и на другие консультационные кейсы.
@@ -328,8 +352,11 @@ Generic query по группе витаминов не распадается �
 
 **Запрос:** `стоимость удаления зуба`
 
-**Факт:**
+**Факт до фикса:**
 Есть несколько релевантных услуг, но пациенту показывается только top-1.
+
+**Локальный результат после фикса:**
+`стоимость удаления зуба` возвращает family-mode с несколькими стоматологическими вариантами: простое, сложное, удаление зуба мудрости и другие.
 
 **Ожидание:**
 Бот должен показывать несколько вариантов: простое, сложное и другие основные типы удаления.
@@ -344,9 +371,8 @@ Ranking находит несколько релевантных стомато�
 - policy multi-variant ответа для generic dental removal query.
 
 **Тесты:**
-- unit: ranking `удаление зуба`;
-- service: `service_bundle_info()` с несколькими вариантами;
-- server/manual: smoke.
+- unit/service: `test_price_info_tooth_removal_returns_family_query_variants`;
+- локальный smoke: `price_info("стоимость удаления зуба")`.
 
 **Примечание:**
 Это похожий класс дефекта на generic анализы, но уже не лабораторный.
@@ -411,6 +437,9 @@ Ranking находит несколько релевантных стомато�
 
 **Примечание:**
 Это один из базовых системных scoring-багов.
+
+**Серверная проверка:**
+Подтверждено прогоном `run_remote_eval.sh` (`run_id=1775676454`): `stage5 PRICE 13/13`, критикал зелёный.
 
 ## P13. Стоимость подтяжки бедер
 
@@ -501,3 +530,7 @@ Doctor-layer пропускает нерелевантные строки `docto
 |---|---|---|---|---|---|
 | 2026-04-08 | P01-P13 | Создан первичный трекер и зафиксирован стартовый анализ | нет | не применимо | не применимо |
 | 2026-04-08 | P01, P02, P04, P06, P07, P12 | Внедрены ranking sanitation, alias normalization `УЗИ`, catalog-driven `service_kind`, family-mode и safe doctor gate | unit + service + endpoint smoke для соответствующих кейсов | `FIXED_LOCAL` | не проверялось |
+| 2026-04-09 | P01, P02, P04, P06, P07, P12 | Подтверждена серверная стабильность после push и remote eval (`run_id=1775676454`) | без новых тестов, использован полный `run_remote_eval.sh` | уже были `FIXED_LOCAL` | `FIXED_SERVER` |
+| 2026-04-09 | P03, P05, P10 | Добавлен family-root expansion для generic vitamin-query; зафиксированы локальные регрессии по `ВИЧ` и `удалению зуба`; добавлены critical cases на стационарные адреса через `priceUnits` | `test_price_info_hiv_returns_multiple_relevant_variants`, `test_price_info_generic_vitamins_returns_family_query_variants`, `test_price_info_tooth_removal_returns_family_query_variants` | `FIXED_LOCAL` | не проверялось |
+| 2026-04-09 | P08, P09 | Исправлено извлечение составной специальности `травматолог-ортопед`; подтвержден локальный приоритет `первичный > к.м.н. > повторный > на дому` для консультаций | `test_extract_specialty_from_text_prefers_compound_traumatologist_orthopedist`, `test_price_info_trauma_orthopedist_prefers_base_consultation_over_kmn_uzi`, `test_price_info_surgeon_prefers_primary_before_repeat_and_home` | `FIXED_LOCAL` | не проверялось |
+| 2026-04-09 | family-mode engine | Family-trigger переведен с root-regex на data-driven кластеризацию по candidate rows и нормализованным family-вариантам; добавлена защита от ложного family на `общий анализ крови` | `test_price_info_generic_family_mode_is_data_driven_without_root_regex`, `test_price_info_general_oak_returns_base_variants_without_special_modifiers` | `FIXED_LOCAL` | не проверялось |

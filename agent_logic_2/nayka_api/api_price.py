@@ -31,10 +31,12 @@ DOCTORS_DIR = DATA_DIR                      # содержит doctors_*.jsonl
 PRICES_DIR = DATA_DIR / "doctor_prices"     # кэш по врачам
 PRICEALL_DIR = DATA_DIR / "prices"          # кэш priceAll
 PRICE_BY_REGION_DIR = DATA_DIR / "price_by_region"  # кэш priceByRegion/{regionId}
+PRICE_UNITS_DIR = DATA_DIR / "price_units"  # кэш справочника priceUnits
 
 PRICES_DIR.mkdir(parents=True, exist_ok=True)
 PRICEALL_DIR.mkdir(parents=True, exist_ok=True)
 PRICE_BY_REGION_DIR.mkdir(parents=True, exist_ok=True)
+PRICE_UNITS_DIR.mkdir(parents=True, exist_ok=True)
 
 DATE_FMT = "%Y%m%d"
 CACHE_TTL_DAYS = 2
@@ -47,6 +49,23 @@ HTTP_TIMEOUT = getattr(c, "nayka_timeout", 60)
 ENDPOINT_PRICE_ALL = f"{BASE_URL}/priceAll"
 ENDPOINT_PRICE_BY_REGION = f"{BASE_URL}/priceByRegion"
 ENDPOINT_DOCTOR_PRICES_BY_REGION = f"{BASE_URL}/doctorServicePricesByRegion"
+ENDPOINT_PRICE_UNITS = f"{BASE_URL}/priceUnits"
+
+CARE_SETTING_POLYCLINIC_ROOT_ID = 146
+CARE_SETTING_DAY_HOSPITAL_ROOT_ID = 311
+CARE_SETTING_INPATIENT_ROOT_ID = 312
+
+CARE_SETTING_LABEL_BY_ROOT_ID = {
+    CARE_SETTING_POLYCLINIC_ROOT_ID: "поликлиника",
+    CARE_SETTING_DAY_HOSPITAL_ROOT_ID: "дневной стационар",
+    CARE_SETTING_INPATIENT_ROOT_ID: "круглосуточный стационар",
+}
+
+CARE_SETTING_ADDRESS_BY_ROOT_ID = {
+    CARE_SETTING_POLYCLINIC_ROOT_ID: "г. Самара, пр. Ленина, 5",
+    CARE_SETTING_DAY_HOSPITAL_ROOT_ID: "г. Самара, пр. Ленина, 5",
+    CARE_SETTING_INPATIENT_ROOT_ID: "г. Самара, ул. Ново-Садовая, 106, кор. 82",
+}
 
 # -----------------------------------------------------------------------------
 # Логирование
@@ -178,6 +197,16 @@ def price_by_region_path(region_id: Any, date: Optional[str] = None) -> Path:
     return dated_filename(PRICE_BY_REGION_DIR, f"price_region_{region_key}", date)
 
 
+def price_units_path(date: Optional[str] = None) -> Path:
+    """
+    Возвращает путь к файлу кэша справочника priceUnits за указанную дату.
+
+    :param date: дата в формате YYYYMMDD; если не передана, берется сегодняшняя
+    :return: путь до jsonl-файла справочника priceUnits
+    """
+    return dated_filename(PRICE_UNITS_DIR, "price_units", date)
+
+
 def _active_doctors_path() -> Path:
     return DOCTORS_DIR / f"doctors_{api_nayka.get_active_date_str()}.jsonl"
 
@@ -195,6 +224,17 @@ def fetch_price_by_region(region_id: Any) -> List[Dict[str, Any]]:
     if not region_key:
         raise ValueError("region_id is required")
     r = SESSION.get(f"{ENDPOINT_PRICE_BY_REGION}/{region_key}", timeout=HTTP_TIMEOUT, verify=VERIFY_TLS)
+    r.raise_for_status()
+    return r.json()
+
+
+def fetch_price_units() -> List[Dict[str, Any]]:
+    """
+    Загружает справочник priceUnits из API Науки.
+
+    :return: список словарей со справочными разделами прайса
+    """
+    r = SESSION.get(ENDPOINT_PRICE_UNITS, timeout=HTTP_TIMEOUT, verify=VERIFY_TLS)
     r.raise_for_status()
     return r.json()
 
@@ -279,6 +319,114 @@ def load_price_by_region(region_id: Any) -> List[Dict[str, Any]]:
     if not fn.exists():
         update_price_by_region(region_id)
     return jsonl_read(fn)
+
+
+def update_price_units(force: bool = False) -> Path:
+    """
+    Скачивает справочник priceUnits в файл за сегодня.
+
+    :param force: если True, перезаписывает кэш даже при наличии файла за сегодня
+    :return: путь к актуальному jsonl-файлу priceUnits
+    """
+    fn = price_units_path()
+    if fn.exists() and not force:
+        log.info("✅ priceUnits на сегодня уже скачан: %s", fn)
+        return fn
+
+    log.info("⏬ Скачиваем priceUnits...")
+    data = fetch_price_units()
+    jsonl_write(fn, data)
+    log.info("✅ priceUnits обновлён (%s строк): %s", len(data), fn)
+    cleanup_old(PRICE_UNITS_DIR, "price_units", CACHE_TTL_DAYS)
+    return fn
+
+
+def load_price_units() -> List[Dict[str, Any]]:
+    """
+    Загружает из локального кэша справочник priceUnits.
+
+    Если кэш за сегодня отсутствует, сначала скачивает его из API.
+
+    :return: список словарей со справочными разделами прайса
+    """
+    fn = price_units_path()
+    if not fn.exists():
+        update_price_units()
+    return jsonl_read(fn)
+
+
+def build_price_units_index(rows: Optional[Iterable[Dict[str, Any]]] = None) -> Dict[int, Dict[str, Any]]:
+    """
+    Строит индекс справочника priceUnits по числовому id.
+
+    :param rows: опциональный список строк priceUnits; если не передан, кэш загружается из файла
+    :return: словарь вида {price_unit_id: row}
+    """
+    src = list(rows) if rows is not None else load_price_units()
+    index: Dict[int, Dict[str, Any]] = {}
+    for row in src:
+        if not isinstance(row, dict):
+            continue
+        unit_id = _as_int(row.get("id"))
+        if unit_id is None:
+            continue
+        index[unit_id] = row
+    return index
+
+
+def _resolve_price_unit_root_id(price_unit_id: Any, units_index: Dict[int, Dict[str, Any]]) -> int | None:
+    """
+    Поднимается по parent-цепочке priceUnits до корневого раздела care-setting.
+
+    :param price_unit_id: id раздела прайса у услуги
+    :param units_index: индекс справочника priceUnits
+    :return: id корневого раздела (146/311/312) либо None
+    """
+    current_id = _as_int(price_unit_id)
+    seen: set[int] = set()
+    care_roots = {
+        CARE_SETTING_POLYCLINIC_ROOT_ID,
+        CARE_SETTING_DAY_HOSPITAL_ROOT_ID,
+        CARE_SETTING_INPATIENT_ROOT_ID,
+    }
+
+    while current_id is not None and current_id not in seen:
+        seen.add(current_id)
+        if current_id in care_roots:
+            return current_id
+        row = units_index.get(current_id)
+        if not isinstance(row, dict):
+            return None
+        current_id = _as_int(row.get("parent"))
+    return None
+
+
+def resolve_price_unit_context(
+    price_unit_id: Any,
+    *,
+    units_index: Optional[Dict[int, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """
+    Возвращает бизнес-контекст priceUnit: тип оказания услуги и рекомендуемый адрес.
+
+    :param price_unit_id: id раздела прайса услуги
+    :param units_index: опциональный заранее построенный индекс priceUnits
+    :return: словарь с именем раздела, корневым care-setting и адресом
+    """
+    idx = units_index or build_price_units_index()
+    unit_id = _as_int(price_unit_id)
+    unit_row = idx.get(unit_id) if unit_id is not None else None
+    root_id = _resolve_price_unit_root_id(unit_id, idx) if unit_id is not None else None
+    root_row = idx.get(root_id) if root_id is not None else None
+
+    return {
+        "price_unit_id": unit_id,
+        "price_unit_name": str((unit_row or {}).get("name") or "").strip(),
+        "care_setting_root_id": root_id,
+        "care_setting_root_name": str((root_row or {}).get("name") or "").strip(),
+        "care_setting_label": str(CARE_SETTING_LABEL_BY_ROOT_ID.get(root_id) or "").strip(),
+        "care_setting_address": str(CARE_SETTING_ADDRESS_BY_ROOT_ID.get(root_id) or "").strip(),
+    }
 
 # -----------------------------------------------------------------------------
 # Функционал: doctor_prices
