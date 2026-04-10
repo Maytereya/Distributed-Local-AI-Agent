@@ -126,7 +126,8 @@ _PRICE_PROCEDURE_LIKE_RE = re.compile(
     r"при[её]м\w*|консультац\w*|осмотр\w*|узи|ультразвук\w*|эндоскоп\w*|фгдс|фкс|гастроскоп\w*|"
     r"колоноскоп\w*|рентген\w*|мрт|кт|флюорограф\w*|маммограф\w*|экг|операц\w*|удалени\w*|"
     r"массаж\w*|пломб\w*|зуб\w*|подтяжк\w*|хирург\w*|травматолог\w*|ортопед\w*|стоматолог\w*|"
-    r"анестези\w*|имплант\w*|протез\w*|сустав\w*"
+    r"анестези\w*|имплант\w*|протез\w*|сустав\w*|лечени\w*|профилактик\w*|"
+    r"биопс\w*|резекц\w*|склерозир\w*|препарат\w*"
     r")\b",
     re.I,
 )
@@ -2031,13 +2032,14 @@ def _doctor_matches_fio(fio: str, doctor_query: str, resolved_surname: str | Non
     if not tokens:
         return False
 
-    candidates: list[str] = []
     if resolved_surname:
-        candidates.extend([v for v in surname_variants(resolved_surname) if v])
-    else:
-        q_tokens = _fio_tokens(doctor_query)
-        if q_tokens:
-            candidates.extend([v for v in surname_variants(q_tokens[0]) if v])
+        target = _normalise_input(resolved_surname)
+        return bool(target and tokens and _normalise_input(tokens[0]) == target)
+
+    candidates: list[str] = []
+    q_tokens = _fio_tokens(doctor_query)
+    if q_tokens:
+        candidates.extend([v for v in surname_variants(q_tokens[0]) if v])
 
     normalized = sorted({ _normalise_input(x) for x in candidates if len(_normalise_input(x)) >= 2 }, key=len, reverse=True)
     if not normalized:
@@ -2048,6 +2050,33 @@ def _doctor_matches_fio(fio: str, doctor_query: str, resolved_surname: str | Non
             if token.startswith(c):
                 return True
     return False
+
+
+def _specialty_label_for_doctor(doc: dict[str, Any], *, preferred_specialty: str = "") -> str:
+    """
+    Возвращает короткую человекочитаемую метку основной специальности врача.
+
+    :param doc: карточка врача
+    :param preferred_specialty: специальность из запроса, если она есть
+    :return: короткая метка специальности для patient-facing ответа
+    """
+
+    preferred = _normalise_input(preferred_specialty).replace("ё", "е")
+    if preferred and _doctor_matches_primary_specialty(doc, preferred):
+        return preferred_specialty.strip().capitalize()
+
+    for unit_name in _collect_role_unit_names(doc, main_value=True) + _collect_role_unit_names(doc, main_value=False):
+        found = _extract_specialties_from_text(unit_name)
+        if found:
+            return found[0].capitalize()
+
+    display_spec = _pick_display_specialization(doc, preferred_specialty=preferred_specialty)
+    for candidate in _split_spec_lines(display_spec):
+        found = _extract_specialties_from_text(candidate)
+        if found:
+            return found[0].capitalize()
+
+    return ""
 
 
 def _compact_specialization(
@@ -3420,7 +3449,17 @@ def _select_family_variant_rows(
         if filtered_ranked:
             ranked = filtered_ranked
         return ranked[:limit]
-    return _rank_price_rows(unique_rows, effective_query, limit=limit)
+    ranked = _rank_price_rows(unique_rows, effective_query, limit=max(limit, 20))
+    family_norm = _normalise_input(family_query).replace("ё", "е")
+    if _is_uzi_query_text(family_query) and _UZI_PROCEDURE_HINT_RE.search(family_norm):
+        filtered_ranked = [
+            row
+            for row in ranked
+            if not _is_lab_like_service_name(str(row.get("serviceName") or row.get("name") or ""))
+        ]
+        if filtered_ranked:
+            ranked = filtered_ranked
+    return ranked[:limit]
 
 
 def _family_variant_base_names(rows: list[dict[str, Any]]) -> set[str]:
@@ -5903,7 +5942,17 @@ class Services:
                         "id": doctor_id,
                         "fio": str(doc.get("fio") or "").strip(),
                         "ord": _as_int(doc.get("ord")),
-                        "specialization": _compact_specialization(str(doc.get("specialization") or "")),
+                        "specialization": _compact_specialization(
+                            _pick_display_specialization(
+                                doc,
+                                preferred_specialty=query_specialty,
+                                preferred_service=service_name,
+                            )
+                        ),
+                        "specialty_label": _specialty_label_for_doctor(
+                            doc,
+                            preferred_specialty=query_specialty,
+                        ),
                         "regions": [str(x).strip() for x in (doc.get("regions") or []) if str(x).strip()],
                         "service_price": _as_int(price_row.get("cost")),
                         "available": bool(availability.get("available")),

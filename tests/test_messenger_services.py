@@ -45,6 +45,34 @@ def test_doctors_info_filters_by_name(monkeypatch):
     assert not res.get("handoff_required", False)
 
 
+def test_doctors_info_exact_surname_does_not_pull_female_variant(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Иванов Иван Иванович",
+                "specialization": "Онколог",
+                "regions": ["Ленина 5"],
+                "units": ["Онкология"],
+            },
+            {
+                "id": 2,
+                "fio": "Иванова Анна Сергеевна",
+                "specialization": "Терапевт",
+                "regions": ["Ленина 5"],
+                "units": ["Терапия"],
+            },
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+
+    res = run(svc.doctors_info("Иванов", {"doctor_name": "Иванов"}))
+
+    assert [row["fio"] for row in res["doctors"]] == ["Иванов Иван Иванович"]
+
+
 def test_doctors_info_sorts_by_ord(monkeypatch):
     svc = Services()
 
@@ -2924,7 +2952,7 @@ def test_service_bundle_info_keeps_service_name_on_city_only_reply(monkeypatch):
     svc = Services()
 
     async def fake_ensure_regions():
-        return [{"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"}]
+        return [{"id": 1, "addressForSite": "г. Самара, ул. Ново-Садовая, 106, кор. 82", "city": "Самара"}]
 
     async def fake_ensure_doctors_cache():
         return []
@@ -3344,3 +3372,115 @@ def test_service_bundle_info_consult_filters_doctors_by_primary_specialty(monkey
     names = [str(row.get("fio") or "") for row in (res.get("doctors") or [])]
 
     assert names == ["Кардиолог Основной"]
+
+
+def test_service_bundle_info_consult_doctor_uses_query_specialty_label(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_regions():
+        return [{"id": 1, "addressForSite": "г. Самара, ул. Ново-Садовая, 106, кор. 82", "city": "Самара"}]
+
+    async def fake_ensure_doctors_cache():
+        return [
+            {
+                "id": 872,
+                "fio": "Дурасов Владимир Владимирович",
+                "ord": 1,
+                "specialization": "Акушер-гинеколог",
+                "regions": ["г. Самара, ул. Ново-Садовая, 106, кор. 82"],
+                "unit_links": [
+                    {"company_unit_name": "Врач акушер-гинеколог", "main": False, "specialization": "Акушер-гинеколог"},
+                    {"company_unit_name": "Врач-хирург", "main": True, "specialization": "Хирург"},
+                ],
+                "units": ["Врач акушер-гинеколог", "Врач-хирург"],
+                "main_units": ["Врач-хирург"],
+            }
+        ]
+
+    async def fake_availability(_fio: str, samara_tokens=None):
+        _ = samara_tokens
+        return {"available": False, "nearest_slot": "", "regions_with_slots": [], "note": "availability_unmatched"}
+
+    def fake_retail(_region_id):
+        return [{"serviceName": "Прием (осмотр, консультация) врача-хирурга первичный", "serviceHomecode": "15.2.1", "cost": 2500}]
+
+    def fake_doctor_prices():
+        return [{"doctorId": 872, "serviceName": "Прием (осмотр, консультация) врача-хирурга первичный", "serviceHomecode": "15.2.1", "cost": 2500}]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(svc, "_doctor_availability_snapshot", fake_availability)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_retail)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+
+    res = run(svc.service_bundle_info("стоимость первичного приема хирурга", {}))
+
+    assert res["doctors"]
+    assert res["doctors"][0]["specialty_label"] == "Хирург"
+
+
+def test_service_bundle_info_ajovy_is_not_lab(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_regions():
+        return [{"id": 1, "addressForSite": "г. Самара, пр. Ленина, 5", "city": "Самара"}]
+
+    async def fake_ensure_doctors_cache():
+        return [
+            {
+                "id": 1288,
+                "fio": "Третьякова Наталья Александровна",
+                "ord": 1,
+                "specialization": "Невролог",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "unit_links": [{"company_unit_name": "Врач-невролог", "main": True, "specialization": "Невролог"}],
+                "main_units": ["Врач-невролог"],
+            }
+        ]
+
+    async def fake_availability(_fio: str, samara_tokens=None):
+        _ = samara_tokens
+        return {"available": False, "nearest_slot": "", "regions_with_slots": [], "note": "availability_unmatched"}
+
+    def fake_retail(_region_id):
+        return [{"serviceName": "Лечение и профилактика мигрени (препарат Аджови)", "serviceHomecode": "12.1.10.3", "cost": 25000}]
+
+    def fake_doctor_prices():
+        return [{"doctorId": 1288, "serviceName": "Лечение и профилактика мигрени (препарат Аджови)", "serviceHomecode": "12.1.10.3", "cost": 25000}]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_ensure_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_doctors_cache)
+    monkeypatch.setattr(svc, "_doctor_availability_snapshot", fake_availability)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_retail)
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", fake_doctor_prices)
+
+    res = run(svc.service_bundle_info("стоимость Аджови", {}))
+
+    assert str(res.get("service_kind") or "") != "lab"
+
+
+def test_service_bundle_info_thyroid_uzi_family_filters_out_lab_profiles(monkeypatch):
+    svc = Services()
+
+    def fake_retail(_region_id):
+        return [
+            {"serviceName": "Щитовидная железа (сокращенное обследование)", "serviceHomecode": "976", "deadline": "1-2", "cost": 860},
+            {"serviceName": "Профиль. \"Здоровая щитовидная железа\"", "serviceHomecode": "1287", "deadline": "1-2", "cost": 1615},
+            {"serviceName": "Ультразвуковое исследование щитовидной железы и паращитовидных желез", "serviceHomecode": "2.4.1", "deadline": " ", "cost": 2100},
+            {"serviceName": "Узи щитовидной железы (экспертное)", "serviceHomecode": "2.4.1.3", "deadline": " ", "cost": 2300},
+            {"serviceName": "Тонкоигольная аспирационная биопсия щитовидной железы", "serviceHomecode": "3.3.9.5", "deadline": " ", "cost": 4300},
+            {"serviceName": "Резекция перешейка щитовидной железы с использованием нейромонитора", "serviceHomecode": "3.3.9.14", "deadline": " ", "cost": 155700},
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_retail)
+
+    res = run(svc.service_bundle_info("стоимость узи щитовидной железы", {}))
+
+    assert str(res.get("service_kind") or "") == "family_query"
+    names = [str(row.get("serviceName") or "") for row in (res.get("family_variants") or [])]
+    assert "Ультразвуковое исследование щитовидной железы и паращитовидных желез" in names
+    assert "Узи щитовидной железы (экспертное)" in names
+    assert "Тонкоигольная аспирационная биопсия щитовидной железы" in names
+    assert "Резекция перешейка щитовидной железы с использованием нейромонитора" in names
+    assert "Щитовидная железа (сокращенное обследование)" not in names
+    assert 'Профиль. "Здоровая щитовидная железа"' not in names

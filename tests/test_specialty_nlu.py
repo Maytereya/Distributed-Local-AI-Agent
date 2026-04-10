@@ -494,3 +494,23 @@ def test_service_bundle_renderer_lab_hides_doctor_schedule_suffix():
     low = text.lower()
     assert "запись к конкретному врачу обычно не требуется" in low
     assert "подробное расписание" not in low
+
+
+def test_service_bundle_renderer_shows_doctor_specialty_label():
+    payload = {
+        "service_name": "Прием (осмотр, консультация) врача-хирурга первичный",
+        "retail_prices": [{"serviceName": "Прием (осмотр, консультация) врача-хирурга первичный", "cost": 2500}],
+        "doctors": [
+            {
+                "fio": "Дурасов Владимир Владимирович",
+                "specialty_label": "Хирург",
+                "service_price": 2500,
+                "available": False,
+                "availability_note": "availability_unmatched",
+            }
+        ],
+    }
+
+    text = format_service_bundle_for_patient(payload, {})
+
+    assert "Дурасов Владимир Владимирович (Хирург)" in text
