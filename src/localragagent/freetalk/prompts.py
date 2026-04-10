@@ -100,12 +100,24 @@ def build_clinical_router_prompt(
     pending_intent: str = "",
     pending_slots: list[str] | None = None,
     remembered_doctor: str = "",
+    dialog_state: dict[str, Any] | None = None,
 ) -> str:
     history = _history_lines(turns, max_turns=12)
     summary_text = str(summary or "").strip() or "(нет)"
     pending_intent_text = str(pending_intent or "").strip() or "(нет)"
     pending_slots_text = ", ".join([str(x).strip() for x in (pending_slots or []) if str(x).strip()]) or "(нет)"
     doctor_hint = str(remembered_doctor or "").strip() or "(нет)"
+    state_payload = dialog_state if isinstance(dialog_state, dict) else {}
+    state_phase = str(state_payload.get("phase") or "").strip() or "(нет)"
+    state_clarify_type = str(state_payload.get("clarify_type") or "").strip() or "(нет)"
+    state_confirmation_target = str(state_payload.get("confirmation_target") or "").strip() or "(нет)"
+    state_open_question = str(state_payload.get("open_question") or "").strip() or "(нет)"
+    state_entities = state_payload.get("entities") if isinstance(state_payload.get("entities"), dict) else {}
+    state_candidates = (
+        state_payload.get("candidate_entities")
+        if isinstance(state_payload.get("candidate_entities"), dict)
+        else {}
+    )
     schema = {
         "intent": "doctor_schedule|doctor_info|price|prepare|tests|test_result|address|clinic_documents|clinic_news|service_info|unknown",
         "confidence": 0.0,
@@ -113,15 +125,28 @@ def build_clinical_router_prompt(
             "doctor_name": "",
             "specialty": "",
             "service_name": "",
+            "service_variant": "",
             "test_name": "",
             "city": "",
+            "region": "",
+            "branch": "",
             "branch_name": "",
+            "filial": "",
             "date_from": "",
             "date_to": "",
             "time_from": "",
             "time_to": "",
+            "date": "",
+            "time": "",
+            "surname": "",
+            "year": "",
+            "number": "",
+            "order_number": "",
+            "order_id": "",
+            "doctor_id": "",
         },
         "missing_slots": ["doctor_name_or_specialty"],
+        "clarify_type": "identify|confirm_candidate|narrow_choice|missing_auth_data|other",
         "clarify_question": "",
         "tool_plan": ["doctors_schedule_week", "doctors_info"],
     }
@@ -129,8 +154,16 @@ def build_clinical_router_prompt(
     return (
         f"{system_prompt}\n\n"
         "Ты роутер клинических интентов. Выбери intent и сущности для tool_call.\n"
-        "Если данных недостаточно, заполни missing_slots и короткий clarify_question.\n"
+        "Если данных недостаточно, заполни missing_slots, clarify_type и короткий clarify_question.\n"
         "Если пользователь пишет \"о нем/его/этот врач\", используй контекст и remembered_doctor.\n"
+        "Если это продолжение предыдущего уточнения, дополни уже собранные сущности, а не начинай разбор заново.\n"
+        "Типы уточнений:\n"
+        "- identify: не хватает базовой сущности, кого/что искать.\n"
+        "- confirm_candidate: есть один вероятный кандидат, нужен вопрос Да/Нет.\n"
+        "- narrow_choice: сущность уже понятна, но нужно сузить по филиалу/дате/времени/варианту.\n"
+        "- missing_auth_data: не хватает персональных идентификаторов для patient-specific запроса.\n"
+        "- other: только если тип выше не подходит.\n"
+        "Если выбран confirm_candidate, вопрос должен быть коротким и бинарным.\n"
         "Не выдумывай конкретные фамилии/услуги, если их нет в сообщении/контексте.\n"
         "Верни ТОЛЬКО JSON без markdown.\n\n"
         "Summary:\n"
@@ -140,6 +173,14 @@ def build_clinical_router_prompt(
         f"Pending intent: {pending_intent_text}\n"
         f"Pending slots: {pending_slots_text}\n"
         f"Remembered doctor: {doctor_hint}\n\n"
+        f"Current dialog phase: {state_phase}\n"
+        f"Current clarify type: {state_clarify_type}\n"
+        f"Current confirmation target: {state_confirmation_target}\n"
+        f"Current open question: {state_open_question}\n\n"
+        "Current dialog entities:\n"
+        f"{json.dumps(state_entities, ensure_ascii=False, indent=2) if state_entities else '(нет)'}\n\n"
+        "Candidate entities:\n"
+        f"{json.dumps(state_candidates, ensure_ascii=False, indent=2) if state_candidates else '(нет)'}\n\n"
         f"Пользователь: {user_message}\n\n"
         "JSON schema example:\n"
         f"{schema_text}\n"
@@ -163,6 +204,7 @@ def build_post_tool_verifier_prompt(
     schema = {
         "enough_data": True,
         "should_clarify": False,
+        "clarify_type": "identify|confirm_candidate|narrow_choice|missing_auth_data|other",
         "clarify_question": "",
         "answer_policy": "direct|clarify|not_found",
     }
@@ -175,6 +217,11 @@ def build_post_tool_verifier_prompt(
         "1) direct: данных достаточно для прямого ответа.\n"
         "2) clarify: данных недостаточно, но можно задать один уточняющий вопрос.\n"
         "3) not_found: данных недостаточно и уточнение не поможет.\n\n"
+        "Если answer_policy=clarify, обязательно укажи clarify_type.\n"
+        "clarify_type=identify — не хватает базовой сущности или названия.\n"
+        "clarify_type=confirm_candidate — есть один вероятный кандидат и нужен Да/Нет.\n"
+        "clarify_type=narrow_choice — нужно сузить по филиалу, дате, времени или варианту услуги.\n"
+        "clarify_type=missing_auth_data — не хватает персональных идентификаторов для результата/пациента.\n\n"
         f"Intent: {intent}\n"
         f"Tool: {tool_name}\n"
         f"User message: {user_message}\n\n"

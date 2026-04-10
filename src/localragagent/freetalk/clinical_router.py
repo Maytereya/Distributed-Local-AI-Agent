@@ -20,6 +20,14 @@ CLINICAL_INTENTS: tuple[str, ...] = (
     "unknown",
 )
 
+CLARIFY_TYPES: tuple[str, ...] = (
+    "identify",
+    "confirm_candidate",
+    "narrow_choice",
+    "missing_auth_data",
+    "other",
+)
+
 
 _KNOWN_TOOLS: set[str] = {
     "service_bundle_info",
@@ -80,14 +88,25 @@ _ENTITY_KEYS: set[str] = {
     "doctor_name",
     "specialty",
     "service_name",
+    "service_variant",
     "test_name",
     "city",
+    "region",
+    "branch",
     "branch_name",
+    "filial",
     "date_from",
     "date_to",
     "time_from",
     "time_to",
+    "date",
+    "time",
     "doctor_id",
+    "surname",
+    "year",
+    "number",
+    "order_number",
+    "order_id",
 }
 
 
@@ -97,6 +116,7 @@ class ClinicalDecision:
     confidence: float = 0.0
     entities: dict[str, Any] = field(default_factory=dict)
     missing_slots: list[str] = field(default_factory=list)
+    clarify_type: str = ""
     clarify_question: str = ""
     tool_plan: list[str] = field(default_factory=list)
     source: str = "heuristic"
@@ -161,6 +181,13 @@ def _coerce_tool_plan(value: Any) -> list[str]:
     return out
 
 
+def normalize_clarify_type(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in CLARIFY_TYPES:
+        return raw
+    return ""
+
+
 def tool_plan_for_intent(intent: str, *, include_meili_tools: bool) -> list[str]:
     plan = list(_INTENT_TO_PLAN.get(str(intent or "").strip().lower(), []))
     if not include_meili_tools:
@@ -173,7 +200,34 @@ def merge_missing_slots_from_plan(tool_plan: list[str], entities: dict[str, Any]
     plan = list(tool_plan or [])
     doctor_known = bool(str(entities.get("doctor_name") or entities.get("doctor_id") or "").strip())
     specialty_known = bool(str(entities.get("specialty") or "").strip())
-    service_known = bool(str(entities.get("service_name") or entities.get("test_name") or "").strip())
+    service_known = bool(
+        str(
+            entities.get("service_name")
+            or entities.get("test_name")
+            or entities.get("service_variant")
+            or ""
+        ).strip()
+    )
+    result_surname = bool(str(entities.get("surname") or "").strip())
+    result_year = bool(str(entities.get("year") or "").strip())
+    result_filial = bool(
+        str(
+            entities.get("filial")
+            or entities.get("branch_name")
+            or entities.get("branch")
+            or entities.get("region")
+            or entities.get("city")
+            or ""
+        ).strip()
+    )
+    result_number = bool(
+        str(
+            entities.get("number")
+            or entities.get("order_number")
+            or entities.get("order_id")
+            or ""
+        ).strip()
+    )
 
     if any(tool in {"doctors_info", "doctors_schedule_week"} for tool in plan):
         if not doctor_known and not specialty_known:
@@ -184,9 +238,14 @@ def merge_missing_slots_from_plan(tool_plan: list[str], entities: dict[str, Any]
             missing.append("service_or_analysis_name")
 
     if "test_result_status" in plan:
-        has_num = bool(str(entities.get("order_number") or "").strip())
-        if not has_num:
-            missing.append("result_identifiers")
+        if not result_surname:
+            missing.append("result_surname")
+        if not result_year:
+            missing.append("result_year")
+        if not result_filial:
+            missing.append("result_filial")
+        if not result_number:
+            missing.append("result_number")
 
     dedup: list[str] = []
     seen: set[str] = set()
@@ -206,9 +265,32 @@ def clarify_question_for_slots(intent: str, missing_slots: list[str]) -> str:
         return "Уточните, пожалуйста, фамилию врача или специальность."
     if "service_or_analysis_name" in slots:
         return "Уточните, пожалуйста, точное название услуги или анализа."
-    if "result_identifiers" in slots:
-        return "Для проверки результата нужны идентификаторы: номер заказа и/или данные пациента."
+    result_labels: list[str] = []
+    if "result_surname" in slots:
+        result_labels.append("фамилию пациента")
+    if "result_year" in slots:
+        result_labels.append("год рождения")
+    if "result_filial" in slots:
+        result_labels.append("филиал")
+    if "result_number" in slots:
+        result_labels.append("номер заказа")
+    if result_labels:
+        return "Для проверки результата уточните: " + ", ".join(result_labels) + "."
     return "Уточните, пожалуйста, ваш запрос по клинике, чтобы я корректно выполнил поиск."
+
+
+def clarify_type_for_slots(intent: str, missing_slots: list[str]) -> str:
+    _ = intent
+    slots = set(str(slot or "").strip().lower() for slot in (missing_slots or []))
+    if not slots:
+        return ""
+    if slots & {"result_surname", "result_year", "result_filial", "result_number", "result_identifiers"}:
+        return "missing_auth_data"
+    if slots & {"doctor_name_or_specialty", "service_or_analysis_name"}:
+        return "identify"
+    if slots & {"branch", "branch_name", "city", "region", "date", "date_from", "date_to", "time", "time_from", "time_to"}:
+        return "narrow_choice"
+    return "other"
 
 
 def parse_clinical_decision(
@@ -221,9 +303,12 @@ def parse_clinical_decision(
     confidence = _clip_float(data.get("confidence"), default=0.0)
     entities = _coerce_entities(data.get("entities"))
     missing_slots = _coerce_missing_slots(data.get("missing_slots"))
+    clarify_type = normalize_clarify_type(data.get("clarify_type"))
     clarify_question = str(data.get("clarify_question") or "").strip()
     explicit_plan = _coerce_tool_plan(data.get("tool_plan"))
     mapped_plan = tool_plan_for_intent(intent, include_meili_tools=include_meili_tools)
+    if not clarify_type and (missing_slots or clarify_question):
+        clarify_type = clarify_type_for_slots(intent, missing_slots)
 
     if explicit_plan:
         tool_plan = [tool for tool in explicit_plan if tool in mapped_plan or tool in _KNOWN_TOOLS]
@@ -237,8 +322,8 @@ def parse_clinical_decision(
         confidence=confidence,
         entities=entities,
         missing_slots=missing_slots,
+        clarify_type=clarify_type,
         clarify_question=clarify_question,
         tool_plan=tool_plan,
         source="llm_router",
     )
-

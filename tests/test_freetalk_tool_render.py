@@ -12,7 +12,7 @@ if str(SRC_ROOT) not in sys.path:
 from localragagent.freetalk.agent import FreeTalkAgent
 from localragagent.freetalk.clinical_router import ClinicalDecision
 from localragagent.freetalk.config import FreeTalkConfig
-from localragagent.freetalk.contracts import AgentReply
+from localragagent.freetalk.contracts import AgentReply, DialogState
 from localragagent.freetalk.tool_dispatcher import ToolDispatcher
 
 
@@ -137,7 +137,7 @@ def test_extract_primary_doctor_name_from_tool_payload():
     assert name == "Трубин Алексей Юрьевич"
 
 
-def test_ground_entities_accepts_fuzzy_doctor_match():
+def test_ground_entities_keeps_fuzzy_doctor_as_candidate():
     class _StubServices:
         async def match_catalog_service(self, _raw: str, *, current_service_name: str = "") -> dict[str, str]:
             _ = current_service_name
@@ -156,7 +156,8 @@ def test_ground_entities_accepts_fuzzy_doctor_match():
     )
 
     entities = asyncio.run(agent._ground_entities("врач дразнин"))
-    assert entities.get("doctor_name") == "Дразнин"
+    assert entities.get("doctor_name") is None
+    assert entities.get("doctor_name_candidate") == "Дразнин"
     assert entities.get("doctor_name_match_status") == "fuzzy"
 
 
@@ -304,10 +305,10 @@ def test_build_dialog_act_uses_llm_router_when_confident(monkeypatch):
         *,
         user_message: str,
         context,
-        pending_state: dict[str, object],
+        dialog_state: DialogState,
         remembered_doctor: str,
     ) -> ClinicalDecision:
-        _ = user_message, context, pending_state, remembered_doctor
+        _ = user_message, context, dialog_state, remembered_doctor
         return ClinicalDecision(
             intent="doctor_schedule",
             confidence=0.9,
@@ -321,7 +322,7 @@ def test_build_dialog_act_uses_llm_router_when_confident(monkeypatch):
         agent._build_dialog_act(
             user_message="Расписание Дразнина",
             context=type("Ctx", (), {"session_id": "s1", "summary": "", "turns": []})(),
-            pending_state={},
+            dialog_state=DialogState(),
             remembered_doctor="",
         )
     )
@@ -347,10 +348,10 @@ def test_build_dialog_act_uses_regex_only_as_fallback(monkeypatch):
         *,
         user_message: str,
         context,
-        pending_state: dict[str, object],
+        dialog_state: DialogState,
         remembered_doctor: str,
     ) -> ClinicalDecision:
-        _ = user_message, context, pending_state, remembered_doctor
+        _ = user_message, context, dialog_state, remembered_doctor
         return ClinicalDecision(
             intent="unknown",
             confidence=0.05,
@@ -364,7 +365,7 @@ def test_build_dialog_act_uses_regex_only_as_fallback(monkeypatch):
         agent._build_dialog_act(
             user_message="Расписание Дразнина",
             context=type("Ctx", (), {"session_id": "s2", "summary": "", "turns": []})(),
-            pending_state={},
+            dialog_state=DialogState(),
             remembered_doctor="",
         )
     )
@@ -392,6 +393,7 @@ def test_heuristic_post_tool_verifier_uses_clarify_text_from_payload():
     )
     assert verification.answer_policy == "clarify"
     assert verification.should_clarify is True
+    assert verification.clarify_type == "identify"
     assert "уточните" in verification.clarify_question.lower()
 
 
@@ -422,6 +424,7 @@ def test_parse_post_tool_verification_normalizes_invalid_policy_to_clarify():
     )
     assert verification.answer_policy == "clarify"
     assert verification.should_clarify is True
+    assert verification.clarify_type == ""
     assert "фамили" in verification.clarify_question.lower()
 
 
@@ -456,7 +459,37 @@ def test_post_tool_verifier_uses_llm_json_decision(monkeypatch):
     )
     assert verification.source == "llm"
     assert verification.answer_policy == "clarify"
+    assert verification.clarify_type == "identify"
     assert "врача" in verification.clarify_question.lower()
+
+
+def test_parse_post_tool_verification_uses_fallback_clarify_type():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    fallback = agent._heuristic_post_tool_verification(
+        intent="test_result",
+        tool_name="test_result_status",
+        drafted_answer="",
+        tool_payload={"missing_fields": ["фамилия"]},
+        missing_slots=["result_surname"],
+    )
+    verification = agent._parse_post_tool_verification(
+        {
+            "enough_data": False,
+            "should_clarify": True,
+            "clarify_question": "Уточните фамилию пациента.",
+            "answer_policy": "clarify",
+        },
+        fallback=fallback,
+    )
+    assert verification.answer_policy == "clarify"
+    assert verification.clarify_type == "missing_auth_data"
 
 
 def test_source_fragments_for_clinic_reply():

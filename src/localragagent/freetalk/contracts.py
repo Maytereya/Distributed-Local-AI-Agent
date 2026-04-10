@@ -28,6 +28,7 @@ class DialogAct:
     entities: dict[str, Any] = field(default_factory=dict)
     confidence: float = 0.0
     missing_slots: list[str] = field(default_factory=list)
+    clarify_type: str = ""
     clarify_question: str = ""
     tool_plan: list[str] = field(default_factory=list)
     response_policy: str = "general_only"
@@ -36,9 +37,28 @@ class DialogAct:
 
 
 @dataclass(slots=True)
+class DialogState:
+    route: str = "general"
+    intent: str = "unknown"
+    entities: dict[str, Any] = field(default_factory=dict)
+    candidate_entities: dict[str, Any] = field(default_factory=dict)
+    confirmation_target: str = ""
+    missing_slots: list[str] = field(default_factory=list)
+    clarify_type: str = ""
+    tool_plan: list[str] = field(default_factory=list)
+    response_policy: str = "general_only"
+    confidence: float = 0.0
+    clarify_count: int = 0
+    last_tool: str = ""
+    phase: str = ""
+    open_question: str = ""
+
+
+@dataclass(slots=True)
 class PostToolVerification:
     enough_data: bool = True
     should_clarify: bool = False
+    clarify_type: str = ""
     clarify_question: str = ""
     answer_policy: str = "direct"
     source: str = "heuristic"

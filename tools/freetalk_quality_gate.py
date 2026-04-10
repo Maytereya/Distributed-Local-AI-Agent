@@ -21,7 +21,7 @@ if str(SRC_ROOT) not in sys.path:
 from localragagent.freetalk.agent import FreeTalkAgent
 from localragagent.freetalk.clinical_router import parse_clinical_decision
 from localragagent.freetalk.config import FreeTalkConfig
-from localragagent.freetalk.contracts import SessionContext
+from localragagent.freetalk.contracts import DialogState, SessionContext
 from localragagent.ports import freetalk_llm_port
 
 
@@ -217,6 +217,11 @@ class StubServices:
 
     async def match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = "") -> dict[str, Any]:
         probe = str(current_service_name or raw_text_or_name or "")
+        probe_norm = _norm(raw_text_or_name)
+        if "общий анлиз крови" in probe_norm:
+            return {"status": "fuzzy", "canonical": "Общий анализ крови", "query": raw_text_or_name}
+        if current_service_name and "наркоз" in probe_norm and "фкс" in _norm(current_service_name):
+            return {"status": "exact", "canonical": "ФКС с наркозом", "query": raw_text_or_name}
         key, service = self._resolve_service(probe)
         if service:
             return {"status": "exact", "canonical": service["name"], "query": raw_text_or_name}
@@ -299,9 +304,18 @@ class StubServices:
 
     async def test_result_status(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         _ = query
-        if str(entities.get("order_number") or "").strip():
+        missing: list[str] = []
+        if not str(entities.get("surname") or "").strip():
+            missing.append("фамилия")
+        if not str(entities.get("year") or "").strip():
+            missing.append("год рождения")
+        if not str(entities.get("filial") or entities.get("branch_name") or "").strip():
+            missing.append("филиал")
+        if not str(entities.get("number") or entities.get("order_number") or "").strip():
+            missing.append("номер заказа")
+        if not missing:
             return {"ready": True, "result_links": ["https://example.org/result"], "note": "test_result_status"}
-        return {"ready": False, "missing_fields": ["номер заказа"], "note": "test_result_status"}
+        return {"ready": False, "missing_fields": missing, "note": "test_result_status"}
 
     async def main_index_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         _ = entities
@@ -373,10 +387,10 @@ class EvalFreeTalkAgent(FreeTalkAgent):
         *,
         user_message: str,
         context: SessionContext,
-        pending_state: dict[str, Any],
+        dialog_state: DialogState,
         remembered_doctor: str,
     ) -> Any:
-        _ = user_message, context, pending_state, remembered_doctor
+        _ = user_message, context, dialog_state, remembered_doctor
         payload = self._eval_router_payload
         if isinstance(payload, dict):
             decision = parse_clinical_decision(
@@ -388,7 +402,7 @@ class EvalFreeTalkAgent(FreeTalkAgent):
         return await super()._route_clinical_decision(
             user_message=user_message,
             context=context,
-            pending_state=pending_state,
+            dialog_state=dialog_state,
             remembered_doctor=remembered_doctor,
         )
 
@@ -474,7 +488,7 @@ async def _run_eval(dataset_path: Path, *, profile: str) -> list[StepEval]:
                     general_answer=str(step.get("general_answer") or ""),
                 )
             reply = await agent.chat(message, sid)
-            pending_raw = await memory.get_meta_str(sid, "clinical_pending_state", "")
+            pending_raw = await memory.get_meta_str(sid, "clinical_dialog_state", "")
             clarification = bool(str(pending_raw or "").strip()) or _looks_like_clarification(reply.text)
             tool_called = bool(str(reply.tool_name or "").strip())
             source_tags = []
