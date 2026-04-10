@@ -40,7 +40,7 @@ REQUIRED_SLOTS: dict[str, list[str]] = {
 UNSAFE_LABELS = {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
 
 
-def post_json(url: str, payload: dict, timeout_sec: int = 50, retries: int = 1) -> dict[str, Any]:
+def post_json(url: str, payload: dict, timeout_sec: int = 75, retries: int = 1) -> dict[str, Any]:
     last_exc: Exception | None = None
     for attempt in range(max(0, retries) + 1):
         try:
@@ -128,6 +128,12 @@ def main() -> int:
     )
     p.add_argument("--session-prefix", default="s_eval_stage5", help="Session prefix")
     p.add_argument("--run-id", default="", help="Optional run id (default unix ts)")
+    p.add_argument(
+        "--timeout-sec",
+        type=int,
+        default=75,
+        help="HTTP timeout for one case in seconds",
+    )
     args = p.parse_args()
 
     golden_version = str(args.golden_version or "").strip()
@@ -193,7 +199,7 @@ def main() -> int:
         slot_info = "-"
 
         try:
-            data = post_json(args.url, payload)
+            data = post_json(args.url, payload, timeout_sec=args.timeout_sec)
             act_handoff = bool(data.get("handoff", False))
             debug = data.get("state_update", {}).get("debug", {})
             decision = debug.get("decision", {}) if isinstance(debug, dict) else {}

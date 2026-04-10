@@ -656,11 +656,22 @@ def _next_doctor_prices_refresh_dt() -> datetime:
 
 
 async def _refresh_doctor_prices_once() -> None:
+    """
+    Обновляет doctor_prices и связанные справочники прайса в фоновом режиме.
+
+    :return: None
+    """
+
     try:
         await asyncio.to_thread(update_doctor_prices, True)
         log.info("✅ [DAILY REFRESH] doctor_prices обновлен")
     except Exception as e:
         log.warning("⚠️ [DAILY REFRESH] doctor_prices refresh failed: %s", e)
+    try:
+        await asyncio.to_thread(update_price_units, True)
+        log.info("✅ [DAILY REFRESH] priceUnits обновлен")
+    except Exception as e:
+        log.warning("⚠️ [DAILY REFRESH] priceUnits refresh failed: %s", e)
 
 
 async def _doctor_prices_refresh_loop() -> None:
@@ -676,7 +687,7 @@ async def _doctor_prices_refresh_loop() -> None:
 
 
 def ensure_daily_price_refresh_started() -> bool:
-    """Запускает фоновый refresh doctor_prices в 08:15 по Самаре (idempotent)."""
+    """Запускает фоновый refresh doctor_prices и priceUnits в 08:15 по Самаре."""
     global _PRICE_REFRESH_TASK
     try:
         loop = asyncio.get_running_loop()
@@ -687,7 +698,7 @@ def ensure_daily_price_refresh_started() -> bool:
         _PRICE_REFRESH_TASK = loop.create_task(_doctor_prices_refresh_loop())
         log.info("▶️ [DAILY REFRESH] Планировщик doctor_prices запущен")
         try:
-            if not doctor_prices_path().exists():
+            if not doctor_prices_path().exists() or not price_units_path().exists():
                 loop.create_task(_refresh_doctor_prices_once())
         except Exception:
             pass

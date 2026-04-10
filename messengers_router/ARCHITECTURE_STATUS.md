@@ -1,133 +1,306 @@
-# Messengers Router: Architecture Status (v4)
+# Messengers Router: Architecture Status (v5)
 
-Обновлено: **2026-04-07**
+Обновлено: **2026-04-10**
 
-Документ отражает текущее состояние `messengers_router` после серии фиксов по flow-контролю, hard reset и очистке stale-контекста.
+Документ отражает текущее состояние `messengers_router` после серии правок по `APPOINTMENT`, `PRICE`, `ADDRESS`, `PREPARE` и интеграции `priceUnits`.
 
-## 1) Подтверждено на текущей ревизии
+## 1) Кратко: что изменилось
 
-1. Архитектурный guardrail:
-   - Команда: `python3 messengers_router/scripts/check_architecture_imports.py`
-   - Результат: `ARCHITECTURE CHECK PASSED`
-   - Метрики: **30 модулей**, **95 внутренних ребер импортов**.
-2. Локальные таргетные тесты по flow-контролю:
-   - Команда:
-     `./.agent_venv/bin/python -m pytest -q tests/test_router_flow_override.py -k "soft_pause_triggers_cancel_confirm or topic_switch_requests_confirmation or topic_switch_confirm_yes_clears_appointment_flow or confirm_pending_yes_handoff_resets_state"`
-   - Результат: **9 passed**.
-3. Stage3-ожидания приведены к текущему APPOINTMENT-flow:
-   - Файл: `messengers_router/scripts/eval_stage3_appointment_flow.py`
-   - Обновлены шаги в `APPT_HOLTER_RESCHEDULE`.
+Базовая архитектура не переписана, но логика работы бота заметно изменилась.
 
-## 2) Что сделано по контролю состояния (state) сейчас
+Что осталось прежним:
+- основной каркас: `router -> services -> renderer/response_builder`;
+- состояние по-прежнему хранится через `state.last_entities` и `memory.pending`;
+- внешние API-контракты для основного чата не ломались.
 
-### 2.1 Hard reset / stop-фразы в APPOINTMENT
+Что реально изменилось:
+- `APPOINTMENT` стал более строгим slot-flow и меньше выпадает в общий `NLU`;
+- `PRICE` стал сильнее опираться на каталог и data-driven логику вместо слабых текстовых эвристик;
+- `ADDRESS` по процедурам теперь использует `care setting` через `priceUnits`;
+- появился bounded-flow для mixed `PRICE`-запросов с несколькими услугами;
+- patient-facing ответы по цене стали группироваться по формату оказания и адресу;
+- doctor/service matching стал строже, чтобы уменьшить ложные совпадения.
 
-Расширен словарь soft-pause/hard-reset в `appointment_flow_guard.py`.
+Итог: архитектура осталась эволюционной, но поведение бота стало более детерминированным и контекстно-устойчивым.
 
-Поддерживаются в активном APPOINTMENT-flow:
-- `стоп`, `отмена`, `передумал`, `не то`, `я не это имел в виду`
-- `не туда`, `не так`, `остановись`
-- `бред`, `ошибка`, `ты несешь бред`
+## 2) Актуальная схема работы
 
-Поведение: бот спрашивает подтверждение отмены текущего процесса (`да/нет`).
+### 2.1 Router layer
 
-### 2.2 Handoff reset
+`/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/router.py`
 
-После `handoff=true` выполняется `_reset_state_after_handoff(...)`:
-- `memory.clear_pending(state)`
-- `state.last_entities.clear()`
-- сохраняется только профильный город (`city=Самара`, если был).
+Роутер сейчас работает в таком порядке:
 
-Это эквивалентно сбросу transaction+focus контекста с сохранением минимального profile.
+1. читает `pending` и session context;
+2. применяет узкие pre-NLU handlers;
+3. запускает primary NLU / rule-based guards / topic registry;
+4. строит `Plan`;
+5. выполняет plan через `services`;
+6. собирает patient-facing ответ через `response_builder` / `renderer`.
 
-### 2.3 Entity conflict cleanup (частично)
+Важно:
+- это уже не “каждый ход заново классифицируется без памяти”;
+- несколько сценариев теперь удерживаются до общего NLU, если есть активный transaction/pending context.
 
-Уже есть точечные механизмы auto-drop stale-сущностей:
-- при выдаче списка >1 врача без явного выбора — сброс `doctor_name/doctor_id` (в `response_builder.py`);
-- при конфликте `service_name` и врача — `service_name` очищается (в `entity_grounder.py` / `router.py`);
-- для price-консультаций снижено влияние stale doctor/service контекста (в `services.py`).
+### 2.2 Service layer
 
-## 3) Сверка с согласованным планом (пункты 2.1 пользователя)
+`/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/services.py`
 
-| Пункт | Статус | Комментарий |
-|---|---|---|
-| Разделить state на `profile_scope / focus_scope / transaction_scope` | **Не сделано** | Сейчас используется единый `state.last_entities` + `memory.pending`. |
-| На `handoff=true` сбрасывать transaction+focus, оставлять profile | **Сделано (фактически)** | Реализовано через `_reset_state_after_handoff`; profile сейчас ограничен `city`. |
-| Следующий ход после handoff начинать “с чистого листа” | **Сделано** | Подтверждается существующей reset-логикой. |
-| Для активных транзакций добавить обязательный confirm при смене интента | **Частично** | Полноценно в APPOINTMENT; для TEST_RESULT / DOC_REQUEST требуется доработка. |
-| Для `новый вопрос/другая тема/стоп` делать switch-with-confirm (`да/нет`) | **Частично** | Реализовано в APPOINTMENT precheck; не унифицировано для всех транзакций. |
-| Auto-drop stale entities при конфликте | **Частично** | Есть набор точечных правил, но нет единого conflict-resolver слоя. |
-| Обновить stage3/critical под строгую логику | **В работе** | Stage3 обновлен; critical расширен новыми hard-reset кейсами, нужен серверный прогон после деплоя. |
+Это главный доменный слой. Здесь сейчас сосредоточена большая часть продуктовой логики:
 
-## 4) Реализационный план (следующий крупный шаг)
+- `price_info(...)`
+- `service_bundle_info(...)`
+- `address_info(...)`
+- `doctors_info(...)`
+- `doctors_schedule_week(...)`
+- `prepare_info(...)`
+- `test_result_status(...)`
 
-### Phase A: Scoped state (без ломки API)
+Ключевая тенденция:
+- больше логики переведено в deterministic/data-driven `services`;
+- меньше reliance на случайный текстовый матч в верхнем слое.
 
-1. Ввести внутренние helper-функции доступа к scope в `router`-слое:
-   - `profile_scope`: `city`, `accepts_children`, `child_age`.
-   - `focus_scope`: `specialty`, `service_name`, `doctor_name/doctor_id`, `branch`.
-   - `transaction_scope`: `appointment_*`, pending confirm flags, `patient_name`, `date/time`, retry counters.
-2. Реализовать это как адаптер поверх `last_entities` (без изменения внешнего контракта).
+### 2.3 Presentation layer
 
-### Phase B: Unified flow transition policy
+`/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/renderer.py`  
+`/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/response_builder.py`
 
-3. Вынести единое правило `switch_with_confirm` для всех транзакций:
-   - APPOINTMENT, TEST_RESULT, DOC_REQUEST.
-4. Для `yes` в switch-confirm:
-   - полный reset `transaction_scope + focus_scope`,
-   - сохранение `profile_scope`.
-5. Для `no`:
-   - возврат в текущую транзакцию с re-ask по отсутствующим слотам.
+Здесь теперь не просто “форматирование текста”.
 
-### Phase C: Central conflict resolver
+Фактически presentation layer отвечает за:
+- финальную patient-facing сборку ответа;
+- сохранение части transient context;
+- компактный, но информативный вывод family-price, doctor list, care-setting и follow-up подсказок.
 
-6. Ввести единый post-merge резолвер конфликтов сущностей:
-   - новый specialist/service -> drop `doctor_*`;
-   - новый doctor -> drop конфликтный `service_name`;
-   - `PRICE` по специальности -> игнор stale `doctor_name`, если в вопросе врач не указан.
-7. Заменить разбросанные ad-hoc очистки на один реестр правил + debug flags.
+## 3) Что поменялось по интентам
 
-### Phase D: Eval contract
+### 3.1 APPOINTMENT
 
-8. Зафиксировать новые сценарии в eval:
-   - Stage3: hard reset в активном APPOINTMENT-flow.
-   - Critical: multi-turn reset и switch-with-confirm для конфликтующих тем.
-9. Ввести отдельный отчёт по transition-метрикам:
-   - `% topic_switch_with_confirm`,
-   - `% stale_entity_dropped`,
-   - `% unexpected_flow_carryover`.
+Подтвержденные изменения:
 
-## 5) Где сбрасывать флоу, а где нет (актуальная policy-цель)
+- active `APPOINTMENT` flow лучше удерживается как slot-driven сценарий;
+- короткие ответы вроде фамилии врача, даты, `да/нет` меньше проваливаются в `OTHER`;
+- reschedule-flow стабилизирован;
+- hard reset / cancel confirm работает предсказуемее;
+- ambiguous `appointment_action` (`отменить или перенести?`) теперь удерживается отдельным pending-handler’ом.
 
-### Сбрасывать
+Практический смысл:
+- сценарии записи стали меньше зависеть от случайной пере-классификации каждого нового сообщения;
+- бот стал ближе к state machine внутри активной записи.
 
-- после передачи оператору (`handoff=true`);
-- при подтвержденной смене темы;
-- при конфликте ядра темы (другой специалист/врач/тип задачи);
-- при выходе из активной транзакции в другой интент.
+Связанные модули:
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/router.py`
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/flow_policy.py`
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/appointment_flow_guard.py`
 
-### Не сбрасывать
+### 3.2 PRICE
 
-- короткие слот-ответы внутри текущей транзакции (`Трубин`, `завтра 11:00`, `да/нет`);
-- follow-up того же интента (`а у других урологов?`, `а в другом филиале?`) с точечной очисткой конфликтных сущностей.
+Это самый существенно изменившийся блок.
 
-## 6) Изменения в этой ревизии
+Подтвержденные изменения:
 
-1. `appointment_flow_guard.py`
-   - расширен словарь soft pause / hard reset (добавлены `не туда`, `не так`, `остановись`, `бред`, `ошибка`).
-2. `tests/test_router_flow_override.py`
-   - добавлены параметризованные тесты на новые hard-reset фразы.
-3. `scripts/eval_stage3_appointment_flow.py`
-   - обновлены ожидания `APPT_HOLTER_RESCHEDULE`,
-   - добавлены hard-reset flow-кейсы.
-4. `eval_suite/critical_cases.jsonl`
-   - добавлены multi-turn critical-кейсы на hard reset в активной записи.
-5. `scripts/check_architecture_imports.py`
-   - синхронизирован layer-map с новым модулем `llm_doesnt_work_fallback`.
+- catalog-grounded resolution для price-запросов;
+- cleaner selection эффективного `service_name`;
+- family-mode для запросов с несколькими родственными вариантами;
+- группировка family-ответа по формату оказания и адресу;
+- bounded-flow для compound/multi-service `PRICE`;
+- использование `priceUnits` как доменного сигнала, а не просто поля из кэша.
 
-## 7) Обязательные проверки перед merge/deploy
+Практический смысл:
+- бот реже берет случайную строку прайса;
+- бот может честно показать несколько допустимых вариантов;
+- mixed query вида `УЗДГ + ЛПНП + филиал` больше не схлопывается в заведомо неверный single-answer.
 
-1. `./.agent_venv/bin/python -m pytest -q`
-2. `python3 messengers_router/scripts/check_architecture_imports.py`
-3. `python3 messengers_router/scripts/check_eval_coverage.py`
-4. `bash messengers_router/eval_suite/run_remote_eval.sh --url <server>/api/messenger-generate-once`
+Связанные модули:
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/services.py`
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/renderer.py`
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/response_builder.py`
+
+### 3.3 ADDRESS
+
+Подтвержденные изменения:
+
+- для процедур/операций `ADDRESS` сначала пытается взять адреса из `care setting`;
+- fallback в общий список филиалов теперь не является первым путем для процедурных кейсов;
+- это убрало часть старых багов, когда бот выдавал “все филиалы”, хотя услуга относится к конкретному типу оказания.
+
+Связанные модули:
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/services.py`
+
+### 3.4 PREPARE
+
+Подтвержденные изменения:
+
+- short follow-up после `PREPARE` стал удерживаться лучше;
+- кейсы вида “Как подготовиться к ...?” -> “Вульвоскопия” больше не должны уезжать в другой intent так легко.
+
+Что важно:
+- `prepare_wrap` по-прежнему partly LLM-dependent;
+- жесткого архитектурного переписывания этого слоя пока не было.
+
+## 4) Новый endpoint и новые данные
+
+### 4.1 Добавлен `priceUnits`
+
+Новый endpoint:
+- `api/v1/site/priceUnits`
+
+Реализация:
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/agent_logic_2/nayka_api/api_price.py`
+
+Добавлено:
+- `fetch_price_units()`
+- `update_price_units()`
+- `load_price_units()`
+- построение индекса `priceUnitId -> node`
+- резолвер контекста оказания услуги по `priceUnitId`
+
+### 4.2 Как используется `priceUnits`
+
+Через `priceUnits` бот теперь определяет корневой тип оказания услуги:
+
+- `146` -> поликлиника
+- `311` -> дневной стационар
+- `312` -> круглосуточный стационар
+
+Далее это маппится на адрес:
+
+- `146/311` -> `г. Самара, пр. Ленина, 5`
+- `312` -> `г. Самара, ул. Ново-Садовая, 106, кор. 82`
+
+Это используется в:
+- `PRICE`
+- `ADDRESS`
+- части procedure-related сценариев записи
+
+### 4.3 Что это дало продуктово
+
+- у стационарных процедур появился детерминированный адресный контекст;
+- цена и адрес теперь можно показывать вместе с форматом оказания;
+- бот начал отличать “поликлиника / дневной стационар / круглосуточный стационар” как доменные сущности.
+
+## 5) Новые bounded-flow сценарии
+
+### 5.1 Compound PRICE flow
+
+Добавлен узкий сценарий для mixed `PRICE`-запросов с несколькими услугами.
+
+Пример класса запросов:
+- `УЗДГ сосудов шеи`
+- `и сдать кровь на ЛПНП`
+- `по адресу Победы 83`
+- `какова стоимость`
+
+Поведение:
+- бот не пытается больше уверенно слепить одну услугу из нескольких;
+- если видит надежный compound case, возвращает controlled clarify;
+- follow-up `да`, `ЛПНП`, другой вопрос обрабатываются детерминированно.
+
+Это не общий multi-service planner, а узкий безопасный flow.
+
+### 5.2 Pending handlers до NLU
+
+В роутере появились дополнительные narrow pre-NLU handlers:
+
+- `appointment_action` pending
+- compound price pending
+- short prepare follow-up
+
+Идея:
+- не пускать короткие контекстные ответы сразу в общий классификатор;
+- сначала попытаться трактовать их как ответ на текущий pending state.
+
+## 6) Что изменилось в doctor matching
+
+Подтвержденные изменения:
+
+- stricter matching по фамилии врача;
+- точнее фильтруются ложные совпадения;
+- в price/service-bundle для врача может показываться короткая релевантная специальность в зависимости от запроса;
+- doctor-facing и specialty-facing логика стала аккуратнее разделяться.
+
+Практический смысл:
+- меньше ложных совпадений вроде `Иванов` -> `Иванова`;
+- меньше путаницы, когда у врача несколько ролей / подразделений;
+- в patient-facing выдаче проще понять, кто именно из однофамильцев нужен.
+
+## 7) Что НЕ поменялось архитектурно
+
+Чтобы не было ложного впечатления о rewrite:
+
+- scoped-state (`profile_scope / focus_scope / transaction_scope`) все еще не внедрен как отдельная модель;
+- `state.last_entities` и `memory.pending` по-прежнему основа состояния;
+- полного universal conflict-resolver слоя пока нет;
+- `PREPARE-wrap` не переведен в fully deterministic режим;
+- общий слой не разделен на новый набор доменных подагентов или orchestrator-подсистем.
+
+То есть это все еще эволюция текущего `messengers_router`, а не новая архитектура с нуля.
+
+## 8) Где смотреть коллеге в первую очередь
+
+### 8.1 Router / flow
+
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/router.py`
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/flow_policy.py`
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/appointment_flow_guard.py`
+
+### 8.2 Domain logic
+
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/services.py`
+
+### 8.3 Presentation / response assembly
+
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/renderer.py`
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/response_builder.py`
+
+### 8.4 Nayka API adapters and caches
+
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/agent_logic_2/nayka_api/api_price.py`
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/agent_logic_2/nayka_api/api_service_info.py`
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/agent_logic_2/nayka_api/api_nayka.py`
+
+### 8.5 История price-дефектов и их фиксов
+
+- `/Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/eval_suite/PRICE_BUG_TRACKER.md`
+
+## 9) Подтвержденные результаты на последних ревизиях
+
+По последним прогоном перед локальными незакоммиченными правками было подтверждено:
+
+- `stage1` — зеленый;
+- `stage3 appointment flow` — зеленый;
+- `stage4 reliability` — зеленый;
+- `stage5 golden corpus` — доведен до полного прохода;
+- `PRICE` и `ADDRESS` стали значительно стабильнее на критичных кейсах.
+
+Важно:
+- часть самых последних точечных фиксов может находиться только в локальном workspace до следующего коммита/деплоя;
+- при передаче работы коллеге нужно сверить `git status` и понять, какие изменения уже в `origin/release`, а какие только локальные.
+
+## 10) Практический вывод для следующего разработчика
+
+Если нужно быстро войти в систему, правильная ментальная модель такая:
+
+1. Это не stateless classifier.
+2. Это не полностью rule-only система.
+3. Это не LLM-first orchestration.
+
+Это гибридная система:
+
+- `router` удерживает контекст и pending-flow;
+- `services` принимают доменные решения по данным;
+- `renderer` отвечает за patient-facing интерпретацию;
+- `priceUnits` и кэши Nayka API стали важной частью source of truth.
+
+Поэтому новые правки лучше делать так:
+
+- сначала искать, можно ли усилить `services.py`;
+- потом, если нужно, добавлять узкий pre-NLU handler;
+- и только в последнюю очередь трогать общий classifier behavior.
+
+## 11) Обязательные проверки перед следующим deploy
+
+1. `venv/bin/python -m pytest -q`
+2. `python3 /Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/scripts/check_architecture_imports.py`
+3. `python3 /Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/scripts/check_eval_coverage.py`
+4. `bash /Users/maxten/Dev/Distributed-Local-AI-Agent2/messengers_router/eval_suite/run_remote_eval.sh --url <server>/api/messenger-generate-once`

@@ -37,6 +37,7 @@ from .policies import (
     detect_appointment_action,
     detect_price_intent,
     detect_address_intent,
+    detect_branch_hours_intent,
     detect_news_intent,
     detect_doctor_info_intent,
     normalize_appointment_action,
@@ -1236,6 +1237,7 @@ async def deterministic_rule_decision(
         appointment_action = normalize_appointment_action(detect_appointment_action(text), text)
         price_intent = detect_price_intent(text)
         address_intent = detect_address_intent(text)
+        branch_hours_intent = detect_branch_hours_intent(text)
         specialty = extract_specialty(text or "")
         appt_ctx = has_appointment_context(text, last_entities, appointment_action)
         prepare_intent = detect_prepare_intent(text)
@@ -1261,6 +1263,15 @@ async def deterministic_rule_decision(
                 confidence=0.70,
                 entities={"specialty": specialty},
                 flags=local_flags | {"rule_doctor_info_specialty"},
+                needs_handoff=False,
+                context_action="continue",
+            )
+        elif branch_hours_intent and appointment_action is None and not price_intent:
+            decision = RouteDecision(
+                label="ADDRESS",
+                confidence=0.72,
+                entities={},
+                flags=local_flags | {"rule_address_work_hours"},
                 needs_handoff=False,
                 context_action="continue",
             )

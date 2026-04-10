@@ -327,6 +327,20 @@ def _availability_text_for_doctor(doc: dict[str, Any]) -> str:
     return "статус расписания уточняется"
 
 
+def _doctor_specialty_suffix(doc: dict[str, Any]) -> str:
+    """
+    Возвращает короткий суффикс специальности для строкового вывода врача.
+
+    :param doc: patient-facing карточка врача
+    :return: строка вида " (Хирург)" либо пустая строка
+    """
+
+    label = str(doc.get("specialty_label") or "").strip()
+    if label:
+        return f" ({label})"
+    return ""
+
+
 def _format_price_family_variants(payload: dict[str, Any], fallback_service_name: str = "") -> str:
     """
     Формирует patient-facing текст для family-query price-выдачи.
@@ -347,19 +361,42 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
     shown = variants if showing_all else variants[:visible_limit]
 
     lines = [f"По запросу «{service_name}» нашёл варианты стоимости:"]
-    for i, row in enumerate(shown, 1):
-        if not isinstance(row, dict):
-            continue
-        name = str(row.get("serviceName") or row.get("name") or service_name).strip()
-        amount = _format_rub(_extract_price_amount(row))
-        care_suffix = _format_care_setting_suffix(row)
-        line = f"{i}. {name} — {amount}."
-        if care_suffix:
-            line = f"{line} {care_suffix}"
-        lines.append(line)
+    grouped = _group_family_variants_by_care_context(shown)
+    has_care_groups = any(group["label"] or group["address"] for group in grouped)
+
+    if has_care_groups:
+        for group in grouped:
+            rows = group["rows"]
+            if not isinstance(rows, list) or not rows:
+                continue
+            lines.append("")
+            heading = _format_family_care_group_heading(
+                str(group["label"] or ""),
+                str(group["address"] or ""),
+            )
+            if heading:
+                lines.append(heading)
+            for i, row in enumerate(rows, 1):
+                if not isinstance(row, dict):
+                    continue
+                name = str(row.get("serviceName") or row.get("name") or service_name).strip()
+                amount = _format_rub(_extract_price_amount(row))
+                lines.append(f"{i}. {name} — {amount}.")
+    else:
+        for i, row in enumerate(shown, 1):
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("serviceName") or row.get("name") or service_name).strip()
+            amount = _format_rub(_extract_price_amount(row))
+            care_suffix = _format_care_setting_suffix(row)
+            line = f"{i}. {name} — {amount}."
+            if care_suffix:
+                line = f"{line} {care_suffix}"
+            lines.append(line)
 
     hint = str(payload.get("show_all_hint") or "").strip()
     if hint:
+        lines.append("")
         lines.append(hint)
     lines.append("Если нужно, помогу выбрать подходящий вариант или подскажу подготовку.")
     return "\n".join(lines).strip()
@@ -422,9 +459,10 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
                 if not isinstance(doc, dict):
                     continue
                 fio = str(doc.get("fio") or "Врач").strip()
+                specialty_suffix = _doctor_specialty_suffix(doc)
                 price_txt = _format_rub(_extract_price_amount(doc))
                 avail_txt = _availability_text_for_doctor(doc)
-                lines.append(f"{i}. {fio} — {price_txt}; {avail_txt}.")
+                lines.append(f"{i}. {fio}{specialty_suffix} — {price_txt}; {avail_txt}.")
         else:
             lines.append("2) Подходящих врачей по этой услуге сейчас не нашёл.")
 
@@ -479,6 +517,60 @@ def _format_care_setting_suffix(row: dict[str, Any]) -> str:
     if address:
         return f"Адрес: {address}."
     return ""
+
+
+def _group_family_variants_by_care_context(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Группирует family-варианты по формату оказания и адресу.
+
+    :param rows: строки family-вариантов
+    :return: список групп с сохранением исходного порядка появления
+    """
+
+    groups: list[dict[str, Any]] = []
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("care_setting_label") or "").strip()
+        address = str(row.get("care_setting_address") or "").strip()
+        key = (label, address)
+        group = by_key.get(key)
+        if group is None:
+            group = {"label": label, "address": address, "rows": []}
+            by_key[key] = group
+            groups.append(group)
+        group["rows"].append(row)
+    return groups
+
+
+def _format_family_care_group_heading(label: str, address: str) -> str:
+    """
+    Формирует заголовок блока family-вариантов по формату оказания услуги.
+
+    :param label: формат оказания услуги
+    :param address: адрес оказания услуги
+    :return: текст заголовка блока
+    """
+
+    norm_label = str(label or "").strip().lower()
+    heading_by_label = {
+        "поликлиника": "В поликлинике",
+        "дневной стационар": "В дневном стационаре",
+        "круглосуточный стационар": "В круглосуточном стационаре",
+    }
+    heading = heading_by_label.get(norm_label)
+    if heading and address:
+        return f"{heading} по адресу: {address}:"
+    if heading:
+        return f"{heading}:"
+    if label and address:
+        return f"Формат: {label}. Адрес: {address}:"
+    if label:
+        return f"Формат: {label}:"
+    if address:
+        return f"По адресу: {address}:"
+    return "Другие варианты, формат и адрес нужно уточнить:"
 
 
 def _price_source_marker(payload: dict[str, Any]) -> str | None:

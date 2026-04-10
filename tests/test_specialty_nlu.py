@@ -149,6 +149,48 @@ def test_price_renderer_shows_care_setting_and_address_when_present():
     assert "Адрес: г. Самара, пр. Ленина, 5." in text
 
 
+def test_price_renderer_groups_family_variants_by_care_setting():
+    payload = {
+        "service_kind": "family_query",
+        "service_name": "массаж",
+        "family_variants": [
+            {
+                "serviceName": "Медицинский массаж 30 мин",
+                "cost": 2500,
+                "care_setting_label": "поликлиника",
+                "care_setting_address": "г. Самара, пр. Ленина, 5",
+            },
+            {
+                "serviceName": "Медицинский массаж 60 мин",
+                "cost": 4000,
+                "care_setting_label": "поликлиника",
+                "care_setting_address": "г. Самара, пр. Ленина, 5",
+            },
+            {
+                "serviceName": "Переливание эритроцитарной массы",
+                "cost": 6000,
+                "care_setting_label": "круглосуточный стационар",
+                "care_setting_address": "г. Самара, ул. Ново-Садовая, 106, кор. 82",
+            },
+            {
+                "serviceName": "Хромато масс-спектрометрия микробных маркеров",
+                "cost": 4950,
+            },
+        ],
+    }
+
+    text = format_price_for_patient(payload, {"service_name": "массаж"})
+
+    assert "В поликлинике по адресу: г. Самара, пр. Ленина, 5:" in text
+    assert "В круглосуточном стационаре по адресу: г. Самара, ул. Ново-Садовая, 106, кор. 82:" in text
+    assert "Другие варианты, формат и адрес нужно уточнить:" in text
+    assert "1. Медицинский массаж 30 мин — 2 500 руб." in text
+    assert "2. Медицинский массаж 60 мин — 4 000 руб." in text
+    assert "1. Переливание эритроцитарной массы — 6 000 руб." in text
+    assert "1. Хромато масс-спектрометрия микробных маркеров — 4 950 руб." in text
+    assert "Медицинский массаж 30 мин — 2 500 руб.. Формат: поликлиника." not in text
+
+
 def test_doctor_info_renderer_single_selected_doctor_compact_followup():
     payload = {
         "doctors": [
@@ -273,6 +315,20 @@ def test_deterministic_rule_decision_price():
     )
     assert out is not None
     assert out.label == "PRICE"
+
+
+def test_deterministic_rule_decision_branch_hours_routes_to_address():
+    out = run(
+        deterministic_rule_decision(
+            "Здравствуйте, вы завтра работаете?",
+            {},
+            allow_refine=False,
+            attach_secondary=False,
+        )
+    )
+    assert out is not None
+    assert out.label == "ADDRESS"
+    assert "rule_address_work_hours" in out.flags
 
 
 def test_deterministic_rule_decision_price_with_doctor_name(monkeypatch):
@@ -438,3 +494,23 @@ def test_service_bundle_renderer_lab_hides_doctor_schedule_suffix():
     low = text.lower()
     assert "запись к конкретному врачу обычно не требуется" in low
     assert "подробное расписание" not in low
+
+
+def test_service_bundle_renderer_shows_doctor_specialty_label():
+    payload = {
+        "service_name": "Прием (осмотр, консультация) врача-хирурга первичный",
+        "retail_prices": [{"serviceName": "Прием (осмотр, консультация) врача-хирурга первичный", "cost": 2500}],
+        "doctors": [
+            {
+                "fio": "Дурасов Владимир Владимирович",
+                "specialty_label": "Хирург",
+                "service_price": 2500,
+                "available": False,
+                "availability_note": "availability_unmatched",
+            }
+        ],
+    }
+
+    text = format_service_bundle_for_patient(payload, {})
+
+    assert "Дурасов Владимир Владимирович (Хирург)" in text

@@ -28,6 +28,7 @@ from .policies import (
     match_branch_hint,
     normalize_appointment_action,
     quick_fill_core_entities,
+    service_name_conflicts_with_doctor,
 )
 from .services import Services, resolve_price_service_name_from_catalog
 
@@ -264,6 +265,153 @@ def _looks_like_appointment_doctor_reply(text: str) -> bool:
         return False
     tokens = [t for t in re.findall(r"[A-Za-zА-Яа-яЁё\-]+", s) if t]
     return 1 <= len(tokens) <= 3
+
+
+def _appointment_pending_missing_slots(pending: dict | None) -> list[str]:
+    """
+    Возвращает список незаполненных слотов активного APPOINTMENT pending.
+
+    :param pending: текущий pending-объект из memory
+    :return: нормализованный список missing-slots
+    """
+
+    if not isinstance(pending, dict) or pending.get("label") != "APPOINTMENT":
+        return []
+    raw_missing = pending.get("missing")
+    if not isinstance(raw_missing, list):
+        return []
+    return [str(item).strip() for item in raw_missing if str(item).strip()]
+
+
+async def _resolve_appointment_doctor_name(text: str, services: Services) -> str | None:
+    """
+    Пытается безопасно распознать врача из короткой реплики внутри записи.
+
+    :param text: текущая реплика пользователя
+    :param services: сервисный слой с doctor catalog
+    :return: каноническое ФИО врача либо None
+    """
+
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+
+    probes: list[str] = [raw]
+    if raw.lower().startswith("к "):
+        tail = raw[2:].strip()
+        if tail:
+            probes.append(tail)
+
+    for probe in probes:
+        resolved = await services.resolve_doctor_name(probe)
+        if resolved:
+            return resolved
+    return None
+
+
+async def prelock_active_appointment_turn(
+    text: str,
+    state_entities: dict[str, Any],
+    pending: dict | None,
+    services: Services,
+) -> dict[str, Any] | None:
+    """
+    Детерминированно распознает слот-ответ внутри активного APPOINTMENT flow.
+
+    Это pre-routing слой: если пациент прислал короткий ответ вроде даты,
+    филиала, ФИО пациента или фамилии врача, мы удерживаем APPOINTMENT до
+    общего NLU и извлекаем только нужные slot-updates.
+
+    :param text: текущая реплика пользователя
+    :param state_entities: текущее состояние сессии
+    :param pending: pending-объект из memory
+    :param services: сервисный слой
+    :return: словарь slot-updates или None, если prelock не нужен
+    """
+
+    appointment_flow_active = bool(state_entities.get("appointment_flow_active"))
+    appointment_pending = isinstance(pending, dict) and pending.get("label") == "APPOINTMENT"
+    schedule_context = (
+        str(state_entities.get("_last_label") or "") == "DOCTOR_SCHEDULE"
+        and bool(state_entities.get("doctor_name") or state_entities.get("doctor_id"))
+        and has_datetime_signal(text)
+        and not (
+            detect_prepare_intent(text)
+            or detect_price_intent(text)
+            or detect_address_intent(text)
+            or detect_doc_request_intent(text)
+            or detect_schedule_intent(text)
+        )
+    )
+    if not appointment_flow_active and not appointment_pending and not schedule_context:
+        return None
+
+    if (
+        state_entities.get("appointment_confirm_pending")
+        or state_entities.get("appointment_cancel_pending")
+        or state_entities.get("appointment_topic_switch_pending")
+    ):
+        return None
+
+    missing_rules = _appointment_pending_missing_slots(pending)
+    if not missing_rules and appointment_flow_active:
+        missing_rules = [
+            "_any_of:doctor_id,doctor_name,specialty,service_name",
+            "_any_of:city,branch_name,branch_id",
+            "date_from",
+            "time_from",
+            "patient_name",
+        ]
+    if not missing_rules and schedule_context:
+        missing_rules = [
+            "_any_of:city,branch_name,branch_id",
+            "date_from",
+            "time_from",
+            "patient_name",
+        ]
+
+    if not missing_rules:
+        return None
+
+    slot_updates = quick_fill_entities_from_text(text, state_entities, missing_rules, services)
+
+    if (
+        _is_appointment_waiting_doctor_or_service(pending)
+        and not slot_updates.get("doctor_name")
+        and not slot_updates.get("doctor_id")
+        and not state_entities.get("doctor_name")
+        and not state_entities.get("doctor_id")
+        and _looks_like_appointment_doctor_reply(text)
+    ):
+        resolved_doctor = await _resolve_appointment_doctor_name(text, services)
+        if resolved_doctor:
+            slot_updates["doctor_name"] = resolved_doctor
+            current_service = str(state_entities.get("service_name") or "").strip()
+            if current_service and service_name_conflicts_with_doctor(current_service, resolved_doctor):
+                slot_updates["__clear_service_name"] = True
+
+    if slot_updates:
+        if schedule_context and not _looks_like_patient_fio(text):
+            slot_updates["__clear_patient_name"] = True
+        return slot_updates
+
+    if _is_appointment_waiting_patient_name(pending) and _looks_like_patient_fio(text):
+        return {}
+    if _is_appointment_waiting_branch_or_city(pending) and (_is_appointment_branch_reply(text) or _is_city_only_reply(text)):
+        return {}
+    if _is_appointment_waiting_doctor_or_service(pending) and _looks_like_appointment_doctor_reply(text):
+        return {}
+    if has_datetime_signal(text) and not (
+        detect_prepare_intent(text)
+        or detect_price_intent(text)
+        or detect_address_intent(text)
+        or detect_doc_request_intent(text)
+        or detect_schedule_intent(text)
+    ):
+        if schedule_context and not _looks_like_patient_fio(text):
+            return {"__clear_patient_name": True}
+        return {}
+    return None
 
 
 def _is_short_prepare_followup(text: str) -> bool:

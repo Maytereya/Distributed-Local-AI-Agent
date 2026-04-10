@@ -113,6 +113,10 @@ _PRICE_SHOW_ALL_RE = re.compile(
     r"^\s*(?:все|всё|покажи\s+все|показать\s+все|все\s+варианты|все\s+услуги|все\s+анализы)\s*[!.,?]*\s*$",
     re.I,
 )
+_PRICE_COMPOUND_LAB_FRAGMENT_RE = re.compile(
+    r"\b(?:сдать\s+кровь\s+на|кровь\s+на|анализ(?:ы)?\s+на|сдать\s+анализ(?:ы)?\s+на)\s+([a-zа-яё0-9\-/ ]{2,80})",
+    re.I,
+)
 _PRICE_DIAGNOSTIC_NO_DOCTOR_RE = re.compile(
     r"\b(экг|флюорограф\w*|маммограф\w*|рентген\w*|мрт|кт)\b",
     re.I,
@@ -122,7 +126,8 @@ _PRICE_PROCEDURE_LIKE_RE = re.compile(
     r"при[её]м\w*|консультац\w*|осмотр\w*|узи|ультразвук\w*|эндоскоп\w*|фгдс|фкс|гастроскоп\w*|"
     r"колоноскоп\w*|рентген\w*|мрт|кт|флюорограф\w*|маммограф\w*|экг|операц\w*|удалени\w*|"
     r"массаж\w*|пломб\w*|зуб\w*|подтяжк\w*|хирург\w*|травматолог\w*|ортопед\w*|стоматолог\w*|"
-    r"анестези\w*|имплант\w*|протез\w*|сустав\w*"
+    r"анестези\w*|имплант\w*|протез\w*|сустав\w*|лечени\w*|профилактик\w*|"
+    r"биопс\w*|резекц\w*|склерозир\w*|препарат\w*"
     r")\b",
     re.I,
 )
@@ -529,6 +534,23 @@ _PRICE_GENERIC_SERVICE_TOKENS = {
     "процедуры",
     "пакет",
     "комплекс",
+}
+_PRICE_GENERIC_FAMILY_ROOT_TOKENS = {
+    "удален",
+    "подтяжк",
+    "операц",
+    "пластик",
+}
+_PRICE_QUERY_SERVICE_NOISE_TOKENS = {
+    "г",
+    "город",
+    "адрес",
+    "филиал",
+    "обследование",
+    "осбледование",
+    "нам",
+    "там",
+    "тут",
 }
 _PRICE_SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
     "оак": ("общий анализ крови",),
@@ -2010,13 +2032,14 @@ def _doctor_matches_fio(fio: str, doctor_query: str, resolved_surname: str | Non
     if not tokens:
         return False
 
-    candidates: list[str] = []
     if resolved_surname:
-        candidates.extend([v for v in surname_variants(resolved_surname) if v])
-    else:
-        q_tokens = _fio_tokens(doctor_query)
-        if q_tokens:
-            candidates.extend([v for v in surname_variants(q_tokens[0]) if v])
+        target = _normalise_input(resolved_surname)
+        return bool(target and tokens and _normalise_input(tokens[0]) == target)
+
+    candidates: list[str] = []
+    q_tokens = _fio_tokens(doctor_query)
+    if q_tokens:
+        candidates.extend([v for v in surname_variants(q_tokens[0]) if v])
 
     normalized = sorted({ _normalise_input(x) for x in candidates if len(_normalise_input(x)) >= 2 }, key=len, reverse=True)
     if not normalized:
@@ -2027,6 +2050,33 @@ def _doctor_matches_fio(fio: str, doctor_query: str, resolved_surname: str | Non
             if token.startswith(c):
                 return True
     return False
+
+
+def _specialty_label_for_doctor(doc: dict[str, Any], *, preferred_specialty: str = "") -> str:
+    """
+    Возвращает короткую человекочитаемую метку основной специальности врача.
+
+    :param doc: карточка врача
+    :param preferred_specialty: специальность из запроса, если она есть
+    :return: короткая метка специальности для patient-facing ответа
+    """
+
+    preferred = _normalise_input(preferred_specialty).replace("ё", "е")
+    if preferred and _doctor_matches_primary_specialty(doc, preferred):
+        return preferred_specialty.strip().capitalize()
+
+    for unit_name in _collect_role_unit_names(doc, main_value=True) + _collect_role_unit_names(doc, main_value=False):
+        found = _extract_specialties_from_text(unit_name)
+        if found:
+            return found[0].capitalize()
+
+    display_spec = _pick_display_specialization(doc, preferred_specialty=preferred_specialty)
+    for candidate in _split_spec_lines(display_spec):
+        found = _extract_specialties_from_text(candidate)
+        if found:
+            return found[0].capitalize()
+
+    return ""
 
 
 def _compact_specialization(
@@ -3327,6 +3377,14 @@ def _family_query_root_tokens(query_text: str) -> list[str]:
             continue
         seen.add(norm)
         tokens.append(norm)
+    if len(tokens) > 1:
+        narrowed = [
+            tok
+            for tok in tokens
+            if not any(tok.startswith(stem) for stem in _PRICE_GENERIC_FAMILY_ROOT_TOKENS)
+        ]
+        if narrowed:
+            tokens = narrowed
     tokens.sort(key=len, reverse=True)
     return tokens
 
@@ -3391,7 +3449,17 @@ def _select_family_variant_rows(
         if filtered_ranked:
             ranked = filtered_ranked
         return ranked[:limit]
-    return _rank_price_rows(unique_rows, effective_query, limit=limit)
+    ranked = _rank_price_rows(unique_rows, effective_query, limit=max(limit, 20))
+    family_norm = _normalise_input(family_query).replace("ё", "е")
+    if _is_uzi_query_text(family_query) and _UZI_PROCEDURE_HINT_RE.search(family_norm):
+        filtered_ranked = [
+            row
+            for row in ranked
+            if not _is_lab_like_service_name(str(row.get("serviceName") or row.get("name") or ""))
+        ]
+        if filtered_ranked:
+            ranked = filtered_ranked
+    return ranked[:limit]
 
 
 def _family_variant_base_names(rows: list[dict[str, Any]]) -> set[str]:
@@ -3645,6 +3713,46 @@ def _care_setting_addresses_from_price_rows(rows: list[dict[str, Any]]) -> list[
     return addresses
 
 
+def _select_address_price_rows(
+    rows: list[dict[str, Any]],
+    query_text: str,
+    *,
+    limit: int = 10,
+    family_limit: int = 50,
+) -> list[dict[str, Any]]:
+    """
+    Подбирает строки прайса для адресного ответа по услуге.
+
+    Сначала берет обычные top-match строки, затем при необходимости расширяет
+    выборку family-кандидатами. Расширение применяется только если добавляет
+    новые care-setting адреса, а не просто раздувает список однотипных строк.
+
+    :param rows: строки прайса региона
+    :param query_text: текст услуги / исходный запрос пользователя
+    :param limit: лимит обычного top-match отбора
+    :param family_limit: лимит family-расширения
+    :return: обогащенные строки прайса с care-setting полями
+    """
+
+    ranked_rows = _select_patient_price_rows(rows, query_text, limit=limit)
+    if not ranked_rows:
+        return []
+
+    ranked_annotated = _annotate_price_rows_with_care_context(ranked_rows)
+    ranked_addresses = _care_setting_addresses_from_price_rows(ranked_annotated)
+
+    family_rows = _build_family_candidate_rows(query_text, rows, limit=family_limit)
+    if len(family_rows) < 2:
+        return ranked_annotated
+
+    merged_rows = _dedupe_price_rows(ranked_rows + family_rows)
+    merged_annotated = _annotate_price_rows_with_care_context(merged_rows)
+    merged_addresses = _care_setting_addresses_from_price_rows(merged_annotated)
+    if len(merged_addresses) > len(ranked_addresses):
+        return merged_annotated
+    return ranked_annotated
+
+
 def _is_price_show_all_request(query_text: str) -> bool:
     """
     Проверяет короткий follow-up пациента с просьбой показать все варианты.
@@ -3896,12 +4004,300 @@ def _should_prefer_retail_query_candidate(query_candidate: str, service_name: st
     if query_candidate_norm in service_name_norm and len(query_candidate_norm) < len(service_name_norm):
         return True
 
+    candidate_tokens = [tok for tok in _price_query_tokens(query_candidate_norm) if tok not in _PRICE_GENERIC_SERVICE_TOKENS]
+    service_tokens = [tok for tok in _price_query_tokens(service_name_norm) if tok not in _PRICE_GENERIC_SERVICE_TOKENS]
+    if candidate_tokens and len(service_tokens) > len(candidate_tokens):
+        candidate_covers_service_base = True
+        for candidate_token in candidate_tokens:
+            if not any(
+                service_token == candidate_token
+                or (
+                    len(candidate_token) >= 4
+                    and len(service_token) >= 4
+                    and (
+                        service_token.startswith(candidate_token[:4])
+                        or candidate_token.startswith(service_token[:4])
+                    )
+                )
+                for service_token in service_tokens
+            ):
+                candidate_covers_service_base = False
+                break
+        if candidate_covers_service_base:
+            return True
+
     service_flags = _lab_price_variant_flags({"serviceName": service_name})
     if not service_flags:
         return False
 
     query_flags = _query_price_variant_flags(query_candidate)
     return not service_flags.issubset(query_flags)
+
+
+def _meaningful_price_service_tokens(value: str) -> list[str]:
+    """
+    Возвращает информативные токены service_name без общих служебных слов.
+
+    :param value: строка услуги
+    :return: список нормализованных токенов
+    """
+
+    return [
+        tok
+        for tok in _price_query_tokens(value)
+        if tok not in _PRICE_GENERIC_SERVICE_TOKENS
+    ]
+
+
+def _is_price_service_noise_token(token: str) -> bool:
+    """
+    Проверяет, что токен не добавляет предметной специфики к услуге.
+
+    :param token: нормализованный токен услуги
+    :return: True для шумового токена
+    """
+
+    norm = _normalise_price_token(token)
+    if not norm:
+        return True
+    if norm.isdigit():
+        return True
+    return norm in _PRICE_QUERY_SERVICE_NOISE_TOKENS
+
+
+def _select_effective_price_service_name(entity_service_name: str, query_service_name: str) -> str:
+    """
+    Выбирает итоговое имя услуги между извлеченной entity и candidate из query.
+
+    Правило защищает от деградации, когда нижний слой повторно извлекает услугу
+    из полного текста и получает более шумную строку с адресом, вторым интентом
+    или служебными словами. При этом новый query-candidate все еще может
+    победить, если он действительно задает другую или более точную услугу.
+
+    :param entity_service_name: service_name, уже выделенный NLU/grounding слоем
+    :param query_service_name: service_name, извлеченный из полного query
+    :return: наиболее надежное имя услуги для дальнейшей обработки
+    """
+
+    entity = str(entity_service_name or "").strip()
+    query = str(query_service_name or "").strip()
+    if not entity:
+        return query
+    if not query:
+        return entity
+
+    entity_norm = _normalise_input(entity).replace("ё", "е")
+    query_norm = _normalise_input(query).replace("ё", "е")
+    if not query_norm or entity_norm == query_norm:
+        return entity
+
+    entity_tokens = _meaningful_price_service_tokens(entity)
+    query_tokens = _meaningful_price_service_tokens(query)
+    if not entity_tokens:
+        return query
+    if not query_tokens:
+        return entity
+
+    entity_set = set(entity_tokens)
+    query_set = set(query_tokens)
+    if not entity_set.intersection(query_set):
+        return query
+    if query_set.issubset(entity_set):
+        return entity
+
+    query_extra = [tok for tok in query_tokens if tok not in entity_set]
+    if not query_extra:
+        return entity
+
+    if entity_set.issubset(query_set):
+        if any(_is_price_service_noise_token(tok) for tok in query_extra):
+            return entity
+        entity_kind = _detect_service_kind(entity, query_text=entity)
+        query_kind = _detect_service_kind(query, query_text=query)
+        if entity_kind != query_kind:
+            return entity
+        return query
+
+    return query
+
+
+def _compound_price_secondary_lab_service(
+    query_text: str,
+    *,
+    primary_service_name: str,
+    retail_rows: list[dict[str, Any]],
+) -> str | None:
+    """
+    Пытается выделить вторую лабораторную услугу из mixed PRICE-запроса.
+
+    Используем только консервативные сигналы:
+    - явные конструкции вида `кровь на ...` / `анализ на ...`;
+    - короткие alias из справочника `_PRICE_SERVICE_ALIASES`.
+
+    :param query_text: исходный запрос пользователя
+    :param primary_service_name: уже выбранная primary-услуга
+    :param retail_rows: строки retail-прайса для catalog-grounding
+    :return: каноническое имя второй лабораторной услуги либо None
+    """
+
+    query_norm = _normalise_input(str(query_text or "")).replace("ё", "е")
+    primary_norm = _normalise_input(str(primary_service_name or "")).replace("ё", "е")
+    if not query_norm or not primary_norm or " и " not in f" {query_norm} ":
+        return None
+
+    fragments: list[str] = []
+    fragment_from_lab_phrase = False
+    match = _PRICE_COMPOUND_LAB_FRAGMENT_RE.search(query_norm)
+    if match:
+        fragment = str(match.group(1) or "").strip(" -")
+        if fragment:
+            fragments.append(fragment)
+            fragment_from_lab_phrase = True
+
+    for alias in sorted(_PRICE_SERVICE_ALIASES.keys(), key=len, reverse=True):
+        alias_norm = _normalise_input(alias).replace("ё", "е")
+        if not alias_norm or alias_norm in primary_norm or alias_norm not in query_norm:
+            continue
+        fragments.append(alias)
+
+    seen: set[str] = set()
+    for idx, fragment in enumerate(fragments):
+        key = _normalise_input(fragment).replace("ё", "е")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        candidate = resolve_price_service_name_from_catalog(fragment, rows=retail_rows)
+        if not candidate:
+            variants = _PRICE_SERVICE_ALIASES.get(key, ())
+            candidate = str(variants[0] or "").strip() if variants else ""
+        candidate_norm = _normalise_input(candidate).replace("ё", "е")
+        if not candidate_norm or candidate_norm == primary_norm:
+            continue
+        top_rows = _select_patient_price_rows(retail_rows, candidate, limit=3)
+        if not top_rows:
+            continue
+        if idx == 0 and fragment_from_lab_phrase:
+            return candidate
+        kind = _classify_catalog_service_kind(
+            candidate,
+            query_text=candidate,
+            retail_rows=top_rows,
+            has_exact_doctor_link=False,
+            is_consult_query=False,
+        )
+        if kind == "lab":
+            return candidate
+    return None
+
+
+def _build_compound_price_clarify_payload(
+    *,
+    query_text: str,
+    entities: dict[str, Any],
+    primary_service_name: str,
+    retail_rows: list[dict[str, Any]],
+    primary_retail_prices: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """
+    Строит clarify-payload для mixed PRICE-запроса с двумя услугами.
+
+    Мы не пытаемся сразу оркестрировать сложный multi-service ответ. Вместо
+    этого честно просим выбрать, какую услугу разобрать первой, если видим
+    надежную primary-услугу и отдельную вторую лабораторную цель.
+
+    :param query_text: исходный запрос пользователя
+    :param entities: текущие сущности роутера
+    :param primary_service_name: уже выбранная основная услуга
+    :param retail_rows: все строки retail-прайса региона
+    :param primary_retail_prices: top retail rows для основной услуги
+    :return: payload для clarify либо None
+    """
+
+    secondary_labels = {
+        str(label or "").strip().upper()
+        for label in (entities.get("secondary_intents") or [])
+        if str(label or "").strip()
+    }
+    if "TEST_ASSIST" not in secondary_labels:
+        return None
+
+    secondary_service = _compound_price_secondary_lab_service(
+        query_text,
+        primary_service_name=primary_service_name,
+        retail_rows=retail_rows,
+    )
+    if not secondary_service:
+        return None
+
+    primary_kind = _classify_catalog_service_kind(
+        primary_service_name,
+        query_text=primary_service_name,
+        retail_rows=primary_retail_prices,
+        has_exact_doctor_link=False,
+        is_consult_query=_is_consultation_service_query(primary_service_name),
+    )
+    if primary_kind == "lab":
+        return None
+
+    clarify_text = (
+        "Вижу в запросе две услуги:\n"
+        f"1. {primary_service_name}\n"
+        f"2. {secondary_service}\n\n"
+        "Чтобы не смешать цену и доступность по разным услугам, лучше проверить их по очереди.\n"
+        f"Если хотите, сначала покажу по {primary_service_name}. "
+        f"Также можно сразу написать: «{secondary_service}»."
+    )
+    return {
+        "service_name": primary_service_name,
+        "retail_prices": primary_retail_prices,
+        "doctors": [],
+        "prepare": "",
+        "show_prepare": False,
+        "service_kind": "compound_clarify",
+        "clarify_text": clarify_text,
+        "compound_price_services": [primary_service_name, secondary_service],
+        "compound_price_default_service": primary_service_name,
+        "note": "service_bundle_info: compound_price_clarify",
+    }
+
+
+def match_compound_price_service_option(user_text: str, options: list[str]) -> str | None:
+    """
+    Сопоставляет короткий follow-up пользователя с одной из услуг compound PRICE.
+
+    :param user_text: текущая реплика пользователя
+    :param options: допустимые услуги из pending compound flow
+    :return: выбранная услуга либо None
+    """
+
+    reply_norm = _normalise_input(str(user_text or "")).replace("ё", "е")
+    if not reply_norm:
+        return None
+    reply_tokens = set(_meaningful_price_service_tokens(reply_norm))
+
+    alias_hits: set[str] = set()
+    for alias, variants in _PRICE_SERVICE_ALIASES.items():
+        alias_norm = _normalise_input(alias).replace("ё", "е")
+        if alias_norm and alias_norm in reply_norm:
+            alias_hits.add(alias_norm)
+            for variant in variants:
+                variant_norm = _normalise_input(variant).replace("ё", "е")
+                if variant_norm:
+                    alias_hits.add(variant_norm)
+
+    for option in options:
+        option_text = str(option or "").strip()
+        option_norm = _normalise_input(option_text).replace("ё", "е")
+        if not option_norm:
+            continue
+        if reply_norm == option_norm or reply_norm in option_norm or option_norm in reply_norm:
+            return option_text
+        option_tokens = set(_meaningful_price_service_tokens(option_text))
+        if reply_tokens and option_tokens and (reply_tokens.issubset(option_tokens) or option_tokens.issubset(reply_tokens)):
+            return option_text
+        if alias_hits and any(alias in option_norm for alias in alias_hits):
+            return option_text
+    return None
 
 
 def _doctor_sort_key(doc: dict[str, Any]) -> tuple[int, str]:
@@ -5314,7 +5710,10 @@ class Services:
                 query_text,
                 current_service_name=entity_service_name,
             ) or _extract_price_service_from_query(query_text)
-        service_name = query_service_name or entity_service_name
+        service_name = _select_effective_price_service_name(
+            entity_service_name,
+            query_service_name,
+        )
         needle = _normalise_input(service_name)
 
         out: dict[str, Any] = {
@@ -5357,6 +5756,21 @@ class Services:
             out["note"] = "service_bundle_info: retail source unavailable"
         if retail_prefers_query_candidate and retail_query:
             out["service_name"] = retail_query
+
+        compound_payload = _build_compound_price_clarify_payload(
+            query_text=query_text,
+            entities=entities,
+            primary_service_name=service_name,
+            retail_rows=retail_rows,
+            primary_retail_prices=out["retail_prices"] if isinstance(out.get("retail_prices"), list) else [],
+        )
+        if compound_payload:
+            compound_payload["top_n_applied"] = top_limit
+            compound_payload["entities_used"] = {
+                **entities,
+                "service_name_effective": service_name,
+            }
+            return compound_payload
 
         # 2) Top-N doctors by ord among doctors that have the matched service in doctor prices.
         top_retail = out["retail_prices"][0] if isinstance(out.get("retail_prices"), list) and out["retail_prices"] else {}
@@ -5528,7 +5942,17 @@ class Services:
                         "id": doctor_id,
                         "fio": str(doc.get("fio") or "").strip(),
                         "ord": _as_int(doc.get("ord")),
-                        "specialization": _compact_specialization(str(doc.get("specialization") or "")),
+                        "specialization": _compact_specialization(
+                            _pick_display_specialization(
+                                doc,
+                                preferred_specialty=query_specialty,
+                                preferred_service=service_name,
+                            )
+                        ),
+                        "specialty_label": _specialty_label_for_doctor(
+                            doc,
+                            preferred_specialty=query_specialty,
+                        ),
                         "regions": [str(x).strip() for x in (doc.get("regions") or []) if str(x).strip()],
                         "service_price": _as_int(price_row.get("cost")),
                         "available": bool(availability.get("available")),
@@ -6632,7 +7056,10 @@ class Services:
                     query_text,
                     current_service_name=entity_service_name,
                 ) or _extract_price_service_from_query(query_text)
-            service_name = query_service_name or entity_service_name
+            service_name = _select_effective_price_service_name(
+                entity_service_name,
+                query_service_name,
+            )
         needle = _normalise_input(service_name)
 
         if doctor_id:
@@ -6793,12 +7220,13 @@ class Services:
             except Exception:
                 retail_rows = []
             if isinstance(retail_rows, list) and retail_rows:
-                retail_matches = _select_patient_price_rows(
+                care_query = str(service_name or query or "").strip()
+                retail_matches = _select_address_price_rows(
                     [row for row in retail_rows if isinstance(row, dict)],
-                    service_name,
+                    care_query,
                     limit=10,
+                    family_limit=50,
                 )
-                retail_matches = _annotate_price_rows_with_care_context(retail_matches)
                 care_addresses = _care_setting_addresses_from_price_rows(retail_matches)
                 if branch_q:
                     care_addresses = [

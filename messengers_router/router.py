@@ -35,6 +35,7 @@ from .flow_policy import (
     is_short_prepare_followup,
     looks_like_patient_fio,
     normalize_secondary_labels,
+    prelock_active_appointment_turn,
     quick_fill_entities_from_text,
     secondary_followup_text,
     set_secondary_queue,
@@ -69,6 +70,7 @@ from .policies import (
     decision_handoff_text,
     apply_verified_doctor_override,
     detect_nonbookable_walkin_intent,
+    detect_appointment_action,
     detect_test_assist_intent,
     detect_test_result_intent,
     detect_prepare_intent,
@@ -78,11 +80,12 @@ from .policies import (
     detect_schedule_intent,
     detect_doctor_info_intent,
     has_datetime_signal,
+    normalize_appointment_action,
     nonbookable_service_hint,
     service_name_conflicts_with_doctor,
 )
 from .recovery_policy import contextual_reply_kind, evaluate_recovery, explicit_operator_requested
-from .services import Services
+from .services import Services, match_compound_price_service_option
 from .renderer import (
     render_urgent,
     render_complaint,
@@ -111,6 +114,11 @@ _SECONDARY_SOFT_YES_RE = re.compile(
 _CATALOG_CONFIRM_STATE_KEY = "_catalog_confirm_pending"
 _CATALOG_CONFIRM_REJECTS_KEY = "_catalog_confirm_rejects"
 _CATALOG_CONFIRM_MAX_REJECTS = 2
+_COMPOUND_PRICE_PENDING_KEY = "_compound_price_pending"
+_COMPOUND_PRICE_SOFT_YES_RE = re.compile(
+    r"^\s*(?:хочу|можно|давай|давайте|покажи|покажите)\b",
+    re.I,
+)
 
 # Backward-compat alias for tests/internal callers.
 _should_keep_appointment_flow_override = should_keep_appointment_flow_override
@@ -424,6 +432,258 @@ def _clear_catalog_confirm_pending(state: SessionState, memory: MemoryStore) -> 
     missing = pending.get("missing")
     if pending.get("label") == "OTHER" and isinstance(missing, list) and "catalog_confirm" in missing:
         memory.clear_pending(state)
+
+
+def _get_compound_price_pending(state: SessionState) -> dict[str, Any] | None:
+    """
+    Возвращает валидный pending-контекст compound PRICE-уточнения.
+
+    :param state: состояние сессии
+    :return: payload с услугами либо None
+    """
+
+    payload = state.last_entities.get(_COMPOUND_PRICE_PENDING_KEY)
+    if not isinstance(payload, dict):
+        return None
+    services = [str(item).strip() for item in (payload.get("services") or []) if str(item).strip()]
+    default_service = str(payload.get("default_service") or "").strip()
+    if len(services) < 2:
+        return None
+    if default_service not in services:
+        default_service = services[0]
+    return {
+        "services": services[:4],
+        "default_service": default_service,
+    }
+
+
+def _clear_compound_price_pending(state: SessionState) -> None:
+    """
+    Сбрасывает transient-состояние compound PRICE-уточнения.
+
+    :param state: состояние сессии
+    :return: None
+    """
+
+    state.last_entities.pop(_COMPOUND_PRICE_PENDING_KEY, None)
+
+
+def _is_appointment_action_pending(pending: dict[str, Any] | None) -> bool:
+    """
+    Проверяет, что pending ждет выбор действия записи: отмена или перенос.
+
+    :param pending: pending-объект из memory
+    :return: True, если активен шаг выбора appointment_action
+    """
+
+    if not isinstance(pending, dict):
+        return False
+    if pending.get("label") != "APPOINTMENT":
+        return False
+    missing = pending.get("missing")
+    return isinstance(missing, list) and "appointment_action" in missing
+
+
+async def _handle_appointment_action_pending(
+    *,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """
+    Детерминированно обрабатывает шаг выбора действия записи.
+
+    Это узкий pre-NLU handler для pending `appointment_action`, чтобы короткие
+    ответы вроде `нет` или `перенести` не уезжали в общий OTHER-flow.
+
+    :param user_text: текущая реплика пользователя
+    :param state: состояние сессии
+    :param services: сервисный слой
+    :param memory: хранилище pending/state
+    :param runtime_options: runtime-параметры роутера
+    :return: decision/plan/evidence либо None, если шаг не активен
+    """
+
+    pending = memory.get_pending(state)
+    if not _is_appointment_action_pending(pending):
+        return None
+
+    if explicit_operator_requested(user_text):
+        return (
+            RouteDecision(
+                label="APPOINTMENT",
+                confidence=0.95,
+                entities={},
+                flags={"manual_operator", "appointment_action_pending_operator"},
+                needs_handoff=False,
+                source="appointment_action_pending",
+            ),
+            Plan(label="APPOINTMENT"),
+            Evidence(
+                items={
+                    "operator_offer_response": {
+                        "text": handoff_message("manual_operator"),
+                        "handoff": True,
+                    }
+                }
+            ),
+        )
+
+    normalized_action = normalize_appointment_action(detect_appointment_action(user_text), user_text)
+    if normalized_action in {"cancel", "reschedule"}:
+        memory.merge_entities(state, {"appointment_action": normalized_action}, label="APPOINTMENT")
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.95,
+            entities={"appointment_action": normalized_action},
+            flags={"appointment_action_selected"},
+            needs_handoff=False,
+            context_action="continue",
+            source="appointment_action_pending",
+        )
+        plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
+        evidence = await execute_plan(plan, state, services)
+        return decision, plan, evidence
+
+    if contextual_reply_kind(user_text) == "no":
+        return (
+            RouteDecision(
+                label="APPOINTMENT",
+                confidence=0.95,
+                entities={},
+                flags={"appointment_action_declined"},
+                needs_handoff=False,
+                source="appointment_action_pending",
+            ),
+            Plan(label="APPOINTMENT"),
+            Evidence(
+                items={
+                    "operator_offer_response": {
+                        "text": handoff_message("manual_operator"),
+                        "handoff": True,
+                    }
+                }
+            ),
+        )
+
+    return (
+        RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.9,
+            entities={},
+            flags={"appointment_action_reask"},
+            needs_handoff=False,
+            source="appointment_action_pending",
+        ),
+        Plan(label="APPOINTMENT"),
+        Evidence(
+            items={
+                "operator_offer_response": {
+                    "text": "Хотите отменить или перенести запись?",
+                    "handoff": False,
+                }
+            }
+        ),
+    )
+
+
+async def _handle_compound_price_pending(
+    *,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """
+    Обрабатывает follow-up после compound PRICE-уточнения.
+
+    Поведение узкое и предсказуемое:
+    - `да/хочу/можно` -> берем первую услугу из списка;
+    - явное название одной из услуг -> берем выбранную услугу;
+    - `нет` -> просим назвать услугу явно;
+    - любая другая новая тема -> просто снимаем pending и отдаем ход общему NLU.
+
+    :param user_text: текущая реплика пользователя
+    :param state: состояние сессии
+    :param services: сервисный слой
+    :param memory: хранилище state/pending
+    :param runtime_options: runtime-параметры роутера
+    :return: decision/plan/evidence либо None
+    """
+
+    pending = _get_compound_price_pending(state)
+    if not pending:
+        return None
+
+    if explicit_operator_requested(user_text):
+        _clear_compound_price_pending(state)
+        return None
+
+    options = list(pending.get("services") or [])
+    default_service = str(pending.get("default_service") or options[0]).strip()
+    reply_kind = contextual_reply_kind(user_text)
+    if reply_kind == "other" and (
+        _is_secondary_soft_yes(user_text) or _COMPOUND_PRICE_SOFT_YES_RE.match(str(user_text or ""))
+    ):
+        reply_kind = "yes"
+
+    if reply_kind == "yes":
+        selected_service = default_service
+    else:
+        selected_service = match_compound_price_service_option(user_text, options)
+
+    if selected_service:
+        _clear_compound_price_pending(state)
+        set_secondary_queue(state, [])
+        state.last_entities["_secondary_offer_pending"] = False
+        state.last_entities.pop("secondary_intents", None)
+        memory.merge_entities(state, {"service_name": selected_service}, label="PRICE")
+        decision = RouteDecision(
+            label="PRICE",
+            confidence=0.92,
+            entities={"service_name": selected_service, "compound_price_selected": True},
+            flags={"compound_price_selected"},
+            needs_handoff=False,
+            context_action="continue",
+            source="compound_price",
+        )
+        plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
+        evidence = await execute_plan(plan, state, services)
+        return decision, plan, evidence
+
+    if reply_kind == "no":
+        _clear_compound_price_pending(state)
+        set_secondary_queue(state, [])
+        state.last_entities["_secondary_offer_pending"] = False
+        options_text = " или ".join(f"«{item}»" for item in options[:3])
+        return (
+            RouteDecision(
+                label="PRICE",
+                confidence=0.9,
+                entities={},
+                flags={"compound_price_declined"},
+                needs_handoff=False,
+                source="compound_price",
+            ),
+            Plan(label="PRICE"),
+            Evidence(
+                items={
+                    "service_bundle": {
+                        "clarify_text": (
+                            f"Хорошо. Тогда напишите, какую из услуг проверить первой: {options_text}."
+                        )
+                    }
+                }
+            ),
+        )
+
+    _clear_compound_price_pending(state)
+    set_secondary_queue(state, [])
+    state.last_entities["_secondary_offer_pending"] = False
+    return None
 
 
 def _catalog_confirm_prompt(kind: str, query: str, canonical: str) -> str:
@@ -1066,6 +1326,26 @@ async def route_patient_message(
     if catalog_pending_result is not None:
         return catalog_pending_result
 
+    appointment_action_result = await _handle_appointment_action_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if appointment_action_result is not None:
+        return appointment_action_result
+
+    compound_price_result = await _handle_compound_price_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if compound_price_result is not None:
+        return compound_price_result
+
     # Вежливое переключение на вторичный интент по короткому "да/нет".
     queue = get_secondary_queue(state)
     if (
@@ -1110,34 +1390,66 @@ async def route_patient_message(
         state.last_entities.pop(key, None)
 
     nlu_debug: dict[str, Any] = {}
-    use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
-    shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False) or _env_flag("MR_NLU_SHADOW", False)
-    if use_v2_nlu:
-        nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
-        decision = nlu_result.decision
-        nlu_debug["candidates"] = [
-            {
-                "source": cand.source,
-                "label": cand.label,
-                "confidence": cand.confidence,
-                "flags": cand.flags[:8],
-            }
-            for cand in nlu_result.candidates
-        ]
-        nlu_debug["merged_from"] = nlu_result.merged_from
-        if nlu_result.trace:
-            nlu_debug["nlu_trace"] = nlu_result.trace
-            nlu_debug["trace"] = nlu_result.trace
-        if shadow_nlu:
-            legacy = await analyze(user_text, state.last_entities)
-            nlu_debug["shadow"] = {
-                "legacy_label": legacy.label,
-                "legacy_conf": legacy.confidence,
-                "v2_label": decision.label,
-                "v2_conf": decision.confidence,
-            }
+    pending_before_nlu = memory.get_pending(state)
+    appointment_prelock = await prelock_active_appointment_turn(
+        user_text,
+        state.last_entities,
+        pending_before_nlu if isinstance(pending_before_nlu, dict) else None,
+        services,
+    )
+    if appointment_prelock is not None:
+        clear_service_name = bool(appointment_prelock.pop("__clear_service_name", False))
+        clear_patient_name = bool(appointment_prelock.pop("__clear_patient_name", False))
+        if clear_service_name:
+            state.last_entities.pop("service_name", None)
+            state.last_entities.pop("test_name", None)
+        if clear_patient_name:
+            state.last_entities.pop("patient_name", None)
+            state.last_entities.pop("appointment_confirm_pending", None)
+            state.last_entities.pop("appointment_confirmed", None)
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.91,
+            entities=appointment_prelock,
+            flags={"appointment_slot_prelock"},
+            needs_handoff=False,
+            context_action="continue",
+            source="flow_prelock",
+        )
+        nlu_debug["appointment_prelock"] = {
+            "hit": True,
+            "entities": dict(appointment_prelock),
+            "pending_label": str((pending_before_nlu or {}).get("label") or ""),
+        }
     else:
-        decision = await analyze(user_text, state.last_entities, runtime_options=runtime_options)
+        use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
+        shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False) or _env_flag("MR_NLU_SHADOW", False)
+        if use_v2_nlu:
+            nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
+            decision = nlu_result.decision
+            nlu_debug["candidates"] = [
+                {
+                    "source": cand.source,
+                    "label": cand.label,
+                    "confidence": cand.confidence,
+                    "flags": cand.flags[:8],
+                }
+                for cand in nlu_result.candidates
+            ]
+            nlu_debug["merged_from"] = nlu_result.merged_from
+            if nlu_result.trace:
+                nlu_debug["nlu_trace"] = nlu_result.trace
+                nlu_debug["trace"] = nlu_result.trace
+            if shadow_nlu:
+                legacy = await analyze(user_text, state.last_entities)
+                nlu_debug["shadow"] = {
+                    "legacy_label": legacy.label,
+                    "legacy_conf": legacy.confidence,
+                    "v2_label": decision.label,
+                    "v2_conf": decision.confidence,
+                }
+        else:
+            decision = await analyze(user_text, state.last_entities, runtime_options=runtime_options)
 
     topic_match = match_topic(user_text)
     if topic_match is not None:
@@ -1333,6 +1645,10 @@ async def route_patient_message(
         and _is_appointment_datetime_followup(user_text)
         and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "TEST_ASSIST", "ADDRESS", "PRICE"}
     ):
+        if not bool(state.last_entities.get("appointment_flow_active")) and not looks_like_patient_fio(user_text):
+            state.last_entities.pop("patient_name", None)
+            state.last_entities.pop("appointment_confirm_pending", None)
+            state.last_entities.pop("appointment_confirmed", None)
         entities = dict(decision.entities)
         for key in ("doctor_id", "doctor_name", "branch_id", "branch_name"):
             if not entities.get(key) and state.last_entities.get(key):
@@ -1912,6 +2228,7 @@ async def patient_routing_stream(
         if (
             followup
             and not state.last_entities.get("_secondary_offer_pending")
+            and not state.last_entities.get(_COMPOUND_PRICE_PENDING_KEY)
             and not decision.needs_handoff
             and flow_label not in {"APPOINTMENT", "URGENT", "COMPLAINT", "MEDICAL_ADVICE", "TEST_RESULT"}
         ):
@@ -1942,6 +2259,7 @@ async def patient_routing_stream(
     if (
         followup
         and not state.last_entities.get("_secondary_offer_pending")
+        and not state.last_entities.get(_COMPOUND_PRICE_PENDING_KEY)
         and not decision.needs_handoff
         and flow_label not in {"APPOINTMENT", "URGENT", "COMPLAINT", "MEDICAL_ADVICE", "TEST_RESULT"}
     ):
