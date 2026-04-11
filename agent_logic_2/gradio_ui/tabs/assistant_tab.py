@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Awaitable, Callable, TypedDict
 
 import gradio as gr
@@ -13,6 +16,69 @@ class AssistantTabRefs(TypedDict):
     value_k_slider: Any
     meili_search_indexes_dropdown: Any
     chroma_search_collection_dropdown: Any
+
+
+_EXPORT_DIR = Path(__file__).resolve().parents[3] / "app_data" / "chat_exports"
+
+
+def _build_chat_export_payload(
+    *,
+    chat_history: list[dict[str, Any]] | None,
+    mode: str,
+    session_id: Any,
+) -> dict[str, Any]:
+    messages: list[dict[str, Any]] = []
+    transcript_lines: list[str] = []
+    for item in chat_history or []:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip() or "assistant"
+        content = item.get("content")
+        if isinstance(content, (str, int, float, bool)) or content is None:
+            normalized_content: Any = "" if content is None else str(content)
+        else:
+            normalized_content = content
+        messages.append(
+            {
+                "role": role,
+                "content": normalized_content,
+            }
+        )
+        content_text = normalized_content if isinstance(normalized_content, str) else json.dumps(
+            normalized_content,
+            ensure_ascii=False,
+            default=str,
+        )
+        transcript_lines.append(f"{role}: {content_text}")
+
+    return {
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "mode": str(mode or "").strip(),
+        "session_id": str(session_id or "").strip(),
+        "messages": messages,
+        "transcript": "\n\n".join(transcript_lines),
+    }
+
+
+def export_chat_dialog(
+    chat_history: list[dict[str, Any]] | None,
+    mode: str,
+    session_id: Any,
+) -> str:
+    payload = _build_chat_export_payload(
+        chat_history=chat_history,
+        mode=mode,
+        session_id=session_id,
+    )
+    _EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    mode_slug = str(mode or "dialog").strip().lower().replace(" ", "_")
+    file_path = _EXPORT_DIR / f"{mode_slug}_dialog_{timestamp}.json"
+    file_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    return str(file_path)
 
 
 def build_assistant_tab(
@@ -127,6 +193,25 @@ def build_assistant_tab(
             ],
             additional_outputs=[messenger_session_state],
             show_progress="full",
+        )
+
+        with gr.Row():
+            export_button = gr.Button("Экспорт диалога", variant="secondary")
+            export_file = gr.File(
+                label="Файл экспорта",
+                visible=False,
+                interactive=False,
+            )
+
+        def export_dialog_for_download(chat_history, mode, current_session):
+            path = export_chat_dialog(chat_history, mode, current_session)
+            return gr.update(value=path, visible=True)
+
+        export_button.click(
+            fn=export_dialog_for_download,
+            inputs=[chatbot, radio_type_of_search, messenger_session_state],
+            outputs=[export_file],
+            queue=False,
         )
 
         # ====== ЗАХВАТ АУДИО И РАСШИФРОВКА ======

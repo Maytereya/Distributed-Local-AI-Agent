@@ -1,0 +1,11 @@
+{
+  "min_steps": 8,
+  "step_pass_rate_min": 0.75,
+  "session_pass_rate_min": 0.50,
+  "clarification_success_rate_min": 0.75,
+  "multiturn_session_rate_min": 0.50,
+  "clarification_session_rate_min": 0.50,
+  "memory_session_rate_min": 0.50,
+  "selferrorcorrection_session_rate_min": 0.25,
+  "flexibility_session_rate_min": 0.50
+}
