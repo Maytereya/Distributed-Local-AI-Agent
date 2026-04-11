@@ -177,7 +177,7 @@ def _check_gate(metrics: dict[str, float], thresholds: dict[str, Any]) -> list[s
 def main() -> int:
     root = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description="Run remote eval against FT debug API")
-    parser.add_argument("--url", default="http://172.16.0.16:8010/v1/freetalk/generate-once", help="FT endpoint URL")
+    parser.add_argument("--url", default="http://172.16.0.16/v1/freetalk/generate-once", help="FT endpoint URL")
     parser.add_argument("--api-key", default=_default_api_key(), help="X-API-Key value")
     parser.add_argument("--host-header", default="", help="Optional Host header")
     parser.add_argument("--timeout-sec", type=int, default=60, help="HTTP timeout per turn")

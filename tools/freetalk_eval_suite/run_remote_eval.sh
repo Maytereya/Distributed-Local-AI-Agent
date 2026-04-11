@@ -4,7 +4,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-URL="http://172.16.0.16:8010/v1/freetalk/generate-once"
+URL="http://172.16.0.16/v1/freetalk/generate-once"
 API_KEY="${AGENT_API_KEY:-}"
 HOST_HEADER=""
 TIMEOUT_SEC="60"

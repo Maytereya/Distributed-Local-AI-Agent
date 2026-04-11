@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import importlib
 import json
 from pathlib import Path
 import sys
@@ -203,22 +204,28 @@ def _infer_freetalk_reply_kind(
     return "final"
 
 
+def _import_freetalk_runner() -> Any:
+    module_name = "localragagent.freetalk.runner"
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if str(getattr(exc, "name", "") or "") != "localragagent":
+            raise
+        src_dir = Path(__file__).resolve().parent / "src"
+        if src_dir.exists():
+            src_str = str(src_dir)
+            if src_str not in sys.path:
+                sys.path.insert(0, src_str)
+        return importlib.import_module(module_name)
+
+
 async def _run_freetalk_once(
     *,
     text: str,
     session_id: str,
     debug: bool,
 ) -> FreeTalkResponse:
-    try:
-        from localragagent.freetalk import runner as free_talk_runner
-    except ModuleNotFoundError:
-        src_dir = Path(__file__).resolve().parent / "src"
-        if src_dir.exists():
-            src_str = str(src_dir)
-            if src_str not in sys.path:
-                sys.path.insert(0, src_str)
-        from localragagent.freetalk import runner as free_talk_runner
-
+    free_talk_runner = _import_freetalk_runner()
     agent = free_talk_runner._agent()
     used_session_id = free_talk_runner.ensure_session_id(session_id)
     reply = await agent.chat(str(text or "").strip(), used_session_id)
