@@ -1426,7 +1426,15 @@ def test_build_doctor_schedule_response_hydrates_context_without_forcing_flow_ac
 
 
 def test_build_doctor_schedule_response_offers_operator_when_no_slots_for_two_weeks():
-    state = SessionState(session_id="doc-schedule-no-slots", last_entities={})
+    state = SessionState(
+        session_id="doc-schedule-no-slots",
+        last_entities={
+            "appointment_flow_active": True,
+            "doctor_name": "Ким Татьяна Александровна",
+            "date_from": "2026-04-15",
+            "time_from": "09:00",
+        },
+    )
     memory = MemoryStore()
     evidence = Evidence(
         items={
@@ -1443,11 +1451,75 @@ def test_build_doctor_schedule_response_offers_operator_when_no_slots_for_two_we
     assert "Врач найден, но свободных слотов нет в ближайшие 2 недели." in env.text
     assert "Перевести на оператора?" in env.text
     assert env.handoff is False
+    assert state.last_entities.get("appointment_flow_active") is None
+    assert state.last_entities.get("date_from") is None
+    assert state.last_entities.get("time_from") is None
     assert state.last_entities.get("_operator_offer_pending") is True
     pending = memory.get_pending(state)
     assert isinstance(pending, dict)
     assert pending.get("label") == "OTHER"
     assert "operator_offer_confirm" in (pending.get("missing") or [])
+
+
+def test_route_message_datetime_after_no_slots_does_not_reactivate_appointment_prelock(monkeypatch):
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="OTHER",
+                confidence=0.2,
+                entities={},
+                flags={"low_confidence"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+
+    state = SessionState(
+        session_id="kim-no-slots-followup",
+        last_entities={
+            "appointment_flow_active": True,
+            "doctor_name": "Ким Татьяна Александровна",
+        },
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    no_slots_evidence = Evidence(
+        items={
+            "doctor_schedule": {
+                "schedule": [],
+                "schedule_unavailable_reason": "no_free_slots_2_weeks",
+            }
+        }
+    )
+
+    first = _build_doctor_schedule_response("DOCTOR_SCHEDULE", no_slots_evidence, state, memory)
+    assert first is not None
+    assert state.last_entities.get("appointment_flow_active") is None
+    pending = memory.get_pending(state)
+    assert isinstance(pending, dict)
+    assert pending.get("label") == "OTHER"
+
+    out = _run_stream_once("на завтра на 9:00", state, services, memory)
+
+    assert len(out) == 1
+    assert "в ближайшие 2 недели" not in out[0].text.lower() or "перевести на оператора" in first.text.lower()
+    assert "фио пациента" not in out[0].text.lower()
+    assert "подтверждаете" not in out[0].text.lower()
+    assert "если нужно записаться" not in out[0].text.lower()
 
 
 def test_build_address_response_sets_pending_when_empty():

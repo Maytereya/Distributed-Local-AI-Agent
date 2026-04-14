@@ -350,6 +350,7 @@ async def prelock_active_appointment_turn(
         state_entities.get("appointment_confirm_pending")
         or state_entities.get("appointment_cancel_pending")
         or state_entities.get("appointment_topic_switch_pending")
+        or state_entities.get("_operator_offer_pending")
     ):
         return None
 
@@ -970,6 +971,21 @@ def safe_get_branches(services: Services) -> list[dict[str, str]]:
 
 def secondary_followup_text(labels: list[str]) -> str | None:
     return _secondary_followup_text(labels)
+
+
+def reset_appointment_runtime_state(state: SessionState) -> None:
+    """
+    Сбрасывает только runtime-состояние активного процесса записи.
+
+    Используется, когда сценарий записи нужно завершить без полного стирания
+    темы разговора: например, после ответа о том, что у врача нет свободных
+    слотов, либо при явном переключении на другой поток.
+
+    :param state: состояние текущей сессии
+    :return: None
+    """
+
+    _clear_flow_state(state)
 
 
 def set_secondary_queue(state: SessionState, labels: list[str]) -> None:

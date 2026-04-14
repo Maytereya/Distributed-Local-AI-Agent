@@ -8,7 +8,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .flow_policy import hydrate_appointment_context_from_schedule, safe_get_branches
+from .flow_policy import (
+    hydrate_appointment_context_from_schedule,
+    reset_appointment_runtime_state,
+    safe_get_branches,
+)
 from .memory import MemoryStore
 from .mess_types import Evidence, ResponseEnvelope, RouteDecision, SessionState
 from .policies import (
@@ -298,6 +302,7 @@ def build_doctor_schedule_response(
     if not isinstance(schedule_payload, dict):
         return None
     if str(schedule_payload.get("schedule_unavailable_reason") or "").strip() == "no_free_slots_2_weeks":
+        reset_appointment_runtime_state(state)
         state.last_entities["_operator_offer_pending"] = True
         memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
         return ResponseEnvelope(
