@@ -11,7 +11,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from localragagent.freetalk.agent import FreeTalkAgent
-from localragagent.freetalk.clinical_router import ClinicalDecision
+from localragagent.freetalk.routing_contract import ClinicalDecision
 from localragagent.freetalk.config import FreeTalkConfig
 from localragagent.freetalk.contracts import DialogState, SessionContext
 
@@ -184,8 +184,13 @@ class ResultDialogAgent(FreeTalkAgent):
                 intent="test_result",
                 confidence=0.93,
                 entities={},
-                missing_slots=["result_surname", "result_year", "result_filial", "result_number"],
-                clarify_question="Для проверки результата уточните: фамилию пациента, год рождения, филиал, номер заказа.",
+                missing_slots=[
+                    "result_surname",
+                    "result_year_of_birth",
+                    "result_analysis_code",
+                    "result_analysis_number",
+                ],
+                clarify_question="Для проверки результата уточните: фамилию пациента, год рождения, код анализа, номер анализа.",
                 tool_plan=["test_result_status"],
                 source="test",
             )
@@ -193,16 +198,24 @@ class ResultDialogAgent(FreeTalkAgent):
             return ClinicalDecision(
                 intent="test_result",
                 confidence=0.93,
-                entities={"surname": "Иванов"},
-                missing_slots=["result_year", "result_filial", "result_number"],
-                clarify_question="Для проверки результата уточните: год рождения, филиал, номер заказа.",
+                entities={"result_surname": "Иванов"},
+                missing_slots=[
+                    "result_year_of_birth",
+                    "result_analysis_code",
+                    "result_analysis_number",
+                ],
+                clarify_question="Для проверки результата уточните: год рождения, код анализа, номер анализа.",
                 tool_plan=["test_result_status"],
                 source="test",
             )
         return ClinicalDecision(
             intent="test_result",
             confidence=0.93,
-            entities={"year": "1990", "filial": "Самара", "number": "12345"},
+            entities={
+                "result_year_of_birth": "1990",
+                "result_analysis_code": "Бг",
+                "result_analysis_number": "12345",
+            },
             missing_slots=[],
             clarify_question="",
             tool_plan=["test_result_status"],
@@ -238,24 +251,28 @@ def test_dialog_state_accumulates_result_slots_across_turns():
     assert state1["intent"] == "test_result"
     assert set(state1["missing_slots"]) == {
         "result_surname",
-        "result_year",
-        "result_filial",
-        "result_number",
+        "result_year_of_birth",
+        "result_analysis_code",
+        "result_analysis_number",
     }
 
     reply2 = asyncio.run(agent.chat("Иванов", session_id))
     assert "год рождения" in reply2.text.lower()
 
     state2 = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
-    assert state2["entities"]["surname"] == "Иванов"
-    assert set(state2["missing_slots"]) == {"result_year", "result_filial", "result_number"}
+    assert state2["entities"]["result_surname"] == "Иванов"
+    assert set(state2["missing_slots"]) == {
+        "result_year_of_birth",
+        "result_analysis_code",
+        "result_analysis_number",
+    }
 
-    reply3 = asyncio.run(agent.chat("1990, Самара, 12345", session_id))
+    reply3 = asyncio.run(agent.chat("1990, Бг, 12345", session_id))
     assert reply3.tool_name == "test_result_status"
     assert "результат готов" in reply3.text.lower()
     assert services.last_entities["surname"] == "Иванов"
     assert services.last_entities["year"] == "1990"
-    assert services.last_entities["filial"] == "Самара"
+    assert services.last_entities["filial"] == "Бг"
     assert services.last_entities["number"] == "12345"
     assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
 
@@ -493,6 +510,6 @@ def test_contextual_schedule_followup_reuses_doctor_and_filters():
     assert reply2.tool_name == "doctors_schedule_week"
     assert len(services.calls) >= 2
     assert services.calls[1]["doctor_name"] == "Дразнин Антон Владимирович"
-    assert services.calls[1]["branch"] == "Ленина"
+    assert services.calls[1]["branch_name"] == "Ленина"
     assert services.calls[1]["time"] == "утром"
     assert services.calls[1]["time_from"] == "08:00"

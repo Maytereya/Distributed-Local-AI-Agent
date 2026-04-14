@@ -8,7 +8,7 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from localragagent.freetalk.tool_registry import (
+from localragagent.freetalk.tool_planning import (
     is_about_agent_query,
     is_medical_query,
     select_tool_plan,

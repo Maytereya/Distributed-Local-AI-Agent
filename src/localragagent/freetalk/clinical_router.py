@@ -91,10 +91,7 @@ _ENTITY_KEYS: set[str] = {
     "service_variant",
     "test_name",
     "city",
-    "region",
-    "branch",
     "branch_name",
-    "filial",
     "date_from",
     "date_to",
     "time_from",
@@ -102,11 +99,10 @@ _ENTITY_KEYS: set[str] = {
     "date",
     "time",
     "doctor_id",
-    "surname",
-    "year",
-    "number",
-    "order_number",
-    "order_id",
+    "result_surname",
+    "result_year_of_birth",
+    "result_analysis_code",
+    "result_analysis_number",
 }
 
 
@@ -208,30 +204,15 @@ def merge_missing_slots_from_plan(tool_plan: list[str], entities: dict[str, Any]
             or ""
         ).strip()
     )
-    result_surname = bool(str(entities.get("surname") or "").strip())
-    result_year = bool(str(entities.get("year") or "").strip())
-    result_filial = bool(
-        str(
-            entities.get("filial")
-            or entities.get("branch_name")
-            or entities.get("branch")
-            or entities.get("region")
-            or entities.get("city")
-            or ""
-        ).strip()
-    )
-    result_number = bool(
-        str(
-            entities.get("number")
-            or entities.get("order_number")
-            or entities.get("order_id")
-            or ""
-        ).strip()
-    )
+    result_surname = bool(str(entities.get("result_surname") or "").strip())
+    result_year = bool(str(entities.get("result_year_of_birth") or "").strip())
+    result_code = bool(str(entities.get("result_analysis_code") or "").strip())
+    result_number = bool(str(entities.get("result_analysis_number") or "").strip())
 
     if any(tool in {"doctors_info", "doctors_schedule_week"} for tool in plan):
         if not doctor_known and not specialty_known:
-            missing.append("doctor_name_or_specialty")
+            missing.append("doctor_name")
+            missing.append("specialty")
 
     if any(tool in {"price_info", "service_bundle_info", "test_prepare", "test_assist"} for tool in plan):
         if not service_known and not doctor_known:
@@ -241,11 +222,11 @@ def merge_missing_slots_from_plan(tool_plan: list[str], entities: dict[str, Any]
         if not result_surname:
             missing.append("result_surname")
         if not result_year:
-            missing.append("result_year")
-        if not result_filial:
-            missing.append("result_filial")
+            missing.append("result_year_of_birth")
+        if not result_code:
+            missing.append("result_analysis_code")
         if not result_number:
-            missing.append("result_number")
+            missing.append("result_analysis_number")
 
     dedup: list[str] = []
     seen: set[str] = set()
@@ -259,7 +240,7 @@ def merge_missing_slots_from_plan(tool_plan: list[str], entities: dict[str, Any]
 
 def clarify_question_for_slots(intent: str, missing_slots: list[str]) -> str:
     slots = set(str(slot or "").strip().lower() for slot in (missing_slots or []))
-    if "doctor_name_or_specialty" in slots:
+    if slots & {"doctor_name", "specialty"}:
         if intent == "doctor_schedule":
             return "Уточните, пожалуйста, фамилию врача или специальность, чтобы показать расписание."
         return "Уточните, пожалуйста, фамилию врача или специальность."
@@ -268,12 +249,12 @@ def clarify_question_for_slots(intent: str, missing_slots: list[str]) -> str:
     result_labels: list[str] = []
     if "result_surname" in slots:
         result_labels.append("фамилию пациента")
-    if "result_year" in slots:
+    if "result_year_of_birth" in slots:
         result_labels.append("год рождения")
-    if "result_filial" in slots:
-        result_labels.append("филиал")
-    if "result_number" in slots:
-        result_labels.append("номер заказа")
+    if "result_analysis_code" in slots:
+        result_labels.append("код анализа")
+    if "result_analysis_number" in slots:
+        result_labels.append("номер анализа")
     if result_labels:
         return "Для проверки результата уточните: " + ", ".join(result_labels) + "."
     return "Уточните, пожалуйста, ваш запрос по клинике, чтобы я корректно выполнил поиск."
@@ -284,11 +265,11 @@ def clarify_type_for_slots(intent: str, missing_slots: list[str]) -> str:
     slots = set(str(slot or "").strip().lower() for slot in (missing_slots or []))
     if not slots:
         return ""
-    if slots & {"result_surname", "result_year", "result_filial", "result_number", "result_identifiers"}:
+    if slots & {"result_surname", "result_year_of_birth", "result_analysis_code", "result_analysis_number"}:
         return "missing_auth_data"
-    if slots & {"doctor_name_or_specialty", "service_or_analysis_name"}:
+    if slots & {"doctor_name", "specialty", "service_or_analysis_name"}:
         return "identify"
-    if slots & {"branch", "branch_name", "city", "region", "date", "date_from", "date_to", "time", "time_from", "time_to"}:
+    if slots & {"branch_name", "city", "date", "date_from", "date_to", "time", "time_from", "time_to"}:
         return "narrow_choice"
     return "other"
 

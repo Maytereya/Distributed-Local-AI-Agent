@@ -10,7 +10,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from localragagent.freetalk.agent import FreeTalkAgent
-from localragagent.freetalk.clinical_router import ClinicalDecision
+from localragagent.freetalk.routing_contract import ClinicalDecision
 from localragagent.freetalk.config import FreeTalkConfig
 from localragagent.freetalk.contracts import AgentReply, DialogState
 from localragagent.freetalk.tool_dispatcher import ToolDispatcher
@@ -454,7 +454,7 @@ def test_post_tool_verifier_uses_llm_json_decision(monkeypatch):
             tool_name="doctors_schedule_week",
             drafted_answer="Нашел расписание",
             tool_payload={"schedule": [{"fio": "Дразнин"}]},
-            missing_slots=["doctor_name_or_specialty"],
+            missing_slots=["doctor_name", "specialty"],
         )
     )
     assert verification.source == "llm"

@@ -15,7 +15,7 @@ from .config import load_config
 from .memory_persist import PersistSettings, PersistentSummaryStore
 from .memory_redis import RedisMemoryStore, RedisSettings
 from .observability import log_event
-from .tool_registry import is_medical_query
+from .tool_planning import is_medical_query
 
 
 @lru_cache(maxsize=1)
