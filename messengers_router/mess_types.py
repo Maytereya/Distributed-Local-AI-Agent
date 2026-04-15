@@ -88,6 +88,39 @@ ContextAction = Literal["continue", "overwrite_doctor", "new_topic", "cancel_flo
 AuthLevel = Literal["none", "patient_token"]
 
 
+class AppointmentPhase:
+    """String constants for appointment flow phases.
+
+    Used as the ``DialogState.phase`` value to track where a patient is
+    in the appointment booking / cancellation / rescheduling state machine.
+    These replace 20+ scattered boolean flags in ``last_entities``.
+
+    Lifecycle
+    ---------
+    IDLE               → not in any appointment sub-flow
+    COLLECTING         → gathering required slots (doctor, date/time, etc.)
+    CONFIRM            → all slots collected; awaiting patient confirmation
+    CONFIRMED          → patient confirmed; handoff to booking system
+    CANCEL_CONFIRM     → awaiting confirmation before cancelling appointment
+    """
+
+    IDLE: str = ""
+    COLLECTING: str = "appointment_collecting"
+    CONFIRM: str = "appointment_confirm"
+    CONFIRMED: str = "appointment_confirmed"
+    CANCEL_CONFIRM: str = "appointment_cancel_confirm"
+
+    @classmethod
+    def values(cls) -> frozenset[str]:
+        """Return the set of all valid phase strings (excluding IDLE)."""
+        return frozenset({cls.COLLECTING, cls.CONFIRM, cls.CONFIRMED, cls.CANCEL_CONFIRM})
+
+    @classmethod
+    def is_active(cls, phase: str) -> bool:
+        """Return True when the phase represents an in-progress appointment flow."""
+        return phase in cls.values()
+
+
 @dataclass
 class DialogState:
     """Typed conversation state for a single active flow.
