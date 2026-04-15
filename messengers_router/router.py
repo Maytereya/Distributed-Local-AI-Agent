@@ -267,6 +267,7 @@ def _env_flag(name: str, default: bool) -> bool:
         "MR_ROUTER_V2_ENABLE": c.MR_ROUTER_V2_ENABLE,
         "MR_ROUTER_V2_SHADOW": c.MR_ROUTER_V2_SHADOW,
         "MR_NLU_SHADOW": c.MR_NLU_SHADOW,
+        "MR_USE_ORCHESTRATOR": c.MR_USE_ORCHESTRATOR,
     }
     raw = cfg_flags.get(name, default)
     if isinstance(raw, bool):
@@ -2054,6 +2055,16 @@ async def patient_routing_stream(
             _reset_state_after_handoff(state, memory)
         yield precheck
         return
+
+    if _env_flag("MR_USE_ORCHESTRATOR", False):
+        from .orchestrator import run_pipeline
+
+        ctx = await run_pipeline(user_text, state, runtime_options=runtime_options)
+        if ctx.response and ctx.response.text:
+            if ctx.response.handoff:
+                _reset_state_after_handoff(state, memory)
+            yield ctx.response
+            return
 
     try:
         decision, plan, evidence = await route_patient_message(

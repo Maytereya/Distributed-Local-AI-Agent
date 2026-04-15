@@ -7,13 +7,22 @@ from messengers_router.flow_policy import (
     hydrate_appointment_context_from_schedule,
     quick_fill_entities_from_text,
 )
-from messengers_router.mess_types import AppointmentPhase, DialogState, Evidence, Plan, PlanStep, SessionState
+from messengers_router.mess_types import (
+    AppointmentPhase,
+    DialogState,
+    Evidence,
+    Plan,
+    PlanStep,
+    ResponseEnvelope,
+    SessionState,
+)
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision
 from messengers_router.appointment_flow_guard import (
     is_new_topic_while_confirm_pending,
     reset_appointment_runtime_state,
 )
+from messengers_router.orchestrator import OrchestratorContext
 from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
 from messengers_router.policies import (
     quick_fill_core_entities,
@@ -100,6 +109,34 @@ def test_reset_appointment_runtime_state_clears_active_dialog_state():
     assert state.dialog.label == "OTHER"
     assert state.dialog.phase == ""
     assert state.dialog.entities == {}
+
+
+def test_patient_routing_stream_uses_orchestrator_when_flag_enabled(monkeypatch):
+    async def fake_run_pipeline(text, state, runtime_options=None):
+        _ = runtime_options
+        ctx = OrchestratorContext(text=text, state=state)
+        ctx.decision = RouteDecision(label="PRICE", confidence=0.81, source="llm_primary")
+        ctx.response = ResponseEnvelope(text="Уточните, пожалуйста, услугу.")
+        return ctx
+
+    async def fail_route_patient_message(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError("legacy route_patient_message should not be used when orchestrator flag is enabled")
+
+    monkeypatch.setattr(router_mod.c, "MR_USE_ORCHESTRATOR", True, raising=False)
+    monkeypatch.setattr("messengers_router.orchestrator.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(router_mod, "route_patient_message", fail_route_patient_message)
+
+    state = SessionState(session_id="orchestrator-stream")
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    out = _run_stream_once("цена", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].text == "Уточните, пожалуйста, услугу."
+    assert out[0].handoff is False
 
 
 def test_apply_appointment_continuity_overrides_prioritizes_datetime():
