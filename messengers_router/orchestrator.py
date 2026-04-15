@@ -142,26 +142,34 @@ async def tool_loop(
     ctx.decision = decision
     ctx.plan = plan
     ctx.evidence = evidence
+    ctx.state.dialog.label = ctx.decision.label
+    ctx.state.dialog.confidence = ctx.decision.confidence
+    ctx.state.dialog.merge_entities(ctx.decision.entities)
     return ctx
 
 
-async def render(ctx: OrchestratorContext) -> OrchestratorContext:
+async def render(
+    ctx: OrchestratorContext,
+    runtime_options: Any | None = None,
+) -> OrchestratorContext:
     """Собирает финальный `ResponseEnvelope`.
 
     :param ctx: контекст пайплайна
+    :param runtime_options: runtime-настройки LLM/NLU
     :return: обновлённый контекст
     """
 
-    if ctx.short_circuit and ctx.decision is not None:
-        from .renderer import render_complaint, render_medical_advice, render_urgent
+    from . import renderer
 
+    if ctx.short_circuit and ctx.decision is not None:
         if ctx.decision.label == "URGENT":
-            ctx.response = render_urgent()
+            ctx.response = renderer.render_urgent()
         elif ctx.decision.label == "COMPLAINT":
-            ctx.response = render_complaint()
+            ctx.response = renderer.render_complaint()
         elif ctx.decision.label == "MEDICAL_ADVICE":
-            ctx.response = render_medical_advice()
-        return ctx
+            ctx.response = renderer.render_medical_advice()
+        if ctx.response is not None:
+            return ctx
     if ctx.should_clarify:
         ctx.response = ResponseEnvelope(text=ctx.clarify_text)
         return ctx
@@ -201,5 +209,5 @@ async def run_pipeline(
         memory=memory,
         runtime_options=runtime_options,
     )
-    ctx = await render(ctx)
+    ctx = await render(ctx, runtime_options=runtime_options)
     return ctx

@@ -7,6 +7,7 @@ from messengers_router.orchestrator import (
     OrchestratorContext,
     clarify_gate,
     early_guards,
+    render,
     run_pipeline,
 )
 from messengers_router.services import Services
@@ -136,7 +137,12 @@ def test_run_pipeline_delegates_legacy_route_inside_orchestrator(monkeypatch):
     async def fake_route_patient_message(text, state, services, memory, runtime_options=None):
         _ = text, state, services, memory, runtime_options
         return (
-            RouteDecision(label="PRICE", confidence=0.9, source="legacy_router"),
+            RouteDecision(
+                label="PRICE",
+                confidence=0.9,
+                entities={"service_name": "ТТГ"},
+                source="legacy_router",
+            ),
             Plan(label="PRICE"),
             Evidence(items={"payload": "ok"}),
         )
@@ -165,3 +171,25 @@ def test_run_pipeline_delegates_legacy_route_inside_orchestrator(monkeypatch):
     assert out.plan == Plan(label="PRICE")
     assert out.evidence == Evidence(items={"payload": "ok"})
     assert out.response is None
+    assert state.dialog.label == "PRICE"
+    assert state.dialog.confidence == 0.9
+    assert state.dialog.entities == {"service_name": "ТТГ"}
+
+
+def test_render_pending_handler_preserves_legacy_bridge_outputs():
+    ctx = OrchestratorContext(
+        text="цена",
+        state=SessionState(session_id="render-stream"),
+        decision=RouteDecision(label="PRICE", confidence=0.93, needs_handoff=True),
+        plan=Plan(label="PRICE"),
+        evidence=Evidence(items={"attachments": [{"type": "pdf", "name": "memo"}]}),
+        short_circuit=True,
+        short_circuit_reason="pending_handler",
+    )
+
+    out = run(render(ctx))
+
+    assert out.response is None
+    assert out.decision == ctx.decision
+    assert out.plan == ctx.plan
+    assert out.evidence == ctx.evidence

@@ -6,6 +6,40 @@
 
 ---
 
+## Session scope override (2026-04-16)
+
+This phase was intentionally narrowed to a **safe partial migration only**.
+Do **not** remove the dependency on `route_patient_message()` in this session.
+The post-NLU middleware that still lives inside the legacy route
+(`catalog_confirm` injection, doctor verification, flow overrides, entity
+grounding, memory merge, secondary queue handling) is too large to extract
+safely in one pass.
+
+### Done in this session
+
+- `tool_loop()` remains a bridge into `route_patient_message()` on purpose.
+- After the legacy bridge returns, `tool_loop()` now synchronizes
+  `ctx.state.dialog` from the final post-middleware decision:
+  - `label`
+  - `confidence`
+  - merged final entities
+- `render()` was corrected so `short_circuit_reason == "pending_handler"`
+  falls through to the normal legacy path instead of rendering inside the
+  orchestrator. This keeps `patient_routing_stream()` unchanged and lets the
+  existing downstream render path consume `decision/plan/evidence`.
+
+### Verification notes
+
+- Impacted orchestrator tests are green after this change.
+- The full suite is currently blocked by an **unrelated date-sensitive test**
+  in `tests/test_freetalk_appointment.py` on **2026-04-16**:
+  input `15.04` now resolves to `2027-04-15`, while the test still expects
+  `2026-04-15`.
+- Treat that FreeTalk failure as out of scope for this orchestrator session
+  unless the human explicitly asks to stabilize temporal tests.
+
+---
+
 ## What exists now (do NOT change)
 
 The 5-stage orchestrator pipeline is live in `messengers_router/orchestrator.py`. All requests go through it. However `tool_loop()` is currently a **bridge stub** — it just calls the old monolithic `route_patient_message()` internally:
