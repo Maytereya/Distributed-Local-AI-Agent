@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-from localragagent.ports.legacy import import_legacy_alias
+from ..ports.legacy import import_legacy_alias
 
 import_legacy_alias("messengers_router")
 

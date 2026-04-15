@@ -102,6 +102,12 @@ def tool_payload_memory_entities(tool_name: str, payload: dict[str, Any]) -> dic
                 out["test_name"] = test_name
     if tool_name == "doctors_schedule_week":
         out.update(extract_schedule_memory_entities(payload))
+        appointment_windows = payload.get("appointment_windows") if isinstance(payload, dict) else None
+        appointment_branch_options = payload.get("appointment_branch_options") if isinstance(payload, dict) else None
+        if isinstance(appointment_windows, list) and appointment_windows:
+            out["appointment_windows"] = appointment_windows
+        if isinstance(appointment_branch_options, list) and appointment_branch_options:
+            out["appointment_branch_options"] = appointment_branch_options
     if tool_name == "address_info":
         entities_used_ft = payload.get("entities_used_ft") if isinstance(payload, dict) else {}
         if isinstance(entities_used_ft, dict):
@@ -120,6 +126,7 @@ def tool_payload_memory_entities(tool_name: str, payload: dict[str, Any]) -> dic
         addresses = [str(x).strip() for x in (payload.get("addresses") or []) if str(x).strip()]
         if addresses:
             out["branch_name"] = addresses[0]
+            out["appointment_branch_options"] = addresses
     return out
 
 

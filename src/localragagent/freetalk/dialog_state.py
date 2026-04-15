@@ -11,9 +11,9 @@ from .contracts import DialogState
 
 
 CLINICAL_DIALOG_STATE_KEY = "clinical_dialog_state"
-LEGACY_CLINICAL_PENDING_STATE_KEY = "clinical_pending_state"
 CLINICAL_ENTITY_MEMORY_KEY = "clinical_entity_memory"
 SESSION_MEMORY_ENTITY_KEYS: tuple[str, ...] = (
+    "appointment_action",
     "doctor_name",
     "specialty",
     "service_name",
@@ -32,6 +32,8 @@ SESSION_MEMORY_ENTITY_KEYS: tuple[str, ...] = (
     "result_analysis_code",
     "result_analysis_number",
     "doctor_id",
+    "appointment_windows",
+    "appointment_branch_options",
 )
 
 
@@ -65,6 +67,11 @@ def filter_missing_slots_by_entities(missing_slots: list[str], entities: dict[st
     result_year = bool(str(entities.get("result_year_of_birth") or "").strip())
     result_code = bool(str(entities.get("result_analysis_code") or "").strip())
     result_number = bool(str(entities.get("result_analysis_number") or "").strip())
+    appointment_action = bool(str(entities.get("appointment_action") or "").strip())
+    patient_name = bool(str(entities.get("patient_name") or "").strip())
+    branch_known = bool(str(entities.get("branch_name") or entities.get("city") or "").strip())
+    date_known = bool(str(entities.get("date") or entities.get("date_from") or "").strip())
+    time_known = bool(str(entities.get("time") or entities.get("time_from") or "").strip())
     for slot in (missing_slots or []):
         name = str(slot or "").strip().lower()
         if not name:
@@ -72,6 +79,16 @@ def filter_missing_slots_by_entities(missing_slots: list[str], entities: dict[st
         if name in {"doctor_name", "specialty"} and (doctor_known or specialty_known):
             continue
         if name == "service_or_analysis_name" and (service_known or doctor_known):
+            continue
+        if name == "appointment_action" and appointment_action:
+            continue
+        if name == "branch_or_city" and branch_known:
+            continue
+        if name == "date" and date_known:
+            continue
+        if name == "time" and time_known:
+            continue
+        if name == "patient_name" and patient_name:
             continue
         if name == "result_surname" and result_surname:
             continue
@@ -190,33 +207,7 @@ async def load_dialog_state(memory: Any, session_id: str) -> DialogState:
         state = dialog_state_from_payload(parsed if isinstance(parsed, dict) else {})
         if dialog_state_is_active(state):
             return state
-
-    legacy_raw = await memory.get_meta_str(session_id, LEGACY_CLINICAL_PENDING_STATE_KEY, "")
-    legacy_text = str(legacy_raw or "").strip()
-    if not legacy_text:
-        return DialogState()
-    try:
-        legacy = json.loads(legacy_text)
-    except Exception:
-        legacy = {}
-    if not isinstance(legacy, dict):
-        return DialogState()
-    return DialogState(
-        route="clinical",
-        intent=str(legacy.get("intent") or "").strip() or "unknown",
-        entities={},
-        candidate_entities={},
-        confirmation_target="",
-        missing_slots=[str(x).strip() for x in (legacy.get("missing_slots") or []) if str(x).strip()],
-        clarify_type="",
-        tool_plan=[],
-        response_policy="tool_only",
-        confidence=0.0,
-        clarify_count=max(0, int(legacy.get("attempts") or 0)),
-        last_tool="",
-        phase=str(legacy.get("phase") or "").strip(),
-        open_question=str(legacy.get("clarify_question") or "").strip(),
-    )
+    return DialogState()
 
 
 async def save_dialog_state(memory: Any, session_id: str, dialog_state: DialogState) -> None:
@@ -228,14 +219,12 @@ async def save_dialog_state(memory: Any, session_id: str, dialog_state: DialogSt
     except Exception:
         encoded = "{}"
     await memory.set_meta_str(session_id, CLINICAL_DIALOG_STATE_KEY, encoded)
-    await memory.set_meta_str(session_id, LEGACY_CLINICAL_PENDING_STATE_KEY, "")
 
 
 async def clear_dialog_state(memory: Any, session_id: str) -> None:
     if memory is None:
         return
     await memory.set_meta_str(session_id, CLINICAL_DIALOG_STATE_KEY, "")
-    await memory.set_meta_str(session_id, LEGACY_CLINICAL_PENDING_STATE_KEY, "")
 
 
 async def load_session_entity_memory(memory: Any, session_id: str) -> dict[str, Any]:
@@ -269,6 +258,33 @@ async def save_session_entity_memory(memory: Any, session_id: str, entities: dic
         return
     try:
         encoded = json.dumps(merged, ensure_ascii=False)
+    except Exception:
+        encoded = "{}"
+    await memory.set_meta_str(session_id, CLINICAL_ENTITY_MEMORY_KEY, encoded)
+
+
+async def clear_session_entity_memory_keys(memory: Any, session_id: str, keys: list[str] | tuple[str, ...]) -> None:
+    if memory is None:
+        return
+    current = await load_session_entity_memory(memory, session_id)
+    if not current:
+        return
+    updated = dict(current)
+    changed = False
+    for key in (keys or []):
+        name = str(key or "").strip()
+        if not name:
+            continue
+        if name in updated:
+            updated.pop(name, None)
+            changed = True
+    if not changed:
+        return
+    if not updated:
+        await memory.set_meta_str(session_id, CLINICAL_ENTITY_MEMORY_KEY, "")
+        return
+    try:
+        encoded = json.dumps(updated, ensure_ascii=False)
     except Exception:
         encoded = "{}"
     await memory.set_meta_str(session_id, CLINICAL_ENTITY_MEMORY_KEY, encoded)

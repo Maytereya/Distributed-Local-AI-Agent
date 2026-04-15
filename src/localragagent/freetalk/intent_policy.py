@@ -20,7 +20,7 @@ def apply_intent_entity_policy(
     message = str(user_message or "")
 
     # Doctor-oriented requests should not keep accidental service grounding.
-    if normalized_intent in {"doctor_info", "doctor_schedule"}:
+    if normalized_intent in {"appointment", "doctor_info", "doctor_schedule"}:
         has_doctor_context = bool(str(filtered.get("doctor_name") or "").strip()) or bool(
             _DOCTOR_IN_SERVICE_CONTEXT_RE.search(message)
         )

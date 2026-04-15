@@ -1,7 +1,7 @@
 # Правила трансляции данных Free Talk по доменам
 
-Статус: draft v0.1  
-Дата: 2026-04-12
+Статус: v0.2 (синхронизировано с кодом)  
+Дата: 2026-04-15
 
 ## 1. Назначение
 
@@ -12,7 +12,7 @@
 - затем в adapter-facing payload;
 - затем в legacy backend aliases/arguments.
 
-Документ нужен до реализации отдельного adapter layer в коде, чтобы согласовать правила трансляции заранее.
+Документ фиксирует правила трансляции, которые уже должны соблюдаться в `adapter.py` и связанных policy-модулях.
 
 Связанные документы:
 
@@ -24,15 +24,17 @@
 
 ## 2. Где это будет жить в коде
 
-Текущий FT вызывает legacy services напрямую через:
+Текущая реализация использует явный translation layer:
 
+- [adapter.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/adapter.py)
+- [adapter_contracts.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/adapter_contracts.py)
 - [freetalk_services_port.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/ports/freetalk_services_port.py)
 
-Сейчас отдельного translation module ещё нет.  
-После согласования правил желательно вынести трансляцию в явный adapter слой между:
+Роль слоёв:
 
-- `src/localragagent/freetalk/agent.py`
-- `src/localragagent/ports/freetalk_services_port.py`
+- FT runtime оперирует каноническими FT entities;
+- `adapter.py` переводит их в backend-facing payload и нормализует ответ обратно;
+- `freetalk_services_port.py` остаётся gateway к `messengers_router.Services`.
 
 ## 3. Общие правила трансляции
 
@@ -40,13 +42,17 @@
 
 Следующие имена не должны быть backend-facing каноном FT:
 
-- `doctor_name_or_specialty`
 - `branch_or_city`
 - `result_analysis_code`
 - `result_analysis_number`
+- `service_variant`
 
 Это user-facing или state-facing имена.  
 Перед adapter они должны быть разложены в нормализованные поля.
+
+Примечание:
+
+- legacy composite-slot `doctor_name_or_specialty` удалён из FT-канона и заменён на отдельные `doctor_name` и `specialty`.
 
 ### 3.2 Common normalization before adapter
 

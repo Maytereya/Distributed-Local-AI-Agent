@@ -1,7 +1,7 @@
 # ТЗ: Free Talk Agent
 
-Статус: v0.3 (актуализировано по фактической реализации)  
-Дата: 2026-04-09  
+Статус: v0.4 (синхронизировано с кодом)  
+Дата: 2026-04-15  
 Контекст: новый режим для вкладки `AI - ассистент` в Gradio.
 
 ## 1. Цель
@@ -42,30 +42,39 @@
 
 Вывод: новый режим строим поверх `Services`, не дублируем API-логику из `agent_logic_2/llama_func_call.py`.
 
-## 3. Фактическая реализация (на 2026-04-09)
+## 3. Фактическая реализация (на 2026-04-15)
 
 1. Основной package FT:
-   - `src/localragagent/freetalk/agent.py`
-   - `src/localragagent/freetalk/runner.py`
-   - `src/localragagent/freetalk/tool_registry.py`
+   - `src/localragagent/freetalk/agent.py` — публичный фасад `FreeTalkAgent`
+   - `src/localragagent/freetalk/orchestrator.py` — основной runtime flow
+   - `src/localragagent/freetalk/routing_contract.py`
+   - `src/localragagent/freetalk/routing_prompting.py`
+   - `src/localragagent/freetalk/tool_planning.py`
+   - `src/localragagent/freetalk/adapter.py`
+   - `src/localragagent/freetalk/adapter_contracts.py`
    - `src/localragagent/freetalk/tool_dispatcher.py`
+   - `src/localragagent/freetalk/dialog_state.py`
+   - `src/localragagent/freetalk/followup_policy.py`
+   - `src/localragagent/freetalk/memory_policy.py`
    - `src/localragagent/freetalk/memory_redis.py`
    - `src/localragagent/freetalk/memory_persist.py`
-   - `src/localragagent/freetalk/prompts.py`
+   - `src/localragagent/freetalk/rendering.py`
    - `src/localragagent/freetalk/system_prompt.txt`
    - `src/localragagent/freetalk/config.ini`
 2. Порты FT:
    - `src/localragagent/ports/freetalk_services_port.py` (к `messengers_router.Services`)
    - `src/localragagent/ports/freetalk_web_search_port.py` (SearXNG)
    - `src/localragagent/ports/freetalk_llm_port.py` (LLM runtime)
-3. Введен `clarification-first` контур с клиническим роутером:
-   - `src/localragagent/freetalk/clinical_router.py`
+3. Введен `clarification-first` контур с явным routing-contract слоем:
+   - `src/localragagent/freetalk/routing_contract.py`
+   - `src/localragagent/freetalk/routing_prompting.py`
    - intent/confidence/entities/missing_slots/clarify_question/tool_plan
    - обязательный уточняющий шаг при недостатке данных
    - мягкий retry после пустого результата инструментов
-4. Добавлено контекстное doctor-followup поведение:
-   - хранение текущего врача в Redis meta
-   - корректная обработка запросов вида «о нем», «чем он занимается», коротких продолжений.
+4. Добавлено контекстное follow-up поведение:
+   - `dialog_state` + `session_entity_memory`
+   - doctor/service/address/result follow-up логика
+   - корректная обработка коротких продолжений и topic shift
 5. Введен source-tagging ответов:
    - внутренние `source_fragments` с тегами `clinic_data | general_knowledge | web_search`
    - запись тегов в trace/логи (`event=answer_source_trace`)
@@ -93,14 +102,20 @@
 ### 5.1 Модули
 
 1. `src/localragagent/freetalk/agent.py`  
+   Публичный фасад `FreeTalkAgent`.
+2. `src/localragagent/freetalk/orchestrator.py`  
    Оркестратор диалога: routing -> clarification -> tool loop -> финальный ответ.
-2. `src/localragagent/freetalk/clinical_router.py`  
-   Нормализация клинического решения (`intent/confidence/entities/missing_slots/tool_plan`).
-3. `src/localragagent/freetalk/tool_registry.py`  
+3. `src/localragagent/freetalk/routing_contract.py`  
+   Нормализация routing-решения (`intent/confidence/entities/missing_slots/tool_plan`).
+4. `src/localragagent/freetalk/routing_prompting.py`  
+   Router/verifier prompt builders.
+5. `src/localragagent/freetalk/tool_planning.py`  
    Эвристический fallback-планировщик и маршрутизация meili/web-сигналов.
-4. `src/localragagent/freetalk/memory_redis.py`  
+6. `src/localragagent/freetalk/adapter.py`  
+   Явный FT -> backend adapter для clinic domains.
+7. `src/localragagent/freetalk/memory_redis.py`  
    Оперативная память диалога в Redis.
-5. `src/localragagent/freetalk/memory_persist.py`  
+8. `src/localragagent/freetalk/memory_persist.py`  
    Компактизация и запись long-term памяти.
 
 ### 5.2 Интеграция в существующий flow
@@ -120,7 +135,7 @@
    - `missing_slots`, `clarify_question`, `tool_plan`.
 4. Если `missing_slots` не пустой или уверенность ниже порога:
    - задать уточняющий вопрос;
-   - сохранить pending-state в Redis;
+   - сохранить `clinical_dialog_state` в Redis;
    - завершить текущий ход.
 5. Если данных достаточно:
    - выполнить tool-plan (до `MAX_TOOL_STEPS`);
@@ -133,7 +148,7 @@
 
 ## 6. Tool-calling контракт (v1)
 
-Контракт решения clinical-router (JSON):
+Контракт решения routing-contract слоя (JSON):
 
 ```json
 {
@@ -279,7 +294,7 @@ v2 (опционально): индексировать summary в отдель�
 3. Contract:
    - если ответ не из клиники, обязательная метка в тексте.
 4. Router:
-   - тесты `clinical_router` на intent mapping/missing slots/clarification.
+   - тесты `routing_contract/routing_prompting` на intent mapping/missing slots/clarification.
 5. Eval профили:
    - `deterministic` (без внешней LLM, фиксированные `router_decision` из датасета):
      - `python3 tools/freetalk_quality_gate.py --profile deterministic`
@@ -298,7 +313,8 @@ v2 (опционально): индексировать summary в отдель�
 
 1. UI mode key: `Free-talk-Ai` (фиксируем).
 2. UI label для пользователя: `Свободное общение` (англ. `Free talk` можно оставить в скобках).
-3. v1: только Gradio-режим, без отдельного API endpoint.
+3. Доступен отдельный FT API endpoint для eval/debug:
+   - `/v1/freetalk/generate-once`.
 4. v1: handoff на оператора не требуется.
 5. v1: Chroma не используем; только запись summary в постоянную память.
 6. `main_index_info/news_info` поддерживаются как опциональные и управляются через `include_meili_tools`.

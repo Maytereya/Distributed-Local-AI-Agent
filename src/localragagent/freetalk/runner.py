@@ -7,8 +7,8 @@ import uuid
 from functools import lru_cache
 from typing import Any, AsyncGenerator
 
-from localragagent.ports.freetalk_services_port import LegacyServicesPort
-from localragagent.ports.freetalk_web_search_port import WebSearchPort, WebSearchSettings
+from ..ports.freetalk_services_port import LegacyServicesPort
+from ..ports.freetalk_web_search_port import WebSearchPort, WebSearchSettings
 
 from .agent import FreeTalkAgent
 from .config import load_config

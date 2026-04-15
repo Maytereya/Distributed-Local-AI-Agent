@@ -9,11 +9,12 @@ import re
 from typing import Any
 import uuid
 
-from localragagent.ports import freetalk_llm_port
-from localragagent.ports.freetalk_services_port import LegacyServicesPort
-from localragagent.ports.freetalk_web_search_port import WebSearchPort
+from ..ports import freetalk_llm_port
+from ..ports.freetalk_services_port import LegacyServicesPort
+from ..ports.freetalk_web_search_port import WebSearchPort
 
 from .adapter import FreeTalkAdapter
+from .appointment_policy import apply_appointment_precheck as _apply_appointment_precheck_helper
 from .candidate_policy import (
     candidate_confirmation_question as _candidate_confirmation_question_helper,
     candidate_confirmation_target as _candidate_confirmation_target_helper,
@@ -36,6 +37,7 @@ from .config import FreeTalkConfig
 from .contracts import AgentReply, DialogAct, DialogState, PostToolVerification, SessionContext
 from .dialog_state import (
     clear_dialog_state as _clear_dialog_state_helper,
+    clear_session_entity_memory_keys as _clear_session_entity_memory_keys_helper,
     copy_dialog_state as _copy_dialog_state_helper,
     dialog_state_from_payload as _dialog_state_from_payload_helper,
     dialog_state_is_active as _dialog_state_is_active_helper,
@@ -121,7 +123,6 @@ def _top_list(values: list[Any], limit: int = 5) -> list[Any]:
 _CTX_GUARD_STATE_KEY = "ctx_guard_state"
 _LAST_DOCTOR_NAME_KEY = "last_doctor_name"
 _CLINICAL_DIALOG_STATE_KEY = "clinical_dialog_state"
-_LEGACY_CLINICAL_PENDING_STATE_KEY = "clinical_pending_state"
 _CLINICAL_ENTITY_MEMORY_KEY = "clinical_entity_memory"
 _CTX_GUARD_NONE = ""
 _CTX_GUARD_AWAITING_IMMEDIATE = "awaiting_immediate"
@@ -859,9 +860,27 @@ class FreeTalkAgent:
     async def _save_session_entity_memory(self, session_id: str, entities: dict[str, Any]) -> None:
         await _save_session_entity_memory_helper(self.memory, session_id, entities)
 
+    async def _clear_session_entity_memory_keys(self, session_id: str, keys: list[str] | tuple[str, ...]) -> None:
+        await _clear_session_entity_memory_keys_helper(self.memory, session_id, keys)
+
     @staticmethod
     def _last_doctor_name_key() -> str:
         return _LAST_DOCTOR_NAME_KEY
+
+    def _appointment_precheck(
+        self,
+        *,
+        user_message: str,
+        dialog_state: DialogState,
+        memory_entities: dict[str, Any],
+    ):
+        contextual_entities = self._extract_contextual_entities(user_message)
+        return _apply_appointment_precheck_helper(
+            user_message=user_message,
+            dialog_state=dialog_state,
+            memory_entities=memory_entities,
+            contextual_entities=contextual_entities,
+        )
 
     @staticmethod
     def _new_session_id() -> str:

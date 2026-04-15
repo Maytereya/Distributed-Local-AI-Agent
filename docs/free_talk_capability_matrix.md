@@ -213,7 +213,7 @@ Legacy backend contract:
 
 ## 7. Следующие шаги по документации
 
-1. После согласования реестра данных привязать к нему `clinical_router.py` и `agent.py`.
-2. Явно описать adapter translation rules по доменам.
-3. Отдельно задокументировать city-support policy.
-4. После этого уже безопасно переписывать FT state machine под новый канон слотов и entities.
+1. Держать в синхроне [routing_contract.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/routing_contract.py), [orchestrator.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/orchestrator.py) и [adapter.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/adapter.py) с этим matrix.
+2. Поддерживать translation rules по доменам как отдельный source-of-truth для adapter layer.
+3. Отдельно держать актуальной city-support policy.
+4. Расширять matrix новыми capability только через playbook внедрения функций.

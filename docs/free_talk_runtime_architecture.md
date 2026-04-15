@@ -1,7 +1,7 @@
 # Архитектура runtime Free Talk
 
-Статус: draft v0.1  
-Дата: 2026-04-12
+Статус: v0.2 (синхронизировано с кодом)  
+Дата: 2026-04-15
 
 ## 1. Назначение
 
@@ -12,7 +12,7 @@
 - какие части уже выглядят как устойчивые слои;
 - какие части перегружены и требуют разукрупнения.
 
-Документ нужен как опора перед рефакторингом adapter layer и разрезанием перегруженного `agent.py`.
+Документ фиксирует уже сложившуюся структуру runtime после основного рефакторинга FT.
 
 Связанные документы:
 
@@ -30,20 +30,23 @@
 ```text
 UI / API
   -> runner.py
-  -> FreeTalkAgent in agent.py
-  -> clinical router + heuristic planning
-  -> state / memory merge
-  -> tool dispatch
+  -> FreeTalkAgent facade in agent.py
+  -> orchestrator.py
+  -> routing_contract.py + routing_prompting.py + tool_planning.py
+  -> state / follow-up / memory / grounding / medical policies
+  -> adapter.py
+  -> tool_dispatcher.py
   -> legacy services port / web search port
-  -> payload verification + rendering
+  -> payload normalization + rendering
   -> Redis / summary persistence
 ```
 
 Важно:
 
-- формального отдельного adapter layer в коде сейчас ещё нет;
-- request/response translation размазана по `agent.py`;
-- `freetalk_services_port.py` является gateway к legacy backend, а не полноценным адаптером.
+- отдельный `adapter layer` уже реализован в `adapter.py`;
+- `agent.py` больше не является центром всей доменной логики, а работает как публичный фасад;
+- source-of-truth для routing/prompting/planning уже живёт в целевых модулях;
+- `freetalk_services_port.py` остаётся gateway к legacy backend.
 
 ## 3. Основные слои
 
@@ -70,11 +73,15 @@ UI / API
 - обновить память;
 - сформировать финальный ответ.
 
-Текущий файл:
+Текущие файлы:
 
 - [agent.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/agent.py)
+- [orchestrator.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/orchestrator.py)
 
-Это главный центр логики FT.
+Роли:
+
+- `agent.py` — публичный фасад и совместимая оболочка `FreeTalkAgent`;
+- `orchestrator.py` — основной chat/runtime flow.
 
 ### 3.3 Routing / contract layer
 
@@ -86,9 +93,9 @@ UI / API
 
 Текущий файл:
 
-- [clinical_router.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/clinical_router.py)
+- [routing_contract.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/routing_contract.py)
 
-Фактически это не “поиск по клинике”, а routing-contract слой.
+Этот модуль является source-of-truth для router schema и канона `missing_slots/entities`.
 
 ### 3.4 Prompting layer
 
@@ -100,7 +107,7 @@ UI / API
 
 Текущий файл:
 
-- [prompts.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/prompts.py)
+- [routing_prompting.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/routing_prompting.py)
 
 ### 3.5 Tool planning / heuristics layer
 
@@ -113,9 +120,33 @@ UI / API
 
 Текущий файл:
 
-- [tool_registry.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/tool_registry.py)
+- [tool_planning.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/tool_planning.py)
 
-### 3.6 Tool execution layer
+### 3.6 Policy and state support layer
+
+Назначение:
+
+- canonical dialog state lifecycle;
+- follow-up / topic shift;
+- session memory reuse;
+- intent / candidate / catalog / grounding policy;
+- medical pre-tool и post-tool orchestration support.
+
+Текущие файлы:
+
+- [dialog_state.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/dialog_state.py)
+- [followup_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/followup_policy.py)
+- [memory_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/memory_policy.py)
+- [intent_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/intent_policy.py)
+- [candidate_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/candidate_policy.py)
+- [catalog_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/catalog_policy.py)
+- [routing_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/routing_policy.py)
+- [grounding_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/grounding_policy.py)
+- [medical_pretool_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/medical_pretool_policy.py)
+- [post_tool_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/post_tool_policy.py)
+- [medical_toolloop.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/medical_toolloop.py)
+
+### 3.7 Tool execution layer
 
 Назначение:
 
@@ -127,7 +158,7 @@ UI / API
 
 - [tool_dispatcher.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/tool_dispatcher.py)
 
-### 3.7 State / contracts layer
+### 3.8 State / contracts layer
 
 Назначение:
 
@@ -137,7 +168,7 @@ UI / API
 
 - [contracts.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/contracts.py)
 
-### 3.8 Memory layer
+### 3.9 Memory layer
 
 Назначение:
 
@@ -150,7 +181,7 @@ UI / API
 - [memory_redis.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/memory_redis.py)
 - [memory_persist.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/memory_persist.py)
 
-### 3.9 External boundaries
+### 3.10 Adapter and external boundaries
 
 Назначение:
 
@@ -158,6 +189,8 @@ UI / API
 
 Текущие файлы:
 
+- [adapter.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/adapter.py)
+- [adapter_contracts.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/adapter_contracts.py)
 - [freetalk_services_port.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/ports/freetalk_services_port.py)
 - [freetalk_web_search_port.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/ports/freetalk_web_search_port.py)
 - [freetalk_llm_port.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/ports/freetalk_llm_port.py)
@@ -166,12 +199,17 @@ UI / API
 
 | Модуль | Текущая роль | Размер / сложность | Оценка состояния | Комментарий |
 |---|---|---|---|---|
-| [runner.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/runner.py) | Entrypoint и wiring | Низкая | Устойчив | Можно оставить почти как есть |
-| [agent.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/agent.py) | Почти вся оркестрация FT | Очень высокая, ~3000 строк | Перегружен | Главный кандидат на разрезание |
-| [clinical_router.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/clinical_router.py) | Router contract / schema normalization | Средняя | Нормален, но название неточно | Логичнее как `routing_contract` |
-| [prompts.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/prompts.py) | Prompt builders | Средняя | Частично устарел | Требует согласования с новым каноном данных |
-| [tool_registry.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/tool_registry.py) | Heuristic routing signals | Средняя | Нормален, но доменно смешан | Позже лучше разнести planning и signal detection |
+| [runner.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/runner.py) | Entrypoint и wiring | Низкая | Устойчив | Тонкий слой интеграции |
+| [agent.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/agent.py) | Публичный фасад `FreeTalkAgent` | Средняя | Стабилизирован | Держит совместимый API и thin wrappers |
+| [orchestrator.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/orchestrator.py) | Основной runtime flow | Средняя | Ключевой core | Здесь живёт верхний chat-loop |
+| [routing_contract.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/routing_contract.py) | Router contract / schema normalization | Средняя | Устойчив | Source-of-truth для routing schema |
+| [routing_prompting.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/routing_prompting.py) | Prompt builders | Средняя | Устойчив | Согласован с текущим каноном |
+| [tool_planning.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/tool_planning.py) | Heuristic signals и fallback tool planning | Средняя | Устойчив | Разделён с routing contract |
+| [adapter.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/adapter.py) | FT -> backend translation и нормализация ответа | Средняя | Ключевой core | Legacy naming остаётся только здесь |
 | [tool_dispatcher.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/tool_dispatcher.py) | Dispatcher | Низкая | Устойчив | Хороший узкий модуль |
+| [dialog_state.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/dialog_state.py) | Dialog state lifecycle | Средняя | Устойчив | Канон session/dialog state |
+| [followup_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/followup_policy.py) | Follow-up / topic shift policy | Средняя | Устойчив | Детерминированная контекстная логика |
+| [memory_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/memory_policy.py) | Session entity memory rules | Средняя | Устойчив | Переиспользование сущностей между ходами |
 | [contracts.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/contracts.py) | Dataclasses | Низкая | Устойчив | Вероятно потребует расширения, не rewrite |
 | [memory_redis.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/memory_redis.py) | Session storage engine | Средняя | Устойчив | Нужна migration semantics, не rewrite engine |
 | [memory_persist.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/memory_persist.py) | Summary persistence | Низкая | Устойчив | Не первоочередной участок |
@@ -180,96 +218,68 @@ UI / API
 | [system_prompt.txt](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/system_prompt.txt) | Общий behavioral prompt | Низкая | Умеренно устарел | Не главный источник хаоса |
 | [freetalk_services_port.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/ports/freetalk_services_port.py) | Gateway к legacy services | Низкая | Устойчив | Сохраняется как boundary |
 
-## 5. Что именно перегружает `agent.py`
+## 5. Что ещё остаётся в `agent.py`
 
-Сейчас в одном файле одновременно живут:
+После разукрупнения `agent.py` больше не держит всю критическую логику FT, но в нём ещё остаются:
 
-1. orchestration chat-loop;
-2. context guard;
-3. dialog state lifecycle;
-4. merge старого и нового routing decision;
-5. follow-up detection;
-6. session memory reuse;
-7. entity grounding;
-8. partial request translation;
-9. post-tool verification;
-10. fallback rendering;
-11. source tagging;
-12. summary compaction orchestration.
+1. публичный класс `FreeTalkAgent`;
+2. совместимые wrapper-методы поверх `orchestrator.py` и policy-модулей;
+3. wiring зависимостей runtime;
+4. точка входа для тестовых monkeypatch и локального debug.
 
-Это делает control flow извилистым и затрудняет:
+Текущая проблема уже не в том, что `agent.py` архитектурно хаотичен, а в том, что он остаётся наиболее заметной публичной точкой входа и требует дисциплины: туда не должна возвращаться новая доменная логика.
 
-- локальную правку без регрессии;
-- изоляцию багов;
-- замену legacy alias logic на явный adapter layer;
-- чтение и ревью кода.
+## 6. Текущие архитектурные узкие места
 
-## 6. Текущие архитектурные проблемы
+### 6.1 Runtime разбит на много policy-модулей
 
-### 6.1 Нет явного adapter layer
+Это уже лучше, чем монолитный `agent.py`, но теперь важен контроль связности:
+
+- новый функционал нельзя добавлять напрямую в фасад;
+- новые policy должны подключаться через понятный orchestration flow;
+- документы должны оставаться синхронны с этой картой модулей.
+
+### 6.2 Legacy backend всё ещё задаёт часть naming constraints
 
 Следствие:
 
-- FT normalized entities не отделены от backend payload;
-- legacy-ключи протекают внутрь оркестратора;
-- request/response normalization размазана по runtime-коду.
+- `adapter.py` остаётся обязательным boundary;
+- legacy поля вроде `filial`, `number`, `branch` должны быть вытеснены из FT-слоя и жить только в adapter/backend boundary.
 
-### 6.2 Routing contract и orchestration слишком тесно связаны
+### 6.3 Основной риск сместился в качество state/merge поведения
 
-Следствие:
+Критичные сценарии теперь проверяются не архитектурой модулей, а качеством:
 
-- `clinical_router.py` формально валидирует schema;
-- но реальные merge policy и stale-state logic живут в `agent.py`;
-- semantic contract не выражен одним слоем.
-
-### 6.3 Memory policy смешана с domain logic
-
-Следствие:
-
-- правила “когда помнить врача”;
-- “когда подмешивать услугу”;
-- “когда сбрасывать старый state”
-
-сейчас не выделены в отдельный policy-модуль.
-
-### 6.4 Rendering смешан с orchestration
-
-Следствие:
-
-- fallback render и source tagging живут там же, где routing и state machine;
-- сложнее менять ответный слой независимо от tool orchestration.
-
-### 6.5 Имена некоторых модулей уже неточны
-
-Примеры:
-
-- `clinical_router.py` фактически описывает routing contract, а не собственно “поиск по клинике”;
-- `tool_registry.py` уже выполняет не только “реестр tools”, а heuristic planning/signals;
-- `agent.py` фактически является orchestrator runtime.
+- topic shift;
+- follow-up reuse;
+- clarify loops;
+- self-error correction;
+- unsupported city / partial data cases.
 
 ## 7. Что можно считать устойчивым уже сейчас
 
 Следующие решения выглядят правильной основой:
 
 1. отдельный `runner.py` как integration entrypoint;
-2. отдельный `ToolDispatcher`;
-3. отдельный Redis-backed memory store;
-4. отдельные ports к external systems;
-5. выделенная prompt-сборка отдельным модулем;
-6. dataclass-контракты для dialog state и replies.
+2. отдельный `orchestrator.py` как runtime core;
+3. отдельный `adapter.py` как boundary к legacy backend;
+4. отдельные routing/prompting/planning модули;
+5. отдельные policy-модули для state, memory, grounding и medical flow;
+6. отдельный Redis-backed memory store и ports к external systems.
 
-То есть проблема не в том, что FT “вообще без структуры”, а в том, что слишком много критической доменной логики не вынесено из `agent.py`.
+То есть FT уже имеет рабочую многослойную структуру. Основная задача теперь не разукрупнение как таковое, а поддержание чистых границ между слоями.
 
 ## 8. Минимальная целевая идея
 
-Целевое направление архитектуры:
+Текущее целевое направление архитектуры:
 
 - `runner` только собирает зависимости;
-- `orchestrator` только управляет стадиями диалога;
-- `adapter` только переводит FT data model <-> backend data model;
-- `routing contract` только валидирует router output и canonical names;
-- `memory policy` только решает reuse/reset behavior;
-- `rendering` только отвечает за final answer shaping.
+- `agent.py` только предоставляет публичный фасад;
+- `orchestrator` управляет стадиями диалога;
+- `adapter` переводит FT data model <-> backend data model;
+- `routing contract` валидирует router output и canonical names;
+- `memory/followup/policy` решают reuse/reset/grounding behavior;
+- `rendering` отвечает за final answer shaping.
 
 Это и есть путь к более straight-line implementation.
 

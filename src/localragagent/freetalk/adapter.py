@@ -58,6 +58,61 @@ _ADDRESS_ENTITY_KEYS: tuple[str, ...] = (
 )
 
 
+def _extract_appointment_schedule_context(payload: dict[str, Any]) -> tuple[list[dict[str, str]], list[str]]:
+    windows: list[dict[str, str]] = []
+    branch_options: list[str] = []
+    schedule = payload.get("schedule") if isinstance(payload, dict) else []
+    if not isinstance(schedule, list):
+        return windows, branch_options
+
+    seen_branches: set[str] = set()
+    for row in schedule:
+        if not isinstance(row, dict):
+            continue
+        doctor_name = str(row.get("fio") or "").strip()
+        row_schedule = row.get("schedule")
+        if not isinstance(row_schedule, dict):
+            continue
+        for branch_name, days in row_schedule.items():
+            branch = str(branch_name or "").strip()
+            if branch and branch not in seen_branches:
+                seen_branches.add(branch)
+                branch_options.append(branch)
+            if not isinstance(days, list):
+                continue
+            for day in days:
+                if not isinstance(day, dict):
+                    continue
+                date_value = str(day.get("date") or "").strip()
+                day_slots = day.get("slots")
+                if isinstance(day_slots, list):
+                    for slot in day_slots:
+                        slot_value = str(slot or "").strip()
+                        if not (date_value and slot_value):
+                            continue
+                        windows.append(
+                            {
+                                "doctor_name": doctor_name,
+                                "branch_name": branch,
+                                "date": date_value,
+                                "time": slot_value[:5] if len(slot_value) >= 5 else slot_value,
+                            }
+                        )
+                start = str(day.get("start") or "").strip()
+                end = str(day.get("end") or "").strip()
+                if not day_slots and date_value and (start or end):
+                    windows.append(
+                        {
+                            "doctor_name": doctor_name,
+                            "branch_name": branch,
+                            "date": date_value,
+                            "time": start[:5] if start else "",
+                            "time_to": end[:5] if end else "",
+                        }
+                    )
+    return windows[:40], branch_options
+
+
 def _first_present(entities: dict[str, Any], keys: tuple[str, ...]) -> str:
     for key in keys:
         value = str(entities.get(key) or "").strip()
@@ -315,6 +370,18 @@ def _normalize_address_entities_used(
     return out
 
 
+def _extract_address_branch_options(payload: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in (payload.get("addresses") or []):
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
 class FreeTalkAdapter:
     """Translate FT-facing entities to legacy backend payloads and back."""
 
@@ -485,6 +552,12 @@ class FreeTalkAdapter:
         normalized_entities_used = _normalize_doctor_entities_used(tool_name, out, prepared_call)
         if normalized_entities_used:
             out["entities_used_ft"] = normalized_entities_used
+        if tool_name == "doctors_schedule_week":
+            appointment_windows, branch_options = _extract_appointment_schedule_context(out)
+            if appointment_windows:
+                out["appointment_windows"] = appointment_windows
+            if branch_options:
+                out["appointment_branch_options"] = branch_options
         adapter_meta = dict(out.get("adapter_meta") or {})
         adapter_meta.update(
             {
@@ -532,6 +605,9 @@ class FreeTalkAdapter:
         normalized_entities_used = _normalize_address_entities_used(out, prepared_call)
         if normalized_entities_used:
             out["entities_used_ft"] = normalized_entities_used
+        branch_options = _extract_address_branch_options(out)
+        if branch_options:
+            out["appointment_branch_options"] = branch_options
         adapter_meta = dict(out.get("adapter_meta") or {})
         adapter_meta.update(
             {

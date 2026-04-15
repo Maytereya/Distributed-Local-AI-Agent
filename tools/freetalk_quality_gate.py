@@ -19,7 +19,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from localragagent.freetalk.agent import FreeTalkAgent
-from localragagent.freetalk.clinical_router import parse_clinical_decision
+from localragagent.freetalk.routing_contract import parse_clinical_decision
 from localragagent.freetalk.config import FreeTalkConfig
 from localragagent.freetalk.contracts import DialogState, SessionContext
 from localragagent.ports import freetalk_llm_port
