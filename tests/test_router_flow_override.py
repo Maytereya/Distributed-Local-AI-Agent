@@ -7,9 +7,13 @@ from messengers_router.flow_policy import (
     hydrate_appointment_context_from_schedule,
     quick_fill_entities_from_text,
 )
-from messengers_router.mess_types import Evidence, Plan, PlanStep, SessionState
+from messengers_router.mess_types import AppointmentPhase, DialogState, Evidence, Plan, PlanStep, SessionState
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision
+from messengers_router.appointment_flow_guard import (
+    is_new_topic_while_confirm_pending,
+    reset_appointment_runtime_state,
+)
 from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
 from messengers_router.policies import (
     quick_fill_core_entities,
@@ -71,6 +75,31 @@ def test_appointment_flow_override_blocks_new_topics():
     assert _should_keep_appointment_flow_override("Как можно сдать анализы") is False
     assert _should_keep_appointment_flow_override("результаты анализов") is False
     assert _should_keep_appointment_flow_override("покажи расписание Казакова") is False
+
+
+def test_is_new_topic_while_confirm_pending_detects_news_intent():
+    assert is_new_topic_while_confirm_pending("какие скидки?") is True
+
+
+def test_reset_appointment_runtime_state_clears_active_dialog_state():
+    state = SessionState(
+        session_id="appt-dialog-reset",
+        last_entities={"appointment_flow_active": True, "doctor_name": "Трубин Алексей Юрьевич"},
+        dialog=DialogState(
+            label="APPOINTMENT",
+            phase=AppointmentPhase.CONFIRM,
+            entities={"doctor_name": "Трубин Алексей Юрьевич"},
+            missing_slots=["patient_name"],
+            confidence=0.82,
+        ),
+    )
+
+    reset_appointment_runtime_state(state)
+
+    assert state.last_entities == {"doctor_name": "Трубин Алексей Юрьевич"}
+    assert state.dialog.label == "OTHER"
+    assert state.dialog.phase == ""
+    assert state.dialog.entities == {}
 
 
 def test_apply_appointment_continuity_overrides_prioritizes_datetime():

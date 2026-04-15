@@ -12,7 +12,7 @@ from typing import Any
 from .city import match_city
 from .flow_policy import looks_like_patient_fio
 from .memory import MemoryStore
-from .mess_types import ResponseEnvelope, SessionState
+from .mess_types import AppointmentPhase, DialogState, ResponseEnvelope, SessionState
 from .policies import (
     APPOINTMENT_CONFIRM_NO,
     APPOINTMENT_CONFIRM_YES,
@@ -101,9 +101,41 @@ _APPOINTMENT_FULL_CONTEXT_KEYS: tuple[str, ...] = (
 )
 
 
+def _is_topic_switch_intent(text: str) -> bool:
+    """Определяет, что реплика уводит из сценария записи в другую тему.
+
+    :param text: исходный текст пользователя
+    :return: True, если сработал любой intent-детектор нового топика
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+
+    low = raw.lower()
+    return any(
+        (
+            detect_test_result_intent(low),
+            detect_test_assist_intent(low),
+            detect_prepare_intent(low),
+            detect_price_intent(low),
+            detect_address_intent(low),
+            detect_schedule_intent(low),
+            detect_doctor_info_intent(low),
+            detect_doc_request_intent(low),
+            detect_nonbookable_walkin_intent(raw),
+            detect_news_intent(low),
+        )
+    )
+
+
 def reset_appointment_runtime_state(state: SessionState) -> None:
     for key in _APPOINTMENT_RUNTIME_KEYS:
         state.last_entities.pop(key, None)
+    dialog: DialogState = state.dialog
+    if dialog.is_active() and (
+        dialog.label == "APPOINTMENT" or AppointmentPhase.is_active(dialog.phase)
+    ):
+        dialog.clear()
 
 
 def clear_appointment_flow_context(state: SessionState, memory: MemoryStore) -> None:
@@ -122,18 +154,7 @@ def should_keep_appointment_flow_override(user_text: str) -> bool:
     if not text:
         return False
 
-    low = text.lower()
-    if (
-        detect_test_result_intent(low)
-        or detect_test_assist_intent(low)
-        or detect_prepare_intent(low)
-        or detect_price_intent(low)
-        or detect_address_intent(low)
-        or detect_doc_request_intent(low)
-        or detect_nonbookable_walkin_intent(text)
-        or detect_schedule_intent(low)
-        or detect_doctor_info_intent(low)
-    ):
+    if _is_topic_switch_intent(text):
         return False
 
     reply_kind = contextual_reply_kind(text)
@@ -159,18 +180,7 @@ def is_new_topic_while_confirm_pending(user_text: str) -> bool:
     if contextual_reply_kind(text) in {"yes", "no"}:
         return False
 
-    low = text.lower()
-    if (
-        detect_prepare_intent(low)
-        or detect_price_intent(low)
-        or detect_test_assist_intent(low)
-        or detect_test_result_intent(low)
-        or detect_address_intent(low)
-        or detect_schedule_intent(low)
-        or detect_doctor_info_intent(low)
-        or detect_doc_request_intent(low)
-        or detect_nonbookable_walkin_intent(text)
-    ):
+    if _is_topic_switch_intent(text):
         return True
 
     return ("?" in text) and (len(text.split()) >= 4)
@@ -204,15 +214,7 @@ def is_likely_topic_switch_from_appointment(user_text: str) -> bool:
         return False
     if is_appointment_soft_pause_request(text):
         return False
-    low = text.lower()
-    if (
-        detect_test_result_intent(low)
-        or detect_test_assist_intent(low)
-        or detect_prepare_intent(low)
-        or detect_doc_request_intent(low)
-        or detect_price_intent(low)
-        or detect_news_intent(low)
-    ):
+    if _is_topic_switch_intent(text):
         return True
     return ("?" in text) and (len(text.split()) >= 4)
 
