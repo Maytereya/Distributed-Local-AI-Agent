@@ -10,7 +10,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
-from localragagent.infrastructure.memory_keys import (
+from ..infrastructure.memory_keys import (
     free_talk_meta_key,
     free_talk_summary_key,
     free_talk_turns_key,

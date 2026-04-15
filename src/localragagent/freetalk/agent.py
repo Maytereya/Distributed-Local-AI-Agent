@@ -9,9 +9,9 @@ import re
 from typing import Any
 import uuid
 
-from localragagent.ports import freetalk_llm_port
-from localragagent.ports.freetalk_services_port import LegacyServicesPort
-from localragagent.ports.freetalk_web_search_port import WebSearchPort
+from ..ports import freetalk_llm_port
+from ..ports.freetalk_services_port import LegacyServicesPort
+from ..ports.freetalk_web_search_port import WebSearchPort
 
 from .adapter import FreeTalkAdapter
 from .candidate_policy import (
@@ -121,7 +121,6 @@ def _top_list(values: list[Any], limit: int = 5) -> list[Any]:
 _CTX_GUARD_STATE_KEY = "ctx_guard_state"
 _LAST_DOCTOR_NAME_KEY = "last_doctor_name"
 _CLINICAL_DIALOG_STATE_KEY = "clinical_dialog_state"
-_LEGACY_CLINICAL_PENDING_STATE_KEY = "clinical_pending_state"
 _CLINICAL_ENTITY_MEMORY_KEY = "clinical_entity_memory"
 _CTX_GUARD_NONE = ""
 _CTX_GUARD_AWAITING_IMMEDIATE = "awaiting_immediate"

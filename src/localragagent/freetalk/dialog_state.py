@@ -11,7 +11,6 @@ from .contracts import DialogState
 
 
 CLINICAL_DIALOG_STATE_KEY = "clinical_dialog_state"
-LEGACY_CLINICAL_PENDING_STATE_KEY = "clinical_pending_state"
 CLINICAL_ENTITY_MEMORY_KEY = "clinical_entity_memory"
 SESSION_MEMORY_ENTITY_KEYS: tuple[str, ...] = (
     "doctor_name",
@@ -190,33 +189,7 @@ async def load_dialog_state(memory: Any, session_id: str) -> DialogState:
         state = dialog_state_from_payload(parsed if isinstance(parsed, dict) else {})
         if dialog_state_is_active(state):
             return state
-
-    legacy_raw = await memory.get_meta_str(session_id, LEGACY_CLINICAL_PENDING_STATE_KEY, "")
-    legacy_text = str(legacy_raw or "").strip()
-    if not legacy_text:
-        return DialogState()
-    try:
-        legacy = json.loads(legacy_text)
-    except Exception:
-        legacy = {}
-    if not isinstance(legacy, dict):
-        return DialogState()
-    return DialogState(
-        route="clinical",
-        intent=str(legacy.get("intent") or "").strip() or "unknown",
-        entities={},
-        candidate_entities={},
-        confirmation_target="",
-        missing_slots=[str(x).strip() for x in (legacy.get("missing_slots") or []) if str(x).strip()],
-        clarify_type="",
-        tool_plan=[],
-        response_policy="tool_only",
-        confidence=0.0,
-        clarify_count=max(0, int(legacy.get("attempts") or 0)),
-        last_tool="",
-        phase=str(legacy.get("phase") or "").strip(),
-        open_question=str(legacy.get("clarify_question") or "").strip(),
-    )
+    return DialogState()
 
 
 async def save_dialog_state(memory: Any, session_id: str, dialog_state: DialogState) -> None:
@@ -228,14 +201,12 @@ async def save_dialog_state(memory: Any, session_id: str, dialog_state: DialogSt
     except Exception:
         encoded = "{}"
     await memory.set_meta_str(session_id, CLINICAL_DIALOG_STATE_KEY, encoded)
-    await memory.set_meta_str(session_id, LEGACY_CLINICAL_PENDING_STATE_KEY, "")
 
 
 async def clear_dialog_state(memory: Any, session_id: str) -> None:
     if memory is None:
         return
     await memory.set_meta_str(session_id, CLINICAL_DIALOG_STATE_KEY, "")
-    await memory.set_meta_str(session_id, LEGACY_CLINICAL_PENDING_STATE_KEY, "")
 
 
 async def load_session_entity_memory(memory: Any, session_id: str) -> dict[str, Any]:

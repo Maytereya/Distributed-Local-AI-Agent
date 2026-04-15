@@ -1,17 +1,18 @@
 # План рефакторинга Free Talk
 
-Статус: draft v0.1  
-Дата: 2026-04-12
+Статус: v0.2 (синхронизировано с кодом)  
+Дата: 2026-04-15
 
 ## 1. Назначение
 
-Этот документ фиксирует целевой план рефакторинга FT перед внедрением полноценного adapter layer.
+Этот документ фиксирует целевой план рефакторинга FT и его фактический статус после основной волны изменений.
 
 Главная идея:
 
 - не встраивать новый adapter в уже перегруженный `agent.py`;
 - сначала сделать структуру FT более прямолинейной;
-- затем переносить доменную логику в новые модули поэтапно и совместимо.
+- затем переносить доменную логику в новые модули поэтапно;
+- legacy оставлять только на boundary к backend.
 
 Связанные документы:
 
@@ -68,13 +69,15 @@ LLM не должна:
 - вводить legacy aliases;
 - сама решать backend mapping.
 
-### 4.3 Compatibility first
+### 4.3 Boundary compatibility only
 
-Каждый этап рефакторинга должен быть:
+На рефакторинге сохраняются только необходимые внешние границы:
 
-- обратносуместимым для FT API;
-- совместимым с текущим backend contract;
-- покрытым regression-тестами.
+- FT API / runner / Gradio integration;
+- backend contract на стороне `messengers_router/services.py`;
+- regression coverage.
+
+Внутренние FT legacy names и переходные мосты не считаются обязательными к сохранению.
 
 ## 5. Целевая структура модулей
 
@@ -115,28 +118,29 @@ src/localragagent/freetalk/
 | `adapter_contracts.py` | Adapter request/response dataclasses |
 | `rendering.py` | Fallback render, source fragments, final shaping |
 
-## 6. Migration map: current -> target
+## 6. Реальная карта модулей после миграции
 
-| Текущий файл | Что в нём сейчас | Куда должно уехать |
+| Область | Текущий source-of-truth | Состояние |
 |---|---|---|
-| `agent.py` | orchestration chat-loop | `orchestrator.py` |
-| `agent.py` | dialog state lifecycle | `dialog_state.py` |
-| `agent.py` | follow-up detection | `followup_policy.py` |
-| `agent.py` | session memory enrichment | `memory_policy.py` |
-| `agent.py` | request/response translation | `adapter.py` |
-| `agent.py` | fallback render / source tagging | `rendering.py` |
-| `clinical_router.py` | routing schema | `routing_contract.py` |
-| `prompts.py` | router/verifier prompting | `routing_prompting.py` |
-| `tool_registry.py` | heuristic tool planning | `tool_planning.py` |
+| Public FT API facade | `agent.py` | Активен |
+| Top-level orchestration | `orchestrator.py` | Активен |
+| Dialog state lifecycle | `dialog_state.py` | Активен |
+| Follow-up / topic shift | `followup_policy.py` | Активен |
+| Session memory reuse | `memory_policy.py` | Активен |
+| Routing schema | `routing_contract.py` | Активен |
+| Router / verifier prompting | `routing_prompting.py` | Активен |
+| Heuristic tool planning | `tool_planning.py` | Активен |
+| FT -> backend translation | `adapter.py` | Активен |
+| Fallback render / source shaping | `rendering.py` | Активен |
 
 Важно:
 
-- `agent.py` и `clinical_router.py` могут временно остаться как compatibility facades;
-- сначала переносим код, потом сокращаем старые файлы.
+- целевые модули уже стали реальным source-of-truth;
+- transitional file names должны отсутствовать в runtime-импортах и документации.
 
 ## 7. Порядок реализации
 
-### Этап 0. Документирование
+### Этап 0. Документирование [выполнено]
 
 Артефакты:
 
@@ -151,9 +155,9 @@ src/localragagent/freetalk/
 
 - зафиксировать термины и границы до кода.
 
-### Этап 1. Разукрупнение без изменения поведения
+### Этап 1. Разукрупнение без изменения поведения [выполнено]
 
-Что делаем:
+Что сделано:
 
 1. создаём новые модули-заготовки;
 2. переносим pure/helper logic из `agent.py` без смены поведения;
@@ -171,9 +175,9 @@ src/localragagent/freetalk/
 - tests green;
 - поведение FT не меняется функционально.
 
-### Этап 2. Введение adapter contracts
+### Этап 2. Введение adapter contracts [выполнено]
 
-Что делаем:
+Что сделано:
 
 1. создаём `adapter_contracts.py`;
 2. вводим FT-facing request/response структуры;
@@ -191,9 +195,9 @@ src/localragagent/freetalk/
   - `result_analysis_code -> filial`
   - `result_analysis_number -> number`
 
-### Этап 3. Реализация adapter layer
+### Этап 3. Реализация adapter layer [выполнено для clinic domains]
 
-Что делаем:
+Что сделано:
 
 1. создаём `adapter.py`;
 2. переносим domain-specific translation из `agent.py`;
@@ -206,23 +210,23 @@ src/localragagent/freetalk/
 3. `doctor_schedule`
 4. `service / price / prepare`
 5. `address`
-6. `local indexes`
+6. `local indexes` как отдельный source-mode сценарий без clinic-adapter translation
 
-### Этап 4. Чистка router contract и prompts
+### Этап 4. Чистка router contract и prompts [выполнено]
 
-Что делаем:
+Что сделано:
 
 1. обновляем `missing_slots` под новый канон;
 2. убираем устаревшие slot names из prompt schema;
 3. синхронизируем router/verifier с adapter contracts.
 
-Критерий:
+Результат:
 
-- router больше не генерирует старые поля вроде `doctor_name_or_specialty`, `result_filial`, `result_number`.
+- router больше не генерирует старые поля FT-слоя вроде `doctor_name_or_specialty`, `result_filial`, `result_number`.
 
-### Этап 5. Упрощение orchestration
+### Этап 5. Упрощение orchestration [выполнено]
 
-Что делаем:
+Что сделано:
 
 1. orchestration использует только новые policy/adapters;
 2. удаляем ad hoc-translation из `agent.py`;
@@ -234,15 +238,13 @@ src/localragagent/freetalk/
    - normalize response
    - render
 
-### Этап 6. Legacy cleanup и rename
+### Этап 6. Legacy cleanup и rename [выполнено]
 
-Что делаем:
+Что сделано:
 
-1. уменьшаем `agent.py` до thin compatibility shell или переименовываем в `orchestrator.py`;
-2. сокращаем `clinical_router.py` до compatibility import или переименовываем в `routing_contract.py`;
-3. убираем дублирующие legacy helpers.
-
-Этот этап должен быть последним, а не первым.
+1. `agent.py` сокращён до публичного фасада над `orchestrator.py` и policy-модулями;
+2. source-of-truth перенесён в `routing_contract.py`, `routing_prompting.py`, `tool_planning.py`;
+3. transitional helpers и legacy bridges в FT-слое удалены или сведены к backend boundary.
 
 ## 8. Совместимость на переходный период
 
@@ -259,8 +261,8 @@ src/localragagent/freetalk/
 Нужно сохранить:
 
 - текущий storage engine;
-- backward-compatible чтение старого `clinical_dialog_state`;
-- возможность мигрировать session entity memory без потери текущих сессий.
+- канонический `clinical_dialog_state`;
+- корректную работу `session_entity_memory`.
 
 ### 8.3 Backend compatibility
 
@@ -296,6 +298,8 @@ src/localragagent/freetalk/
 3. prompts используют новый канон слотов и сущностей;
 4. Redis-слой хранит новый state без хаоса legacy names;
 5. remote eval ловит содержательные ошибки, а не архитектурные сбои state/merge.
+
+По состоянию на 2026-04-15 критерии 1-4 закрыты. Основной оставшийся акцент — качество реальных multi-turn диалогов и regression/eval coverage.
 
 ## 11. Практическое правило для реализации
 
