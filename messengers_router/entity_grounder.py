@@ -18,6 +18,7 @@ from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
 from .policies import extract_service_phrase, has_datetime_signal, service_name_conflicts_with_doctor
+from .russian_nlu import normalize_ru
 from .services import Services, resolve_price_service_name_from_catalog
 
 _CONTROL_KEYS = {
@@ -154,7 +155,7 @@ def _sanitize_raw_doctor_name(raw: str, flags: set[str], entities: dict[str, Any
     value = str(raw or "").strip()
     if not value:
         return ""
-    norm = " ".join(value.lower().replace("ё", "е").split())
+    norm = " ".join(normalize_ru(value).split())
     tokens = [t for t in norm.split(" ") if t]
     if len(tokens) == 1 and tokens[0] in _DOCTOR_NOISE_TOKENS:
         entities.pop("doctor_name", None)

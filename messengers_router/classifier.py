@@ -19,6 +19,7 @@ from typing import Any, cast
 from .llm_mode_policy import RuntimeOptions
 from .llm_runtime import generate_text
 from .doctor_name_port import resolve_cached_doctor_name_candidate
+from .russian_nlu import normalize_ru
 from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision, ContextAction
 from .prompt_contracts import sanitize_classifier_json
 from .prompt_registry import load_prompt_text
@@ -324,12 +325,12 @@ def _looks_like_specialty_or_service_token(token: str, text: str = "") -> bool:
     :param text: исходный текст пользователя
     :return: True, если токен похож на специальность/услугу, а не на фамилию
     """
-    norm = str(token or "").strip().lower().replace("ё", "е")
+    norm = normalize_ru(token)
     if not norm:
         return False
     if norm in _SPECIALTY_LIKE_NAME_TOKENS:
         return True
-    spec = str(extract_specialty(text or "") or "").strip().lower().replace("ё", "е")
+    spec = normalize_ru(extract_specialty(text or ""))
     if spec and norm == spec:
         return True
     return False
@@ -375,14 +376,14 @@ def _doctor_followup_name_in_context(text: str, last_entities: dict[str, Any]) -
     ):
         return None
 
-    low = s.lower().replace("ё", "е")
+    low = normalize_ru(s)
     if re.search(r"\b(результат\w*|анализ\w*|год\b|номер\b|код\b|филиал\w*)\b", low):
         return None
 
     tokens = re.findall(r"[A-Za-zА-Яа-яЁё0-9\-]+", s)
     if not tokens or len(tokens) > 4:
         return None
-    core_tokens = [t.lower().replace("ё", "е") for t in tokens if t.lower().replace("ё", "е") not in _DOCTOR_FOLLOWUP_FILLERS]
+    core_tokens = [normalize_ru(t) for t in tokens if normalize_ru(t) not in _DOCTOR_FOLLOWUP_FILLERS]
     if not core_tokens:
         return None
 
@@ -447,7 +448,7 @@ def _looks_like_patient_name_only(text: str) -> bool:
         return False
     if has_datetime_signal(s):
         return False
-    tokens = [t.lower().replace("ё", "е") for t in re.findall(r"[А-Яа-яЁёA-Za-z\-]+", s) if t]
+    tokens = [normalize_ru(t) for t in re.findall(r"[А-Яа-яЁёA-Za-z\-]+", s) if t]
     if len(tokens) < 2:
         return False
     if any(t in _PATIENT_NAME_STOPWORDS for t in tokens):
@@ -707,14 +708,14 @@ def _derive_context_action(
     if label == "APPOINTMENT" and _CANCEL_FLOW_RE.search(text or ""):
         return cast(ContextAction, "cancel_flow")
 
-    prev_doctor = str(prev.get("doctor_name") or "").strip().lower().replace("ё", "е")
-    new_doctor = str(entities.get("doctor_name") or "").strip().lower().replace("ё", "е")
+    prev_doctor = normalize_ru(prev.get("doctor_name"))
+    new_doctor = normalize_ru(entities.get("doctor_name"))
     if new_doctor and prev_doctor and new_doctor != prev_doctor:
         return cast(ContextAction, "overwrite_doctor")
     extracted = resolve_cached_doctor_name_candidate(text, prefer_schedule=True)
     if extracted and _INVALID_DOCTOR_TOKEN_RE.search(str(extracted)):
         extracted = None
-    extracted_norm = str(extracted or "").strip().lower().replace("ё", "е")
+    extracted_norm = normalize_ru(extracted)
     if (
         extracted_norm
         and prev_doctor
