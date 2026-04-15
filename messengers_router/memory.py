@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .mess_types import SessionState
+from .mess_types import DialogState, SessionState
 
 
 @dataclass
@@ -277,6 +277,52 @@ class MemoryStore:
         old.update(cleaned)
         if label:
             old["_last_label"] = label
+
+    # ---------- dialog state helpers ----------
+
+    def save_dialog_state(self, state: SessionState) -> None:
+        """Snapshot ``state.dialog`` into ``state.last_entities["_dialog_state"]``.
+
+        Useful during the migration period when some code still reads dialog
+        state from ``last_entities``.  Calling this after updating ``state.dialog``
+        keeps the two representations in sync.
+        """
+        ds = state.dialog
+        state.last_entities["_dialog_state"] = {
+            "label": ds.label,
+            "phase": ds.phase,
+            "entities": dict(ds.entities),
+            "candidate_entities": dict(ds.candidate_entities),
+            "missing_slots": list(ds.missing_slots),
+            "clarify_count": ds.clarify_count,
+            "open_question": ds.open_question,
+            "confidence": ds.confidence,
+        }
+
+    def load_dialog_state(self, state: SessionState) -> DialogState:
+        """Restore ``state.dialog`` from ``state.last_entities["_dialog_state"]``.
+
+        If the key is absent or malformed, ``state.dialog`` is left untouched
+        and the current (possibly default) ``DialogState`` is returned.
+        """
+        raw = state.last_entities.get("_dialog_state")
+        if not isinstance(raw, dict):
+            return state.dialog
+        try:
+            ds = DialogState(
+                label=str(raw.get("label") or "OTHER"),
+                phase=str(raw.get("phase") or ""),
+                entities=dict(raw.get("entities") or {}),
+                candidate_entities=dict(raw.get("candidate_entities") or {}),
+                missing_slots=list(raw.get("missing_slots") or []),
+                clarify_count=int(raw.get("clarify_count") or 0),
+                open_question=str(raw.get("open_question") or ""),
+                confidence=float(raw.get("confidence") or 0.0),
+            )
+        except Exception:
+            return state.dialog
+        state.dialog = ds
+        return ds
 
     # ---------- housekeeping ----------
 
