@@ -37,6 +37,7 @@ from .config import FreeTalkConfig
 from .contracts import AgentReply, DialogAct, DialogState, PostToolVerification, SessionContext
 from .dialog_state import (
     clear_dialog_state as _clear_dialog_state_helper,
+    clear_session_entity_memory_keys as _clear_session_entity_memory_keys_helper,
     copy_dialog_state as _copy_dialog_state_helper,
     dialog_state_from_payload as _dialog_state_from_payload_helper,
     dialog_state_is_active as _dialog_state_is_active_helper,
@@ -858,6 +859,9 @@ class FreeTalkAgent:
 
     async def _save_session_entity_memory(self, session_id: str, entities: dict[str, Any]) -> None:
         await _save_session_entity_memory_helper(self.memory, session_id, entities)
+
+    async def _clear_session_entity_memory_keys(self, session_id: str, keys: list[str] | tuple[str, ...]) -> None:
+        await _clear_session_entity_memory_keys_helper(self.memory, session_id, keys)
 
     @staticmethod
     def _last_doctor_name_key() -> str:

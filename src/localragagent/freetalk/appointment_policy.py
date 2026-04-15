@@ -22,6 +22,10 @@ _TOPIC_SWITCH_RE = re.compile(
     r"новост\w*|документ\w*|интернет|поищи|найди|веб)\b",
     re.I,
 )
+_SCHEDULE_PREVIEW_RE = re.compile(
+    r"\b(расписан\w*|график|свободн\w*\s+(?:окн\w*|слот\w*)|слот\w*|окн\w*)\b",
+    re.I,
+)
 _YES_RE = re.compile(r"^\s*(да|yes|y)\s*[.!?]?\s*$", re.I)
 _NO_RE = re.compile(r"^\s*(нет|не|no|n)\s*[.!?]?\s*$", re.I)
 _FIO_RE = re.compile(
@@ -44,6 +48,19 @@ _MONTHS_RU = {
 }
 
 APPOINTMENT_CANCEL_GUARD_TEXT = "Прекратить запись? Ответьте: да или нет."
+APPOINTMENT_MEMORY_CLEAR_KEYS: tuple[str, ...] = (
+    "appointment_action",
+    "appointment_windows",
+    "appointment_branch_options",
+    "patient_name",
+    "date",
+    "date_from",
+    "date_to",
+    "time",
+    "time_from",
+    "time_to",
+    "branch_name",
+)
 
 
 @dataclass(slots=True)
@@ -52,6 +69,8 @@ class AppointmentPrecheckResult:
     reply_text: str = ""
     next_state: DialogState | None = None
     clear_state: bool = False
+    reset_session: bool = False
+    clear_memory_keys: tuple[str, ...] = ()
     save_memory_entities: dict[str, Any] = field(default_factory=dict)
 
 
@@ -105,6 +124,10 @@ def looks_like_topic_switch_during_appointment(text: str) -> bool:
     if looks_like_appointment_intent_message(probe):
         return False
     return bool(_TOPIC_SWITCH_RE.search(probe))
+
+
+def looks_like_schedule_preview_request(text: str) -> bool:
+    return bool(_SCHEDULE_PREVIEW_RE.search(str(text or "").strip()))
 
 
 def has_schedule_context(memory_entities: dict[str, Any]) -> bool:
@@ -359,6 +382,7 @@ def _apply_active_appointment_turn(
                 handled=True,
                 reply_text="Отменено. Могу быть чем-то еще полезен?",
                 clear_state=True,
+                clear_memory_keys=APPOINTMENT_MEMORY_CLEAR_KEYS,
             )
         if transition == "no":
             resume_text = appointment_resume_question(dialog_state, entities)
@@ -389,6 +413,8 @@ def _apply_active_appointment_turn(
                 handled=True,
                 reply_text=appointment_handoff_text(entities),
                 clear_state=True,
+                reset_session=True,
+                clear_memory_keys=APPOINTMENT_MEMORY_CLEAR_KEYS,
             )
         if transition == "no":
             clarify_text = "Что нужно изменить в записи: дату, время, филиал или ФИО?"
@@ -413,6 +439,22 @@ def _apply_active_appointment_turn(
                 open_question=str(dialog_state.open_question or appointment_confirmation_text(entities)),
             ),
         )
+
+    if looks_like_schedule_preview_request(user_message):
+        preview_text = render_cached_appointment_schedule_preview(entities)
+        if preview_text:
+            resume_text = appointment_resume_question(dialog_state, entities)
+            next_state = _build_state(
+                entities=entities,
+                missing_slots=list(dialog_state.missing_slots or appointment_missing_slots(entities)),
+                phase="appointment_collecting",
+                open_question=resume_text,
+            )
+            return AppointmentPrecheckResult(
+                handled=True,
+                reply_text=preview_text,
+                next_state=next_state,
+            )
 
     if _should_request_cancel_guard(user_message, contextual_entities, entities):
         resume_text = appointment_resume_question(dialog_state, entities)
@@ -550,3 +592,43 @@ def _format_human_date(value: str) -> str:
         if month:
             return f"{day_num} {month}"
     return raw
+
+
+def render_cached_appointment_schedule_preview(entities: dict[str, Any]) -> str:
+    windows = entities.get("appointment_windows")
+    if not isinstance(windows, list) or not windows:
+        return ""
+    doctor_name = str(entities.get("doctor_name") or "").strip() or str(windows[0].get("doctor_name") or "").strip()
+    grouped: dict[str, dict[str, list[str]]] = {}
+    for item in windows:
+        if not isinstance(item, dict):
+            continue
+        branch_name = str(item.get("branch_name") or item.get("branch") or "").strip() or "Филиал"
+        date_value = str(item.get("date") or "").strip()
+        time_value = str(item.get("time") or "").strip()
+        if not (date_value and time_value):
+            continue
+        branch_bucket = grouped.setdefault(branch_name, {})
+        branch_bucket.setdefault(date_value, [])
+        if time_value not in branch_bucket[date_value]:
+            branch_bucket[date_value].append(time_value)
+    if not grouped:
+        return ""
+
+    lines: list[str] = ["Нашел расписание:"]
+    if doctor_name:
+        lines.append(doctor_name)
+    rendered_days = 0
+    for branch_name, days in grouped.items():
+        lines.append(branch_name)
+        for date_value in sorted(days.keys()):
+            rendered_days += 1
+            if rendered_days > 4:
+                break
+            human_date = _format_human_date(date_value) or date_value
+            slots = ", ".join(days[date_value][:6])
+            lines.append(f"• {human_date}: {slots}")
+        if rendered_days > 4:
+            break
+    lines.append("Если хотите записаться, выберите дату и время из предложенных, и я продолжу запись.")
+    return "\n".join(line for line in lines if str(line).strip())

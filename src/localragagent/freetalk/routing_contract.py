@@ -223,6 +223,8 @@ def merge_missing_slots_from_plan(tool_plan: list[str], entities: dict[str, Any]
     time_known = bool(str(entities.get("time") or entities.get("time_from") or "").strip())
 
     if normalized_intent == "appointment":
+        has_windows = bool(entities.get("appointment_windows"))
+        has_selected_datetime = date_known or time_known
         if not appointment_action:
             missing.append("appointment_action")
         if not doctor_known and not specialty_known:
@@ -230,11 +232,12 @@ def merge_missing_slots_from_plan(tool_plan: list[str], entities: dict[str, Any]
             missing.append("specialty")
         if not branch_known and str(entities.get("appointment_branch_options") or "").strip():
             missing.append("branch_or_city")
-        if not date_known:
-            missing.append("date")
-        if not time_known:
-            missing.append("time")
-        if not patient_name:
+        if has_windows or has_selected_datetime:
+            if not date_known:
+                missing.append("date")
+            if not time_known:
+                missing.append("time")
+        if (has_windows or (date_known and time_known)) and not patient_name:
             missing.append("patient_name")
 
     if any(tool in {"doctors_info", "doctors_schedule_week"} for tool in plan):

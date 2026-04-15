@@ -261,3 +261,30 @@ async def save_session_entity_memory(memory: Any, session_id: str, entities: dic
     except Exception:
         encoded = "{}"
     await memory.set_meta_str(session_id, CLINICAL_ENTITY_MEMORY_KEY, encoded)
+
+
+async def clear_session_entity_memory_keys(memory: Any, session_id: str, keys: list[str] | tuple[str, ...]) -> None:
+    if memory is None:
+        return
+    current = await load_session_entity_memory(memory, session_id)
+    if not current:
+        return
+    updated = dict(current)
+    changed = False
+    for key in (keys or []):
+        name = str(key or "").strip()
+        if not name:
+            continue
+        if name in updated:
+            updated.pop(name, None)
+            changed = True
+    if not changed:
+        return
+    if not updated:
+        await memory.set_meta_str(session_id, CLINICAL_ENTITY_MEMORY_KEY, "")
+        return
+    try:
+        encoded = json.dumps(updated, ensure_ascii=False)
+    except Exception:
+        encoded = "{}"
+    await memory.set_meta_str(session_id, CLINICAL_ENTITY_MEMORY_KEY, encoded)

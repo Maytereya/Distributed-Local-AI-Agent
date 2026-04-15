@@ -129,11 +129,35 @@ class AppointmentServices:
         probe = str(raw_text_or_name or "").lower()
         if "трубин" in probe:
             return {"status": "exact", "canonical": "Трубин Алексей Юрьевич", "query": raw_text_or_name}
+        if "дразнин" in probe:
+            return {"status": "exact", "canonical": "Дразнин Антон Владимирович", "query": raw_text_or_name}
         return {"status": "miss", "canonical": "", "query": raw_text_or_name}
 
     async def doctors_schedule_week(self, query: str, entities: dict[str, object]) -> dict[str, object]:
         _ = query
         self.schedule_calls.append(dict(entities))
+        doctor_name = str(entities.get("doctor_name") or "").strip()
+        if "Дразнин" in doctor_name:
+            return {
+                "schedule": [
+                    {
+                        "fio": "Дразнин Антон Владимирович",
+                        "schedule": {
+                            "г. Самара, пр. Ленина, 5": [
+                                {
+                                    "date": "2026-04-20",
+                                    "slots": ["15:30", "16:00", "17:00"],
+                                    "start": "15:30",
+                                    "end": "18:00",
+                                }
+                            ]
+                        },
+                    }
+                ],
+                "entities_used": {"doctor_name_resolved": "Дразнин Антон Владимирович"},
+                "schedule_unavailable_reason": "",
+                "note": "doctors_schedule_week",
+            }
         return {
             "schedule": [
                 {
@@ -163,6 +187,13 @@ class AppointmentServices:
 
     async def doctors_info(self, query: str, entities: dict[str, object]) -> dict[str, object]:
         _ = query, entities
+        doctor_name = str(entities.get("doctor_name") or "").strip()
+        if "Дразнин" in doctor_name:
+            return {
+                "doctors": [{"fio": "Дразнин Антон Владимирович", "specialization": "Уролог"}],
+                "entities_used": {"doctor_name_resolved": "Дразнин Антон Владимирович"},
+                "note": "doctors_info",
+            }
         return {
             "doctors": [{"fio": "Трубин Алексей Юрьевич", "specialization": "Уролог"}],
             "entities_used": {"doctor_name_resolved": "Трубин Алексей Юрьевич"},
@@ -276,7 +307,10 @@ def test_schedule_to_appointment_flow_uses_slot_and_finishes_with_handoff():
 
     reply4 = asyncio.run(agent.chat("да", session_id))
     assert "зафиксирован" in reply4.text.lower()
+    assert reply4.next_session_id
+    assert reply4.next_session_id != session_id
     assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
+    assert asyncio.run(memory.get_turn_count(session_id)) == 0
 
 
 def test_active_appointment_topic_switch_requests_cancel_confirmation_and_resumes():
@@ -307,3 +341,64 @@ def test_active_appointment_topic_switch_requests_cancel_confirmation_and_resume
     resumed_state = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
     assert resumed_state["phase"] == "appointment_collecting"
     assert resumed_state["missing_slots"] == ["patient_name"]
+
+
+def test_active_appointment_schedule_request_returns_cached_schedule_preview():
+    memory = InMemoryMemory()
+    services = AppointmentServices()
+    agent = AppointmentAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "appointment_schedule_preview"
+
+    asyncio.run(agent.chat("А есть расписание работы Трубина?", session_id))
+    asyncio.run(agent.chat("Мне надо записаться к нему. На 15.04, 08:30", session_id))
+
+    reply = asyncio.run(agent.chat("Дай пожалуйста расписание врача", session_id))
+    low = reply.text.lower()
+    assert "нашел расписание" in low
+    assert "15 апреля" in low
+    assert "08:30" in low
+    assert "выберите дату и время" in low
+    assert "сообщите, пожалуйста, ваше фио" not in low
+
+    state = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
+    assert state["intent"] == "appointment"
+    assert state["phase"] == "appointment_collecting"
+    assert state["missing_slots"] == ["patient_name"]
+
+
+def test_new_appointment_after_handoff_does_not_reuse_old_slot_context():
+    memory = InMemoryMemory()
+    services = AppointmentServices()
+    agent = AppointmentAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "appointment_new_doctor_after_handoff"
+
+    asyncio.run(agent.chat("А есть расписание работы Трубина?", session_id))
+    asyncio.run(agent.chat("Мне надо записаться к нему. На 15.04, 08:30", session_id))
+    asyncio.run(agent.chat("Рахманов Вахоб Дмитриевич", session_id))
+    finish = asyncio.run(agent.chat("Да", session_id))
+    assert "зафиксирован" in finish.text.lower()
+
+    price_reply = asyncio.run(agent.chat("Спасибо. Скажи пожалуйста, сколько стоит общий анализ мочи в клинике?", session_id))
+    assert price_reply.tool_name == "price_info"
+    assert "нашел цены" in price_reply.text.lower()
+
+    new_appointment = asyncio.run(agent.chat("Можно еще записаться к врачу Дразнину?", session_id))
+    low = new_appointment.text.lower()
+    assert "нашел расписание" in low
+    assert "дразнин" in low
+    assert "20 апреля" in low
+    assert "выберите, пожалуйста, дату и время для записи" not in low
