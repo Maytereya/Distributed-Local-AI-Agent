@@ -89,6 +89,64 @@ AuthLevel = Literal["none", "patient_token"]
 
 
 @dataclass
+class DialogState:
+    """Typed conversation state for a single active flow.
+
+    Replaces the unbounded ``last_entities`` god-object for all structured
+    multi-turn flows (appointment, test_result, etc.).  ``last_entities``
+    continues to carry raw session memory; ``DialogState`` carries the
+    semantic intent + slot state for the *current active intent*.
+
+    Methods
+    -------
+    is_active()         — True when a non-trivial label is currently held.
+    clear()             — Reset all fields to defaults (on topic switch / handoff).
+    merge_entities(new) — Merge new entities without overwriting existing values.
+    """
+
+    label: str = "OTHER"
+    phase: str = ""
+    entities: dict[str, Any] = field(default_factory=dict)
+    candidate_entities: dict[str, Any] = field(default_factory=dict)
+    missing_slots: list[str] = field(default_factory=list)
+    clarify_count: int = 0
+    open_question: str = ""
+    confidence: float = 0.0
+
+    _INACTIVE_LABELS: frozenset[str] = field(
+        default_factory=lambda: frozenset({"OTHER", ""}),
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def is_active(self) -> bool:
+        """Return True when an intent is being tracked (not OTHER / empty)."""
+        return self.label not in self._INACTIVE_LABELS
+
+    def clear(self) -> None:
+        """Reset all state to defaults — call on explicit topic switch or handoff."""
+        self.label = "OTHER"
+        self.phase = ""
+        self.entities = {}
+        self.candidate_entities = {}
+        self.missing_slots = []
+        self.clarify_count = 0
+        self.open_question = ""
+        self.confidence = 0.0
+
+    def merge_entities(self, new: dict[str, Any]) -> None:
+        """Merge ``new`` entities into ``self.entities``.
+
+        Existing values are preserved; only genuinely missing keys are added.
+        Call this after each NLU pass to accumulate extracted slots.
+        """
+        for k, v in new.items():
+            if k not in self.entities and v not in (None, "", []):
+                self.entities[k] = v
+
+
+@dataclass
 class SessionState:
     session_id: str
     history: list[dict[str, str]] = field(default_factory=list)  # [{"role":"user|assistant","text":...}]
@@ -97,6 +155,7 @@ class SessionState:
     is_authenticated: bool = field(default=False)
     # Важно: токены лучше не хранить тут в явном виде
     auth_ref: str | None = None  # id сессии авторизации или что-то подобное
+    dialog: DialogState = field(default_factory=DialogState)  # typed intent state
 
 
 @dataclass
