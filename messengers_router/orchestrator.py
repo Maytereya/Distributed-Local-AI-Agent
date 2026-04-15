@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .mess_types import ResponseEnvelope, RouteDecision, SessionState
+from .mess_types import Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 
 _SAFETY_LABELS = {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
 
@@ -35,6 +35,8 @@ class OrchestratorContext:
     should_clarify: bool = False
     clarify_text: str = ""
     tool_results: dict[str, Any] = field(default_factory=dict)
+    plan: Plan | None = None
+    evidence: Evidence | None = None
     response: ResponseEnvelope | None = None
     short_circuit: bool = False
     short_circuit_reason: str = ""
@@ -110,18 +112,36 @@ async def clarify_gate(ctx: OrchestratorContext) -> OrchestratorContext:
 async def tool_loop(
     ctx: OrchestratorContext,
     services: Any | None = None,
+    memory: Any | None = None,
+    runtime_options: Any | None = None,
 ) -> OrchestratorContext:
-    """Заглушка для будущего вызова сервисов и инструментов.
+    """Выполняет bridge в legacy-router, пока новый tool-loop не реализован полностью.
 
     :param ctx: контекст пайплайна
     :param services: сервисный слой, который будет задействован позже
+    :param memory: хранилище состояния/pendings для legacy-router
+    :param runtime_options: runtime-настройки LLM/NLU
     :return: обновлённый контекст
     """
 
-    _ = services
-    if ctx.should_clarify:
+    if ctx.short_circuit or ctx.should_clarify:
         return ctx
-    ctx.tool_results = {}
+    if services is None or memory is None:
+        ctx.tool_results = {}
+        return ctx
+
+    from . import router
+
+    decision, plan, evidence = await router.route_patient_message(
+        ctx.text,
+        ctx.state,
+        services,
+        memory,
+        runtime_options=runtime_options,
+    )
+    ctx.decision = decision
+    ctx.plan = plan
+    ctx.evidence = evidence
     return ctx
 
 
@@ -132,8 +152,21 @@ async def render(ctx: OrchestratorContext) -> OrchestratorContext:
     :return: обновлённый контекст
     """
 
+    if ctx.short_circuit and ctx.decision is not None:
+        from .renderer import render_complaint, render_medical_advice, render_urgent
+
+        if ctx.decision.label == "URGENT":
+            ctx.response = render_urgent()
+        elif ctx.decision.label == "COMPLAINT":
+            ctx.response = render_complaint()
+        elif ctx.decision.label == "MEDICAL_ADVICE":
+            ctx.response = render_medical_advice()
+        return ctx
     if ctx.should_clarify:
         ctx.response = ResponseEnvelope(text=ctx.clarify_text)
+        return ctx
+    if ctx.plan is not None or ctx.evidence is not None:
+        ctx.response = None
         return ctx
     ctx.response = ResponseEnvelope(text="")
     return ctx
@@ -142,12 +175,16 @@ async def render(ctx: OrchestratorContext) -> OrchestratorContext:
 async def run_pipeline(
     text: str,
     state: SessionState,
+    services: Any | None = None,
+    memory: Any | None = None,
     runtime_options: Any | None = None,
 ) -> OrchestratorContext:
     """Прогоняет сообщение через 5-stage skeleton оркестратора.
 
     :param text: текст пользователя
     :param state: текущее состояние сессии
+    :param services: сервисный слой для legacy-bridge
+    :param memory: хранилище pending/state для legacy-bridge
     :param runtime_options: runtime-настройки LLM/NLU
     :return: финальный контекст после прохождения стадий
     """
@@ -155,9 +192,14 @@ async def run_pipeline(
     ctx = OrchestratorContext(text=text, state=state)
     ctx = await early_guards(ctx, runtime_options=runtime_options)
     if ctx.short_circuit:
-        return ctx
+        return await render(ctx)
     ctx = await nlu_route(ctx, runtime_options=runtime_options)
     ctx = await clarify_gate(ctx)
-    ctx = await tool_loop(ctx, services=None)
+    ctx = await tool_loop(
+        ctx,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
     ctx = await render(ctx)
     return ctx

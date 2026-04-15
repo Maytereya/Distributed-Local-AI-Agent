@@ -268,7 +268,6 @@ def _env_flag(name: str, default: bool) -> bool:
         "MR_ROUTER_V2_ENABLE": c.MR_ROUTER_V2_ENABLE,
         "MR_ROUTER_V2_SHADOW": c.MR_ROUTER_V2_SHADOW,
         "MR_NLU_SHADOW": c.MR_NLU_SHADOW,
-        "MR_USE_ORCHESTRATOR": c.MR_USE_ORCHESTRATOR,
     }
     raw = cfg_flags.get(name, default)
     if isinstance(raw, bool):
@@ -2057,24 +2056,26 @@ async def patient_routing_stream(
         yield precheck
         return
 
-    if _env_flag("MR_USE_ORCHESTRATOR", False):
+    try:
         from .orchestrator import run_pipeline
 
-        ctx = await run_pipeline(user_text, state, runtime_options=runtime_options)
+        ctx = await run_pipeline(
+            user_text,
+            state,
+            services=services,
+            memory=memory,
+            runtime_options=runtime_options,
+        )
         if ctx.response and ctx.response.text:
             if ctx.response.handoff:
                 _reset_state_after_handoff(state, memory)
             yield ctx.response
             return
-
-    try:
-        decision, plan, evidence = await route_patient_message(
-            user_text,
-            state,
-            services,
-            memory,
-            runtime_options=runtime_options,
-        )
+        decision = ctx.decision
+        plan = ctx.plan
+        evidence = ctx.evidence
+        if decision is None or plan is None or evidence is None:
+            raise RuntimeError("orchestrator returned neither response nor legacy routing result")
     except Exception as e:
         fallback_text = handoff_message("service_error")
         state_update: dict[str, Any] = {}

@@ -1,6 +1,7 @@
 import asyncio
 
-from messengers_router.mess_types import ResponseEnvelope, RouteDecision, SessionState
+from messengers_router.memory import MemoryStore
+from messengers_router.mess_types import Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
 from messengers_router.orchestrator import (
     OrchestratorContext,
@@ -8,6 +9,7 @@ from messengers_router.orchestrator import (
     early_guards,
     run_pipeline,
 )
+from messengers_router.services import Services
 
 
 def run(coro):
@@ -111,3 +113,55 @@ def test_run_pipeline_returns_context_with_mocked_nlu(monkeypatch):
     assert out.response == ResponseEnvelope(text="")
     assert state.dialog.label == "PRICE"
     assert state.dialog.entities == {"service_name": "УЗИ щитовидной железы"}
+
+
+def test_run_pipeline_delegates_legacy_route_inside_orchestrator(monkeypatch):
+    async def fake_deterministic_rule_decision(*args, **kwargs):
+        _ = args, kwargs
+        return None
+
+    async def fake_analyze_with_candidates(text, state, runtime_options=None):
+        _ = text, state, runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="PRICE",
+                confidence=0.84,
+                flags={"llm_primary"},
+                source="llm_primary",
+            ),
+            candidates=[NLUCandidate(source="llm_primary", label="PRICE", confidence=0.84)],
+            merged_from="llm_primary",
+        )
+
+    async def fake_route_patient_message(text, state, services, memory, runtime_options=None):
+        _ = text, state, services, memory, runtime_options
+        return (
+            RouteDecision(label="PRICE", confidence=0.9, source="legacy_router"),
+            Plan(label="PRICE"),
+            Evidence(items={"payload": "ok"}),
+        )
+
+    monkeypatch.setattr(
+        "messengers_router.classifier.deterministic_rule_decision",
+        fake_deterministic_rule_decision,
+    )
+    monkeypatch.setattr(
+        "messengers_router.nlu_pipeline.analyze_with_candidates",
+        fake_analyze_with_candidates,
+    )
+    monkeypatch.setattr(
+        "messengers_router.router.route_patient_message",
+        fake_route_patient_message,
+    )
+
+    state = SessionState(session_id="pipeline-legacy-bridge")
+    services = Services()
+    memory = MemoryStore()
+
+    out = run(run_pipeline("сколько стоит узи", state, services=services, memory=memory))
+
+    assert out.decision is not None
+    assert out.decision.source == "legacy_router"
+    assert out.plan == Plan(label="PRICE")
+    assert out.evidence == Evidence(items={"payload": "ok"})
+    assert out.response is None

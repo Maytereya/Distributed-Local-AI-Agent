@@ -3,7 +3,7 @@
 **Branch:** `refactor/core` → merges into `origin/release`  
 **Python:** `venv/bin/pytest` with `PYTHONPATH=.`  
 **Test command:** `cd /Users/maxten/Dev/Distributed-Local-AI-Agent2 && PYTHONPATH=. venv/bin/pytest tests/ -x -q --ignore=tests/eval`  
-**Never break:** 511 tests must stay green after every task.
+**Never break:** 513 tests must stay green after every task.
 
 ---
 
@@ -45,11 +45,12 @@ Tests added: `test_russian_nlu.py`, `test_confidence_policy.py`, `test_nlu_merge
 - Task 6.1 is done in `84d2522`.
 - Task 6.2 is done in the latest `refactor/core` commit after Task 6.1.
 - Task 7.1 is done in the current `refactor/core` commit.
-- Current green baseline: `511 passed, 3 warnings`.
+- Task 7.3 is done in the current `refactor/core` working commit.
+- Current green baseline: `513 passed, 3 warnings`.
 
 ### Important implementation notes for the next agent
 
-1. **Task 5.2 deviation from the original text:** the orchestrator gate was added in `patient_routing_stream()`, not `route_patient_message()`. Reason: `route_patient_message()` returns `(RouteDecision, Plan, Evidence)`, while the orchestrator currently returns `ResponseEnvelope` through `ctx.response`. Putting the gate into the stream preserves API compatibility and still gives a real A/B entry point.
+1. **Task 7.3 final orchestrator shape:** `patient_routing_stream()` now always enters through `orchestrator.run_pipeline()`. The feature flag is gone. To preserve existing behavior while the 5-stage pipeline is still incomplete, `tool_loop()` temporarily bridges into `router.route_patient_message()` and stores `(decision, plan, evidence)` back into `OrchestratorContext`.
 2. **Task 6.1 facade compatibility requirement:** `messengers_router.services` is not a dumb `import *` facade. The package `services/__init__.py` must preserve:
    - direct attribute access to underscore helpers (example: `_prepare_roots_match`)
    - `monkeypatch.setattr(svc_mod, ...)` compatibility for tests that expect old `services.py` module semantics
@@ -59,13 +60,15 @@ Tests added: `test_russian_nlu.py`, `test_confidence_policy.py`, `test_nlu_merge
 5. **Task 6.2 circular-import avoidance:** `services/doctors.py` uses a lazy helper (`_legacy_module()`) to access shared helpers from `services_legacy` at runtime. Do not replace this with a top-level `from .. import services_legacy` import unless you intentionally redesign the import graph.
 6. **Task 7.1 normalization rollout detail:** `services_legacy._normalise_input()` now delegates to `russian_nlu.normalize_ru()` and keeps only whitespace compaction locally. That change made it safe to remove dozens of legacy `.replace("ё", "е")` no-op tails without changing behavior.
 7. **Task 7.1 regression coverage:** `tests/test_messenger_services.py::test_services_normalise_input_normalizes_yo_characters` is the new red/green guard for the normalization rollout. Keep it when moving more service helpers into submodules.
+8. **Task 7.3 regression coverage:** `tests/test_router_flow_override.py::test_patient_routing_stream_uses_orchestrator_by_default`, `tests/test_router_flow_override.py::test_patient_routing_stream_uses_orchestrator_outputs_without_legacy_route_call`, and `tests/test_orchestrator_pipeline.py::test_run_pipeline_delegates_legacy_route_inside_orchestrator` protect the new “orchestrator-only entry + legacy bridge” contract.
+9. **Task 7.3 config cleanup:** `runtime_config.py` no longer exposes `MR_USE_ORCHESTRATOR`, and `router._env_flag()` no longer knows about it. Do not re-introduce the flag unless you are intentionally restoring an A/B rollout strategy.
 
 ---
 
 ## What STILL NEEDS TO BE DONE
 
-Tasks are ordered — do them in sequence. Each task is a single focused commit.
-Tasks 4.2, 5.1, 5.2, 6.1, 6.2, and 7.1 are already done. Do not redo them. Historical task definitions are kept below only as implementation context.
+All mandatory refactor tasks in this handoff are now complete.
+Only optional cleanup remains. Historical task definitions are kept below as implementation context for future work.
 
 ---
 
@@ -371,13 +374,27 @@ The stemmer only runs when Ollama is completely down. It's a safety net, not a m
 
 ---
 
-### Task 7.3 — Remove `MR_USE_ORCHESTRATOR` flag (LAST STEP, do after eval is green)
+### Task 7.3 — DONE (current HEAD after next commit) — Remove `MR_USE_ORCHESTRATOR` flag
 
-Only do this after Tasks 5.1, 5.2, and 7.1 are complete and the orchestrator is handling real traffic in tests.
+Completed in the current `refactor/core` working commit.
 
-**File:** `router.py`, `runtime_config.py`
+**What changed:**
+- Removed the `MR_USE_ORCHESTRATOR` flag from `runtime_config.py`.
+- Removed the `MR_USE_ORCHESTRATOR` branch from `patient_routing_stream()`.
+- Made `orchestrator.run_pipeline()` the mandatory entry path for stream routing.
+- Added a temporary legacy bridge in `orchestrator.tool_loop()` so the orchestrator can carry `(decision, plan, evidence)` produced by `route_patient_message()` until the rest of the pipeline is migrated.
+- Added regression tests that verify:
+  - orchestrator is used by default,
+  - `patient_routing_stream()` consumes `decision/plan/evidence` from orchestrator without directly calling the legacy path,
+  - `run_pipeline()` performs the legacy bridge when `services` and `memory` are provided.
 
-Remove the `if _c.MR_USE_ORCHESTRATOR:` branch. Make `run_pipeline()` the sole routing path. Delete the `MR_USE_ORCHESTRATOR` entry from `runtime_config.py`.
+**Verification run:**
+```bash
+cd /Users/maxten/Dev/Distributed-Local-AI-Agent2
+PYTHONPATH=. venv/bin/pytest tests/ -x -q --ignore=tests/eval
+```
+
+**Result:** `513 passed, 3 warnings`
 
 **Commit message:**
 ```
