@@ -296,24 +296,24 @@ def _extract_service_keyword(text: str) -> str | None:
     return extract_service_phrase(text)
 
 
-def _extract_schedule_doctor_name(text: str) -> str | None:
-    candidate = resolve_cached_doctor_name_candidate(text, prefer_schedule=True)
-    if candidate and _looks_like_specialty_or_service_token(candidate, text):
+def _extract_doctor_name(text: str, *, mode: str = "appointment") -> str | None:
+    """Extract a doctor-name candidate for the given intent mode.
+
+    mode:
+        "schedule"    — prefer_schedule=True, rejects specialty/service tokens
+        "appointment" — prefer_schedule=False, rejects verb/action tokens
+        "price"       — prefer_schedule=True, rejects verb/action tokens
+    """
+    prefer = mode in {"schedule", "price"}
+    candidate = resolve_cached_doctor_name_candidate(text, prefer_schedule=prefer)
+    if not candidate:
         return None
-    return candidate
-
-
-def _extract_appointment_doctor_name(text: str) -> str | None:
-    candidate = resolve_cached_doctor_name_candidate(text)
-    if candidate and _INVALID_DOCTOR_TOKEN_RE.search(candidate):
-        return None
-    return candidate
-
-
-def _extract_price_doctor_name(text: str) -> str | None:
-    candidate = resolve_cached_doctor_name_candidate(text, prefer_schedule=True)
-    if candidate and _INVALID_DOCTOR_TOKEN_RE.search(candidate):
-        return None
+    if mode == "schedule":
+        if _looks_like_specialty_or_service_token(candidate, text):
+            return None
+    else:  # appointment or price
+        if _INVALID_DOCTOR_TOKEN_RE.search(candidate):
+            return None
     return candidate
 
 
@@ -387,7 +387,7 @@ def _doctor_followup_name_in_context(text: str, last_entities: dict[str, Any]) -
     if not core_tokens:
         return None
 
-    candidate = _extract_schedule_doctor_name(s) or _extract_appointment_doctor_name(s)
+    candidate = _extract_doctor_name(s, mode="schedule") or _extract_doctor_name(s, mode="appointment")
     if not candidate:
         return None
     if _looks_like_specialty_or_service_token(candidate, s):
@@ -905,7 +905,7 @@ def _postprocess_primary_decision(
         entities["result_action"] = "get_pdf" if ("pdf" in t or "пдф" in t or "файл" in t or "скач" in t) else "status"
 
     if label == "PRICE" and not entities.get("doctor_name"):
-        doctor_name = _extract_price_doctor_name(text)
+        doctor_name = _extract_doctor_name(text, mode="price")
         if doctor_name:
             entities["doctor_name"] = doctor_name
 
@@ -1288,7 +1288,7 @@ async def deterministic_rule_decision(
                 svc = _extract_service_keyword(text)
                 if svc:
                     entities["service_name"] = svc
-                doctor_name = _extract_price_doctor_name(text)
+                doctor_name = _extract_doctor_name(text, mode="price")
                 if doctor_name:
                     entities["doctor_name"] = doctor_name
                 decision = RouteDecision(
@@ -1316,7 +1316,7 @@ async def deterministic_rule_decision(
                 entities = {}
                 if appointment_action:
                     entities["appointment_action"] = appointment_action
-                doctor_name = _extract_appointment_doctor_name(text)
+                doctor_name = _extract_doctor_name(text, mode="appointment")
                 if doctor_name:
                     entities["doctor_name"] = doctor_name
                 svc = _extract_service_keyword(text)
@@ -1367,7 +1367,7 @@ async def deterministic_rule_decision(
                 svc = _extract_service_keyword(text)
                 if svc:
                     entities["service_name"] = svc
-                doctor_name = _extract_price_doctor_name(text)
+                doctor_name = _extract_doctor_name(text, mode="price")
                 if doctor_name:
                     entities["doctor_name"] = doctor_name
                 decision = RouteDecision(
@@ -1473,7 +1473,7 @@ async def analyze(
         else:
             entities["result_action"] = "status"
     if label == "PRICE" and not entities.get("doctor_name"):
-        doctor_name = _extract_price_doctor_name(text)
+        doctor_name = _extract_doctor_name(text, mode="price")
         if doctor_name:
             entities["doctor_name"] = doctor_name
 
