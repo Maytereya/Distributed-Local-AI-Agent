@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 
 import pytest
 
@@ -20,6 +21,23 @@ from messengers_router.policies import (
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def test_services_package_facade_exports_legacy_api():
+    assert svc_mod.Services is Services
+    assert svc_mod.resolve_price_service_name_from_catalog is resolve_price_service_name_from_catalog
+
+
+def test_services_placeholder_submodules_are_importable():
+    for module_name in (
+        "messengers_router.services.doctors",
+        "messengers_router.services.appointments",
+        "messengers_router.services.lab_tests",
+        "messengers_router.services.addresses",
+        "messengers_router.services.prices",
+    ):
+        module = importlib.import_module(module_name)
+        assert module is not None
 
 
 def test_doctors_info_filters_by_name(monkeypatch):

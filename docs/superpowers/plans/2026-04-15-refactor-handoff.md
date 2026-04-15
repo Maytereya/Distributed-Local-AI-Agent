@@ -3,7 +3,7 @@
 **Branch:** `refactor/core` → merges into `origin/release`  
 **Python:** `venv/bin/pytest` with `PYTHONPATH=.`  
 **Test command:** `cd /Users/maxten/Dev/Distributed-Local-AI-Agent2 && PYTHONPATH=. venv/bin/pytest tests/ -x -q --ignore=tests/eval`  
-**Never break:** 480 tests must stay green after every task.
+**Never break:** 509 tests must stay green after every task.
 
 ---
 
@@ -31,18 +31,39 @@ All committed on branch `refactor/core`.
 | `84707cb` | Added `DialogState` dataclass to `mess_types.py` (fields: `label`, `phase`, `entities`, `candidate_entities`, `missing_slots`, `clarify_count`, `open_question`, `confidence`; methods: `is_active()`, `clear()`, `merge_entities()`); added `dialog: DialogState` field to `SessionState` |
 | `8fabc6d` | Added `save_dialog_state()` / `load_dialog_state()` to `MemoryStore` in `memory.py` |
 | `10c92eb` | Added `AppointmentPhase` class to `mess_types.py` (constants: `IDLE=""`, `COLLECTING`, `CONFIRM`, `CONFIRMED`, `CANCEL_CONFIRM`; class methods: `values()`, `is_active(phase)`) |
+| `24f2d78` | Completed Task 4.2: extracted `_is_topic_switch_intent()` in `appointment_flow_guard.py`, added `DialogState` reset sync, and verified with full test suite |
+| `ad35894` | Completed Task 5.1: added `messengers_router/orchestrator.py` with the 5-stage pipeline skeleton and `tests/test_orchestrator_pipeline.py` |
+| `de827ea` | Completed Task 5.2: added `MR_USE_ORCHESTRATOR` runtime flag and wired the A/B gate through `patient_routing_stream()` |
 
 Tests added: `test_russian_nlu.py`, `test_confidence_policy.py`, `test_nlu_merge_policy.py`, `test_dialog_state.py`, `test_memory_dialog_state.py`
+
+## Session Update (2026-04-15)
+
+- Task 4.2 is done in `24f2d78`.
+- Task 5.1 is done in `ad35894`.
+- Task 5.2 is done in `de827ea`.
+- Task 6.1 is implemented in the current working tree and should be committed with the Task 6.1 commit message after reviewing the diff.
+- Current green baseline: `509 passed, 3 warnings`.
+
+### Important implementation notes for the next agent
+
+1. **Task 5.2 deviation from the original text:** the orchestrator gate was added in `patient_routing_stream()`, not `route_patient_message()`. Reason: `route_patient_message()` returns `(RouteDecision, Plan, Evidence)`, while the orchestrator currently returns `ResponseEnvelope` through `ctx.response`. Putting the gate into the stream preserves API compatibility and still gives a real A/B entry point.
+2. **Task 6.1 facade compatibility requirement:** `messengers_router.services` is not a dumb `import *` facade. The package `services/__init__.py` must preserve:
+   - direct attribute access to underscore helpers (example: `_prepare_roots_match`)
+   - `monkeypatch.setattr(svc_mod, ...)` compatibility for tests that expect old `services.py` module semantics
+   The current implementation uses a proxy module class to sync top-level monkeypatch assignments into `services_legacy`.
+3. **Relative import correction for Task 6.1:** from inside `messengers_router/services/__init__.py`, the legacy module must be imported as sibling `messengers_router.services_legacy` via `from .. import services_legacy`, not `from .services_legacy`.
 
 ---
 
 ## What STILL NEEDS TO BE DONE
 
 Tasks are ordered — do them in sequence. Each task is a single focused commit.
+Tasks 4.2, 5.1, 5.2, and 6.1 are already done. Do not redo them. Historical task definitions are kept below only as implementation context.
 
 ---
 
-### Task 4.2 — Collapse 3 repeated intent-check chains in `appointment_flow_guard.py`
+### Task 4.2 — DONE (`24f2d78`) — Collapse 3 repeated intent-check chains in `appointment_flow_guard.py`
 
 **File:** `messengers_router/appointment_flow_guard.py`
 
@@ -83,7 +104,7 @@ Use the **union** — include all detectors from all three functions. Each calli
 
 The import of `AppointmentPhase` and `DialogState` should come from `.mess_types`.
 
-**Tests:** Run the full suite. No new test file required for this one — the existing 480 tests cover the behavior.
+**Tests:** Run the full suite. No new test file required for this one — the existing baseline covered the behavior.
 
 **Commit message:**
 ```
@@ -96,7 +117,7 @@ into reset_appointment_runtime_state() to keep DialogState in sync with flag res
 
 ---
 
-### Task 5.1 — Create `messengers_router/orchestrator.py` with 5 named pipeline stages
+### Task 5.1 — DONE (`ad35894`) — Create `messengers_router/orchestrator.py` with 5 named pipeline stages
 
 **File to CREATE:** `messengers_router/orchestrator.py`
 
@@ -196,7 +217,7 @@ tool_loop and render are stubs; real dispatch/rendering comes in Task 5.2+.
 
 ---
 
-### Task 5.2 — Wire `router.py` to call orchestrator behind `MR_USE_ORCHESTRATOR=1` flag
+### Task 5.2 — DONE (`de827ea`) — Wire `router.py` to call orchestrator behind `MR_USE_ORCHESTRATOR=1` flag
 
 **File:** `messengers_router/router.py`  
 **File:** `messengers_router/runtime_config.py` (add flag)
@@ -232,7 +253,7 @@ touching production behavior.
 
 ---
 
-### Task 6.1 — Create `messengers_router/services/` package skeleton
+### Task 6.1 — DONE (current HEAD after next commit) — Create `messengers_router/services/` package skeleton
 
 **Goal:** Begin extracting the 3000-line `services.py` into domain-focused submodules. This is additive — `services.py` is NOT deleted yet.
 
@@ -251,11 +272,12 @@ Actually, the cleanest approach: **rename `services.py` → `services_legacy.py`
 During migration, all symbols are re-exported from services_legacy.
 New domain modules will be added as submodules and removed from legacy.
 """
-from .services_legacy import *  # noqa: F401,F403
-from .services_legacy import __all__  # if defined
+from .. import services_legacy as _legacy
 ```
 
-Check whether `services.py` defines `__all__`. If not, the `import *` still works for public names.
+Status note: `services.py` did **not** define `__all__`, and plain `import *` was not enough to preserve monkeypatch compatibility. The working implementation uses:
+- `globals().update(...)` to mirror the legacy namespace, including underscore helpers
+- a proxy module class that forwards top-level `setattr` / `delattr` calls into `services_legacy`
 
 **Important:** After renaming, search for `from .services import` and `from messengers_router.services import` across the codebase and update any imports that break. Run the full test suite to confirm nothing broke.
 
