@@ -40,6 +40,12 @@ def test_services_placeholder_submodules_are_importable():
         assert module is not None
 
 
+def test_services_doctor_methods_are_sourced_from_doctors_module():
+    assert Services.resolve_doctor_name.__module__ == "messengers_router.services.doctors"
+    assert Services.doctors_info.__module__ == "messengers_router.services.doctors"
+    assert Services.doctors_schedule_week.__module__ == "messengers_router.services.doctors"
+
+
 def test_doctors_info_filters_by_name(monkeypatch):
     svc = Services()
 

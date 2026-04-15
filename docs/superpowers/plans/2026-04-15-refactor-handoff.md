@@ -3,7 +3,7 @@
 **Branch:** `refactor/core` → merges into `origin/release`  
 **Python:** `venv/bin/pytest` with `PYTHONPATH=.`  
 **Test command:** `cd /Users/maxten/Dev/Distributed-Local-AI-Agent2 && PYTHONPATH=. venv/bin/pytest tests/ -x -q --ignore=tests/eval`  
-**Never break:** 509 tests must stay green after every task.
+**Never break:** 510 tests must stay green after every task.
 
 ---
 
@@ -42,8 +42,9 @@ Tests added: `test_russian_nlu.py`, `test_confidence_policy.py`, `test_nlu_merge
 - Task 4.2 is done in `24f2d78`.
 - Task 5.1 is done in `ad35894`.
 - Task 5.2 is done in `de827ea`.
-- Task 6.1 is implemented in the current working tree and should be committed with the Task 6.1 commit message after reviewing the diff.
-- Current green baseline: `509 passed, 3 warnings`.
+- Task 6.1 is done in `84d2522`.
+- Task 6.2 is done in the latest `refactor/core` commit after Task 6.1.
+- Current green baseline: `510 passed, 3 warnings`.
 
 ### Important implementation notes for the next agent
 
@@ -53,13 +54,15 @@ Tests added: `test_russian_nlu.py`, `test_confidence_policy.py`, `test_nlu_merge
    - `monkeypatch.setattr(svc_mod, ...)` compatibility for tests that expect old `services.py` module semantics
    The current implementation uses a proxy module class to sync top-level monkeypatch assignments into `services_legacy`.
 3. **Relative import correction for Task 6.1:** from inside `messengers_router/services/__init__.py`, the legacy module must be imported as sibling `messengers_router.services_legacy` via `from .. import services_legacy`, not `from .services_legacy`.
+4. **Task 6.2 extraction pattern:** the pilot migration does not rewrite the `Services` class body inline. Instead, doctor-domain methods are implemented in `messengers_router/services/doctors.py` and rebound onto `Services` at the bottom of `services_legacy.py`. This keeps the step small and preserves the external `Services` API.
+5. **Task 6.2 circular-import avoidance:** `services/doctors.py` uses a lazy helper (`_legacy_module()`) to access shared helpers from `services_legacy` at runtime. Do not replace this with a top-level `from .. import services_legacy` import unless you intentionally redesign the import graph.
 
 ---
 
 ## What STILL NEEDS TO BE DONE
 
 Tasks are ordered — do them in sequence. Each task is a single focused commit.
-Tasks 4.2, 5.1, 5.2, and 6.1 are already done. Do not redo them. Historical task definitions are kept below only as implementation context.
+Tasks 4.2, 5.1, 5.2, 6.1, and 6.2 are already done. Do not redo them. Historical task definitions are kept below only as implementation context.
 
 ---
 
@@ -303,7 +306,7 @@ lab_tests, addresses, prices. Full test suite must pass.
 
 ---
 
-### Task 6.2 — Move one domain into its submodule (doctors.py as pilot)
+### Task 6.2 — DONE (latest `refactor/core` commit) — Move one domain into its submodule (doctors.py as pilot)
 
 **This is a pilot migration.** Move doctor-related functions from `services_legacy.py` into `services/doctors.py`.
 
@@ -311,9 +314,9 @@ lab_tests, addresses, prices. Full test suite must pass.
 
 **Step 2:** Move those functions to `services/doctors.py`. Add proper imports.
 
-**Step 3:** In `services_legacy.py`, replace the moved functions with imports from `.doctors`:
+**Step 3:** In `services_legacy.py`, replace the moved functions with imports from `.services.doctors`:
 ```python
-from .doctors import get_doctor_info, get_doctor_schedule  # etc.
+from .services.doctors import get_doctor_info, get_doctor_schedule  # etc.
 ```
 
 **Step 4:** `services/__init__.py` continues to re-export everything — callers don't need to change.
