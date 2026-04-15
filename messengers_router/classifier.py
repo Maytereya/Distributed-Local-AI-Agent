@@ -20,7 +20,7 @@ from .llm_mode_policy import RuntimeOptions
 from .llm_runtime import generate_text
 from .doctor_name_port import resolve_cached_doctor_name_candidate
 from .russian_nlu import normalize_ru, ENTITY_WHITELIST
-from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision, ContextAction
+from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision, ContextAction, CONFIDENCE
 from .prompt_contracts import sanitize_classifier_json
 from .prompt_registry import load_prompt_text
 from .policies import (
@@ -229,7 +229,7 @@ async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000)
         )
     except Exception:
         return "", sanitize_classifier_json(
-            {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_timeout"]}
+            {"label": "OTHER", "confidence": CONFIDENCE.llm_default, "entities": {}, "flags": ["ollama_timeout"]}
         )
     if isinstance(raw, str):
         obj = _extract_json(raw)
@@ -238,7 +238,7 @@ async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000)
 
     raw_text = raw if isinstance(raw, str) else ""
     return raw_text, sanitize_classifier_json(
-        {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_non_json"]}
+        {"label": "OTHER", "confidence": CONFIDENCE.llm_default, "entities": {}, "flags": ["ollama_non_json"]}
     )
 
 
@@ -589,7 +589,7 @@ async def _maybe_refine_live_intent(
         cand_label = base.label
 
     cand_conf = _normalize_confidence(data.get("confidence"))
-    if cand_conf < 0.45:
+    if cand_conf < CONFIDENCE.refine_min:
         return base
 
     cand_entities = _sanitize_entities(data.get("entities"))
@@ -626,7 +626,7 @@ def _normalize_confidence(x: Any) -> float:
     try:
         v = float(x)
     except Exception:
-        return 0.2
+        return CONFIDENCE.llm_default
     return max(0.0, min(1.0, v))
 
 
@@ -869,7 +869,7 @@ async def guardrail_precheck(
         kind_flag = "doc_request_tax" if doc_kind == "tax" else "doc_request_generic"
         return RouteDecision(
             label="OTHER",
-            confidence=0.85,
+            confidence=CONFIDENCE.rule_hardcode,
             entities={"doc_request_kind": doc_kind},
             flags=local_flags | {"doc_request_main_index", kind_flag},
             needs_handoff=False,
@@ -1105,7 +1105,7 @@ async def deterministic_rule_decision(
         kind_flag = "doc_request_tax" if doc_kind == "tax" else "doc_request_generic"
         decision = RouteDecision(
             label="OTHER",
-            confidence=0.85,
+            confidence=CONFIDENCE.rule_hardcode,
             entities={"doc_request_kind": doc_kind},
             flags=local_flags | {"doc_request_main_index", kind_flag},
             needs_handoff=False,
@@ -1163,7 +1163,7 @@ async def deterministic_rule_decision(
                 entities["order_id"] = oid
             decision = RouteDecision(
                 label="TEST_RESULT",
-                confidence=0.85,
+                confidence=CONFIDENCE.rule_hardcode,
                 entities=entities,
                 flags=local_flags | {"rule_test_result"},
                 needs_handoff=False,
@@ -1249,7 +1249,7 @@ async def deterministic_rule_decision(
         elif specialty and not appointment_intent and not price_intent:
             decision = RouteDecision(
                 label="DOCTOR_INFO",
-                confidence=0.70,
+                confidence=CONFIDENCE.moderate,
                 entities={"specialty": specialty},
                 flags=local_flags | {"rule_doctor_info_specialty"},
                 needs_handoff=False,
@@ -1324,7 +1324,7 @@ async def deterministic_rule_decision(
                     entities["service_name"] = svc
                 base = RouteDecision(
                     label="APPOINTMENT",
-                    confidence=0.75,
+                    confidence=CONFIDENCE.high,
                     entities=entities,
                     flags=local_flags | {"rule_appointment"},
                     needs_handoff=False,
@@ -1492,7 +1492,7 @@ async def analyze(
             promoted = hints[0]
             if promoted != "OTHER":
                 label = promoted
-                conf = max(conf, 0.55)
+                conf = max(conf, CONFIDENCE.price_floor)
                 flags.discard("handoff_recommended")
                 needs_handoff = False
                 flags.add("promoted_from_rule_hints")

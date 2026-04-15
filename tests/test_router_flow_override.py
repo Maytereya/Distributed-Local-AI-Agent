@@ -212,7 +212,7 @@ def test_classifier_does_not_extract_unmatched_question_word_as_doctor_name(monk
         lambda _text, prefer_schedule=False: None,
     )
 
-    assert classifier_mod._extract_appointment_doctor_name("подскажите к кому записаться") is None
+    assert classifier_mod._extract_doctor_name("подскажите к кому записаться", mode="appointment") is None
 
 
 def test_appointment_confirmation_transition_accepts_common_yes_forms():
