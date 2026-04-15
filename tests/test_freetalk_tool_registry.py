@@ -80,6 +80,13 @@ def test_slots_query_routes_to_schedule_tools():
     assert plan[:2] == ["doctors_schedule_week", "doctors_info"]
 
 
+def test_appointment_query_routes_to_schedule_and_doctor_tools():
+    text = "Хочу записаться к Трубину на 15 апреля"
+    assert is_medical_query(text) is True
+    plan = select_tool_plan(text, include_meili_tools=False)
+    assert plan[:3] == ["doctors_schedule_week", "doctors_info", "address_info"]
+
+
 def test_about_agent_query_with_zanimaeshsya_is_detected():
     text = "Чем ты занимаешься?"
     assert is_about_agent_query(text) is True

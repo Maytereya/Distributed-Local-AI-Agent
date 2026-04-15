@@ -119,9 +119,10 @@ def build_clinical_router_prompt(
         else {}
     )
     schema = {
-        "intent": "doctor_schedule|doctor_info|price|prepare|tests|test_result|address|clinic_documents|clinic_news|service_info|unknown",
+        "intent": "appointment|doctor_schedule|doctor_info|price|prepare|tests|test_result|address|clinic_documents|clinic_news|service_info|unknown",
         "confidence": 0.0,
         "entities": {
+            "appointment_action": "",
             "doctor_name": "",
             "specialty": "",
             "service_name": "",
@@ -140,6 +141,8 @@ def build_clinical_router_prompt(
             "result_analysis_code": "",
             "result_analysis_number": "",
             "doctor_id": "",
+            "patient_name": "",
+            "child_age": "",
         },
         "missing_slots": ["doctor_name", "specialty"],
         "clarify_type": "identify|confirm_candidate|narrow_choice|missing_auth_data|other",
@@ -153,6 +156,7 @@ def build_clinical_router_prompt(
         "Если данных недостаточно, заполни missing_slots, clarify_type и короткий clarify_question.\n"
         "Если пользователь пишет \"о нем/его/этот врач\", используй контекст и remembered_doctor.\n"
         "Если это продолжение предыдущего уточнения, дополни уже собранные сущности, а не начинай разбор заново.\n"
+        "Если пользователь хочет записаться, перенести или отменить запись, используй intent=appointment.\n"
         "Типы уточнений:\n"
         "- identify: не хватает базовой сущности, кого/что искать.\n"
         "- confirm_candidate: есть один вероятный кандидат, нужен вопрос Да/Нет.\n"
@@ -161,6 +165,7 @@ def build_clinical_router_prompt(
         "- other: только если тип выше не подходит.\n"
         "Если выбран confirm_candidate, вопрос должен быть коротким и бинарным.\n"
         "Не выдумывай конкретные фамилии/услуги, если их нет в сообщении/контексте.\n"
+        "Для intent=appointment user-facing слоты: appointment_action, doctor_name/specialty, branch_or_city, date, time, patient_name.\n"
         "Верни ТОЛЬКО JSON без markdown.\n\n"
         "Summary:\n"
         f"{summary_text}\n\n"

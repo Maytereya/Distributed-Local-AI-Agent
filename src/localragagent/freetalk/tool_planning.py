@@ -42,11 +42,13 @@ _MEDICAL_TOPIC_RE = _compile(
     r"клиник|медцентр|медицинск|врач|доктор|терапевт|теарапевт|терапефт|кардиолог|невролог|гастроэнтеролог|эндокринолог|"
     r"гинеколог|уролог|онколог|педиатр|хирург|дерматолог|аллерголог|иммунолог|"
     r"офтальмолог|лор|отоларинголог|специалист|прием|приём|приним|консультац|"
+    r"запис|запись|перенес|отмена\s+запис|"
     r"расписан|график|услуг|процедур|анализ|тест|лаборатор|подготовк|адрес|"
     r"филиал|результат|узи|мрт|кт|слот|окн"
     r")\w*\b"
 )
 _PRICE_RE = _compile(r"\b(цена|стоим|прайс|сколько\s+стоит)\b")
+_APPOINTMENT_RE = _compile(r"\b(запис\w*|запись|перенест\w*|отмен\w*\s+запис|отмена\s+запис)\b")
 _PREPARE_RE = _compile(r"\b(подготовк|натощак|можно\s+ли\s+есть|как\s+подготовиться)\b")
 _SCHEDULE_RE = _compile(
     r"\b("
@@ -168,6 +170,8 @@ def select_tool_plan(text: str, *, include_meili_tools: bool) -> list[str]:
             return ["news_info", "main_index_info"]
         return ["main_index_info", "news_info"]
 
+    if _APPOINTMENT_RE.search(q):
+        return ["doctors_schedule_week", "doctors_info", "address_info"]
     if _CLINIC_DOCTOR_LIST_RE.search(q):
         return ["doctors_info", "doctors_schedule_week"]
     if _RESULT_RE.search(q):

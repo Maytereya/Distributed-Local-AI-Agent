@@ -14,6 +14,7 @@ from ..ports.freetalk_services_port import LegacyServicesPort
 from ..ports.freetalk_web_search_port import WebSearchPort
 
 from .adapter import FreeTalkAdapter
+from .appointment_policy import apply_appointment_precheck as _apply_appointment_precheck_helper
 from .candidate_policy import (
     candidate_confirmation_question as _candidate_confirmation_question_helper,
     candidate_confirmation_target as _candidate_confirmation_target_helper,
@@ -861,6 +862,21 @@ class FreeTalkAgent:
     @staticmethod
     def _last_doctor_name_key() -> str:
         return _LAST_DOCTOR_NAME_KEY
+
+    def _appointment_precheck(
+        self,
+        *,
+        user_message: str,
+        dialog_state: DialogState,
+        memory_entities: dict[str, Any],
+    ):
+        contextual_entities = self._extract_contextual_entities(user_message)
+        return _apply_appointment_precheck_helper(
+            user_message=user_message,
+            dialog_state=dialog_state,
+            memory_entities=memory_entities,
+            contextual_entities=contextual_entities,
+        )
 
     @staticmethod
     def _new_session_id() -> str:

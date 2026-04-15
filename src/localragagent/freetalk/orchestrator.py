@@ -79,26 +79,46 @@ async def chat(
 
     dialog_state = await agent._load_dialog_state(sid)
     remembered_doctor = await agent.memory.get_meta_str(sid, agent._last_doctor_name_key(), "")
-    dialog_act = await agent._build_dialog_act(
+    session_memory_entities = await agent._load_session_entity_memory(sid)
+    appointment_precheck = agent._appointment_precheck(
         user_message=user_message,
-        context=context,
         dialog_state=dialog_state,
-        remembered_doctor=remembered_doctor,
+        memory_entities=session_memory_entities,
     )
-    log_event(
-        "route_selected",
-        session_id=sid,
-        route=dialog_act.route,
-        intent=dialog_act.intent,
-        source=dialog_act.source,
-        fallback_reason=dialog_act.fallback_reason or "",
-    )
-    reply = await agent._execute_dialog_act(
-        user_message=user_message,
-        context=context,
-        dialog_act=dialog_act,
-        dialog_state=dialog_state,
-    )
+    if getattr(appointment_precheck, "handled", False):
+        if getattr(appointment_precheck, "clear_state", False):
+            await agent._clear_dialog_state(sid)
+        elif getattr(appointment_precheck, "next_state", None) is not None:
+            await agent._save_dialog_state(sid, appointment_precheck.next_state)
+            await agent._save_session_entity_memory(sid, dict(appointment_precheck.next_state.entities or {}))
+        save_memory_entities = getattr(appointment_precheck, "save_memory_entities", None)
+        if isinstance(save_memory_entities, dict) and save_memory_entities:
+            await agent._save_session_entity_memory(sid, save_memory_entities)
+        reply = AgentReply(
+            text=str(getattr(appointment_precheck, "reply_text", "") or "").strip(),
+            source="clinic_data",
+        )
+    else:
+        dialog_act = await agent._build_dialog_act(
+            user_message=user_message,
+            context=context,
+            dialog_state=dialog_state,
+            remembered_doctor=remembered_doctor,
+        )
+        log_event(
+            "route_selected",
+            session_id=sid,
+            route=dialog_act.route,
+            intent=dialog_act.intent,
+            source=dialog_act.source,
+            fallback_reason=dialog_act.fallback_reason or "",
+        )
+        reply = await agent._execute_dialog_act(
+            user_message=user_message,
+            context=context,
+            dialog_act=dialog_act,
+            dialog_state=dialog_state,
+        )
 
     if guard_state == guard.one_more_state and not reply.next_session_id:
         await agent.memory.set_meta_str(sid, guard.state_key, guard.awaiting_final_state)

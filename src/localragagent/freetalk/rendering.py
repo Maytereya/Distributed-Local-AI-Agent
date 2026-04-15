@@ -5,6 +5,21 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+_MONTHS_RU = {
+    1: "января",
+    2: "февраля",
+    3: "марта",
+    4: "апреля",
+    5: "мая",
+    6: "июня",
+    7: "июля",
+    8: "августа",
+    9: "сентября",
+    10: "октября",
+    11: "ноября",
+    12: "декабря",
+}
+
 
 def top_list(values: list[Any], limit: int = 5) -> list[Any]:
     return list(values[: max(1, limit)])
@@ -24,11 +39,23 @@ def format_iso_date_short(value: str) -> str:
     return raw
 
 
+def format_iso_date_human(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(raw)
+        return f"{parsed.day} {_MONTHS_RU.get(parsed.month, parsed.strftime('%m'))}"
+    except Exception:
+        pass
+    return raw
+
+
 def schedule_day_line(day: dict[str, Any]) -> tuple[str, bool]:
     if not isinstance(day, dict):
         return "", False
 
-    date_label = format_iso_date_short(str(day.get("date") or ""))
+    date_label = format_iso_date_human(str(day.get("date") or ""))
     slots_raw = day.get("slots")
     slots: list[str] = []
     if isinstance(slots_raw, list):
@@ -103,7 +130,7 @@ def render_schedule_details(payload: dict[str, Any]) -> str:
     if not has_free_slots and reason == "no_free_slots_2_weeks":
         lines.append("На ближайшие две недели свободных слотов по этому запросу нет.")
     elif has_free_slots:
-        lines.append("Если нужно, уточню ближайшие окна по филиалу и дате.")
+        lines.append("Если хотите записаться, выберите дату и время из предложенных, и я продолжу запись.")
 
     return "\n".join([line for line in lines if str(line).strip()]).strip()
 

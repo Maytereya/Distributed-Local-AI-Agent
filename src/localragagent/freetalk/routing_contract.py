@@ -7,6 +7,7 @@ from typing import Any
 
 
 CLINICAL_INTENTS: tuple[str, ...] = (
+    "appointment",
     "doctor_schedule",
     "doctor_info",
     "price",
@@ -44,6 +45,8 @@ _KNOWN_TOOLS: set[str] = {
 
 
 _INTENT_ALIASES: dict[str, str] = {
+    "appointment": "appointment",
+    "book": "appointment",
     "doctor_schedule": "doctor_schedule",
     "schedule": "doctor_schedule",
     "doctor_info": "doctor_info",
@@ -70,6 +73,7 @@ _INTENT_ALIASES: dict[str, str] = {
 
 
 _INTENT_TO_PLAN: dict[str, list[str]] = {
+    "appointment": ["doctors_schedule_week", "doctors_info", "address_info"],
     "doctor_schedule": ["doctors_schedule_week", "doctors_info"],
     "doctor_info": ["doctors_info", "doctors_schedule_week"],
     "price": ["price_info", "service_bundle_info", "test_assist"],
@@ -85,6 +89,7 @@ _INTENT_TO_PLAN: dict[str, list[str]] = {
 
 
 _ENTITY_KEYS: set[str] = {
+    "appointment_action",
     "doctor_name",
     "specialty",
     "service_name",
@@ -99,6 +104,8 @@ _ENTITY_KEYS: set[str] = {
     "date",
     "time",
     "doctor_id",
+    "patient_name",
+    "child_age",
     "result_surname",
     "result_year_of_birth",
     "result_analysis_code",
@@ -191,9 +198,10 @@ def tool_plan_for_intent(intent: str, *, include_meili_tools: bool) -> list[str]
     return plan
 
 
-def merge_missing_slots_from_plan(tool_plan: list[str], entities: dict[str, Any]) -> list[str]:
+def merge_missing_slots_from_plan(tool_plan: list[str], entities: dict[str, Any], *, intent: str = "") -> list[str]:
     missing: list[str] = []
     plan = list(tool_plan or [])
+    normalized_intent = str(intent or "").strip().lower()
     doctor_known = bool(str(entities.get("doctor_name") or entities.get("doctor_id") or "").strip())
     specialty_known = bool(str(entities.get("specialty") or "").strip())
     service_known = bool(
@@ -208,6 +216,26 @@ def merge_missing_slots_from_plan(tool_plan: list[str], entities: dict[str, Any]
     result_year = bool(str(entities.get("result_year_of_birth") or "").strip())
     result_code = bool(str(entities.get("result_analysis_code") or "").strip())
     result_number = bool(str(entities.get("result_analysis_number") or "").strip())
+    patient_name = bool(str(entities.get("patient_name") or "").strip())
+    appointment_action = bool(str(entities.get("appointment_action") or "").strip())
+    branch_known = bool(str(entities.get("branch_name") or entities.get("city") or "").strip())
+    date_known = bool(str(entities.get("date") or entities.get("date_from") or "").strip())
+    time_known = bool(str(entities.get("time") or entities.get("time_from") or "").strip())
+
+    if normalized_intent == "appointment":
+        if not appointment_action:
+            missing.append("appointment_action")
+        if not doctor_known and not specialty_known:
+            missing.append("doctor_name")
+            missing.append("specialty")
+        if not branch_known and str(entities.get("appointment_branch_options") or "").strip():
+            missing.append("branch_or_city")
+        if not date_known:
+            missing.append("date")
+        if not time_known:
+            missing.append("time")
+        if not patient_name:
+            missing.append("patient_name")
 
     if any(tool in {"doctors_info", "doctors_schedule_week"} for tool in plan):
         if not doctor_known and not specialty_known:
@@ -240,12 +268,26 @@ def merge_missing_slots_from_plan(tool_plan: list[str], entities: dict[str, Any]
 
 def clarify_question_for_slots(intent: str, missing_slots: list[str]) -> str:
     slots = set(str(slot or "").strip().lower() for slot in (missing_slots or []))
+    if "appointment_action" in slots:
+        return "Уточните, пожалуйста, что нужно сделать: записаться, перенести или отменить запись."
+    if str(intent or "").strip().lower() == "appointment" and slots & {"doctor_name", "specialty"}:
+        return "Уточните, пожалуйста, к какому врачу или по какой специальности нужна запись."
     if slots & {"doctor_name", "specialty"}:
         if intent == "doctor_schedule":
             return "Уточните, пожалуйста, фамилию врача или специальность, чтобы показать расписание."
         return "Уточните, пожалуйста, фамилию врача или специальность."
     if "service_or_analysis_name" in slots:
         return "Уточните, пожалуйста, точное название услуги или анализа."
+    if "branch_or_city" in slots:
+        return "Уточните, пожалуйста, удобный филиал для записи."
+    if "date" in slots and "time" in slots and str(intent or "").strip().lower() == "appointment":
+        return "Выберите, пожалуйста, дату и время для записи."
+    if "date" in slots and str(intent or "").strip().lower() == "appointment":
+        return "Уточните, пожалуйста, удобную дату для записи."
+    if "time" in slots and str(intent or "").strip().lower() == "appointment":
+        return "Уточните, пожалуйста, удобное время для записи."
+    if "patient_name" in slots:
+        return "Сообщите, пожалуйста, ваше ФИО для записи."
     result_labels: list[str] = []
     if "result_surname" in slots:
         result_labels.append("фамилию пациента")
@@ -265,11 +307,11 @@ def clarify_type_for_slots(intent: str, missing_slots: list[str]) -> str:
     slots = set(str(slot or "").strip().lower() for slot in (missing_slots or []))
     if not slots:
         return ""
-    if slots & {"result_surname", "result_year_of_birth", "result_analysis_code", "result_analysis_number"}:
+    if slots & {"result_surname", "result_year_of_birth", "result_analysis_code", "result_analysis_number", "patient_name"}:
         return "missing_auth_data"
-    if slots & {"doctor_name", "specialty", "service_or_analysis_name"}:
+    if slots & {"appointment_action", "doctor_name", "specialty", "service_or_analysis_name"}:
         return "identify"
-    if slots & {"branch_name", "city", "date", "date_from", "date_to", "time", "time_from", "time_to"}:
+    if slots & {"branch_name", "branch_or_city", "city", "date", "date_from", "date_to", "time", "time_from", "time_to"}:
         return "narrow_choice"
     return "other"
 

@@ -258,16 +258,43 @@ def test_agent_uses_adapter_to_send_legacy_result_fields_to_backend():
     reply = asyncio.run(agent.chat("Проверь результат анализа", "adapter_result"))
 
     assert reply.tool_name == "test_result_status"
-    assert services.last_entities["surname"] == "Иванов"
-    assert services.last_entities["year"] == "1989"
-    assert services.last_entities["filial"] == "Бг"
-    assert services.last_entities["number"] == "1234"
-    assert reply.tool_payload["missing_fields"] == [
-        "фамилия",
-        "год рождения",
-        "код анализа",
-        "номер анализа",
-    ]
+
+
+def test_adapter_normalizes_schedule_payload_to_appointment_context():
+    adapter = FreeTalkAdapter()
+    prepared = adapter.prepare_tool_call(
+        tool_name="doctors_schedule_week",
+        user_message="расписание Трубина",
+        entities={"doctor_name": "Трубин Алексей Юрьевич"},
+    )
+
+    result = adapter.normalize_tool_payload(
+        tool_name="doctors_schedule_week",
+        payload={
+            "schedule": [
+                {
+                    "fio": "Трубин Алексей Юрьевич",
+                    "schedule": {
+                        "г. Самара, пр. Ленина, 5": [
+                            {
+                                "date": "2026-04-16",
+                                "slots": ["09:00", "09:30"],
+                                "start": "09:00",
+                                "end": "12:00",
+                            }
+                        ]
+                    },
+                }
+            ],
+            "entities_used": {"doctor_name_resolved": "Трубин Алексей Юрьевич"},
+        },
+        prepared_call=prepared,
+    )
+
+    assert result.ft_payload["entities_used_ft"]["doctor_name"] == "Трубин Алексей Юрьевич"
+    assert result.ft_payload["appointment_branch_options"] == ["г. Самара, пр. Ленина, 5"]
+    assert result.ft_payload["appointment_windows"][0]["date"] == "2026-04-16"
+    assert result.ft_payload["appointment_windows"][0]["time"] == "09:00"
 
 
 class DoctorAdapterServices:

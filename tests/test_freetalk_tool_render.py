@@ -225,7 +225,8 @@ def test_render_schedule_details_includes_region_dates_and_slots():
     assert "Дразнин Антон Владимирович" in text
     assert "Самара" in text
     assert "09:00" in text
-    assert "10.04" in text
+    assert "10 апреля" in text
+    assert "выберите дату и время" in text.lower()
 
 
 def test_doctor_followup_message_detected_with_pronoun_and_memory():

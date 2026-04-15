@@ -13,6 +13,7 @@ from .contracts import DialogState
 CLINICAL_DIALOG_STATE_KEY = "clinical_dialog_state"
 CLINICAL_ENTITY_MEMORY_KEY = "clinical_entity_memory"
 SESSION_MEMORY_ENTITY_KEYS: tuple[str, ...] = (
+    "appointment_action",
     "doctor_name",
     "specialty",
     "service_name",
@@ -31,6 +32,8 @@ SESSION_MEMORY_ENTITY_KEYS: tuple[str, ...] = (
     "result_analysis_code",
     "result_analysis_number",
     "doctor_id",
+    "appointment_windows",
+    "appointment_branch_options",
 )
 
 
@@ -64,6 +67,11 @@ def filter_missing_slots_by_entities(missing_slots: list[str], entities: dict[st
     result_year = bool(str(entities.get("result_year_of_birth") or "").strip())
     result_code = bool(str(entities.get("result_analysis_code") or "").strip())
     result_number = bool(str(entities.get("result_analysis_number") or "").strip())
+    appointment_action = bool(str(entities.get("appointment_action") or "").strip())
+    patient_name = bool(str(entities.get("patient_name") or "").strip())
+    branch_known = bool(str(entities.get("branch_name") or entities.get("city") or "").strip())
+    date_known = bool(str(entities.get("date") or entities.get("date_from") or "").strip())
+    time_known = bool(str(entities.get("time") or entities.get("time_from") or "").strip())
     for slot in (missing_slots or []):
         name = str(slot or "").strip().lower()
         if not name:
@@ -71,6 +79,16 @@ def filter_missing_slots_by_entities(missing_slots: list[str], entities: dict[st
         if name in {"doctor_name", "specialty"} and (doctor_known or specialty_known):
             continue
         if name == "service_or_analysis_name" and (service_known or doctor_known):
+            continue
+        if name == "appointment_action" and appointment_action:
+            continue
+        if name == "branch_or_city" and branch_known:
+            continue
+        if name == "date" and date_known:
+            continue
+        if name == "time" and time_known:
+            continue
+        if name == "patient_name" and patient_name:
             continue
         if name == "result_surname" and result_surname:
             continue

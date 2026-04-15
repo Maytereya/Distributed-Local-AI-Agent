@@ -110,7 +110,7 @@ def finalize_pretool_state(
         candidate_entities=candidate_entities,
         current_target=effective_state.confirmation_target,
     )
-    missing_from_plan = merge_missing_slots_from_plan(tool_plan, entities)
+    missing_from_plan = merge_missing_slots_from_plan(tool_plan, entities, intent=intent)
     missing_slots = merge_missing_slots(
         list(base_missing_slots or []),
         missing_from_plan,
