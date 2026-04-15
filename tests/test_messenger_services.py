@@ -46,6 +46,10 @@ def test_services_doctor_methods_are_sourced_from_doctors_module():
     assert Services.doctors_schedule_week.__module__ == "messengers_router.services.doctors"
 
 
+def test_services_normalise_input_normalizes_yo_characters():
+    assert svc_mod._normalise_input("  Ёжик   в Тумане  ") == "ежик в тумане"
+
+
 def test_doctors_info_filters_by_name(monkeypatch):
     svc = Services()
 

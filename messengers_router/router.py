@@ -62,6 +62,7 @@ from .response_builder import (
     build_service_bundle_response as response_build_service_bundle_response,
     build_test_result_response as response_build_test_result_response,
 )
+from .russian_nlu import normalize_ru
 from .policies import (
     missing_slots,
     clarification_question,
@@ -882,7 +883,7 @@ def _extract_nlu_trace(evidence: Evidence) -> dict[str, Any]:
 def _is_samara_city(city: str | None) -> bool:
     if not city:
         return False
-    return str(city).strip().lower().replace("ё", "е") == "самара"
+    return normalize_ru(city) == "самара"
 
 
 def _reset_state_after_handoff(state: SessionState, memory: MemoryStore) -> None:
@@ -1247,9 +1248,9 @@ async def _backfill_appointment_doctor_from_text(
     # очищаем его, чтобы план строился по doctor flow.
     svc = str(state.last_entities.get("service_name") or "").strip()
     if svc:
-        svc_norm = " ".join(svc.lower().replace("ё", "е").split())
-        raw_norm = " ".join(raw.lower().replace("ё", "е").split())
-        resolved_norm = " ".join(str(resolved).lower().replace("ё", "е").split())
+        svc_norm = " ".join(normalize_ru(svc).split())
+        raw_norm = " ".join(normalize_ru(raw).split())
+        resolved_norm = " ".join(normalize_ru(resolved).split())
         if svc_norm in {raw_norm, resolved_norm}:
             state.last_entities.pop("service_name", None)
 

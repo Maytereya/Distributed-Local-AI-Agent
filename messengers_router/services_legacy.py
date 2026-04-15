@@ -39,6 +39,7 @@ from .doctor_name_port import (
 from .llm_doesnt_work_fallback import build_prepare_fallback_answer
 from .llm_runtime import generate_text
 from .prompt_registry import load_prompt_text
+from .russian_nlu import normalize_ru
 from .service_phrase import extract_service_phrase
 from .runtime_config import config as c
 
@@ -628,7 +629,7 @@ def _is_schedule_no_slots_text(payload: Any) -> bool:
 
     if not isinstance(payload, str):
         return False
-    norm = _normalise_input(payload).replace("ё", "е")
+    norm = _normalise_input(payload)
     return "свободных слотов нет" in norm
 
 
@@ -688,11 +689,11 @@ _PREPARE_SYNONYM_HINTS: dict[str, tuple[str, ...]] = {
 
 
 def _normalise_input(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "").strip()).lower()
+    return re.sub(r"\s+", " ", normalize_ru(s))
 
 
 def _normalise_catalog_text(s: str) -> str:
-    norm = _normalise_input(s).replace("ё", "е")
+    norm = _normalise_input(s)
     norm = re.sub(r"[^a-zа-я0-9\- ]+", " ", norm)
     return re.sub(r"\s+", " ", norm).strip()
 
@@ -766,7 +767,7 @@ def _service_catalog_query_candidates(raw_text_or_name: str, *, current_service_
 
 
 def _normalise_prepare_text(text: str) -> str:
-    norm = _normalise_input(text).replace("ё", "е")
+    norm = _normalise_input(text)
     norm = re.sub(r"[\"'«»!?.,;:()]+", " ", norm)
     return re.sub(r"\s+", " ", norm).strip()
 
@@ -1067,8 +1068,8 @@ def _prepare_fast_relevance_score(query: str, content: str, *, title: str = "") 
 
     query_roots = _prepare_term_roots(query)
     if not query_roots:
-        query_norm = _normalise_input(query).replace("ё", "е")
-        content_norm = _normalise_input(content).replace("ё", "е")
+        query_norm = _normalise_input(query)
+        content_norm = _normalise_input(content)
         generic_prepare_query = any(x in query_norm for x in ("подготов", "анализ", "исслед", "натощак"))
         if generic_prepare_query and _is_prepare_content_actionable(content):
             # Generic query без таргета: разрешаем умеренный score для fallback по main_index.
@@ -1088,9 +1089,9 @@ def _prepare_fast_relevance_score(query: str, content: str, *, title: str = "") 
     if actionable < 1.0:
         score -= 0.08
 
-    query_norm = _normalise_input(query).replace("ё", "е")
-    content_norm = _normalise_input(content).replace("ё", "е")
-    title_norm = _normalise_input(title).replace("ё", "е")
+    query_norm = _normalise_input(query)
+    content_norm = _normalise_input(content)
+    title_norm = _normalise_input(title)
     if query_norm and len(query_norm) >= 6:
         if query_norm in content_norm:
             score += 0.05
@@ -1224,7 +1225,7 @@ def _service_info_row_score(queries: list[str], row: dict[str, Any]) -> tuple[fl
     :return: (score, лучшая query-вариация)
     """
 
-    service_name = _normalise_input(str(row.get("serviceName") or "")).replace("ё", "е")
+    service_name = _normalise_input(str(row.get("serviceName") or ""))
     preparation = str(row.get("preparation") or "").strip()
     if not service_name or not preparation:
         return 0.0, ""
@@ -1287,7 +1288,7 @@ def _is_non_samara_city_value(value: str | None) -> bool:
 def _extract_city_token(value: str | None) -> str | None:
     if not value:
         return None
-    norm = _normalise_input(value).replace("ё", "е")
+    norm = _normalise_input(value)
     if not norm:
         return None
     if _ADDRESS_HINT_RE.search(norm):
@@ -1307,7 +1308,7 @@ def _extract_city_token(value: str | None) -> str | None:
 
 
 def _normalize_region_text(value: str) -> str:
-    norm = _normalise_input(value).replace("ё", "е")
+    norm = _normalise_input(value)
     return re.sub(r"\s+", " ", norm).strip()
 
 
@@ -1378,7 +1379,7 @@ def _extract_specialty_from_text(text: str) -> str:
     m = _SPECIALTY_RE.search(text or "")
     if not m:
         return ""
-    return str(m.group(1) or "").strip().lower().replace("ё", "е")
+    return normalize_ru(m.group(1))
 
 
 def _procedure_query_role_specialty(text: str) -> str:
@@ -1404,7 +1405,7 @@ def _looks_like_schedule_specialty_token(value: str) -> bool:
     :param value: кандидат на фамилию
     :return: True, если это specialty-like токен
     """
-    norm = _normalise_input(value).replace("ё", "е")
+    norm = _normalise_input(value)
     if not norm:
         return False
     return norm in _SCHEDULE_SPECIALTY_TOKENS
@@ -1452,20 +1453,20 @@ def _specialty_terms(specialty: str) -> tuple[str, ...]:
     :param specialty: каноническая специальность (например, "хирург", "лор", "узи")
     :return: кортеж терминов/синонимов для подстрочного поиска
     """
-    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    spec_norm = _normalise_input(specialty)
     if not spec_norm:
         return tuple()
     terms = _SPECIALTY_ROLE_SYNONYMS.get(spec_norm, (spec_norm,))
     out: list[str] = []
     for term in terms:
-        term_norm = _normalise_input(term).replace("ё", "е")
+        term_norm = _normalise_input(term)
         if term_norm and term_norm not in out:
             out.append(term_norm)
     return tuple(out)
 
 
 def _specialty_norm(value: str) -> str:
-    return _normalise_input(value).replace("ё", "е")
+    return _normalise_input(value)
 
 
 def _specialty_equivalent(left: str, right: str) -> bool:
@@ -1561,7 +1562,7 @@ def _matches_specialty_terms(text: str, specialty: str) -> bool:
     :param specialty: искомая специальность
     :return: True, если найдено совпадение по одному из терминов
     """
-    norm = _normalise_input(text).replace("ё", "е")
+    norm = _normalise_input(text)
     if not norm:
         return False
     tokens = re.findall(r"[a-zа-я0-9]+", norm)
@@ -1569,7 +1570,7 @@ def _matches_specialty_terms(text: str, specialty: str) -> bool:
         return False
 
     for term in _specialty_terms(specialty):
-        t = _normalise_input(term).replace("ё", "е")
+        t = _normalise_input(term)
         if not t:
             continue
         term_tokens = re.findall(r"[a-zа-я0-9]+", t)
@@ -1646,7 +1647,7 @@ def _doctor_role_specialty_match_level(doc: dict[str, Any], specialty: str) -> i
     :param specialty: каноническая специальность (например, "хирург")
     :return: целочисленный приоритет совпадения
     """
-    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    spec_norm = _normalise_input(specialty)
     if not spec_norm:
         return 0
 
@@ -1732,7 +1733,7 @@ def _specialization_matches_specialty(unit_name: str, link_spec: str, specialty:
     :param specialty: целевая специальность
     :return: True, если specialization релевантен специальности
     """
-    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    spec_norm = _normalise_input(specialty)
     if not spec_norm:
         return False
     # В ролевом режиме (по специальности) опираемся именно на unit_name.
@@ -1762,7 +1763,7 @@ def _pick_display_specialization(
     :param preferred_service: услуга/процедура из запроса (если есть)
     :return: выбранный текст specialization
     """
-    spec_norm = _normalise_input(preferred_specialty).replace("ё", "е")
+    spec_norm = _normalise_input(preferred_specialty)
     service_norm = _normalise_input(preferred_service)
     link_specs = _iter_unit_link_specs(doc)
 
@@ -1824,8 +1825,8 @@ def _is_role_specialty_query(query_text: str, specialty: str) -> bool:
     :param specialty: распознанная специальность
     :return: True для ролевого сценария, False для процедурного
     """
-    spec_norm = _normalise_input(specialty).replace("ё", "е")
-    query_norm = _normalise_input(query_text).replace("ё", "е")
+    spec_norm = _normalise_input(specialty)
+    query_norm = _normalise_input(query_text)
     if not spec_norm:
         return False
     if spec_norm != "узи":
@@ -1850,7 +1851,7 @@ def _doctor_matches_specialty(doc: dict[str, Any], specialty: str, query_text: s
     :param query_text: исходный запрос пользователя
     :return: True, если врач подходит под фильтр
     """
-    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    spec_norm = _normalise_input(specialty)
     if not spec_norm:
         return False
 
@@ -1880,7 +1881,7 @@ def _stem_service_token(token: str) -> str:
     :param token: токен услуги
     :return: укороченный вариант токена
     """
-    t = str(token or "").strip().lower().replace("ё", "е")
+    t = normalize_ru(token)
     if len(t) < 5:
         return t
     endings = (
@@ -1931,7 +1932,7 @@ def _service_tokens(service_name: str) -> list[str]:
     raw_tokens = re.findall(r"[a-zа-яё0-9]{2,}", _normalise_input(service_name))
     out: list[str] = []
     for tok in raw_tokens:
-        t = tok.lower().replace("ё", "е")
+        t = normalize_ru(tok)
         if t in _SERVICE_FILTER_STOPWORDS:
             continue
         if len(t) < 3:
@@ -1962,7 +1963,7 @@ def _doctor_matches_service(doc: dict[str, Any], service_name: str) -> bool:
     for raw_link in (doc.get("unit_links") or []):
         if isinstance(raw_link, dict):
             parts.append(str(raw_link.get("specialization") or ""))
-    hay = _normalise_input(" ".join(parts)).replace("ё", "е")
+    hay = _normalise_input(" ".join(parts))
     if not hay:
         return False
 
@@ -2061,7 +2062,7 @@ def _specialty_label_for_doctor(doc: dict[str, Any], *, preferred_specialty: str
     :return: короткая метка специальности для patient-facing ответа
     """
 
-    preferred = _normalise_input(preferred_specialty).replace("ё", "е")
+    preferred = _normalise_input(preferred_specialty)
     if preferred and _doctor_matches_primary_specialty(doc, preferred):
         return preferred_specialty.strip().capitalize()
 
@@ -2334,7 +2335,7 @@ def _normalise_price_token(token: str) -> str:
     :return: нормализованный токен
     """
 
-    norm = str(token or "").strip().lower().replace("ё", "е")
+    norm = normalize_ru(token)
     if not norm:
         return ""
     if norm.startswith("ультразвук"):
@@ -2354,7 +2355,7 @@ def _extract_vitamin_designator(text: str) -> str:
     :return: канонический код витамина или пустая строка
     """
 
-    raw = _normalise_input(text).replace("ё", "е")
+    raw = _normalise_input(text)
     m = re.search(r"\bвитамин\w*\s+([a-zа-я]\d{0,2})\b", raw, re.I)
     if not m:
         return ""
@@ -2390,7 +2391,7 @@ def _augment_price_tokens(tokens: list[str], *, raw_text: str = "") -> list[str]
     for token in tokens:
         _push(token)
 
-    raw = _normalise_input(raw_text).replace("ё", "е")
+    raw = _normalise_input(raw_text)
     if raw and _UZI_LINE_RE.search(raw):
         _push("узи")
     vitamin_code = _extract_vitamin_designator(raw)
@@ -2400,7 +2401,7 @@ def _augment_price_tokens(tokens: list[str], *, raw_text: str = "") -> list[str]
 
 
 def _price_query_tokens(text: str) -> list[str]:
-    s = _normalise_input(text).replace("ё", "е")
+    s = _normalise_input(text)
     out: list[str] = []
     for t in _PRICE_TOKEN_RE.findall(s):
         token = _normalise_price_token(str(t or ""))
@@ -2420,7 +2421,7 @@ def _price_query_tokens(text: str) -> list[str]:
 
 
 def _price_alias_candidates(query_text: str) -> list[str]:
-    raw = _normalise_input(str(query_text or "")).replace("ё", "е")
+    raw = _normalise_input(str(query_text or ""))
     if not raw:
         return []
     out: list[str] = []
@@ -2429,7 +2430,7 @@ def _price_alias_candidates(query_text: str) -> list[str]:
         out.append(direct)
     extracted = _extract_price_service_from_query(raw)
     if extracted:
-        out.append(_normalise_input(extracted).replace("ё", "е"))
+        out.append(_normalise_input(extracted))
     compact = " ".join(_price_query_tokens(raw)).strip()
     if compact:
         out.append(compact)
@@ -2510,7 +2511,7 @@ def _is_generic_uzi_price_request(query_text: str) -> bool:
         return False
 
     extracted = str(_extract_price_service_from_query(raw) or "").strip()
-    norm = _normalise_input(extracted).replace("ё", "е")
+    norm = _normalise_input(extracted)
     return norm in {"узи", "ультразвук", "ультразвуковое исследование"}
 
 
@@ -2545,8 +2546,8 @@ def _detect_service_kind(
     :return: `lab` | `doctor`
     """
 
-    norm_name = _normalise_input(str(service_name or "")).replace("ё", "е")
-    norm_query = _normalise_input(str(query_text or "")).replace("ё", "е")
+    norm_name = _normalise_input(str(service_name or ""))
+    norm_query = _normalise_input(str(query_text or ""))
 
     if is_consult_query:
         return "doctor"
@@ -2603,7 +2604,7 @@ def _dedupe_price_queries(queries: list[str], *, max_items: int = 8) -> list[str
         value = str(raw or "").strip()
         if not value:
             continue
-        key = _normalise_input(value).replace("ё", "е")
+        key = _normalise_input(value)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -2639,7 +2640,7 @@ def _should_prefer_current_price_query_over_context(query_text: str, current_ser
     if _is_city_only_reply(raw):
         return False
 
-    current_norm = _normalise_input(current).replace("ё", "е")
+    current_norm = _normalise_input(current)
     current_tokens = set(_price_query_tokens(current))
     query_variants: list[str] = []
 
@@ -2656,7 +2657,7 @@ def _should_prefer_current_price_query_over_context(query_text: str, current_ser
         query_variants.append(compact)
 
     for candidate in query_variants:
-        cand_norm = _normalise_input(candidate).replace("ё", "е")
+        cand_norm = _normalise_input(candidate)
         if not cand_norm or cand_norm == current_norm:
             continue
         cand_tokens = set(_price_query_tokens(candidate))
@@ -2803,7 +2804,7 @@ def _resolve_best_price_row_from_queries(
         row = ranked[0]
         score, matched = _price_row_score(
             row,
-            query=_normalise_input(query).replace("ё", "е"),
+            query=_normalise_input(query),
             tokens=_price_query_tokens(query),
             homecode_query=_extract_homecode_query(query),
         )
@@ -2984,7 +2985,7 @@ def _score_price_rows(
     :return: список словарей вида `{"row": ..., "score": ..., "matched": ...}`
     """
 
-    query = _normalise_input(query_text).replace("ё", "е")
+    query = _normalise_input(query_text)
     tokens = _price_query_tokens(query_text)
     homecode_query = _extract_homecode_query(query_text)
 
@@ -3043,7 +3044,7 @@ def _score_price_rows(
 
 
 def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], homecode_query: str) -> tuple[int, int]:
-    name = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
+    name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
     homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
     if not name:
         return 0, 0
@@ -3221,7 +3222,7 @@ def _select_patient_price_rows(
     if filtered_ranked:
         ranked = filtered_ranked
 
-    query = _normalise_input(query_text).replace("ё", "е")
+    query = _normalise_input(query_text)
     tokens = _price_query_tokens(query_text)
     homecode_query = _extract_homecode_query(query_text)
     top_score, top_matched = _price_row_score(
@@ -3265,7 +3266,7 @@ def _normalise_family_variant_name(value: str) -> str:
     :return: нормализованное имя без модификаторов
     """
 
-    norm = _normalise_input(str(value or "")).replace("ё", "е")
+    norm = _normalise_input(str(value or ""))
     norm = _PRICE_CITO_ROW_RE.sub(" ", norm)
     norm = _PRICE_CAPILLARY_ROW_RE.sub(" ", norm)
     norm = _PRICE_CHILD_ROW_RE.sub(" ", norm)
@@ -3450,7 +3451,7 @@ def _select_family_variant_rows(
             ranked = filtered_ranked
         return ranked[:limit]
     ranked = _rank_price_rows(unique_rows, effective_query, limit=max(limit, 20))
-    family_norm = _normalise_input(family_query).replace("ё", "е")
+    family_norm = _normalise_input(family_query)
     if _is_uzi_query_text(family_query) and _UZI_PROCEDURE_HINT_RE.search(family_norm):
         filtered_ranked = [
             row
@@ -3772,7 +3773,7 @@ def _is_lab_like_service_name(value: str) -> bool:
     :return: True для lab-like строки
     """
 
-    norm = _normalise_input(str(value or "")).replace("ё", "е")
+    norm = _normalise_input(str(value or ""))
     if not norm:
         return False
     if _PRICE_PROCEDURE_LIKE_RE.search(norm):
@@ -3806,9 +3807,9 @@ def _classify_catalog_service_kind(
         (retail_rows[0].get("serviceName") or retail_rows[0].get("name") or service_name)
         if retail_rows else service_name
     ).strip()
-    top_norm = _normalise_input(top_name).replace("ё", "е")
-    service_norm = _normalise_input(service_name).replace("ё", "е")
-    query_norm = _normalise_input(query_text).replace("ё", "е")
+    top_norm = _normalise_input(top_name)
+    service_norm = _normalise_input(service_name)
+    query_norm = _normalise_input(query_text)
     top_rows = retail_rows[:3] if retail_rows else []
     lab_signal = bool(
         _LAB_SERVICE_HINT_RE.search(service_norm)
@@ -3862,7 +3863,7 @@ def _has_reliable_doctor_service_link(
         return False
     strong_hits = 0
     for _, matched, _, _, row in matched_rows[:3]:
-        row_name = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
+        row_name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
         if not row_name:
             continue
         if query_norm == row_name or query_norm in row_name or row_name in query_norm:
@@ -4086,8 +4087,8 @@ def _select_effective_price_service_name(entity_service_name: str, query_service
     if not query:
         return entity
 
-    entity_norm = _normalise_input(entity).replace("ё", "е")
-    query_norm = _normalise_input(query).replace("ё", "е")
+    entity_norm = _normalise_input(entity)
+    query_norm = _normalise_input(query)
     if not query_norm or entity_norm == query_norm:
         return entity
 
@@ -4140,8 +4141,8 @@ def _compound_price_secondary_lab_service(
     :return: каноническое имя второй лабораторной услуги либо None
     """
 
-    query_norm = _normalise_input(str(query_text or "")).replace("ё", "е")
-    primary_norm = _normalise_input(str(primary_service_name or "")).replace("ё", "е")
+    query_norm = _normalise_input(str(query_text or ""))
+    primary_norm = _normalise_input(str(primary_service_name or ""))
     if not query_norm or not primary_norm or " и " not in f" {query_norm} ":
         return None
 
@@ -4155,14 +4156,14 @@ def _compound_price_secondary_lab_service(
             fragment_from_lab_phrase = True
 
     for alias in sorted(_PRICE_SERVICE_ALIASES.keys(), key=len, reverse=True):
-        alias_norm = _normalise_input(alias).replace("ё", "е")
+        alias_norm = _normalise_input(alias)
         if not alias_norm or alias_norm in primary_norm or alias_norm not in query_norm:
             continue
         fragments.append(alias)
 
     seen: set[str] = set()
     for idx, fragment in enumerate(fragments):
-        key = _normalise_input(fragment).replace("ё", "е")
+        key = _normalise_input(fragment)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -4170,7 +4171,7 @@ def _compound_price_secondary_lab_service(
         if not candidate:
             variants = _PRICE_SERVICE_ALIASES.get(key, ())
             candidate = str(variants[0] or "").strip() if variants else ""
-        candidate_norm = _normalise_input(candidate).replace("ё", "е")
+        candidate_norm = _normalise_input(candidate)
         if not candidate_norm or candidate_norm == primary_norm:
             continue
         top_rows = _select_patient_price_rows(retail_rows, candidate, limit=3)
@@ -4270,24 +4271,24 @@ def match_compound_price_service_option(user_text: str, options: list[str]) -> s
     :return: выбранная услуга либо None
     """
 
-    reply_norm = _normalise_input(str(user_text or "")).replace("ё", "е")
+    reply_norm = _normalise_input(str(user_text or ""))
     if not reply_norm:
         return None
     reply_tokens = set(_meaningful_price_service_tokens(reply_norm))
 
     alias_hits: set[str] = set()
     for alias, variants in _PRICE_SERVICE_ALIASES.items():
-        alias_norm = _normalise_input(alias).replace("ё", "е")
+        alias_norm = _normalise_input(alias)
         if alias_norm and alias_norm in reply_norm:
             alias_hits.add(alias_norm)
             for variant in variants:
-                variant_norm = _normalise_input(variant).replace("ё", "е")
+                variant_norm = _normalise_input(variant)
                 if variant_norm:
                     alias_hits.add(variant_norm)
 
     for option in options:
         option_text = str(option or "").strip()
-        option_norm = _normalise_input(option_text).replace("ё", "е")
+        option_norm = _normalise_input(option_text)
         if not option_norm:
             continue
         if reply_norm == option_norm or reply_norm in option_norm or option_norm in reply_norm:
@@ -4317,12 +4318,12 @@ def _specialty_priority_rank(doc: dict[str, Any], specialty: str) -> int:
     :param specialty: специальность запроса
     :return: индекс приоритета (0..N-1), либо большой ранг если врач не в приоритете
     """
-    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    spec_norm = _normalise_input(specialty)
     priorities = _SPECIALTY_PRIORITY_SURNAMES.get(spec_norm)
     if not priorities:
         return 10**6
 
-    fio_norm = _normalise_input(str(doc.get("fio") or "")).replace("ё", "е")
+    fio_norm = _normalise_input(str(doc.get("fio") or ""))
     if not fio_norm:
         return 10**6
     fio_tokens = [token for token in re.findall(r"[a-zа-я0-9]+", fio_norm) if token]
@@ -4428,7 +4429,6 @@ def _extract_region_work_time(region: dict[str, Any]) -> str:
 
 def _norm_city(s: str) -> str:
     t = _normalise_input(s or "")
-    t = t.replace("ё", "е")
     t = re.sub(r"^г\.?\s*", "", t)
     return t.strip()
 
@@ -4681,7 +4681,7 @@ _DOC_RELEVANCE_STOPWORDS = {
 
 
 def _doc_tokens(text: str) -> set[str]:
-    norm = _normalise_input(text).replace("ё", "е")
+    norm = _normalise_input(text)
     out: set[str] = set()
     for token in re.findall(r"[a-zа-я0-9]{3,}", norm):
         if token.isdigit() or token in _DOC_RELEVANCE_STOPWORDS:
@@ -4691,8 +4691,8 @@ def _doc_tokens(text: str) -> set[str]:
 
 
 def _is_main_index_relevant(query: str, content: str, *, doc_kind: str) -> bool:
-    content_norm = _normalise_input(content).replace("ё", "е")
-    query_norm = _normalise_input(query).replace("ё", "е")
+    content_norm = _normalise_input(content)
+    query_norm = _normalise_input(query)
     if not content_norm:
         return False
 
@@ -4728,7 +4728,7 @@ def _is_main_index_relevant(query: str, content: str, *, doc_kind: str) -> bool:
 
 
 def _is_prepare_relevant(query: str, content: str) -> bool:
-    content_norm = _normalise_input(content).replace("ё", "е")
+    content_norm = _normalise_input(content)
     if not content_norm:
         return False
     if not any(x in content_norm for x in ("подготов", "натощак", "перед", "за ")):
@@ -4895,7 +4895,7 @@ def _is_prepare_content_actionable(content: str) -> bool:
     :return: True, если текст выглядит содержательным
     """
 
-    norm = _normalise_input(content).replace("ё", "е")
+    norm = _normalise_input(content)
     if not norm:
         return False
     if norm in _PREPARE_GENERIC_HEADINGS:
@@ -4911,7 +4911,7 @@ def _is_prepare_content_actionable(content: str) -> bool:
 
 
 def _has_prepare_strong_hints(content: str) -> bool:
-    norm = _normalise_input(content).replace("ё", "е")
+    norm = _normalise_input(content)
     if not norm:
         return False
     return any(h in norm for h in _PREPARE_STRONG_HINTS)
@@ -5249,7 +5249,7 @@ class Services:
                 name_norm = _normalise_catalog_text(str(row.get("serviceName") or row.get("name") or ""))
                 if not name_norm:
                     continue
-                code_norm = _normalise_input(str(row.get("serviceHomecode") or "")).replace("ё", "е")
+                code_norm = _normalise_input(str(row.get("serviceHomecode") or ""))
                 key = (name_norm, code_norm)
                 if key in seen:
                     continue
@@ -5785,7 +5785,7 @@ class Services:
             has_exact_doctor_link=False,
             is_consult_query=is_consult_query,
         )
-        query_norm = _normalise_input(service_name).replace("ё", "е")
+        query_norm = _normalise_input(service_name)
         query_tokens = _price_query_tokens(service_name)
         homecode_query = _extract_homecode_query(service_name)
         matched_price_rows: list[tuple[int, int, int, int, dict[str, Any]]] = []
@@ -5821,7 +5821,7 @@ class Services:
                 doctor_id = _as_int(row.get("doctorId"))
                 if doctor_id is None or doctor_id not in by_id:
                     continue
-                row_name_norm = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
+                row_name_norm = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
                 row_homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
                 score, matched = _price_row_score(
                     row,

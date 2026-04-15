@@ -30,6 +30,7 @@ from .policies import (
     quick_fill_core_entities,
     service_name_conflicts_with_doctor,
 )
+from .russian_nlu import normalize_ru
 from .services import Services, resolve_price_service_name_from_catalog
 
 
@@ -140,7 +141,7 @@ def _looks_like_patient_fio(text: str) -> bool:
     tokens = [t for t in s.split() if t]
     if len(tokens) < 2:
         return False
-    normalized = [t.lower().replace("ё", "е") for t in tokens]
+    normalized = [normalize_ru(t) for t in tokens]
     if any(t in _PATIENT_FIO_STOPWORDS for t in normalized):
         return False
     return True
@@ -180,7 +181,7 @@ def _is_city_only_reply(text: str) -> bool:
 def _is_samara_city_value(city: str | None) -> bool:
     if not city:
         return False
-    return str(city).strip().lower().replace("ё", "е") == "самара"
+    return normalize_ru(city) == "самара"
 
 
 def _is_appointment_branch_reply(text: str) -> bool:
@@ -205,7 +206,7 @@ def _is_appointment_branch_reply(text: str) -> bool:
     if looks_like_branch_hint(s):
         return True
 
-    low = re.sub(r"[\"'`]", "", s.lower()).replace("ё", "е")
+    low = re.sub(r"[\"'`]", "", normalize_ru(s))
     low = re.sub(r"\s+", " ", low).strip()
     # "на победе", "победы 83" без явного префикса "ул."
     return bool(re.fullmatch(r"(?:на\s+)?[а-я\-]{4,40}(?:\s+\d{1,4}[a-zа-я]?)?", low))
@@ -539,8 +540,7 @@ def _set_secondary_queue(state: SessionState, labels: list[str]) -> None:
 
 
 def _normalize_doctor_key(value: Any) -> str:
-    s = str(value or "").strip().lower()
-    s = s.replace("ё", "е")
+    s = normalize_ru(value)
     return re.sub(r"\s+", " ", s)
 
 
@@ -873,8 +873,8 @@ def quick_fill_entities_from_text(
         else:
             specialty = extract_specialty(t.lower())
             if specialty:
-                existing = str(out.get("service_name") or "").strip().lower().replace("ё", "е")
-                spec_norm = specialty.strip().lower().replace("ё", "е")
+                existing = _normalize_doctor_key(out.get("service_name"))
+                spec_norm = _normalize_doctor_key(specialty)
                 if not existing or existing == spec_norm:
                     out["service_name"] = f"прием {specialty}"
 

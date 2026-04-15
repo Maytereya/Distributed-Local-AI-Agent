@@ -40,6 +40,7 @@ from .policies import (
     looks_like_branch_hint,
     missing_slots,
 )
+from .russian_nlu import normalize_ru
 from .recovery_policy import contextual_reply_kind
 
 _PATIENT_NAME_FRAGMENT_RE = re.compile(r"^\s*[А-ЯЁа-яё\-]{2,}\s+[А-ЯЁа-яё\-]{1,}\s*$")
@@ -197,7 +198,7 @@ def is_appointment_soft_pause_request(user_text: str) -> bool:
     text = str(user_text or "").strip()
     if not text:
         return False
-    norm = _APPOINTMENT_SOFT_PAUSE_PUNCT_RE.sub(" ", text.lower().replace("ё", "е")).strip()
+    norm = _APPOINTMENT_SOFT_PAUSE_PUNCT_RE.sub(" ", normalize_ru(text)).strip()
     norm = re.sub(r"\s+", " ", norm)
     if norm in _APPOINTMENT_SOFT_PAUSE_EXACT:
         return True

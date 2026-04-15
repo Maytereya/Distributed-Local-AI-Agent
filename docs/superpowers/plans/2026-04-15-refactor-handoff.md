@@ -3,7 +3,7 @@
 **Branch:** `refactor/core` → merges into `origin/release`  
 **Python:** `venv/bin/pytest` with `PYTHONPATH=.`  
 **Test command:** `cd /Users/maxten/Dev/Distributed-Local-AI-Agent2 && PYTHONPATH=. venv/bin/pytest tests/ -x -q --ignore=tests/eval`  
-**Never break:** 510 tests must stay green after every task.
+**Never break:** 511 tests must stay green after every task.
 
 ---
 
@@ -44,7 +44,8 @@ Tests added: `test_russian_nlu.py`, `test_confidence_policy.py`, `test_nlu_merge
 - Task 5.2 is done in `de827ea`.
 - Task 6.1 is done in `84d2522`.
 - Task 6.2 is done in the latest `refactor/core` commit after Task 6.1.
-- Current green baseline: `510 passed, 3 warnings`.
+- Task 7.1 is done in the current `refactor/core` commit.
+- Current green baseline: `511 passed, 3 warnings`.
 
 ### Important implementation notes for the next agent
 
@@ -56,13 +57,15 @@ Tests added: `test_russian_nlu.py`, `test_confidence_policy.py`, `test_nlu_merge
 3. **Relative import correction for Task 6.1:** from inside `messengers_router/services/__init__.py`, the legacy module must be imported as sibling `messengers_router.services_legacy` via `from .. import services_legacy`, not `from .services_legacy`.
 4. **Task 6.2 extraction pattern:** the pilot migration does not rewrite the `Services` class body inline. Instead, doctor-domain methods are implemented in `messengers_router/services/doctors.py` and rebound onto `Services` at the bottom of `services_legacy.py`. This keeps the step small and preserves the external `Services` API.
 5. **Task 6.2 circular-import avoidance:** `services/doctors.py` uses a lazy helper (`_legacy_module()`) to access shared helpers from `services_legacy` at runtime. Do not replace this with a top-level `from .. import services_legacy` import unless you intentionally redesign the import graph.
+6. **Task 7.1 normalization rollout detail:** `services_legacy._normalise_input()` now delegates to `russian_nlu.normalize_ru()` and keeps only whitespace compaction locally. That change made it safe to remove dozens of legacy `.replace("ё", "е")` no-op tails without changing behavior.
+7. **Task 7.1 regression coverage:** `tests/test_messenger_services.py::test_services_normalise_input_normalizes_yo_characters` is the new red/green guard for the normalization rollout. Keep it when moving more service helpers into submodules.
 
 ---
 
 ## What STILL NEEDS TO BE DONE
 
 Tasks are ordered — do them in sequence. Each task is a single focused commit.
-Tasks 4.2, 5.1, 5.2, 6.1, and 6.2 are already done. Do not redo them. Historical task definitions are kept below only as implementation context.
+Tasks 4.2, 5.1, 5.2, 6.1, 6.2, and 7.1 are already done. Do not redo them. Historical task definitions are kept below only as implementation context.
 
 ---
 
@@ -333,17 +336,23 @@ All external callers unchanged via services/__init__.py facade.
 
 ---
 
-### Task 7.1 — Full eval run + any fixes
+### Task 7.1 — DONE (current HEAD after next commit) — Full eval run + any fixes
 
-**Run:**
+Completed in the current `refactor/core` working commit.
+
+**What changed:**
+- Imported `normalize_ru` into the last seven scoped modules: `router.py`, `services_legacy.py`, `renderer.py`, `flow_policy.py`, `appointment_flow_guard.py`, `topic_registry.py`, `doctor_name_port.py`.
+- Switched `services_legacy._normalise_input()` to `normalize_ru()` + whitespace compaction.
+- Removed the remaining inline `.lower().replace("ё", "е")` idioms and the redundant `.replace("ё", "е")` tails that sat on top of `_normalise_input()`.
+- Added regression test `test_services_normalise_input_normalizes_yo_characters`.
+
+**Verification run:**
 ```bash
 cd /Users/maxten/Dev/Distributed-Local-AI-Agent2
-PYTHONPATH=. venv/bin/pytest tests/ -q --ignore=tests/eval 2>&1 | tail -5
+PYTHONPATH=. venv/bin/pytest tests/ -x -q --ignore=tests/eval
 ```
 
-If there are failures from earlier tasks, fix them before proceeding.
-
-Also check for remaining inline `.lower().replace("ё", "е")` copies that were noted in scope but not yet migrated (these are in `router.py`, `services_legacy.py`, `renderer.py`, `flow_policy.py`, `appointment_flow_guard.py`, `topic_registry.py`, `doctor_name_port.py`). Fix them by importing `normalize_ru` from `russian_nlu` — follow the exact same pattern as Task 1.2.
+**Result:** `511 passed, 3 warnings`
 
 **Commit message:**
 ```
