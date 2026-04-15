@@ -19,7 +19,7 @@ from typing import Any, cast
 from .llm_mode_policy import RuntimeOptions
 from .llm_runtime import generate_text
 from .doctor_name_port import resolve_cached_doctor_name_candidate
-from .russian_nlu import normalize_ru
+from .russian_nlu import normalize_ru, ENTITY_WHITELIST
 from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision, ContextAction
 from .prompt_contracts import sanitize_classifier_json
 from .prompt_registry import load_prompt_text
@@ -630,24 +630,12 @@ def _normalize_confidence(x: Any) -> float:
     return max(0.0, min(1.0, v))
 
 
-_ALLOWED_ENTITY_KEYS = {
-    "doctor_name", "doctor_id", "specialty",
-    "branch_name", "branch_id", "city",
-    "service_name", "appointment_action",
-    "test_name", "test_goal", "order_id", "result_action", "include_promos",
-    "insurance_type", "accepts_children", "child_age",
-    "patient_name",
-    "date_hint", "date_from", "date_to", "time_from", "time_to",
-    "surname", "year", "filial", "number", "lang",
-    "secondary_intents",
-}
-
 def _sanitize_entities(entities: Any) -> dict[str, Any]:
     if not isinstance(entities, dict):
         return {}
     clean: dict[str, Any] = {}
     for k, v in entities.items():
-        if k in _ALLOWED_ENTITY_KEYS:
+        if k in ENTITY_WHITELIST:
             clean[k] = v
     return clean
 
