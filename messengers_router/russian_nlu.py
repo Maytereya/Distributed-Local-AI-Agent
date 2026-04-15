@@ -8,7 +8,7 @@ from __future__ import annotations
 
 
 def normalize_ru(text: str | None) -> str:
-    """Lowercase + ё→е normalization.
+    """Lowercase + ё→е normalization. Returns ``""`` for None.
 
     Use everywhere in place of the inline idiom:
         str(x).lower().replace("ё", "е").strip()
