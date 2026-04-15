@@ -11,6 +11,46 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
+@dataclass(frozen=True)
+class ConfidencePolicy:
+    """Named confidence thresholds — single source of truth.
+
+    Replace every scattered magic float in nlu_pipeline / classifier
+    with a reference to the appropriate field here so thresholds are
+    tuned in one place.
+
+    Threshold semantics
+    -------------------
+    llm_promote_rich    — _merge(): promote rule over LLM when LLM conf is
+                          below this value and engine mode is "rich".
+    llm_promote_hybrid  — same for "hybrid" mode (stricter threshold).
+    refine_min          — minimum LLM-refine confidence to override base decision.
+    rule_hardcode       — confidence assigned to unambiguous deterministic hits
+                          (safety labels, strong keyword rules).
+    high                — high-confidence rule-based label assignment.
+    moderate            — moderate-confidence rule-based label assignment.
+    price_floor         — minimum confidence floor applied to PRICE decisions
+                          before emitting them.
+    promoted_floor      — confidence floor used when rule is promoted over LLM.
+    llm_default         — default confidence returned when LLM is unavailable
+                          or returns malformed JSON.
+    """
+
+    llm_promote_rich: float = 0.45
+    llm_promote_hybrid: float = 0.55
+    refine_min: float = 0.45
+    rule_hardcode: float = 0.85
+    high: float = 0.75
+    moderate: float = 0.70
+    price_floor: float = 0.55
+    promoted_floor: float = 0.60
+    llm_default: float = 0.20
+
+
+# Module-level singleton — import this everywhere instead of sprinkling floats.
+CONFIDENCE = ConfidencePolicy()
+
+
 PATIENT_LABEL_PRIORITY = [
     "URGENT",
     "COMPLAINT",
