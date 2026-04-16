@@ -13,6 +13,7 @@ from __future__ import annotations
 # не конфликтует с чужими пакетами
 
 import json
+import logging
 import re
 from typing import Any, cast
 
@@ -103,6 +104,7 @@ _PATIENT_NAME_STOPWORDS = {
     "хотела",
     "буду",
 }
+log = logging.getLogger(__name__)
 _DOCTOR_FOLLOWUP_FILLERS = {
     "да",
     "нет",
@@ -228,6 +230,7 @@ async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000)
             fmt="json",
         )
     except Exception:
+        log.warning("ollama_classify_failed", exc_info=True)
         return "", sanitize_classifier_json(
             {"label": "OTHER", "confidence": CONFIDENCE.llm_default, "entities": {}, "flags": ["ollama_timeout"]}
         )

@@ -1996,7 +1996,7 @@ async def patient_routing_stream(
     try:
         services.ensure_background_refresh_started()
     except Exception:
-        pass
+        logger.warning("background_refresh_start_failed", exc_info=True)
 
     # Явный запрос оператора должен иметь абсолютный приоритет.
     if explicit_operator_requested(user_text):

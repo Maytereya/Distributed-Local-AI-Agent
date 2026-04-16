@@ -12,11 +12,14 @@ GraphEngine не меняет внешний API и не заменяет роу
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
 from .mess_types import RouteDecision, SessionState
+
+log = logging.getLogger(__name__)
 
 
 class DialogState(str, Enum):
@@ -47,6 +50,7 @@ def get_dialog_state(state: SessionState) -> DialogState:
     try:
         return DialogState(raw)
     except Exception:
+        log.warning("dialog_state_deserialize_failed", exc_info=True)
         return DialogState.IDLE
 
 

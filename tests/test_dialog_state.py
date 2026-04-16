@@ -1,7 +1,8 @@
 # tests/test_dialog_state.py
 """Unit tests for DialogState dataclass in mess_types."""
 import dataclasses
-import pytest
+import logging
+from messengers_router import dialog_graph as dialog_graph_mod
 from messengers_router.mess_types import DialogState, SessionState
 
 
@@ -120,3 +121,13 @@ def test_session_state_dialog_is_independent_per_instance():
     s2 = SessionState(session_id="s2")
     s1.dialog.label = "APPOINTMENT"
     assert s2.dialog.label == "OTHER"
+
+
+def test_dialog_graph_logs_warning_on_invalid_state(caplog):
+    state = SessionState(session_id="graph-invalid", last_entities={"_dialog_state": "BROKEN"})
+
+    with caplog.at_level(logging.WARNING):
+        result = dialog_graph_mod.get_dialog_state(state)
+
+    assert result == dialog_graph_mod.DialogState.IDLE
+    assert "dialog_state_deserialize_failed" in caplog.text
