@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from typing import AsyncGenerator, Any
 
-from .mess_types import Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
+from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
 from .context_summary import update_summary
 from .dialog_graph import GraphEngine
@@ -1408,6 +1408,7 @@ async def route_patient_message(
             state.last_entities.pop("patient_name", None)
             state.last_entities.pop("appointment_confirm_pending", None)
             state.last_entities.pop("appointment_confirmed", None)
+            state.dialog.phase = AppointmentPhase.COLLECTING  # dual-write: typed phase
         decision = RouteDecision(
             label="APPOINTMENT",
             confidence=0.91,
@@ -1650,6 +1651,7 @@ async def route_patient_message(
             state.last_entities.pop("patient_name", None)
             state.last_entities.pop("appointment_confirm_pending", None)
             state.last_entities.pop("appointment_confirmed", None)
+            state.dialog.phase = AppointmentPhase.COLLECTING  # dual-write: typed phase
         entities = dict(decision.entities)
         for key in ("doctor_id", "doctor_name", "branch_id", "branch_name"):
             if not entities.get(key) and state.last_entities.get(key):
@@ -2209,6 +2211,7 @@ async def patient_routing_stream(
                     state.last_entities.pop("_appointment_datetime_attempts", None)
             if flow_label == "APPOINTMENT":
                 state.last_entities["appointment_flow_active"] = True
+                state.dialog.phase = AppointmentPhase.COLLECTING  # dual-write: typed phase
             _remember_question(state, f"pending:{flow_label}", missing if isinstance(missing, list) else [])
             yield ResponseEnvelope(
                 text=clarification_question(flow_label, missing if isinstance(missing, list) else [], state.last_entities),

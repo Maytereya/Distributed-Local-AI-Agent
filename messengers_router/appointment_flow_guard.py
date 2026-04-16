@@ -238,6 +238,7 @@ def _appointment_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
 
     summary = appointment_summary(state.last_entities)
     state.last_entities["appointment_confirm_pending"] = True
+    state.dialog.phase = AppointmentPhase.CONFIRM  # dual-write: typed phase
     return appointment_text_confirm_prompt(summary)
 
 
@@ -270,6 +271,7 @@ def run_appointment_precheck(
             state.last_entities.pop("appointment_cancel_pending", None)
             state.last_entities.pop("appointment_topic_switch_pending", None)
             state.last_entities["appointment_flow_active"] = True
+            state.dialog.phase = AppointmentPhase.COLLECTING  # dual-write: typed phase
             return ResponseEnvelope(
                 text=_appointment_resume_prompt(state, memory),
                 handoff=False,
@@ -352,6 +354,7 @@ def run_appointment_precheck(
             state.last_entities["appointment_confirmed"] = True
             state.last_entities.pop("appointment_confirm_pending", None)
             state.last_entities.pop("appointment_flow_active", None)
+            state.dialog.phase = AppointmentPhase.CONFIRMED  # dual-write: typed phase
             return ResponseEnvelope(
                 text=appointment_text_confirmed_handoff(summary),
                 handoff=True,
@@ -369,6 +372,7 @@ def run_appointment_precheck(
             for key in ("date_from", "date_to", "time_from", "time_to", "date_hint"):
                 state.last_entities.pop(key, None)
             state.last_entities["appointment_flow_active"] = True
+            state.dialog.phase = AppointmentPhase.COLLECTING  # dual-write: typed phase
             return ResponseEnvelope(
                 text=appointment_text_reask_datetime(),
                 handoff=False,
