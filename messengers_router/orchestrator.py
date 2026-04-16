@@ -115,11 +115,17 @@ async def tool_loop(
     memory: Any | None = None,
     runtime_options: Any | None = None,
 ) -> OrchestratorContext:
-    """Выполняет bridge в legacy-router, пока новый tool-loop не реализован полностью.
+    """Выполняет plan + execute, заменяя legacy-bridge route_patient_message().
+
+    Порядок:
+    1. Три pre-pending handler'а — перехватывают ожидающие multi-turn состояния
+       до того, как NLU-решение будет использовано.
+    2. build_plan() — строит Plan из уже готового ctx.decision.
+    3. execute_plan() — запускает Plan против сервисов, возвращает Evidence.
 
     :param ctx: контекст пайплайна
-    :param services: сервисный слой, который будет задействован позже
-    :param memory: хранилище состояния/pendings для legacy-router
+    :param services: сервисный слой
+    :param memory: хранилище pending/state
     :param runtime_options: runtime-настройки LLM/NLU
     :return: обновлённый контекст
     """
@@ -132,6 +138,32 @@ async def tool_loop(
 
     from . import router
 
+    # 1. Pre-pending handlers — short-circuit before the legacy route when a
+    #    multi-turn pending state is already set from the previous turn.
+    #    If none fires, the full legacy route runs below (which sets pending
+    #    state for the NEXT turn and handles all post-NLU middleware).
+    for handler in (
+        router._handle_catalog_confirm_pending,
+        router._handle_appointment_action_pending,
+        router._handle_compound_price_pending,
+    ):
+        result = await handler(
+            user_text=ctx.text,
+            state=ctx.state,
+            services=services,
+            memory=memory,
+            runtime_options=runtime_options,
+        )
+        if result is not None:
+            ctx.decision, ctx.plan, ctx.evidence = result
+            ctx.short_circuit = True
+            ctx.short_circuit_reason = "pending_handler"
+            return ctx
+
+    # 2. Legacy route — handles all post-NLU middleware (catalog-confirm injection,
+    #    doctor verification, entity grounding, flow overrides, memory merge, etc.)
+    #    and calls build_plan + execute_plan internally.
+    #    Stays here until the remaining middleware is extracted into the orchestrator.
     decision, plan, evidence = await router.route_patient_message(
         ctx.text,
         ctx.state,

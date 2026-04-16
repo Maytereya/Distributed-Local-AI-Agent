@@ -116,36 +116,38 @@ def test_run_pipeline_returns_context_with_mocked_nlu(monkeypatch):
     assert state.dialog.entities == {"service_name": "УЗИ щитовидной железы"}
 
 
-def test_run_pipeline_delegates_legacy_route_inside_orchestrator(monkeypatch):
+def test_tool_loop_pending_handler_short_circuits_before_legacy_route(monkeypatch):
+    """When a pending handler fires, tool_loop short-circuits and skips route_patient_message."""
+
+    import messengers_router.router as router_mod
+
     async def fake_deterministic_rule_decision(*args, **kwargs):
-        _ = args, kwargs
         return None
 
     async def fake_analyze_with_candidates(text, state, runtime_options=None):
-        _ = text, state, runtime_options
         return NLUResult(
-            decision=RouteDecision(
-                label="PRICE",
-                confidence=0.84,
-                flags={"llm_primary"},
-                source="llm_primary",
-            ),
+            decision=RouteDecision(label="PRICE", confidence=0.84, source="llm_primary"),
             candidates=[NLUCandidate(source="llm_primary", label="PRICE", confidence=0.84)],
             merged_from="llm_primary",
         )
 
-    async def fake_route_patient_message(text, state, services, memory, runtime_options=None):
-        _ = text, state, services, memory, runtime_options
-        return (
-            RouteDecision(
-                label="PRICE",
-                confidence=0.9,
-                entities={"service_name": "ТТГ"},
-                source="legacy_router",
-            ),
-            Plan(label="PRICE"),
-            Evidence(items={"payload": "ok"}),
-        )
+    pending_decision = RouteDecision(
+        label="PRICE",
+        confidence=0.95,
+        entities={"service_name": "ТТГ"},
+        source="compound_price",
+    )
+    pending_plan = Plan(label="PRICE")
+    pending_evidence = Evidence(items={"payload": "compound_ok"})
+
+    async def fake_compound_price_handler(**kw):
+        return pending_decision, pending_plan, pending_evidence
+
+    legacy_called: list = []
+
+    async def fake_route_patient_message(*args, **kwargs):
+        legacy_called.append(True)
+        return pending_decision, pending_plan, pending_evidence
 
     monkeypatch.setattr(
         "messengers_router.classifier.deterministic_rule_decision",
@@ -155,25 +157,32 @@ def test_run_pipeline_delegates_legacy_route_inside_orchestrator(monkeypatch):
         "messengers_router.nlu_pipeline.analyze_with_candidates",
         fake_analyze_with_candidates,
     )
-    monkeypatch.setattr(
-        "messengers_router.router.route_patient_message",
-        fake_route_patient_message,
-    )
+    monkeypatch.setattr(router_mod, "_handle_catalog_confirm_pending",
+                        lambda **kw: None)  # sync ok — not awaited in loop if prior fires
+    monkeypatch.setattr(router_mod, "_handle_appointment_action_pending",
+                        lambda **kw: None)
 
-    state = SessionState(session_id="pipeline-legacy-bridge")
+    async def _no_pending(**kw):
+        return None
+
+    monkeypatch.setattr(router_mod, "_handle_catalog_confirm_pending", _no_pending)
+    monkeypatch.setattr(router_mod, "_handle_appointment_action_pending", _no_pending)
+    monkeypatch.setattr(router_mod, "_handle_compound_price_pending", fake_compound_price_handler)
+    monkeypatch.setattr(router_mod, "route_patient_message", fake_route_patient_message)
+
+    state = SessionState(session_id="pipeline-pending-gate")
     services = Services()
     memory = MemoryStore()
 
-    out = run(run_pipeline("сколько стоит узи", state, services=services, memory=memory))
+    out = run(run_pipeline("да", state, services=services, memory=memory))
 
-    assert out.decision is not None
-    assert out.decision.source == "legacy_router"
-    assert out.plan == Plan(label="PRICE")
-    assert out.evidence == Evidence(items={"payload": "ok"})
-    assert out.response is None
-    assert state.dialog.label == "PRICE"
-    assert state.dialog.confidence == 0.9
-    assert state.dialog.entities == {"service_name": "ТТГ"}
+    # Legacy route must NOT have been called — pending handler short-circuited
+    assert legacy_called == []
+    assert out.short_circuit is True
+    assert out.short_circuit_reason == "pending_handler"
+    assert out.decision is pending_decision
+    assert out.plan is pending_plan
+    assert out.evidence is pending_evidence
 
 
 def test_render_pending_handler_preserves_legacy_bridge_outputs():
