@@ -145,6 +145,7 @@ def test_patient_routing_stream_uses_orchestrator_outputs_without_legacy_route_c
         ctx.decision = RouteDecision(label="PRICE", confidence=0.91, source="llm_primary")
         ctx.plan = Plan(label="PRICE")
         ctx.evidence = Evidence(items={"payload": "stub"})
+        ctx.response = ResponseEnvelope(text="Ответ из orchestrator", handoff=False)
         return ctx
 
     async def fail_route_patient_message(*args, **kwargs):
@@ -153,11 +154,6 @@ def test_patient_routing_stream_uses_orchestrator_outputs_without_legacy_route_c
 
     monkeypatch.setattr("messengers_router.orchestrator.run_pipeline", fake_run_pipeline)
     monkeypatch.setattr(router_mod, "route_patient_message", fail_route_patient_message)
-    monkeypatch.setattr(
-        router_mod,
-        "_build_first_structured_response",
-        lambda **kwargs: ResponseEnvelope(text="Ответ из orchestrator", handoff=False),
-    )
 
     state = SessionState(session_id="orchestrator-outputs")
     services = Services()
@@ -169,6 +165,10 @@ def test_patient_routing_stream_uses_orchestrator_outputs_without_legacy_route_c
     assert len(out) == 1
     assert out[0].text == "Ответ из orchestrator"
     assert out[0].handoff is False
+    assert state.history[-2:] == [
+        {"role": "user", "text": "цена"},
+        {"role": "assistant", "text": "Ответ из orchestrator"},
+    ]
 
 
 def test_apply_appointment_continuity_overrides_prioritizes_datetime():

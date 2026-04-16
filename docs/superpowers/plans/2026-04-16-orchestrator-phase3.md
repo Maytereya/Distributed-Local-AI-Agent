@@ -44,6 +44,39 @@ Commit 2 should modify `router.py` only after re-reading the now-current
 
 ---
 
+## Progress update (2026-04-16, Commit 2 completed)
+
+Task C is now complete on `refactor/core`.
+
+- `patient_routing_stream()` is now a shell around `run_pipeline()`.
+- The large post-orchestrator rendering block was removed.
+- The shell now keeps only:
+  - error fallback around `run_pipeline()`
+  - optional debug envelope from `ctx.decision/plan/evidence`
+  - history append (`user` + `assistant`)
+  - summary refresh
+  - handoff reset at the boundary
+  - final `yield ctx.response`
+
+This means the orchestrator is now the sole owner of normal response
+construction, while `patient_routing_stream()` keeps the transport/session
+wrapper responsibilities only.
+
+Verification after Commit 2:
+
+- Full suite:
+  `PYTHONPATH=. venv/bin/pytest tests/ -x -q --ignore=tests/eval`
+- Result:
+  `516 passed, 3 warnings`
+
+### Net result of Phase 3
+
+- `tool_loop()` owns orchestration after NLU.
+- `render()` owns response construction.
+- `patient_routing_stream()` is reduced to prechecks + shell behavior.
+
+---
+
 ## Current state (what exists right now)
 
 File: `messengers_router/orchestrator.py` (213 lines)

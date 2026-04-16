@@ -2067,16 +2067,12 @@ async def patient_routing_stream(
             memory=memory,
             runtime_options=runtime_options,
         )
-        if ctx.response and ctx.response.text:
-            if ctx.response.handoff:
-                _reset_state_after_handoff(state, memory)
-            yield ctx.response
-            return
+        response = ctx.response
         decision = ctx.decision
         plan = ctx.plan
         evidence = ctx.evidence
-        if decision is None or plan is None or evidence is None:
-            raise RuntimeError("orchestrator returned neither response nor legacy routing result")
+        if response is None:
+            raise RuntimeError("orchestrator returned no response")
     except Exception as e:
         fallback_text = handoff_message("service_error")
         state_update: dict[str, Any] = {}
@@ -2090,9 +2086,8 @@ async def patient_routing_stream(
             state_update=state_update,
         )
         return
-    flow_label = plan.label
 
-    if debug:
+    if debug and decision is not None and plan is not None and evidence is not None:
         pending = memory.get_pending(state)
         yield ResponseEnvelope(
             text="",
@@ -2101,182 +2096,12 @@ async def patient_routing_stream(
             state_update={"debug": _debug_meta(decision, plan, evidence, state, pending)},
         )
 
-    user_turn_count = sum(1 for h in (state.history or []) if isinstance(h, dict) and h.get("role") == "user")
-    if "smalltalk_greeting" in decision.flags and user_turn_count <= 1:
-        yield ResponseEnvelope(text=INTRO_TEXT, attachments=[], handoff=False)
-        return
+    memory.append_turn(state, role="user", text=user_text)
+    memory.append_turn(state, role="assistant", text=response.text)
+    update_summary(state, reason="normal")
 
-    if decision.label == "URGENT":
-        yield render_urgent()
-        return
-    if decision.label == "COMPLAINT":
-        yield render_complaint()
-        return
-    if decision.label == "MEDICAL_ADVICE":
-        yield render_medical_advice()
-        return
-
-    # Смягченный fallback для неуверенного NLU:
-    # сначала уточняем, а к оператору передаем только после 3-го непонимания
-    # или при явном запросе "оператор".
-    # Важно: не перебиваем активный pending/flow (иначе ломается естественный диалог).
-    pending_now = memory.get_pending(state)
-    flow_active = state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
-    recovery = evaluate_recovery(
-        user_text=user_text,
-        decision=decision,
-        flow_label=flow_label,
-        pending_exists=bool(pending_now),
-        flow_active=flow_active,
-        state_entities=state.last_entities,
-        summary=state.summary,
-        max_unclear=3,
-    )
-    if recovery.kind == "handoff":
-        update_summary(state, reason="handoff")
+    if response.handoff:
         _reset_state_after_handoff(state, memory)
-        yield ResponseEnvelope(text=recovery.text or handoff_message("low_confidence"), handoff=True)
-        return
-    if recovery.kind == "clarify":
-        _remember_question(
-            state,
-            recovery.reason or "clarify",
-            list(decision.clarify_slots) if decision.clarify_slots else [],
-        )
-        yield ResponseEnvelope(text=recovery.text or LOW_CONF_CLARIFY_TEXT, handoff=False)
-        return
 
-    pending = memory.get_pending(state)
-    if not plan.steps and pending:
-        missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
-        catalog_pending_reply = (
-            flow_label == "OTHER"
-            and isinstance(missing, list)
-            and "catalog_confirm" in missing
-            and isinstance(evidence.get("catalog_confirm_response"), dict)
-        )
-        if catalog_pending_reply:
-            pass
-        else:
-            if (
-                flow_label == "APPOINTMENT"
-                and isinstance(missing, list)
-                and "appointment_action" in missing
-                and contextual_reply_kind(user_text) == "no"
-            ):
-                update_summary(state, reason="handoff")
-                _reset_state_after_handoff(state, memory)
-                yield ResponseEnvelope(text=handoff_message("manual_operator"), handoff=True)
-                return
-            if flow_label == "APPOINTMENT" and isinstance(missing, list):
-                action = str(state.last_entities.get("appointment_action") or "").strip().lower()
-                needs_doctor = any(
-                    str(item).startswith("_any_of:")
-                    and ("doctor_id" in str(item) or "doctor_name" in str(item))
-                    for item in missing
-                )
-                needs_datetime = any(
-                    "date_from" in str(item) or "time_from" in str(item) or "date_hint" in str(item)
-                    for item in missing
-                )
-                if action in {"cancel", "reschedule"} and needs_doctor:
-                    attempts = int(state.last_entities.get("_appointment_doctor_lookup_attempts") or 0) + 1
-                    state.last_entities["_appointment_doctor_lookup_attempts"] = attempts
-                    if attempts >= 3:
-                        state.last_entities.pop("_appointment_doctor_lookup_attempts", None)
-                        update_summary(state, reason="handoff")
-                        _reset_state_after_handoff(state, memory)
-                        yield ResponseEnvelope(
-                            text="Не удалось точно определить врача для этой записи. Соединяю с оператором.",
-                            handoff=True,
-                        )
-                        return
-                else:
-                    state.last_entities.pop("_appointment_doctor_lookup_attempts", None)
-
-                if action in {"cancel", "reschedule"} and needs_datetime:
-                    attempts = int(state.last_entities.get("_appointment_datetime_attempts") or 0) + 1
-                    state.last_entities["_appointment_datetime_attempts"] = attempts
-                    if attempts >= 3:
-                        state.last_entities.pop("_appointment_datetime_attempts", None)
-                        update_summary(state, reason="handoff")
-                        _reset_state_after_handoff(state, memory)
-                        yield ResponseEnvelope(
-                            text="Не удалось точно определить дату или время записи. Соединяю с оператором.",
-                            handoff=True,
-                        )
-                        return
-                else:
-                    state.last_entities.pop("_appointment_datetime_attempts", None)
-            if flow_label == "APPOINTMENT":
-                state.last_entities["appointment_flow_active"] = True
-                state.dialog.phase = AppointmentPhase.COLLECTING
-            _remember_question(state, f"pending:{flow_label}", missing if isinstance(missing, list) else [])
-            yield ResponseEnvelope(
-                text=clarification_question(flow_label, missing if isinstance(missing, list) else [], state.last_entities),
-                handoff=False,
-            )
-            return
-
-    if evidence.get("auth_required"):
-        yield ResponseEnvelope(text=evidence.get("auth_message", "Нужна авторизация."), handoff=False)
-        return
-
-    handoff_required, handoff_msg, handoff_reason = evidence_requires_handoff(evidence)
-    if handoff_required:
-        _reset_state_after_handoff(state, memory)
-        yield ResponseEnvelope(text=handoff_message(handoff_reason, handoff_msg), handoff=True)
-        return
-
-    structured_response = _build_first_structured_response(
-        flow_label=flow_label,
-        evidence=evidence,
-        state=state,
-        services=services,
-        memory=memory,
-        decision=decision,
-        user_text=user_text,
-    )
-    if structured_response is not None:
-        secondary = get_secondary_queue(state)
-        followup = secondary_followup_text(secondary)
-        if (
-            followup
-            and not state.last_entities.get("_secondary_offer_pending")
-            and not state.last_entities.get(_COMPOUND_PRICE_PENDING_KEY)
-            and not decision.needs_handoff
-            and flow_label not in {"APPOINTMENT", "URGENT", "COMPLAINT", "MEDICAL_ADVICE", "TEST_RESULT"}
-        ):
-            state.last_entities["_secondary_offer_pending"] = True
-        if structured_response.handoff:
-            _reset_state_after_handoff(state, memory)
-        yield structured_response
-        return
-
-    try:
-        async for chunk in render_stream(user_text, decision, evidence, runtime_options=runtime_options):
-            yield ResponseEnvelope(text=chunk, attachments=[], handoff=False)
-    except Exception:
-        _reset_state_after_handoff(state, memory)
-        yield ResponseEnvelope(
-            text=handoff_message("renderer_error"),
-            attachments=[],
-            handoff=True,
-        )
-        return
-
-    if decision.needs_handoff:
-        _reset_state_after_handoff(state, memory)
-        yield ResponseEnvelope(text=decision_handoff_text(decision.flags), attachments=[], handoff=True)
-
-    secondary = get_secondary_queue(state)
-    followup = secondary_followup_text(secondary)
-    if (
-        followup
-        and not state.last_entities.get("_secondary_offer_pending")
-        and not state.last_entities.get(_COMPOUND_PRICE_PENDING_KEY)
-        and not decision.needs_handoff
-        and flow_label not in {"APPOINTMENT", "URGENT", "COMPLAINT", "MEDICAL_ADVICE", "TEST_RESULT"}
-    ):
-        state.last_entities["_secondary_offer_pending"] = True
-        yield ResponseEnvelope(text=followup, attachments=[], handoff=False)
+    yield response
+    return
