@@ -190,6 +190,19 @@ class SessionState:
     auth_ref: str | None = None  # id сессии авторизации или что-то подобное
     dialog: DialogState = field(default_factory=DialogState)  # typed intent state
 
+    def __post_init__(self) -> None:
+        # Migration bridge: derive dialog.phase from legacy last_entities flags when
+        # dialog.phase is not already set.  Allows code that only writes last_entities
+        # (tests, restored sessions) to work correctly during Phase 2.
+        # Remove once all writers set dialog.phase directly.
+        if not self.dialog.phase:
+            if self.last_entities.get("appointment_confirmed"):
+                self.dialog.phase = AppointmentPhase.CONFIRMED
+            elif self.last_entities.get("appointment_confirm_pending"):
+                self.dialog.phase = AppointmentPhase.CONFIRM
+            elif self.last_entities.get("appointment_flow_active"):
+                self.dialog.phase = AppointmentPhase.COLLECTING
+
 
 @dataclass
 class RouteDecision:

@@ -956,7 +956,7 @@ def _apply_appointment_continuity_overrides(
     2) OTHER + контекстное продолжение
     3) guard для TEST_RESULT/DOCTOR_* при активной записи
     """
-    if not state.last_entities.get("appointment_flow_active"):
+    if state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM):
         return decision
 
     if (
@@ -1352,8 +1352,7 @@ async def route_patient_message(
     if (
         state.last_entities.get("_secondary_offer_pending")
         and queue
-        and not state.last_entities.get("appointment_confirm_pending")
-        and not state.last_entities.get("appointment_flow_active")
+        and state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
     ):
         reply_kind = contextual_reply_kind(user_text)
         if reply_kind == "other" and _is_secondary_soft_yes(user_text):
@@ -1408,7 +1407,7 @@ async def route_patient_message(
             state.last_entities.pop("patient_name", None)
             state.last_entities.pop("appointment_confirm_pending", None)
             state.last_entities.pop("appointment_confirmed", None)
-            state.dialog.phase = AppointmentPhase.COLLECTING  # dual-write: typed phase
+            state.dialog.phase = AppointmentPhase.COLLECTING
         decision = RouteDecision(
             label="APPOINTMENT",
             confidence=0.91,
@@ -1517,7 +1516,7 @@ async def route_patient_message(
     # В активном APPOINTMENT flow короткий follow-up с датой/временем
     # считаем продолжением записи до применения context_action.
     if (
-        state.last_entities.get("appointment_flow_active")
+        state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
         and _is_appointment_datetime_followup(user_text)
         and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "ADDRESS", "PRICE"}
     ):
@@ -1647,11 +1646,11 @@ async def route_patient_message(
         and _is_appointment_datetime_followup(user_text)
         and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "TEST_ASSIST", "ADDRESS", "PRICE"}
     ):
-        if not bool(state.last_entities.get("appointment_flow_active")) and not looks_like_patient_fio(user_text):
+        if state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM) and not looks_like_patient_fio(user_text):
             state.last_entities.pop("patient_name", None)
             state.last_entities.pop("appointment_confirm_pending", None)
             state.last_entities.pop("appointment_confirmed", None)
-            state.dialog.phase = AppointmentPhase.COLLECTING  # dual-write: typed phase
+            state.dialog.phase = AppointmentPhase.COLLECTING
         entities = dict(decision.entities)
         for key in ("doctor_id", "doctor_name", "branch_id", "branch_name"):
             if not entities.get(key) and state.last_entities.get(key):
@@ -1686,7 +1685,7 @@ async def route_patient_message(
         keep_appointment_flow = (
             (is_appointment_waiting_patient_name(pending_now) and looks_like_patient_fio(user_text))
             or (
-                bool(state.last_entities.get("appointment_flow_active"))
+                state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
                 and should_keep_appointment_flow_override(user_text)
             )
         )
@@ -1814,7 +1813,7 @@ async def route_patient_message(
             if quick_now:
                 quick_now = await _sanitize_doctor_in_entities(quick_now, services, label=decision.label)
                 memory.merge_entities(state, quick_now, label=decision.label)
-        elif decision.label == "APPOINTMENT" and state.last_entities.get("appointment_flow_active"):
+        elif decision.label == "APPOINTMENT" and state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM):
             # В активном сценарии записи продолжаем извлекать филиал/дату/время
             # даже если формально required slots уже заполнены.
             quick_flow = quick_fill_entities_from_text(
@@ -2122,7 +2121,7 @@ async def patient_routing_stream(
     # или при явном запросе "оператор".
     # Важно: не перебиваем активный pending/flow (иначе ломается естественный диалог).
     pending_now = memory.get_pending(state)
-    flow_active = bool(state.last_entities.get("appointment_flow_active"))
+    flow_active = state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
     recovery = evaluate_recovery(
         user_text=user_text,
         decision=decision,
@@ -2211,7 +2210,7 @@ async def patient_routing_stream(
                     state.last_entities.pop("_appointment_datetime_attempts", None)
             if flow_label == "APPOINTMENT":
                 state.last_entities["appointment_flow_active"] = True
-                state.dialog.phase = AppointmentPhase.COLLECTING  # dual-write: typed phase
+                state.dialog.phase = AppointmentPhase.COLLECTING
             _remember_question(state, f"pending:{flow_label}", missing if isinstance(missing, list) else [])
             yield ResponseEnvelope(
                 text=clarification_question(flow_label, missing if isinstance(missing, list) else [], state.last_entities),

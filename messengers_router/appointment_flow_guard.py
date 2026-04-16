@@ -233,12 +233,12 @@ def _appointment_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
         memory.set_pending(state, label="APPOINTMENT", missing_slots=missing)
         return clarification_question("APPOINTMENT", missing, state.last_entities)
 
-    if state.last_entities.get("appointment_confirm_pending"):
+    if state.dialog.phase == AppointmentPhase.CONFIRM:
         return appointment_text_reask_confirm()
 
     summary = appointment_summary(state.last_entities)
     state.last_entities["appointment_confirm_pending"] = True
-    state.dialog.phase = AppointmentPhase.CONFIRM  # dual-write: typed phase
+    state.dialog.phase = AppointmentPhase.CONFIRM
     return appointment_text_confirm_prompt(summary)
 
 
@@ -271,7 +271,7 @@ def run_appointment_precheck(
             state.last_entities.pop("appointment_cancel_pending", None)
             state.last_entities.pop("appointment_topic_switch_pending", None)
             state.last_entities["appointment_flow_active"] = True
-            state.dialog.phase = AppointmentPhase.COLLECTING  # dual-write: typed phase
+            state.dialog.phase = AppointmentPhase.COLLECTING
             return ResponseEnvelope(
                 text=_appointment_resume_prompt(state, memory),
                 handoff=False,
@@ -305,7 +305,7 @@ def run_appointment_precheck(
 
     pending = memory.get_pending(state)
     appointment_pending = isinstance(pending, dict) and pending.get("label") == "APPOINTMENT"
-    appointment_flow_active = bool(state.last_entities.get("appointment_flow_active"))
+    appointment_flow_active = state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
     pending_missing: list[str] = []
     if appointment_pending:
         raw_missing = pending.get("missing")
@@ -313,7 +313,7 @@ def run_appointment_precheck(
             pending_missing = [str(x) for x in raw_missing if str(x).strip()]
     waiting_action_choice = "appointment_action" in pending_missing
     reply_kind = contextual_reply_kind(user_text)
-    if (appointment_flow_active or appointment_pending) and not state.last_entities.get("appointment_confirm_pending"):
+    if (appointment_flow_active or appointment_pending) and state.dialog.phase != AppointmentPhase.CONFIRM:
         # Когда ждем именно выбор действия (отмена/перенос), короткие "да/нет"
         # не считаем soft-pause/cancel, чтобы обработка шла в pending-ветке роутера.
         if waiting_action_choice and reply_kind in {"yes", "no"}:
@@ -347,14 +347,14 @@ def run_appointment_precheck(
                 ),
             )
 
-    if state.last_entities.get("appointment_confirm_pending"):
+    if state.dialog.phase == AppointmentPhase.CONFIRM:
         confirm_transition = appointment_confirmation_transition(user_text)
         if confirm_transition == APPOINTMENT_CONFIRM_YES:
             summary = appointment_summary(state.last_entities)
             state.last_entities["appointment_confirmed"] = True
             state.last_entities.pop("appointment_confirm_pending", None)
             state.last_entities.pop("appointment_flow_active", None)
-            state.dialog.phase = AppointmentPhase.CONFIRMED  # dual-write: typed phase
+            state.dialog.phase = AppointmentPhase.CONFIRMED
             return ResponseEnvelope(
                 text=appointment_text_confirmed_handoff(summary),
                 handoff=True,
@@ -372,7 +372,7 @@ def run_appointment_precheck(
             for key in ("date_from", "date_to", "time_from", "time_to", "date_hint"):
                 state.last_entities.pop(key, None)
             state.last_entities["appointment_flow_active"] = True
-            state.dialog.phase = AppointmentPhase.COLLECTING  # dual-write: typed phase
+            state.dialog.phase = AppointmentPhase.COLLECTING
             return ResponseEnvelope(
                 text=appointment_text_reask_datetime(),
                 handoff=False,
