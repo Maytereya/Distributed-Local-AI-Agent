@@ -14,6 +14,7 @@ recovery-политика и сервисные интеграции вынес�
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import AsyncGenerator, Any
 
@@ -107,6 +108,7 @@ _SAMARA_ONLY_OPERATOR_TEXT = "Сейчас могу помочь только п
 _GRAPH_ENGINE = GraphEngine()
 _TOPIC_OVERRIDE_ALLOW_FROM_OTHER = {"PREPARE", "NEWS"}
 _TOPIC_OVERRIDE_MIN_SCORE = 2
+logger = logging.getLogger(__name__)
 _SECONDARY_SOFT_YES_RE = re.compile(
     r"^\s*(?:(?:да|ок|окей|хорошо|ладно)(?:\s+(?:спасибо|благодарю|благодарствую|спс))?|"
     r"(?:спасибо|благодарю|благодарствую|спс))\s*[!.,?;:]*\s*$",
@@ -2074,6 +2076,7 @@ async def patient_routing_stream(
         if response is None:
             raise RuntimeError("orchestrator returned no response")
     except Exception as e:
+        logger.exception("patient_routing_stream failed for session_id=%s", state.session_id)
         fallback_text = handoff_message("service_error")
         state_update: dict[str, Any] = {}
         if debug:

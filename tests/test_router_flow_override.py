@@ -74,6 +74,16 @@ def _run_stream_once(user_text: str, state: SessionState, services: Services, me
     return asyncio.run(_collect())
 
 
+def _run_stream_once_debug(user_text: str, state: SessionState, services: Services, memory: MemoryStore):
+    async def _collect():
+        out = []
+        async for env in router_mod.patient_routing_stream(user_text, state, services, memory, debug=True):
+            out.append(env)
+        return out
+
+    return asyncio.run(_collect())
+
+
 def test_appointment_flow_override_allows_city_datetime_and_fio():
     assert _should_keep_appointment_flow_override("Самара") is True
     assert _should_keep_appointment_flow_override("на 16:30") is True
@@ -169,6 +179,32 @@ def test_patient_routing_stream_uses_orchestrator_outputs_without_legacy_route_c
         {"role": "user", "text": "цена"},
         {"role": "assistant", "text": "Ответ из orchestrator"},
     ]
+
+
+def test_patient_routing_stream_logs_traceback_when_orchestrator_crashes(monkeypatch):
+    async def fake_run_pipeline(*args, **kwargs):
+        _ = args, kwargs
+        raise RuntimeError("boom")
+
+    logged: list[tuple[tuple, dict]] = []
+
+    def fake_logger_exception(*args, **kwargs):
+        logged.append((args, kwargs))
+
+    monkeypatch.setattr("messengers_router.orchestrator.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(router_mod.logger, "exception", fake_logger_exception)
+
+    state = SessionState(session_id="orchestrator-crash")
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    out = _run_stream_once_debug("расписание Хальметовой", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].handoff is True
+    assert out[0].state_update == {"debug": {"route_error": "boom"}}
+    assert logged
 
 
 def test_apply_appointment_continuity_overrides_prioritizes_datetime():
