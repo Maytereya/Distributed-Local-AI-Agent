@@ -202,6 +202,7 @@ _DOCTOR_INFO_HINT_RE = re.compile(
     re.I,
 )
 _DOCTOR_SCHEDULE_HINT_RE = re.compile(r"\b(расписани\w*|график|окн\w*|слот\w*|когда\b.*\bпринима\w*)\b", re.I)
+_SERVICE_LOCATION_QUERY_RE = re.compile(r"\bгде\b.*\b(сделать|пройти|сдать)\b", re.I)
 
 
 def _compile_patterns(patterns: list[str]) -> tuple[re.Pattern[str], ...]:
@@ -735,8 +736,23 @@ def detect_price_intent(text: str) -> bool:
     return _matches_any(text, _PRICE_RE)
 
 
+def _looks_like_service_location_query(text: str) -> bool:
+    """
+    Определяет вопрос о месте оказания услуги по формулировке пользователя.
+
+    :param text: исходный текст пользователя
+    :return: True, если запрос похож на «где можно сделать <услугу>»
+    """
+
+    raw = str(text or "").strip()
+    if not raw or not _SERVICE_LOCATION_QUERY_RE.search(raw):
+        return False
+    return bool(extract_service_phrase(raw))
+
+
 def detect_address_intent(text: str) -> bool:
-    return _matches_any(text, _ADDRESS_RE)
+    raw = str(text or "").strip()
+    return _matches_any(raw, _ADDRESS_RE) or _looks_like_service_location_query(raw)
 
 
 def detect_branch_hours_intent(text: str) -> bool:

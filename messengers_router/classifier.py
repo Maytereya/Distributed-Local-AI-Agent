@@ -1172,7 +1172,7 @@ async def deterministic_rule_decision(
     elif detect_schedule_intent(text):
         entities: dict[str, Any] = {}
         specialty = _extract_schedule_specialty(text)
-        doctor_name = _extract_schedule_doctor_name(text)
+        doctor_name = _extract_doctor_name(text, mode="schedule")
         if doctor_name:
             entities["doctor_name"] = doctor_name
         if specialty:
@@ -1192,7 +1192,7 @@ async def deterministic_rule_decision(
         )
     elif detect_doctor_info_intent(text):
         entities: dict[str, Any] = {}
-        doctor_name = _extract_appointment_doctor_name(text)
+        doctor_name = _extract_doctor_name(text, mode="appointment")
         if doctor_name:
             entities["doctor_name"] = doctor_name
         base = RouteDecision(
