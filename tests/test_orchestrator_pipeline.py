@@ -170,28 +170,84 @@ def test_tool_loop_pending_handler_short_circuits_before_legacy_route(monkeypatc
     assert out.evidence is pending_evidence
 
 
-def test_render_pending_handler_defers_to_patient_routing_stream(monkeypatch):
-    """pending_handler short-circuit with a non-safety label leaves response=None.
+def test_render_uses_prebuilt_structured_response_and_sets_secondary_offer_pending():
+    state = SessionState(
+        session_id="render-prebuilt",
+        last_entities={"_secondary_queue": ["DOCTOR_SCHEDULE"]},
+    )
+    ctx = OrchestratorContext(
+        text="Какие кардиологи принимают?",
+        state=state,
+        decision=RouteDecision(label="DOCTOR_INFO", confidence=0.93),
+        plan=Plan(label="DOCTOR_INFO"),
+        evidence=Evidence(
+            items={
+                "doctors_info": {
+                    "doctors": [
+                        {
+                            "fio": "Хальметова Алина Алексеевна",
+                            "specialization": "Кардиолог",
+                            "regions": ["г. Самара, пр. Ленина, 5"],
+                        }
+                    ]
+                }
+            }
+        ),
+    )
 
-    The evidence for pending-handler cases contains special structures (e.g.
-    operator_offer_response, service_bundle) that patient_routing_stream's
-    200-line rendering block handles.  render() intentionally returns None so
-    that block can take over.  Full render_stream() integration is deferred
-    until that rendering block is migrated into the orchestrator (Task C).
-    """
+    out = run(render(ctx, services=Services(), memory=MemoryStore()))
+
+    assert out.response is not None
+    assert "Хальметова" in out.response.text
+    assert state.last_entities.get("_secondary_offer_pending") is True
+
+
+def test_render_collects_stream_into_response_envelope(monkeypatch):
+    async def fake_render_stream(user_text, decision, evidence, runtime_options=None):
+        _ = user_text, decision, evidence, runtime_options
+        yield "hello "
+        yield "world"
+
+    monkeypatch.setattr("messengers_router.renderer.render_stream", fake_render_stream)
+
     ctx = OrchestratorContext(
         text="цена",
         state=SessionState(session_id="render-stream"),
-        decision=RouteDecision(label="PRICE", confidence=0.93, needs_handoff=True),
+        decision=RouteDecision(label="PRICE", confidence=0.93, needs_handoff=False),
         plan=Plan(label="PRICE"),
-        evidence=Evidence(items={"attachments": [{"type": "pdf", "name": "memo"}]}),
-        short_circuit=True,
-        short_circuit_reason="pending_handler",
+        evidence=Evidence(items={"payload": "ok", "attachments": [{"type": "pdf", "name": "memo"}]}),
     )
 
-    out = run(render(ctx))
+    out = run(render(ctx, services=Services(), memory=MemoryStore()))
 
-    assert out.response is None
-    assert out.decision == ctx.decision
-    assert out.plan == ctx.plan
-    assert out.evidence == ctx.evidence
+    assert out.response == ResponseEnvelope(
+        text="hello world",
+        attachments=[{"type": "pdf", "name": "memo"}],
+        handoff=False,
+    )
+
+
+def test_render_prioritizes_pending_clarification_before_appointment_step_response():
+    state = SessionState(
+        session_id="render-pending-clarify",
+        last_entities={"appointment_flow_active": True, "appointment_action": "reschedule"},
+    )
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["_any_of:doctor_id,doctor_name"])
+    ctx = OrchestratorContext(
+        text="не знаю фамилию",
+        state=state,
+        decision=RouteDecision(
+            label="OTHER",
+            confidence=0.4,
+            flags={"low_confidence"},
+            needs_handoff=False,
+        ),
+        plan=Plan(label="APPOINTMENT"),
+        evidence=Evidence(items={}),
+    )
+
+    out = run(render(ctx, services=Services(), memory=memory))
+
+    assert out.response is not None
+    assert "фио врача" in out.response.text.lower()
