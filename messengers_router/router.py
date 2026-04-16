@@ -38,7 +38,6 @@ from .flow_policy import (
     normalize_secondary_labels,
     prelock_active_appointment_turn,
     quick_fill_entities_from_text,
-    secondary_followup_text,
     set_secondary_queue,
 )
 from .appointment_flow_guard import (
@@ -66,10 +65,7 @@ from .response_builder import (
 from .russian_nlu import normalize_ru
 from .policies import (
     missing_slots,
-    clarification_question,
-    evidence_requires_handoff,
     handoff_message,
-    decision_handoff_text,
     apply_verified_doctor_override,
     detect_nonbookable_walkin_intent,
     detect_appointment_action,
@@ -86,16 +82,9 @@ from .policies import (
     nonbookable_service_hint,
     service_name_conflicts_with_doctor,
 )
-from .recovery_policy import contextual_reply_kind, evaluate_recovery, explicit_operator_requested
+from .recovery_policy import contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option
-from .renderer import (
-    render_urgent,
-    render_complaint,
-    render_medical_advice,
-    render_stream,
-)
 from .memory import MemoryStore
-from .text_templates import INTRO_TEXT, LOW_CONF_CLARIFY_TEXT
 from .city import match_city
 from .topic_registry import (
     build_topic_flag,

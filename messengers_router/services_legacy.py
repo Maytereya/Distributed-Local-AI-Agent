@@ -2047,8 +2047,8 @@ def _doctor_matches_fio(fio: str, doctor_query: str, resolved_surname: str | Non
         return False
 
     for token in tokens:
-        for c in normalized:
-            if token.startswith(c):
+        for candidate in normalized:
+            if token.startswith(candidate):
                 return True
     return False
 
@@ -2240,17 +2240,21 @@ def _soft_address_match(left: str, right: str) -> bool:
     :param right: адрес из второго источника
     :return: True, если строки похожи и описывают один филиал
     """
-    l = _normalise_input(left)
-    r = _normalise_input(right)
-    if not l or not r:
+    left_norm = _normalise_input(left)
+    right_norm = _normalise_input(right)
+    if not left_norm or not right_norm:
         return False
-    if l == r or l in r or r in l:
+    if left_norm == right_norm or left_norm in right_norm or right_norm in left_norm:
         return True
-    lc = re.sub(r"[^a-zа-я0-9]+", "", l)
-    rc = re.sub(r"[^a-zа-я0-9]+", "", r)
-    if not lc or not rc:
+    left_compact = re.sub(r"[^a-zа-я0-9]+", "", left_norm)
+    right_compact = re.sub(r"[^a-zа-я0-9]+", "", right_norm)
+    if not left_compact or not right_compact:
         return False
-    return lc == rc or lc in rc or rc in lc
+    return (
+        left_compact == right_compact
+        or left_compact in right_compact
+        or right_compact in left_compact
+    )
 
 
 def _static_procedure_addresses(service_q: str) -> list[str]:
@@ -7429,7 +7433,7 @@ class Services:
         return []
 
 
-from .services.doctors import (
+from .services.doctors import (  # noqa: E402
     _doctor_availability_snapshot as _doctor_availability_snapshot_impl,
     _resolve_doctor_id_from_name as _resolve_doctor_id_from_name_impl,
     _schedule_by_specialty as _schedule_by_specialty_impl,
@@ -7447,10 +7451,10 @@ Services._resolve_doctor_id_from_name = _resolve_doctor_id_from_name_impl
 Services.doctors_info = _doctors_info_impl
 Services.doctors_schedule_week = _doctors_schedule_week_impl
 
-from .services.prices import price_info as _price_info_impl
+from .services.prices import price_info as _price_info_impl  # noqa: E402
 Services.price_info = _price_info_impl
 
-from .services.addresses import address_info as _address_info_impl
+from .services.addresses import address_info as _address_info_impl  # noqa: E402
 Services.address_info = _address_info_impl
 
 

@@ -1854,7 +1854,6 @@ def _render_appointment_date_part(date_raw: str) -> str:
 
 def appointment_summary(entities: dict[str, Any]) -> str:
     patient_name = str(entities.get("patient_name") or "").strip()
-    doctor_name = str(entities.get("doctor_name") or "").strip()
     service = appointment_service_display(entities)
     place = str(entities.get("branch_name") or entities.get("city") or "выбранный филиал").strip()
     date_part_raw = str(entities.get("date_from") or entities.get("date_hint") or "").strip()
