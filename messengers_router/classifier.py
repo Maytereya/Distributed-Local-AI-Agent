@@ -811,7 +811,7 @@ def _build_unsupported_catalog_decision(text: str, local_flags: set[str]) -> Rou
     )
 
 
-async def guardrail_precheck(
+def guardrail_precheck(
     text: str,
     last_entities: dict[str, Any],
     *,
@@ -957,7 +957,7 @@ async def analyze_llm_primary(
     runtime_options: RuntimeOptions | None = None,
 ) -> tuple[RouteDecision, dict[str, Any]]:
     flags: set[str] = set()
-    guardrail = await guardrail_precheck(text, last_entities, flags=flags)
+    guardrail = guardrail_precheck(text, last_entities, flags=flags)
     if guardrail is not None:
         return guardrail, {
             "guardrail_pre": {

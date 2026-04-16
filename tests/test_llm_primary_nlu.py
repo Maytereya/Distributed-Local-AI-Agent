@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 
 from messengers_router import classifier
 from messengers_router.llm_mode_policy import normalize_runtime_options
@@ -11,6 +12,15 @@ from messengers_router.mess_types import Evidence, Plan
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def test_guardrail_precheck_is_sync():
+    decision = classifier.guardrail_precheck("привет", {})
+
+    assert not inspect.iscoroutinefunction(classifier.guardrail_precheck)
+    assert decision is not None
+    assert decision.label == "OTHER"
+    assert "smalltalk_greeting" in decision.flags
 
 
 def test_llm_primary_engine_used_when_enabled(monkeypatch):
