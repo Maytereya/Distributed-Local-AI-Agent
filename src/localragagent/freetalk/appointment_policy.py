@@ -69,7 +69,7 @@ class AppointmentPrecheckResult:
     reply_text: str = ""
     next_state: DialogState | None = None
     clear_state: bool = False
-    reset_session: bool = False
+    handoff: bool = False
     clear_memory_keys: tuple[str, ...] = ()
     save_memory_entities: dict[str, Any] = field(default_factory=dict)
 
@@ -413,7 +413,7 @@ def _apply_active_appointment_turn(
                 handled=True,
                 reply_text=appointment_handoff_text(entities),
                 clear_state=True,
-                reset_session=True,
+                handoff=True,
                 clear_memory_keys=APPOINTMENT_MEMORY_CLEAR_KEYS,
             )
         if transition == "no":

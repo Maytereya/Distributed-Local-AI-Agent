@@ -260,6 +260,37 @@ Adapter не является местом для:
 
 Если новая функция не имеет явного rendering strategy, она считается недоделанной.
 
+## 5.6 Handoff rule
+
+Если новая функция может завершаться `handoff`-сценарием, это должно считаться terminal state для FT.
+
+Обязательное правило:
+
+1. любой `handoff` в FT завершает текущую FT-сессию;
+2. при `handoff` память FT очищается полностью, а не частично;
+3. после `handoff` должен выдаваться новый `session_id`;
+4. следующее обращение к FT должно идти как новый диалог, без reuse старого summary/history/meta;
+5. это правило не должно реализовываться локально внутри одной фичи как уникальная логика, если handoff может появиться и в других сценариях.
+
+Практический смысл:
+
+- если диалог передан оператору, значит FT больше не является владельцем этой сессии;
+- если пользователь позже снова пишет боту, это уже новый диалог, а не продолжение старого handoff-кейса.
+
+Следствие для реализации:
+
+- `handoff` должен проходить через единый session-reset path;
+- нельзя ограничиваться очисткой только `dialog_state` или только части session memory.
+- source-of-truth для этого правила должен быть один общий finalizer в runtime core, а не локальная логика внутри конкретной фичи.
+
+Текущее runtime-правило FT:
+
+1. handoff может приходить как `reply.handoff=True`;
+2. handoff может приходить из tool payload как `handoff_required=True`;
+3. handoff может приходить из tool payload как непустой `handoff_message`;
+4. все эти сигналы должны сводиться к одному общему handoff finalizer в `orchestrator.py`;
+5. finalizer обязан вызвать полный `clear_session(session_id)` и выдать новый `next_session_id`.
+
 ## 6. Обязательные запреты
 
 При добавлении новых функций запрещено:
@@ -281,6 +312,7 @@ Adapter не является местом для:
 2. Новые `missing_slots` названы user-facing и канонически.
 3. Новые normalized entities не дублируют старые по смыслу.
 4. Для backend integration прописан явный mapping.
+5. Если есть `handoff`, для него определён session-reset path.
 
 ### 7.2 Architecture checklist
 
@@ -296,6 +328,7 @@ Adapter не является местом для:
 3. Если фича user-visible и важная, есть remote eval case.
 4. Есть regression-case на failure mode.
 5. Протестирован topic shift рядом с новой фичей.
+6. Если есть `handoff`, есть тест на полный reset FT-session и ротацию `session_id`.
 
 ## 8. Пример: nearest branch by user address
 

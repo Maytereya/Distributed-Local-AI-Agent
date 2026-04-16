@@ -267,6 +267,62 @@ class AppointmentAgent(FreeTalkAgent):
         return ""
 
 
+class ToolHandoffServices:
+    async def get_catalog_health(self) -> dict[str, object]:
+        return {"ok": True}
+
+    async def match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = "") -> dict[str, str]:
+        _ = raw_text_or_name, current_service_name
+        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
+
+    async def match_catalog_doctor(self, raw_text_or_name: str) -> dict[str, str]:
+        _ = raw_text_or_name
+        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
+
+    async def service_bundle_info(self, query: str, entities: dict[str, object]) -> dict[str, object]:
+        _ = query, entities
+        return {
+            "handoff_required": True,
+            "handoff_message": "В моей базе данных информации недостаточно. Передаю диалог оператору.",
+            "note": "handoff_required",
+        }
+
+    def tool_handlers(self, *, include_meili_tools: bool) -> dict[str, object]:
+        _ = include_meili_tools
+        return {
+            "service_bundle_info": self.service_bundle_info,
+        }
+
+
+class ToolHandoffAgent(FreeTalkAgent):
+    async def _route_clinical_decision(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        dialog_state: DialogState,
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        _ = user_message, context, dialog_state, remembered_doctor
+        return ClinicalDecision(
+            intent="service_info",
+            confidence=0.95,
+            entities={"service_name": "Неизвестная услуга"},
+            missing_slots=[],
+            clarify_question="",
+            tool_plan=["service_bundle_info"],
+            source="test",
+        )
+
+    async def _llm_json(self, prompt: str) -> dict[str, object]:
+        _ = prompt
+        return {}
+
+    async def _llm_text(self, prompt: str) -> str:
+        _ = prompt
+        return ""
+
+
 def test_schedule_to_appointment_flow_uses_slot_and_finishes_with_handoff():
     memory = InMemoryMemory()
     services = AppointmentServices()
@@ -286,7 +342,7 @@ def test_schedule_to_appointment_flow_uses_slot_and_finishes_with_handoff():
     assert "выберите дату и время" in reply1.text.lower()
     assert len(services.schedule_calls) == 1
 
-    reply2 = asyncio.run(agent.chat("Нет, мне надо записаться к нему. На 15.04, 08:30", session_id))
+    reply2 = asyncio.run(agent.chat("Нет, мне надо записаться к нему. На 16.04, 09:00", session_id))
     assert "фио" in reply2.text.lower()
     assert len(services.schedule_calls) == 1
 
@@ -294,12 +350,12 @@ def test_schedule_to_appointment_flow_uses_slot_and_finishes_with_handoff():
     assert state2["intent"] == "appointment"
     assert state2["missing_slots"] == ["patient_name"]
     assert state2["entities"]["doctor_name"] == "Трубин Алексей Юрьевич"
-    assert state2["entities"]["date"] == "2026-04-15"
-    assert state2["entities"]["time"] == "08:30"
+    assert state2["entities"]["date"] == "2026-04-16"
+    assert state2["entities"]["time"] == "09:00"
 
     reply3 = asyncio.run(agent.chat("Иванов Иван Иванович", session_id))
-    assert "15 апреля" in reply3.text
-    assert "08:30" in reply3.text
+    assert "16 апреля" in reply3.text
+    assert "09:00" in reply3.text
     assert "Трубин Алексей Юрьевич" in reply3.text
 
     state3 = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
@@ -327,7 +383,7 @@ def test_active_appointment_topic_switch_requests_cancel_confirmation_and_resume
     session_id = "appointment_guardrail"
 
     asyncio.run(agent.chat("А есть расписание работы Трубина?", session_id))
-    asyncio.run(agent.chat("Мне надо записаться к нему. На 15.04, 08:30", session_id))
+    asyncio.run(agent.chat("Мне надо записаться к нему. На 16.04, 09:00", session_id))
 
     reply = asyncio.run(agent.chat("Скажите стоимость общего анализа крови", session_id))
     assert "прекратить запись" in reply.text.lower()
@@ -357,13 +413,13 @@ def test_active_appointment_schedule_request_returns_cached_schedule_preview():
     session_id = "appointment_schedule_preview"
 
     asyncio.run(agent.chat("А есть расписание работы Трубина?", session_id))
-    asyncio.run(agent.chat("Мне надо записаться к нему. На 15.04, 08:30", session_id))
+    asyncio.run(agent.chat("Мне надо записаться к нему. На 16.04, 09:00", session_id))
 
     reply = asyncio.run(agent.chat("Дай пожалуйста расписание врача", session_id))
     low = reply.text.lower()
     assert "нашел расписание" in low
-    assert "15 апреля" in low
-    assert "08:30" in low
+    assert "16 апреля" in low
+    assert "09:00" in low
     assert "выберите дату и время" in low
     assert "сообщите, пожалуйста, ваше фио" not in low
 
@@ -387,7 +443,7 @@ def test_new_appointment_after_handoff_does_not_reuse_old_slot_context():
     session_id = "appointment_new_doctor_after_handoff"
 
     asyncio.run(agent.chat("А есть расписание работы Трубина?", session_id))
-    asyncio.run(agent.chat("Мне надо записаться к нему. На 15.04, 08:30", session_id))
+    asyncio.run(agent.chat("Мне надо записаться к нему. На 16.04, 09:00", session_id))
     asyncio.run(agent.chat("Рахманов Вахоб Дмитриевич", session_id))
     finish = asyncio.run(agent.chat("Да", session_id))
     assert "зафиксирован" in finish.text.lower()
@@ -402,3 +458,24 @@ def test_new_appointment_after_handoff_does_not_reuse_old_slot_context():
     assert "дразнин" in low
     assert "20 апреля" in low
     assert "выберите, пожалуйста, дату и время для записи" not in low
+
+
+def test_tool_handoff_uses_global_session_reset():
+    memory = InMemoryMemory()
+    agent = ToolHandoffAgent(
+        config=_cfg(),
+        services=ToolHandoffServices(),  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "tool_handoff_reset"
+
+    reply = asyncio.run(agent.chat("Расскажи подробнее про неизвестную услугу", session_id))
+
+    assert "передаю диалог оператору" in reply.text.lower()
+    assert reply.next_session_id
+    assert reply.next_session_id != session_id
+    assert asyncio.run(memory.get_turn_count(session_id)) == 0
+    assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""

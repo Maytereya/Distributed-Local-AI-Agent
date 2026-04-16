@@ -315,7 +315,7 @@ v2 (опционально): индексировать summary в отдель�
 2. UI label для пользователя: `Свободное общение` (англ. `Free talk` можно оставить в скобках).
 3. Доступен отдельный FT API endpoint для eval/debug:
    - `/v1/freetalk/generate-once`.
-4. v1: handoff на оператора не требуется.
+4. FT поддерживает `handoff` как terminal state: при handoff FT полностью очищает память текущей сессии и выдаёт новый `session_id`.
 5. v1: Chroma не используем; только запись summary в постоянную память.
 6. `main_index_info/news_info` поддерживаются как опциональные и управляются через `include_meili_tools`.
 7. Открытый вопрос: оставить ли LLM-router + heuristic fallback или перейти на pure LLM-router без regex-предмаршрутизации.
