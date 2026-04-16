@@ -72,3 +72,4 @@ class AgentReply:
     tool_payload: dict[str, Any] = field(default_factory=dict)
     source_fragments: list[dict[str, str]] = field(default_factory=list)
     next_session_id: str = ""
+    handoff: bool = False

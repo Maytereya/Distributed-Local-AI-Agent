@@ -225,6 +225,30 @@ LLM:
 2. synthesis поверх нескольких payload fragments;
 3. recommendation/analyze if это разрешено `task_mode`.
 
+## 4.4 Stage K: Handoff finalization
+
+Исполняется кодом.
+
+Если текущий ответ помечен как `handoff`, FT обязан считать это terminal state.
+
+Допустимые источники handoff-сигнала:
+
+1. `AgentReply.handoff=True`
+2. `tool_payload.handoff_required=True`
+3. непустой `tool_payload.handoff_message`
+
+Действия finalizer:
+
+1. выполнить полный `clear_session(session_id)`;
+2. не сохранять старую сессию обратно в history/summary/meta;
+3. выдать новый `next_session_id`;
+4. завершить текущий FT-run без reuse старого состояния.
+
+Важно:
+
+- handoff finalization не должен жить как частная логика отдельной фичи;
+- это общий runtime-path для всех handoff-сценариев FT.
+
 ## 5. Domain-specific notes
 
 ## 5.1 Doctor availability

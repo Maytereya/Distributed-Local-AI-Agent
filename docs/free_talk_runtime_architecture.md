@@ -71,6 +71,7 @@ UI / API
 - выбрать route;
 - решить, нужен ли tool call;
 - обновить память;
+- распознать terminal `handoff` и выполнить общий session-reset finalizer;
 - сформировать финальный ответ.
 
 Текущие файлы:
@@ -81,7 +82,7 @@ UI / API
 Роли:
 
 - `agent.py` — публичный фасад и совместимая оболочка `FreeTalkAgent`;
-- `orchestrator.py` — основной chat/runtime flow.
+- `orchestrator.py` — основной chat/runtime flow, включая общий handoff finalizer.
 
 ### 3.3 Routing / contract layer
 
@@ -174,6 +175,7 @@ UI / API
 
 - хранить tail истории, summary и meta;
 - хранить `clinical_dialog_state` и session entity memory;
+- уметь делать полный `clear_session(session_id)` для terminal state;
 - переживать отсутствие Redis через fallback.
 
 Текущие файлы:
@@ -265,7 +267,8 @@ UI / API
 3. отдельный `adapter.py` как boundary к legacy backend;
 4. отдельные routing/prompting/planning модули;
 5. отдельные policy-модули для state, memory, grounding и medical flow;
-6. отдельный Redis-backed memory store и ports к external systems.
+6. отдельный Redis-backed memory store и ports к external systems;
+7. единый handoff finalizer в `orchestrator.py`, который очищает FT-session полностью и ротирует `session_id`.
 
 То есть FT уже имеет рабочую многослойную структуру. Основная задача теперь не разукрупнение как таковое, а поддержание чистых границ между слоями.
 

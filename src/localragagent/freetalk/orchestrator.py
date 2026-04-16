@@ -28,6 +28,15 @@ class GuardRuntimeConfig:
     awaiting_final_state: str
 
 
+def _is_handoff_reply(reply: AgentReply) -> bool:
+    if bool(getattr(reply, "handoff", False)):
+        return True
+    payload = reply.tool_payload if isinstance(reply.tool_payload, dict) else {}
+    if bool(payload.get("handoff_required")):
+        return True
+    return bool(str(payload.get("handoff_message") or "").strip())
+
+
 async def chat(
     agent: Any,
     message: str,
@@ -86,25 +95,21 @@ async def chat(
         memory_entities=session_memory_entities,
     )
     if getattr(appointment_precheck, "handled", False):
-        next_session_id = ""
-        if getattr(appointment_precheck, "reset_session", False):
-            await agent.memory.clear_session(sid)
-            next_session_id = agent._new_session_id()
-        if not next_session_id and getattr(appointment_precheck, "clear_state", False):
+        if getattr(appointment_precheck, "clear_state", False):
             await agent._clear_dialog_state(sid)
         clear_memory_keys = getattr(appointment_precheck, "clear_memory_keys", None)
-        if not next_session_id and isinstance(clear_memory_keys, (list, tuple)) and clear_memory_keys:
+        if isinstance(clear_memory_keys, (list, tuple)) and clear_memory_keys:
             await agent._clear_session_entity_memory_keys(sid, clear_memory_keys)
-        elif not next_session_id and getattr(appointment_precheck, "next_state", None) is not None:
+        elif getattr(appointment_precheck, "next_state", None) is not None:
             await agent._save_dialog_state(sid, appointment_precheck.next_state)
             await agent._save_session_entity_memory(sid, dict(appointment_precheck.next_state.entities or {}))
         save_memory_entities = getattr(appointment_precheck, "save_memory_entities", None)
-        if not next_session_id and isinstance(save_memory_entities, dict) and save_memory_entities:
+        if isinstance(save_memory_entities, dict) and save_memory_entities:
             await agent._save_session_entity_memory(sid, save_memory_entities)
         reply = AgentReply(
             text=str(getattr(appointment_precheck, "reply_text", "") or "").strip(),
             source="clinic_data",
-            next_session_id=next_session_id,
+            handoff=bool(getattr(appointment_precheck, "handoff", False)),
         )
     else:
         dialog_act = await agent._build_dialog_act(
@@ -148,6 +153,19 @@ async def chat(
     source_fragments = agent._source_fragments_for_reply(reply)
     reply.source_fragments = source_fragments
     agent._log_source_trace(session_id=sid, reply=reply)
+    if _is_handoff_reply(reply):
+        await agent.memory.clear_session(sid)
+        if not str(reply.next_session_id or "").strip():
+            reply.next_session_id = agent._new_session_id()
+        log_event(
+            "freetalk_handoff_session_reset",
+            level=logging.WARNING,
+            session_id=sid,
+            next_session_id=reply.next_session_id,
+            tool_name=reply.tool_name or "",
+            source=reply.source or "",
+        )
+        return reply
     if reply.next_session_id:
         return reply
     await agent.memory.append_exchange(

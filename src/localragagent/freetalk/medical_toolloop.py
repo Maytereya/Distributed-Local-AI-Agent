@@ -14,6 +14,14 @@ from .medical_pretool_policy import build_clinical_state
 from .observability import log_event
 
 
+def _payload_requests_handoff(payload: dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if bool(payload.get("handoff_required")):
+        return True
+    return bool(str(payload.get("handoff_message") or "").strip())
+
+
 @dataclass(slots=True)
 class MedicalToolLoopContext:
     session_id: str
@@ -141,6 +149,14 @@ async def execute_medical_tool_loop(
             payload_keys=",".join(sorted(str(k) for k in result.payload.keys())),
             answer_chars=len(answer),
         )
+        if _payload_requests_handoff(result.payload):
+            return AgentReply(
+                text=answer,
+                source="clinic_data",
+                tool_name=result.tool_name,
+                tool_payload=result.payload,
+                handoff=True,
+            )
         verification = await runtime.post_tool_verify(
             user_message=context.user_message,
             intent=context.intent,
