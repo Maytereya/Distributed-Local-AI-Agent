@@ -17,6 +17,8 @@ import threading
 
 import yaml
 
+from .russian_nlu import normalize_ru
+
 _REGISTRY_PATH = Path(__file__).resolve().parent / "data" / "topic_registry.yaml"
 _CACHE_LOCK = threading.RLock()
 _CACHE_DATA: dict[str, Any] | None = None
@@ -57,7 +59,7 @@ class TopicMatch:
 
 
 def _normalize_text(text: str) -> str:
-    raw = str(text or "").lower().replace("ё", "е")
+    raw = normalize_ru(text)
     tokens = re.findall(r"[a-zа-я0-9]+", raw)
     return " ".join(tokens)
 

@@ -14,7 +14,7 @@ from .flow_policy import (
     safe_get_branches,
 )
 from .memory import MemoryStore
-from .mess_types import Evidence, ResponseEnvelope, RouteDecision, SessionState
+from .mess_types import AppointmentPhase, Evidence, ResponseEnvelope, RouteDecision, SessionState
 from .policies import (
     APPOINTMENT_STEP_BRANCH,
     APPOINTMENT_STEP_CONFIRM,
@@ -397,6 +397,7 @@ def build_appointment_schedule_preview_response(
 
     hydrate_appointment_context_from_schedule(state, schedule_payload)
     state.last_entities["appointment_flow_active"] = True
+    state.dialog.phase = AppointmentPhase.COLLECTING
     text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
@@ -413,6 +414,7 @@ def build_appointment_step_response(
 
     entities = state.last_entities
     state.last_entities["appointment_flow_active"] = True
+    state.dialog.phase = AppointmentPhase.COLLECTING
     action = str(entities.get("appointment_action") or "").strip().lower()
     if action == "cancel":
         patient_name = str(entities.get("patient_name") or "").strip()
@@ -439,6 +441,7 @@ def build_appointment_step_response(
         state.last_entities.pop("appointment_confirmed", None)
         state.last_entities.pop("appointment_cancel_pending", None)
         state.last_entities.pop("appointment_topic_switch_pending", None)
+        state.dialog.phase = AppointmentPhase.IDLE
         text_lines = [f"{header}: " + ", ".join(details) + "."] if details else [f"{header}: данные получены."]
         text_lines.append("Передаю заявку оператору для подтверждения и дальнейшего оформления.")
         return ResponseEnvelope(text="\n".join(text_lines), handoff=True)
@@ -516,6 +519,7 @@ def build_appointment_step_response(
 
     if appointment_step == APPOINTMENT_STEP_CONFIRM:
         state.last_entities["appointment_confirm_pending"] = True
+        state.dialog.phase = AppointmentPhase.CONFIRM
         summary = appointment_summary(entities)
         return ResponseEnvelope(text=appointment_text_confirm_prompt(summary), handoff=False)
 

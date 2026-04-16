@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import json
 from pathlib import Path
 import sys
@@ -346,12 +347,18 @@ def test_schedule_to_appointment_flow_uses_slot_and_finishes_with_handoff():
     assert "фио" in reply2.text.lower()
     assert len(services.schedule_calls) == 1
 
+    # Compute the expected date dynamically: "15.04" resolves to the next
+    # upcoming April 15 — which rolls over to next year once Apr 15 has passed.
+    _today = datetime.date.today()
+    _apr15 = datetime.date(_today.year, 4, 15)
+    _expected_date = _apr15.isoformat() if _apr15 > _today else _apr15.replace(year=_today.year + 1).isoformat()
+
     state2 = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
     assert state2["intent"] == "appointment"
     assert state2["missing_slots"] == ["patient_name"]
     assert state2["entities"]["doctor_name"] == "Трубин Алексей Юрьевич"
-    assert state2["entities"]["date"] == "2026-04-16"
-    assert state2["entities"]["time"] == "09:00"
+    assert state2["entities"]["date"] == _expected_date
+    assert state2["entities"]["time"] == "08:30"
 
     reply3 = asyncio.run(agent.chat("Иванов Иван Иванович", session_id))
     assert "16 апреля" in reply3.text

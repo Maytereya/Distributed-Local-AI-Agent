@@ -19,7 +19,8 @@ from typing import Any, cast
 from .llm_mode_policy import RuntimeOptions
 from .llm_runtime import generate_text
 from .doctor_name_port import resolve_cached_doctor_name_candidate
-from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision, ContextAction
+from .russian_nlu import normalize_ru, ENTITY_WHITELIST
+from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision, ContextAction, CONFIDENCE
 from .prompt_contracts import sanitize_classifier_json
 from .prompt_registry import load_prompt_text
 from .policies import (
@@ -228,7 +229,7 @@ async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000)
         )
     except Exception:
         return "", sanitize_classifier_json(
-            {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_timeout"]}
+            {"label": "OTHER", "confidence": CONFIDENCE.llm_default, "entities": {}, "flags": ["ollama_timeout"]}
         )
     if isinstance(raw, str):
         obj = _extract_json(raw)
@@ -237,7 +238,7 @@ async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000)
 
     raw_text = raw if isinstance(raw, str) else ""
     return raw_text, sanitize_classifier_json(
-        {"label": "OTHER", "confidence": 0.2, "entities": {}, "flags": ["ollama_non_json"]}
+        {"label": "OTHER", "confidence": CONFIDENCE.llm_default, "entities": {}, "flags": ["ollama_non_json"]}
     )
 
 
@@ -295,24 +296,24 @@ def _extract_service_keyword(text: str) -> str | None:
     return extract_service_phrase(text)
 
 
-def _extract_schedule_doctor_name(text: str) -> str | None:
-    candidate = resolve_cached_doctor_name_candidate(text, prefer_schedule=True)
-    if candidate and _looks_like_specialty_or_service_token(candidate, text):
+def _extract_doctor_name(text: str, *, mode: str = "appointment") -> str | None:
+    """Extract a doctor-name candidate for the given intent mode.
+
+    mode:
+        "schedule"    — prefer_schedule=True, rejects specialty/service tokens
+        "appointment" — prefer_schedule=False, rejects verb/action tokens
+        "price"       — prefer_schedule=True, rejects verb/action tokens
+    """
+    prefer = mode in {"schedule", "price"}
+    candidate = resolve_cached_doctor_name_candidate(text, prefer_schedule=prefer)
+    if not candidate:
         return None
-    return candidate
-
-
-def _extract_appointment_doctor_name(text: str) -> str | None:
-    candidate = resolve_cached_doctor_name_candidate(text)
-    if candidate and _INVALID_DOCTOR_TOKEN_RE.search(candidate):
-        return None
-    return candidate
-
-
-def _extract_price_doctor_name(text: str) -> str | None:
-    candidate = resolve_cached_doctor_name_candidate(text, prefer_schedule=True)
-    if candidate and _INVALID_DOCTOR_TOKEN_RE.search(candidate):
-        return None
+    if mode == "schedule":
+        if _looks_like_specialty_or_service_token(candidate, text):
+            return None
+    else:  # appointment or price
+        if _INVALID_DOCTOR_TOKEN_RE.search(candidate):
+            return None
     return candidate
 
 
@@ -324,12 +325,12 @@ def _looks_like_specialty_or_service_token(token: str, text: str = "") -> bool:
     :param text: исходный текст пользователя
     :return: True, если токен похож на специальность/услугу, а не на фамилию
     """
-    norm = str(token or "").strip().lower().replace("ё", "е")
+    norm = normalize_ru(token)
     if not norm:
         return False
     if norm in _SPECIALTY_LIKE_NAME_TOKENS:
         return True
-    spec = str(extract_specialty(text or "") or "").strip().lower().replace("ё", "е")
+    spec = normalize_ru(extract_specialty(text or ""))
     if spec and norm == spec:
         return True
     return False
@@ -375,18 +376,18 @@ def _doctor_followup_name_in_context(text: str, last_entities: dict[str, Any]) -
     ):
         return None
 
-    low = s.lower().replace("ё", "е")
+    low = normalize_ru(s)
     if re.search(r"\b(результат\w*|анализ\w*|год\b|номер\b|код\b|филиал\w*)\b", low):
         return None
 
     tokens = re.findall(r"[A-Za-zА-Яа-яЁё0-9\-]+", s)
     if not tokens or len(tokens) > 4:
         return None
-    core_tokens = [t.lower().replace("ё", "е") for t in tokens if t.lower().replace("ё", "е") not in _DOCTOR_FOLLOWUP_FILLERS]
+    core_tokens = [normalize_ru(t) for t in tokens if normalize_ru(t) not in _DOCTOR_FOLLOWUP_FILLERS]
     if not core_tokens:
         return None
 
-    candidate = _extract_schedule_doctor_name(s) or _extract_appointment_doctor_name(s)
+    candidate = _extract_doctor_name(s, mode="schedule") or _extract_doctor_name(s, mode="appointment")
     if not candidate:
         return None
     if _looks_like_specialty_or_service_token(candidate, s):
@@ -447,7 +448,7 @@ def _looks_like_patient_name_only(text: str) -> bool:
         return False
     if has_datetime_signal(s):
         return False
-    tokens = [t.lower().replace("ё", "е") for t in re.findall(r"[А-Яа-яЁёA-Za-z\-]+", s) if t]
+    tokens = [normalize_ru(t) for t in re.findall(r"[А-Яа-яЁёA-Za-z\-]+", s) if t]
     if len(tokens) < 2:
         return False
     if any(t in _PATIENT_NAME_STOPWORDS for t in tokens):
@@ -588,7 +589,7 @@ async def _maybe_refine_live_intent(
         cand_label = base.label
 
     cand_conf = _normalize_confidence(data.get("confidence"))
-    if cand_conf < 0.45:
+    if cand_conf < CONFIDENCE.refine_min:
         return base
 
     cand_entities = _sanitize_entities(data.get("entities"))
@@ -625,28 +626,16 @@ def _normalize_confidence(x: Any) -> float:
     try:
         v = float(x)
     except Exception:
-        return 0.2
+        return CONFIDENCE.llm_default
     return max(0.0, min(1.0, v))
 
-
-_ALLOWED_ENTITY_KEYS = {
-    "doctor_name", "doctor_id", "specialty",
-    "branch_name", "branch_id", "city",
-    "service_name", "appointment_action",
-    "test_name", "test_goal", "order_id", "result_action", "include_promos",
-    "insurance_type", "accepts_children", "child_age",
-    "patient_name",
-    "date_hint", "date_from", "date_to", "time_from", "time_to",
-    "surname", "year", "filial", "number", "lang",
-    "secondary_intents",
-}
 
 def _sanitize_entities(entities: Any) -> dict[str, Any]:
     if not isinstance(entities, dict):
         return {}
     clean: dict[str, Any] = {}
     for k, v in entities.items():
-        if k in _ALLOWED_ENTITY_KEYS:
+        if k in ENTITY_WHITELIST:
             clean[k] = v
     return clean
 
@@ -707,14 +696,14 @@ def _derive_context_action(
     if label == "APPOINTMENT" and _CANCEL_FLOW_RE.search(text or ""):
         return cast(ContextAction, "cancel_flow")
 
-    prev_doctor = str(prev.get("doctor_name") or "").strip().lower().replace("ё", "е")
-    new_doctor = str(entities.get("doctor_name") or "").strip().lower().replace("ё", "е")
+    prev_doctor = normalize_ru(prev.get("doctor_name"))
+    new_doctor = normalize_ru(entities.get("doctor_name"))
     if new_doctor and prev_doctor and new_doctor != prev_doctor:
         return cast(ContextAction, "overwrite_doctor")
     extracted = resolve_cached_doctor_name_candidate(text, prefer_schedule=True)
     if extracted and _INVALID_DOCTOR_TOKEN_RE.search(str(extracted)):
         extracted = None
-    extracted_norm = str(extracted or "").strip().lower().replace("ё", "е")
+    extracted_norm = normalize_ru(extracted)
     if (
         extracted_norm
         and prev_doctor
@@ -880,7 +869,7 @@ async def guardrail_precheck(
         kind_flag = "doc_request_tax" if doc_kind == "tax" else "doc_request_generic"
         return RouteDecision(
             label="OTHER",
-            confidence=0.85,
+            confidence=CONFIDENCE.rule_hardcode,
             entities={"doc_request_kind": doc_kind},
             flags=local_flags | {"doc_request_main_index", kind_flag},
             needs_handoff=False,
@@ -916,7 +905,7 @@ def _postprocess_primary_decision(
         entities["result_action"] = "get_pdf" if ("pdf" in t or "пдф" in t or "файл" in t or "скач" in t) else "status"
 
     if label == "PRICE" and not entities.get("doctor_name"):
-        doctor_name = _extract_price_doctor_name(text)
+        doctor_name = _extract_doctor_name(text, mode="price")
         if doctor_name:
             entities["doctor_name"] = doctor_name
 
@@ -1116,7 +1105,7 @@ async def deterministic_rule_decision(
         kind_flag = "doc_request_tax" if doc_kind == "tax" else "doc_request_generic"
         decision = RouteDecision(
             label="OTHER",
-            confidence=0.85,
+            confidence=CONFIDENCE.rule_hardcode,
             entities={"doc_request_kind": doc_kind},
             flags=local_flags | {"doc_request_main_index", kind_flag},
             needs_handoff=False,
@@ -1174,7 +1163,7 @@ async def deterministic_rule_decision(
                 entities["order_id"] = oid
             decision = RouteDecision(
                 label="TEST_RESULT",
-                confidence=0.85,
+                confidence=CONFIDENCE.rule_hardcode,
                 entities=entities,
                 flags=local_flags | {"rule_test_result"},
                 needs_handoff=False,
@@ -1260,7 +1249,7 @@ async def deterministic_rule_decision(
         elif specialty and not appointment_intent and not price_intent:
             decision = RouteDecision(
                 label="DOCTOR_INFO",
-                confidence=0.70,
+                confidence=CONFIDENCE.moderate,
                 entities={"specialty": specialty},
                 flags=local_flags | {"rule_doctor_info_specialty"},
                 needs_handoff=False,
@@ -1299,7 +1288,7 @@ async def deterministic_rule_decision(
                 svc = _extract_service_keyword(text)
                 if svc:
                     entities["service_name"] = svc
-                doctor_name = _extract_price_doctor_name(text)
+                doctor_name = _extract_doctor_name(text, mode="price")
                 if doctor_name:
                     entities["doctor_name"] = doctor_name
                 decision = RouteDecision(
@@ -1327,7 +1316,7 @@ async def deterministic_rule_decision(
                 entities = {}
                 if appointment_action:
                     entities["appointment_action"] = appointment_action
-                doctor_name = _extract_appointment_doctor_name(text)
+                doctor_name = _extract_doctor_name(text, mode="appointment")
                 if doctor_name:
                     entities["doctor_name"] = doctor_name
                 svc = _extract_service_keyword(text)
@@ -1335,7 +1324,7 @@ async def deterministic_rule_decision(
                     entities["service_name"] = svc
                 base = RouteDecision(
                     label="APPOINTMENT",
-                    confidence=0.75,
+                    confidence=CONFIDENCE.high,
                     entities=entities,
                     flags=local_flags | {"rule_appointment"},
                     needs_handoff=False,
@@ -1378,7 +1367,7 @@ async def deterministic_rule_decision(
                 svc = _extract_service_keyword(text)
                 if svc:
                     entities["service_name"] = svc
-                doctor_name = _extract_price_doctor_name(text)
+                doctor_name = _extract_doctor_name(text, mode="price")
                 if doctor_name:
                     entities["doctor_name"] = doctor_name
                 decision = RouteDecision(
@@ -1484,7 +1473,7 @@ async def analyze(
         else:
             entities["result_action"] = "status"
     if label == "PRICE" and not entities.get("doctor_name"):
-        doctor_name = _extract_price_doctor_name(text)
+        doctor_name = _extract_doctor_name(text, mode="price")
         if doctor_name:
             entities["doctor_name"] = doctor_name
 
@@ -1503,7 +1492,7 @@ async def analyze(
             promoted = hints[0]
             if promoted != "OTHER":
                 label = promoted
-                conf = max(conf, 0.55)
+                conf = max(conf, CONFIDENCE.price_floor)
                 flags.discard("handoff_recommended")
                 needs_handoff = False
                 flags.add("promoted_from_rule_hints")

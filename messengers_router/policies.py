@@ -15,6 +15,7 @@ from typing import Any
 
 from .city import looks_like_address, match_city
 from .doctor_name_port import resolve_cached_doctor_name_candidate, surname_variants
+from .russian_nlu import normalize_ru
 from .service_phrase import extract_service_phrase
 
 # ---------------------------
@@ -805,7 +806,7 @@ def extract_specialty(text: str) -> str | None:
     m = _SPECIALTY_HINT_RE.search(text or "")
     if not m:
         return None
-    value = str(m.group(1) or "").strip().lower().replace("ё", "е")
+    value = normalize_ru(m.group(1))
     return value or None
 
 
@@ -1494,7 +1495,7 @@ def extract_branch_hint(text: str, state_entities: dict[str, Any]) -> str | None
     return branch_hint
 
 def _normalize_alpha_token(value: str) -> str:
-    return re.sub(r"[^a-zа-яё\-]", "", str(value or "").lower().replace("ё", "е")).strip()
+    return re.sub(r"[^a-zа-яё\-]", "", normalize_ru(value)).strip()
 
 
 def _first_alpha_token(value: str) -> str:
@@ -1721,7 +1722,7 @@ _CONFIRM_NO_EXACT = {
 
 
 def _normalize_confirmation_text(text: str) -> str:
-    norm = str(text or "").lower().replace("ё", "е").strip()
+    norm = normalize_ru(text)
     if not norm:
         return ""
     norm = _CONFIRM_STRIP_QUOTES_RE.sub(" ", norm)

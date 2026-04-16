@@ -1,0 +1,516 @@
+"""Новый оркестратор пайплайна роутера.
+
+Пока это только каркас из 5 именованных стадий, который будет постепенно
+замещать монолитный `route_patient_message()` из `router.py`.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
+
+_SAFETY_LABELS = {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
+
+
+@dataclass
+class OrchestratorContext:
+    """Контекст, который передаётся через все стадии пайплайна.
+
+    :param text: исходный текст пользователя
+    :param state: текущее состояние сессии
+    :param decision: текущее routing-решение, если уже вычислено
+    :param should_clarify: нужно ли вернуть уточняющий вопрос
+    :param clarify_text: текст уточнения для пользователя
+    :param tool_results: накопленные результаты вызовов инструментов/сервисов
+    :param response: подготовленный ответ для пользователя
+    :param short_circuit: нужно ли досрочно завершить пайплайн
+    :param short_circuit_reason: причина досрочного завершения
+    """
+
+    text: str
+    state: SessionState
+    decision: RouteDecision | None = None
+    should_clarify: bool = False
+    clarify_text: str = ""
+    tool_results: dict[str, Any] = field(default_factory=dict)
+    plan: Plan | None = None
+    evidence: Evidence | None = None
+    response: ResponseEnvelope | None = None
+    short_circuit: bool = False
+    short_circuit_reason: str = ""
+
+
+def _extract_prebuilt_response(
+    ctx: OrchestratorContext,
+    services: Any | None = None,
+    memory: Any | None = None,
+) -> ResponseEnvelope | None:
+    """Извлекает готовый deterministic-ответ из evidence без вызова LLM.
+
+    :param ctx: контекст пайплайна с decision/plan/evidence
+    :param services: сервисный слой для builders, которым нужен доступ к каталогу
+    :param memory: memory-store для builders, которые выставляют pending-состояния
+    :return: готовый envelope или None, если нужен LLM-рендер
+    """
+
+    decision = ctx.decision
+    plan = ctx.plan
+    evidence = ctx.evidence
+    if decision is None or evidence is None:
+        return None
+
+    if evidence.get("auth_required"):
+        return ResponseEnvelope(text=evidence.get("auth_message", "Нужна авторизация."), handoff=False)
+
+    from .policies import evidence_requires_handoff, handoff_message
+
+    handoff_required, handoff_msg, handoff_reason = evidence_requires_handoff(evidence)
+    if handoff_required:
+        return ResponseEnvelope(text=handoff_message(handoff_reason, handoff_msg), handoff=True)
+
+    if plan is None or services is None or memory is None:
+        return None
+
+    from .response_builder import build_first_structured_response
+
+    return build_first_structured_response(
+        flow_label=plan.label,
+        evidence=evidence,
+        state=ctx.state,
+        services=services,
+        memory=memory,
+        decision=decision,
+        user_text=ctx.text,
+    )
+
+
+def _mark_secondary_offer_pending(ctx: OrchestratorContext) -> None:
+    """Помечает, что после ответа можно предложить вторичный intent.
+
+    :param ctx: контекст пайплайна после построения ответа
+    :return: None
+    """
+
+    decision = ctx.decision
+    plan = ctx.plan
+    if decision is None or plan is None:
+        return
+
+    from .flow_policy import get_secondary_queue, secondary_followup_text
+
+    secondary = get_secondary_queue(ctx.state)
+    followup = secondary_followup_text(secondary)
+    if (
+        followup
+        and not ctx.state.last_entities.get("_secondary_offer_pending")
+        and not ctx.state.last_entities.get("_compound_price_pending")
+        and not decision.needs_handoff
+        and plan.label not in {"APPOINTMENT", "URGENT", "COMPLAINT", "MEDICAL_ADVICE", "TEST_RESULT"}
+    ):
+        ctx.state.last_entities["_secondary_offer_pending"] = True
+
+
+def _extract_recovery_response(
+    ctx: OrchestratorContext,
+    memory: Any | None = None,
+) -> ResponseEnvelope | None:
+    """Строит ответ recovery-политики до deterministic/LLM-рендера.
+
+    :param ctx: контекст пайплайна после tool_loop
+    :param memory: хранилище pending-состояния
+    :return: envelope recovery-ответа или None
+    """
+
+    decision = ctx.decision
+    plan = ctx.plan
+    if decision is None or plan is None or memory is None:
+        return None
+
+    from . import router
+    from .policies import handoff_message
+    from .recovery_policy import evaluate_recovery
+    from .text_templates import LOW_CONF_CLARIFY_TEXT
+
+    pending_now = memory.get_pending(ctx.state)
+    flow_active = ctx.state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
+    recovery = evaluate_recovery(
+        user_text=ctx.text,
+        decision=decision,
+        flow_label=plan.label,
+        pending_exists=bool(pending_now),
+        flow_active=flow_active,
+        state_entities=ctx.state.last_entities,
+        summary=ctx.state.summary,
+        max_unclear=3,
+    )
+    if recovery.kind == "handoff":
+        return ResponseEnvelope(text=recovery.text or handoff_message("low_confidence"), handoff=True)
+    if recovery.kind == "clarify":
+        router._remember_question(
+            ctx.state,
+            recovery.reason or "clarify",
+            list(decision.clarify_slots) if decision.clarify_slots else [],
+        )
+        return ResponseEnvelope(text=recovery.text or LOW_CONF_CLARIFY_TEXT, handoff=False)
+    return None
+
+
+def _extract_pending_response(
+    ctx: OrchestratorContext,
+    memory: Any | None = None,
+) -> ResponseEnvelope | None:
+    """Возвращает pending-уточнение раньше structured appointment-ответов.
+
+    :param ctx: контекст пайплайна после tool_loop
+    :param memory: memory-store с pending-слотами
+    :return: envelope pending-ответа или None
+    """
+
+    decision = ctx.decision
+    plan = ctx.plan
+    evidence = ctx.evidence
+    if decision is None or plan is None or evidence is None or memory is None:
+        return None
+
+    pending = memory.get_pending(ctx.state)
+    if plan.steps or not pending:
+        return None
+
+    from . import router
+    from .policies import clarification_question, handoff_message
+    from .recovery_policy import contextual_reply_kind
+
+    missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
+    catalog_pending_reply = (
+        plan.label == "OTHER"
+        and isinstance(missing, list)
+        and "catalog_confirm" in missing
+        and isinstance(evidence.get("catalog_confirm_response"), dict)
+    )
+    if catalog_pending_reply:
+        return None
+
+    if (
+        plan.label == "APPOINTMENT"
+        and isinstance(missing, list)
+        and "appointment_action" in missing
+        and contextual_reply_kind(ctx.text) == "no"
+    ):
+        return ResponseEnvelope(text=handoff_message("manual_operator"), handoff=True)
+
+    if plan.label == "APPOINTMENT" and isinstance(missing, list):
+        action = str(ctx.state.last_entities.get("appointment_action") or "").strip().lower()
+        needs_doctor = any(
+            str(item).startswith("_any_of:")
+            and ("doctor_id" in str(item) or "doctor_name" in str(item))
+            for item in missing
+        )
+        needs_datetime = any(
+            "date_from" in str(item) or "time_from" in str(item) or "date_hint" in str(item)
+            for item in missing
+        )
+        if action in {"cancel", "reschedule"} and needs_doctor:
+            attempts = int(ctx.state.last_entities.get("_appointment_doctor_lookup_attempts") or 0) + 1
+            ctx.state.last_entities["_appointment_doctor_lookup_attempts"] = attempts
+            if attempts >= 3:
+                ctx.state.last_entities.pop("_appointment_doctor_lookup_attempts", None)
+                return ResponseEnvelope(
+                    text="Не удалось точно определить врача для этой записи. Соединяю с оператором.",
+                    handoff=True,
+                )
+        else:
+            ctx.state.last_entities.pop("_appointment_doctor_lookup_attempts", None)
+
+        if action in {"cancel", "reschedule"} and needs_datetime:
+            attempts = int(ctx.state.last_entities.get("_appointment_datetime_attempts") or 0) + 1
+            ctx.state.last_entities["_appointment_datetime_attempts"] = attempts
+            if attempts >= 3:
+                ctx.state.last_entities.pop("_appointment_datetime_attempts", None)
+                return ResponseEnvelope(
+                    text="Не удалось точно определить дату или время записи. Соединяю с оператором.",
+                    handoff=True,
+                )
+        else:
+            ctx.state.last_entities.pop("_appointment_datetime_attempts", None)
+
+    if plan.label == "APPOINTMENT":
+        ctx.state.last_entities["appointment_flow_active"] = True
+        ctx.state.dialog.phase = AppointmentPhase.COLLECTING
+    router._remember_question(
+        ctx.state,
+        f"pending:{plan.label}",
+        missing if isinstance(missing, list) else [],
+    )
+    return ResponseEnvelope(
+        text=clarification_question(plan.label, missing if isinstance(missing, list) else [], ctx.state.last_entities),
+        handoff=False,
+    )
+
+
+async def early_guards(
+    ctx: OrchestratorContext,
+    runtime_options: Any | None = None,
+) -> OrchestratorContext:
+    """Выполняет ранние safety-проверки до основного NLU.
+
+    :param ctx: контекст пайплайна
+    :param runtime_options: runtime-настройки LLM/NLU
+    :return: обновлённый контекст
+    """
+
+    from . import classifier
+
+    decision = await classifier.deterministic_rule_decision(
+        ctx.text,
+        ctx.state.last_entities,
+        runtime_options=runtime_options,
+    )
+    if decision and decision.label in _SAFETY_LABELS:
+        ctx.decision = decision
+        ctx.short_circuit = True
+        ctx.short_circuit_reason = "safety"
+    return ctx
+
+
+async def nlu_route(
+    ctx: OrchestratorContext,
+    runtime_options: Any | None = None,
+) -> OrchestratorContext:
+    """Запускает основной NLU и обновляет typed dialog state.
+
+    :param ctx: контекст пайплайна
+    :param runtime_options: runtime-настройки LLM/NLU
+    :return: обновлённый контекст
+    """
+
+    from . import nlu_pipeline
+
+    result = await nlu_pipeline.analyze_with_candidates(
+        ctx.text,
+        ctx.state,
+        runtime_options,
+    )
+    ctx.decision = result.decision
+    ctx.state.dialog.merge_entities(ctx.decision.entities)
+    ctx.state.dialog.label = ctx.decision.label
+    ctx.state.dialog.confidence = ctx.decision.confidence
+    ctx.state.dialog.missing_slots = list(ctx.decision.clarify_slots or [])
+    return ctx
+
+
+async def clarify_gate(ctx: OrchestratorContext) -> OrchestratorContext:
+    """Определяет, нужно ли остановиться на уточняющем вопросе.
+
+    :param ctx: контекст пайплайна
+    :return: обновлённый контекст
+    """
+
+    decision = ctx.decision
+    if decision and decision.clarify_needed:
+        ctx.should_clarify = True
+        ctx.clarify_text = decision.clarify_reason
+    if ctx.state.dialog.missing_slots:
+        ctx.should_clarify = True
+    return ctx
+
+
+async def tool_loop(
+    ctx: OrchestratorContext,
+    services: Any | None = None,
+    memory: Any | None = None,
+    runtime_options: Any | None = None,
+) -> OrchestratorContext:
+    """Выполняет plan + execute, заменяя legacy-bridge route_patient_message().
+
+    Порядок:
+    1. Три pre-pending handler'а — перехватывают ожидающие multi-turn состояния
+       до того, как NLU-решение будет использовано.
+    2. build_plan() — строит Plan из уже готового ctx.decision.
+    3. execute_plan() — запускает Plan против сервисов, возвращает Evidence.
+
+    :param ctx: контекст пайплайна
+    :param services: сервисный слой
+    :param memory: хранилище pending/state
+    :param runtime_options: runtime-настройки LLM/NLU
+    :return: обновлённый контекст
+    """
+
+    if ctx.short_circuit or ctx.should_clarify:
+        return ctx
+    if services is None or memory is None:
+        ctx.tool_results = {}
+        return ctx
+
+    from . import router
+
+    # 1. Pre-pending handlers — short-circuit before the legacy route when a
+    #    multi-turn pending state is already set from the previous turn.
+    #    If none fires, the full legacy route runs below (which sets pending
+    #    state for the NEXT turn and handles all post-NLU middleware).
+    for handler in (
+        router._handle_catalog_confirm_pending,
+        router._handle_appointment_action_pending,
+        router._handle_compound_price_pending,
+    ):
+        result = await handler(
+            user_text=ctx.text,
+            state=ctx.state,
+            services=services,
+            memory=memory,
+            runtime_options=runtime_options,
+        )
+        if result is not None:
+            ctx.decision, ctx.plan, ctx.evidence = result
+            ctx.short_circuit = True
+            ctx.short_circuit_reason = "pending_handler"
+            return ctx
+
+    # 2. Legacy route — handles all post-NLU middleware (catalog-confirm injection,
+    #    doctor verification, entity grounding, flow overrides, memory merge, etc.)
+    #    and calls build_plan + execute_plan internally.
+    #    Stays here until the remaining middleware is extracted into the orchestrator.
+    decision, plan, evidence = await router.route_patient_message(
+        ctx.text,
+        ctx.state,
+        services,
+        memory,
+        runtime_options=runtime_options,
+    )
+    ctx.decision = decision
+    ctx.plan = plan
+    ctx.evidence = evidence
+    ctx.state.dialog.label = ctx.decision.label
+    ctx.state.dialog.confidence = ctx.decision.confidence
+    ctx.state.dialog.merge_entities(ctx.decision.entities)
+    return ctx
+
+
+async def render(
+    ctx: OrchestratorContext,
+    runtime_options: Any | None = None,
+    services: Any | None = None,
+    memory: Any | None = None,
+) -> OrchestratorContext:
+    """Собирает финальный `ResponseEnvelope`.
+
+    Порядок проверок:
+    1. Safety short-circuits (URGENT / COMPLAINT / MEDICAL_ADVICE) — синхронный шаблон.
+       ``pending_handler`` short-circuit с другими label'ами падает сюда же, но
+       не попадает ни в одну из веток и переходит к обычному render_stream.
+    2. Clarify gate — возвращает вопрос уточнения.
+    3. Нормальный путь — собирает render_stream в строку, строит ResponseEnvelope.
+    4. Defensive fallback (decision или evidence ещё не установлены).
+
+    :param ctx: контекст пайплайна
+    :param runtime_options: runtime-настройки LLM/NLU
+    :param services: сервисный слой для deterministic-builders
+    :param memory: memory-store для deterministic-builders
+    :return: обновлённый контекст с заполненным ctx.response
+    """
+
+    from . import renderer
+
+    # 1. Safety short-circuits — use sync templates, no LLM needed
+    if ctx.short_circuit and ctx.decision is not None:
+        if ctx.decision.label == "URGENT":
+            ctx.response = renderer.render_urgent()
+        elif ctx.decision.label == "COMPLAINT":
+            ctx.response = renderer.render_complaint()
+        elif ctx.decision.label == "MEDICAL_ADVICE":
+            ctx.response = renderer.render_medical_advice()
+        if ctx.response is not None:
+            return ctx
+
+    # 2. Clarify gate
+    if ctx.should_clarify:
+        ctx.response = ResponseEnvelope(text=ctx.clarify_text)
+        return ctx
+
+    if ctx.decision is not None:
+        user_turn_count = sum(
+            1 for item in (ctx.state.history or []) if isinstance(item, dict) and item.get("role") == "user"
+        )
+        if "smalltalk_greeting" in ctx.decision.flags and user_turn_count <= 1:
+            from .text_templates import INTRO_TEXT
+
+            ctx.response = ResponseEnvelope(text=INTRO_TEXT, attachments=[], handoff=False)
+            return ctx
+
+    recovery_response = _extract_recovery_response(ctx, memory=memory)
+    if recovery_response is not None:
+        ctx.response = recovery_response
+        return ctx
+
+    pending_response = _extract_pending_response(ctx, memory=memory)
+    if pending_response is not None:
+        ctx.response = pending_response
+        return ctx
+
+    # 3. Deterministic/pre-built path — response is already encoded in evidence.
+    prebuilt = _extract_prebuilt_response(ctx, services=services, memory=memory)
+    if prebuilt is not None:
+        ctx.response = prebuilt
+        _mark_secondary_offer_pending(ctx)
+        return ctx
+
+    # 4. LLM path — collect render_stream into one envelope.
+    if ctx.decision is not None and ctx.evidence is not None:
+        chunks: list[str] = []
+        async for chunk in renderer.render_stream(
+            ctx.text,
+            ctx.decision,
+            ctx.evidence,
+            runtime_options=runtime_options,
+        ):
+            chunks.append(chunk)
+        ctx.response = ResponseEnvelope(
+            text="".join(chunks),
+            attachments=list(ctx.evidence.items.get("attachments") or []),
+            handoff=bool(ctx.decision.needs_handoff),
+        )
+        _mark_secondary_offer_pending(ctx)
+        return ctx
+
+    # 5. Defensive fallback — tool_loop bailed early (no services/memory)
+    ctx.response = ResponseEnvelope(text="")
+    return ctx
+
+
+async def run_pipeline(
+    text: str,
+    state: SessionState,
+    services: Any | None = None,
+    memory: Any | None = None,
+    runtime_options: Any | None = None,
+) -> OrchestratorContext:
+    """Прогоняет сообщение через 5-stage skeleton оркестратора.
+
+    :param text: текст пользователя
+    :param state: текущее состояние сессии
+    :param services: сервисный слой для legacy-bridge
+    :param memory: хранилище pending/state для legacy-bridge
+    :param runtime_options: runtime-настройки LLM/NLU
+    :return: финальный контекст после прохождения стадий
+    """
+
+    ctx = OrchestratorContext(text=text, state=state)
+    ctx = await early_guards(ctx, runtime_options=runtime_options)
+    if ctx.short_circuit:
+        return await render(ctx, runtime_options=runtime_options)
+    ctx = await nlu_route(ctx, runtime_options=runtime_options)
+    ctx = await clarify_gate(ctx)
+    ctx = await tool_loop(
+        ctx,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    ctx = await render(
+        ctx,
+        runtime_options=runtime_options,
+        services=services,
+        memory=memory,
+    )
+    return ctx

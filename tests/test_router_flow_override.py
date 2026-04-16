@@ -7,9 +7,22 @@ from messengers_router.flow_policy import (
     hydrate_appointment_context_from_schedule,
     quick_fill_entities_from_text,
 )
-from messengers_router.mess_types import Evidence, Plan, PlanStep, SessionState
+from messengers_router.mess_types import (
+    AppointmentPhase,
+    DialogState,
+    Evidence,
+    Plan,
+    PlanStep,
+    ResponseEnvelope,
+    SessionState,
+)
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision
+from messengers_router.appointment_flow_guard import (
+    is_new_topic_while_confirm_pending,
+    reset_appointment_runtime_state,
+)
+from messengers_router.orchestrator import OrchestratorContext
 from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
 from messengers_router.policies import (
     quick_fill_core_entities,
@@ -71,6 +84,91 @@ def test_appointment_flow_override_blocks_new_topics():
     assert _should_keep_appointment_flow_override("Как можно сдать анализы") is False
     assert _should_keep_appointment_flow_override("результаты анализов") is False
     assert _should_keep_appointment_flow_override("покажи расписание Казакова") is False
+
+
+def test_is_new_topic_while_confirm_pending_detects_news_intent():
+    assert is_new_topic_while_confirm_pending("какие скидки?") is True
+
+
+def test_reset_appointment_runtime_state_clears_active_dialog_state():
+    state = SessionState(
+        session_id="appt-dialog-reset",
+        last_entities={"appointment_flow_active": True, "doctor_name": "Трубин Алексей Юрьевич"},
+        dialog=DialogState(
+            label="APPOINTMENT",
+            phase=AppointmentPhase.CONFIRM,
+            entities={"doctor_name": "Трубин Алексей Юрьевич"},
+            missing_slots=["patient_name"],
+            confidence=0.82,
+        ),
+    )
+
+    reset_appointment_runtime_state(state)
+
+    assert state.last_entities == {"doctor_name": "Трубин Алексей Юрьевич"}
+    assert state.dialog.label == "OTHER"
+    assert state.dialog.phase == ""
+    assert state.dialog.entities == {}
+
+
+def test_patient_routing_stream_uses_orchestrator_by_default(monkeypatch):
+    async def fake_run_pipeline(text, state, services=None, memory=None, runtime_options=None):
+        _ = services, memory, runtime_options
+        ctx = OrchestratorContext(text=text, state=state)
+        ctx.decision = RouteDecision(label="PRICE", confidence=0.81, source="llm_primary")
+        ctx.response = ResponseEnvelope(text="Уточните, пожалуйста, услугу.")
+        return ctx
+
+    async def fail_route_patient_message(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError("legacy route_patient_message should not be used when orchestrator is the default path")
+
+    monkeypatch.setattr("messengers_router.orchestrator.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(router_mod, "route_patient_message", fail_route_patient_message)
+
+    state = SessionState(session_id="orchestrator-stream")
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    out = _run_stream_once("цена", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].text == "Уточните, пожалуйста, услугу."
+    assert out[0].handoff is False
+
+
+def test_patient_routing_stream_uses_orchestrator_outputs_without_legacy_route_call(monkeypatch):
+    async def fake_run_pipeline(text, state, services=None, memory=None, runtime_options=None):
+        _ = services, memory, runtime_options
+        ctx = OrchestratorContext(text=text, state=state)
+        ctx.decision = RouteDecision(label="PRICE", confidence=0.91, source="llm_primary")
+        ctx.plan = Plan(label="PRICE")
+        ctx.evidence = Evidence(items={"payload": "stub"})
+        ctx.response = ResponseEnvelope(text="Ответ из orchestrator", handoff=False)
+        return ctx
+
+    async def fail_route_patient_message(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError("patient_routing_stream should use decision/plan/evidence from orchestrator")
+
+    monkeypatch.setattr("messengers_router.orchestrator.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(router_mod, "route_patient_message", fail_route_patient_message)
+
+    state = SessionState(session_id="orchestrator-outputs")
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    out = _run_stream_once("цена", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].text == "Ответ из orchestrator"
+    assert out[0].handoff is False
+    assert state.history[-2:] == [
+        {"role": "user", "text": "цена"},
+        {"role": "assistant", "text": "Ответ из orchestrator"},
+    ]
 
 
 def test_apply_appointment_continuity_overrides_prioritizes_datetime():
@@ -212,7 +310,7 @@ def test_classifier_does_not_extract_unmatched_question_word_as_doctor_name(monk
         lambda _text, prefer_schedule=False: None,
     )
 
-    assert classifier_mod._extract_appointment_doctor_name("подскажите к кому записаться") is None
+    assert classifier_mod._extract_doctor_name("подскажите к кому записаться", mode="appointment") is None
 
 
 def test_appointment_confirmation_transition_accepts_common_yes_forms():
