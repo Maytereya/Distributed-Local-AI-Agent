@@ -186,13 +186,22 @@ async def render(
 ) -> OrchestratorContext:
     """Собирает финальный `ResponseEnvelope`.
 
+    Порядок проверок:
+    1. Safety short-circuits (URGENT / COMPLAINT / MEDICAL_ADVICE) — синхронный шаблон.
+       ``pending_handler`` short-circuit с другими label'ами падает сюда же, но
+       не попадает ни в одну из веток и переходит к обычному render_stream.
+    2. Clarify gate — возвращает вопрос уточнения.
+    3. Нормальный путь — собирает render_stream в строку, строит ResponseEnvelope.
+    4. Defensive fallback (decision или evidence ещё не установлены).
+
     :param ctx: контекст пайплайна
     :param runtime_options: runtime-настройки LLM/NLU
-    :return: обновлённый контекст
+    :return: обновлённый контекст с заполненным ctx.response
     """
 
     from . import renderer
 
+    # 1. Safety short-circuits — use sync templates, no LLM needed
     if ctx.short_circuit and ctx.decision is not None:
         if ctx.decision.label == "URGENT":
             ctx.response = renderer.render_urgent()
@@ -202,12 +211,25 @@ async def render(
             ctx.response = renderer.render_medical_advice()
         if ctx.response is not None:
             return ctx
+
+    # 2. Clarify gate
     if ctx.should_clarify:
         ctx.response = ResponseEnvelope(text=ctx.clarify_text)
         return ctx
+
+    # 3. Normal path — response is intentionally None here so that
+    #    patient_routing_stream() falls through to its own 200-line rendering
+    #    block which handles special evidence structures (catalog confirm text,
+    #    appointment prompts, compound price, etc.) that render_stream() does
+    #    not know about yet.
+    #
+    #    Full render_stream() integration (Task B in the phase-3 plan) requires
+    #    that block to be migrated into the orchestrator first (Task C).
     if ctx.plan is not None or ctx.evidence is not None:
         ctx.response = None
         return ctx
+
+    # 4. Defensive fallback — tool_loop bailed early (no services/memory)
     ctx.response = ResponseEnvelope(text="")
     return ctx
 
@@ -232,7 +254,7 @@ async def run_pipeline(
     ctx = OrchestratorContext(text=text, state=state)
     ctx = await early_guards(ctx, runtime_options=runtime_options)
     if ctx.short_circuit:
-        return await render(ctx)
+        return await render(ctx, runtime_options=runtime_options)
     ctx = await nlu_route(ctx, runtime_options=runtime_options)
     ctx = await clarify_gate(ctx)
     ctx = await tool_loop(

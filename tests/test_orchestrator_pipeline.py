@@ -9,6 +9,7 @@ from messengers_router.orchestrator import (
     early_guards,
     render,
     run_pipeline,
+    tool_loop,
 )
 from messengers_router.services import Services
 
@@ -117,19 +118,12 @@ def test_run_pipeline_returns_context_with_mocked_nlu(monkeypatch):
 
 
 def test_tool_loop_pending_handler_short_circuits_before_legacy_route(monkeypatch):
-    """When a pending handler fires, tool_loop short-circuits and skips route_patient_message."""
+    """When a pending handler fires, tool_loop short-circuits and skips route_patient_message.
+
+    Tests tool_loop directly so we don't go through render() and hit the LLM.
+    """
 
     import messengers_router.router as router_mod
-
-    async def fake_deterministic_rule_decision(*args, **kwargs):
-        return None
-
-    async def fake_analyze_with_candidates(text, state, runtime_options=None):
-        return NLUResult(
-            decision=RouteDecision(label="PRICE", confidence=0.84, source="llm_primary"),
-            candidates=[NLUCandidate(source="llm_primary", label="PRICE", confidence=0.84)],
-            merged_from="llm_primary",
-        )
 
     pending_decision = RouteDecision(
         label="PRICE",
@@ -143,27 +137,14 @@ def test_tool_loop_pending_handler_short_circuits_before_legacy_route(monkeypatc
     async def fake_compound_price_handler(**kw):
         return pending_decision, pending_plan, pending_evidence
 
+    async def _no_pending(**kw):
+        return None
+
     legacy_called: list = []
 
     async def fake_route_patient_message(*args, **kwargs):
         legacy_called.append(True)
         return pending_decision, pending_plan, pending_evidence
-
-    monkeypatch.setattr(
-        "messengers_router.classifier.deterministic_rule_decision",
-        fake_deterministic_rule_decision,
-    )
-    monkeypatch.setattr(
-        "messengers_router.nlu_pipeline.analyze_with_candidates",
-        fake_analyze_with_candidates,
-    )
-    monkeypatch.setattr(router_mod, "_handle_catalog_confirm_pending",
-                        lambda **kw: None)  # sync ok — not awaited in loop if prior fires
-    monkeypatch.setattr(router_mod, "_handle_appointment_action_pending",
-                        lambda **kw: None)
-
-    async def _no_pending(**kw):
-        return None
 
     monkeypatch.setattr(router_mod, "_handle_catalog_confirm_pending", _no_pending)
     monkeypatch.setattr(router_mod, "_handle_appointment_action_pending", _no_pending)
@@ -171,10 +152,14 @@ def test_tool_loop_pending_handler_short_circuits_before_legacy_route(monkeypatc
     monkeypatch.setattr(router_mod, "route_patient_message", fake_route_patient_message)
 
     state = SessionState(session_id="pipeline-pending-gate")
-    services = Services()
-    memory = MemoryStore()
+    # Prime ctx with an NLU decision (simulates post-nlu_route state)
+    ctx = OrchestratorContext(
+        text="да",
+        state=state,
+        decision=RouteDecision(label="PRICE", confidence=0.84, source="llm_primary"),
+    )
 
-    out = run(run_pipeline("да", state, services=services, memory=memory))
+    out = run(tool_loop(ctx, services=Services(), memory=MemoryStore()))
 
     # Legacy route must NOT have been called — pending handler short-circuited
     assert legacy_called == []
@@ -185,7 +170,15 @@ def test_tool_loop_pending_handler_short_circuits_before_legacy_route(monkeypatc
     assert out.evidence is pending_evidence
 
 
-def test_render_pending_handler_preserves_legacy_bridge_outputs():
+def test_render_pending_handler_defers_to_patient_routing_stream(monkeypatch):
+    """pending_handler short-circuit with a non-safety label leaves response=None.
+
+    The evidence for pending-handler cases contains special structures (e.g.
+    operator_offer_response, service_bundle) that patient_routing_stream's
+    200-line rendering block handles.  render() intentionally returns None so
+    that block can take over.  Full render_stream() integration is deferred
+    until that rendering block is migrated into the orchestrator (Task C).
+    """
     ctx = OrchestratorContext(
         text="цена",
         state=SessionState(session_id="render-stream"),
