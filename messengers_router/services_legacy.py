@@ -7447,6 +7447,12 @@ Services._resolve_doctor_id_from_name = _resolve_doctor_id_from_name_impl
 Services.doctors_info = _doctors_info_impl
 Services.doctors_schedule_week = _doctors_schedule_week_impl
 
+from .services.prices import price_info as _price_info_impl
+Services.price_info = _price_info_impl
+
+from .services.addresses import address_info as _address_info_impl
+Services.address_info = _address_info_impl
+
 
 if __name__ == "__main__":
     async def main():
