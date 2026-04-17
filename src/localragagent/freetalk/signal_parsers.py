@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 import re
 
+from messengers_router.specialty_parser import extract_specialty_from_text as extract_shared_specialty_from_text
+
 
 DOCTOR_ANAPHORA_RE = re.compile(r"\b(его|него|нему|ним|он|у\s+него|у\s+него\s+же|у\s+неё|ее|её|она)\b", re.I)
 DOCTOR_FOLLOWUP_RE = re.compile(
@@ -237,6 +239,10 @@ def extract_person_name(text: str) -> str:
     if not match:
         return ""
     return str(match.group(1) or "").strip()
+
+
+def extract_specialty_reference(text: str) -> str:
+    return extract_shared_specialty_from_text(str(text or "").strip())
 
 
 def looks_like_specific_doctor_reference(text: str) -> bool:
@@ -571,8 +577,12 @@ def extract_expected_slot_entities(text: str, *, expected_slots: list[str] | tup
         doctor_name = extract_doctor_reference_candidate(probe)
         if doctor_name:
             out["doctor_name"] = doctor_name
-    if "specialty" in slots and not out.get("doctor_name") and _looks_like_short_slot_phrase(probe):
-        out["specialty"] = probe
+    if "specialty" in slots and not out.get("doctor_name"):
+        specialty = extract_specialty_reference(probe)
+        if specialty:
+            out["specialty"] = specialty
+        elif _looks_like_short_slot_phrase(probe):
+            out["specialty"] = probe
     if "service_or_analysis_name" in slots:
         service_name = extract_service_reference_candidate(probe)
         if service_name:

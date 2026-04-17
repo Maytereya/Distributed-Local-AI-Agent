@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .signal_parsers import extract_specialty_reference
+
 
 _DOCTOR_IN_SERVICE_CONTEXT_RE = re.compile(r"\b(врач|доктор|у\s+[а-яё\\-]{3,})\b", re.I)
 
@@ -18,6 +20,11 @@ def apply_intent_entity_policy(
     filtered = dict(entities or {})
     normalized_intent = str(intent or "").strip().lower()
     message = str(user_message or "")
+
+    if not str(filtered.get("specialty") or "").strip():
+        specialty = extract_specialty_reference(message)
+        if specialty:
+            filtered["specialty"] = specialty
 
     # Doctor-oriented requests should not keep accidental service grounding.
     if normalized_intent in {"appointment", "doctor_info", "doctor_schedule"}:

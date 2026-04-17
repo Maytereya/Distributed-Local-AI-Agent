@@ -42,6 +42,16 @@ from .prompt_registry import load_prompt_text
 from .russian_nlu import normalize_ru
 from .service_phrase import extract_service_phrase
 from .runtime_config import config as c
+from .specialty_parser import (
+    ENDOSCOPY_SERVICE_RE as _ENDOSCOPY_SERVICE_RE,
+    SPECIALTY_CANONICAL as _SPECIALTY_CANONICAL,
+    UZI_QUERY_RE as _UZI_QUERY_RE,
+    extract_specialties_from_text as _shared_extract_specialties_from_text,
+    extract_specialty_from_text as _shared_extract_specialty_from_text,
+    matches_specialty_terms as _shared_matches_specialty_terms,
+    specialty_equivalent as _shared_specialty_equivalent,
+    specialty_terms as _shared_specialty_terms,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +144,6 @@ _PRICE_PROCEDURE_LIKE_RE = re.compile(
 )
 _NONBOOKABLE_POINTS_PATH = Path(__file__).resolve().parent / "data" / "nonbookable_points.json"
 _NEAREST_HINT_RE = re.compile(r"\b(ближайш\w*|сам\w*\s+ранн\w*|раньше|поскорее|свободн\w*\s+окн\w*)\b", re.I)
-_UZI_QUERY_RE = re.compile(r"\b(узи|узист|ультразвук\w*|ультразвуков\w*)\b", re.I)
 _UZI_LINE_RE = re.compile(r"\b(узи|ультразвук\w*|ультразвуков\w*)\b", re.I)
 _CITY_PREFIX_RE = re.compile(r"\b(?:г|город)\.?\s*([а-яёa-z\-]+)\b", re.I)
 _UZI_FALSE_POSITIVE_RE = re.compile(
@@ -152,56 +161,6 @@ _UZI_PROCEDURE_HINT_RE = re.compile(
     r"брюшн\w*|щитовид\w*|мал\w*\s+таз\w*|молочн\w*|почек|печен\w*|сердц\w*|сосуд\w*)\b",
     re.I,
 )
-_SPECIALTY_ROLE_SYNONYMS: dict[str, tuple[str, ...]] = {
-    "акушер-гинеколог": ("акушер гинеколог", "гинеколог"),
-    "аллерголог": ("аллерголог", "иммунолог"),
-    "иммунолог": ("иммунолог", "аллерголог"),
-    "кардиолог": ("кардиолог",),
-    "эндокринолог": ("эндокринолог",),
-    "гинеколог-эндокринолог": ("гинеколог эндокринолог", "эндокринолог", "гинеколог"),
-    "гинеколог-маммолог": ("гинеколог маммолог", "гинеколог", "маммолог"),
-    "педиатр": ("педиатр",),
-    "хирург": ("хирург",),
-    "пластический хирург": ("пластический хирург", "пластическ"),
-    "терапевт": ("терапевт",),
-    "травматолог": ("травматолог",),
-    "травматолог-ортопед": ("травматолог ортопед", "травматолог", "ортопед"),
-    "проктолог": ("проктолог", "колопроктолог"),
-    "колопроктолог": ("колопроктолог", "проктолог"),
-    "уролог": ("уролог",),
-    "уролог-андролог": ("уролог андролог", "уролог", "андролог"),
-    "андролог": ("андролог", "уролог"),
-    "онколог": ("онколог",),
-    "гинеколог": ("гинеколог",),
-    "невролог": ("невролог",),
-    "нейрохирург": ("нейрохирург",),
-    "нефролог": ("нефролог",),
-    "гастроэнтеролог": ("гастроэнтеролог",),
-    "гематолог": ("гематолог",),
-    "гепатолог": ("гепатолог",),
-    "гирудотерапевт": ("гирудотерапевт",),
-    "дерматолог": ("дерматолог", "дерматовенеролог"),
-    "дерматовенеролог": ("дерматовенеролог", "дерматолог"),
-    "инфекционист": ("инфекционист",),
-    "эндоскопист": ("эндоскопист", "эндоскоп"),
-    "эндоскопия": ("эндоскопист", "эндоскоп"),
-    "лор": ("лор", "оториноларинг"),
-    "оториноларинголог": ("оториноларинголог", "оториноларинг", "лор"),
-    "лимфолог": ("лимфолог",),
-    "массажист": ("массажист",),
-    "мануальный терапевт": ("мануальный терапевт", "мануальн"),
-    "пульмонолог": ("пульмонолог",),
-    "ревматолог": ("ревматолог",),
-    "стоматолог": ("стоматолог",),
-    "стоматолог-ортопед": ("стоматолог ортопед", "стоматолог", "ортопед"),
-    "флеболог": ("флеболог",),
-    "фониатр": ("фониатр",),
-    "физиотерапевт": ("физиотерапевт", "физиотерап"),
-    "функциональная диагностика": ("функциональная диагностика", "функциональн"),
-    "анестезиолог": ("анестезиолог", "реаниматолог"),
-    "реаниматолог": ("реаниматолог", "анестезиолог"),
-    "узи": ("узи", "ультразвук"),
-}
 _SPECIALTY_PRIORITY_SURNAMES: dict[str, tuple[str, ...]] = {
     # Бизнес-приоритет списка хирургов в выдаче.
     "хирург": ("тюрин", "джарар", "алимназаров", "губский"),
@@ -300,71 +259,11 @@ _SERVICE_QUERY_SIGNAL_RE = re.compile(
     r"кольпоскоп\w*|колоноскоп\w*|рентген\w*|холтер\w*)\b",
     re.I,
 )
-_ENDOSCOPY_SERVICE_RE = re.compile(
-    r"\b(эндоскоп\w*|фгдс|фдгс|фгс|егдс|эгдс|фкс|гастроскоп\w*|колоноскоп\w*|"
-    r"ректороманоскоп\w*|эзофагогастродуоденоскоп\w*)\b",
-    re.I,
-)
 _PROCEDURE_BRANCH_LOOKUP_RE = re.compile(
     r"\b(где|сдела\w*|пройти|провест\w*|выполня\w*|дела\w*|можно|пройти\s+диагностик\w*)\b",
     re.I,
 )
-_SPECIALTY_CANONICAL = (
-    "акушер-гинеколог",
-    "аллерголог",
-    "иммунолог",
-    "гастроэнтеролог",
-    "гематолог",
-    "гепатолог",
-    "гирудотерапевт",
-    "гинеколог-маммолог",
-    "гинеколог-эндокринолог",
-    "эндокринолог",
-    "офтальмолог",
-    "дерматолог",
-    "дерматовенеролог",
-    "эндоскопист",
-    "эндоскопия",
-    "кардиолог",
-    "колопроктолог",
-    "лимфолог",
-    "массажист",
-    "мануальный терапевт",
-    "невролог",
-    "нейрохирург",
-    "нефролог",
-    "проктолог",
-    "травматолог",
-    "травматолог-ортопед",
-    "ревматолог",
-    "пульмонолог",
-    "гинеколог",
-    "терапевт",
-    "педиатр",
-    "уролог",
-    "уролог-андролог",
-    "андролог",
-    "онколог",
-    "инфекционист",
-    "хирург",
-    "пластический хирург",
-    "ортопед",
-    "стоматолог",
-    "стоматолог-ортопед",
-    "флеболог",
-    "фониатр",
-    "физиотерапевт",
-    "функциональная диагностика",
-    "анестезиолог",
-    "реаниматолог",
-    "лор",
-    "оториноларинголог",
-)
 _SCHEDULE_SPECIALTY_TOKENS = set(_SPECIALTY_CANONICAL) | {"узи", "узист", "экг", "мрт", "кт", "фгдс", "фкс"}
-_SPECIALTY_RE = re.compile(
-    r"\b(" + "|".join(re.escape(x) for x in sorted(_SPECIALTY_CANONICAL, key=len, reverse=True)) + r")\w*\b",
-    re.I,
-)
 # Fallback-карта для процедур, где API не отдает надежный branch-level match.
 _STATIC_PROCEDURE_BRANCH_OVERRIDES: dict[str, tuple[str, ...]] = {
     "флюорограф": ("г. Самара, пр. Ленина, 5",),
@@ -1369,17 +1268,7 @@ def _extract_specialty_from_text(text: str) -> str:
     :return: каноническая специальность или пустая строка
     """
 
-    if _UZI_QUERY_RE.search(text or ""):
-        return "узи"
-    if _ENDOSCOPY_SERVICE_RE.search(text or ""):
-        return "эндоскопист"
-    for specialty in sorted(_SPECIALTY_CANONICAL, key=len, reverse=True):
-        if _matches_specialty_terms(text, specialty):
-            return specialty
-    m = _SPECIALTY_RE.search(text or "")
-    if not m:
-        return ""
-    return normalize_ru(m.group(1))
+    return _shared_extract_specialty_from_text(text or "")
 
 
 def _procedure_query_role_specialty(text: str) -> str:
@@ -1453,16 +1342,7 @@ def _specialty_terms(specialty: str) -> tuple[str, ...]:
     :param specialty: каноническая специальность (например, "хирург", "лор", "узи")
     :return: кортеж терминов/синонимов для подстрочного поиска
     """
-    spec_norm = _normalise_input(specialty)
-    if not spec_norm:
-        return tuple()
-    terms = _SPECIALTY_ROLE_SYNONYMS.get(spec_norm, (spec_norm,))
-    out: list[str] = []
-    for term in terms:
-        term_norm = _normalise_input(term)
-        if term_norm and term_norm not in out:
-            out.append(term_norm)
-    return tuple(out)
+    return _shared_specialty_terms(specialty)
 
 
 def _specialty_norm(value: str) -> str:
@@ -1480,15 +1360,7 @@ def _specialty_equivalent(left: str, right: str) -> bool:
     :return: True, если обозначения эквивалентны
     """
 
-    left_norm = _specialty_norm(left)
-    right_norm = _specialty_norm(right)
-    if not left_norm or not right_norm:
-        return False
-    if left_norm == right_norm:
-        return True
-    left_terms = {left_norm, *_specialty_terms(left_norm)}
-    right_terms = {right_norm, *_specialty_terms(right_norm)}
-    return bool(left_terms & right_terms)
+    return _shared_specialty_equivalent(left, right)
 
 
 def _extract_specialties_from_text(text: str) -> tuple[str, ...]:
@@ -1499,15 +1371,7 @@ def _extract_specialties_from_text(text: str) -> tuple[str, ...]:
     :return: кортеж нормализованных специальностей
     """
 
-    norm = _specialty_norm(text)
-    if not norm:
-        return tuple()
-    found: list[str] = []
-    for raw in _SPECIALTY_CANONICAL:
-        spec = _specialty_norm(raw)
-        if spec and _matches_specialty_terms(norm, spec) and spec not in found:
-            found.append(spec)
-    return tuple(found)
+    return _shared_extract_specialties_from_text(text)
 
 
 def _is_direct_specialty_text_match(text: str, specialty: str) -> bool:
@@ -1562,35 +1426,7 @@ def _matches_specialty_terms(text: str, specialty: str) -> bool:
     :param specialty: искомая специальность
     :return: True, если найдено совпадение по одному из терминов
     """
-    norm = _normalise_input(text)
-    if not norm:
-        return False
-    tokens = re.findall(r"[a-zа-я0-9]+", norm)
-    if not tokens:
-        return False
-
-    for term in _specialty_terms(specialty):
-        t = _normalise_input(term)
-        if not t:
-            continue
-        term_tokens = re.findall(r"[a-zа-я0-9]+", t)
-        if len(term_tokens) > 1:
-            if all(any(tok == part or tok.startswith(part) for tok in tokens) for part in term_tokens):
-                return True
-            continue
-        # Короткие термины должны совпадать целиком (например, "узи", "лор"),
-        # иначе получаем ложные срабатывания по подстрокам.
-        if len(t) <= 4:
-            if any(tok == t for tok in tokens):
-                return True
-            continue
-
-        # Для длинных терминов допускаем:
-        # - точное совпадение токена ("эндокринолог")
-        # - префиксное совпадение ("ультразвук" -> "ультразвуковой").
-        if any(tok == t or tok.startswith(t) for tok in tokens):
-            return True
-    return False
+    return _shared_matches_specialty_terms(text, specialty)
 
 
 def _collect_role_unit_names(doc: dict[str, Any], *, main_value: bool) -> list[str]:

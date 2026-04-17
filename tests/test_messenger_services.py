@@ -413,6 +413,9 @@ def test_doctors_schedule_week_ignores_unrelated_payload_rows_for_requested_doct
         ("расписание нейрохирургов", "нейрохирург"),
         ("расписание флеболога", "флеболог"),
         ("расписание флебологов", "флеболог"),
+        ("нужен прием у уролога", "уролог"),
+        ("нужен прием у лора", "лор"),
+        ("нужен уролог андролог", "уролог-андролог"),
     ],
 )
 def test_extract_specialty_supports_inflected_neurosurgeon_and_phlebologist(text, expected):

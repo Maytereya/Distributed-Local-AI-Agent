@@ -8,7 +8,11 @@ import logging
 from typing import Any
 
 from .catalog_policy import catalog_resolution_reply_if_needed
-from .routing_contract import clarify_question_for_slots, clarify_type_for_slots
+from .routing_contract import (
+    clarify_question_for_slots,
+    clarify_type_for_slots,
+    merge_missing_slots_from_plan,
+)
 from .contracts import AgentReply
 from .medical_pretool_policy import build_clinical_state
 from .observability import log_event
@@ -257,8 +261,16 @@ async def execute_medical_tool_loop(
         and str(context.phase or "").strip().lower() != "post_not_found"
     )
     if retry_after_not_found:
-        clarify_type = clarify_type_for_slots(context.intent, context.missing_slots)
-        clarify_text = clarify_question_for_slots(context.intent, context.missing_slots)
+        missing_slots = list(context.missing_slots or [])
+        if not missing_slots:
+            missing_slots = merge_missing_slots_from_plan(
+                context.tool_plan,
+                context.entities,
+                intent=context.intent,
+            )
+            missing_slots = runtime.filter_missing_slots_by_entities(missing_slots, context.entities)
+        clarify_type = clarify_type_for_slots(context.intent, missing_slots)
+        clarify_text = clarify_question_for_slots(context.intent, missing_slots)
         await runtime.save_dialog_state(
             context.session_id,
             build_clinical_state(
@@ -266,7 +278,7 @@ async def execute_medical_tool_loop(
                 entities=runtime.public_entities(context.entities),
                 candidate_entities=context.candidate_entities,
                 confirmation_target="",
-                missing_slots=context.missing_slots,
+                missing_slots=missing_slots,
                 clarify_type=clarify_type,
                 tool_plan=context.tool_plan,
                 confidence=context.confidence,

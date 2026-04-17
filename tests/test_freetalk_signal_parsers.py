@@ -19,6 +19,7 @@ from localragagent.freetalk.signal_parsers import (
     extract_result_lookup_fields,
     extract_service_reference_candidate,
     extract_service_variant,
+    extract_specialty_reference,
     extract_time_filters,
     looks_like_specific_doctor_reference,
     looks_like_no_preference_answer,
@@ -114,6 +115,14 @@ def test_extract_service_reference_candidate_and_slot_correction():
     assert looks_like_slot_correction("не этого врача") is True
     assert looks_like_slot_correction("другой филиал") is True
     assert looks_like_slot_correction("Сколько стоит анализ?") is False
+
+
+def test_extract_specialty_reference_supports_inflected_forms():
+    assert extract_specialty_reference("Дай информацию по кардиологам клиники") == "кардиолог"
+    assert extract_specialty_reference("нужен прием у уролога") == "уролог"
+    assert extract_specialty_reference("хочу записаться к ЛОРу") == "лор"
+    assert extract_specialty_reference("стоимость приема травматолога ортопеда") == "травматолог-ортопед"
+    assert extract_specialty_reference("нужен уролог андролог") == "уролог-андролог"
 
 
 def test_uncertainty_and_no_preference_detection():

@@ -17,6 +17,7 @@ from .city import looks_like_address, match_city
 from .doctor_name_port import resolve_cached_doctor_name_candidate, surname_variants
 from .russian_nlu import normalize_ru
 from .service_phrase import extract_service_phrase
+from .specialty_parser import extract_specialty_from_text
 
 # ---------------------------
 # Fast detectors (cheap gates)
@@ -279,62 +280,6 @@ _QF_BRANCH_FREEFORM_RE = re.compile(
     r"([А-ЯЁа-яё\-]{4,40})(?:\s*,?\s*([0-9]{1,4}[A-Za-zА-Яа-яЁё]?))?\s*$",
     re.I,
 )
-_SPECIALTY_CANONICAL = (
-    "акушер-гинеколог",
-    "аллерголог",
-    "иммунолог",
-    "гастроэнтеролог",
-    "гематолог",
-    "гепатолог",
-    "гирудотерапевт",
-    "гинеколог-маммолог",
-    "гинеколог-эндокринолог",
-    "гинеколог",
-    "дерматовенеролог",
-    "дерматолог",
-    "инфекционист",
-    "кардиолог",
-    "колопроктолог",
-    "проктолог",
-    "лимфолог",
-    "массажист",
-    "мануальный терапевт",
-    "невролог",
-    "нейрохирург",
-    "нефролог",
-    "онколог",
-    "ортопед",
-    "оториноларинголог",
-    "лор",
-    "педиатр",
-    "пластический хирург",
-    "пульмонолог",
-    "ревматолог",
-    "стоматолог-ортопед",
-    "стоматолог",
-    "терапевт",
-    "травматолог-ортопед",
-    "травматолог",
-    "уролог-андролог",
-    "андролог",
-    "уролог",
-    "узи",
-    "физиотерапевт",
-    "флеболог",
-    "фониатр",
-    "функциональная диагностика",
-    "хирург",
-    "эндокринолог",
-    "эндоскопист",
-    "эндоскопия",
-    "анестезиолог",
-    "реаниматолог",
-)
-_SPECIALTY_HINT_RE = re.compile(
-    r"\b(" + "|".join(re.escape(x) for x in sorted(_SPECIALTY_CANONICAL, key=len, reverse=True)) + r")\w*\b",
-    re.I,
-)
-_QF_SPECIALTY_HINT_RE = _SPECIALTY_HINT_RE
 _NEAREST_SCHEDULE_HINT_RE = re.compile(
     r"\b(ближайш\w*|сам\w*\s+ранн\w*|раньше|поскорее|свободн\w*\s+окн\w*)\b",
     re.I,
@@ -829,10 +774,7 @@ def detect_unsupported_catalog(text: str) -> UnsupportedCatalogMatch | None:
 
 
 def extract_specialty(text: str) -> str | None:
-    m = _SPECIALTY_HINT_RE.search(text or "")
-    if not m:
-        return None
-    value = normalize_ru(m.group(1))
+    value = extract_specialty_from_text(text or "")
     return value or None
 
 

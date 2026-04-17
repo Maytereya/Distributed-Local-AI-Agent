@@ -289,6 +289,23 @@ def test_apply_intent_entity_policy_drops_service_for_doctor_intent():
     assert "service_name" not in out
 
 
+def test_apply_intent_entity_policy_extracts_specialty_from_user_message():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    out = agent._apply_intent_entity_policy(
+        user_message="Привет! Дай информацию по кардиологам клиники",
+        intent="doctor_info",
+        entities={},
+    )
+    assert out.get("specialty") == "кардиолог"
+
+
 def test_build_tool_plan_from_decision_uses_router_plan():
     agent = FreeTalkAgent(
         config=_cfg(),
