@@ -8,6 +8,7 @@ from messengers_router.orchestrator import (
     clarify_gate,
     doctor_entity_guard,
     early_guards,
+    pending_dispatch,
     render,
     run_pipeline,
     tool_loop,
@@ -192,10 +193,9 @@ def test_tool_loop_uses_post_nlu_helper_without_legacy_route_call(monkeypatch):
     assert out.evidence is evidence
 
 
-def test_tool_loop_pending_handler_short_circuits_before_legacy_route(monkeypatch):
-    """When a pending handler fires, tool_loop short-circuits and skips route_patient_message.
-
-    Tests tool_loop directly so we don't go through render() and hit the LLM.
+def test_pending_dispatch_short_circuits_before_nlu(monkeypatch):
+    """When a pending handler fires, pending_dispatch short-circuits the pipeline
+    so downstream stages (nlu_route, doctor_entity_guard, tool_loop) are skipped.
     """
 
     import messengers_router.router as router_mod
@@ -215,29 +215,16 @@ def test_tool_loop_pending_handler_short_circuits_before_legacy_route(monkeypatc
     async def _no_pending(**kw):
         return None
 
-    legacy_called: list = []
-
-    async def fake_route_patient_message(*args, **kwargs):
-        legacy_called.append(True)
-        return pending_decision, pending_plan, pending_evidence
-
     monkeypatch.setattr(router_mod, "_handle_catalog_confirm_pending", _no_pending)
     monkeypatch.setattr(router_mod, "_handle_appointment_action_pending", _no_pending)
     monkeypatch.setattr(router_mod, "_handle_compound_price_pending", fake_compound_price_handler)
-    monkeypatch.setattr(router_mod, "route_patient_message", fake_route_patient_message)
+    monkeypatch.setattr(router_mod, "_handle_secondary_queue_pending", _no_pending)
 
     state = SessionState(session_id="pipeline-pending-gate")
-    # Prime ctx with an NLU decision (simulates post-nlu_route state)
-    ctx = OrchestratorContext(
-        text="да",
-        state=state,
-        decision=RouteDecision(label="PRICE", confidence=0.84, source="llm_primary"),
-    )
+    ctx = OrchestratorContext(text="да", state=state)
 
-    out = run(tool_loop(ctx, services=Services(), memory=MemoryStore()))
+    out = run(pending_dispatch(ctx, services=Services(), memory=MemoryStore()))
 
-    # Legacy route must NOT have been called — pending handler short-circuited
-    assert legacy_called == []
     assert out.short_circuit is True
     assert out.short_circuit_reason == "pending_handler"
     assert out.decision is pending_decision

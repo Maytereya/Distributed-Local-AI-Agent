@@ -298,6 +298,60 @@ async def early_guards(
     return ctx
 
 
+async def pending_dispatch(
+    ctx: OrchestratorContext,
+    services: Any | None = None,
+    memory: Any | None = None,
+    runtime_options: Any | None = None,
+) -> OrchestratorContext:
+    """Dispatch multi-turn pending handlers before running NLU.
+
+    Matches the legacy ``route_patient_message`` order: operator_offer first,
+    then catalog_confirm, appointment_action, compound_price, secondary_queue.
+    If any handler fires the rest of the pipeline is short-circuited and the
+    canned triple is used directly.
+
+    :param ctx: pipeline context
+    :param services: service layer (handlers need it for catalog lookups)
+    :param memory: pending/state store
+    :param runtime_options: runtime LLM/NLU options
+    :return: updated context
+    """
+
+    if ctx.short_circuit or services is None or memory is None:
+        return ctx
+
+    from . import router
+
+    operator_offer_result = router._handle_operator_offer_pending(ctx.text, ctx.state, memory)
+    if operator_offer_result is not None:
+        ctx.decision, ctx.plan, ctx.evidence = operator_offer_result
+        ctx.short_circuit = True
+        ctx.short_circuit_reason = "pending_handler"
+        return ctx
+
+    for handler in (
+        router._handle_catalog_confirm_pending,
+        router._handle_appointment_action_pending,
+        router._handle_compound_price_pending,
+        router._handle_secondary_queue_pending,
+    ):
+        result = await handler(
+            user_text=ctx.text,
+            state=ctx.state,
+            services=services,
+            memory=memory,
+            runtime_options=runtime_options,
+        )
+        if result is not None:
+            ctx.decision, ctx.plan, ctx.evidence = result
+            ctx.short_circuit = True
+            ctx.short_circuit_reason = "pending_handler"
+            return ctx
+
+    return ctx
+
+
 async def nlu_route(
     ctx: OrchestratorContext,
     services: Any | None = None,
@@ -385,18 +439,19 @@ async def tool_loop(
     memory: Any | None = None,
     runtime_options: Any | None = None,
 ) -> OrchestratorContext:
-    """Выполняет post-NLU middleware, plan и execute без legacy full-route fallback.
+    """Finish post-NLU middleware, plan and execute.
 
-    Порядок:
-    1. Pending-handler'ы — перехватывают ожидающие multi-turn состояния.
-    2. Shared router helper — завершает legacy post-NLU middleware после
-       doctor verification.
+    Pending handlers already ran in ``pending_dispatch`` before NLU, so this
+    stage only runs when a live NLU decision is present. It calls the shared
+    router helper ``_complete_route_after_doctor_guard`` which finishes
+    catalog injection, guardrails, entity grounding, planning, executor and
+    graph transition.
 
-    :param ctx: контекст пайплайна
-    :param services: сервисный слой
-    :param memory: хранилище pending/state
-    :param runtime_options: runtime-настройки LLM/NLU
-    :return: обновлённый контекст
+    :param ctx: pipeline context
+    :param services: service layer
+    :param memory: pending/state store
+    :param runtime_options: runtime LLM/NLU options
+    :return: updated context
     """
 
     if ctx.short_circuit or ctx.should_clarify:
@@ -404,53 +459,20 @@ async def tool_loop(
     if services is None or memory is None:
         ctx.tool_results = {}
         return ctx
+    if ctx.decision is None:
+        return ctx
 
     from . import router
 
-    operator_offer_result = router._handle_operator_offer_pending(ctx.text, ctx.state, memory)
-    if operator_offer_result is not None:
-        ctx.decision, ctx.plan, ctx.evidence = operator_offer_result
-        ctx.short_circuit = True
-        ctx.short_circuit_reason = "pending_handler"
-        return ctx
-
-    for handler in (
-        router._handle_catalog_confirm_pending,
-        router._handle_appointment_action_pending,
-        router._handle_compound_price_pending,
-        router._handle_secondary_queue_pending,
-    ):
-        result = await handler(
-            user_text=ctx.text,
-            state=ctx.state,
-            services=services,
-            memory=memory,
-            runtime_options=runtime_options,
-        )
-        if result is not None:
-            ctx.decision, ctx.plan, ctx.evidence = result
-            ctx.short_circuit = True
-            ctx.short_circuit_reason = "pending_handler"
-            return ctx
-
-    if ctx.decision is None:
-        decision, plan, evidence = await router.route_patient_message(
-            ctx.text,
-            ctx.state,
-            services,
-            memory,
-            runtime_options=runtime_options,
-        )
-    else:
-        decision, plan, evidence = await router._complete_route_after_doctor_guard(
-            decision=ctx.decision,
-            user_text=ctx.text,
-            state=ctx.state,
-            services=services,
-            memory=memory,
-            runtime_options=runtime_options,
-            nlu_debug=ctx.nlu_debug,
-        )
+    decision, plan, evidence = await router._complete_route_after_doctor_guard(
+        decision=ctx.decision,
+        user_text=ctx.text,
+        state=ctx.state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+        nlu_debug=ctx.nlu_debug,
+    )
     ctx.decision = decision
     ctx.plan = plan
     ctx.evidence = evidence
@@ -574,6 +596,21 @@ async def run_pipeline(
     if ctx.short_circuit:
         async with _timed_stage(ctx, "render"):
             return await render(ctx, runtime_options=runtime_options)
+    async with _timed_stage(ctx, "pending_dispatch"):
+        ctx = await pending_dispatch(
+            ctx,
+            services=services,
+            memory=memory,
+            runtime_options=runtime_options,
+        )
+    if ctx.short_circuit:
+        async with _timed_stage(ctx, "render"):
+            return await render(
+                ctx,
+                runtime_options=runtime_options,
+                services=services,
+                memory=memory,
+            )
     async with _timed_stage(ctx, "nlu_route"):
         ctx = await nlu_route(
             ctx,

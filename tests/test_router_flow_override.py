@@ -831,8 +831,8 @@ def test_route_message_short_circuits_on_catalog_health_degraded(monkeypatch):
 
 
 def test_patient_routing_stream_renders_catalog_health_response(monkeypatch):
-    async def fake_route_patient_message(_user_text, _state, _services, _memory, runtime_options=None):
-        _ = runtime_options
+    async def fake_complete_route(*, decision, user_text, state, services, memory, runtime_options=None, nlu_debug=None):
+        _ = decision, user_text, state, services, memory, runtime_options, nlu_debug
         return (
             RouteDecision(
                 label="OTHER",
@@ -855,7 +855,7 @@ def test_patient_routing_stream_renders_catalog_health_response(monkeypatch):
             ),
         )
 
-    monkeypatch.setattr(router_mod, "route_patient_message", fake_route_patient_message)
+    monkeypatch.setattr(router_mod, "_complete_route_after_doctor_guard", fake_complete_route)
 
     state = SessionState(session_id="catalog-health-stream")
     services = Services()
