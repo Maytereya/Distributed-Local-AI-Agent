@@ -26,6 +26,7 @@ class OrchestratorContext:
     :param decision: текущее routing-решение, если уже вычислено
     :param should_clarify: нужно ли вернуть уточняющий вопрос
     :param clarify_text: текст уточнения для пользователя
+    :param nlu_debug: диагностические данные NLU для debug_trace
     :param tool_results: накопленные результаты вызовов инструментов/сервисов
     :param response: подготовленный ответ для пользователя
     :param short_circuit: нужно ли досрочно завершить пайплайн
@@ -37,6 +38,7 @@ class OrchestratorContext:
     decision: RouteDecision | None = None
     should_clarify: bool = False
     clarify_text: str = ""
+    nlu_debug: dict[str, Any] = field(default_factory=dict)
     tool_results: dict[str, Any] = field(default_factory=dict)
     plan: Plan | None = None
     evidence: Evidence | None = None
@@ -298,6 +300,8 @@ async def early_guards(
 
 async def nlu_route(
     ctx: OrchestratorContext,
+    services: Any | None = None,
+    memory: Any | None = None,
     runtime_options: Any | None = None,
 ) -> OrchestratorContext:
     """Запускает основной NLU и обновляет typed dialog state.
@@ -307,14 +311,51 @@ async def nlu_route(
     :return: обновлённый контекст
     """
 
-    from . import nlu_pipeline
+    if services is not None and memory is not None:
+        from . import router
 
-    result = await nlu_pipeline.analyze_with_candidates(
-        ctx.text,
-        ctx.state,
-        runtime_options,
-    )
-    ctx.decision = result.decision
+        ctx.decision, ctx.nlu_debug = await router._resolve_nlu_decision_before_doctor_guard(
+            user_text=ctx.text,
+            state=ctx.state,
+            services=services,
+            memory=memory,
+            runtime_options=runtime_options,
+        )
+    else:
+        from . import nlu_pipeline
+
+        result = await nlu_pipeline.analyze_with_candidates(
+            ctx.text,
+            ctx.state,
+            runtime_options,
+        )
+        ctx.decision = result.decision
+        ctx.nlu_debug = {}
+
+    ctx.state.dialog.merge_entities(ctx.decision.entities)
+    ctx.state.dialog.label = ctx.decision.label
+    ctx.state.dialog.confidence = ctx.decision.confidence
+    ctx.state.dialog.missing_slots = list(ctx.decision.clarify_slots or [])
+    return ctx
+
+
+async def doctor_entity_guard(
+    ctx: OrchestratorContext,
+    services: Any | None = None,
+) -> OrchestratorContext:
+    """Проверяет и нормализует doctor entity до post-NLU middleware.
+
+    :param ctx: контекст пайплайна после NLU-стадии
+    :param services: сервисный слой для разрешения doctor_name
+    :return: обновлённый контекст
+    """
+
+    if ctx.short_circuit or ctx.decision is None or services is None:
+        return ctx
+
+    from . import router
+
+    ctx.decision = await router._verify_doctor_entity(ctx.decision, services, ctx.text)
     ctx.state.dialog.merge_entities(ctx.decision.entities)
     ctx.state.dialog.label = ctx.decision.label
     ctx.state.dialog.confidence = ctx.decision.confidence
@@ -344,13 +385,12 @@ async def tool_loop(
     memory: Any | None = None,
     runtime_options: Any | None = None,
 ) -> OrchestratorContext:
-    """Выполняет plan + execute, заменяя legacy-bridge route_patient_message().
+    """Выполняет post-NLU middleware, plan и execute без legacy full-route fallback.
 
     Порядок:
-    1. Три pre-pending handler'а — перехватывают ожидающие multi-turn состояния
-       до того, как NLU-решение будет использовано.
-    2. build_plan() — строит Plan из уже готового ctx.decision.
-    3. execute_plan() — запускает Plan против сервисов, возвращает Evidence.
+    1. Pending-handler'ы — перехватывают ожидающие multi-turn состояния.
+    2. Shared router helper — завершает legacy post-NLU middleware после
+       doctor verification.
 
     :param ctx: контекст пайплайна
     :param services: сервисный слой
@@ -367,14 +407,18 @@ async def tool_loop(
 
     from . import router
 
-    # 1. Pre-pending handlers — short-circuit before the legacy route when a
-    #    multi-turn pending state is already set from the previous turn.
-    #    If none fires, the full legacy route runs below (which sets pending
-    #    state for the NEXT turn and handles all post-NLU middleware).
+    operator_offer_result = router._handle_operator_offer_pending(ctx.text, ctx.state, memory)
+    if operator_offer_result is not None:
+        ctx.decision, ctx.plan, ctx.evidence = operator_offer_result
+        ctx.short_circuit = True
+        ctx.short_circuit_reason = "pending_handler"
+        return ctx
+
     for handler in (
         router._handle_catalog_confirm_pending,
         router._handle_appointment_action_pending,
         router._handle_compound_price_pending,
+        router._handle_secondary_queue_pending,
     ):
         result = await handler(
             user_text=ctx.text,
@@ -389,17 +433,24 @@ async def tool_loop(
             ctx.short_circuit_reason = "pending_handler"
             return ctx
 
-    # 2. Legacy route — handles all post-NLU middleware (catalog-confirm injection,
-    #    doctor verification, entity grounding, flow overrides, memory merge, etc.)
-    #    and calls build_plan + execute_plan internally.
-    #    Stays here until the remaining middleware is extracted into the orchestrator.
-    decision, plan, evidence = await router.route_patient_message(
-        ctx.text,
-        ctx.state,
-        services,
-        memory,
-        runtime_options=runtime_options,
-    )
+    if ctx.decision is None:
+        decision, plan, evidence = await router.route_patient_message(
+            ctx.text,
+            ctx.state,
+            services,
+            memory,
+            runtime_options=runtime_options,
+        )
+    else:
+        decision, plan, evidence = await router._complete_route_after_doctor_guard(
+            decision=ctx.decision,
+            user_text=ctx.text,
+            state=ctx.state,
+            services=services,
+            memory=memory,
+            runtime_options=runtime_options,
+            nlu_debug=ctx.nlu_debug,
+        )
     ctx.decision = decision
     ctx.plan = plan
     ctx.evidence = evidence
@@ -507,7 +558,7 @@ async def run_pipeline(
     memory: Any | None = None,
     runtime_options: Any | None = None,
 ) -> OrchestratorContext:
-    """Прогоняет сообщение через 5-stage skeleton оркестратора.
+    """Прогоняет сообщение через 6-stage skeleton оркестратора.
 
     :param text: текст пользователя
     :param state: текущее состояние сессии
@@ -524,7 +575,14 @@ async def run_pipeline(
         async with _timed_stage(ctx, "render"):
             return await render(ctx, runtime_options=runtime_options)
     async with _timed_stage(ctx, "nlu_route"):
-        ctx = await nlu_route(ctx, runtime_options=runtime_options)
+        ctx = await nlu_route(
+            ctx,
+            services=services,
+            memory=memory,
+            runtime_options=runtime_options,
+        )
+    async with _timed_stage(ctx, "doctor_entity_guard"):
+        ctx = await doctor_entity_guard(ctx, services=services)
     async with _timed_stage(ctx, "clarify_gate"):
         ctx = await clarify_gate(ctx)
     async with _timed_stage(ctx, "tool_loop"):

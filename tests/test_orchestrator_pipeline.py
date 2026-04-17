@@ -6,6 +6,7 @@ from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
 from messengers_router.orchestrator import (
     OrchestratorContext,
     clarify_gate,
+    doctor_entity_guard,
     early_guards,
     render,
     run_pipeline,
@@ -77,6 +78,42 @@ def test_clarify_gate_marks_clarify_when_decision_requests_it():
     assert out.clarify_text == "Уточните услугу"
 
 
+def test_doctor_entity_guard_verifies_decision_before_tool_loop(monkeypatch):
+    async def fake_verify(decision, services, user_text):
+        assert decision.label == "APPOINTMENT"
+        assert user_text == "к дразнину"
+        assert services is not None
+        return RouteDecision(
+            label=decision.label,
+            confidence=decision.confidence,
+            entities={"doctor_name": "Дразнин Антон Владимирович"},
+            flags={"doctor_name_verified"},
+            needs_handoff=False,
+            context_action=decision.context_action,
+            source=decision.source,
+        )
+
+    monkeypatch.setattr("messengers_router.router._verify_doctor_entity", fake_verify)
+
+    ctx = OrchestratorContext(
+        text="к дразнину",
+        state=SessionState(session_id="doctor-guard"),
+        decision=RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.81,
+            entities={"doctor_name": "Дразнину"},
+            flags={"doctor_name_unverified"},
+            source="llm_primary",
+        ),
+    )
+
+    out = run(doctor_entity_guard(ctx, services=Services()))
+
+    assert out.decision is not None
+    assert out.decision.entities["doctor_name"] == "Дразнин Антон Владимирович"
+    assert "doctor_name_verified" in out.decision.flags
+
+
 def test_run_pipeline_returns_context_with_mocked_nlu(monkeypatch):
     async def fake_deterministic_rule_decision(*args, **kwargs):
         _ = args, kwargs
@@ -115,6 +152,44 @@ def test_run_pipeline_returns_context_with_mocked_nlu(monkeypatch):
     assert out.response == ResponseEnvelope(text="")
     assert state.dialog.label == "PRICE"
     assert state.dialog.entities == {"service_name": "УЗИ щитовидной железы"}
+
+
+def test_tool_loop_uses_post_nlu_helper_without_legacy_route_call(monkeypatch):
+    import messengers_router.router as router_mod
+
+    decision = RouteDecision(label="PRICE", confidence=0.91, source="llm_primary")
+    plan = Plan(label="PRICE")
+    evidence = Evidence(items={"price": {"prices": []}})
+
+    async def _no_pending(**kw):
+        _ = kw
+        return None
+
+    async def fake_complete_route(**kwargs):
+        assert kwargs["decision"] is decision
+        return decision, plan, evidence
+
+    async def fail_route_patient_message(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError("tool_loop should use post-nlu helper, not full route_patient_message")
+
+    monkeypatch.setattr(router_mod, "_handle_catalog_confirm_pending", _no_pending)
+    monkeypatch.setattr(router_mod, "_handle_appointment_action_pending", _no_pending)
+    monkeypatch.setattr(router_mod, "_handle_compound_price_pending", _no_pending)
+    monkeypatch.setattr(router_mod, "_complete_route_after_doctor_guard", fake_complete_route)
+    monkeypatch.setattr(router_mod, "route_patient_message", fail_route_patient_message)
+
+    ctx = OrchestratorContext(
+        text="цена",
+        state=SessionState(session_id="tool-loop-post-nlu"),
+        decision=decision,
+    )
+
+    out = run(tool_loop(ctx, services=Services(), memory=MemoryStore()))
+
+    assert out.decision is decision
+    assert out.plan is plan
+    assert out.evidence is evidence
 
 
 def test_tool_loop_pending_handler_short_circuits_before_legacy_route(monkeypatch):

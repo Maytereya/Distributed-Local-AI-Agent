@@ -1636,56 +1636,27 @@ def _handle_operator_offer_pending(
     return None
 
 
-async def route_patient_message(
+async def _resolve_nlu_decision_before_doctor_guard(
     user_text: str,
     state: SessionState,
     services: Services,
     memory: MemoryStore,
     runtime_options: RuntimeOptions | None = None,
-) -> tuple[RouteDecision, Plan, Evidence]:
-    operator_offer_result = _handle_operator_offer_pending(user_text, state, memory)
-    if operator_offer_result is not None:
-        return operator_offer_result
+) -> tuple[RouteDecision, dict[str, Any]]:
+    """Строит NLU-решение до doctor verification.
 
-    catalog_pending_result = await _handle_catalog_confirm_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if catalog_pending_result is not None:
-        return catalog_pending_result
+    Хелпер сохраняет legacy-порядок: очистка stale debug-ключей, appointment
+    prelock, основной NLU и topic-registry override. Нужен и для
+    `route_patient_message`, и для orchestrator-stage `nlu_route`, чтобы не
+    дублировать эту часть пайплайна.
 
-    appointment_action_result = await _handle_appointment_action_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if appointment_action_result is not None:
-        return appointment_action_result
-
-    compound_price_result = await _handle_compound_price_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if compound_price_result is not None:
-        return compound_price_result
-
-    secondary_queue_result = await _handle_secondary_queue_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if secondary_queue_result is not None:
-        return secondary_queue_result
+    :param user_text: текущий текст пользователя
+    :param state: состояние сессии
+    :param services: сервисный слой для prelock-логики
+    :param memory: memory-store для чтения pending-состояния
+    :param runtime_options: runtime-настройки LLM/NLU
+    :return: решение маршрутизации и NLU debug-метаданные
+    """
 
     # Диагностические NLU-поля не должны засорять долгоживущий session state.
     # Актуальный trace отдаем только через debug-канал.
@@ -1765,7 +1736,36 @@ async def route_patient_message(
             "matched_regex": list(topic_match.matched_regex),
         }
 
-    decision = await _verify_doctor_entity(decision, services, user_text)
+    return decision, nlu_debug
+
+
+async def _complete_route_after_doctor_guard(
+    *,
+    decision: RouteDecision,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+    nlu_debug: dict[str, Any] | None = None,
+) -> tuple[RouteDecision, Plan, Evidence]:
+    """Завершает legacy post-NLU middleware после doctor verification.
+
+    Хелпер принимает уже готовое `decision` после `_verify_doctor_entity` и
+    выполняет оставшуюся часть старого `route_patient_message`: catalog
+    injection, guardrails, entity grounding, планирование, executor и графовый
+    переход.
+
+    :param decision: routing-решение после doctor verification
+    :param user_text: текущий текст пользователя
+    :param state: состояние сессии
+    :param services: сервисный слой
+    :param memory: memory-store
+    :param runtime_options: runtime-настройки LLM/NLU
+    :param nlu_debug: отладочные метаданные NLU для debug_trace
+    :return: финальный routing triple
+    """
+
     decision = await _inject_catalog_candidates(
         decision,
         user_text=user_text,
@@ -1886,9 +1886,22 @@ async def route_patient_message(
         return catalog_confirm
 
     # Служебные каталожные ключи не должны попадать в долгоживущий state.
-    if any(k in decision.entities for k in ("_catalog_doctor_candidate", "_catalog_doctor_query", "_catalog_service_candidate", "_catalog_service_query")):
+    if any(
+        k in decision.entities
+        for k in (
+            "_catalog_doctor_candidate",
+            "_catalog_doctor_query",
+            "_catalog_service_candidate",
+            "_catalog_service_query",
+        )
+    ):
         clean_entities = dict(decision.entities)
-        for key in ("_catalog_doctor_candidate", "_catalog_doctor_query", "_catalog_service_candidate", "_catalog_service_query"):
+        for key in (
+            "_catalog_doctor_candidate",
+            "_catalog_doctor_query",
+            "_catalog_service_candidate",
+            "_catalog_service_query",
+        ):
             clean_entities.pop(key, None)
         decision = _copy_decision(decision, entities=clean_entities)
 
@@ -1965,8 +1978,6 @@ async def route_patient_message(
         decision=decision,
         pending=pending_after_plan,
         handoff_planned=(
-            # executor sets a top-level boolean; service fallbacks use nested
-            # dicts — check both so the graph FSM always knows about a handoff
             bool(evidence.get(ek.HANDOFF_REQUIRED))
             or evidence_requires_handoff(evidence)[0]
         ),
@@ -1985,6 +1996,76 @@ async def route_patient_message(
         reason="topic_switch" if decision.context_action in {"new_topic", "overwrite_doctor"} else "",
     )
     return decision, plan, evidence
+
+
+async def route_patient_message(
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence]:
+    operator_offer_result = _handle_operator_offer_pending(user_text, state, memory)
+    if operator_offer_result is not None:
+        return operator_offer_result
+
+    catalog_pending_result = await _handle_catalog_confirm_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if catalog_pending_result is not None:
+        return catalog_pending_result
+
+    appointment_action_result = await _handle_appointment_action_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if appointment_action_result is not None:
+        return appointment_action_result
+
+    compound_price_result = await _handle_compound_price_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if compound_price_result is not None:
+        return compound_price_result
+
+    secondary_queue_result = await _handle_secondary_queue_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if secondary_queue_result is not None:
+        return secondary_queue_result
+
+    decision, nlu_debug = await _resolve_nlu_decision_before_doctor_guard(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    decision = await _verify_doctor_entity(decision, services, user_text)
+    return await _complete_route_after_doctor_guard(
+        decision=decision,
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+        nlu_debug=nlu_debug,
+    )
 
 
 
