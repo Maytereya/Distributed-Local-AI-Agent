@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from time import perf_counter
+from typing import Any, AsyncIterator
 
 from . import evidence_keys as ek
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
@@ -41,6 +43,25 @@ class OrchestratorContext:
     response: ResponseEnvelope | None = None
     short_circuit: bool = False
     short_circuit_reason: str = ""
+    # Per-stage wall-clock in milliseconds (filled by ``_timed_stage``). Used
+    # by the Part IV perf work as a baseline for optimisation decisions.
+    stage_timings: dict[str, float] = field(default_factory=dict)
+
+
+@asynccontextmanager
+async def _timed_stage(ctx: OrchestratorContext, name: str) -> AsyncIterator[None]:
+    """Record wall-clock latency for a pipeline stage into ``ctx.stage_timings``.
+
+    :param ctx: pipeline context
+    :param name: stage name used as the dict key (``early_guards``,
+        ``nlu_route``, ``clarify_gate``, ``tool_loop``, ``render``)
+    """
+
+    t0 = perf_counter()
+    try:
+        yield
+    finally:
+        ctx.stage_timings[name] = round((perf_counter() - t0) * 1000, 1)
 
 
 def _extract_prebuilt_response(
@@ -497,21 +518,27 @@ async def run_pipeline(
     """
 
     ctx = OrchestratorContext(text=text, state=state)
-    ctx = await early_guards(ctx, runtime_options=runtime_options)
+    async with _timed_stage(ctx, "early_guards"):
+        ctx = await early_guards(ctx, runtime_options=runtime_options)
     if ctx.short_circuit:
-        return await render(ctx, runtime_options=runtime_options)
-    ctx = await nlu_route(ctx, runtime_options=runtime_options)
-    ctx = await clarify_gate(ctx)
-    ctx = await tool_loop(
-        ctx,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    ctx = await render(
-        ctx,
-        runtime_options=runtime_options,
-        services=services,
-        memory=memory,
-    )
+        async with _timed_stage(ctx, "render"):
+            return await render(ctx, runtime_options=runtime_options)
+    async with _timed_stage(ctx, "nlu_route"):
+        ctx = await nlu_route(ctx, runtime_options=runtime_options)
+    async with _timed_stage(ctx, "clarify_gate"):
+        ctx = await clarify_gate(ctx)
+    async with _timed_stage(ctx, "tool_loop"):
+        ctx = await tool_loop(
+            ctx,
+            services=services,
+            memory=memory,
+            runtime_options=runtime_options,
+        )
+    async with _timed_stage(ctx, "render"):
+        ctx = await render(
+            ctx,
+            runtime_options=runtime_options,
+            services=services,
+            memory=memory,
+        )
     return ctx
