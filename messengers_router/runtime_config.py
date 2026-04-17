@@ -22,6 +22,8 @@ class _RuntimeConfigProxy:
     def __setattr__(self, name: str, value):
         setattr(_host_config, name, value)
 
+    def __delattr__(self, name: str):
+        delattr(_host_config, name)
+
 
 config = _RuntimeConfigProxy()
-

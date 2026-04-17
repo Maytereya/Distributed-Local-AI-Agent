@@ -1,4 +1,6 @@
 import asyncio
+import inspect
+import logging
 
 from messengers_router import classifier
 from messengers_router.llm_mode_policy import normalize_runtime_options
@@ -11,6 +13,30 @@ from messengers_router.mess_types import Evidence, Plan
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def test_guardrail_precheck_is_sync():
+    decision = classifier.guardrail_precheck("привет", {})
+
+    assert not inspect.iscoroutinefunction(classifier.guardrail_precheck)
+    assert decision is not None
+    assert decision.label == "OTHER"
+    assert "smalltalk_greeting" in decision.flags
+
+
+def test_ollama_classify_payload_logs_failure(monkeypatch, caplog):
+    async def fake_generate_text(*args, **kwargs):
+        raise RuntimeError("llm offline")
+
+    monkeypatch.setattr(classifier, "generate_text", fake_generate_text)
+
+    with caplog.at_level(logging.WARNING):
+        raw, data = run(classifier.ollama_classify_payload("test prompt"))
+
+    assert raw == ""
+    assert data["label"] == "OTHER"
+    assert "ollama_timeout" in data["flags"]
+    assert "ollama_classify_failed" in caplog.text
 
 
 def test_llm_primary_engine_used_when_enabled(monkeypatch):

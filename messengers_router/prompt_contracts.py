@@ -14,38 +14,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from .mess_types import PATIENT_LABEL_PRIORITY
+from .russian_nlu import ENTITY_WHITELIST
 
 ALLOWED_CONTEXT_ACTIONS = {"continue", "overwrite_doctor", "new_topic", "cancel_flow"}
 
-ALLOWED_ENTITY_KEYS = {
-    "doctor_name",
-    "doctor_id",
-    "specialty",
-    "branch_name",
-    "branch_id",
-    "city",
-    "service_name",
-    "appointment_action",
-    "patient_name",
-    "test_name",
-    "test_goal",
-    "surname",
-    "year",
-    "filial",
-    "number",
-    "order_id",
-    "result_action",
-    "lang",
-    "insurance_type",
-    "accepts_children",
-    "child_age",
-    "date_hint",
-    "date_from",
-    "date_to",
-    "time_from",
-    "time_to",
-    "secondary_intents",
-}
+# Single source of truth lives in russian_nlu.ENTITY_WHITELIST.
+ALLOWED_ENTITY_KEYS = ENTITY_WHITELIST
 
 
 @dataclass(frozen=True)

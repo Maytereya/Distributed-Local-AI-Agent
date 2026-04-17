@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from functools import lru_cache
 from typing import Any, Literal, Optional
 
@@ -22,6 +23,7 @@ from .services import Services
 from .policies import handoff_message
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -35,7 +37,8 @@ def get_services() -> Services:
     try:
         services.ensure_background_refresh_started()
     except Exception:
-        pass
+        log.error("get_services_init_failed", exc_info=True)
+        raise
     return services
 
 

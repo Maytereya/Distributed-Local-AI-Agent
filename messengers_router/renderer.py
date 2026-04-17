@@ -21,6 +21,7 @@ from .llm_runtime import generate_stream_text, generate_text
 from .mess_types import Evidence, RouteDecision, ResponseEnvelope
 from .policies import sanitize_for_patient
 from .prompt_registry import load_prompt_text
+from .russian_nlu import normalize_ru
 from .self_check import build_critic_prompt, parse_critic_result, should_regenerate
 from .runtime_config import config as c
 
@@ -243,7 +244,7 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
             lines.append("Если нужно записаться — напишите удобное время.")
     else:
         lines.append("Могу подобрать другого врача или передать диалог оператору.")
-    return "\n".join([l for l in lines if l is not None]).strip()
+    return "\n".join([line for line in lines if line is not None]).strip()
 
 
 def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
@@ -251,11 +252,11 @@ def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, 
     if not isinstance(docs, list) or not docs:
         return "К сожалению, информация о враче не найдена. Уточните фамилию или специальность."
 
-    doctor_hint = str(entities.get("doctor_name") or "").strip().lower().replace("ё", "е")
+    doctor_hint = normalize_ru(entities.get("doctor_name"))
     if doctor_hint:
         narrowed = []
         for d in docs:
-            fio = str(d.get("fio") or "").strip().lower().replace("ё", "е")
+            fio = normalize_ru(d.get("fio"))
             if doctor_hint in fio:
                 narrowed.append(d)
         if narrowed:
@@ -288,7 +289,7 @@ def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, 
             lines.append("Если нужно — могу показать расписание этого врача или помочь с записью.")
         else:
             lines.append("Если нужно — могу показать расписание любого из этих врачей или помочь с записью.")
-    return "\n".join([l for l in lines if l is not None]).strip()
+    return "\n".join([line for line in lines if line is not None]).strip()
 
 
 def _format_slot_compact(slot_iso: str) -> str:

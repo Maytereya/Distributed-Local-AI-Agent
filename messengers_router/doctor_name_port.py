@@ -17,6 +17,7 @@ from agent_logic_2.nayka_api.api_nayka import (
     find_existing_doctors_file as _find_existing_doctors_file,
     load_doctors_data as _load_doctors_data,
 )
+from .russian_nlu import normalize_ru
 
 _DOCTOR_CACHE_SIGNATURE: tuple[str, int] | None = None
 _DOCTOR_SURNAMES_MAP: dict[str, str] = {}
@@ -25,7 +26,7 @@ _DOCTOR_FIO_MAP: dict[str, str] = {}
 
 def _normalize_doctor_key(value: str | None) -> str:
     """Нормализует ФИО/фамилию врача для сопоставления с локальным кэшем."""
-    return " ".join(str(value or "").strip().lower().replace("ё", "е").split())
+    return " ".join(normalize_ru(value).split())
 
 
 def _doctor_cache_signature(file: Path | None) -> tuple[str, int] | None:

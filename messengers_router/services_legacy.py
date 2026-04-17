@@ -19,7 +19,6 @@ import logging
 import re
 import time
 from datetime import datetime
-from urllib.parse import quote_from_bytes
 from dataclasses import dataclass, field
 from difflib import get_close_matches
 from functools import lru_cache
@@ -38,7 +37,9 @@ from .doctor_name_port import (
 )
 from .llm_doesnt_work_fallback import build_prepare_fallback_answer
 from .llm_runtime import generate_text
+from .policies import handoff_message
 from .prompt_registry import load_prompt_text
+from .russian_nlu import normalize_ru
 from .service_phrase import extract_service_phrase
 from .runtime_config import config as c
 
@@ -628,7 +629,7 @@ def _is_schedule_no_slots_text(payload: Any) -> bool:
 
     if not isinstance(payload, str):
         return False
-    norm = _normalise_input(payload).replace("ё", "е")
+    norm = _normalise_input(payload)
     return "свободных слотов нет" in norm
 
 
@@ -688,11 +689,11 @@ _PREPARE_SYNONYM_HINTS: dict[str, tuple[str, ...]] = {
 
 
 def _normalise_input(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "").strip()).lower()
+    return re.sub(r"\s+", " ", normalize_ru(s))
 
 
 def _normalise_catalog_text(s: str) -> str:
-    norm = _normalise_input(s).replace("ё", "е")
+    norm = _normalise_input(s)
     norm = re.sub(r"[^a-zа-я0-9\- ]+", " ", norm)
     return re.sub(r"\s+", " ", norm).strip()
 
@@ -766,7 +767,7 @@ def _service_catalog_query_candidates(raw_text_or_name: str, *, current_service_
 
 
 def _normalise_prepare_text(text: str) -> str:
-    norm = _normalise_input(text).replace("ё", "е")
+    norm = _normalise_input(text)
     norm = re.sub(r"[\"'«»!?.,;:()]+", " ", norm)
     return re.sub(r"\s+", " ", norm).strip()
 
@@ -1067,8 +1068,8 @@ def _prepare_fast_relevance_score(query: str, content: str, *, title: str = "") 
 
     query_roots = _prepare_term_roots(query)
     if not query_roots:
-        query_norm = _normalise_input(query).replace("ё", "е")
-        content_norm = _normalise_input(content).replace("ё", "е")
+        query_norm = _normalise_input(query)
+        content_norm = _normalise_input(content)
         generic_prepare_query = any(x in query_norm for x in ("подготов", "анализ", "исслед", "натощак"))
         if generic_prepare_query and _is_prepare_content_actionable(content):
             # Generic query без таргета: разрешаем умеренный score для fallback по main_index.
@@ -1088,9 +1089,9 @@ def _prepare_fast_relevance_score(query: str, content: str, *, title: str = "") 
     if actionable < 1.0:
         score -= 0.08
 
-    query_norm = _normalise_input(query).replace("ё", "е")
-    content_norm = _normalise_input(content).replace("ё", "е")
-    title_norm = _normalise_input(title).replace("ё", "е")
+    query_norm = _normalise_input(query)
+    content_norm = _normalise_input(content)
+    title_norm = _normalise_input(title)
     if query_norm and len(query_norm) >= 6:
         if query_norm in content_norm:
             score += 0.05
@@ -1224,7 +1225,7 @@ def _service_info_row_score(queries: list[str], row: dict[str, Any]) -> tuple[fl
     :return: (score, лучшая query-вариация)
     """
 
-    service_name = _normalise_input(str(row.get("serviceName") or "")).replace("ё", "е")
+    service_name = _normalise_input(str(row.get("serviceName") or ""))
     preparation = str(row.get("preparation") or "").strip()
     if not service_name or not preparation:
         return 0.0, ""
@@ -1287,7 +1288,7 @@ def _is_non_samara_city_value(value: str | None) -> bool:
 def _extract_city_token(value: str | None) -> str | None:
     if not value:
         return None
-    norm = _normalise_input(value).replace("ё", "е")
+    norm = _normalise_input(value)
     if not norm:
         return None
     if _ADDRESS_HINT_RE.search(norm):
@@ -1307,7 +1308,7 @@ def _extract_city_token(value: str | None) -> str | None:
 
 
 def _normalize_region_text(value: str) -> str:
-    norm = _normalise_input(value).replace("ё", "е")
+    norm = _normalise_input(value)
     return re.sub(r"\s+", " ", norm).strip()
 
 
@@ -1378,7 +1379,7 @@ def _extract_specialty_from_text(text: str) -> str:
     m = _SPECIALTY_RE.search(text or "")
     if not m:
         return ""
-    return str(m.group(1) or "").strip().lower().replace("ё", "е")
+    return normalize_ru(m.group(1))
 
 
 def _procedure_query_role_specialty(text: str) -> str:
@@ -1404,7 +1405,7 @@ def _looks_like_schedule_specialty_token(value: str) -> bool:
     :param value: кандидат на фамилию
     :return: True, если это specialty-like токен
     """
-    norm = _normalise_input(value).replace("ё", "е")
+    norm = _normalise_input(value)
     if not norm:
         return False
     return norm in _SCHEDULE_SPECIALTY_TOKENS
@@ -1452,20 +1453,20 @@ def _specialty_terms(specialty: str) -> tuple[str, ...]:
     :param specialty: каноническая специальность (например, "хирург", "лор", "узи")
     :return: кортеж терминов/синонимов для подстрочного поиска
     """
-    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    spec_norm = _normalise_input(specialty)
     if not spec_norm:
         return tuple()
     terms = _SPECIALTY_ROLE_SYNONYMS.get(spec_norm, (spec_norm,))
     out: list[str] = []
     for term in terms:
-        term_norm = _normalise_input(term).replace("ё", "е")
+        term_norm = _normalise_input(term)
         if term_norm and term_norm not in out:
             out.append(term_norm)
     return tuple(out)
 
 
 def _specialty_norm(value: str) -> str:
-    return _normalise_input(value).replace("ё", "е")
+    return _normalise_input(value)
 
 
 def _specialty_equivalent(left: str, right: str) -> bool:
@@ -1561,7 +1562,7 @@ def _matches_specialty_terms(text: str, specialty: str) -> bool:
     :param specialty: искомая специальность
     :return: True, если найдено совпадение по одному из терминов
     """
-    norm = _normalise_input(text).replace("ё", "е")
+    norm = _normalise_input(text)
     if not norm:
         return False
     tokens = re.findall(r"[a-zа-я0-9]+", norm)
@@ -1569,7 +1570,7 @@ def _matches_specialty_terms(text: str, specialty: str) -> bool:
         return False
 
     for term in _specialty_terms(specialty):
-        t = _normalise_input(term).replace("ё", "е")
+        t = _normalise_input(term)
         if not t:
             continue
         term_tokens = re.findall(r"[a-zа-я0-9]+", t)
@@ -1646,7 +1647,7 @@ def _doctor_role_specialty_match_level(doc: dict[str, Any], specialty: str) -> i
     :param specialty: каноническая специальность (например, "хирург")
     :return: целочисленный приоритет совпадения
     """
-    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    spec_norm = _normalise_input(specialty)
     if not spec_norm:
         return 0
 
@@ -1732,7 +1733,7 @@ def _specialization_matches_specialty(unit_name: str, link_spec: str, specialty:
     :param specialty: целевая специальность
     :return: True, если specialization релевантен специальности
     """
-    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    spec_norm = _normalise_input(specialty)
     if not spec_norm:
         return False
     # В ролевом режиме (по специальности) опираемся именно на unit_name.
@@ -1762,7 +1763,7 @@ def _pick_display_specialization(
     :param preferred_service: услуга/процедура из запроса (если есть)
     :return: выбранный текст specialization
     """
-    spec_norm = _normalise_input(preferred_specialty).replace("ё", "е")
+    spec_norm = _normalise_input(preferred_specialty)
     service_norm = _normalise_input(preferred_service)
     link_specs = _iter_unit_link_specs(doc)
 
@@ -1824,8 +1825,8 @@ def _is_role_specialty_query(query_text: str, specialty: str) -> bool:
     :param specialty: распознанная специальность
     :return: True для ролевого сценария, False для процедурного
     """
-    spec_norm = _normalise_input(specialty).replace("ё", "е")
-    query_norm = _normalise_input(query_text).replace("ё", "е")
+    spec_norm = _normalise_input(specialty)
+    query_norm = _normalise_input(query_text)
     if not spec_norm:
         return False
     if spec_norm != "узи":
@@ -1850,7 +1851,7 @@ def _doctor_matches_specialty(doc: dict[str, Any], specialty: str, query_text: s
     :param query_text: исходный запрос пользователя
     :return: True, если врач подходит под фильтр
     """
-    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    spec_norm = _normalise_input(specialty)
     if not spec_norm:
         return False
 
@@ -1880,7 +1881,7 @@ def _stem_service_token(token: str) -> str:
     :param token: токен услуги
     :return: укороченный вариант токена
     """
-    t = str(token or "").strip().lower().replace("ё", "е")
+    t = normalize_ru(token)
     if len(t) < 5:
         return t
     endings = (
@@ -1931,7 +1932,7 @@ def _service_tokens(service_name: str) -> list[str]:
     raw_tokens = re.findall(r"[a-zа-яё0-9]{2,}", _normalise_input(service_name))
     out: list[str] = []
     for tok in raw_tokens:
-        t = tok.lower().replace("ё", "е")
+        t = normalize_ru(tok)
         if t in _SERVICE_FILTER_STOPWORDS:
             continue
         if len(t) < 3:
@@ -1962,7 +1963,7 @@ def _doctor_matches_service(doc: dict[str, Any], service_name: str) -> bool:
     for raw_link in (doc.get("unit_links") or []):
         if isinstance(raw_link, dict):
             parts.append(str(raw_link.get("specialization") or ""))
-    hay = _normalise_input(" ".join(parts)).replace("ё", "е")
+    hay = _normalise_input(" ".join(parts))
     if not hay:
         return False
 
@@ -2046,8 +2047,8 @@ def _doctor_matches_fio(fio: str, doctor_query: str, resolved_surname: str | Non
         return False
 
     for token in tokens:
-        for c in normalized:
-            if token.startswith(c):
+        for candidate in normalized:
+            if token.startswith(candidate):
                 return True
     return False
 
@@ -2061,7 +2062,7 @@ def _specialty_label_for_doctor(doc: dict[str, Any], *, preferred_specialty: str
     :return: короткая метка специальности для patient-facing ответа
     """
 
-    preferred = _normalise_input(preferred_specialty).replace("ё", "е")
+    preferred = _normalise_input(preferred_specialty)
     if preferred and _doctor_matches_primary_specialty(doc, preferred):
         return preferred_specialty.strip().capitalize()
 
@@ -2119,52 +2120,6 @@ def _dedupe_doctors_by_fio(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(fio)
         out.append(d)
     return out
-
-
-def _extract_result_query_fields(entities: dict[str, Any], query: str) -> dict[str, Any]:
-    surname = _get_first_present(entities, ["surname", "result_surname"])
-    filial = _get_first_present(entities, ["filial", "result_filial"])
-    year_raw = entities.get("year")
-    number_raw = entities.get("number")
-
-    if number_raw is None:
-        number_raw = entities.get("order_id")
-
-    year = _as_int(year_raw)
-    number = _as_int(number_raw)
-    return {
-        "surname": str(surname or "").strip(),
-        "year": year,
-        "filial": str(filial or "").strip(),
-        "number": number,
-        "lang": _get_first_present(entities, ["lang", "result_lang"]) or "ru",
-    }
-
-
-def _cp1251_urlencode(value: str) -> str:
-    """
-    Кодирование параметров под контракт ссылки naykalab/getanaliz:
-    Windows-1251 + URL-encode.
-    """
-    raw = str(value or "").strip().encode("cp1251", errors="replace")
-    return quote_from_bytes(raw, safe="")
-
-
-def _build_public_result_link(fields: dict[str, Any]) -> str | None:
-    surname = str(fields.get("surname") or "").strip()
-    filial = str(fields.get("filial") or "").strip()
-    year = _as_int(fields.get("year"))
-    number = _as_int(fields.get("number"))
-    if not surname or not filial or year is None or number is None:
-        return None
-    return (
-        "https://naykalab.ru/getanaliz.php"
-        f"?fam={_cp1251_urlencode(surname)}"
-        f"&year={year}"
-        f"&nom={_cp1251_urlencode(filial)}"
-        f"&nom2={number}"
-        "&fast=1"
-    )
 
 
 def _region_display_name(region: dict[str, Any]) -> str:
@@ -2239,17 +2194,21 @@ def _soft_address_match(left: str, right: str) -> bool:
     :param right: адрес из второго источника
     :return: True, если строки похожи и описывают один филиал
     """
-    l = _normalise_input(left)
-    r = _normalise_input(right)
-    if not l or not r:
+    left_norm = _normalise_input(left)
+    right_norm = _normalise_input(right)
+    if not left_norm or not right_norm:
         return False
-    if l == r or l in r or r in l:
+    if left_norm == right_norm or left_norm in right_norm or right_norm in left_norm:
         return True
-    lc = re.sub(r"[^a-zа-я0-9]+", "", l)
-    rc = re.sub(r"[^a-zа-я0-9]+", "", r)
-    if not lc or not rc:
+    left_compact = re.sub(r"[^a-zа-я0-9]+", "", left_norm)
+    right_compact = re.sub(r"[^a-zа-я0-9]+", "", right_norm)
+    if not left_compact or not right_compact:
         return False
-    return lc == rc or lc in rc or rc in lc
+    return (
+        left_compact == right_compact
+        or left_compact in right_compact
+        or right_compact in left_compact
+    )
 
 
 def _static_procedure_addresses(service_q: str) -> list[str]:
@@ -2334,7 +2293,7 @@ def _normalise_price_token(token: str) -> str:
     :return: нормализованный токен
     """
 
-    norm = str(token or "").strip().lower().replace("ё", "е")
+    norm = normalize_ru(token)
     if not norm:
         return ""
     if norm.startswith("ультразвук"):
@@ -2354,7 +2313,7 @@ def _extract_vitamin_designator(text: str) -> str:
     :return: канонический код витамина или пустая строка
     """
 
-    raw = _normalise_input(text).replace("ё", "е")
+    raw = _normalise_input(text)
     m = re.search(r"\bвитамин\w*\s+([a-zа-я]\d{0,2})\b", raw, re.I)
     if not m:
         return ""
@@ -2390,7 +2349,7 @@ def _augment_price_tokens(tokens: list[str], *, raw_text: str = "") -> list[str]
     for token in tokens:
         _push(token)
 
-    raw = _normalise_input(raw_text).replace("ё", "е")
+    raw = _normalise_input(raw_text)
     if raw and _UZI_LINE_RE.search(raw):
         _push("узи")
     vitamin_code = _extract_vitamin_designator(raw)
@@ -2400,7 +2359,7 @@ def _augment_price_tokens(tokens: list[str], *, raw_text: str = "") -> list[str]
 
 
 def _price_query_tokens(text: str) -> list[str]:
-    s = _normalise_input(text).replace("ё", "е")
+    s = _normalise_input(text)
     out: list[str] = []
     for t in _PRICE_TOKEN_RE.findall(s):
         token = _normalise_price_token(str(t or ""))
@@ -2420,7 +2379,7 @@ def _price_query_tokens(text: str) -> list[str]:
 
 
 def _price_alias_candidates(query_text: str) -> list[str]:
-    raw = _normalise_input(str(query_text or "")).replace("ё", "е")
+    raw = _normalise_input(str(query_text or ""))
     if not raw:
         return []
     out: list[str] = []
@@ -2429,7 +2388,7 @@ def _price_alias_candidates(query_text: str) -> list[str]:
         out.append(direct)
     extracted = _extract_price_service_from_query(raw)
     if extracted:
-        out.append(_normalise_input(extracted).replace("ё", "е"))
+        out.append(_normalise_input(extracted))
     compact = " ".join(_price_query_tokens(raw)).strip()
     if compact:
         out.append(compact)
@@ -2510,7 +2469,7 @@ def _is_generic_uzi_price_request(query_text: str) -> bool:
         return False
 
     extracted = str(_extract_price_service_from_query(raw) or "").strip()
-    norm = _normalise_input(extracted).replace("ё", "е")
+    norm = _normalise_input(extracted)
     return norm in {"узи", "ультразвук", "ультразвуковое исследование"}
 
 
@@ -2545,8 +2504,8 @@ def _detect_service_kind(
     :return: `lab` | `doctor`
     """
 
-    norm_name = _normalise_input(str(service_name or "")).replace("ё", "е")
-    norm_query = _normalise_input(str(query_text or "")).replace("ё", "е")
+    norm_name = _normalise_input(str(service_name or ""))
+    norm_query = _normalise_input(str(query_text or ""))
 
     if is_consult_query:
         return "doctor"
@@ -2603,7 +2562,7 @@ def _dedupe_price_queries(queries: list[str], *, max_items: int = 8) -> list[str
         value = str(raw or "").strip()
         if not value:
             continue
-        key = _normalise_input(value).replace("ё", "е")
+        key = _normalise_input(value)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -2639,7 +2598,7 @@ def _should_prefer_current_price_query_over_context(query_text: str, current_ser
     if _is_city_only_reply(raw):
         return False
 
-    current_norm = _normalise_input(current).replace("ё", "е")
+    current_norm = _normalise_input(current)
     current_tokens = set(_price_query_tokens(current))
     query_variants: list[str] = []
 
@@ -2656,7 +2615,7 @@ def _should_prefer_current_price_query_over_context(query_text: str, current_ser
         query_variants.append(compact)
 
     for candidate in query_variants:
-        cand_norm = _normalise_input(candidate).replace("ё", "е")
+        cand_norm = _normalise_input(candidate)
         if not cand_norm or cand_norm == current_norm:
             continue
         cand_tokens = set(_price_query_tokens(candidate))
@@ -2803,7 +2762,7 @@ def _resolve_best_price_row_from_queries(
         row = ranked[0]
         score, matched = _price_row_score(
             row,
-            query=_normalise_input(query).replace("ё", "е"),
+            query=_normalise_input(query),
             tokens=_price_query_tokens(query),
             homecode_query=_extract_homecode_query(query),
         )
@@ -2984,7 +2943,7 @@ def _score_price_rows(
     :return: список словарей вида `{"row": ..., "score": ..., "matched": ...}`
     """
 
-    query = _normalise_input(query_text).replace("ё", "е")
+    query = _normalise_input(query_text)
     tokens = _price_query_tokens(query_text)
     homecode_query = _extract_homecode_query(query_text)
 
@@ -3043,7 +3002,7 @@ def _score_price_rows(
 
 
 def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], homecode_query: str) -> tuple[int, int]:
-    name = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
+    name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
     homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
     if not name:
         return 0, 0
@@ -3221,7 +3180,7 @@ def _select_patient_price_rows(
     if filtered_ranked:
         ranked = filtered_ranked
 
-    query = _normalise_input(query_text).replace("ё", "е")
+    query = _normalise_input(query_text)
     tokens = _price_query_tokens(query_text)
     homecode_query = _extract_homecode_query(query_text)
     top_score, top_matched = _price_row_score(
@@ -3265,7 +3224,7 @@ def _normalise_family_variant_name(value: str) -> str:
     :return: нормализованное имя без модификаторов
     """
 
-    norm = _normalise_input(str(value or "")).replace("ё", "е")
+    norm = _normalise_input(str(value or ""))
     norm = _PRICE_CITO_ROW_RE.sub(" ", norm)
     norm = _PRICE_CAPILLARY_ROW_RE.sub(" ", norm)
     norm = _PRICE_CHILD_ROW_RE.sub(" ", norm)
@@ -3450,7 +3409,7 @@ def _select_family_variant_rows(
             ranked = filtered_ranked
         return ranked[:limit]
     ranked = _rank_price_rows(unique_rows, effective_query, limit=max(limit, 20))
-    family_norm = _normalise_input(family_query).replace("ё", "е")
+    family_norm = _normalise_input(family_query)
     if _is_uzi_query_text(family_query) and _UZI_PROCEDURE_HINT_RE.search(family_norm):
         filtered_ranked = [
             row
@@ -3520,8 +3479,15 @@ def _build_family_candidate_rows(
         if isinstance(row, dict):
             direct_rows.append(row)
 
-    best_rows = _select_family_variant_rows(direct_rows, family_query, limit=limit)
+    direct_filtered = _select_family_variant_rows(direct_rows, family_query, limit=limit)
+    best_rows = list(direct_filtered)
     best_base_names = _family_variant_base_names(best_rows)
+
+    def _row_key(row: dict[str, Any]) -> tuple[str, str]:
+        return (
+            _normalise_input(str(row.get("serviceName") or row.get("name") or "")),
+            _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or "")),
+        )
 
     for token in _family_query_root_tokens(query_text):
         expanded_rows = _expand_family_rows_by_root_token(
@@ -3532,12 +3498,30 @@ def _build_family_candidate_rows(
         )
         if len(expanded_rows) < 2:
             continue
-        candidate_rows = _select_family_variant_rows(
-            direct_rows + expanded_rows,
+        # Ранжируем expansion по одному root-токену (сохраняет поведение для
+        # запросов типа «анализы на витамины», где полный запрос не матчится
+        # ни на одну отдельную витаминную строку сильно).
+        expanded_ranked = _select_family_variant_rows(
+            expanded_rows,
             family_query,
             ranking_query=token,
-            limit=limit,
+            limit=max(limit, 40),
         )
+        # Держим уже отфильтрованные direct_rows (сильные матчи по полному
+        # запросу) в голове кандидатного списка, чтобы широкая expansion по
+        # одному root-токену не вытесняла их (кейс «общий анализ крови» —
+        # expansion по «кровь» не должен прятать ОАК-варианты).
+        merged: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str]] = set()
+        for row in list(direct_filtered) + list(expanded_ranked):
+            key = _row_key(row)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            merged.append(row)
+            if len(merged) >= limit:
+                break
+        candidate_rows = merged
         candidate_base_names = _family_variant_base_names(candidate_rows)
         if len(candidate_base_names) > len(best_base_names) or (
             len(candidate_base_names) == len(best_base_names) and len(candidate_rows) > len(best_rows)
@@ -3581,6 +3565,123 @@ def _is_family_query_candidate(query_text: str, rows: list[dict[str, Any]]) -> b
     return len(base_names) >= 3
 
 
+_OAK_ALIAS_RE = re.compile(r"\bоак\b", re.I)
+_OAK_PHRASE_RE = re.compile(r"общ\w*\s+анализ\w*\s+кров\w*", re.I)
+_OAK_CANONICAL_BASE_RE = re.compile(r"^\s*общий\s+анализ\s+крови\b", re.I)
+_OAK_HOMEVISIT_RE = re.compile(r"\bна\s+дом\b|выезд\s+на\s+дом", re.I)
+
+
+def _is_oak_base_query(query_text: str) -> bool:
+    """Проверяет, что запрос адресован именно к базовому ОАК.
+
+    Явно запрошенные модификаторы (cito, капиллярная, детский) не считаем
+    базовым ОАК — там стандартный family/ranking путь даст нужный вариант.
+
+    :param query_text: исходный запрос пользователя
+    :return: True, если речь именно про обычный общий анализ крови
+    """
+
+    raw = _normalise_input(str(query_text or ""))
+    if not raw:
+        return False
+    if _query_price_variant_flags(raw):
+        return False
+    if _OAK_ALIAS_RE.search(raw):
+        return True
+    return bool(_OAK_PHRASE_RE.search(raw))
+
+
+def _select_oak_canonical_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Возвращает канонические ОАК-строки без служебных модификаторов.
+
+    Канонические — те, что начинаются с «Общий анализ крови», без cito,
+    капиллярной крови, детских вариантов и выездов на дом. На реальном
+    прайсе это ровно две позиции (390 и 490 руб).
+
+    :param rows: строки прайса
+    :return: канонические ОАК-строки, отсортированные по стоимости
+    """
+
+    canonical: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
+        if not name or not _OAK_CANONICAL_BASE_RE.search(name):
+            continue
+        if _lab_price_variant_flags(row):
+            continue
+        if _OAK_HOMEVISIT_RE.search(name):
+            continue
+        canonical.append(row)
+
+    canonical.sort(key=lambda r: _as_int(r.get("cost")) or 0)
+    return canonical
+
+
+def _build_oak_canonical_payload(
+    query_text: str,
+    rows: list[dict[str, Any]],
+    *,
+    show_all: bool = False,
+    visible_limit: int = 2,
+) -> dict[str, Any] | None:
+    """Формирует payload для ОАК: по умолчанию две базовые позиции, остальное — по «все».
+
+    :param query_text: исходный запрос пользователя
+    :param rows: строки прайса
+    :param show_all: разворачивать ли весь список
+    :param visible_limit: сколько позиций показывать в первом ответе
+    :return: family-query-совместимый payload либо None, если канонических <2
+    """
+
+    canonical = _select_oak_canonical_rows(rows)
+    if len(canonical) < 2:
+        return None
+
+    canonical_keys = {
+        (
+            _normalise_input(str(row.get("serviceName") or row.get("name") or "")),
+            _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or "")),
+        )
+        for row in canonical
+    }
+
+    extras: list[dict[str, Any]] = []
+    extra_source = _rank_price_rows(rows, "общий анализ крови", limit=60)
+    for row in extra_source:
+        if not isinstance(row, dict):
+            continue
+        key = (
+            _normalise_input(str(row.get("serviceName") or row.get("name") or "")),
+            _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or "")),
+        )
+        if key in canonical_keys:
+            continue
+        extras.append(row)
+
+    variants = _annotate_price_rows_with_care_context(canonical + extras)
+    visible_count = len(variants) if show_all else min(len(variants), visible_limit)
+    remaining_count = max(0, len(variants) - visible_count)
+    show_all_hint = ""
+    if remaining_count > 0 and not show_all:
+        show_all_hint = (
+            f"По вашему запросу найдено еще {remaining_count} вариантов. "
+            'Чтобы показать их, напишите: "все".'
+        )
+
+    return {
+        "service_name": "общий анализ крови",
+        "service_kind": "family_query",
+        "family_variants": variants,
+        "showing_all": show_all,
+        "visible_limit": visible_limit,
+        "remaining_count": remaining_count,
+        "show_all_hint": show_all_hint,
+        "note": "price_oak_canonical",
+    }
+
+
 def _build_price_family_payload(
     query_text: str,
     rows: list[dict[str, Any]],
@@ -3597,6 +3698,16 @@ def _build_price_family_payload(
     :param visible_limit: лимит строк в первом ответе
     :return: payload family-query либо None
     """
+
+    if _is_oak_base_query(query_text):
+        oak_payload = _build_oak_canonical_payload(
+            query_text,
+            rows,
+            show_all=show_all,
+            visible_limit=2,
+        )
+        if oak_payload is not None:
+            return oak_payload
 
     family_query = str(_extract_price_service_from_query(query_text) or query_text).strip()
     if not _is_family_query_candidate(query_text, rows):
@@ -3772,7 +3883,7 @@ def _is_lab_like_service_name(value: str) -> bool:
     :return: True для lab-like строки
     """
 
-    norm = _normalise_input(str(value or "")).replace("ё", "е")
+    norm = _normalise_input(str(value or ""))
     if not norm:
         return False
     if _PRICE_PROCEDURE_LIKE_RE.search(norm):
@@ -3806,9 +3917,9 @@ def _classify_catalog_service_kind(
         (retail_rows[0].get("serviceName") or retail_rows[0].get("name") or service_name)
         if retail_rows else service_name
     ).strip()
-    top_norm = _normalise_input(top_name).replace("ё", "е")
-    service_norm = _normalise_input(service_name).replace("ё", "е")
-    query_norm = _normalise_input(query_text).replace("ё", "е")
+    top_norm = _normalise_input(top_name)
+    service_norm = _normalise_input(service_name)
+    query_norm = _normalise_input(query_text)
     top_rows = retail_rows[:3] if retail_rows else []
     lab_signal = bool(
         _LAB_SERVICE_HINT_RE.search(service_norm)
@@ -3862,7 +3973,7 @@ def _has_reliable_doctor_service_link(
         return False
     strong_hits = 0
     for _, matched, _, _, row in matched_rows[:3]:
-        row_name = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
+        row_name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
         if not row_name:
             continue
         if query_norm == row_name or query_norm in row_name or row_name in query_norm:
@@ -4086,8 +4197,8 @@ def _select_effective_price_service_name(entity_service_name: str, query_service
     if not query:
         return entity
 
-    entity_norm = _normalise_input(entity).replace("ё", "е")
-    query_norm = _normalise_input(query).replace("ё", "е")
+    entity_norm = _normalise_input(entity)
+    query_norm = _normalise_input(query)
     if not query_norm or entity_norm == query_norm:
         return entity
 
@@ -4121,6 +4232,151 @@ def _select_effective_price_service_name(entity_service_name: str, query_service
     return query
 
 
+_MULTI_PRICE_SPLIT_RE = re.compile(r"\s*(?:,|;|\bи\b|\+|/)\s*", re.I)
+_MULTI_PRICE_SERVICE_HINT_RE = re.compile(
+    r"[a-zа-яё]{3,}",
+    re.I,
+)
+
+
+def _split_price_query_items(query_text: str) -> list[str]:
+    """Делит мульти-услуговый price-запрос на отдельные фрагменты-услуги.
+
+    Консервативный сплиттер: режем по `,` / `;` / ` и ` / `+` / `/`, отбрасываем
+    служебные стоп-слова («стоимость», «цена» и т.п.) из каждого фрагмента.
+
+    :param query_text: исходный текст пользователя
+    :return: список непустых фрагментов услуг; пустой список, если делить нечего
+    """
+
+    raw = str(query_text or "").strip()
+    if not raw:
+        return []
+
+    head = re.sub(
+        r"^\s*(?:стоимость|цена|сколько\s+стоит|прайс)\s+",
+        "",
+        raw,
+        flags=re.I,
+    ).strip()
+    if not head:
+        head = raw
+
+    fragments: list[str] = []
+    for chunk in _MULTI_PRICE_SPLIT_RE.split(head):
+        frag = chunk.strip(" ?!.,;:-–—")
+        if not frag:
+            continue
+        if not _MULTI_PRICE_SERVICE_HINT_RE.search(frag):
+            continue
+        if _normalise_input(frag) in _PRICE_QUERY_STOPWORDS:
+            continue
+        fragments.append(frag)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for frag in fragments:
+        key = _normalise_input(frag)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(frag)
+    return unique
+
+
+def _resolve_multi_price_items(
+    query_text: str,
+    retail_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Разрешает фрагменты мульти-услугового запроса в реальные услуги каталога.
+
+    Возвращает список словарей `{"service_name", "prices"}` только если ≥2
+    фрагментов успешно приземлились на каталог. Иначе — пустой список
+    (fallback на стандартный single-service путь).
+
+    :param query_text: исходный запрос пользователя
+    :param retail_rows: строки retail-прайса региона
+    :return: список разрешённых услуг с top-рядами цен
+    """
+
+    fragments = _split_price_query_items(query_text)
+    if len(fragments) < 2:
+        return []
+
+    resolved: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for frag in fragments:
+        service_name = resolve_price_service_name_from_catalog(frag, rows=retail_rows)
+        if not service_name:
+            extracted = _extract_price_service_from_query(frag) or frag
+            alias_variants = _PRICE_SERVICE_ALIASES.get(_normalise_input(extracted), ())
+            service_name = str(alias_variants[0] or "").strip() if alias_variants else ""
+        if not service_name:
+            continue
+        key = _normalise_input(service_name)
+        if key in seen_names:
+            continue
+        top_rows = _select_patient_price_rows(retail_rows, service_name, limit=2)
+        if not top_rows:
+            continue
+        seen_names.add(key)
+        resolved.append(
+            {
+                "service_name": service_name,
+                "prices": _annotate_price_rows_with_care_context(top_rows),
+            }
+        )
+
+    if len(resolved) < 2:
+        return []
+    return resolved
+
+
+def _build_multi_price_payload(
+    query_text: str,
+    retail_rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Формирует payload для мульти-услугового price-запроса.
+
+    Каждая услуга отрисовывается как отдельная family-подгруппа через
+    `care_setting_label`, чтобы рендер умел группировать список без
+    дополнительного рендер-кейса.
+
+    :param query_text: исходный запрос пользователя
+    :param retail_rows: строки retail-прайса региона
+    :return: family-query-совместимый payload либо None
+    """
+
+    items = _resolve_multi_price_items(query_text, retail_rows)
+    if not items:
+        return None
+
+    variants: list[dict[str, Any]] = []
+    for item in items:
+        label = f"По услуге «{item['service_name']}»"
+        for row in item["prices"]:
+            annotated = dict(row)
+            annotated["care_setting_label"] = label
+            annotated["care_setting_address"] = ""
+            variants.append(annotated)
+
+    if len(variants) < 2:
+        return None
+
+    service_name = ", ".join(str(item["service_name"]) for item in items)
+    visible_limit = len(variants)
+    return {
+        "service_name": service_name,
+        "service_kind": "family_query",
+        "family_variants": variants,
+        "showing_all": True,
+        "visible_limit": visible_limit,
+        "remaining_count": 0,
+        "show_all_hint": "",
+        "note": "price_multi_service",
+    }
+
+
 def _compound_price_secondary_lab_service(
     query_text: str,
     *,
@@ -4140,8 +4396,8 @@ def _compound_price_secondary_lab_service(
     :return: каноническое имя второй лабораторной услуги либо None
     """
 
-    query_norm = _normalise_input(str(query_text or "")).replace("ё", "е")
-    primary_norm = _normalise_input(str(primary_service_name or "")).replace("ё", "е")
+    query_norm = _normalise_input(str(query_text or ""))
+    primary_norm = _normalise_input(str(primary_service_name or ""))
     if not query_norm or not primary_norm or " и " not in f" {query_norm} ":
         return None
 
@@ -4155,14 +4411,14 @@ def _compound_price_secondary_lab_service(
             fragment_from_lab_phrase = True
 
     for alias in sorted(_PRICE_SERVICE_ALIASES.keys(), key=len, reverse=True):
-        alias_norm = _normalise_input(alias).replace("ё", "е")
+        alias_norm = _normalise_input(alias)
         if not alias_norm or alias_norm in primary_norm or alias_norm not in query_norm:
             continue
         fragments.append(alias)
 
     seen: set[str] = set()
     for idx, fragment in enumerate(fragments):
-        key = _normalise_input(fragment).replace("ё", "е")
+        key = _normalise_input(fragment)
         if not key or key in seen:
             continue
         seen.add(key)
@@ -4170,7 +4426,7 @@ def _compound_price_secondary_lab_service(
         if not candidate:
             variants = _PRICE_SERVICE_ALIASES.get(key, ())
             candidate = str(variants[0] or "").strip() if variants else ""
-        candidate_norm = _normalise_input(candidate).replace("ё", "е")
+        candidate_norm = _normalise_input(candidate)
         if not candidate_norm or candidate_norm == primary_norm:
             continue
         top_rows = _select_patient_price_rows(retail_rows, candidate, limit=3)
@@ -4270,24 +4526,24 @@ def match_compound_price_service_option(user_text: str, options: list[str]) -> s
     :return: выбранная услуга либо None
     """
 
-    reply_norm = _normalise_input(str(user_text or "")).replace("ё", "е")
+    reply_norm = _normalise_input(str(user_text or ""))
     if not reply_norm:
         return None
     reply_tokens = set(_meaningful_price_service_tokens(reply_norm))
 
     alias_hits: set[str] = set()
     for alias, variants in _PRICE_SERVICE_ALIASES.items():
-        alias_norm = _normalise_input(alias).replace("ё", "е")
+        alias_norm = _normalise_input(alias)
         if alias_norm and alias_norm in reply_norm:
             alias_hits.add(alias_norm)
             for variant in variants:
-                variant_norm = _normalise_input(variant).replace("ё", "е")
+                variant_norm = _normalise_input(variant)
                 if variant_norm:
                     alias_hits.add(variant_norm)
 
     for option in options:
         option_text = str(option or "").strip()
-        option_norm = _normalise_input(option_text).replace("ё", "е")
+        option_norm = _normalise_input(option_text)
         if not option_norm:
             continue
         if reply_norm == option_norm or reply_norm in option_norm or option_norm in reply_norm:
@@ -4317,12 +4573,12 @@ def _specialty_priority_rank(doc: dict[str, Any], specialty: str) -> int:
     :param specialty: специальность запроса
     :return: индекс приоритета (0..N-1), либо большой ранг если врач не в приоритете
     """
-    spec_norm = _normalise_input(specialty).replace("ё", "е")
+    spec_norm = _normalise_input(specialty)
     priorities = _SPECIALTY_PRIORITY_SURNAMES.get(spec_norm)
     if not priorities:
         return 10**6
 
-    fio_norm = _normalise_input(str(doc.get("fio") or "")).replace("ё", "е")
+    fio_norm = _normalise_input(str(doc.get("fio") or ""))
     if not fio_norm:
         return 10**6
     fio_tokens = [token for token in re.findall(r"[a-zа-я0-9]+", fio_norm) if token]
@@ -4428,7 +4684,6 @@ def _extract_region_work_time(region: dict[str, Any]) -> str:
 
 def _norm_city(s: str) -> str:
     t = _normalise_input(s or "")
-    t = t.replace("ё", "е")
     t = re.sub(r"^г\.?\s*", "", t)
     return t.strip()
 
@@ -4598,27 +4853,6 @@ def _prepare_clarify_response(query: str, entities: dict[str, Any], *, note: str
     }
 
 
-def _test_assist_clarify_response(entities: dict[str, Any], *, note: str) -> dict[str, Any]:
-    """
-    Возвращает безопасный non-handoff fallback для подбора анализов.
-
-    :param entities: текущие сущности роутера
-    :param note: диагностическая пометка источника
-    :return: payload TEST_ASSIST без handoff_required
-    """
-
-    return {
-        "tests": [],
-        "promos": [],
-        "message": (
-            "Уточните, пожалуйста, какие симптомы, жалобы или цель обследования вас интересуют, "
-            "и я помогу подобрать анализы."
-        ),
-        "note": note,
-        "entities_used": entities,
-    }
-
-
 def _tax_doc_guidance_response(entities: dict[str, Any], *, note: str) -> dict[str, Any]:
     """
     Возвращает детерминированную ссылку на оформление справки для налогового вычета.
@@ -4681,7 +4915,7 @@ _DOC_RELEVANCE_STOPWORDS = {
 
 
 def _doc_tokens(text: str) -> set[str]:
-    norm = _normalise_input(text).replace("ё", "е")
+    norm = _normalise_input(text)
     out: set[str] = set()
     for token in re.findall(r"[a-zа-я0-9]{3,}", norm):
         if token.isdigit() or token in _DOC_RELEVANCE_STOPWORDS:
@@ -4691,8 +4925,8 @@ def _doc_tokens(text: str) -> set[str]:
 
 
 def _is_main_index_relevant(query: str, content: str, *, doc_kind: str) -> bool:
-    content_norm = _normalise_input(content).replace("ё", "е")
-    query_norm = _normalise_input(query).replace("ё", "е")
+    content_norm = _normalise_input(content)
+    query_norm = _normalise_input(query)
     if not content_norm:
         return False
 
@@ -4728,7 +4962,7 @@ def _is_main_index_relevant(query: str, content: str, *, doc_kind: str) -> bool:
 
 
 def _is_prepare_relevant(query: str, content: str) -> bool:
-    content_norm = _normalise_input(content).replace("ё", "е")
+    content_norm = _normalise_input(content)
     if not content_norm:
         return False
     if not any(x in content_norm for x in ("подготов", "натощак", "перед", "за ")):
@@ -4895,7 +5129,7 @@ def _is_prepare_content_actionable(content: str) -> bool:
     :return: True, если текст выглядит содержательным
     """
 
-    norm = _normalise_input(content).replace("ё", "е")
+    norm = _normalise_input(content)
     if not norm:
         return False
     if norm in _PREPARE_GENERIC_HEADINGS:
@@ -4911,7 +5145,7 @@ def _is_prepare_content_actionable(content: str) -> bool:
 
 
 def _has_prepare_strong_hints(content: str) -> bool:
-    norm = _normalise_input(content).replace("ё", "е")
+    norm = _normalise_input(content)
     if not norm:
         return False
     return any(h in norm for h in _PREPARE_STRONG_HINTS)
@@ -4938,7 +5172,7 @@ def _is_prepare_service_info_usable(query: str, content: str, *, title: str = ""
     return score >= low
 
 
-_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = "В моей базе данных информации недостаточно, перевожу на оператора."
+_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = handoff_message("knowledge_not_found")
 
 
 @dataclass
@@ -5249,7 +5483,7 @@ class Services:
                 name_norm = _normalise_catalog_text(str(row.get("serviceName") or row.get("name") or ""))
                 if not name_norm:
                     continue
-                code_norm = _normalise_input(str(row.get("serviceHomecode") or "")).replace("ё", "е")
+                code_norm = _normalise_input(str(row.get("serviceHomecode") or ""))
                 key = (name_norm, code_norm)
                 if key in seen:
                     continue
@@ -5785,7 +6019,7 @@ class Services:
             has_exact_doctor_link=False,
             is_consult_query=is_consult_query,
         )
-        query_norm = _normalise_input(service_name).replace("ё", "е")
+        query_norm = _normalise_input(service_name)
         query_tokens = _price_query_tokens(service_name)
         homecode_query = _extract_homecode_query(service_name)
         matched_price_rows: list[tuple[int, int, int, int, dict[str, Any]]] = []
@@ -5821,7 +6055,7 @@ class Services:
                 doctor_id = _as_int(row.get("doctorId"))
                 if doctor_id is None or doctor_id not in by_id:
                     continue
-                row_name_norm = _normalise_input(str(row.get("serviceName") or row.get("name") or "")).replace("ё", "е")
+                row_name_norm = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
                 row_homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
                 score, matched = _price_row_score(
                     row,
@@ -5873,7 +6107,7 @@ class Services:
         if service_kind == "operator":
             return _service_fallback(
                 note="service_bundle_info ambiguous operator fallback",
-                handoff_message="Сейчас по этой услуге безопаснее уточнить у оператора. Соединяю с оператором.",
+                handoff_message=handoff_message("ambiguous_price_service"),
                 entities=entities,
                 reason="ambiguous_price_service",
                 extra={
@@ -6048,7 +6282,7 @@ class Services:
         if not doctors:
             return _service_fallback(
                 note="doctors_info source unavailable",
-                handoff_message="Сейчас не удалось получить список врачей автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_doctors_list"),
                 entities=entities,
                 extra={"doctors": []},
             )
@@ -6271,7 +6505,7 @@ class Services:
         if region_name and _is_non_samara_city_value(region_name):
             return _service_fallback(
                 note=f"doctors_schedule_week unsupported city: {region_name}",
-                handoff_message="Сейчас могу помочь только по Самаре. Соединяю с оператором.",
+                handoff_message=handoff_message("city_not_supported"),
                 entities=entities,
                 reason="city_not_supported",
                 extra={"schedule": []},
@@ -6311,7 +6545,7 @@ class Services:
         except Exception:
             return _service_fallback(
                 note="doctors_schedule_week unavailable",
-                handoff_message="Сейчас не удалось получить расписание автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_schedule"),
                 entities=entities,
                 extra={"schedule": []},
             )
@@ -6424,7 +6658,7 @@ class Services:
                 return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback unavailable")
             return _service_fallback(
                 note="main_index_info source unavailable",
-                handoff_message="Сейчас не удалось найти информацию автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_doctor_info"),
                 entities=entities,
                 extra={"content": ""},
             )
@@ -6434,7 +6668,7 @@ class Services:
                 return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback error")
             return _service_fallback(
                 note="main_index_info source unavailable",
-                handoff_message="Сейчас не удалось найти информацию автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_doctor_info"),
                 entities=entities,
                 extra={"content": ""},
             )
@@ -6481,42 +6715,20 @@ class Services:
             except Exception:
                 return _service_fallback(
                     note="appointment_help source unavailable",
-                    handoff_message="Сейчас не удалось получить данные для записи автоматически. Соединяю с оператором.",
+                    handoff_message=handoff_message("service_error_appointments"),
                     entities=entities,
                     extra={"instructions": "Сейчас не удалось получить данные для записи автоматически."},
                 )
             if _is_meili_error_text(cleaned):
                 return _service_fallback(
                     note="appointment_help source unavailable",
-                    handoff_message="Сейчас не удалось получить данные для записи автоматически. Соединяю с оператором.",
+                    handoff_message=handoff_message("service_error_appointments"),
                     entities=entities,
                     extra={"instructions": "Сейчас не удалось получить данные для записи автоматически."},
                 )
             return {"instructions": cleaned, "entities_used": entities}
         return {
             "instructions": "Чтобы записаться, уточните врача/специальность/услугу и удобные даты.",
-            "entities_used": entities,
-        }
-
-    async def test_assist(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        test_name = _get_first_present(entities, ["test_name", "service_name"]) or query
-        needle = _normalise_input(test_name)
-        if not needle:
-            return _test_assist_clarify_response(entities, note="test_assist: no test query")
-
-        try:
-            price_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
-        except Exception:
-            return _test_assist_clarify_response(entities, note="test_assist source unavailable")
-        matches = _rank_price_rows([p for p in price_rows if isinstance(p, dict)], test_name, limit=10)
-
-        if not matches:
-            return _test_assist_clarify_response(entities, note=f"test_assist: no matches ({SAMARA_PRICE_REGION_ID})")
-
-        return {
-            "tests": matches,
-            "promos": [],
-            "note": f"test_assist: priceByRegion({SAMARA_PRICE_REGION_ID})",
             "entities_used": entities,
         }
 
@@ -6923,68 +7135,6 @@ class Services:
             return None
         return str(best.text or "").strip() or None
 
-    async def test_result_status(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        def _result_fallback(note: str, message: str = "Сейчас не удалось получить результаты автоматически. Соединяю с оператором.") -> dict[str, Any]:
-            return _service_fallback(
-                note=note,
-                handoff_message=message,
-                entities=entities,
-                reason="test_result_fallback",
-                extra={"ready": False},
-            )
-
-        fields = _extract_result_query_fields(entities, query)
-        missing = [k for k in ("surname", "year", "filial", "number") if not fields.get(k)]
-        if missing:
-            return {
-                "ready": False,
-                "note": "missing_result_fields",
-                "missing_fields": missing,
-                "entities_used": entities,
-            }
-
-        try:
-            api_resp = await asyncio.to_thread(
-                api_nayka.site_result_for_patient,
-                surname=fields["surname"],
-                year=int(fields["year"]),
-                filial=fields["filial"],
-                number=int(fields["number"]),
-                lang=fields["lang"],
-                with_time=None,
-            )
-        except Exception as e:
-            return _result_fallback(f"resultForPatient failed: {e}")
-
-        if not isinstance(api_resp, dict) or not api_resp.get("ok"):
-            return _result_fallback(f"resultForPatient error: {api_resp}")
-
-        payload = api_resp.get("data")
-        if not payload:
-            return {
-                "ready": False,
-                "note": "result_not_found_or_not_ready",
-                "result_payload": payload,
-                "result_preview": "По указанным данным результаты пока не найдены или еще не готовы.",
-                "entities_used": entities,
-            }
-
-        link = _build_public_result_link(fields)
-        if not link:
-            return _result_fallback(
-                "result_link_build_failed",
-                "Сейчас не удалось сформировать ссылку на результат автоматически. Соединяю с оператором.",
-            )
-
-        return {
-            "ready": True,
-            "note": "result_link_constructed",
-            "result_payload": payload,
-            "result_preview": "Ссылка на результат сформирована.",
-            "result_links": [link],
-            "entities_used": entities,
-        }
-
     async def price_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         async def _load_with_retry(fn: Any, *args: Any) -> Any:
             last_exc: Exception | None = None
@@ -7069,7 +7219,7 @@ class Services:
             except Exception:
                 return _service_fallback(
                     note="price_info source unavailable",
-                    handoff_message="Сейчас не удалось получить цены автоматически. Соединяю с оператором.",
+                    handoff_message=handoff_message("service_error_prices"),
                     entities=entities,
                     extra={"prices": []},
                 )
@@ -7116,7 +7266,7 @@ class Services:
         except Exception:
             return _service_fallback(
                 note="price_info source unavailable",
-                handoff_message="Сейчас не удалось получить цены автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_prices"),
                 entities=entities,
                 extra={"prices": []},
             )
@@ -7193,7 +7343,7 @@ class Services:
         if city_for_static and _is_non_samara_city_value(city_for_static):
             return _service_fallback(
                 note=f"address_info unsupported city: {city_for_static}",
-                handoff_message="Сейчас могу помочь только по Самаре. Соединяю с оператором.",
+                handoff_message=handoff_message("city_not_supported"),
                 entities=entities,
                 reason="city_not_supported",
                 extra={"addresses": [], "branches": []},
@@ -7427,6 +7577,38 @@ class Services:
             return list(uniq_by_name.values())
 
         return []
+
+
+from .services.doctors import (  # noqa: E402
+    _doctor_availability_snapshot as _doctor_availability_snapshot_impl,
+    _resolve_doctor_id_from_name as _resolve_doctor_id_from_name_impl,
+    _schedule_by_specialty as _schedule_by_specialty_impl,
+    doctors_info as _doctors_info_impl,
+    doctors_schedule_week as _doctors_schedule_week_impl,
+    match_catalog_doctor as _match_catalog_doctor_impl,
+    resolve_doctor_name as _resolve_doctor_name_impl,
+)
+
+Services.match_catalog_doctor = _match_catalog_doctor_impl
+Services._schedule_by_specialty = _schedule_by_specialty_impl
+Services._doctor_availability_snapshot = _doctor_availability_snapshot_impl
+Services.resolve_doctor_name = _resolve_doctor_name_impl
+Services._resolve_doctor_id_from_name = _resolve_doctor_id_from_name_impl
+Services.doctors_info = _doctors_info_impl
+Services.doctors_schedule_week = _doctors_schedule_week_impl
+
+from .services.prices import price_info as _price_info_impl  # noqa: E402
+Services.price_info = _price_info_impl
+
+from .services.addresses import address_info as _address_info_impl  # noqa: E402
+Services.address_info = _address_info_impl
+
+from .services.lab_tests import (  # noqa: E402
+    test_assist as _test_assist_impl,
+    test_result_status as _test_result_status_impl,
+)
+Services.test_assist = _test_assist_impl
+Services.test_result_status = _test_result_status_impl
 
 
 if __name__ == "__main__":

@@ -1,15 +1,30 @@
 import asyncio
+import logging
 import pytest
 
 from messengers_router.flow_policy import (
     apply_context_action,
     apply_pending_override,
+    clear_on_appointment_end,
+    clear_on_handoff,
+    clear_on_topic_switch,
     hydrate_appointment_context_from_schedule,
     quick_fill_entities_from_text,
 )
-from messengers_router.mess_types import Evidence, Plan, PlanStep, SessionState
+from messengers_router.mess_types import (
+    AppointmentPhase,
+    DialogState,
+    Evidence,
+    Plan,
+    PlanStep,
+    ResponseEnvelope,
+    SessionState,
+)
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision
+from messengers_router.appointment_flow_guard import is_new_topic_while_confirm_pending
+from messengers_router.flow_policy import reset_appointment_runtime_state
+from messengers_router.orchestrator import OrchestratorContext
 from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
 from messengers_router.policies import (
     quick_fill_core_entities,
@@ -61,6 +76,16 @@ def _run_stream_once(user_text: str, state: SessionState, services: Services, me
     return asyncio.run(_collect())
 
 
+def _run_stream_once_debug(user_text: str, state: SessionState, services: Services, memory: MemoryStore):
+    async def _collect():
+        out = []
+        async for env in router_mod.patient_routing_stream(user_text, state, services, memory, debug=True):
+            out.append(env)
+        return out
+
+    return asyncio.run(_collect())
+
+
 def test_appointment_flow_override_allows_city_datetime_and_fio():
     assert _should_keep_appointment_flow_override("Самара") is True
     assert _should_keep_appointment_flow_override("на 16:30") is True
@@ -71,6 +96,231 @@ def test_appointment_flow_override_blocks_new_topics():
     assert _should_keep_appointment_flow_override("Как можно сдать анализы") is False
     assert _should_keep_appointment_flow_override("результаты анализов") is False
     assert _should_keep_appointment_flow_override("покажи расписание Казакова") is False
+
+
+def test_is_new_topic_while_confirm_pending_detects_news_intent():
+    assert is_new_topic_while_confirm_pending("какие скидки?") is True
+
+
+def test_patient_routing_stream_logs_background_refresh_start_failure(monkeypatch, caplog):
+    class _FailingRefreshServices:
+        def ensure_background_refresh_started(self):
+            raise RuntimeError("background refresh failed")
+
+    monkeypatch.setattr(router_mod, "explicit_operator_requested", lambda text: True)
+
+    state = SessionState(session_id="router-refresh-log")
+    memory = MemoryStore()
+
+    with caplog.at_level(logging.WARNING):
+        out = _run_stream_once("оператор", state, _FailingRefreshServices(), memory)
+
+    assert out
+    assert out[0].handoff is True
+    assert "background_refresh_start_failed" in caplog.text
+
+
+def test_safe_get_branches_logs_failure(caplog):
+    class _FailingServices:
+        def get_branches(self):
+            raise RuntimeError("branches unavailable")
+
+    with caplog.at_level(logging.WARNING):
+        branches = flow_policy_mod._safe_get_branches(_FailingServices())
+
+    assert branches == []
+    assert "branches_fetch_failed" in caplog.text
+
+
+def test_reset_appointment_runtime_state_clears_active_dialog_state():
+    state = SessionState(
+        session_id="appt-dialog-reset",
+        last_entities={"appointment_flow_active": True, "doctor_name": "Трубин Алексей Юрьевич"},
+        dialog=DialogState(
+            label="APPOINTMENT",
+            phase=AppointmentPhase.CONFIRM,
+            entities={"doctor_name": "Трубин Алексей Юрьевич"},
+            missing_slots=["patient_name"],
+            confidence=0.82,
+        ),
+    )
+
+    reset_appointment_runtime_state(state)
+
+    assert state.last_entities == {"doctor_name": "Трубин Алексей Юрьевич"}
+    assert state.dialog.label == "OTHER"
+    assert state.dialog.phase == ""
+    assert state.dialog.entities == {}
+
+
+def test_clear_on_handoff_preserves_samara_city_and_clears_dialog_and_pending():
+    state = SessionState(
+        session_id="handoff-clear",
+        last_entities={
+            "city": "Самара",
+            "appointment_flow_active": True,
+            "doctor_name": "Трубин Алексей Юрьевич",
+        },
+        dialog=DialogState(
+            label="APPOINTMENT",
+            phase=AppointmentPhase.CONFIRM,
+            entities={"doctor_name": "Трубин Алексей Юрьевич"},
+        ),
+    )
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["patient_name"])
+
+    clear_on_handoff(state, memory)
+
+    assert state.last_entities == {"city": "Самара"}
+    assert memory.get_pending(state) is None
+    assert state.dialog.label == "OTHER"
+    assert state.dialog.phase == ""
+
+
+def test_clear_on_topic_switch_clears_topic_context_and_pending():
+    state = SessionState(
+        session_id="topic-switch-clear",
+        last_entities={
+            "city": "Самара",
+            "appointment_flow_active": True,
+            "appointment_action": "book",
+            "doctor_id": 7,
+            "doctor_name": "Ким Татьяна Александровна",
+            "specialty": "уролог",
+            "service_name": "Прием врача",
+            "test_name": "ОАК",
+            "doc_request_kind": "tax",
+            "secondary_intents": ["DOCTOR_SCHEDULE"],
+            "_secondary_queue": ["DOCTOR_SCHEDULE"],
+            "_secondary_offer_pending": True,
+            "_catalog_confirm_pending": {"canonical": "оак"},
+            "_catalog_confirm_rejects": 1,
+        },
+        dialog=DialogState(label="PRICE", entities={"service_name": "Прием врача"}),
+    )
+    memory = MemoryStore()
+    memory.set_pending(state, label="PRICE", missing_slots=["service_name"])
+
+    clear_on_topic_switch(state, memory)
+
+    assert state.last_entities == {"city": "Самара"}
+    assert memory.get_pending(state) is None
+    assert state.dialog.label == "OTHER"
+    assert state.dialog.entities == {}
+
+
+def test_clear_on_appointment_end_clears_only_appointment_context():
+    state = SessionState(
+        session_id="appointment-end-clear",
+        last_entities={
+            "city": "Самара",
+            "appointment_flow_active": True,
+            "appointment_confirm_pending": True,
+            "doctor_id": 3,
+            "doctor_name": "Хальметова Алина Алексеевна",
+            "service_name": "Прием врача",
+            "test_name": "ОАК",
+            "patient_name": "Иван Иванов",
+            "doc_request_kind": "tax",
+        },
+        dialog=DialogState(label="APPOINTMENT", phase=AppointmentPhase.CONFIRM),
+    )
+    memory = MemoryStore()
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["patient_name"])
+
+    clear_on_appointment_end(state, memory)
+
+    assert state.last_entities == {"city": "Самара", "doc_request_kind": "tax"}
+    assert memory.get_pending(state) is None
+    assert state.dialog.label == "OTHER"
+    assert state.dialog.phase == ""
+
+
+def test_patient_routing_stream_uses_orchestrator_by_default(monkeypatch):
+    async def fake_run_pipeline(text, state, services=None, memory=None, runtime_options=None):
+        _ = services, memory, runtime_options
+        ctx = OrchestratorContext(text=text, state=state)
+        ctx.decision = RouteDecision(label="PRICE", confidence=0.81, source="llm_primary")
+        ctx.response = ResponseEnvelope(text="Уточните, пожалуйста, услугу.")
+        return ctx
+
+    async def fail_route_patient_message(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError("legacy route_patient_message should not be used when orchestrator is the default path")
+
+    monkeypatch.setattr("messengers_router.orchestrator.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(router_mod, "route_patient_message", fail_route_patient_message)
+
+    state = SessionState(session_id="orchestrator-stream")
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    out = _run_stream_once("цена", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].text == "Уточните, пожалуйста, услугу."
+    assert out[0].handoff is False
+
+
+def test_patient_routing_stream_uses_orchestrator_outputs_without_legacy_route_call(monkeypatch):
+    async def fake_run_pipeline(text, state, services=None, memory=None, runtime_options=None):
+        _ = services, memory, runtime_options
+        ctx = OrchestratorContext(text=text, state=state)
+        ctx.decision = RouteDecision(label="PRICE", confidence=0.91, source="llm_primary")
+        ctx.plan = Plan(label="PRICE")
+        ctx.evidence = Evidence(items={"payload": "stub"})
+        ctx.response = ResponseEnvelope(text="Ответ из orchestrator", handoff=False)
+        return ctx
+
+    async def fail_route_patient_message(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError("patient_routing_stream should use decision/plan/evidence from orchestrator")
+
+    monkeypatch.setattr("messengers_router.orchestrator.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(router_mod, "route_patient_message", fail_route_patient_message)
+
+    state = SessionState(session_id="orchestrator-outputs")
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    out = _run_stream_once("цена", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].text == "Ответ из orchestrator"
+    assert out[0].handoff is False
+    assert state.history[-2:] == [
+        {"role": "user", "text": "цена"},
+        {"role": "assistant", "text": "Ответ из orchestrator"},
+    ]
+
+
+def test_patient_routing_stream_logs_traceback_when_orchestrator_crashes(monkeypatch):
+    async def fake_run_pipeline(*args, **kwargs):
+        _ = args, kwargs
+        raise RuntimeError("boom")
+
+    logged: list[tuple[tuple, dict]] = []
+
+    def fake_logger_exception(*args, **kwargs):
+        logged.append((args, kwargs))
+
+    monkeypatch.setattr("messengers_router.orchestrator.run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(router_mod.logger, "exception", fake_logger_exception)
+
+    state = SessionState(session_id="orchestrator-crash")
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    out = _run_stream_once_debug("расписание Хальметовой", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].handoff is True
+    assert out[0].state_update == {"debug": {"route_error": "boom"}}
+    assert logged
 
 
 def test_apply_appointment_continuity_overrides_prioritizes_datetime():
@@ -212,7 +462,7 @@ def test_classifier_does_not_extract_unmatched_question_word_as_doctor_name(monk
         lambda _text, prefer_schedule=False: None,
     )
 
-    assert classifier_mod._extract_appointment_doctor_name("подскажите к кому записаться") is None
+    assert classifier_mod._extract_doctor_name("подскажите к кому записаться", mode="appointment") is None
 
 
 def test_appointment_confirmation_transition_accepts_common_yes_forms():
@@ -2008,6 +2258,41 @@ def test_apply_context_action_blocks_new_topic_on_patient_name_step():
     assert state.last_entities.get("_pending") is not None
 
 
+def test_apply_context_action_new_topic_clears_pending_and_dialog():
+    state = SessionState(
+        session_id="appt-new-topic-clear",
+        last_entities={
+            "city": "Самара",
+            "appointment_flow_active": True,
+            "doctor_name": "Хальметова Алина Алексеевна",
+            "_pending": {"label": "APPOINTMENT", "missing": ["date_from"]},
+            "_pending_label": "APPOINTMENT",
+        },
+        dialog=DialogState(
+            label="APPOINTMENT",
+            phase=AppointmentPhase.COLLECTING,
+            entities={"doctor_name": "Хальметова Алина Алексеевна"},
+        ),
+    )
+    decision = RouteDecision(
+        label="PRICE",
+        confidence=0.82,
+        entities={"service_name": "ОАК"},
+        flags={"rule_price"},
+        needs_handoff=False,
+        context_action="new_topic",
+    )
+    memory = MemoryStore()
+
+    out = apply_context_action(decision, state, "Сколько стоит ОАК?", memory)
+
+    assert out.context_action == "new_topic"
+    assert state.last_entities == {"city": "Самара"}
+    assert memory.get_pending(state) is None
+    assert state.dialog.label == "OTHER"
+    assert state.dialog.phase == ""
+
+
 def test_build_appointment_step_response_patient_step_sets_pending():
     state = SessionState(
         session_id="appt-step",
@@ -2588,6 +2873,11 @@ def test_patient_routing_stream_manual_operator_clears_appointment_context():
             "time_from": "09:00",
             "city": "Самара",
         },
+        dialog=DialogState(
+            label="APPOINTMENT",
+            phase=AppointmentPhase.CONFIRM,
+            entities={"doctor_name": "Ким Татьяна Александровна"},
+        ),
     )
     services = Services()
     services.ensure_background_refresh_started = lambda: None
@@ -2607,6 +2897,8 @@ def test_patient_routing_stream_manual_operator_clears_appointment_context():
     assert state.last_entities.get("time_from") is None
     assert state.last_entities.get("city") == "Самара"
     assert memory.get_pending(state) is None
+    assert state.dialog.label == "OTHER"
+    assert state.dialog.phase == ""
 
 
 def test_patient_routing_stream_structured_doctor_info_sets_secondary_offer_pending(monkeypatch):

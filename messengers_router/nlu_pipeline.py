@@ -69,34 +69,56 @@ def _candidate_from_decision(source: str, d: RouteDecision) -> NLUCandidate:
 
 
 def _merge(rule: RouteDecision, llm: RouteDecision, *, llm_mode: str = "hybrid") -> tuple[RouteDecision, str]:
-    # Safety всегда выше.
+    """LLM-first merge policy.
+
+    Intent source of truth
+    ----------------------
+    1. Safety hard-overrides: if rule fired a safety label (URGENT / COMPLAINT /
+       MEDICAL_ADVICE), that always wins over LLM intent.
+    2. LLM intent wins unconditionally for all non-safety labels regardless of
+       confidence — the LLM handles nuance that regex cannot.
+
+    Entity donation
+    ---------------
+    Deterministic rule entities are merged INTO the LLM decision as supplemental
+    signal — they never override LLM-extracted entities.
+
+    Rationale
+    ---------
+    The old promotion path (`llm.confidence < threshold → promote rule`) caused
+    correct LLM classifications to be silently overridden by crude regex when the
+    model was only moderately confident. This produced the green-eval / prod-fail
+    gap: eval cases were unambiguous, but real user messages contained natural
+    variation that lowered LLM confidence below the threshold.
+    """
+    # --- 1. Safety hard-overrides (bidirectional) ---
     if rule.label in _SAFETY_LABELS and llm.label not in _SAFETY_LABELS:
         return rule, "rule_safety"
     if llm.label in _SAFETY_LABELS:
         return llm, "llm_safety"
 
-    # Если LLM не уверен и deterministic видит явный intent — промотируем rule.
-    promote_threshold = 0.45 if llm_mode == "rich" else 0.55
-    if llm.confidence < promote_threshold and rule.label != "OTHER":
-        merged_flags = set(llm.flags) | set(rule.flags) | {"promoted_from_rule_pass"}
-        merged_entities = dict(rule.entities or {})
-        merged_entities.update(dict(llm.entities or {}))
-        promoted = RouteDecision(
-            label=rule.label,  # type: ignore[arg-type]
-            confidence=max(rule.confidence, llm.confidence, 0.60),
-            entities=merged_entities,
-            flags=merged_flags,
-            needs_handoff=False,
-            context_action=llm.context_action,
-            source="guardrail_post",
-            clarify_needed=llm.clarify_needed,
-            clarify_reason=llm.clarify_reason,
-            clarify_slots=list(llm.clarify_slots),
-            intent_candidates=list(llm.intent_candidates),
-        )
-        return promoted, "rule_promoted"
+    # --- 2. LLM wins on intent; rule donates entities only ---
+    donated_entities = {
+        k: v for k, v in (rule.entities or {}).items()
+        if k not in (llm.entities or {}) and v not in (None, "", [])
+    }
+    merged_entities = dict(llm.entities or {})
+    merged_entities.update(donated_entities)
 
-    return llm, "llm_primary"
+    merged = RouteDecision(
+        label=llm.label,
+        confidence=llm.confidence,
+        entities=merged_entities,
+        flags=set(llm.flags) | set(rule.flags),
+        needs_handoff=llm.needs_handoff,
+        context_action=llm.context_action,
+        source="llm_primary",
+        clarify_needed=llm.clarify_needed,
+        clarify_reason=llm.clarify_reason,
+        clarify_slots=list(llm.clarify_slots),
+        intent_candidates=list(llm.intent_candidates),
+    )
+    return merged, "llm_primary"
 
 
 def _engine_from_config() -> str:

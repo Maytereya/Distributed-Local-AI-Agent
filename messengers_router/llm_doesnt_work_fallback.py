@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 
+from .russian_nlu import normalize_ru
+
 _WORD_RE = re.compile(r"[a-zа-я0-9]{2,}", re.I)
 _PREPARE_TARGET_RE = re.compile(
     r"подготов(?:иться|ка)\s*(?:к|для)\s+(?P<target>.+?)(?:[?.!,]|$)",
@@ -140,11 +142,11 @@ _RU_SUFFIXES = (
 
 
 def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "").strip().lower().replace("ё", "е"))
+    return re.sub(r"\s+", " ", normalize_ru(text))
 
 
 def _stem(token: str) -> str:
-    t = str(token or "").strip().lower().replace("ё", "е")
+    t = normalize_ru(token)
     if len(t) < 4:
         return t
     for suffix in _RU_SUFFIXES:
