@@ -375,7 +375,7 @@ async def doctors_info(
     if not doctors:
         return legacy._service_fallback(
             note="doctors_info source unavailable",
-            handoff_message="Сейчас не удалось получить список врачей автоматически. Соединяю с оператором.",
+            handoff_message=legacy.handoff_message("service_error_doctors_list"),
             entities=entities,
             extra={"doctors": []},
         )
@@ -578,7 +578,7 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
     if region_name and legacy._is_non_samara_city_value(region_name):
         return legacy._service_fallback(
             note=f"doctors_schedule_week unsupported city: {region_name}",
-            handoff_message="Сейчас могу помочь только по Самаре. Соединяю с оператором.",
+            handoff_message=legacy.handoff_message("city_not_supported"),
             entities=entities,
             reason="city_not_supported",
             extra={"schedule": []},
@@ -614,7 +614,7 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
     except Exception:
         return legacy._service_fallback(
             note="doctors_schedule_week unavailable",
-            handoff_message="Сейчас не удалось получить расписание автоматически. Соединяю с оператором.",
+            handoff_message=legacy.handoff_message("service_error_schedule"),
             entities=entities,
             extra={"schedule": []},
         )

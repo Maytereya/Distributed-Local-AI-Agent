@@ -38,6 +38,7 @@ from .doctor_name_port import (
 )
 from .llm_doesnt_work_fallback import build_prepare_fallback_answer
 from .llm_runtime import generate_text
+from .policies import handoff_message
 from .prompt_registry import load_prompt_text
 from .russian_nlu import normalize_ru
 from .service_phrase import extract_service_phrase
@@ -5239,7 +5240,7 @@ def _is_prepare_service_info_usable(query: str, content: str, *, title: str = ""
     return score >= low
 
 
-_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = "В моей базе данных информации недостаточно, перевожу на оператора."
+_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = handoff_message("knowledge_not_found")
 
 
 @dataclass
@@ -6174,7 +6175,7 @@ class Services:
         if service_kind == "operator":
             return _service_fallback(
                 note="service_bundle_info ambiguous operator fallback",
-                handoff_message="Сейчас по этой услуге безопаснее уточнить у оператора. Соединяю с оператором.",
+                handoff_message=handoff_message("ambiguous_price_service"),
                 entities=entities,
                 reason="ambiguous_price_service",
                 extra={
@@ -6349,7 +6350,7 @@ class Services:
         if not doctors:
             return _service_fallback(
                 note="doctors_info source unavailable",
-                handoff_message="Сейчас не удалось получить список врачей автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_doctors_list"),
                 entities=entities,
                 extra={"doctors": []},
             )
@@ -6572,7 +6573,7 @@ class Services:
         if region_name and _is_non_samara_city_value(region_name):
             return _service_fallback(
                 note=f"doctors_schedule_week unsupported city: {region_name}",
-                handoff_message="Сейчас могу помочь только по Самаре. Соединяю с оператором.",
+                handoff_message=handoff_message("city_not_supported"),
                 entities=entities,
                 reason="city_not_supported",
                 extra={"schedule": []},
@@ -6612,7 +6613,7 @@ class Services:
         except Exception:
             return _service_fallback(
                 note="doctors_schedule_week unavailable",
-                handoff_message="Сейчас не удалось получить расписание автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_schedule"),
                 entities=entities,
                 extra={"schedule": []},
             )
@@ -6725,7 +6726,7 @@ class Services:
                 return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback unavailable")
             return _service_fallback(
                 note="main_index_info source unavailable",
-                handoff_message="Сейчас не удалось найти информацию автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_doctor_info"),
                 entities=entities,
                 extra={"content": ""},
             )
@@ -6735,7 +6736,7 @@ class Services:
                 return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback error")
             return _service_fallback(
                 note="main_index_info source unavailable",
-                handoff_message="Сейчас не удалось найти информацию автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_doctor_info"),
                 entities=entities,
                 extra={"content": ""},
             )
@@ -6782,14 +6783,14 @@ class Services:
             except Exception:
                 return _service_fallback(
                     note="appointment_help source unavailable",
-                    handoff_message="Сейчас не удалось получить данные для записи автоматически. Соединяю с оператором.",
+                    handoff_message=handoff_message("service_error_appointments"),
                     entities=entities,
                     extra={"instructions": "Сейчас не удалось получить данные для записи автоматически."},
                 )
             if _is_meili_error_text(cleaned):
                 return _service_fallback(
                     note="appointment_help source unavailable",
-                    handoff_message="Сейчас не удалось получить данные для записи автоматически. Соединяю с оператором.",
+                    handoff_message=handoff_message("service_error_appointments"),
                     entities=entities,
                     extra={"instructions": "Сейчас не удалось получить данные для записи автоматически."},
                 )
@@ -7225,7 +7226,7 @@ class Services:
         return str(best.text or "").strip() or None
 
     async def test_result_status(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        def _result_fallback(note: str, message: str = "Сейчас не удалось получить результаты автоматически. Соединяю с оператором.") -> dict[str, Any]:
+        def _result_fallback(note: str, message: str = handoff_message("service_error_results")) -> dict[str, Any]:
             return _service_fallback(
                 note=note,
                 handoff_message=message,
@@ -7274,7 +7275,7 @@ class Services:
         if not link:
             return _result_fallback(
                 "result_link_build_failed",
-                "Сейчас не удалось сформировать ссылку на результат автоматически. Соединяю с оператором.",
+                handoff_message("service_error_result_link"),
             )
 
         return {
@@ -7370,7 +7371,7 @@ class Services:
             except Exception:
                 return _service_fallback(
                     note="price_info source unavailable",
-                    handoff_message="Сейчас не удалось получить цены автоматически. Соединяю с оператором.",
+                    handoff_message=handoff_message("service_error_prices"),
                     entities=entities,
                     extra={"prices": []},
                 )
@@ -7417,7 +7418,7 @@ class Services:
         except Exception:
             return _service_fallback(
                 note="price_info source unavailable",
-                handoff_message="Сейчас не удалось получить цены автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_prices"),
                 entities=entities,
                 extra={"prices": []},
             )
@@ -7494,7 +7495,7 @@ class Services:
         if city_for_static and _is_non_samara_city_value(city_for_static):
             return _service_fallback(
                 note=f"address_info unsupported city: {city_for_static}",
-                handoff_message="Сейчас могу помочь только по Самаре. Соединяю с оператором.",
+                handoff_message=handoff_message("city_not_supported"),
                 entities=entities,
                 reason="city_not_supported",
                 extra={"addresses": [], "branches": []},

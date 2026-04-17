@@ -14,6 +14,7 @@ from messengers_router.policies import (
     build_branch_index,
     extract_specialty,
     extract_service_phrase,
+    handoff_message,
     match_branch_hint,
     quick_fill_core_entities,
 )
@@ -226,6 +227,63 @@ def test_doctors_info_empty_cache_returns_fallback(monkeypatch):
     assert res.get("handoff_required") is True
     assert res.get("doctors") == []
     assert res.get("handoff_reason") == "service_error"
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("ambiguous_price_service", "Сейчас по этой услуге безопаснее уточнить у оператора. Соединяю с оператором."),
+        ("city_not_supported", "Сейчас могу помочь только по Самаре. Соединяю с оператором."),
+        ("knowledge_not_found", "В моей базе данных информации недостаточно, перевожу на оператора."),
+        ("service_error_doctors_list", "Сейчас не удалось получить список врачей автоматически. Соединяю с оператором."),
+        ("service_error_schedule", "Сейчас не удалось получить расписание автоматически. Соединяю с оператором."),
+        ("service_error_doctor_info", "Сейчас не удалось найти информацию автоматически. Соединяю с оператором."),
+        ("service_error_appointments", "Сейчас не удалось получить данные для записи автоматически. Соединяю с оператором."),
+        ("service_error_results", "Сейчас не удалось получить результаты автоматически. Соединяю с оператором."),
+        ("service_error_result_link", "Сейчас не удалось сформировать ссылку на результат автоматически. Соединяю с оператором."),
+        ("service_error_prices", "Сейчас не удалось получить цены автоматически. Соединяю с оператором."),
+    ],
+)
+def test_handoff_message_supports_domain_specific_service_texts(reason, expected):
+    assert handoff_message(reason) == expected
+
+
+def test_doctors_info_empty_cache_uses_domain_specific_handoff_message(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_cache():
+        return []
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+
+    res = run(svc.doctors_info("Петров", {}))
+
+    assert res.get("handoff_message") == handoff_message("service_error_doctors_list")
+
+
+def test_doctors_schedule_week_source_unavailable_uses_domain_handoff_message(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Иванов Иван Иванович",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+            }
+        ]
+
+    async def fake_schedule_payload(_candidate, _region_name):
+        raise RuntimeError("nayka unavailable")
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_get_schedule_payload_cached", fake_schedule_payload)
+
+    res = run(svc.doctors_schedule_week("расписание Иванова", {"doctor_name": "Иванов"}))
+
+    assert res.get("handoff_required") is True
+    assert res.get("handoff_reason") == "service_error"
+    assert res.get("handoff_message") == handoff_message("service_error_schedule")
 
 
 def test_doctors_schedule_week(monkeypatch):
@@ -706,7 +764,7 @@ def test_main_index_info_source_unavailable_returns_handoff(monkeypatch):
 
     assert res.get("handoff_required") is True
     assert res.get("handoff_reason") == "service_error"
-    assert "не удалось найти информацию" in str(res.get("handoff_message") or "").lower()
+    assert res.get("handoff_message") == handoff_message("service_error_doctor_info")
 
 
 def test_main_index_info_tax_source_unavailable_returns_guidance_without_handoff(monkeypatch):
@@ -1496,6 +1554,21 @@ def test_price_info_price_by_region(monkeypatch):
     res = run(svc.price_info("ЭКГ", {}))
 
     assert res["prices"], "Expected prices from priceByRegion"
+
+
+def test_price_info_source_unavailable_uses_domain_handoff_message(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        raise RuntimeError("price api unavailable")
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("ЭКГ", {}))
+
+    assert res.get("handoff_required") is True
+    assert res.get("handoff_reason") == "service_error"
+    assert res.get("handoff_message") == handoff_message("service_error_prices")
 
 
 def test_price_info_enriches_care_setting_from_price_units(monkeypatch):
