@@ -14,6 +14,7 @@ recovery-политика и сервисные интеграции вынес�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import AsyncGenerator, Any
@@ -1058,23 +1059,6 @@ async def _inject_catalog_candidates(
             or decision.context_action == "overwrite_doctor"
         )
     )
-    if should_try_doctor:
-        doctor_match = await services.match_catalog_doctor(
-            str(entities.get("doctor_name") or user_text or ""),
-        )
-        status = str(doctor_match.get("status") or "")
-        canonical = str(doctor_match.get("canonical") or "").strip()
-        if status == "exact" and canonical:
-            entities["doctor_name"] = canonical
-            flags.discard("doctor_name_unverified")
-            flags.add("doctor_name_verified")
-            flags.add("catalog_doctor_exact")
-            updated = True
-        elif status == "fuzzy" and canonical:
-            entities["_catalog_doctor_candidate"] = canonical
-            entities["_catalog_doctor_query"] = str(doctor_match.get("query") or "").strip()
-            flags.add("catalog_doctor_fuzzy_candidate")
-            updated = True
 
     should_try_service = (
         decision.label in {"APPOINTMENT", "PRICE", "ADDRESS", "TEST_ASSIST"}
@@ -1092,11 +1076,54 @@ async def _inject_catalog_candidates(
             and (entities.get("doctor_name") or state.last_entities.get("doctor_name"))
         ):
             should_try_service = False
-    if should_try_service:
-        service_match = await services.match_catalog_service(
+
+    # Part IV Stage 15 (OPTION B, partial): doctor + service catalog lookups
+    # are independent — both read post-verify entities and don't depend on
+    # each other's result. Gather them into a single await to drop up to
+    # ~50-100ms off the turn when both conditions fire. The APPLY half below
+    # stays sequential (doctor first, then service) to preserve legacy flag /
+    # entity merge order byte-for-byte.
+    doctor_coro = (
+        services.match_catalog_doctor(
+            str(entities.get("doctor_name") or user_text or ""),
+        )
+        if should_try_doctor
+        else None
+    )
+    service_coro = (
+        services.match_catalog_service(
             str(entities.get("service_name") or entities.get("test_name") or user_text or ""),
             current_service_name=str(state.last_entities.get("service_name") or ""),
         )
+        if should_try_service
+        else None
+    )
+
+    doctor_match: dict[str, Any] | None = None
+    service_match: dict[str, Any] | None = None
+    if doctor_coro is not None and service_coro is not None:
+        doctor_match, service_match = await asyncio.gather(doctor_coro, service_coro)
+    elif doctor_coro is not None:
+        doctor_match = await doctor_coro
+    elif service_coro is not None:
+        service_match = await service_coro
+
+    if doctor_match is not None:
+        status = str(doctor_match.get("status") or "")
+        canonical = str(doctor_match.get("canonical") or "").strip()
+        if status == "exact" and canonical:
+            entities["doctor_name"] = canonical
+            flags.discard("doctor_name_unverified")
+            flags.add("doctor_name_verified")
+            flags.add("catalog_doctor_exact")
+            updated = True
+        elif status == "fuzzy" and canonical:
+            entities["_catalog_doctor_candidate"] = canonical
+            entities["_catalog_doctor_query"] = str(doctor_match.get("query") or "").strip()
+            flags.add("catalog_doctor_fuzzy_candidate")
+            updated = True
+
+    if service_match is not None:
         status = str(service_match.get("status") or "")
         canonical = str(service_match.get("canonical") or "").strip()
         if status == "exact" and canonical:
