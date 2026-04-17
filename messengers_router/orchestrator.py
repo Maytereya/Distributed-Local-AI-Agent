@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import evidence_keys as ek
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 
 _SAFETY_LABELS = {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
@@ -61,8 +62,8 @@ def _extract_prebuilt_response(
     if decision is None or evidence is None:
         return None
 
-    if evidence.get("auth_required"):
-        return ResponseEnvelope(text=evidence.get("auth_message", "Нужна авторизация."), handoff=False)
+    if evidence.get(ek.AUTH_REQUIRED):
+        return ResponseEnvelope(text=evidence.get(ek.AUTH_MESSAGE, "Нужна авторизация."), handoff=False)
 
     from .policies import evidence_requires_handoff, handoff_message
 
@@ -187,7 +188,7 @@ def _extract_pending_response(
         plan.label == "OTHER"
         and isinstance(missing, list)
         and "catalog_confirm" in missing
-        and isinstance(evidence.get("catalog_confirm_response"), dict)
+        and isinstance(evidence.get(ek.CATALOG_CONFIRM_RESPONSE), dict)
     )
     if catalog_pending_reply:
         return None
@@ -467,7 +468,7 @@ async def render(
             chunks.append(chunk)
         ctx.response = ResponseEnvelope(
             text="".join(chunks),
-            attachments=list(ctx.evidence.items.get("attachments") or []),
+            attachments=list(ctx.evidence.items.get(ek.ATTACHMENTS) or []),
             handoff=bool(ctx.decision.needs_handoff),
         )
         _mark_secondary_offer_pending(ctx)

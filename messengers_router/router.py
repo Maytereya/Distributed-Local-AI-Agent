@@ -18,6 +18,7 @@ import logging
 import re
 from typing import AsyncGenerator, Any
 
+from . import evidence_keys as ek
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
 from .context_summary import update_summary
@@ -1839,7 +1840,7 @@ async def route_patient_message(
         handoff_planned=(
             # executor sets a top-level boolean; service fallbacks use nested
             # dicts — check both so the graph FSM always knows about a handoff
-            bool(evidence.get("handoff_required"))
+            bool(evidence.get(ek.HANDOFF_REQUIRED))
             or evidence_requires_handoff(evidence)[0]
         ),
     )
