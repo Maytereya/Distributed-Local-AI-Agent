@@ -66,6 +66,7 @@ from .russian_nlu import normalize_ru
 from .policies import (
     missing_slots,
     handoff_message,
+    evidence_requires_handoff,
     apply_verified_doctor_override,
     detect_nonbookable_walkin_intent,
     detect_appointment_action,
@@ -1848,7 +1849,12 @@ async def route_patient_message(
         session=state,
         decision=decision,
         pending=pending_after_plan,
-        handoff_planned=bool(evidence.get("handoff_required")),
+        handoff_planned=(
+            # executor sets a top-level boolean; service fallbacks use nested
+            # dicts — check both so the graph FSM always knows about a handoff
+            bool(evidence.get("handoff_required"))
+            or evidence_requires_handoff(evidence)[0]
+        ),
     )
     evidence.debug_trace.append(
         {
