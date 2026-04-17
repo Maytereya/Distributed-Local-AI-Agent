@@ -3,6 +3,7 @@ import importlib
 
 import pytest
 
+from messengers_router.services import lab_tests as lab_tests_mod
 from messengers_router import classifier as classifier_mod
 from messengers_router import services as svc_mod
 from messengers_router.city import match_city
@@ -47,8 +48,59 @@ def test_services_doctor_methods_are_sourced_from_doctors_module():
     assert Services.doctors_schedule_week.__module__ == "messengers_router.services.doctors"
 
 
+def test_services_lab_methods_are_sourced_from_lab_tests_module():
+    assert Services.test_assist.__module__ == "messengers_router.services.lab_tests"
+    assert Services.test_result_status.__module__ == "messengers_router.services.lab_tests"
+
+
 def test_services_normalise_input_normalizes_yo_characters():
     assert svc_mod._normalise_input("  Ёжик   в Тумане  ") == "ежик в тумане"
+
+
+def test_lab_tests_extract_result_query_fields_uses_order_id_fallback():
+    fields = lab_tests_mod._extract_result_query_fields(
+        {
+            "result_surname": "Иванов",
+            "result_filial": "Бг",
+            "year": "1990",
+            "order_id": "12345",
+        },
+        "результат анализа",
+    )
+
+    assert fields == {
+        "surname": "Иванов",
+        "year": 1990,
+        "filial": "Бг",
+        "number": 12345,
+        "lang": "ru",
+    }
+
+
+def test_lab_tests_build_public_result_link_keeps_cp1251_contract():
+    link = lab_tests_mod._build_public_result_link(
+        {
+            "surname": "Иванов",
+            "year": 1990,
+            "filial": "Бг",
+            "number": 12345,
+            "lang": "ru",
+        }
+    )
+
+    assert link == (
+        "https://naykalab.ru/getanaliz.php"
+        "?fam=%C8%E2%E0%ED%EE%E2&year=1990&nom=%C1%E3&nom2=12345&fast=1"
+    )
+
+
+def test_lab_tests_test_assist_clarify_response_stays_non_handoff():
+    res = lab_tests_mod._test_assist_clarify_response({"test_goal": "щитовидка"}, note="stage8")
+
+    assert res.get("handoff_required") is not True
+    assert res["tests"] == []
+    assert "подобрать анализы" in str(res.get("message") or "").lower()
+    assert res["note"] == "stage8"
 
 
 def test_doctors_info_filters_by_name(monkeypatch):
