@@ -169,9 +169,20 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             entities=entities,
             extra={"prices": []},
         )
+    retail_rows_clean = [p for p in price_rows if isinstance(p, dict)]
+    # Мульти-услуговый запрос («ВИЧ, гепатит, ОАК»): активируется только если
+    # ≥2 фрагментов приземлились на реальные услуги каталога. Иначе — fallback
+    # на существующий single-service путь, старые кейсы остаются без изменений.
+    multi_payload = legacy._build_multi_price_payload(query_text, retail_rows_clean)
+    if multi_payload is not None:
+        multi_payload["entities_used"] = {
+            **entities,
+            "service_name_effective": str(multi_payload.get("service_name") or "").strip(),
+        }
+        return multi_payload
     family_payload = legacy._build_price_family_payload(
         query_text,
-        [p for p in price_rows if isinstance(p, dict)],
+        retail_rows_clean,
         show_all=False,
         visible_limit=10,
     )
