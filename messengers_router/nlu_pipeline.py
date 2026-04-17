@@ -19,7 +19,7 @@ from typing import Any
 from . import classifier
 from .context_summary import seeded_context_for_nlu
 from .llm_mode_policy import RuntimeOptions
-from .mess_types import CONFIDENCE, RouteDecision, SessionState
+from .mess_types import RouteDecision, SessionState
 from .runtime_config import config as c
 
 _SAFETY_LABELS = {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}

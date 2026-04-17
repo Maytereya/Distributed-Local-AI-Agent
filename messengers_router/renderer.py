@@ -244,7 +244,7 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
             lines.append("Если нужно записаться — напишите удобное время.")
     else:
         lines.append("Могу подобрать другого врача или передать диалог оператору.")
-    return "\n".join([l for l in lines if l is not None]).strip()
+    return "\n".join([line for line in lines if line is not None]).strip()
 
 
 def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
@@ -289,7 +289,7 @@ def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, 
             lines.append("Если нужно — могу показать расписание этого врача или помочь с записью.")
         else:
             lines.append("Если нужно — могу показать расписание любого из этих врачей или помочь с записью.")
-    return "\n".join([l for l in lines if l is not None]).strip()
+    return "\n".join([line for line in lines if line is not None]).strip()
 
 
 def _format_slot_compact(slot_iso: str) -> str:

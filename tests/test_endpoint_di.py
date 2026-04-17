@@ -1,8 +1,10 @@
+import logging
 import json
 from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from messengers_router import endpoint as endpoint_mod
 
@@ -86,3 +88,18 @@ def test_endpoint_uses_dependency_overrides(monkeypatch):
         stream_obj = json.loads(line)
         assert stream_obj["text"] == "ok"
 
+
+def test_get_services_logs_and_raises_when_refresh_init_fails(monkeypatch, caplog):
+    class _FailingServices:
+        def ensure_background_refresh_started(self):
+            raise RuntimeError("refresh init failed")
+
+    endpoint_mod.get_services.cache_clear()
+    monkeypatch.setattr(endpoint_mod, "Services", _FailingServices)
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="refresh init failed"):
+            endpoint_mod.get_services()
+
+    assert "get_services_init_failed" in caplog.text
+    endpoint_mod.get_services.cache_clear()

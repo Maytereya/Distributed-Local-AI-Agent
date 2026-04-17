@@ -8,11 +8,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from .mess_types import DialogState, SessionState
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -320,6 +323,7 @@ class MemoryStore:
                 confidence=float(raw.get("confidence") or 0.0),
             )
         except Exception:
+            log.warning("memory_deserialize_failed", exc_info=True)
             return state.dialog
         state.dialog = ds
         return ds

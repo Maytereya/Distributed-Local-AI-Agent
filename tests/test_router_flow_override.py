@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import pytest
 
 from messengers_router.flow_policy import (
@@ -98,6 +99,36 @@ def test_appointment_flow_override_blocks_new_topics():
 
 def test_is_new_topic_while_confirm_pending_detects_news_intent():
     assert is_new_topic_while_confirm_pending("какие скидки?") is True
+
+
+def test_patient_routing_stream_logs_background_refresh_start_failure(monkeypatch, caplog):
+    class _FailingRefreshServices:
+        def ensure_background_refresh_started(self):
+            raise RuntimeError("background refresh failed")
+
+    monkeypatch.setattr(router_mod, "explicit_operator_requested", lambda text: True)
+
+    state = SessionState(session_id="router-refresh-log")
+    memory = MemoryStore()
+
+    with caplog.at_level(logging.WARNING):
+        out = _run_stream_once("оператор", state, _FailingRefreshServices(), memory)
+
+    assert out
+    assert out[0].handoff is True
+    assert "background_refresh_start_failed" in caplog.text
+
+
+def test_safe_get_branches_logs_failure(caplog):
+    class _FailingServices:
+        def get_branches(self):
+            raise RuntimeError("branches unavailable")
+
+    with caplog.at_level(logging.WARNING):
+        branches = flow_policy_mod._safe_get_branches(_FailingServices())
+
+    assert branches == []
+    assert "branches_fetch_failed" in caplog.text
 
 
 def test_reset_appointment_runtime_state_clears_active_dialog_state():

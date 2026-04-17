@@ -40,6 +40,12 @@ REQUIRED_SLOTS: dict[str, list[str]] = {
 UNSAFE_LABELS = {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
 
 
+def _diag_print(enabled: bool, message: str) -> None:
+    """Печатает диагностическое сообщение и сразу сбрасывает буфер вывода."""
+    if enabled:
+        print(message, flush=True)
+
+
 def post_json(url: str, payload: dict, timeout_sec: int = 75, retries: int = 1) -> dict[str, Any]:
     last_exc: Exception | None = None
     for attempt in range(max(0, retries) + 1):
@@ -134,6 +140,17 @@ def main() -> int:
         default=75,
         help="HTTP timeout for one case in seconds",
     )
+    p.add_argument(
+        "--diagnostic",
+        action="store_true",
+        help="Print per-case timing diagnostics and slowest cases summary",
+    )
+    p.add_argument(
+        "--slow-case-threshold-sec",
+        type=float,
+        default=10.0,
+        help="Threshold for marking a case as slow in diagnostic mode",
+    )
     args = p.parse_args()
 
     golden_version = str(args.golden_version or "").strip()
@@ -149,7 +166,15 @@ def main() -> int:
         print(f"[error] golden file is empty: {golden_path}")
         return 2
 
+    preflight_started_at = time.perf_counter() if args.diagnostic else None
     preflight_ok, preflight_note = preflight_endpoint(args.url)
+    if preflight_started_at is not None:
+        preflight_elapsed_sec = time.perf_counter() - preflight_started_at
+        preflight_status = "ok" if preflight_ok else "error"
+        _diag_print(
+            args.diagnostic,
+            f"[diag] PREFLIGHT {preflight_status} elapsed={preflight_elapsed_sec:.1f}s note={preflight_note}",
+        )
     if not preflight_ok:
         print(f"[error] endpoint preflight failed: {preflight_note}")
         print("[hint] start API first, e.g. python -m uvicorn agent_api:app --host 0.0.0.0 --port 8000 --reload")
@@ -169,6 +194,7 @@ def main() -> int:
     by_label_total: Counter[str] = Counter()
     by_label_pass: Counter[str] = Counter()
     fail_reasons: Counter[str] = Counter()
+    case_diagnostics: list[dict[str, Any]] = []
 
     print(f"Evaluating stage-5 corpus: {total} cases against {args.url}")
     print(f"Golden: {golden_path}")
@@ -197,6 +223,11 @@ def main() -> int:
         conf = 0.0
         top_flags: list[str] = []
         slot_info = "-"
+        case_started_at = time.perf_counter() if args.diagnostic else None
+        diag_status = "ok"
+        diag_error = ""
+
+        _diag_print(args.diagnostic, f"[diag] START {case_id}")
 
         try:
             data = post_json(args.url, payload, timeout_sec=args.timeout_sec)
@@ -219,9 +250,37 @@ def main() -> int:
                 slot_sat_total += sat
                 slot_req_total += req
                 slot_info = f"{sat}/{req}"
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             transport_errors += 1
             fail_reasons["transport_or_json_error"] += 1
+            diag_status = "error"
+            diag_error = f"{type(exc).__name__}: {exc}"
+
+        if case_started_at is not None:
+            case_elapsed_sec = time.perf_counter() - case_started_at
+            case_diagnostics.append(
+                {
+                    "case_id": case_id,
+                    "elapsed_sec": case_elapsed_sec,
+                    "status": diag_status,
+                    "label": act_label,
+                }
+            )
+            if diag_status == "error":
+                _diag_print(
+                    args.diagnostic,
+                    f"[diag] ERROR {case_id} elapsed={case_elapsed_sec:.1f}s error={diag_error}",
+                )
+            else:
+                _diag_print(
+                    args.diagnostic,
+                    f"[diag] END {case_id} elapsed={case_elapsed_sec:.1f}s status={diag_status}",
+                )
+            if case_elapsed_sec >= args.slow_case_threshold_sec:
+                _diag_print(
+                    args.diagnostic,
+                    f"[diag] SLOW {case_id} elapsed={case_elapsed_sec:.1f}s status={diag_status} label={act_label}",
+                )
 
         label_match = act_label == exp_label
         handoff_match = act_handoff == exp_handoff
@@ -281,6 +340,16 @@ def main() -> int:
         print("- none")
     if transport_errors:
         print(f"transport_errors: {transport_errors}")
+
+    if args.diagnostic and case_diagnostics:
+        print("")
+        print("Slowest cases:", flush=True)
+        for item in sorted(case_diagnostics, key=lambda entry: float(entry["elapsed_sec"]), reverse=True)[:5]:
+            print(
+                f"- {item['case_id']}: {float(item['elapsed_sec']):.1f}s "
+                f"status={item['status']} label={item['label']}",
+                flush=True,
+            )
 
     # Базовый gate: intent >= 85%, handoff >= 85%, transport/json ошибок нет.
     gate_ok = intent_accuracy >= 85.0 and handoff_accuracy >= 85.0 and transport_errors == 0

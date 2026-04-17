@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -32,6 +33,8 @@ from .policies import (
 )
 from .russian_nlu import normalize_ru
 from .services import Services, resolve_price_service_name_from_catalog
+
+log = logging.getLogger(__name__)
 
 
 def _should_break_pending(decision: RouteDecision, pending_label: str) -> bool:
@@ -706,6 +709,7 @@ def _safe_get_branches(services: Services) -> list[dict[str, str]]:
     try:
         branches = services.get_branches()
     except Exception:
+        log.warning("branches_fetch_failed", exc_info=True)
         return []
     if not isinstance(branches, list):
         return []

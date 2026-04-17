@@ -1,5 +1,7 @@
 # tests/test_memory_dialog_state.py
 """Tests for save_dialog_state / load_dialog_state in MemoryStore."""
+import logging
+
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import DialogState, SessionState
 
@@ -92,6 +94,29 @@ def test_load_returns_existing_on_malformed_snapshot():
 
     result = store.load_dialog_state(state)
     assert result.label == "OTHER"  # default DialogState returned
+
+
+def test_load_logs_warning_on_invalid_dialog_snapshot(caplog):
+    store = _store()
+    state = _state()
+    state.dialog = DialogState(label="PRICE", entities={"service_name": "ЭКГ"})
+    state.last_entities["_dialog_state"] = {
+        "label": "PRICE",
+        "phase": "",
+        "entities": {"service_name": "ЭКГ"},
+        "candidate_entities": {},
+        "missing_slots": [],
+        "clarify_count": "oops",
+        "open_question": "",
+        "confidence": 0.7,
+    }
+
+    with caplog.at_level(logging.WARNING):
+        result = store.load_dialog_state(state)
+
+    assert result is state.dialog
+    assert result.label == "PRICE"
+    assert "memory_deserialize_failed" in caplog.text
 
 
 # --- round-trip ---

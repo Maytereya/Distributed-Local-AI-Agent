@@ -1883,9 +1883,13 @@ def test_price_info_general_oak_returns_base_variants_without_special_modifiers(
 
     res = run(svc.price_info("Сколько стоит общий анализ крови?", {}))
 
-    assert res.get("service_kind") == "lab"
-    codes = [str(row.get("serviceHomecode") or "") for row in res["prices"]]
-    assert codes == ["502", "501"]
+    assert res.get("service_kind") == "family_query"
+    assert res.get("visible_limit") == 2
+    variants = res.get("family_variants") or []
+    assert isinstance(variants, list) and len(variants) >= 2
+    visible_codes = [str(row.get("serviceHomecode") or "") for row in variants[:2]]
+    assert visible_codes == ["502", "501"]
+    assert res.get("remaining_count", 0) >= 1
 
 
 def test_price_info_keeps_cito_variant_when_user_requests_it_explicitly(monkeypatch):
@@ -2296,6 +2300,155 @@ def test_price_info_tooth_removal_returns_family_query_variants(monkeypatch):
     assert any("сложное удаление зуба" in name for name in names)
     assert not any("серной пробки" in name for name in names)
     assert not any("полипа уретры" in name for name in names)
+
+
+def test_price_info_oak_keeps_canonical_variants_over_noise(monkeypatch):
+    """ОАК-запрос: канонические строки должны вытеснять шум вроде «группа крови»."""
+
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "Группа крови", "serviceHomecode": "g1", "cost": 290},
+            {"serviceName": "Медь в крови", "serviceHomecode": "cu", "cost": 850},
+            {"serviceName": "Хром в крови", "serviceHomecode": "cr", "cost": 960},
+            {"serviceName": "Свинец в крови", "serviceHomecode": "pb", "cost": 910},
+            {"serviceName": "Биохимия крови", "serviceHomecode": "bx", "cost": 2690},
+            {"serviceName": "Гистамин в крови", "serviceHomecode": "his", "cost": 2400},
+            {"serviceName": "Серотонин в крови", "serviceHomecode": "ser", "cost": 2200},
+            {"serviceName": "ЗППП: анализ крови", "serviceHomecode": "sti", "cost": 2900},
+            {"serviceName": "Коэнзим Q10 в крови", "serviceHomecode": "q10", "cost": 3500},
+            {"serviceName": "Взятие крови из вены", "serviceHomecode": "vene", "cost": 190},
+            {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "serviceHomecode": "502", "cost": 390},
+            {
+                "serviceName": "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты)",
+                "serviceHomecode": "501",
+                "cost": 490,
+            },
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("стоимость общего анализа крови", {}))
+
+    assert res.get("service_kind") == "family_query"
+    assert res.get("visible_limit") == 2
+    variants = res.get("family_variants") or []
+    assert len(variants) >= 2
+    visible_codes = [str(row.get("serviceHomecode") or "") for row in variants[:2]]
+    assert visible_codes == ["502", "501"]
+    assert res.get("remaining_count", 0) >= 1
+    assert '"все"' in str(res.get("show_all_hint") or "")
+
+
+def test_price_info_oak_alias_returns_canonical_variants(monkeypatch):
+    """Короткий alias «ОАК» должен попадать на тот же canonical-путь."""
+
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "Группа крови", "serviceHomecode": "g1", "cost": 290},
+            {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "serviceHomecode": "502", "cost": 390},
+            {
+                "serviceName": "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты)",
+                "serviceHomecode": "501",
+                "cost": 490,
+            },
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("стоимость ОАК", {}))
+
+    variants = res.get("family_variants") or []
+    visible_codes = [str(row.get("serviceHomecode") or "") for row in variants[:2]]
+    assert visible_codes == ["502", "501"]
+
+
+def test_price_info_oak_show_all_expands_to_full_list(monkeypatch):
+    """Follow-up «все» должен раскрывать остальные варианты ОАК (cito/капиллярная)."""
+
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "Cito Общий анализ крови (Le, Er, Hb)", "serviceHomecode": "802", "cost": 580},
+            {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ) капиллярная кровь", "serviceHomecode": "502к", "cost": 380},
+            {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "serviceHomecode": "502", "cost": 390},
+            {
+                "serviceName": "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты)",
+                "serviceHomecode": "501",
+                "cost": 490,
+            },
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    first = run(svc.price_info("стоимость общего анализа крови", {}))
+    assert first.get("service_kind") == "family_query"
+    family_ctx = {
+        "_price_family_context": {
+            "service_name": first.get("service_name"),
+            "family_variants": first.get("family_variants"),
+            "visible_limit": first.get("visible_limit"),
+        }
+    }
+
+    expanded = run(svc.price_info("все", family_ctx))
+    assert expanded.get("showing_all") is True
+    all_codes = {str(row.get("serviceHomecode") or "") for row in expanded.get("family_variants") or []}
+    assert {"502", "501", "802", "502к"}.issubset(all_codes)
+
+
+def test_price_info_multi_service_returns_grouped_prices(monkeypatch):
+    """Мульти-услуговый запрос должен отдать цены каждой услуги в одном ответе."""
+
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "serviceHomecode": "502", "cost": 390},
+            {"serviceName": "Кровь на ВИЧ", "serviceHomecode": "hiv", "cost": 410},
+            {"serviceName": "Гепатит B (HBsAg, качественный)", "serviceHomecode": "hep-b", "cost": 520},
+            {"serviceName": "Группа крови", "serviceHomecode": "g1", "cost": 290},
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("стоимость гепатита в, общего анализа крови, вич", {}))
+
+    assert str(res.get("note") or "") == "price_multi_service"
+    assert res.get("service_kind") == "family_query"
+    names = [str(row.get("serviceName") or "").lower() for row in res.get("family_variants") or []]
+    assert any("вич" in name for name in names)
+    assert any("гепатит" in name for name in names)
+    assert any("общий анализ крови" in name for name in names)
+
+
+def test_price_info_single_service_query_bypasses_multi_splitter(monkeypatch):
+    """Одиночный запрос не должен попадать в multi-путь, даже если содержит «и»."""
+
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        return [
+            {"serviceName": "УЗИ брюшной полости и почек", "serviceHomecode": "uzi-bp", "cost": 1800},
+        ]
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("стоимость узи брюшной полости и почек", {}))
+
+    assert str(res.get("note") or "") != "price_multi_service"
+
+
+def test_split_price_query_items_splits_on_common_delimiters():
+    from messengers_router.services_legacy import _split_price_query_items
+
+    assert _split_price_query_items("стоимость гепатит в, оак, вич") == ["гепатит в", "оак", "вич"]
+    assert _split_price_query_items("цена вич и гепатит") == ["вич", "гепатит"]
+    assert _split_price_query_items("стоимость общего анализа крови") == ["общего анализа крови"]
 
 
 def test_price_info_trauma_orthopedist_prefers_base_consultation_over_kmn_uzi(monkeypatch):
@@ -3255,10 +3408,13 @@ def test_service_bundle_info_general_oak_returns_base_variants_without_special_m
 
     res = run(svc.service_bundle_info("Сколько стоит общий анализ крови?", {}))
 
-    codes = [str(row.get("serviceHomecode") or "") for row in res["retail_prices"]]
-    assert codes == ["502", "501"]
-    assert str(res.get("service_kind") or "") == "lab"
+    assert str(res.get("service_kind") or "") == "family_query"
+    assert res.get("visible_limit") == 2
+    variants = res.get("family_variants") or []
+    visible_codes = [str(row.get("serviceHomecode") or "") for row in variants[:2]]
+    assert visible_codes == ["502", "501"]
     assert str(res.get("service_name") or "").lower() == "общий анализ крови"
+    assert res.get("remaining_count", 0) >= 1
     assert calls["doctor_prices"] == 0
 
 

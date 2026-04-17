@@ -2047,8 +2047,8 @@ def _doctor_matches_fio(fio: str, doctor_query: str, resolved_surname: str | Non
         return False
 
     for token in tokens:
-        for c in normalized:
-            if token.startswith(c):
+        for candidate in normalized:
+            if token.startswith(candidate):
                 return True
     return False
 
@@ -2240,17 +2240,21 @@ def _soft_address_match(left: str, right: str) -> bool:
     :param right: адрес из второго источника
     :return: True, если строки похожи и описывают один филиал
     """
-    l = _normalise_input(left)
-    r = _normalise_input(right)
-    if not l or not r:
+    left_norm = _normalise_input(left)
+    right_norm = _normalise_input(right)
+    if not left_norm or not right_norm:
         return False
-    if l == r or l in r or r in l:
+    if left_norm == right_norm or left_norm in right_norm or right_norm in left_norm:
         return True
-    lc = re.sub(r"[^a-zа-я0-9]+", "", l)
-    rc = re.sub(r"[^a-zа-я0-9]+", "", r)
-    if not lc or not rc:
+    left_compact = re.sub(r"[^a-zа-я0-9]+", "", left_norm)
+    right_compact = re.sub(r"[^a-zа-я0-9]+", "", right_norm)
+    if not left_compact or not right_compact:
         return False
-    return lc == rc or lc in rc or rc in lc
+    return (
+        left_compact == right_compact
+        or left_compact in right_compact
+        or right_compact in left_compact
+    )
 
 
 def _static_procedure_addresses(service_q: str) -> list[str]:
@@ -3521,8 +3525,15 @@ def _build_family_candidate_rows(
         if isinstance(row, dict):
             direct_rows.append(row)
 
-    best_rows = _select_family_variant_rows(direct_rows, family_query, limit=limit)
+    direct_filtered = _select_family_variant_rows(direct_rows, family_query, limit=limit)
+    best_rows = list(direct_filtered)
     best_base_names = _family_variant_base_names(best_rows)
+
+    def _row_key(row: dict[str, Any]) -> tuple[str, str]:
+        return (
+            _normalise_input(str(row.get("serviceName") or row.get("name") or "")),
+            _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or "")),
+        )
 
     for token in _family_query_root_tokens(query_text):
         expanded_rows = _expand_family_rows_by_root_token(
@@ -3533,12 +3544,30 @@ def _build_family_candidate_rows(
         )
         if len(expanded_rows) < 2:
             continue
-        candidate_rows = _select_family_variant_rows(
-            direct_rows + expanded_rows,
+        # Ранжируем expansion по одному root-токену (сохраняет поведение для
+        # запросов типа «анализы на витамины», где полный запрос не матчится
+        # ни на одну отдельную витаминную строку сильно).
+        expanded_ranked = _select_family_variant_rows(
+            expanded_rows,
             family_query,
             ranking_query=token,
-            limit=limit,
+            limit=max(limit, 40),
         )
+        # Держим уже отфильтрованные direct_rows (сильные матчи по полному
+        # запросу) в голове кандидатного списка, чтобы широкая expansion по
+        # одному root-токену не вытесняла их (кейс «общий анализ крови» —
+        # expansion по «кровь» не должен прятать ОАК-варианты).
+        merged: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str]] = set()
+        for row in list(direct_filtered) + list(expanded_ranked):
+            key = _row_key(row)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            merged.append(row)
+            if len(merged) >= limit:
+                break
+        candidate_rows = merged
         candidate_base_names = _family_variant_base_names(candidate_rows)
         if len(candidate_base_names) > len(best_base_names) or (
             len(candidate_base_names) == len(best_base_names) and len(candidate_rows) > len(best_rows)
@@ -3582,6 +3611,123 @@ def _is_family_query_candidate(query_text: str, rows: list[dict[str, Any]]) -> b
     return len(base_names) >= 3
 
 
+_OAK_ALIAS_RE = re.compile(r"\bоак\b", re.I)
+_OAK_PHRASE_RE = re.compile(r"общ\w*\s+анализ\w*\s+кров\w*", re.I)
+_OAK_CANONICAL_BASE_RE = re.compile(r"^\s*общий\s+анализ\s+крови\b", re.I)
+_OAK_HOMEVISIT_RE = re.compile(r"\bна\s+дом\b|выезд\s+на\s+дом", re.I)
+
+
+def _is_oak_base_query(query_text: str) -> bool:
+    """Проверяет, что запрос адресован именно к базовому ОАК.
+
+    Явно запрошенные модификаторы (cito, капиллярная, детский) не считаем
+    базовым ОАК — там стандартный family/ranking путь даст нужный вариант.
+
+    :param query_text: исходный запрос пользователя
+    :return: True, если речь именно про обычный общий анализ крови
+    """
+
+    raw = _normalise_input(str(query_text or ""))
+    if not raw:
+        return False
+    if _query_price_variant_flags(raw):
+        return False
+    if _OAK_ALIAS_RE.search(raw):
+        return True
+    return bool(_OAK_PHRASE_RE.search(raw))
+
+
+def _select_oak_canonical_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Возвращает канонические ОАК-строки без служебных модификаторов.
+
+    Канонические — те, что начинаются с «Общий анализ крови», без cito,
+    капиллярной крови, детских вариантов и выездов на дом. На реальном
+    прайсе это ровно две позиции (390 и 490 руб).
+
+    :param rows: строки прайса
+    :return: канонические ОАК-строки, отсортированные по стоимости
+    """
+
+    canonical: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
+        if not name or not _OAK_CANONICAL_BASE_RE.search(name):
+            continue
+        if _lab_price_variant_flags(row):
+            continue
+        if _OAK_HOMEVISIT_RE.search(name):
+            continue
+        canonical.append(row)
+
+    canonical.sort(key=lambda r: _as_int(r.get("cost")) or 0)
+    return canonical
+
+
+def _build_oak_canonical_payload(
+    query_text: str,
+    rows: list[dict[str, Any]],
+    *,
+    show_all: bool = False,
+    visible_limit: int = 2,
+) -> dict[str, Any] | None:
+    """Формирует payload для ОАК: по умолчанию две базовые позиции, остальное — по «все».
+
+    :param query_text: исходный запрос пользователя
+    :param rows: строки прайса
+    :param show_all: разворачивать ли весь список
+    :param visible_limit: сколько позиций показывать в первом ответе
+    :return: family-query-совместимый payload либо None, если канонических <2
+    """
+
+    canonical = _select_oak_canonical_rows(rows)
+    if len(canonical) < 2:
+        return None
+
+    canonical_keys = {
+        (
+            _normalise_input(str(row.get("serviceName") or row.get("name") or "")),
+            _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or "")),
+        )
+        for row in canonical
+    }
+
+    extras: list[dict[str, Any]] = []
+    extra_source = _rank_price_rows(rows, "общий анализ крови", limit=60)
+    for row in extra_source:
+        if not isinstance(row, dict):
+            continue
+        key = (
+            _normalise_input(str(row.get("serviceName") or row.get("name") or "")),
+            _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or "")),
+        )
+        if key in canonical_keys:
+            continue
+        extras.append(row)
+
+    variants = _annotate_price_rows_with_care_context(canonical + extras)
+    visible_count = len(variants) if show_all else min(len(variants), visible_limit)
+    remaining_count = max(0, len(variants) - visible_count)
+    show_all_hint = ""
+    if remaining_count > 0 and not show_all:
+        show_all_hint = (
+            f"По вашему запросу найдено еще {remaining_count} вариантов. "
+            'Чтобы показать их, напишите: "все".'
+        )
+
+    return {
+        "service_name": "общий анализ крови",
+        "service_kind": "family_query",
+        "family_variants": variants,
+        "showing_all": show_all,
+        "visible_limit": visible_limit,
+        "remaining_count": remaining_count,
+        "show_all_hint": show_all_hint,
+        "note": "price_oak_canonical",
+    }
+
+
 def _build_price_family_payload(
     query_text: str,
     rows: list[dict[str, Any]],
@@ -3598,6 +3744,16 @@ def _build_price_family_payload(
     :param visible_limit: лимит строк в первом ответе
     :return: payload family-query либо None
     """
+
+    if _is_oak_base_query(query_text):
+        oak_payload = _build_oak_canonical_payload(
+            query_text,
+            rows,
+            show_all=show_all,
+            visible_limit=2,
+        )
+        if oak_payload is not None:
+            return oak_payload
 
     family_query = str(_extract_price_service_from_query(query_text) or query_text).strip()
     if not _is_family_query_candidate(query_text, rows):
@@ -4120,6 +4276,151 @@ def _select_effective_price_service_name(entity_service_name: str, query_service
         return query
 
     return query
+
+
+_MULTI_PRICE_SPLIT_RE = re.compile(r"\s*(?:,|;|\bи\b|\+|/)\s*", re.I)
+_MULTI_PRICE_SERVICE_HINT_RE = re.compile(
+    r"[a-zа-яё]{3,}",
+    re.I,
+)
+
+
+def _split_price_query_items(query_text: str) -> list[str]:
+    """Делит мульти-услуговый price-запрос на отдельные фрагменты-услуги.
+
+    Консервативный сплиттер: режем по `,` / `;` / ` и ` / `+` / `/`, отбрасываем
+    служебные стоп-слова («стоимость», «цена» и т.п.) из каждого фрагмента.
+
+    :param query_text: исходный текст пользователя
+    :return: список непустых фрагментов услуг; пустой список, если делить нечего
+    """
+
+    raw = str(query_text or "").strip()
+    if not raw:
+        return []
+
+    head = re.sub(
+        r"^\s*(?:стоимость|цена|сколько\s+стоит|прайс)\s+",
+        "",
+        raw,
+        flags=re.I,
+    ).strip()
+    if not head:
+        head = raw
+
+    fragments: list[str] = []
+    for chunk in _MULTI_PRICE_SPLIT_RE.split(head):
+        frag = chunk.strip(" ?!.,;:-–—")
+        if not frag:
+            continue
+        if not _MULTI_PRICE_SERVICE_HINT_RE.search(frag):
+            continue
+        if _normalise_input(frag) in _PRICE_QUERY_STOPWORDS:
+            continue
+        fragments.append(frag)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for frag in fragments:
+        key = _normalise_input(frag)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(frag)
+    return unique
+
+
+def _resolve_multi_price_items(
+    query_text: str,
+    retail_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Разрешает фрагменты мульти-услугового запроса в реальные услуги каталога.
+
+    Возвращает список словарей `{"service_name", "prices"}` только если ≥2
+    фрагментов успешно приземлились на каталог. Иначе — пустой список
+    (fallback на стандартный single-service путь).
+
+    :param query_text: исходный запрос пользователя
+    :param retail_rows: строки retail-прайса региона
+    :return: список разрешённых услуг с top-рядами цен
+    """
+
+    fragments = _split_price_query_items(query_text)
+    if len(fragments) < 2:
+        return []
+
+    resolved: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for frag in fragments:
+        service_name = resolve_price_service_name_from_catalog(frag, rows=retail_rows)
+        if not service_name:
+            extracted = _extract_price_service_from_query(frag) or frag
+            alias_variants = _PRICE_SERVICE_ALIASES.get(_normalise_input(extracted), ())
+            service_name = str(alias_variants[0] or "").strip() if alias_variants else ""
+        if not service_name:
+            continue
+        key = _normalise_input(service_name)
+        if key in seen_names:
+            continue
+        top_rows = _select_patient_price_rows(retail_rows, service_name, limit=2)
+        if not top_rows:
+            continue
+        seen_names.add(key)
+        resolved.append(
+            {
+                "service_name": service_name,
+                "prices": _annotate_price_rows_with_care_context(top_rows),
+            }
+        )
+
+    if len(resolved) < 2:
+        return []
+    return resolved
+
+
+def _build_multi_price_payload(
+    query_text: str,
+    retail_rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Формирует payload для мульти-услугового price-запроса.
+
+    Каждая услуга отрисовывается как отдельная family-подгруппа через
+    `care_setting_label`, чтобы рендер умел группировать список без
+    дополнительного рендер-кейса.
+
+    :param query_text: исходный запрос пользователя
+    :param retail_rows: строки retail-прайса региона
+    :return: family-query-совместимый payload либо None
+    """
+
+    items = _resolve_multi_price_items(query_text, retail_rows)
+    if not items:
+        return None
+
+    variants: list[dict[str, Any]] = []
+    for item in items:
+        label = f"По услуге «{item['service_name']}»"
+        for row in item["prices"]:
+            annotated = dict(row)
+            annotated["care_setting_label"] = label
+            annotated["care_setting_address"] = ""
+            variants.append(annotated)
+
+    if len(variants) < 2:
+        return None
+
+    service_name = ", ".join(str(item["service_name"]) for item in items)
+    visible_limit = len(variants)
+    return {
+        "service_name": service_name,
+        "service_kind": "family_query",
+        "family_variants": variants,
+        "showing_all": True,
+        "visible_limit": visible_limit,
+        "remaining_count": 0,
+        "show_all_hint": "",
+        "note": "price_multi_service",
+    }
 
 
 def _compound_price_secondary_lab_service(
@@ -7429,7 +7730,7 @@ class Services:
         return []
 
 
-from .services.doctors import (
+from .services.doctors import (  # noqa: E402
     _doctor_availability_snapshot as _doctor_availability_snapshot_impl,
     _resolve_doctor_id_from_name as _resolve_doctor_id_from_name_impl,
     _schedule_by_specialty as _schedule_by_specialty_impl,
@@ -7447,10 +7748,10 @@ Services._resolve_doctor_id_from_name = _resolve_doctor_id_from_name_impl
 Services.doctors_info = _doctors_info_impl
 Services.doctors_schedule_week = _doctors_schedule_week_impl
 
-from .services.prices import price_info as _price_info_impl
+from .services.prices import price_info as _price_info_impl  # noqa: E402
 Services.price_info = _price_info_impl
 
-from .services.addresses import address_info as _address_info_impl
+from .services.addresses import address_info as _address_info_impl  # noqa: E402
 Services.address_info = _address_info_impl
 
 
