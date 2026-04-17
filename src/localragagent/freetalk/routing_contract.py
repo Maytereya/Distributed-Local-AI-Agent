@@ -343,6 +343,14 @@ def parse_clinical_decision(
     else:
         tool_plan = mapped_plan
 
+    if intent == "price":
+        blocked_slots = {"branch_name", "branch_or_city", "city"}
+        sanitized_slots = [slot for slot in missing_slots if slot not in blocked_slots]
+        if len(sanitized_slots) != len(missing_slots):
+            missing_slots = sanitized_slots
+            clarify_type = ""
+            clarify_question = ""
+
     return ClinicalDecision(
         intent=intent,
         confidence=confidence,

@@ -751,76 +751,6 @@ class FuzzyPreparePriceAgent(FreeTalkAgent):
         return ""
 
 
-class PriceBranchClarifyServices:
-    def __init__(self) -> None:
-        self.last_query = ""
-        self.last_entities: dict[str, object] = {}
-
-    async def get_catalog_health(self) -> dict[str, object]:
-        return {"ok": True}
-
-    async def match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = "") -> dict[str, str]:
-        probe = str(raw_text_or_name or current_service_name or "").lower()
-        if "общий анализ крови" in probe or "оак" in probe:
-            return {"status": "exact", "canonical": "Общий анализ крови", "query": raw_text_or_name}
-        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
-
-    async def match_catalog_doctor(self, raw_text_or_name: str) -> dict[str, str]:
-        _ = raw_text_or_name
-        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
-
-    async def price_info(self, query: str, entities: dict[str, object]) -> dict[str, object]:
-        self.last_query = str(query or "")
-        self.last_entities = dict(entities)
-        service_name = str(entities.get("service_name") or "").strip().lower()
-        if "общий анализ крови" not in service_name:
-            return {"prices": [], "note": "price_info"}
-        return {
-            "prices": [
-                {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "cost": 390},
-                {"serviceName": "Общий анализ крови (полный)", "cost": 490},
-            ],
-            "entities_used": {
-                "service_name_effective": "Общий анализ крови",
-            },
-            "note": "price_info",
-        }
-
-    def tool_handlers(self, *, include_meili_tools: bool) -> dict[str, object]:
-        _ = include_meili_tools
-        return {"price_info": self.price_info}
-
-
-class PriceBranchClarifyAgent(FreeTalkAgent):
-    async def _route_clinical_decision(
-        self,
-        *,
-        user_message: str,
-        context: SessionContext,
-        dialog_state: DialogState,
-        remembered_doctor: str,
-    ) -> ClinicalDecision:
-        _ = context, dialog_state, remembered_doctor
-        text = str(user_message or "").strip().lower()
-        if "стоимость" in text and "общий анализ крови" in text:
-            return ClinicalDecision(
-                intent="price",
-                confidence=0.95,
-                entities={"service_name": "Общий анализ крови"},
-                tool_plan=["price_info"],
-                source="test",
-            )
-        return ClinicalDecision(intent="unknown", confidence=0.1, source="test")
-
-    async def _llm_json(self, prompt: str) -> dict[str, object]:
-        _ = prompt
-        return {}
-
-    async def _llm_text(self, prompt: str) -> str:
-        _ = prompt
-        return ""
-
-
 class DoctorClarifyMixedServices:
     def __init__(self) -> None:
         self.last_doctor_entities: dict[str, object] = {}
@@ -1092,55 +1022,6 @@ def test_confirmation_no_preference_rejects_candidate_and_returns_to_clarify():
     assert state2["confirmation_target"] == ""
     assert state2["candidate_entities"] == {}
     assert state2["missing_slots"] == ["service_or_analysis_name"]
-
-
-def test_price_branch_no_preference_reenters_with_synthetic_price_query():
-    memory = InMemoryMemory()
-    services = PriceBranchClarifyServices()
-    agent = PriceBranchClarifyAgent(
-        config=_cfg(),
-        services=services,  # type: ignore[arg-type]
-        memory=memory,  # type: ignore[arg-type]
-        persist=InMemoryPersist(),  # type: ignore[arg-type]
-        system_prompt="FT test",
-        web_search=None,
-    )
-    session_id = "price_branch_no_preference_dialog"
-    state = DialogState(
-        route="clinical",
-        intent="price",
-        entities={"service_name": "Общий анализ крови"},
-        candidate_entities={},
-        confirmation_target="",
-        missing_slots=["branch_name"],
-        expected_slots=["branch_name"],
-        clarify_type="identify",
-        tool_plan=["price_info"],
-        response_policy="tool_only",
-        confidence=0.95,
-        clarify_count=1,
-        last_tool="price_info",
-        phase="collecting",
-        open_question="В каком филиале вам нужна стоимость общего анализа крови?",
-        flow_active=True,
-        flow_kind="clarify",
-        flow_stage="collecting",
-        flow_interruptible=True,
-        flow_resume_question="В каком филиале вам нужна стоимость общего анализа крови?",
-    )
-    asyncio.run(
-        memory.set_meta_str(
-            session_id,
-            "clinical_dialog_state",
-            json.dumps(dialog_state_payload(state), ensure_ascii=False),
-        )
-    )
-
-    reply = asyncio.run(agent.chat("В любом филиале.", session_id))
-
-    assert "прервать текущий сценарий" not in reply.text.lower()
-    assert "390" in reply.text
-    assert services.last_query.lower() == "стоимость общий анализ крови"
 
 
 def test_mixed_clarify_slot_answer_and_topic_switch_no_reenters_original_flow():

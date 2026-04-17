@@ -119,6 +119,41 @@ def test_parse_clinical_decision_respects_explicit_confirm_candidate_type():
     assert decision.clarify_type == "confirm_candidate"
 
 
+def test_parse_clinical_decision_drops_branch_clarify_for_price():
+    decision = parse_clinical_decision(
+        {
+            "intent": "price",
+            "entities": {"service_name": "Общий анализ крови"},
+            "missing_slots": ["branch_name"],
+            "clarify_type": "narrow_choice",
+            "clarify_question": "Вы хотите узнать стоимость ОАК в филиале Наука?",
+            "tool_plan": ["price_info"],
+        },
+        include_meili_tools=False,
+    )
+
+    assert decision.missing_slots == []
+    assert decision.clarify_type == ""
+    assert decision.clarify_question == ""
+
+
+def test_parse_clinical_decision_keeps_non_branch_missing_slots_for_price():
+    decision = parse_clinical_decision(
+        {
+            "intent": "price",
+            "missing_slots": ["branch_name", "service_or_analysis_name"],
+            "clarify_type": "narrow_choice",
+            "clarify_question": "Уточните филиал.",
+            "tool_plan": ["price_info"],
+        },
+        include_meili_tools=False,
+    )
+
+    assert decision.missing_slots == ["service_or_analysis_name"]
+    assert decision.clarify_type == ""
+    assert decision.clarify_question == ""
+
+
 def test_clarify_type_for_slots_marks_identify_and_missing_auth_data():
     assert clarify_type_for_slots("doctor_schedule", ["doctor_name", "specialty"]) == "identify"
     assert clarify_type_for_slots("test_result", ["result_analysis_number"]) == "missing_auth_data"

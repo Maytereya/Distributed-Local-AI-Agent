@@ -574,6 +574,35 @@ def test_adapter_normalizes_price_entities_used_to_ft_shape():
     assert result.ft_payload["adapter_meta"]["domain"] == "service_query"
 
 
+def test_adapter_normalizes_price_family_variants_to_prices():
+    adapter = FreeTalkAdapter()
+    prepared = adapter.prepare_tool_call(
+        tool_name="price_info",
+        user_message="Стоимость ОАК",
+        entities={"service_name": "общий анализ крови"},
+    )
+
+    result = adapter.normalize_tool_payload(
+        tool_name="price_info",
+        payload={
+            "service_kind": "family_query",
+            "family_variants": [
+                {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "cost": 390},
+                {"serviceName": "Общий анализ крови (полный)", "cost": 490},
+                {"serviceName": "Общий анализ крови капиллярная кровь", "cost": 380},
+            ],
+            "visible_limit": 2,
+            "showing_all": False,
+            "note": "price_oak_canonical",
+        },
+        prepared_call=prepared,
+    )
+
+    assert len(result.ft_payload["prices"]) == 2
+    assert result.ft_payload["prices"][0]["serviceName"] == "Общий анализ крови (Le, Er, Hb, СОЭ)"
+    assert result.ft_payload["prices"][1]["serviceName"] == "Общий анализ крови (полный)"
+
+
 def test_adapter_keeps_test_name_for_test_assist_calls():
     adapter = FreeTalkAdapter()
 

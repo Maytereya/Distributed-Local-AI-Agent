@@ -579,6 +579,13 @@ class FreeTalkAdapter:
         prepared_call: PreparedToolCall,
     ) -> AdapterToolResult:
         out = dict(payload or {})
+        if str(tool_name or "").strip() == "price_info":
+            family_variants = out.get("family_variants")
+            prices = out.get("prices")
+            if isinstance(family_variants, list) and family_variants and not isinstance(prices, list):
+                visible_limit = max(1, int(out.get("visible_limit") or 5))
+                showing_all = bool(out.get("showing_all"))
+                out["prices"] = list(family_variants if showing_all else family_variants[:visible_limit])
         normalized_entities_used = _normalize_service_entities_used(tool_name, out, prepared_call)
         if normalized_entities_used:
             out["entities_used_ft"] = normalized_entities_used
