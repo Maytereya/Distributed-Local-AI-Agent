@@ -11,6 +11,7 @@ import logging
 import re
 from typing import Any
 
+from .memory import MemoryStore
 from .mess_types import AppointmentPhase, DialogState, RouteDecision, SessionState
 from .city import match_city
 from .policies import (
@@ -572,37 +573,164 @@ _APPOINTMENT_RUNTIME_KEYS: tuple[str, ...] = (
     "branch_name",
     "patient_name",
 )
+_APPOINTMENT_FULL_CONTEXT_KEYS: tuple[str, ...] = (
+    "doctor_id",
+    "doctor_name",
+    "specialty",
+    "service_name",
+    "test_name",
+)
+_TOPIC_SWITCH_EXTRA_KEYS: tuple[str, ...] = (
+    "doc_request_kind",
+    "secondary_intents",
+    "_secondary_queue",
+    "_secondary_offer_pending",
+    "_catalog_confirm_pending",
+    "_catalog_confirm_rejects",
+)
 
 
-def _clear_flow_state(state: SessionState) -> None:
-    for k in _APPOINTMENT_RUNTIME_KEYS:
-        state.last_entities.pop(k, None)
+def _clear_pending_state(state: SessionState, memory: MemoryStore | None = None) -> None:
+    """Очищает pending-слоты вне зависимости от наличия MemoryStore.
+
+    :param state: текущее состояние сессии
+    :param memory: optional MemoryStore для canonical clear_pending
+    :return: None
+    """
+
+    if memory is not None:
+        memory.clear_pending(state)
+        return
+    state.last_entities.pop("_pending", None)
+    state.last_entities.pop("_pending_label", None)
 
 
-def _clear_topic_state(state: SessionState) -> None:
-    _clear_flow_state(state)
-    for k in (
-        "doctor_id",
-        "doctor_name",
-        "specialty",
-        "service_name",
-        "test_name",
-        "doc_request_kind",
-        "branch_id",
-        "branch_name",
-        "secondary_intents",
-        "_secondary_queue",
-        "_secondary_offer_pending",
-        "_catalog_confirm_pending",
-        "_catalog_confirm_rejects",
-    ):
-        state.last_entities.pop(k, None)
+def _clear_state_core(
+    state: SessionState,
+    memory: MemoryStore | None = None,
+    *,
+    keys_to_clear: tuple[str, ...] = (),
+    clear_all_entities: bool = False,
+    preserve_samara_city: bool = False,
+    clear_dialog: bool = False,
+) -> None:
+    """Выполняет общую механику очистки session state для public helper'ов.
+
+    :param state: текущее состояние сессии
+    :param memory: optional MemoryStore для очистки pending
+    :param keys_to_clear: точечный список ключей last_entities для удаления
+    :param clear_all_entities: если True, очищает last_entities целиком
+    :param preserve_samara_city: сохранить `city`, только если это Самара
+    :param clear_dialog: если True, сбрасывает typed dialog state
+    :return: None
+    """
+
+    keep_city = ""
+    if preserve_samara_city:
+        city = str(state.last_entities.get("city") or "").strip()
+        if normalize_ru(city) == "самара":
+            keep_city = city
+
+    _clear_pending_state(state, memory)
+
+    if clear_all_entities:
+        state.last_entities.clear()
+    else:
+        for key in keys_to_clear:
+            state.last_entities.pop(key, None)
+
+    if keep_city:
+        state.last_entities["city"] = keep_city
+
+    if clear_dialog:
+        state.dialog.clear()
 
 
-def _apply_context_action(decision: RouteDecision, state: SessionState, user_text: str) -> RouteDecision:
+def clear_on_handoff(
+    state: SessionState,
+    memory: MemoryStore | None = None,
+    *,
+    preserve_city: bool = True,
+) -> None:
+    """Сбрасывает transient state после handoff к оператору.
+
+    Матрица очистки:
+    - pending: очищается всегда
+    - last_entities: очищается целиком
+    - city: сохраняется только для Самары, если `preserve_city=True`
+    - dialog: очищается полностью
+
+    :param state: текущее состояние сессии
+    :param memory: optional MemoryStore для очистки pending
+    :param preserve_city: сохранить устойчивый city-контекст Самары
+    :return: None
+    """
+
+    _clear_state_core(
+        state,
+        memory,
+        clear_all_entities=True,
+        preserve_samara_city=preserve_city,
+        clear_dialog=True,
+    )
+
+
+def clear_on_topic_switch(state: SessionState, memory: MemoryStore | None = None) -> None:
+    """Сбрасывает контекст текущей темы при явном переходе к новому вопросу.
+
+    Матрица очистки:
+    - pending: очищается всегда
+    - appointment runtime: очищается
+    - appointment full context: очищается
+    - secondary/catalog/doc-request topic state: очищается
+    - city и другие устойчивые поля: сохраняются
+    - dialog: очищается полностью
+
+    :param state: текущее состояние сессии
+    :param memory: optional MemoryStore для очистки pending
+    :return: None
+    """
+
+    _clear_state_core(
+        state,
+        memory,
+        keys_to_clear=_APPOINTMENT_RUNTIME_KEYS + _APPOINTMENT_FULL_CONTEXT_KEYS + _TOPIC_SWITCH_EXTRA_KEYS,
+        clear_dialog=True,
+    )
+
+
+def clear_on_appointment_end(state: SessionState, memory: MemoryStore | None = None) -> None:
+    """Сбрасывает завершённый APPOINTMENT flow без полного handoff-reset.
+
+    Матрица очистки:
+    - pending: очищается всегда
+    - appointment runtime: очищается
+    - doctor/service/test context записи: очищается
+    - city и несвязанные topic-ключи: сохраняются
+    - dialog: очищается через appointment runtime reset
+
+    :param state: текущее состояние сессии
+    :param memory: optional MemoryStore для очистки pending
+    :return: None
+    """
+
+    reset_appointment_runtime_state(state)
+    _clear_state_core(
+        state,
+        memory,
+        keys_to_clear=_APPOINTMENT_FULL_CONTEXT_KEYS,
+    )
+
+
+def _apply_context_action(
+    decision: RouteDecision,
+    state: SessionState,
+    user_text: str,
+    memory: MemoryStore | None = None,
+) -> RouteDecision:
     action = decision.context_action
     if action == "cancel_flow":
-        _clear_flow_state(state)
+        reset_appointment_runtime_state(state)
         return decision
 
     if action == "new_topic":
@@ -623,7 +751,7 @@ def _apply_context_action(decision: RouteDecision, state: SessionState, user_tex
                 clarify_slots=list(decision.clarify_slots),
                 intent_candidates=list(decision.intent_candidates),
             )
-        _clear_topic_state(state)
+        clear_on_topic_switch(state, memory)
         return decision
 
     if (
@@ -660,7 +788,7 @@ def _apply_context_action(decision: RouteDecision, state: SessionState, user_tex
     if current and target and current == target:
         return decision
 
-    _clear_flow_state(state)
+    reset_appointment_runtime_state(state)
     entities = dict(decision.entities)
     entities["doctor_name"] = extracted_doctor
     sanitized_flags = set(decision.flags)
@@ -944,8 +1072,22 @@ def quick_fill_entities_from_text(
 
 # Public API for other modules. Wrappers preserve current behavior
 # while hiding implementation-specific `_...` names.
-def apply_context_action(decision: RouteDecision, state: SessionState, user_text: str) -> RouteDecision:
-    return _apply_context_action(decision, state, user_text)
+def apply_context_action(
+    decision: RouteDecision,
+    state: SessionState,
+    user_text: str,
+    memory: MemoryStore | None = None,
+) -> RouteDecision:
+    """Применяет context_action к state перед дальнейшей маршрутизацией.
+
+    :param decision: текущее решение маршрутизатора
+    :param state: текущее состояние сессии
+    :param user_text: исходный текст пользователя
+    :param memory: optional MemoryStore для очистки pending при topic switch
+    :return: possibly adjusted RouteDecision
+    """
+
+    return _apply_context_action(decision, state, user_text, memory)
 
 
 def apply_pending_override(decision: RouteDecision, pending: dict | None, user_text: str = "") -> str:
@@ -999,8 +1141,8 @@ def reset_appointment_runtime_state(state: SessionState) -> None:
     в APPOINTMENT-фазе, вызывает dialog.clear() чтобы FSM вернулся
     в IDLE, а не застрял с устаревшей меткой.
 
-    Canonical owner: flow_policy.  Используется router, response_builder
-    и appointment_flow_guard (через clear_appointment_flow_context).
+    Canonical owner: flow_policy. Используется router, response_builder
+    и higher-level clear helper'ами этого же модуля.
     """
     for key in _APPOINTMENT_RUNTIME_KEYS:
         state.last_entities.pop(key, None)

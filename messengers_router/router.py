@@ -29,6 +29,7 @@ from .entity_grounder import (
 )
 from .flow_policy import (
     apply_context_action,
+    clear_on_handoff,
     fill_date_from_schedule_windows,
     get_secondary_queue,
     is_appointment_waiting_patient_name,
@@ -877,20 +878,6 @@ def _is_samara_city(city: str | None) -> bool:
     return normalize_ru(city) == "самара"
 
 
-def _reset_state_after_handoff(state: SessionState, memory: MemoryStore) -> None:
-    """
-    Сбрасывает transient/focus state после передачи диалога оператору.
-    Сохраняем только устойчивый профильный контекст города (Самара).
-    """
-
-    city = str(state.last_entities.get("city") or "").strip()
-    keep_city = city if _is_samara_city(city) else ""
-    memory.clear_pending(state)
-    state.last_entities.clear()
-    if keep_city:
-        state.last_entities["city"] = keep_city
-
-
 def _is_appointment_datetime_followup(user_text: str) -> bool:
     text = str(user_text or "").strip()
     if not text or not has_datetime_signal(text):
@@ -1520,7 +1507,7 @@ async def route_patient_message(
             needs_handoff=False,
             context_action="continue",
         )
-    decision = apply_context_action(decision, state, user_text)
+    decision = apply_context_action(decision, state, user_text, memory)
 
     pending_before_overrides = memory.get_pending(state)
     if (
@@ -2006,7 +1993,7 @@ async def patient_routing_stream(
 
     # Явный запрос оператора должен иметь абсолютный приоритет.
     if explicit_operator_requested(user_text):
-        _reset_state_after_handoff(state, memory)
+        clear_on_handoff(state, memory)
         yield ResponseEnvelope(
             text=handoff_message("manual_operator"),
             attachments=[],
@@ -2024,7 +2011,7 @@ async def patient_routing_stream(
 
     city_now = match_city(user_text)
     if city_now and not _is_samara_city(city_now):
-        _reset_state_after_handoff(state, memory)
+        clear_on_handoff(state, memory)
         update_summary(state, reason="handoff")
         yield ResponseEnvelope(
             text=_SAMARA_ONLY_OPERATOR_TEXT,
@@ -2050,7 +2037,7 @@ async def patient_routing_stream(
     )
     if precheck is not None:
         if precheck.handoff:
-            _reset_state_after_handoff(state, memory)
+            clear_on_handoff(state, memory)
         yield precheck
         return
 
@@ -2076,7 +2063,7 @@ async def patient_routing_stream(
         state_update: dict[str, Any] = {}
         if debug:
             state_update = {"debug": {"route_error": str(e)}}
-        _reset_state_after_handoff(state, memory)
+        clear_on_handoff(state, memory)
         yield ResponseEnvelope(
             text=fallback_text,
             attachments=[],
@@ -2099,7 +2086,7 @@ async def patient_routing_stream(
     update_summary(state, reason="normal")
 
     if response.handoff:
-        _reset_state_after_handoff(state, memory)
+        clear_on_handoff(state, memory)
 
     yield response
     return
