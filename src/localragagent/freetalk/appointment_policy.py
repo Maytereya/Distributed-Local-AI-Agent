@@ -7,29 +7,15 @@ import re
 from typing import Any
 
 from .contracts import DialogState
+from .signal_parsers import extract_person_name, parse_yes_no
 
 
 _BOOK_RE = re.compile(r"\b(запис\w*|запись)\b", re.I)
 _RESCHEDULE_RE = re.compile(r"\b(перенест\w*|перезапис\w*)\b", re.I)
 _CANCEL_BOOKING_RE = re.compile(r"\b(отмен\w*\s+запис|отмена\s+запис)\b", re.I)
-_STOP_FLOW_RE = re.compile(
-    r"\b(стоп|отмена|прекрат\w*|передумал\w*|подождите|другое|другой\s+вопрос|"
-    r"хочу\s+другое|хочу\s+другое\s+спросить|простите\s+отмените)\b",
-    re.I,
-)
-_TOPIC_SWITCH_RE = re.compile(
-    r"\b(цена|стоим\w*|сколько\s+стоит|анализ\w*|результат\w*|подготов\w*|адрес\w*|филиал\w*|"
-    r"новост\w*|документ\w*|интернет|поищи|найди|веб)\b",
-    re.I,
-)
 _SCHEDULE_PREVIEW_RE = re.compile(
     r"\b(расписан\w*|график|свободн\w*\s+(?:окн\w*|слот\w*)|слот\w*|окн\w*)\b",
     re.I,
-)
-_YES_RE = re.compile(r"^\s*(да|yes|y)\s*[.!?]?\s*$", re.I)
-_NO_RE = re.compile(r"^\s*(нет|не|no|n)\s*[.!?]?\s*$", re.I)
-_FIO_RE = re.compile(
-    r"^\s*([А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+){1,2})\s*[.!?]?\s*$"
 )
 
 _MONTHS_RU = {
@@ -47,7 +33,6 @@ _MONTHS_RU = {
     12: "декабря",
 }
 
-APPOINTMENT_CANCEL_GUARD_TEXT = "Прекратить запись? Ответьте: да или нет."
 APPOINTMENT_MEMORY_CLEAR_KEYS: tuple[str, ...] = (
     "appointment_action",
     "appointment_windows",
@@ -93,37 +78,16 @@ def detect_appointment_action(text: str, *, current_action: str = "") -> str:
 
 
 def appointment_confirmation_transition(text: str) -> str:
-    probe = str(text or "").strip()
-    if _YES_RE.match(probe):
-        return "yes"
-    if _NO_RE.match(probe):
-        return "no"
-    return ""
+    return parse_yes_no(text, profile="strict")
 
 
 def extract_patient_name(text: str) -> str:
     probe = str(text or "").strip()
     if not probe or any(ch.isdigit() for ch in probe):
         return ""
-    if _BOOK_RE.search(probe) or _STOP_FLOW_RE.search(probe) or _TOPIC_SWITCH_RE.search(probe):
+    if _BOOK_RE.search(probe) or _RESCHEDULE_RE.search(probe) or _CANCEL_BOOKING_RE.search(probe):
         return ""
-    match = _FIO_RE.match(probe)
-    if not match:
-        return ""
-    return str(match.group(1) or "").strip()
-
-
-def looks_like_abort_current_appointment(text: str) -> bool:
-    return bool(_STOP_FLOW_RE.search(str(text or "").strip()))
-
-
-def looks_like_topic_switch_during_appointment(text: str) -> bool:
-    probe = str(text or "").strip()
-    if not probe:
-        return False
-    if looks_like_appointment_intent_message(probe):
-        return False
-    return bool(_TOPIC_SWITCH_RE.search(probe))
+    return extract_person_name(probe)
 
 
 def looks_like_schedule_preview_request(text: str) -> bool:
@@ -295,11 +259,8 @@ def appointment_handoff_text(entities: dict[str, Any]) -> str:
 
 
 def appointment_resume_question(dialog_state: DialogState, entities: dict[str, Any]) -> str:
-    saved = str((entities or {}).get("_ft_appointment_resume_question") or "").strip()
-    if saved:
-        return saved
     open_question = str(dialog_state.open_question or "").strip()
-    if open_question and open_question != APPOINTMENT_CANCEL_GUARD_TEXT:
+    if open_question:
         return open_question
     return appointment_clarify_question(list(dialog_state.missing_slots or []), entities)
 
@@ -338,7 +299,7 @@ def apply_appointment_precheck(
             return AppointmentPrecheckResult(
                 handled=True,
                 reply_text=clarify_text,
-                next_state=_build_state(
+                next_state=build_appointment_state(
                     entities=entities,
                     missing_slots=missing_slots,
                     phase="appointment_collecting",
@@ -349,7 +310,7 @@ def apply_appointment_precheck(
         return AppointmentPrecheckResult(
             handled=True,
             reply_text=confirm_text,
-            next_state=_build_state(
+            next_state=build_appointment_state(
                 entities=entities,
                 missing_slots=[],
                 phase="appointment_confirm",
@@ -376,37 +337,6 @@ def _apply_active_appointment_turn(
     phase = str(dialog_state.phase or "").strip().lower()
     transition = appointment_confirmation_transition(user_message)
 
-    if phase == "appointment_cancel_confirm":
-        if transition == "yes":
-            return AppointmentPrecheckResult(
-                handled=True,
-                reply_text="Отменено. Могу быть чем-то еще полезен?",
-                clear_state=True,
-                clear_memory_keys=APPOINTMENT_MEMORY_CLEAR_KEYS,
-            )
-        if transition == "no":
-            resume_text = appointment_resume_question(dialog_state, entities)
-            return AppointmentPrecheckResult(
-                handled=True,
-                reply_text=resume_text,
-                next_state=_build_state(
-                    entities=_drop_private_resume_question(entities),
-                    missing_slots=list(dialog_state.missing_slots or []),
-                    phase="appointment_collecting",
-                    open_question=resume_text,
-                ),
-            )
-        return AppointmentPrecheckResult(
-            handled=True,
-            reply_text=APPOINTMENT_CANCEL_GUARD_TEXT,
-            next_state=_build_state(
-                entities=entities,
-                missing_slots=list(dialog_state.missing_slots or []),
-                phase="appointment_cancel_confirm",
-                open_question=APPOINTMENT_CANCEL_GUARD_TEXT,
-            ),
-        )
-
     if phase == "appointment_confirm":
         if transition == "yes":
             return AppointmentPrecheckResult(
@@ -422,7 +352,7 @@ def _apply_active_appointment_turn(
             return AppointmentPrecheckResult(
                 handled=True,
                 reply_text=clarify_text,
-                next_state=_build_state(
+                next_state=build_appointment_state(
                     entities=entities,
                     missing_slots=next_missing,
                     phase="appointment_collecting",
@@ -432,7 +362,7 @@ def _apply_active_appointment_turn(
         return AppointmentPrecheckResult(
             handled=True,
             reply_text=str(dialog_state.open_question or appointment_confirmation_text(entities)),
-            next_state=_build_state(
+            next_state=build_appointment_state(
                 entities=entities,
                 missing_slots=[],
                 phase="appointment_confirm",
@@ -444,7 +374,7 @@ def _apply_active_appointment_turn(
         preview_text = render_cached_appointment_schedule_preview(entities)
         if preview_text:
             resume_text = appointment_resume_question(dialog_state, entities)
-            next_state = _build_state(
+            next_state = build_appointment_state(
                 entities=entities,
                 missing_slots=list(dialog_state.missing_slots or appointment_missing_slots(entities)),
                 phase="appointment_collecting",
@@ -456,20 +386,12 @@ def _apply_active_appointment_turn(
                 next_state=next_state,
             )
 
-    if _should_request_cancel_guard(user_message, contextual_entities, entities):
-        resume_text = appointment_resume_question(dialog_state, entities)
-        guarded_entities = dict(entities)
-        guarded_entities["_ft_appointment_resume_question"] = resume_text
-        return AppointmentPrecheckResult(
-            handled=True,
-            reply_text=APPOINTMENT_CANCEL_GUARD_TEXT,
-            next_state=_build_state(
-                entities=guarded_entities,
-                missing_slots=list(dialog_state.missing_slots or []),
-                phase="appointment_cancel_confirm",
-                open_question=APPOINTMENT_CANCEL_GUARD_TEXT,
-            ),
-        )
+    if phase == "appointment_collecting" and not _looks_like_active_appointment_followup(
+        user_message=user_message,
+        contextual_entities=contextual_entities,
+        entities=entities,
+    ):
+        return AppointmentPrecheckResult()
 
     missing_slots = appointment_missing_slots(entities)
     if missing_slots:
@@ -477,7 +399,7 @@ def _apply_active_appointment_turn(
         return AppointmentPrecheckResult(
             handled=True,
             reply_text=clarify_text,
-            next_state=_build_state(
+            next_state=build_appointment_state(
                 entities=entities,
                 missing_slots=missing_slots,
                 phase="appointment_collecting",
@@ -489,7 +411,7 @@ def _apply_active_appointment_turn(
     return AppointmentPrecheckResult(
         handled=True,
         reply_text=confirm_text,
-        next_state=_build_state(
+        next_state=build_appointment_state(
             entities=entities,
             missing_slots=[],
             phase="appointment_confirm",
@@ -498,33 +420,32 @@ def _apply_active_appointment_turn(
     )
 
 
-def _should_request_cancel_guard(
+def _looks_like_active_appointment_followup(
+    *,
     user_message: str,
     contextual_entities: dict[str, Any],
     entities: dict[str, Any],
 ) -> bool:
-    if looks_like_abort_current_appointment(user_message):
+    if looks_like_appointment_intent_message(user_message):
+        return True
+    if looks_like_schedule_preview_request(user_message):
         return True
     if extract_patient_name(user_message):
-        return False
-    if contextual_entities:
-        return False
-    if looks_like_appointment_intent_message(user_message):
-        return False
-    if looks_like_topic_switch_during_appointment(user_message):
         return True
-    if str((entities or {}).get("patient_name") or "").strip():
-        return False
-    return False
+    if contextual_entities:
+        return True
+    return bool(str((entities or {}).get("patient_name") or "").strip() and appointment_confirmation_transition(user_message) != "unknown")
 
 
-def _build_state(
+def build_appointment_state(
     *,
     entities: dict[str, Any],
     missing_slots: list[str],
     phase: str,
     open_question: str,
 ) -> DialogState:
+    phase_value = str(phase or "").strip().lower()
+    flow_stage = "confirm" if "confirm" in phase_value else "collecting"
     return DialogState(
         route="clinical",
         intent="appointment",
@@ -540,14 +461,13 @@ def _build_state(
         last_tool="",
         phase=str(phase or ""),
         open_question=str(open_question or ""),
+        flow_active=True,
+        flow_kind="appointment",
+        flow_stage=flow_stage,
+        flow_interruptible=True,
+        flow_resume_question=str(open_question or ""),
+        expected_slots=[str(slot).strip() for slot in list(missing_slots or []) if str(slot).strip()],
     )
-
-
-def _drop_private_resume_question(entities: dict[str, Any]) -> dict[str, Any]:
-    out = dict(entities or {})
-    out.pop("_ft_appointment_resume_question", None)
-    return out
-
 
 def _apply_branch_from_slot(entities: dict[str, Any]) -> None:
     branch_name = str(entities.get("branch_name") or "").strip()

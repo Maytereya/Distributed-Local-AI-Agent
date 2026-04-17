@@ -19,6 +19,7 @@ from .candidate_policy import (
     candidate_confirmation_question as _candidate_confirmation_question_helper,
     candidate_confirmation_target as _candidate_confirmation_target_helper,
     candidate_entities_from_entities as _candidate_entities_from_entities_helper,
+    parse_candidate_confirmation_message as _parse_candidate_confirmation_message_helper,
     candidate_rejected_question as _candidate_rejected_question_helper,
     promote_confirmed_candidate as _promote_confirmed_candidate_helper,
 )
@@ -62,7 +63,14 @@ from .followup_policy import (
     looks_like_doctor_followup_message as _looks_like_doctor_followup_message_helper,
     looks_like_service_followup_message as _looks_like_service_followup_message_helper,
 )
+from .flow_local_policy import apply_flow_local_precheck as _apply_flow_local_precheck_helper
 from .grounding_policy import ground_entities as _ground_entities_helper
+from .interrupt_policy import apply_interrupt_precheck as _apply_interrupt_precheck_helper
+from .interrupt_policy import (
+    apply_interrupt_arbiter_decision as _apply_interrupt_arbiter_decision_helper,
+    build_topic_switch_confirm_state as _build_topic_switch_confirm_state_helper,
+    parse_interrupt_arbiter_payload as _parse_interrupt_arbiter_payload_helper,
+)
 from .intent_policy import apply_intent_entity_policy as _apply_intent_entity_policy_helper
 from .memory_persist import PersistentSummaryStore
 from .memory_policy import (
@@ -92,6 +100,7 @@ from .orchestrator import (
 )
 from .routing_prompting import (
     build_clinical_router_prompt,
+    build_interrupt_arbiter_prompt,
     build_post_tool_verifier_prompt,
     build_summary_prompt,
     build_tool_result_prompt,
@@ -109,6 +118,7 @@ from .rendering import (
     schedule_payload_stats as _schedule_payload_stats_helper,
 )
 from .routing_policy import resolve_dialog_act as _resolve_dialog_act_helper
+from .signal_parsers import parse_yes_no
 from .tool_planning import is_about_agent_query, is_medical_query, select_tool_plan, should_use_web_search
 
 
@@ -129,71 +139,6 @@ _CTX_GUARD_AWAITING_IMMEDIATE = "awaiting_immediate"
 _CTX_GUARD_ONE_MORE = "one_more"
 _CTX_GUARD_AWAITING_FINAL = "awaiting_final"
 _CLINICAL_MIN_CONFIDENCE = 0.58
-
-_YES_RE = re.compile(r"^\s*(да|угу|ага|yes|yep|ok|ок|конечно)\s*[.!?]?\s*$", re.I)
-_NO_RE = re.compile(r"^\s*(нет|неа|no|nope|not now|пока нет)\s*[.!?]?\s*$", re.I)
-_DOCTOR_ANAPHORA_RE = re.compile(r"\b(его|него|нему|ним|он|у\s+него|у\s+него\s+же|у\s+неё|ее|её|она)\b", re.I)
-_DOCTOR_FOLLOWUP_RE = re.compile(
-    r"\b(доктор|врач|расписан|график|при(е|ё)м|слот|окн|чем\s+занима|о\s+нем|о\s+враче|инфо)\b",
-    re.I,
-)
-_SERVICE_FOLLOWUP_RE = re.compile(
-    r"\b(услуг|анализ|процедур|подготовк|цена|стоим|сколько|где|филиал|адрес|с\s+наркозом|без\s+наркоза)\b",
-    re.I,
-)
-_SERVICE_VARIANT_RE = re.compile(r"\b(с\s+наркозом|без\s+наркоза|с\s+контрастом|без\s+контраста)\b", re.I)
-_DATE_FILTER_RE = re.compile(
-    r"\b("
-    r"сегодня|завтра|послезавтра|"
-    r"на\s+следующ(?:ей|ую)\s+неделе|"
-    r"на\s+этой\s+неделе|"
-    r"\d{4}-\d{2}-\d{2}|"
-    r"\d{1,2}\.\d{1,2}(?:\.\d{2,4})?"
-    r")\b",
-    re.I,
-)
-_TIME_FILTER_RE = re.compile(
-    r"\b("
-    r"утром|дн[её]м|вечером|"
-    r"после\s+\d{1,2}(?::\d{2})?|"
-    r"до\s+\d{1,2}(?::\d{2})?|"
-    r"в\s+\d{1,2}:\d{2}|"
-    r"\d{1,2}:\d{2}"
-    r")\b",
-    re.I,
-)
-_BRANCH_WORD_RE = re.compile(r"\b(филиал|адрес|локаци)\w*\b", re.I)
-_SHORT_BRANCH_RE = re.compile(r"^\s*(?:а\s+)?(?:на|в)\s+([^?.!,]+?)\s*[?!.]?\s*$", re.I)
-_BRANCH_CAPTURE_RE = re.compile(
-    r"\b(?:филиал(?:е|ом)?|адрес(?:е|ом)?)(?:\s+на)?\s+([^?.!,]+?)(?:\s*[?!.]|$)",
-    re.I,
-)
-_TIME_HHMM_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
-_TIME_AFTER_RE = re.compile(r"\bпосле\s+(\d{1,2})(?::(\d{2}))?\b", re.I)
-_TIME_BEFORE_RE = re.compile(r"\bдо\s+(\d{1,2})(?::(\d{2}))?\b", re.I)
-_DATE_ISO_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
-_DATE_DOT_RE = re.compile(r"\b(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b")
-_BRANCH_FOLLOWUP_STOPWORDS = {
-    "сегодня",
-    "завтра",
-    "послезавтра",
-    "утром",
-    "вечером",
-    "днем",
-    "днём",
-    "следующей",
-    "следующую",
-    "этой",
-    "неделе",
-    "неделю",
-    "понедельник",
-    "вторник",
-    "среду",
-    "четверг",
-    "пятницу",
-    "субботу",
-    "воскресенье",
-}
 _SESSION_MEMORY_ENTITY_KEYS: tuple[str, ...] = (
     "doctor_name",
     "specialty",
@@ -561,12 +506,7 @@ class FreeTalkAgent:
         return None
 
     def _yes_no_decision(self, text: str) -> str:
-        value = str(text or "").strip()
-        if _YES_RE.match(value):
-            return "yes"
-        if _NO_RE.match(value):
-            return "no"
-        return "unknown"
+        return parse_yes_no(text, profile="guard")
 
     def _guard_near_limit_prompt(self) -> str:
         return (
@@ -882,6 +822,69 @@ class FreeTalkAgent:
             contextual_entities=contextual_entities,
         )
 
+    def _flow_local_precheck(
+        self,
+        *,
+        user_message: str,
+        dialog_state: DialogState,
+        memory_entities: dict[str, Any],
+    ):
+        return _apply_flow_local_precheck_helper(
+            user_message=user_message,
+            dialog_state=dialog_state,
+            memory_entities=memory_entities,
+        )
+
+    async def _interrupt_precheck(
+        self,
+        *,
+        user_message: str,
+        dialog_state: DialogState,
+        memory_entities: dict[str, Any],
+    ):
+        result = _apply_interrupt_precheck_helper(
+            user_message=user_message,
+            dialog_state=dialog_state,
+            memory_entities=memory_entities,
+        )
+        if not getattr(result, "arbiter_needed", False):
+            return result
+        decision = await self._interrupt_arbiter_decision(
+            user_message=user_message,
+            dialog_state=dialog_state,
+        )
+        return _apply_interrupt_arbiter_decision_helper(
+            decision=decision,
+            user_message=user_message,
+            dialog_state=dialog_state,
+        )
+
+    async def _interrupt_arbiter_decision(
+        self,
+        *,
+        user_message: str,
+        dialog_state: DialogState,
+    ) -> str:
+        prompt = build_interrupt_arbiter_prompt(
+            user_message=user_message,
+            dialog_state=self._dialog_state_payload(dialog_state),
+        )
+        payload = await self._llm_json(prompt)
+        return _parse_interrupt_arbiter_payload_helper(payload)
+
+    @staticmethod
+    def _build_topic_switch_confirm_state(
+        *,
+        previous_state: DialogState,
+        pending_user_message: str,
+        continue_message: str = "",
+    ) -> DialogState:
+        return _build_topic_switch_confirm_state_helper(
+            previous_state=previous_state,
+            pending_user_message=pending_user_message,
+            continue_message=continue_message,
+        )
+
     @staticmethod
     def _new_session_id() -> str:
         return _new_session_id()
@@ -922,6 +925,10 @@ class FreeTalkAgent:
     @staticmethod
     def _candidate_rejected_question(target: str) -> str:
         return _candidate_rejected_question_helper(target)
+
+    @staticmethod
+    def _parse_candidate_confirmation_message(*, text: str, target: str):
+        return _parse_candidate_confirmation_message_helper(text, target=target)
 
     @staticmethod
     def _promote_confirmed_candidate(

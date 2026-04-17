@@ -1,7 +1,7 @@
 # Pipeline обработки диалогов и запросов Free Talk
 
-Статус: draft v0.1  
-Дата: 2026-04-12
+Статус: draft v0.2  
+Дата: 2026-04-17
 
 ## 1. Назначение
 
@@ -31,15 +31,18 @@
 В коде должны жить:
 
 1. канон слотов и entities;
-2. state transitions;
-3. topic shift detection;
-4. stale-state reset;
-5. source/task gating;
-6. adapter translation;
-7. capability checks;
-8. city support policy;
-9. derived flags вроде `availability_scope`;
-10. interpretation of backend fallback / unsupported / no-data.
+2. typed signal parsing;
+3. flow descriptor и active-flow semantics;
+4. state transitions;
+5. topic shift detection;
+6. stale-state reset;
+7. mixed utterance resolve;
+8. source/task gating;
+9. adapter translation;
+10. capability checks;
+11. city support policy;
+12. derived flags вроде `availability_scope`;
+13. interpretation of backend fallback / unsupported / no-data.
 
 ### 2.2 Что можно делегировать LLM
 
@@ -87,14 +90,47 @@ LLM не должна сама:
 Задачи:
 
 1. context guard / rollover guard;
-2. явные about-agent запросы;
-3. topic shift detection;
-4. stale-state reset, если новая реплика меняет домен;
-5. deterministic hints:
+2. global interrupt / flow-stop / hard-reset guard;
+3. flow-local deterministic handling для active flow:
+   - `uncertainty`
+   - `no_preference`
+   - partial tuples
+   - mixed utterances `flow_part -> switch_part`
+4. appointment precheck и другие domain-specific active-flow hooks;
+5. явные about-agent запросы;
+6. topic shift detection;
+7. stale-state reset, если новая реплика меняет домен;
+8. deterministic hints:
    - doctor follow-up
    - specialty list query
    - city unsupported signals
    - short contextual follow-ups
+
+Базовые runtime-owners этого этапа:
+
+1. `signal_parsers.py` — typed parser layer;
+2. `interrupt_policy.py` — global `interrupt/reset/topic_switch`;
+3. `flow_local_policy.py` — active-flow deterministic behavior;
+4. `appointment_policy.py` — domain-specific appointment precheck;
+5. `LLM-arbiter` — только ambiguity fallback поверх deterministic interrupt/topic-switch слоя.
+
+На этом этапе FT различает три разных reset-механизма:
+
+1. `interrupt_current_flow`
+   - очищает только текущий flow-state и flow-scoped memory;
+   - история и `session_id` сохраняются;
+2. `hard_reset_session`
+   - очищает всю FT-session;
+   - выдаёт новый `next_session_id`;
+3. `handoff_terminal_reset`
+   - также очищает всю FT-session;
+   - но запускается не по пользовательской stop-команде, а по terminal `handoff`.
+
+Отдельно:
+
+1. если детерминированный слой обнаруживает `topic_switch_candidate`, FT поднимает `topic_switch_confirm`;
+2. для нового вопроса сохраняется `pending_user_message`;
+3. для mixed `clarify/confirmation` допускается и `continue_message`, чтобы при отклонении topic switch вернуться не к старому вопросу буквально, а к уже подтверждённой или скорректированной части той же реплики.
 
 ## 3.3 Stage C: Router decision
 
@@ -143,6 +179,17 @@ LLM здесь не нужна.
 1. сохраняем новый `DialogState`;
 2. увеличиваем clarify count;
 3. возвращаем уточнение.
+
+Если flow остаётся активным, в `DialogState` дополнительно поддерживаются:
+
+1. `flow_active`
+2. `flow_kind`
+3. `flow_stage`
+4. `flow_interruptible`
+5. `flow_resume_question`
+6. `expected_slots`
+7. `flow_non_answer_count`
+8. `flow_non_answer_kind`
 
 LLM может участвовать только в формулировке вопроса, но не в самом решении, что данных недостаточно.
 

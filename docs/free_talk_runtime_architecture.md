@@ -1,7 +1,7 @@
 # Архитектура runtime Free Talk
 
-Статус: v0.2 (синхронизировано с кодом)  
-Дата: 2026-04-15
+Статус: v0.3 (синхронизировано с кодом)  
+Дата: 2026-04-17
 
 ## 1. Назначение
 
@@ -33,7 +33,7 @@ UI / API
   -> FreeTalkAgent facade in agent.py
   -> orchestrator.py
   -> routing_contract.py + routing_prompting.py + tool_planning.py
-  -> state / follow-up / memory / grounding / medical policies
+  -> signal_parsers.py + state / follow-up / memory / flow-local / grounding / medical policies
   -> adapter.py
   -> tool_dispatcher.py
   -> legacy services port / web search port
@@ -128,17 +128,22 @@ UI / API
 Назначение:
 
 - canonical dialog state lifecycle;
+- typed signal parsing;
 - follow-up / topic shift;
 - session memory reuse;
+- flow-local deterministic handling;
 - intent / candidate / catalog / grounding policy;
 - medical pre-tool и post-tool orchestration support.
 
 Текущие файлы:
 
 - [dialog_state.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/dialog_state.py)
+- [signal_parsers.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/signal_parsers.py)
 - [followup_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/followup_policy.py)
 - [memory_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/memory_policy.py)
+- [flow_local_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/flow_local_policy.py)
 - [intent_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/intent_policy.py)
+- [interrupt_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/interrupt_policy.py)
 - [candidate_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/candidate_policy.py)
 - [catalog_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/catalog_policy.py)
 - [routing_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/routing_policy.py)
@@ -146,6 +151,26 @@ UI / API
 - [medical_pretool_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/medical_pretool_policy.py)
 - [post_tool_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/post_tool_policy.py)
 - [medical_toolloop.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/medical_toolloop.py)
+
+Отдельно:
+
+- `signal_parsers.py` является source-of-truth для typed parsers:
+  - `yes/no`
+  - `date/time`
+  - `branch/city`
+  - `person-name`
+  - doctor/service references
+  - controlled mixed-utterance split
+- `flow_local_policy.py` является source-of-truth для active-flow deterministic поведения:
+  - `non-answer / uncertainty`
+  - `no preference`
+  - partial tuples
+  - repeated non-answer escalation
+  - mixed utterance `flow_part -> switch_part`
+- `interrupt_policy.py` является source-of-truth для пользовательского `stop/reset` поведения до router и до domain-specific flow;
+- он различает `interrupt_current_flow` и `hard_reset_session`;
+- `LLM-arbiter` используется только как ambiguity fallback поверх deterministic interrupt/topic-switch слоя;
+- `handoff` не относится к interrupt policy и завершается отдельным terminal finalizer в `orchestrator.py`.
 
 ### 3.7 Tool execution layer
 
@@ -210,8 +235,10 @@ UI / API
 | [adapter.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/adapter.py) | FT -> backend translation и нормализация ответа | Средняя | Ключевой core | Legacy naming остаётся только здесь |
 | [tool_dispatcher.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/tool_dispatcher.py) | Dispatcher | Низкая | Устойчив | Хороший узкий модуль |
 | [dialog_state.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/dialog_state.py) | Dialog state lifecycle | Средняя | Устойчив | Канон session/dialog state |
+| [signal_parsers.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/signal_parsers.py) | Typed parsers / mixed split helpers | Средняя | Устойчив | Source-of-truth для parser-layer |
 | [followup_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/followup_policy.py) | Follow-up / topic shift policy | Средняя | Устойчив | Детерминированная контекстная логика |
 | [memory_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/memory_policy.py) | Session entity memory rules | Средняя | Устойчив | Переиспользование сущностей между ходами |
+| [flow_local_policy.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/flow_local_policy.py) | Active-flow deterministic behavior | Средняя | Ключевой support-layer | `no preference`, partial tuples, mixed utterances, escalation |
 | [contracts.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/contracts.py) | Dataclasses | Низкая | Устойчив | Вероятно потребует расширения, не rewrite |
 | [memory_redis.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/memory_redis.py) | Session storage engine | Средняя | Устойчив | Нужна migration semantics, не rewrite engine |
 | [memory_persist.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/memory_persist.py) | Summary persistence | Низкая | Устойчив | Не первоочередной участок |
@@ -268,7 +295,9 @@ UI / API
 4. отдельные routing/prompting/planning модули;
 5. отдельные policy-модули для state, memory, grounding и medical flow;
 6. отдельный Redis-backed memory store и ports к external systems;
-7. единый handoff finalizer в `orchestrator.py`, который очищает FT-session полностью и ротирует `session_id`.
+7. единый parser-layer в `signal_parsers.py`;
+8. единый flow-local deterministic layer в `flow_local_policy.py`;
+9. единый handoff finalizer в `orchestrator.py`, который очищает FT-session полностью и ротирует `session_id`.
 
 То есть FT уже имеет рабочую многослойную структуру. Основная задача теперь не разукрупнение как таковое, а поддержание чистых границ между слоями.
 

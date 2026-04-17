@@ -52,6 +52,14 @@ class DialogState:
     last_tool: str = ""
     phase: str = ""
     open_question: str = ""
+    flow_active: bool = False
+    flow_kind: str = ""
+    flow_stage: str = ""
+    flow_interruptible: bool = False
+    flow_resume_question: str = ""
+    expected_slots: list[str] = field(default_factory=list)
+    flow_non_answer_count: int = 0
+    flow_non_answer_kind: str = ""
 
 
 @dataclass(slots=True)

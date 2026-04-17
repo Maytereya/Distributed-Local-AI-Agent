@@ -37,6 +37,38 @@ def _is_handoff_reply(reply: AgentReply) -> bool:
     return bool(str(payload.get("handoff_message") or "").strip())
 
 
+def _build_candidate_rejection_state(
+    agent: Any,
+    *,
+    intent: str,
+    entities: dict[str, Any],
+    candidate_entities: dict[str, Any],
+    confirmation_target: str,
+    tool_plan: list[str],
+    confidence: float,
+    effective_state: DialogState,
+) -> tuple[DialogState, str, dict[str, Any]]:
+    updated_candidates = dict(candidate_entities or {})
+    updated_candidates.pop(confirmation_target, None)
+    clarify_slots = agent._rejected_candidate_slots(confirmation_target)
+    clarify_text = agent._candidate_rejected_question(confirmation_target)
+    state = agent._build_clinical_state(
+        intent=intent,
+        entities=agent._public_entities(entities),
+        candidate_entities=updated_candidates,
+        confirmation_target="",
+        missing_slots=agent._merge_missing_slots([], clarify_slots),
+        clarify_type="identify",
+        tool_plan=tool_plan,
+        confidence=confidence,
+        clarify_count=max(1, int(effective_state.clarify_count or 0)),
+        last_tool=effective_state.last_tool,
+        phase="collecting",
+        open_question=clarify_text,
+    )
+    return state, clarify_text, updated_candidates
+
+
 async def chat(
     agent: Any,
     message: str,
@@ -89,49 +121,189 @@ async def chat(
     dialog_state = await agent._load_dialog_state(sid)
     remembered_doctor = await agent.memory.get_meta_str(sid, agent._last_doctor_name_key(), "")
     session_memory_entities = await agent._load_session_entity_memory(sid)
-    appointment_precheck = agent._appointment_precheck(
+    interrupt_precheck = await agent._interrupt_precheck(
         user_message=user_message,
         dialog_state=dialog_state,
         memory_entities=session_memory_entities,
     )
-    if getattr(appointment_precheck, "handled", False):
-        if getattr(appointment_precheck, "clear_state", False):
+    if getattr(interrupt_precheck, "handled", False):
+        if getattr(interrupt_precheck, "hard_reset", False):
+            await agent.memory.clear_session(sid)
+            next_session_id = str(getattr(interrupt_precheck, "next_session_id", "") or "").strip()
+            if not next_session_id:
+                next_session_id = agent._new_session_id()
+            log_event(
+                "freetalk_interrupt_session_reset",
+                level=logging.WARNING,
+                session_id=sid,
+                next_session_id=next_session_id,
+            )
+            return AgentReply(
+                text=str(getattr(interrupt_precheck, "reply_text", "") or "").strip(),
+                source="system",
+                next_session_id=next_session_id,
+            )
+        if getattr(interrupt_precheck, "clear_state", False):
             await agent._clear_dialog_state(sid)
-        clear_memory_keys = getattr(appointment_precheck, "clear_memory_keys", None)
+        clear_memory_keys = getattr(interrupt_precheck, "clear_memory_keys", None)
         if isinstance(clear_memory_keys, (list, tuple)) and clear_memory_keys:
             await agent._clear_session_entity_memory_keys(sid, clear_memory_keys)
-        elif getattr(appointment_precheck, "next_state", None) is not None:
-            await agent._save_dialog_state(sid, appointment_precheck.next_state)
-            await agent._save_session_entity_memory(sid, dict(appointment_precheck.next_state.entities or {}))
-        save_memory_entities = getattr(appointment_precheck, "save_memory_entities", None)
-        if isinstance(save_memory_entities, dict) and save_memory_entities:
-            await agent._save_session_entity_memory(sid, save_memory_entities)
-        reply = AgentReply(
-            text=str(getattr(appointment_precheck, "reply_text", "") or "").strip(),
-            source="clinic_data",
-            handoff=bool(getattr(appointment_precheck, "handoff", False)),
-        )
+        clear_meta_keys = getattr(interrupt_precheck, "clear_meta_keys", None)
+        if isinstance(clear_meta_keys, (list, tuple)) and clear_meta_keys:
+            for key in clear_meta_keys:
+                name = str(key or "").strip()
+                if not name:
+                    continue
+                await agent.memory.set_meta_str(sid, name, "")
+        reentry_message = str(getattr(interrupt_precheck, "reentry_message", "") or "").strip()
+        if getattr(interrupt_precheck, "next_state", None) is not None:
+            await agent._save_dialog_state(sid, interrupt_precheck.next_state)
+        if reentry_message:
+            dialog_state = await agent._load_dialog_state(sid)
+            remembered_doctor = await agent.memory.get_meta_str(sid, agent._last_doctor_name_key(), "")
+            dialog_act = await agent._build_dialog_act(
+                user_message=reentry_message,
+                context=context,
+                dialog_state=dialog_state,
+                remembered_doctor=remembered_doctor,
+            )
+            log_event(
+                "topic_switch_reentry",
+                session_id=sid,
+                intent=dialog_act.intent,
+                route=dialog_act.route,
+            )
+            reply = await agent._execute_dialog_act(
+                user_message=reentry_message,
+                context=context,
+                dialog_act=dialog_act,
+                dialog_state=dialog_state,
+            )
+        else:
+            reply = AgentReply(
+                text=str(getattr(interrupt_precheck, "reply_text", "") or "").strip(),
+                source="system",
+                next_session_id=str(getattr(interrupt_precheck, "next_session_id", "") or "").strip(),
+            )
     else:
-        dialog_act = await agent._build_dialog_act(
+        flow_local_precheck = agent._flow_local_precheck(
             user_message=user_message,
-            context=context,
             dialog_state=dialog_state,
-            remembered_doctor=remembered_doctor,
+            memory_entities=session_memory_entities,
         )
-        log_event(
-            "route_selected",
-            session_id=sid,
-            route=dialog_act.route,
-            intent=dialog_act.intent,
-            source=dialog_act.source,
-            fallback_reason=dialog_act.fallback_reason or "",
-        )
-        reply = await agent._execute_dialog_act(
-            user_message=user_message,
-            context=context,
-            dialog_act=dialog_act,
-            dialog_state=dialog_state,
-        )
+        if getattr(flow_local_precheck, "handled", False):
+            if getattr(flow_local_precheck, "clear_state", False):
+                await agent._clear_dialog_state(sid)
+            clear_memory_keys = getattr(flow_local_precheck, "clear_memory_keys", None)
+            if isinstance(clear_memory_keys, (list, tuple)) and clear_memory_keys:
+                await agent._clear_session_entity_memory_keys(sid, clear_memory_keys)
+            clear_meta_keys = getattr(flow_local_precheck, "clear_meta_keys", None)
+            if isinstance(clear_meta_keys, (list, tuple)) and clear_meta_keys:
+                for key in clear_meta_keys:
+                    name = str(key or "").strip()
+                    if not name:
+                        continue
+                    await agent.memory.set_meta_str(sid, name, "")
+            save_memory_entities = getattr(flow_local_precheck, "save_memory_entities", None)
+            if isinstance(save_memory_entities, dict) and save_memory_entities:
+                await agent._save_session_entity_memory(sid, save_memory_entities)
+            pending_topic_switch_message = str(
+                getattr(flow_local_precheck, "pending_topic_switch_message", "") or ""
+            ).strip()
+            if pending_topic_switch_message:
+                pending_continue_message = str(
+                    getattr(flow_local_precheck, "pending_continue_message", "") or ""
+                ).strip()
+                previous_state = (
+                    flow_local_precheck.next_state
+                    if getattr(flow_local_precheck, "next_state", None) is not None
+                    else dialog_state
+                )
+                confirm_state = agent._build_topic_switch_confirm_state(
+                    previous_state=previous_state,
+                    pending_user_message=pending_topic_switch_message,
+                    continue_message=pending_continue_message,
+                )
+                await agent._save_dialog_state(sid, confirm_state)
+                reply = AgentReply(
+                    text=str(confirm_state.open_question or "").strip(),
+                    source="system",
+                )
+            else:
+                if getattr(flow_local_precheck, "next_state", None) is not None:
+                    await agent._save_dialog_state(sid, flow_local_precheck.next_state)
+                if getattr(flow_local_precheck, "reprocess_current_message", False):
+                    dialog_state = await agent._load_dialog_state(sid)
+                    remembered_doctor = await agent.memory.get_meta_str(sid, agent._last_doctor_name_key(), "")
+                    dialog_act = await agent._build_dialog_act(
+                        user_message=user_message,
+                        context=context,
+                        dialog_state=dialog_state,
+                        remembered_doctor=remembered_doctor,
+                    )
+                    log_event(
+                        "flow_local_reentry",
+                        session_id=sid,
+                        intent=dialog_act.intent,
+                        route=dialog_act.route,
+                        flow_kind=str(dialog_state.flow_kind or ""),
+                    )
+                    reply = await agent._execute_dialog_act(
+                        user_message=user_message,
+                        context=context,
+                        dialog_act=dialog_act,
+                        dialog_state=dialog_state,
+                    )
+                else:
+                    reply = AgentReply(
+                        text=str(getattr(flow_local_precheck, "reply_text", "") or "").strip(),
+                        source="clinic_data",
+                        handoff=bool(getattr(flow_local_precheck, "handoff", False)),
+                    )
+        else:
+            appointment_precheck = agent._appointment_precheck(
+                user_message=user_message,
+                dialog_state=dialog_state,
+                memory_entities=session_memory_entities,
+            )
+            if getattr(appointment_precheck, "handled", False):
+                if getattr(appointment_precheck, "clear_state", False):
+                    await agent._clear_dialog_state(sid)
+                clear_memory_keys = getattr(appointment_precheck, "clear_memory_keys", None)
+                if isinstance(clear_memory_keys, (list, tuple)) and clear_memory_keys:
+                    await agent._clear_session_entity_memory_keys(sid, clear_memory_keys)
+                elif getattr(appointment_precheck, "next_state", None) is not None:
+                    await agent._save_dialog_state(sid, appointment_precheck.next_state)
+                    await agent._save_session_entity_memory(sid, dict(appointment_precheck.next_state.entities or {}))
+                save_memory_entities = getattr(appointment_precheck, "save_memory_entities", None)
+                if isinstance(save_memory_entities, dict) and save_memory_entities:
+                    await agent._save_session_entity_memory(sid, save_memory_entities)
+                reply = AgentReply(
+                    text=str(getattr(appointment_precheck, "reply_text", "") or "").strip(),
+                    source="clinic_data",
+                    handoff=bool(getattr(appointment_precheck, "handoff", False)),
+                )
+            else:
+                dialog_act = await agent._build_dialog_act(
+                    user_message=user_message,
+                    context=context,
+                    dialog_state=dialog_state,
+                    remembered_doctor=remembered_doctor,
+                )
+                log_event(
+                    "route_selected",
+                    session_id=sid,
+                    route=dialog_act.route,
+                    intent=dialog_act.intent,
+                    source=dialog_act.source,
+                    fallback_reason=dialog_act.fallback_reason or "",
+                )
+                reply = await agent._execute_dialog_act(
+                    user_message=user_message,
+                    context=context,
+                    dialog_act=dialog_act,
+                    dialog_state=dialog_state,
+                )
 
     if guard_state == guard.one_more_state and not reply.next_session_id:
         await agent.memory.set_meta_str(sid, guard.state_key, guard.awaiting_final_state)
@@ -401,15 +573,50 @@ async def medical_reply(
     confirmation_target = pretool.confirmation_target
     missing_slots = pretool.missing_slots
     state_clarify_type = pretool.state_clarify_type
-    if str(effective_state.phase or "").strip().lower() == "confirm_candidate" and confirmation_target:
-        confirm_decision = agent._yes_no_decision(user_message)
+    active_confirmation_target = str(effective_state.confirmation_target or "").strip()
+    active_candidate_entities = dict(effective_state.candidate_entities or {})
+    if str(effective_state.phase or "").strip().lower() == "confirm_candidate" and active_confirmation_target:
+        confirm_parse = agent._parse_candidate_confirmation_message(
+            text=user_message,
+            target=active_confirmation_target,
+        )
+        if confirm_parse.switch_message:
+            if confirm_parse.decision == "yes":
+                topic_previous_state = effective_state
+                continue_message = str(confirm_parse.continue_message or "Да").strip()
+            elif confirm_parse.decision == "no":
+                topic_previous_state, _, candidate_entities = _build_candidate_rejection_state(
+                    agent,
+                    intent=dialog_act.intent,
+                    entities=entities,
+                    candidate_entities=active_candidate_entities,
+                    confirmation_target=active_confirmation_target,
+                    tool_plan=tool_plan,
+                    confidence=dialog_act.confidence,
+                    effective_state=effective_state,
+                )
+                continue_message = str(confirm_parse.continue_message or "").strip()
+            else:
+                topic_previous_state = effective_state
+                continue_message = ""
+            topic_switch_state = agent._build_topic_switch_confirm_state(
+                previous_state=topic_previous_state,
+                pending_user_message=str(confirm_parse.switch_message or "").strip(),
+                continue_message=continue_message,
+            )
+            await agent._save_dialog_state(context.session_id, topic_switch_state)
+            await agent._save_session_entity_memory(context.session_id, entities)
+            return AgentReply(text=str(topic_switch_state.open_question or "").strip(), source="system")
+
+        confirm_decision = str(confirm_parse.decision or "").strip().lower()
         if confirm_decision == "yes":
             entities = agent._promote_confirmed_candidate(
                 entities=entities,
-                candidate_entities=candidate_entities,
-                target=confirmation_target,
+                candidate_entities=active_candidate_entities,
+                target=active_confirmation_target,
             )
-            candidate_entities.pop(confirmation_target, None)
+            candidate_entities = dict(active_candidate_entities or {})
+            candidate_entities.pop(active_confirmation_target, None)
             effective_state.phase = ""
             effective_state.open_question = ""
             effective_state.confirmation_target = ""
@@ -428,25 +635,43 @@ async def medical_reply(
             missing_slots = pretool.missing_slots
             state_clarify_type = pretool.state_clarify_type
         elif confirm_decision == "no":
-            candidate_entities.pop(confirmation_target, None)
-            clarify_slots = agent._rejected_candidate_slots(confirmation_target)
-            clarify_text = agent._candidate_rejected_question(confirmation_target)
+            rejected_state, clarify_text, candidate_entities = _build_candidate_rejection_state(
+                agent,
+                intent=dialog_act.intent,
+                entities=entities,
+                candidate_entities=active_candidate_entities,
+                confirmation_target=active_confirmation_target,
+                tool_plan=tool_plan,
+                confidence=dialog_act.confidence,
+                effective_state=effective_state,
+            )
+            correction_value = str(confirm_parse.correction_value or "").strip()
+            if correction_value:
+                await agent._save_dialog_state(context.session_id, rejected_state)
+                await agent._save_session_entity_memory(context.session_id, entities)
+                remembered_doctor = await agent.memory.get_meta_str(context.session_id, agent._last_doctor_name_key(), "")
+                correction_dialog_act = await agent._build_dialog_act(
+                    user_message=correction_value,
+                    context=context,
+                    dialog_state=rejected_state,
+                    remembered_doctor=remembered_doctor,
+                )
+                log_event(
+                    "medical_candidate_correction_reentry",
+                    session_id=context.session_id,
+                    intent=correction_dialog_act.intent,
+                    route=correction_dialog_act.route,
+                    target=active_confirmation_target,
+                )
+                return await agent._execute_dialog_act(
+                    user_message=correction_value,
+                    context=context,
+                    dialog_act=correction_dialog_act,
+                    dialog_state=rejected_state,
+                )
             await agent._save_dialog_state(
                 context.session_id,
-                agent._build_clinical_state(
-                    intent=dialog_act.intent,
-                    entities=agent._public_entities(entities),
-                    candidate_entities=candidate_entities,
-                    confirmation_target="",
-                    missing_slots=agent._merge_missing_slots([], clarify_slots),
-                    clarify_type="identify",
-                    tool_plan=tool_plan,
-                    confidence=dialog_act.confidence,
-                    clarify_count=max(1, int(effective_state.clarify_count or 0)),
-                    last_tool=effective_state.last_tool,
-                    phase="collecting",
-                    open_question=clarify_text,
-                ),
+                rejected_state,
             )
             await agent._save_session_entity_memory(context.session_id, entities)
             return AgentReply(text=clarify_text, source="clinic_data")

@@ -231,3 +231,58 @@ def build_post_tool_verifier_prompt(
         "JSON schema example:\n"
         f"{schema_text}\n"
     )
+
+
+def build_interrupt_arbiter_prompt(
+    *,
+    user_message: str,
+    dialog_state: dict[str, Any] | None,
+) -> str:
+    state = dialog_state if isinstance(dialog_state, dict) else {}
+    entities = state.get("entities") if isinstance(state.get("entities"), dict) else {}
+    expected_slots = state.get("expected_slots") if isinstance(state.get("expected_slots"), list) else []
+    compact_entities: dict[str, Any] = {}
+    for key in (
+        "doctor_name",
+        "specialty",
+        "service_name",
+        "test_name",
+        "branch_name",
+        "city",
+        "date",
+        "time",
+        "patient_name",
+        "result_surname",
+        "result_year_of_birth",
+        "result_analysis_code",
+        "result_analysis_number",
+    ):
+        value = str(entities.get(key) or "").strip()
+        if value:
+            compact_entities[key] = value
+    schema = {
+        "decision": "continue|correct|switch|interrupt|hard_reset|unknown",
+        "reason": "",
+    }
+    return (
+        "Ты interrupt/topic-switch arbiter для клинического диалога.\n"
+        "Твоя задача: классифицировать неоднозначную реплику пользователя при уже активном flow.\n"
+        "Нельзя менять state, очищать память или придумывать новый вопрос.\n"
+        "Верни только JSON без markdown.\n\n"
+        "Классы решения:\n"
+        "- continue: это продолжение текущего flow.\n"
+        "- correct: это корректировка текущего slot/entity внутри того же flow.\n"
+        "- switch: это новый вопрос, нужен confirm на переход к новой теме.\n"
+        "- interrupt: пользователь хочет остановить текущий сценарий.\n"
+        "- hard_reset: пользователь хочет очистить весь диалог.\n"
+        "- unknown: решение неясно.\n\n"
+        "Текущий flow:\n"
+        f"- flow_kind: {str(state.get('flow_kind') or '').strip() or '(нет)'}\n"
+        f"- flow_stage: {str(state.get('flow_stage') or '').strip() or '(нет)'}\n"
+        f"- open_question: {str(state.get('open_question') or '').strip() or '(нет)'}\n"
+        f"- expected_slots: {json.dumps(expected_slots, ensure_ascii=False)}\n"
+        f"- entities: {json.dumps(compact_entities, ensure_ascii=False)}\n\n"
+        f"Пользователь: {user_message}\n\n"
+        "JSON schema example:\n"
+        f"{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+    )

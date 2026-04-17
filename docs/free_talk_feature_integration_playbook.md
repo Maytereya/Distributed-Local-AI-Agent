@@ -1,7 +1,7 @@
 # Playbook внедрения новых функций Free Talk
 
-Статус: draft v0.1  
-Дата: 2026-04-14
+Статус: draft v0.2  
+Дата: 2026-04-17
 
 ## 1. Назначение
 
@@ -149,9 +149,10 @@
 Меняются:
 
 1. routing/task policy
-2. deterministic policy module
-3. prompts, если нужно
-4. tests
+2. `signal_parsers`, если появляются новые typed user signals
+3. deterministic policy module
+4. prompts, если нужно
+5. tests
 
 ### 4.4 Шаг 4. Определение code ownership
 
@@ -168,6 +169,7 @@
 5. fallback interpretation
 6. distance / scoring / sorting / nearest-match calculations
 7. privacy-sensitive data handling
+8. typed parsing и mixed-utterance resolution
 
 #### Что делает LLM
 
@@ -185,6 +187,7 @@ LLM не должна:
 3. решать, какие поля хранить в памяти;
 4. определять unsupported-city policy;
 5. строить payload для внешних сервисов по свободной логике.
+6. быть первым уровнем разбора для `interrupt/topic-switch/continuation/correction`, если это можно выразить deterministic parsers.
 
 ## 5. Standard extension points
 
@@ -260,7 +263,42 @@ Adapter не является местом для:
 
 Если новая функция не имеет явного rendering strategy, она считается недоделанной.
 
-## 5.6 Handoff rule
+## 5.6 Signal parser layer
+
+Если новая функция вводит новые typed user signals, она обязана сначала проверить общий parser-layer.
+
+Текущий source-of-truth:
+
+- [signal_parsers.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/src/localragagent/freetalk/signal_parsers.py)
+
+Правила:
+
+1. новый flow не должен писать локальные regex/helper для уже существующих signal types;
+2. общие parser-типы вроде `yes/no`, `date/time`, `branch/city`, `person-name`, doctor/service references и controlled mixed split живут только в общем parser-layer;
+3. локальные parsers допустимы только для genuinely domain-specific сигналов.
+
+## 5.7 Active flow contract
+
+Если новая функция запускает активный многоходовый flow, она обязана заполнять единый `flow_descriptor`.
+
+Текущий контракт:
+
+1. `flow_active`
+2. `flow_kind`
+3. `flow_stage`
+4. `flow_interruptible`
+5. `flow_resume_question`
+6. `expected_slots`
+7. `flow_non_answer_count`
+8. `flow_non_answer_kind`
+
+Практический смысл:
+
+1. `interrupt_policy.py` не должен знать имена всех будущих flow;
+2. `flow_local_policy.py` должен понимать continuation/correction/non-answer по общему контракту;
+3. новые flow не должны держать stop/topic-switch semantics в ad hoc флагах.
+
+## 5.8 Handoff rule
 
 Если новая функция может завершаться `handoff`-сценарием, это должно считаться terminal state для FT.
 
@@ -291,6 +329,30 @@ Adapter не является местом для:
 4. все эти сигналы должны сводиться к одному общему handoff finalizer в `orchestrator.py`;
 5. finalizer обязан вызвать полный `clear_session(session_id)` и выдать новый `next_session_id`.
 
+## 5.9 Interrupt and reset rule
+
+Если новая функция запускает многоходовый flow, она обязана быть совместима с общим FT interrupt/reset layer.
+
+Обязательное различие:
+
+1. `interrupt_current_flow`
+   - останавливает только текущую процедуру;
+   - очищает `dialog_state` и flow-scoped memory;
+   - не очищает весь диалог и не ротирует `session_id`;
+2. `hard_reset_session`
+   - очищает всю FT-session;
+   - выдаёт новый `next_session_id`;
+3. `handoff_terminal_reset`
+   - также очищает всю FT-session;
+   - но является terminal состоянием, а не обычной пользовательской stop-командой.
+
+Следствие для новых фич:
+
+1. общие stop-фразы пользователя не должны обрабатываться локально внутри одной фичи, если в FT уже есть общий interrupt layer;
+2. фича может иметь свои domain-specific cancel/reschedule intents, но не должна дублировать глобальный `stop/reset`;
+3. новый flow должен иметь корректный `resume_question`, если interrupt-confirm был отклонён пользователем.
+4. mixed utterances должны переиспользовать существующий `topic_switch_confirm` path, а не строить отдельный конкурентный router.
+
 ## 6. Обязательные запреты
 
 При добавлении новых функций запрещено:
@@ -320,6 +382,8 @@ Adapter не является местом для:
 2. Выбрана правильная точка расширения.
 3. Новая логика не усиливает перегрузку orchestrator.
 4. Sensitive data handling продумана.
+5. Если добавлен новый active flow, он заполняет `flow_descriptor`.
+6. Если добавлены новые typed signals, они либо переиспользуют общий parser-layer, либо явно обоснованы как domain-specific.
 
 ### 7.3 Testing checklist
 
@@ -329,6 +393,7 @@ Adapter не является местом для:
 4. Есть regression-case на failure mode.
 5. Протестирован topic shift рядом с новой фичей.
 6. Если есть `handoff`, есть тест на полный reset FT-session и ротацию `session_id`.
+7. Если фича многоходовая, есть тесты на `interrupt/reset`, `no_preference` и mixed utterance рядом с ней.
 
 ## 8. Пример: nearest branch by user address
 

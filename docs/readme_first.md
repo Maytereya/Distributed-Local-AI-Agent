@@ -27,17 +27,23 @@
 ### `free_talk_runtime_architecture.md`
 - Карта текущей архитектуры FT.
 - Объясняет, из каких модулей состоит FT runtime и за что отвечает каждый слой.
+- Здесь зафиксированы актуальные runtime-ядра: `orchestrator.py`, `signal_parsers.py`, `flow_local_policy.py`, `interrupt_policy.py`, `adapter.py`.
 - Нужен, когда разработчик пытается понять структуру кода до чтения самих модулей.
 
 ### `free_talk_data_registry.md`
 - Реестр основных типов данных FT.
-- Фиксирует `missing slots`, нормализованные сущности, флаги и смысл полей.
+- Фиксирует `missing slots`, нормализованные сущности, flow-state поля и смысл ключей в runtime.
 - Это основной источник истины по названиям и семантике данных внутри FT.
 
 ### `free_talk_processing_pipeline.md`
 - Описание потока обработки запроса в обе стороны.
 - Показывает, что делает код детерминированно, а что делегируется LLM.
 - Здесь же зафиксирован общий `handoff finalization` path: полный reset FT-session и выдача нового `session_id`.
+- Здесь же описаны:
+  - общий pre-routing interrupt/reset layer;
+  - `flow_local_policy` для active flow;
+  - mixed utterance resolve;
+  - `topic_switch_confirm` и re-entry.
 - Нужен, когда нужно понять, где должна жить логика: в коде, в prompt или в adapter.
 
 ### `free_talk_translation_rules.md`
@@ -54,12 +60,20 @@
 - Правила внедрения нового функционала в FT. Важнейший документ. Показывай его агенту, когда планируешь добавить новый функционал.
 - Объясняет, как классифицировать новую фичу, куда её встраивать и какие документы/тесты обновлять.
 - В том числе фиксирует обязательное правило: любой `handoff` в FT должен проходить через общий session-reset path.
+- И отдельно фиксирует:
+  - как новая фича должна сосуществовать с общим `interrupt/reset` слоем;
+  - когда нужно использовать общий `signal_parsers` layer;
+  - как новый active flow обязан заполнять `flow_descriptor`.
 - Это operational guide для разработчиков.
 
 ### `free_talk_refactor_plan.md`
 - План структурного рефакторинга FT.
 - Нужен для понимания, как проект переходил от старой структуры к новой и какие этапы были запланированы.
 - Сейчас это документ о траектории изменений, а не о runtime-контракте. То есть исторический.
+
+Важно:
+- отдельный временный dev-документ по `signal_parsers` больше не нужен;
+- его результаты уже сведены в `free_talk_runtime_architecture.md`, `free_talk_processing_pipeline.md`, `free_talk_data_registry.md` и `free_talk_feature_integration_playbook.md`.
 
 ## Общие документы по пакету и backend
 

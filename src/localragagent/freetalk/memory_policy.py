@@ -5,11 +5,21 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from .contracts import DialogState
-from .followup_policy import DOCTOR_ANAPHORA_RE
+from .dialog_state import SESSION_MEMORY_ENTITY_KEYS
 from .observability import log_event
+from .signal_parsers import DOCTOR_ANAPHORA_RE
 
 
 LAST_DOCTOR_NAME_KEY = "last_doctor_name"
+FLOW_SCOPED_META_KEYS: tuple[str, ...] = (LAST_DOCTOR_NAME_KEY,)
+
+
+def flow_scoped_memory_keys() -> tuple[str, ...]:
+    return tuple(SESSION_MEMORY_ENTITY_KEYS)
+
+
+def flow_scoped_meta_keys() -> tuple[str, ...]:
+    return FLOW_SCOPED_META_KEYS
 
 
 def extract_primary_doctor_name(tool_name: str, payload: dict[str, Any]) -> str:

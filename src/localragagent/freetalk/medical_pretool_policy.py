@@ -151,6 +151,13 @@ def build_clinical_state(
     phase: str,
     open_question: str,
 ) -> DialogState:
+    flow_active, flow_kind, flow_stage = _clinical_flow_descriptor(
+        intent=intent,
+        confirmation_target=confirmation_target,
+        missing_slots=missing_slots,
+        phase=phase,
+        open_question=open_question,
+    )
     return DialogState(
         route="clinical",
         intent=intent,
@@ -166,6 +173,12 @@ def build_clinical_state(
         last_tool=str(last_tool or ""),
         phase=str(phase or ""),
         open_question=str(open_question or ""),
+        flow_active=flow_active,
+        flow_kind=flow_kind,
+        flow_stage=flow_stage,
+        flow_interruptible=flow_active,
+        flow_resume_question=str(open_question or "") if flow_active else "",
+        expected_slots=[str(slot).strip() for slot in list(missing_slots or []) if str(slot).strip()],
     )
 
 
@@ -175,3 +188,25 @@ def rejected_candidate_slots(target: str) -> list[str]:
     if target == "service_name":
         return ["service_or_analysis_name"]
     return []
+
+
+def _clinical_flow_descriptor(
+    *,
+    intent: str,
+    confirmation_target: str,
+    missing_slots: list[str],
+    phase: str,
+    open_question: str,
+) -> tuple[bool, str, str]:
+    target = str(confirmation_target or "").strip()
+    phase_value = str(phase or "").strip().lower()
+    active = bool(target or list(missing_slots or []) or phase_value or str(open_question or "").strip())
+    if not active:
+        return False, "", ""
+    if phase_value == "confirm_candidate" or target:
+        return True, "confirmation", "confirm"
+    if str(intent or "").strip().lower() == "test_result":
+        return True, "result_lookup", "collecting"
+    if phase_value in {"collecting", "post_tool", "post_not_found"} or list(missing_slots or []):
+        return True, "clarify", "collecting"
+    return True, "clarify", phase_value or "collecting"

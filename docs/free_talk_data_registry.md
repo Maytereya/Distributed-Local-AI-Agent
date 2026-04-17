@@ -1,24 +1,22 @@
 # Реестр данных Free Talk
 
-Статус: draft v0.1  
-Дата: 12.04.2026
+Статус: draft v0.2  
+Дата: 17.04.2026
 
 ## 1. Зачем нужен этот документ
 
-Этот документ фиксирует три разных слоя данных в FT (Free talk conversation mode):
+Этот документ фиксирует четыре разных слоя данных в FT:
 
-1. `Missing Slots Layer`  
-   Чего именно не хватает, чтобы продолжить диалог и задать корректное уточнение.
-2. `Normalized Entities Layer`  
-   Какие нормализованные данные уже собраны в рамках FT-диалога.
-3. `Adapter/Backend Mapping Layer`  
-   Как данные FT переводятся в контракт адаптера (является частью пакета FT) и дальше в legacy backend `messengers_router/services.py`.
+1. `Missing Slots Layer`
+2. `Normalized Entities Layer`
+3. `Flow / Dialog State Layer`
+4. `Adapter / Backend Mapping Layer`
 
 Главная цель:
 
 - не смешивать `missing_slots` с реальными `entities`;
-- не пропускать в state произвольные названия слотов от LLM;
-- явно описать перевод из human-facing терминов FT в legacy поля backend.
+- не смешивать runtime-state активного flow с пользовательскими сущностями;
+- явно описать перевод из human-facing терминов FT в adapter/backend contract.
 
 Связанные документы:
 
@@ -32,43 +30,19 @@
 
 ### 2.1 Missing slots
 
-`missing_slots` — это не контейнер данных, а только короткие ярлыки нехватки информации.
-
-Пример:
-
-```json
-{
-  "missing_slots": ["specialty"],
-  "entities": {}
-}
-```
-
-После ответа пользователя:
-
-```json
-{
-  "missing_slots": [],
-  "entities": {
-    "specialty": "уролог"
-  }
-}
-```
+`missing_slots` — это не контейнер данных, а только ярлыки нехватки информации для user-facing уточнения.
 
 ### 2.2 Normalized entities
 
-`entities` — это уже собранные и нормализованные данные, которые можно передавать в tools.
+`entities` — это уже собранные и нормализованные данные, которые можно передавать в tools или использовать в orchestration.
 
-### 2.3 Mapping
+### 2.3 Flow state
 
-`mapping` — это не свободная динамическая структура.
+`flow descriptor` — это runtime-state активного сценария. Это не `missing_slots` и не `entities`.
 
-Это детерминированный перевод:
+### 2.4 Mapping
 
-- из user-facing имен FT;
-- в adapter-facing поля;
-- затем в legacy backend ключи.
-
-То есть:
+`mapping` — это детерминированный перевод:
 
 `FT entity -> adapter entity -> backend argument`
 
@@ -82,10 +56,12 @@
 4. `branch_or_city`
 5. `date`
 6. `time`
-7. `result_surname`
-8. `result_year_of_birth`
-9. `result_analysis_code`
-10. `result_analysis_number`
+7. `appointment_action`
+8. `patient_name`
+9. `result_surname`
+10. `result_year_of_birth`
+11. `result_analysis_code`
+12. `result_analysis_number`
 
 ### 3.1 Семантика missing slots
 
@@ -93,32 +69,13 @@
 
 Не хватает данных, чтобы однозначно выбрать конкретного врача.
 
-Примеры:
-
-- `Дай информацию по врачу Иванову`
-- `Покажи расписание Дразнина`
-
-Если фамилия неоднозначна, FT уточняет имя/отчество до уровня, достаточного для выбора врача.
-
 #### `specialty`
 
 Не хватает специальности врача.
 
-Примеры:
-
-- `Покажи всех врачей`
-- `К кому обратиться с натоптышем?`
-
-После уточнения slot закрывается значением вроде `уролог`, `дерматовенеролог`, `хирург`.
-
 #### `service_or_analysis_name`
 
 Не хватает названия услуги, процедуры или анализа.
-
-Примеры:
-
-- `Сколько стоит это исследование?`
-- `Как подготовиться к анализу?`
 
 #### `branch_or_city`
 
@@ -132,28 +89,40 @@
 
 Особое правило FT:
 
-- для данных врачей/записи clinic API считается доступным только по Самаре;
-- если пользователь спрашивает про другой город, FT должен честно сообщить это, а не продолжать doctor-schedule flow как будто данные есть.
+- для doctor-related clinic API данные считаются поддерживаемыми только по Самаре;
+- если пользователь спрашивает про другой город, FT должен честно сообщить это, а не продолжать doctor flow как будто данные есть.
 
 #### `date`
 
 Не хватает даты или диапазона дат.
 
-Примеры:
-
-- `на следующей неделе`
-- `на 15 апреля`
-- `в ближайшие дни`
-
 #### `time`
 
 Не хватает времени суток или временного интервала.
 
+#### `appointment_action`
+
+Не хватает типа действия в appointment-flow.
+
 Примеры:
 
-- `утром`
-- `после 18:00`
-- `во второй половине дня`
+- `записаться`
+- `перенести`
+- `отменить`
+
+Важно:
+
+- это slot только для сценария записи;
+- вне appointment-domain не должен появляться в `missing_slots`.
+
+#### `patient_name`
+
+Не хватает ФИО пациента для записи.
+
+Важно:
+
+- это user-facing slot appointment-domain;
+- это не doctor name и не произвольная person entity.
 
 #### `result_surname`
 
@@ -167,26 +136,16 @@
 
 Не хватает кода анализа в пользовательском формате.
 
-Пример:
-
-- `Бг`
-
 Важно:
 
-- в FT это называется именно `код анализа`, потому что так это выглядит в user-facing контракте;
+- в FT это называется именно `код анализа`;
 - внутри legacy backend это сейчас уходит в поле `filial`.
 
 #### `result_analysis_number`
 
 Не хватает номера анализа в пользовательском формате.
 
-Пример:
-
-- `1234`
-
 ## 4. Normalized Entities Layer
-
-Базовый список нормализованных сущностей FT:
 
 ### 4.1 Doctor domain
 
@@ -204,17 +163,10 @@
 
 Это модификатор базовой услуги, который обычно появляется в коротком follow-up сообщении.
 
-Примеры:
-
-- `с наркозом`
-- `под седацией`
-- `без контраста`
-
 Важно:
 
 - `service_variant` не считается самостоятельной услугой;
-- он дополняет уже выбранную `service_name`;
-- на текущем этапе FT склеивает `remembered_service + service_variant` и пытается повторно разрешить итоговую формулировку через каталог.
+- он дополняет уже выбранную `service_name`.
 
 ### 4.3 Location / schedule filters
 
@@ -227,14 +179,12 @@
 7. `time_from`
 8. `time_to`
 
-#### Пояснение по локации
+На уровне FT canonical entities храним только:
 
-На уровне FT canonical entities intentionally храним только:
+- `branch_name`
+- `city`
 
-- `branch_name` — конкретный филиал/площадка;
-- `city` — городской фильтр.
-
-Низкоуровневые или legacy-варианты вроде `branch` и `region` остаются adapter/backend-слоем и не должны раздувать основной FT-контракт.
+Legacy-варианты вроде `branch` и `region` остаются adapter/backend-слоем.
 
 ### 4.4 Test result domain
 
@@ -243,11 +193,53 @@
 3. `result_analysis_code`
 4. `result_analysis_number`
 
-## 5. Source / Task Flags
+### 4.5 Appointment domain
 
-Это не missing slots и не entities. Это отдельный слой управления ходом ответа.
+1. `appointment_action`
+2. `patient_name`
+3. `appointment_windows`
+4. `appointment_branch_options`
 
-### 5.1 `source_mode`
+#### `appointment_windows`
+
+Это нормализованный список доступных окон записи, который FT получает из schedule payload и удерживает в active flow.
+
+#### `appointment_branch_options`
+
+Это нормализованный список филиалов, подходящих для записи или связанного адресного уточнения.
+
+## 5. Flow / Dialog State Layer
+
+Это отдельный runtime-layer активного сценария. Он не должен смешиваться с `missing_slots` и `entities`.
+
+Базовые поля:
+
+1. `flow_active`
+2. `flow_kind`
+3. `flow_stage`
+4. `flow_interruptible`
+5. `flow_resume_question`
+6. `expected_slots`
+7. `flow_non_answer_count`
+8. `flow_non_answer_kind`
+
+### 5.1 Зачем нужен flow descriptor
+
+Flow descriptor нужен, чтобы FT:
+
+- одинаково обрабатывал active flows без списка `is_active_*` функций;
+- умел deterministic различать `same_flow_continuation`, `slot_correction`, `topic_switch_candidate`;
+- централизованно применял `interrupt`, `topic switch`, `no preference` и repeated non-answer policy.
+
+### 5.2 Что важно
+
+- owner этих полей находится в runtime/state слое FT;
+- любой новый многоходовый flow обязан заполнять этот descriptor;
+- `handoff` и `hard reset` должны очищать его полностью вместе с остальным session-state.
+
+## 6. Source / Task Flags
+
+### 6.1 `source_mode`
 
 Возможные значения:
 
@@ -257,7 +249,7 @@
 4. `self_knowledge`
 5. `mixed`
 
-### 5.2 `task_mode`
+### 6.2 `task_mode`
 
 Возможные значения:
 
@@ -268,30 +260,23 @@
 5. `compare`
 6. `analyze`
 
-Примеры:
+## 7. Adapter / Backend Mapping Layer
 
-- `Поищи это в интернете` -> `source_mode=web`, `task_mode=lookup`
-- `Что ты сам об этом думаешь?` -> `source_mode=self_knowledge`, `task_mode=explain|analyze`
-- `К какому врачу лучше обратиться с натоптышем?` -> `source_mode=mixed`, `task_mode=recommend`
-- `Какие анализы есть на холестерин?` -> `source_mode=clinic_api`, `task_mode=lookup`
-
-## 6. Adapter / Backend Mapping Layer
-
-### 6.1 Общий принцип
+### 7.1 Общий принцип
 
 FT работает с user-facing именами.  
-Адаптер переводит их в legacy-имена backend.
+Адаптер переводит их в backend-facing и legacy-имена.
 
-### 6.2 Mapping для результатов анализов
+### 7.2 Mapping для результатов анализов
 
-#### FT user-facing entities
+FT user-facing entities:
 
 1. `result_surname`
 2. `result_year_of_birth`
 3. `result_analysis_code`
 4. `result_analysis_number`
 
-#### Adapter-facing translation
+Adapter-facing translation:
 
 ```json
 {
@@ -302,43 +287,49 @@ FT работает с user-facing именами.
 }
 ```
 
-#### Legacy backend usage
+### 7.3 Mapping для локации
 
-Сейчас `messengers_router/services.py` вызывает:
-
-- `test_result_status(query, entities)`
-- внутри `_extract_result_query_fields(...)`
-- затем `site_result_for_patient(surname, year, filial, number, ...)`
-
-Ссылки:
-
-- [services.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/messengers_router/services.py#L6926)
-- [services.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/messengers_router/services.py#L2124)
-- [api_nayka.py](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/agent_logic_2/nayka_api/api_nayka.py#L852)
-
-### 6.3 Mapping для локации
-
-#### FT user-facing slot
+FT user-facing slot:
 
 - `branch_or_city`
 
-#### Нормализованные FT entities 
+Нормализованные FT entities:
+
 - `branch_name`
 - `city`
 
-#### Adapter behavior
+Adapter behavior:
 
-1. Если пользователь указал филиал Самары:
-   переводим в `branch_name`.
-2. Если пользователь указал `Самара`:
-   переводим в `city=Самара`.
-3. Если пользователь город не указал:
-   по doctor-related clinic API считаем рабочим default `city=Самара`, но не обязаны записывать это как явную user entity.
-4. Если пользователь указал другой город:
-   не пытаемся слепо звать doctor scheduling API;
-   FT должен честно сообщить, что данные clinic API по врачам/записи ограничены Самарой.
+1. если пользователь указал филиал Самары, переводим в `branch_name`;
+2. если пользователь указал `Самара`, переводим в `city=Самара`;
+3. если пользователь указал другой город, не пытаемся слепо звать doctor scheduling API.
 
-## 7. Что НЕ должно попадать в Missing Slots
+### 7.4 Mapping для appointment-domain
+
+FT user-facing entities:
+
+1. `appointment_action`
+2. `doctor_name`
+3. `specialty`
+4. `branch_name`
+5. `city`
+6. `date`
+7. `time`
+8. `patient_name`
+
+Adapter behavior:
+
+1. appointment-flow не создаёт отдельный booking backend tool;
+2. FT использует существующие tools:
+   - `doctors_schedule_week`
+   - `doctors_info`
+   - `address_info`
+3. adapter нормализует:
+   - `appointment_windows`
+   - `appointment_branch_options`
+4. terminal completion записи сейчас завершается `handoff`, а не прямым booking API.
+
+## 8. Что НЕ должно попадать в Missing Slots
 
 Следующие названия считаются слишком низкоуровневыми или legacy-специфичными для FT-слоя и не должны жить в `missing_slots`:
 
@@ -360,26 +351,18 @@ FT работает с user-facing именами.
 
 но не как user-facing clarifying slots.
 
-## 8. Открытые вопросы
+## 9. Открытые вопросы
 
-1. Стоит ли для doctor disambiguation в FT использовать отдельную сущность `doctor_surname`, а не только `surname`?
-Решение: да. Используем `doctor_surname` и `result_surname` как разные доменные сущности.
-2. Следует ли backend `test_result_status` со временем переименовать с legacy пары `filial/number` в человеко-понятные `analysis_code/analysis_number`?
-Решение: да, но только после отдельной аккуратной миграции adapter/backend contract.
-3. Нужен ли один boolean-флаг вроде `not_Samara_supported` для городовых ограничений?
-Решение: нет. Нужна capability matrix по доменам/инструментам, потому что поддержка города зависит от сценария:
-- doctor schedule;
-- doctor info;
-- address info;
-- results;
-- service lookup.
-4. У нас пока нет полного и исчерпывающего списка возможностей извлечения бизнес-данных из `services.py` / `api_nayka.py` для построения полной карты FT.
-Решение: да. Для этого введен отдельный документ:
-- [free_talk_capability_matrix.md](/Users/rakhmanov/PycharmProjects/LocalRAGagent0.1/docs/free_talk_capability_matrix.md)
+1. Стоит ли для doctor disambiguation использовать отдельную сущность `doctor_surname`, а не только `surname`?  
+Решение: да.
+2. Следует ли backend `test_result_status` со временем переименовать legacy-пару `filial/number` в человеко-понятные `analysis_code/analysis_number`?  
+Решение: да, но только после отдельной миграции adapter/backend contract.
+3. Нужен ли один boolean-флаг для городовых ограничений?  
+Решение: нет. Нужна capability matrix по доменам и инструментам.
 
-## 9. Mapping examples
+## 10. Mapping examples
 
-### 9.1 Результаты анализов
+### 10.1 Результаты анализов
 
 Пользователь пишет:
 
@@ -407,12 +390,7 @@ Adapter translation:
 }
 ```
 
-Legacy backend:
-
-- `test_result_status(query, entities)`
-- `site_result_for_patient(surname, year, filial, number, ...)`
-
-### 9.2 Смена темы с врача на специальность
+### 10.2 Смена темы с врача на специальность
 
 История:
 
@@ -423,15 +401,40 @@ Legacy backend:
 
 - не тащить старый `doctor_name` в новый specialty-query;
 - сбросить doctor-specific clarify-state;
-- заполнить:
+- вызвать `doctors_info`, а не `doctors_schedule_week`.
+
+### 10.3 Appointment flow
+
+Пользователь пишет:
+
+`Хочу записаться к Трубину на 16 апреля, 09:00`
+
+FT normalized entities:
 
 ```json
 {
-  "missing_slots": [],
-  "entities": {
-    "specialty": "уролог"
-  }
+  "appointment_action": "book",
+  "doctor_name": "Трубин Алексей Юрьевич",
+  "date": "2026-04-16",
+  "time": "09:00"
 }
 ```
 
-а затем вызвать `doctors_info`, а не `doctors_schedule_week`.
+FT runtime state:
+
+```json
+{
+  "flow_active": true,
+  "flow_kind": "appointment",
+  "flow_stage": "collecting",
+  "flow_interruptible": true,
+  "flow_resume_question": "Сообщите, пожалуйста, ваше ФИО для записи.",
+  "expected_slots": ["patient_name"]
+}
+```
+
+Дальше FT:
+
+- удерживает `appointment_windows` и `appointment_branch_options`;
+- дособирает `patient_name`;
+- завершает сценарий через terminal `handoff`.

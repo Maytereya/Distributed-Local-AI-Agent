@@ -14,6 +14,7 @@ from localragagent.freetalk.agent import FreeTalkAgent
 from localragagent.freetalk.routing_contract import ClinicalDecision
 from localragagent.freetalk.config import FreeTalkConfig
 from localragagent.freetalk.contracts import DialogState, SessionContext
+from localragagent.freetalk.dialog_state import dialog_state_from_payload, dialog_state_payload
 
 
 def _cfg() -> FreeTalkConfig:
@@ -231,6 +232,123 @@ class ResultDialogAgent(FreeTalkAgent):
         return ""
 
 
+class PartialTupleResultAgent(FreeTalkAgent):
+    async def _route_clinical_decision(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        dialog_state: DialogState,
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        _ = context, dialog_state, remembered_doctor
+        text = str(user_message or "").strip().lower()
+        if "результат" in text:
+            return ClinicalDecision(
+                intent="test_result",
+                confidence=0.93,
+                entities={},
+                missing_slots=[
+                    "result_surname",
+                    "result_year_of_birth",
+                    "result_analysis_code",
+                    "result_analysis_number",
+                ],
+                clarify_question="Для проверки результата уточните: фамилию пациента, год рождения, код анализа, номер анализа.",
+                tool_plan=["test_result_status"],
+                source="test",
+            )
+        return ClinicalDecision(
+            intent="unknown",
+            confidence=0.15,
+            entities={},
+            missing_slots=[],
+            clarify_question="",
+            tool_plan=[],
+            source="test",
+        )
+
+    async def _llm_json(self, prompt: str) -> dict[str, object]:
+        _ = prompt
+        return {}
+
+    async def _llm_text(self, prompt: str) -> str:
+        _ = prompt
+        return ""
+
+
+class MixedResultServices(ResultServices):
+    async def doctors_info(self, query: str, entities: dict[str, object]) -> dict[str, object]:
+        _ = query, entities
+        return {
+            "doctors": [
+                {"fio": "Трубин Алексей Юрьевич", "specialization": "Уролог"},
+                {"fio": "Вахобов Абдуджалол Нозимович", "specialization": "Уролог"},
+            ],
+            "note": "doctors_info",
+        }
+
+    def tool_handlers(self, *, include_meili_tools: bool) -> dict[str, object]:
+        handlers = super().tool_handlers(include_meili_tools=include_meili_tools)
+        handlers["doctors_info"] = self.doctors_info
+        return handlers
+
+
+class MixedResultAgent(FreeTalkAgent):
+    async def _route_clinical_decision(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        dialog_state: DialogState,
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        _ = context, dialog_state, remembered_doctor
+        text = str(user_message or "").strip().lower()
+        if "результат" in text:
+            return ClinicalDecision(
+                intent="test_result",
+                confidence=0.93,
+                entities={},
+                missing_slots=[
+                    "result_surname",
+                    "result_year_of_birth",
+                    "result_analysis_code",
+                    "result_analysis_number",
+                ],
+                clarify_question="Для проверки результата уточните: фамилию пациента, год рождения, код анализа, номер анализа.",
+                tool_plan=["test_result_status"],
+                source="test",
+            )
+        if "уролог" in text:
+            return ClinicalDecision(
+                intent="doctor_info",
+                confidence=0.95,
+                entities={"specialty": "уролог"},
+                missing_slots=[],
+                clarify_question="",
+                tool_plan=["doctors_info"],
+                source="test",
+            )
+        return ClinicalDecision(
+            intent="unknown",
+            confidence=0.15,
+            entities={},
+            missing_slots=[],
+            clarify_question="",
+            tool_plan=[],
+            source="test",
+        )
+
+    async def _llm_json(self, prompt: str) -> dict[str, object]:
+        _ = prompt
+        return {}
+
+    async def _llm_text(self, prompt: str) -> str:
+        _ = prompt
+        return ""
+
+
 def test_dialog_state_accumulates_result_slots_across_turns():
     memory = InMemoryMemory()
     services = ResultServices()
@@ -255,9 +373,27 @@ def test_dialog_state_accumulates_result_slots_across_turns():
         "result_analysis_code",
         "result_analysis_number",
     }
+    assert state1["flow_active"] is True
+    assert state1["flow_kind"] == "result_lookup"
+    assert state1["flow_stage"] == "collecting"
+    assert set(state1["expected_slots"]) == {
+        "result_surname",
+        "result_year_of_birth",
+        "result_analysis_code",
+        "result_analysis_number",
+    }
 
     reply2 = asyncio.run(agent.chat("Иванов", session_id))
     assert "год рождения" in reply2.text.lower()
+    state2 = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
+    assert state2["flow_active"] is True
+    assert state2["flow_kind"] == "result_lookup"
+    assert state2["flow_stage"] == "collecting"
+    assert set(state2["expected_slots"]) == {
+        "result_year_of_birth",
+        "result_analysis_code",
+        "result_analysis_number",
+    }
 
     state2 = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
     assert state2["entities"]["result_surname"] == "Иванов"
@@ -275,6 +411,157 @@ def test_dialog_state_accumulates_result_slots_across_turns():
     assert services.last_entities["filial"] == "Бг"
     assert services.last_entities["number"] == "12345"
     assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
+
+
+def test_flow_local_partial_result_tuple_accumulates_without_llm_second_turn():
+    memory = InMemoryMemory()
+    services = ResultServices()
+    agent = PartialTupleResultAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "result_partial_tuple_dialog"
+
+    reply1 = asyncio.run(agent.chat("Проверь результат анализа", session_id))
+    assert "фамилию пациента" in reply1.text.lower()
+
+    reply2 = asyncio.run(agent.chat("Иванов, 1990", session_id))
+    assert "код анализа" in reply2.text.lower()
+    assert "номер анализа" in reply2.text.lower()
+
+    state2 = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
+    assert state2["entities"]["result_surname"] == "Иванов"
+    assert state2["entities"]["result_year_of_birth"] == "1990"
+    assert set(state2["missing_slots"]) == {
+        "result_analysis_code",
+        "result_analysis_number",
+    }
+
+    reply3 = asyncio.run(agent.chat("Бг, 12345", session_id))
+    assert reply3.tool_name == "test_result_status"
+    assert "результат готов" in reply3.text.lower()
+    assert services.last_entities["surname"] == "Иванов"
+    assert services.last_entities["year"] == "1990"
+    assert services.last_entities["filial"] == "Бг"
+    assert services.last_entities["number"] == "12345"
+
+
+def test_result_lookup_repeated_uncertainty_stops_without_handoff():
+    memory = InMemoryMemory()
+    services = ResultServices()
+    agent = PartialTupleResultAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "result_repeated_uncertainty"
+
+    asyncio.run(agent.chat("Проверь результат анализа", session_id))
+
+    first = asyncio.run(agent.chat("не знаю", session_id))
+    assert "точные данные" in first.text.lower()
+
+    second = asyncio.run(agent.chat("не помню", session_id))
+    assert "не смогу проверить результат автоматически" in second.text.lower()
+
+    third = asyncio.run(agent.chat("все равно не помню", session_id))
+    low = third.text.lower()
+    assert "сценарий остановлен" in low
+    assert third.next_session_id == ""
+    assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
+
+
+def test_mixed_result_tuple_and_topic_switch_preserves_partial_state_until_confirm():
+    memory = InMemoryMemory()
+    services = MixedResultServices()
+    agent = MixedResultAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "result_mixed_topic_switch"
+
+    asyncio.run(agent.chat("Проверь результат анализа", session_id))
+
+    confirm = asyncio.run(agent.chat("Иванов, 1990, а лучше покажи урологов", session_id))
+    assert "прервать текущий сценарий" in confirm.text.lower()
+
+    state = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
+    assert state["phase"] == "interrupt_confirm_topic_switch"
+
+    resume = asyncio.run(agent.chat("нет", session_id))
+    low = resume.text.lower()
+    assert "код анализа" in low
+    assert "номер анализа" in low
+
+    resumed_state = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
+    assert resumed_state["entities"]["result_surname"] == "Иванов"
+    assert resumed_state["entities"]["result_year_of_birth"] == "1990"
+    assert set(resumed_state["missing_slots"]) == {
+        "result_analysis_code",
+        "result_analysis_number",
+    }
+
+
+def test_mixed_result_tuple_and_topic_switch_yes_reenters_new_question():
+    memory = InMemoryMemory()
+    services = MixedResultServices()
+    agent = MixedResultAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "result_mixed_topic_switch_yes"
+
+    asyncio.run(agent.chat("Проверь результат анализа", session_id))
+    asyncio.run(agent.chat("Иванов, 1990, а лучше покажи урологов", session_id))
+
+    reply = asyncio.run(agent.chat("да", session_id))
+    assert reply.tool_name == "doctors_info"
+    assert "уролог" in reply.text.lower()
+
+
+def test_dialog_state_payload_roundtrip_preserves_flow_descriptor():
+    state = DialogState(
+        route="clinical",
+        intent="appointment",
+        entities={"doctor_name": "Трубин Алексей Юрьевич"},
+        missing_slots=["patient_name"],
+        phase="appointment_collecting",
+        open_question="Сообщите, пожалуйста, ваше ФИО для записи.",
+        flow_active=True,
+        flow_kind="appointment",
+        flow_stage="collecting",
+        flow_interruptible=True,
+        flow_resume_question="Сообщите, пожалуйста, ваше ФИО для записи.",
+        expected_slots=["patient_name"],
+        flow_non_answer_count=2,
+        flow_non_answer_kind="uncertainty",
+    )
+
+    restored = dialog_state_from_payload(dialog_state_payload(state))
+
+    assert restored.flow_active is True
+    assert restored.flow_kind == "appointment"
+    assert restored.flow_stage == "collecting"
+    assert restored.flow_interruptible is True
+    assert restored.flow_resume_question == "Сообщите, пожалуйста, ваше ФИО для записи."
+    assert restored.expected_slots == ["patient_name"]
+    assert restored.flow_non_answer_count == 2
+    assert restored.flow_non_answer_kind == "uncertainty"
 
 
 class FuzzyPriceServices:
@@ -360,6 +647,327 @@ class FuzzyPriceAgent(FreeTalkAgent):
         return ""
 
 
+class FuzzyPreparePriceServices:
+    def __init__(self) -> None:
+        self.last_prepare_entities: dict[str, object] = {}
+        self.last_price_entities: dict[str, object] = {}
+
+    async def get_catalog_health(self) -> dict[str, object]:
+        return {"ok": True}
+
+    async def match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = "") -> dict[str, str]:
+        probe = str(raw_text_or_name or current_service_name or "").lower()
+        if "анлиз" in probe:
+            return {
+                "status": "fuzzy",
+                "canonical": "Общий анализ крови",
+                "query": raw_text_or_name,
+            }
+        if "анализ крови" in probe:
+            return {
+                "status": "exact",
+                "canonical": "Общий анализ крови",
+                "query": raw_text_or_name,
+            }
+        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
+
+    async def match_catalog_doctor(self, raw_text_or_name: str) -> dict[str, str]:
+        _ = raw_text_or_name
+        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
+
+    async def test_prepare(self, query: str, entities: dict[str, object]) -> dict[str, object]:
+        _ = query
+        self.last_prepare_entities = dict(entities)
+        return {
+            "prepare": "Натощак 8 часов, воду пить можно.",
+            "entities_used": {"service_name_effective": "Общий анализ крови"},
+            "note": "test_prepare",
+        }
+
+    async def price_info(self, query: str, entities: dict[str, object]) -> dict[str, object]:
+        _ = query
+        self.last_price_entities = dict(entities)
+        return {
+            "prices": [{"serviceName": "Общий анализ крови", "cost": 650}],
+            "entities_used": {"service_name_effective": "Общий анализ крови"},
+            "note": "price_info",
+        }
+
+    def tool_handlers(self, *, include_meili_tools: bool) -> dict[str, object]:
+        _ = include_meili_tools
+        return {
+            "test_prepare": self.test_prepare,
+            "price_info": self.price_info,
+        }
+
+
+class FuzzyPreparePriceAgent(FreeTalkAgent):
+    async def _route_clinical_decision(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        dialog_state: DialogState,
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        _ = context, dialog_state, remembered_doctor
+        text = str(user_message or "").strip().lower()
+        if "подготов" in text:
+            return ClinicalDecision(
+                intent="prepare",
+                confidence=0.94,
+                entities={},
+                missing_slots=[],
+                clarify_question="",
+                tool_plan=["test_prepare"],
+                source="test",
+            )
+        if "стоит" in text:
+            return ClinicalDecision(
+                intent="price",
+                confidence=0.94,
+                entities={"service_name": "Общий анализ крови"},
+                missing_slots=[],
+                clarify_question="",
+                tool_plan=["price_info"],
+                source="test",
+            )
+        return ClinicalDecision(
+            intent="unknown",
+            confidence=0.2,
+            entities={},
+            missing_slots=[],
+            clarify_question="",
+            tool_plan=[],
+            source="test",
+        )
+
+    async def _llm_json(self, prompt: str) -> dict[str, object]:
+        _ = prompt
+        return {}
+
+    async def _llm_text(self, prompt: str) -> str:
+        _ = prompt
+        return ""
+
+
+class DoctorClarifyMixedServices:
+    def __init__(self) -> None:
+        self.last_doctor_entities: dict[str, object] = {}
+        self.last_price_entities: dict[str, object] = {}
+
+    async def get_catalog_health(self) -> dict[str, object]:
+        return {"ok": True}
+
+    async def match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = "") -> dict[str, str]:
+        _ = raw_text_or_name, current_service_name
+        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
+
+    async def match_catalog_doctor(self, raw_text_or_name: str) -> dict[str, str]:
+        probe = str(raw_text_or_name or "").lower()
+        if "суворов" in probe:
+            return {
+                "status": "exact",
+                "canonical": "Суворов Алексей Петрович",
+                "query": raw_text_or_name,
+            }
+        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
+
+    async def doctors_info(self, query: str, entities: dict[str, object]) -> dict[str, object]:
+        _ = query
+        self.last_doctor_entities = dict(entities)
+        return {
+            "doctors": [{"fio": "Суворов Алексей Петрович", "specialization": "Кардиолог"}],
+            "entities_used": {"doctor_name_resolved": "Суворов Алексей Петрович"},
+            "note": "doctors_info",
+        }
+
+    async def price_info(self, query: str, entities: dict[str, object]) -> dict[str, object]:
+        _ = query
+        self.last_price_entities = dict(entities)
+        return {
+            "prices": [{"serviceName": "Прием врача", "cost": 1200}],
+            "entities_used": {"service_name_effective": "Прием врача"},
+            "note": "price_info",
+        }
+
+    def tool_handlers(self, *, include_meili_tools: bool) -> dict[str, object]:
+        _ = include_meili_tools
+        return {
+            "doctors_info": self.doctors_info,
+            "price_info": self.price_info,
+        }
+
+
+class DoctorClarifyMixedAgent(FreeTalkAgent):
+    async def _route_clinical_decision(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        dialog_state: DialogState,
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        _ = context, dialog_state, remembered_doctor
+        text = str(user_message or "").strip().lower()
+        if "стоит" in text:
+            return ClinicalDecision(
+                intent="price",
+                confidence=0.95,
+                entities={"service_name": "Прием врача"},
+                missing_slots=[],
+                clarify_question="",
+                tool_plan=["price_info"],
+                source="test",
+            )
+        if "суворов" in text:
+            return ClinicalDecision(
+                intent="doctor_info",
+                confidence=0.95,
+                entities={"doctor_name": "Суворов Алексей Петрович"},
+                missing_slots=[],
+                clarify_question="",
+                tool_plan=["doctors_info"],
+                source="test",
+            )
+        if "врач" in text or "доктор" in text or "расскажи" in text:
+            return ClinicalDecision(
+                intent="doctor_info",
+                confidence=0.93,
+                entities={},
+                missing_slots=["doctor_name"],
+                clarify_question="Уточните, пожалуйста, какого врача вы имеете в виду.",
+                tool_plan=["doctors_info"],
+                source="test",
+            )
+        return ClinicalDecision(
+            intent="unknown",
+            confidence=0.2,
+            entities={},
+            missing_slots=[],
+            clarify_question="",
+            tool_plan=[],
+            source="test",
+        )
+
+    async def _llm_json(self, prompt: str) -> dict[str, object]:
+        _ = prompt
+        return {}
+
+    async def _llm_text(self, prompt: str) -> str:
+        _ = prompt
+        return ""
+
+
+class FuzzyDoctorMixedServices:
+    def __init__(self) -> None:
+        self.last_doctor_entities: dict[str, object] = {}
+        self.last_price_entities: dict[str, object] = {}
+
+    async def get_catalog_health(self) -> dict[str, object]:
+        return {"ok": True}
+
+    async def match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = "") -> dict[str, str]:
+        _ = raw_text_or_name, current_service_name
+        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
+
+    async def match_catalog_doctor(self, raw_text_or_name: str) -> dict[str, str]:
+        probe = str(raw_text_or_name or "").lower()
+        if "дразнн" in probe:
+            return {
+                "status": "fuzzy",
+                "canonical": "Дразнин Антон Владимирович",
+                "query": raw_text_or_name,
+            }
+        if "суворов" in probe:
+            return {
+                "status": "exact",
+                "canonical": "Суворов Алексей Петрович",
+                "query": raw_text_or_name,
+            }
+        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
+
+    async def doctors_info(self, query: str, entities: dict[str, object]) -> dict[str, object]:
+        _ = query
+        self.last_doctor_entities = dict(entities)
+        doctor_name = str(entities.get("doctor_name") or "").strip()
+        if "Суворов" in doctor_name:
+            fio = "Суворов Алексей Петрович"
+        else:
+            fio = "Дразнин Антон Владимирович"
+        return {
+            "doctors": [{"fio": fio, "specialization": "Кардиолог"}],
+            "entities_used": {"doctor_name_resolved": fio},
+            "note": "doctors_info",
+        }
+
+    async def price_info(self, query: str, entities: dict[str, object]) -> dict[str, object]:
+        _ = query
+        self.last_price_entities = dict(entities)
+        return {
+            "prices": [{"serviceName": "Прием врача", "cost": 1200}],
+            "entities_used": {"service_name_effective": "Прием врача"},
+            "note": "price_info",
+        }
+
+    def tool_handlers(self, *, include_meili_tools: bool) -> dict[str, object]:
+        _ = include_meili_tools
+        return {
+            "doctors_info": self.doctors_info,
+            "price_info": self.price_info,
+        }
+
+
+class FuzzyDoctorMixedAgent(FreeTalkAgent):
+    async def _route_clinical_decision(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        dialog_state: DialogState,
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        _ = context, dialog_state, remembered_doctor
+        text = str(user_message or "").strip().lower()
+        if "стоит" in text:
+            return ClinicalDecision(
+                intent="price",
+                confidence=0.95,
+                entities={"service_name": "Прием врача"},
+                missing_slots=[],
+                clarify_question="",
+                tool_plan=["price_info"],
+                source="test",
+            )
+        if "драз" in text or "суворов" in text or "расскажи" in text or "врач" in text:
+            return ClinicalDecision(
+                intent="doctor_info",
+                confidence=0.95,
+                entities={},
+                missing_slots=[],
+                clarify_question="",
+                tool_plan=["doctors_info"],
+                source="test",
+            )
+        return ClinicalDecision(
+            intent="unknown",
+            confidence=0.2,
+            entities={},
+            missing_slots=[],
+            clarify_question="",
+            tool_plan=[],
+            source="test",
+        )
+
+    async def _llm_json(self, prompt: str) -> dict[str, object]:
+        _ = prompt
+        return {}
+
+    async def _llm_text(self, prompt: str) -> str:
+        _ = prompt
+        return ""
+
+
 def test_dialog_state_confirms_fuzzy_service_candidate_before_tool_call():
     memory = InMemoryMemory()
     services = FuzzyPriceServices()
@@ -387,6 +995,147 @@ def test_dialog_state_confirms_fuzzy_service_candidate_before_tool_call():
     assert "650" in reply2.text
     assert services.last_entities["service_name"] == "Общий анализ крови"
     assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
+
+
+def test_confirmation_no_preference_rejects_candidate_and_returns_to_clarify():
+    memory = InMemoryMemory()
+    services = FuzzyPriceServices()
+    agent = FuzzyPriceAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "fuzzy_price_no_preference_dialog"
+
+    reply1 = asyncio.run(agent.chat("Сколько стоит общий анлиз крови?", session_id))
+    assert "правильно понял" in reply1.text.lower()
+
+    reply2 = asyncio.run(agent.chat("Любой", session_id))
+    assert "уточните" in reply2.text.lower()
+
+    state2 = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
+    assert state2["phase"] == "collecting"
+    assert state2["flow_kind"] == "clarify"
+    assert state2["confirmation_target"] == ""
+    assert state2["candidate_entities"] == {}
+    assert state2["missing_slots"] == ["service_or_analysis_name"]
+
+
+def test_mixed_clarify_slot_answer_and_topic_switch_no_reenters_original_flow():
+    memory = InMemoryMemory()
+    services = DoctorClarifyMixedServices()
+    agent = DoctorClarifyMixedAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "doctor_clarify_mixed_no"
+
+    first = asyncio.run(agent.chat("Расскажи про врача", session_id))
+    assert "уточните" in first.text.lower()
+
+    confirm = asyncio.run(agent.chat("Суворов, а сколько стоит прием?", session_id))
+    assert "прервать текущий сценарий" in confirm.text.lower()
+
+    reply = asyncio.run(agent.chat("нет", session_id))
+    assert reply.tool_name == "doctors_info"
+    assert "суворов" in reply.text.lower()
+
+
+def test_mixed_clarify_slot_answer_and_topic_switch_yes_reenters_new_question():
+    memory = InMemoryMemory()
+    services = DoctorClarifyMixedServices()
+    agent = DoctorClarifyMixedAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "doctor_clarify_mixed_yes"
+
+    asyncio.run(agent.chat("Расскажи про врача", session_id))
+    asyncio.run(agent.chat("Суворов, а сколько стоит прием?", session_id))
+
+    reply = asyncio.run(agent.chat("да", session_id))
+    assert reply.tool_name == "price_info"
+    assert "1200" in reply.text
+
+
+def test_mixed_confirmation_yes_and_topic_switch_no_continues_confirmed_flow():
+    memory = InMemoryMemory()
+    services = FuzzyPreparePriceServices()
+    agent = FuzzyPreparePriceAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "prepare_confirm_mixed_no"
+
+    first = asyncio.run(agent.chat("Как подготовиться к общему анлизу крови?", session_id))
+    assert "правильно понял" in first.text.lower()
+
+    confirm = asyncio.run(agent.chat("Да, а сколько стоит общий анализ крови?", session_id))
+    assert "прервать текущий сценарий" in confirm.text.lower()
+
+    reply = asyncio.run(agent.chat("нет", session_id))
+    assert reply.tool_name == "test_prepare"
+    assert "натощак" in reply.text.lower()
+
+
+def test_mixed_confirmation_yes_and_topic_switch_yes_reenters_new_question():
+    memory = InMemoryMemory()
+    services = FuzzyPreparePriceServices()
+    agent = FuzzyPreparePriceAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "prepare_confirm_mixed_yes"
+
+    asyncio.run(agent.chat("Как подготовиться к общему анлизу крови?", session_id))
+    asyncio.run(agent.chat("Да, а сколько стоит общий анализ крови?", session_id))
+
+    reply = asyncio.run(agent.chat("да", session_id))
+    assert reply.tool_name == "price_info"
+    assert "650" in reply.text
+
+
+def test_mixed_confirmation_no_correction_and_topic_switch_no_reenters_correction():
+    memory = InMemoryMemory()
+    services = FuzzyDoctorMixedServices()
+    agent = FuzzyDoctorMixedAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "doctor_confirm_mixed_no"
+
+    first = asyncio.run(agent.chat("Расскажи про Дразннина", session_id))
+    assert "правильно понял" in first.text.lower()
+
+    confirm = asyncio.run(agent.chat("Нет, Суворов, а сколько стоит прием?", session_id))
+    assert "прервать текущий сценарий" in confirm.text.lower()
+
+    reply = asyncio.run(agent.chat("нет", session_id))
+    assert reply.tool_name == "doctors_info"
+    assert "суворов" in reply.text.lower()
 
 
 class ScheduleFollowupServices:

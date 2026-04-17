@@ -133,6 +133,14 @@ def copy_dialog_state(dialog_state: DialogState | None) -> DialogState:
         last_tool=str(dialog_state.last_tool or ""),
         phase=str(dialog_state.phase or ""),
         open_question=str(dialog_state.open_question or ""),
+        flow_active=bool(dialog_state.flow_active),
+        flow_kind=str(dialog_state.flow_kind or ""),
+        flow_stage=str(dialog_state.flow_stage or ""),
+        flow_interruptible=bool(dialog_state.flow_interruptible),
+        flow_resume_question=str(dialog_state.flow_resume_question or ""),
+        expected_slots=[str(x).strip() for x in list(dialog_state.expected_slots or []) if str(x).strip()],
+        flow_non_answer_count=max(0, int(dialog_state.flow_non_answer_count or 0)),
+        flow_non_answer_kind=str(dialog_state.flow_non_answer_kind or ""),
     )
 
 
@@ -141,6 +149,12 @@ def dialog_state_is_active(dialog_state: DialogState | None) -> bool:
         return False
     intent = str(dialog_state.intent or "").strip().lower()
     return bool(
+        bool(dialog_state.flow_active)
+        or str(dialog_state.flow_kind or "").strip()
+        or str(dialog_state.flow_stage or "").strip()
+        or dialog_state.expected_slots
+        or str(dialog_state.flow_resume_question or "").strip()
+        or
         (intent and intent != "unknown")
         or dialog_state.entities
         or dialog_state.missing_slots
@@ -166,6 +180,7 @@ def dialog_state_from_payload(payload: dict[str, Any] | None) -> DialogState:
     )
     missing_slots = data.get("missing_slots") if isinstance(data.get("missing_slots"), list) else []
     tool_plan = data.get("tool_plan") if isinstance(data.get("tool_plan"), list) else []
+    expected_slots = data.get("expected_slots") if isinstance(data.get("expected_slots"), list) else []
     try:
         confidence = float(data.get("confidence", 0.0))
     except Exception:
@@ -174,6 +189,10 @@ def dialog_state_from_payload(payload: dict[str, Any] | None) -> DialogState:
         clarify_count = int(data.get("clarify_count", 0))
     except Exception:
         clarify_count = 0
+    try:
+        flow_non_answer_count = int(data.get("flow_non_answer_count", 0))
+    except Exception:
+        flow_non_answer_count = 0
     return DialogState(
         route=str(data.get("route") or "").strip() or "general",
         intent=str(data.get("intent") or "").strip() or "unknown",
@@ -191,6 +210,14 @@ def dialog_state_from_payload(payload: dict[str, Any] | None) -> DialogState:
         last_tool=str(data.get("last_tool") or "").strip(),
         phase=str(data.get("phase") or "").strip(),
         open_question=str(data.get("open_question") or "").strip(),
+        flow_active=bool(data.get("flow_active")),
+        flow_kind=str(data.get("flow_kind") or "").strip(),
+        flow_stage=str(data.get("flow_stage") or "").strip(),
+        flow_interruptible=bool(data.get("flow_interruptible")),
+        flow_resume_question=str(data.get("flow_resume_question") or "").strip(),
+        expected_slots=[str(x).strip() for x in expected_slots if str(x).strip()],
+        flow_non_answer_count=max(0, flow_non_answer_count),
+        flow_non_answer_kind=str(data.get("flow_non_answer_kind") or "").strip(),
     )
 
 
