@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from .contracts import AgentReply
+from .signal_parsers import looks_like_specific_doctor_reference
 
 
 _TOKEN_RE = re.compile(r"[a-zа-яё0-9\\-]+", re.I)
@@ -52,10 +53,17 @@ _SERVICE_NON_SPECIFIC_TOKENS = {
 
 
 def looks_like_specific_doctor_lookup(value: str) -> bool:
-    tokens = [t.lower() for t in _TOKEN_RE.findall(str(value or "")) if len(t) >= 3]
-    if not tokens:
+    probe = str(value or "").strip()
+    if not probe:
         return False
-    return any(token not in _DOCTOR_NON_PERSON_TOKENS for token in tokens)
+    if looks_like_specific_doctor_reference(probe):
+        return True
+    tokens = [t.lower() for t in _TOKEN_RE.findall(probe) if len(t) >= 3]
+    if not tokens or len(tokens) > 3:
+        return False
+    if any(token in _DOCTOR_NON_PERSON_TOKENS for token in tokens):
+        return False
+    return False
 
 
 def looks_like_specific_service_lookup(value: str) -> bool:

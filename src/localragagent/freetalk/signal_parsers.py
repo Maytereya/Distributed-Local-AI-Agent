@@ -56,6 +56,9 @@ DATE_WORD_RE = re.compile(
 PERSON_NAME_RE = re.compile(
     r"^\s*([А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+){1,2})\s*[.!?]?\s*$"
 )
+GENERIC_NAME_CANDIDATE_RE = re.compile(
+    r"^\s*([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё\-]+(?:\s+[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё\-]+){0,2})\s*[.!?]?\s*$"
+)
 CAPITALIZED_NAME_CANDIDATE_RE = re.compile(
     r"^\s*([А-ЯЁA-Z][а-яёa-z\-]+(?:\s+[А-ЯЁA-Z][а-яёa-z\-]+){0,2})\s*[.!?]?\s*$"
 )
@@ -171,6 +174,30 @@ MONTH_NAME_TO_NUMBER = {
     "декабря": 12,
     "декабрь": 12,
 }
+DOCTOR_REFERENCE_TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё\-]+", re.I)
+DOCTOR_ROLE_TOKEN_RE = re.compile(
+    r"^(?:"
+    r"врач\w*|доктор\w*|специалист\w*|"
+    r"терапевт\w*|теарапевт\w*|терапефт\w*|"
+    r"кардиолог\w*|невролог\w*|гастроэнтеролог\w*|эндокринолог\w*|"
+    r"гинеколог\w*|уролог\w*|онколог\w*|педиатр\w*|хирург\w*|"
+    r"дерматолог\w*|дерматовенеролог\w*|аллерголог\w*|иммунолог\w*|"
+    r"офтальмолог\w*|лор\w*|отоларинголог\w*|"
+    r"кардиохирург\w*|проктолог\w*|нефролог\w*|ревматолог\w*|"
+    r"травматолог\w*|ортопед\w*|психотерапевт\w*|психиатр\w*"
+    r")$",
+    re.I,
+)
+DOCTOR_NOISE_TOKEN_RE = re.compile(
+    r"^(?:"
+    r"привет\w*|здравств\w*|добрый|доброе|доброго|"
+    r"день|вечер|утро|"
+    r"подскаж\w*|скаж\w*|расскаж\w*|покаж\w*|дай\w*|найд\w*|поищ\w*|"
+    r"информац\w*|клиник\w*|принима\w*|прием\w*|приём\w*|"
+    r"запис\w*|хочу|нуж\w*|можно|пожалуйста|плиз|clinic"
+    r")$",
+    re.I,
+)
 
 
 def parse_yes_no(text: str, *, profile: str = "strict") -> str:
@@ -212,19 +239,43 @@ def extract_person_name(text: str) -> str:
     return str(match.group(1) or "").strip()
 
 
+def looks_like_specific_doctor_reference(text: str) -> bool:
+    probe = str(text or "").strip(" ,.!?")
+    if not probe or any(ch.isdigit() for ch in probe):
+        return False
+    tokens = [token.lower() for token in DOCTOR_REFERENCE_TOKEN_RE.findall(probe) if token.strip()]
+    if not tokens or len(tokens) > 3:
+        return False
+    for token in tokens:
+        if DOCTOR_ROLE_TOKEN_RE.match(token):
+            return False
+        if DOCTOR_NOISE_TOKEN_RE.match(token):
+            return False
+        if TOPIC_WORD_RE.match(token):
+            return False
+    return True
+
+
 def extract_doctor_reference_candidate(text: str) -> str:
     probe = str(text or "").strip()
     if not probe:
         return ""
     explicit = DOCTOR_REFERENCE_RE.search(probe)
     if explicit:
-        return str(explicit.group(1) or "").strip()
+        candidate = str(explicit.group(1) or "").strip()
+        return candidate if looks_like_specific_doctor_reference(candidate) else ""
     negated = NEGATED_REFERENCE_RE.match(probe)
     if negated:
-        return str(negated.group(1) or "").strip()
+        candidate = str(negated.group(1) or "").strip()
+        return candidate if looks_like_specific_doctor_reference(candidate) else ""
     short = CAPITALIZED_NAME_CANDIDATE_RE.match(probe)
     if short:
-        return str(short.group(1) or "").strip()
+        candidate = str(short.group(1) or "").strip()
+        return candidate if looks_like_specific_doctor_reference(candidate) else ""
+    generic = GENERIC_NAME_CANDIDATE_RE.match(probe)
+    if generic:
+        candidate = str(generic.group(1) or "").strip()
+        return candidate if looks_like_specific_doctor_reference(candidate) else ""
     return ""
 
 

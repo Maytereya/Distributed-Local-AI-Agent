@@ -201,6 +201,26 @@ def test_catalog_resolution_reply_not_triggered_for_specialty_miss():
     assert reply is None
 
 
+def test_catalog_resolution_reply_not_triggered_for_greeting_noise():
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="test",
+        web_search=None,
+    )
+    reply = agent._catalog_resolution_reply_if_needed(
+        tool_plan=["doctors_info"],
+        entities={
+            "_ft_doctor_match_status": "miss",
+            "_ft_doctor_match_query": "Привет",
+        },
+        fallback_only=True,
+    )
+    assert reply is None
+
+
 def test_render_schedule_details_includes_region_dates_and_slots():
     payload = {
         "schedule": [

@@ -20,6 +20,7 @@ from localragagent.freetalk.signal_parsers import (
     extract_service_reference_candidate,
     extract_service_variant,
     extract_time_filters,
+    looks_like_specific_doctor_reference,
     looks_like_no_preference_answer,
     looks_like_slot_correction,
     looks_like_uncertainty_answer,
@@ -97,6 +98,15 @@ def test_extract_doctor_reference_candidate_supports_explicit_and_short_forms():
     assert extract_doctor_reference_candidate("к врачу Суворову") == "Суворову"
     assert extract_doctor_reference_candidate("нет, Суворов") == "Суворов"
     assert extract_doctor_reference_candidate("Дразнин") == "Дразнин"
+    assert extract_doctor_reference_candidate("дразнин") == "дразнин"
+
+
+def test_doctor_reference_candidate_rejects_greetings_and_specialties():
+    assert extract_doctor_reference_candidate("Привет") == ""
+    assert extract_doctor_reference_candidate("кардиолог") == ""
+    assert looks_like_specific_doctor_reference("Привет") is False
+    assert looks_like_specific_doctor_reference("кардиолог") is False
+    assert looks_like_specific_doctor_reference("Дразнин") is True
 
 
 def test_extract_service_reference_candidate_and_slot_correction():
