@@ -1277,11 +1277,26 @@ def _doctor_candidate_is_contextual(text: str, candidate: str) -> bool:
     return any(re.search(p, t, re.I) for p in near_patterns)
 
 
-def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_rules: list[str]) -> dict[str, Any]:
-    t = (text or "").strip()
-    low = t.lower()
-    out: dict[str, Any] = {}
+def _missing_rules_include(missing_rules: list[str], *fragments: str) -> bool:
+    """Проверяет, упоминаются ли нужные слоты в списке missing-rules.
 
+    :param missing_rules: список правил незаполненных слотов
+    :param fragments: фрагменты имён слотов для поиска
+    :return: ``True``, если хотя бы один фрагмент найден
+    """
+
+    return any(any(fragment in rule for fragment in fragments) for rule in missing_rules)
+
+
+def _fill_insurance_entities(text: str, out: dict[str, Any]) -> None:
+    """Быстро извлекает сущности по страховке и детскому контексту.
+
+    :param text: исходный текст пользователя
+    :param out: словарь, который пополняется найденными сущностями
+    :return: None
+    """
+
+    low = str(text or "").strip().lower()
     if _QF_DMS_RE.search(low):
         out["insurance_type"] = "dms"
     elif _QF_OMS_RE.search(low):
@@ -1292,194 +1307,299 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
     if _QF_CHILD_RE.search(low):
         out["accepts_children"] = True
 
+
+def _fill_datetime_entities(text: str, out: dict[str, Any]) -> None:
+    """Извлекает дату, время и флаг гибкого времени.
+
+    :param text: исходный текст пользователя
+    :param out: словарь, который пополняется найденными сущностями
+    :return: None
+    """
+
+    t = str(text or "").strip()
+    low = t.lower()
     dt = parse_date_time_ru(t)
     out.update({k: v for k, v in dt.items() if v is not None})
     if _QF_TIME_FLEXIBLE_RE.search(low):
         out["time_flexible"] = True
 
+
+def _fill_test_result_entities(text: str, missing_rules: list[str], out: dict[str, Any]) -> None:
+    """Извлекает номер заказа и данные для сценария получения результатов.
+
+    :param text: исходный текст пользователя
+    :param missing_rules: список правил незаполненных слотов
+    :param out: словарь, который пополняется найденными сущностями
+    :return: None
+    """
+
+    t = str(text or "").strip()
+    low = t.lower()
+
     m_oid = _QF_ORDER_ID_RE.search(t)
     if m_oid:
         out["order_id"] = m_oid.group(1)
 
-    # TEST_RESULT flow: собираем surname/year/filial/number по мере диалога.
-    needs_result = any(m in {"surname", "year", "filial", "number"} for m in missing_rules)
-    if needs_result:
-        # Формат одной строкой: "Иванов, 1989, Бг, 1234"
-        ordered = _QF_RESULT_ORDERED_RE.match(t)
-        if ordered:
-            out["surname"] = ordered.group(1).strip().capitalize()
-            out["year"] = int(ordered.group(2))
-            out["filial"] = ordered.group(3).strip()
-            out["number"] = int(ordered.group(4))
-        else:
-            # Альтернативный формат без запятых: "Иванов 1989 Бг 1234"
-            ordered_space = _QF_RESULT_ORDERED_SPACE_RE.match(t)
-            if ordered_space:
-                out["surname"] = ordered_space.group(1).strip().capitalize()
-                out["year"] = int(ordered_space.group(2))
-                out["filial"] = ordered_space.group(3).strip()
-                out["number"] = int(ordered_space.group(4))
+    if not _missing_rules_include(missing_rules, "surname", "year", "filial", "number"):
+        return
 
-        m_surname = _QF_RESULT_SURNAME_RE.search(t)
-        if m_surname:
-            out["surname"] = m_surname.group(1).strip().capitalize()
+    ordered = _QF_RESULT_ORDERED_RE.match(t)
+    if ordered:
+        out["surname"] = ordered.group(1).strip().capitalize()
+        out["year"] = int(ordered.group(2))
+        out["filial"] = ordered.group(3).strip()
+        out["number"] = int(ordered.group(4))
+    else:
+        ordered_space = _QF_RESULT_ORDERED_SPACE_RE.match(t)
+        if ordered_space:
+            out["surname"] = ordered_space.group(1).strip().capitalize()
+            out["year"] = int(ordered_space.group(2))
+            out["filial"] = ordered_space.group(3).strip()
+            out["number"] = int(ordered_space.group(4))
 
-        m_year = _QF_RESULT_YEAR_RE.search(t)
-        if m_year:
-            out["year"] = int(m_year.group(1))
-        elif re.fullmatch(r"\s*(?:19|20)\d{2}\s*", t):
-            out["year"] = int(t.strip())
-        else:
-            y_any = re.search(r"\b((?:19|20)\d{2})\b", t)
-            if y_any:
-                out["year"] = int(y_any.group(1))
+    m_surname = _QF_RESULT_SURNAME_RE.search(t)
+    if m_surname:
+        out["surname"] = m_surname.group(1).strip().capitalize()
 
-        m_filial = _QF_RESULT_FILIAL_RE.search(t)
-        if m_filial:
-            out["filial"] = m_filial.group(1).strip(" ,.")
-        elif "filial" in missing_rules:
-            city_guess = match_city(t)
-            if city_guess:
-                out["filial"] = city_guess
-            words = [w for w in re.split(r"\s+", t) if w]
-            if "filial" not in out and 1 <= len(words) <= 3 and not re.search(r"\d", t) and not _QF_APPOINTMENT_WORD_RE.search(low):
-                out["filial"] = t.strip(" ,.")
+    m_year = _QF_RESULT_YEAR_RE.search(t)
+    if m_year:
+        out["year"] = int(m_year.group(1))
+    elif re.fullmatch(r"\s*(?:19|20)\d{2}\s*", t):
+        out["year"] = int(t.strip())
+    else:
+        y_any = re.search(r"\b((?:19|20)\d{2})\b", t)
+        if y_any:
+            out["year"] = int(y_any.group(1))
 
-        m_number = _QF_RESULT_NUMBER_RE.search(t)
-        if m_number:
-            out["number"] = int(m_number.group(1))
-        elif m_oid:
-            out["number"] = int(m_oid.group(1))
-        elif re.fullmatch(r"\s*\d{3,}\s*", t):
-            out["number"] = int(t.strip())
-        else:
-            nums = [int(x) for x in re.findall(r"\b\d{3,}\b", t)]
-            if nums:
-                year_val = out.get("year")
-                filtered = [n for n in nums if year_val is None or n != year_val]
-                if filtered:
-                    out["number"] = filtered[-1]
+    m_filial = _QF_RESULT_FILIAL_RE.search(t)
+    if m_filial:
+        out["filial"] = m_filial.group(1).strip(" ,.")
+    elif "filial" in missing_rules:
+        city_guess = match_city(t)
+        if city_guess:
+            out["filial"] = city_guess
+        words = [w for w in re.split(r"\s+", t) if w]
+        if "filial" not in out and 1 <= len(words) <= 3 and not re.search(r"\d", t) and not _QF_APPOINTMENT_WORD_RE.search(low):
+            out["filial"] = t.strip(" ,.")
 
-        if "surname" in missing_rules and "surname" not in out:
-            words = [w for w in re.split(r"\s+", t) if w]
-            if (
-                len(words) == 1
-                and re.fullmatch(r"[А-Яа-яЁё\-]{2,}", words[0])
-                and words[0].lower() not in _QF_RESULT_SURNAME_STOPWORDS
-            ):
-                out["surname"] = words[0].capitalize()
+    m_number = _QF_RESULT_NUMBER_RE.search(t)
+    if m_number:
+        out["number"] = int(m_number.group(1))
+    elif m_oid:
+        out["number"] = int(m_oid.group(1))
+    elif re.fullmatch(r"\s*\d{3,}\s*", t):
+        out["number"] = int(t.strip())
+    else:
+        nums = [int(x) for x in re.findall(r"\b\d{3,}\b", t)]
+        if nums:
+            year_val = out.get("year")
+            filtered = [n for n in nums if year_val is None or n != year_val]
+            if filtered:
+                out["number"] = filtered[-1]
+
+    if "surname" in missing_rules and "surname" not in out:
+        words = [w for w in re.split(r"\s+", t) if w]
+        if (
+            len(words) == 1
+            and re.fullmatch(r"[А-Яа-яЁё\-]{2,}", words[0])
+            and words[0].lower() not in _QF_RESULT_SURNAME_STOPWORDS
+        ):
+            out["surname"] = words[0].capitalize()
+
+
+def _fill_appointment_entities(
+    text: str,
+    state_entities: dict[str, Any],
+    missing_rules: list[str],
+    out: dict[str, Any],
+) -> None:
+    """Извлекает сущности записи: специальность, врача, тест/услугу.
+
+    :param text: исходный текст пользователя
+    :param state_entities: уже накопленные сущности состояния
+    :param missing_rules: список правил незаполненных слотов
+    :param out: словарь, который пополняется найденными сущностями
+    :return: None
+    """
+
+    t = str(text or "").strip()
+    low = t.lower()
 
     spec = extract_specialty(low)
     if spec:
         out["specialty"] = spec
 
-    needs_doctor_or_spec = any("doctor" in r or "specialty" in r for r in missing_rules)
+    needs_doctor_or_spec = _missing_rules_include(missing_rules, "doctor", "specialty")
     patient_name_like_text = bool(_QF_PATIENT_NAME_PREFIX_RE.search(t) or _QF_PLAIN_NAME_RE.match(t))
-    # В активном flow, когда врач уже известен, не перезаписываем doctor_name
-    # из свободного текста пациента (там часто его собственное ФИО).
     doctor_already_selected = bool(state_entities.get("doctor_name") or state_entities.get("doctor_id"))
     if needs_doctor_or_spec and not patient_name_like_text and not doctor_already_selected:
         extracted_name = resolve_cached_doctor_name_candidate(t)
         if extracted_name and _doctor_candidate_is_contextual(t, extracted_name):
             out["doctor_name"] = extracted_name
 
-    needs_test = any("test_goal" in r or "test_name" in r for r in missing_rules)
-    if needs_test:
-        if _QF_TEST_WORDS_RE.search(low):
-            if not state_entities.get("test_name"):
-                out["test_goal"] = t[:200]
+    needs_test = _missing_rules_include(missing_rules, "test_goal", "test_name")
+    if needs_test and _QF_TEST_WORDS_RE.search(low) and not state_entities.get("test_name"):
+        out["test_goal"] = t[:200]
 
-    if any("service_name" in r for r in missing_rules) and len(t) >= 3:
+    if _missing_rules_include(missing_rules, "service_name") and len(t) >= 3:
         service_phrase = extract_service_phrase(t)
-        # Не подставляем весь текст как service_name: это приводит к
-        # ложным услугам вида "Можно записаться к врачу".
         if service_phrase:
             out["service_name"] = service_phrase.strip()
 
-    if "child_age" in missing_rules:
-        m_age = _QF_AGE_RE.search(low)
-        if m_age:
-            try:
-                out["child_age"] = int(m_age.group(1))
-            except Exception:
-                pass
 
-    def _is_valid_patient_name_candidate(candidate_text: str) -> bool:
-        raw = str(candidate_text or "").strip()
-        if not raw:
-            return False
-        if has_datetime_signal(raw):
-            return False
-        if match_city(raw):
-            return False
-        low_raw = raw.lower()
-        if _QF_APPOINTMENT_WORD_RE.search(low_raw):
-            return False
-        if _QF_TIME_FRAGMENT_RE.search(low_raw):
-            return False
-        tokens = [w for w in re.split(r"\s+", low_raw) if w]
-        if len(tokens) < 2:
-            return False
-        if any(t in _QF_PATIENT_NAME_STOPWORDS for t in tokens):
-            return False
-        # "на завтра на" и подобные служебные фрагменты не считаем ФИО.
-        if not any(len(t) >= 3 for t in tokens):
-            return False
-        return True
+def _fill_child_age_entities(text: str, missing_rules: list[str], out: dict[str, Any]) -> None:
+    """Извлекает возраст ребёнка, если он отдельно запрашивается.
 
-    if "patient_name" in missing_rules:
-        candidate: str | None = None
-        m_name = _QF_PATIENT_NAME_PREFIX_RE.search(t)
-        if m_name:
-            candidate = m_name.group(1).strip()
-        if not candidate:
-            m_plain = _QF_PLAIN_NAME_RE.match(t)
-            if m_plain:
-                plain = m_plain.group(1).strip()
-                low_plain = plain.lower()
-                if not (
-                    _QF_APPOINTMENT_WORD_RE.search(low_plain)
-                    or _QF_TIME_FRAGMENT_RE.search(low_plain)
-                    or match_city(low_plain)
-                ):
-                    candidate = plain
-        if not candidate:
-            # ФИО внутри смешанной строки ("12 февраля 09:00 Тен Максим Александрович")
-            # берём последнюю тройку слов как наиболее вероятное ФИО пациента.
-            fragments = list(_QF_NAME_FRAGMENT_RE.finditer(t))
-            if fragments:
-                raw = " ".join(fragments[-1].groups()).strip()
-                low_raw = raw.lower()
-                if not (
-                    _QF_APPOINTMENT_WORD_RE.search(low_raw)
-                    or _QF_TIME_FRAGMENT_RE.search(low_raw)
-                    or match_city(low_raw)
-                ):
-                    candidate = raw
-        if candidate and _is_valid_patient_name_candidate(candidate):
-            normalized_tokens = [w.capitalize() for w in re.split(r"\s+", candidate) if w]
-            if len(normalized_tokens) >= 2:
-                out["patient_name"] = " ".join(normalized_tokens)
+    :param text: исходный текст пользователя
+    :param missing_rules: список правил незаполненных слотов
+    :param out: словарь, который пополняется найденными сущностями
+    :return: None
+    """
 
-    needs_city = any("city" in r for r in missing_rules)
-    if needs_city:
-        # 1) Всегда даем приоритет явному распознаванию города, даже если city уже был в state.
-        city = match_city(t)
-        if city:
-            out["city"] = city.strip()
+    if "child_age" not in missing_rules:
+        return
 
-    # APPOINTMENT ветка выбора способа подбора:
-    # "врачи" -> сначала список врачей, "филиалы/адреса" -> сначала список филиалов.
-    # Не привязываем к конкретному интенту, чтобы quick-fill срабатывал и в pending-режиме.
-    needs_branch_or_city = any("branch" in str(r or "").lower() or "city" in str(r or "").lower() for r in missing_rules)
-    if needs_branch_or_city and not (out.get("branch_id") or out.get("branch_name")):
-        doctor_choice = bool(_QF_APPOINTMENT_CHOICE_DOCTOR_RE.search(t))
-        branch_choice = bool(_QF_APPOINTMENT_CHOICE_BRANCH_RE.search(t))
-        if doctor_choice and not branch_choice:
-            out["appointment_selection_mode"] = "doctor"
-        elif branch_choice and not doctor_choice:
-            out["appointment_selection_mode"] = "branch"
+    m_age = _QF_AGE_RE.search(str(text or "").strip().lower())
+    if not m_age:
+        return
+    try:
+        out["child_age"] = int(m_age.group(1))
+    except Exception:
+        pass
 
+
+def _is_valid_patient_name_candidate(candidate_text: str) -> bool:
+    """Проверяет, похож ли кандидат на реальное ФИО пациента.
+
+    :param candidate_text: текст-кандидат
+    :return: ``True``, если строка похожа на ФИО пациента
+    """
+
+    raw = str(candidate_text or "").strip()
+    if not raw:
+        return False
+    if has_datetime_signal(raw):
+        return False
+    if match_city(raw):
+        return False
+    low_raw = raw.lower()
+    if _QF_APPOINTMENT_WORD_RE.search(low_raw):
+        return False
+    if _QF_TIME_FRAGMENT_RE.search(low_raw):
+        return False
+    tokens = [w for w in re.split(r"\s+", low_raw) if w]
+    if len(tokens) < 2:
+        return False
+    if any(token in _QF_PATIENT_NAME_STOPWORDS for token in tokens):
+        return False
+    if not any(len(token) >= 3 for token in tokens):
+        return False
+    return True
+
+
+def _fill_patient_entities(text: str, missing_rules: list[str], out: dict[str, Any]) -> None:
+    """Извлекает ФИО пациента из явного ответа пользователя.
+
+    :param text: исходный текст пользователя
+    :param missing_rules: список правил незаполненных слотов
+    :param out: словарь, который пополняется найденными сущностями
+    :return: None
+    """
+
+    if "patient_name" not in missing_rules:
+        return
+
+    t = str(text or "").strip()
+    candidate: str | None = None
+    m_name = _QF_PATIENT_NAME_PREFIX_RE.search(t)
+    if m_name:
+        candidate = m_name.group(1).strip()
+    if not candidate:
+        m_plain = _QF_PLAIN_NAME_RE.match(t)
+        if m_plain:
+            plain = m_plain.group(1).strip()
+            low_plain = plain.lower()
+            if not (
+                _QF_APPOINTMENT_WORD_RE.search(low_plain)
+                or _QF_TIME_FRAGMENT_RE.search(low_plain)
+                or match_city(low_plain)
+            ):
+                candidate = plain
+    if not candidate:
+        fragments = list(_QF_NAME_FRAGMENT_RE.finditer(t))
+        if fragments:
+            raw = " ".join(fragments[-1].groups()).strip()
+            low_raw = raw.lower()
+            if not (
+                _QF_APPOINTMENT_WORD_RE.search(low_raw)
+                or _QF_TIME_FRAGMENT_RE.search(low_raw)
+                or match_city(low_raw)
+            ):
+                candidate = raw
+    if candidate and _is_valid_patient_name_candidate(candidate):
+        normalized_tokens = [w.capitalize() for w in re.split(r"\s+", candidate) if w]
+        if len(normalized_tokens) >= 2:
+            out["patient_name"] = " ".join(normalized_tokens)
+
+
+def _fill_location_entities(text: str, missing_rules: list[str], out: dict[str, Any]) -> None:
+    """Извлекает город, если он нужен для текущего уточнения.
+
+    :param text: исходный текст пользователя
+    :param missing_rules: список правил незаполненных слотов
+    :param out: словарь, который пополняется найденными сущностями
+    :return: None
+    """
+
+    if not _missing_rules_include(missing_rules, "city"):
+        return
+
+    city = match_city(str(text or "").strip())
+    if city:
+        out["city"] = city.strip()
+
+
+def _fill_appointment_selection_mode(text: str, missing_rules: list[str], out: dict[str, Any]) -> None:
+    """Извлекает режим выбора в appointment-flow: врач или филиал.
+
+    :param text: исходный текст пользователя
+    :param missing_rules: список правил незаполненных слотов
+    :param out: словарь, который пополняется найденными сущностями
+    :return: None
+    """
+
+    if not _missing_rules_include(missing_rules, "branch", "city"):
+        return
+    if out.get("branch_id") or out.get("branch_name"):
+        return
+
+    t = str(text or "").strip()
+    doctor_choice = bool(_QF_APPOINTMENT_CHOICE_DOCTOR_RE.search(t))
+    branch_choice = bool(_QF_APPOINTMENT_CHOICE_BRANCH_RE.search(t))
+    if doctor_choice and not branch_choice:
+        out["appointment_selection_mode"] = "doctor"
+    elif branch_choice and not doctor_choice:
+        out["appointment_selection_mode"] = "branch"
+
+
+def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_rules: list[str]) -> dict[str, Any]:
+    """Быстро дополняет базовые сущности из короткой реплики пользователя.
+
+    :param text: исходный текст пользователя
+    :param state_entities: уже накопленные сущности состояния
+    :param missing_rules: список правил незаполненных слотов
+    :return: словарь с быстро извлечёнными сущностями
+    """
+
+    out: dict[str, Any] = {}
+    _fill_insurance_entities(text, out)
+    _fill_datetime_entities(text, out)
+    _fill_test_result_entities(text, missing_rules, out)
+    _fill_appointment_entities(text, state_entities, missing_rules, out)
+    _fill_child_age_entities(text, missing_rules, out)
+    _fill_patient_entities(text, missing_rules, out)
+    _fill_location_entities(text, missing_rules, out)
+    _fill_appointment_selection_mode(text, missing_rules, out)
     return out
 
 

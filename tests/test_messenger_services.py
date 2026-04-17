@@ -5,6 +5,7 @@ import pytest
 
 from messengers_router.services import lab_tests as lab_tests_mod
 from messengers_router import classifier as classifier_mod
+from messengers_router import policies as policies_mod
 from messengers_router import services as svc_mod
 from messengers_router.city import match_city
 from messengers_router.mess_types import Evidence, SessionState
@@ -1535,6 +1536,25 @@ def test_test_result_status_stub():
 def test_quick_fill_test_goal_checkup():
     out = quick_fill_core_entities("чекап", {}, ["_any_of:test_goal,test_name"])
     assert out.get("test_goal"), "Expected quick-fill to capture test goal for checkup keyword"
+
+
+def test_quick_fill_core_entities_is_split_into_domain_helpers():
+    for helper_name in (
+        "_fill_insurance_entities",
+        "_fill_datetime_entities",
+        "_fill_test_result_entities",
+        "_fill_appointment_entities",
+        "_fill_patient_entities",
+    ):
+        assert callable(getattr(policies_mod, helper_name, None))
+
+
+def test_quick_fill_insurance_and_child_age_are_preserved_together():
+    out = quick_fill_core_entities("детям 5 лет по дмс", {}, ["child_age"])
+
+    assert out.get("insurance_type") == "dms"
+    assert out.get("accepts_children") is True
+    assert out.get("child_age") == 5
 
 
 def test_quick_fill_city_typo_is_normalized():
