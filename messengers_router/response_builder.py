@@ -8,13 +8,23 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import evidence_keys as ek
 from .flow_policy import (
     hydrate_appointment_context_from_schedule,
     reset_appointment_runtime_state,
     safe_get_branches,
 )
 from .memory import MemoryStore
-from .mess_types import AppointmentPhase, Evidence, ResponseEnvelope, RouteDecision, SessionState
+from .mess_types import Evidence, ResponseEnvelope, RouteDecision, SessionState
+from .state_mutations import (
+    activate_appointment_flow,
+    clear_appointment_branch_options,
+    clear_appointment_selection_mode,
+    mark_appointment_confirm_pending,
+    reset_appointment_confirmation_flags,
+    set_appointment_branch_options,
+    set_appointment_selection_mode,
+)
 from .policies import (
     APPOINTMENT_STEP_BRANCH,
     APPOINTMENT_STEP_CONFIRM,
@@ -54,7 +64,7 @@ _UNSUPPORTED_CATALOG_TEXT: dict[str, str] = {
 
 
 def build_unsupported_catalog_response(evidence: Evidence) -> ResponseEnvelope | None:
-    payload = evidence.get("unsupported_catalog")
+    payload = evidence.get(ek.UNSUPPORTED_CATALOG)
     if not isinstance(payload, dict):
         return None
     kind = str(payload.get("kind") or "").strip()
@@ -72,7 +82,7 @@ def build_operator_offer_response(evidence: Evidence) -> ResponseEnvelope | None
     :return: готовый envelope или None
     """
 
-    payload = evidence.get("operator_offer_response")
+    payload = evidence.get(ek.OPERATOR_OFFER_RESPONSE)
     if not isinstance(payload, dict):
         return None
     text = str(payload.get("text") or "").strip()
@@ -86,7 +96,7 @@ def build_operator_offer_response(evidence: Evidence) -> ResponseEnvelope | None
 
 
 def build_catalog_confirm_response(evidence: Evidence) -> ResponseEnvelope | None:
-    payload = evidence.get("catalog_confirm_response")
+    payload = evidence.get(ek.CATALOG_CONFIRM_RESPONSE)
     if not isinstance(payload, dict):
         return None
     text = str(payload.get("text") or "").strip()
@@ -100,7 +110,7 @@ def build_catalog_confirm_response(evidence: Evidence) -> ResponseEnvelope | Non
 
 
 def build_catalog_health_response(evidence: Evidence) -> ResponseEnvelope | None:
-    payload = evidence.get("catalog_health_response")
+    payload = evidence.get(ek.CATALOG_HEALTH_RESPONSE)
     if not isinstance(payload, dict):
         return None
     text = str(payload.get("text") or "").strip()
@@ -162,7 +172,7 @@ def _sync_compound_price_pending(state: SessionState, payload: dict[str, Any]) -
 def build_price_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "PRICE":
         return None
-    price_payload = evidence.get("price")
+    price_payload = evidence.get(ek.PRICE)
     if not isinstance(price_payload, dict):
         return None
     _sync_price_family_context(state, price_payload)
@@ -187,7 +197,7 @@ def build_price_response(flow_label: str, evidence: Evidence, state: SessionStat
 def build_service_bundle_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "PRICE":
         return None
-    payload = evidence.get("service_bundle")
+    payload = evidence.get(ek.SERVICE_BUNDLE)
     if not isinstance(payload, dict):
         return None
     _sync_price_family_context(state, payload)
@@ -199,7 +209,7 @@ def build_service_bundle_response(flow_label: str, evidence: Evidence, state: Se
 def build_doctor_info_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "DOCTOR_INFO":
         return None
-    doctors_info_payload = evidence.get("doctors_info")
+    doctors_info_payload = evidence.get(ek.DOCTORS_INFO)
     if not isinstance(doctors_info_payload, dict):
         return None
     doctors_raw = doctors_info_payload.get("doctors")
@@ -226,7 +236,7 @@ def build_doctor_info_response(flow_label: str, evidence: Evidence, state: Sessi
         state.last_entities.pop("doctor_id", None)
 
     text = format_doctor_info_for_patient(doctors_info_payload, state.last_entities)
-    price_payload = evidence.get("price")
+    price_payload = evidence.get(ek.PRICE)
     if isinstance(price_payload, dict):
         raw_prices = price_payload.get("prices")
         if isinstance(raw_prices, list) and raw_prices:
@@ -241,7 +251,7 @@ def build_doctor_info_response(flow_label: str, evidence: Evidence, state: Sessi
 def build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseEnvelope | None:
     if flow_label != "TEST_RESULT":
         return None
-    result_status = evidence.get("test_result_status")
+    result_status = evidence.get(ek.TEST_RESULT_STATUS)
     if not isinstance(result_status, dict):
         return None
 
@@ -281,7 +291,7 @@ def build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseE
 def build_prepare_response(flow_label: str, evidence: Evidence) -> ResponseEnvelope | None:
     if flow_label != "PREPARE":
         return None
-    payload = evidence.get("prepare")
+    payload = evidence.get(ek.PREPARE)
     if not isinstance(payload, dict):
         return None
     text = str(payload.get("prepare") or "").strip()
@@ -298,7 +308,7 @@ def build_doctor_schedule_response(
 ) -> ResponseEnvelope | None:
     if flow_label != "DOCTOR_SCHEDULE":
         return None
-    schedule_payload = evidence.get("doctor_schedule")
+    schedule_payload = evidence.get(ek.DOCTOR_SCHEDULE)
     if not isinstance(schedule_payload, dict):
         return None
     if str(schedule_payload.get("schedule_unavailable_reason") or "").strip() == "no_free_slots_2_weeks":
@@ -328,7 +338,7 @@ def build_address_response(
 ) -> ResponseEnvelope | None:
     if flow_label != "ADDRESS":
         return None
-    address_payload = evidence.get("address")
+    address_payload = evidence.get(ek.ADDRESS)
     if not isinstance(address_payload, dict):
         return None
 
@@ -358,7 +368,7 @@ def build_address_response(
 def build_news_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "NEWS":
         return None
-    news_payload = evidence.get("news")
+    news_payload = evidence.get(ek.NEWS)
     if not isinstance(news_payload, dict):
         return None
     text = format_news_for_patient(news_payload, state.last_entities)
@@ -366,7 +376,7 @@ def build_news_response(flow_label: str, evidence: Evidence, state: SessionState
 
 
 def build_main_index_info_response(evidence: Evidence) -> ResponseEnvelope | None:
-    payload = evidence.get("main_index_info")
+    payload = evidence.get(ek.MAIN_INDEX_INFO)
     if not isinstance(payload, dict):
         return None
     content = str(payload.get("content") or "").strip()
@@ -382,7 +392,7 @@ def build_appointment_schedule_preview_response(
 ) -> ResponseEnvelope | None:
     if flow_label != "APPOINTMENT":
         return None
-    schedule_payload = evidence.get("doctor_schedule")
+    schedule_payload = evidence.get(ek.DOCTOR_SCHEDULE)
     if not isinstance(schedule_payload, dict):
         return None
     if not (state.last_entities.get("doctor_name") or state.last_entities.get("doctor_id")):
@@ -396,8 +406,7 @@ def build_appointment_schedule_preview_response(
         return None
 
     hydrate_appointment_context_from_schedule(state, schedule_payload)
-    state.last_entities["appointment_flow_active"] = True
-    state.dialog.phase = AppointmentPhase.COLLECTING
+    activate_appointment_flow(state)
     text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
@@ -413,8 +422,7 @@ def build_appointment_step_response(
         return None
 
     entities = state.last_entities
-    state.last_entities["appointment_flow_active"] = True
-    state.dialog.phase = AppointmentPhase.COLLECTING
+    activate_appointment_flow(state)
     action = str(entities.get("appointment_action") or "").strip().lower()
     if action == "cancel":
         patient_name = str(entities.get("patient_name") or "").strip()
@@ -436,12 +444,7 @@ def build_appointment_step_response(
         if time_text:
             details.append(f"время: {time_text}")
 
-        state.last_entities.pop("appointment_flow_active", None)
-        state.last_entities.pop("appointment_confirm_pending", None)
-        state.last_entities.pop("appointment_confirmed", None)
-        state.last_entities.pop("appointment_cancel_pending", None)
-        state.last_entities.pop("appointment_topic_switch_pending", None)
-        state.dialog.phase = AppointmentPhase.IDLE
+        reset_appointment_confirmation_flags(state)
         text_lines = [f"{header}: " + ", ".join(details) + "."] if details else [f"{header}: данные получены."]
         text_lines.append("Передаю заявку оператору для подтверждения и дальнейшего оформления.")
         return ResponseEnvelope(text="\n".join(text_lines), handoff=True)
@@ -452,22 +455,22 @@ def build_appointment_step_response(
     selection_mode = str(entities.get("appointment_selection_mode") or "").strip().lower()
     doctor_selected = bool(entities.get("doctor_name") or entities.get("doctor_id"))
     if doctor_selected:
-        state.last_entities.pop("appointment_selection_mode", None)
+        clear_appointment_selection_mode(state)
         selection_mode = ""
 
     if appointment_step == APPOINTMENT_STEP_BRANCH:
         if selection_mode == "doctor" and not doctor_selected:
-            doctors_info_payload = evidence.get("doctors_info")
+            doctors_info_payload = evidence.get(ek.DOCTORS_INFO)
             doctors_raw = doctors_info_payload.get("doctors") if isinstance(doctors_info_payload, dict) else None
             doctors = doctors_raw if isinstance(doctors_raw, list) else []
             if doctors:
-                state.last_entities.pop("appointment_branch_options", None)
+                clear_appointment_branch_options(state)
                 return ResponseEnvelope(
                     text=format_doctor_info_for_patient(doctors_info_payload, entities),  # type: ignore[arg-type]
                     handoff=False,
                 )
             # Если список врачей не найден, мягко возвращаемся к выбору филиала.
-            state.last_entities["appointment_selection_mode"] = "branch"
+            set_appointment_selection_mode(state, "branch")
             selection_mode = "branch"
 
         if not city:
@@ -480,12 +483,12 @@ def build_appointment_step_response(
         if not addresses:
             branches = safe_get_branches(services)
             addresses = appointment_addresses_for_city(
-                evidence.get("address"),
+                evidence.get(ek.ADDRESS),
                 branches,
                 city=city or None,
                 limit=5,
             )
-        state.last_entities["appointment_branch_options"] = addresses
+        set_appointment_branch_options(state, addresses)
         allow_doctor_option = not doctor_selected and bool(
             str(entities.get("service_name") or entities.get("test_name") or entities.get("specialty") or "").strip()
         )
@@ -500,10 +503,10 @@ def build_appointment_step_response(
         )
 
     if appointment_step == APPOINTMENT_STEP_DATETIME:
-        state.last_entities.pop("appointment_branch_options", None)
+        clear_appointment_branch_options(state)
         if action in {"cancel", "reschedule"}:
             memory.set_pending(state, label="APPOINTMENT", missing_slots=["_any_of:date_from,time_from,date_hint"])
-        price_rub = extract_price_rub(evidence.get("price"))
+        price_rub = extract_price_rub(evidence.get(ek.PRICE))
         branch = str(entities.get("branch_name") or entities.get("city") or "выбранном филиале").strip()
         return ResponseEnvelope(
             text=appointment_text_datetime_prompt(service, branch, price_rub),
@@ -518,8 +521,7 @@ def build_appointment_step_response(
         )
 
     if appointment_step == APPOINTMENT_STEP_CONFIRM:
-        state.last_entities["appointment_confirm_pending"] = True
-        state.dialog.phase = AppointmentPhase.CONFIRM
+        mark_appointment_confirm_pending(state)
         summary = appointment_summary(entities)
         return ResponseEnvelope(text=appointment_text_confirm_prompt(summary), handoff=False)
 

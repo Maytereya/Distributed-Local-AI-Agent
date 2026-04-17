@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from functools import lru_cache
 from typing import Any, cast
 
 from .llm_mode_policy import RuntimeOptions
@@ -299,6 +300,7 @@ def _extract_service_keyword(text: str) -> str | None:
     return extract_service_phrase(text)
 
 
+@lru_cache(maxsize=512)
 def _extract_doctor_name(text: str, *, mode: str = "appointment") -> str | None:
     """Extract a doctor-name candidate for the given intent mode.
 

@@ -14,10 +14,13 @@ recovery-политика и сервисные интеграции вынес�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import AsyncGenerator, Any
 
+from . import evidence_keys as ek
+from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
 from .context_summary import update_summary
@@ -1056,23 +1059,6 @@ async def _inject_catalog_candidates(
             or decision.context_action == "overwrite_doctor"
         )
     )
-    if should_try_doctor:
-        doctor_match = await services.match_catalog_doctor(
-            str(entities.get("doctor_name") or user_text or ""),
-        )
-        status = str(doctor_match.get("status") or "")
-        canonical = str(doctor_match.get("canonical") or "").strip()
-        if status == "exact" and canonical:
-            entities["doctor_name"] = canonical
-            flags.discard("doctor_name_unverified")
-            flags.add("doctor_name_verified")
-            flags.add("catalog_doctor_exact")
-            updated = True
-        elif status == "fuzzy" and canonical:
-            entities["_catalog_doctor_candidate"] = canonical
-            entities["_catalog_doctor_query"] = str(doctor_match.get("query") or "").strip()
-            flags.add("catalog_doctor_fuzzy_candidate")
-            updated = True
 
     should_try_service = (
         decision.label in {"APPOINTMENT", "PRICE", "ADDRESS", "TEST_ASSIST"}
@@ -1090,11 +1076,54 @@ async def _inject_catalog_candidates(
             and (entities.get("doctor_name") or state.last_entities.get("doctor_name"))
         ):
             should_try_service = False
-    if should_try_service:
-        service_match = await services.match_catalog_service(
+
+    # Part IV Stage 15 (OPTION B, partial): doctor + service catalog lookups
+    # are independent — both read post-verify entities and don't depend on
+    # each other's result. Gather them into a single await to drop up to
+    # ~50-100ms off the turn when both conditions fire. The APPLY half below
+    # stays sequential (doctor first, then service) to preserve legacy flag /
+    # entity merge order byte-for-byte.
+    doctor_coro = (
+        services.match_catalog_doctor(
+            str(entities.get("doctor_name") or user_text or ""),
+        )
+        if should_try_doctor
+        else None
+    )
+    service_coro = (
+        services.match_catalog_service(
             str(entities.get("service_name") or entities.get("test_name") or user_text or ""),
             current_service_name=str(state.last_entities.get("service_name") or ""),
         )
+        if should_try_service
+        else None
+    )
+
+    doctor_match: dict[str, Any] | None = None
+    service_match: dict[str, Any] | None = None
+    if doctor_coro is not None and service_coro is not None:
+        doctor_match, service_match = await asyncio.gather(doctor_coro, service_coro)
+    elif doctor_coro is not None:
+        doctor_match = await doctor_coro
+    elif service_coro is not None:
+        service_match = await service_coro
+
+    if doctor_match is not None:
+        status = str(doctor_match.get("status") or "")
+        canonical = str(doctor_match.get("canonical") or "").strip()
+        if status == "exact" and canonical:
+            entities["doctor_name"] = canonical
+            flags.discard("doctor_name_unverified")
+            flags.add("doctor_name_verified")
+            flags.add("catalog_doctor_exact")
+            updated = True
+        elif status == "fuzzy" and canonical:
+            entities["_catalog_doctor_candidate"] = canonical
+            entities["_catalog_doctor_query"] = str(doctor_match.get("query") or "").strip()
+            flags.add("catalog_doctor_fuzzy_candidate")
+            updated = True
+
+    if service_match is not None:
         status = str(service_match.get("status") or "")
         canonical = str(service_match.get("canonical") or "").strip()
         if status == "exact" and canonical:
@@ -1250,206 +1279,43 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
     return await executor_execute_plan(plan, state, services)
 
 
-async def route_patient_message(
-    user_text: str,
+async def _apply_post_nlu_guardrails(
+    decision: RouteDecision,
     state: SessionState,
+    user_text: str,
     services: Services,
     memory: MemoryStore,
-    runtime_options: RuntimeOptions | None = None,
-) -> tuple[RouteDecision, Plan, Evidence]:
-    if state.last_entities.get("_operator_offer_pending"):
-        reply_kind = contextual_reply_kind(user_text)
-        if explicit_operator_requested(user_text):
-            reply_kind = "yes"
-        if reply_kind == "yes":
-            _clear_operator_offer_pending(state, memory)
-            return (
-                RouteDecision(
-                    label="OTHER",
-                    confidence=0.95,
-                    entities={},
-                    flags={"operator_offer_confirmed"},
-                    needs_handoff=False,
-                ),
-                Plan(label="OTHER"),
-                Evidence(items={"operator_offer_response": {"text": handoff_message("manual_operator"), "handoff": True}}),
-            )
-        if reply_kind == "no":
-            _clear_operator_offer_pending(state, memory)
-            return (
-                RouteDecision(
-                    label="OTHER",
-                    confidence=0.95,
-                    entities={},
-                    flags={"operator_offer_declined"},
-                    needs_handoff=False,
-                ),
-                Plan(label="OTHER"),
-                Evidence(
-                    items={
-                        "operator_offer_response": {
-                            "text": "Хорошо, продолжаем диалог. Можете задать другой вопрос.",
-                            "handoff": False,
-                        }
-                    }
-                ),
-            )
-        _clear_operator_offer_pending(state, memory)
+) -> RouteDecision:
+    """Apply post-NLU flow-continuity overrides before plan building.
 
-    catalog_pending_result = await _handle_catalog_confirm_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if catalog_pending_result is not None:
-        return catalog_pending_result
+    Consolidates the cascade of narrow heuristics that sat inline between
+    ``_inject_catalog_candidates`` and ``_apply_appointment_continuity_overrides``:
 
-    appointment_action_result = await _handle_appointment_action_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if appointment_action_result is not None:
-        return appointment_action_result
+    * PRICE → PREPARE short follow-up
+    * PRICE → ADDRESS short follow-up
+    * Active APPOINTMENT flow datetime prelock
+    * apply_context_action (promote/continue/new_topic)
+    * PRICE city-only reply override
+    * verified-doctor label promotion
+    * clear stale doctor on specialty-only queries (state mutation)
+    * non-bookable walk-in → ADDRESS
+    * PREPARE short follow-up hold
+    * DOCTOR_INFO → DOCTOR_SCHEDULE follow-up (awaits services)
+    * DOCTOR_SCHEDULE → APPOINTMENT datetime follow-up (state mutation)
+    * _apply_appointment_continuity_overrides
 
-    compound_price_result = await _handle_compound_price_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if compound_price_result is not None:
-        return compound_price_result
+    State is mutated in-place for the blocks that legacy code mutated directly
+    (patient_name reset, secondary_queue clear, stale doctor-key cleanup);
+    behaviour is byte-for-byte identical to the previous inline form.
 
-    # Вежливое переключение на вторичный интент по короткому "да/нет".
-    queue = get_secondary_queue(state)
-    if (
-        state.last_entities.get("_secondary_offer_pending")
-        and queue
-        and state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
-    ):
-        reply_kind = contextual_reply_kind(user_text)
-        if reply_kind == "other" and _is_secondary_soft_yes(user_text):
-            reply_kind = "yes"
-        next_label = queue[0]
-        secondary_entities = await _resolve_secondary_queue_doctor_reply(user_text, next_label, services)
-        if reply_kind == "other" and secondary_entities:
-            reply_kind = "yes"
-        if reply_kind == "yes":
-            next_label = queue.pop(0)
-            set_secondary_queue(state, queue)
-            state.last_entities["_secondary_offer_pending"] = False
-            if secondary_entities:
-                memory.merge_entities(state, secondary_entities, label=next_label)
-            decision = RouteDecision(
-                label=next_label,  # type: ignore[arg-type]
-                confidence=0.9,
-                entities={"secondary_intent_from_queue": True, **secondary_entities},
-                flags={"secondary_intent_activated"},
-                needs_handoff=False,
-            )
-            plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
-            evidence = await execute_plan(plan, state, services)
-            return decision, plan, evidence
-        if reply_kind == "no":
-            set_secondary_queue(state, [])
-            state.last_entities["_secondary_offer_pending"] = False
-        else:
-            # Пользователь продолжил диалог в другом направлении.
-            state.last_entities["_secondary_offer_pending"] = False
+    :param decision: routing decision after NLU + catalog candidate injection
+    :param state: session state
+    :param user_text: current user turn
+    :param services: service layer (for doctor-name resolution in follow-ups)
+    :param memory: memory store (for pending inspection)
+    :return: decision after the full guardrail cascade
+    """
 
-    # Диагностические NLU-поля не должны засорять долгоживущий session state.
-    # Актуальный trace отдаем только через debug-канал.
-    for key in ("_nlu_candidates", "_nlu_merged_from", "_nlu_shadow"):
-        state.last_entities.pop(key, None)
-
-    nlu_debug: dict[str, Any] = {}
-    pending_before_nlu = memory.get_pending(state)
-    appointment_prelock = await prelock_active_appointment_turn(
-        user_text,
-        state.last_entities,
-        pending_before_nlu if isinstance(pending_before_nlu, dict) else None,
-        services,
-    )
-    if appointment_prelock is not None:
-        clear_service_name = bool(appointment_prelock.pop("__clear_service_name", False))
-        clear_patient_name = bool(appointment_prelock.pop("__clear_patient_name", False))
-        if clear_service_name:
-            state.last_entities.pop("service_name", None)
-            state.last_entities.pop("test_name", None)
-        if clear_patient_name:
-            state.last_entities.pop("patient_name", None)
-            state.last_entities.pop("appointment_confirm_pending", None)
-            state.last_entities.pop("appointment_confirmed", None)
-            state.dialog.phase = AppointmentPhase.COLLECTING
-        decision = RouteDecision(
-            label="APPOINTMENT",
-            confidence=0.91,
-            entities=appointment_prelock,
-            flags={"appointment_slot_prelock"},
-            needs_handoff=False,
-            context_action="continue",
-            source="flow_prelock",
-        )
-        nlu_debug["appointment_prelock"] = {
-            "hit": True,
-            "entities": dict(appointment_prelock),
-            "pending_label": str((pending_before_nlu or {}).get("label") or ""),
-        }
-    else:
-        use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
-        shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False) or _env_flag("MR_NLU_SHADOW", False)
-        if use_v2_nlu:
-            nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
-            decision = nlu_result.decision
-            nlu_debug["candidates"] = [
-                {
-                    "source": cand.source,
-                    "label": cand.label,
-                    "confidence": cand.confidence,
-                    "flags": cand.flags[:8],
-                }
-                for cand in nlu_result.candidates
-            ]
-            nlu_debug["merged_from"] = nlu_result.merged_from
-            if nlu_result.trace:
-                nlu_debug["nlu_trace"] = nlu_result.trace
-                nlu_debug["trace"] = nlu_result.trace
-            if shadow_nlu:
-                legacy = await analyze(user_text, state.last_entities)
-                nlu_debug["shadow"] = {
-                    "legacy_label": legacy.label,
-                    "legacy_conf": legacy.confidence,
-                    "v2_label": decision.label,
-                    "v2_conf": decision.confidence,
-                }
-        else:
-            decision = await analyze(user_text, state.last_entities, runtime_options=runtime_options)
-
-    topic_match = match_topic(user_text)
-    if topic_match is not None:
-        decision = _apply_topic_registry_override(decision, topic_match)
-        nlu_debug["topic_registry"] = {
-            "topic_id": topic_match.topic_id,
-            "label": topic_match.label,
-            "priority": topic_match.priority,
-            "score": topic_match.score,
-            "matched_keywords": list(topic_match.matched_keywords),
-            "matched_regex": list(topic_match.matched_regex),
-        }
-
-    decision = await _verify_doctor_entity(decision, services, user_text)
-    decision = await _inject_catalog_candidates(
-        decision,
-        user_text=user_text,
-        state=state,
-        services=services,
-    )
     last_label_before = str(state.last_entities.get("_last_label") or "")
     service_context = str(state.last_entities.get("service_name") or state.last_entities.get("test_name") or "").strip()
     if (
@@ -1627,9 +1493,7 @@ async def route_patient_message(
     ):
         if state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM) and not looks_like_patient_fio(user_text):
             state.last_entities.pop("patient_name", None)
-            state.last_entities.pop("appointment_confirm_pending", None)
-            state.last_entities.pop("appointment_confirmed", None)
-            state.dialog.phase = AppointmentPhase.COLLECTING
+            reactivate_appointment_collecting(state)
         entities = dict(decision.entities)
         for key in ("doctor_id", "doctor_name", "branch_id", "branch_name"):
             if not entities.get(key) and state.last_entities.get(key):
@@ -1645,6 +1509,270 @@ async def route_patient_message(
         )
 
     decision = _apply_appointment_continuity_overrides(decision, state, user_text)
+    return decision
+
+
+async def _handle_secondary_queue_pending(
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Resolve a previously-offered secondary intent awaiting user ack.
+
+    Mirrors the legacy block that sat inline at the top of
+    ``route_patient_message``: if the previous turn offered a queued follow-up
+    (``_secondary_offer_pending``) and the current reply is a short "да"/"нет"
+    (or a short doctor last-name for doctor-flavoured follow-ups), promote the
+    first queued label into a full routing triple. On a "no"/ambiguous reply
+    the pending flag is cleared and ``None`` is returned so normal routing
+    continues.
+
+    :param user_text: current user turn
+    :param state: session state
+    :param services: service layer (used to resolve doctor entities)
+    :param memory: memory store (for entity merging)
+    :param runtime_options: runtime options propagated into plan building
+    :return: fully-materialised routing triple when the turn is consumed by the
+        secondary-queue flow, else ``None`` so normal routing continues.
+    """
+
+    queue = get_secondary_queue(state)
+    if not (
+        state.last_entities.get("_secondary_offer_pending")
+        and queue
+        and state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
+    ):
+        return None
+
+    reply_kind = contextual_reply_kind(user_text)
+    if reply_kind == "other" and _is_secondary_soft_yes(user_text):
+        reply_kind = "yes"
+    next_label = queue[0]
+    secondary_entities = await _resolve_secondary_queue_doctor_reply(user_text, next_label, services)
+    if reply_kind == "other" and secondary_entities:
+        reply_kind = "yes"
+    if reply_kind == "yes":
+        next_label = queue.pop(0)
+        set_secondary_queue(state, queue)
+        state.last_entities["_secondary_offer_pending"] = False
+        if secondary_entities:
+            memory.merge_entities(state, secondary_entities, label=next_label)
+        decision = RouteDecision(
+            label=next_label,  # type: ignore[arg-type]
+            confidence=0.9,
+            entities={"secondary_intent_from_queue": True, **secondary_entities},
+            flags={"secondary_intent_activated"},
+            needs_handoff=False,
+        )
+        plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
+        evidence = await execute_plan(plan, state, services)
+        return decision, plan, evidence
+    if reply_kind == "no":
+        set_secondary_queue(state, [])
+        state.last_entities["_secondary_offer_pending"] = False
+    else:
+        # Пользователь продолжил диалог в другом направлении.
+        state.last_entities["_secondary_offer_pending"] = False
+    return None
+
+
+def _handle_operator_offer_pending(
+    user_text: str,
+    state: SessionState,
+    memory: MemoryStore,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Resolve a previously-offered operator handoff awaiting user ack.
+
+    :param user_text: current user turn
+    :param state: session state
+    :param memory: memory store (for clearing pending markers)
+    :return: fully-materialised routing triple when the turn is consumed by the
+        operator-offer flow, else ``None`` so normal routing continues.
+    """
+
+    if not state.last_entities.get("_operator_offer_pending"):
+        return None
+
+    reply_kind = contextual_reply_kind(user_text)
+    if explicit_operator_requested(user_text):
+        reply_kind = "yes"
+    if reply_kind == "yes":
+        _clear_operator_offer_pending(state, memory)
+        return (
+            RouteDecision(
+                label="OTHER",
+                confidence=0.95,
+                entities={},
+                flags={"operator_offer_confirmed"},
+                needs_handoff=False,
+            ),
+            Plan(label="OTHER"),
+            Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": handoff_message("manual_operator"), "handoff": True}}),
+        )
+    if reply_kind == "no":
+        _clear_operator_offer_pending(state, memory)
+        return (
+            RouteDecision(
+                label="OTHER",
+                confidence=0.95,
+                entities={},
+                flags={"operator_offer_declined"},
+                needs_handoff=False,
+            ),
+            Plan(label="OTHER"),
+            Evidence(
+                items={
+                    ek.OPERATOR_OFFER_RESPONSE: {
+                        "text": "Хорошо, продолжаем диалог. Можете задать другой вопрос.",
+                        "handoff": False,
+                    }
+                }
+            ),
+        )
+    # Pending cleared; caller proceeds to normal routing.
+    _clear_operator_offer_pending(state, memory)
+    return None
+
+
+async def route_patient_message(
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence]:
+    operator_offer_result = _handle_operator_offer_pending(user_text, state, memory)
+    if operator_offer_result is not None:
+        return operator_offer_result
+
+    catalog_pending_result = await _handle_catalog_confirm_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if catalog_pending_result is not None:
+        return catalog_pending_result
+
+    appointment_action_result = await _handle_appointment_action_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if appointment_action_result is not None:
+        return appointment_action_result
+
+    compound_price_result = await _handle_compound_price_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if compound_price_result is not None:
+        return compound_price_result
+
+    secondary_queue_result = await _handle_secondary_queue_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if secondary_queue_result is not None:
+        return secondary_queue_result
+
+    # Диагностические NLU-поля не должны засорять долгоживущий session state.
+    # Актуальный trace отдаем только через debug-канал.
+    for key in ("_nlu_candidates", "_nlu_merged_from", "_nlu_shadow"):
+        state.last_entities.pop(key, None)
+
+    nlu_debug: dict[str, Any] = {}
+    pending_before_nlu = memory.get_pending(state)
+    appointment_prelock = await prelock_active_appointment_turn(
+        user_text,
+        state.last_entities,
+        pending_before_nlu if isinstance(pending_before_nlu, dict) else None,
+        services,
+    )
+    if appointment_prelock is not None:
+        clear_service_name = bool(appointment_prelock.pop("__clear_service_name", False))
+        clear_patient_name = bool(appointment_prelock.pop("__clear_patient_name", False))
+        if clear_service_name:
+            state.last_entities.pop("service_name", None)
+            state.last_entities.pop("test_name", None)
+        if clear_patient_name:
+            state.last_entities.pop("patient_name", None)
+            reactivate_appointment_collecting(state)
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.91,
+            entities=appointment_prelock,
+            flags={"appointment_slot_prelock"},
+            needs_handoff=False,
+            context_action="continue",
+            source="flow_prelock",
+        )
+        nlu_debug["appointment_prelock"] = {
+            "hit": True,
+            "entities": dict(appointment_prelock),
+            "pending_label": str((pending_before_nlu or {}).get("label") or ""),
+        }
+    else:
+        use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
+        shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False) or _env_flag("MR_NLU_SHADOW", False)
+        if use_v2_nlu:
+            nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
+            decision = nlu_result.decision
+            nlu_debug["candidates"] = [
+                {
+                    "source": cand.source,
+                    "label": cand.label,
+                    "confidence": cand.confidence,
+                    "flags": cand.flags[:8],
+                }
+                for cand in nlu_result.candidates
+            ]
+            nlu_debug["merged_from"] = nlu_result.merged_from
+            if nlu_result.trace:
+                nlu_debug["nlu_trace"] = nlu_result.trace
+                nlu_debug["trace"] = nlu_result.trace
+            if shadow_nlu:
+                legacy = await analyze(user_text, state.last_entities)
+                nlu_debug["shadow"] = {
+                    "legacy_label": legacy.label,
+                    "legacy_conf": legacy.confidence,
+                    "v2_label": decision.label,
+                    "v2_conf": decision.confidence,
+                }
+        else:
+            decision = await analyze(user_text, state.last_entities, runtime_options=runtime_options)
+
+    topic_match = match_topic(user_text)
+    if topic_match is not None:
+        decision = _apply_topic_registry_override(decision, topic_match)
+        nlu_debug["topic_registry"] = {
+            "topic_id": topic_match.topic_id,
+            "label": topic_match.label,
+            "priority": topic_match.priority,
+            "score": topic_match.score,
+            "matched_keywords": list(topic_match.matched_keywords),
+            "matched_regex": list(topic_match.matched_regex),
+        }
+
+    decision = await _verify_doctor_entity(decision, services, user_text)
+    decision = await _inject_catalog_candidates(
+        decision,
+        user_text=user_text,
+        state=state,
+        services=services,
+    )
+    decision = await _apply_post_nlu_guardrails(decision, state, user_text, services, memory)
 
     if decision.label == "DOCTOR_SCHEDULE":
         # Очищаем хвосты сценария записи, чтобы расписание не фильтровалось
@@ -1839,7 +1967,7 @@ async def route_patient_message(
         handoff_planned=(
             # executor sets a top-level boolean; service fallbacks use nested
             # dicts — check both so the graph FSM always knows about a handoff
-            bool(evidence.get("handoff_required"))
+            bool(evidence.get(ek.HANDOFF_REQUIRED))
             or evidence_requires_handoff(evidence)[0]
         ),
     )
