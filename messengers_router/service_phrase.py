@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 from .city import match_city
 
@@ -85,6 +86,7 @@ _SERVICE_ACTION_RE = re.compile(
 _SERVICE_SINGLE_WORD_RE = re.compile(r"^\s*([a-zа-яё][a-zа-яё0-9\-]{3,})\s*$", re.I)
 
 
+@lru_cache(maxsize=1024)
 def extract_service_phrase(text: str) -> str | None:
     """
     Выделяет компактную фразу услуги/процедуры из пользовательского текста.

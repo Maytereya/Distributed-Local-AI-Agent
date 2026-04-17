@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import evidence_keys as ek
 from .mess_types import Evidence, Plan, SessionState
 from .policies import handoff_message, require_auth_for_test_result
 from .services import Services
@@ -30,8 +31,8 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
         if step.auth == "patient_token":
             need_auth, msg = require_auth_for_test_result(state.is_authenticated)
             if need_auth:
-                ev.put("auth_required", True)
-                ev.put("auth_message", msg)
+                ev.put(ek.AUTH_REQUIRED, True)
+                ev.put(ek.AUTH_MESSAGE, msg)
                 return ev
 
         tool = step.tool
@@ -45,69 +46,69 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
                 if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):
                     _put_optional_step_fallback(tool, q, payload)
                     continue
-                ev.put("doctors_info", payload)
+                ev.put(ek.DOCTORS_INFO, payload)
             elif tool == "doctors_schedule_week":
                 payload = await services.doctors_schedule_week(q, ent)
                 if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):
                     _put_optional_step_fallback(tool, q, payload)
                     continue
-                ev.put("doctor_schedule", payload)
+                ev.put(ek.DOCTOR_SCHEDULE, payload)
             elif tool == "appointment_help":
                 payload = await services.appointment_help(q, ent)
                 if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):
                     _put_optional_step_fallback(tool, q, payload)
                     continue
-                ev.put("appointment", payload)
+                ev.put(ek.APPOINTMENT, payload)
             elif tool == "test_assist":
                 payload = await services.test_assist(q, ent)
                 if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):
                     _put_optional_step_fallback(tool, q, payload)
                     continue
-                ev.put("test_assist", payload)
+                ev.put(ek.TEST_ASSIST, payload)
             elif tool == "test_prepare":
                 payload = await services.test_prepare(q, ent)
                 if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):
                     _put_optional_step_fallback(tool, q, payload)
                     continue
-                ev.put("prepare", payload)
+                ev.put(ek.PREPARE, payload)
             elif tool == "test_result_status":
                 payload = await services.test_result_status(q, ent)
                 if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):
                     _put_optional_step_fallback(tool, q, payload)
                     continue
-                ev.put("test_result_status", payload)
+                ev.put(ek.TEST_RESULT_STATUS, payload)
             elif tool == "price_info":
                 payload = await services.price_info(q, ent)
                 if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):
                     _put_optional_step_fallback(tool, q, payload)
                     continue
-                ev.put("price", payload)
+                ev.put(ek.PRICE, payload)
             elif tool == "main_index_info":
                 payload = await services.main_index_info(q, ent)
                 if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):
                     _put_optional_step_fallback(tool, q, payload)
                     continue
-                ev.put("main_index_info", payload)
+                ev.put(ek.MAIN_INDEX_INFO, payload)
             elif tool == "service_bundle_info":
                 payload = await services.service_bundle_info(q, ent)
                 if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):
                     _put_optional_step_fallback(tool, q, payload)
                     continue
-                ev.put("service_bundle", payload)
+                ev.put(ek.SERVICE_BUNDLE, payload)
             elif tool == "address_info":
                 payload = await services.address_info(q, ent)
                 if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):
                     _put_optional_step_fallback(tool, q, payload)
                     continue
-                ev.put("address", payload)
+                ev.put(ek.ADDRESS, payload)
             elif tool == "news_info":
                 payload = await services.news_info(q, ent)
                 if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):
                     _put_optional_step_fallback(tool, q, payload)
                     continue
-                ev.put("news", payload)
+                ev.put(ek.NEWS, payload)
             else:
-                ev.put("unknown_tool", tool)
+                ev.put(ek.UNKNOWN_TOOL, tool)
         except Exception as e:
             if not step.required:
                 ev.put(
@@ -127,10 +128,10 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
                     "query": q,
                 },
             )
-            ev.put("handoff_required", True)
-            ev.put("handoff_reason", "service_error")
+            ev.put(ek.HANDOFF_REQUIRED, True)
+            ev.put(ek.HANDOFF_REASON, "service_error")
             ev.put(
-                "handoff_message",
+                ek.HANDOFF_MESSAGE,
                 handoff_message("service_error"),
             )
             return ev

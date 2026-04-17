@@ -6,7 +6,10 @@ This eliminates 20+ scattered copies of the same normalization idiom.
 """
 from __future__ import annotations
 
+from functools import lru_cache
 
+
+@lru_cache(maxsize=4096)
 def normalize_ru(text: str | None) -> str:
     """Lowercase + ё→е normalization. Returns ``""`` for None.
 
