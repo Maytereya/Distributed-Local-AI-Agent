@@ -217,6 +217,18 @@ context_action: continue
 Label: APPOINTMENT
 context_action: continue
 
+Текст: Как подготовиться к ФГДС?
+Label: PREPARE
+context_action: continue
+
+Текст: Как готовиться к сдаче крови на холестерин?
+Label: PREPARE
+context_action: continue
+
+Текст: Что нужно сделать перед УЗИ брюшной полости?
+Label: PREPARE
+context_action: continue
+
 Текст: передумал, покажи расписание Ким
 Label: DOCTOR_SCHEDULE
 context_action: overwrite_doctor
