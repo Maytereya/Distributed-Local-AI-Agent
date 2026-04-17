@@ -19,10 +19,8 @@ from messengers_router.mess_types import (
 )
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision
-from messengers_router.appointment_flow_guard import (
-    is_new_topic_while_confirm_pending,
-    reset_appointment_runtime_state,
-)
+from messengers_router.appointment_flow_guard import is_new_topic_while_confirm_pending
+from messengers_router.flow_policy import reset_appointment_runtime_state
 from messengers_router.orchestrator import OrchestratorContext
 from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
 from messengers_router.policies import (

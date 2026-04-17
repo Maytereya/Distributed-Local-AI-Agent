@@ -38,10 +38,10 @@ from .flow_policy import (
     normalize_secondary_labels,
     prelock_active_appointment_turn,
     quick_fill_entities_from_text,
+    reset_appointment_runtime_state,
     set_secondary_queue,
 )
 from .appointment_flow_guard import (
-    reset_appointment_runtime_state,
     run_appointment_precheck,
     should_keep_appointment_flow_override,
 )

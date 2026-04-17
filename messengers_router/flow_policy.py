@@ -11,7 +11,7 @@ import logging
 import re
 from typing import Any
 
-from .mess_types import RouteDecision, SessionState
+from .mess_types import AppointmentPhase, DialogState, RouteDecision, SessionState
 from .city import match_city
 from .policies import (
     branch_options_to_indexable,
@@ -547,20 +547,35 @@ def _normalize_doctor_key(value: Any) -> str:
     return re.sub(r"\s+", " ", s)
 
 
+# Keys that belong to an active appointment flow turn — cleared on any reset.
+# Exported so appointment_flow_guard can reference the same list without
+# duplicating it.
+_APPOINTMENT_RUNTIME_KEYS: tuple[str, ...] = (
+    "appointment_action",
+    "appointment_flow_active",
+    "appointment_confirm_pending",
+    "appointment_confirmed",
+    "appointment_cancel_pending",
+    "appointment_topic_switch_pending",
+    "_appointment_doctor_lookup_attempts",
+    "_appointment_datetime_attempts",
+    "appointment_selection_mode",
+    "appointment_windows",
+    "appointment_branch_options",
+    "date_from",
+    "date_to",
+    "time_from",
+    "time_to",
+    "time_flexible",
+    "date_hint",
+    "branch_id",
+    "branch_name",
+    "patient_name",
+)
+
+
 def _clear_flow_state(state: SessionState) -> None:
-    for k in (
-        "appointment_flow_active",
-        "appointment_confirm_pending",
-        "appointment_confirmed",
-        "appointment_windows",
-        "appointment_branch_options",
-        "date_from",
-        "date_to",
-        "time_from",
-        "time_to",
-        "date_hint",
-        "_pending",
-    ):
+    for k in _APPOINTMENT_RUNTIME_KEYS:
         state.last_entities.pop(k, None)
 
 
@@ -978,18 +993,22 @@ def secondary_followup_text(labels: list[str]) -> str | None:
 
 
 def reset_appointment_runtime_state(state: SessionState) -> None:
+    """Сбрасывает runtime-состояние активного appointment-flow.
+
+    Очищает все ключи из _APPOINTMENT_RUNTIME_KEYS и, если диалог был
+    в APPOINTMENT-фазе, вызывает dialog.clear() чтобы FSM вернулся
+    в IDLE, а не застрял с устаревшей меткой.
+
+    Canonical owner: flow_policy.  Используется router, response_builder
+    и appointment_flow_guard (через clear_appointment_flow_context).
     """
-    Сбрасывает только runtime-состояние активного процесса записи.
-
-    Используется, когда сценарий записи нужно завершить без полного стирания
-    темы разговора: например, после ответа о том, что у врача нет свободных
-    слотов, либо при явном переключении на другой поток.
-
-    :param state: состояние текущей сессии
-    :return: None
-    """
-
-    _clear_flow_state(state)
+    for key in _APPOINTMENT_RUNTIME_KEYS:
+        state.last_entities.pop(key, None)
+    dialog: DialogState = state.dialog
+    if dialog.is_active() and (
+        dialog.label == "APPOINTMENT" or AppointmentPhase.is_active(dialog.phase)
+    ):
+        dialog.clear()
 
 
 def set_secondary_queue(state: SessionState, labels: list[str]) -> None:
