@@ -2778,6 +2778,13 @@ def test_extract_price_service_from_query_strips_politeness_tail():
     assert svc_mod._extract_price_service_from_query("стоимость экг подскажите") == "экг"
 
 
+def test_extract_price_service_from_query_strips_gratitude_prefix():
+    assert (
+        svc_mod._extract_price_service_from_query("Спасибо\nПодскажи стоимость общего анализа крови")
+        == "общего анализа крови"
+    )
+
+
 def test_price_info_resolves_doctor_name_to_doctor_prices(monkeypatch):
     svc = Services()
 

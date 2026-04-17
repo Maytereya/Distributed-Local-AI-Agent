@@ -130,6 +130,8 @@ def test_uncertainty_and_no_preference_detection():
     assert looks_like_uncertainty_answer("все равно не помню") is True
     assert looks_like_no_preference_answer("без разницы") is True
     assert looks_like_no_preference_answer("любой") is True
+    assert looks_like_no_preference_answer("в любом филиале") is True
+    assert extract_branch_reference("в любом филиале") == ""
 
 
 def test_extract_result_lookup_fields_supports_partial_tuple():

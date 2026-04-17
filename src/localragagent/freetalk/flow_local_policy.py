@@ -48,6 +48,7 @@ class FlowLocalPrecheckResult:
     handoff: bool = False
     save_memory_entities: dict[str, Any] = field(default_factory=dict)
     reprocess_current_message: bool = False
+    reentry_message: str = ""
     pending_topic_switch_message: str = ""
     pending_continue_message: str = ""
 
@@ -367,6 +368,9 @@ def _apply_generic_flow_local(
             confirmation_result = _apply_confirmation_no_preference(dialog_state)
             if confirmation_result.handled:
                 return confirmation_result
+        generic_no_preference = _apply_generic_no_preference(dialog_state)
+        if generic_no_preference.handled:
+            return generic_no_preference
         return _generic_non_answer(dialog_state, kind="no_preference")
     return FlowLocalPrecheckResult()
 
@@ -709,6 +713,39 @@ def _apply_confirmation_no_preference(dialog_state: DialogState) -> FlowLocalPre
     )
 
 
+def _apply_generic_no_preference(dialog_state: DialogState) -> FlowLocalPrecheckResult:
+    intent = str(dialog_state.intent or "").strip().lower()
+    expected = {
+        str(slot or "").strip().lower()
+        for slot in (dialog_state.expected_slots or dialog_state.missing_slots or [])
+        if str(slot or "").strip()
+    }
+    entities = dict(dialog_state.entities or {})
+    if intent == "price" and expected & {"branch_or_city", "branch_name", "city"}:
+        service_name = str(entities.get("service_name") or entities.get("test_name") or "").strip()
+        doctor_name = str(entities.get("doctor_name") or "").strip()
+        specialty = str(entities.get("specialty") or "").strip()
+        if service_name or doctor_name or specialty:
+            normalized = dict(entities)
+            if not str(normalized.get("city") or "").strip() and not str(normalized.get("branch_name") or "").strip():
+                normalized["city"] = "Самара"
+            next_state = _build_generic_clarify_state(
+                dialog_state=dialog_state,
+                entities=normalized,
+                missing_slots=[],
+                open_question="",
+            )
+            reentry_message = _generic_no_preference_reentry_message(intent=intent, entities=normalized)
+            if reentry_message:
+                return FlowLocalPrecheckResult(
+                    handled=True,
+                    next_state=next_state,
+                    save_memory_entities=normalized,
+                    reentry_message=reentry_message,
+                )
+    return FlowLocalPrecheckResult()
+
+
 def _resume_with_state(dialog_state: DialogState, *, prefix: str) -> FlowLocalPrecheckResult:
     state = copy_dialog_state(dialog_state)
     resume = _resume_question(state)
@@ -720,6 +757,21 @@ def _resume_with_state(dialog_state: DialogState, *, prefix: str) -> FlowLocalPr
         reply_text=text,
         next_state=state,
     )
+
+
+def _generic_no_preference_reentry_message(*, intent: str, entities: dict[str, Any]) -> str:
+    normalized_intent = str(intent or "").strip().lower()
+    if normalized_intent == "price":
+        service_name = str(entities.get("service_name") or entities.get("test_name") or "").strip()
+        if service_name:
+            return f"стоимость {service_name}".strip()
+        doctor_name = str(entities.get("doctor_name") or "").strip()
+        if doctor_name:
+            return f"стоимость приема {doctor_name}".strip()
+        specialty = str(entities.get("specialty") or "").strip()
+        if specialty:
+            return f"стоимость приема {specialty}".strip()
+    return ""
 
 
 def _bump_non_answer_state(dialog_state: DialogState, *, kind: str) -> DialogState:

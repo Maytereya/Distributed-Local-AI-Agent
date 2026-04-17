@@ -232,7 +232,30 @@ async def chat(
             else:
                 if getattr(flow_local_precheck, "next_state", None) is not None:
                     await agent._save_dialog_state(sid, flow_local_precheck.next_state)
-                if getattr(flow_local_precheck, "reprocess_current_message", False):
+                reentry_message = str(getattr(flow_local_precheck, "reentry_message", "") or "").strip()
+                if reentry_message:
+                    dialog_state = await agent._load_dialog_state(sid)
+                    remembered_doctor = await agent.memory.get_meta_str(sid, agent._last_doctor_name_key(), "")
+                    dialog_act = await agent._build_dialog_act(
+                        user_message=reentry_message,
+                        context=context,
+                        dialog_state=dialog_state,
+                        remembered_doctor=remembered_doctor,
+                    )
+                    log_event(
+                        "flow_local_reentry",
+                        session_id=sid,
+                        intent=dialog_act.intent,
+                        route=dialog_act.route,
+                        flow_kind=str(dialog_state.flow_kind or ""),
+                    )
+                    reply = await agent._execute_dialog_act(
+                        user_message=reentry_message,
+                        context=context,
+                        dialog_act=dialog_act,
+                        dialog_state=dialog_state,
+                    )
+                elif getattr(flow_local_precheck, "reprocess_current_message", False):
                     dialog_state = await agent._load_dialog_state(sid)
                     remembered_doctor = await agent.memory.get_meta_str(sid, agent._last_doctor_name_key(), "")
                     dialog_act = await agent._build_dialog_act(

@@ -93,7 +93,7 @@ UNCERTAINTY_RE = re.compile(
 )
 NO_PREFERENCE_RE = re.compile(
     r"\b("
-    r"любой|любая|любое|"
+    r"люб(?:ой|ая|ое|ые|ого|ому|ом|ую|ыми|ых)|"
     r"без\s+разниц\w*|"
     r"неважн\w*|"
     r"как\s+угодно|"
@@ -334,6 +334,8 @@ def extract_branch_reference(text: str) -> str:
     source = str(text or "").strip()
     if not source:
         return ""
+    if looks_like_no_preference_answer(source) and re.search(r"\b(филиал\w*|адрес\w*|клиник\w*)\b", source, re.I):
+        return ""
     lowered = source.lower()
     if "другом филиале" in lowered or "другой филиал" in lowered:
         return "другой филиал"
@@ -350,6 +352,8 @@ def extract_branch_reference(text: str) -> str:
         return ""
     low_candidate = candidate.lower()
     if low_candidate in BRANCH_FOLLOWUP_STOPWORDS:
+        return ""
+    if looks_like_no_preference_answer(candidate) and re.search(r"\b(филиал\w*|адрес\w*|клиник\w*)\b", candidate, re.I):
         return ""
     if DATE_FILTER_RE.search(candidate) or TIME_FILTER_RE.search(candidate):
         return ""

@@ -508,7 +508,7 @@ def _is_same_flow_continuation(text: str, dialog_state: DialogState) -> bool:
         return True
     if expected & {"time"} and extract_time_filters(probe):
         return True
-    if expected & {"branch_or_city"} and (extract_branch_reference(probe) or extract_city_reference(probe)):
+    if expected & {"branch_or_city", "branch_name", "city"} and (extract_branch_reference(probe) or extract_city_reference(probe)):
         return True
     if expected & {"doctor_name", "result_surname"} and extract_doctor_reference_candidate(probe):
         return True

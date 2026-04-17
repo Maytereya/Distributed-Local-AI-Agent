@@ -303,6 +303,10 @@ def _runtime_bool(name: str, default: bool) -> bool:
     except Exception:
         return bool(default)
 _PRICE_QUERY_STOPWORDS = {
+    "спасибо",
+    "благодарю",
+    "благодарствую",
+    "спс",
     "сколько",
     "стоит",
     "стоимость",
@@ -375,6 +379,7 @@ _PRICE_QUERY_STOPWORDS = {
     "сейчас",
     "сегодня",
     "подскажите",
+    "подскажи",
     "скажите",
     "пожалуйста",
 }
