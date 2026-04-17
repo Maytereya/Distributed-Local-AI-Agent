@@ -1252,6 +1252,239 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
     return await executor_execute_plan(plan, state, services)
 
 
+async def _apply_post_nlu_guardrails(
+    decision: RouteDecision,
+    state: SessionState,
+    user_text: str,
+    services: Services,
+    memory: MemoryStore,
+) -> RouteDecision:
+    """Apply post-NLU flow-continuity overrides before plan building.
+
+    Consolidates the cascade of narrow heuristics that sat inline between
+    ``_inject_catalog_candidates`` and ``_apply_appointment_continuity_overrides``:
+
+    * PRICE → PREPARE short follow-up
+    * PRICE → ADDRESS short follow-up
+    * Active APPOINTMENT flow datetime prelock
+    * apply_context_action (promote/continue/new_topic)
+    * PRICE city-only reply override
+    * verified-doctor label promotion
+    * clear stale doctor on specialty-only queries (state mutation)
+    * non-bookable walk-in → ADDRESS
+    * PREPARE short follow-up hold
+    * DOCTOR_INFO → DOCTOR_SCHEDULE follow-up (awaits services)
+    * DOCTOR_SCHEDULE → APPOINTMENT datetime follow-up (state mutation)
+    * _apply_appointment_continuity_overrides
+
+    State is mutated in-place for the blocks that legacy code mutated directly
+    (patient_name reset, secondary_queue clear, stale doctor-key cleanup);
+    behaviour is byte-for-byte identical to the previous inline form.
+
+    :param decision: routing decision after NLU + catalog candidate injection
+    :param state: session state
+    :param user_text: current user turn
+    :param services: service layer (for doctor-name resolution in follow-ups)
+    :param memory: memory store (for pending inspection)
+    :return: decision after the full guardrail cascade
+    """
+
+    last_label_before = str(state.last_entities.get("_last_label") or "")
+    service_context = str(state.last_entities.get("service_name") or state.last_entities.get("test_name") or "").strip()
+    if (
+        last_label_before == "PRICE"
+        and service_context
+        and detect_prepare_intent(user_text)
+        and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE"}
+    ):
+        entities = dict(decision.entities)
+        if not entities.get("service_name"):
+            entities["service_name"] = service_context
+        decision = _copy_decision(
+            decision,
+            label="PREPARE",
+            confidence=max(decision.confidence, 0.72),
+            entities=entities,
+            flags=set(decision.flags) | {"flow_price_followup_prepare"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+    if (
+        last_label_before == "PRICE"
+        and service_context
+        and decision.label in {"OTHER", "TEST_ASSIST", "DOCTOR_INFO", "APPOINTMENT"}
+    ):
+        merged_ctx = dict(state.last_entities)
+        merged_ctx.update(decision.entities or {})
+        followup_address_hint = bool(re.search(r"\b(где|адрес|филиал|сдать|сдавать)\b", user_text or "", re.I))
+        if followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
+            entities = dict(decision.entities)
+            if not entities.get("service_name"):
+                entities["service_name"] = service_context
+            decision = _copy_decision(
+                decision,
+                label="ADDRESS",
+                confidence=max(decision.confidence, 0.76),
+                entities=entities,
+                flags=set(decision.flags) | {"flow_price_followup_address"},
+                needs_handoff=False,
+                context_action="continue",
+                source="guardrail_post",
+            )
+    # В активном APPOINTMENT flow короткий follow-up с датой/временем
+    # считаем продолжением записи до применения context_action.
+    if (
+        state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
+        and _is_appointment_datetime_followup(user_text)
+        and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "ADDRESS", "PRICE"}
+    ):
+        decision = _copy_decision(
+            decision,
+            label="APPOINTMENT",
+            confidence=max(decision.confidence, 0.68),
+            flags=set(decision.flags) | {"flow_datetime_appointment_prelock"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+    decision = apply_context_action(decision, state, user_text, memory)
+
+    pending_before_overrides = memory.get_pending(state)
+    if (
+        isinstance(pending_before_overrides, dict)
+        and pending_before_overrides.get("label") == "PRICE"
+        and decision.label == "ADDRESS"
+        and is_city_only_reply(user_text)
+    ):
+        decision = _copy_decision(
+            decision,
+            label="PRICE",
+            confidence=max(decision.confidence, 0.72),
+            flags=set(decision.flags) | {"flow_price_city_reply_override"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+
+    promoted_label, promoted_flags = apply_verified_doctor_override(decision.label, set(decision.flags), user_text)
+    if promoted_label != decision.label or promoted_flags != decision.flags:
+        decision = _copy_decision(
+            decision,
+            label=promoted_label,  # type: ignore[arg-type]
+            confidence=max(decision.confidence, 0.65),
+            flags=promoted_flags,
+            needs_handoff=False,
+        )
+
+    # При запросах по специальности (без явного врача) чистим залипшего врача из state.
+    if (
+        decision.label in {"DOCTOR_INFO", "DOCTOR_SCHEDULE"}
+        and decision.entities.get("specialty")
+        and not any(decision.entities.get(k) for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"))
+    ):
+        for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"):
+            state.last_entities.pop(k, None)
+
+    if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text):
+        merged_ctx = dict(state.last_entities)
+        merged_ctx.update(decision.entities or {})
+        if detect_nonbookable_walkin_intent(user_text, merged_ctx):
+            entities = dict(decision.entities)
+            if not entities.get("service_name"):
+                svc = nonbookable_service_hint(user_text, merged_ctx)
+                if svc:
+                    entities["service_name"] = svc
+            decision = _copy_decision(
+                decision,
+                label="ADDRESS",
+                confidence=max(decision.confidence, 0.78),
+                entities=entities,
+                flags=set(decision.flags) | {"policy_nonbookable_walkin"},
+                needs_handoff=False,
+                context_action="continue",
+                source="guardrail_post",
+            )
+
+    # Короткий follow-up после PREPARE (например, "вульвоскопия") держим
+    # в подготовке, чтобы не сваливаться обратно в TEST_ASSIST.
+    if (
+        str(state.last_entities.get("_last_label") or "") == "PREPARE"
+        and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE", "DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
+        and is_short_prepare_followup(user_text)
+        and not detect_prepare_intent(user_text)
+        and not detect_nonbookable_walkin_intent(user_text, state.last_entities)
+        and not any(decision.entities.get(k) for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"))
+    ):
+        decision = _copy_decision(
+            decision,
+            label="PREPARE",
+            confidence=max(decision.confidence, 0.62),
+            flags=set(decision.flags) | {"flow_prepare_followup_override"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+
+    last_label = str(state.last_entities.get("_last_label") or "")
+    if last_label == "DOCTOR_INFO" and decision.label in {"OTHER", "DOCTOR_INFO", "TEST_RESULT"}:
+        doctor_followup_entities: dict[str, Any] = {}
+        if (
+            not detect_schedule_intent(user_text)
+            and not has_datetime_signal(user_text)
+            and not detect_prepare_intent(user_text)
+            and not detect_price_intent(user_text)
+            and not detect_address_intent(user_text)
+            and not detect_doc_request_intent(user_text)
+            and not detect_test_result_intent(user_text)
+            and not detect_test_assist_intent(user_text)
+        ):
+            doctor_followup_entities = await _resolve_secondary_queue_doctor_reply(
+                user_text,
+                "DOCTOR_SCHEDULE",
+                services,
+            )
+        if doctor_followup_entities or (
+            _is_short_verified_doctor_followup(decision, user_text)
+            and not detect_schedule_intent(user_text)
+        ):
+            entities = dict(decision.entities)
+            entities.update(doctor_followup_entities)
+            state.last_entities["_secondary_offer_pending"] = False
+            set_secondary_queue(state, [])
+            decision = _copy_decision(
+                decision,
+                label="DOCTOR_SCHEDULE",
+                confidence=max(decision.confidence, 0.74),
+                entities=entities,
+                flags=set(decision.flags) | {"flow_doctor_info_to_schedule"},
+                needs_handoff=False,
+                context_action="continue",
+            )
+
+    if (
+        last_label == "DOCTOR_SCHEDULE"
+        and (state.last_entities.get("doctor_name") or state.last_entities.get("doctor_id"))
+        and _is_appointment_datetime_followup(user_text)
+        and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "TEST_ASSIST", "ADDRESS", "PRICE"}
+    ):
+        if state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM) and not looks_like_patient_fio(user_text):
+            state.last_entities.pop("patient_name", None)
+            reactivate_appointment_collecting(state)
+        entities = dict(decision.entities)
+        for key in ("doctor_id", "doctor_name", "branch_id", "branch_name"):
+            if not entities.get(key) and state.last_entities.get(key):
+                entities[key] = state.last_entities.get(key)
+        decision = _copy_decision(
+            decision,
+            label="APPOINTMENT",
+            confidence=max(decision.confidence, 0.72),
+            entities=entities,
+            flags=set(decision.flags) | {"flow_schedule_to_appointment"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+
+    decision = _apply_appointment_continuity_overrides(decision, state, user_text)
+    return decision
+
+
 async def _handle_secondary_queue_pending(
     user_text: str,
     state: SessionState,
@@ -1512,199 +1745,7 @@ async def route_patient_message(
         state=state,
         services=services,
     )
-    last_label_before = str(state.last_entities.get("_last_label") or "")
-    service_context = str(state.last_entities.get("service_name") or state.last_entities.get("test_name") or "").strip()
-    if (
-        last_label_before == "PRICE"
-        and service_context
-        and detect_prepare_intent(user_text)
-        and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE"}
-    ):
-        entities = dict(decision.entities)
-        if not entities.get("service_name"):
-            entities["service_name"] = service_context
-        decision = _copy_decision(
-            decision,
-            label="PREPARE",
-            confidence=max(decision.confidence, 0.72),
-            entities=entities,
-            flags=set(decision.flags) | {"flow_price_followup_prepare"},
-            needs_handoff=False,
-            context_action="continue",
-        )
-    if (
-        last_label_before == "PRICE"
-        and service_context
-        and decision.label in {"OTHER", "TEST_ASSIST", "DOCTOR_INFO", "APPOINTMENT"}
-    ):
-        merged_ctx = dict(state.last_entities)
-        merged_ctx.update(decision.entities or {})
-        followup_address_hint = bool(re.search(r"\b(где|адрес|филиал|сдать|сдавать)\b", user_text or "", re.I))
-        if followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
-            entities = dict(decision.entities)
-            if not entities.get("service_name"):
-                entities["service_name"] = service_context
-            decision = _copy_decision(
-                decision,
-                label="ADDRESS",
-                confidence=max(decision.confidence, 0.76),
-                entities=entities,
-                flags=set(decision.flags) | {"flow_price_followup_address"},
-                needs_handoff=False,
-                context_action="continue",
-                source="guardrail_post",
-            )
-    # В активном APPOINTMENT flow короткий follow-up с датой/временем
-    # считаем продолжением записи до применения context_action.
-    if (
-        state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
-        and _is_appointment_datetime_followup(user_text)
-        and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "ADDRESS", "PRICE"}
-    ):
-        decision = _copy_decision(
-            decision,
-            label="APPOINTMENT",
-            confidence=max(decision.confidence, 0.68),
-            flags=set(decision.flags) | {"flow_datetime_appointment_prelock"},
-            needs_handoff=False,
-            context_action="continue",
-        )
-    decision = apply_context_action(decision, state, user_text, memory)
-
-    pending_before_overrides = memory.get_pending(state)
-    if (
-        isinstance(pending_before_overrides, dict)
-        and pending_before_overrides.get("label") == "PRICE"
-        and decision.label == "ADDRESS"
-        and is_city_only_reply(user_text)
-    ):
-        decision = _copy_decision(
-            decision,
-            label="PRICE",
-            confidence=max(decision.confidence, 0.72),
-            flags=set(decision.flags) | {"flow_price_city_reply_override"},
-            needs_handoff=False,
-            context_action="continue",
-        )
-
-    promoted_label, promoted_flags = apply_verified_doctor_override(decision.label, set(decision.flags), user_text)
-    if promoted_label != decision.label or promoted_flags != decision.flags:
-        decision = _copy_decision(
-            decision,
-            label=promoted_label,  # type: ignore[arg-type]
-            confidence=max(decision.confidence, 0.65),
-            flags=promoted_flags,
-            needs_handoff=False,
-        )
-
-    # При запросах по специальности (без явного врача) чистим залипшего врача из state.
-    if (
-        decision.label in {"DOCTOR_INFO", "DOCTOR_SCHEDULE"}
-        and decision.entities.get("specialty")
-        and not any(decision.entities.get(k) for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"))
-    ):
-        for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"):
-            state.last_entities.pop(k, None)
-
-    if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text):
-        merged_ctx = dict(state.last_entities)
-        merged_ctx.update(decision.entities or {})
-        if detect_nonbookable_walkin_intent(user_text, merged_ctx):
-            entities = dict(decision.entities)
-            if not entities.get("service_name"):
-                svc = nonbookable_service_hint(user_text, merged_ctx)
-                if svc:
-                    entities["service_name"] = svc
-            decision = _copy_decision(
-                decision,
-                label="ADDRESS",
-                confidence=max(decision.confidence, 0.78),
-                entities=entities,
-                flags=set(decision.flags) | {"policy_nonbookable_walkin"},
-                needs_handoff=False,
-                context_action="continue",
-                source="guardrail_post",
-            )
-
-    # Короткий follow-up после PREPARE (например, "вульвоскопия") держим
-    # в подготовке, чтобы не сваливаться обратно в TEST_ASSIST.
-    if (
-        str(state.last_entities.get("_last_label") or "") == "PREPARE"
-        and decision.label in {"OTHER", "TEST_ASSIST", "ADDRESS", "PRICE", "DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"}
-        and is_short_prepare_followup(user_text)
-        and not detect_prepare_intent(user_text)
-        and not detect_nonbookable_walkin_intent(user_text, state.last_entities)
-        and not any(decision.entities.get(k) for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"))
-    ):
-        decision = _copy_decision(
-            decision,
-            label="PREPARE",
-            confidence=max(decision.confidence, 0.62),
-            flags=set(decision.flags) | {"flow_prepare_followup_override"},
-            needs_handoff=False,
-            context_action="continue",
-        )
-
-    last_label = str(state.last_entities.get("_last_label") or "")
-    if last_label == "DOCTOR_INFO" and decision.label in {"OTHER", "DOCTOR_INFO", "TEST_RESULT"}:
-        doctor_followup_entities: dict[str, Any] = {}
-        if (
-            not detect_schedule_intent(user_text)
-            and not has_datetime_signal(user_text)
-            and not detect_prepare_intent(user_text)
-            and not detect_price_intent(user_text)
-            and not detect_address_intent(user_text)
-            and not detect_doc_request_intent(user_text)
-            and not detect_test_result_intent(user_text)
-            and not detect_test_assist_intent(user_text)
-        ):
-            doctor_followup_entities = await _resolve_secondary_queue_doctor_reply(
-                user_text,
-                "DOCTOR_SCHEDULE",
-                services,
-            )
-        if doctor_followup_entities or (
-            _is_short_verified_doctor_followup(decision, user_text)
-            and not detect_schedule_intent(user_text)
-        ):
-            entities = dict(decision.entities)
-            entities.update(doctor_followup_entities)
-            state.last_entities["_secondary_offer_pending"] = False
-            set_secondary_queue(state, [])
-            decision = _copy_decision(
-                decision,
-                label="DOCTOR_SCHEDULE",
-                confidence=max(decision.confidence, 0.74),
-                entities=entities,
-                flags=set(decision.flags) | {"flow_doctor_info_to_schedule"},
-                needs_handoff=False,
-                context_action="continue",
-            )
-
-    if (
-        last_label == "DOCTOR_SCHEDULE"
-        and (state.last_entities.get("doctor_name") or state.last_entities.get("doctor_id"))
-        and _is_appointment_datetime_followup(user_text)
-        and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "TEST_ASSIST", "ADDRESS", "PRICE"}
-    ):
-        if state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM) and not looks_like_patient_fio(user_text):
-            state.last_entities.pop("patient_name", None)
-            reactivate_appointment_collecting(state)
-        entities = dict(decision.entities)
-        for key in ("doctor_id", "doctor_name", "branch_id", "branch_name"):
-            if not entities.get(key) and state.last_entities.get(key):
-                entities[key] = state.last_entities.get(key)
-        decision = _copy_decision(
-            decision,
-            label="APPOINTMENT",
-            confidence=max(decision.confidence, 0.72),
-            entities=entities,
-            flags=set(decision.flags) | {"flow_schedule_to_appointment"},
-            needs_handoff=False,
-            context_action="continue",
-        )
-
-    decision = _apply_appointment_continuity_overrides(decision, state, user_text)
+    decision = await _apply_post_nlu_guardrails(decision, state, user_text, services, memory)
 
     if decision.label == "DOCTOR_SCHEDULE":
         # Очищаем хвосты сценария записи, чтобы расписание не фильтровалось
