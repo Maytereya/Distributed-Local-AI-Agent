@@ -1252,6 +1252,72 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
     return await executor_execute_plan(plan, state, services)
 
 
+async def _handle_secondary_queue_pending(
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Resolve a previously-offered secondary intent awaiting user ack.
+
+    Mirrors the legacy block that sat inline at the top of
+    ``route_patient_message``: if the previous turn offered a queued follow-up
+    (``_secondary_offer_pending``) and the current reply is a short "да"/"нет"
+    (or a short doctor last-name for doctor-flavoured follow-ups), promote the
+    first queued label into a full routing triple. On a "no"/ambiguous reply
+    the pending flag is cleared and ``None`` is returned so normal routing
+    continues.
+
+    :param user_text: current user turn
+    :param state: session state
+    :param services: service layer (used to resolve doctor entities)
+    :param memory: memory store (for entity merging)
+    :param runtime_options: runtime options propagated into plan building
+    :return: fully-materialised routing triple when the turn is consumed by the
+        secondary-queue flow, else ``None`` so normal routing continues.
+    """
+
+    queue = get_secondary_queue(state)
+    if not (
+        state.last_entities.get("_secondary_offer_pending")
+        and queue
+        and state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
+    ):
+        return None
+
+    reply_kind = contextual_reply_kind(user_text)
+    if reply_kind == "other" and _is_secondary_soft_yes(user_text):
+        reply_kind = "yes"
+    next_label = queue[0]
+    secondary_entities = await _resolve_secondary_queue_doctor_reply(user_text, next_label, services)
+    if reply_kind == "other" and secondary_entities:
+        reply_kind = "yes"
+    if reply_kind == "yes":
+        next_label = queue.pop(0)
+        set_secondary_queue(state, queue)
+        state.last_entities["_secondary_offer_pending"] = False
+        if secondary_entities:
+            memory.merge_entities(state, secondary_entities, label=next_label)
+        decision = RouteDecision(
+            label=next_label,  # type: ignore[arg-type]
+            confidence=0.9,
+            entities={"secondary_intent_from_queue": True, **secondary_entities},
+            flags={"secondary_intent_activated"},
+            needs_handoff=False,
+        )
+        plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
+        evidence = await execute_plan(plan, state, services)
+        return decision, plan, evidence
+    if reply_kind == "no":
+        set_secondary_queue(state, [])
+        state.last_entities["_secondary_offer_pending"] = False
+    else:
+        # Пользователь продолжил диалог в другом направлении.
+        state.last_entities["_secondary_offer_pending"] = False
+    return None
+
+
 def _handle_operator_offer_pending(
     user_text: str,
     state: SessionState,
@@ -1351,42 +1417,15 @@ async def route_patient_message(
     if compound_price_result is not None:
         return compound_price_result
 
-    # Вежливое переключение на вторичный интент по короткому "да/нет".
-    queue = get_secondary_queue(state)
-    if (
-        state.last_entities.get("_secondary_offer_pending")
-        and queue
-        and state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
-    ):
-        reply_kind = contextual_reply_kind(user_text)
-        if reply_kind == "other" and _is_secondary_soft_yes(user_text):
-            reply_kind = "yes"
-        next_label = queue[0]
-        secondary_entities = await _resolve_secondary_queue_doctor_reply(user_text, next_label, services)
-        if reply_kind == "other" and secondary_entities:
-            reply_kind = "yes"
-        if reply_kind == "yes":
-            next_label = queue.pop(0)
-            set_secondary_queue(state, queue)
-            state.last_entities["_secondary_offer_pending"] = False
-            if secondary_entities:
-                memory.merge_entities(state, secondary_entities, label=next_label)
-            decision = RouteDecision(
-                label=next_label,  # type: ignore[arg-type]
-                confidence=0.9,
-                entities={"secondary_intent_from_queue": True, **secondary_entities},
-                flags={"secondary_intent_activated"},
-                needs_handoff=False,
-            )
-            plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
-            evidence = await execute_plan(plan, state, services)
-            return decision, plan, evidence
-        if reply_kind == "no":
-            set_secondary_queue(state, [])
-            state.last_entities["_secondary_offer_pending"] = False
-        else:
-            # Пользователь продолжил диалог в другом направлении.
-            state.last_entities["_secondary_offer_pending"] = False
+    secondary_queue_result = await _handle_secondary_queue_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if secondary_queue_result is not None:
+        return secondary_queue_result
 
     # Диагностические NLU-поля не должны засорять долгоживущий session state.
     # Актуальный trace отдаем только через debug-канал.
