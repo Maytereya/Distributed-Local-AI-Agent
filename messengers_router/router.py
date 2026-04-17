@@ -19,6 +19,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
+from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
 from .context_summary import update_summary
@@ -1385,9 +1386,7 @@ async def route_patient_message(
             state.last_entities.pop("test_name", None)
         if clear_patient_name:
             state.last_entities.pop("patient_name", None)
-            state.last_entities.pop("appointment_confirm_pending", None)
-            state.last_entities.pop("appointment_confirmed", None)
-            state.dialog.phase = AppointmentPhase.COLLECTING
+            reactivate_appointment_collecting(state)
         decision = RouteDecision(
             label="APPOINTMENT",
             confidence=0.91,
@@ -1628,9 +1627,7 @@ async def route_patient_message(
     ):
         if state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM) and not looks_like_patient_fio(user_text):
             state.last_entities.pop("patient_name", None)
-            state.last_entities.pop("appointment_confirm_pending", None)
-            state.last_entities.pop("appointment_confirmed", None)
-            state.dialog.phase = AppointmentPhase.COLLECTING
+            reactivate_appointment_collecting(state)
         entities = dict(decision.entities)
         for key in ("doctor_id", "doctor_name", "branch_id", "branch_name"):
             if not entities.get(key) and state.last_entities.get(key):

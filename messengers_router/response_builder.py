@@ -15,7 +15,16 @@ from .flow_policy import (
     safe_get_branches,
 )
 from .memory import MemoryStore
-from .mess_types import AppointmentPhase, Evidence, ResponseEnvelope, RouteDecision, SessionState
+from .mess_types import Evidence, ResponseEnvelope, RouteDecision, SessionState
+from .state_mutations import (
+    activate_appointment_flow,
+    clear_appointment_branch_options,
+    clear_appointment_selection_mode,
+    mark_appointment_confirm_pending,
+    reset_appointment_confirmation_flags,
+    set_appointment_branch_options,
+    set_appointment_selection_mode,
+)
 from .policies import (
     APPOINTMENT_STEP_BRANCH,
     APPOINTMENT_STEP_CONFIRM,
@@ -397,8 +406,7 @@ def build_appointment_schedule_preview_response(
         return None
 
     hydrate_appointment_context_from_schedule(state, schedule_payload)
-    state.last_entities["appointment_flow_active"] = True
-    state.dialog.phase = AppointmentPhase.COLLECTING
+    activate_appointment_flow(state)
     text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
@@ -414,8 +422,7 @@ def build_appointment_step_response(
         return None
 
     entities = state.last_entities
-    state.last_entities["appointment_flow_active"] = True
-    state.dialog.phase = AppointmentPhase.COLLECTING
+    activate_appointment_flow(state)
     action = str(entities.get("appointment_action") or "").strip().lower()
     if action == "cancel":
         patient_name = str(entities.get("patient_name") or "").strip()
@@ -437,12 +444,7 @@ def build_appointment_step_response(
         if time_text:
             details.append(f"время: {time_text}")
 
-        state.last_entities.pop("appointment_flow_active", None)
-        state.last_entities.pop("appointment_confirm_pending", None)
-        state.last_entities.pop("appointment_confirmed", None)
-        state.last_entities.pop("appointment_cancel_pending", None)
-        state.last_entities.pop("appointment_topic_switch_pending", None)
-        state.dialog.phase = AppointmentPhase.IDLE
+        reset_appointment_confirmation_flags(state)
         text_lines = [f"{header}: " + ", ".join(details) + "."] if details else [f"{header}: данные получены."]
         text_lines.append("Передаю заявку оператору для подтверждения и дальнейшего оформления.")
         return ResponseEnvelope(text="\n".join(text_lines), handoff=True)
@@ -453,7 +455,7 @@ def build_appointment_step_response(
     selection_mode = str(entities.get("appointment_selection_mode") or "").strip().lower()
     doctor_selected = bool(entities.get("doctor_name") or entities.get("doctor_id"))
     if doctor_selected:
-        state.last_entities.pop("appointment_selection_mode", None)
+        clear_appointment_selection_mode(state)
         selection_mode = ""
 
     if appointment_step == APPOINTMENT_STEP_BRANCH:
@@ -462,13 +464,13 @@ def build_appointment_step_response(
             doctors_raw = doctors_info_payload.get("doctors") if isinstance(doctors_info_payload, dict) else None
             doctors = doctors_raw if isinstance(doctors_raw, list) else []
             if doctors:
-                state.last_entities.pop("appointment_branch_options", None)
+                clear_appointment_branch_options(state)
                 return ResponseEnvelope(
                     text=format_doctor_info_for_patient(doctors_info_payload, entities),  # type: ignore[arg-type]
                     handoff=False,
                 )
             # Если список врачей не найден, мягко возвращаемся к выбору филиала.
-            state.last_entities["appointment_selection_mode"] = "branch"
+            set_appointment_selection_mode(state, "branch")
             selection_mode = "branch"
 
         if not city:
@@ -486,7 +488,7 @@ def build_appointment_step_response(
                 city=city or None,
                 limit=5,
             )
-        state.last_entities["appointment_branch_options"] = addresses
+        set_appointment_branch_options(state, addresses)
         allow_doctor_option = not doctor_selected and bool(
             str(entities.get("service_name") or entities.get("test_name") or entities.get("specialty") or "").strip()
         )
@@ -501,7 +503,7 @@ def build_appointment_step_response(
         )
 
     if appointment_step == APPOINTMENT_STEP_DATETIME:
-        state.last_entities.pop("appointment_branch_options", None)
+        clear_appointment_branch_options(state)
         if action in {"cancel", "reschedule"}:
             memory.set_pending(state, label="APPOINTMENT", missing_slots=["_any_of:date_from,time_from,date_hint"])
         price_rub = extract_price_rub(evidence.get(ek.PRICE))
@@ -519,8 +521,7 @@ def build_appointment_step_response(
         )
 
     if appointment_step == APPOINTMENT_STEP_CONFIRM:
-        state.last_entities["appointment_confirm_pending"] = True
-        state.dialog.phase = AppointmentPhase.CONFIRM
+        mark_appointment_confirm_pending(state)
         summary = appointment_summary(entities)
         return ResponseEnvelope(text=appointment_text_confirm_prompt(summary), handoff=False)
 

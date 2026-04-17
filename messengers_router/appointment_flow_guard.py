@@ -13,6 +13,13 @@ from .city import match_city
 from .flow_policy import clear_on_appointment_end, looks_like_patient_fio
 from .memory import MemoryStore
 from .mess_types import AppointmentPhase, ResponseEnvelope, SessionState
+from .state_mutations import (
+    finalize_appointment_confirmation,
+    mark_appointment_cancel_pending,
+    mark_appointment_confirm_pending,
+    mark_appointment_topic_switch_pending,
+    reject_appointment_confirmation,
+)
 from .policies import (
     APPOINTMENT_CONFIRM_NO,
     APPOINTMENT_CONFIRM_YES,
@@ -191,8 +198,7 @@ def _appointment_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
         return appointment_text_reask_confirm()
 
     summary = appointment_summary(state.last_entities)
-    state.last_entities["appointment_confirm_pending"] = True
-    state.dialog.phase = AppointmentPhase.CONFIRM
+    mark_appointment_confirm_pending(state)
     return appointment_text_confirm_prompt(summary)
 
 
@@ -222,10 +228,7 @@ def run_appointment_precheck(
             )
 
         if reply_kind == "no":
-            state.last_entities.pop("appointment_cancel_pending", None)
-            state.last_entities.pop("appointment_topic_switch_pending", None)
-            state.last_entities["appointment_flow_active"] = True
-            state.dialog.phase = AppointmentPhase.COLLECTING
+            reject_appointment_confirmation(state, extra_keys=("appointment_cancel_pending", "appointment_topic_switch_pending"))
             return ResponseEnvelope(
                 text=_appointment_resume_prompt(state, memory),
                 handoff=False,
@@ -273,7 +276,7 @@ def run_appointment_precheck(
         if waiting_action_choice and reply_kind in {"yes", "no"}:
             return None
         if is_appointment_cancel_or_restart_request(user_text) or is_appointment_soft_pause_request(user_text):
-            state.last_entities["appointment_cancel_pending"] = True
+            mark_appointment_cancel_pending(state)
             return ResponseEnvelope(
                 text=appointment_text_cancel_confirm(),
                 handoff=False,
@@ -287,7 +290,7 @@ def run_appointment_precheck(
                 ),
             )
         if is_likely_topic_switch_from_appointment(user_text):
-            state.last_entities["appointment_topic_switch_pending"] = True
+            mark_appointment_topic_switch_pending(state)
             return ResponseEnvelope(
                 text=appointment_text_topic_switch_confirm(),
                 handoff=False,
@@ -305,10 +308,7 @@ def run_appointment_precheck(
         confirm_transition = appointment_confirmation_transition(user_text)
         if confirm_transition == APPOINTMENT_CONFIRM_YES:
             summary = appointment_summary(state.last_entities)
-            state.last_entities["appointment_confirmed"] = True
-            state.last_entities.pop("appointment_confirm_pending", None)
-            state.last_entities.pop("appointment_flow_active", None)
-            state.dialog.phase = AppointmentPhase.CONFIRMED
+            finalize_appointment_confirmation(state)
             return ResponseEnvelope(
                 text=appointment_text_confirmed_handoff(summary),
                 handoff=True,
@@ -321,12 +321,10 @@ def run_appointment_precheck(
                 ),
             )
         if confirm_transition == APPOINTMENT_CONFIRM_NO:
-            state.last_entities["appointment_confirmed"] = False
-            state.last_entities.pop("appointment_confirm_pending", None)
-            for key in ("date_from", "date_to", "time_from", "time_to", "date_hint"):
-                state.last_entities.pop(key, None)
-            state.last_entities["appointment_flow_active"] = True
-            state.dialog.phase = AppointmentPhase.COLLECTING
+            reject_appointment_confirmation(
+                state,
+                extra_keys=("date_from", "date_to", "time_from", "time_to", "date_hint"),
+            )
             return ResponseEnvelope(
                 text=appointment_text_reask_datetime(),
                 handoff=False,
@@ -339,7 +337,7 @@ def run_appointment_precheck(
                 ),
             )
         if is_appointment_cancel_or_restart_request(user_text) or is_appointment_soft_pause_request(user_text):
-            state.last_entities["appointment_cancel_pending"] = True
+            mark_appointment_cancel_pending(state)
             return ResponseEnvelope(
                 text=appointment_text_cancel_confirm(),
                 handoff=False,
@@ -353,7 +351,7 @@ def run_appointment_precheck(
                 ),
             )
         if is_new_topic_while_confirm_pending(user_text):
-            state.last_entities["appointment_topic_switch_pending"] = True
+            mark_appointment_topic_switch_pending(state)
             return ResponseEnvelope(
                 text=appointment_text_topic_switch_confirm(),
                 handoff=False,
