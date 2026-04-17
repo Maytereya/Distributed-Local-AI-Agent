@@ -1252,6 +1252,64 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
     return await executor_execute_plan(plan, state, services)
 
 
+def _handle_operator_offer_pending(
+    user_text: str,
+    state: SessionState,
+    memory: MemoryStore,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Resolve a previously-offered operator handoff awaiting user ack.
+
+    :param user_text: current user turn
+    :param state: session state
+    :param memory: memory store (for clearing pending markers)
+    :return: fully-materialised routing triple when the turn is consumed by the
+        operator-offer flow, else ``None`` so normal routing continues.
+    """
+
+    if not state.last_entities.get("_operator_offer_pending"):
+        return None
+
+    reply_kind = contextual_reply_kind(user_text)
+    if explicit_operator_requested(user_text):
+        reply_kind = "yes"
+    if reply_kind == "yes":
+        _clear_operator_offer_pending(state, memory)
+        return (
+            RouteDecision(
+                label="OTHER",
+                confidence=0.95,
+                entities={},
+                flags={"operator_offer_confirmed"},
+                needs_handoff=False,
+            ),
+            Plan(label="OTHER"),
+            Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": handoff_message("manual_operator"), "handoff": True}}),
+        )
+    if reply_kind == "no":
+        _clear_operator_offer_pending(state, memory)
+        return (
+            RouteDecision(
+                label="OTHER",
+                confidence=0.95,
+                entities={},
+                flags={"operator_offer_declined"},
+                needs_handoff=False,
+            ),
+            Plan(label="OTHER"),
+            Evidence(
+                items={
+                    ek.OPERATOR_OFFER_RESPONSE: {
+                        "text": "Хорошо, продолжаем диалог. Можете задать другой вопрос.",
+                        "handoff": False,
+                    }
+                }
+            ),
+        )
+    # Pending cleared; caller proceeds to normal routing.
+    _clear_operator_offer_pending(state, memory)
+    return None
+
+
 async def route_patient_message(
     user_text: str,
     state: SessionState,
@@ -1259,44 +1317,9 @@ async def route_patient_message(
     memory: MemoryStore,
     runtime_options: RuntimeOptions | None = None,
 ) -> tuple[RouteDecision, Plan, Evidence]:
-    if state.last_entities.get("_operator_offer_pending"):
-        reply_kind = contextual_reply_kind(user_text)
-        if explicit_operator_requested(user_text):
-            reply_kind = "yes"
-        if reply_kind == "yes":
-            _clear_operator_offer_pending(state, memory)
-            return (
-                RouteDecision(
-                    label="OTHER",
-                    confidence=0.95,
-                    entities={},
-                    flags={"operator_offer_confirmed"},
-                    needs_handoff=False,
-                ),
-                Plan(label="OTHER"),
-                Evidence(items={"operator_offer_response": {"text": handoff_message("manual_operator"), "handoff": True}}),
-            )
-        if reply_kind == "no":
-            _clear_operator_offer_pending(state, memory)
-            return (
-                RouteDecision(
-                    label="OTHER",
-                    confidence=0.95,
-                    entities={},
-                    flags={"operator_offer_declined"},
-                    needs_handoff=False,
-                ),
-                Plan(label="OTHER"),
-                Evidence(
-                    items={
-                        "operator_offer_response": {
-                            "text": "Хорошо, продолжаем диалог. Можете задать другой вопрос.",
-                            "handoff": False,
-                        }
-                    }
-                ),
-            )
-        _clear_operator_offer_pending(state, memory)
+    operator_offer_result = _handle_operator_offer_pending(user_text, state, memory)
+    if operator_offer_result is not None:
+        return operator_offer_result
 
     catalog_pending_result = await _handle_catalog_confirm_pending(
         user_text=user_text,
