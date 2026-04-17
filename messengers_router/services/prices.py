@@ -118,7 +118,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         except Exception:
             return legacy._service_fallback(
                 note="price_info source unavailable",
-                handoff_message="Сейчас не удалось получить цены автоматически. Соединяю с оператором.",
+                handoff_message=legacy.handoff_message("service_error_prices"),
                 entities=entities,
                 extra={"prices": []},
             )
@@ -165,7 +165,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     except Exception:
         return legacy._service_fallback(
             note="price_info source unavailable",
-            handoff_message="Сейчас не удалось получить цены автоматически. Соединяю с оператором.",
+            handoff_message=legacy.handoff_message("service_error_prices"),
             entities=entities,
             extra={"prices": []},
         )

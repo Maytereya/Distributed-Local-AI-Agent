@@ -66,7 +66,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
     if city_for_static and legacy._is_non_samara_city_value(city_for_static):
         return legacy._service_fallback(
             note=f"address_info unsupported city: {city_for_static}",
-            handoff_message="Сейчас могу помочь только по Самаре. Соединяю с оператором.",
+            handoff_message=legacy.handoff_message("city_not_supported"),
             entities=entities,
             reason="city_not_supported",
             extra={"addresses": [], "branches": []},

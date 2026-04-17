@@ -3,7 +3,9 @@ import importlib
 
 import pytest
 
+from messengers_router.services import lab_tests as lab_tests_mod
 from messengers_router import classifier as classifier_mod
+from messengers_router import policies as policies_mod
 from messengers_router import services as svc_mod
 from messengers_router.city import match_city
 from messengers_router.mess_types import Evidence, SessionState
@@ -14,6 +16,7 @@ from messengers_router.policies import (
     build_branch_index,
     extract_specialty,
     extract_service_phrase,
+    handoff_message,
     match_branch_hint,
     quick_fill_core_entities,
 )
@@ -46,8 +49,59 @@ def test_services_doctor_methods_are_sourced_from_doctors_module():
     assert Services.doctors_schedule_week.__module__ == "messengers_router.services.doctors"
 
 
+def test_services_lab_methods_are_sourced_from_lab_tests_module():
+    assert Services.test_assist.__module__ == "messengers_router.services.lab_tests"
+    assert Services.test_result_status.__module__ == "messengers_router.services.lab_tests"
+
+
 def test_services_normalise_input_normalizes_yo_characters():
     assert svc_mod._normalise_input("  Ёжик   в Тумане  ") == "ежик в тумане"
+
+
+def test_lab_tests_extract_result_query_fields_uses_order_id_fallback():
+    fields = lab_tests_mod._extract_result_query_fields(
+        {
+            "result_surname": "Иванов",
+            "result_filial": "Бг",
+            "year": "1990",
+            "order_id": "12345",
+        },
+        "результат анализа",
+    )
+
+    assert fields == {
+        "surname": "Иванов",
+        "year": 1990,
+        "filial": "Бг",
+        "number": 12345,
+        "lang": "ru",
+    }
+
+
+def test_lab_tests_build_public_result_link_keeps_cp1251_contract():
+    link = lab_tests_mod._build_public_result_link(
+        {
+            "surname": "Иванов",
+            "year": 1990,
+            "filial": "Бг",
+            "number": 12345,
+            "lang": "ru",
+        }
+    )
+
+    assert link == (
+        "https://naykalab.ru/getanaliz.php"
+        "?fam=%C8%E2%E0%ED%EE%E2&year=1990&nom=%C1%E3&nom2=12345&fast=1"
+    )
+
+
+def test_lab_tests_test_assist_clarify_response_stays_non_handoff():
+    res = lab_tests_mod._test_assist_clarify_response({"test_goal": "щитовидка"}, note="stage8")
+
+    assert res.get("handoff_required") is not True
+    assert res["tests"] == []
+    assert "подобрать анализы" in str(res.get("message") or "").lower()
+    assert res["note"] == "stage8"
 
 
 def test_doctors_info_filters_by_name(monkeypatch):
@@ -226,6 +280,63 @@ def test_doctors_info_empty_cache_returns_fallback(monkeypatch):
     assert res.get("handoff_required") is True
     assert res.get("doctors") == []
     assert res.get("handoff_reason") == "service_error"
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("ambiguous_price_service", "Сейчас по этой услуге безопаснее уточнить у оператора. Соединяю с оператором."),
+        ("city_not_supported", "Сейчас могу помочь только по Самаре. Соединяю с оператором."),
+        ("knowledge_not_found", "В моей базе данных информации недостаточно, перевожу на оператора."),
+        ("service_error_doctors_list", "Сейчас не удалось получить список врачей автоматически. Соединяю с оператором."),
+        ("service_error_schedule", "Сейчас не удалось получить расписание автоматически. Соединяю с оператором."),
+        ("service_error_doctor_info", "Сейчас не удалось найти информацию автоматически. Соединяю с оператором."),
+        ("service_error_appointments", "Сейчас не удалось получить данные для записи автоматически. Соединяю с оператором."),
+        ("service_error_results", "Сейчас не удалось получить результаты автоматически. Соединяю с оператором."),
+        ("service_error_result_link", "Сейчас не удалось сформировать ссылку на результат автоматически. Соединяю с оператором."),
+        ("service_error_prices", "Сейчас не удалось получить цены автоматически. Соединяю с оператором."),
+    ],
+)
+def test_handoff_message_supports_domain_specific_service_texts(reason, expected):
+    assert handoff_message(reason) == expected
+
+
+def test_doctors_info_empty_cache_uses_domain_specific_handoff_message(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_cache():
+        return []
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+
+    res = run(svc.doctors_info("Петров", {}))
+
+    assert res.get("handoff_message") == handoff_message("service_error_doctors_list")
+
+
+def test_doctors_schedule_week_source_unavailable_uses_domain_handoff_message(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Иванов Иван Иванович",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+            }
+        ]
+
+    async def fake_schedule_payload(_candidate, _region_name):
+        raise RuntimeError("nayka unavailable")
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_get_schedule_payload_cached", fake_schedule_payload)
+
+    res = run(svc.doctors_schedule_week("расписание Иванова", {"doctor_name": "Иванов"}))
+
+    assert res.get("handoff_required") is True
+    assert res.get("handoff_reason") == "service_error"
+    assert res.get("handoff_message") == handoff_message("service_error_schedule")
 
 
 def test_doctors_schedule_week(monkeypatch):
@@ -706,7 +817,7 @@ def test_main_index_info_source_unavailable_returns_handoff(monkeypatch):
 
     assert res.get("handoff_required") is True
     assert res.get("handoff_reason") == "service_error"
-    assert "не удалось найти информацию" in str(res.get("handoff_message") or "").lower()
+    assert res.get("handoff_message") == handoff_message("service_error_doctor_info")
 
 
 def test_main_index_info_tax_source_unavailable_returns_guidance_without_handoff(monkeypatch):
@@ -1427,6 +1538,25 @@ def test_quick_fill_test_goal_checkup():
     assert out.get("test_goal"), "Expected quick-fill to capture test goal for checkup keyword"
 
 
+def test_quick_fill_core_entities_is_split_into_domain_helpers():
+    for helper_name in (
+        "_fill_insurance_entities",
+        "_fill_datetime_entities",
+        "_fill_test_result_entities",
+        "_fill_appointment_entities",
+        "_fill_patient_entities",
+    ):
+        assert callable(getattr(policies_mod, helper_name, None))
+
+
+def test_quick_fill_insurance_and_child_age_are_preserved_together():
+    out = quick_fill_core_entities("детям 5 лет по дмс", {}, ["child_age"])
+
+    assert out.get("insurance_type") == "dms"
+    assert out.get("accepts_children") is True
+    assert out.get("child_age") == 5
+
+
 def test_quick_fill_city_typo_is_normalized():
     out = quick_fill_core_entities("Самраа", {}, ["_any_of:city,branch_name,branch_id"])
     assert out.get("city") == "Самара"
@@ -1496,6 +1626,21 @@ def test_price_info_price_by_region(monkeypatch):
     res = run(svc.price_info("ЭКГ", {}))
 
     assert res["prices"], "Expected prices from priceByRegion"
+
+
+def test_price_info_source_unavailable_uses_domain_handoff_message(monkeypatch):
+    svc = Services()
+
+    def fake_price_by_region(_region_id):
+        raise RuntimeError("price api unavailable")
+
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", fake_price_by_region)
+
+    res = run(svc.price_info("ЭКГ", {}))
+
+    assert res.get("handoff_required") is True
+    assert res.get("handoff_reason") == "service_error"
+    assert res.get("handoff_message") == handoff_message("service_error_prices")
 
 
 def test_price_info_enriches_care_setting_from_price_units(monkeypatch):

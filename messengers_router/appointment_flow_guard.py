@@ -10,9 +10,9 @@ from collections.abc import Callable
 from typing import Any
 
 from .city import match_city
-from .flow_policy import looks_like_patient_fio
+from .flow_policy import clear_on_appointment_end, looks_like_patient_fio
 from .memory import MemoryStore
-from .mess_types import AppointmentPhase, DialogState, ResponseEnvelope, SessionState
+from .mess_types import AppointmentPhase, ResponseEnvelope, SessionState
 from .policies import (
     APPOINTMENT_CONFIRM_NO,
     APPOINTMENT_CONFIRM_YES,
@@ -71,37 +71,8 @@ _APPOINTMENT_SOFT_PAUSE_RE = re.compile(
 _APPOINTMENT_SOFT_PAUSE_EXACT = {"нет", "ладно"}
 _APPOINTMENT_SOFT_PAUSE_PUNCT_RE = re.compile(r"[!.,?;:]+")
 
-_APPOINTMENT_RUNTIME_KEYS: tuple[str, ...] = (
-    "appointment_action",
-    "appointment_flow_active",
-    "appointment_confirm_pending",
-    "appointment_confirmed",
-    "appointment_cancel_pending",
-    "appointment_topic_switch_pending",
-    "_appointment_doctor_lookup_attempts",
-    "_appointment_datetime_attempts",
-    "appointment_selection_mode",
-    "appointment_windows",
-    "appointment_branch_options",
-    "date_from",
-    "date_to",
-    "time_from",
-    "time_to",
-    "time_flexible",
-    "date_hint",
-    "branch_id",
-    "branch_name",
-    "patient_name",
-)
-_APPOINTMENT_FULL_CONTEXT_KEYS: tuple[str, ...] = (
-    "doctor_id",
-    "doctor_name",
-    "specialty",
-    "service_name",
-    "test_name",
-)
-
-
+# Extended appointment-context keys (doctor identity / service context) are
+# cleared by flow_policy.clear_on_appointment_end(), not by runtime reset alone.
 def _is_topic_switch_intent(text: str) -> bool:
     """Определяет, что реплика уводит из сценария записи в другую тему.
 
@@ -127,23 +98,6 @@ def _is_topic_switch_intent(text: str) -> bool:
             detect_news_intent(low),
         )
     )
-
-
-def reset_appointment_runtime_state(state: SessionState) -> None:
-    for key in _APPOINTMENT_RUNTIME_KEYS:
-        state.last_entities.pop(key, None)
-    dialog: DialogState = state.dialog
-    if dialog.is_active() and (
-        dialog.label == "APPOINTMENT" or AppointmentPhase.is_active(dialog.phase)
-    ):
-        dialog.clear()
-
-
-def clear_appointment_flow_context(state: SessionState, memory: MemoryStore) -> None:
-    reset_appointment_runtime_state(state)
-    for key in _APPOINTMENT_FULL_CONTEXT_KEYS:
-        state.last_entities.pop(key, None)
-    memory.clear_pending(state)
 
 
 def should_keep_appointment_flow_override(user_text: str) -> bool:
@@ -253,7 +207,7 @@ def run_appointment_precheck(
     if state.last_entities.get("appointment_cancel_pending") or state.last_entities.get("appointment_topic_switch_pending"):
         reply_kind = contextual_reply_kind(user_text)
         if reply_kind == "yes":
-            clear_appointment_flow_context(state, memory)
+            clear_on_appointment_end(state, memory)
             return ResponseEnvelope(
                 text=appointment_text_cancelled(),
                 handoff=False,

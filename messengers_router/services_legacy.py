@@ -19,7 +19,6 @@ import logging
 import re
 import time
 from datetime import datetime
-from urllib.parse import quote_from_bytes
 from dataclasses import dataclass, field
 from difflib import get_close_matches
 from functools import lru_cache
@@ -38,6 +37,7 @@ from .doctor_name_port import (
 )
 from .llm_doesnt_work_fallback import build_prepare_fallback_answer
 from .llm_runtime import generate_text
+from .policies import handoff_message
 from .prompt_registry import load_prompt_text
 from .russian_nlu import normalize_ru
 from .service_phrase import extract_service_phrase
@@ -2120,52 +2120,6 @@ def _dedupe_doctors_by_fio(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(fio)
         out.append(d)
     return out
-
-
-def _extract_result_query_fields(entities: dict[str, Any], query: str) -> dict[str, Any]:
-    surname = _get_first_present(entities, ["surname", "result_surname"])
-    filial = _get_first_present(entities, ["filial", "result_filial"])
-    year_raw = entities.get("year")
-    number_raw = entities.get("number")
-
-    if number_raw is None:
-        number_raw = entities.get("order_id")
-
-    year = _as_int(year_raw)
-    number = _as_int(number_raw)
-    return {
-        "surname": str(surname or "").strip(),
-        "year": year,
-        "filial": str(filial or "").strip(),
-        "number": number,
-        "lang": _get_first_present(entities, ["lang", "result_lang"]) or "ru",
-    }
-
-
-def _cp1251_urlencode(value: str) -> str:
-    """
-    Кодирование параметров под контракт ссылки naykalab/getanaliz:
-    Windows-1251 + URL-encode.
-    """
-    raw = str(value or "").strip().encode("cp1251", errors="replace")
-    return quote_from_bytes(raw, safe="")
-
-
-def _build_public_result_link(fields: dict[str, Any]) -> str | None:
-    surname = str(fields.get("surname") or "").strip()
-    filial = str(fields.get("filial") or "").strip()
-    year = _as_int(fields.get("year"))
-    number = _as_int(fields.get("number"))
-    if not surname or not filial or year is None or number is None:
-        return None
-    return (
-        "https://naykalab.ru/getanaliz.php"
-        f"?fam={_cp1251_urlencode(surname)}"
-        f"&year={year}"
-        f"&nom={_cp1251_urlencode(filial)}"
-        f"&nom2={number}"
-        "&fast=1"
-    )
 
 
 def _region_display_name(region: dict[str, Any]) -> str:
@@ -4899,27 +4853,6 @@ def _prepare_clarify_response(query: str, entities: dict[str, Any], *, note: str
     }
 
 
-def _test_assist_clarify_response(entities: dict[str, Any], *, note: str) -> dict[str, Any]:
-    """
-    Возвращает безопасный non-handoff fallback для подбора анализов.
-
-    :param entities: текущие сущности роутера
-    :param note: диагностическая пометка источника
-    :return: payload TEST_ASSIST без handoff_required
-    """
-
-    return {
-        "tests": [],
-        "promos": [],
-        "message": (
-            "Уточните, пожалуйста, какие симптомы, жалобы или цель обследования вас интересуют, "
-            "и я помогу подобрать анализы."
-        ),
-        "note": note,
-        "entities_used": entities,
-    }
-
-
 def _tax_doc_guidance_response(entities: dict[str, Any], *, note: str) -> dict[str, Any]:
     """
     Возвращает детерминированную ссылку на оформление справки для налогового вычета.
@@ -5239,7 +5172,7 @@ def _is_prepare_service_info_usable(query: str, content: str, *, title: str = ""
     return score >= low
 
 
-_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = "В моей базе данных информации недостаточно, перевожу на оператора."
+_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = handoff_message("knowledge_not_found")
 
 
 @dataclass
@@ -6174,7 +6107,7 @@ class Services:
         if service_kind == "operator":
             return _service_fallback(
                 note="service_bundle_info ambiguous operator fallback",
-                handoff_message="Сейчас по этой услуге безопаснее уточнить у оператора. Соединяю с оператором.",
+                handoff_message=handoff_message("ambiguous_price_service"),
                 entities=entities,
                 reason="ambiguous_price_service",
                 extra={
@@ -6349,7 +6282,7 @@ class Services:
         if not doctors:
             return _service_fallback(
                 note="doctors_info source unavailable",
-                handoff_message="Сейчас не удалось получить список врачей автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_doctors_list"),
                 entities=entities,
                 extra={"doctors": []},
             )
@@ -6572,7 +6505,7 @@ class Services:
         if region_name and _is_non_samara_city_value(region_name):
             return _service_fallback(
                 note=f"doctors_schedule_week unsupported city: {region_name}",
-                handoff_message="Сейчас могу помочь только по Самаре. Соединяю с оператором.",
+                handoff_message=handoff_message("city_not_supported"),
                 entities=entities,
                 reason="city_not_supported",
                 extra={"schedule": []},
@@ -6612,7 +6545,7 @@ class Services:
         except Exception:
             return _service_fallback(
                 note="doctors_schedule_week unavailable",
-                handoff_message="Сейчас не удалось получить расписание автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_schedule"),
                 entities=entities,
                 extra={"schedule": []},
             )
@@ -6725,7 +6658,7 @@ class Services:
                 return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback unavailable")
             return _service_fallback(
                 note="main_index_info source unavailable",
-                handoff_message="Сейчас не удалось найти информацию автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_doctor_info"),
                 entities=entities,
                 extra={"content": ""},
             )
@@ -6735,7 +6668,7 @@ class Services:
                 return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback error")
             return _service_fallback(
                 note="main_index_info source unavailable",
-                handoff_message="Сейчас не удалось найти информацию автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_doctor_info"),
                 entities=entities,
                 extra={"content": ""},
             )
@@ -6782,42 +6715,20 @@ class Services:
             except Exception:
                 return _service_fallback(
                     note="appointment_help source unavailable",
-                    handoff_message="Сейчас не удалось получить данные для записи автоматически. Соединяю с оператором.",
+                    handoff_message=handoff_message("service_error_appointments"),
                     entities=entities,
                     extra={"instructions": "Сейчас не удалось получить данные для записи автоматически."},
                 )
             if _is_meili_error_text(cleaned):
                 return _service_fallback(
                     note="appointment_help source unavailable",
-                    handoff_message="Сейчас не удалось получить данные для записи автоматически. Соединяю с оператором.",
+                    handoff_message=handoff_message("service_error_appointments"),
                     entities=entities,
                     extra={"instructions": "Сейчас не удалось получить данные для записи автоматически."},
                 )
             return {"instructions": cleaned, "entities_used": entities}
         return {
             "instructions": "Чтобы записаться, уточните врача/специальность/услугу и удобные даты.",
-            "entities_used": entities,
-        }
-
-    async def test_assist(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        test_name = _get_first_present(entities, ["test_name", "service_name"]) or query
-        needle = _normalise_input(test_name)
-        if not needle:
-            return _test_assist_clarify_response(entities, note="test_assist: no test query")
-
-        try:
-            price_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
-        except Exception:
-            return _test_assist_clarify_response(entities, note="test_assist source unavailable")
-        matches = _rank_price_rows([p for p in price_rows if isinstance(p, dict)], test_name, limit=10)
-
-        if not matches:
-            return _test_assist_clarify_response(entities, note=f"test_assist: no matches ({SAMARA_PRICE_REGION_ID})")
-
-        return {
-            "tests": matches,
-            "promos": [],
-            "note": f"test_assist: priceByRegion({SAMARA_PRICE_REGION_ID})",
             "entities_used": entities,
         }
 
@@ -7224,68 +7135,6 @@ class Services:
             return None
         return str(best.text or "").strip() or None
 
-    async def test_result_status(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        def _result_fallback(note: str, message: str = "Сейчас не удалось получить результаты автоматически. Соединяю с оператором.") -> dict[str, Any]:
-            return _service_fallback(
-                note=note,
-                handoff_message=message,
-                entities=entities,
-                reason="test_result_fallback",
-                extra={"ready": False},
-            )
-
-        fields = _extract_result_query_fields(entities, query)
-        missing = [k for k in ("surname", "year", "filial", "number") if not fields.get(k)]
-        if missing:
-            return {
-                "ready": False,
-                "note": "missing_result_fields",
-                "missing_fields": missing,
-                "entities_used": entities,
-            }
-
-        try:
-            api_resp = await asyncio.to_thread(
-                api_nayka.site_result_for_patient,
-                surname=fields["surname"],
-                year=int(fields["year"]),
-                filial=fields["filial"],
-                number=int(fields["number"]),
-                lang=fields["lang"],
-                with_time=None,
-            )
-        except Exception as e:
-            return _result_fallback(f"resultForPatient failed: {e}")
-
-        if not isinstance(api_resp, dict) or not api_resp.get("ok"):
-            return _result_fallback(f"resultForPatient error: {api_resp}")
-
-        payload = api_resp.get("data")
-        if not payload:
-            return {
-                "ready": False,
-                "note": "result_not_found_or_not_ready",
-                "result_payload": payload,
-                "result_preview": "По указанным данным результаты пока не найдены или еще не готовы.",
-                "entities_used": entities,
-            }
-
-        link = _build_public_result_link(fields)
-        if not link:
-            return _result_fallback(
-                "result_link_build_failed",
-                "Сейчас не удалось сформировать ссылку на результат автоматически. Соединяю с оператором.",
-            )
-
-        return {
-            "ready": True,
-            "note": "result_link_constructed",
-            "result_payload": payload,
-            "result_preview": "Ссылка на результат сформирована.",
-            "result_links": [link],
-            "entities_used": entities,
-        }
-
     async def price_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
         async def _load_with_retry(fn: Any, *args: Any) -> Any:
             last_exc: Exception | None = None
@@ -7370,7 +7219,7 @@ class Services:
             except Exception:
                 return _service_fallback(
                     note="price_info source unavailable",
-                    handoff_message="Сейчас не удалось получить цены автоматически. Соединяю с оператором.",
+                    handoff_message=handoff_message("service_error_prices"),
                     entities=entities,
                     extra={"prices": []},
                 )
@@ -7417,7 +7266,7 @@ class Services:
         except Exception:
             return _service_fallback(
                 note="price_info source unavailable",
-                handoff_message="Сейчас не удалось получить цены автоматически. Соединяю с оператором.",
+                handoff_message=handoff_message("service_error_prices"),
                 entities=entities,
                 extra={"prices": []},
             )
@@ -7494,7 +7343,7 @@ class Services:
         if city_for_static and _is_non_samara_city_value(city_for_static):
             return _service_fallback(
                 note=f"address_info unsupported city: {city_for_static}",
-                handoff_message="Сейчас могу помочь только по Самаре. Соединяю с оператором.",
+                handoff_message=handoff_message("city_not_supported"),
                 entities=entities,
                 reason="city_not_supported",
                 extra={"addresses": [], "branches": []},
@@ -7753,6 +7602,13 @@ Services.price_info = _price_info_impl
 
 from .services.addresses import address_info as _address_info_impl  # noqa: E402
 Services.address_info = _address_info_impl
+
+from .services.lab_tests import (  # noqa: E402
+    test_assist as _test_assist_impl,
+    test_result_status as _test_result_status_impl,
+)
+Services.test_assist = _test_assist_impl
+Services.test_result_status = _test_result_status_impl
 
 
 if __name__ == "__main__":
