@@ -1030,6 +1030,87 @@ async def _verify_doctor_entity(
     )
 
 
+def _plan_service_catalog_prefetch(
+    decision: RouteDecision,
+    state: SessionState,
+    user_text: str,
+) -> dict[str, str] | None:
+    """Part IV Stage 15 (full OPTION B): decide whether a speculative service
+    catalog match can be fired in parallel with doctor verification.
+
+    Speculation is only safe when the pre-verify state guarantees the
+    post-verify ``_inject_catalog_candidates`` gate fires with an identical
+    ``match_catalog_service`` input. ``_verify_doctor_entity`` can only alter
+    doctor-related fields (resolve/drop ``doctor_name``, drop ``service_name``
+    on conflict, or promote to ``patient_name``); this helper restricts
+    speculation to cases where none of those mutations can change the gate:
+
+    - label must be service-eligible
+    - no ``service_name`` already present (otherwise gate is False pre-verify
+      and speculation is pointless)
+    - no ``doctor_name`` anywhere (entities or ``state.last_entities``) —
+      absence pre-verify plus ``context_action != overwrite_doctor`` means
+      verify cannot introduce a doctor that would flip the APPOINTMENT gate
+    - ``context_action`` not ``overwrite_doctor`` — that branch runs
+      ``resolve_doctor_name(user_text)`` and may set ``doctor_name``
+    - not a PRICE+specialty pre-condition (gate would be False)
+
+    :return: ``{"query": ..., "current_service_name": ...}`` or ``None``
+    """
+
+    entities = decision.entities or {}
+    last = state.last_entities or {}
+
+    if decision.label not in {"APPOINTMENT", "PRICE", "ADDRESS", "TEST_ASSIST"}:
+        return None
+    if entities.get("service_name"):
+        return None
+    if entities.get("doctor_name") or last.get("doctor_name"):
+        return None
+    if decision.context_action == "overwrite_doctor":
+        return None
+    if decision.label == "PRICE" and (
+        entities.get("specialty") or last.get("specialty")
+    ):
+        return None
+
+    query = str(entities.get("test_name") or user_text or "")
+    if not query:
+        return None
+    current = str(last.get("service_name") or "")
+    return {"query": query, "current_service_name": current}
+
+
+async def _verify_decision_and_prefetch_catalog(
+    *,
+    decision: RouteDecision,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+) -> tuple[RouteDecision, dict[str, Any] | None]:
+    """Part IV Stage 15 (full OPTION B): parallelize doctor verification with
+    a speculative service catalog match when guards permit.
+
+    Falls back to a plain ``_verify_doctor_entity`` await when no speculation
+    is safe (which covers the majority of turns that carry a raw doctor_name
+    or ``overwrite_doctor`` context). Returns ``(verified_decision, prefetch)``
+    where ``prefetch`` is ``{"query": str, "match": dict | None}`` or ``None``.
+    """
+
+    plan = _plan_service_catalog_prefetch(decision, state, user_text)
+    if plan is None:
+        verified = await _verify_doctor_entity(decision, services, user_text)
+        return verified, None
+
+    verify_coro = _verify_doctor_entity(decision, services, user_text)
+    service_coro = services.match_catalog_service(
+        plan["query"],
+        current_service_name=plan["current_service_name"],
+    )
+    verified, service_match = await asyncio.gather(verify_coro, service_coro)
+    return verified, {"query": plan["query"], "match": service_match}
+
+
 async def _sanitize_doctor_in_entities(
     entities: dict[str, Any],
     services: Services,
@@ -1046,6 +1127,7 @@ async def _inject_catalog_candidates(
     user_text: str,
     state: SessionState,
     services: Services,
+    prefetched_service: dict[str, Any] | None = None,
 ) -> RouteDecision:
     entities = dict(decision.entities or {})
     flags = set(decision.flags or set())
@@ -1090,17 +1172,32 @@ async def _inject_catalog_candidates(
         if should_try_doctor
         else None
     )
-    service_coro = (
-        services.match_catalog_service(
-            str(entities.get("service_name") or entities.get("test_name") or user_text or ""),
-            current_service_name=str(state.last_entities.get("service_name") or ""),
+
+    # Part IV Stage 15 (full OPTION B): if ``_verify_decision_and_prefetch_catalog``
+    # already fired a speculative service match in parallel with verify, and
+    # the post-verify gate resolves to the same input, reuse that result
+    # instead of re-fetching. ``_plan_service_catalog_prefetch`` guards the
+    # speculation such that gate+input can only stay identical or the
+    # prefetch is ``None``; the defensive query equality check below protects
+    # against drift if those guards are ever loosened.
+    service_coro = None
+    service_match: dict[str, Any] | None = None
+    if should_try_service:
+        service_query = str(
+            entities.get("service_name") or entities.get("test_name") or user_text or ""
         )
-        if should_try_service
-        else None
-    )
+        if (
+            prefetched_service is not None
+            and prefetched_service.get("query") == service_query
+        ):
+            service_match = prefetched_service.get("match")
+        else:
+            service_coro = services.match_catalog_service(
+                service_query,
+                current_service_name=str(state.last_entities.get("service_name") or ""),
+            )
 
     doctor_match: dict[str, Any] | None = None
-    service_match: dict[str, Any] | None = None
     if doctor_coro is not None and service_coro is not None:
         doctor_match, service_match = await asyncio.gather(doctor_coro, service_coro)
     elif doctor_coro is not None:
@@ -1748,6 +1845,7 @@ async def _complete_route_after_doctor_guard(
     memory: MemoryStore,
     runtime_options: RuntimeOptions | None = None,
     nlu_debug: dict[str, Any] | None = None,
+    catalog_prefetch: dict[str, Any] | None = None,
 ) -> tuple[RouteDecision, Plan, Evidence]:
     """Завершает legacy post-NLU middleware после doctor verification.
 
@@ -1771,6 +1869,7 @@ async def _complete_route_after_doctor_guard(
         user_text=user_text,
         state=state,
         services=services,
+        prefetched_service=catalog_prefetch,
     )
     decision = await _apply_post_nlu_guardrails(decision, state, user_text, services, memory)
 

@@ -48,6 +48,10 @@ class OrchestratorContext:
     # Per-stage wall-clock in milliseconds (filled by ``_timed_stage``). Used
     # by the Part IV perf work as a baseline for optimisation decisions.
     stage_timings: dict[str, float] = field(default_factory=dict)
+    # Part IV Stage 15 (full OPTION B): speculative service-catalog match
+    # fetched in parallel with doctor verification. Consumed by ``tool_loop``
+    # via ``_complete_route_after_doctor_guard`` → ``_inject_catalog_candidates``.
+    catalog_prefetch: dict[str, Any] | None = None
 
 
 @asynccontextmanager
@@ -409,7 +413,12 @@ async def doctor_entity_guard(
 
     from . import router
 
-    ctx.decision = await router._verify_doctor_entity(ctx.decision, services, ctx.text)
+    ctx.decision, ctx.catalog_prefetch = await router._verify_decision_and_prefetch_catalog(
+        decision=ctx.decision,
+        user_text=ctx.text,
+        state=ctx.state,
+        services=services,
+    )
     ctx.state.dialog.merge_entities(ctx.decision.entities)
     ctx.state.dialog.label = ctx.decision.label
     ctx.state.dialog.confidence = ctx.decision.confidence
@@ -472,6 +481,7 @@ async def tool_loop(
         memory=memory,
         runtime_options=runtime_options,
         nlu_debug=ctx.nlu_debug,
+        catalog_prefetch=ctx.catalog_prefetch,
     )
     ctx.decision = decision
     ctx.plan = plan
