@@ -1030,6 +1030,87 @@ async def _verify_doctor_entity(
     )
 
 
+def _plan_service_catalog_prefetch(
+    decision: RouteDecision,
+    state: SessionState,
+    user_text: str,
+) -> dict[str, str] | None:
+    """Part IV Stage 15 (full OPTION B): decide whether a speculative service
+    catalog match can be fired in parallel with doctor verification.
+
+    Speculation is only safe when the pre-verify state guarantees the
+    post-verify ``_inject_catalog_candidates`` gate fires with an identical
+    ``match_catalog_service`` input. ``_verify_doctor_entity`` can only alter
+    doctor-related fields (resolve/drop ``doctor_name``, drop ``service_name``
+    on conflict, or promote to ``patient_name``); this helper restricts
+    speculation to cases where none of those mutations can change the gate:
+
+    - label must be service-eligible
+    - no ``service_name`` already present (otherwise gate is False pre-verify
+      and speculation is pointless)
+    - no ``doctor_name`` anywhere (entities or ``state.last_entities``) —
+      absence pre-verify plus ``context_action != overwrite_doctor`` means
+      verify cannot introduce a doctor that would flip the APPOINTMENT gate
+    - ``context_action`` not ``overwrite_doctor`` — that branch runs
+      ``resolve_doctor_name(user_text)`` and may set ``doctor_name``
+    - not a PRICE+specialty pre-condition (gate would be False)
+
+    :return: ``{"query": ..., "current_service_name": ...}`` or ``None``
+    """
+
+    entities = decision.entities or {}
+    last = state.last_entities or {}
+
+    if decision.label not in {"APPOINTMENT", "PRICE", "ADDRESS", "TEST_ASSIST"}:
+        return None
+    if entities.get("service_name"):
+        return None
+    if entities.get("doctor_name") or last.get("doctor_name"):
+        return None
+    if decision.context_action == "overwrite_doctor":
+        return None
+    if decision.label == "PRICE" and (
+        entities.get("specialty") or last.get("specialty")
+    ):
+        return None
+
+    query = str(entities.get("test_name") or user_text or "")
+    if not query:
+        return None
+    current = str(last.get("service_name") or "")
+    return {"query": query, "current_service_name": current}
+
+
+async def _verify_decision_and_prefetch_catalog(
+    *,
+    decision: RouteDecision,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+) -> tuple[RouteDecision, dict[str, Any] | None]:
+    """Part IV Stage 15 (full OPTION B): parallelize doctor verification with
+    a speculative service catalog match when guards permit.
+
+    Falls back to a plain ``_verify_doctor_entity`` await when no speculation
+    is safe (which covers the majority of turns that carry a raw doctor_name
+    or ``overwrite_doctor`` context). Returns ``(verified_decision, prefetch)``
+    where ``prefetch`` is ``{"query": str, "match": dict | None}`` or ``None``.
+    """
+
+    plan = _plan_service_catalog_prefetch(decision, state, user_text)
+    if plan is None:
+        verified = await _verify_doctor_entity(decision, services, user_text)
+        return verified, None
+
+    verify_coro = _verify_doctor_entity(decision, services, user_text)
+    service_coro = services.match_catalog_service(
+        plan["query"],
+        current_service_name=plan["current_service_name"],
+    )
+    verified, service_match = await asyncio.gather(verify_coro, service_coro)
+    return verified, {"query": plan["query"], "match": service_match}
+
+
 async def _sanitize_doctor_in_entities(
     entities: dict[str, Any],
     services: Services,
@@ -1046,6 +1127,7 @@ async def _inject_catalog_candidates(
     user_text: str,
     state: SessionState,
     services: Services,
+    prefetched_service: dict[str, Any] | None = None,
 ) -> RouteDecision:
     entities = dict(decision.entities or {})
     flags = set(decision.flags or set())
@@ -1090,17 +1172,32 @@ async def _inject_catalog_candidates(
         if should_try_doctor
         else None
     )
-    service_coro = (
-        services.match_catalog_service(
-            str(entities.get("service_name") or entities.get("test_name") or user_text or ""),
-            current_service_name=str(state.last_entities.get("service_name") or ""),
+
+    # Part IV Stage 15 (full OPTION B): if ``_verify_decision_and_prefetch_catalog``
+    # already fired a speculative service match in parallel with verify, and
+    # the post-verify gate resolves to the same input, reuse that result
+    # instead of re-fetching. ``_plan_service_catalog_prefetch`` guards the
+    # speculation such that gate+input can only stay identical or the
+    # prefetch is ``None``; the defensive query equality check below protects
+    # against drift if those guards are ever loosened.
+    service_coro = None
+    service_match: dict[str, Any] | None = None
+    if should_try_service:
+        service_query = str(
+            entities.get("service_name") or entities.get("test_name") or user_text or ""
         )
-        if should_try_service
-        else None
-    )
+        if (
+            prefetched_service is not None
+            and prefetched_service.get("query") == service_query
+        ):
+            service_match = prefetched_service.get("match")
+        else:
+            service_coro = services.match_catalog_service(
+                service_query,
+                current_service_name=str(state.last_entities.get("service_name") or ""),
+            )
 
     doctor_match: dict[str, Any] | None = None
-    service_match: dict[str, Any] | None = None
     if doctor_coro is not None and service_coro is not None:
         doctor_match, service_match = await asyncio.gather(doctor_coro, service_coro)
     elif doctor_coro is not None:
@@ -1636,56 +1733,27 @@ def _handle_operator_offer_pending(
     return None
 
 
-async def route_patient_message(
+async def _resolve_nlu_decision_before_doctor_guard(
     user_text: str,
     state: SessionState,
     services: Services,
     memory: MemoryStore,
     runtime_options: RuntimeOptions | None = None,
-) -> tuple[RouteDecision, Plan, Evidence]:
-    operator_offer_result = _handle_operator_offer_pending(user_text, state, memory)
-    if operator_offer_result is not None:
-        return operator_offer_result
+) -> tuple[RouteDecision, dict[str, Any]]:
+    """Строит NLU-решение до doctor verification.
 
-    catalog_pending_result = await _handle_catalog_confirm_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if catalog_pending_result is not None:
-        return catalog_pending_result
+    Хелпер сохраняет legacy-порядок: очистка stale debug-ключей, appointment
+    prelock, основной NLU и topic-registry override. Нужен и для
+    `route_patient_message`, и для orchestrator-stage `nlu_route`, чтобы не
+    дублировать эту часть пайплайна.
 
-    appointment_action_result = await _handle_appointment_action_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if appointment_action_result is not None:
-        return appointment_action_result
-
-    compound_price_result = await _handle_compound_price_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if compound_price_result is not None:
-        return compound_price_result
-
-    secondary_queue_result = await _handle_secondary_queue_pending(
-        user_text=user_text,
-        state=state,
-        services=services,
-        memory=memory,
-        runtime_options=runtime_options,
-    )
-    if secondary_queue_result is not None:
-        return secondary_queue_result
+    :param user_text: текущий текст пользователя
+    :param state: состояние сессии
+    :param services: сервисный слой для prelock-логики
+    :param memory: memory-store для чтения pending-состояния
+    :param runtime_options: runtime-настройки LLM/NLU
+    :return: решение маршрутизации и NLU debug-метаданные
+    """
 
     # Диагностические NLU-поля не должны засорять долгоживущий session state.
     # Актуальный trace отдаем только через debug-канал.
@@ -1765,12 +1833,43 @@ async def route_patient_message(
             "matched_regex": list(topic_match.matched_regex),
         }
 
-    decision = await _verify_doctor_entity(decision, services, user_text)
+    return decision, nlu_debug
+
+
+async def _complete_route_after_doctor_guard(
+    *,
+    decision: RouteDecision,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+    nlu_debug: dict[str, Any] | None = None,
+    catalog_prefetch: dict[str, Any] | None = None,
+) -> tuple[RouteDecision, Plan, Evidence]:
+    """Завершает legacy post-NLU middleware после doctor verification.
+
+    Хелпер принимает уже готовое `decision` после `_verify_doctor_entity` и
+    выполняет оставшуюся часть старого `route_patient_message`: catalog
+    injection, guardrails, entity grounding, планирование, executor и графовый
+    переход.
+
+    :param decision: routing-решение после doctor verification
+    :param user_text: текущий текст пользователя
+    :param state: состояние сессии
+    :param services: сервисный слой
+    :param memory: memory-store
+    :param runtime_options: runtime-настройки LLM/NLU
+    :param nlu_debug: отладочные метаданные NLU для debug_trace
+    :return: финальный routing triple
+    """
+
     decision = await _inject_catalog_candidates(
         decision,
         user_text=user_text,
         state=state,
         services=services,
+        prefetched_service=catalog_prefetch,
     )
     decision = await _apply_post_nlu_guardrails(decision, state, user_text, services, memory)
 
@@ -1886,9 +1985,22 @@ async def route_patient_message(
         return catalog_confirm
 
     # Служебные каталожные ключи не должны попадать в долгоживущий state.
-    if any(k in decision.entities for k in ("_catalog_doctor_candidate", "_catalog_doctor_query", "_catalog_service_candidate", "_catalog_service_query")):
+    if any(
+        k in decision.entities
+        for k in (
+            "_catalog_doctor_candidate",
+            "_catalog_doctor_query",
+            "_catalog_service_candidate",
+            "_catalog_service_query",
+        )
+    ):
         clean_entities = dict(decision.entities)
-        for key in ("_catalog_doctor_candidate", "_catalog_doctor_query", "_catalog_service_candidate", "_catalog_service_query"):
+        for key in (
+            "_catalog_doctor_candidate",
+            "_catalog_doctor_query",
+            "_catalog_service_candidate",
+            "_catalog_service_query",
+        ):
             clean_entities.pop(key, None)
         decision = _copy_decision(decision, entities=clean_entities)
 
@@ -1965,8 +2077,6 @@ async def route_patient_message(
         decision=decision,
         pending=pending_after_plan,
         handoff_planned=(
-            # executor sets a top-level boolean; service fallbacks use nested
-            # dicts — check both so the graph FSM always knows about a handoff
             bool(evidence.get(ek.HANDOFF_REQUIRED))
             or evidence_requires_handoff(evidence)[0]
         ),
@@ -1985,6 +2095,76 @@ async def route_patient_message(
         reason="topic_switch" if decision.context_action in {"new_topic", "overwrite_doctor"} else "",
     )
     return decision, plan, evidence
+
+
+async def route_patient_message(
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence]:
+    operator_offer_result = _handle_operator_offer_pending(user_text, state, memory)
+    if operator_offer_result is not None:
+        return operator_offer_result
+
+    catalog_pending_result = await _handle_catalog_confirm_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if catalog_pending_result is not None:
+        return catalog_pending_result
+
+    appointment_action_result = await _handle_appointment_action_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if appointment_action_result is not None:
+        return appointment_action_result
+
+    compound_price_result = await _handle_compound_price_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if compound_price_result is not None:
+        return compound_price_result
+
+    secondary_queue_result = await _handle_secondary_queue_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if secondary_queue_result is not None:
+        return secondary_queue_result
+
+    decision, nlu_debug = await _resolve_nlu_decision_before_doctor_guard(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    decision = await _verify_doctor_entity(decision, services, user_text)
+    return await _complete_route_after_doctor_guard(
+        decision=decision,
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+        nlu_debug=nlu_debug,
+    )
 
 
 

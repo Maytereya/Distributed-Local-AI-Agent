@@ -784,8 +784,10 @@ def test_route_message_short_circuits_on_catalog_health_degraded(monkeypatch):
     async def fake_verify_doctor(decision, _services, _user_text):
         return decision
 
-    async def fake_inject_catalog(decision, *, user_text, state, services):
-        _ = user_text, state, services
+    async def fake_inject_catalog(
+        decision, *, user_text, state, services, prefetched_service=None
+    ):
+        _ = user_text, state, services, prefetched_service
         return decision
 
     async def fake_get_catalog_health(self):
@@ -831,8 +833,18 @@ def test_route_message_short_circuits_on_catalog_health_degraded(monkeypatch):
 
 
 def test_patient_routing_stream_renders_catalog_health_response(monkeypatch):
-    async def fake_route_patient_message(_user_text, _state, _services, _memory, runtime_options=None):
-        _ = runtime_options
+    async def fake_complete_route(
+        *,
+        decision,
+        user_text,
+        state,
+        services,
+        memory,
+        runtime_options=None,
+        nlu_debug=None,
+        catalog_prefetch=None,
+    ):
+        _ = decision, user_text, state, services, memory, runtime_options, nlu_debug, catalog_prefetch
         return (
             RouteDecision(
                 label="OTHER",
@@ -855,7 +867,7 @@ def test_patient_routing_stream_renders_catalog_health_response(monkeypatch):
             ),
         )
 
-    monkeypatch.setattr(router_mod, "route_patient_message", fake_route_patient_message)
+    monkeypatch.setattr(router_mod, "_complete_route_after_doctor_guard", fake_complete_route)
 
     state = SessionState(session_id="catalog-health-stream")
     services = Services()

@@ -9,30 +9,40 @@
 
 - **Active checkout:** `/Users/maxten/Dev/Distributed-Local-AI-Agent2`
 - **Active branch:** `refactor/core`
-- **Completed stage commits already present on `refactor/core`:**
+- **HEAD at rewrite time:** `b01c5de` (2026-04-18)
+- **Completed stage commits on `refactor/core` (chronological):**
   - `e492ecb` — Stage 0/1 cleanup + Stage 5 diagnostic mode checkpoint
   - `f388318` — Stage 2 (`refactor(classifier): make guardrail_precheck sync (it never awaited)`)
   - `36cfe69` — Stage 3 (`refactor(router): log swallowed exceptions instead of hiding them`)
   - `da77de9` — Stage 4 (`refactor(router): route evidence handoff check through policies helper`)
   - `9f9483b` — Stage 5 (`refactor(router): consolidate reset_appointment_runtime_state — Option A`)
   - `d026414` — Stage 6 (`refactor(policies): centralise handoff messages via HANDOFF_REASON_MATRIX`)
-- **Current stage:** Stage 7 is implemented locally and verified locally, but **not committed yet**
-- **Current dirty files (Stage 7 only, excluding local user files outside scope):**
-  - `messengers_router/flow_policy.py`
-  - `messengers_router/router.py`
-  - `messengers_router/appointment_flow_guard.py`
-  - `tests/test_router_flow_override.py`
-- **Fresh local verification for the current dirty Stage-7 diff:**
-  - `ruff check messengers_router/flow_policy.py messengers_router/router.py messengers_router/appointment_flow_guard.py tests/test_router_flow_override.py` → passed
-  - `PYTHONPATH=/Users/maxten/Dev/Distributed-Local-AI-Agent2 /Users/maxten/Dev/Distributed-Local-AI-Agent2/venv/bin/pytest tests/test_router_flow_override.py -q` → `171 passed`
-  - `PYTHONPATH=/Users/maxten/Dev/Distributed-Local-AI-Agent2 /Users/maxten/Dev/Distributed-Local-AI-Agent2/venv/bin/pytest tests/ -x -q --ignore=tests/eval` → `555 passed, 3 warnings`
-- **Remote eval status:** not rerun after `RUN_ID=1776366965`; the last known remote blocker remains `04_stage5_golden_corpus` timeout from Session 4, so remote parity is still unverified for Stages 4–7
-- **Important environment caveat:** after the date rolled to `2026-04-17`, local pytest started picking today's Nayka cache filenames. To keep local tests deterministic in this worktree, hydrate today's dated files before pytest if they are missing/empty:
-  - `agent_logic_2/nayka_api/apidata/doctors_20260417.jsonl`
-  - `agent_logic_2/nayka_api/apidata/price_units/price_units_20260417.jsonl`
-  - `agent_logic_2/nayka_api/apidata/price_by_region/price_region_3_20260417.jsonl`
-  - `agent_logic_2/nayka_api/apidata/service_info/service_info_20260417.jsonl`
-  Otherwise some tests may regenerate empty live-dependent caches and fail for environment reasons rather than router logic.
+  - `2833bf7` — Stage 7 (`refactor(router): collapse overlapping state-clear helpers`)
+  - `74b4376` — Stage 8 (`refactor(services): extract test-result helpers into services/lab_tests`)
+  - `a9c35b5` — Stage 9 (`refactor(policies): split quick_fill_core_entities by entity domain`)
+  - `3b6db5f` — Stage 10 (`refactor(evidence): replace raw keys with constants …`)
+  - `ba4816d` — Stage 11 (`refactor(state): appointment-domain mutation wrapper (pilot)`)
+  - `d2ac78d` — Stage 12a (`extract _handle_operator_offer_pending`)
+  - Stages 12b/12c/12d — already module-level from prior passes; no new commits (Session 14 note)
+  - `9f6c745` — Stage 12e (`extract _handle_secondary_queue_pending`)
+  - `5922bd5` + `b01c5de` — Stage 12f (doctor entity guard → pipeline stage; fix-forward restores pending-before-NLU order via new `pending_dispatch` stage)
+  - `034bf7e` — Stage 12g (`extract _apply_post_nlu_guardrails`)
+  - `77e21bf` — Stage 14 (per-stage latency instrumentation)
+  - `78e31f4` — Stage 15 partial (parallel catalog fetch **inside** `_inject_catalog_candidates` only)
+  - _Stage 15 remainder_ — full OPTION B landed this session: `_verify_decision_and_prefetch_catalog` + `_plan_service_catalog_prefetch` in router.py run verify and the speculative service-catalog match in a single `asyncio.gather`; `OrchestratorContext.catalog_prefetch` pipes the result into `_inject_catalog_candidates`, which reuses the prefetch when post-verify input matches and re-fetches otherwise.
+  - `1dfc35d` — Stage 16 (`perf(nlu): memoize deterministic text helpers with lru_cache`)
+  - `13c2cda` — out-of-band prompt fix (`PREPARE` few-shots so ФГДС/УЗИ-prep queries stop routing to `DOCTOR_INFO`)
+- **Stages determined no-op / deferred:**
+  - Stage 17a — no-op (Session 14 analysis: `early_guards` already short-circuits what 17a-Option-C would add)
+  - Stage 19 — audit-only, no code changes needed (Session 13)
+  - Stage 13 — explicitly migrate-as-you-touch; never scheduled as standalone
+- **Remaining open stages (see end of plan for detail):**
+  - **Stage 17b** — speculative parallel rule+LLM NLU with early-cancel. Needs explicit user approval; highest-risk stage per plan.
+- **Stage 18 formally skipped (Session 15, 2026-04-18):** `scripts/bench_pending_dispatch.py` measured the no-pending fast-path over 2000 iterations — **p50 = 0.001 ms, p99 = 0.002 ms, max = 0.022 ms**. The plan's 20 ms gate is missed by four orders of magnitude; parallelizing pending-handler dispatch would add non-determinism risk for zero latency win. No code change.
+- **Local gate policy (Session 13 onwards):** `ruff check messengers_router/` + `PYTHONPATH=. venv/bin/pytest tests/ --ignore=tests/eval -q` gate every stage. Remote eval (`run_remote_eval.sh --url http://172.16.0.16/api/messenger-generate-once`) is reserved for one-shot post-deploy verification, not per-stage.
+- **Last full-suite local result (post-Stage 15 remainder):** `577 passed, 3 warnings` in ~148s (563 prior + 14 new in `tests/test_stage15_prefetch.py`).
+- **Remote eval status:** last remote run before Session 14; `13c2cda` (PREPARE prompt fix) and `b01c5de` (orchestrator order restore) are not yet verified remotely. Re-run deferred until a batch of changes is ready to deploy.
+- **Environment caveat (unchanged):** local pytest picks up today-dated Nayka cache files. Hydrate the current-dated `doctors_*.jsonl`, `price_units_*.jsonl`, `price_region_3_*.jsonl`, and `service_info_*.jsonl` under `agent_logic_2/nayka_api/apidata/` before running pytest, otherwise date-rolled days will fail live-dependent tests for environment (not logic) reasons.
 
 ## Progress Log
 
@@ -276,6 +286,35 @@
   - **Stage 17b** (speculative parallel NLU/LLM) — requires new user approval; skipped this session.
   - **Stage 18** (measurements-driven) — out of scope per Session 13 decisions.
   - **One-shot remote eval** — to be run once after deploy to production server.
+
+### Session 15 — 2026-04-18
+
+- **Status:** Stage 15 remainder landed (full OPTION B). Plan `Current Handoff Status` header rewritten to reflect real commit history; prior stages 12f/16/FGDS-prompt-fix/etc. were already committed on HEAD but not recorded in the header.
+- **Scope:** parallelize `_verify_doctor_entity` with a speculative `services.match_catalog_service` call, using a tight guard matrix so the post-verify `_inject_catalog_candidates` gate input is guaranteed identical (or prefetch is `None`).
+- **New helpers in `messengers_router/router.py`:**
+  - `_plan_service_catalog_prefetch(decision, state, user_text) -> dict | None` — pure guard: only returns a query when (label in `{APPOINTMENT,PRICE,ADDRESS,TEST_ASSIST}`) AND no `service_name` AND no `doctor_name` in entities or state AND no `overwrite_doctor` AND (for PRICE) no specialty. These are exactly the conditions under which verify cannot change the service-fetch gate.
+  - `_verify_decision_and_prefetch_catalog(...) -> (verified, prefetch)` — if `_plan_service_catalog_prefetch` returns `None`, falls back to plain `_verify_doctor_entity` await (common case when a raw `doctor_name` is present). Otherwise runs verify + the speculative service fetch via `asyncio.gather`.
+- **Wiring:**
+  - `OrchestratorContext` gained a `catalog_prefetch: dict | None` field.
+  - `orchestrator.doctor_entity_guard` now calls `_verify_decision_and_prefetch_catalog` (preserving the `_verify_doctor_entity` seam used by existing monkeypatches, which still fires as the first coroutine in the gather).
+  - `orchestrator.tool_loop` forwards `ctx.catalog_prefetch` into `_complete_route_after_doctor_guard(... catalog_prefetch=...)`.
+  - `_complete_route_after_doctor_guard` forwards it as `prefetched_service=...` to `_inject_catalog_candidates`.
+  - `_inject_catalog_candidates` reuses `prefetched_service["match"]` when the post-verify service query equals `prefetched_service["query"]`; otherwise it re-fetches inline. Defensive equality check protects against drift if the guards are ever loosened.
+- **Test signature updates (existing fakes):**
+  - `tests/test_router_flow_override.py::fake_inject_catalog` now accepts `prefetched_service=None`.
+  - `tests/test_router_flow_override.py::test_patient_routing_stream_renders_catalog_health_response::fake_complete_route` now accepts `catalog_prefetch=None`.
+- **New tests — `tests/test_stage15_prefetch.py` (14 cases):**
+  - 9 cover `_plan_service_catalog_prefetch` guard matrix (label filter, service_name present, doctor_name in decision, doctor_name in state, overwrite_doctor, PRICE+specialty, test_name as query, current-service passthrough, happy path).
+  - 2 cover `_verify_decision_and_prefetch_catalog` (parallel path when guard permits; serial fallback when guard blocks — proves `match_catalog_service` never fires for unsafe inputs).
+  - 3 cover `_inject_catalog_candidates` prefetch-reuse vs re-fetch (matching-query reuse with no re-fetch; stale-query re-fetch; post-verify gate closed → prefetch ignored, nothing applied).
+- **Gate:**
+  - `ruff check messengers_router/ tests/test_stage15_prefetch.py tests/test_router_flow_override.py tests/test_orchestrator_pipeline.py` → clean.
+  - `PYTHONPATH=. venv/bin/python -m pytest tests/ --ignore=tests/eval -q` → **577 passed, 3 warnings** in ~148s (was 563 pre-Stage 15 remainder; +14 new).
+- **Latency expectation:** on turns where the guard fires (APPOINTMENT/PRICE/ADDRESS/TEST_ASSIST with no doctor context and no service_name), verify's `resolve_doctor_name` is overlapped with `match_catalog_service`. Since those are the very turns where verify typically has little raw doctor_name to resolve, the critical path reduces to `max(verify_cost, service_fetch_cost)` instead of sum. Remote eval once deployed will quantify the actual p50 shift.
+- **Open items not addressed this session:**
+  - **Stage 17b** — still requires user approval.
+  - **Stage 18** — still measurement-gated.
+  - **One-shot remote eval** — pending deploy of `Stage 15 remainder + b01c5de + 13c2cda`.
 
 ---
 
