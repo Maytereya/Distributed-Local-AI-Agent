@@ -38,7 +38,7 @@
   - Stage 13 — explicitly migrate-as-you-touch; never scheduled as standalone
 - **Remaining open stages (see end of plan for detail):**
   - **Stage 17b** — speculative parallel rule+LLM NLU with early-cancel. Needs explicit user approval; highest-risk stage per plan.
-  - **Stage 18** — parallel pending-handler dispatch. Measurement-gated: only if Stage 14 logs show `pending_dispatch` >20ms at p50.
+- **Stage 18 formally skipped (Session 15, 2026-04-18):** `scripts/bench_pending_dispatch.py` measured the no-pending fast-path over 2000 iterations — **p50 = 0.001 ms, p99 = 0.002 ms, max = 0.022 ms**. The plan's 20 ms gate is missed by four orders of magnitude; parallelizing pending-handler dispatch would add non-determinism risk for zero latency win. No code change.
 - **Local gate policy (Session 13 onwards):** `ruff check messengers_router/` + `PYTHONPATH=. venv/bin/pytest tests/ --ignore=tests/eval -q` gate every stage. Remote eval (`run_remote_eval.sh --url http://172.16.0.16/api/messenger-generate-once`) is reserved for one-shot post-deploy verification, not per-stage.
 - **Last full-suite local result (post-Stage 15 remainder):** `577 passed, 3 warnings` in ~148s (563 prior + 14 new in `tests/test_stage15_prefetch.py`).
 - **Remote eval status:** last remote run before Session 14; `13c2cda` (PREPARE prompt fix) and `b01c5de` (orchestrator order restore) are not yet verified remotely. Re-run deferred until a batch of changes is ready to deploy.
