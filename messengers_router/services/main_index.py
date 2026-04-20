@@ -11,11 +11,15 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..policies import handoff_message as _handoff_message
+
 if TYPE_CHECKING:
     from ..services_legacy import Services
 
 
 logger = logging.getLogger(__name__)
+
+_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = _handoff_message("knowledge_not_found")
 
 
 def _legacy_module():
@@ -113,7 +117,7 @@ async def main_index_info(self: "Services", query: str, entities: dict[str, Any]
             return legacy._tax_doc_guidance_response(entities, note="main_index_info: tax fallback no matches")
         return legacy._service_fallback(
             note="main_index_info: no matches",
-            handoff_message=legacy._KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
+            handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
             entities=entities,
             reason="knowledge_not_found",
             extra={"content": ""},
@@ -124,7 +128,7 @@ async def main_index_info(self: "Services", query: str, entities: dict[str, Any]
             return legacy._tax_doc_guidance_response(entities, note="main_index_info: tax fallback weak relevance")
         return legacy._service_fallback(
             note=f"main_index_info: weak relevance ({doc_kind})",
-            handoff_message=legacy._KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
+            handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
             entities=entities,
             reason="knowledge_not_found",
             extra={"content": ""},

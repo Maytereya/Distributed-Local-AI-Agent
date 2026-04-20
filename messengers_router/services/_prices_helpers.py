@@ -34,6 +34,17 @@ from ._doctors_helpers import (
 from ._regions import _extract_city_token
 
 
+def _get_legacy():
+    """Лениво импортирует services_legacy, чтобы избежать цикла импортов.
+
+    Используется для получения patchable-ссылок на функции, которые тесты
+    монкипатчат через svc_mod (services/__init__.py → services_legacy).
+    """
+    from .. import services_legacy as legacy  # noqa: PLC0415
+
+    return legacy
+
+
 # ---------------------------------------------------------------------------
 # Regex patterns and constant sets (order preserved from services_legacy.py)
 # ---------------------------------------------------------------------------
@@ -41,6 +52,7 @@ from ._regions import _extract_city_token
 _PRICE_TOKEN_RE = re.compile(r"[a-zа-яё0-9]+", re.I)
 _PRICE_REQUEST_RE = re.compile(r"\b(стоим\w*|цен\w*|сколько)\b", re.I)
 _PRICE_CONSULT_HINT_RE = re.compile(r"\b(при[её]м\w*|консультаци\w*)\b", re.I)
+_DOCTOR_PRICE_HINT_RE = re.compile(r"\b(?:у|врач\w*|доктор\w*)\s+[а-яё\-]{3,}\b", re.I)
 _PRICE_SERVICE_PREFIX_RE = re.compile(
     r"^\s*(?:а\s+)?(?:сколько\s+стоит|сколько\s+будет\s+стоить|"
     r"каков(?:а|о|ы)?\s+стоимость|каков(?:а|о|ы)?\s+цена|"
@@ -2217,3 +2229,48 @@ def match_compound_price_service_option(user_text: str, options: list[str]) -> s
         if alias_hits and any(alias in option_norm for alias in alias_hits):
             return option_text
     return None
+
+
+async def _resolve_ambiguous_price_kind_with_llm(
+    query_text: str,
+    retail_rows: list[dict[str, Any]],
+    *,
+    has_exact_doctor_link: bool,
+    runtime_llm_mode: str = "",
+) -> str:
+    """
+    Запускает LLM fallback только для ambiguous PRICE-кейсов.
+
+    :param query_text: исходный пользовательский запрос
+    :param retail_rows: top retail rows
+    :param has_exact_doctor_link: найден ли надежный doctor linkage
+    :param runtime_llm_mode: текущий llm_mode (`strict|hybrid|rich`)
+    :return: выбранный kind либо `ambiguous`
+    """
+
+    mode = str(runtime_llm_mode or "").strip().lower()
+    if mode not in {"hybrid", "rich"}:
+        return "ambiguous"
+    prompt = _build_price_kind_ambiguous_prompt(
+        query_text,
+        retail_rows,
+        has_exact_doctor_link=has_exact_doctor_link,
+    )
+    if not prompt:
+        return "ambiguous"
+    try:
+        raw = await _get_legacy().generate_text(
+            prompt,
+            timeout_s=20,
+            queue_timeout_ms=4000,
+            fmt="json",
+            think=False,
+        )
+    except Exception:
+        return "ambiguous"
+    kind = _parse_price_kind_ambiguous_result(raw)
+    if not kind:
+        return "ambiguous"
+    if kind == "procedure_with_doctor" and not has_exact_doctor_link:
+        return "ambiguous"
+    return kind

@@ -24,11 +24,31 @@ from ._regions import (
 
 _PRICE_HOMECODE_DOTTED_RE = re.compile(r"\b\d+(?:\.\d+){1,6}\b")
 _PRICE_HOMECODE_NUM_RE = re.compile(r"\b\d{4,}\b")
+_PROCEDURE_BRANCH_LOOKUP_RE = re.compile(
+    r"\b(где|сдела\w*|пройти|провест\w*|выполня\w*|дела\w*|можно|пройти\s+диагностик\w*)\b",
+    re.I,
+)
 _NONBOOKABLE_POINTS_PATH = Path(__file__).resolve().parent.parent / "data" / "nonbookable_points.json"
 # Fallback-карта для процедур, где API не отдает надежный branch-level match.
 _STATIC_PROCEDURE_BRANCH_OVERRIDES: dict[str, tuple[str, ...]] = {
     "флюорограф": ("г. Самара, пр. Ленина, 5",),
 }
+
+
+def _is_procedure_branch_lookup_query(query_text: str, service_q: str) -> bool:
+    """
+    Определяет, что пользователь ищет филиал под конкретную процедуру.
+
+    :param query_text: исходный текст запроса
+    :param service_q: нормализованная процедура/услуга
+    :return: True, если это адресный lookup по процедуре
+    """
+    if not str(service_q or "").strip():
+        return False
+    q = _normalise_input(query_text or "")
+    if not q:
+        return False
+    return bool(_PROCEDURE_BRANCH_LOOKUP_RE.search(q))
 
 
 def _looks_like_real_address(text: str) -> bool:

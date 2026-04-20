@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import time
 from datetime import datetime  # noqa: F401 — re-exported for services/doctors.py via legacy.datetime
 from dataclasses import dataclass, field
@@ -35,8 +34,8 @@ from .doctor_name_port import (  # noqa: F401
     surname_variants,
 )
 from .llm_doesnt_work_fallback import build_prepare_fallback_answer  # noqa: F401 — re-exported for services/prepare.py
-from .llm_runtime import generate_text
-from .policies import handoff_message
+from .llm_runtime import generate_text  # noqa: F401 — re-exported for services/*.py via legacy.generate_text (tests monkey-patch svc_mod.generate_text)
+from .policies import handoff_message  # noqa: F401 — re-exported for services/*.py via legacy.handoff_message
 from .service_phrase import extract_service_phrase  # noqa: F401 — re-exported for services/doctors.py, services/addresses.py
 
 # Stage 20 cluster 1 — common helpers moved to services/_common.py.
@@ -116,9 +115,11 @@ from .services._addresses_helpers import (  # noqa: E402, F401
     _NONBOOKABLE_POINTS_PATH,
     _PRICE_HOMECODE_DOTTED_RE,
     _PRICE_HOMECODE_NUM_RE,
+    _PROCEDURE_BRANCH_LOOKUP_RE,
     _STATIC_PROCEDURE_BRANCH_OVERRIDES,
     _addresses_to_branch_payload,
     _extract_homecode_query,
+    _is_procedure_branch_lookup_query,
     _load_nonbookable_points,
     _looks_like_real_address,
     _nonbookable_needs,
@@ -138,8 +139,10 @@ from .services._doctors_helpers import (  # noqa: E402, F401
     _CATALOG_SERVICE_TRAILING_TIME_RE,
     _CATALOG_WORD_RE,
     _FIO_TOKEN_RE,
+    _SCHEDULE_QUERY_RE,
     _SCHEDULE_SPECIALTY_TOKENS,
     _SERVICE_FILTER_STOPWORDS,
+    _SERVICE_QUERY_SIGNAL_RE,
     _SPECIALTY_PRIORITY_SURNAMES,
     _UZI_FALSE_POSITIVE_RE,
     _UZI_LINE_RE,
@@ -200,6 +203,7 @@ from .services._doctors_helpers import (  # noqa: E402, F401
 # Re-exported here so internal references and external callers keep working.
 from .services._prices_helpers import (  # noqa: E402, F401
     SAMARA_PRICE_REGION_ID,
+    _DOCTOR_PRICE_HINT_RE,
     _DOCTOR_SERVICE_HINT_RE,
     _LAB_DEADLINE_HINT_RE,
     _LAB_SERVICE_HINT_RE,
@@ -282,6 +286,7 @@ from .services._prices_helpers import (  # noqa: E402, F401
     _query_nonbase_price_flags,
     _query_price_variant_flags,
     _rank_price_rows,
+    _resolve_ambiguous_price_kind_with_llm,
     _resolve_best_price_row_from_queries,
     _resolve_multi_price_items,
     _resolve_price_alias_from_catalog,
@@ -298,84 +303,6 @@ from .services._prices_helpers import (  # noqa: E402, F401
 )
 
 logger = logging.getLogger(__name__)
-
-_SCHEDULE_QUERY_RE = re.compile(r"\b(расписани\w*|график|когда\b.*\bпринима\w*|принима\w*)\b", re.I)
-_DOCTOR_PRICE_HINT_RE = re.compile(r"\b(?:у|врач\w*|доктор\w*)\s+[а-яё\-]{3,}\b", re.I)
-_SERVICE_QUERY_SIGNAL_RE = re.compile(
-    r"\b(услуг\w*|процедур\w*|исследован\w*|анализ\w*|сда[тч]\w*|"
-    r"сдела\w*|провед\w*|провод\w*|выполня\w*|дела\w*|удали\w*|удалени\w*|"
-    r"узи|экг|мрт|кт|фгдс|фкс|эндоскоп\w*|гастроскоп\w*|"
-    r"кольпоскоп\w*|колоноскоп\w*|рентген\w*|холтер\w*)\b",
-    re.I,
-)
-_PROCEDURE_BRANCH_LOOKUP_RE = re.compile(
-    r"\b(где|сдела\w*|пройти|провест\w*|выполня\w*|дела\w*|можно|пройти\s+диагностик\w*)\b",
-    re.I,
-)
-
-
-def _is_procedure_branch_lookup_query(query_text: str, service_q: str) -> bool:
-    """
-    Определяет, что пользователь ищет филиал под конкретную процедуру.
-
-    :param query_text: исходный текст запроса
-    :param service_q: нормализованная процедура/услуга
-    :return: True, если это адресный lookup по процедуре
-    """
-    if not str(service_q or "").strip():
-        return False
-    q = _normalise_input(query_text or "")
-    if not q:
-        return False
-    return bool(_PROCEDURE_BRANCH_LOOKUP_RE.search(q))
-
-
-async def _resolve_ambiguous_price_kind_with_llm(
-    query_text: str,
-    retail_rows: list[dict[str, Any]],
-    *,
-    has_exact_doctor_link: bool,
-    runtime_llm_mode: str = "",
-) -> str:
-    """
-    Запускает LLM fallback только для ambiguous PRICE-кейсов.
-
-    :param query_text: исходный пользовательский запрос
-    :param retail_rows: top retail rows
-    :param has_exact_doctor_link: найден ли надежный doctor linkage
-    :param runtime_llm_mode: текущий llm_mode (`strict|hybrid|rich`)
-    :return: выбранный kind либо `ambiguous`
-    """
-
-    mode = str(runtime_llm_mode or "").strip().lower()
-    if mode not in {"hybrid", "rich"}:
-        return "ambiguous"
-    prompt = _build_price_kind_ambiguous_prompt(
-        query_text,
-        retail_rows,
-        has_exact_doctor_link=has_exact_doctor_link,
-    )
-    if not prompt:
-        return "ambiguous"
-    try:
-        raw = await generate_text(
-            prompt,
-            timeout_s=20,
-            queue_timeout_ms=4000,
-            fmt="json",
-            think=False,
-        )
-    except Exception:
-        return "ambiguous"
-    kind = _parse_price_kind_ambiguous_result(raw)
-    if not kind:
-        return "ambiguous"
-    if kind == "procedure_with_doctor" and not has_exact_doctor_link:
-        return "ambiguous"
-    return kind
-
-
-_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = handoff_message("knowledge_not_found")
 
 
 @dataclass
