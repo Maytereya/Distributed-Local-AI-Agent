@@ -22,9 +22,9 @@ from dataclasses import dataclass, field
 from difflib import get_close_matches  # noqa: F401 — re-exported for services/doctors.py via legacy.get_close_matches
 from typing import Any, Optional
 
-from agent_logic_1 import meilisearch_client as meilisearch
+from agent_logic_1 import meilisearch_client as meilisearch  # noqa: F401 — re-exported for services/main_index.py, services/news.py
 from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info
-from converters import html_cleaner
+from converters import html_cleaner  # noqa: F401 — re-exported for services/main_index.py via legacy.html_cleaner
 from schedule_ttl_cache import AsyncListTTLStaleCache
 
 # Re-exported for domain modules (services/doctors.py etc.) that access these via
@@ -737,122 +737,6 @@ class Services:
     # NAUKA API used by router
     # -----------------------------
 
-    async def main_index_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        q = str(query or "").strip()
-        if not q:
-            return {
-                "content": "",
-                "note": "main_index_info: no query",
-                "entities_used": entities,
-            }
-        doc_kind = str(entities.get("doc_request_kind") or "").strip().lower()
-        if doc_kind not in {"tax", "generic"}:
-            norm_q = _normalise_input(q)
-            doc_kind = "tax" if any(k in norm_q for k in ("налог", "вычет", "фнс")) else "generic"
-
-        if doc_kind == "tax":
-            return _tax_doc_guidance_response(entities, note="main_index_info: tax direct link")
-
-        normalized_q = _normalise_input(q)
-        fallback_queries: list[str] = []
-        if doc_kind == "tax" and any(k in normalized_q for k in ("налог", "фнс", "вычет", "справк")):
-            fallback_queries = [
-                "справка для налоговой",
-                "налоговый вычет",
-                "справка об оплате медицинских услуг",
-            ]
-
-        queries = [q]
-        for fq in fallback_queries:
-            if _normalise_input(fq) != normalized_q:
-                queries.append(fq)
-
-        cleaned = ""
-        relevant_hit = False
-        try:
-            for qq in queries:
-                raw = await asyncio.to_thread(
-                    meilisearch.search_meili,
-                    "main_index",
-                    qq,
-                    output_mode="content_only",
-                    max_chars=12000,
-                )
-                cleaned = html_cleaner.strip_html(raw).strip()
-                if _is_meili_error_text(cleaned):
-                    continue
-                if _is_meili_no_matches_text(cleaned):
-                    continue
-                if _is_main_index_relevant(qq, cleaned, doc_kind=doc_kind):
-                    relevant_hit = True
-                    break
-        except Exception:
-            if doc_kind == "tax":
-                return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback unavailable")
-            return _service_fallback(
-                note="main_index_info source unavailable",
-                handoff_message=handoff_message("service_error_doctor_info"),
-                entities=entities,
-                extra={"content": ""},
-            )
-
-        if _is_meili_error_text(cleaned):
-            if doc_kind == "tax":
-                return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback error")
-            return _service_fallback(
-                note="main_index_info source unavailable",
-                handoff_message=handoff_message("service_error_doctor_info"),
-                entities=entities,
-                extra={"content": ""},
-            )
-
-        if _is_meili_no_matches_text(cleaned):
-            if doc_kind == "tax":
-                return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback no matches")
-            return _service_fallback(
-                note="main_index_info: no matches",
-                handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
-                entities=entities,
-                reason="knowledge_not_found",
-                extra={"content": ""},
-            )
-
-        if not relevant_hit:
-            if doc_kind == "tax":
-                return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback weak relevance")
-            return _service_fallback(
-                note=f"main_index_info: weak relevance ({doc_kind})",
-                handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
-                entities=entities,
-                reason="knowledge_not_found",
-                extra={"content": ""},
-            )
-
-        return {
-            "content": cleaned,
-            "note": f"main_index_info: main_index ({doc_kind})",
-            "entities_used": entities,
-        }
-
-    async def news_info(self, query: str, entities: dict[str, Any]) -> dict[str, Any]:
-        try:
-            hits = await asyncio.to_thread(
-                meilisearch.search_news_active,
-                index_name="news",
-                keyword=query or None,
-                limit=10,
-                sort=["from_ts:desc"],
-            )
-        except Exception:
-            # Для новостей деградация источника не критична: возвращаем пустой ответ
-            # без принудительного handoff.
-            return {
-                "news": [],
-                "note": "news source unavailable",
-                "entities_used": entities,
-            }
-        return {"news": hits, "entities_used": entities}
-
     def get_branches(self) -> list[dict[str, str]]:
         """
         Возвращает справочник филиалов.
@@ -942,6 +826,12 @@ Services._procedure_branches_from_index = _procedure_branches_from_index_impl
 
 from .services.appointments import appointment_help as _appointment_help_impl  # noqa: E402
 Services.appointment_help = _appointment_help_impl
+
+from .services.main_index import main_index_info as _main_index_info_impl  # noqa: E402
+Services.main_index_info = _main_index_info_impl
+
+from .services.news import news_info as _news_info_impl  # noqa: E402
+Services.news_info = _news_info_impl
 
 from .services.lab_tests import (  # noqa: E402
     test_assist as _test_assist_impl,
