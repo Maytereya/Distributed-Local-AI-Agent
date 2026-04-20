@@ -2645,7 +2645,7 @@ def test_price_info_single_service_query_bypasses_multi_splitter(monkeypatch):
 
 
 def test_split_price_query_items_splits_on_common_delimiters():
-    from messengers_router.services_legacy import _split_price_query_items
+    from messengers_router.services.core import _split_price_query_items
 
     assert _split_price_query_items("стоимость гепатит в, оак, вич") == ["гепатит в", "оак", "вич"]
     assert _split_price_query_items("цена вич и гепатит") == ["вич", "гепатит"]

@@ -13,7 +13,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..services_legacy import Services
+    from .core import Services
 
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ def _legacy_module():
     :return: модуль ``messengers_router.services_legacy``
     """
 
-    from .. import services_legacy as legacy
+    from . import core as legacy
 
     return legacy
 

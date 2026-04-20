@@ -30,7 +30,7 @@ def _get_legacy():
     Используется для получения patchable-ссылок на функции, которые тесты
     монкипатчат через svc_mod (services/__init__.py → services_legacy).
     """
-    from .. import services_legacy as legacy  # noqa: PLC0415
+    from . import core as legacy  # noqa: PLC0415
 
     return legacy
 

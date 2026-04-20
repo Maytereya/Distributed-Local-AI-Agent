@@ -975,7 +975,7 @@ def _is_consultation_service_query(value: str) -> bool:
     """
 
     # Lazy import to avoid circular imports with services_legacy on price regex.
-    from .. import services_legacy as _legacy  # noqa: PLC0415
+    from . import core as _legacy  # noqa: PLC0415
 
     norm = _normalise_input(str(value or ""))
     return bool(norm and _legacy._PRICE_CONSULT_HINT_RE.search(norm))
@@ -1000,7 +1000,7 @@ def _detect_service_kind(
     :return: `lab` | `doctor`
     """
 
-    from .. import services_legacy as _legacy  # noqa: PLC0415
+    from . import core as _legacy  # noqa: PLC0415
 
     norm_name = _normalise_input(str(service_name or ""))
     norm_query = _normalise_input(str(query_text or ""))
@@ -1039,7 +1039,7 @@ def _is_clean_consultation_row_name(value: str) -> bool:
     :return: True для чистого консультационного тарифа
     """
 
-    from .. import services_legacy as _legacy  # noqa: PLC0415
+    from . import core as _legacy  # noqa: PLC0415
 
     norm = _normalise_input(str(value or ""))
     if not norm or not _legacy._PRICE_CONSULT_HINT_RE.search(norm):
@@ -1097,7 +1097,7 @@ def _is_lab_like_service_name(value: str) -> bool:
     :return: True для lab-like строки
     """
 
-    from .. import services_legacy as _legacy  # noqa: PLC0415
+    from . import core as _legacy  # noqa: PLC0415
 
     norm = _normalise_input(str(value or ""))
     if not norm:
@@ -1126,7 +1126,7 @@ def _classify_catalog_service_kind(
     :return: `lab`, `doctor_consult`, `procedure_with_doctor`, `diagnostic_no_doctor` или `ambiguous`
     """
 
-    from .. import services_legacy as _legacy  # noqa: PLC0415
+    from . import core as _legacy  # noqa: PLC0415
 
     if is_consult_query:
         return "doctor_consult"
@@ -1187,7 +1187,7 @@ def _has_reliable_doctor_service_link(
     :return: True, если linkage можно считать надежным
     """
 
-    from .. import services_legacy as _legacy  # noqa: PLC0415
+    from . import core as _legacy  # noqa: PLC0415
 
     if not matched_rows or not query_norm:
         return False
@@ -1218,7 +1218,7 @@ def _should_prefer_retail_query_candidate(query_candidate: str, service_name: st
     :return: True, если для retail-ranking полезнее текущий текст запроса
     """
 
-    from .. import services_legacy as _legacy  # noqa: PLC0415
+    from . import core as _legacy  # noqa: PLC0415
 
     query_candidate_norm = _normalise_input(str(query_candidate or ""))
     service_name_norm = _normalise_input(str(service_name or ""))
@@ -1269,7 +1269,7 @@ def _meaningful_price_service_tokens(value: str) -> list[str]:
     :return: список нормализованных токенов
     """
 
-    from .. import services_legacy as _legacy  # noqa: PLC0415
+    from . import core as _legacy  # noqa: PLC0415
 
     return [
         tok
@@ -1286,7 +1286,7 @@ def _is_price_service_noise_token(token: str) -> bool:
     :return: True для шумового токена
     """
 
-    from .. import services_legacy as _legacy  # noqa: PLC0415
+    from . import core as _legacy  # noqa: PLC0415
 
     norm = _legacy._normalise_price_token(token)
     if not norm:

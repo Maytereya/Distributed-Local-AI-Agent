@@ -28,20 +28,20 @@ from schedule_ttl_cache import AsyncListTTLStaleCache
 
 # Re-exported for domain modules (services/doctors.py etc.) that access these via
 # ``_legacy_module().<name>``. Ruff cannot see the dynamic access, hence noqa.
-from .doctor_name_port import (  # noqa: F401
+from ..doctor_name_port import (  # noqa: F401
     extract_doctor_name_candidate,
     resolve_schedule_surname,
     surname_variants,
 )
-from .llm_doesnt_work_fallback import build_prepare_fallback_answer  # noqa: F401 — re-exported for services/prepare.py
-from .llm_runtime import generate_text  # noqa: F401 — re-exported for services/*.py via legacy.generate_text (tests monkey-patch svc_mod.generate_text)
-from .policies import handoff_message  # noqa: F401 — re-exported for services/*.py via legacy.handoff_message
-from .service_phrase import extract_service_phrase  # noqa: F401 — re-exported for services/doctors.py, services/addresses.py
+from ..llm_doesnt_work_fallback import build_prepare_fallback_answer  # noqa: F401 — re-exported for services/prepare.py
+from ..llm_runtime import generate_text  # noqa: F401 — re-exported for services/*.py via legacy.generate_text (tests monkey-patch svc_mod.generate_text)
+from ..policies import handoff_message  # noqa: F401 — re-exported for services/*.py via legacy.handoff_message
+from ..service_phrase import extract_service_phrase  # noqa: F401 — re-exported for services/doctors.py, services/addresses.py
 
 # Stage 20 cluster 1 — common helpers moved to services/_common.py.
 # Re-exported here so internal references and external imports
 # (e.g. ``services_legacy.DOCTORS_TOP_N`` from services/doctors.py) keep working.
-from .services._common import (  # noqa: F401
+from ._common import (  # noqa: F401
     DOCTORS_TOP_N,
     _as_int,
     _coerce_top_n,
@@ -62,7 +62,7 @@ from .services._common import (  # noqa: F401
 
 # Stage 20 cluster 2 — prepare helpers moved to services/_prepare.py.
 # Re-exported here so internal references keep working.
-from .services._prepare import (  # noqa: E402, F401
+from ._prepare import (  # noqa: E402, F401
     _PREPARE_RELEVANCE_VERDICT_IRRELEVANT,
     _PREPARE_RELEVANCE_VERDICT_RELEVANT,
     _PrepareCandidate,
@@ -89,7 +89,7 @@ from .services._prepare import (  # noqa: E402, F401
 
 # Stage 20 cluster 3 — region/city helpers moved to services/_regions.py.
 # Re-exported here so internal references and external callers keep working.
-from .services._regions import (  # noqa: E402, F401
+from ._regions import (  # noqa: E402, F401
     _ADDRESS_HINT_RE,
     _CITY_PREFIX_RE,
     _PHONE_EXTRACT_RE,
@@ -111,7 +111,7 @@ from .services._regions import (  # noqa: E402, F401
 
 # Stage 20 cluster 4 — address/branch helpers moved to services/_addresses_helpers.py.
 # Re-exported here so internal references and external callers keep working.
-from .services._addresses_helpers import (  # noqa: E402, F401
+from ._addresses_helpers import (  # noqa: E402, F401
     _NONBOOKABLE_POINTS_PATH,
     _PRICE_HOMECODE_DOTTED_RE,
     _PRICE_HOMECODE_NUM_RE,
@@ -131,7 +131,7 @@ from .services._addresses_helpers import (  # noqa: E402, F401
 # Stage 20 cluster 6 — doctor/specialty/service helpers moved to
 # services/_doctors_helpers.py. Re-exported here so internal references and
 # external callers keep working.
-from .services._doctors_helpers import (  # noqa: E402, F401
+from ._doctors_helpers import (  # noqa: E402, F401
     _CATALOG_DOCTOR_STOPWORDS,
     _CATALOG_SERVICE_LEADIN_RE,
     _CATALOG_SERVICE_SIGNAL_RE,
@@ -201,7 +201,7 @@ from .services._doctors_helpers import (  # noqa: E402, F401
 
 # Stage 20 cluster 5 — price helpers moved to services/_prices_helpers.py.
 # Re-exported here so internal references and external callers keep working.
-from .services._prices_helpers import (  # noqa: E402, F401
+from ._prices_helpers import (  # noqa: E402, F401
     SAMARA_PRICE_REGION_ID,
     _DOCTOR_PRICE_HINT_RE,
     _DOCTOR_SERVICE_HINT_RE,
@@ -717,7 +717,7 @@ class Services:
         return []
 
 
-from .services.doctors import (  # noqa: E402
+from .doctors import (  # noqa: E402
     _doctor_availability_snapshot as _doctor_availability_snapshot_impl,
     _resolve_doctor_id_from_name as _resolve_doctor_id_from_name_impl,
     _schedule_by_specialty as _schedule_by_specialty_impl,
@@ -737,37 +737,37 @@ Services._resolve_doctor_id_from_name = _resolve_doctor_id_from_name_impl
 Services.doctors_info = _doctors_info_impl
 Services.doctors_schedule_week = _doctors_schedule_week_impl
 
-from .services.prices import (  # noqa: E402
+from .prices import (  # noqa: E402
     price_info as _price_info_impl,
     service_bundle_info as _service_bundle_info_impl,
 )
 Services.price_info = _price_info_impl
 Services.service_bundle_info = _service_bundle_info_impl
 
-from .services.addresses import (  # noqa: E402
+from .addresses import (  # noqa: E402
     _procedure_branches_from_index as _procedure_branches_from_index_impl,
     address_info as _address_info_impl,
 )
 Services.address_info = _address_info_impl
 Services._procedure_branches_from_index = _procedure_branches_from_index_impl
 
-from .services.appointments import appointment_help as _appointment_help_impl  # noqa: E402
+from .appointments import appointment_help as _appointment_help_impl  # noqa: E402
 Services.appointment_help = _appointment_help_impl
 
-from .services.main_index import main_index_info as _main_index_info_impl  # noqa: E402
+from .main_index import main_index_info as _main_index_info_impl  # noqa: E402
 Services.main_index_info = _main_index_info_impl
 
-from .services.news import news_info as _news_info_impl  # noqa: E402
+from .news import news_info as _news_info_impl  # noqa: E402
 Services.news_info = _news_info_impl
 
-from .services.lab_tests import (  # noqa: E402
+from .lab_tests import (  # noqa: E402
     test_assist as _test_assist_impl,
     test_result_status as _test_result_status_impl,
 )
 Services.test_assist = _test_assist_impl
 Services.test_result_status = _test_result_status_impl
 
-from .services.prepare import (  # noqa: E402
+from .prepare import (  # noqa: E402
     _maybe_compact_prepare_text as _maybe_compact_prepare_text_impl,
     _pick_prepare_candidate as _pick_prepare_candidate_impl,
     _prepare_candidates_from_analysis_api_cache as _prepare_candidates_from_analysis_api_cache_impl,

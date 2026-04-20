@@ -15,7 +15,7 @@ from agent_logic_2.nayka_api import api_service_info
 from converters import html_cleaner
 
 if TYPE_CHECKING:
-    from ..services_legacy import Services
+    from .core import Services
 
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ def _legacy_module():
     :return: модуль ``messengers_router.services_legacy``
     """
 
-    from .. import services_legacy as legacy
+    from . import core as legacy
 
     return legacy
 

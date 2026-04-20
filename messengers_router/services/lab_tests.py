@@ -14,7 +14,7 @@ from urllib.parse import quote_from_bytes
 from agent_logic_2.nayka_api import api_nayka, api_price
 
 if TYPE_CHECKING:
-    from ..services_legacy import Services
+    from .core import Services
 
 
 def _legacy_module():
@@ -23,7 +23,7 @@ def _legacy_module():
     :return: модуль ``messengers_router.services_legacy``
     """
 
-    from .. import services_legacy as legacy
+    from . import core as legacy
 
     return legacy
 

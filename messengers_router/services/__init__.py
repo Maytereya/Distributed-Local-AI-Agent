@@ -8,7 +8,7 @@
 import sys
 import types
 
-from .. import services_legacy as _legacy
+from . import core as _legacy
 
 _EXPORTED_NAMES = [
     name for name in dir(_legacy)

@@ -20,7 +20,7 @@ def _get_legacy():
     в legacy (``_nonbookable_needs`` переедет в cluster 4 addresses,
     ``_extract_specialty_from_text`` остаётся в legacy).
     """
-    from .. import services_legacy as legacy  # noqa: PLC0415
+    from . import core as legacy  # noqa: PLC0415
 
     return legacy
 

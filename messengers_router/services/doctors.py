@@ -12,7 +12,7 @@ from ..russian_nlu import normalize_ru
 from ..specialty_parser import PROCEDURE_TO_SPECIALTY, PROCEDURE_TO_SPECIALTY_RE
 
 if TYPE_CHECKING:
-    from ..services_legacy import Services
+    from .core import Services
 
 
 def _legacy_module():
@@ -21,7 +21,7 @@ def _legacy_module():
     :return: модуль ``messengers_router.services_legacy``
     """
 
-    from .. import services_legacy as legacy
+    from . import core as legacy
 
     return legacy
 
