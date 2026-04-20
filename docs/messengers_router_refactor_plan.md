@@ -38,6 +38,9 @@
   - Stage 13 — explicitly migrate-as-you-touch; never scheduled as standalone
 - **Remaining open stages (see end of plan for detail):**
   - **Stage 17b** — speculative parallel rule+LLM NLU with early-cancel. Needs explicit user approval; highest-risk stage per plan.
+  - **Stage 20** — finish `services_legacy.py` module-level helper extraction (172 helpers → 6 domain submodules, behind a re-export shim). Replaces the deferred Stage 13 "migrate as you touch". Full recipe at end of plan.
+  - **Stage 21** — extract `Services` class methods into domain modules (follows Stage 20).
+  - **Stage 22** — drop the re-export shim after a deprecation window.
 - **Stage 18 formally skipped (Session 15, 2026-04-18):** `scripts/bench_pending_dispatch.py` measured the no-pending fast-path over 2000 iterations — **p50 = 0.001 ms, p99 = 0.002 ms, max = 0.022 ms**. The plan's 20 ms gate is missed by four orders of magnitude; parallelizing pending-handler dispatch would add non-determinism risk for zero latency win. No code change.
 - **Local gate policy (Session 13 onwards):** `ruff check messengers_router/` + `PYTHONPATH=. venv/bin/pytest tests/ --ignore=tests/eval -q` gate every stage. Remote eval (`run_remote_eval.sh --url http://172.16.0.16/api/messenger-generate-once`) is reserved for one-shot post-deploy verification, not per-stage.
 - **Last full-suite local result (post-Stage 15 remainder):** `577 passed, 3 warnings` in ~148s (563 prior + 14 new in `tests/test_stage15_prefetch.py`).
@@ -1203,6 +1206,97 @@ These numbers are illustrative — your Stage 14 baseline is the source of truth
 - Optimizing the LLM provider itself (out of scope for this package).
 - Micro-optimizing Python (re-ordering, `__slots__`, etc.). ROI is too low vs. IO wins.
 - Parallelizing evaluation runs (test harness concern, not router concern).
+
+---
+
+## Stage 20 — Finish `services_legacy.py` module-level helper extraction
+
+**Context (2026-04-20):** Stages 8 / 13 left `services_legacy.py` at ~7,524 lines / 172 module-level helpers + a 34-method `Services` class (~2,400 lines). The `services/` package is a facade with pilot migrations (doctors/prices/addresses/lab_tests) that delegate back via `_legacy_module()`. Stage 13 was explicitly deferred ("migrate as you touch"); after Session 15 the call came to finish it properly as a dedicated stage.
+
+**Goal of Stage 20:** move all 172 **module-level helpers** (the 4,800-line prefix-grouped pure/near-pure layer) out of `services_legacy.py` into domain submodules under `messengers_router/services/`. The `Services` **class** (34 methods, async I/O, caches) stays in legacy for Stage 21.
+
+**Why split helpers from the class:**
+- Helpers are overwhelmingly pure (string/regex/math on dicts). Low coupling, high safety to move.
+- The `Services` class uses `self`, shared caches, and `asyncio` — moving it requires a different pattern (method re-binding or class split) and its own risk budget.
+- After Stage 20, `services_legacy.py` becomes "a class + its private cache helpers" — much easier to reason about for Stage 21.
+
+**External-caller audit (2026-04-20):**
+- Private helpers with imports from outside `services_legacy.py`: **1** (`_split_price_query_items`, imported by `tests/test_messenger_services.py:2595`).
+- Public helpers with external callers: **2** (`resolve_price_service_name_from_catalog`, `match_compound_price_service_option`) — both imported via the `messengers_router.services` facade.
+- Ergo: a thin **re-export shim** in `services_legacy.py` keeps every current import working while bodies move.
+
+**Shim pattern (mandatory for every moved helper):**
+
+```python
+# services_legacy.py — at the top, after existing imports
+from .services._common import (
+    _runtime_int,
+    _runtime_float,
+    _runtime_bool,
+    _normalise_input,
+    ...
+)
+```
+
+The names stay callable via `services_legacy._runtime_int` AND via `messengers_router.services._runtime_int` (because `services/__init__.py` re-exports everything from `_legacy` via `globals().update`). External callers see no behavior change.
+
+**Cluster map (172 helpers → 6 files):**
+
+| # | New file | Helpers | Approx lines | Risk |
+|---|---|---|---|---|
+| 1 | `services/_common.py` | `_runtime_int`, `_runtime_float`, `_runtime_bool`, `_normalise_input`, `_normalise_catalog_text`, `_dedupe_str`, `_dedupe_queries`, `_extract_json_object`, `_get_first_present`, `_as_int`, `_coerce_top_n`, `_has_nearest_hint`, `_doc_tokens`, `_is_main_index_relevant`, `_is_meili_error_text`, `_is_meili_no_matches_text`, `_tax_doc_guidance_response`, `_service_fallback` | ~450 | low (pure) |
+| 2 | `services/_prepare.py` | `_PrepareCandidate` class + all `_prepare_*` / `_is_prepare_*` / `_has_prepare_*` / `_dedupe_prepare_*` / `_parse_prepare_*` / `_service_info_row_score` / `_choose_service_info_preparation` / `_normalise_prepare_text` / `_extract_prepare_entity_phrase` | ~900 | low (pure, already self-contained) |
+| 3 | `services/_regions.py` | `_is_samara_city_value`, `_is_non_samara_city_value`, `_extract_city_token`, `_normalize_region_text`, `_compact_region_text`, `_is_explicit_non_samara_region`, `_region_matches_samara_tokens`, `_has_explicit_non_samara_regions`, `_region_display_name`, `_norm_city`, `_schedule_regions_with_free_slots`, `_extract_region_phone`, `_extract_region_work_time`, `_filter_regions_by_service_flags` | ~300 | low |
+| 4 | `services/_addresses_helpers.py` | `_looks_like_real_address`, `_soft_address_match`, `_static_procedure_addresses`, `_addresses_to_branch_payload`, `_extract_homecode_query`, `_load_nonbookable_points`, `_nonbookable_needs`, `_static_nonbookable_branches` | ~250 | low |
+| 5 | `services/_prices_helpers.py` | 54 helpers: `_normalise_price_token` … `_build_compound_price_clarify_payload` + public `resolve_price_service_name_from_catalog` + public `match_compound_price_service_option` | ~2,100 | medium (biggest cluster; cross-calls) |
+| 6 | `services/_doctors_helpers.py` | 48 helpers: `_doctor_catalog_query_candidates`, all `_specialty_*`, `_fio_*`, `_doctor_*_matches_*`, `_iter_unit_link_specs`, `_specialization_matches_specialty`, `_pick_display_specialization`, `_doctor_sort_key`, `_is_schedule_no_slots_text`, `_schedule_payload_matches_doctor`, `_iter_slot_datetimes`, `_service_catalog_query_candidates`, `_service_query_matches`, `_service_tokens`, `_stem_service_token`, `_is_consultation_service_query`, `_detect_service_kind`, `_is_clean_consultation_row_name`, `_is_lab_like_service_name`, `_classify_catalog_service_kind`, `_has_reliable_doctor_service_link`, `_meaningful_price_service_tokens`, `_is_price_service_noise_token`, `_select_effective_price_service_name`, `_should_prefer_retail_query_candidate`, `_is_uzi_query_text`, `_matches_uzi_doctor_profile` | ~1,700 | medium (cluster 5+6 cross-reference) |
+
+Note: where a helper fits two clusters (e.g. `_is_uzi_query_text` is used by both doctors and prices), file it in the cluster it's **defined closest to** in the current legacy ordering, and let the other cluster import it. Do NOT duplicate.
+
+**Execution recipe (per cluster):**
+
+1. Create the new file `messengers_router/services/<cluster>.py` with the minimum imports needed by that cluster (mirror from `services_legacy.py:14-46` — stdlib, local `specialty_parser`, `russian_nlu`, `doctor_name_port`, etc.).
+2. For each helper in the cluster:
+   - Copy the full function body (including decorators like `@lru_cache`) from `services_legacy.py` to the new file.
+   - Do NOT yet delete from legacy.
+3. After all helpers in the cluster are copied, at the top of `services_legacy.py` add:
+   ```python
+   from .services.<cluster> import (
+       helper_a,
+       helper_b,
+       ...
+   )
+   ```
+4. Delete the original function bodies from `services_legacy.py` (the helpers now exist only in the new file; the import line makes them still accessible as `services_legacy.helper_a`).
+5. Fix the one `from .services_legacy import _split_price_query_items` in `tests/test_messenger_services.py:2595` → leave as-is; the re-export shim above keeps it valid.
+6. Run `ruff check messengers_router/services/ messengers_router/services_legacy.py` — must be clean.
+7. Run `PYTHONPATH=. venv/bin/python -m pytest tests/ --ignore=tests/eval -q` — must stay at the Stage-15 baseline (646 passed).
+8. Commit with message: `refactor(services): extract <cluster> helpers into services/<cluster>.py (Stage 20.N)`.
+
+**Cluster ordering (hard-required — do not reorder):**
+
+Clusters 1 → 6 in the order listed above. The reason: cluster 1 (common) defines utilities used by 2–6; clusters 2–4 are independent leaves; cluster 5 uses cluster 6's doctor-matching helpers (e.g. `_is_strong_doctor_price_match` needs FIO tokens). If cluster 5 moves before cluster 6, the cross-cluster import has to be forward-declared. Moving 6 before 5 is fine because doctor helpers don't call into price helpers.
+
+**Gate per cluster:**
+- `ruff check messengers_router/` clean.
+- `venv/bin/python -m pytest tests/ --ignore=tests/eval -q` → 646 passed (or higher — no tests removed).
+- No new `F401` warnings (means shim imports are all actually used in legacy; if not, the helper was safe to delete without re-export).
+
+**Explicitly out of scope for Stage 20:**
+- Moving the `Services` class, its methods, or its caches. That's Stage 21.
+- Renaming helpers. Rename is a separate concern; do not combine with a move.
+- Changing function signatures or return types. Pure move only.
+- Dropping the re-export shim. The shim stays for 1 release so unknown downstream callers (e.g. manual ops scripts) don't break. Stage 22 removes the shim after a deprecation window.
+
+**Exit criteria for Stage 20 complete:**
+- All 6 cluster files created and populated.
+- `services_legacy.py` module-level helper count: **0** (only imports, the `Services` class, and its tightly-coupled private cache helpers remain).
+- `wc -l messengers_router/services_legacy.py` → expect ~2,700 (down from 7,524).
+- Full pytest green; ruff clean; remote eval deferred until the whole stage lands.
+
+**Next stages (for continuity — not this session):**
+- **Stage 21:** extract `Services` class methods into domain modules using method re-binding (`prices.py` defines `async def price_info(self, ...)`, then at the bottom `Services.price_info = price_info`). This is the existing pilot pattern in `services/doctors.py` — just scale it to all 34 methods.
+- **Stage 22:** delete the re-export shim from `services_legacy.py`. Rename `services_legacy.py` → `services/core.py` (holds the `Services` dataclass definition + `__post_init__` only).
 
 ---
 
