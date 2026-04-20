@@ -189,6 +189,59 @@ def test_doctors_info_sorts_by_ord(monkeypatch):
     assert [row["fio"] for row in res["doctors"][:2]] == ["Врач Первый", "Врач Второй"]
 
 
+def test_doctors_info_procedure_query_falls_back_to_specialty_when_service_text_missing(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Уролог Первый",
+                "ord": 2,
+                "specialization": "Уролог",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "units": ["Врач-уролог"],
+                "unit_links": [{"company_unit_name": "Врач-уролог", "main": True, "specialization": "Уролог"}],
+                "main_units": ["Врач-уролог"],
+            },
+            {
+                "id": 2,
+                "fio": "Уролог Второй",
+                "ord": 5,
+                "specialization": "Уролог",
+                "regions": ["г. Самара, ул. Победы, 83"],
+                "units": ["Врач-уролог"],
+                "unit_links": [{"company_unit_name": "Врач-уролог", "main": True, "specialization": "Уролог"}],
+                "main_units": ["Врач-уролог"],
+            },
+            {
+                "id": 3,
+                "fio": "Хирург Лишний",
+                "ord": 1,
+                "specialization": "Хирург",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "units": ["Врач-хирург"],
+                "unit_links": [{"company_unit_name": "Врач-хирург", "main": True, "specialization": "Хирург"}],
+                "main_units": ["Врач-хирург"],
+            },
+        ]
+
+    async def fake_samara_tokens():
+        return {"г. самара, пр. ленина, 5", "г. самара, ул. победы, 83"}
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+
+    res = run(
+        svc.doctors_info(
+            "какой врач выполняет уретроскопию",
+            {"service_name": "Уретроскопию", "specialty": "уролог"},
+        )
+    )
+
+    assert [row["fio"] for row in res["doctors"]] == ["Уролог Первый", "Уролог Второй"]
+
+
 def test_doctors_info_uzi_query_filters_to_real_uzi_doctors(monkeypatch):
     svc = Services()
 

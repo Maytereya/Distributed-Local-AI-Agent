@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..russian_nlu import normalize_ru
+from ..specialty_parser import PROCEDURE_TO_SPECIALTY, PROCEDURE_TO_SPECIALTY_RE
+
 if TYPE_CHECKING:
     from ..services_legacy import Services
 
@@ -21,6 +24,36 @@ def _legacy_module():
     from .. import services_legacy as legacy
 
     return legacy
+
+
+def _normalise_text(value: str | None) -> str:
+    """Нормализует строку для безопасного текстового сравнения.
+
+    :param value: исходное значение
+    :return: нормализованная строка без лишних пробелов
+    """
+
+    return " ".join(normalize_ru(value).split())
+
+
+def _is_mapped_procedure_specialty_query(query: str, specialty: str) -> bool:
+    """Проверяет, что специальность получена из известного маппинга процедуры.
+
+    Нужен для безопасного fallback: если процедурный запрос уже был
+    приземлён в специальность (`уретроскопия -> уролог`), но профиль врача
+    не содержит текст процедуры, можно показать врачей этой специальности
+    вместо пустой выдачи.
+
+    :param query: исходный текст пользователя
+    :param specialty: каноническая специальность
+    :return: True, если запрос содержит процедуру из утвержденного маппинга
+    """
+
+    match = PROCEDURE_TO_SPECIALTY_RE.search(str(query or ""))
+    if not match:
+        return False
+    mapped = PROCEDURE_TO_SPECIALTY.get(match.group(1).lower(), "")
+    return _normalise_text(mapped) == _normalise_text(specialty)
 
 
 async def match_catalog_doctor(self: "Services", raw_text_or_name: str) -> dict[str, Any]:
@@ -423,7 +456,7 @@ async def doctors_info(
 
     keyword = keyword.strip()
 
-    def match_doc(doc: dict[str, Any]) -> bool:
+    def match_doc(doc: dict[str, Any], *, require_service: bool = True) -> bool:
         fio = legacy._normalise_input(str(doc.get("fio", "")))
         spec_text = legacy._normalise_input(str(doc.get("specialization", "")))
         raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
@@ -445,7 +478,7 @@ async def doctors_info(
                     return False
             elif not legacy._doctor_matches_specialty(doc, spec_q, query):
                 return False
-        if service_q:
+        if require_service and service_q:
             if not legacy._doctor_matches_service(doc, service_q):
                 return False
         if region_q and region_q not in hay:
@@ -459,6 +492,14 @@ async def doctors_info(
         return True
 
     filtered = [d for d in doctors if match_doc(d)]
+    if (
+        not filtered
+        and service_q
+        and spec_q
+        and role_query
+        and _is_mapped_procedure_specialty_query(query, spec_q)
+    ):
+        filtered = [d for d in doctors if match_doc(d, require_service=False)]
     filtered = legacy._dedupe_doctors_by_fio(filtered)
     if role_query:
         filtered = sorted(
