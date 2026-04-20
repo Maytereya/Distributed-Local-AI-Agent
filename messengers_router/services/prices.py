@@ -220,3 +220,329 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             "service_name_effective": service_name,
         },
     }
+
+
+async def service_bundle_info(
+    self: "Services",
+    query: str,
+    entities: dict[str, Any],
+    *,
+    top_n: int | None = None,
+) -> dict[str, Any]:
+    legacy = _legacy_module()
+
+    top_limit = legacy._coerce_top_n(top_n, default=legacy.DOCTORS_TOP_N)
+    entity_service_name = legacy._get_first_present(entities, ["service_name", "test_name"]) or ""
+    query_text = str(query or "").strip()
+    if legacy._is_price_show_all_request(query_text):
+        family_payload = legacy._price_family_payload_from_context(entities, show_all=True)
+        if family_payload:
+            family_payload["entities_used"] = entities
+            return family_payload
+    if legacy._is_generic_uzi_price_request(query_text):
+        return {
+            "service_name": "УЗИ",
+            "retail_prices": [],
+            "doctors": [],
+            "prepare": "",
+            "show_prepare": False,
+            "top_n_applied": top_limit,
+            "clarify_text": (
+                "Введите конкретное название процедуры, например: "
+                "стоимость УЗИ брюшной полости или цена УЗИ молочной железы."
+            ),
+            "note": "service_bundle_info: generic_uzi_clarify",
+            "entities_used": entities,
+        }
+    try:
+        retail_rows = await asyncio.to_thread(legacy.api_price.load_price_by_region, legacy.SAMARA_PRICE_REGION_ID)
+    except Exception:
+        retail_rows = []
+    retail_rows = [p for p in retail_rows if isinstance(p, dict)]
+
+    family_payload = legacy._build_price_family_payload(
+        query_text,
+        retail_rows,
+        show_all=False,
+        visible_limit=10,
+    )
+    if family_payload:
+        family_payload["top_n_applied"] = top_limit
+        family_payload["entities_used"] = entities
+        return family_payload
+    if entity_service_name and legacy._is_city_only_reply(query_text):
+        query_service_name = None
+    else:
+        query_service_name = legacy.resolve_price_service_name_from_catalog(
+            query_text,
+            current_service_name=entity_service_name,
+        ) or legacy._extract_price_service_from_query(query_text)
+    service_name = legacy._select_effective_price_service_name(
+        entity_service_name,
+        query_service_name,
+    )
+    needle = legacy._normalise_input(service_name)
+
+    out: dict[str, Any] = {
+        "service_name": service_name,
+        "retail_prices": [],
+        "doctors": [],
+        "prepare": "",
+        "show_prepare": False,
+        "top_n_applied": top_limit,
+        "note": "service_bundle_info",
+        "entities_used": {
+            **entities,
+            "service_name_effective": service_name,
+        },
+    }
+    if not needle:
+        out["note"] = "service_bundle_info: no service query"
+        return out
+
+    # 1) Retail price by city-level regionId (Самара = 3).
+    retail_query = service_name
+    retail_prefers_query_candidate = False
+    if query_text and not legacy._is_city_only_reply(query_text):
+        query_candidate = legacy._extract_price_service_from_query(query_text)
+        retail_prefers_query_candidate = legacy._should_prefer_retail_query_candidate(
+            query_candidate or "",
+            service_name,
+        )
+        if retail_prefers_query_candidate:
+            retail_query = query_candidate or service_name
+    try:
+        out["retail_prices"] = legacy._select_patient_price_rows(
+            retail_rows,
+            retail_query,
+            limit=5,
+        )
+        out["retail_prices"] = legacy._annotate_price_rows_with_care_context(out["retail_prices"])
+    except Exception:
+        out["retail_prices"] = []
+        out["note"] = "service_bundle_info: retail source unavailable"
+    if retail_prefers_query_candidate and retail_query:
+        out["service_name"] = retail_query
+
+    compound_payload = legacy._build_compound_price_clarify_payload(
+        query_text=query_text,
+        entities=entities,
+        primary_service_name=service_name,
+        retail_rows=retail_rows,
+        primary_retail_prices=out["retail_prices"] if isinstance(out.get("retail_prices"), list) else [],
+    )
+    if compound_payload:
+        compound_payload["top_n_applied"] = top_limit
+        compound_payload["entities_used"] = {
+            **entities,
+            "service_name_effective": service_name,
+        }
+        return compound_payload
+
+    # 2) Top-N doctors by ord among doctors that have the matched service in doctor prices.
+    top_retail = out["retail_prices"][0] if isinstance(out.get("retail_prices"), list) and out["retail_prices"] else {}
+    target_homecode = legacy._normalise_input(
+        str(top_retail.get("serviceHomecode") or top_retail.get("homecode") or "")
+    )
+    is_consult_query = legacy._is_consultation_service_query(service_name)
+    preliminary_kind = legacy._classify_catalog_service_kind(
+        service_name,
+        query_text=query_text,
+        retail_rows=out["retail_prices"] if isinstance(out.get("retail_prices"), list) else [],
+        has_exact_doctor_link=False,
+        is_consult_query=is_consult_query,
+    )
+    query_norm = legacy._normalise_input(service_name)
+    query_tokens = legacy._price_query_tokens(service_name)
+    homecode_query = legacy._extract_homecode_query(service_name)
+    matched_price_rows: list[tuple[int, int, int, int, dict[str, Any]]] = []
+    exact_link_rows: list[tuple[int, int, int, int, dict[str, Any]]] = []
+    samara_tokens: set[str] = set()
+    by_id: dict[int, dict[str, Any]] = {}
+    doctor_prices: list[dict[str, Any]] = []
+    service_kind = preliminary_kind
+    if preliminary_kind not in {"lab", "diagnostic_no_doctor"}:
+        samara_tokens = await self._samara_region_tokens()
+        doctors = await self._ensure_doctors_cache_loaded()
+        for doc in doctors:
+            if not isinstance(doc, dict):
+                continue
+            doc_id = legacy._as_int(doc.get("id"))
+            if doc_id is None:
+                continue
+            raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
+            if legacy._has_explicit_non_samara_regions(raw_regions):
+                continue
+            if samara_tokens and raw_regions and not any(legacy._region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
+                continue
+            by_id[doc_id] = doc
+
+        try:
+            doctor_prices = await asyncio.to_thread(legacy.api_price.load_doctor_prices)
+        except Exception:
+            doctor_prices = []
+
+        for row in doctor_prices:
+            if not isinstance(row, dict):
+                continue
+            doctor_id = legacy._as_int(row.get("doctorId"))
+            if doctor_id is None or doctor_id not in by_id:
+                continue
+            row_name_norm = legacy._normalise_input(str(row.get("serviceName") or row.get("name") or ""))
+            row_homecode = legacy._normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
+            score, matched = legacy._price_row_score(
+                row,
+                query=query_norm,
+                tokens=query_tokens,
+                homecode_query=homecode_query,
+            )
+            if not is_consult_query and target_homecode and row_homecode and target_homecode == row_homecode:
+                score = max(score, 260)
+                matched = max(matched, 1)
+            if score <= 0:
+                continue
+            if not is_consult_query and not legacy._is_strong_doctor_price_match(
+                query_norm=query_norm,
+                query_tokens=query_tokens,
+                row_name_norm=row_name_norm,
+                matched_tokens=matched,
+                target_homecode=target_homecode,
+                row_homecode=row_homecode,
+            ):
+                continue
+            cost = legacy._as_int(row.get("cost")) or 0
+            item = (score, matched, -cost, doctor_id, row)
+            matched_price_rows.append(item)
+            if target_homecode and row_homecode and target_homecode == row_homecode:
+                exact_link_rows.append(item)
+
+        has_reliable_doctor_link = bool(exact_link_rows) or legacy._has_reliable_doctor_service_link(
+            matched_price_rows,
+            query_norm,
+        )
+        service_kind = legacy._classify_catalog_service_kind(
+            service_name,
+            query_text=query_text,
+            retail_rows=out["retail_prices"] if isinstance(out.get("retail_prices"), list) else [],
+            has_exact_doctor_link=has_reliable_doctor_link,
+            is_consult_query=is_consult_query,
+        )
+    if service_kind == "ambiguous":
+        service_kind = await legacy._resolve_ambiguous_price_kind_with_llm(
+            query_text,
+            out["retail_prices"] if isinstance(out.get("retail_prices"), list) else [],
+            has_exact_doctor_link=bool(exact_link_rows) or legacy._has_reliable_doctor_service_link(
+                matched_price_rows,
+                query_norm,
+            ),
+            runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
+        )
+    if service_kind == "operator":
+        return legacy._service_fallback(
+            note="service_bundle_info ambiguous operator fallback",
+            handoff_message=legacy.handoff_message("ambiguous_price_service"),
+            entities=entities,
+            reason="ambiguous_price_service",
+            extra={
+                "retail_prices": out.get("retail_prices") or [],
+                "service_name": service_name,
+            },
+        )
+    if service_kind == "family_query":
+        family_payload = legacy._build_price_family_payload(
+            query_text,
+            retail_rows,
+            show_all=False,
+            visible_limit=10,
+        )
+        if family_payload:
+            family_payload["entities_used"] = entities
+            family_payload["top_n_applied"] = top_limit
+            return family_payload
+    out["service_kind"] = service_kind
+
+    if service_kind in {"doctor_consult", "procedure_with_doctor"}:
+        candidate_rows = (
+            exact_link_rows
+            if service_kind == "procedure_with_doctor" and exact_link_rows
+            else matched_price_rows
+        )
+        allow_soft_substring_fallback = service_kind == "doctor_consult" and len(query_tokens) <= 1
+        if not candidate_rows and query_norm and allow_soft_substring_fallback:
+            for row in doctor_prices:
+                if not isinstance(row, dict):
+                    continue
+                doctor_id = legacy._as_int(row.get("doctorId"))
+                if doctor_id is None or doctor_id not in by_id:
+                    continue
+                service_row_name = legacy._normalise_input(str(row.get("serviceName") or ""))
+                if query_norm and query_norm in service_row_name:
+                    cost = legacy._as_int(row.get("cost")) or 0
+                    candidate_rows.append((1, 1, -cost, doctor_id, row))
+
+        candidate_rows.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
+        best_row_by_doctor: dict[int, dict[str, Any]] = {}
+        for _, _, _, doctor_id, row in candidate_rows:
+            if doctor_id not in best_row_by_doctor:
+                best_row_by_doctor[doctor_id] = row
+
+        doctor_cards = sorted(
+            [by_id[doctor_id] for doctor_id in best_row_by_doctor if doctor_id in by_id],
+            key=legacy._doctor_sort_key,
+        )[:top_limit]
+
+        out_doctors: list[dict[str, Any]] = []
+        query_specialty = legacy._extract_specialty_from_text(query_text) or legacy._extract_specialty_from_text(service_name)
+        for doc in doctor_cards:
+            doctor_id = legacy._as_int(doc.get("id"))
+            if doctor_id is None:
+                continue
+            if service_kind == "doctor_consult" and query_specialty and not legacy._doctor_matches_primary_specialty(doc, query_specialty):
+                continue
+            price_row = best_row_by_doctor.get(doctor_id, {})
+            availability = await self._doctor_availability_snapshot(
+                str(doc.get("fio") or ""),
+                samara_tokens=samara_tokens,
+            )
+            out_doctors.append(
+                {
+                    "id": doctor_id,
+                    "fio": str(doc.get("fio") or "").strip(),
+                    "ord": legacy._as_int(doc.get("ord")),
+                    "specialization": legacy._compact_specialization(
+                        legacy._pick_display_specialization(
+                            doc,
+                            preferred_specialty=query_specialty,
+                            preferred_service=service_name,
+                        )
+                    ),
+                    "specialty_label": legacy._specialty_label_for_doctor(
+                        doc,
+                        preferred_specialty=query_specialty,
+                    ),
+                    "regions": [str(x).strip() for x in (doc.get("regions") or []) if str(x).strip()],
+                    "service_price": legacy._as_int(price_row.get("cost")),
+                    "available": bool(availability.get("available")),
+                    "nearest_slot": str(availability.get("nearest_slot") or ""),
+                    "regions_with_slots": list(availability.get("regions_with_slots") or []),
+                    "availability_note": str(availability.get("note") or ""),
+                }
+            )
+        out["doctors"] = out_doctors
+    else:
+        out["doctors"] = []
+        out["note"] = (
+            f"{out['note']}; " if str(out.get("note") or "").strip() else ""
+        ) + f"service_bundle_info: {service_kind or 'no_doctors'}"
+
+    # 3) Preparation guidance by service/test name.
+    # В PRICE показываем подготовку только по явному запросу пациента.
+    # Иначе блок шумит и мешает основной задаче (цена/врач/расписание).
+    show_prepare = legacy._is_prepare_requested_in_price_query(query_text)
+    out["show_prepare"] = show_prepare
+    if show_prepare and not is_consult_query:
+        prepare_payload = await self.test_prepare(service_name, {"service_name": service_name})
+        if isinstance(prepare_payload, dict) and not prepare_payload.get("handoff_required"):
+            out["prepare"] = str(prepare_payload.get("prepare") or "").strip()
+
+    return out

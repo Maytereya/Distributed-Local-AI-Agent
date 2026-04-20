@@ -711,3 +711,75 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
         "schedule_unavailable_reason": schedule_unavailable_reason,
         "entities_used": {"last_name": last_name, "raw_name": raw_name, "region_name": region_name},
     }
+
+
+async def match_catalog_service(
+    self: "Services",
+    raw_text_or_name: str,
+    *,
+    current_service_name: str = "",
+) -> dict[str, Any]:
+    """
+    Матчит услугу по объединенному каталогу услуг клиники:
+    1) exact через resolver price-catalog
+    2) fuzzy через difflib по нормализованным названиям услуг
+    """
+
+    legacy = _legacy_module()
+
+    queries = legacy._service_catalog_query_candidates(
+        raw_text_or_name,
+        current_service_name=current_service_name,
+    )
+    if not queries:
+        return {"status": "miss", "query": "", "canonical": ""}
+
+    catalog_rows = await self._ensure_service_catalog_rows_loaded()
+    if not catalog_rows:
+        return {
+            "status": "unavailable",
+            "query": queries[0],
+            "canonical": "",
+            "reason": self._service_catalog_last_error or "service_catalog_empty",
+        }
+
+    for query in queries:
+        exact = legacy.resolve_price_service_name_from_catalog(
+            query,
+            current_service_name="",
+            rows=catalog_rows,
+        )
+        if exact:
+            return {
+                "status": "exact",
+                "query": query,
+                "canonical": str(exact).strip(),
+            }
+
+    name_map: dict[str, str] = {}
+    for row in catalog_rows:
+        name = str(row.get("serviceName") or row.get("name") or "").strip()
+        norm = legacy._normalise_catalog_text(name)
+        if norm and norm not in name_map:
+            name_map[norm] = name
+    name_keys = list(name_map.keys())
+    if not name_keys:
+        return {"status": "miss", "query": "", "canonical": ""}
+
+    for query in queries:
+        norm = legacy._normalise_catalog_text(query)
+        if len(norm) < 4:
+            continue
+        hit = legacy.get_close_matches(norm, name_keys, n=1, cutoff=0.86)
+        if not hit:
+            continue
+        canonical = str(name_map.get(hit[0]) or "").strip()
+        if canonical and legacy._normalise_catalog_text(canonical) != norm:
+            return {
+                "status": "fuzzy",
+                "query": query,
+                "canonical": canonical,
+                "matched_key": hit[0],
+            }
+
+    return {"status": "miss", "query": queries[0], "canonical": ""}

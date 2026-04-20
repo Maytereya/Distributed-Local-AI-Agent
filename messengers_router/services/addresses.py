@@ -229,3 +229,57 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
         "note": "address_info: doctors cache fallback",
         "entities_used": entities,
     }
+
+
+async def _procedure_branches_from_index(
+    self: "Services",
+    service_q: str,
+    regions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    Находит филиалы для процедуры по индексу `doctor_prices`.
+
+    :param service_q: нормализованная процедура
+    :param regions: live-список филиалов /regions (для phone/work_time)
+    :return: список branches в формате address_info
+    """
+
+    legacy = _legacy_module()
+
+    role_specialty = legacy._procedure_query_role_specialty(service_q)
+    if role_specialty:
+        doctors = await self._ensure_doctors_cache_loaded()
+        samara_tokens = await self._samara_region_tokens()
+        role_addresses: list[str] = []
+        for doc in doctors:
+            if not isinstance(doc, dict):
+                continue
+            if legacy._doctor_role_specialty_match_level(doc, role_specialty) <= 0:
+                continue
+            regions_src = [str(x).strip() for x in (doc.get("regions") or []) if str(x).strip()]
+            if legacy._has_explicit_non_samara_regions(regions_src):
+                continue
+            for addr in regions_src:
+                if not legacy._looks_like_real_address(addr):
+                    continue
+                if samara_tokens and not legacy._region_matches_samara_tokens(addr, samara_tokens):
+                    continue
+                if addr not in role_addresses:
+                    role_addresses.append(addr)
+        if role_addresses:
+            return legacy._addresses_to_branch_payload(role_addresses, regions)
+
+    rows = await self._ensure_procedure_rows_loaded()
+    ranked = legacy._rank_price_rows(rows, service_q, limit=200)
+
+    addresses: list[str] = []
+    for row in ranked:
+        addr = str(row.get("regionName") or "").strip()
+        if not addr or not legacy._looks_like_real_address(addr):
+            continue
+        if addr not in addresses:
+            addresses.append(addr)
+
+    if not addresses:
+        addresses = legacy._static_procedure_addresses(service_q)
+    return legacy._addresses_to_branch_payload(addresses, regions)
