@@ -16,28 +16,13 @@ from typing import Any
 from converters import html_cleaner
 
 from ..prompt_registry import load_prompt_text
+from . import _common as _common_mod
 from ._common import (
     _doc_tokens,
     _extract_json_object,
     _get_first_present,
     _normalise_input,
 )
-
-
-def _get_legacy():
-    """Лениво импортирует services_legacy, чтобы избежать цикла импортов.
-
-    Используется для получения patchable-ссылок на функции, которые тесты
-    монкипатчат через svc_mod (services/__init__.py → services_legacy).
-    """
-    from . import core as legacy  # noqa: PLC0415
-
-    return legacy
-
-
-def _get_stem_service_token():
-    """Temporary: moves to _doctors_helpers in Cluster 6."""
-    return _get_legacy()._stem_service_token
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +377,8 @@ def _prepare_term_roots(text: str) -> set[str]:
     :return: множество токенов-корней
     """
 
-    _stem_service_token = _get_stem_service_token()
+    from ._doctors_helpers import _stem_service_token  # noqa: PLC0415
+
     roots: set[str] = set()
     for token in _prepare_service_info_core_tokens(text):
         stem = _stem_service_token(token)
@@ -490,11 +476,10 @@ def _prepare_relevance_thresholds() -> tuple[float, float, float]:
     """
 
     # Quality-first defaults: шире серая зона, чтобы чаще подключать LLM-валидатор.
-    # Use lazy lookup so monkeypatching _runtime_float via svc_mod works in tests.
-    _runtime_float = _get_legacy()._runtime_float
-    low = _runtime_float("MR_PREPARE_RELEVANCE_LOW_THRESHOLD", 0.28, min_value=0.05, max_value=0.95)
-    high = _runtime_float("MR_PREPARE_RELEVANCE_HIGH_THRESHOLD", 0.78, min_value=0.10, max_value=0.99)
-    margin = _runtime_float("MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD", 0.18, min_value=0.01, max_value=0.60)
+    # Reference _common_mod so monkeypatching _runtime_float on the module works in tests.
+    low = _common_mod._runtime_float("MR_PREPARE_RELEVANCE_LOW_THRESHOLD", 0.28, min_value=0.05, max_value=0.95)
+    high = _common_mod._runtime_float("MR_PREPARE_RELEVANCE_HIGH_THRESHOLD", 0.78, min_value=0.10, max_value=0.99)
+    margin = _common_mod._runtime_float("MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD", 0.18, min_value=0.01, max_value=0.60)
     if low >= high:
         low = max(0.05, high - 0.10)
     return low, high, margin

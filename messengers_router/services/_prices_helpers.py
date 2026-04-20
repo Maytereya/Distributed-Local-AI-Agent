@@ -31,18 +31,8 @@ from ._doctors_helpers import (
     _service_name_allows_specialty,
     _service_name_matches_specialty,
 )
+from .. import llm_runtime as llm_runtime_mod
 from ._regions import _extract_city_token
-
-
-def _get_legacy():
-    """Лениво импортирует services_legacy, чтобы избежать цикла импортов.
-
-    Используется для получения patchable-ссылок на функции, которые тесты
-    монкипатчат через svc_mod (services/__init__.py → services_legacy).
-    """
-    from . import core as legacy  # noqa: PLC0415
-
-    return legacy
 
 
 # ---------------------------------------------------------------------------
@@ -2259,7 +2249,7 @@ async def _resolve_ambiguous_price_kind_with_llm(
     if not prompt:
         return "ambiguous"
     try:
-        raw = await _get_legacy().generate_text(
+        raw = await llm_runtime_mod.generate_text(
             prompt,
             timeout_s=20,
             queue_timeout_ms=4000,

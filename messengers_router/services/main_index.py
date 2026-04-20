@@ -11,7 +11,19 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from agent_logic_1 import meilisearch_client as meilisearch
+from converters import html_cleaner
+
+from ..policies import handoff_message
 from ..policies import handoff_message as _handoff_message
+from ._common import (
+    _is_main_index_relevant,
+    _is_meili_error_text,
+    _is_meili_no_matches_text,
+    _normalise_input,
+    _service_fallback,
+    _tax_doc_guidance_response,
+)
 
 if TYPE_CHECKING:
     from .core import Services
@@ -20,17 +32,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT = _handoff_message("knowledge_not_found")
-
-
-def _legacy_module():
-    """Лениво импортирует legacy-модуль, чтобы не создать цикл импортов.
-
-    :return: модуль ``messengers_router.services_legacy``
-    """
-
-    from . import core as legacy
-
-    return legacy
 
 
 async def main_index_info(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
@@ -42,8 +43,6 @@ async def main_index_info(self: "Services", query: str, entities: dict[str, Any]
     :return: словарь с полем ``content`` либо handoff payload при сбое/отсутствии матчей
     """
 
-    legacy = _legacy_module()
-
     q = str(query or "").strip()
     if not q:
         return {
@@ -53,13 +52,13 @@ async def main_index_info(self: "Services", query: str, entities: dict[str, Any]
         }
     doc_kind = str(entities.get("doc_request_kind") or "").strip().lower()
     if doc_kind not in {"tax", "generic"}:
-        norm_q = legacy._normalise_input(q)
+        norm_q = _normalise_input(q)
         doc_kind = "tax" if any(k in norm_q for k in ("налог", "вычет", "фнс")) else "generic"
 
     if doc_kind == "tax":
-        return legacy._tax_doc_guidance_response(entities, note="main_index_info: tax direct link")
+        return _tax_doc_guidance_response(entities, note="main_index_info: tax direct link")
 
-    normalized_q = legacy._normalise_input(q)
+    normalized_q = _normalise_input(q)
     fallback_queries: list[str] = []
     if doc_kind == "tax" and any(k in normalized_q for k in ("налог", "фнс", "вычет", "справк")):
         fallback_queries = [
@@ -70,7 +69,7 @@ async def main_index_info(self: "Services", query: str, entities: dict[str, Any]
 
     queries = [q]
     for fq in fallback_queries:
-        if legacy._normalise_input(fq) != normalized_q:
+        if _normalise_input(fq) != normalized_q:
             queries.append(fq)
 
     cleaned = ""
@@ -78,44 +77,44 @@ async def main_index_info(self: "Services", query: str, entities: dict[str, Any]
     try:
         for qq in queries:
             raw = await asyncio.to_thread(
-                legacy.meilisearch.search_meili,
+                meilisearch.search_meili,
                 "main_index",
                 qq,
                 output_mode="content_only",
                 max_chars=12000,
             )
-            cleaned = legacy.html_cleaner.strip_html(raw).strip()
-            if legacy._is_meili_error_text(cleaned):
+            cleaned = html_cleaner.strip_html(raw).strip()
+            if _is_meili_error_text(cleaned):
                 continue
-            if legacy._is_meili_no_matches_text(cleaned):
+            if _is_meili_no_matches_text(cleaned):
                 continue
-            if legacy._is_main_index_relevant(qq, cleaned, doc_kind=doc_kind):
+            if _is_main_index_relevant(qq, cleaned, doc_kind=doc_kind):
                 relevant_hit = True
                 break
     except Exception:
         if doc_kind == "tax":
-            return legacy._tax_doc_guidance_response(entities, note="main_index_info: tax fallback unavailable")
-        return legacy._service_fallback(
+            return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback unavailable")
+        return _service_fallback(
             note="main_index_info source unavailable",
-            handoff_message=legacy.handoff_message("service_error_doctor_info"),
+            handoff_message=handoff_message("service_error_doctor_info"),
             entities=entities,
             extra={"content": ""},
         )
 
-    if legacy._is_meili_error_text(cleaned):
+    if _is_meili_error_text(cleaned):
         if doc_kind == "tax":
-            return legacy._tax_doc_guidance_response(entities, note="main_index_info: tax fallback error")
-        return legacy._service_fallback(
+            return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback error")
+        return _service_fallback(
             note="main_index_info source unavailable",
-            handoff_message=legacy.handoff_message("service_error_doctor_info"),
+            handoff_message=handoff_message("service_error_doctor_info"),
             entities=entities,
             extra={"content": ""},
         )
 
-    if legacy._is_meili_no_matches_text(cleaned):
+    if _is_meili_no_matches_text(cleaned):
         if doc_kind == "tax":
-            return legacy._tax_doc_guidance_response(entities, note="main_index_info: tax fallback no matches")
-        return legacy._service_fallback(
+            return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback no matches")
+        return _service_fallback(
             note="main_index_info: no matches",
             handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
             entities=entities,
@@ -125,8 +124,8 @@ async def main_index_info(self: "Services", query: str, entities: dict[str, Any]
 
     if not relevant_hit:
         if doc_kind == "tax":
-            return legacy._tax_doc_guidance_response(entities, note="main_index_info: tax fallback weak relevance")
-        return legacy._service_fallback(
+            return _tax_doc_guidance_response(entities, note="main_index_info: tax fallback weak relevance")
+        return _service_fallback(
             note=f"main_index_info: weak relevance ({doc_kind})",
             handoff_message=_KNOWLEDGE_NOT_FOUND_HANDOFF_TEXT,
             entities=entities,

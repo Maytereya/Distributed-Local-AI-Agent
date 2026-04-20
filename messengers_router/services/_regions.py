@@ -13,18 +13,6 @@ from ..specialty_parser import UZI_QUERY_RE as _UZI_QUERY_RE
 from ._common import _normalise_input
 
 
-def _get_legacy():
-    """Лениво импортирует services_legacy, чтобы избежать цикла импортов.
-
-    Используется для cross-cluster ссылок на функции, которые пока живут
-    в legacy (``_nonbookable_needs`` переедет в cluster 4 addresses,
-    ``_extract_specialty_from_text`` остаётся в legacy).
-    """
-    from . import core as legacy  # noqa: PLC0415
-
-    return legacy
-
-
 # ---------------------------------------------------------------------------
 # Regex patterns
 # ---------------------------------------------------------------------------
@@ -222,8 +210,11 @@ def _filter_regions_by_service_flags(regions: list[dict[str, Any]], service_q: s
     if not sq:
         return list(regions)
 
-    legacy = _get_legacy()
-    need_analysis, need_ekg = legacy._nonbookable_needs(sq)
+    # Lazy imports to avoid circular imports with _addresses_helpers / _doctors_helpers.
+    from ._addresses_helpers import _nonbookable_needs  # noqa: PLC0415
+    from ._doctors_helpers import _extract_specialty_from_text  # noqa: PLC0415
+
+    need_analysis, need_ekg = _nonbookable_needs(sq)
     need_uzi = bool(_UZI_QUERY_RE.search(sq))
     need_doctor = False
     if not (need_analysis or need_ekg or need_uzi):
@@ -232,7 +223,7 @@ def _filter_regions_by_service_flags(regions: list[dict[str, Any]], service_q: s
             or "приём" in sq
             or "консультац" in sq
             or "осмотр" in sq
-            or bool(legacy._extract_specialty_from_text(sq))
+            or bool(_extract_specialty_from_text(sq))
         )
 
     if not (need_analysis or need_ekg or need_uzi or need_doctor):

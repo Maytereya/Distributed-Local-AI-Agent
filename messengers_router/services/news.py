@@ -12,22 +12,13 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from agent_logic_1 import meilisearch_client as meilisearch
+
 if TYPE_CHECKING:
     from .core import Services
 
 
 logger = logging.getLogger(__name__)
-
-
-def _legacy_module():
-    """Лениво импортирует legacy-модуль, чтобы не создать цикл импортов.
-
-    :return: модуль ``messengers_router.services_legacy``
-    """
-
-    from . import core as legacy
-
-    return legacy
 
 
 async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
@@ -39,11 +30,9 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
     :return: словарь с полем ``news`` (список) и ``entities_used``
     """
 
-    legacy = _legacy_module()
-
     try:
         hits = await asyncio.to_thread(
-            legacy.meilisearch.search_news_active,
+            meilisearch.search_news_active,
             index_name="news",
             keyword=query or None,
             limit=10,

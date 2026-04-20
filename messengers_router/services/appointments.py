@@ -11,6 +11,12 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from agent_logic_1 import meilisearch_client as meilisearch
+from converters import html_cleaner
+
+from ..policies import handoff_message
+from ._common import _is_meili_error_text, _service_fallback
+
 if TYPE_CHECKING:
     from .core import Services
 
@@ -18,41 +24,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _legacy_module():
-    """Лениво импортирует legacy-модуль, чтобы не создать цикл импортов.
-
-    :return: модуль ``messengers_router.services_legacy``
-    """
-
-    from . import core as legacy
-
-    return legacy
-
-
 async def appointment_help(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
-    legacy = _legacy_module()
-
     if query:
         try:
             raw = await asyncio.to_thread(
-                legacy.meilisearch.search_meili,
+                meilisearch.search_meili,
                 "main_index",
                 query,
                 output_mode="content_only",
                 max_chars=12000,
             )
-            cleaned = legacy.html_cleaner.strip_html(raw)
+            cleaned = html_cleaner.strip_html(raw)
         except Exception:
-            return legacy._service_fallback(
+            return _service_fallback(
                 note="appointment_help source unavailable",
-                handoff_message=legacy.handoff_message("service_error_appointments"),
+                handoff_message=handoff_message("service_error_appointments"),
                 entities=entities,
                 extra={"instructions": "Сейчас не удалось получить данные для записи автоматически."},
             )
-        if legacy._is_meili_error_text(cleaned):
-            return legacy._service_fallback(
+        if _is_meili_error_text(cleaned):
+            return _service_fallback(
                 note="appointment_help source unavailable",
-                handoff_message=legacy.handoff_message("service_error_appointments"),
+                handoff_message=handoff_message("service_error_appointments"),
                 entities=entities,
                 extra={"instructions": "Сейчас не удалось получить данные для записи автоматически."},
             )

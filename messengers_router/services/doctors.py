@@ -6,24 +6,62 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from difflib import get_close_matches
 from typing import TYPE_CHECKING, Any
 
+from ..doctor_name_port import (
+    extract_doctor_name_candidate,
+    resolve_schedule_surname,
+    surname_variants,
+)
+from ..policies import handoff_message
 from ..russian_nlu import normalize_ru
+from ..service_phrase import extract_service_phrase
 from ..specialty_parser import PROCEDURE_TO_SPECIALTY, PROCEDURE_TO_SPECIALTY_RE
+from ._common import (
+    DOCTORS_TOP_N,
+    _as_int,
+    _coerce_top_n,
+    _get_first_present,
+    _has_nearest_hint,
+    _normalise_catalog_text,
+    _normalise_input,
+    _service_fallback,
+)
+from ._doctors_helpers import (
+    _SCHEDULE_QUERY_RE,
+    _SERVICE_QUERY_SIGNAL_RE,
+    _compact_specialization,
+    _dedupe_doctors_by_fio,
+    _doctor_catalog_query_candidates,
+    _doctor_matches_fio,
+    _doctor_matches_service,
+    _doctor_matches_specialty,
+    _doctor_role_specialty_match_level,
+    _doctor_sort_key,
+    _extract_specialty_from_text,
+    _is_role_specialty_query,
+    _is_schedule_no_slots_text,
+    _iter_slot_datetimes,
+    _looks_like_schedule_specialty_token,
+    _pick_display_specialization,
+    _procedure_query_role_specialty,
+    _schedule_payload_matches_doctor,
+    _service_catalog_query_candidates,
+    _specialty_priority_rank,
+)
+from ._prices_helpers import resolve_price_service_name_from_catalog
+from ._regions import (
+    _has_explicit_non_samara_regions,
+    _is_non_samara_city_value,
+    _is_samara_city_value,
+    _region_matches_samara_tokens,
+    _schedule_regions_with_free_slots,
+)
 
 if TYPE_CHECKING:
     from .core import Services
-
-
-def _legacy_module():
-    """Лениво импортирует legacy-модуль, чтобы не создать цикл импортов.
-
-    :return: модуль ``messengers_router.services_legacy``
-    """
-
-    from . import core as legacy
-
-    return legacy
 
 
 def _normalise_text(value: str | None) -> str:
@@ -64,17 +102,16 @@ async def match_catalog_doctor(self: "Services", raw_text_or_name: str) -> dict[
     :return: словарь со статусом матчинга и каноническим именем
     """
 
-    legacy = _legacy_module()
     doctors = await self._ensure_doctors_cache_loaded()
     if not doctors:
         return {"status": "miss", "query": "", "canonical": ""}
 
-    queries = legacy._doctor_catalog_query_candidates(raw_text_or_name)
+    queries = _doctor_catalog_query_candidates(raw_text_or_name)
     if not queries:
         return {"status": "miss", "query": "", "canonical": ""}
 
     for query in queries:
-        exact = legacy.resolve_schedule_surname(query, doctors)
+        exact = resolve_schedule_surname(query, doctors)
         if exact:
             return {
                 "status": "exact",
@@ -90,7 +127,7 @@ async def match_catalog_doctor(self: "Services", raw_text_or_name: str) -> dict[
         if not fio:
             continue
         surname = str(fio.split()[0] or "").strip()
-        norm = legacy._normalise_catalog_text(surname)
+        norm = _normalise_catalog_text(surname)
         if norm and norm not in surname_map:
             surname_map[norm] = surname
     surname_keys = list(surname_map.keys())
@@ -98,14 +135,14 @@ async def match_catalog_doctor(self: "Services", raw_text_or_name: str) -> dict[
         return {"status": "miss", "query": "", "canonical": ""}
 
     for query in queries:
-        norm = legacy._normalise_catalog_text(query)
+        norm = _normalise_catalog_text(query)
         if len(norm) < 4:
             continue
-        hit = legacy.get_close_matches(norm, surname_keys, n=1, cutoff=0.84)
+        hit = get_close_matches(norm, surname_keys, n=1, cutoff=0.84)
         if not hit:
             continue
         canonical = surname_map.get(hit[0], "").strip()
-        if canonical and legacy._normalise_catalog_text(canonical) != norm:
+        if canonical and _normalise_catalog_text(canonical) != norm:
             return {
                 "status": "fuzzy",
                 "query": query,
@@ -133,18 +170,17 @@ async def _schedule_by_specialty(
     :return: кортеж ``(список расписаний, причина пустого результата)``
     """
 
-    legacy = _legacy_module()
     doctors = await self._ensure_doctors_cache_loaded()
     if not doctors:
         return [], None
-    spec = legacy._normalise_input(specialty)
+    spec = _normalise_input(specialty)
     if not spec:
         return [], None
 
     samara_tokens = await self._samara_region_tokens()
-    role_query = legacy._is_role_specialty_query(query_text or specialty, spec)
+    role_query = _is_role_specialty_query(query_text or specialty, spec)
     role_levels = {
-        id(d): legacy._doctor_role_specialty_match_level(d, spec)
+        id(d): _doctor_role_specialty_match_level(d, spec)
         for d in doctors
     } if role_query else {}
     candidates = sorted(
@@ -153,13 +189,13 @@ async def _schedule_by_specialty(
             if (
                 (role_levels.get(id(d), 0) > 0)
                 if role_query
-                else legacy._doctor_matches_specialty(d, spec, query_text or specialty)
+                else _doctor_matches_specialty(d, spec, query_text or specialty)
             )
-            and not legacy._has_explicit_non_samara_regions([str(x) for x in (d.get("regions") or []) if str(x).strip()])
+            and not _has_explicit_non_samara_regions([str(x) for x in (d.get("regions") or []) if str(x).strip()])
             and (
                 not samara_tokens
                 or any(
-                    legacy._region_matches_samara_tokens(str(x), samara_tokens)
+                    _region_matches_samara_tokens(str(x), samara_tokens)
                     for x in (d.get("regions") or [])
                     if str(x).strip()
                 )
@@ -168,11 +204,11 @@ async def _schedule_by_specialty(
         key=(
             (lambda d: (
                 -role_levels.get(id(d), 0),
-                legacy._specialty_priority_rank(d, spec),
-                *legacy._doctor_sort_key(d),
+                _specialty_priority_rank(d, spec),
+                *_doctor_sort_key(d),
             ))
             if role_query
-            else legacy._doctor_sort_key
+            else _doctor_sort_key
         ),
     )[:8]
     if not candidates:
@@ -189,7 +225,7 @@ async def _schedule_by_specialty(
             data = await self._get_schedule_payload_cached(surname)
         except Exception:
             continue
-        if legacy._is_schedule_no_slots_text(data):
+        if _is_schedule_no_slots_text(data):
             matched_but_without_slots = True
             continue
         if not isinstance(data, list) or not data:
@@ -198,15 +234,15 @@ async def _schedule_by_specialty(
             if not isinstance(row, dict):
                 continue
             row_fio = str(row.get("fio") or "").strip()
-            if row_fio and legacy._normalise_input(row_fio) != legacy._normalise_input(fio):
+            if row_fio and _normalise_input(row_fio) != _normalise_input(fio):
                 continue
             item = dict(row)
-            display_spec = legacy._pick_display_specialization(
+            display_spec = _pick_display_specialization(
                 doc,
                 preferred_specialty=spec,
             )
-            item["specialization"] = legacy._compact_specialization(display_spec)
-            slots = legacy._iter_slot_datetimes(item.get("schedule") or {})
+            item["specialization"] = _compact_specialization(display_spec)
+            slots = _iter_slot_datetimes(item.get("schedule") or {})
             if slots:
                 item["_nearest_slot"] = min(slots)
             out_rows.append(item)
@@ -216,7 +252,7 @@ async def _schedule_by_specialty(
         if matched_but_without_slots:
             return [], "no_free_slots_2_weeks"
         return [], None
-    with_slots = [x for x in out_rows if isinstance(x.get("_nearest_slot"), legacy.datetime)]
+    with_slots = [x for x in out_rows if isinstance(x.get("_nearest_slot"), datetime)]
     if with_slots:
         with_slots.sort(key=lambda x: x["_nearest_slot"])
         chosen = with_slots[:1] if nearest_only else with_slots[:3]
@@ -242,7 +278,6 @@ async def _doctor_availability_snapshot(
     :return: словарь со статусом доступности и ближайшим слотом
     """
 
-    legacy = _legacy_module()
     fio_clean = str(fio or "").strip()
     surname = fio_clean.split()[0] if fio_clean else ""
     if not surname:
@@ -271,7 +306,7 @@ async def _doctor_availability_snapshot(
             "note": "availability_empty",
         }
 
-    target_norm = legacy._normalise_input(fio_clean)
+    target_norm = _normalise_input(fio_clean)
     chosen: dict[str, Any] | None = None
     for row in data:
         if not isinstance(row, dict):
@@ -279,11 +314,11 @@ async def _doctor_availability_snapshot(
         row_fio = str(row.get("fio") or "").strip()
         if not row_fio:
             continue
-        row_norm = legacy._normalise_input(row_fio)
+        row_norm = _normalise_input(row_fio)
         if target_norm and row_norm == target_norm:
             chosen = row
             break
-        if legacy._doctor_matches_fio(row_fio, fio_clean, resolved_surname=surname):
+        if _doctor_matches_fio(row_fio, fio_clean, resolved_surname=surname):
             chosen = row
             break
     if chosen is None:
@@ -304,17 +339,17 @@ async def _doctor_availability_snapshot(
                 region = str(region_name or "").strip()
                 if not region:
                     continue
-                if legacy._region_matches_samara_tokens(region, samara_tokens):
+                if _region_matches_samara_tokens(region, samara_tokens):
                     schedule[region] = days
         else:
             schedule = {str(k): v for k, v in schedule_raw.items()}
 
-    slots = legacy._iter_slot_datetimes(schedule)
+    slots = _iter_slot_datetimes(schedule)
     nearest_slot = min(slots).isoformat(timespec="minutes") if slots else ""
     return {
         "available": bool(slots),
         "nearest_slot": nearest_slot,
-        "regions_with_slots": legacy._schedule_regions_with_free_slots(schedule),
+        "regions_with_slots": _schedule_regions_with_free_slots(schedule),
         "note": "availability_checked",
     }
 
@@ -327,20 +362,19 @@ async def resolve_doctor_name(self: "Services", raw_text_or_name: str) -> str | 
     :return: каноническая фамилия врача или ``None``
     """
 
-    legacy = _legacy_module()
     doctors = await self._ensure_doctors_cache_loaded()
     if not doctors:
         return None
     value = str(raw_text_or_name or "").strip()
     if not value:
         return None
-    resolved = legacy.resolve_schedule_surname(value, doctors)
+    resolved = resolve_schedule_surname(value, doctors)
     if resolved:
         return resolved
 
-    candidate = legacy.extract_doctor_name_candidate(value, prefer_schedule=True)
-    if candidate and legacy._normalise_input(candidate) != legacy._normalise_input(value):
-        return legacy.resolve_schedule_surname(candidate, doctors)
+    candidate = extract_doctor_name_candidate(value, prefer_schedule=True)
+    if candidate and _normalise_input(candidate) != _normalise_input(value):
+        return resolve_schedule_surname(candidate, doctors)
     return None
 
 
@@ -355,7 +389,6 @@ async def _resolve_doctor_id_from_name(
     :return: кортеж ``(doctor_id, canonical_fio)``
     """
 
-    legacy = _legacy_module()
     doctors = await self._ensure_doctors_cache_loaded()
     if not doctors:
         return None, None
@@ -364,7 +397,7 @@ async def _resolve_doctor_id_from_name(
     if not raw:
         return None, None
 
-    resolved_surname = legacy.resolve_schedule_surname(raw, doctors)
+    resolved_surname = resolve_schedule_surname(raw, doctors)
     samara_tokens = await self._samara_region_tokens()
     matched: list[dict[str, Any]] = []
     for doc in doctors:
@@ -374,18 +407,18 @@ async def _resolve_doctor_id_from_name(
         if not fio:
             continue
         raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
-        if legacy._has_explicit_non_samara_regions(raw_regions):
+        if _has_explicit_non_samara_regions(raw_regions):
             continue
-        if samara_tokens and raw_regions and not any(legacy._region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
+        if samara_tokens and raw_regions and not any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
             continue
-        if legacy._doctor_matches_fio(fio, raw, resolved_surname):
+        if _doctor_matches_fio(fio, raw, resolved_surname):
             matched.append(doc)
 
     if not matched:
         return None, None
-    matched = sorted(matched, key=legacy._doctor_sort_key)
+    matched = sorted(matched, key=_doctor_sort_key)
     first = matched[0]
-    return legacy._as_int(first.get("id")), str(first.get("fio") or "").strip() or None
+    return _as_int(first.get("id")), str(first.get("fio") or "").strip() or None
 
 
 async def doctors_info(
@@ -403,33 +436,32 @@ async def doctors_info(
     :return: payload с карточками врачей или fallback-ответом
     """
 
-    legacy = _legacy_module()
     doctors = await self._ensure_doctors_cache_loaded()
     if not doctors:
-        return legacy._service_fallback(
+        return _service_fallback(
             note="doctors_info source unavailable",
-            handoff_message=legacy.handoff_message("service_error_doctors_list"),
+            handoff_message=handoff_message("service_error_doctors_list"),
             entities=entities,
             extra={"doctors": []},
         )
 
-    q = legacy._normalise_input(query)
-    doctor_raw = legacy._get_first_present(entities, ["doctor", "doctor_name", "fio", "last_name", "doctor_last_name"]) or ""
-    fio_q = legacy._normalise_input(doctor_raw)
-    spec_q = legacy._normalise_input(legacy._get_first_present(entities, ["specialty", "specialization", "spec"]) or "")
+    q = _normalise_input(query)
+    doctor_raw = _get_first_present(entities, ["doctor", "doctor_name", "fio", "last_name", "doctor_last_name"]) or ""
+    fio_q = _normalise_input(doctor_raw)
+    spec_q = _normalise_input(_get_first_present(entities, ["specialty", "specialization", "spec"]) or "")
     if not spec_q:
-        spec_q = legacy._extract_specialty_from_text(query)
-    service_q = legacy._normalise_input(legacy._get_first_present(entities, ["service_name", "test_name"]) or "")
+        spec_q = _extract_specialty_from_text(query)
+    service_q = _normalise_input(_get_first_present(entities, ["service_name", "test_name"]) or "")
     if not service_q:
-        if legacy._SERVICE_QUERY_SIGNAL_RE.search(legacy._normalise_input(query)):
-            extracted_service = legacy.extract_service_phrase(query)
+        if _SERVICE_QUERY_SIGNAL_RE.search(_normalise_input(query)):
+            extracted_service = extract_service_phrase(query)
             if extracted_service:
-                service_q = legacy._normalise_input(extracted_service)
-    region_q = legacy._normalise_input(legacy._get_first_present(entities, ["region", "branch", " филиал", "company_unit"]) or "")
-    resolved_surname = legacy.resolve_schedule_surname(doctor_raw, doctors) if doctor_raw else None
+                service_q = _normalise_input(extracted_service)
+    region_q = _normalise_input(_get_first_present(entities, ["region", "branch", " филиал", "company_unit"]) or "")
+    resolved_surname = resolve_schedule_surname(doctor_raw, doctors) if doctor_raw else None
 
-    query_candidate = legacy.extract_doctor_name_candidate(query, prefer_schedule=True) if query else None
-    query_resolved = legacy.resolve_schedule_surname(query_candidate, doctors) if query_candidate else None
+    query_candidate = extract_doctor_name_candidate(query, prefer_schedule=True) if query else None
+    query_resolved = resolve_schedule_surname(query_candidate, doctors) if query_candidate else None
     if not resolved_surname:
         resolved_surname = query_resolved
 
@@ -438,9 +470,9 @@ async def doctors_info(
         resolved_surname = None
 
     samara_tokens = await self._samara_region_tokens()
-    role_query = bool(spec_q and legacy._is_role_specialty_query(query, spec_q))
+    role_query = bool(spec_q and _is_role_specialty_query(query, spec_q))
     role_levels = {
-        id(d): legacy._doctor_role_specialty_match_level(d, spec_q)
+        id(d): _doctor_role_specialty_match_level(d, spec_q)
         for d in doctors
     } if role_query else {}
 
@@ -457,29 +489,29 @@ async def doctors_info(
     keyword = keyword.strip()
 
     def match_doc(doc: dict[str, Any], *, require_service: bool = True) -> bool:
-        fio = legacy._normalise_input(str(doc.get("fio", "")))
-        spec_text = legacy._normalise_input(str(doc.get("specialization", "")))
+        fio = _normalise_input(str(doc.get("fio", "")))
+        spec_text = _normalise_input(str(doc.get("specialization", "")))
         raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
-        regions = " ".join([legacy._normalise_input(x) for x in raw_regions])
-        units = " ".join([legacy._normalise_input(str(x)) for x in (doc.get("units") or [])])
+        regions = " ".join([_normalise_input(x) for x in raw_regions])
+        units = " ".join([_normalise_input(str(x)) for x in (doc.get("units") or [])])
 
         hay = " | ".join([fio, spec_text, regions, units])
-        if legacy._has_explicit_non_samara_regions(raw_regions):
+        if _has_explicit_non_samara_regions(raw_regions):
             return False
         if samara_tokens:
-            if not any(legacy._region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
+            if not any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
                 return False
         if fio_q:
-            if not legacy._doctor_matches_fio(fio, fio_q, resolved_surname):
+            if not _doctor_matches_fio(fio, fio_q, resolved_surname):
                 return False
         if spec_q:
             if role_query:
                 if role_levels.get(id(doc), 0) <= 0:
                     return False
-            elif not legacy._doctor_matches_specialty(doc, spec_q, query):
+            elif not _doctor_matches_specialty(doc, spec_q, query):
                 return False
         if require_service and service_q:
-            if not legacy._doctor_matches_service(doc, service_q):
+            if not _doctor_matches_service(doc, service_q):
                 return False
         if region_q and region_q not in hay:
             return False
@@ -500,20 +532,20 @@ async def doctors_info(
         and _is_mapped_procedure_specialty_query(query, spec_q)
     ):
         filtered = [d for d in doctors if match_doc(d, require_service=False)]
-    filtered = legacy._dedupe_doctors_by_fio(filtered)
+    filtered = _dedupe_doctors_by_fio(filtered)
     if role_query:
         filtered = sorted(
             filtered,
             key=lambda d: (
                 -role_levels.get(id(d), 0),
-                legacy._specialty_priority_rank(d, spec_q),
-                *legacy._doctor_sort_key(d),
+                _specialty_priority_rank(d, spec_q),
+                *_doctor_sort_key(d),
             ),
         )
     else:
-        filtered = sorted(filtered, key=legacy._doctor_sort_key)
+        filtered = sorted(filtered, key=_doctor_sort_key)
 
-    limit = legacy._coerce_top_n(output_max, default=legacy.DOCTORS_TOP_N)
+    limit = _coerce_top_n(output_max, default=DOCTORS_TOP_N)
     if resolved_surname:
         limit = min(limit, 3)
 
@@ -521,12 +553,12 @@ async def doctors_info(
     compact: list[dict[str, Any]] = []
     for d in filtered:
         row = dict(d)
-        display_spec = legacy._pick_display_specialization(
+        display_spec = _pick_display_specialization(
             row,
             preferred_specialty=spec_q,
             preferred_service=service_q,
         )
-        row["specialization"] = legacy._compact_specialization(display_spec)
+        row["specialization"] = _compact_specialization(display_spec)
         compact.append(row)
 
     return {
@@ -553,19 +585,18 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
     :return: payload с расписанием или fallback-ответом
     """
 
-    legacy = _legacy_module()
-    raw_name = legacy._get_first_present(
+    raw_name = _get_first_present(
         entities,
         ["last_name", "doctor_last_name", "doctor", "doctor_name", "fio"],
     )
-    specialty = legacy._normalise_input(legacy._get_first_present(entities, ["specialty", "specialization", "spec"]) or "")
-    query_specialty = legacy._extract_specialty_from_text(query)
-    query_procedure_specialty = legacy._procedure_query_role_specialty(query or "")
+    specialty = _normalise_input(_get_first_present(entities, ["specialty", "specialization", "spec"]) or "")
+    query_specialty = _extract_specialty_from_text(query)
+    query_procedure_specialty = _procedure_query_role_specialty(query or "")
     if query_specialty:
         specialty = query_specialty
     elif query_procedure_specialty:
         specialty = query_procedure_specialty
-    if raw_name and legacy._looks_like_schedule_specialty_token(str(raw_name)):
+    if raw_name and _looks_like_schedule_specialty_token(str(raw_name)):
         raw_name = ""
 
     doctors = await self._ensure_doctors_cache_loaded()
@@ -574,21 +605,21 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
         first = raw_for_match.split()[0].strip()
         raw_for_match = first or raw_for_match
 
-    query_doctor_candidate = legacy.extract_doctor_name_candidate(str(query or ""), prefer_schedule=True) if query else None
-    if query_doctor_candidate and legacy._looks_like_schedule_specialty_token(str(query_doctor_candidate)):
+    query_doctor_candidate = extract_doctor_name_candidate(str(query or ""), prefer_schedule=True) if query else None
+    if query_doctor_candidate and _looks_like_schedule_specialty_token(str(query_doctor_candidate)):
         query_doctor_candidate = None
-    query_name = legacy.resolve_schedule_surname(str(query_doctor_candidate), doctors) if query_doctor_candidate else None
-    last_name = legacy.resolve_schedule_surname(raw_for_match, doctors)
-    has_schedule_signal = bool(legacy._SCHEDULE_QUERY_RE.search(str(query or "")))
+    query_name = resolve_schedule_surname(str(query_doctor_candidate), doctors) if query_doctor_candidate else None
+    last_name = resolve_schedule_surname(raw_for_match, doctors)
+    has_schedule_signal = bool(_SCHEDULE_QUERY_RE.search(str(query or "")))
     if query_name and (
         not last_name
         or has_schedule_signal
-        or legacy._normalise_input(str(query_name)) != legacy._normalise_input(str(last_name))
+        or _normalise_input(str(query_name)) != _normalise_input(str(last_name))
     ):
         last_name = query_name
     elif not last_name and query and query != raw_name:
         if not specialty:
-            last_name = query_name or legacy.resolve_schedule_surname(query, doctors)
+            last_name = query_name or resolve_schedule_surname(query, doctors)
 
     query_has_specialty_signal = bool(query_specialty or query_procedure_specialty)
     if query_has_specialty_signal and specialty and not query_name:
@@ -598,7 +629,7 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
         schedule_by_spec, schedule_unavailable_reason = await self._schedule_by_specialty(
             specialty,
             entities,
-            nearest_only=legacy._has_nearest_hint(query),
+            nearest_only=_has_nearest_hint(query),
             query_text=query,
         )
         return {
@@ -615,47 +646,47 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
             "entities_used": entities,
         }
 
-    region_name = legacy._get_first_present(entities, ["region", "branch", "company_unit", "unit", "city", "branch_name"])
-    if region_name and legacy._is_non_samara_city_value(region_name):
-        return legacy._service_fallback(
+    region_name = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city", "branch_name"])
+    if region_name and _is_non_samara_city_value(region_name):
+        return _service_fallback(
             note=f"doctors_schedule_week unsupported city: {region_name}",
-            handoff_message=legacy.handoff_message("city_not_supported"),
+            handoff_message=handoff_message("city_not_supported"),
             entities=entities,
             reason="city_not_supported",
             extra={"schedule": []},
         )
-    if region_name and legacy._is_samara_city_value(region_name):
+    if region_name and _is_samara_city_value(region_name):
         region_name = None
 
     data = None
     schedule_unavailable_reason: str | None = None
-    candidates = legacy.surname_variants(str(last_name))
+    candidates = surname_variants(str(last_name))
     if not candidates:
         candidates = [str(last_name)]
     if query_name:
-        for qv in legacy.surname_variants(str(query_name)):
+        for qv in surname_variants(str(query_name)):
             if qv not in candidates:
                 candidates.append(qv)
 
     try:
         for candidate in candidates:
             data = await self._get_schedule_payload_cached(candidate, region_name)
-            if isinstance(data, list) and data and legacy._schedule_payload_matches_doctor(data, candidate):
+            if isinstance(data, list) and data and _schedule_payload_matches_doctor(data, candidate):
                 last_name = candidate
                 break
-            if legacy._is_schedule_no_slots_text(data):
+            if _is_schedule_no_slots_text(data):
                 schedule_unavailable_reason = "no_free_slots_2_weeks"
             if region_name:
                 data = await self._get_schedule_payload_cached(candidate, None)
-                if isinstance(data, list) and data and legacy._schedule_payload_matches_doctor(data, candidate):
+                if isinstance(data, list) and data and _schedule_payload_matches_doctor(data, candidate):
                     last_name = candidate
                     break
-                if legacy._is_schedule_no_slots_text(data):
+                if _is_schedule_no_slots_text(data):
                     schedule_unavailable_reason = "no_free_slots_2_weeks"
     except Exception:
-        return legacy._service_fallback(
+        return _service_fallback(
             note="doctors_schedule_week unavailable",
-            handoff_message=legacy.handoff_message("service_error_schedule"),
+            handoff_message=handoff_message("service_error_schedule"),
             entities=entities,
             extra={"schedule": []},
         )
@@ -664,7 +695,7 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
         compact_data: list[dict[str, Any]] = []
         samara_tokens = await self._samara_region_tokens()
         doctor_by_fio = {
-            legacy._normalise_input(str(d.get("fio") or "")): d
+            _normalise_input(str(d.get("fio") or "")): d
             for d in doctors
             if isinstance(d, dict) and str(d.get("fio") or "").strip()
         }
@@ -674,29 +705,29 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
             item = dict(row)
             if last_name:
                 row_fio = str(item.get("fio") or "").strip()
-                if row_fio and not legacy._doctor_matches_fio(row_fio, str(last_name), resolved_surname=str(last_name)):
+                if row_fio and not _doctor_matches_fio(row_fio, str(last_name), resolved_surname=str(last_name)):
                     continue
-            row_fio_key = legacy._normalise_input(str(item.get("fio") or ""))
+            row_fio_key = _normalise_input(str(item.get("fio") or ""))
             cache_doc = doctor_by_fio.get(row_fio_key)
             if cache_doc:
-                display_spec = legacy._pick_display_specialization(
+                display_spec = _pick_display_specialization(
                     cache_doc,
                     preferred_specialty=specialty,
                 )
             else:
                 display_spec = str(item.get("specialization") or "")
-            item["specialization"] = legacy._compact_specialization(display_spec)
+            item["specialization"] = _compact_specialization(display_spec)
             regions_src = [str(x) for x in (item.get("regions") or []) if str(x).strip()]
-            if legacy._has_explicit_non_samara_regions(regions_src):
+            if _has_explicit_non_samara_regions(regions_src):
                 continue
             if samara_tokens:
-                if regions_src and not any(legacy._region_matches_samara_tokens(x, samara_tokens) for x in regions_src):
+                if regions_src and not any(_region_matches_samara_tokens(x, samara_tokens) for x in regions_src):
                     continue
                 sched = item.get("schedule")
                 if isinstance(sched, dict) and sched:
                     sched_filtered: dict[str, Any] = {}
                     for k, v in sched.items():
-                        if legacy._region_matches_samara_tokens(str(k), samara_tokens):
+                        if _region_matches_samara_tokens(str(k), samara_tokens):
                             sched_filtered[k] = v
                     if sched_filtered:
                         item["schedule"] = sched_filtered
@@ -725,9 +756,7 @@ async def match_catalog_service(
     2) fuzzy через difflib по нормализованным названиям услуг
     """
 
-    legacy = _legacy_module()
-
-    queries = legacy._service_catalog_query_candidates(
+    queries = _service_catalog_query_candidates(
         raw_text_or_name,
         current_service_name=current_service_name,
     )
@@ -744,7 +773,7 @@ async def match_catalog_service(
         }
 
     for query in queries:
-        exact = legacy.resolve_price_service_name_from_catalog(
+        exact = resolve_price_service_name_from_catalog(
             query,
             current_service_name="",
             rows=catalog_rows,
@@ -759,7 +788,7 @@ async def match_catalog_service(
     name_map: dict[str, str] = {}
     for row in catalog_rows:
         name = str(row.get("serviceName") or row.get("name") or "").strip()
-        norm = legacy._normalise_catalog_text(name)
+        norm = _normalise_catalog_text(name)
         if norm and norm not in name_map:
             name_map[norm] = name
     name_keys = list(name_map.keys())
@@ -767,14 +796,14 @@ async def match_catalog_service(
         return {"status": "miss", "query": "", "canonical": ""}
 
     for query in queries:
-        norm = legacy._normalise_catalog_text(query)
+        norm = _normalise_catalog_text(query)
         if len(norm) < 4:
             continue
-        hit = legacy.get_close_matches(norm, name_keys, n=1, cutoff=0.86)
+        hit = get_close_matches(norm, name_keys, n=1, cutoff=0.86)
         if not hit:
             continue
         canonical = str(name_map.get(hit[0]) or "").strip()
-        if canonical and legacy._normalise_catalog_text(canonical) != norm:
+        if canonical and _normalise_catalog_text(canonical) != norm:
             return {
                 "status": "fuzzy",
                 "query": query,

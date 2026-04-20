@@ -3,7 +3,24 @@ import importlib
 
 import pytest
 
+from messengers_router import llm_runtime as llm_runtime_mod
+from messengers_router.services import _common as _common_mod
 from messengers_router.services import lab_tests as lab_tests_mod
+from messengers_router.services._common import _normalise_input as _svc_normalise_input
+from messengers_router.services._doctors_helpers import (
+    _extract_specialty_from_text as _svc_extract_specialty_from_text,
+    _select_effective_price_service_name as _svc_select_effective_price_service_name,
+    _service_name_matches_specialty as _svc_service_name_matches_specialty,
+)
+from messengers_router.services._prepare import (
+    _prepare_relevance_gate as _svc_prepare_relevance_gate,
+    _prepare_roots_match as _svc_prepare_roots_match,
+    _prepare_subject_hint as _svc_prepare_subject_hint,
+)
+from messengers_router.services._prices_helpers import (
+    _extract_price_service_from_query as _svc_extract_price_service_from_query,
+    _resolve_ambiguous_price_kind_with_llm as _svc_resolve_ambiguous_price_kind_with_llm,
+)
 from messengers_router import classifier as classifier_mod
 from messengers_router import policies as policies_mod
 from messengers_router import services as svc_mod
@@ -55,7 +72,7 @@ def test_services_lab_methods_are_sourced_from_lab_tests_module():
 
 
 def test_services_normalise_input_normalizes_yo_characters():
-    assert svc_mod._normalise_input("  Ёжик   в Тумане  ") == "ежик в тумане"
+    assert _svc_normalise_input("  Ёжик   в Тумане  ") == "ежик в тумане"
 
 
 def test_lab_tests_extract_result_query_fields_uses_order_id_fallback():
@@ -1113,8 +1130,8 @@ def test_test_prepare_rejects_unrelated_hormone_service_info_and_falls_back_to_m
 
 
 def test_prepare_roots_match_does_not_match_holesterol_with_sterile_substring():
-    assert svc_mod._prepare_roots_match("холестерин", {"стерильн"}) is False
-    assert svc_mod._prepare_roots_match("холестерин", {"холестерин"}) is True
+    assert _svc_prepare_roots_match("холестерин", {"стерильн"}) is False
+    assert _svc_prepare_roots_match("холестерин", {"холестерин"}) is True
 
 
 def test_test_prepare_cholesterol_not_confused_by_urogenital_soskob(monkeypatch):
@@ -1159,8 +1176,8 @@ def test_test_prepare_cholesterol_not_confused_by_urogenital_soskob(monkeypatch)
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fail_meili)
     monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
-    monkeypatch.setattr(svc_mod, "_runtime_float", fake_runtime_float)
-    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
+    monkeypatch.setattr(_common_mod, "_runtime_float", fake_runtime_float)
+    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
 
     res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {}))
     answer = str(res.get("prepare") or "").lower()
@@ -1180,12 +1197,12 @@ def test_prepare_relevance_gate_thresholds(monkeypatch):
         }
         return values.get(name, default)
 
-    monkeypatch.setattr(svc_mod, "_runtime_float", fake_runtime_float)
+    monkeypatch.setattr(_common_mod, "_runtime_float", fake_runtime_float)
 
-    assert svc_mod._prepare_relevance_gate(0.20, 0.30) == "reject"
-    assert svc_mod._prepare_relevance_gate(0.72, 0.12) == "accept"
-    assert svc_mod._prepare_relevance_gate(0.72, 0.01) == "llm"
-    assert svc_mod._prepare_relevance_gate(0.45, 0.30) == "llm"
+    assert _svc_prepare_relevance_gate(0.20, 0.30) == "reject"
+    assert _svc_prepare_relevance_gate(0.72, 0.12) == "accept"
+    assert _svc_prepare_relevance_gate(0.72, 0.01) == "llm"
+    assert _svc_prepare_relevance_gate(0.45, 0.30) == "llm"
 
 
 def test_test_prepare_mid_score_uses_llm_validator_and_accepts_api(monkeypatch):
@@ -1228,9 +1245,9 @@ def test_test_prepare_mid_score_uses_llm_validator_and_accepts_api(monkeypatch):
         return default
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fail_meili)
-    monkeypatch.setattr(svc_mod, "generate_text", fake_generate_text)
-    monkeypatch.setattr(svc_mod, "_runtime_float", fake_runtime_float)
-    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
+    monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
+    monkeypatch.setattr(_common_mod, "_runtime_float", fake_runtime_float)
+    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
 
     res = run(svc.test_prepare("Кровь на гормоны сдают натощак?", {}))
 
@@ -1284,11 +1301,11 @@ def test_test_prepare_mid_score_llm_reject_falls_back_to_meili(monkeypatch):
             return True
         return default
 
-    monkeypatch.setattr(svc_mod, "generate_text", fake_generate_text)
+    monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
     monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
-    monkeypatch.setattr(svc_mod, "_runtime_float", fake_runtime_float)
-    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
+    monkeypatch.setattr(_common_mod, "_runtime_float", fake_runtime_float)
+    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
 
     res = run(svc.test_prepare("Кровь на гормоны сдают натощак?", {}))
 
@@ -1389,7 +1406,7 @@ def test_test_prepare_compacts_long_meili_answer_with_llm_wrap(monkeypatch):
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
     monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
-    monkeypatch.setattr(svc_mod, "generate_text", fake_generate_text)
+    monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
 
     def fake_runtime_bool(name: str, default: bool) -> bool:
         if name == "MR_PREPARE_LLM_WRAP_ENABLED":
@@ -1401,8 +1418,8 @@ def test_test_prepare_compacts_long_meili_answer_with_llm_wrap(monkeypatch):
             return 1
         return default
 
-    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
-    monkeypatch.setattr(svc_mod, "_runtime_int", fake_runtime_int)
+    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
+    monkeypatch.setattr(_common_mod, "_runtime_int", fake_runtime_int)
 
     res = run(svc.test_prepare("Как подготовиться к пайпель-биопсии?", {"service_name": "Пайпель-биопсия"}))
 
@@ -1430,7 +1447,7 @@ def test_test_prepare_llm_wrap_uses_deterministic_fallback_on_invalid_compaction
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
     monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
-    monkeypatch.setattr(svc_mod, "generate_text", fake_generate_text)
+    monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
 
     def fake_runtime_bool(name: str, default: bool) -> bool:
         if name == "MR_PREPARE_LLM_WRAP_ENABLED":
@@ -1442,8 +1459,8 @@ def test_test_prepare_llm_wrap_uses_deterministic_fallback_on_invalid_compaction
             return 1
         return default
 
-    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
-    monkeypatch.setattr(svc_mod, "_runtime_int", fake_runtime_int)
+    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
+    monkeypatch.setattr(_common_mod, "_runtime_int", fake_runtime_int)
 
     res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {"service_name": "Холестерин"}))
 
@@ -1474,7 +1491,7 @@ def test_test_prepare_llm_wrap_timeout_uses_deterministic_fallback(monkeypatch):
 
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
     monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
-    monkeypatch.setattr(svc_mod, "generate_text", fake_generate_text)
+    monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
 
     def fake_runtime_bool(name: str, default: bool) -> bool:
         if name == "MR_PREPARE_LLM_WRAP_ENABLED":
@@ -1490,8 +1507,8 @@ def test_test_prepare_llm_wrap_timeout_uses_deterministic_fallback(monkeypatch):
             return 800
         return default
 
-    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
-    monkeypatch.setattr(svc_mod, "_runtime_int", fake_runtime_int)
+    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
+    monkeypatch.setattr(_common_mod, "_runtime_int", fake_runtime_int)
 
     res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {"service_name": "Холестерин"}))
 
@@ -1505,7 +1522,7 @@ def test_test_prepare_llm_wrap_timeout_uses_deterministic_fallback(monkeypatch):
 
 
 def test_prepare_subject_hint_prefers_full_phrase_from_query_over_truncated_entity():
-    hint = svc_mod._prepare_subject_hint(
+    hint = _svc_prepare_subject_hint(
         "Как подготовиться к гастроскопии?",
         {"service_name": "гастроскопи"},
     )
@@ -1540,7 +1557,7 @@ def test_test_prepare_main_index_override_after_llm_reject(monkeypatch):
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
     monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
     monkeypatch.setattr(svc, "_prepare_llm_validate_candidate", fake_llm_reject)
-    monkeypatch.setattr(svc_mod, "_runtime_bool", fake_runtime_bool)
+    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
 
     res = run(svc.test_prepare("Как подготовиться к ФГДС?", {"service_name": "ФГДС"}))
 
@@ -1937,11 +1954,11 @@ def test_resolve_price_service_name_from_catalog_consult_specialty_cardio():
 
 
 def test_extract_price_service_from_query_consult_without_specialty_returns_none():
-    assert svc_mod._extract_price_service_from_query("Сколько стоит консультация?") is None
+    assert _svc_extract_price_service_from_query("Сколько стоит консультация?") is None
 
 
 def test_select_effective_price_service_name_keeps_clean_entity_over_noisy_query():
-    selected = svc_mod._select_effective_price_service_name(
+    selected = _svc_select_effective_price_service_name(
         "Rv-вич гепатит",
         "сдачи анализа rv вич гепатит г",
     )
@@ -1950,7 +1967,7 @@ def test_select_effective_price_service_name_keeps_clean_entity_over_noisy_query
 
 
 def test_select_effective_price_service_name_keeps_doctor_entity_when_query_has_address_noise():
-    selected = svc_mod._select_effective_price_service_name(
+    selected = _svc_select_effective_price_service_name(
         "УЗДГ сосудов шеи",
         "победы 83 нам обследование уздг сосудов шеи кровь",
     )
@@ -1959,7 +1976,7 @@ def test_select_effective_price_service_name_keeps_doctor_entity_when_query_has_
 
 
 def test_select_effective_price_service_name_prefers_new_query_over_stale_context():
-    selected = svc_mod._select_effective_price_service_name(
+    selected = _svc_select_effective_price_service_name(
         "ЭКГ",
         "холестерин",
     )
@@ -1968,7 +1985,7 @@ def test_select_effective_price_service_name_prefers_new_query_over_stale_contex
 
 
 def test_select_effective_price_service_name_accepts_more_specific_query_variant():
-    selected = svc_mod._select_effective_price_service_name(
+    selected = _svc_select_effective_price_service_name(
         "УЗДГ сосудов",
         "УЗДГ сосудов шеи",
     )
@@ -1977,14 +1994,14 @@ def test_select_effective_price_service_name_accepts_more_specific_query_variant
 
 
 def test_service_name_matches_specialty_does_not_match_substring_therapist_in_hirudotherapist():
-    assert svc_mod._service_name_matches_specialty(
+    assert _svc_service_name_matches_specialty(
         "Прием (осмотр, консультация) гирудотерапевта первичный",
         "терапевт",
     ) is False
 
 
 def test_service_name_matches_specialty_rejects_hybrid_specialty_for_direct_query():
-    assert svc_mod._service_name_matches_specialty(
+    assert _svc_service_name_matches_specialty(
         "Прием (осмотр, консультация) врача-кардиолога-ревматолога первичный",
         "кардиолог",
     ) is False
@@ -2390,7 +2407,7 @@ def test_resolve_price_service_name_prefers_adult_uzi_over_child():
 
 
 def test_extract_specialty_from_text_prefers_compound_traumatologist_orthopedist():
-    extracted = svc_mod._extract_specialty_from_text("стоимость приема травматолога ортопеда")
+    extracted = _svc_extract_specialty_from_text("стоимость приема травматолога ортопеда")
 
     assert extracted == "травматолог-ортопед"
 
@@ -2645,7 +2662,7 @@ def test_price_info_single_service_query_bypasses_multi_splitter(monkeypatch):
 
 
 def test_split_price_query_items_splits_on_common_delimiters():
-    from messengers_router.services.core import _split_price_query_items
+    from messengers_router.services._prices_helpers import _split_price_query_items
 
     assert _split_price_query_items("стоимость гепатит в, оак, вич") == ["гепатит в", "оак", "вич"]
     assert _split_price_query_items("цена вич и гепатит") == ["вич", "гепатит"]
@@ -2804,10 +2821,10 @@ def test_ambiguous_price_kind_llm_fallback_respects_exact_link(monkeypatch):
     async def fake_generate(*_args, **_kwargs):
         return '{"kind":"procedure_with_doctor","reason":"exact service match"}'
 
-    monkeypatch.setattr(svc_mod, "generate_text", fake_generate)
+    monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate)
 
     good = run(
-        svc_mod._resolve_ambiguous_price_kind_with_llm(
+        _svc_resolve_ambiguous_price_kind_with_llm(
             "стоимость узи печени",
             [{"serviceName": "УЗИ печени"}],
             has_exact_doctor_link=True,
@@ -2815,7 +2832,7 @@ def test_ambiguous_price_kind_llm_fallback_respects_exact_link(monkeypatch):
         )
     )
     bad = run(
-        svc_mod._resolve_ambiguous_price_kind_with_llm(
+        _svc_resolve_ambiguous_price_kind_with_llm(
             "стоимость узи печени",
             [{"serviceName": "УЗИ печени"}],
             has_exact_doctor_link=False,
@@ -2828,12 +2845,12 @@ def test_ambiguous_price_kind_llm_fallback_respects_exact_link(monkeypatch):
 
 
 def test_extract_price_service_from_query_strips_politeness_tail():
-    assert svc_mod._extract_price_service_from_query("стоимость экг подскажите") == "экг"
+    assert _svc_extract_price_service_from_query("стоимость экг подскажите") == "экг"
 
 
 def test_extract_price_service_from_query_strips_gratitude_prefix():
     assert (
-        svc_mod._extract_price_service_from_query("Спасибо\nПодскажи стоимость общего анализа крови")
+        _svc_extract_price_service_from_query("Спасибо\nПодскажи стоимость общего анализа крови")
         == "общего анализа крови"
     )
 

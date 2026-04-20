@@ -9,19 +9,46 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from agent_logic_2.nayka_api import api_price
+
+from ..policies import handoff_message
+from ..service_phrase import extract_service_phrase
+from ._addresses_helpers import (
+    _addresses_to_branch_payload,
+    _is_procedure_branch_lookup_query,
+    _looks_like_real_address,
+    _static_procedure_addresses,
+)
+from ._common import (
+    _as_int,
+    _get_first_present,
+    _normalise_input,
+    _service_fallback,
+)
+from ._doctors_helpers import (
+    _doctor_role_specialty_match_level,
+    _procedure_query_role_specialty,
+)
+from ._prices_helpers import (
+    SAMARA_PRICE_REGION_ID,
+    _care_setting_addresses_from_price_rows,
+    _rank_price_rows,
+    _select_address_price_rows,
+)
+from ._regions import (
+    _ADDRESS_HINT_RE,
+    _extract_region_phone,
+    _extract_region_work_time,
+    _filter_regions_by_service_flags,
+    _has_explicit_non_samara_regions,
+    _is_non_samara_city_value,
+    _is_samara_city_value,
+    _region_display_name,
+    _region_matches_samara_tokens,
+)
+
 if TYPE_CHECKING:
     from .core import Services
-
-
-def _legacy_module():
-    """Лениво импортирует legacy-модуль, чтобы не создать цикл импортов.
-
-    :return: модуль ``messengers_router.services_legacy``
-    """
-
-    from . import core as legacy
-
-    return legacy
 
 
 async def address_info(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
@@ -33,8 +60,6 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
     :return: словарь с адресами и данными о филиалах
     """
 
-    legacy = _legacy_module()
-
     try:
         regions = await self._ensure_regions_loaded()
     except Exception:
@@ -44,29 +69,29 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
         r for r in regions
         if isinstance(r, dict)
         and (
-            legacy._is_samara_city_value(str(r.get("city") or ""))
-            or "самара" in legacy._normalise_input(str(r.get("name") or ""))
-            or "самара" in legacy._normalise_input(str(r.get("addressForSite") or ""))
+            _is_samara_city_value(str(r.get("city") or ""))
+            or "самара" in _normalise_input(str(r.get("name") or ""))
+            or "самара" in _normalise_input(str(r.get("addressForSite") or ""))
         )
     ]
     appointment_mode = bool(entities.get("__appointment_mode"))
-    branch = legacy._get_first_present(entities, ["region", "branch", "company_unit", "unit", "city"]) or ""
+    branch = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city"]) or ""
     if not branch:
         raw_query = str(query or "").strip()
-        if raw_query and (legacy._looks_like_real_address(raw_query) or legacy._ADDRESS_HINT_RE.search(raw_query)):
+        if raw_query and (_looks_like_real_address(raw_query) or _ADDRESS_HINT_RE.search(raw_query)):
             branch = raw_query
-    branch_q = legacy._normalise_input(branch)
-    service_name = legacy._get_first_present(entities, ["service_name", "test_name"]) or ""
+    branch_q = _normalise_input(branch)
+    service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
     if not service_name:
-        extracted = legacy.extract_service_phrase(query or "")
+        extracted = extract_service_phrase(query or "")
         if extracted:
             service_name = extracted
-    service_q = legacy._normalise_input(service_name)
-    city_for_static = legacy._get_first_present(entities, ["city"])
-    if city_for_static and legacy._is_non_samara_city_value(city_for_static):
-        return legacy._service_fallback(
+    service_q = _normalise_input(service_name)
+    city_for_static = _get_first_present(entities, ["city"])
+    if city_for_static and _is_non_samara_city_value(city_for_static):
+        return _service_fallback(
             note=f"address_info unsupported city: {city_for_static}",
-            handoff_message=legacy.handoff_message("city_not_supported"),
+            handoff_message=handoff_message("city_not_supported"),
             entities=entities,
             reason="city_not_supported",
             extra={"addresses": [], "branches": []},
@@ -83,45 +108,45 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
                 continue
             for addr in (d.get("regions") or d.get("addresses") or []):
                 a = str(addr).strip()
-                if not a or not legacy._looks_like_real_address(a):
+                if not a or not _looks_like_real_address(a):
                     continue
-                allowed_doctor_addresses_norm.add(legacy._normalise_input(a))
+                allowed_doctor_addresses_norm.add(_normalise_input(a))
 
-    if service_q and (appointment_mode or legacy._is_procedure_branch_lookup_query(query, service_q)):
+    if service_q and (appointment_mode or _is_procedure_branch_lookup_query(query, service_q)):
         try:
-            retail_rows = await asyncio.to_thread(legacy.api_price.load_price_by_region, legacy.SAMARA_PRICE_REGION_ID)
+            retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
         except Exception:
             retail_rows = []
         if isinstance(retail_rows, list) and retail_rows:
             care_query = str(service_name or query or "").strip()
-            retail_matches = legacy._select_address_price_rows(
+            retail_matches = _select_address_price_rows(
                 [row for row in retail_rows if isinstance(row, dict)],
                 care_query,
                 limit=10,
                 family_limit=50,
             )
-            care_addresses = legacy._care_setting_addresses_from_price_rows(retail_matches)
+            care_addresses = _care_setting_addresses_from_price_rows(retail_matches)
             if branch_q:
                 care_addresses = [
                     addr for addr in care_addresses
-                    if branch_q in legacy._normalise_input(addr)
+                    if branch_q in _normalise_input(addr)
                 ]
             if care_addresses:
                 return {
                     "addresses": care_addresses,
-                    "branches": legacy._addresses_to_branch_payload(care_addresses, regions),
+                    "branches": _addresses_to_branch_payload(care_addresses, regions),
                     "note": "address_info: priceUnits care-setting",
                     "entities_used": entities,
                 }
 
-    if service_q and legacy._is_procedure_branch_lookup_query(query, service_q):
+    if service_q and _is_procedure_branch_lookup_query(query, service_q):
         procedure_branches = await self._procedure_branches_from_index(service_q, regions)
         if procedure_branches:
             if branch_q:
                 procedure_branches = [
                     b
                     for b in procedure_branches
-                    if branch_q in legacy._normalise_input(str(b.get("address") or ""))
+                    if branch_q in _normalise_input(str(b.get("address") or ""))
                 ]
             if procedure_branches:
                 return {
@@ -132,25 +157,25 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
                 }
 
     if service_q:
-        regions = legacy._filter_regions_by_service_flags(regions, service_q)
+        regions = _filter_regions_by_service_flags(regions, service_q)
 
     addresses: list[str] = []
     branches: list[dict[str, Any]] = []
     for r in regions:
         if not isinstance(r, dict):
             continue
-        rid = legacy._as_int(r.get("id"))
-        disp = legacy._region_display_name(r)
+        rid = _as_int(r.get("id"))
+        disp = _region_display_name(r)
         if not disp:
             continue
         # в выдачу пациенту пускаем только реальные адреса филиалов
-        if not legacy._looks_like_real_address(disp):
+        if not _looks_like_real_address(disp):
             continue
         hay = " | ".join(
             [
-                legacy._normalise_input(disp),
-                legacy._normalise_input(str(r.get("name") or "")),
-                legacy._normalise_input(str(r.get("city") or "")),
+                _normalise_input(disp),
+                _normalise_input(str(r.get("name") or "")),
+                _normalise_input(str(r.get("city") or "")),
             ]
         )
         if branch_q and branch_q not in hay:
@@ -161,8 +186,8 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
                 "id": rid,
                 "address": disp,
                 "city": str(r.get("city") or "").strip(),
-                "phone": legacy._extract_region_phone(r),
-                "work_time": legacy._extract_region_work_time(r),
+                "phone": _extract_region_phone(r),
+                "work_time": _extract_region_work_time(r),
             }
         )
 
@@ -184,7 +209,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
 
         if appointment_mode and allowed_doctor_addresses_norm:
             def _is_doctor_capable(addr: str) -> bool:
-                n = legacy._normalise_input(addr)
+                n = _normalise_input(addr)
                 for x in allowed_doctor_addresses_norm:
                     if n == x or n in x or x in n:
                         return True
@@ -218,9 +243,9 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
             a = str(addr).strip()
             if not a:
                 continue
-            if not legacy._looks_like_real_address(a):
+            if not _looks_like_real_address(a):
                 continue
-            if branch_q and branch_q not in legacy._normalise_input(a):
+            if branch_q and branch_q not in _normalise_input(a):
                 continue
             fallback.append(a)
     return {
@@ -244,9 +269,7 @@ async def _procedure_branches_from_index(
     :return: список branches в формате address_info
     """
 
-    legacy = _legacy_module()
-
-    role_specialty = legacy._procedure_query_role_specialty(service_q)
+    role_specialty = _procedure_query_role_specialty(service_q)
     if role_specialty:
         doctors = await self._ensure_doctors_cache_loaded()
         samara_tokens = await self._samara_region_tokens()
@@ -254,32 +277,32 @@ async def _procedure_branches_from_index(
         for doc in doctors:
             if not isinstance(doc, dict):
                 continue
-            if legacy._doctor_role_specialty_match_level(doc, role_specialty) <= 0:
+            if _doctor_role_specialty_match_level(doc, role_specialty) <= 0:
                 continue
             regions_src = [str(x).strip() for x in (doc.get("regions") or []) if str(x).strip()]
-            if legacy._has_explicit_non_samara_regions(regions_src):
+            if _has_explicit_non_samara_regions(regions_src):
                 continue
             for addr in regions_src:
-                if not legacy._looks_like_real_address(addr):
+                if not _looks_like_real_address(addr):
                     continue
-                if samara_tokens and not legacy._region_matches_samara_tokens(addr, samara_tokens):
+                if samara_tokens and not _region_matches_samara_tokens(addr, samara_tokens):
                     continue
                 if addr not in role_addresses:
                     role_addresses.append(addr)
         if role_addresses:
-            return legacy._addresses_to_branch_payload(role_addresses, regions)
+            return _addresses_to_branch_payload(role_addresses, regions)
 
     rows = await self._ensure_procedure_rows_loaded()
-    ranked = legacy._rank_price_rows(rows, service_q, limit=200)
+    ranked = _rank_price_rows(rows, service_q, limit=200)
 
     addresses: list[str] = []
     for row in ranked:
         addr = str(row.get("regionName") or "").strip()
-        if not addr or not legacy._looks_like_real_address(addr):
+        if not addr or not _looks_like_real_address(addr):
             continue
         if addr not in addresses:
             addresses.append(addr)
 
     if not addresses:
-        addresses = legacy._static_procedure_addresses(service_q)
-    return legacy._addresses_to_branch_payload(addresses, regions)
+        addresses = _static_procedure_addresses(service_q)
+    return _addresses_to_branch_payload(addresses, regions)

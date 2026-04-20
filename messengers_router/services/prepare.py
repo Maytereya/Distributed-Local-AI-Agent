@@ -14,22 +14,41 @@ from agent_logic_1 import meilisearch_client as meilisearch
 from agent_logic_2.nayka_api import api_service_info
 from converters import html_cleaner
 
+from .. import llm_runtime as llm_runtime_mod
+from ..llm_doesnt_work_fallback import build_prepare_fallback_answer
+from . import _common as _common_mod
+from ._common import (
+    _get_first_present,
+    _is_meili_error_text,
+    _is_meili_no_matches_text,
+)
+from ._prepare import (
+    _PREPARE_RELEVANCE_VERDICT_IRRELEVANT,
+    _PREPARE_RELEVANCE_VERDICT_RELEVANT,
+    _PrepareCandidate,
+    _dedupe_prepare_candidates,
+    _has_prepare_strong_hints,
+    _is_prepare_content_actionable,
+    _is_prepare_service_info_usable,
+    _is_prepare_wrap_output_usable,
+    _parse_prepare_relevance_validator,
+    _prepare_clarify_response,
+    _prepare_fast_relevance_score,
+    _prepare_query_variants,
+    _prepare_relevance_gate,
+    _prepare_relevance_prompt,
+    _prepare_roots_coverage,
+    _prepare_service_info_queries,
+    _prepare_term_roots,
+    _prepare_wrap_clean,
+    _prepare_wrap_prompt,
+)
+
 if TYPE_CHECKING:
     from .core import Services
 
 
 logger = logging.getLogger(__name__)
-
-
-def _legacy_module():
-    """Лениво импортирует legacy-модуль, чтобы не создать цикл импортов.
-
-    :return: модуль ``messengers_router.services_legacy``
-    """
-
-    from . import core as legacy
-
-    return legacy
 
 
 # ---------------------------------------------------------------------------
@@ -50,12 +69,10 @@ async def _prepare_llm_validate_candidate(
     :return: (релевантно, confidence, reason)
     """
 
-    legacy = _legacy_module()
-
-    if not legacy._runtime_bool("MR_PREPARE_RELEVANCE_LLM_ENABLED", True):
+    if not _common_mod._runtime_bool("MR_PREPARE_RELEVANCE_LLM_ENABLED", True):
         return False, 0.0, "llm_disabled"
 
-    prompt = legacy._prepare_relevance_prompt(
+    prompt = _prepare_relevance_prompt(
         query,
         candidate.text,
         source_kind=candidate.source,
@@ -64,20 +81,20 @@ async def _prepare_llm_validate_candidate(
     if not prompt:
         return False, 0.0, "empty_prompt"
 
-    timeout_s = legacy._runtime_int(
+    timeout_s = _common_mod._runtime_int(
         "MR_PREPARE_RELEVANCE_LLM_TIMEOUT_S",
         15,
         min_value=1,
         max_value=60,
     )
-    queue_timeout_ms = legacy._runtime_int(
+    queue_timeout_ms = _common_mod._runtime_int(
         "MR_PREPARE_RELEVANCE_LLM_QUEUE_TIMEOUT_MS",
         3000,
         min_value=200,
         max_value=20000,
     )
     try:
-        raw = await legacy.generate_text(
+        raw = await llm_runtime_mod.generate_text(
             prompt,
             timeout_s=timeout_s,
             queue_timeout_ms=queue_timeout_ms,
@@ -88,7 +105,7 @@ async def _prepare_llm_validate_candidate(
         logger.info("prepare relevance llm skipped: %s", e.__class__.__name__)
         return False, 0.0, "llm_unavailable"
 
-    return legacy._parse_prepare_relevance_validator(str(raw or ""))
+    return _parse_prepare_relevance_validator(str(raw or ""))
 
 
 async def _pick_prepare_candidate(
@@ -104,25 +121,23 @@ async def _pick_prepare_candidate(
     :return: лучший релевантный кандидат или None
     """
 
-    legacy = _legacy_module()
-
-    ranked = legacy._dedupe_prepare_candidates(candidates, limit=12)
+    ranked = _dedupe_prepare_candidates(candidates, limit=12)
     if not ranked:
         return None
 
-    max_llm_checks = legacy._runtime_int(
+    max_llm_checks = _common_mod._runtime_int(
         "MR_PREPARE_RELEVANCE_LLM_MAX_CHECKS",
         2,
         min_value=1,
         max_value=8,
     )
     llm_checks = 0
-    query_roots = legacy._prepare_term_roots(query)
+    query_roots = _prepare_term_roots(query)
     for idx, cand in enumerate(ranked):
         next_score = ranked[idx + 1].score if idx + 1 < len(ranked) else 0.0
         margin = max(0.0, float(cand.score) - float(next_score))
         cand.margin = margin
-        gate = legacy._prepare_relevance_gate(cand.score, cand.margin)
+        gate = _prepare_relevance_gate(cand.score, cand.margin)
         if gate == "accept":
             cand.note = (cand.note + "; " if cand.note else "") + "prepare_fast_gate=accept"
             return cand
@@ -131,9 +146,9 @@ async def _pick_prepare_candidate(
             continue
 
         if cand.source == "serviceInfoAll" and query_roots:
-            title_roots = legacy._prepare_term_roots(cand.service_title)
-            title_cov = legacy._prepare_roots_coverage(query_roots, title_roots)
-            if title_cov >= 0.99 and legacy._has_prepare_strong_hints(cand.text):
+            title_roots = _prepare_term_roots(cand.service_title)
+            title_cov = _prepare_roots_coverage(query_roots, title_roots)
+            if title_cov >= 0.99 and _has_prepare_strong_hints(cand.text):
                 cand.note = (
                     (cand.note + "; " if cand.note else "")
                     + "prepare_fast_gate=accept_service_title_anchor"
@@ -148,7 +163,7 @@ async def _pick_prepare_candidate(
         ok, confidence, reason = await self._prepare_llm_validate_candidate(query, cand)
         cand.note = (
             (cand.note + "; " if cand.note else "")
-            + f"prepare_llm={legacy._PREPARE_RELEVANCE_VERDICT_RELEVANT if ok else legacy._PREPARE_RELEVANCE_VERDICT_IRRELEVANT}"
+            + f"prepare_llm={_PREPARE_RELEVANCE_VERDICT_RELEVANT if ok else _PREPARE_RELEVANCE_VERDICT_IRRELEVANT}"
             + f"({confidence:.2f})"
             + (f":{reason}" if reason else "")
         )
@@ -159,9 +174,9 @@ async def _pick_prepare_candidate(
         # если LLM отверг из-за "смешанности", но у кандидата высокий fast-score,
         # полное покрытие корней запроса и actionable-текст, пропускаем в wrapper.
         if cand.source == "main_index" and query_roots:
-            body_roots = legacy._prepare_term_roots(cand.text)
-            body_cov = legacy._prepare_roots_coverage(query_roots, body_roots)
-            override_score = legacy._runtime_float(
+            body_roots = _prepare_term_roots(cand.text)
+            body_cov = _prepare_roots_coverage(query_roots, body_roots)
+            override_score = _common_mod._runtime_float(
                 "MR_PREPARE_MAIN_INDEX_OVERRIDE_SCORE",
                 0.70,
                 min_value=0.30,
@@ -170,7 +185,7 @@ async def _pick_prepare_candidate(
             if (
                 cand.score >= override_score
                 and body_cov >= 0.99
-                and legacy._is_prepare_content_actionable(cand.text)
+                and _is_prepare_content_actionable(cand.text)
             ):
                 cand.note = (
                     (cand.note + "; " if cand.note else "")
@@ -179,7 +194,7 @@ async def _pick_prepare_candidate(
                 return cand
 
         if reason in {"llm_unavailable", "llm_non_json", "llm_disabled", "empty_prompt"}:
-            fallback_score = legacy._runtime_float(
+            fallback_score = _common_mod._runtime_float(
                 "MR_PREPARE_RELEVANCE_LLM_UNAVAILABLE_ACCEPT_SCORE",
                 0.40,
                 min_value=0.10,
@@ -204,12 +219,10 @@ async def _prepare_candidates_from_analysis_api_cache(
     :return: список кандидатов
     """
 
-    legacy = _legacy_module()
-
-    entity_query = legacy._get_first_present(entities, ["test_name", "service_name"]) or ""
-    if not legacy._prepare_term_roots(" ".join(x for x in (query, entity_query) if x)):
+    entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
+    if not _prepare_term_roots(" ".join(x for x in (query, entity_query) if x)):
         return []
-    queries = legacy._prepare_service_info_queries(query, entity_query)
+    queries = _prepare_service_info_queries(query, entity_query)
     if not queries:
         return []
 
@@ -230,7 +243,7 @@ async def _prepare_candidates_from_analysis_api_cache(
         best_score = 0.0
         best_query = ""
         for query_variant in queries:
-            score = legacy._prepare_fast_relevance_score(query_variant, preparation, title=service_name)
+            score = _prepare_fast_relevance_score(query_variant, preparation, title=service_name)
             if score > best_score:
                 best_score = score
                 best_query = query_variant
@@ -239,7 +252,7 @@ async def _prepare_candidates_from_analysis_api_cache(
             continue
 
         candidates.append(
-            legacy._PrepareCandidate(
+            _PrepareCandidate(
                 source="serviceInfoAll",
                 text=preparation,
                 query_variant=best_query or query,
@@ -249,7 +262,7 @@ async def _prepare_candidates_from_analysis_api_cache(
             )
         )
 
-    return legacy._dedupe_prepare_candidates(candidates, limit=16)
+    return _dedupe_prepare_candidates(candidates, limit=16)
 
 
 async def _maybe_compact_prepare_text(
@@ -265,15 +278,13 @@ async def _maybe_compact_prepare_text(
     :return: (итоговый текст, статус wrap, причина/диагностика)
     """
 
-    legacy = _legacy_module()
-
     text = str(source_text or "").strip()
     if not text:
         return "", "empty_source", "no_source_text"
-    if not legacy._runtime_bool("MR_PREPARE_LLM_WRAP_ENABLED", True):
+    if not _common_mod._runtime_bool("MR_PREPARE_LLM_WRAP_ENABLED", True):
         return text, "disabled", "llm_wrap_disabled"
 
-    min_chars = legacy._runtime_int(
+    min_chars = _common_mod._runtime_int(
         "MR_PREPARE_LLM_WRAP_MIN_CHARS",
         700,
         min_value=120,
@@ -282,7 +293,7 @@ async def _maybe_compact_prepare_text(
     if len(text) < min_chars:
         return text, "short_source", "below_min_chars"
 
-    source_max_chars = legacy._runtime_int(
+    source_max_chars = _common_mod._runtime_int(
         "MR_PREPARE_LLM_WRAP_SOURCE_MAX_CHARS",
         9000,
         min_value=500,
@@ -291,16 +302,16 @@ async def _maybe_compact_prepare_text(
     source_for_prompt = text[:source_max_chars].strip()
 
     def _fallback_or_source(reason: str) -> tuple[str, str, str]:
-        compacted = legacy.build_prepare_fallback_answer(
+        compacted = build_prepare_fallback_answer(
             query,
             source_for_prompt,
-            max_chars=legacy._runtime_int(
+            max_chars=_common_mod._runtime_int(
                 "MR_PREPARE_FALLBACK_MAX_CHARS",
                 1600,
                 min_value=400,
                 max_value=4000,
             ),
-            max_points=legacy._runtime_int(
+            max_points=_common_mod._runtime_int(
                 "MR_PREPARE_FALLBACK_MAX_POINTS",
                 7,
                 min_value=3,
@@ -313,24 +324,24 @@ async def _maybe_compact_prepare_text(
             return text, "fallback_not_shorter", reason
         return text, "fallback_failed", reason
 
-    prompt = legacy._prepare_wrap_prompt(query, source_for_prompt)
+    prompt = _prepare_wrap_prompt(query, source_for_prompt)
     if not prompt:
         return _fallback_or_source("empty_prompt")
 
-    timeout_s = legacy._runtime_int(
+    timeout_s = _common_mod._runtime_int(
         "MR_PREPARE_LLM_WRAP_TIMEOUT_S",
         30,
         min_value=3,
         max_value=90,
     )
-    queue_timeout_ms = legacy._runtime_int(
+    queue_timeout_ms = _common_mod._runtime_int(
         "MR_PREPARE_LLM_WRAP_QUEUE_TIMEOUT_MS",
         6000,
         min_value=300,
         max_value=30000,
     )
     try:
-        raw = await legacy.generate_text(
+        raw = await llm_runtime_mod.generate_text(
             prompt,
             timeout_s=timeout_s,
             queue_timeout_ms=queue_timeout_ms,
@@ -340,17 +351,15 @@ async def _maybe_compact_prepare_text(
         logger.info("prepare llm wrap skipped: %s", e.__class__.__name__)
         return _fallback_or_source(f"llm_wrap_error:{e.__class__.__name__}")
 
-    wrapped = legacy._prepare_wrap_clean(str(raw or ""))
-    if not legacy._is_prepare_wrap_output_usable(query, source_for_prompt, wrapped):
+    wrapped = _prepare_wrap_clean(str(raw or ""))
+    if not _is_prepare_wrap_output_usable(query, source_for_prompt, wrapped):
         return _fallback_or_source("llm_wrap_invalid_output")
     return wrapped, "llm_wrapped", "ok"
 
 
 async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
-    legacy = _legacy_module()
-
     raw_query = str(query or "").strip()
-    entity_query = legacy._get_first_present(entities, ["test_name", "service_name"]) or ""
+    entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
     # Для нового вопроса берем текст пользователя, чтобы не залипала старая услуга из контекста.
     q = raw_query or entity_query
     if not q:
@@ -360,7 +369,7 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
     api_best = await self._pick_prepare_candidate(q, api_candidates)
     if api_best:
         api_cached_cleaned = html_cleaner.strip_html(api_best.text).strip()
-        if not legacy._is_prepare_service_info_usable(q, api_cached_cleaned, title=api_best.service_title):
+        if not _is_prepare_service_info_usable(q, api_cached_cleaned, title=api_best.service_title):
             api_best = None
         else:
             api_best.text = api_cached_cleaned
@@ -374,7 +383,7 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
             "prepare_wrap_reason": wrap_reason,
         }
 
-    variants = legacy._prepare_query_variants(q, entity_query)
+    variants = _prepare_query_variants(q, entity_query)
     if not variants:
         variants = [q]
 
@@ -396,11 +405,11 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
             saw_service_error = True
             continue
 
-        if legacy._is_meili_error_text(cleaned):
+        if _is_meili_error_text(cleaned):
             saw_service_error = True
             continue
 
-        if legacy._is_meili_no_matches_text(cleaned):
+        if _is_meili_no_matches_text(cleaned):
             saw_no_matches = True
             continue
 
@@ -409,13 +418,13 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
 
         saw_non_empty = True
         score = max(
-            legacy._prepare_fast_relevance_score(q, cleaned),
-            legacy._prepare_fast_relevance_score(candidate, cleaned),
+            _prepare_fast_relevance_score(q, cleaned),
+            _prepare_fast_relevance_score(candidate, cleaned),
         )
         if score <= 0.0:
             continue
         meili_candidates.append(
-            legacy._PrepareCandidate(
+            _PrepareCandidate(
                 source="main_index",
                 text=cleaned,
                 query_variant=candidate,
@@ -436,12 +445,12 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
         }
 
     if saw_non_empty:
-        return legacy._prepare_clarify_response(q, entities, note="prepare: weak relevance")
+        return _prepare_clarify_response(q, entities, note="prepare: weak relevance")
 
     if saw_no_matches or not saw_service_error:
-        return legacy._prepare_clarify_response(q, entities, note="prepare: no matches")
+        return _prepare_clarify_response(q, entities, note="prepare: no matches")
 
-    return legacy._prepare_clarify_response(q, entities, note="prepare source unavailable")
+    return _prepare_clarify_response(q, entities, note="prepare source unavailable")
 
 
 async def _prepare_from_analysis_api_cache(

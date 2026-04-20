@@ -16,290 +16,32 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime  # noqa: F401 — re-exported for services/doctors.py via legacy.datetime
 from dataclasses import dataclass, field
-from difflib import get_close_matches  # noqa: F401 — re-exported for services/doctors.py via legacy.get_close_matches
 from typing import Any, Optional
 
-from agent_logic_1 import meilisearch_client as meilisearch  # noqa: F401 — re-exported for services/main_index.py, services/news.py
+from agent_logic_1 import meilisearch_client as meilisearch  # noqa: F401 — tests patch svc_mod.meilisearch
 from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info
-from converters import html_cleaner  # noqa: F401 — re-exported for services/main_index.py via legacy.html_cleaner
+from converters import html_cleaner  # noqa: F401 — tests patch svc_mod.html_cleaner
 from schedule_ttl_cache import AsyncListTTLStaleCache
 
-# Re-exported for domain modules (services/doctors.py etc.) that access these via
-# ``_legacy_module().<name>``. Ruff cannot see the dynamic access, hence noqa.
-from ..doctor_name_port import (  # noqa: F401
-    extract_doctor_name_candidate,
-    resolve_schedule_surname,
-    surname_variants,
-)
-from ..llm_doesnt_work_fallback import build_prepare_fallback_answer  # noqa: F401 — re-exported for services/prepare.py
-from ..llm_runtime import generate_text  # noqa: F401 — re-exported for services/*.py via legacy.generate_text (tests monkey-patch svc_mod.generate_text)
-from ..policies import handoff_message  # noqa: F401 — re-exported for services/*.py via legacy.handoff_message
-from ..service_phrase import extract_service_phrase  # noqa: F401 — re-exported for services/doctors.py, services/addresses.py
-
-# Stage 20 cluster 1 — common helpers moved to services/_common.py.
-# Re-exported here so internal references and external imports
-# (e.g. ``services_legacy.DOCTORS_TOP_N`` from services/doctors.py) keep working.
-from ._common import (  # noqa: F401
-    DOCTORS_TOP_N,
+from ._common import (
     _as_int,
-    _coerce_top_n,
-    _dedupe_str,
-    _get_first_present,
-    _has_nearest_hint,
-    _is_main_index_relevant,
-    _is_meili_error_text,
-    _is_meili_no_matches_text,
     _normalise_catalog_text,
     _normalise_input,
     _runtime_bool,
-    _runtime_float,
     _runtime_int,
-    _service_fallback,
-    _tax_doc_guidance_response,
 )
-
-# Stage 20 cluster 2 — prepare helpers moved to services/_prepare.py.
-# Re-exported here so internal references keep working.
-from ._prepare import (  # noqa: E402, F401
-    _PREPARE_RELEVANCE_VERDICT_IRRELEVANT,
-    _PREPARE_RELEVANCE_VERDICT_RELEVANT,
-    _PrepareCandidate,
-    _dedupe_prepare_candidates,
-    _has_prepare_strong_hints,
-    _is_prepare_content_actionable,
-    _is_prepare_requested_in_price_query,
-    _is_prepare_service_info_usable,
-    _is_prepare_wrap_output_usable,
-    _parse_prepare_relevance_validator,
-    _prepare_clarify_response,
-    _prepare_fast_relevance_score,
-    _prepare_query_variants,
-    _prepare_relevance_gate,
-    _prepare_relevance_prompt,
-    _prepare_roots_coverage,
-    _prepare_roots_match,
-    _prepare_service_info_queries,
-    _prepare_subject_hint,
-    _prepare_term_roots,
-    _prepare_wrap_clean,
-    _prepare_wrap_prompt,
+from ._addresses_helpers import _looks_like_real_address
+from ._prices_helpers import (
+    SAMARA_PRICE_REGION_ID,
+    match_compound_price_service_option,  # noqa: F401 — public API re-export for messengers_router.services
+    resolve_price_service_name_from_catalog,  # noqa: F401 — public API re-export for messengers_router.services
 )
-
-# Stage 20 cluster 3 — region/city helpers moved to services/_regions.py.
-# Re-exported here so internal references and external callers keep working.
-from ._regions import (  # noqa: E402, F401
-    _ADDRESS_HINT_RE,
-    _CITY_PREFIX_RE,
-    _PHONE_EXTRACT_RE,
-    _compact_region_text,
-    _extract_city_token,
-    _extract_region_phone,
-    _extract_region_work_time,
-    _filter_regions_by_service_flags,
-    _has_explicit_non_samara_regions,
+from ._regions import (
     _is_explicit_non_samara_region,
-    _is_non_samara_city_value,
     _is_samara_city_value,
-    _norm_city,
-    _normalize_region_text,
     _region_display_name,
     _region_matches_samara_tokens,
-    _schedule_regions_with_free_slots,
-)
-
-# Stage 20 cluster 4 — address/branch helpers moved to services/_addresses_helpers.py.
-# Re-exported here so internal references and external callers keep working.
-from ._addresses_helpers import (  # noqa: E402, F401
-    _NONBOOKABLE_POINTS_PATH,
-    _PRICE_HOMECODE_DOTTED_RE,
-    _PRICE_HOMECODE_NUM_RE,
-    _PROCEDURE_BRANCH_LOOKUP_RE,
-    _STATIC_PROCEDURE_BRANCH_OVERRIDES,
-    _addresses_to_branch_payload,
-    _extract_homecode_query,
-    _is_procedure_branch_lookup_query,
-    _load_nonbookable_points,
-    _looks_like_real_address,
-    _nonbookable_needs,
-    _soft_address_match,
-    _static_nonbookable_branches,
-    _static_procedure_addresses,
-)
-
-# Stage 20 cluster 6 — doctor/specialty/service helpers moved to
-# services/_doctors_helpers.py. Re-exported here so internal references and
-# external callers keep working.
-from ._doctors_helpers import (  # noqa: E402, F401
-    _CATALOG_DOCTOR_STOPWORDS,
-    _CATALOG_SERVICE_LEADIN_RE,
-    _CATALOG_SERVICE_SIGNAL_RE,
-    _CATALOG_SERVICE_STOPWORDS,
-    _CATALOG_SERVICE_TRAILING_TIME_RE,
-    _CATALOG_WORD_RE,
-    _FIO_TOKEN_RE,
-    _SCHEDULE_QUERY_RE,
-    _SCHEDULE_SPECIALTY_TOKENS,
-    _SERVICE_FILTER_STOPWORDS,
-    _SERVICE_QUERY_SIGNAL_RE,
-    _SPECIALTY_PRIORITY_SURNAMES,
-    _UZI_FALSE_POSITIVE_RE,
-    _UZI_LINE_RE,
-    _UZI_PROCEDURE_HINT_RE,
-    _UZI_ROLE_HINT_RE,
-    _classify_catalog_service_kind,
-    _collect_role_unit_names,
-    _compact_specialization,
-    _dedupe_doctors_by_fio,
-    _detect_service_kind,
-    _doctor_catalog_query_candidates,
-    _doctor_main_payload,
-    _doctor_matches_fio,
-    _doctor_matches_primary_specialty,
-    _doctor_matches_service,
-    _doctor_matches_specialty,
-    _doctor_role_specialty_match_level,
-    _doctor_sort_key,
-    _extract_specialties_from_text,
-    _extract_specialty_from_text,
-    _fio_tokens,
-    _has_reliable_doctor_service_link,
-    _is_clean_consultation_row_name,
-    _is_consultation_service_query,
-    _is_direct_specialty_text_match,
-    _is_lab_like_service_name,
-    _is_price_service_noise_token,
-    _is_role_specialty_query,
-    _is_schedule_no_slots_text,
-    _is_uzi_query_text,
-    _iter_slot_datetimes,
-    _iter_unit_link_specs,
-    _looks_like_schedule_specialty_token,
-    _matches_specialty_terms,
-    _matches_uzi_doctor_profile,
-    _meaningful_price_service_tokens,
-    _pick_display_specialization,
-    _procedure_query_role_specialty,
-    _schedule_payload_matches_doctor,
-    _select_effective_price_service_name,
-    _service_catalog_query_candidates,
-    _service_name_allows_specialty,
-    _service_name_matches_specialty,
-    _service_query_matches,
-    _service_tokens,
-    _should_prefer_retail_query_candidate,
-    _specialization_matches_specialty,
-    _specialty_equivalent,
-    _specialty_label_for_doctor,
-    _specialty_norm,
-    _specialty_priority_rank,
-    _specialty_terms,
-    _split_spec_lines,
-    _stem_service_token,
-)
-
-# Stage 20 cluster 5 — price helpers moved to services/_prices_helpers.py.
-# Re-exported here so internal references and external callers keep working.
-from ._prices_helpers import (  # noqa: E402, F401
-    SAMARA_PRICE_REGION_ID,
-    _DOCTOR_PRICE_HINT_RE,
-    _DOCTOR_SERVICE_HINT_RE,
-    _LAB_DEADLINE_HINT_RE,
-    _LAB_SERVICE_HINT_RE,
-    _MULTI_PRICE_SERVICE_HINT_RE,
-    _MULTI_PRICE_SPLIT_RE,
-    _OAK_ALIAS_RE,
-    _OAK_CANONICAL_BASE_RE,
-    _OAK_HOMEVISIT_RE,
-    _OAK_PHRASE_RE,
-    _PRICE_CAPILLARY_QUERY_RE,
-    _PRICE_CAPILLARY_ROW_RE,
-    _PRICE_CHILD_QUERY_RE,
-    _PRICE_CHILD_ROW_RE,
-    _PRICE_CITO_QUERY_RE,
-    _PRICE_CITO_ROW_RE,
-    _PRICE_COMPOUND_LAB_FRAGMENT_RE,
-    _PRICE_CONSULT_EXCLUDE_RE,
-    _PRICE_CONSULT_HINT_RE,
-    _PRICE_DIAGNOSTIC_NO_DOCTOR_RE,
-    _PRICE_DOCTOR_SUFFIX_RE,
-    _PRICE_GENERIC_FAMILY_ROOT_TOKENS,
-    _PRICE_GENERIC_SERVICE_TOKENS,
-    _PRICE_GENETIC_QUERY_RE,
-    _PRICE_GENETIC_ROW_RE,
-    _PRICE_HOME_QUERY_RE,
-    _PRICE_HOME_ROW_RE,
-    _PRICE_KMN_QUERY_RE,
-    _PRICE_KMN_ROW_RE,
-    _PRICE_PACKAGE_QUERY_RE,
-    _PRICE_PACKAGE_ROW_RE,
-    _PRICE_PROCEDURE_LIKE_RE,
-    _PRICE_QUERY_CANONICAL_TOKENS,
-    _PRICE_QUERY_SERVICE_NOISE_TOKENS,
-    _PRICE_QUERY_STOPWORDS,
-    _PRICE_REPEAT_QUERY_RE,
-    _PRICE_REPEAT_ROW_RE,
-    _PRICE_REQUEST_RE,
-    _PRICE_SERVICE_ALIASES,
-    _PRICE_SERVICE_PREFIX_RE,
-    _PRICE_SHORT_TOKEN_WHITELIST,
-    _PRICE_SHOW_ALL_RE,
-    _PRICE_TOKEN_RE,
-    _VITAMIN_CODE_MAP,
-    _annotate_price_rows_with_care_context,
-    _augment_price_tokens,
-    _build_compound_price_clarify_payload,
-    _build_family_candidate_rows,
-    _build_multi_price_payload,
-    _build_oak_canonical_payload,
-    _build_price_catalog_queries,
-    _build_price_family_payload,
-    _build_price_kind_ambiguous_prompt,
-    _care_setting_addresses_from_price_rows,
-    _compound_price_secondary_lab_service,
-    _dedupe_price_queries,
-    _dedupe_price_rows,
-    _expand_family_rows_by_root_token,
-    _extract_price_service_from_query,
-    _extract_vitamin_designator,
-    _family_query_root_tokens,
-    _family_variant_base_names,
-    _has_specific_price_tokens,
-    _is_city_only_reply,
-    _is_family_query_candidate,
-    _is_generic_uzi_price_request,
-    _is_lab_price_query_for_catalog,
-    _is_oak_base_query,
-    _is_price_match_strong,
-    _is_price_show_all_request,
-    _is_strong_doctor_price_match,
-    _lab_price_variant_flags,
-    _normalise_family_variant_name,
-    _normalise_price_token,
-    _parse_price_kind_ambiguous_result,
-    _price_alias_candidates,
-    _price_family_payload_from_context,
-    _price_query_tokens,
-    _price_row_modifier_penalty,
-    _price_row_score,
-    _query_nonbase_price_flags,
-    _query_price_variant_flags,
-    _rank_price_rows,
-    _resolve_ambiguous_price_kind_with_llm,
-    _resolve_best_price_row_from_queries,
-    _resolve_multi_price_items,
-    _resolve_price_alias_from_catalog,
-    _row_nonbase_price_flags,
-    _score_price_rows,
-    _select_address_price_rows,
-    _select_family_variant_rows,
-    _select_oak_canonical_rows,
-    _select_patient_price_rows,
-    _should_prefer_current_price_query_over_context,
-    _split_price_query_items,
-    match_compound_price_service_option,
-    resolve_price_service_name_from_catalog,
 )
 
 logger = logging.getLogger(__name__)

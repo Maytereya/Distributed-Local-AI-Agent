@@ -13,19 +13,17 @@ from urllib.parse import quote_from_bytes
 
 from agent_logic_2.nayka_api import api_nayka, api_price
 
+from ..policies import handoff_message
+from ._common import (
+    _as_int,
+    _get_first_present,
+    _normalise_input,
+    _service_fallback,
+)
+from ._prices_helpers import SAMARA_PRICE_REGION_ID, _rank_price_rows
+
 if TYPE_CHECKING:
     from .core import Services
-
-
-def _legacy_module():
-    """Лениво импортирует legacy-модуль, чтобы не создать цикл импортов.
-
-    :return: модуль ``messengers_router.services_legacy``
-    """
-
-    from . import core as legacy
-
-    return legacy
 
 
 def _cp1251_urlencode(value: str) -> str:
@@ -47,24 +45,23 @@ def _extract_result_query_fields(entities: dict[str, Any], query: str) -> dict[s
     :return: словарь с фамилией, годом, филиалом, номером и языком
     """
 
-    legacy = _legacy_module()
     _ = query
-    surname = legacy._get_first_present(entities, ["surname", "result_surname"])
-    filial = legacy._get_first_present(entities, ["filial", "result_filial"])
+    surname = _get_first_present(entities, ["surname", "result_surname"])
+    filial = _get_first_present(entities, ["filial", "result_filial"])
     year_raw = entities.get("year")
     number_raw = entities.get("number")
 
     if number_raw is None:
         number_raw = entities.get("order_id")
 
-    year = legacy._as_int(year_raw)
-    number = legacy._as_int(number_raw)
+    year = _as_int(year_raw)
+    number = _as_int(number_raw)
     return {
         "surname": str(surname or "").strip(),
         "year": year,
         "filial": str(filial or "").strip(),
         "number": number,
-        "lang": legacy._get_first_present(entities, ["lang", "result_lang"]) or "ru",
+        "lang": _get_first_present(entities, ["lang", "result_lang"]) or "ru",
     }
 
 
@@ -75,11 +72,10 @@ def _build_public_result_link(fields: dict[str, Any]) -> str | None:
     :return: готовая ссылка или ``None``, если данных недостаточно
     """
 
-    legacy = _legacy_module()
     surname = str(fields.get("surname") or "").strip()
     filial = str(fields.get("filial") or "").strip()
-    year = legacy._as_int(fields.get("year"))
-    number = legacy._as_int(fields.get("number"))
+    year = _as_int(fields.get("year"))
+    number = _as_int(fields.get("number"))
     if not surname or not filial or year is None or number is None:
         return None
     return (
@@ -121,28 +117,27 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
     :return: payload со списком анализов или уточняющим сообщением
     """
 
-    legacy = _legacy_module()
-    test_name = legacy._get_first_present(entities, ["test_name", "service_name"]) or query
-    needle = legacy._normalise_input(test_name)
+    test_name = _get_first_present(entities, ["test_name", "service_name"]) or query
+    needle = _normalise_input(test_name)
     if not needle:
         return _test_assist_clarify_response(entities, note="test_assist: no test query")
 
     try:
-        price_rows = await asyncio.to_thread(api_price.load_price_by_region, legacy.SAMARA_PRICE_REGION_ID)
+        price_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
     except Exception:
         return _test_assist_clarify_response(entities, note="test_assist source unavailable")
-    matches = legacy._rank_price_rows([p for p in price_rows if isinstance(p, dict)], test_name, limit=10)
+    matches = _rank_price_rows([p for p in price_rows if isinstance(p, dict)], test_name, limit=10)
 
     if not matches:
         return _test_assist_clarify_response(
             entities,
-            note=f"test_assist: no matches ({legacy.SAMARA_PRICE_REGION_ID})",
+            note=f"test_assist: no matches ({SAMARA_PRICE_REGION_ID})",
         )
 
     return {
         "tests": matches,
         "promos": [],
-        "note": f"test_assist: priceByRegion({legacy.SAMARA_PRICE_REGION_ID})",
+        "note": f"test_assist: priceByRegion({SAMARA_PRICE_REGION_ID})",
         "entities_used": entities,
     }
 
@@ -156,12 +151,11 @@ async def test_result_status(self: "Services", query: str, entities: dict[str, A
     :return: payload с готовностью результата или fallback-ответом
     """
 
-    legacy = _legacy_module()
     _ = self
 
     def _result_fallback(
         note: str,
-        message: str = legacy.handoff_message("service_error_results"),
+        message: str = handoff_message("service_error_results"),
     ) -> dict[str, Any]:
         """Формирует единый fallback при ошибке получения результатов.
 
@@ -170,7 +164,7 @@ async def test_result_status(self: "Services", query: str, entities: dict[str, A
         :return: fallback-payload с ``ready=False``
         """
 
-        return legacy._service_fallback(
+        return _service_fallback(
             note=note,
             handoff_message=message,
             entities=entities,
@@ -218,7 +212,7 @@ async def test_result_status(self: "Services", query: str, entities: dict[str, A
     if not link:
         return _result_fallback(
             "result_link_build_failed",
-            legacy.handoff_message("service_error_result_link"),
+            handoff_message("service_error_result_link"),
         )
 
     return {
