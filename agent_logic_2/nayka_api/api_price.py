@@ -408,17 +408,101 @@ def _resolve_price_unit_root_id(price_unit_id: Any, units_index: Dict[int, Dict[
     return None
 
 
+def build_service_address_index(
+    rows: Optional[Iterable[Dict[str, Any]]] = None,
+) -> Dict[str, List[str]]:
+    """
+    Строит индекс реальных адресов оказания услуги по данным doctor_prices.
+
+    Ключи: `hc:<serviceHomecode>` и `id:<serviceId>`; значение — список уникальных
+    адресов (regionName) в порядке появления. Позволяет динамически определить,
+    где реально оказывается конкретная услуга, вместо фиксированного адреса по
+    типу care-setting.
+
+    :param rows: опциональный список строк doctor_prices; если не передан, читается
+                 кэш на диске без форс-refresh (чтобы не блокировать реактивный код)
+    :return: словарь ключ -> список адресов
+    """
+    if rows is None:
+        src: List[Dict[str, Any]] = []
+        fn = doctor_prices_path()
+        candidate: Path | None = fn if fn.exists() else None
+        if candidate is None:
+            try:
+                candidate = latest_file(PRICES_DIR, "doctor_prices_*.jsonl")
+            except FileNotFoundError:
+                candidate = None
+        if candidate is not None:
+            try:
+                src = jsonl_read(candidate)
+            except Exception:
+                src = []
+    else:
+        src = list(rows)
+
+    index: Dict[str, List[str]] = {}
+    for row in src:
+        if not isinstance(row, dict):
+            continue
+        address = str(row.get("regionName") or "").strip()
+        if not address:
+            continue
+        homecode = str(row.get("serviceHomecode") or "").strip()
+        service_id = _as_int(row.get("serviceId"))
+        keys: List[str] = []
+        if homecode:
+            keys.append(f"hc:{homecode}")
+        if service_id is not None:
+            keys.append(f"id:{service_id}")
+        for key in keys:
+            bucket = index.setdefault(key, [])
+            if address not in bucket:
+                bucket.append(address)
+    return index
+
+
+def _resolve_service_addresses_from_index(
+    service_homecode: Any,
+    service_id: Any,
+    index: Optional[Dict[str, List[str]]],
+) -> List[str]:
+    if not index:
+        return []
+    homecode = str(service_homecode or "").strip()
+    if homecode:
+        addrs = index.get(f"hc:{homecode}")
+        if addrs:
+            return list(addrs)
+    sid = _as_int(service_id)
+    if sid is not None:
+        addrs = index.get(f"id:{sid}")
+        if addrs:
+            return list(addrs)
+    return []
+
+
 def resolve_price_unit_context(
     price_unit_id: Any,
     *,
     units_index: Optional[Dict[int, Dict[str, Any]]] = None,
+    service_homecode: Any = None,
+    service_id: Any = None,
+    service_address_index: Optional[Dict[str, List[str]]] = None,
 ) -> Dict[str, Any]:
     """
-    Возвращает бизнес-контекст priceUnit: тип оказания услуги и рекомендуемый адрес.
+    Возвращает бизнес-контекст priceUnit: тип оказания услуги и адреса.
+
+    Если передан `service_address_index`, адреса определяются динамически по
+    фактическим локациям оказания услуги (doctor_prices). При отсутствии
+    динамических совпадений используется фиксированный адрес по care-setting
+    root id (поведение исторически используется для чисто-лабораторных услуг).
 
     :param price_unit_id: id раздела прайса услуги
     :param units_index: опциональный заранее построенный индекс priceUnits
-    :return: словарь с именем раздела, корневым care-setting и адресом
+    :param service_homecode: код услуги для динамического определения адресов
+    :param service_id: id услуги для динамического определения адресов
+    :param service_address_index: индекс адресов по коду/id услуги
+    :return: словарь с именем раздела, корневым care-setting, адресом и списком адресов
     """
     idx = units_index or build_price_units_index()
     unit_id = _as_int(price_unit_id)
@@ -426,13 +510,26 @@ def resolve_price_unit_context(
     root_id = _resolve_price_unit_root_id(unit_id, idx) if unit_id is not None else None
     root_row = idx.get(root_id) if root_id is not None else None
 
+    dynamic_addresses = _resolve_service_addresses_from_index(
+        service_homecode, service_id, service_address_index
+    )
+    fallback_address = str(CARE_SETTING_ADDRESS_BY_ROOT_ID.get(root_id) or "").strip()
+    if dynamic_addresses:
+        addresses = dynamic_addresses
+    elif fallback_address:
+        addresses = [fallback_address]
+    else:
+        addresses = []
+    primary_address = "; ".join(addresses)
+
     return {
         "price_unit_id": unit_id,
         "price_unit_name": str((unit_row or {}).get("name") or "").strip(),
         "care_setting_root_id": root_id,
         "care_setting_root_name": str((root_row or {}).get("name") or "").strip(),
         "care_setting_label": str(CARE_SETTING_LABEL_BY_ROOT_ID.get(root_id) or "").strip(),
-        "care_setting_address": str(CARE_SETTING_ADDRESS_BY_ROOT_ID.get(root_id) or "").strip(),
+        "care_setting_address": primary_address,
+        "care_setting_addresses": list(addresses),
     }
 
 # -----------------------------------------------------------------------------

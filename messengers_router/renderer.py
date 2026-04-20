@@ -510,13 +510,33 @@ def _format_rub(amount: int | None) -> str:
 
 def _format_care_setting_suffix(row: dict[str, Any]) -> str:
     label = str(row.get("care_setting_label") or "").strip()
-    address = str(row.get("care_setting_address") or "").strip()
-    if label and address:
-        return f"Формат: {label}. Адрес: {address}."
+    addresses: list[str] = []
+    raw_list = row.get("care_setting_addresses")
+    if isinstance(raw_list, list):
+        for item in raw_list:
+            item_str = str(item or "").strip()
+            if item_str and item_str not in addresses:
+                addresses.append(item_str)
+    if not addresses:
+        raw_single = str(row.get("care_setting_address") or "").strip()
+        if raw_single:
+            for part in raw_single.split(";"):
+                part_str = part.strip()
+                if part_str and part_str not in addresses:
+                    addresses.append(part_str)
+
+    if addresses:
+        addr_label = "Адрес" if len(addresses) == 1 else "Адреса"
+        addr_text = "; ".join(addresses)
+    else:
+        addr_label, addr_text = "", ""
+
+    if label and addr_text:
+        return f"Формат: {label}. {addr_label}: {addr_text}."
     if label:
         return f"Формат: {label}."
-    if address:
-        return f"Адрес: {address}."
+    if addr_text:
+        return f"{addr_label}: {addr_text}."
     return ""
 
 
