@@ -27,6 +27,34 @@ def test_specialty_plural_routes_to_doctor_info():
     assert out.decision.entities.get("specialty") == "уролог"
 
 
+def test_procedure_urethroscopy_routes_to_urologist():
+    state = SessionState(session_id="nlu_urethroscopy")
+    out = run(analyze_with_candidates("какой врач выполняет уретроскопию", state))
+    assert out.decision.label == "DOCTOR_INFO"
+    assert out.decision.entities.get("specialty") == "уролог"
+
+
+def test_procedure_anoscopy_routes_to_coloproctologist():
+    state = SessionState(session_id="nlu_anoscopy")
+    out = run(analyze_with_candidates("какой врач выполняет аноскопию", state))
+    assert out.decision.label == "DOCTOR_INFO"
+    assert out.decision.entities.get("specialty") == "колопроктолог"
+
+
+def test_procedure_colposcopy_routes_to_obgyn():
+    state = SessionState(session_id="nlu_colposcopy")
+    out = run(analyze_with_candidates("кто делает кольпоскопию", state))
+    assert out.decision.label == "DOCTOR_INFO"
+    assert out.decision.entities.get("specialty") == "акушер-гинеколог"
+
+
+def test_procedure_dermatoscopy_routes_to_dermatovenerologist():
+    state = SessionState(session_id="nlu_dermatoscopy")
+    out = run(analyze_with_candidates("какой врач делает дерматоскопию", state))
+    assert out.decision.label == "DOCTOR_INFO"
+    assert out.decision.entities.get("specialty") == "дерматовенеролог"
+
+
 def test_nearest_specialty_routes_to_schedule():
     state = SessionState(session_id="nlu2")
     out = run(analyze_with_candidates("гастроэнтеролог ближайший", state))

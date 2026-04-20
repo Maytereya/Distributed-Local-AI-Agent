@@ -1218,6 +1218,9 @@ async def deterministic_rule_decision(
         entities = {}
         if svc:
             entities["service_name"] = svc
+        proc_specialty = extract_specialty(text or "")
+        if proc_specialty:
+            entities["specialty"] = proc_specialty
         decision = RouteDecision(
             label="DOCTOR_INFO",
             confidence=0.71,

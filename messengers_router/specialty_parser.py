@@ -18,6 +18,28 @@ ENDOSCOPY_SERVICE_RE = re.compile(
     re.I,
 )
 
+# Сопоставление процедур, которые выполняет конкретная специальность, а не
+# «эндоскопист по умолчанию». Ключи — корни слов (обрезанные до стабильной
+# основы), чтобы ловить любые падежи. Порядок обхода не важен: маппинг
+# используется как первый фильтр в extract_specialty_from_text.
+#
+# Источник данных — джойн локального снапшота doctor_prices × doctors.units
+# (agent_logic_2/nayka_api/apidata/*_20260419.jsonl).
+PROCEDURE_TO_SPECIALTY: dict[str, str] = {
+    "уретроскоп": "уролог",
+    "цистоскоп": "уролог",
+    "аноскоп": "колопроктолог",
+    "кольпоскоп": "акушер-гинеколог",
+    "вульвоскоп": "акушер-гинеколог",
+    "дерматоскоп": "дерматовенеролог",
+    "оторинофарингоскоп": "оториноларинголог",
+    "ларингоскоп": "оториноларинголог",
+}
+PROCEDURE_TO_SPECIALTY_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in PROCEDURE_TO_SPECIALTY) + r")\w*\b",
+    re.I,
+)
+
 SPECIALTY_ROLE_SYNONYMS: dict[str, tuple[str, ...]] = {
     "акушер-гинеколог": ("акушер гинеколог", "гинеколог"),
     "аллерголог": ("аллерголог", "иммунолог"),
@@ -212,6 +234,9 @@ def extract_specialties_from_text(text: str) -> tuple[str, ...]:
 
 def extract_specialty_from_text(text: str) -> str:
     probe = str(text or "")
+    proc_match = PROCEDURE_TO_SPECIALTY_RE.search(probe)
+    if proc_match:
+        return PROCEDURE_TO_SPECIALTY[proc_match.group(1).lower()]
     if UZI_QUERY_RE.search(probe):
         return "узи"
     if ENDOSCOPY_SERVICE_RE.search(probe):
@@ -227,6 +252,8 @@ def extract_specialty_from_text(text: str) -> str:
 
 __all__ = [
     "ENDOSCOPY_SERVICE_RE",
+    "PROCEDURE_TO_SPECIALTY",
+    "PROCEDURE_TO_SPECIALTY_RE",
     "SPECIALTY_CANONICAL",
     "SPECIALTY_RE",
     "SPECIALTY_ROLE_SYNONYMS",
