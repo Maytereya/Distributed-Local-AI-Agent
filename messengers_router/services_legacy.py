@@ -2484,6 +2484,31 @@ def _service_name_matches_specialty(service_name: str, specialty: str) -> bool:
     return _is_direct_specialty_text_match(service_name, specialty)
 
 
+def _service_name_allows_specialty(service_name: str, specialty: str) -> bool:
+    """
+    Мягкая проверка соответствия имени услуги специальности для PRICE-запросов.
+
+    В отличие от strict-варианта (_service_name_matches_specialty) допускает
+    гибриды: имя «травматолога-ортопеда» проходит запрос «травматолог», потому что
+    атомарная специальность «травматолог» присутствует среди извлечённых. Нужно для
+    price-consultation-фильтра, где составные специальности вида «травматолог-ортопед»
+    являются канонической формой тарифа. Strict-проверка сохраняется для direct-doctor
+    запросов, где важно не спутать «терапевт» с «гирудотерапевт».
+
+    :param service_name: строка услуги из каталога
+    :param specialty: каноническая специальность из запроса
+    :return: True, если хотя бы одна извлечённая специальность эквивалентна целевой
+    """
+
+    target = _specialty_norm(specialty)
+    if not target:
+        return False
+    found = _extract_specialties_from_text(service_name)
+    if not found:
+        return False
+    return any(_specialty_equivalent(spec, target) for spec in found)
+
+
 def _is_prepare_requested_in_price_query(query_text: str) -> bool:
     """
     Проверяет, просит ли пользователь именно подготовку в PRICE-реплике.
@@ -2859,7 +2884,7 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
     if _PRICE_CONSULT_HINT_RE.search(query):
         if not _is_clean_consultation_row_name(name):
             return 0, 0
-        if query_specialty and not _service_name_matches_specialty(name, query_specialty):
+        if query_specialty and not _service_name_allows_specialty(name, query_specialty):
             return 0, 0
 
     score = 0
