@@ -1714,29 +1714,11 @@ def _annotate_price_rows_with_care_context(rows: list[dict[str, Any]]) -> list[d
     except Exception:
         return [row for row in rows if isinstance(row, dict)]
 
-    # Динамические адреса грузим только если хотя бы одна строка имеет
-    # priceUnitId + идентификатор услуги — иначе resolver всё равно уйдёт
-    # в статический fallback. Это сохраняет ленивость для lab-запросов.
-    needs_dynamic_addresses = any(
-        isinstance(row, dict)
-        and row.get("priceUnitId") is not None
-        and (
-            str(row.get("serviceHomecode") or "").strip()
-            or row.get("serviceId") is not None
-        )
-        for row in rows
-    )
-    service_address_index: dict[str, list[str]] = {}
-    if needs_dynamic_addresses:
-        try:
-            doctor_price_rows = api_price.load_doctor_prices()
-        except Exception:
-            doctor_price_rows = []
-        try:
-            service_address_index = api_price.build_service_address_index(doctor_price_rows)
-        except Exception:
-            service_address_index = {}
-
+    # Адреса оказания услуги резолвятся внутри resolve_price_unit_context:
+    # сначала по priceUnit-override'ам (PRICE_UNIT_ADDRESSES), затем fallback
+    # на care-setting root-level хардкод. doctor_prices больше не используется
+    # как источник адресов — regionName в нём указывает филиал приёма врача,
+    # а не место проведения процедуры (подтверждено разработчиком Наяки).
     enriched: list[dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -1746,9 +1728,6 @@ def _annotate_price_rows_with_care_context(rows: list[dict[str, Any]]) -> list[d
             api_price.resolve_price_unit_context(
                 row.get("priceUnitId"),
                 units_index=units_index,
-                service_homecode=row.get("serviceHomecode"),
-                service_id=row.get("serviceId"),
-                service_address_index=service_address_index,
             )
         )
         enriched.append(annotated)
