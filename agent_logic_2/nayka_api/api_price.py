@@ -68,6 +68,32 @@ CARE_SETTING_ADDRESS_BY_ROOT_ID = {
 }
 
 # -----------------------------------------------------------------------------
+# Ручной справочник "priceUnitId -> фактические адреса оказания"
+# -----------------------------------------------------------------------------
+# В /priceByRegion и /priceUnits НЕТ поля "филиал оказания услуги" —
+# подтверждено разработчиком Наяки (22.04.2026). Поле `regionName` в
+# doctor_prices указывает филиал приёма врача, а не место проведения
+# процедуры, поэтому использовать его как источник адресов нельзя.
+#
+# Этот справочник перекрывает `CARE_SETTING_ADDRESS_BY_ROOT_ID` на уровне
+# конкретного priceUnit для случаев, когда один care-setting root (например,
+# дневной стационар) включает специальности, физически расположенные в
+# разных зданиях клиники, либо когда услуга выполняется в нескольких
+# филиалах одновременно. Ключ — priceUnitId, значение — список адресов.
+#
+# При добавлении новых записей подтверждайте данные у клиники и
+# фиксируйте источник в комментарии (письмо, отчёт, оператор).
+PRICE_UNIT_ADDRESSES: Dict[int, List[str]] = {
+    # ЛОР — амбулаторно (priceUnit 158). Тонзиллотомия / септопластика /
+    # прочие ЛОР-процедуры: по отчётам клиники за январь услуга
+    # оказывалась и на Ленина, 5, и на Ново-Садовой, 106.
+    158: [
+        "г. Самара, пр. Ленина, 5",
+        "г.Самара, ул.Ново-Садовая, 106, кор. 82",
+    ],
+}
+
+# -----------------------------------------------------------------------------
 # Логирование
 # -----------------------------------------------------------------------------
 log = logging.getLogger(__name__)
@@ -408,83 +434,14 @@ def _resolve_price_unit_root_id(price_unit_id: Any, units_index: Dict[int, Dict[
     return None
 
 
-def build_service_address_index(
-    rows: Optional[Iterable[Dict[str, Any]]] = None,
-) -> Dict[str, List[str]]:
-    """
-    Строит индекс реальных адресов оказания услуги по данным doctor_prices.
-
-    Ключи: `hc:<serviceHomecode>` и `id:<serviceId>`; значение — список уникальных
-    адресов (regionName) в порядке появления. Позволяет динамически определить,
-    где реально оказывается конкретная услуга, вместо фиксированного адреса по
-    типу care-setting.
-
-    :param rows: опциональный список строк doctor_prices; если не передан, читается
-                 кэш на диске без форс-refresh (чтобы не блокировать реактивный код)
-    :return: словарь ключ -> список адресов
-    """
-    if rows is None:
-        src: List[Dict[str, Any]] = []
-        fn = doctor_prices_path()
-        candidate: Path | None = fn if fn.exists() else None
-        if candidate is None:
-            try:
-                candidate = latest_file(PRICES_DIR, "doctor_prices_*.jsonl")
-            except FileNotFoundError:
-                candidate = None
-        if candidate is not None:
-            try:
-                src = jsonl_read(candidate)
-            except Exception:
-                src = []
-    else:
-        src = list(rows)
-
-    index: Dict[str, List[str]] = {}
-    for row in src:
-        if not isinstance(row, dict):
-            continue
-        address = str(row.get("regionName") or "").strip()
-        if not address:
-            continue
-        homecode = str(row.get("serviceHomecode") or "").strip()
-        service_id = _as_int(row.get("serviceId"))
-        keys: List[str] = []
-        if homecode:
-            keys.append(f"hc:{homecode}")
-        if service_id is not None:
-            keys.append(f"id:{service_id}")
-        for key in keys:
-            bucket = index.setdefault(key, [])
-            if address not in bucket:
-                bucket.append(address)
-    return index
-
-
-def _resolve_service_addresses_from_index(
-    service_homecode: Any,
-    service_id: Any,
-    index: Optional[Dict[str, List[str]]],
-) -> List[str]:
-    if not index:
-        return []
-    homecode = str(service_homecode or "").strip()
-    if homecode:
-        addrs = index.get(f"hc:{homecode}")
-        if addrs:
-            return list(addrs)
-    sid = _as_int(service_id)
-    if sid is not None:
-        addrs = index.get(f"id:{sid}")
-        if addrs:
-            return list(addrs)
-    return []
-
-
 def resolve_price_unit_context(
     price_unit_id: Any,
     *,
     units_index: Optional[Dict[int, Dict[str, Any]]] = None,
+    # Следующие параметры оставлены для обратной совместимости со старыми
+    # вызовами. Они игнорируются: адрес оказания услуги через doctor_prices
+    # определить нельзя (regionName там — филиал приёма врача, а не место
+    # проведения процедуры; подтверждено разработчиком Наяки 22.04.2026).
     service_homecode: Any = None,
     service_id: Any = None,
     service_address_index: Optional[Dict[str, List[str]]] = None,
@@ -492,34 +449,33 @@ def resolve_price_unit_context(
     """
     Возвращает бизнес-контекст priceUnit: тип оказания услуги и адреса.
 
-    Если передан `service_address_index`, адреса определяются динамически по
-    фактическим локациям оказания услуги (doctor_prices). При отсутствии
-    динамических совпадений используется фиксированный адрес по care-setting
-    root id (поведение исторически используется для чисто-лабораторных услуг).
+    Цепочка резолва адресов:
+    1) `PRICE_UNIT_ADDRESSES[priceUnitId]` — ручной справочник на уровне
+       priceUnit (нужен для случаев, когда один care-setting root покрывает
+       несколько физических зданий, или услуга делается в нескольких филиалах).
+    2) `CARE_SETTING_ADDRESS_BY_ROOT_ID[root_id]` — fallback по root-уровню
+       care-setting (146 / 311 / 312).
 
     :param price_unit_id: id раздела прайса услуги
     :param units_index: опциональный заранее построенный индекс priceUnits
-    :param service_homecode: код услуги для динамического определения адресов
-    :param service_id: id услуги для динамического определения адресов
-    :param service_address_index: индекс адресов по коду/id услуги
     :return: словарь с именем раздела, корневым care-setting, адресом и списком адресов
     """
+    # Сознательно игнорируем service_homecode/service_id/service_address_index —
+    # они существуют только ради обратной совместимости, см. докстринг.
+    del service_homecode, service_id, service_address_index
+
     idx = units_index or build_price_units_index()
     unit_id = _as_int(price_unit_id)
     unit_row = idx.get(unit_id) if unit_id is not None else None
     root_id = _resolve_price_unit_root_id(unit_id, idx) if unit_id is not None else None
     root_row = idx.get(root_id) if root_id is not None else None
 
-    dynamic_addresses = _resolve_service_addresses_from_index(
-        service_homecode, service_id, service_address_index
-    )
-    fallback_address = str(CARE_SETTING_ADDRESS_BY_ROOT_ID.get(root_id) or "").strip()
-    if dynamic_addresses:
-        addresses = dynamic_addresses
-    elif fallback_address:
-        addresses = [fallback_address]
+    override_addresses = PRICE_UNIT_ADDRESSES.get(unit_id) if unit_id is not None else None
+    if override_addresses:
+        addresses: List[str] = [a for a in override_addresses if a]
     else:
-        addresses = []
+        fallback_address = str(CARE_SETTING_ADDRESS_BY_ROOT_ID.get(root_id) or "").strip()
+        addresses = [fallback_address] if fallback_address else []
     primary_address = "; ".join(addresses)
 
     return {
