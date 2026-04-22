@@ -420,6 +420,15 @@ async def prelock_active_appointment_turn(
     return None
 
 
+_PREPARE_FOLLOWUP_BREAKOUT_RE = re.compile(
+    r"\b(кто|какой|какая|какие|каким|кем|кому)\b.*?"
+    r"\b(делает|делают|выполня\w*|проводит|проводят|"
+    r"принима\w*|работа\w*|ведёт|ведет|"
+    r"врач\w*|доктор\w*|специалист\w*|эндоскопист\w*)\b",
+    re.I,
+)
+
+
 def _is_short_prepare_followup(text: str) -> bool:
     s = str(text or "").strip()
     if not s or len(s) > 64:
@@ -427,7 +436,14 @@ def _is_short_prepare_followup(text: str) -> bool:
     tokens = [t for t in re.findall(r"[A-Za-zА-Яа-яЁё0-9\-]+", s) if t]
     if not tokens or len(tokens) > 5:
         return False
-    if detect_price_intent(s) or detect_address_intent(s) or detect_doc_request_intent(s):
+    if (
+        detect_price_intent(s)
+        or detect_address_intent(s)
+        or detect_doc_request_intent(s)
+        or detect_schedule_intent(s)
+    ):
+        return False
+    if _PREPARE_FOLLOWUP_BREAKOUT_RE.search(s):
         return False
     return True
 
