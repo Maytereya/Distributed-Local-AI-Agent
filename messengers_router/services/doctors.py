@@ -6,9 +6,12 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from difflib import get_close_matches
 from typing import TYPE_CHECKING, Any
+
+from agent_logic_2.nayka_api import api_price
 
 from ..doctor_name_port import (
     extract_doctor_name_candidate,
@@ -53,12 +56,18 @@ from ._doctors_helpers import (
 )
 from ._prices_helpers import resolve_price_service_name_from_catalog
 from ._regions import (
+    _extract_region_phone,
     _has_explicit_non_samara_regions,
     _is_non_samara_city_value,
     _is_samara_city_value,
     _region_matches_samara_tokens,
     _schedule_regions_with_free_slots,
 )
+
+
+# Регэксп для поиска филиала на пр. Ленина, 5 в `addressForSite`/`name` /regions.
+# Дом «5» отделён границей слова, чтобы НЕ ловить «Ленина 50», «Ленина 55».
+_FIXED_EQUIPMENT_LENINA5_RE = re.compile(r"ленина[,\s]+5\b", re.I)
 
 if TYPE_CHECKING:
     from .core import Services
@@ -576,6 +585,56 @@ async def doctors_info(
     }
 
 
+async def _fixed_equipment_handoff_payload(self: "Services") -> tuple[str, str]:
+    """Возвращает ``(address, phone)`` регистратуры филиала с фиксированным оборудованием.
+
+    Используется для запроса расписания процедур, у которых нет приёмного
+    врача с расписанием в Naika (флюорограф/маммограф на пр. Ленина, 5).
+    Запись таких процедур всегда ведёт регистратура филиала.
+
+    :param self: экземпляр сервисного слоя
+    :return: кортеж ``(адрес, телефон)``; телефон может быть пустой строкой,
+             если в /regions нет соответствующей записи или у неё нет телефона
+    """
+
+    fixed_addr = "г. Самара, пр. Ленина, 5"
+    try:
+        regions = await self._ensure_regions_loaded()
+    except Exception:
+        regions = []
+    for r in regions:
+        if not isinstance(r, dict):
+            continue
+        for key in ("addressForSite", "name", "address"):
+            raw = str(r.get(key) or "")
+            if _FIXED_EQUIPMENT_LENINA5_RE.search(raw):
+                phone = _extract_region_phone(r)
+                if phone:
+                    return fixed_addr, phone
+                # продолжаем — вдруг другая запись /regions содержит телефон
+                break
+    return fixed_addr, ""
+
+
+def _fixed_equipment_handoff_message(address: str, phone: str) -> str:
+    """Формирует patient-facing handoff-сообщение для процедур с фиксированным оборудованием.
+
+    :param address: адрес филиала с оборудованием
+    :param phone: телефон регистратуры (может быть пустой строкой)
+    :return: текст сообщения для пациента
+    """
+    if phone:
+        return (
+            f"Запись на флюорографию и маммографию ведётся через регистратуру "
+            f"филиала {address}, телефон: {phone}. Соединяю с оператором, "
+            f"чтобы подтвердить удобное время."
+        )
+    return (
+        f"Запись на флюорографию и маммографию ведётся через регистратуру "
+        f"филиала {address}. Соединяю с оператором."
+    )
+
+
 async def doctors_schedule_week(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
     """Возвращает realtime-расписание врача или специальности.
 
@@ -584,6 +643,26 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
     :param entities: сущности роутера
     :return: payload с расписанием или fallback-ответом
     """
+
+    # Short-circuit для процедур, привязанных к фиксированному оборудованию
+    # (флюорограф/маммограф). У клиники нет приёмного врача-радиолога с
+    # расписанием в Naika — рентгенолог только пишет заключения и помечен
+    # «Не выгружать на сайт». Поэтому любые попытки найти расписание ниже
+    # приводят либо к пустой выдаче, либо к подмене на УЗИ-врача (см. кейс
+    # «расписание флюорографии» 22.04.2026). Временное решение — сразу
+    # отдавать handoff с телефоном регистратуры филиала на Ленина 5.
+    if api_price.resolve_diagnostic_fixed_addresses(query or ""):
+        addr, phone = await _fixed_equipment_handoff_payload(self)
+        return _service_fallback(
+            note="doctors_schedule_week: fixed equipment → registry handoff",
+            handoff_message=handoff_message(
+                "schedule_via_registry_fixed_equipment",
+                override=_fixed_equipment_handoff_message(addr, phone),
+            ),
+            entities=entities,
+            reason="schedule_via_registry_fixed_equipment",
+            extra={"schedule": [], "fixed_equipment_branch": {"address": addr, "phone": phone}},
+        )
 
     raw_name = _get_first_present(
         entities,

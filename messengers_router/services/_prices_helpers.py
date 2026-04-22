@@ -965,8 +965,13 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
             if "_" in tok:
                 continue
             # Для длинных токенов допускаем умеренно мягкий префиксный матч.
+            # Минимальный shared-префикс — 5 символов: 4-буквенный префикс
+            # пропускал слишком общие греческие корни ("эндо" → эндокринолог /
+            # эндомизий / эндотрахеальный при запросе "эндоскопия"). Для
+            # медицинских терминов 5 символов разделяют семьи слов адекватно
+            # (маммо-, флюоро-, эндос-, рентг-, гастр- и т.д.).
             if len(tok) >= 5 and any(
-                len(rt) >= 4 and (rt.startswith(tok[:4]) or tok.startswith(rt[:4]))
+                len(rt) >= 5 and (rt.startswith(tok[:5]) or tok.startswith(rt[:5]))
                 for rt in row_tokens
             ):
                 matched += 1
@@ -1738,28 +1743,40 @@ def _care_setting_addresses_from_price_rows(rows: list[dict[str, Any]]) -> list[
     """
     Извлекает уникальные адреса care-setting из уже обогащенных строк прайса.
 
+    Дедуп по нормализованному ключу (без учёта пробелов и регистра), чтобы
+    одинаковые адреса с разной пунктуацией ("г. Самара, ул. Ново-Садовая…"
+    vs "г.Самара, ул.Ново-Садовая…") схлопывались в один пункт выдачи.
+
     :param rows: строки прайса с полем care_setting_address
     :return: список уникальных адресов в порядке появления
     """
     addresses: list[str] = []
+    seen: set[str] = set()
+
+    def _add(candidate: str) -> None:
+        candidate_str = str(candidate or "").strip()
+        if not candidate_str:
+            return
+        key = _normalise_input(candidate_str)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        addresses.append(candidate_str)
+
     for row in rows:
         if not isinstance(row, dict):
             continue
         row_addresses = row.get("care_setting_addresses")
         if isinstance(row_addresses, list) and row_addresses:
             for candidate in row_addresses:
-                candidate_str = str(candidate or "").strip()
-                if candidate_str and candidate_str not in addresses:
-                    addresses.append(candidate_str)
+                _add(candidate)
             continue
         address = str(row.get("care_setting_address") or "").strip()
         if not address:
             continue
         # Допускаем старый форматированный вид "A; B" от внешних источников.
         for part in address.split(";"):
-            part_str = part.strip()
-            if part_str and part_str not in addresses:
-                addresses.append(part_str)
+            _add(part)
     return addresses
 
 

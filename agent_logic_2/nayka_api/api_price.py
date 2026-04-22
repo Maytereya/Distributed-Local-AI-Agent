@@ -4,10 +4,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterable, List, Dict, Any, Optional
+from typing import Iterable, List, Dict, Any, Optional, Tuple
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -89,9 +90,40 @@ PRICE_UNIT_ADDRESSES: Dict[int, List[str]] = {
     # оказывалась и на Ленина, 5, и на Ново-Садовой, 106.
     158: [
         "г. Самара, пр. Ленина, 5",
-        "г.Самара, ул.Ново-Садовая, 106, кор. 82",
+        "г. Самара, ул. Ново-Садовая, 106, кор. 82",
     ],
 }
+
+# -----------------------------------------------------------------------------
+# Override адресов для diagnostic-процедур, привязанных к оборудованию.
+# -----------------------------------------------------------------------------
+# Маммограф/флюорограф физически установлены только на Ленина 5 — место
+# оказания не зависит от care-setting иерархии прайса. Поэтому если
+# patient-запрос явно про эти процедуры, мы перебиваем все адреса из
+# priceByRegion / doctor_prices и возвращаем единственный реальный адрес.
+# Подтверждено клиникой 22.04.2026.
+DIAGNOSTIC_PROCEDURE_FIXED_ADDRESSES: List[Tuple["re.Pattern[str]", List[str]]] = [
+    (
+        re.compile(r"\b(маммограф\w*|флюорограф\w*)\b", re.I),
+        ["г. Самара, пр. Ленина, 5"],
+    ),
+]
+
+
+def resolve_diagnostic_fixed_addresses(query_or_service: str) -> List[str]:
+    """
+    Возвращает фиксированный адрес для процедур, привязанных к оборудованию.
+
+    :param query_or_service: текст запроса пользователя или название услуги
+    :return: список адресов или пустой список, если override не сработал
+    """
+    text = str(query_or_service or "")
+    if not text:
+        return []
+    for pattern, addresses in DIAGNOSTIC_PROCEDURE_FIXED_ADDRESSES:
+        if pattern.search(text):
+            return list(addresses)
+    return []
 
 # -----------------------------------------------------------------------------
 # Логирование

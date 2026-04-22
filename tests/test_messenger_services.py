@@ -384,6 +384,126 @@ def test_doctors_info_empty_cache_uses_domain_specific_handoff_message(monkeypat
     assert res.get("handoff_message") == handoff_message("service_error_doctors_list")
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "расписание флюорографии",
+        "когда можно сделать маммографию",
+        "запишите на флюорографию",
+        "расписание маммографа",
+    ],
+)
+def test_doctors_schedule_week_diagnostic_fixed_equipment_handoff(monkeypatch, query):
+    """Запрос расписания флюорографии/маммографии должен сразу уходить в handoff
+    с телефоном регистратуры филиала на Ленина 5, потому что у клиники нет
+    приёмного врача-радиолога с расписанием в Naika (рентгенолог только пишет
+    заключения). См. кейс «Тагирова», 22.04.2026."""
+
+    svc = Services()
+
+    async def fake_regions():
+        return [
+            {
+                "id": 100,
+                "city": "Самара",
+                "name": "Поликлиника №1",
+                "addressForSite": "г. Самара, пр. Ленина, 5",
+                "phone": "+7 (846) 123-45-67",
+            },
+            {
+                "id": 101,
+                "city": "Самара",
+                "name": "Стационар",
+                "addressForSite": "г. Самара, ул. Ново-Садовая, 106",
+                "phone": "+7 (846) 999-99-99",
+            },
+        ]
+
+    async def fail_doctors():
+        raise AssertionError("doctors cache must NOT be touched on fixed-equipment short-circuit")
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fail_doctors)
+
+    res = run(svc.doctors_schedule_week(query, {}))
+
+    assert res["schedule"] == []
+    assert res.get("handoff_required") is True
+    assert res.get("handoff_reason") == "schedule_via_registry_fixed_equipment"
+    msg = str(res.get("handoff_message") or "")
+    assert "Ленина, 5" in msg
+    assert "846" in msg  # подставлен телефон Ленина 5, а не Ново-Садовой
+    assert "999-99-99" not in msg
+    branch = res.get("fixed_equipment_branch") or {}
+    assert branch.get("address") == "г. Самара, пр. Ленина, 5"
+    assert "123-45-67" in branch.get("phone", "")
+
+
+def test_doctors_schedule_week_diagnostic_handoff_works_without_phone(monkeypatch):
+    """Если /regions не отдаёт телефон Ленина 5 — handoff всё равно отрабатывает,
+    просто без номера в тексте."""
+
+    svc = Services()
+
+    async def fake_regions():
+        return []
+
+    async def fail_doctors():
+        raise AssertionError("doctors cache must NOT be touched on fixed-equipment short-circuit")
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fail_doctors)
+
+    res = run(svc.doctors_schedule_week("расписание флюорография", {}))
+
+    assert res["schedule"] == []
+    assert res.get("handoff_required") is True
+    assert res.get("handoff_reason") == "schedule_via_registry_fixed_equipment"
+    msg = str(res.get("handoff_message") or "")
+    assert "Ленина, 5" in msg
+    branch = res.get("fixed_equipment_branch") or {}
+    assert branch.get("phone") == ""
+
+
+def test_doctors_schedule_week_non_diagnostic_query_does_not_short_circuit(monkeypatch):
+    """Регулярный запрос расписания (без слов флюоро/маммо) НЕ должен попадать
+    в fixed-equipment handoff — нужно идти в обычный flow."""
+
+    svc = Services()
+
+    async def fake_doctors():
+        return [
+            {
+                "id": 1,
+                "fio": "Иванов Иван Иванович",
+                "specialization": "терапевт",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+            }
+        ]
+
+    async def fake_regions():
+        return [
+            {
+                "id": 100,
+                "city": "Самара",
+                "addressForSite": "г. Самара, пр. Ленина, 5",
+                "phone": "+7 (846) 000-00-00",
+            }
+        ]
+
+    async def fake_schedule_payload(_candidate, _region_name=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_doctors)
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_regions)
+    monkeypatch.setattr(svc, "_get_schedule_payload_cached", fake_schedule_payload)
+
+    res = run(svc.doctors_schedule_week("расписание Иванова", {"doctor_name": "Иванов"}))
+
+    # должен попасть в обычный fallback service_error_schedule (а не наш новый reason)
+    assert res.get("handoff_reason") != "schedule_via_registry_fixed_equipment"
+
+
 def test_doctors_schedule_week_source_unavailable_uses_domain_handoff_message(monkeypatch):
     svc = Services()
 
