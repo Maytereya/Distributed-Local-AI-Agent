@@ -32,7 +32,6 @@ from ._doctors_helpers import (
 from ._prices_helpers import (
     SAMARA_PRICE_REGION_ID,
     _care_setting_addresses_from_price_rows,
-    _rank_price_rows,
     _select_address_price_rows,
 )
 from ._regions import (
@@ -96,6 +95,28 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
             reason="city_not_supported",
             extra={"addresses": [], "branches": []},
         )
+
+    # Override для процедур с физически фиксированной точкой оказания
+    # (маммограф / флюорограф установлены только на Ленина 5). Этот шорт-каррент
+    # нужно проверять ДО Path 1/2/3, потому что priceByRegion раскладывает
+    # такие процедуры по нескольким priceUnit/care-setting'ам и фолбэк на
+    # CARE_SETTING_ADDRESS_BY_ROOT_ID ошибочно тянет Ново-Садовую.
+    fixed_addresses = api_price.resolve_diagnostic_fixed_addresses(
+        service_name or query or ""
+    )
+    if fixed_addresses:
+        if branch_q:
+            fixed_addresses = [
+                addr for addr in fixed_addresses
+                if branch_q in _normalise_input(addr)
+            ]
+        if fixed_addresses:
+            return {
+                "addresses": list(fixed_addresses),
+                "branches": _addresses_to_branch_payload(fixed_addresses, regions),
+                "note": "address_info: diagnostic equipment fixed address",
+                "entities_used": entities,
+            }
 
     allowed_doctor_addresses_norm: set[str] = set()
     if appointment_mode:
@@ -292,17 +313,12 @@ async def _procedure_branches_from_index(
         if role_addresses:
             return _addresses_to_branch_payload(role_addresses, regions)
 
-    rows = await self._ensure_procedure_rows_loaded()
-    ranked = _rank_price_rows(rows, service_q, limit=200)
-
-    addresses: list[str] = []
-    for row in ranked:
-        addr = str(row.get("regionName") or "").strip()
-        if not addr or not _looks_like_real_address(addr):
-            continue
-        if addr not in addresses:
-            addresses.append(addr)
-
-    if not addresses:
-        addresses = _static_procedure_addresses(service_q)
+    # Раньше здесь был fallback через `_ensure_procedure_rows_loaded` →
+    # `doctor_prices.regionName`. Этот источник возвращает филиал ПРИЁМА
+    # врача, а не место оказания услуги — тот же баг, что починили в
+    # /priceByRegion-ветке (см. PR #14). Поскольку Path 1 (priceByRegion +
+    # priceUnit override) уже отрабатывает корректно, здесь оставляем
+    # только статический справочник для diagnostic-процедур, по которым
+    # /priceByRegion ничего не отдаёт.
+    addresses = _static_procedure_addresses(service_q)
     return _addresses_to_branch_payload(addresses, regions)
