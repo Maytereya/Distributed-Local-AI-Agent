@@ -1,25 +1,773 @@
+"""
+Маршрутизация пользовательских запросов: сегментация, классификация, вызов модулей.
+
+Пайплайн:
+1) split_into_segments() — переформулировка и разбиение текста.
+2) classify() — присвоение label‑ов (API_INFO/APPOINTMENT/SCRIPTS/NEWS/UNDEFINED).
+3) process_segments() — логика FILTER/эвристик/быстрых путей и сбор ответов.
+4) routing() — асинхронный генератор ответов (стриминг), финальный постпроцесс.
+
+Особенности:
+- «SAFE_LIST» детерминированный формат для списков врачей (без участия LLM).
+- «<NO_POSTPROC>» позволяет миновать финальную постобработку.
+- Фильтры: ARRIVING/CHILDREN/DMS из явных меток, ключевых слов и возрастных паттернов.
+"""
+
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple, AsyncGenerator, TypeAlias, Literal, Optional
 
 from ollama import AsyncClient
 
 import agent_logic_2.ollama_settings as ollama_settings
+from agent_logic_1 import meilisearch_client as meilisearch, formulate
 from agent_logic_2 import llama_func_call as doctor_info, config as c
-from agent_logic_2.prompts import load_prompt
-from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
+from agent_logic_2.doctor_name_matching import resolve_schedule_surname
+from agent_logic_2.gigachat import async_gigachat_logic as gigachat
 from agent_logic_2.llama_func_call import repo
-from agent_logic_pack import meilisearch_client as meilisearch
+from agent_logic_2.nayka_api.api_nayka import ensure_daily_refresh_started
+from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info
+from agent_logic_2.ollama_settings import LLMName
+from agent_logic_2.prompts import load_prompt
+from agent_logic_2.text_constants import (
+    NOTE_STOPWORDS,
+    UZI_REGEX,
+    UZI_FUZZY_TOKENS,
+    PROCEDURE_HINT_REGEX,
+)
+from agent_logic_2.text_fuzzy import fuzzy_match, normalize_text_for_fuzzy
 from converters import html_cleaner
+
+#  Инициализация logging для понимания логики роутера
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
+
+# =========================
+# КОНСТАНТЫ И НАСТРОЙКИ
+# =========================
+
+# Label‑ы и порядок в LABEL_PRIORITY:
+LABEL_PRIORITY = load_prompt("LABEL_PRIORITY", False).split(",")
+ALLOWED = set(LABEL_PRIORITY + ["UNDEFINED"])
+
+# Какой индекс MEILISEARCH открывать для конкретного лейбла:
+INDEX_BY_LABEL: dict[str, str] = {
+    "NEWS": "news",
+    "SCRIPTS": "main_index",
+}
+
+# Константы форматирования
+LABEL_DOC = load_prompt("LABEL_DOC", False)
+RAW_MODE_MARKER = "<NO_POSTPROC>"
+EXAMPLES = load_prompt("EXAMPLES", False)
+KNOWLEDGE_MARKER = "{KNOWLEDGE_SNIPPET}"
+ITEM_MARKER = "⊢ID:"
+SEGMENT_SEPARATOR = "\n\n— — —\n\n"
+
+# Регулярные выражения
+NOTE_WORD_RE = re.compile(r"(замет\w*|кнопк\w*|кнопоч\w*)", re.IGNORECASE)
+MANAGER_WORD_RE = re.compile(r"\bменеджер\w*", re.IGNORECASE)
+SCRIPT_WORD_RE = re.compile(r"\bскрипт\w*", re.IGNORECASE)
+NOTE_SPLIT_RE = re.compile(r"[^0-9a-zа-яё]+", re.IGNORECASE)
+FILTER_RE = re.compile(r'^\s*FILTER:\s*(.+)$', re.IGNORECASE)
+UZI_RE = re.compile(UZI_REGEX, re.IGNORECASE)
+PROCEDURE_HINT_RE = re.compile(PROCEDURE_HINT_REGEX, re.IGNORECASE)
+
+NOTE_TRIGGER_WORDS = ("заметка", "кнопка")
+
+
+def _strip_standalone_number_lines(text: str) -> str:
+    if not text:
+        return text
+    lines = text.splitlines()
+    cleaned: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if re.match(r"^\s*\d+\s*[\.)]?\s*$", line):
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and "**ФИО врача:**" in lines[j]:
+                i += 1
+                continue
+        cleaned.append(line)
+        i += 1
+    return "\n".join(cleaned)
+
+
+def _number_doctor_blocks(text: str) -> str:
+    """Добавляет нумерацию к блокам врачей в финальном ответе."""
+    if not text or ITEM_MARKER in text:
+        return text
+    text = _strip_standalone_number_lines(text)
+    marker = "**ФИО врача:**"
+    count = text.count(marker)
+    if count < 2:
+        return text
+
+    lines = text.splitlines()
+    numbered: list[str] = []
+    idx = 1
+    for line in lines:
+        if line.strip().startswith(marker):
+            # Не дублируем нумерацию, если она уже есть
+            if re.match(r"^\s*\d+[\.)]\s+", line):
+                numbered.append(line)
+            else:
+                numbered.append(f"{idx}. {line}")
+            idx += 1
+        else:
+            numbered.append(line)
+    return "\n".join(numbered)
+
+
+def _extract_fio_from_line(line: str) -> str | None:
+    marker = "**ФИО врача:**"
+    if marker not in line:
+        return None
+    cleaned = line.strip()
+    cleaned = re.sub(r"^\d+\s*[\.)]\s*", "", cleaned)
+    m = re.search(r"\*\*ФИО врача:\*\*\s*(.+)$", cleaned)
+    if not m:
+        return None
+    fio = m.group(1).strip()
+    return fio or None
+
+
+def _dedupe_doctor_blocks(text: str) -> str:
+    """Удаляет дубликаты блоков врачей по ФИО."""
+    if not text or "**ФИО врача:**" not in text:
+        return text
+    lines = text.splitlines()
+    preamble: list[str] = []
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    in_block = False
+    for line in lines:
+        if "**ФИО врача:**" in line:
+            if current:
+                blocks.append(current)
+            current = [line]
+            in_block = True
+            continue
+        if in_block:
+            current.append(line)
+        else:
+            preamble.append(line)
+    if current:
+        blocks.append(current)
+
+    seen: set[str] = set()
+    kept: list[list[str]] = []
+    for block in blocks:
+        fio = _extract_fio_from_line(block[0]) if block else None
+        if fio:
+            key = fio.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+        kept.append(block)
+
+    out_lines: list[str] = []
+    out_lines.extend(preamble)
+    if preamble and kept:
+        out_lines.append("")
+    for i, block in enumerate(kept):
+        if i > 0 and out_lines and out_lines[-1] != "":
+            out_lines.append("")
+        out_lines.extend(block)
+    return "\n".join(out_lines)
+
+
+def _strip_cc_notes_from_markers(text: str) -> str:
+    """Удаляет блоки заметок из маркерного формата, сохраняя фильтры при наличии."""
+    if not text or "**ФИО врача:**" not in text:
+        return text
+
+    lines = text.splitlines()
+    preamble: list[str] = []
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    in_block = False
+    for line in lines:
+        if "**ФИО врача:**" in line:
+            if current:
+                blocks.append(current)
+            current = [line]
+            in_block = True
+            continue
+        if in_block:
+            current.append(line)
+        else:
+            preamble.append(line)
+    if current:
+        blocks.append(current)
+
+    def _has_field(block_lines: list[str], field: str) -> bool:
+        return any(ln.strip().startswith(field) for ln in block_lines)
+
+    new_blocks: list[list[str]] = []
+    for block in blocks:
+        note_idx = None
+        for i, ln in enumerate(block):
+            if ln.strip().startswith("**📞Заметка"):
+                note_idx = i
+                break
+        if note_idx is None:
+            new_blocks.append(block)
+            continue
+
+        note_text = "\n".join(block[note_idx + 1:]).strip()
+        trimmed = block[:note_idx]
+
+        if note_text:
+            arriving_flag = CCNotesProcessor.get_flag(note_text, "arriving")
+            dms_flag = CCNotesProcessor.get_flag(note_text, "dms")
+            age_value = CCNotesProcessor.extract_age(note_text)
+            if arriving_flag is True and not _has_field(trimmed, "**Приходящий:**"):
+                trimmed.append("**Приходящий:** Да!")
+            elif arriving_flag is False and not _has_field(trimmed, "**Приходящий:**"):
+                trimmed.append("**Приходящий:** Нет!")
+            if age_value and age_value != "не указан" and not _has_field(trimmed, "**Возраст пациентов:**"):
+                trimmed.append(f"**Возраст пациентов:** {age_value}")
+            if dms_flag is True and not _has_field(trimmed, "**ДМС:**"):
+                trimmed.append("**ДМС:** Да")
+            elif dms_flag is False and not _has_field(trimmed, "**ДМС:**"):
+                trimmed.append("**ДМС:** Нет")
+
+        new_blocks.append(trimmed)
+
+    out_lines: list[str] = []
+    out_lines.extend(preamble)
+    if preamble and new_blocks:
+        out_lines.append("")
+    for i, block in enumerate(new_blocks):
+        if i > 0 and out_lines and out_lines[-1] != "":
+            out_lines.append("")
+        out_lines.extend(block)
+    return "\n".join(out_lines)
+
+
+def _validate_list_count(text: str, expected_count: int) -> bool:
+    if expected_count <= 0:
+        return True
+    return _count_fio_blocks(text) >= expected_count
+
+
+def _convert_bullets_to_markers(text: str, include_notes: bool = True) -> str:
+    """Преобразует список с '• ФИО:' в маркерный формат для final_answer."""
+    if not text or "**ФИО врача:**" in text:
+        return text
+    if text.count("• ФИО:") < 2:
+        return text
+
+    chunks = text.split("• ФИО:")
+    preamble = chunks[0].strip()
+    blocks: list[str] = []
+    if preamble:
+        blocks.append(preamble)
+
+    for raw in chunks[1:]:
+        part = raw.strip()
+        if not part:
+            continue
+        lines = part.splitlines()
+        fio = lines[0].strip(" \t•-")
+        body = "\n".join(lines[1:])
+        note_text = ""
+        if "• 📞Заметка колл-центра:" in body:
+            body, note_part = body.split("• 📞Заметка колл-центра:", 1)
+            note_text = note_part.strip()
+
+        spec_text = ""
+        addr_text = ""
+        if "• Специализация:" in body:
+            spec_part = body.split("• Специализация:", 1)[1]
+            if "• Адрес/Адреса:" in spec_part:
+                spec_raw, addr_raw = spec_part.split("• Адрес/Адреса:", 1)
+                spec_text = spec_raw
+                addr_text = addr_raw
+            else:
+                spec_text = spec_part
+        if not addr_text and "• Адрес/Адреса:" in body:
+            addr_text = body.split("• Адрес/Адреса:", 1)[1]
+
+        spec_lines = [
+            ln.strip(" \t•-")
+            for ln in spec_text.splitlines()
+            if ln.strip() and not ln.strip().startswith("─") and not ln.strip().startswith("---")
+        ]
+        spec_clean = "\n".join(spec_lines).strip()
+
+        addr_line = ""
+        if addr_text:
+            for ln in addr_text.splitlines():
+                ln = ln.strip(" \t•-")
+                if ln:
+                    addr_line = ln
+                    break
+
+        block_lines: list[str] = [f"**ФИО врача:** {fio}"]
+        if spec_clean:
+            block_lines.append(f"**Специализация:** {spec_clean}")
+        if addr_line:
+            block_lines.append(f"**Адрес/адреса работы:** {addr_line}")
+        if note_text:
+            note_lines = [
+                ln.strip("\t ")
+                for ln in note_text.splitlines()
+                if ln.strip() and not ln.strip().startswith("─") and not ln.strip().startswith("---")
+            ]
+            arriving_flag = CCNotesProcessor.get_flag(note_text, "arriving")
+            dms_flag = CCNotesProcessor.get_flag(note_text, "dms")
+            age_value = CCNotesProcessor.extract_age(note_text)
+            if arriving_flag is True:
+                block_lines.append("**Приходящий:** Да!")
+            elif arriving_flag is False:
+                block_lines.append("**Приходящий:** Нет!")
+            if age_value and age_value != "не указан":
+                block_lines.append(f"**Возраст пациентов:** {age_value}")
+            if dms_flag is True:
+                block_lines.append("**ДМС:** Да")
+            elif dms_flag is False:
+                block_lines.append("**ДМС:** Нет")
+            if include_notes and note_lines:
+                block_lines.append("**📞Заметка:**")
+                block_lines.append("\n".join(note_lines))
+        blocks.append("\n".join(block_lines))
+
+    return "\n\n".join(blocks).strip() if blocks else text
+
+
+def _count_doctor_blocks(text: str) -> int:
+    if not text:
+        return 0
+    return text.count("**ФИО врача:**")
+
+
+def _count_fio_blocks(text: str) -> int:
+    if not text:
+        return 0
+    return text.count("**ФИО врача:**") + text.count("• ФИО:")
+
+
+def _is_uzi_query(text: str) -> bool:
+    if not text:
+        return False
+    if UZI_RE.search(text):
+        return True
+    norm = normalize_text_for_fuzzy(text)
+    tokens = norm.split()
+    for tok in tokens:
+        for hint in UZI_FUZZY_TOKENS:
+            threshold = 0.75 if len(tok) <= 4 else 0.85
+            if fuzzy_match(tok, hint, threshold):
+                return True
+    return False
+
+
+def _is_procedure_like_query(text: str) -> bool:
+    if not text:
+        return False
+    if _is_uzi_query(text):
+        return True
+    return bool(PROCEDURE_HINT_RE.search(text))
+
+
+# Возрастные паттерны
+AGE_PATTERNS: tuple[str, ...] = (
+    r"\b[сc]\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b",
+    r"возраст[а-я\s]*?(?:[сc]\s*)?(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет",
+    r"\b[сc]\s*возраста\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b",
+)
+
+# Ключевые слова для фильтров
+KEYWORDS_TRUE = {
+    'dms': [
+        'по дмс', 'принимает по дмс', 'принимают по дмс', 'работает по дмс', 'работают по дмс', 'есть дмс', 'дмс да'
+    ],
+    'children': [
+        'работает с детьми', 'работают с детьми', 'принимает детей', 'принимают детей', 'детей принимает', 'детям',
+        'с детьми', 'дети', 'детский', 'детская', 'детские', 'детские врачи', 'детский врач', 'с детьми'
+    ],
+    'arriving': [
+        'приходящий', 'приходящие', 'разовый', 'совмещает'
+    ],
+}
+
+KEYWORDS_FALSE = {
+    'dms': [
+        'не по дмс', 'не принимает по дмс', 'не принимают по дмс', 'без дмс', 'дмс нет', 'нет дмс'
+    ],
+    'children': [
+        'не работает с детьми', 'не работают с детьми', 'без детей', 'детей не принимает', 'детей не принимают',
+        'только взросл'
+    ],
+    'arriving': [
+        'не приходящий', 'не приходящие', 'неприходящий', 'неприходящие'
+    ],
+}
+
+# Константы для парсинга фильтров
+DEF_TRUE = {"yes", "да", "true", "1"}
+DEF_FALSE = {"no", "нет", "false", "0"}
+
+# Таймаут для вызова ollama
+timeout: int = 300
+
+
+# =========================
+# УТИЛИТАРНЫЕ КЛАССЫ
+# =========================
+
+class CCNotesProcessor:
+    """Обработка заметок call-центра"""
+
+    @staticmethod
+    def normalize_text(cc: str | None) -> str:
+        """Очищает HTML, заменяет NBSP на пробел и приводит к lower()."""
+        if not cc:
+            return ""
+        return html_cleaner.strip_html(cc).replace("\xa0", " ").lower()
+
+    @staticmethod
+    def extract_age(cc: str) -> str:
+        """Пытается вытащить возраст из заметки КЦ и вернуть нормализованную строку вида "с N лет"."""
+        if not isinstance(cc, str) or not cc:
+            return "не указан"
+
+        s = CCNotesProcessor.normalize_text(cc)
+
+        # Возрастные формулировки
+        for pat in AGE_PATTERNS + (r"принимает\s*(пациентов\s*)?[сc]\s*(\d{1,2})\s*(?:-?и)?\s*лет",):
+            m = re.search(pat, s)
+            if m:
+                num = (m.group(2) or m.group(1)) if (m.lastindex or 0) >= 2 else m.group(1)
+                return f"с {num} лет"
+
+        # Дополнительные паттерны
+        patterns = [
+            (r"\bв\s*возрасте\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", "с {0} лет"),
+            (r"\bв\s*возрасте\s*(\d{1,2})\s*\+", "с {0} лет"),
+            (r"\b[сc]\s*возраста\s*(\d{1,2})\s*(?:-?и)?\s*лет\b", "с {0} лет"),
+            (r"принимает\s*(пациентов\s*)?[сc]\s*(\d{1,2})\s*(?:-?и)?\s*лет", "с {1} лет"),
+        ]
+
+        for pattern, template in patterns:
+            m = re.search(pattern, s)
+            if m:
+                num = m.group(2) if (m.lastindex or 0) >= 2 else m.group(1)
+                return template.format(num)
+
+        # Специальные случаи
+        if "совершеннолет" in s:
+            return "с 18 лет"
+        if "0+" in s or re.search(r"\b[сc]\s*0\s*лет\b", s) or re.search(r"\b0\s*\+", s):
+            return "с 0 лет"
+        if "только взросл" in s or "взросл" in s or re.search(r"\b[сc]\s*18\s*лет\b", s):
+            return "с 18 лет"
+
+        return "не указан"
+
+    @staticmethod
+    def get_flag(cc: str, key: str) -> Optional[bool]:
+        """Определяет флаг из заметки call-центра."""
+        if not cc:
+            return None
+
+        s = CCNotesProcessor.normalize_text(cc)
+
+        if key == 'arriving':
+            if 'не приход' in s or 'неприход' in s:
+                return False
+            if 'приходящ' in s:
+                return True
+            return None
+
+        if key == 'children':
+            # Явные отрицания/только взрослые/совершеннолетние
+            if (
+                    re.search(r"\b[сc]\s*18\s*лет\b", s)
+                    or re.search(r"принимает\s*[сc]\s*18", s)
+                    or 'только взросл' in s
+                    or 'взросл' in s
+                    or 'совершеннолет' in s
+            ):
+                return False
+            # Явные указания работы с детьми
+            if 'дет' in s and ('работ' in s or 'принимает' in s):
+                return True
+            # Возрастной признак
+            for pat in AGE_PATTERNS:
+                m = re.search(pat, s)
+                if m:
+                    try:
+                        n = int(m.group(1))
+                        return n < 18
+                    except Exception:
+                        continue
+            return None
+
+        if key == 'dms':
+            if re.search(
+                    r"(?:не\s*(?:принима(ет|ют)|работа(ет|ют))\s*по\s*дмс|не\s*по\s*дмс|без\s*дмс|дмс\s*(?:[:\-—]\s*)?нет)",
+                    s):
+                return False
+            if re.search(r"(?:по\s*дмс|дмс\s*(?:[:\-—]\s*)?да)", s):
+                return True
+            return None
+
+        return None
+
+    @staticmethod
+    def extract_note_keywords(segment: str) -> List[str]:
+        """Выделяет ключевые слова/фразы из запроса про заметки."""
+        if not isinstance(segment, str) or not segment.strip():
+            return []
+
+        # Берём только хвост после первого «заметк*»
+        m = NOTE_WORD_RE.search(segment)
+        tail = segment[m.end():] if m else segment
+
+        # Извлекаем кавычённые фразы
+        quoted: List[str] = []
+
+        def _drop(m):
+            for g in m.groups():
+                if g:
+                    q = g.strip().lower()
+                    if q:
+                        quoted.append(q)
+            return " "
+
+        cleaned = re.sub(r"\"([^\"]+)\"|'([^']+)'|«([^»]+)»", _drop, tail)
+
+        # Токенизация и фильтрация
+        tokens = [tok for tok in NOTE_SPLIT_RE.split(cleaned.lower()) if tok]
+
+        seen = set()
+        keywords: List[str] = []
+
+        def _push(term: str):
+            if not term or term in seen:
+                return
+            seen.add(term)
+            keywords.append(term)
+
+        for tok in tokens:
+            if tok in NOTE_STOPWORDS or len(tok) < 2:
+                continue
+            if any(fuzzy_match(tok, w, 0.84) for w in NOTE_TRIGGER_WORDS):
+                continue
+            _push(tok)
+
+        for phrase in quoted:
+            _push(phrase)
+
+        return keywords
+
+
+class SegmentProcessor:
+    """Обработка сегментов текста"""
+
+    @staticmethod
+    def check_pattern_match(segment: str, text: str, pattern: re.Pattern) -> Tuple[bool, bool]:
+        """Универсальная проверка паттернов в сегменте и тексте."""
+        hit_in_segment = bool(pattern.search(segment))
+        hit_in_full = bool(pattern.search(text)) if text else False
+        return hit_in_segment, hit_in_full
+
+    @staticmethod
+    def extract_specialty_terms(segment: str, docs: List[Dict[str, Any]]) -> List[str]:
+        """Пытается извлечь возможные ключевые слова специальности из сегмента."""
+        if not isinstance(segment, str) or not segment.strip():
+            return []
+
+        seg = segment.lower()
+        seg = re.sub(r"[,.!?;:()\[\]{}]", " ", seg)
+        tokens = [t for t in re.split(r"\s+", seg) if t]
+
+        # Уберём частые служебные слова и слова фильтров
+        stop = set(getattr(doctor_info, 'STOP_WORDS', set())) | {
+            'дмс', 'страховка', 'страховой', 'страховая', 'по', 'с', 'без',
+            'дети', 'детям', 'детей', 'взрослые', 'взрослый', 'приходящий', 'приходящие', 'неприходящий',
+            'принимает', 'работает', 'где', 'кто', 'список', 'нужен', 'ищу'
+        }
+        tokens = [t for t in tokens if t not in stop and len(t) >= 3]
+
+        # Морфологическая нормализация
+        norm_tokens: List[str] = []
+        for t in tokens:
+            try:
+                if hasattr(doctor_info, 'normalize_specialty_term'):
+                    nt = doctor_info.normalize_specialty_term(t) or t
+                else:
+                    nt = t[:-1] if (len(t) > 4 and (t.endswith('и') or t.endswith('ы'))) else t
+            except Exception:
+                nt = t
+            norm_tokens.append(nt)
+
+        # Базовые синонимы
+        synonyms = {
+            'лор': ['отоларинголог', 'оториноларинголог', 'лор-врач'],
+            'узи': ['ультразвуков'],
+            'узист': ['ультразвуков'],
+        }
+        expanded_tokens: List[str] = []
+        for t in norm_tokens:
+            expanded_tokens.append(t)
+            vals = synonyms.get(t)
+            if isinstance(vals, list):
+                expanded_tokens.extend(vals)
+            elif isinstance(vals, str):
+                expanded_tokens.append(vals)
+
+        if not expanded_tokens:
+            return []
+
+        # Построим текст для поиска по каждому врачу
+        texts = []
+        for d in docs:
+            spec = (d.get('specialization') or '').lower()
+            units = ", ".join(d.get('units') or [])
+            texts.append(spec + " " + units.lower())
+
+        # Оставляем только те термины, которые где-то реально встречаются
+        valid_terms = []
+        for t in expanded_tokens:
+            if any(t in txt for txt in texts):
+                valid_terms.append(t)
+
+        # Уберём дубликаты, сохранив порядок
+        seen = set()
+        uniq_terms = []
+        for t in valid_terms:
+            if t not in seen:
+                seen.add(t)
+                uniq_terms.append(t)
+        return uniq_terms
+
+
+class FilterProcessor:
+    """Обработка фильтров"""
+
+    @staticmethod
+    def parse_filters(expr: str) -> Dict[str, bool]:
+        """Парсит строку фильтров и возвращает словарь с фильтрами."""
+        pairs = [p.strip() for p in expr.split(';') if p.strip()]
+        out: Dict[str, bool] = {}
+        for p in pairs:
+            if '=' not in p:
+                continue
+            k, v = [t.strip().lower() for t in p.split('=', 1)]
+            if v in DEF_TRUE:
+                out[k] = True
+            elif v in DEF_FALSE:
+                out[k] = False
+        return out
+
+    @staticmethod
+    def keyword_to_filter(segment: str, original: str | None = None) -> Dict[str, Any] | None:
+        """Грубое извлечение фильтров из естественных формулировок."""
+        if not isinstance(segment, str) or not segment.strip():
+            return None
+
+        s = segment.lower()
+        out: Dict[str, Any] = {}
+
+        # DMS
+        if re.search(r"\b(не\s*(принима(ет|ют)|работа(ет|ют)|по)\s*по\s*дмс|без\s*дмс|дмс\s*нет|нет\s*дмс)\b", s):
+            out['dms'] = False
+        elif re.search(r"\b(принима(ет|ют)\s*по\s*дмс|работа(ет|ют)\s*по\s*дмс|по\s*дмс|дмс\s*да)\b", s):
+            out['dms'] = True
+
+        # CHILDREN
+        if re.search(r"\b(не\s*работа(ет|ют)\s*с\s*детьми|без\s*детей|детей\s*не\s*принима(ет|ют)|только\s*взросл)\b",
+                     s):
+            out['children'] = False
+        elif any(k in s for k in KEYWORDS_TRUE['children']):
+            out['children'] = True
+
+        # ARRIVING
+        if any(k in s for k in KEYWORDS_FALSE['arriving']):
+            out['arriving'] = False
+        elif any(k in s for k in KEYWORDS_TRUE['arriving']):
+            out['arriving'] = True
+
+        # NOTE keywords
+        note_terms: List[str] = []
+        sources: List[str] = []
+        if isinstance(segment, str):
+            sources.append(segment)
+        if original and original not in sources:
+            sources.append(original)
+
+        for src in sources:
+            if not src or not NOTE_WORD_RE.search(src):
+                continue
+            for kw in CCNotesProcessor.extract_note_keywords(src):
+                if kw not in note_terms:
+                    note_terms.append(kw)
+
+        if note_terms:
+            out.setdefault('notes', note_terms)
+
+        # Дополнительное правило: "с N лет" → children=True (если N < 18)
+        m = re.search(r"\bс\s*(\d{1,2})\s*(?:-?[а-я]{1,3})?\s*лет\b", s)
+        if m:
+            try:
+                n = int(m.group(1))
+                if n < 18:
+                    out.setdefault('children', True)
+                else:
+                    out.setdefault('children', False)
+            except Exception:
+                pass
+
+        return out or None
+
+
+# =========================
+# ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И ИНИЦИАЛИЗАЦИЯ
+# =========================
+
+# LLM‑клиент для обработки входящих запросов
+ollama = AsyncClient(c.ollama_url)
+
+# CC‑info thin process cache (по id врача)
+_CC_INFO_MAP: Dict[int, str] | None = None
+
+
+def _get_cc_info_map() -> Dict[int, str]:
+    """Получает информацию о заметках call-центра по врачам."""
+    global _CC_INFO_MAP
+    if _CC_INFO_MAP is None:
+        try:
+            data = get_doctors_cc_info()
+            _CC_INFO_MAP = {
+                int(row.get('id', 0)): row.get('callCenterInfo', '')
+                for row in data if isinstance(row, dict) and row.get('id') is not None
+            }
+        except Exception:
+            _CC_INFO_MAP = {}
+    return _CC_INFO_MAP
 
 
 # --- ensure doctors repo is warmed up (file may be absent on first FILTER run) ---
 async def _ensure_doctors_repo_loaded() -> None:
+    """Обеспечивает загрузку кэша врачей (JSONL) и его обновление из API при необходимости."""
     try:
+        # стараемся запустить планировщик ежедневного обновления (внутри активного event loop)
+        try:
+            ensure_daily_refresh_started()
+        except Exception:
+            pass
         # try fast-path
         data = repo.read_all()
         if not data:
@@ -31,73 +779,97 @@ async def _ensure_doctors_repo_loaded() -> None:
         except Exception:
             pass
 
-# LLM‑клиент для классификации входящих запросов
-ollama = AsyncClient(c.ollama_url)
 
-# -----------------------------------------------------
-# СЕКЦИЯ КОНСТАНТ ЛОГИКИ РАБОТЫ РОУТЕРА
-# -----------------------------------------------------
+# =========================
+# УТИЛИТАРНЫЕ ФУНКЦИИ ДЛЯ ОБРАБОТКИ СЕГМЕНТОВ
+# =========================
 
-# Label‑ы и порядок в LABEL_PRIORITY:
-#
-# "API_INFO" - справка из API Мед.центра
-# "APPOINTMENT" - назначение времени / запись на приём к врачу
-# "SCRIPTS" - алгоритмы, скрипты из серии "если - то..."
+async def _try_doctor_fallback(segment: str, sess: SessionType, think: bool | None, context: str = "") -> Optional[str]:
+    """Универсальная функция для fallback к doctor_info."""
+    try:
+        if await is_possible_surname_or_specialty(segment):
+            logger.debug(f"[{context}] doctor_info fallback")
+            response, _ = await get_doc_info_from_api(segment, session=sess, think=think)
+            if c.DEBUG_RAW_OUTPUT:
+                return RAW_MODE_MARKER + "\n" + response
+            return response
+    except (asyncio.CancelledError, GeneratorExit):
+        logger.info("_try_doctor_fallback ОСТАНОВЛЕН")
+        # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+        raise
+    except Exception as e:
+        logger.exception(f"[{context}] fallback check error: %s", e)
+    return None
 
-LABEL_PRIORITY = load_prompt("LABEL_PRIORITY", False).split(",")
-ALLOWED = set(LABEL_PRIORITY + ["UNDEFINED"])  # TODO: разобраться, не совсем понятое добавление лейбла "снаружи".
-LABEL_DOC = load_prompt("LABEL_DOC", False)
-RAW_MODE_MARKER = "<NO_POSTPROC>"
-EXAMPLES = load_prompt("EXAMPLES", False)
-ITEM_MARKER = "⊢ID:" # маркер для компактного формата
 
-# --- CC‑info thin process cache (по id врача) ---
-_CC_INFO_MAP: Dict[int, str] | None = None
+async def _handle_note_search(segment: str, text: str) -> Optional[str]:
+    """Обработка поиска по заметкам."""
+    if _is_uzi_query(segment or "") or _is_uzi_query(text or ""):
+        return None
+    note_hit_seg, note_hit_full = SegmentProcessor.check_pattern_match(segment, text, NOTE_WORD_RE)
+    if not (note_hit_seg or note_hit_full):
+        def _fuzzy_hit(src: str) -> bool:
+            if not src:
+                return False
+            norm = normalize_text_for_fuzzy(src)
+            for tok in norm.split():
+                if any(fuzzy_match(tok, w, 0.84) for w in NOTE_TRIGGER_WORDS):
+                    return True
+            return False
 
-def _get_cc_info_map() -> Dict[int, str]:
-    """Получает информацию о заметках call-центра по врачам."""
-    global _CC_INFO_MAP
-    if _CC_INFO_MAP is None:
-        try:
-            data = get_doctors_cc_info()
-            _CC_INFO_MAP = {
-                row.get('id'): row.get('callCenterInfo', '')
-                for row in data if isinstance(row, dict)
-            }
-        except Exception:
-            _CC_INFO_MAP = {}
-    return _CC_INFO_MAP
+        note_hit_seg = _fuzzy_hit(segment)
+        note_hit_full = _fuzzy_hit(text)
+    if note_hit_seg or note_hit_full:
+        search_source = segment if note_hit_seg else text
+        logger.debug("CC NOTES search (source=%s)", "segment" if note_hit_seg else "full")
+        return await _search_in_cc_notes(search_source, fallback_segment=text, match_mode="all")
+    return None
 
-def _extract_age_from_cc(cc: str) -> str:
-    """Пытается вытащить возраст из заметки КЦ и вернуть нормализованную строку вида "с N лет".
-    Возвращает "не указан" если не найдено.
-    """
-    if not isinstance(cc, str) or not cc:
-        return "не указан"
-    s = cc.lower()
-    # Явные формулировки
-    m = re.search(r"с\s*(\d{1,2})\s*лет", s)
+
+async def _handle_manager_search(segment: str, text: str) -> Optional[str]:
+    """Обработка поиска по менеджерам."""
+    manager_hit_seg, manager_hit_full = SegmentProcessor.check_pattern_match(segment, text, MANAGER_WORD_RE)
+    if manager_hit_seg or manager_hit_full:
+        search_source = segment if manager_hit_seg else text
+        logger.debug("MANAGER search (source=%s)", "segment" if manager_hit_seg else "full")
+        response, _ = await instructions_search(search_source, index="main_index", manager_mode=True)
+        return response
+    return None
+
+
+async def _handle_filter_search(segment: str, text: str) -> Optional[str]:
+    """Обработка фильтров."""
+    # Проверяем явные фильтры
+    m = FILTER_RE.match(segment)
     if m:
-        return f"с {m.group(1)} лет"
-    m = re.search(r"в\s+возрасте\s*(\d{1,2})\s*лет", s)
-    if m:
-        return f"с {m.group(1)} лет"
-    m = re.search(r"принимает\s*(пациентов\s*)?с\s*(\d{1,2})\s*лет", s)
-    if m:
-        return f"с {m.group(2)} лет"
-    # Иногда пишут "с 0+" или "0+"
-    if "0+" in s or re.search(r"\bс\s*0\s*лет\b", s):
-        return "с 0 лет"
-    # Негативные формулировки дают подсказку: только взрослые → с 18 лет
-    if "только взросл" in s or re.search(r"\bс\s*18\s*лет\b", s):
-        return "с 18 лет"
-    return "не указан"
+        flt = FilterProcessor.parse_filters(m.group(1))
+        logger.debug("FILTER explicit -> %s", flt)
+        return await _filter_doctors_via_cc_info(flt, segment=segment, fallback_segment=text)
+
+    # Проверяем ключевые слова
+    kw_filters = FilterProcessor.keyword_to_filter(segment, text)
+    if kw_filters:
+        logger.debug("FILTER kw -> %s", kw_filters)
+        return await _filter_doctors_via_cc_info(kw_filters, segment=segment, fallback_segment=text)
+
+    return None
+
+
+# Удалены дублированные определения - используются из утилитарных классов
+
+
+# Удалена - заменена на CCNotesProcessor.extract_age()
 
 
 def _bool_to_ru(v: Optional[bool]) -> str:
     return "Да" if v is True else ("Нет" if v is False else "—")
 
+
+# Удалена - заменена на CCNotesProcessor.extract_note_keywords()
+
+
 def _compact_line(d: dict) -> str:
+    """Форматирует строку компактного формата для отображения информации о враче."""
     fio = (d.get("fio") or "").strip()
     spec = d.get("units") or d.get("specialization") or ""
     if isinstance(spec, list):
@@ -105,15 +877,15 @@ def _compact_line(d: dict) -> str:
     addr_list = d.get("regions") or []
     addr = ", ".join(addr_list[:2])
 
-    # исходная заметка КЦ (как есть); _flag_from_cc сам приводит к lower()
+    # исходная заметка КЦ (как есть)
     cc_text = d.get("callCenterInfo") or ""
 
     # нормализованные флаги через единую функцию
-    arriving_flag = _flag_from_cc(cc_text, "arriving")
-    dms_flag      = _flag_from_cc(cc_text, "dms")
-    children_flag = _flag_from_cc(cc_text, "children")
+    arriving_flag = CCNotesProcessor.get_flag(cc_text, "arriving")
+    dms_flag = CCNotesProcessor.get_flag(cc_text, "dms")
+    children_flag = CCNotesProcessor.get_flag(cc_text, "children")
 
-    age = _extract_age_from_cc(cc_text)
+    age = CCNotesProcessor.extract_age(cc_text)
 
     return (
         f"{ITEM_MARKER}{d.get('id')} — {fio} — {spec} — {addr} — "
@@ -125,6 +897,7 @@ def _compact_line(d: dict) -> str:
 
 
 def _format_compact(matched: List[Dict[str, Any]]) -> str:
+    """Форматирует список врачей в строку компактного формата для отображения информации о врачах."""
     lines = [_compact_line(d) for d in matched]
     n = len(lines)
     header = f"[SAFE_LIST]\nN={n}\nORDER=PRESERVE\nFORMAT=ECHO_ALL\n"
@@ -145,7 +918,6 @@ def _extract_safe_list_meta(s: str) -> Tuple[int, List[str] | None]:
         return 0, None
 
 
-
 # =========================
 # SAFE_LIST deterministic helpers
 # =========================
@@ -154,7 +926,8 @@ def _parse_safe_compact_line(line: str) -> Dict[str, str]:
     ⊢ID:123 — Иванов И.И. — Врач терапевт — Ленина 5 — ДМС: Да — Приходящий: Нет — Дети: Да — Возраст: с 18 лет
     и возвращает словарь полей. Не бросает исключений.
     """
-    out = {"id": "", "fio": "", "spec": "", "addr": "", "dms": "—", "arriving": "—", "children": "—", "age": "не указан"}
+    out = {"id": "", "fio": "", "spec": "", "addr": "", "dms": "—", "arriving": "—", "children": "—",
+           "age": "не указан"}
     if not isinstance(line, str) or ITEM_MARKER not in line:
         return out
     try:
@@ -175,15 +948,11 @@ def _parse_safe_compact_line(line: str) -> Dict[str, str]:
         m = re.search(r"дмс:\s*(да|нет)", tl)
         if m:
             out["dms"] = "Да" if m.group(1) == "да" else "Нет"
-        # Приходящий
-        m = re.search(r"приходящий:\s*(да|нет)", tl)
+        # Приходящий: учитываем ТОЛЬКО явные метки "да"/"нет", без эвристик
+        # Если метки нет — оставляем значение по умолчанию "—" (неизвестно)
+        m = re.search(r"\bприходящий:\s*(да|нет)\b", tl)
         if m:
             out["arriving"] = "Да" if m.group(1) == "да" else "Нет"
-        else:
-            if "не приход" in tl or "неприход" in tl:
-                out["arriving"] = "Нет"
-            elif "приходящ" in tl:
-                out["arriving"] = "Да"
         # Дети
         m = re.search(r"дети:\s*(да|нет)", tl)
         if m:
@@ -211,6 +980,11 @@ def _shorten_specialty(text: str, limit_words: int = 10) -> str:
 
 def _render_numbered_list_from_safe(compact_payload: str) -> str:
     """Строит итоговый пронумерованный список в формате final_answer (без участия LLM)."""
+    query_text = None
+    m = re.search(r'CC_QUERY="([^"]+)"', compact_payload)
+    if m:
+        query_text = m.group(1).replace("\n", " ").strip()
+
     lines = [ln for ln in compact_payload.splitlines() if ln.strip().startswith(ITEM_MARKER)]
     blocks: List[str] = []
     for i, ln in enumerate(lines, 1):
@@ -233,69 +1007,13 @@ def _render_numbered_list_from_safe(compact_payload: str) -> str:
         blocks.append(block)
     if not blocks:
         return "Релевантной информации не найдено"
-    return "\n".join(blocks) + "\n— Конец списка —"
+    body = "\n".join(blocks) + "\n— Конец списка —"
+    if query_text:
+        return f"В заметках по запросу «{query_text}» найдены следующие врачи:\n\n{body}"
+    return body
 
-# --- FILTER segment support (ARRIVING / CHILDREN / DMS) ---
-FILTER_RE = re.compile(r'^\s*FILTER:\s*(.+)$', re.IGNORECASE)
 
-_KEYWORDS_TRUE = {
-    'dms': [
-        'по дмс', 'принимает по дмс', 'принимают по дмс', 'работает по дмс', 'работают по дмс', 'есть дмс', 'дмс да'
-    ],
-    'children': [
-        'работает с детьми', 'работают с детьми', 'принимает детей', 'принимают детей', 'детей принимает', 'детям', 'с детьми'
-    ],
-    'arriving': [
-        'приходящий', 'приходящие', 'разовый', 'совмещает'
-    ],
-}
-
-_KEYWORDS_FALSE = {
-    'dms': [
-        'не по дмс', 'не принимает по дмс', 'не принимают по дмс', 'без дмс', 'дмс нет', 'нет дмс'
-    ],
-    'children': [
-        'не работает с детьми', 'не работают с детьми', 'без детей', 'детей не принимает', 'детей не принимают', 'только взросл'
-    ],
-    'arriving': [
-        'не приходящий', 'не приходящие', 'неприходящий', 'неприходящие'
-    ],
-}
-
-def _keyword_to_filter(segment: str) -> Dict[str, bool] | None:
-    """Грубое извлечение фильтров из естественных формулировок, если LLM не вернул FILTER:"""
-    if not isinstance(segment, str) or not segment.strip():
-        return None
-    s = segment.lower()
-    out: Dict[str, bool] = {}
-    # DMS — сначала проверяем отрицания, затем положительные упоминания
-    # Регулярки учитывают формы "принимает/принимают", "работает/работают"
-    if re.search(r"\b(не\s*(принима(ет|ют)|работа(ет|ют)|по)\s*по\s*дмс|без\s*дмс|дмс\s*нет|нет\s*дмс)\b", s):
-        out['dms'] = False
-    elif re.search(r"\b(принима(ет|ют)\s*по\s*дмс|работа(ет|ют)\s*по\s*дмс|по\s*дмс|дмс\s*да)\b", s):
-        out['dms'] = True
-    # CHILDREN
-    if re.search(r"\b(не\s*работа(ет|ют)\s*с\s*детьми|без\s*детей|детей\s*не\s*принима(ет|ют)|только\s*взросл)\b", s):
-        out['children'] = False
-    elif any(k in s for k in _KEYWORDS_TRUE['children']):
-        out['children'] = True
-    # ARRIVING
-    if any(k in s for k in _KEYWORDS_FALSE['arriving']):
-        out['arriving'] = False
-    elif any(k in s for k in _KEYWORDS_TRUE['arriving']):
-        out['arriving'] = True
-    # Дополнительное правило: "с N лет" → children=True (если N < 18), N>=18 → children=False
-    m = re.search(r"\bс\s*(\d{1,2})\s*лет\b", s)
-    if m:
-        try:
-            n = int(m.group(1))
-            if n < 18:
-                out.setdefault('children', True)
-            else:
-                out.setdefault('children', False)
-        except Exception:
-            pass
-    return out or None
+# Удалены - заменены на FilterProcessor
 
 
 def _safe_format(template: str, **kwargs) -> str:
@@ -309,16 +1027,21 @@ def _safe_format(template: str, **kwargs) -> str:
     protected: dict[str, str] = {}
     for k in kwargs.keys():
         protected[k] = f"<<__{k.upper()}__>>"
-        template = template.replace("{"+k+"}", protected[k])
+        template = template.replace("{" + k + "}", protected[k])
     # экранируем все остальные скобки
     template = template.replace("{", "{{").replace("}", "}}")
     # возвращаем плейсхолдеры и форматируем
     for k, marker in protected.items():
-        template = template.replace(marker, "{"+k+"}")
+        template = template.replace(marker, "{" + k + "}")
     return template.format(**kwargs)
 
 
-
+def _strip_service_markers(text: str) -> str:
+    """Удаляет служебные маркеры из выходного текста перед отправкой пользователю."""
+    if not isinstance(text, str):
+        return text
+    cleaned = text.replace(KNOWLEDGE_MARKER, "")
+    return cleaned.replace("{{KNOWLEDGE_SNIPPET}}", "")
 
 
 # --- robust JSON extraction without PCRE recursion ---
@@ -361,7 +1084,7 @@ def _extract_json_object(text: str):
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    chunk = s[start:i+1]
+                    chunk = s[start:i + 1]
                     try:
                         return json.loads(chunk)
                     except Exception:
@@ -371,8 +1094,33 @@ def _extract_json_object(text: str):
                             return json.loads(cleaned)
                         except Exception:
                             return None
-    return None
-        
+
+
+def _collapse_duplicated_segment(text: str) -> str:
+    """Схлопывает точное повторение сегмента вида 'X + X'."""
+    if not text:
+        return text
+    length = len(text)
+    if length % 2 != 0:
+        return text
+    half = text[: length // 2]
+    if half and half == text[length // 2:]:
+        return half
+    return text
+
+
+def _dedupe_segments(segments: List[str]) -> List[str]:
+    """Удаляет дубликаты сегментов, сохраняя порядок."""
+    seen = set()
+    deduped: List[str] = []
+    for seg in segments:
+        if seg in seen:
+            continue
+        seen.add(seg)
+        deduped.append(seg)
+    return deduped
+
+
 # ----------------------------------------------
 # Функция обработки истории запросов
 # и ответов на них
@@ -416,6 +1164,7 @@ def _history_reveal(user: str, sess: Dict[str, Any]) -> str:
 # ----------------------------------------------
 
 def classificator_prompt(text_user: str, sess: Dict[str, Any]) -> str:
+    """Форматирует строку prompt для классификации входящего сообщения пользователя."""
     today = datetime.now().strftime("%d %B %Y, %H:%M:%S")
     template = load_prompt("classificator_prompt", False)
 
@@ -430,6 +1179,7 @@ def classificator_prompt(text_user: str, sess: Dict[str, Any]) -> str:
 
 
 def split_prompt(text_user: str, sess: Dict[str, Any]) -> str:
+    """Форматирует строку prompt для сплита входящего сообщения пользователя."""
     template = load_prompt("split_prompt", False)
 
     return _safe_format(
@@ -439,7 +1189,7 @@ def split_prompt(text_user: str, sess: Dict[str, Any]) -> str:
     )
 
 
-async def split_into_segments(text: str, sess: Dict[str, Any], think: bool = None) -> List[str]:
+async def split_into_segments(text: str, sess: Dict[str, Any], think: bool | None = None) -> List[str]:
     """
     Важно! Функция переформулирует запрос!
     Это первая функция в каскаде обработки входящего сообщения пользователя.
@@ -450,26 +1200,30 @@ async def split_into_segments(text: str, sess: Dict[str, Any], think: bool = Non
     :return: Возвращает список запросов от пользователя.
     """
     think = ollama_settings.resolve_think(think)
-    print("!!!THINK:", think)
-    ollama_settings.init_model_name()
+    # print("!!!THINK:", think)
+    # ollama_settings.init_model_name()
     # print("split_into_segments OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
     # print("split_into_segments options: ", ollama_settings.options_set())
-    if not ollama_settings.OLLAMA_MODEL:
-        raise ValueError("split_into_segments OLLAMA_MODEL cannot be empty")
+    # if not ollama_settings.OLLAMA_MODEL:
+    #     raise ValueError("split_into_segments OLLAMA_MODEL cannot be empty")
 
     # Защищаемся от долгого ответа модели: ограничиваем время ожидания
     try:
         res = await asyncio.wait_for(
             ollama.generate(
-                model=ollama_settings.OLLAMA_MODEL,
+                model=LLMName.get(),
                 prompt=split_prompt(text, sess),  # Добавляется sess
                 options=ollama_settings.options_set(),
                 format="json",
-                keep_alive=-1,
                 think=think,
             ),
-            timeout=20,
+            timeout=timeout,
         )
+    except (asyncio.CancelledError, GeneratorExit):
+        logger.info("split_into_segments ОСТАНОВЛЕН")
+        # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+        raise
+
     except Exception as e:
         print(f"\n⚠️ split_into_segments timeout/error: {e}")
         return [text]
@@ -485,6 +1239,11 @@ async def split_into_segments(text: str, sess: Dict[str, Any], think: bool = Non
         if not segments:
             segments = [text]
 
+        segments = [_collapse_duplicated_segment(s) for s in segments if s]
+        segments = _dedupe_segments([s for s in segments if s])
+        if not segments:
+            segments = [text]
+
         print("\nProcessing results:")
         print(f"• Segments count: {len(segments)}")
         print(f"• Final segments: {segments}")
@@ -496,7 +1255,7 @@ async def split_into_segments(text: str, sess: Dict[str, Any], think: bool = Non
         return [text]
 
 
-async def classify(text: str, sess: Dict[str, Any], think: bool = None) -> List[str]:
+async def classify(text: str, sess: Dict[str, Any], think: bool | None = None) -> List[str]:
     """
     Классификатор сегментов входящего запроса пользователя,
     второй этап обработки входящего сообщения пользователя.
@@ -507,33 +1266,39 @@ async def classify(text: str, sess: Dict[str, Any], think: bool = None) -> List[
     :return:
     """
 
-    # print("classify OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
-    # print("classify options: ", ollama_settings.options_set())
     think = ollama_settings.resolve_think(think)
-    print("!!!THINK:", think)
-    if not ollama_settings.OLLAMA_MODEL:
-        raise ValueError("classify OLLAMA_MODEL cannot be empty")
+
+    if not LLMName.get():
+        raise ValueError("for classify LLMName.get() cannot be empty")
 
     try:
         res = await asyncio.wait_for(
             ollama.generate(
-                model=ollama_settings.OLLAMA_MODEL,
+                model=LLMName.get(),
                 prompt=classificator_prompt(text, sess),
                 options=ollama_settings.options_set(),
                 format="json",
-                keep_alive=-1,
                 think=think,
             ),
-            timeout=20,
+            timeout=timeout,
         )
+    except (asyncio.CancelledError, GeneratorExit):
+        logger.info("classify ОСТАНОВЛЕН")
+        # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+        raise
+
     except Exception as e:
         print(f"\n⚠️ classify timeout/error: {e}")
         return ["UNDEFINED"]
     try:
-        labels = [l.upper() for l in json.loads(res["response"]).get("labels", []) if l.upper() in ALLOWED]
-        print("----------------- LABELS -----------------------")
-        print(f"Маркировано labels: ", labels)
-        print("------------------------------------------------")
+        obj = _extract_json_object(res.get("response"))
+        labels_raw: list[str] = []
+        if isinstance(obj, dict):
+            raw = obj.get("labels")
+            if isinstance(raw, list):
+                labels_raw = raw
+        labels = [str(label).upper() for label in labels_raw if str(label).upper() in ALLOWED]
+
         return labels or ["UNDEFINED"]
     except Exception as e:
         print(f"\n Classificator error: {e}")
@@ -542,54 +1307,113 @@ async def classify(text: str, sess: Dict[str, Any], think: bool = None) -> List[
 
 async def final_answering(primary_request: str,
                           collected_info: str,
-                          think: bool = None,
+                          think: bool | None = None,
+                          ai_feed: Literal["local", "cloud"] = "local",
                           ):  # Пока неясно что за тип данных будет возвращаться
-
+    """Форматирует строку prompt для генерации ответа на входящее сообщение пользователя."""
     template = load_prompt("final_answer", False)
+    template_cloud = load_prompt("final_answer_giga", False)
+    list_count = _count_fio_blocks(collected_info or "")
+    block_hint = "SPECIALTY" if list_count >= 2 else "CONCRETE"
+    if c.DEBUG_FINAL_INPUT:
+        logger.info(
+            "final_answering input: chars=%d blocks=%d",
+            len(collected_info or ""),
+            _count_doctor_blocks(collected_info or ""),
+        )
+        options = ollama_settings.options_set()
+        logger.info(
+            "final_answering options: num_predict=%s stop=%s",
+            options.get("num_predict"),
+            options.get("stop"),
+        )
     prompt = _safe_format(
         template,
         primary_request=primary_request,
         collected_info=collected_info,
+        block_hint=block_hint,
+        list_count=list_count,
+    )
+    if c.DEBUG_FINAL_INPUT:
+        logger.info("final_answering prompt head: %s", prompt[:600])
+        logger.info("final_answering prompt tail: %s", prompt[-600:])
+    cloud_prompt = _safe_format(
+        template_cloud,
+        collected_info=collected_info,
+        block_hint=block_hint,
+        list_count=list_count,
     )
 
-    # print("final_answering OLLAMA_MODEL:", ollama_settings.OLLAMA_MODEL)
-    # print("final_answering options: ", ollama_settings.options_set())
-    if not ollama_settings.OLLAMA_MODEL:
-        raise ValueError("final_answering OLLAMA_MODEL cannot be empty")
+    if not LLMName.get():
+        raise ValueError("final_answering LLMName.get() cannot be empty")
     think = ollama_settings.resolve_think(think)
-    print("!!!THINK:", think)
-
     partial = ""  # накопитель
-    stream = await ollama.generate(
-        model=ollama_settings.OLLAMA_MODEL,
-        prompt=prompt,
-        options=ollama_settings.options_set(),
-        keep_alive=-1,
-        stream=True,
-        think=think,
-    )
-    async for chunk in stream:
-        partial += chunk["response"]
-        yield partial
+    if ai_feed == "local":
+        try:
+            logger.info("final_answering LOCAL branch has activated/активировано подключение к локальной LLM")
+            stream = await ollama.generate(
+                model=LLMName.get(),
+                prompt=prompt,
+                options=ollama_settings.options_set(),
+                stream=True,
+                think=think,
+            )
+            async for chunk in stream:
+                partial += chunk["response"]
+                partial = _strip_service_markers(partial)
+                yield partial
+            if c.DEBUG_FINAL_INPUT:
+                logger.info("final_answering output: chars=%d", len(partial))
+
+        except (asyncio.CancelledError, GeneratorExit):
+            logger.info("final_answering ollama ОСТАНОВЛЕН")
+            # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+            raise
+
+    if ai_feed == "cloud":
+        try:
+            logger.info("final_answering cloud branch has activated/активировано подключение к облачной LLM")
+            stream = gigachat.gigachad_echo_async(
+                system=cloud_prompt,
+                prompt=primary_request,
+            )
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content or ""
+                partial += delta
+                partial = _strip_service_markers(partial)
+                yield partial
+            if c.DEBUG_FINAL_INPUT:
+                logger.info("final_answering output: chars=%d", len(partial))
+
+        except (asyncio.CancelledError, GeneratorExit):
+            logger.info("final_answering GigaChat ОСТАНОВЛЕН")
+            # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+            raise
 
 
 # ──────────────────────────────────────────────────────
 # Подключаем doctor_info из llama_func_call
 # ──────────────────────────────────────────────────────
 
-async def get_doc_info_from_api(question: str, think: bool = None, **_, ) -> Tuple[str, bool]:
+async def get_doc_info_from_api(question: str, think: bool | None = None, **_, ) -> Tuple[str, bool]:
+    """Получает информацию из API Мед.центра."""
     think = ollama_settings.resolve_think(think)
-    print("!!!THINK:", think)
-    result = await doctor_info.investigate(question, think=think)
-    return result, False
+    try:
+        result = await doctor_info.investigate(question, think=think)
+        return result, False
+
+    except (asyncio.CancelledError, GeneratorExit):
+        print("get_doc_info_from_api ОСТАНОВЛЕН")
+        # Отмена сверху => закроется HTTP-стрим клиента => Ollama прекращает генерацию
+        raise
 
 
 # ------------------------------------------------------
 # Подключаем заглушку функции записи пациента
 # ------------------------------------------------------
-async def appointment_stub(_text: str, think: bool = None, **__) -> Tuple[str, bool]:
+async def appointment_stub(_text: str, think: bool | None = None, **__) -> Tuple[str, bool]:
+    """Заглушка функции записи пациента."""
     think = ollama_settings.resolve_think(think)
-    print("!!!THINK:", think)
     return "Модуль записи к врачу скоро появится. ", False
 
 
@@ -597,37 +1421,98 @@ async def appointment_stub(_text: str, think: bool = None, **__) -> Tuple[str, b
 # Search with MEILISEARCH function
 # (может использовать LLM переформулировку)
 # ──────────────────────────────────────────────────────
-# ToDo: Объединить все запросы в одну функцию
-# TODO: Завернуть всю поисковую часть (MEILI) в одну функцию
-async def instructions_search(_text: str, think: bool = None, **__) -> Tuple[str, bool]:
+async def instructions_search(_text: str,
+                              think: bool | None = None,
+                              index: str = "main_index",
+                              raw: bool = False,
+                              manager_mode: bool = False,
+                              **__) -> Tuple[
+    str, bool]:
     """
-    Для поиска нужной информации в индексе или коллекции используется переформулировка запроса пользователя
-    Пока не ясно, следует ли ее делать.
+    Для поиска нужной информации в индексе опционно используется переформулировка запроса пользователя
+    Пока неясно, следует ли ее делать.
+    :param manager_mode:
+    :param raw:
+    :param index:
     :param think:
     :param _text:
     :param __:
     :return: Кортеж: результат поиска и стоп - паттерн для PENDING
     """
-    # Временно отключу переформулировку!
-    # extracted_keyword = await formulate.extract_keyword(_text, extract_type="sentence")
-
-    print("=" * 45)
-    print("Экстрагировалось: ",
-          # extracted_keyword
-          _text  # шарахнем запрос напрямую без переформулировки
-          or "Empty")
-    print("=" * 45)
-
-    collected_info = await asyncio.to_thread(meilisearch.search_meili, "spravka_docs", _text)
+    # LLM - Переформулировка отключена!
+    extracted_keyword = await formulate.extract_keyword(_text,
+                                                        extract_type="sentence")
+    collected_info = await asyncio.to_thread(meilisearch.search_meili,
+                                             index_name=index,
+                                             query=_text)
 
     # Очистка HTML перед подстановкой в prompt
     clean_info = html_cleaner.strip_html(collected_info)
+    if manager_mode:
+        clean_info = (
+            clean_info
+            .replace("\r\n_\r\n", "\n\n")
+            .replace("\r\n_\n", "\n\n")
+            .replace("\n_\r\n", "\n\n")
+            .replace("\n_\n", "\n\n")
+            .replace("\n_", "\n")
+            .replace("_\n", "\n")
+        )
+    if raw:
+        return RAW_MODE_MARKER + "\n" + clean_info, False
     # Добавление маркера для лучшего распознавания LLM
-    marked_info = "{KNOWLEDGE_SNIPPET}" + "\n" + clean_info
-    print("=" * 45)
-    print(marked_info)
-    print("=" * 45)
+    marker = "[MANAGER_INFO]\n" if manager_mode else ""
+    marked_info = KNOWLEDGE_MARKER + "\n" + marker + clean_info
     return marked_info, False
+
+
+# ------- поиск в новостном индексе---------------
+
+
+def _fmt_news(hit: dict) -> str:
+    vf = hit.get("valid_from") or ""
+    vt = hit.get("valid_to") or ""
+    title = hit.get("title") or "(без заголовка)"
+    body = hit.get("content") or hit.get("body") or ""
+    # короткий фрагмент:
+    snippet = body.strip()
+    if len(snippet) > 5000:
+        snippet = snippet[:5000].rstrip() + "… [новость сокращена до 5.000 символов]"
+    return f"[{vf} — {vt}] {title}\n{snippet}"
+
+
+async def news_search(text: str, think: bool | None = None, index: str = "news", **__) -> Tuple[str, bool]:
+    """
+    Возвращает список активных на сейчас новостей/акций из индекса news.
+    keyword берётся из исходного сегмента (без переформулировки).
+    """
+    # ключевое слово — сам сегмент | переформулировка не подключена!
+    keyword = (text or "").strip() or None
+    # extracted_keyword = await formulate.extract_keyword(keyword, extract_type="sentence")
+    logger.info(f"Работает поиск по новостям, фраза запроса: {keyword}")
+    # logger.info(f"Работает поиск по новостям, экстрагированное ключевое слово: {extracted_keyword}")
+    logger.info(
+        f"Индекс поиска: {index}, timestamp: {int(datetime.now(timezone.utc).timestamp())}"
+    )
+    hits = await asyncio.to_thread(
+        meilisearch.search_news_active,
+        index_name=index,
+        keyword=keyword,
+        now_ts=int(datetime.now(timezone.utc).timestamp()),
+        limit=20,
+        sort=["from_ts:desc"],
+    )
+
+    if not hits:
+        return KNOWLEDGE_MARKER + "\nСейчас нет активных новостей/акций по заданным критериям.", False
+
+    lines = [_fmt_news(h) for h in hits]
+    # Помечаем как «сырое содержимое» — минуется final_answering для теста
+    # payload = "<NO_POSTPROC>\n" + "\n\n---\n\n".join(lines)
+    payload = "\n\n---\n\n".join(lines)
+    marked_payload = KNOWLEDGE_MARKER + "\n" + payload
+    # logger.info(payload)
+    return marked_payload, False
 
 
 # ────────────────────────────────────────────────
@@ -638,11 +1523,6 @@ async def instructions_search(_text: str, think: bool = None, **__) -> Tuple[str
 # дополнительная секция констант для работы логики (не может быть обозначена вверху модуля, так как содержит в себе
 # объявление функций для вызова
 
-# MODULES = {
-#     "API_INFO": get_doc_info_from_api,
-#     "APPOINTMENT": appointment_stub,
-#     "SCRIPTS": instructions_search,
-# }
 
 # Нужно промежуточное извлечение, так как строка не может содержать вызова функции
 MODULES_str: str = load_prompt("MODULES", False)
@@ -665,20 +1545,19 @@ for key, name in pairs:
 SessionType: TypeAlias = Dict[str, Any]
 RoutingResult: TypeAlias = Tuple[str, SessionType]
 
-# Константа для удобства форматирования
-SEGMENT_SEPARATOR = "\n\n— — —\n\n"
-
 
 async def handle_pending_module(text: str, sess: SessionType, think: bool | None = None) -> RoutingResult | None:
+    """Обрабатывает задержки выполнения модулей."""
     if (pending_module := sess.get("pending")) and pending_module in MODULES:
-        print("=" * 45)
-        print("pending_module content: ", pending_module or "Empty")
-        print("=" * 45)
-
-        response, continue_pending = await MODULES[pending_module](text, session=sess, think=think)
+        kwargs = {"session": sess, "think": think}
+        idx_name = INDEX_BY_LABEL.get(pending_module)
+        if idx_name:
+            kwargs["index"] = idx_name
+        # ToDo: возможно сюда так же стоит поставить перехватчик ошибки - команды СТОП от пользователя
+        # но это не точно, поскольку этот обработчик есть у вызываемых функций.
+        response, continue_pending = await MODULES[pending_module](text, **kwargs)
         sess["pending"] = pending_module if continue_pending else None
-
-        # Record interaction in history
+        response = _strip_service_markers(response)
         sess["history"].extend([
             {"user": text},
             {"bot": response}
@@ -686,7 +1565,6 @@ async def handle_pending_module(text: str, sess: SessionType, think: bool | None
 
         return response, sess
     return None
-
 
 
 async def is_possible_surname_or_specialty(segment: str) -> bool:
@@ -700,135 +1578,128 @@ async def is_possible_surname_or_specialty(segment: str) -> bool:
     # ensure repo is ready (creates data file on first use)
     await _ensure_doctors_repo_loaded()
     docs = repo.read_all()
-    # Проверка ФИО и специальности
+
+    # Проверка фамилии через общий helper (учитывает падежи/опечатки/регистр).
+    # Порог выше дефолтного, чтобы не ловить лишние fuzzy-совпадения в fallback-гейте.
+    if resolve_schedule_surname(text, docs, threshold=0.82):
+        return True
+
+    # Проверка специальности/юнитов.
     tl = text.lower()
     for d in docs:
-        if tl in d.get('fio', '').lower().split():
-            return True
-        if tl == (d.get('specialization') or '').lower():
+        spec = (d.get('specialization') or '').lower()
+        units = " ".join(d.get('units') or []).lower()
+        if tl and (tl == spec or tl in units.split() or tl in spec):
             return True
     return False
 
 
-# --- FILTER segment support (ARRIVING / CHILDREN / DMS) ---
-
-_DEF_TRUE = {"yes", "да", "true", "1"}
-_DEF_FALSE = {"no", "нет", "false", "0"}
-
-def _parse_filters(expr: str) -> Dict[str, bool]:
-    # "ARRIVING=YES; CHILDREN=NO; DMS=YES" -> {"arriving": True, "children": False, "dms": True}
-    pairs = [p.strip() for p in expr.split(';') if p.strip()]
-    out: Dict[str, bool] = {}
-    for p in pairs:
-        if '=' not in p:
-            continue
-        k, v = [t.strip().lower() for t in p.split('=', 1)]
-        if v in _DEF_TRUE:
-            out[k] = True
-        elif v in _DEF_FALSE:
-            out[k] = False
-    return out
-
-def _flag_from_cc(cc: str, key: str) -> Optional[bool]:
-    if not cc:
-        return None
-    s = cc.lower()
-    if key == 'arriving':
-        if 'не приход' in s or 'неприход' in s:
-            return False
-        if 'приходящ' in s:
-            return True
-        return None
-    if key == 'children':
-        if 'с 18 лет' in s or 'принимает с 18' in s or 'только взросл' in s:
-            return False
-        if 'дет' in s and ('работ' in s or 'принимает' in s):
-            return True
-        return None
-    if key == 'dms':
-        if 'не принимает по дмс' in s or 'дмс: нет' in s or 'дмс — нет' in s or 'дмс - нет' in s:
-            return False
-        if 'по дмс' in s or 'дмс: да' in s or 'дмс — да' in s or 'дмс - да' in s:
-            return True
-        return None
-    return None
+# Удалены - заменены на FilterProcessor
 
 
 def _norm_text(s: str) -> str:
+    """Приводит строку к lower()."""
     return (s or "").lower()
 
-def _extract_specialty_terms_from_segment(segment: str, docs: List[Dict[str, Any]]) -> List[str]:
-    """
-    Пытается извлечь возможные ключевые слова специальности из сегмента.
-    Возвращает только те токены, которые встречаются хотя бы в одной специализации/юните врача.
-    """
-    if not isinstance(segment, str) or not segment.strip():
-        return []
-    seg = _norm_text(segment)
-    seg = re.sub(r"[,.!?;:()\[\]{}]", " ", seg)
-    tokens = [t for t in re.split(r"\s+", seg) if t]
-    # Уберём частые служебные слова и слова фильтров
-    stop = set(getattr(doctor_info, 'STOP_WORDS', set())) | {
-        'дмс', 'страховка', 'страховой', 'страховая', 'по', 'с', 'без',
-        'дети', 'детям', 'детей', 'взрослые', 'взрослый', 'приходящий', 'приходящие', 'неприходящий',
-        'принимает', 'работает', 'где', 'кто', 'список', 'нужен', 'ищу'
-    }
-    tokens = [t for t in tokens if t not in stop and len(t) >= 3]
 
-    # Морфологическая нормализация (простая): множественное → единственное
-    norm_tokens: List[str] = []
-    for t in tokens:
-        try:
-            # используем имеющуюся нормализацию из doctor_info, если доступна
-            if hasattr(doctor_info, 'normalize_specialty_term'):
-                nt = doctor_info.normalize_specialty_term(t) or t
-            else:
-                nt = t[:-1] if (len(t) > 4 and (t.endswith('и') or t.endswith('ы'))) else t
-        except Exception:
-            nt = t
-        norm_tokens.append(nt)
+# Удалена - заменена на SegmentProcessor.extract_specialty_terms()
 
-    # Базовые синонимы под подстроки, встречающиеся в наших данных
-    synonyms = {
-        'лор': 'отоларинголог',
-        'узи': 'ультразвуков',   # покроет и "врач ультразвуковой диагностики"
-        'узист': 'ультразвуков',
-    }
-    expanded_tokens: List[str] = []
-    for t in norm_tokens:
-        expanded_tokens.append(t)
-        if t in synonyms:
-            expanded_tokens.append(synonyms[t])
 
-    if not expanded_tokens:
-        return []
+async def _search_in_cc_notes(
+        keywords: str,
+        fallback_segment: str | None = None,
+        match_mode: Literal["all", "any"] = "all",
+) -> str:
+    """Ищет врачей по ключевым словам/фразам в заметках call‑центра."""
+    await _ensure_doctors_repo_loaded()
+    try:
+        cc_by_id = _get_cc_info_map()
+    except Exception as e:
+        return f"Релевантной информации не найдено (ошибка загрузки заметок: {e})."
 
-    # Построим текст для поиска по каждому врачу: specialization + units
-    texts = []
+    docs = repo.read_all()
+
+    # Извлекаем ключевые слова/фразы
+    base_text = keywords or ""
+    if not base_text and fallback_segment:
+        base_text = fallback_segment
+
+    search_terms = CCNotesProcessor.extract_note_keywords(base_text)
+
+    if not search_terms:
+        return "Не удалось извлечь ключевые слова для поиска."
+
+    query_repr = " ".join(search_terms)
+    matched: List[Dict[str, Any]] = []
+
+    logger.debug("[CC_NOTES] terms=%s | mode=%s", search_terms, match_mode)
+
+    fuzzy_threshold = 0.86
+
     for d in docs:
-        spec = _norm_text(d.get('specialization') or '')
-        units = ", ".join(d.get('units') or [])
-        texts.append(spec + " " + _norm_text(units))
+        did = d.get('id')
+        if did is None:
+            continue
+        cc_text = cc_by_id.get(int(did), '')
+        if not cc_text:
+            continue
 
-    # Оставляем только те термины, которые где-то реально встречаются
-    valid_terms = []
-    for t in expanded_tokens:
-        if any(t in txt for txt in texts):
-            valid_terms.append(t)
-    # Уберём дубликаты, сохранив порядок
-    seen = set()
-    uniq_terms = []
-    for t in valid_terms:
-        if t not in seen:
-            seen.add(t)
-            uniq_terms.append(t)
-    return uniq_terms
+        # Очищаем HTML, NBSP → пробел, приводим к lower
+        clean_cc = CCNotesProcessor.normalize_text(cc_text)
+        clean_cc_fuzzy = normalize_text_for_fuzzy(clean_cc)
+        note_tokens = clean_cc_fuzzy.split()
+        note_join = clean_cc_fuzzy.replace(" ", "")
+        if not clean_cc_fuzzy:
+            continue
+
+        def _term_matches(term: str) -> bool:
+            term_norm = normalize_text_for_fuzzy(term)
+            if not term_norm:
+                return False
+            if term_norm in clean_cc_fuzzy:
+                return True
+            term_join = term_norm.replace(" ", "")
+            if term_join and term_join in note_join:
+                return True
+            for tok in note_tokens:
+                if fuzzy_match(term_norm, tok, fuzzy_threshold):
+                    return True
+            for i in range(len(note_tokens) - 1):
+                joined = note_tokens[i] + note_tokens[i + 1]
+                if fuzzy_match(term_norm, joined, fuzzy_threshold):
+                    return True
+            return False
+
+        # Проверяем наличие терминов согласно match_mode
+        if match_mode == "all":
+            has_match = all(_term_matches(term) for term in search_terms)
+        else:
+            has_match = any(_term_matches(term) for term in search_terms)
+
+        if has_match:
+            dd = dict(d)
+            dd['callCenterInfo'] = cc_text
+            matched.append(dd)
+
+    if not matched:
+        return f"Врачи с упоминанием «{query_repr}» в заметках не найдены."
+
+    # Используем существующий формат SAFE_LIST
+    full_text = doctor_info.format_documents(matched)
+    compact = _format_compact(matched)
+    compact_with_query = compact.replace("[SAFE_LIST]", f"[SAFE_LIST]\nCC_QUERY=\"{query_repr}\"")
+
+    # Добавляем заголовок с запросом
+    header = f"Запрос \"{query_repr}\" встречается у следующих врачей:\n"
+    return header + compact_with_query + "\n\n[RAW_FULL]\n" + full_text
 
 
-async def _filter_doctors_via_cc_info(filters: Dict[str, bool], segment: str | None = None) -> str:
-    """Вернёт отформатированный список врачей, удовлетворяющих фильтрам, а также (если удаётся распознать)
-    специальности из того же сегмента. Если специальность не распознана — поведение остаётся прежним.
-    """
+async def _filter_doctors_via_cc_info(
+        filters: Dict[str, Any],
+        segment: str | None = None,
+        fallback_segment: str | None = None,
+) -> str:
+    """Возвращает отформатированный список врачей, удовлетворяющих фильтрам."""
     await _ensure_doctors_repo_loaded()
     try:
         cc_by_id = _get_cc_info_map()
@@ -836,34 +1707,50 @@ async def _filter_doctors_via_cc_info(filters: Dict[str, bool], segment: str | N
         return f"Релевантной информации не найдено (ошибка загрузки заметок колл-центра: {e})."
 
     docs = repo.read_all()
+
     # Попробуем аккуратно вытащить ключевые слова специальности из сегмента
     spec_terms: List[str] = []
     if segment:
         try:
-            spec_terms = _extract_specialty_terms_from_segment(segment, docs)
+            spec_terms = SegmentProcessor.extract_specialty_terms(segment, docs)
         except Exception:
             spec_terms = []
+
+    # Fallback: если не нашли в текущем сегменте, попробуем во всём тексте запроса
+    if not spec_terms and fallback_segment and fallback_segment != segment:
+        try:
+            spec_terms = SegmentProcessor.extract_specialty_terms(fallback_segment, docs)
+        except Exception:
+            spec_terms = []
+
     require_spec = bool(spec_terms)
     matched: List[Dict[str, Any]] = []
 
     for d in docs:
         did = d.get('id')
-        cc_text = cc_by_id.get(did, '')
+        if did is None:
+            continue
+        cc_text = cc_by_id.get(int(did), '')
         ok = True
+
         # 1) Специальность/направление (если распознан термин спец-сти в сегменте)
         if require_spec:
             units_text = _norm_text(" ".join(d.get('units') or []))
             spec_text = _norm_text(d.get('specialization') or '')
+
             def _match_in_units(term: str) -> bool:
                 return term in units_text
+
             def _match_in_spec(term: str) -> bool:
                 if not spec_text:
                     return False
                 # требуем соседство с "врач" в пределах 25 символов в любую сторону
                 pattern = rf"(врач[^\n\r\-,:;]{{0,25}}{re.escape(term)})|({re.escape(term)}[^\n\r\-,:;]{{0,25}}врач)"
                 return re.search(pattern, spec_text) is not None
+
             if not (any(_match_in_units(t) for t in spec_terms) or any(_match_in_spec(t) for t in spec_terms)):
                 ok = False
+
         # 2) Флаги FILTER (ДМС/дети/приходящий)
         for k, desired in filters.items():
             key = k.lower()
@@ -873,12 +1760,24 @@ async def _filter_doctors_via_cc_info(filters: Dict[str, bool], segment: str | N
                 key = 'children'
             elif key in ('dms', 'дмс'):
                 key = 'dms'
+            elif key.startswith('notes'):
+                key = 'notes'
             else:
                 continue
-            val = _flag_from_cc(cc_text, key)
+
+            if key == 'notes':
+                keywords = desired if isinstance(desired, list) else [desired]
+                note_text = CCNotesProcessor.normalize_text(cc_text or '')
+                if not keywords or not all(k in note_text for k in keywords):
+                    ok = False
+                    break
+                continue
+
+            val = CCNotesProcessor.get_flag(cc_text, key)
             if val is None or val != desired:
                 ok = False
                 break
+
         if ok:
             dd = dict(d)
             dd['callCenterInfo'] = cc_text or 'Нет заметок'
@@ -889,80 +1788,100 @@ async def _filter_doctors_via_cc_info(filters: Dict[str, bool], segment: str | N
 
     full_text = doctor_info.format_documents(matched)
     compact = _format_compact(matched)
-    return compact + "\n\n[RAW_FULL]\n" + full_text
+    note_terms = filters.get('notes') if isinstance(filters, dict) else None
+    header = ""
+    if isinstance(note_terms, list) and note_terms:
+        query_phrase = " ".join(note_terms)
+        header = f"Запрос \"{query_phrase}\" встречается у следующих врачей:\n"
+    return header + compact + "\n\n[RAW_FULL]\n" + full_text
 
 
 async def process_segments(text: str, sess: SessionType, think: bool | None = None) -> str:
+    """
+    Процессинг системы для принятия решения об использовании документальной базы.
+    - Происходит в ходе сплита (билдинг сегментов) запроса на основе шаблонов.
+    - Упрощенное разбиение на сегменты
+    - Обработка поиска по заметкам КЦ
+    - Обработка поиска по менеджерам
+    - Обработка фильтров
+    - Обработка искомой информации из документальной базы
+    """
+    # Всегда прогреваем кэш врачей при любом запросе
+    await _ensure_doctors_repo_loaded()
     segments = await split_into_segments(text, sess, think)
+    logger.debug("segments=%d: %s", len(segments), segments)
     responses: List[str] = []
 
     for idx, segment in enumerate(segments, 1):
-        # SAFETY NET: если LLM не вернул FILTER:, но сегмент выглядит как фильтр — обрабатываем правилами
-        kw_filters = _keyword_to_filter(segment)
-        if kw_filters:
-            print("[KEYWORD→FILTER] parsed:", kw_filters)
-            response = await _filter_doctors_via_cc_info(kw_filters, segment=segment)
-            responses.append(response)
-            continue
-        # 0) FILTER: ... → обрабатываем напрямую, не ломая существующие ветки
-        m = FILTER_RE.match(segment)
-        if m:
-            flt = _parse_filters(m.group(1))
-            print("[FILTER] parsed:", flt)
-            response = await _filter_doctors_via_cc_info(flt, segment=segment)
+        logger.debug("[seg#%d] raw='%s'", idx, segment)
+
+        # 1. Поиск по заметкам КЦ
+        if response := await _handle_note_search(segment, text):
             responses.append(response)
             continue
 
-        # Быстрый путь: если это похоже на фамилию/спец-сть — сразу идём в doctor_info,
-        # чтобы не ждать классификатор LLM (который может зависнуть)
-        try:
-            if await is_possible_surname_or_specialty(segment):
-                print(f"  [Force doctor_info fallback EARLY] Отправляю сегмент напрямую в doctor_info: {segment}")
-                response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
-                # Добавим RAW-маркер, чтобы миновать postprocessing LLM
-                responses.append(RAW_MODE_MARKER + "\n" + response)
-                continue
-        except Exception as e:
-            print(f"[EARLY fallback check error]: {e}")
+        # 2. Поиск по менеджерам
+        if response := await _handle_manager_search(segment, text):
+            responses.append(response)
+            continue
 
+        # 3. Обработка фильтров
+        if response := await _handle_filter_search(segment, text):
+            responses.append(response)
+            continue
+
+        # 4. Early fallback к doctor_info
+        if response := await _try_doctor_fallback(segment, sess, think, f"seg#{idx} EARLY"):
+            responses.append(response)
+            continue
+
+        # 5. Классификация и обработка через модули
         labels = await classify(segment, sess, think)
         main_labels = [lbl for lbl in labels if lbl in LABEL_PRIORITY]
+        logger.debug("[seg#%d] labels=%s | main=%s", idx, labels, main_labels)
 
-        print("=" * 45)
-        print(f"PART view #{idx}: ", segment or "Empty PART")
-        print("LABELS: ", labels)
-        print("=" * 45)
+        # 5.5. Патч: принудительная активация meilisearch при наличии слова "скрипт"
+        script_hit_seg, script_hit_full = SegmentProcessor.check_pattern_match(segment, text, SCRIPT_WORD_RE)
+        if (script_hit_seg or script_hit_full) and "SCRIPTS" not in main_labels:
+            logger.debug("[seg#%d] скрипт обнаружен → принудительно добавляем SCRIPTS", idx)
+            main_labels.insert(0, "SCRIPTS")  # Добавляем в начало для приоритета
 
-        # Fallback если это возможно фамилия или специальность (второй шанс)
-        try:
-            if await is_possible_surname_or_specialty(segment):
-                print(f"  [Force doctor_info fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
-                response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
-                responses.append(RAW_MODE_MARKER + "\n" + response)
-                continue
-        except Exception as e:
-            print(f"[Fallback check error]: {e}")
-
-        if not main_labels:
-            print(f"  [Fallback] Отправляю сегмент напрямую в doctor_info: {segment}")
-            response, continue_pending = await get_doc_info_from_api(segment, session=sess, think=think)
-            responses.append(RAW_MODE_MARKER + "\n" + response)
+        # 6. Late fallback к doctor_info
+        if response := await _try_doctor_fallback(segment, sess, think, f"seg#{idx} LATE"):
+            responses.append(response)
             continue
 
+        # 7. Если нет основных лейблов - fallback к doctor_info
+        if not main_labels:
+            logger.debug("[seg#%d] no main_labels → doctor_info fallback", idx)
+            response, _ = await get_doc_info_from_api(segment, session=sess, think=think)
+            if c.DEBUG_RAW_OUTPUT:
+                responses.append(RAW_MODE_MARKER + "\n" + response)
+            else:
+                responses.append(response)
+            continue
+
+        # 8. Обработка через модули
         for label in main_labels:
-            response, continue_pending = await MODULES[label](segment, session=sess, think=think, )
-            responses.append(response)
+            kwargs: Dict[str, Any] = {"session": sess, "think": think}
+            idx_name = INDEX_BY_LABEL.get(label)
+            if idx_name:
+                kwargs["index"] = idx_name
+            logger.info("[seg#%d] call MODULE label=%s index=%s", idx, label, idx_name)
+
+            response, continue_pending = await MODULES[label](segment, **kwargs)
+
+            logger.debug("[seg#%d] module=%s responded, size=%d", idx, label, len(response) if response else 0)
+            if response:
+                responses.append(response)
+
             if continue_pending:
                 sess["pending"] = label
-                print("=" * 45)
-                print("need pending view: ", sess["pending"] or "Empty need")
-                print("=" * 45)
+                logger.debug("[seg#%d] pending set to %s", idx, label)
                 break
 
     final_answ = SEGMENT_SEPARATOR.join(responses)
-    print("=" * 45)
-    print("Финальный ответ процессора сегментов: ", final_answ)
-    print("=" * 45)
+    logger.debug("final response size=%d", len(final_answ))
     return final_answ
 
 
@@ -974,7 +1893,8 @@ async def process_segments(text: str, sess: SessionType, think: bool | None = No
 async def routing(text: str,
                   sess: SessionType | None = None,
                   extra_processing: Literal["direct", "processed"] = "processed",
-                  think: bool = None,
+                  think: bool | None = None,
+                  ai_feed: Literal["local", "cloud"] = "local",
                   ) -> AsyncGenerator[RoutingResult, None]:
     """
     Обработка входящего запроса пользователя идет в следующем направлении:
@@ -986,6 +1906,7 @@ async def routing(text: str,
     Here is variant of routing() that *yields* (partial_answer, session) pairs,
         so that the outer UI can stream them.
 
+    :param ai_feed: Что подключаем к итоговой обработке текста: облачную LLM или локальную
     :param think: Включает Reasoning у поддерживающей его модели
     :param extra_processing: определяется, будет ли использоваться на выходе
     постобработка входящих данных с помощью функции final_answering либо же
@@ -996,7 +1917,7 @@ async def routing(text: str,
     """
 
     # 1. Инициализируем состояние сессии обработки входящего текстового блока
-
+    think = bool(think) if think is not None else False  # ToDo: Надо проверить функционирование!
     sess = sess or {}
     sess.setdefault("pending", None)
     sess.setdefault("history", [])
@@ -1004,7 +1925,7 @@ async def routing(text: str,
     # Handle pending module if exists
     # TODO: Понять зачем вообще это тут вызывается
     if pending_result := await handle_pending_module(text, sess, think=think):
-        yield pending_result
+        yield pending_result  # потенциальная проблема - вывод строки вместо кортежа.
 
     # Process text segments
     result = await process_segments(text, sess, think=think, )
@@ -1012,7 +1933,8 @@ async def routing(text: str,
     # ==== SAFE_LIST path (детерминированный рендер без изменения final_answer) ====
     N, ids = _extract_safe_list_meta(result)
     if N and ids:
-        compact, raw_full = (result.split("\n\n[RAW_FULL]\n", 1) + [""])[:2] if "\n\n[RAW_FULL]\n" in result else (result, "")
+        compact, raw_full = (result.split("\n\n[RAW_FULL]\n", 1) + [""])[:2] if "\n\n[RAW_FULL]\n" in result else (
+            result, "")
         # Рендерим сами (без LLM), чтобы не терять позиции и не зависеть от final_answer
         formatted = _render_numbered_list_from_safe(compact)
         sess["history"].extend([{"user": text}, {"bot": formatted}])
@@ -1027,16 +1949,34 @@ async def routing(text: str,
 
     # ⬇️ новый быстрый выход для «сырых» (готовых) результатов
     if isinstance(result, str) and (RAW_MODE_MARKER in result):
-        # отдаём как есть, без постпроцесса (final_answering)
-        cleaned = result.replace(RAW_MODE_MARKER, "").lstrip("\n\r ")
-        yield cleaned, sess
-        return
+        if c.DEBUG_RAW_OUTPUT:
+            # отдаём как есть, без постпроцесса (final_answering)
+            cleaned = result.replace(RAW_MODE_MARKER, "").lstrip("\n\r ")
+            cleaned = _strip_service_markers(cleaned)
+            yield cleaned, sess
+            return
+        result = result.replace(RAW_MODE_MARKER, "").lstrip("\n\r ")
 
     if extra_processing == "processed":
-        async for partial in final_answering(text, result, think=think):
-            yield partial, sess  # Stream final response V1 with processing by final_answering func.
+        converted = False
+        strip_notes = _is_procedure_like_query(text)
+        converted_result = _convert_bullets_to_markers(result, include_notes=True)
+        if isinstance(result, str) and isinstance(converted_result, str) and converted_result != result:
+            converted = True
+        logging.getLogger().info("converted_to_markers=%s", converted)
+        result = converted_result
+        async for partial in final_answering(text, result, think=think, ai_feed=ai_feed):
+            cleaned = _dedupe_doctor_blocks(partial)
+            if strip_notes:
+                cleaned = _strip_cc_notes_from_markers(cleaned)
+            finalized = _number_doctor_blocks(cleaned)
+            if _validate_list_count(finalized, _count_fio_blocks(result)):
+                yield finalized, sess  # Stream final response V1 with processing by final_answering func.
+            else:
+                fallback = _number_doctor_blocks(_strip_service_markers(result))
+                yield fallback, sess
     else:
-        yield result, sess  # Stream final response V2 without handling by final_answering func.
+        yield _strip_service_markers(result), sess  # Stream final response V2 without handling by final_answering func.
 
 
 async def process_routing_request(query: str, think: bool | None = None) -> Tuple[str, Dict[str, Any]]:
@@ -1063,6 +2003,7 @@ async def main():
 
 if __name__ == "__main__":
     import sys
+
     query = " ".join(sys.argv[1:]).strip() or input("Введите запрос: ").strip()
     final_resp, final_sess = asyncio.run(process_routing_request(query, think=False))
     print(final_resp)

@@ -1,0 +1,86 @@
+INPUT: Скажите, есть ли акция или скидка?
+OUTPUT: {"labels":["NEWS"]}
+
+INPUT: Есть ли сейчас скидки на УЗИ?
+OUTPUT: {"labels":["NEWS"]}
+
+INPUT:  Какие акции сейчас действуют?
+OUTPUT: {"labels":["NEWS"]}
+
+INPUT: Скидку можете сделать? Может быть, акция какая-нибудь есть?
+OUTPUT: {"labels":["NEWS"]}
+
+INPUT: Расскажите новости клиники
+OUTPUT: {"labels":["NEWS"]}
+
+INPUT: Сколько стоит приём кардиолога Михлик?
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: Прайс Белохвостиковой
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: Стоимость приема у Дразнина
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: Какое расписание работы у Пивоваровой?
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: Как подготовиться к анализу крови?
+OUTPUT: {"labels":["SCRIPTS"]}
+
+INPUT: Запишите меня к терапевту завтра утром.
+OUTPUT: {"labels":["APPOINTMENT"]}
+
+INPUT: Вы плохо взяли кровь, огромный синяк!
+OUTPUT: {"labels":["SCRIPTS"]}
+
+INPUT: Подготовка к УЗИ и запишите к УЗИсту.
+OUTPUT: {"labels":["SCRIPTS","APPOINTMENT"]}
+
+INPUT: Где принимает Иванов?
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: все про кольпоскопию
+OUTPUT: {"labels":["SCRIPTS"]}
+
+INPUT: подготовка к вульвоскопии
+OUTPUT: {"labels":["SCRIPTS"]}
+
+INPUT: врачи по дмс
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: какие врачи работают с детьми?
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: приходящие врачи
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: не приходящие врачи
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: урологи по дмс
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: кто проводит торакоцентез?
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: торакоцентез, что это такое?
+OUTPUT: {"labels":["SCRIPTS"]}
+
+INPUT: подготовка к торакоцентезу
+OUTPUT: {"labels":["SCRIPTS"]}
+
+INPUT: какие врачи делают узи брюшной полости?
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: кто проводит торакоцентез?
+OUTPUT: {"labels":["API_INFO"]}
+
+INPUT: торакоцентез, что это такое?
+OUTPUT: {"labels":["SCRIPTS"]}
+
+INPUT: подготовка к торакоцентезу
+OUTPUT: {"labels":["SCRIPTS"]}
+
+INPUT: какие врачи делают узи брюшной полости?
+OUTPUT: {"labels":["API_INFO"]}

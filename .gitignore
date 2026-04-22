@@ -168,6 +168,8 @@ cython_debug/
 
 #Project py files
 all_reqs.txt
-config.py
 vllm_llama_func_call1.py
 apidata/
+messengers_router/чаты из ватсап для ии/
+app_data/settings/users_db.json
+data/

@@ -1,262 +1,142 @@
-# Distributed Local Retrieval-Augmented Generation (RAG) Agent Using LangGraph. 
-## Adapted for the Russian Language
-__Llama 3.1, vikhr nemo 12b, Command-R, Ollama 0.4.6, Chroma 0.5.4, Tavily AI__
-
-# Agent Operation Algorithm
-
-## Request Processing Workflow
-
-### Speech Recognition
-- **Real-time recording:** Operator-patient dialogues are recorded on the fly.
-- **Audio-to-text conversion:** Speech is converted to text using [VOSK](https://alphacephei.com/vosk/).
-
-### Keyword Extraction
-- **Text analysis:** The input text is analyzed with an LLM (Large Language Model).
-- **Keyword extraction:** Key terms are identified for information retrieval.
-
-### Information Retrieval
-- **Database query:** The vector database ([ChromaDB](https://www.trychroma.com/)) is queried for relevant information.
-- **Text filtering:** Retrieved text is filtered using the `cointegrated/rubert-tiny2` model.
-
-### Response Formation
-- **Text generation:** Responses are created using an LLM.
-- **Hallucination check:**
-  - Ensures the response aligns with the database query results.
-  - Verifies correspondence with the extracted keywords.
-
-### Prompt Display
-- **Operator assistance:** The generated text is presented to the operator in the chatbot interface.
+# LocalRAGagent / Neiry Agent API
 
----
-
-## Task Distribution Between Servers
-
-### Server 1 (2 x NVIDIA RTX 4090)
-- Manages the vector database.
-- Performs text embedding.
-- Handles speech recognition.
-- Controls agent logic and integrates with clinical systems.
-
-### Server 2 (4 x AMD Radeon RX 7900 XTX)
-- Processes requests using the LLM.
-- Generates textual responses.
-
----
+Текущая версия проекта: production-ориентированный API-контур для клиники с двумя независимыми сценариями:
 
-## Tools and Technologies
-- **Speech Recognition:** [VOSK](https://alphacephei.com/vosk/)
-- **Vector Database:** [ChromaDB](https://www.trychroma.com/)
-- **Text Filtering Model:** `cointegrated/rubert-tiny2`
-- **Language Models:** Large Language Models (LLMs)
+- `for-messengers` — пациентский роутер (`messengers_router`) с stateful flow-логикой.
+- `for-call-center` — SSE-стрим для операторского интерфейса.
 
----
+Основной фокус текущего цикла: стабильность `messengers_router` v2, архитектурные guardrails и воспроизводимый remote eval.
 
-## Functional Capabilities of the AI Agent
+## Что сейчас умеет система
 
-### AI Agent Features
+### 1) Контур мессенджеров (`messengers_router`)
 
-The AI agent supports a flexible approach to request processing using complex routing logic and retrieval of relevant information. Its key functionalities include:
-
-### 1. Request Recognition and Routing
-- Identifies the data source for request processing:
-  - **Vector Storage:** Uses [ChromaDB](https://www.trychroma.com/) optimized for result diversity (MMR).
-  - **Chat with Memory:** Supports conversational mode with prior interaction history.
-  - **Web Search:** Acts as a fallback if no relevant data is found locally.
-  - **Session Termination:** Provides an option to end the agent's operation.
-
-### 2. Request Processing
-- **Focus and Enhancement of Queries:**
-  - Extracts keywords to optimize the search process.
-  - Refines queries for precise information retrieval.
-- **Multi-Step Data Retrieval:** Ensures high accuracy by:
-  - Utilizing various search strategies in the vector database:
-    - High response diversity (MMR, `lambda_mult=0.25`).
-    - Moderate diversity (`lambda_mult=0.85`).
-    - Mathematical computation of diversity based on the probability of finding relevant content in the collection.
-    - Specific embedding models for fallback searches.
-  - Selecting appropriate data collections for specific tasks.
+- Интенты: `APPOINTMENT`, `DOCTOR_SCHEDULE`, `DOCTOR_INFO`, `PRICE`, `ADDRESS`, `TEST_ASSIST`, `TEST_RESULT`, `PREPARE`, `NEWS`, `OTHER`, `URGENT`, `COMPLAINT`, `MEDICAL_ADVICE`.
+- Stateful-диалог: память сессии, pending-слоты, подтверждение/отмена записи, topic-switch guardrails.
+- NLU v2 pipeline с feature flags (`legacy_v2` / `llm_primary`) и debug trace.
+- Entity grounding перед merge в state.
+- Детерминированная сборка ответов через `response_builder.py`.
+- Handoff-политики для high-risk сценариев.
+- Архитектурный gate (циклы/границы импортов) + CI workflow.
 
-### 3. Filtering and Relevance Verification
-- Filters documents based on similarity to user query keywords (cosine distance evaluation).
-- Evaluates document relevance:
-  - Matches document content to the request using scoring models.
-  - Automatically switches to alternate sources if no relevant data is found.
+### 2) Контур колл-центра (`/v1/agent/stream`)
 
-### 4. Response Generation
-- Utilizes LLMs like `Llama 3.1 70b fp16`, `rscr/vikhr_nemo_12b`, or `Command-R` for task-specific generation:
-  - Generates text based on:
-    - Local vector database (RAG).
-    - Web search results if local data is insufficient.
-  - Verifies responses to eliminate hallucinations and ensure alignment with user queries.
+- SSE-стрим ответа для операторов.
+- Отдельный протокол от мессенджеров.
+- Защита `X-API-Key`.
 
-### 5. Conversational Memory
-- Maintains dialogue context for more accurate responses.
-- Stores interaction history for seamless user experience.
+## HTTP API (актуально)
 
-### 6. Error Handling and Session Logic
-- Proceeds to the next processing step if relevant data is unavailable, up to session termination.
-- Supports multi-step routing through a state graph.
-
-### 7. Asynchronous Processing
-- Employs asynchronous methods for parallel task execution, such as:
-  - Data retrieval.
-  - Response generation.
-  - Document relevance assessment.
+### For Messengers
 
-### 8. Integration with ChromaDB
-- Works with ChromaDB through built-in retrievers:
-  - Implements search strategies like MMR and cosine similarity for diverse results.
-  - Leverages fallback collections built using various embedding models (e.g., LaBSE, Distiluse).
-
-### 9. Response Quality Verification
-- Uses evaluation models to:
-  - Analyze document relevance.
-  - Ensure the adequacy of generated responses.
+- `POST /api/messenger-generate`
+  - NDJSON stream (`application/x-ndjson`)
+  - для Telegram/WhatsApp/Web-chat интеграций
 
-### 10. Interface and Session Management
-- User interaction through a chat interface.
-- Session termination command support.
-- Automatic handling of multiple requests within a session.
+- `POST /api/messenger-generate-once`
+  - единый JSON-ответ
+  - поддерживает `debug=true` и возвращает `state_update.debug`
 
----
+### For Call Center
 
-### User Interface Features
+- `POST /v1/agent/stream`
+  - SSE (`text/event-stream`)
+  - требует `X-API-Key`
 
-An asynchronous web server based on [Quart](https://pgjones.gitlab.io/quart/) will provide the interface for user interaction and agent integration into workflows. The interface supports session management for call center operators and file upload for data placement in vector collections based on user access rights.
+## Быстрый старт (локально)
 
-### Key Interface Features
+### 1) Установка зависимостей
 
-#### 1. Web Chat Interface
-- Users can send queries through a web page (CRM integration or standalone Windows app as per client agreement).
-- AI agent responses are displayed in real time.
-- Dialogue history is preserved for context-aware responses.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-#### 2. Asynchronous Query Handling
-- Queries are processed asynchronously for optimal performance.
+### 2) Конфигурация
 
-#### 3. File Upload and Processing
-- Supports uploading TXT, PDF, and web links (additional formats per client agreement).
-- Uploaded files are stored and processed for addition to ChromaDB.
+- Основная конфигурация: `agent_logic_2/config.ini`
+- API-ключ для call-center endpoint: `AGENT_API_KEY` (используется в `agent_api.py`)
+- Prompt override каталог: `app_data/prompts/` (опционально)
 
-#### 4. Data Collection Management
-- Allows prioritization of specific collections for user requests.
+### 3) Запуск API
 
-### Detailed Interface Description
+```bash
+uvicorn agent_api:app --host 0.0.0.0 --port 8000 --reload
+```
 
-#### 1. Main Page
-- **Route `/`:** Displays the chat interface using the `index.html` template.
+### 4) Smoke-проверка мессенджерного endpoint
 
-#### 2. Text Query Handling
-- **Route `/get`:**
-  - Accepts text queries via AJAX requests.
-  - Saves queries and responses in session history.
-  - Asynchronously calls the `get_agent_response` function for generating responses.
+```bash
+curl -s http://localhost:8000/api/messenger-generate-once \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "session_id":"s_local_smoke",
+    "text":"покажи расписание уролога",
+    "debug":true,
+    "llm_mode":"hybrid"
+  }' | jq .
+```
 
-#### 3. File Upload
-- **Route `/upload`:**
-  - Accepts files via POST requests.
-  - Supports `.pdf` and `.txt` formats.
-  - Processes files asynchronously and adds their content to the vector database.
+## Качество и регрессия
 
-#### 4. Document Processing
-- **Function `process_file`:**
-  - Processes uploaded files.
-  - Adds content to ChromaDB for future retrieval.
+### Локальные тесты
 
-#### 5. Session Support
-- Utilizes `session` for storing dialogue history.
-- Ensures context-aware responses in ongoing interactions.
+```bash
+PYTHONPATH=. pytest -q tests
+```
 
----
+### Архитектурный guardrail
 
-### Data Retrieval and Vector Database Integration
+```bash
+python3 messengers_router/scripts/check_architecture_imports.py
+```
 
-The AI agent uses ChromaDB and embedding models to perform high-precision search, data addition, and document processing. Its retrieval logic is built on an adaptive approach to search and collection management.
+### Remote eval (целевой gate: 100%)
 
-### Key Retrieval Features
+```bash
+bash messengers_router/eval_suite/run_remote_eval.sh \
+  --url http://<server>/api/messenger-generate-once
+```
 
-#### 1. Embedding Models
-- Supported models for text embeddings include:
-  - `cointegrated/LaBSE-en-ru`
-  - `sentence-transformers/distiluse-base-multilingual-cased-v1`
-  - `ai-forever/sbert_large_nlu_ru`
-  - `hkunlp/instructor-xl` (instruction-based embedding training)
+`run_remote_eval.sh` запускает `stage1`, `stage3`, `stage4`, `stage5`, `critical` и затем `coverage_ext`.
+Логи складываются в `messengers_router/eval_suite/logs/<run_id>/`.
 
-#### 2. ChromaDB Collection Management
-- Creation, deletion, and listing of collections.
-- Environment preparation for collection updates.
+## Текущий статус качества (2026-03-21)
 
-#### 3. Data Upload and Processing
-- Supported data types:
-  - **PDF:** Split into pages and indexed.
-  - **TXT:** Split into fragments for optimal indexing.
-  - **URL:** Text extracted, processed, and added to the database.
+- Локальный `pytest`: `150 passed`
+- Последний server remote eval: `run_id=1774094099`
+  - `stage1`: 20/20
+  - `stage3`: 9/9
+  - `stage4`: 15/15
+  - `stage5`: 49/49
+  - `critical`: 21/21
+  - `coverage_ext`: passed
 
-#### 4. Search and Filtering
-- Multiple search types:
-  - **Simil:** Vector similarity search.
-  - **Simil_score:** Similarity with scoring.
-  - **Vector:** Direct vector-based search.
-  - **MMR:** Maximal Marginal Relevance for diverse results.
-- Metadata-based filtering.
+## Репозиторий: что важно читать первым
 
-#### 5. Flexible Search Parameter Management
-- Adjustable parameters:
-  - Number of returned documents (`k`).
-  - Number of fetched documents (`fetch_k`).
-  - Diversity coefficient (`lambda_mult`).
+- API вход: `agent_api.py`
+- Мессенджерные endpoint: `messengers_router/endpoint.py`
+- Оркестратор: `messengers_router/router.py`
+- Политики/слоты: `messengers_router/policies.py`
+- Интеграции: `messengers_router/services.py`
+- Архитектурный статус: `messengers_router/ARCHITECTURE_STATUS.md`
+- Remote eval docs: `messengers_router/eval_suite/README.md`
 
----
+## Docker / Infra
 
-### Speech Recognition
+В `docker-compose.yml` описаны основные сервисы:
 
-The module records speech from a call center operator’s headset and processes it through an ASR server ([VOSK](https://alphacephei.com/vosk/)) via WebSocket. This enables the agent to handle voice requests and convert them into structured text for further processing.
+- `bookworm-agent`
+- `agent-api`
+- `nginx`
+- `certbot`
 
-### Key Features
+Перед запуском docker-контура проверьте mount-paths и внешнюю сеть `local_net` под ваш хост.
 
-#### 1. Goal
-- Provide a voice interface for user interaction.
-- Ensure accurate speech-to-text conversion.
+## Важно для разработки
 
-#### 2. Workflow
-- Records audio signals in real time.
-- Sends audio blocks to the ASR server via WebSocket.
-- Processes recognized text for use in queries.
-
-#### 3. Technical Details
-- Uses `sounddevice` for audio recording.
-- Asynchronous processing with `websockets`.
-- Customizable settings via command-line arguments.
-
----
-
-For detailed technical documentation and examples, refer to the [Documentation](./docs/README.md).
-
-
-
-## Code Description
-
-The code provides a framework for an agent that uses a state graph to handle user queries, perform actions such as document retrieval, answer generation, and web search.
-
-### Core LangGraph Logic
-
-**AgentState**: Defines the data structure for storing the agent’s current state. This is a TypedDict with fields for messages, the question, generation, web search state, and documents.
-
-**Agent**: The `__init__` constructor initializes the system, tools, and state graph.
-
-- The `retrieve` method fetches documents from the indexed storage based on the query.
-
-- The `generate` method produces an answer using the retrieved documents.
-
-- The `grade_documents` method assesses the relevance of documents to the given query.
-
-- The `web_search` method performs an Internet search and appends the results to the documents.
-
-- The `route_question` method determines whether the query should be directed to a web search or the vector store.
-
-- The `decide_to_generate` method decides whether to proceed with generating a response or to perform a web search.
-
-- The `grade_generation_v_documents_and_question` method checks whether the generated answer is correct and matches the query.
-
-## Contact
-For any questions or contributions, feel free to open an issue or submit a pull request.
+- Не правьте только `app_data/prompts/*`, если изменение должно жить в git.
+  Канонический набор prompt-файлов для ревью: `messengers_router/prompts/*`.
+- Для проверок поведения в мессенджерах используйте `.../api/messenger-generate-once` с `debug=true`.
+- Для серверной репрезентативности используйте только remote eval с той машины, где развернут текущий коммит.

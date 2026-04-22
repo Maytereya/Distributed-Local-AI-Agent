@@ -17,4 +17,4 @@ COPY . .
 EXPOSE 7860
 
 # Команда для запуска приложения
-CMD ["python", "gradio_interfaice.py"]
+CMD ["python", "gradio_interface.py"]

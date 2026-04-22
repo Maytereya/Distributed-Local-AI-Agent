@@ -1,0 +1,5 @@
+Данная директория является package - источником дефолтных промптов для /app_data/prompts, то есть является
+seed/default source.
+Runtime-источник для agent_logic_2: app_data (/app_data/prompts).
+При старте app_data дозаполняется из package-источника agent_logic_2/data/prompts и agent_logic_2/data/settings
+(gradio_interface.py:797, gradio_interface.py:798, persist.py:29).

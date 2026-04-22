@@ -1,0 +1,28 @@
+name: Architecture Fitness Checks
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+jobs:
+  architecture-fitness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run messengers_router architecture checks
+        run: python3 messengers_router/scripts/check_architecture_imports.py
+
+      - name: Run localragagent package architecture checks
+        run: python3 tools/check_localragagent_architecture.py
+
+      - name: Run FreeTalk eval quality gate
+        run: python3 tools/freetalk_quality_gate.py --profile deterministic
