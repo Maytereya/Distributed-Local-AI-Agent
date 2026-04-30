@@ -158,10 +158,37 @@ class Services:
             try:
                 if region_name:
                     try:
-                        return await asyncio.to_thread(api_nayka.find_doctor_schedule, last_name, region_name)
+                        payload = await asyncio.to_thread(
+                            api_nayka.find_doctor_schedule, last_name, region_name
+                        )
                     except TypeError:
-                        return await asyncio.to_thread(api_nayka.find_doctor_schedule, last_name)
-                return await asyncio.to_thread(api_nayka.find_doctor_schedule, last_name)
+                        payload = await asyncio.to_thread(
+                            api_nayka.find_doctor_schedule, last_name
+                        )
+                else:
+                    payload = await asyncio.to_thread(
+                        api_nayka.find_doctor_schedule, last_name
+                    )
+                # ``find_doctor_schedule`` historically returns string-error
+                # messages on negative outcomes ("Врач найден, но свободных
+                # слотов нет", "Врач не найден", "Не удалось получить связи
+                # врача: ..."). The cache layer can only store list payloads
+                # (see schedule_ttl_cache.AsyncListTTLStaleCache._store), so
+                # non-list returns leak back to callers without negative
+                # caching and force a fresh upstream call on every miss.
+                # Normalise to an empty list so we can store the negative
+                # outcome and avoid hammering Nayka on repeated lookups.
+                if not isinstance(payload, list):
+                    logger.info(
+                        "schedule_fetch_source_normalised_non_list "
+                        "last_name=%r region=%r payload_type=%s message=%r",
+                        last_name,
+                        region_name or "",
+                        type(payload).__name__,
+                        (str(payload) if payload is not None else "")[:160],
+                    )
+                    return []
+                return payload
             except Exception as exc:
                 last_exc = exc
                 if attempt == 0:
