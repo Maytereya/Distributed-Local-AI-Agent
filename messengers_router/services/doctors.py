@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime
 from difflib import get_close_matches
@@ -223,22 +224,49 @@ async def _schedule_by_specialty(
     if not candidates:
         return [], None
 
-    out_rows: list[dict[str, Any]] = []
-    matched_but_without_slots = False
-    for doc in candidates:
+    # Параллельно собираем расписания для всех 8 кандидатов.
+    # Раньше цикл был последовательным: каждый surname блокировал
+    # вызов следующего, плюс каждый `find_doctor_schedule` под капотом
+    # делает каскад HTTP-вызовов к Nayka (/doctors → /doctorCompanyUnits
+    # → /doctorRegions → /doctorSchedule × дни → /doctorScheduleCells).
+    # Для специальностей с 8 кандидатами и многими повторными походами
+    # в Nayka это давало >100 секунд (см. кейс «Расписание уролог»
+    # 2026-04-30). Параллелизация с per-doctor timeout снимает узкое
+    # место: один залипший врач больше не блокирует остальных.
+    # Per-doctor timeout 60s — компромисс под текущую деградацию
+    # Nayka schedule API. Замер 2026-04-30: одиночный
+    # find_doctor_schedule сейчас занимает 38-224с (Трубин — 224с,
+    # Тюрин — 60с, Михлик — 38с). 60с пропускает большинство врачей,
+    # а аномально медленные (Трубин 224с) обрезаются — без них
+    # расписание остальных всё равно вернётся.
+    # Concurrency 8 = все 8 кандидатов едут разом → верхняя граница
+    # на schedule-фазу = 60с (max одного fetch), а не 60с × batch.
+    # Итого pipeline: LLM ≈ 14с + schedule ≤ 60с = до 74с в худшем
+    # случае; типично 35-50с при текущей нагрузке Nayka.
+    _PER_DOCTOR_TIMEOUT_S = 60.0
+    _MAX_CONCURRENT_DOCTORS = 8
+    _doctor_sem = asyncio.Semaphore(_MAX_CONCURRENT_DOCTORS)
+
+    async def _fetch_one(doc: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
+        """Вернуть ``(row | None, matched_but_without_slots)`` для одного врача."""
         fio = str(doc.get("fio") or "").strip()
         if not fio:
-            continue
+            return None, False
         surname = fio.split()[0]
-        try:
-            data = await self._get_schedule_payload_cached(surname)
-        except Exception:
-            continue
+        async with _doctor_sem:
+            try:
+                data = await asyncio.wait_for(
+                    self._get_schedule_payload_cached(surname),
+                    timeout=_PER_DOCTOR_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                return None, False
+            except Exception:
+                return None, False
         if _is_schedule_no_slots_text(data):
-            matched_but_without_slots = True
-            continue
+            return None, True
         if not isinstance(data, list) or not data:
-            continue
+            return None, False
         for row in data:
             if not isinstance(row, dict):
                 continue
@@ -254,8 +282,18 @@ async def _schedule_by_specialty(
             slots = _iter_slot_datetimes(item.get("schedule") or {})
             if slots:
                 item["_nearest_slot"] = min(slots)
-            out_rows.append(item)
-            break
+            return item, False
+        return None, False
+
+    fetched = await asyncio.gather(*(_fetch_one(d) for d in candidates))
+
+    out_rows: list[dict[str, Any]] = []
+    matched_but_without_slots = False
+    for row, no_slots in fetched:
+        if no_slots:
+            matched_but_without_slots = True
+        if row is not None:
+            out_rows.append(row)
 
     if not out_rows:
         if matched_but_without_slots:

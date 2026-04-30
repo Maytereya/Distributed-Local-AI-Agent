@@ -90,6 +90,21 @@ def build_plan(
         return Plan(label=label, steps=steps)
 
     if label == "DOCTOR_SCHEDULE":
+        # Демоция: «Расписание уролог» (без конкретной фамилии) — это
+        # запрос списка специалистов, не загрузки 8 расписаний скопом.
+        # Прежде такие запросы триггерили `_schedule_by_specialty`,
+        # который под нагрузкой Nayka API отвечал 70+ секунд (а часто
+        # вообще не успевал). При запросе только специальности
+        # переключаем на DOCTOR_INFO — мгновенная выдача списка из
+        # JSONL-кэша. После выбора конкретного врача расписание
+        # запрашивается прицельно за разумное время.
+        has_specific_doctor = any(
+            str(entities.get(key) or "").strip()
+            for key in ("doctor_id", "doctor_name", "doctor", "fio", "last_name", "doctor_last_name")
+        )
+        if not has_specific_doctor:
+            steps.append(PlanStep(tool="doctors_info", input={"query": user_text, "entities": dict(entities)}))
+            return Plan(label="DOCTOR_INFO", steps=steps)
         steps.append(PlanStep(tool="doctors_schedule_week", input={"query": user_text, "entities": dict(entities)}))
         return Plan(label=label, steps=steps)
 
