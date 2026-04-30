@@ -47,10 +47,16 @@ class GraphOutput:
 
 def get_dialog_state(state: SessionState) -> DialogState:
     raw = str(state.last_entities.get("_dialog_state") or "").strip()
+    # Пустое значение — штатная ситуация для свежих сессий, а также для
+    # сессий, в которых ``_dialog_state`` ещё не записывали. Раньше пустая
+    # строка падала в DialogState('') -> ValueError и заполняла логи
+    # WARNING-стек-трейсами на каждом первом ходу.
+    if not raw:
+        return DialogState.IDLE
     try:
         return DialogState(raw)
     except Exception:
-        log.warning("dialog_state_deserialize_failed", exc_info=True)
+        log.warning("dialog_state_deserialize_failed raw=%r", raw, exc_info=True)
         return DialogState.IDLE
 
 

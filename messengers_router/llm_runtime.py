@@ -7,7 +7,12 @@
 from __future__ import annotations
 
 import asyncio
+import json as _json
+import os as _os
+import time as _time
+import uuid as _uuid
 from contextlib import asynccontextmanager
+from pathlib import Path as _Path
 from typing import Any, AsyncGenerator
 
 from ollama import AsyncClient
@@ -24,6 +29,43 @@ except Exception:
     _MAX_CONCURRENCY = _DEFAULT_MAX_CONCURRENCY
 _SEMAPHORE = asyncio.Semaphore(max(1, _MAX_CONCURRENCY))
 _OLLAMA_CLIENT = AsyncClient(c.ollama_url)
+
+
+# --- DEBUG: файловый лог промптов и ответов ---
+# Включается env-переменной MR_LLM_LOG_PROMPTS=1.
+# Пишет одну JSON-line на каждое событие в /tmp/llm_prompts.jsonl
+# События: prompt_request (до вызова), prompt_response (после успеха),
+#          prompt_timeout (на TimeoutError), prompt_error (на любое исключение).
+# Цель: захватить реальный промпт даже при зависании LLM, сравнить
+# отличие между быстрыми ("Расписание хирург") и медленными
+# ("Расписание уролог") запросами.
+_PROMPT_LOG_PATH = _Path(_os.getenv("MR_LLM_LOG_PATH", "/tmp/llm_prompts.jsonl"))
+# Маркер-файл: если /tmp/llm_prompts.enabled существует → пишем prompt-лог.
+# Так не нужно перезапускать сервер — touch/rm включает/выключает на лету.
+_PROMPT_LOG_MARKER = _Path("/tmp/llm_prompts.enabled")
+
+
+def _prompt_log_enabled() -> bool:
+    if str(_os.getenv("MR_LLM_LOG_PROMPTS", "")).strip() in {"1", "true", "True"}:
+        return True
+    try:
+        return _PROMPT_LOG_MARKER.exists()
+    except Exception:
+        return False
+
+
+def _log_prompt_event(event: str, payload: dict[str, Any]) -> None:
+    if not _prompt_log_enabled():
+        return
+    record = {"ts": _time.time(), "event": event, **payload}
+    try:
+        _PROMPT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _PROMPT_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(record, ensure_ascii=False))
+            fh.write("\n")
+    except Exception:
+        # Не падаем, если лог-файл недоступен — debug-фича.
+        pass
 
 
 class LLMQueueTimeoutError(RuntimeError):
@@ -83,19 +125,66 @@ async def generate_text_with_usage(
 ) -> tuple[str, dict[str, int]]:
     model = llm or LLMName.get()
     resolved_think = ollama_settings.resolve_think(think)
-    async with llm_slot(queue_timeout_ms):
-        res = await asyncio.wait_for(
-            _OLLAMA_CLIENT.generate(
-                model=model,
-                prompt=prompt,
-                options=ollama_settings.options_set(),
-                format=fmt,
-                keep_alive=-1,
-                think=resolved_think,
-            ),
-            timeout=max(5, int(timeout_s)),
+    request_id = _uuid.uuid4().hex[:12] if _prompt_log_enabled() else ""
+    started_at = _time.monotonic()
+    if _prompt_log_enabled():
+        _log_prompt_event(
+            "prompt_request",
+            {
+                "id": request_id,
+                "model": model,
+                "fmt": fmt,
+                "timeout_s": int(timeout_s),
+                "prompt_len": len(prompt),
+                "prompt": prompt,
+            },
         )
-    return _extract_response_text(res), _extract_usage(res)
+    try:
+        async with llm_slot(queue_timeout_ms):
+            res = await asyncio.wait_for(
+                _OLLAMA_CLIENT.generate(
+                    model=model,
+                    prompt=prompt,
+                    options=ollama_settings.options_set(),
+                    format=fmt,
+                    keep_alive=-1,
+                    think=resolved_think,
+                ),
+                timeout=max(5, int(timeout_s)),
+            )
+    except asyncio.TimeoutError:
+        if _prompt_log_enabled():
+            _log_prompt_event(
+                "prompt_timeout",
+                {"id": request_id, "duration_s": round(_time.monotonic() - started_at, 3)},
+            )
+        raise
+    except Exception as exc:
+        if _prompt_log_enabled():
+            _log_prompt_event(
+                "prompt_error",
+                {
+                    "id": request_id,
+                    "duration_s": round(_time.monotonic() - started_at, 3),
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:300],
+                },
+            )
+        raise
+    text = _extract_response_text(res)
+    usage = _extract_usage(res)
+    if _prompt_log_enabled():
+        _log_prompt_event(
+            "prompt_response",
+            {
+                "id": request_id,
+                "duration_s": round(_time.monotonic() - started_at, 3),
+                "response_len": len(text),
+                "response": text,
+                "usage": usage,
+            },
+        )
+    return text, usage
 
 
 @asynccontextmanager
