@@ -32,6 +32,11 @@ from ._common import (
     _normalise_catalog_text,
     _normalise_input,
 )
+from ._unit_canonicalisation import (
+    canonicalise_unit as _canonicalise_unit,
+    is_uzi_unit as _is_uzi_unit,
+    unit_matches_specialty as _unit_matches_specialty,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -306,24 +311,39 @@ def _split_spec_lines(spec_text: str) -> list[str]:
 
 
 def _matches_uzi_doctor_profile(doc: dict[str, Any]) -> bool:
-    spec_text = str(doc.get("specialization") or "")
-    if not spec_text:
-        return False
+    """
+    УЗИ-врач — это тот, у кого подразделение «Врач ультразвуковой
+    диагностики» (или эквивалент). НЕ матчим врачей, у которых УЗИ
+    упоминается лишь как инструмент внутри основного приёма (например,
+    эндокринолог, который делает УЗИ щитовидной железы прямо на
+    приёме). Раньше fallback по spec_text вытягивал таких как
+    «УЗИ-врачей», что неверно — пациент, попросивший УЗИ, получал
+    профильного эндокринолога/гинеколога вместо выделенного УЗИ-
+    специалиста.
 
-    units_text = " ".join(str(x or "") for x in (doc.get("units") or []))
-    units_norm = _normalise_input(units_text)
-    if "ультразвук" in units_norm or re.search(r"\bузи\b", units_norm):
-        return True
+    Проверка идёт двумя слоями:
+    1) Канонизация: если unit известен карте `_unit_canonicalisation`,
+       решение принимается по ней (исключает ложные срабатывания типа
+       «эндокринолог делает УЗИ → попал в УЗИ»).
+    2) Legacy substring fallback по полю `units` — для unit'ов, ещё
+       не добавленных в карту.
+    """
 
-    for raw_line in _split_spec_lines(spec_text):
-        line = _normalise_input(raw_line)
-        if not line or not _UZI_LINE_RE.search(line):
-            continue
-        if _UZI_FALSE_POSITIVE_RE.search(line):
-            continue
-        if "врач ультразвуковой диагностики" in line or "ультразвуков" in line:
+    def _unit_is_uzi(unit_name: str) -> bool:
+        canonical_match = _is_uzi_unit(unit_name)
+        if canonical_match is not None:
+            return canonical_match
+        unit_norm = _normalise_input(unit_name)
+        return bool("ультразвук" in unit_norm or re.search(r"\bузи\b", unit_norm))
+
+    for unit_name in (doc.get("units") or []):
+        if isinstance(unit_name, str) and _unit_is_uzi(unit_name):
             return True
-        if line.startswith("узи "):
+    for unit_name in _collect_role_unit_names(doc, main_value=True):
+        if _unit_is_uzi(unit_name):
+            return True
+    for unit_name in _collect_role_unit_names(doc, main_value=False):
+        if _unit_is_uzi(unit_name):
             return True
     return False
 
@@ -472,6 +492,18 @@ def _doctor_role_specialty_match_level(doc: dict[str, Any], specialty: str) -> i
     - 1: найдено совпадение в unit name с main=false / legacy units
     - 0: совпадений нет
 
+    Логика матча для одного unit name:
+    1) Сначала смотрим в `_unit_canonicalisation.UNIT_TO_CANONICAL`.
+       Если unit известен карте — отвечаем строго по ней (никакого
+       substring). Это убирает ложные срабатывания вида
+       «Врач-стоматолог-ортопед» → «ортопед» и
+       «Врач-мануальный терапевт» → «терапевт».
+    2) Если unit карте неизвестен — fallback на legacy substring-
+       матчер `_matches_specialty_terms`. Так новые подразделения,
+       ещё не внесённые в карту, продолжают работать как раньше
+       (с известным риском ложных матчей), но в лог попадает запись
+       `unit_canonicalisation_unknown ...` — сигнал пополнить карту.
+
     :param doc: карточка врача
     :param specialty: каноническая специальность (например, "хирург")
     :return: целочисленный приоритет совпадения
@@ -480,12 +512,19 @@ def _doctor_role_specialty_match_level(doc: dict[str, Any], specialty: str) -> i
     if not spec_norm:
         return 0
 
+    def _unit_matches(unit_name: str) -> bool:
+        canonical_match = _unit_matches_specialty(unit_name, spec_norm)
+        if canonical_match is not None:
+            return canonical_match
+        # Unit отсутствует в карте → используем legacy substring matcher.
+        return _matches_specialty_terms(unit_name, spec_norm)
+
     main_true_units = _collect_role_unit_names(doc, main_value=True)
-    if any(_matches_specialty_terms(unit_name, spec_norm) for unit_name in main_true_units):
+    if any(_unit_matches(unit_name) for unit_name in main_true_units):
         return 2
 
     main_false_units = _collect_role_unit_names(doc, main_value=False)
-    if any(_matches_specialty_terms(unit_name, spec_norm) for unit_name in main_false_units):
+    if any(_unit_matches(unit_name) for unit_name in main_false_units):
         return 1
 
     return 0
