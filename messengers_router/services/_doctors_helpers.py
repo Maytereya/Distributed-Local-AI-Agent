@@ -169,16 +169,30 @@ _SCHEDULE_SPECIALTY_TOKENS = set(_SPECIALTY_CANONICAL) | {"узи", "узист"
 
 def _is_schedule_no_slots_text(payload: Any) -> bool:
     """
-    Определяет текстовый ответ Nayka API, когда врач найден, но свободных слотов нет.
+    Определяет ответ Nayka API «врач найден, но свободных слотов нет».
 
-    :param payload: ответ из find_doctor_schedule
-    :return: True, если это кейс отсутствия свободных слотов, а не отсутствия врача
+    Поддерживает три формы payload:
+    1. Строка с маркером «свободных слотов нет» — оригинальный
+       сырой ответ ``find_doctor_schedule``.
+    2. Synthetic list-маркер ``[{"_no_free_slots": True, ...}]`` —
+       создаётся в ``_fetch_schedule_source`` для сохранения
+       результата в list-кэше при сохранении семантики «нет слотов».
+    3. Что-либо другое → False.
+
+    :param payload: ответ из find_doctor_schedule (после нормализации
+                    в кэшируемый формат — list/строка).
+    :return: True, если это кейс отсутствия свободных слотов, а не
+             отсутствия врача / сетевой ошибки / валидного расписания.
     """
-
-    if not isinstance(payload, str):
-        return False
-    norm = _normalise_input(payload)
-    return "свободных слотов нет" in norm
+    if isinstance(payload, str):
+        norm = _normalise_input(payload)
+        return "свободных слотов нет" in norm
+    if isinstance(payload, list):
+        # Synthetic-маркер из `_fetch_schedule_source`.
+        for item in payload:
+            if isinstance(item, dict) and item.get("_no_free_slots") is True:
+                return True
+    return False
 
 
 def _schedule_payload_matches_doctor(data: Any, doctor_name: str) -> bool:

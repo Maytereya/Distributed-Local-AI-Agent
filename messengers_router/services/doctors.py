@@ -788,18 +788,30 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
     try:
         for candidate in candidates:
             data = await self._get_schedule_payload_cached(candidate, region_name)
+            # ВАЖНО: проверяем «свободных слотов нет» ДО positive-match.
+            # Synthetic-list `[{"_no_free_slots": True, ...}]` из
+            # `_fetch_schedule_source` тоже non-empty, и `_schedule_payload_matches_doctor`
+            # может его принять за валидное расписание (если в нём есть
+            # `fio`). Без раннего ветвления получим пустое расписание
+            # вместо корректного handoff на оператора по «нет слотов».
+            if _is_schedule_no_slots_text(data):
+                schedule_unavailable_reason = "no_free_slots_2_weeks"
+                last_name = candidate
+                data = []
+                continue
             if isinstance(data, list) and data and _schedule_payload_matches_doctor(data, candidate):
                 last_name = candidate
                 break
-            if _is_schedule_no_slots_text(data):
-                schedule_unavailable_reason = "no_free_slots_2_weeks"
             if region_name:
                 data = await self._get_schedule_payload_cached(candidate, None)
+                if _is_schedule_no_slots_text(data):
+                    schedule_unavailable_reason = "no_free_slots_2_weeks"
+                    last_name = candidate
+                    data = []
+                    continue
                 if isinstance(data, list) and data and _schedule_payload_matches_doctor(data, candidate):
                     last_name = candidate
                     break
-                if _is_schedule_no_slots_text(data):
-                    schedule_unavailable_reason = "no_free_slots_2_weeks"
     except Exception:
         return _service_fallback(
             note="doctors_schedule_week unavailable",

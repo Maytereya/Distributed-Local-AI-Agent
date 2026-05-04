@@ -1057,10 +1057,35 @@ def find_doctor_schedule(
         })
 
     if not result and matched_but_without_slots:
-        return "Врач найден, но свободных слотов нет в ближайшие 2 недели."
+        return _NO_FREE_SLOTS_MESSAGE
     if not result:
         return f"Врач с фамилией '{last_name}' не найден."
     return result
+
+
+# Каноническое сообщение «врач найден, слотов нет в 14 дней» —
+# вынесено в константу, чтобы caller-ы могли отличить этот кейс от
+# других строковых ошибок без дублирования текста.
+_NO_FREE_SLOTS_MESSAGE = "Врач найден, но свободных слотов нет в ближайшие 2 недели."
+_NO_FREE_SLOTS_MARKER = "свободных слотов нет"
+
+
+def is_no_free_slots_message(payload: str | None) -> bool:
+    """Проверяет, является ли строковый ответ ``find_doctor_schedule``
+    маркером «врач есть, свободных слотов нет в 14-дневном окне».
+
+    Используется в `messengers_router.services.core` чтобы отличить
+    «нет слотов» от «врач не найден» при нормализации не-list ответов
+    в кэшируемый формат.
+
+    :param payload: ответ ``find_doctor_schedule`` или иное строковое
+                    сообщение.
+    :return: True если это «нет свободных слотов», False во всех
+             остальных случаях (включая None / нестрока).
+    """
+    if not isinstance(payload, str):
+        return False
+    return _NO_FREE_SLOTS_MARKER in payload.lower()
 
 
 if __name__ == "__main__":

@@ -138,7 +138,22 @@ class Services:
     # -----------------------------
 
     def ensure_background_refresh_started(self) -> None:
-        """Запускает фоновые refresh-задачи кэшей (idempotent)."""
+        """Запускает фоновые refresh-задачи кэшей (idempotent).
+
+        Вызовы покрывают три независимых источника:
+        - doctors JSONL — справочник врачей (`unit_links`,
+          `specialization`, `regions`, `ord`). Используется DOCTOR_INFO,
+          DOCTOR_SCHEDULE и пайплайном matcher специальностей. Без
+          этого вызова кэш не обновляется автоматически — нашли
+          2026-05-04: на бою кэш отставал на 70 часов и не содержал
+          68 живых врачей (Макова, Пикалова, Школин и др.).
+        - price_by_region JSONL — справочник прайса.
+        - service_info JSONL — описания услуг для подготовки/PRICE.
+        """
+        try:
+            api_nayka.ensure_daily_refresh_started()
+        except Exception:
+            pass
         try:
             api_price.ensure_daily_price_refresh_started()
         except Exception:
@@ -169,24 +184,48 @@ class Services:
                     payload = await asyncio.to_thread(
                         api_nayka.find_doctor_schedule, last_name
                     )
-                # ``find_doctor_schedule`` historically returns string-error
-                # messages on negative outcomes ("Врач найден, но свободных
-                # слотов нет", "Врач не найден", "Не удалось получить связи
-                # врача: ..."). The cache layer can only store list payloads
-                # (see schedule_ttl_cache.AsyncListTTLStaleCache._store), so
-                # non-list returns leak back to callers without negative
-                # caching and force a fresh upstream call on every miss.
-                # Normalise to an empty list so we can store the negative
-                # outcome and avoid hammering Nayka on repeated lookups.
+                # ``find_doctor_schedule`` исторически возвращает
+                # строки-сообщения на негативных исходах:
+                #   1) "Врач с фамилией ... не найден"
+                #   2) "Врач найден, но свободных слотов нет в ближайшие
+                #      2 недели"
+                #   3) "Не удалось получить ..." (5xx / сеть)
+                # Cache layer хранит только list-payload, поэтому
+                # строки приходится нормализовать. Раньше всё сжималось
+                # в `[]`, и renderer терял различие между «врача нет» и
+                # «врач есть без слотов» — пациент видел generic
+                # «расписание не найдено», даже когда правильным ответом
+                # должен быть handoff на оператора («все слоты заняты,
+                # записать в очередь?»).
+                # Сейчас:
+                # - случай (2) → list-маркер с одним dict, который
+                #   `_is_schedule_no_slots_text` распознает как
+                #   «matched_but_without_slots». Renderer выдаёт
+                #   корректное сообщение через ветку
+                #   `no_free_slots_2_weeks` в `build_doctor_schedule_response`.
+                # - случаи (1) и (3) → пустой `[]` → cache хранит
+                #   как negative с TTL 15с, renderer выдаёт
+                #   «расписание не найдено».
                 if not isinstance(payload, list):
+                    payload_text = str(payload) if payload is not None else ""
+                    no_free_slots_match = api_nayka.is_no_free_slots_message(payload_text)
                     logger.info(
                         "schedule_fetch_source_normalised_non_list "
-                        "last_name=%r region=%r payload_type=%s message=%r",
+                        "last_name=%r region=%r payload_type=%s "
+                        "no_free_slots=%s message=%r",
                         last_name,
                         region_name or "",
                         type(payload).__name__,
-                        (str(payload) if payload is not None else "")[:160],
+                        no_free_slots_match,
+                        payload_text[:160],
                     )
+                    if no_free_slots_match:
+                        return [{
+                            "_synthetic": True,
+                            "_no_free_slots": True,
+                            "fio": last_name,
+                            "schedule": {},
+                        }]
                     return []
                 return payload
             except Exception as exc:
