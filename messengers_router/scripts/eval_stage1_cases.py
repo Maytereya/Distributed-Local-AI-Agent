@@ -64,7 +64,12 @@ def post_json(url: str, payload: dict, retries: int = 1) -> dict:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=40) as resp:
+            # PRICE-консультации специалистов могут занимать до 45с
+            # (LLM ~14с + parallel availability snapshot до ~25с +
+            # рендер). 40с раньше срезали кейс P3 «Какая стоимость
+            # приема уролога?». 70с даёт честный запас, при этом всё
+            # ещё ловит реальные зависания.
+            with urllib.request.urlopen(req, timeout=70) as resp:
                 raw = resp.read().decode("utf-8")
             return json.loads(raw)
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
