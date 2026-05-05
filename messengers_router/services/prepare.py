@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from agent_logic_1 import meilisearch_client as meilisearch
@@ -357,6 +358,55 @@ async def _maybe_compact_prepare_text(
     return wrapped, "llm_wrapped", "ok"
 
 
+# Голый запрос подготовки: «правила подготовки», «как подготовиться»,
+# «подготовка», «нужна ли подготовка». Без явного указания предмета
+# подготовки.
+_GENERIC_PREPARE_QUERY_RE = re.compile(
+    r"^\s*(?:"
+    r"правил\w*\s+подготовк\w*|"
+    r"подготовк\w*(?:\s+к\s+анализ\w*|\s+к\s+процедур\w*)?|"
+    r"как\s+(?:готовит\w*|подготовит\w*)|"
+    r"нужн\w*\s+ли\s+подготовк\w*"
+    r")\s*[.!?]?\s*$",
+    re.I,
+)
+
+# Признак того, что в запросе есть конкретный предмет подготовки —
+# название анализа, процедуры, специальности или общеупотребимая
+# лабораторная аббревиатура.
+_PREPARE_SUBJECT_HINT_RE = re.compile(
+    r"\b(?:"
+    # лабораторные аббревиатуры
+    r"оак|оам|алт|аст|алат|асат|ттг|сое|соэ|мно|пти|ггт|"
+    r"лдг|кфк|hba1c|hbsag|hcv|пцр|ифа|"
+    # общие лабораторные термины
+    r"анализ\w*|кров\w*|моч[аеи]\b|кал\b|биохим\w*|гормон\w*|"
+    r"копроло\w*|спирометри\w*|узи|ультразвук\w*|кт\b|мрт\b|"
+    r"рентген\w*|биопси\w*|гистолог\w*|ферритин\w*|глюкоз\w*|"
+    r"холестерин\w*|инсулин\w*|витамин\w*|"
+    # процедуры
+    r"эндоскоп\w*|фгдс|фкс|колоноскоп\w*|кольпоскоп\w*|"
+    r"вульвоскоп\w*|маммограф\w*|флюорограф\w*|урофлоуметр\w*|"
+    r"экг|эхокардиограф\w*|эхокг|холтер\w*|"
+    # популярные тесты
+    r"гемоглобин\w*|тромбоцит\w*|лейкоцит\w*|эритроцит\w*|"
+    # ключевые слова специальностей (узкий набор для signal-only)
+    r"гинеколог\w*|уролог\w*|стоматолог\w*|кардиолог\w*"
+    r")\b",
+    re.I,
+)
+
+
+def _is_generic_prepare_query(text: str) -> bool:
+    """Возвращает True для голых запросов про подготовку без предмета."""
+    return bool(_GENERIC_PREPARE_QUERY_RE.match(str(text or "").strip()))
+
+
+def _has_specific_subject_in_query(text: str) -> bool:
+    """Возвращает True, если в запросе явно упомянут анализ/процедура."""
+    return bool(_PREPARE_SUBJECT_HINT_RE.search(str(text or "")))
+
+
 async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
     raw_query = str(query or "").strip()
     entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
@@ -364,6 +414,21 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
     q = raw_query or entity_query
     if not q:
         return {"prepare": "", "note": "no query", "entities_used": entities}
+
+    # Защита от голого запроса «правила подготовки» / «как
+    # подготовиться» без указания анализа или процедуры. Раньше
+    # бот в этом случае подтягивал stale `service_name`/`test_name`
+    # из state предыдущей PRICE-турны и выдавал правила к чужому
+    # анализу — заказчик 2026-05-05 видел, как после диалога про
+    # ТТГ запрос «правила подготовки» возвращал инструкцию по
+    # отбору эпителия из мочеиспускательного канала. Теперь —
+    # явный clarify, чтобы пациент сам назвал предмет подготовки.
+    if _is_generic_prepare_query(raw_query) and not _has_specific_subject_in_query(raw_query):
+        return _prepare_clarify_response(
+            raw_query,
+            entities,
+            note="prepare: generic query, asking for specific subject",
+        )
 
     api_candidates = await self._prepare_candidates_from_analysis_api_cache(q, entities)
     api_best = await self._pick_prepare_candidate(q, api_candidates)
