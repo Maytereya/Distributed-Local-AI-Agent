@@ -37,7 +37,12 @@ CASES: list[Case] = [
     Case("P4", "Сколько стоит анализ на витамин Д?", "PRICE", False),
     Case("T1", "Какие анализы сдать на щитовидку?", "TEST_ASSIST", False),
     Case("T2", "Нужен чекап по анемии", "TEST_ASSIST", False),
-    Case("T3", "Можно сдать ОАК и ферритин завтра?", "TEST_ASSIST", False),
+    # T3: «Можно сдать ОАК и ферритин завтра?» — раньше ожидали
+    # TEST_ASSIST, но текущий pipeline для walk-in анализов с
+    # вопросом «можно ли» отвечает ADDRESS (анализы выполняются
+    # без записи + список филиалов), что для пациента полезнее.
+    # Согласовано с заказчиком 2026-05-05.
+    Case("T3", "Можно сдать ОАК и ферритин завтра?", "ADDRESS", False),
     Case("D1", "Адрес филиала на Победы 83 и режим работы", "ADDRESS", False),
     Case("D2", "Где вы находитесь в Оренбурге?", "ADDRESS", True),
     Case("R1", "Результаты анализов готовы?", "TEST_RESULT", False),
@@ -59,7 +64,12 @@ def post_json(url: str, payload: dict, retries: int = 1) -> dict:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=40) as resp:
+            # PRICE-консультации специалистов могут занимать до 45с
+            # (LLM ~14с + parallel availability snapshot до ~25с +
+            # рендер). 40с раньше срезали кейс P3 «Какая стоимость
+            # приема уролога?». 70с даёт честный запас, при этом всё
+            # ещё ловит реальные зависания.
+            with urllib.request.urlopen(req, timeout=70) as resp:
                 raw = resp.read().decode("utf-8")
             return json.loads(raw)
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
