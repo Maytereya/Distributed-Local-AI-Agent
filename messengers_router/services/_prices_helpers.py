@@ -923,6 +923,15 @@ def _score_price_rows(
     return out
 
 
+def _common_prefix_len(a: str, b: str) -> int:
+    """Длина общего префикса двух строк."""
+    n = min(len(a), len(b))
+    i = 0
+    while i < n and a[i] == b[i]:
+        i += 1
+    return i
+
+
 def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], homecode_query: str) -> tuple[int, int]:
     name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
     homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
@@ -964,17 +973,38 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
                 continue
             if "_" in tok:
                 continue
-            # Для длинных токенов допускаем умеренно мягкий префиксный матч.
-            # Минимальный shared-префикс — 5 символов: 4-буквенный префикс
-            # пропускал слишком общие греческие корни ("эндо" → эндокринолог /
-            # эндомизий / эндотрахеальный при запросе "эндоскопия"). Для
-            # медицинских терминов 5 символов разделяют семьи слов адекватно
-            # (маммо-, флюоро-, эндос-, рентг-, гастр- и т.д.).
-            if len(tok) >= 5 and any(
-                len(rt) >= 5 and (rt.startswith(tok[:5]) or tok.startswith(rt[:5]))
-                for rt in row_tokens
-            ):
-                matched += 1
+            # Префиксный матч для длинных токенов с защитой от ложных
+            # совпадений по общему медицинскому корню.
+            #
+            # Раньше было достаточно 5-символьного префикса. Это давало
+            # ложные срабатывания между разными процедурами с одним
+            # греческим корнем — заказчик 2026-05-05: запрос
+            # «кольпоскопия» (диагностика) находил «кольпорафию»,
+            # «кольпоперинеорафию», «реконструкцию тазового дна
+            # +кольпорафию» — это совсем другие хирургические
+            # вмешательства, общий корень «кольпо-» (влагалище)
+            # не означает взаимозаменяемости.
+            #
+            # Новое правило: матч засчитывается только если хотя бы
+            # один из токенов «доезжает» до общего префикса с разницей
+            # не более 2 символов в хвосте. Это пропускает варианты
+            # «кольпоскопия / кольпоскопическая», «маммограф /
+            # маммография», «эндоскоп / эндоскопия», но отсекает
+            # «кольпоскопия / кольпорафия» (расхождение 6 vs 5
+            # символов).
+            if len(tok) < 5:
+                continue
+            for rt in row_tokens:
+                if len(rt) < 5:
+                    continue
+                shared = _common_prefix_len(tok, rt)
+                if shared < 5:
+                    continue
+                diverge_in_query = len(tok) - shared
+                diverge_in_row = len(rt) - shared
+                if diverge_in_query <= 2 or diverge_in_row <= 2:
+                    matched += 1
+                    break
         score += matched * 25
         if matched == len(tokens):
             score += 80
