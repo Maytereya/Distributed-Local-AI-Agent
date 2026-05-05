@@ -400,7 +400,7 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
         lines.append("")
         lines.append(hint)
     lines.append("Если нужно, помогу выбрать подходящий вариант или подскажу подготовку.")
-    return "\n".join(lines).strip()
+    return _append_samara_disclaimer("\n".join(lines).strip())
 
 
 def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
@@ -483,7 +483,15 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
         lines.append("Если нужно, покажу подробное расписание этого врача.")
     else:
         lines.append("Если нужно, покажу подробное расписание любого из этих врачей.")
-    return "\n".join(lines).strip()
+    text = "\n".join(lines).strip()
+    # Самарская disclaimer-приписка показывается, только если в
+    # ответе фактически есть цены (retail или у врача). Иначе ответ
+    # — просто список врачей или подсказка по подготовке.
+    if retail_prices or any(
+        isinstance(d, dict) and d.get("service_price") for d in doctors
+    ):
+        text = _append_samara_disclaimer(text)
+    return text
 
 
 def _extract_price_amount(row: dict[str, Any]) -> int | None:
@@ -603,6 +611,28 @@ def _price_source_marker(payload: dict[str, Any]) -> str | None:
     return None
 
 
+_SAMARA_PRICE_DISCLAIMER = "Цены актуальны для г. Самара."
+
+
+def _append_samara_disclaimer(text: str) -> str:
+    """Добавляет disclaimer о Самаре в конец PRICE-ответа.
+
+    Запрошено заказчиком 2026-05-05: пациент должен видеть, что
+    приведённые цены — для г. Самара, потому что у клиники есть
+    филиалы и в других регионах с другими прайсами.
+
+    Идемпотентно: если disclaimer уже в тексте, не дублирует.
+    Пустой текст не меняет (чтобы fallback-инструкции не получали
+    лишний хвост).
+    """
+    txt = str(text or "").strip()
+    if not txt:
+        return txt
+    if _SAMARA_PRICE_DISCLAIMER in txt:
+        return txt
+    return f"{txt}\n\n_{_SAMARA_PRICE_DISCLAIMER}_"
+
+
 def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
     prices_raw = payload.get("prices")
     prices = prices_raw if isinstance(prices_raw, list) else []
@@ -615,7 +645,12 @@ def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) 
         if not txt:
             return txt
         if source_marker:
-            return f"{txt}\nИсточник цены: {source_marker}."
+            txt = f"{txt}\nИсточник цены: {source_marker}."
+        # Добавляем самарскую disclaimer-приписку только если в
+        # ответе действительно есть цены (нет смысла приклеивать её
+        # к clarify-сообщениям и fallback-ам без цен).
+        if prices:
+            txt = _append_samara_disclaimer(txt)
         return txt
 
     if clarify_text:
