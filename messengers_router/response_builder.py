@@ -203,6 +203,24 @@ def build_service_bundle_response(flow_label: str, evidence: Evidence, state: Se
     _sync_price_family_context(state, payload)
     _sync_compound_price_pending(state, payload)
     text = format_service_bundle_for_patient(payload, state.last_entities)
+    # Defensive fallback: если рендер вернул пустой текст, показываем
+    # пациенту инструкцию о том, как сформулировать запрос правильно.
+    # Бывает, когда в state остался stale service_name (например,
+    # после галлюцинации LLM или ADDRESS-флоу), и pipeline не нашёл
+    # под него ни розничной цены, ни doctor-link. Раньше пациент
+    # получал пустое сообщение и уходил в очередь оператора.
+    # Жалоба заказчика 2026-05-05: «Сдать витамин Д» → «Стоимость» →
+    # пустой ответ → «Переключаю на оператора».
+    if not text or not text.strip():
+        text = (
+            "Чтобы я мог уточнить стоимость, напишите запрос полностью. "
+            "Например:\n"
+            "• «Сколько стоит общий анализ крови»\n"
+            "• «Цена ТТГ»\n"
+            "• «Стоимость приёма кардиолога»\n"
+            "• «Стоимость УЗИ молочных желез»\n\n"
+            "Так я смогу точно сказать цену и формат услуги."
+        )
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 
