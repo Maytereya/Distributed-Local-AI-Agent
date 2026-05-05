@@ -613,6 +613,7 @@ def _clear_state_core(
     clear_all_entities: bool = False,
     preserve_samara_city: bool = False,
     clear_dialog: bool = False,
+    clear_summary: bool = False,
 ) -> None:
     """Выполняет общую механику очистки session state для public helper'ов.
 
@@ -622,6 +623,10 @@ def _clear_state_core(
     :param clear_all_entities: если True, очищает last_entities целиком
     :param preserve_samara_city: сохранить `city`, только если это Самара
     :param clear_dialog: если True, сбрасывает typed dialog state
+    :param clear_summary: если True, обнуляет running summary диалога —
+                          нужно при handoff, чтобы при возврате чата от
+                          оператора предыдущий контекст не подмешивался
+                          в новый диалог.
     :return: None
     """
 
@@ -645,6 +650,16 @@ def _clear_state_core(
     if clear_dialog:
         state.dialog.clear()
 
+    if clear_summary:
+        # `state.summary` — running LLM-summary, держит контекст диалога
+        # между турнами для NLU/recovery. После handoff он теряет
+        # ценность: либо чат уехал в очередь оператора, либо мы уже
+        # дёрнули фолбэк. Если оставить — при следующем входе в бота
+        # старый контекст («пациент спрашивал про ТТГ перед записью»)
+        # подмешается в LLM и может сбить классификацию свежего
+        # запроса.
+        state.summary = ""
+
 
 def clear_on_handoff(
     state: SessionState,
@@ -659,6 +674,12 @@ def clear_on_handoff(
     - last_entities: очищается целиком
     - city: сохраняется только для Самары, если `preserve_city=True`
     - dialog: очищается полностью
+    - summary: обнуляется — иначе предыдущий контекст диалога
+      («пациент спрашивал про ТТГ») мог бы вернуться при следующем
+      входе и сбить NLU свежего запроса. Подтверждённый кейс
+      2026-05-05: после handoff на запись к Арцыбашевой пациент
+      возвращался к боту со свежим вопросом, но summary всё ещё
+      содержал ТТГ-контекст.
 
     :param state: текущее состояние сессии
     :param memory: optional MemoryStore для очистки pending
@@ -672,6 +693,7 @@ def clear_on_handoff(
         clear_all_entities=True,
         preserve_samara_city=preserve_city,
         clear_dialog=True,
+        clear_summary=True,
     )
 
 
