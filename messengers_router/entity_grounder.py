@@ -241,6 +241,7 @@ def _should_keep_nonbookable_service_name_as_is(
     *,
     raw_value: str,
     decision_flags: set[str],
+    user_text: str = "",
 ) -> bool:
     """
     Сохраняет generic service_name как есть в ADDRESS-flow для услуг без записи.
@@ -249,8 +250,19 @@ def _should_keep_nonbookable_service_name_as_is(
     где роутеру важен сам класс услуги (`анализы`/`ЭКГ`), а не жесткая
     каталожная канонизация до конкретной строки прайса.
 
+    Защита от галлюцинаций LLM: если в user_text нет ни одного
+    префикс-совпадения с raw_value, это, скорее всего, выдумка модели,
+    и сохранять её в state опасно — она утечёт в следующий PRICE-турн.
+    Подтверждённый кейс 2026-05-05: на запрос «Сдать витамин Д»
+    классификатор выдавал service_name=«Маммопластика — увеличение
+    груди со стоимостью имплантов», бот отвечал ADDRESS (адреса
+    филиалов), а stale «Маммопластика» оседала в state. На следующий
+    короткий запрос «Стоимость» бот строил PRICE-ответ для
+    маммопластики и рендерил пустой текст.
+
     :param raw_value: исходное service_name из решения/guardrail
     :param decision_flags: флаги текущего решения
+    :param user_text: текущий запрос пользователя (для sanity-check)
     :return: True, если service_name нужно оставить без catalog-grounding
     """
 
@@ -259,6 +271,22 @@ def _should_keep_nonbookable_service_name_as_is(
         return False
     if "policy_nonbookable_walkin" not in decision_flags:
         return False
+    if user_text:
+        text_lower = user_text.lower()
+        value_tokens = {
+            t for t in re.findall(r"[a-zа-яё0-9]+", value.lower()) if len(t) >= 4
+        }
+        text_tokens = {
+            t for t in re.findall(r"[a-zа-яё0-9]+", text_lower) if len(t) >= 4
+        }
+        if value_tokens and text_tokens:
+            has_common_prefix = any(
+                vt[:4] == tt[:4]
+                for vt in value_tokens
+                for tt in text_tokens
+            )
+            if not has_common_prefix:
+                return False
     return True
 
 
@@ -438,6 +466,7 @@ async def ground_decision_entities(
             if _should_keep_nonbookable_service_name_as_is(
                 raw_value=raw_value,
                 decision_flags=set(decision.flags),
+                user_text=user_text,
             ):
                 out[key] = raw_value
                 flags.add("entity_kept_nonbookable_service_name")

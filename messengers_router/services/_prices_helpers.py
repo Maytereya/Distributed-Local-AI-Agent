@@ -124,7 +124,20 @@ _PRICE_QUERY_STOPWORDS = {
     "сколько",
     "стоит",
     "стоимость",
+    # Падежные формы «стоимость» — без них не отбрасывалось «стоимостью»
+    # / «стоимости» в формулировках вроде «о стоимости АЛТ».
+    "стоимости",
+    "стоимостью",
+    "стоимостей",
     "цена",
+    # Падежные формы «цена» — без них «подскажите цену АЛТ» оставлял
+    # «цену» в токенах, ранкер искал строку с обоими «цену» и «алт»
+    # и не находил. Жалоба заказчика 2026-05-05.
+    "цену",
+    "цены",
+    "ценой",
+    "цене",
+    "ценах",
     "какой",
     "какая",
     "какое",
@@ -138,7 +151,6 @@ _PRICE_QUERY_STOPWORDS = {
     "какова",
     "каково",
     "каковы",
-    "цена",
     "на",
     "в",
     "по",
@@ -411,6 +423,15 @@ def _price_alias_candidates(query_text: str) -> list[str]:
     compact = " ".join(_price_query_tokens(raw)).strip()
     if compact:
         out.append(compact)
+    # Также пробуем каждый токен по отдельности, если он есть в карте
+    # `_PRICE_SERVICE_ALIASES`. Это нужно для запросов типа
+    # «оак срочно», «оам срочно», «лпвп натощак», где аббревиатура
+    # стоит рядом с модификатором: full-string match не сработает,
+    # а токенный — да. Жалоба заказчика 2026-05-05: «ОАК срочно»
+    # возвращал None.
+    for tok in _price_query_tokens(raw):
+        if tok in _PRICE_SERVICE_ALIASES:
+            out.append(tok)
     dedup: list[str] = []
     seen: set[str] = set()
     for cand in out:
@@ -419,7 +440,7 @@ def _price_alias_candidates(query_text: str) -> list[str]:
             continue
         seen.add(key)
         dedup.append(key)
-    return dedup[:5]
+    return dedup[:8]
 
 
 def _resolve_price_alias_from_catalog(query_text: str, rows: list[dict[str, Any]]) -> str | None:

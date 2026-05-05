@@ -540,43 +540,77 @@ async def service_bundle_info(
             key=_doctor_sort_key,
         )[:top_limit]
 
-        out_doctors: list[dict[str, Any]] = []
+        # Параллелизируем availability_snapshot для всех кандидатов.
+        # Раньше последовательный цикл `for doc ...: await snapshot(...)`
+        # подвешивал PRICE-консультацию специалиста на 240+ секунд при
+        # медленном Nayka /doctorSchedule (один surname Трубин у нас
+        # отдавался 224с). Теперь все 4-8 кандидатов едут параллельно,
+        # верхняя граница на availability-фазу ≈ 30с (per-doctor timeout
+        # внутри `_schedule_by_specialty` уже 60с, для чисто
+        # availability-проверки ставим 25с — мы не показываем дни/слоты,
+        # а только bool «есть/нет окон»).
+        # Жалоба заказчика 2026-05-05: «сколько стоит приём кардиолога»
+        # уходил в 4-минутный таймаут (eval P3 / CRIT_PRICE_CONSULT_UROLOGIST_001).
         query_specialty = _extract_specialty_from_text(query_text) or _extract_specialty_from_text(service_name)
-        for doc in doctor_cards:
+        _AVAILABILITY_TIMEOUT_S = 25.0
+        _AVAILABILITY_CONCURRENCY = 8
+        _availability_sem = asyncio.Semaphore(_AVAILABILITY_CONCURRENCY)
+        _empty_availability = {
+            "available": False,
+            "nearest_slot": "",
+            "regions_with_slots": [],
+            "note": "availability_timeout",
+        }
+
+        async def _fetch_doctor_availability(doc: dict[str, Any]) -> dict[str, Any] | None:
+            """Возвращает payload для одного врача либо None, если врача надо
+            пропустить (specialty mismatch / no doctor_id)."""
             doctor_id = _as_int(doc.get("id"))
             if doctor_id is None:
-                continue
+                return None
             if service_kind == "doctor_consult" and query_specialty and not _doctor_matches_primary_specialty(doc, query_specialty):
-                continue
+                return None
+            async with _availability_sem:
+                try:
+                    availability = await asyncio.wait_for(
+                        self._doctor_availability_snapshot(
+                            str(doc.get("fio") or ""),
+                            samara_tokens=samara_tokens,
+                        ),
+                        timeout=_AVAILABILITY_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    availability = dict(_empty_availability)
+                except Exception:
+                    availability = dict(_empty_availability, note="availability_error")
             price_row = best_row_by_doctor.get(doctor_id, {})
-            availability = await self._doctor_availability_snapshot(
-                str(doc.get("fio") or ""),
-                samara_tokens=samara_tokens,
-            )
-            out_doctors.append(
-                {
-                    "id": doctor_id,
-                    "fio": str(doc.get("fio") or "").strip(),
-                    "ord": _as_int(doc.get("ord")),
-                    "specialization": _compact_specialization(
-                        _pick_display_specialization(
-                            doc,
-                            preferred_specialty=query_specialty,
-                            preferred_service=service_name,
-                        )
-                    ),
-                    "specialty_label": _specialty_label_for_doctor(
+            return {
+                "id": doctor_id,
+                "fio": str(doc.get("fio") or "").strip(),
+                "ord": _as_int(doc.get("ord")),
+                "specialization": _compact_specialization(
+                    _pick_display_specialization(
                         doc,
                         preferred_specialty=query_specialty,
-                    ),
-                    "regions": [str(x).strip() for x in (doc.get("regions") or []) if str(x).strip()],
-                    "service_price": _as_int(price_row.get("cost")),
-                    "available": bool(availability.get("available")),
-                    "nearest_slot": str(availability.get("nearest_slot") or ""),
-                    "regions_with_slots": list(availability.get("regions_with_slots") or []),
-                    "availability_note": str(availability.get("note") or ""),
-                }
-            )
+                        preferred_service=service_name,
+                    )
+                ),
+                "specialty_label": _specialty_label_for_doctor(
+                    doc,
+                    preferred_specialty=query_specialty,
+                ),
+                "regions": [str(x).strip() for x in (doc.get("regions") or []) if str(x).strip()],
+                "service_price": _as_int(price_row.get("cost")),
+                "available": bool(availability.get("available")),
+                "nearest_slot": str(availability.get("nearest_slot") or ""),
+                "regions_with_slots": list(availability.get("regions_with_slots") or []),
+                "availability_note": str(availability.get("note") or ""),
+            }
+
+        availability_results = await asyncio.gather(
+            *(_fetch_doctor_availability(doc) for doc in doctor_cards)
+        )
+        out_doctors = [r for r in availability_results if r is not None]
         out["doctors"] = out_doctors
     else:
         out["doctors"] = []
