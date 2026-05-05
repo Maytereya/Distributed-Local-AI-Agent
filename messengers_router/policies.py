@@ -2050,10 +2050,54 @@ def appointment_text_cancelled() -> str:
     return APPOINTMENT_REPLY_MAP["cancelled"]
 
 
+_STALE_LAB_SERVICE_RE = re.compile(
+    r"(?:"
+    r"антитела|анализ\w*\s+(?:крови|мочи|кала)|"
+    r"\b(?:оак|оам|алт|аст|алат|асат|ттг|сое|соэ|"
+    r"мно|пти|ггт|лдг|кфк|глюкоз\w*|холестерин\w*|"
+    r"инсулин\w*|липид\w*|ферритин\w*|витамин\b)|"
+    r"\b(?:пцр|ифа|элиза|hba1c|hbsag|hcv|hiv|спид|"
+    r"кардиолипин\w*|щитовидк\w*)|"
+    r"копрологи\w*|общий\s+анализ|развернут\w+\s+анализ|"
+    r"кровь\s+на\b|моча\s+на\b"
+    r")",
+    re.I,
+)
+
+
+def _service_looks_like_stale_lab_test(service: str) -> bool:
+    """Эвристика: service_name похож на лабораторный анализ.
+
+    Используется в `appointment_service_display`: если у записи к
+    врачу `service_name` выглядит как анализ (но прямо в карточке к
+    приёму — нерелевантен), мы предпочитаем «приём к врачу <ФИО>»
+    вместо ложного «Запись: ..., Антитела к рецепторам ТТГ, ...».
+    Жалоба заказчика 2026-05-05: stale service_name из предыдущей
+    PRICE-турны попадал в подтверждение записи, оператор получал
+    карточку «Антитела к рецепторам ТТГ» вместо «приём к Арцыбашевой».
+
+    :param service: значение `service_name`/`test_name`
+    :return: True, если строка пахнет лабораторным анализом
+    """
+    if not service:
+        return False
+    return bool(_STALE_LAB_SERVICE_RE.search(service))
+
+
 def appointment_service_display(entities: dict[str, Any]) -> str:
     service_raw = str(entities.get("service_name") or entities.get("test_name") or "").strip()
     doctor_name = str(entities.get("doctor_name") or "").strip()
     if service_raw and doctor_name and service_name_conflicts_with_doctor(service_raw, doctor_name):
+        service_raw = ""
+    # Защита от утечки stale `service_name` из предыдущей PRICE-турны
+    # в карточку записи. Если врач явно указан, а service_name
+    # выглядит как лабораторный анализ — пациент почти наверняка
+    # записывается на ПРИЁМ К ВРАЧУ, а не на анализ. Берём display
+    # «приём к врачу <ФИО>» вместо stale lab-service.
+    # Подтверждённый кейс: «Записаться к Арцыбашевой» после диалога
+    # про ТТГ → бот показывал «Запись: ..., Антитела к рецепторам ТТГ»
+    # → оператор путался. См. policies._STALE_LAB_SERVICE_RE.
+    if service_raw and doctor_name and _service_looks_like_stale_lab_test(service_raw):
         service_raw = ""
     if (
         not service_raw
