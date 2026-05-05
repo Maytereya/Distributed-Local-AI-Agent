@@ -424,6 +424,17 @@ async def service_bundle_info(
         for row in doctor_prices:
             if not isinstance(row, dict):
                 continue
+            # Пропускаем «нулевые» doctor_prices — это, как правило,
+            # незаполненные админом записи (data drafts). Пациент
+            # видел в выдаче «Саушкина (Лор) — 0 руб», «Джовмардов
+            # (Лор) — 0 руб» — заведомо неверная цена для приёма
+            # ЛОР-врача (розница 2 000 руб). Если для специальности
+            # есть retail-цена, она и так показана сверху ответа,
+            # а конкретный врач без заполненной цены пусть всплывает
+            # через doctors_info, но не клеймится «0 руб».
+            row_cost = _as_int(row.get("cost")) or 0
+            if row_cost <= 0:
+                continue
             doctor_id = _as_int(row.get("doctorId"))
             if doctor_id is None or doctor_id not in by_id:
                 continue
@@ -449,8 +460,7 @@ async def service_bundle_info(
                 row_homecode=row_homecode,
             ):
                 continue
-            cost = _as_int(row.get("cost")) or 0
-            item = (score, matched, -cost, doctor_id, row)
+            item = (score, matched, -row_cost, doctor_id, row)
             matched_price_rows.append(item)
             if target_homecode and row_homecode and target_homecode == row_homecode:
                 exact_link_rows.append(item)
