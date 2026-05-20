@@ -4013,3 +4013,32 @@ def test_service_bundle_info_thyroid_uzi_family_filters_out_lab_profiles(monkeyp
     assert "Резекция перешейка щитовидной железы с использованием нейромонитора" in names
     assert "Щитовидная железа (сокращенное обследование)" not in names
     assert 'Профиль. "Здоровая щитовидная железа"' not in names
+
+
+def test_samara_region_tokens_recognise_lenina5_by_value_slug(monkeypatch):
+    """Регрессия: филиал «Ленина 5» (region 8882) попадает в samara-allowlist.
+
+    В CRM у этого филиала пустой `addressForSite` и `name='Ленина 5'` без слова
+    «Самара» — самарский признак есть только в slug `value='region_samara_lenina'`.
+    Без распознавания по `value` врачи этого филиала (напр. Дразнин) выпадали из
+    расписания → «расписание не найдено».
+    """
+    svc = Services()
+
+    async def fake_regions():
+        return [
+            {"id": 8882, "name": "Ленина 5", "addressForSite": "", "value": "region_samara_lenina"},
+            {"id": 3, "name": "Московское шоссе", "addressForSite": "г. Самара, Московское шоссе, 100", "value": "region_samara_msk"},
+            {"id": 99, "name": "Оренбург центр", "addressForSite": "г. Оренбург, ул. Советская, 1", "value": "region_orenburg_1"},
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_regions)
+
+    tokens = run(svc._samara_region_tokens())
+
+    # «Ленина 5» теперь распознаётся как самарский филиал по value-слагу
+    assert "ленина 5" in tokens
+    from messengers_router.services._regions import _region_matches_samara_tokens
+    assert _region_matches_samara_tokens("Ленина 5", tokens) is True
+    # Оренбург не должен попасть в самарский allowlist
+    assert not any("оренбург" in t for t in tokens)

@@ -307,10 +307,20 @@ class Services:
             city = str(r.get("city") or "").strip()
             name = str(r.get("name") or "").strip()
             addr = str(r.get("addressForSite") or "").strip()
+            # CRM помечает самарские филиалы slug-ом `value` вида
+            # `region_samara_*` (например `region_samara_lenina`). Это нужно,
+            # потому что у части филиалов человекочитаемые `name`/`addressForSite`
+            # не содержат слова «Самара» (кейс «Ленина 5»: addressForSite пуст,
+            # name = «Ленина 5»). Без этого признака такой филиал не попадает в
+            # samara-allowlist, и расписание врача ошибочно отбрасывается
+            # фильтром в doctors_schedule_week → «расписание не найдено».
+            value = str(r.get("value") or "").strip().lower()
+            is_samara_value = value.startswith("region_samara")
             if not (
                 _is_samara_city_value(city)
                 or "самара" in _normalise_input(name)
                 or "самара" in _normalise_input(addr)
+                or is_samara_value
             ):
                 continue
             for raw in (name, addr):
