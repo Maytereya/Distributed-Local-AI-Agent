@@ -395,6 +395,9 @@ _QF_WEEKDAY_RE = re.compile(
     r"\b(в|во|на)\s+(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье|пн|вт|ср|чт|пт|сб|вс)\b",
     re.I,
 )
+# «выходные / на выходных / в выходной» → ближайшие суббота+воскресенье.
+# «выходн\w*» не цепляет «выход/выходить» (нужна буква «н» после «д»).
+_QF_WEEKEND_RE = re.compile(r"\bвыходн\w*\b", re.I)
 _QF_TIME_RE = re.compile(r"\b([01]?\d|2[0-3])[:.](\d{2})\b")
 _QF_AFTER_TIME_RE = re.compile(r"\b(после|с)\s+([01]?\d|2[0-3])(?:[:.](\d{2}))?\b", re.I)
 _QF_BEFORE_TIME_RE = re.compile(r"\b(до|раньше)\s+([01]?\d|2[0-3])(?:[:.](\d{2}))?\b", re.I)
@@ -1163,6 +1166,13 @@ def parse_date_time_ru(text: str, today: date | None = None) -> dict[str, Any]:
                 if dt:
                     out["date_from"] = out["date_to"] = dt.isoformat()
                     out.pop("date_hint", None)
+
+    if "date_from" not in out:
+        if _QF_WEEKEND_RE.search(low):
+            sat = _next_weekday(today, 5)
+            sun = sat + timedelta(days=1)
+            out["date_from"], out["date_to"] = sat.isoformat(), sun.isoformat()
+            out.pop("date_hint", None)
 
     if "date_from" not in out:
         wd = _QF_WEEKDAY_RE.search(s)
