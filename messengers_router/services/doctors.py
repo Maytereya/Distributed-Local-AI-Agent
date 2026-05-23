@@ -201,13 +201,15 @@ async def _schedule_by_specialty(
                 if role_query
                 else _doctor_matches_specialty(d, spec, query_text or specialty)
             )
-            and not _has_explicit_non_samara_regions([str(x) for x in (d.get("regions") or []) if str(x).strip()])
             and (
-                not samara_tokens
-                or any(
+                any(
                     _region_matches_samara_tokens(str(x), samara_tokens)
                     for x in (d.get("regions") or [])
                     if str(x).strip()
+                )
+                if samara_tokens
+                else not _has_explicit_non_samara_regions(
+                    [str(x) for x in (d.get("regions") or []) if str(x).strip()]
                 )
             )
         ],
@@ -454,9 +456,12 @@ async def _resolve_doctor_id_from_name(
         if not fio:
             continue
         raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
-        if _has_explicit_non_samara_regions(raw_regions):
-            continue
-        if samara_tokens and raw_regions and not any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
+        # Врач с практикой в нескольких городах (Самара + другой) не должен
+        # выпадать из резолва — иначе нельзя оформить запись к нему.
+        if samara_tokens:
+            if raw_regions and not any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
+                continue
+        elif _has_explicit_non_samara_regions(raw_regions):
             continue
         if _doctor_matches_fio(fio, raw, resolved_surname):
             matched.append(doc)
@@ -543,11 +548,14 @@ async def doctors_info(
         units = " ".join([_normalise_input(str(x)) for x in (doc.get("units") or [])])
 
         hay = " | ".join([fio, spec_text, regions, units])
-        if _has_explicit_non_samara_regions(raw_regions):
-            return False
+        # Врач может вести приём и в Самаре, и в другом городе — оставляем его
+        # по самарскому присутствию, а не отбрасываем по любому несамарскому
+        # филиалу. «Явный несамарский» дроп — fallback без samara_tokens.
         if samara_tokens:
             if not any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
                 return False
+        elif _has_explicit_non_samara_regions(raw_regions):
+            return False
         if fio_q:
             if not _doctor_matches_fio(fio, fio_q, resolved_surname):
                 return False
@@ -847,8 +855,13 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
                 display_spec = str(item.get("specialization") or "")
             item["specialization"] = _compact_specialization(display_spec)
             regions_src = [str(x) for x in (item.get("regions") or []) if str(x).strip()]
-            if _has_explicit_non_samara_regions(regions_src):
-                continue
+            # ВАЖНО: врач может вести приём и в Самаре, и в другом городе
+            # (напр. Лунев: «Ленина 5» + Оренбург). Нельзя отбрасывать его
+            # целиком по `_has_explicit_non_samara_regions` — иначе теряем
+            # самарское расписание. При наличии samara_tokens отбираем по
+            # самарскому присутствию и обрезаем регионы/расписание до
+            # самарских; «явный несамарский» дроп оставляем как fallback на
+            # случай недоступности /regions.
             if samara_tokens:
                 if regions_src and not any(_region_matches_samara_tokens(x, samara_tokens) for x in regions_src):
                     continue
@@ -862,6 +875,14 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
                         item["schedule"] = sched_filtered
                     elif regions_src:
                         continue
+                samara_regions = [
+                    x for x in regions_src
+                    if _region_matches_samara_tokens(x, samara_tokens)
+                ]
+                if samara_regions:
+                    item["regions"] = samara_regions
+            elif _has_explicit_non_samara_regions(regions_src):
+                continue
             compact_data.append(item)
         data = compact_data
 

@@ -596,6 +596,54 @@ def test_doctors_schedule_week_ignores_unrelated_payload_rows_for_requested_doct
     assert "doctors_schedule_week" in str(res.get("note") or "")
 
 
+def test_doctors_schedule_week_keeps_samara_branch_for_multi_city_doctor(monkeypatch):
+    """Регрессия: врач с практикой в нескольких городах (Самара + Оренбург,
+    напр. Лунев — «Ленина 5» + Оренбург) не должен выпадать целиком.
+
+    Должны остаться только самарский филиал и его расписание; оренбургские
+    адрес и окна — отсечься. Раньше `_has_explicit_non_samara_regions`
+    отбрасывал такого врача полностью → «расписание не найдено»."""
+    svc = Services()
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 2738,
+                "fio": "Лунев Андрей Владимирович",
+                "specialization": "уролог",
+                "regions": ["г. Оренбург, ул. Чкалова, 51/1, пом.6.", "Ленина 5"],
+            }
+        ]
+
+    async def fake_samara_tokens():
+        return {"ленина 5"}
+
+    async def fake_schedule_payload(_last_name, _region_name=None):
+        return [
+            {
+                "fio": "Лунев Андрей Владимирович",
+                "regions": ["г. Оренбург, ул. Чкалова, 51/1, пом.6.", "Ленина 5"],
+                "schedule": {
+                    "г. Оренбург, ул. Чкалова, 51/1, пом.6.": [
+                        {"date": "2026-05-24", "slots": ["10:00"]}
+                    ],
+                    "Ленина 5": [{"date": "2026-05-24", "slots": ["12:00"]}],
+                },
+            }
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+    monkeypatch.setattr(svc, "_get_schedule_payload_cached", fake_schedule_payload)
+
+    res = run(svc.doctors_schedule_week("Лунев", {"doctor_name": "Лунев"}))
+
+    assert res["schedule"], "Расписание не должно быть пустым для multi-city врача"
+    row = res["schedule"][0]
+    assert list(row.get("schedule", {}).keys()) == ["Ленина 5"]
+    assert row.get("regions") == ["Ленина 5"]
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
