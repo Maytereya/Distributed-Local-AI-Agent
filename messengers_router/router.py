@@ -406,6 +406,52 @@ def _clear_operator_offer_pending(state: SessionState, memory: MemoryStore) -> N
             memory.clear_pending(state)
 
 
+# O4 анти-залип: минимальная длина ответа, который считаем «содержательным»
+# для детекта повтора (короткие «да/нет/ок» не считаем).
+_REPEAT_GUARD_MIN_LEN = 24
+_REPEAT_GUARD_HINT = (
+    "Если не получается решить здесь — напишите «оператор», и я переключу на специалиста."
+)
+
+
+def _repeat_norm(text: str) -> str:
+    """Нормализует текст ответа для сравнения на повтор."""
+    return " ".join(str(text or "").lower().split())
+
+
+def _maybe_append_operator_hint_on_repeat(
+    response: ResponseEnvelope, state: SessionState
+) -> ResponseEnvelope:
+    """Анти-залип: если бот выдаёт один и тот же ответ подряд, после 2-го
+    повтора (3-й одинаковый ответ) дописывает подсказку про оператора.
+
+    Намеренно НЕ трогает pending/flow-state — только счётчик в last_entities и
+    приписка к тексту. Эскалация дальше идёт через явный запрос оператора
+    («оператор»/«человек»/«не бот»), который уже распознаётся и уходит в handoff.
+
+    :param response: финальный ответ текущего хода
+    :param state: состояние сессии (счётчик живёт в last_entities)
+    :return: тот же response (возможно, с допиской)
+    """
+    text = (response.text or "").strip()
+    norm = _repeat_norm(text)
+    # Не вмешиваемся в handoff, пустые/короткие ответы и те, где уже есть оператор.
+    if response.handoff or len(norm) < _REPEAT_GUARD_MIN_LEN or "оператор" in norm:
+        state.last_entities["_last_answer_norm"] = norm
+        state.last_entities["_answer_repeat_count"] = 0
+        return response
+
+    prev = str(state.last_entities.get("_last_answer_norm") or "")
+    repeat_count = int(state.last_entities.get("_answer_repeat_count") or 0) + 1 if norm == prev else 0
+    state.last_entities["_last_answer_norm"] = norm
+    state.last_entities["_answer_repeat_count"] = repeat_count
+
+    if repeat_count >= 2:  # 3-й одинаковый ответ подряд = после 2-го повтора
+        state.last_entities["_answer_repeat_count"] = 0
+        response.text = f"{text}\n\n{_REPEAT_GUARD_HINT}"
+    return response
+
+
 def _get_catalog_confirm_pending(state: SessionState) -> dict[str, Any] | None:
     payload = state.last_entities.get(_CATALOG_CONFIRM_STATE_KEY)
     if not isinstance(payload, dict):
@@ -2388,6 +2434,8 @@ async def patient_routing_stream(
             handoff=False,
             state_update={"debug": _debug_meta(decision, plan, evidence, state, pending)},
         )
+
+    response = _maybe_append_operator_hint_on_repeat(response, state)
 
     memory.append_turn(state, role="user", text=user_text)
     memory.append_turn(state, role="assistant", text=response.text)
