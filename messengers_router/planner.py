@@ -63,6 +63,16 @@ def build_plan(
         entities = {**entities, "__runtime_llm_mode": runtime_options.llm_mode}
     missing = missing_slots(effective_label, entities)
 
+    # «во сколько/когда прийти сдать кровь» — это PREPARE без конкретного анализа.
+    # Не уходим в clarify-петлю «к какому анализу нужна подготовка?», а планируем
+    # test_prepare: он короткозамкнётся на адреса филиалов с графиком. Иначе
+    # clarify-gate отвечает раньше, чем тул успевает отработать.
+    if effective_label == "PREPARE" and missing:
+        from .services.prepare import _is_lab_visit_timing_query
+
+        if _is_lab_visit_timing_query(user_text):
+            missing = []
+
     if missing:
         memory.set_pending(state, label=effective_label, missing_slots=missing)
         return Plan(label=effective_label, steps=[])
