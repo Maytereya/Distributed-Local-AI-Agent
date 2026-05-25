@@ -425,8 +425,90 @@ def _prepare_biomaterial(text: str) -> str | None:
     return None
 
 
+# Общий вопрос «во сколько / когда прийти сдать кровь/мочу/анализ» — это вопрос
+# про ВРЕМЯ и МЕСТО сдачи, а не про правила подготовки конкретного анализа.
+_LAB_VISIT_TIMING_RE = re.compile(
+    r"(?:во\s*сколько|к\s*скольк\w*|до\s*скольк\w*|когда|в\s+какое\s+время|в\s+котор\w*\s+час\w*)",
+    re.I,
+)
+_LAB_COLLECTION_ACTION_RE = re.compile(
+    r"\b(сда(?:ть|вать|ча|чи|ю|ём|ем)\w*|прий[тд]\w*|приход\w*|подойти|подъехать|принима\w*)\b",
+    re.I,
+)
+
+
+def _is_lab_visit_timing_query(text: str) -> bool:
+    """True для общих вопросов «во сколько/когда прийти сдать кровь/мочу/анализ».
+
+    Требует одновременно: сигнал времени/визита, действие сдачи/прихода и
+    биоматериал. Конкретные «подготовка к ОАК/ТТГ» (без «во сколько/когда»)
+    сюда НЕ попадают и идут обычным prepare-путём.
+    """
+    raw = str(text or "")
+    if not (_LAB_VISIT_TIMING_RE.search(raw) and _LAB_COLLECTION_ACTION_RE.search(raw)):
+        return False
+    return bool(_prepare_biomaterial(raw))
+
+
+async def _lab_collection_branches_answer(self: "Services") -> str:
+    """Список самарских филиалов с графиком работы для вопросов про время сдачи.
+
+    Отдаём готовый текст (адреса + часы), без LLM и без выдумывания медфактов.
+    """
+    from ._addresses_helpers import _looks_like_real_address
+    from ._regions import (
+        _extract_region_work_time,
+        _is_samara_city_value,
+        _region_display_name,
+    )
+
+    norm = _common_mod._normalise_input
+    try:
+        regions = await self._ensure_regions_loaded()
+    except Exception:
+        return ""
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for r in regions:
+        if not isinstance(r, dict):
+            continue
+        # Только Самара (та же логика, что в address_info).
+        if not (
+            _is_samara_city_value(str(r.get("city") or ""))
+            or "самара" in norm(str(r.get("name") or ""))
+            or "самара" in norm(str(r.get("addressForSite") or ""))
+        ):
+            continue
+        disp = _region_display_name(r)
+        if not disp or not _looks_like_real_address(disp):
+            continue
+        key = disp.strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        work_time = _extract_region_work_time(r)
+        lines.append(f"— {disp}" + (f" (график: {work_time})" if work_time else ""))
+
+    if not lines:
+        return ""
+    lines.sort()
+    return "Адреса филиалов в Самаре и часы их работы:\n" + "\n".join(lines)
+
+
 async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
     raw_query = str(query or "").strip()
+    # «Во сколько/когда прийти сдать кровь» — вопрос про время/место сдачи,
+    # а не про подготовку. Отдаём адреса филиалов с графиком работы вместо
+    # clarify-петли «к какому анализу нужна подготовка?».
+    if _is_lab_visit_timing_query(raw_query):
+        branches_text = await _lab_collection_branches_answer(self)
+        if branches_text:
+            return {
+                "prepare": branches_text,
+                "note": "prepare: lab-collection branches+hours",
+                "entities_used": entities,
+            }
     entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
     # Если пациент в этом ходе сам назвал биоматериал, а stale-сущность из
     # прошлого хода — про другой биоматериал (кейс «сдать кровь» при stale

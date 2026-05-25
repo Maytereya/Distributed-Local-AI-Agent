@@ -48,7 +48,9 @@ def test_prepare_drops_conflicting_stale_biomaterial(monkeypatch):
     seen: list[str] = []
     _patch_meili(monkeypatch, seen)
 
-    res = run(svc.test_prepare("во сколько прийти сдать кровь", {"service_name": "общий анализ мочи"}))
+    # «подготовка к сдаче крови» (не вопрос про время) идёт обычным prepare-путём,
+    # где и работает дроп конфликтного stale-биоматериала.
+    res = run(svc.test_prepare("подготовка к сдаче крови", {"service_name": "общий анализ мочи"}))
 
     assert not any("моч" in q.lower() for q in seen), seen
     assert any("кров" in q.lower() for q in seen), seen
@@ -66,6 +68,6 @@ def test_prepare_keeps_consistent_stale_biomaterial(monkeypatch):
     seen: list[str] = []
     _patch_meili(monkeypatch, seen)
 
-    run(svc.test_prepare("во сколько прийти сдать кровь", {"service_name": "общий анализ крови"}))
+    run(svc.test_prepare("подготовка к сдаче крови", {"service_name": "общий анализ крови"}))
 
     assert any("общий анализ крови" in q.lower() for q in seen), seen
