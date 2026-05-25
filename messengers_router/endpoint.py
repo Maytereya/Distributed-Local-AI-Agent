@@ -20,7 +20,7 @@ from .llm_mode_policy import normalize_runtime_options
 from .memory import MemoryStore
 from .router import patient_routing_stream
 from .services import Services
-from .policies import handoff_message
+from .policies import handoff_message, operator_after_hours_note
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -189,6 +189,7 @@ async def messenger_generate(
     async def event_stream():
         # debug=False — осознанно
         assistant_parts: list[str] = []
+        after_hours_note_added = False
         try:
             async for env in patient_routing_stream(
                 text,
@@ -200,8 +201,16 @@ async def messenger_generate(
             ):
                 if env.text:
                     assistant_parts.append(str(env.text))
+                out_text = env.text or ""
+                # При переключении на оператора во внерабочее время дописываем
+                # часы операторов (один раз за ответ). Бот сам работает всегда.
+                if env.handoff and not after_hours_note_added:
+                    note = operator_after_hours_note()
+                    if note:
+                        out_text = f"{out_text}\n\n{note}".strip() if out_text.strip() else note
+                        after_hours_note_added = True
                 obj = {
-                    "text": env.text or "",
+                    "text": out_text,
                     "attachments": env.attachments or [],
                     "handoff": bool(env.handoff),
                     "state_update": {},  # в стриме не используем
@@ -301,8 +310,14 @@ async def messenger_generate_once(
             if payload.debug:
                 state_update = {"debug": {"endpoint_error": str(e)}}
 
+        final_text = "".join(parts).strip()
+        if handoff:
+            note = operator_after_hours_note()
+            if note:
+                final_text = f"{final_text}\n\n{note}".strip() if final_text else note
+
         out = ResponseEnvelopeOut(
-            text="".join(parts).strip(),
+            text=final_text,
             attachments=attachments,
             handoff=handoff,
             state_update=state_update,

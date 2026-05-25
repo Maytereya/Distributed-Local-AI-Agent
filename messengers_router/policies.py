@@ -10,7 +10,7 @@ from __future__ import annotations
 from difflib import get_close_matches
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from .city import looks_like_address, match_city
@@ -18,6 +18,44 @@ from .doctor_name_port import resolve_cached_doctor_name_candidate, surname_vari
 from .russian_nlu import normalize_ru
 from .service_phrase import extract_service_phrase
 from .specialty_parser import extract_specialty_from_text
+
+# ---------------------------------------------------------------------------
+# Часы работы операторов (Самара) и after-hours примечание для handoff.
+# Операторы: будни 08:00–20:00, выходные 08:00–19:00 (Europe/Samara).
+# Бот продолжает работать круглосуточно; при переключении на оператора во
+# внерабочее время к ответу дописывается это примечание.
+# ---------------------------------------------------------------------------
+OPERATOR_HOURS_NOTE = (
+    "(операторы работают с 08:00 до 20:00 по будням "
+    "и с 08:00 до 19:00 по выходным)"
+)
+
+try:  # tz может отсутствовать в окружении — тогда деградируем на локальное время
+    from zoneinfo import ZoneInfo as _ZoneInfo
+
+    _SAMARA_TZ: Any = _ZoneInfo("Europe/Samara")
+except Exception:  # pragma: no cover
+    _SAMARA_TZ = None
+
+
+def operator_after_hours_note(now: datetime | None = None) -> str:
+    """Примечание о часах операторов, если сейчас вне рабочего времени.
+
+    Возвращает текст ``OPERATOR_HOURS_NOTE`` во внерабочее время Самары
+    (до 08:00, либо после 20:00 в будни / после 19:00 в выходные), иначе "".
+    Используется для приписки к handoff-ответам — сам бот работает всегда.
+
+    :param now: момент времени (для тестов); по умолчанию — текущее время Самары
+    :return: примечание о часах операторов или пустая строка
+    """
+    if now is None:
+        now = datetime.now(_SAMARA_TZ) if _SAMARA_TZ is not None else datetime.now()
+    open_t = time(8, 0)
+    close_t = time(19, 0) if now.weekday() >= 5 else time(20, 0)
+    current = now.time()
+    if current < open_t or current >= close_t:
+        return OPERATOR_HOURS_NOTE
+    return ""
 
 # ---------------------------
 # Fast detectors (cheap gates)
