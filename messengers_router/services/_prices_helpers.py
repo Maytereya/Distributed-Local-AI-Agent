@@ -953,6 +953,34 @@ def _common_prefix_len(a: str, b: str) -> int:
     return i
 
 
+# Синонимы для токенов СТРОКИ прайса (расширяем row-set, НЕ query-токены —
+# иначе раздувается token_count и завышается порог _is_price_match_strong).
+# Пациент пишет «антитела на корь», а в прайсе — «Вирус кори Ig M/Ig G»:
+# - «ig»/«иммуноглобулин» в названии == «антитела» в запросе;
+# - «кори» (род. падеж в названии) == «корь» (как пишет пациент).
+_PRICE_ROW_TOKEN_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "ig": ("антитела", "антитело", "иммуноглобулин"),
+    "иммуноглобулин": ("антитела", "антитело"),
+    "кори": ("корь",),
+    "корь": ("кори",),
+}
+
+
+def _expand_row_token_synonyms(row_tokens_set: set[str]) -> set[str]:
+    """Дополняет набор токенов строки прайса безопасными синонимами.
+
+    Расширяется ТОЛЬКО row-set (для точечного membership-матча query-токенов),
+    чтобы не раздувать ``len(tokens)`` запроса в ``_is_price_match_strong``.
+
+    :param row_tokens_set: токены названия услуги
+    :return: набор с добавленными синонимами
+    """
+    extra: set[str] = set()
+    for tok in row_tokens_set:
+        extra.update(_PRICE_ROW_TOKEN_SYNONYMS.get(tok, ()))
+    return row_tokens_set | extra
+
+
 def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], homecode_query: str) -> tuple[int, int]:
     name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
     homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
@@ -962,7 +990,7 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
         [_normalise_price_token(tok) for tok in _PRICE_TOKEN_RE.findall(name) if tok],
         raw_text=name,
     )
-    row_tokens_set = set(row_tokens)
+    row_tokens_set = _expand_row_token_synonyms(set(row_tokens))
 
     # Жесткий фильтр для консультационных price-запросов по специальности:
     # "стоимость приема уролога" не должен матчиться на фониатра/терапевта.
