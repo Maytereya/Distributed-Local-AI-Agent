@@ -196,6 +196,36 @@ def _extract_region_work_time(region: dict[str, Any]) -> str:
                     parts.append(f"{kk}: {txt}")
             if parts:
                 return "; ".join(parts)
+
+    # Live /regions отдаёт график не строкой, а структурно: weekdaysFrom/To,
+    # saturdayFrom/To, sundayFrom/To (например «07:00:00»). Собираем из них
+    # человекочитаемое расписание — иначе «График» пропадает из адресных ответов.
+    def _hhmm(value: Any) -> str:
+        s = str(value or "").strip()
+        m = re.match(r"^(\d{1,2}):(\d{2})", s)
+        return f"{int(m.group(1)):02d}:{m.group(2)}" if m else s
+
+    def _range(from_key: str, to_key: str) -> str:
+        a, b = _hhmm(region.get(from_key)), _hhmm(region.get(to_key))
+        if a and b:
+            return f"{a}–{b}"
+        return a or b or ""
+
+    weekday = _range("weekdaysFrom", "weekdaysTo")
+    saturday = _range("saturdayFrom", "saturdayTo")
+    sunday = _range("sundayFrom", "sundayTo")
+    schedule_parts: list[str] = []
+    if weekday:
+        schedule_parts.append(f"будни {weekday}")
+    if saturday and saturday == sunday:
+        schedule_parts.append(f"выходные {saturday}")
+    else:
+        if saturday:
+            schedule_parts.append(f"сб {saturday}")
+        if sunday:
+            schedule_parts.append(f"вс {sunday}")
+    if schedule_parts:
+        return ", ".join(schedule_parts)
     return ""
 
 
