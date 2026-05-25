@@ -407,9 +407,36 @@ def _has_specific_subject_in_query(text: str) -> bool:
     return bool(_PREPARE_SUBJECT_HINT_RE.search(str(text or "")))
 
 
+# Биоматериал по тексту — для отсечения конфликтующей stale-сущности.
+# «общий анализ крови» (ОАК) и «общий анализ мочи» (ОАМ) — разные биоматериалы.
+_PREPARE_BIOMATERIAL_RES: dict[str, re.Pattern[str]] = {
+    "blood": re.compile(r"\bкров\w*", re.I),
+    "urine": re.compile(r"\bмоч[аеиую]\w*", re.I),
+    "feces": re.compile(r"\bкал\b|\bкопрол\w*", re.I),
+}
+
+
+def _prepare_biomaterial(text: str) -> str | None:
+    """Определяет биоматериал (blood/urine/feces) по тексту или None."""
+    raw = str(text or "")
+    for material, pattern in _PREPARE_BIOMATERIAL_RES.items():
+        if pattern.search(raw):
+            return material
+    return None
+
+
 async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
     raw_query = str(query or "").strip()
     entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
+    # Если пациент в этом ходе сам назвал биоматериал, а stale-сущность из
+    # прошлого хода — про другой биоматериал (кейс «сдать кровь» при stale
+    # «общий анализ мочи»), не тащим её: иначе в варианты/clarify подмешивается
+    # чужой анализ и пациент видит подготовку «к общий анализ мочи».
+    raw_material = _prepare_biomaterial(raw_query)
+    stale_material = _prepare_biomaterial(entity_query)
+    if entity_query and raw_material and stale_material and raw_material != stale_material:
+        entities = {k: v for k, v in entities.items() if k not in ("test_name", "service_name")}
+        entity_query = ""
     # Для нового вопроса берем текст пользователя, чтобы не залипала старая услуга из контекста.
     q = raw_query or entity_query
     if not q:
