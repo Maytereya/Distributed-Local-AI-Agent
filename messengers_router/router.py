@@ -406,12 +406,10 @@ def _clear_operator_offer_pending(state: SessionState, memory: MemoryStore) -> N
             memory.clear_pending(state)
 
 
-# O4 анти-залип: минимальная длина ответа, который считаем «содержательным»
-# для детекта повтора (короткие «да/нет/ок» не считаем).
+# O4 анти-залип: минимальная длина «содержательного» ответа (короткие
+# «да/нет/ок» не считаем поводом для детекта повтора).
 _REPEAT_GUARD_MIN_LEN = 24
-_REPEAT_GUARD_HINT = (
-    "Если не получается решить здесь — напишите «оператор», и я переключу на специалиста."
-)
+_REPEAT_GUARD_OFFER = "Похоже, мне не удаётся помочь с этим в чате. Перевести на оператора?"
 
 
 def _repeat_norm(text: str) -> str:
@@ -419,24 +417,33 @@ def _repeat_norm(text: str) -> str:
     return " ".join(str(text or "").lower().split())
 
 
-def _maybe_append_operator_hint_on_repeat(
-    response: ResponseEnvelope, state: SessionState
+def _maybe_offer_operator_on_repeat(
+    response: ResponseEnvelope, state: SessionState, memory: MemoryStore
 ) -> ResponseEnvelope:
     """Анти-залип: если бот выдаёт один и тот же ответ подряд, после 2-го
-    повтора (3-й одинаковый ответ) дописывает подсказку про оператора.
+    повтора (3-й одинаковый ответ) предлагает перевод на оператора.
 
-    Намеренно НЕ трогает pending/flow-state — только счётчик в last_entities и
-    приписка к тексту. Эскалация дальше идёт через явный запрос оператора
-    («оператор»/«человек»/«не бот»), который уже распознаётся и уходит в handoff.
+    Переиспользует существующий operator-offer-pending: следующий ход
+    обрабатывает ``_handle_operator_offer_pending`` (да→handoff, нет→продолжаем,
+    иное→снимает offer и обычный роутинг, без ловушки). Дополнительно сбрасывает
+    залипший appointment-flow, чтобы гарантированно выйти из тупика.
+    Срабатывает только на реальном повторе → нормальные диалоги не затрагивает.
 
     :param response: финальный ответ текущего хода
-    :param state: состояние сессии (счётчик живёт в last_entities)
-    :return: тот же response (возможно, с допиской)
+    :param state: состояние сессии (счётчик в last_entities)
+    :param memory: хранилище pending-слотов
+    :return: тот же response (возможно, с offer-вопросом)
     """
     text = (response.text or "").strip()
     norm = _repeat_norm(text)
-    # Не вмешиваемся в handoff, пустые/короткие ответы и те, где уже есть оператор.
-    if response.handoff or len(norm) < _REPEAT_GUARD_MIN_LEN or "оператор" in norm:
+    # Не вмешиваемся в handoff, пустые/короткие ответы, ответы про оператора и
+    # уже-висящий offer (напр. кейс «нет слотов» сам ставит operator-offer).
+    if (
+        response.handoff
+        or len(norm) < _REPEAT_GUARD_MIN_LEN
+        or "оператор" in norm
+        or state.last_entities.get("_operator_offer_pending")
+    ):
         state.last_entities["_last_answer_norm"] = norm
         state.last_entities["_answer_repeat_count"] = 0
         return response
@@ -448,7 +455,10 @@ def _maybe_append_operator_hint_on_repeat(
 
     if repeat_count >= 2:  # 3-й одинаковый ответ подряд = после 2-го повтора
         state.last_entities["_answer_repeat_count"] = 0
-        response.text = f"{text}\n\n{_REPEAT_GUARD_HINT}"
+        reset_appointment_runtime_state(state)
+        state.last_entities["_operator_offer_pending"] = True
+        memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+        response.text = f"{text}\n\n{_REPEAT_GUARD_OFFER}"
     return response
 
 
@@ -2435,7 +2445,7 @@ async def patient_routing_stream(
             state_update={"debug": _debug_meta(decision, plan, evidence, state, pending)},
         )
 
-    response = _maybe_append_operator_hint_on_repeat(response, state)
+    response = _maybe_offer_operator_on_repeat(response, state, memory)
 
     memory.append_turn(state, role="user", text=user_text)
     memory.append_turn(state, role="assistant", text=response.text)
