@@ -450,10 +450,21 @@ def _is_lab_visit_timing_query(text: str) -> bool:
     return bool(_prepare_biomaterial(raw))
 
 
-async def _lab_collection_branches_answer(self: "Services") -> str:
-    """Список самарских филиалов с графиком работы для вопросов про время сдачи.
+# Фиксированная памятка о сдаче крови (предоставлена клиникой) — добавляется
+# к ответу на вопросы вида «во сколько сдать кровь».
+_BLOOD_COLLECTION_GUIDANCE = (
+    "Кровь сдается без записи, в порядке живой очереди, строго натощак, после "
+    "ночного голодания. Пить можно простую, не газированную воду. Обратиться "
+    "можно в любое отделение нашей клиники. Для оформления договора при себе "
+    "иметь паспорт."
+)
 
-    Отдаём готовый текст (адреса + часы), без LLM и без выдумывания медфактов.
+
+async def _lab_collection_branches_answer(self: "Services", query: str = "") -> str:
+    """Ответ про время/место сдачи: памятка (для крови) + самарские филиалы с графиком.
+
+    Отдаём готовый текст без LLM и без выдумывания медфактов: памятка по крови —
+    фиксированная, адреса/часы — из ``/regions``.
     """
     from ._addresses_helpers import _looks_like_real_address
     from ._regions import (
@@ -466,7 +477,7 @@ async def _lab_collection_branches_answer(self: "Services") -> str:
     try:
         regions = await self._ensure_regions_loaded()
     except Exception:
-        return ""
+        regions = []
 
     lines: list[str] = []
     seen: set[str] = set()
@@ -490,10 +501,13 @@ async def _lab_collection_branches_answer(self: "Services") -> str:
         work_time = _extract_region_work_time(r)
         lines.append(f"— {disp}" + (f" (график: {work_time})" if work_time else ""))
 
-    if not lines:
-        return ""
-    lines.sort()
-    return "Адреса филиалов в Самаре и часы их работы:\n" + "\n".join(lines)
+    parts: list[str] = []
+    if _prepare_biomaterial(query) == "blood":
+        parts.append(_BLOOD_COLLECTION_GUIDANCE)
+    if lines:
+        lines.sort()
+        parts.append("Адреса филиалов в Самаре и часы их работы:\n" + "\n".join(lines))
+    return "\n\n".join(parts)
 
 
 async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
@@ -502,7 +516,7 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
     # а не про подготовку. Отдаём адреса филиалов с графиком работы вместо
     # clarify-петли «к какому анализу нужна подготовка?».
     if _is_lab_visit_timing_query(raw_query):
-        branches_text = await _lab_collection_branches_answer(self)
+        branches_text = await _lab_collection_branches_answer(self, raw_query)
         if branches_text:
             return {
                 "prepare": branches_text,
