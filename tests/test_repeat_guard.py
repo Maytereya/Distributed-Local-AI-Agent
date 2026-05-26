@@ -62,6 +62,19 @@ def test_answer_mentioning_operator_not_guarded():
     assert _REPEAT_GUARD_OFFER not in r.text
 
 
+def test_active_appointment_flow_skips_guard():
+    """В активном APPOINTMENT-флоу O4 не должен срабатывать — у записи свои
+    счётчики попыток и свой порог эскалации (на слоте), которые точнее."""
+    st, mem = _state(), MemoryStore()
+    st.last_entities["appointment_flow_active"] = True
+    msg = "Есть возможность записи на приём к врачу Трубин в городе Самара по адресам: …"
+    r = None
+    for _ in range(5):
+        r = _run(st, mem, msg)
+    assert _REPEAT_GUARD_OFFER not in r.text
+    assert not st.last_entities.get("_operator_offer_pending")
+
+
 def test_already_pending_offer_is_skipped():
     st, mem = _state(), MemoryStore()
     st.last_entities["_operator_offer_pending"] = True

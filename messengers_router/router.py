@@ -425,9 +425,13 @@ def _maybe_offer_operator_on_repeat(
 
     Переиспользует существующий operator-offer-pending: следующий ход
     обрабатывает ``_handle_operator_offer_pending`` (да→handoff, нет→продолжаем,
-    иное→снимает offer и обычный роутинг, без ловушки). Дополнительно сбрасывает
-    залипший appointment-flow, чтобы гарантированно выйти из тупика.
-    Срабатывает только на реальном повторе → нормальные диалоги не затрагивает.
+    иное→снимает offer и обычный роутинг, без ловушки). Срабатывает только на
+    реальном повторе → нормальные диалоги не затрагивает.
+
+    В активном APPOINTMENT-флоу гард намеренно не срабатывает: у записи свои
+    счётчики попыток (``_appointment_doctor_lookup_attempts``,
+    ``_appointment_datetime_attempts``) и свой порог эскалации, которые
+    обработают залип точнее (на конкретном слоте, а не на тексте ответа).
 
     :param response: финальный ответ текущего хода
     :param state: состояние сессии (счётчик в last_entities)
@@ -436,13 +440,15 @@ def _maybe_offer_operator_on_repeat(
     """
     text = (response.text or "").strip()
     norm = _repeat_norm(text)
-    # Не вмешиваемся в handoff, пустые/короткие ответы, ответы про оператора и
-    # уже-висящий offer (напр. кейс «нет слотов» сам ставит operator-offer).
+    # Не вмешиваемся в handoff, пустые/короткие ответы, ответы про оператора,
+    # уже-висящий offer (напр. кейс «нет слотов» сам ставит operator-offer) и
+    # активный appointment-flow (у него свои attempt-счётчики и эскалация).
     if (
         response.handoff
         or len(norm) < _REPEAT_GUARD_MIN_LEN
         or "оператор" in norm
         or state.last_entities.get("_operator_offer_pending")
+        or state.last_entities.get("appointment_flow_active")
     ):
         state.last_entities["_last_answer_norm"] = norm
         state.last_entities["_answer_repeat_count"] = 0
