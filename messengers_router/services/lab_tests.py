@@ -20,7 +20,7 @@ from ._common import (
     _normalise_input,
     _service_fallback,
 )
-from ._prices_helpers import SAMARA_PRICE_REGION_ID, _rank_price_rows
+from ._prices_helpers import SAMARA_PRICE_REGION_ID, _rank_price_rows, _resolve_multi_price_items
 
 if TYPE_CHECKING:
     from .core import Services
@@ -126,7 +126,37 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
         price_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
     except Exception:
         return _test_assist_clarify_response(entities, note="test_assist source unavailable")
-    matches = _rank_price_rows([p for p in price_rows if isinstance(p, dict)], test_name, limit=10)
+    rows = [p for p in price_rows if isinstance(p, dict)]
+
+    # Мульти-услуговый запрос (через `,` / `;` / ` и ` / `+` / `/`): резолвим
+    # каждую услугу через каталог с алиасами (ОАК→общий анализ крови и т.п.),
+    # отдаём LLM реальные цены ВСЕХ найденных позиций. LLM не сможет
+    # «дофантазировать» недостающие (защищено правилом промпта). Однопредметные
+    # запросы и пробельные перечисления идут стандартным single-bag путём ниже.
+    multi_items = _resolve_multi_price_items(str(query or ""), rows)
+    if multi_items:
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in multi_items:
+            for row in item.get("prices") or []:
+                if not isinstance(row, dict):
+                    continue
+                code = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
+                name_key = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
+                key = code or name_key
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                merged.append(row)
+        if merged:
+            return {
+                "tests": merged,
+                "promos": [],
+                "note": f"test_assist: priceByRegion({SAMARA_PRICE_REGION_ID}, multi-item)",
+                "entities_used": entities,
+            }
+
+    matches = _rank_price_rows(rows, test_name, limit=10)
 
     if not matches:
         return _test_assist_clarify_response(
