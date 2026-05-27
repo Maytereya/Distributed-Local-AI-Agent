@@ -323,6 +323,67 @@ def test_patient_routing_stream_logs_traceback_when_orchestrator_crashes(monkeyp
     assert logged
 
 
+def test_patient_routing_stream_allows_test_result_for_non_samara_city(monkeypatch):
+    """TEST_RESULT работает для любого города: публичная ссылка результата
+    не привязана к региону, поэтому city-gate не должен блокировать handoff'ом
+    запросы вроде «нужен результат анализов Оренбург»."""
+    captured: dict[str, str] = {}
+
+    async def fake_run_pipeline(text, state, services=None, memory=None, runtime_options=None):
+        _ = services, memory, runtime_options
+        captured["text"] = text
+        ctx = OrchestratorContext(text=text, state=state)
+        ctx.decision = RouteDecision(label="TEST_RESULT", confidence=0.9, source="llm_primary")
+        ctx.plan = Plan(label="TEST_RESULT")
+        ctx.evidence = Evidence(items={})
+        ctx.response = ResponseEnvelope(
+            text="Пришлите, пожалуйста, фамилию, год рождения, филиал и номер заказа.",
+            handoff=False,
+        )
+        return ctx
+
+    monkeypatch.setattr("messengers_router.orchestrator.run_pipeline", fake_run_pipeline)
+
+    state = SessionState(session_id="test-result-orenburg")
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    out = _run_stream_once("нужен результат анализов Оренбург", state, services, memory)
+
+    assert captured.get("text") == "нужен результат анализов Оренбург", (
+        "TEST_RESULT-реплика с не-самарским городом обязана дойти до оркестратора, "
+        "а не блокироваться city-gate"
+    )
+    assert len(out) == 1
+    assert out[0].handoff is False
+    assert "только по Самаре" not in out[0].text
+
+
+def test_patient_routing_stream_still_blocks_non_test_result_for_non_samara_city(monkeypatch):
+    """Регрессия: city-gate должен продолжать блокировать ВСЁ, что НЕ TEST_RESULT,
+    при упоминании не-самарского города (например, запись/цены в Оренбурге)."""
+
+    async def fail_run_pipeline(*args, **kwargs):
+        _ = args, kwargs
+        raise AssertionError(
+            "city-gate должен сработать ДО оркестратора для не-TEST_RESULT интентов"
+        )
+
+    monkeypatch.setattr("messengers_router.orchestrator.run_pipeline", fail_run_pipeline)
+
+    state = SessionState(session_id="appointment-orenburg")
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+
+    out = _run_stream_once("хочу записаться в Оренбурге", state, services, memory)
+
+    assert len(out) == 1
+    assert out[0].handoff is True
+    assert out[0].text == "Сейчас могу помочь только по Самаре. Соединяю с оператором."
+
+
 def test_apply_appointment_continuity_overrides_prioritizes_datetime():
     state = SessionState(session_id="appt-override-datetime", last_entities={"appointment_flow_active": True})
     decision = RouteDecision(

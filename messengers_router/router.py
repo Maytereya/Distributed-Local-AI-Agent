@@ -2381,22 +2381,28 @@ async def patient_routing_stream(
 
     city_now = match_city(user_text)
     if city_now and not _is_samara_city(city_now):
-        clear_on_handoff(state, memory)
-        update_summary(state, reason="handoff")
-        yield ResponseEnvelope(
-            text=_SAMARA_ONLY_OPERATOR_TEXT,
-            attachments=[],
-            handoff=True,
-            state_update=_early_debug_state_update(
-                debug,
-                label="ADDRESS",
+        # Исключение: запрос результатов анализов работает для любого города —
+        # публичная ссылка naykalab.ru/getanaliz.php не привязана к региону,
+        # достаточно ФИО/года/филиала/номера. Пускаем такие реплики в TEST_RESULT-флоу.
+        if detect_test_result_intent(user_text):
+            pass
+        else:
+            clear_on_handoff(state, memory)
+            update_summary(state, reason="handoff")
+            yield ResponseEnvelope(
+                text=_SAMARA_ONLY_OPERATOR_TEXT,
+                attachments=[],
                 handoff=True,
-                flags={"city_not_supported"},
-                context_action="new_topic",
-                confidence=1.0,
-            ),
-        )
-        return
+                state_update=_early_debug_state_update(
+                    debug,
+                    label="ADDRESS",
+                    handoff=True,
+                    flags={"city_not_supported"},
+                    context_action="new_topic",
+                    confidence=1.0,
+                ),
+            )
+            return
 
     precheck = run_appointment_precheck(
         user_text=user_text,
