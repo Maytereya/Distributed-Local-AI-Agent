@@ -10,6 +10,7 @@
 """
 
 import json
+import logging
 import os
 import sys
 from collections import defaultdict
@@ -35,6 +36,8 @@ except Exception:
 # Добавляем корневую директорию в PYTHONPATH
 root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(root_dir)
+
+logger = logging.getLogger(__name__)
 
 base_url = c.nayka_base_url
 auth = requests.auth.HTTPBasicAuth(c.nayka_login, c.nayka_pass)
@@ -959,6 +962,10 @@ def find_doctor_schedule(
         doctors_resp.raise_for_status()
         doctors = doctors_resp.json()
     except (requests.RequestException, ValueError) as e:
+        logger.warning(
+            "find_doctor_schedule: /doctors fetch failed last_name=%r error=%s",
+            last_name, e,
+        )
         return f"Не удалось получить список врачей: {e}"
     doctor_dict = {doc["id"]: doc for doc in doctors}
     matched_doctors = {doc["id"]: doc for doc in doctors if last_name.lower() in doc["fio"].lower()}
@@ -979,6 +986,11 @@ def find_doctor_schedule(
         dr_regions.raise_for_status()
         dr_regions = dr_regions.json()
     except (requests.RequestException, ValueError) as e:
+        logger.warning(
+            "find_doctor_schedule: doctorCompanyUnits/doctorRegions fetch failed "
+            "last_name=%r error=%s",
+            last_name, e,
+        )
         return f"Не удалось получить связи врача: {e}"
 
     start_date = date.today().isoformat()
@@ -987,6 +999,10 @@ def find_doctor_schedule(
     # --- Собираем расписания ---
     result = []
     matched_but_without_slots = False
+    # Трекаем сбои fetch внутри цикла: если врач найден и регионы есть, но все
+    # слоты собраны при наличии ошибок /doctorSchedule|/doctorScheduleCells —
+    # вывод «нет слотов» может быть артефактом сбоя, а не реальностью.
+    any_fetch_error = False
     for doctor_id, doctor_obj in matched_doctors.items():
         doctor_mappings = [m for m in mappings if m["worker"] == doctor_id]
         doctor_reg_entries = [r for r in dr_regions if r["worker"] == doctor_id]
@@ -1011,7 +1027,13 @@ def find_doctor_schedule(
                 schedule_resp = _session_get(schedule_url)
                 schedule_resp.raise_for_status()
                 schedule_days = schedule_resp.json()
-            except (requests.RequestException, ValueError):
+            except (requests.RequestException, ValueError) as exc:
+                any_fetch_error = True
+                logger.warning(
+                    "find_doctor_schedule: /doctorSchedule fetch failed, skipping region "
+                    "doctor_id=%s region_id=%s url=%s error=%s",
+                    doctor_id, reg_id, schedule_url, exc,
+                )
                 continue
             region_rows: list[dict[str, Any]] = []
             for day in schedule_days:
@@ -1022,7 +1044,13 @@ def find_doctor_schedule(
                     cells_resp.raise_for_status()
                     cells = cells_resp.json()
                     free_slots = [cell.get("startTime") for cell in cells if isinstance(cell, dict) and cell.get("free")]
-                except (requests.RequestException, ValueError):
+                except (requests.RequestException, ValueError) as exc:
+                    any_fetch_error = True
+                    logger.warning(
+                        "find_doctor_schedule: /doctorScheduleCells fetch failed, treating day as no free slots "
+                        "doctor_id=%s schedule_day_id=%s url=%s error=%s",
+                        doctor_id, day.get("id"), cells_url, exc,
+                    )
                     free_slots = []
                 if not free_slots:
                     continue
@@ -1057,6 +1085,19 @@ def find_doctor_schedule(
         })
 
     if not result and matched_but_without_slots:
+        if any_fetch_error:
+            # Врач найден, регионы есть, но слоты так и не собраны ПРИ наличии
+            # сбоев fetch. Вывод «нет слотов» здесь может быть артефактом
+            # частичного сбоя CRM, а не реальным отсутствием приёма (кейс
+            # Паничевой 28.05). Поведение пока не меняем (возвращаем
+            # NO_FREE_SLOTS — безопасный handoff-офер), но помечаем в логах как
+            # подозрительное: основа для будущей эскалации в api_error.
+            logger.warning(
+                "find_doctor_schedule: NO_FREE_SLOTS for last_name=%r but some "
+                "schedule/cells fetches errored — result may be incomplete "
+                "(suspected API failure misreported as no-slots)",
+                last_name,
+            )
         return _NO_FREE_SLOTS_MESSAGE
     if not result:
         return f"Врач с фамилией '{last_name}' не найден."
@@ -1068,6 +1109,11 @@ def find_doctor_schedule(
 # других строковых ошибок без дублирования текста.
 _NO_FREE_SLOTS_MESSAGE = "Врач найден, но свободных слотов нет в ближайшие 2 недели."
 _NO_FREE_SLOTS_MARKER = "свободных слотов нет"
+# Маркер строковых ответов find_doctor_schedule, означающих СБОЙ обращения
+# к CRM (сеть/5xx после исчерпания HTTP-ретраев), а не валидный негатив.
+# Обе ветки ошибок («Не удалось получить список врачей: …» и
+# «Не удалось получить связи врача: …») начинаются с этой фразы.
+_API_ERROR_MARKER = "не удалось получить"
 
 
 def is_no_free_slots_message(payload: str | None) -> bool:
@@ -1086,6 +1132,28 @@ def is_no_free_slots_message(payload: str | None) -> bool:
     if not isinstance(payload, str):
         return False
     return _NO_FREE_SLOTS_MARKER in payload.lower()
+
+
+def is_api_error_message(payload: str | None) -> bool:
+    """Проверяет, является ли строковый ответ ``find_doctor_schedule``
+    признаком СБОЯ обращения к CRM (сеть/5xx), а не валидным негативом
+    («врач не найден» / «регион не найден» / «нет слотов»).
+
+    Нужно, чтобы caller (`messengers_router.services.core`) мог отличить
+    недоступность источника (→ stale-fallback из кэша или честный
+    handoff на оператора) от ситуации «врача действительно нет»
+    (→ сообщение «расписание не найдено»). Раньше оба случая сжимались
+    в `[]`, и пациент при сбое API видел вводящее в заблуждение
+    «расписание не найдено».
+
+    :param payload: ответ ``find_doctor_schedule`` или иное строковое
+                    сообщение.
+    :return: True если это ошибка обращения к источнику, иначе False
+             (включая None / нестрока / валидные негативы).
+    """
+    if not isinstance(payload, str):
+        return False
+    return _API_ERROR_MARKER in payload.lower()
 
 
 if __name__ == "__main__":

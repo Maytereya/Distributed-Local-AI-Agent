@@ -1,5 +1,8 @@
 import json
+import logging
 from datetime import date
+
+import requests
 
 from agent_logic_2.nayka_api import api_nayka
 
@@ -121,3 +124,79 @@ def test_find_doctor_schedule_uses_extended_lookahead_window(monkeypatch):
     assert seen_schedule_urls, "Expected doctorSchedule requests"
     assert any("startDate=2026-04-01" in url for url in seen_schedule_urls)
     assert any("endDate=2026-04-15" in url for url in seen_schedule_urls)
+
+
+def test_is_api_error_message_classification():
+    # Сбои обращения к CRM → True (обе ветки начинаются с «Не удалось получить»).
+    assert api_nayka.is_api_error_message("Не удалось получить список врачей: timeout")
+    assert api_nayka.is_api_error_message("Не удалось получить связи врача: 503")
+    # Валидные негативы → False (это НЕ сбой, а корректный исход).
+    assert not api_nayka.is_api_error_message(api_nayka._NO_FREE_SLOTS_MESSAGE)
+    assert not api_nayka.is_api_error_message("Врач с фамилией (или частью ФИО) 'X' не найден.")
+    assert not api_nayka.is_api_error_message("Регион 'Луна' не найден.")
+    # Не-строки → False.
+    assert not api_nayka.is_api_error_message(None)
+    assert not api_nayka.is_api_error_message([])
+    # «нет слотов» и «api error» — взаимоисключающие классы.
+    assert not api_nayka.is_no_free_slots_message("Не удалось получить список врачей: timeout")
+
+
+def test_find_doctor_schedule_returns_api_error_string_on_doctors_fetch_failure(monkeypatch):
+    """Когда падает запрос /doctors, find_doctor_schedule возвращает строку
+    «Не удалось получить список врачей: …», которую is_api_error_message
+    распознаёт как сбой источника (а не «врач не найден»)."""
+
+    def fake_session_get(url: str, **kwargs):
+        _ = kwargs
+        if url.endswith("/doctors"):
+            raise requests.ConnectionError("read timed out")
+        raise AssertionError(f"Unexpected URL after failure: {url}")
+
+    monkeypatch.setattr(api_nayka, "site_regions", lambda: [{"id": 8882, "name": "Самара"}])
+    monkeypatch.setattr(api_nayka, "_session_get", fake_session_get)
+
+    result = api_nayka.find_doctor_schedule("Паничева")
+
+    assert isinstance(result, str)
+    assert api_nayka.is_api_error_message(result)
+    assert not api_nayka.is_no_free_slots_message(result)
+
+
+def test_find_doctor_schedule_logs_warning_on_schedule_fetch_failure(monkeypatch, caplog):
+    """Молчаливый `continue` при сбое /doctorSchedule теперь оставляет
+    WARNING в логах — иначе частичный сбой не отличить от «нет приёма»."""
+
+    class _FakeResp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_session_get(url: str, **kwargs):
+        _ = kwargs
+        if url.endswith("/doctors"):
+            return _FakeResp([{"id": 1, "fio": "Паничева Анна", "ord": 1}])
+        if url.endswith("/doctorCompanyUnits"):
+            return _FakeResp([{"worker": 1, "specialization": "терапевт"}])
+        if url.endswith("/doctorRegions"):
+            return _FakeResp([{"worker": 1, "companyUnit": 38, "region": 8882}])
+        if "/doctorSchedule?" in url:
+            raise requests.ConnectionError("read timed out")
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(api_nayka, "site_regions", lambda: [{"id": 8882, "name": "Самара"}])
+    monkeypatch.setattr(api_nayka, "_session_get", fake_session_get)
+
+    with caplog.at_level(logging.WARNING, logger="agent_logic_2.nayka_api.api_nayka"):
+        result = api_nayka.find_doctor_schedule("Паничева")
+
+    # Врач найден, регион есть, но все /doctorSchedule упали → «нет слотов».
+    assert api_nayka.is_no_free_slots_message(result)
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("doctorSchedule" in m for m in warnings), warnings
+    # И отдельный сигнал, что вывод «нет слотов» мог быть искажён сбоем fetch.
+    assert any("no-slots" in m.lower() or "incomplete" in m.lower() for m in warnings), warnings

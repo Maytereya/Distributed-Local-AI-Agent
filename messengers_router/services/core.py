@@ -47,6 +47,21 @@ from ._regions import (
 logger = logging.getLogger(__name__)
 
 
+class ScheduleSourceUnavailable(RuntimeError):
+    """Источник расписания (CRM «Наука») недоступен — сетевой сбой / 5xx.
+
+    Бросается из ``_fetch_schedule_source`` при строковом ответе
+    ``find_doctor_schedule`` вида «Не удалось получить …». В отличие от
+    пустого ``[]`` («врач не найден») это сигнал, что данных нет из-за
+    сбоя, а не из-за отсутствия врача. Распространяется до:
+      • cache-слоя (`schedule_ttl_cache`) — он отдаст последний валидный
+        (positive) ответ из stale-окна, если такой есть;
+      • ``doctors_schedule_week`` — там generic ``except`` превращает
+        исключение в честный handoff ``service_error_schedule`` вместо
+        вводящего в заблуждение «расписание не найдено».
+    """
+
+
 @dataclass
 class Services:
     """
@@ -203,20 +218,26 @@ class Services:
                 #   «matched_but_without_slots». Renderer выдаёт
                 #   корректное сообщение через ветку
                 #   `no_free_slots_2_weeks` в `build_doctor_schedule_response`.
-                # - случаи (1) и (3) → пустой `[]` → cache хранит
-                #   как negative с TTL 15с, renderer выдаёт
-                #   «расписание не найдено».
+                # - случай (1) → пустой `[]` → cache хранит как negative
+                #   с TTL 15с, renderer выдаёт «расписание не найдено».
+                # - случай (3) → ScheduleSourceUnavailable: НЕ «врача нет»,
+                #   а сбой источника. Cache отдаст stale (если есть),
+                #   иначе doctors_schedule_week сделает честный handoff
+                #   `service_error_schedule`. Так пациент при недоступном
+                #   API больше не видит «расписание не найдено».
                 if not isinstance(payload, list):
                     payload_text = str(payload) if payload is not None else ""
                     no_free_slots_match = api_nayka.is_no_free_slots_message(payload_text)
+                    api_error_match = api_nayka.is_api_error_message(payload_text)
                     logger.info(
                         "schedule_fetch_source_normalised_non_list "
                         "last_name=%r region=%r payload_type=%s "
-                        "no_free_slots=%s message=%r",
+                        "no_free_slots=%s api_error=%s message=%r",
                         last_name,
                         region_name or "",
                         type(payload).__name__,
                         no_free_slots_match,
+                        api_error_match,
                         payload_text[:160],
                     )
                     if no_free_slots_match:
@@ -226,8 +247,16 @@ class Services:
                             "fio": last_name,
                             "schedule": {},
                         }]
+                    if api_error_match:
+                        # HTTP-слой (urllib3 Retry) уже исчерпал свои
+                        # ретраи, поэтому повтор на уровне
+                        # _fetch_schedule_source не нужен — отдельный
+                        # except ниже re-raise'ит без лишнего sleep+повтора.
+                        raise ScheduleSourceUnavailable(payload_text)
                     return []
                 return payload
+            except ScheduleSourceUnavailable:
+                raise
             except Exception as exc:
                 last_exc = exc
                 if attempt == 0:

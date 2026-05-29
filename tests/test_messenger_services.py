@@ -529,6 +529,128 @@ def test_doctors_schedule_week_source_unavailable_uses_domain_handoff_message(mo
     assert res.get("handoff_message") == handoff_message("service_error_schedule")
 
 
+def test_doctors_schedule_week_api_error_string_triggers_honest_handoff(monkeypatch):
+    """find_doctor_schedule вернул строку-ошибку CRM («Не удалось получить…»):
+    это СБОЙ источника, а не «врача нет». Ожидаем честный handoff
+    service_error_schedule, а не вводящее в заблуждение «расписание не найдено»
+    (регресс кейса Паничевой 28.05)."""
+    svc = Services()
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Паничева Анна Сергеевна",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+            }
+        ]
+
+    calls = {"count": 0}
+
+    def fake_schedule(_name, _branch=None):
+        calls["count"] += 1
+        return "Не удалось получить список врачей: HTTPSConnectionPool read timed out"
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc_mod.api_nayka, "find_doctor_schedule", fake_schedule)
+
+    res = run(svc.doctors_schedule_week("расписание Паничевой", {"doctor_name": "Паничева"}))
+
+    assert res.get("handoff_required") is True
+    assert res.get("handoff_reason") == "service_error"
+    assert res.get("handoff_message") == handoff_message("service_error_schedule")
+    # HTTP-слой (urllib3 Retry) уже исчерпал ретраи — _fetch_schedule_source
+    # НЕ должен повторять запрос на api_error (в отличие от raised-exception
+    # пути, где retry-петля делает 2 попытки). Один вызов на первый кандидат.
+    assert calls["count"] == 1
+
+
+def test_doctors_schedule_week_doctor_not_found_string_yields_empty_no_handoff(monkeypatch):
+    """find_doctor_schedule вернул «врач не найден» — это валидный негатив, а
+    НЕ сбой. Ожидаем пустое расписание без handoff (renderer выдаст
+    «расписание не найдено»). Различие с api_error не должно стираться."""
+    svc = Services()
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Иванов Иван Иванович",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+            }
+        ]
+
+    def fake_schedule(_name, _branch=None):
+        return "Врач с фамилией (или частью ФИО) 'Несуществующий' не найден."
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc_mod.api_nayka, "find_doctor_schedule", fake_schedule)
+
+    res = run(svc.doctors_schedule_week("расписание Иванова", {"doctor_name": "Иванов"}))
+
+    assert res.get("schedule") == []
+    assert not res.get("handoff_required", False)
+    assert res.get("schedule_unavailable_reason") is None
+
+
+def test_doctors_schedule_week_api_error_string_serves_stale(monkeypatch):
+    """При строке-ошибке CRM отдаём последний валидный (positive) ответ из
+    stale-окна, если он есть — и без удвоения вызовов retry-петлёй (api_error
+    re-raise'ится сразу, в отличие от raised exception)."""
+    svc = Services(
+        schedule_fresh_ttl_seconds=10,
+        schedule_stale_ttl_seconds=120,
+        schedule_negative_ttl_seconds=5,
+        schedule_cache_max_keys=100,
+    )
+    calls = {"count": 0}
+    clock = {"ts": 5000.0}
+    fail = {"enabled": False}
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Тестов Тест",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+            }
+        ]
+
+    async def fake_samara_tokens():
+        return {"г. самара, пр. ленина, 5"}
+
+    def fake_schedule(_name, _branch=None):
+        calls["count"] += 1
+        if fail["enabled"]:
+            return "Не удалось получить связи врача: HTTPSConnectionPool read timed out"
+        return [
+            {
+                "fio": "Тестов Тест",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "schedule": {"г. Самара, пр. Ленина, 5": [{"date": "2026-03-20", "slots": ["09:00"]}]},
+            }
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+    monkeypatch.setattr(svc_mod.api_nayka, "find_doctor_schedule", fake_schedule)
+    monkeypatch.setattr(svc_mod.time, "time", lambda: clock["ts"])
+
+    first = run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
+    assert first["schedule"]
+    assert calls["count"] == 1
+
+    fail["enabled"] = True
+    clock["ts"] += 11
+    second = run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
+
+    # api_error НЕ ретраится на уровне _fetch_schedule_source: +1 вызов (не +2),
+    # затем отдаётся stale из кэша.
+    assert calls["count"] == 2
+    assert second["schedule"], "Expected stale schedule when source returns api error"
+    assert not second.get("handoff_required", False)
+
+
 def test_doctors_schedule_week(monkeypatch):
     svc = Services()
 
