@@ -2313,8 +2313,9 @@ def _build_appointment_schedule_preview_response(
     flow_label: str,
     evidence: Evidence,
     state: SessionState,
+    memory: MemoryStore,
 ) -> ResponseEnvelope | None:
-    return response_build_appointment_schedule_preview_response(flow_label, evidence, state)
+    return response_build_appointment_schedule_preview_response(flow_label, evidence, state, memory)
 
 
 def _build_appointment_step_response(

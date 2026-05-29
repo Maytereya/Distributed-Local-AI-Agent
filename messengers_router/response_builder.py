@@ -318,6 +318,23 @@ def build_prepare_response(flow_label: str, evidence: Evidence) -> ResponseEnvel
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 
+def _no_free_slots_operator_offer(state: SessionState, memory: MemoryStore) -> ResponseEnvelope:
+    """Единый ответ на «врач найден, но слотов нет 2 недели» — и в DOCTOR_SCHEDULE,
+    и в APPOINTMENT. Сбрасывает runtime-стейт записи и переводит диалог в ожидание
+    подтверждения перевода на оператора."""
+    reset_appointment_runtime_state(state)
+    state.last_entities["_operator_offer_pending"] = True
+    memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+    return ResponseEnvelope(
+        text=(
+            "Врач найден, но свободных слотов нет в ближайшие 2 недели. "
+            "Для уточнения могу перевести на оператора. Перевести на оператора?"
+        ),
+        attachments=[],
+        handoff=False,
+    )
+
+
 def build_doctor_schedule_response(
     flow_label: str,
     evidence: Evidence,
@@ -330,17 +347,7 @@ def build_doctor_schedule_response(
     if not isinstance(schedule_payload, dict):
         return None
     if str(schedule_payload.get("schedule_unavailable_reason") or "").strip() == "no_free_slots_2_weeks":
-        reset_appointment_runtime_state(state)
-        state.last_entities["_operator_offer_pending"] = True
-        memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
-        return ResponseEnvelope(
-            text=(
-                "Врач найден, но свободных слотов нет в ближайшие 2 недели. "
-                "Для уточнения могу перевести на оператора. Перевести на оператора?"
-            ),
-            attachments=[],
-            handoff=False,
-        )
+        return _no_free_slots_operator_offer(state, memory)
     hydrate_appointment_context_from_schedule(state, schedule_payload)
     text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
@@ -407,6 +414,7 @@ def build_appointment_schedule_preview_response(
     flow_label: str,
     evidence: Evidence,
     state: SessionState,
+    memory: MemoryStore,
 ) -> ResponseEnvelope | None:
     if flow_label != "APPOINTMENT":
         return None
@@ -422,6 +430,11 @@ def build_appointment_schedule_preview_response(
         return None
     if state.last_entities.get("time_from"):
         return None
+
+    # Пациент хочет записаться, но свободных слотов нет на 2 недели — честный
+    # ответ как в DOCTOR_SCHEDULE, без падения в format_*→«расписание не найдено».
+    if str(schedule_payload.get("schedule_unavailable_reason") or "").strip() == "no_free_slots_2_weeks":
+        return _no_free_slots_operator_offer(state, memory)
 
     hydrate_appointment_context_from_schedule(state, schedule_payload)
     activate_appointment_flow(state)
@@ -570,7 +583,7 @@ def build_first_structured_response(
         lambda: build_doctor_info_response(flow_label, evidence, state),
         lambda: build_address_response(flow_label, evidence, state, memory, decision, user_text),
         lambda: build_news_response(flow_label, evidence, state),
-        lambda: build_appointment_schedule_preview_response(flow_label, evidence, state),
+        lambda: build_appointment_schedule_preview_response(flow_label, evidence, state, memory),
         lambda: build_appointment_step_response(flow_label, evidence, state, services, memory),
     )
     for build in builders:

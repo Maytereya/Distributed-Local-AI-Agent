@@ -1876,9 +1876,42 @@ def test_build_appointment_schedule_preview_response():
             }
         }
     )
-    env = _build_appointment_schedule_preview_response("APPOINTMENT", evidence, state)
+    env = _build_appointment_schedule_preview_response("APPOINTMENT", evidence, state, MemoryStore())
     assert env is not None
     assert "Трубин Алексей Юрьевич" in env.text
+
+
+def test_build_appointment_schedule_preview_response_offers_operator_when_no_slots_for_two_weeks():
+    state = SessionState(
+        session_id="appt-preview-no-slots",
+        last_entities={
+            "appointment_flow_active": True,
+            "doctor_name": "Паничева Ольга",
+        },
+    )
+    memory = MemoryStore()
+    evidence = Evidence(
+        items={
+            "doctor_schedule": {
+                "schedule": [],
+                "schedule_unavailable_reason": "no_free_slots_2_weeks",
+            }
+        }
+    )
+
+    env = _build_appointment_schedule_preview_response("APPOINTMENT", evidence, state, memory)
+
+    assert env is not None
+    assert "Врач найден, но свободных слотов нет в ближайшие 2 недели." in env.text
+    assert "Перевести на оператора?" in env.text
+    assert "расписание не найдено" not in env.text.lower()
+    assert env.handoff is False
+    assert state.last_entities.get("appointment_flow_active") is None
+    assert state.last_entities.get("_operator_offer_pending") is True
+    pending = memory.get_pending(state)
+    assert isinstance(pending, dict)
+    assert pending.get("label") == "OTHER"
+    assert "operator_offer_confirm" in (pending.get("missing") or [])
 
 
 def test_build_appointment_schedule_preview_response_skips_for_reschedule_action():
@@ -1900,7 +1933,7 @@ def test_build_appointment_schedule_preview_response_skips_for_reschedule_action
         }
     )
 
-    env = _build_appointment_schedule_preview_response("APPOINTMENT", evidence, state)
+    env = _build_appointment_schedule_preview_response("APPOINTMENT", evidence, state, MemoryStore())
 
     assert env is None
 
