@@ -765,9 +765,17 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
         }
 
     if not last_name:
+        # Имя врача было названо («Записаться к <ФИО>»), но фамилия не
+        # резолвится в самарском каталоге врачей — значит врача нет в нашей
+        # системе онлайн-записи (напр. принимает только в Оренбурге, регион
+        # исключён из кэша через EXCLUDED_REGION_ROOTS). Помечаем явным
+        # сигналом `doctor_lookup=unresolved`, чтобы response_builder не
+        # предлагал самарские филиалы вслепую, а честно сообщил об
+        # ограничении и предложил оператора.
         return {
             "schedule": [],
             "note": "doctors_schedule_week: missing doctor last name",
+            "doctor_lookup": "unresolved" if str(raw_name or "").strip() else "",
             "entities_used": entities,
         }
 

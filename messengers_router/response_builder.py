@@ -335,6 +335,28 @@ def _no_free_slots_operator_offer(state: SessionState, memory: MemoryStore) -> R
     )
 
 
+def _doctor_not_bookable_via_bot_offer(state: SessionState, memory: MemoryStore) -> ResponseEnvelope:
+    """Ответ на «выбран конкретный врач, которого нет в системе онлайн-записи».
+
+    Онлайн-запись через бот доступна только по филиалам в Самаре. Если врача
+    нет в самарском каталоге (например, принимает только в Оренбурге — регион
+    исключён из кэша через EXCLUDED_REGION_ROOTS), нельзя предлагать самарские
+    филиалы вслепую: честно сообщаем об ограничении и предлагаем оператора.
+    """
+    reset_appointment_runtime_state(state)
+    state.last_entities["_operator_offer_pending"] = True
+    memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+    return ResponseEnvelope(
+        text=(
+            "К сожалению, этого врача нет в системе онлайн-записи — через бот "
+            "запись возможна только по филиалам в Самаре. Могу перевести на "
+            "оператора, чтобы уточнить запись. Перевести на оператора?"
+        ),
+        attachments=[],
+        handoff=False,
+    )
+
+
 def build_doctor_schedule_response(
     flow_label: str,
     evidence: Evidence,
@@ -436,6 +458,13 @@ def build_appointment_schedule_preview_response(
     if str(schedule_payload.get("schedule_unavailable_reason") or "").strip() == "no_free_slots_2_weeks":
         return _no_free_slots_operator_offer(state, memory)
 
+    # Назван конкретный врач, которого нет в самарском каталоге онлайн-записи
+    # (doctor_lookup=unresolved из doctors_schedule_week). Не показываем
+    # «расписание не найдено» и не предлагаем самарские филиалы вслепую —
+    # честно сообщаем об ограничении «только по Самаре» и предлагаем оператора.
+    if str(schedule_payload.get("doctor_lookup") or "").strip() == "unresolved":
+        return _doctor_not_bookable_via_bot_offer(state, memory)
+
     hydrate_appointment_context_from_schedule(state, schedule_payload)
     activate_appointment_flow(state)
     text = format_doctor_schedule_for_patient(schedule_payload, state.last_entities)
@@ -490,6 +519,18 @@ def build_appointment_step_response(
         selection_mode = ""
 
     if appointment_step == APPOINTMENT_STEP_BRANCH:
+        # Назван конкретный врач, которого нет в самарском каталоге онлайн-записи
+        # (например, «Записаться к <ФИО> на завтра»: дата задана → preview-ветка
+        # пропущена → доходим сюда). Не предлагаем самарские филиалы вслепую —
+        # честно сообщаем «только по Самаре» и предлагаем оператора.
+        if doctor_selected:
+            schedule_payload = evidence.get(ek.DOCTOR_SCHEDULE)
+            if (
+                isinstance(schedule_payload, dict)
+                and str(schedule_payload.get("doctor_lookup") or "").strip() == "unresolved"
+            ):
+                return _doctor_not_bookable_via_bot_offer(state, memory)
+
         if selection_mode == "doctor" and not doctor_selected:
             doctors_info_payload = evidence.get(ek.DOCTORS_INFO)
             doctors_raw = doctors_info_payload.get("doctors") if isinstance(doctors_info_payload, dict) else None

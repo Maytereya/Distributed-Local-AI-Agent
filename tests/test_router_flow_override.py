@@ -1914,6 +1914,108 @@ def test_build_appointment_schedule_preview_response_offers_operator_when_no_slo
     assert "operator_offer_confirm" in (pending.get("missing") or [])
 
 
+def test_build_appointment_schedule_preview_response_offers_operator_when_doctor_not_in_samara():
+    # Назван конкретный врач, которого нет в самарском каталоге онлайн-записи
+    # (doctor_lookup=unresolved). Вместо «расписание не найдено» и слепого
+    # списка самарских филиалов — честный отказ «только по Самаре» + оператор.
+    state = SessionState(
+        session_id="appt-preview-non-samara-doctor",
+        last_entities={
+            "appointment_flow_active": True,
+            "doctor_name": "Турмухамбетова Балслу Турмурадовна",
+        },
+    )
+    memory = MemoryStore()
+    evidence = Evidence(
+        items={
+            "doctor_schedule": {
+                "schedule": [],
+                "doctor_lookup": "unresolved",
+            }
+        }
+    )
+
+    env = _build_appointment_schedule_preview_response("APPOINTMENT", evidence, state, memory)
+
+    assert env is not None
+    assert "только по филиалам в Самаре" in env.text
+    assert "Перевести на оператора?" in env.text
+    assert "расписание не найдено" not in env.text.lower()
+    assert env.handoff is False
+    assert state.last_entities.get("appointment_flow_active") is None
+    assert state.last_entities.get("_operator_offer_pending") is True
+    pending = memory.get_pending(state)
+    assert isinstance(pending, dict)
+    assert pending.get("label") == "OTHER"
+    assert "operator_offer_confirm" in (pending.get("missing") or [])
+
+
+def test_build_appointment_step_response_offers_operator_when_doctor_not_in_samara():
+    # «Записаться к <ФИО> на завтра»: дата задана → preview-ветка пропущена,
+    # доходим до branch-шага; врача нет в самарском каталоге → честный отказ
+    # (а не слепой список 5 филиалов Самары).
+    state = SessionState(
+        session_id="appt-step-non-samara-doctor",
+        last_entities={
+            "doctor_name": "Турмухамбетова Балслу Турмурадовна",
+            "date_from": "2026-06-02",
+            "time_from": "10:00",
+        },
+    )
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    memory = MemoryStore()
+    evidence = Evidence(
+        items={
+            "doctor_schedule": {
+                "schedule": [],
+                "doctor_lookup": "unresolved",
+            }
+        }
+    )
+
+    env = _build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
+
+    assert env is not None
+    assert "только по филиалам в Самаре" in env.text
+    assert "Перевести на оператора?" in env.text
+    assert env.handoff is False
+    assert state.last_entities.get("_operator_offer_pending") is True
+    pending = memory.get_pending(state)
+    assert isinstance(pending, dict)
+    assert pending.get("label") == "OTHER"
+    assert "operator_offer_confirm" in (pending.get("missing") or [])
+
+
+def test_doctors_schedule_week_flags_unresolved_doctor_when_not_in_samara_directory():
+    # Имя врача названо, но фамилия не резолвится в самарском каталоге →
+    # doctor_lookup=unresolved (без сетевого запроса расписания). Каталог
+    # непустой и не содержит запрошенного врача (как Турмухамбетова —
+    # только Оренбург, исключён из кэша через EXCLUDED_REGION_ROOTS).
+    services = Services()
+
+    samara_doctors = [
+        {"fio": "Иванова Мария Петровна", "regions": ["Ленина 5"]},
+        {"fio": "Петров Сергей Иванович", "regions": ["Самара, ул. Гагарина, 1"]},
+        {"fio": "Сидорова Анна Олеговна", "regions": ["Самара, Московское шоссе, 10"]},
+    ]
+
+    async def _cache():
+        return samara_doctors
+
+    services._ensure_doctors_cache_loaded = _cache
+
+    async def _run():
+        return await services.doctors_schedule_week(
+            "Записаться к Турмухамбетова Балслу Турмурадовна",
+            {"doctor_name": "Турмухамбетова Балслу Турмурадовна"},
+        )
+
+    payload = asyncio.run(_run())
+    assert payload.get("schedule") == []
+    assert payload.get("doctor_lookup") == "unresolved"
+
+
 def test_build_appointment_schedule_preview_response_skips_for_reschedule_action():
     state = SessionState(
         session_id="appt-preview-reschedule-skip",
