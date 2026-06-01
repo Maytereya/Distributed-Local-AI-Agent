@@ -53,12 +53,6 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
                     _put_optional_step_fallback(tool, q, payload)
                     continue
                 ev.put(ek.DOCTOR_SCHEDULE, payload)
-            elif tool == "appointment_help":
-                payload = await services.appointment_help(q, ent)
-                if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):
-                    _put_optional_step_fallback(tool, q, payload)
-                    continue
-                ev.put(ek.APPOINTMENT, payload)
             elif tool == "test_assist":
                 payload = await services.test_assist(q, ent)
                 if not step.required and isinstance(payload, dict) and payload.get("handoff_required"):

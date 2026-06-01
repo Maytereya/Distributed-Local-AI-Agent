@@ -51,7 +51,6 @@ def test_services_package_facade_exports_legacy_api():
 def test_services_placeholder_submodules_are_importable():
     for module_name in (
         "messengers_router.services.doctors",
-        "messengers_router.services.appointments",
         "messengers_router.services.lab_tests",
         "messengers_router.services.addresses",
         "messengers_router.services.prices",
@@ -361,7 +360,6 @@ def test_doctors_info_empty_cache_returns_fallback(monkeypatch):
         ("service_error_doctors_list", "Сейчас не удалось получить список врачей автоматически. Соединяю с оператором."),
         ("service_error_schedule", "Сейчас не удалось получить расписание автоматически. Соединяю с оператором."),
         ("service_error_doctor_info", "Сейчас не удалось найти информацию автоматически. Соединяю с оператором."),
-        ("service_error_appointments", "Сейчас не удалось получить данные для записи автоматически. Соединяю с оператором."),
         ("service_error_results", "Сейчас не удалось получить результаты автоматически. Соединяю с оператором."),
         ("service_error_result_link", "Сейчас не удалось сформировать ссылку на результат автоматически. Соединяю с оператором."),
         ("service_error_prices", "Сейчас не удалось получить цены автоматически. Соединяю с оператором."),
@@ -1161,23 +1159,6 @@ def test_doctors_schedule_week_negative_cache_ttl(monkeypatch):
     clock["ts"] += 4
     run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
     assert calls["count"] == 2, "Expected cache miss after negative TTL expiry"
-
-
-def test_appointment_help_meili(monkeypatch):
-    svc = Services()
-    captured: dict[str, object] = {}
-
-    def fake_search(_index, _query, *args, **kwargs):
-        captured["kwargs"] = dict(kwargs)
-        return "<b>info</b>"
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: "info")
-
-    res = run(svc.appointment_help("запись", {}))
-
-    assert res["instructions"] == "info"
-    assert captured.get("kwargs") == {"output_mode": "content_only", "max_chars": 12000}
 
 
 def test_main_index_info_success(monkeypatch):

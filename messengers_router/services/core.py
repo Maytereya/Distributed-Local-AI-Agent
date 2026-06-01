@@ -598,9 +598,6 @@ from .addresses import (  # noqa: E402
 Services.address_info = _address_info_impl
 Services._procedure_branches_from_index = _procedure_branches_from_index_impl
 
-from .appointments import appointment_help as _appointment_help_impl  # noqa: E402
-Services.appointment_help = _appointment_help_impl
-
 from .main_index import main_index_info as _main_index_info_impl  # noqa: E402
 Services.main_index_info = _main_index_info_impl
 

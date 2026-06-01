@@ -26,7 +26,6 @@ HANDOFF_MESSAGE = "handoff_message"
 # --- Tool payloads (executor writes, response_builder reads) --------------
 DOCTORS_INFO = "doctors_info"
 DOCTOR_SCHEDULE = "doctor_schedule"
-APPOINTMENT = "appointment"
 TEST_ASSIST = "test_assist"
 PREPARE = "prepare"
 TEST_RESULT_STATUS = "test_result_status"
