@@ -3872,3 +3872,41 @@ def test_route_message_compound_price_pending_other_question_clears_and_routes_n
     assert plan.label == "NEWS"
     assert state.last_entities.get("_compound_price_pending") is None
     assert state.last_entities.get("_secondary_queue") is None
+
+
+def test_appointment_dropped_unverified_target_does_not_offer_branches():
+    # BUG-2026-06-01-01 (class invariant, B′): when the APPOINTMENT target was
+    # dropped by the grounder as unverified (entity_dropped_unverified_service_name)
+    # and there is no valid doctor/specialty, the planner must NOT route to
+    # address_info (the blind 5-branch list). Flag-based → covers ANY junk target:
+    # full ФИО, frequent 2-word name, bare surname.
+    for leaked in ("Турмухамбетова Балслу Турмурадовна", "Иванов Пётр", "Сидоренко"):
+        state = SessionState(
+            session_id="dropped-target",
+            last_entities={"appointment_action": "book", "service_name": leaked, "city": "Самара"},
+        )
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.75,
+            entities={"appointment_action": "book"},
+            flags={"entity_dropped_unverified_service_name", "rule_appointment"},
+            needs_handoff=False,
+        )
+        plan = build_plan(decision, state, f"Записаться к {leaked}", memory=MemoryStore())
+        assert "address_info" not in [s.tool for s in plan.steps], leaked
+        assert state.last_entities.get("_appointment_unbookable_target") is True, leaked
+
+
+def test_appointment_unbookable_target_marker_yields_honest_refusal():
+    # The marker set by the planner makes the appointment step honestly refuse
+    # (booking only for Samara branches → operator), not list branches blindly.
+    state = SessionState(
+        session_id="unbookable",
+        last_entities={"_appointment_unbookable_target": True, "appointment_action": "book"},
+    )
+    res = _build_appointment_step_response("APPOINTMENT", Evidence(), state, Services(), MemoryStore())
+    assert res is not None
+    assert "оператор" in res.text.lower()
+    assert "по адресам" not in res.text.lower()
+    # marker is popped → does not leak into the next turn
+    assert state.last_entities.get("_appointment_unbookable_target") is None

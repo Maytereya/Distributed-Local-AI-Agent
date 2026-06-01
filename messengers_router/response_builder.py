@@ -482,6 +482,11 @@ def build_appointment_step_response(
         return None
 
     entities = state.last_entities
+    # B′ (BUG-2026-06-01-01): планировщик пометил запись без валидной цели
+    # (дропнутая неверифицированная «услуга»/ФИО, нет врача/специальности) —
+    # честно отказываем вместо самарских филиалов вслепую. pop → не утечёт в след. ход.
+    if entities.pop("_appointment_unbookable_target", None):
+        return _doctor_not_bookable_via_bot_offer(state, memory)
     activate_appointment_flow(state)
     action = str(entities.get("appointment_action") or "").strip().lower()
     if action == "cancel":

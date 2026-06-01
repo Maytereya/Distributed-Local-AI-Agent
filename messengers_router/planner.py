@@ -128,6 +128,18 @@ def build_plan(
         action = str(entities.get("appointment_action") or "").strip().lower()
         if action == "cancel":
             return Plan(label=label, steps=steps)
+        # B′ (BUG-2026-06-01-01): цель записи была дропнута грундером как
+        # неверифицированная (напр. ФИО врача не из самарского каталога утекло в
+        # service_name) и нет валидного doctor/specialty → бронировать нечего.
+        # Не идём в address_info/филиалы вслепую — помечаем ход, чтобы
+        # build_appointment_step_response честно отказал (запись только по Самаре).
+        if (
+            "entity_dropped_unverified_service_name" in set(decision.flags)
+            and not (entities.get("doctor_id") or entities.get("doctor_name"))
+            and not str(entities.get("specialty") or "").strip()
+        ):
+            state.last_entities["_appointment_unbookable_target"] = True
+            return Plan(label=label, steps=[])
         flow_active = bool(state.last_entities.get("appointment_flow_active"))
         selection_mode = str(state.last_entities.get("appointment_selection_mode") or "").strip().lower()
         if entities.get("doctor_id") or entities.get("doctor_name"):
