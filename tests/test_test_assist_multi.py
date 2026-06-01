@@ -61,3 +61,53 @@ def test_single_item_query_uses_single_bag_path(monkeypatch):
     assert "multi-item" not in str(res.get("note") or "")
     tests = res.get("tests") or []
     assert any(str(t.get("serviceHomecode") or "") == "240" for t in tests)
+
+
+# Каталог чекапов как в Самаре: «чекап» — это ЛИНЕЙКА пакетов, а не одна услуга.
+_CHECKUP_CATALOG = [
+    {"serviceName": "Ежегодный Чекап", "serviceHomecode": "9001", "cost": 1970, "deadline": "1-2"},
+    {"serviceName": "Мужской чекап Базовый", "serviceHomecode": "9002", "cost": 1210, "deadline": "1-2"},
+    {"serviceName": "Мужской чекап Стандартный", "serviceHomecode": "9003", "cost": 3150, "deadline": "1-2"},
+    {"serviceName": "Мужской чекап Расширенный", "serviceHomecode": "9004", "cost": 7700, "deadline": "1-2"},
+    {"serviceName": "Женский чекап Базовый", "serviceHomecode": "9005", "cost": 2860, "deadline": "1-2"},
+    {"serviceName": "Женский чекап Расширенный", "serviceHomecode": "9006", "cost": 9900, "deadline": "1-2"},
+    # шум — не чекапы, не должны попадать в выдачу
+    {"serviceName": "Ферритин", "serviceHomecode": "240", "cost": 490, "deadline": "1-2"},
+    {"serviceName": "ТТГ (TSH) тиреотропный гормон", "serviceHomecode": "131", "cost": 380, "deadline": "1-2"},
+]
+
+
+def test_checkup_category_query_returns_whole_family(monkeypatch):
+    """Регрессия (Bug #2): голый «чекап» должен вернуть ВСЮ линейку пакетов, а
+    «мужской/женский чекап» — сужать по полу. Это контракт широкого запроса,
+    который гард в роутере (test_assist_category_kept_broad) обязан сохранить —
+    service_name НЕ пиннится в одну каноническую строку."""
+    svc = Services()
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", lambda _r: _CHECKUP_CATALOG)
+
+    res = run(svc.test_assist("чекап", {}))
+    tests = res.get("tests") or []
+    assert len(tests) == 6, [t.get("serviceName") for t in tests]
+    assert res.get("needs_handoff") is not True
+
+    res_m = run(svc.test_assist("мужской чекап", {}))
+    assert len(res_m.get("tests") or []) == 3
+    assert all("Мужской" in str(t.get("serviceName") or "") for t in res_m.get("tests") or [])
+
+    res_f = run(svc.test_assist("женский чекап", {}))
+    assert len(res_f.get("tests") or []) == 2
+    assert all("Женский" in str(t.get("serviceName") or "") for t in res_f.get("tests") or [])
+
+
+def test_checkup_pinned_service_name_collapses_family(monkeypatch):
+    """Анти-регрессия: ДОКУМЕНТИРУЕМ корень бага. Если service_name запиннен в
+    «Ежегодный Чекап» (как делал _inject_catalog_candidates до фикса), линейка
+    схлопывается в один пакет. Гард в роутере именно поэтому держит запрос
+    широким и не пиннит имя."""
+    svc = Services()
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", lambda _r: _CHECKUP_CATALOG)
+
+    res = run(svc.test_assist("чекап", {"service_name": "Ежегодный Чекап"}))
+    tests = res.get("tests") or []
+    assert len(tests) == 1
+    assert str(tests[0].get("serviceName") or "") == "Ежегодный Чекап"

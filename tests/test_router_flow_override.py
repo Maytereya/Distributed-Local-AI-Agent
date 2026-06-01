@@ -40,6 +40,7 @@ from messengers_router.policies import (
     nonbookable_service_hint,
     detect_prepare_intent,
     detect_unsupported_catalog,
+    is_test_assist_category_term,
 )
 from messengers_router.services import Services
 from messengers_router.entity_grounder import ground_decision_entities
@@ -605,6 +606,73 @@ def test_route_message_starts_catalog_confirm_for_fuzzy_doctor(monkeypatch):
     pending = state.last_entities.get("_catalog_confirm_pending")
     assert isinstance(pending, dict)
     assert pending.get("canonical") == "Евграфова"
+
+
+def test_route_message_keeps_checkup_category_broad(monkeypatch):
+    """Регрессия (Bug #2): «чекап» — это КАТЕГОРИЯ (линейка пакетов), а не одна
+    услуга. Каталог отдаёт exact на «Ежегодный Чекап»; если запиннить это имя,
+    test_assist схлопнет всю линейку в один пакет. Гард в
+    _inject_catalog_candidates обязан оставить запрос широким: service_name НЕ
+    пиннится, выставляется флаг test_assist_category_kept_broad."""
+
+    async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
+        _ = runtime_options
+        return NLUResult(
+            decision=RouteDecision(
+                label="TEST_ASSIST",
+                confidence=0.9,
+                entities={},
+                flags={"rule_test_assist"},
+                needs_handoff=False,
+            ),
+            candidates=[],
+            merged_from="rule",
+        )
+
+    def fake_env_flag(name: str, default: bool) -> bool:
+        if name == "MR_ROUTER_V2_ENABLE":
+            return True
+        if name == "MR_ROUTER_V2_SHADOW":
+            return False
+        return default
+
+    # Каталог ВСЕГДА вернул бы exact на «Ежегодный Чекап» — без гарда это
+    # запиннило бы service_name и схлопнуло линейку. Гард должен не дать
+    # применить этот результат для категорийного запроса.
+    async def fake_match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = ""):
+        _ = self, current_service_name
+        if "чекап" in str(raw_text_or_name or "").lower():
+            return {"status": "exact", "query": raw_text_or_name, "canonical": "Ежегодный Чекап"}
+        return {"status": "miss", "query": "", "canonical": ""}
+
+    async def fake_execute_plan(_plan, _state, _services):
+        return Evidence()
+
+    monkeypatch.setattr(router_mod, "analyze_with_candidates", fake_analyze_with_candidates)
+    monkeypatch.setattr(router_mod, "_env_flag", fake_env_flag)
+    monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
+    monkeypatch.setattr(Services, "match_catalog_service", fake_match_catalog_service)
+
+    state = SessionState(session_id="checkup-category-broad")
+    services = Services()
+    memory = MemoryStore()
+
+    decision, plan, _evidence = asyncio.run(
+        router_mod.route_patient_message(
+            "чекап",
+            state,
+            services,
+            memory,
+        )
+    )
+
+    assert decision.label == "TEST_ASSIST"
+    assert plan.label == "TEST_ASSIST"
+    assert "test_assist_category_kept_broad" in decision.flags
+    # Главное: имя НЕ запиннилось в одну каноническую строку.
+    assert not (decision.entities or {}).get("service_name")
+    assert "catalog_service_exact" not in decision.flags
+    assert str(state.last_entities.get("service_name") or "").lower() != "ежегодный чекап"
 
 
 def test_route_message_accepts_catalog_confirm_yes_and_continues_flow(monkeypatch):
@@ -2330,6 +2398,22 @@ def test_nonbookable_service_hint_uses_test_context_for_profile_followup():
     )
 
     assert hint == "анализы"
+
+
+def test_is_test_assist_category_term_distinguishes_category_from_service():
+    # Категория (линейка пакетов) — запрос держим широким.
+    assert is_test_assist_category_term("чекап") is True
+    assert is_test_assist_category_term("Чекап") is True
+    assert is_test_assist_category_term("мужской чекап") is True
+    assert is_test_assist_category_term("женский чекап") is True
+    assert is_test_assist_category_term("анализы чекап мужской") is True
+    assert is_test_assist_category_term("чек-ап") is True
+    assert is_test_assist_category_term("чек ап") is True
+    # Не категория — обычные услуги/реплики не должны триггерить гард.
+    assert is_test_assist_category_term("оак") is False
+    assert is_test_assist_category_term("ферритин") is False
+    assert is_test_assist_category_term("подскажите пожалуйста") is False
+    assert is_test_assist_category_term("") is False
 
 
 def test_detect_prepare_intent_covers_time_of_day_questions():

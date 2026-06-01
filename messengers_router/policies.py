@@ -260,6 +260,14 @@ _MEDICAL_ADVICE_RE = _compile_patterns(MEDICAL_ADVICE_PATTERNS)
 _TEST_INTERPRET_RE = _compile_patterns(TEST_INTERPRET_PATTERNS)
 _TEST_RESULT_RE = _compile_patterns(TEST_RESULT_PATTERNS)
 _TEST_ASSIST_RE = _compile_patterns(TEST_ASSIST_PATTERNS)
+# «Чекап» — это КАТЕГОРИЯ (меню) лабораторных пакетов, а не одна услуга:
+# в каталоге Самары это «Ежегодный Чекап», «Мужской/Женский чекап
+# Базовый/Стандартный/Расширенный». Такой запрос нельзя схлопывать в одну
+# каноническую строку — иначе пациент видит единственный пакет вместо всей
+# линейки. Скрининг сознательно НЕ включаем: в каталоге это десятки
+# несвязанных «скрининговых» исследований (ПЦР, гемостаз, PSA и т.п.),
+# широкий список был бы шумным.
+_TEST_ASSIST_CATEGORY_RE = re.compile(r"\bчек[-\s]?ап\w*\b", re.I)
 _PREPARE_RE = _compile_patterns(PREPARE_PATTERNS)
 _SCHEDULE_RE = _compile_patterns(SCHEDULE_PATTERNS)
 _DOC_REQUEST_RE = _compile_patterns(DOC_REQUEST_PATTERNS)
@@ -693,6 +701,24 @@ def detect_test_result_intent(text: str) -> bool:
 
 def detect_test_assist_intent(text: str) -> bool:
     return _matches_any(text, _TEST_ASSIST_RE)
+
+
+def is_test_assist_category_term(text: str) -> bool:
+    """True, если запрос — это КАТЕГОРИЯ анализов (чекап), а не одна услуга.
+
+    Для таких терминов нельзя схлопывать каталог в одну каноническую строку
+    (`match_catalog_service` отдаёт exact на «Ежегодный Чекап»), иначе
+    `test_assist` вернёт единственный пакет вместо всей линейки чекапов.
+    Запрос остаётся широким, и поиск отдаёт всё семейство.
+
+    :param text: исходный текст запроса пользователя
+    :return: True для категорийного чекап-запроса
+    """
+
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    return bool(_TEST_ASSIST_CATEGORY_RE.search(raw))
 
 
 def detect_prepare_intent(text: str) -> bool:

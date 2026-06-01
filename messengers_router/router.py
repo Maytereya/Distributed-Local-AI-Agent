@@ -83,6 +83,7 @@ from .policies import (
     detect_schedule_intent,
     detect_doctor_info_intent,
     has_datetime_signal,
+    is_test_assist_category_term,
     normalize_appointment_action,
     nonbookable_service_hint,
     service_name_conflicts_with_doctor,
@@ -1220,6 +1221,16 @@ async def _inject_catalog_candidates(
             and (entities.get("doctor_name") or state.last_entities.get("doctor_name"))
         ):
             should_try_service = False
+        # «Чекап» — это КАТЕГОРИЯ (линейка пакетов), а не одна услуга.
+        # match_catalog_service отдаёт exact на «Ежегодный Чекап» и схлопывает
+        # весь список в одну каноническую строку, из-за чего test_assist
+        # возвращает единственный пакет вместо всей линейки. Оставляем запрос
+        # широким — service_name не пиннится, test_assist ищет по сырому тексту
+        # и отдаёт всё семейство чекапов.
+        if decision.label == "TEST_ASSIST" and is_test_assist_category_term(user_text):
+            should_try_service = False
+            flags.add("test_assist_category_kept_broad")
+            updated = True
 
     # Part IV Stage 15 (OPTION B, partial): doctor + service catalog lookups
     # are independent — both read post-verify entities and don't depend on
