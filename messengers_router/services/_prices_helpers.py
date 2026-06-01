@@ -75,22 +75,22 @@ _DOCTOR_SERVICE_HINT_RE = re.compile(
     re.I,
 )
 _LAB_DEADLINE_HINT_RE = re.compile(r"\b\d+\s*(?:-\s*\d+)?\s*(?:дн|дней|нед|час)\b", re.I)
-_PRICE_CITO_QUERY_RE = re.compile(r"\b(cito|сроч\w*|экспресс\w*)\b", re.I)
+_PRICE_CITO_QUERY_RE = re.compile(r"\b(cito|сроч\w*)\b", re.I)
 _PRICE_CAPILLARY_QUERY_RE = re.compile(r"\b(капилляр\w*|из\s+пальца|палец)\b", re.I)
-_PRICE_CHILD_QUERY_RE = re.compile(r"\b(дет\w*|ребен\w*|ребён\w*)\b", re.I)
+_PRICE_CHILD_QUERY_RE = re.compile(r"\b(детск\w*|детям|детей|ребен\w*|ребён\w*)\b", re.I)
 _PRICE_REPEAT_QUERY_RE = re.compile(r"\b(повторн\w*|повтор)\b", re.I)
 _PRICE_KMN_QUERY_RE = re.compile(r"\b(к\.?\s*м\.?\s*н\.?|кандидат\w*\s+медицин\w*\s+наук)\b", re.I)
 _PRICE_HOME_QUERY_RE = re.compile(r"\b(на\s+дому|домой|выезд\w*\s+на\s+дом)\b", re.I)
 _PRICE_PACKAGE_QUERY_RE = re.compile(r"\b(совместно|комплекс\w*|пакет\w*|программ\w*|combo|комбо|с\s+узи)\b", re.I)
-_PRICE_GENETIC_QUERY_RE = re.compile(r"\b(ген\w*|мутац\w*|полиморф\w*|генет\w*|vdr)\b", re.I)
-_PRICE_CITO_ROW_RE = re.compile(r"\b(cito|сроч\w*|экспресс\w*)\b", re.I)
+_PRICE_GENETIC_QUERY_RE = re.compile(r"\b(ген(?![ти])\w*|мутац\w*|полиморф\w*|vdr)\b", re.I)
+_PRICE_CITO_ROW_RE = re.compile(r"\b(cito|сроч\w*)\b", re.I)
 _PRICE_CAPILLARY_ROW_RE = re.compile(r"\bкапилляр\w*\b", re.I)
-_PRICE_CHILD_ROW_RE = re.compile(r"\b(дет\w*|ребен\w*|ребён\w*)\b", re.I)
+_PRICE_CHILD_ROW_RE = re.compile(r"\b(детск\w*|детям|детей|ребен\w*|ребён\w*)\b", re.I)
 _PRICE_REPEAT_ROW_RE = re.compile(r"\b(повторн\w*|повтор)\b", re.I)
 _PRICE_KMN_ROW_RE = re.compile(r"\b(к\.?\s*м\.?\s*н\.?|кандидат\w*\s+медицин\w*\s+наук)\b", re.I)
 _PRICE_HOME_ROW_RE = re.compile(r"\b(на\s+дому|домой|выезд\w*\s+на\s+дом)\b", re.I)
 _PRICE_PACKAGE_ROW_RE = re.compile(r"\b(совместно|комплекс\w*|пакет\w*|программ\w*|combo|комбо|регулярн\w*)\b", re.I)
-_PRICE_GENETIC_ROW_RE = re.compile(r"\b(ген\w*|мутац\w*|полиморф\w*|генет\w*|vdr)\b", re.I)
+_PRICE_GENETIC_ROW_RE = re.compile(r"\b(ген(?![ти])\w*|мутац\w*|полиморф\w*|vdr)\b", re.I)
 _PRICE_SHOW_ALL_RE = re.compile(
     r"^\s*(?:все|всё|покажи\s+все|показать\s+все|все\s+варианты|все\s+услуги|все\s+анализы)\s*[!.,?]*\s*$",
     re.I,

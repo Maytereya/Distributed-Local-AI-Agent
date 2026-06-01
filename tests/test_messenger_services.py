@@ -3817,6 +3817,41 @@ def test_resolve_price_service_still_switches_on_pure_lab_query():
     assert got == "ЛПНП"
 
 
+def test_price_modifier_regexes_exclude_false_positives():
+    # M3 regression: price-modifier regexes were too broad and flagged
+    # non-modifier catalog rows (verified against the live price cache).
+    from messengers_router.services import _prices_helpers as ph
+    from messengers_router.services._common import _normalise_input
+
+    def gen(s):
+        return bool(ph._PRICE_GENETIC_ROW_RE.search(_normalise_input(s)))
+
+    def cito(s):
+        return bool(ph._PRICE_CITO_ROW_RE.search(_normalise_input(s)))
+
+    def child(s):
+        return bool(ph._PRICE_CHILD_ROW_RE.search(_normalise_input(s)))
+
+    # genetic: гент*/гени* are NOT genetic; real genetic tests still are.
+    assert not gen("Гентамицин (с60)")
+    assert not gen("Гениопластика")
+    assert not gen("Удаление генитальных образований")
+    assert gen("Анализ генетических полиморфизмов")
+    assert gen("Анализ мутаций в гене MPL")
+    # cito: «экспресс-тест» is a product name, not a cito surcharge.
+    assert not cito("Экспресс-тест Helicobacter pylori")
+    assert cito("Cito Общий анализ крови")
+    assert cito("Срочное выявление РНК коронавируса")
+    # child: «детекция»/«детартрин» are not pediatric; real pediatric rows are.
+    assert not child("Детекция мутации V600E в гене BRAF")
+    assert child("Детский массаж (старше 3 лет)")
+    assert child("аллергены значимые для детей")
+    # query side mirrors row side
+    assert ph._PRICE_GENETIC_QUERY_RE.search(_normalise_input("генетический анализ"))
+    assert not ph._PRICE_CITO_QUERY_RE.search(_normalise_input("экспресс-тест на вич"))
+    assert ph._PRICE_CHILD_QUERY_RE.search(_normalise_input("детский прием"))
+
+
 def test_service_bundle_info_enriches_tonsillotomy_with_care_setting(monkeypatch):
     svc = Services()
 
