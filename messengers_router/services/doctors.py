@@ -370,8 +370,9 @@ async def _doctor_availability_snapshot(
         if _doctor_matches_fio(row_fio, fio_clean, resolved_surname=surname):
             chosen = row
             break
-    if chosen is None:
-        chosen = next((row for row in data if isinstance(row, dict)), None)
+    # Без first-row fallback на FIO-промахе: кэш может вернуть «общий» список
+    # ДРУГИХ врачей (ложный позитив API), и взятие первой строки показало бы
+    # доступность не того врача (омоним). Честно отдаём unmatched.
     if not isinstance(chosen, dict):
         return {
             "available": False,

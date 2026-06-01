@@ -3875,6 +3875,32 @@ def test_is_non_samara_city_value_handles_multiword():
     assert not _is_non_samara_city_value("улица Ленина 5")
 
 
+def test_doctor_availability_snapshot_no_first_row_fallback_on_fio_miss():
+    # M5 regression: on a FIO miss (the API returned a generic list of OTHER
+    # doctors), the snapshot must report «unmatched», not the first row's
+    # availability — otherwise a wrong/homonym doctor's slots are shown for the
+    # requested name in PRICE consultation cards.
+    svc = Services()
+
+    async def fake_payload(surname, *a, **k):
+        return [
+            {
+                "fio": "Петров Сергей Олегович",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "schedule": {"г. Самара, пр. Ленина, 5": ["2026-06-10 10:00"]},
+            }
+        ]
+
+    svc._get_schedule_payload_cached = fake_payload
+    res = run(
+        svc._doctor_availability_snapshot(
+            "Ким Иван", samara_tokens={"г. самара, пр. ленина, 5"}
+        )
+    )
+    assert res.get("note") == "availability_unmatched"
+    assert res.get("available") is False
+
+
 def test_service_bundle_info_enriches_tonsillotomy_with_care_setting(monkeypatch):
     svc = Services()
 
