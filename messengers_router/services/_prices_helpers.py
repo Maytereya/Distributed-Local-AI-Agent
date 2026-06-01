@@ -921,8 +921,13 @@ def _score_price_rows(
     :return: список словарей вида `{"row": ..., "score": ..., "matched": ...}`
     """
 
-    query = _normalise_input(query_text)
     tokens = _price_query_tokens(query_text)
+    # M4: score against the cleaned token-join, not the raw normalised text. A
+    # leading stopword («стоимость ттг», «где сдать соэ») otherwise defeats the
+    # exact/substring/head bonuses and pushes short abbreviations under the
+    # strong-match threshold → empty result. Fall back to raw for all-stopword
+    # queries so behaviour is unchanged when there is nothing to clean.
+    query = " ".join(tokens) or _normalise_input(query_text)
     homecode_query = _extract_homecode_query(query_text)
 
     scored: list[tuple[int, int, int, int, dict[str, Any]]] = []

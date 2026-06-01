@@ -3882,6 +3882,30 @@ def test_doctor_availability_snapshot_no_first_row_fallback_on_fio_miss():
     assert res.get("available") is False
 
 
+def test_price_scorer_short_abbrev_survives_leading_stopword():
+    # M4: a short abbreviation with a leading price stopword («стоимость ттг»)
+    # must still match the catalog row — the stopword used to defeat the
+    # exact/substring bonuses and push it under the strong-match threshold.
+    from messengers_router.services._prices_helpers import _select_patient_price_rows
+    from messengers_router.services._common import _normalise_input
+
+    rows = [
+        {"serviceName": "ТТГ (TSH) тиреотропный гормон", "cost": 380},
+        {"serviceName": "Общий анализ крови", "cost": 300},
+        {"serviceName": "Ультразвуковое исследование органов брюшной полости", "cost": 1800},
+    ]
+
+    def top_name(q):
+        r = _select_patient_price_rows(rows, q, limit=3)
+        return _normalise_input(str(r[0].get("serviceName") or "")) if r else ""
+
+    assert "ттг" in top_name("ттг")
+    assert "ттг" in top_name("стоимость ттг")  # M4 — was empty
+    assert "ттг" in top_name("цена ттг")
+    # clean multi-word query unaffected
+    assert "ультразвук" in top_name("узи брюшной полости") or "брюшн" in top_name("узи брюшной полости")
+
+
 def test_service_bundle_info_enriches_tonsillotomy_with_care_setting(monkeypatch):
     svc = Services()
 
