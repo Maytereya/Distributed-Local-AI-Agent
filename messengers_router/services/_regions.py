@@ -32,7 +32,20 @@ def _is_samara_city_value(value: str | None) -> bool:
 
 def _is_non_samara_city_value(value: str | None) -> bool:
     city = _extract_city_token(value)
-    return bool(city and city != "самара")
+    if city is not None:
+        return bool(city and city != "самара")
+    # Multi-word place value («Нижний Новгород», «Ульяновская область»):
+    # _extract_city_token returns None for >1 token, so the single-word check
+    # above misses it. Treat as non-Samara when the value looks like a place
+    # (a few alpha tokens, no digits, not an address) and carries no «самар»
+    # stem — keeping «Самарская область»/«город Самара» Samara-supported.
+    norm = _normalize_region_text(value or "")
+    if not norm or "самар" in norm or any(ch.isdigit() for ch in norm):
+        return False
+    if _ADDRESS_HINT_RE.search(norm):
+        return False
+    tokens = [t for t in re.findall(r"[a-zа-яё\-]+", norm) if t not in {"г", "город", "обл", "район"}]
+    return 1 <= len(tokens) <= 4
 
 
 def _extract_city_token(value: str | None) -> str | None:

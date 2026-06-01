@@ -3852,6 +3852,29 @@ def test_price_modifier_regexes_exclude_false_positives():
     assert ph._PRICE_CHILD_QUERY_RE.search(_normalise_input("детский прием"))
 
 
+def test_is_non_samara_city_value_handles_multiword():
+    # M2 regression: multi-word non-Samara cities/regions used to slip through
+    # the «city not supported» guard (single-word _extract_city_token → None),
+    # so a non-Samara request was answered with Samara branch addresses.
+    from messengers_router.services._regions import _is_non_samara_city_value
+
+    # Multi-word genuine non-Samara → flagged.
+    assert _is_non_samara_city_value("Нижний Новгород")
+    assert _is_non_samara_city_value("Ульяновская область")
+    assert _is_non_samara_city_value("Набережные Челны")
+    # Samara region / city stay supported (carry the «самар» stem).
+    assert not _is_non_samara_city_value("Самарская область")
+    assert not _is_non_samara_city_value("город Самара")
+    # Single-word behaviour preserved.
+    assert _is_non_samara_city_value("Москва")
+    assert _is_non_samara_city_value("Тольятти")
+    assert not _is_non_samara_city_value("Самара")
+    assert not _is_non_samara_city_value("")
+    assert not _is_non_samara_city_value(None)
+    # An address (not a city) must not be treated as a non-Samara city.
+    assert not _is_non_samara_city_value("улица Ленина 5")
+
+
 def test_service_bundle_info_enriches_tonsillotomy_with_care_setting(monkeypatch):
     svc = Services()
 
