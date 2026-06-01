@@ -1,6 +1,5 @@
 # tests/test_nlu_merge_policy.py
 """Unit tests for the LLM-first _merge() policy in nlu_pipeline."""
-import pytest
 from messengers_router.mess_types import RouteDecision
 from messengers_router.nlu_pipeline import _merge
 
@@ -80,6 +79,49 @@ def test_llm_wins_in_rich_mode_at_low_confidence():
     decision, source = _merge(rule, llm, llm_mode="rich")
     assert decision.label == "DOCTOR_INFO"
     assert source == "llm_primary"
+
+
+# --- Strong deterministic PRICE rescue ---
+
+def test_rule_price_rescued_when_llm_drops_to_other():
+    """Явный ценовой вопрос («Стоимость общего анализа крови»): rule даёт
+    PRICE+rule_price, LLM ушёл в OTHER → итог PRICE (не утечка в оператора)."""
+    rule = _rule("PRICE", confidence=0.72, flags=["rule_price"])
+    llm = _llm("OTHER", confidence=0.30)
+    decision, source = _merge(rule, llm)
+    assert decision.label == "PRICE"
+    assert source == "rule_price_rescue"
+    assert decision.needs_handoff is False
+    assert "rule_price_rescue" in decision.flags
+
+
+def test_rule_price_not_rescued_without_rule_price_flag():
+    """Без сильного rule-сигнала (нет флага rule_price) остаётся LLM-first."""
+    rule = _rule("PRICE", confidence=0.72)
+    llm = _llm("OTHER", confidence=0.30)
+    decision, source = _merge(rule, llm)
+    assert decision.label == "OTHER"
+    assert source == "llm_primary"
+
+
+def test_rule_price_not_rescued_when_llm_confident_non_other():
+    """Спасаем только при llm.label == OTHER: уверенный APPOINTMENT с упоминанием
+    цены не должен перехватываться в PRICE."""
+    rule = _rule("PRICE", confidence=0.72, flags=["rule_price"])
+    llm = _llm("APPOINTMENT", confidence=0.66)
+    decision, source = _merge(rule, llm)
+    assert decision.label == "APPOINTMENT"
+    assert source == "llm_primary"
+
+
+def test_rule_price_rescue_donates_llm_entities():
+    """При спасении PRICE непустые LLM-сущности доносятся, rule-сущности базовые."""
+    rule = _rule("PRICE", confidence=0.72, flags=["rule_price"], entities={"service_name": "общий анализ крови"})
+    llm = _llm("OTHER", confidence=0.30, entities={"city": "самара"})
+    decision, source = _merge(rule, llm)
+    assert source == "rule_price_rescue"
+    assert decision.entities["service_name"] == "общий анализ крови"
+    assert decision.entities["city"] == "самара"
 
 
 # --- Entity donation ---

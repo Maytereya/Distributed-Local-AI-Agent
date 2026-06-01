@@ -97,6 +97,36 @@ def _merge(rule: RouteDecision, llm: RouteDecision, *, llm_mode: str = "hybrid")
     if llm.label in _SAFETY_LABELS:
         return llm, "llm_safety"
 
+    # --- 1b. Strong deterministic PRICE rescue ---
+    # Legacy merge — LLM-first, но уверенный rule-сигнал PRICE
+    # («стоимость/цена <услуга>») нельзя терять, когда LLM ушёл в OTHER: иначе
+    # явный ценовой вопрос утекает в low-confidence → оператор вместо
+    # детерминированного прайс-флоу (прайс-данные и матчинг услуги есть).
+    # Узко: спасаем ТОЛЬКО при llm.label == "OTHER", чтобы не перехватывать
+    # уверенные не-OTHER интенты (APPOINTMENT/ADDRESS/...), упоминающие цену.
+    if rule.label == "PRICE" and "rule_price" in (rule.flags or set()) and llm.label == "OTHER":
+        donated = {
+            k: v
+            for k, v in (llm.entities or {}).items()
+            if k not in (rule.entities or {}) and v not in (None, "", [])
+        }
+        rescued_entities = dict(rule.entities or {})
+        rescued_entities.update(donated)
+        rescued = RouteDecision(
+            label="PRICE",
+            confidence=rule.confidence,
+            entities=rescued_entities,
+            flags=set(rule.flags) | {"rule_price_rescue"},
+            needs_handoff=False,
+            context_action=rule.context_action,
+            source="rule_price_rescue",
+            clarify_needed=rule.clarify_needed,
+            clarify_reason=rule.clarify_reason,
+            clarify_slots=list(rule.clarify_slots),
+            intent_candidates=list(rule.intent_candidates),
+        )
+        return rescued, "rule_price_rescue"
+
     # --- 2. LLM wins on intent; rule donates entities only ---
     donated_entities = {
         k: v for k, v in (rule.entities or {}).items()
