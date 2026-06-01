@@ -290,3 +290,25 @@ def test_rule_doctor_followup_prefers_doctor_info_for_about_doctor_question():
     assert decision is not None
     assert decision.label == "DOCTOR_INFO"
     assert decision.entities.get("doctor_name") == "Рязанова"
+
+
+def test_extract_doctor_name_not_stale_after_index_refresh(monkeypatch):
+    """Regression (H3): _extract_doctor_name must reflect doctors-index refreshes.
+
+    It used to be @lru_cache'd on (text, mode); a surname queried while the local
+    doctors index was empty/cold cached None forever — the doctor stayed invisible
+    for the whole process lifetime even after the index loaded.
+    """
+    calls = {"n": 0}
+
+    def fake_resolve(text, *, prefer_schedule=False):
+        calls["n"] += 1
+        # First lookup: index still cold → not found. After refresh: resolves.
+        return None if calls["n"] == 1 else "Зорина"
+
+    monkeypatch.setattr(classifier, "resolve_cached_doctor_name_candidate", fake_resolve)
+
+    text = "к врачу зорина запись h3uniq42"
+    assert classifier._extract_doctor_name(text, mode="appointment") is None
+    # Same query after the index refresh must resolve, not return a stale cached None.
+    assert classifier._extract_doctor_name(text, mode="appointment") == "Зорина"
