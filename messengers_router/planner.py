@@ -73,6 +73,29 @@ def build_plan(
         if _is_lab_visit_timing_query(user_text):
             missing = []
 
+    # B′ + A′-2 (BUG-2026-06-01-01): если ГРУНДИРОВАННОЕ решение этого хода
+    # обронило цель записи как неверифицированную (напр. ФИО, ошибочно принятое
+    # за услугу) и валидного врача/специальности нет — пользователь назвал цель,
+    # которую забронировать нельзя. Честно отказываем (запись только по Самаре →
+    # оператор) ДО missing-slots short-circuit, иначе вместо честного отказа
+    # уходим в generic clarify-петлю «к кому/на что записать?». Источник цели на
+    # свежем ходу — ГРУНДИРОВАННЫЙ decision.entities, НЕ stale state: оставшаяся
+    # от прошлой темы specialty не должна молча подменять цель (A′-2). В активном
+    # flow читаем state — известный врач/специальность должны пережить ход.
+    if effective_label == "APPOINTMENT" and "entity_dropped_unverified_service_name" in set(decision.flags):
+        appt_action = str(entities.get("appointment_action") or "").strip().lower()
+        flow_active = bool(state.last_entities.get("appointment_flow_active"))
+        target_src = entities if flow_active else decision.entities
+        has_grounded_target = bool(
+            target_src.get("doctor_id")
+            or target_src.get("doctor_name")
+            or str(target_src.get("specialty") or "").strip()
+        )
+        if appt_action not in {"cancel", "reschedule"} and not has_grounded_target:
+            state.last_entities["_appointment_unbookable_target"] = True
+            memory.clear_pending(state)
+            return Plan(label=effective_label, steps=[])
+
     if missing:
         memory.set_pending(state, label=effective_label, missing_slots=missing)
         return Plan(label=effective_label, steps=[])
@@ -128,18 +151,9 @@ def build_plan(
         action = str(entities.get("appointment_action") or "").strip().lower()
         if action == "cancel":
             return Plan(label=label, steps=steps)
-        # B′ (BUG-2026-06-01-01): цель записи была дропнута грундером как
-        # неверифицированная (напр. ФИО врача не из самарского каталога утекло в
-        # service_name) и нет валидного doctor/specialty → бронировать нечего.
-        # Не идём в address_info/филиалы вслепую — помечаем ход, чтобы
-        # build_appointment_step_response честно отказал (запись только по Самаре).
-        if (
-            "entity_dropped_unverified_service_name" in set(decision.flags)
-            and not (entities.get("doctor_id") or entities.get("doctor_name"))
-            and not str(entities.get("specialty") or "").strip()
-        ):
-            state.last_entities["_appointment_unbookable_target"] = True
-            return Plan(label=label, steps=[])
+        # Дропнутая-цель → честный отказ обрабатывается выше, ДО missing-slots
+        # (см. ранний guard «B′ + A′-2»), поэтому сюда доходит только запись с
+        # валидной грундированной целью или активный flow.
         flow_active = bool(state.last_entities.get("appointment_flow_active"))
         selection_mode = str(state.last_entities.get("appointment_selection_mode") or "").strip().lower()
         if entities.get("doctor_id") or entities.get("doctor_name"):

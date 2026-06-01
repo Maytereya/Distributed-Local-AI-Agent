@@ -3951,3 +3951,73 @@ def test_quickfill_reextracts_fio_as_service_then_suppressed():
     quick = {"service_name": phrase, "appointment_action": "book"}
     out = router_mod._suppress_grounder_rejected_slots(quick, {"entity_dropped_unverified_service_name"})
     assert "service_name" not in out
+
+
+def test_appointment_dropped_target_with_stale_specialty_still_refuses():
+    # A′-2 (BUG-2026-06-01-01): a specialty left over in state.last_entities from a
+    # PRIOR topic must NOT satisfy the unbookable-target guard when THIS turn's
+    # grounded decision dropped the booking target (no active flow). Otherwise a
+    # stale specialty silently substitutes the named (non-bookable) target → blind
+    # branch offer, re-opening the bug through the specialty door. The guard now
+    # reads the GROUNDED decision.entities, not stale state. Class-level: many specialties.
+    for stale_specialty in ("уролог", "кардиолог", "эндокринолог"):
+        state = SessionState(
+            session_id="stale-spec",
+            last_entities={"appointment_action": "book", "specialty": stale_specialty, "city": "Самара"},
+        )
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.75,
+            entities={"appointment_action": "book"},  # grounded this turn: NO target
+            flags={"entity_dropped_unverified_service_name", "rule_appointment"},
+            needs_handoff=False,
+        )
+        plan = build_plan(decision, state, "Записаться к Несуществующему Врачу Ивановичу", memory=MemoryStore())
+        assert "address_info" not in [s.tool for s in plan.steps], stale_specialty
+        assert state.last_entities.get("_appointment_unbookable_target") is True, stale_specialty
+
+
+def test_appointment_dropped_target_clean_state_refuses_not_clarifies():
+    # With the A′ leak fixed there is no stale service_name in state either; a
+    # dropped target must still yield the honest Samara-only refusal (early guard
+    # fires BEFORE missing-slots), not a generic "who/what?" clarify pending.
+    state = SessionState(
+        session_id="dropped-clean",
+        last_entities={"appointment_action": "book", "city": "Самара"},
+    )
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.75,
+        entities={"appointment_action": "book"},
+        flags={"entity_dropped_unverified_service_name", "rule_appointment"},
+        needs_handoff=False,
+    )
+    mem = MemoryStore()
+    plan = build_plan(decision, state, "Записаться к Несуществующему Врачу", memory=mem)
+    assert plan.steps == []
+    assert state.last_entities.get("_appointment_unbookable_target") is True
+    assert mem.get_pending(state) is None  # honest refuse, NOT a clarify loop
+
+
+def test_appointment_active_flow_specialty_survives_dropped_service():
+    # Regression guard: inside an ACTIVE appointment flow a specialty/doctor held
+    # in state MUST keep the booking alive even if THIS turn's service was dropped —
+    # we must not over-refuse a live flow.
+    state = SessionState(
+        session_id="active-spec",
+        last_entities={
+            "appointment_action": "book",
+            "specialty": "уролог",
+            "city": "Самара",
+            "appointment_flow_active": True,
+        },
+    )
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.75,
+        entities={"appointment_action": "book"},
+        flags={"entity_dropped_unverified_service_name", "rule_appointment"},
+        needs_handoff=False,
+    )
+    build_plan(decision, state, "на анализ", memory=MemoryStore())
+    assert state.last_entities.get("_appointment_unbookable_target") is not True
