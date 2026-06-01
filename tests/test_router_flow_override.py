@@ -3910,3 +3910,44 @@ def test_appointment_unbookable_target_marker_yields_honest_refusal():
     assert "по адресам" not in res.text.lower()
     # marker is popped → does not leak into the next turn
     assert state.last_entities.get("_appointment_unbookable_target") is None
+
+
+def test_quickfill_does_not_resurrect_grounder_rejected_service_name():
+    # A′ root (BUG-2026-06-01-01): the grounder sanitizes decision.entities, but
+    # quick-fill writes straight into state.last_entities (which the planner reads).
+    # When the grounder rejected service_name THIS turn (any *_service_name drop
+    # flag), quick-fill must NOT re-inject it from the raw user text — otherwise
+    # the dropped value bypasses the grounder. Class-level: parametrized over the
+    # rejection flags AND over junk values (full FIO / 2-word name / bare surname).
+    reject_flags = [
+        "entity_dropped_unverified_service_name",
+        "entity_dropped_doctor_like_service_name",
+        "entity_dropped_stale_service_name_in_reschedule",
+    ]
+    leaked_values = ["Турмухамбетова Балслу Турмурадовна", "Иванов Пётр", "Сидоренко"]
+    for flag in reject_flags:
+        for leaked in leaked_values:
+            quick = {"service_name": leaked, "appointment_action": "book"}
+            out = router_mod._suppress_grounder_rejected_slots(quick, {flag, "rule_appointment"})
+            assert "service_name" not in out, (flag, leaked)
+            # неотвергнутые слоты не трогаем
+            assert out.get("appointment_action") == "book", (flag, leaked)
+    # БЕЗ флага отказа грундера — service_name из quick-fill сохраняется (не пере-подавляем)
+    keep = router_mod._suppress_grounder_rejected_slots(
+        {"service_name": "УЗИ щитовидной железы"}, {"rule_appointment"}
+    )
+    assert keep.get("service_name") == "УЗИ щитовидной железы"
+
+
+def test_quickfill_reextracts_fio_as_service_then_suppressed():
+    # Ties the suppressor to the REAL leak primitive: on "Записаться к <ФИО>" the
+    # raw text is mis-extracted as a service phrase (what _fill_appointment_entities
+    # merges into state.last_entities). With the grounder's drop flag present, the
+    # suppressor removes it so it never reaches the planner.
+    from messengers_router.policies import extract_service_phrase
+
+    phrase = extract_service_phrase("Записаться к Турмухамбетова Балслу Турмурадовна")
+    assert phrase, "precondition: raw FIO is mis-extracted as a service phrase (the leak source)"
+    quick = {"service_name": phrase, "appointment_action": "book"}
+    out = router_mod._suppress_grounder_rejected_slots(quick, {"entity_dropped_unverified_service_name"})
+    assert "service_name" not in out

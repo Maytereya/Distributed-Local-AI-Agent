@@ -1184,6 +1184,49 @@ async def _sanitize_doctor_in_entities(
     return await sanitize_doctor_entities(entities=entities, services=services, label=label)
 
 
+# A′ (BUG-2026-06-01-01) корень: quick-fill повторно извлекает сущности из
+# СЫРОГО user_text и может воскресить слот, который грундер уже отверг в этом
+# же ходу (напр. ФИО, ошибочно попавшее в service_name), в обход
+# ground_decision_entities. Карта: слот -> грундер-флаги его отказа.
+_GROUNDER_REJECTED_SLOT_FLAGS: dict[str, frozenset[str]] = {
+    "service_name": frozenset(
+        {
+            "entity_dropped_unverified_service_name",
+            "entity_dropped_doctor_like_service_name",
+            "entity_dropped_stale_service_name_in_reschedule",
+        }
+    ),
+}
+
+
+def _suppress_grounder_rejected_slots(
+    quick: dict[str, Any] | None,
+    decision_flags: set[str] | frozenset[str] | None,
+) -> dict[str, Any]:
+    """Убирает из quick-fill результата слоты, которые грундер отверг в этом ходу.
+
+    Грундер санирует только ``decision.entities``; quick-fill пишет напрямую в
+    ``state.last_entities`` (его читает планировщик), поэтому без этого фильтра
+    отвергнутая сущность воскресает мимо защиты (корень A′). Инвариант: если
+    у текущего решения стоит флаг отказа грундера по слоту — quick-fill НЕ
+    имеет права заново подставлять этот слот из сырого текста.
+
+    :param quick: сущности, извлечённые quick-fill из user_text
+    :param decision_flags: флаги текущего (грундированного) решения
+    :return: quick без отвергнутых грундером слотов
+    """
+    if not quick:
+        return quick or {}
+    flags = set(decision_flags or set())
+    if not flags:
+        return quick
+    out = dict(quick)
+    for slot, reject_flags in _GROUNDER_REJECTED_SLOT_FLAGS.items():
+        if slot in out and (flags & reject_flags):
+            out.pop(slot, None)
+    return out
+
+
 async def _inject_catalog_candidates(
     decision: RouteDecision,
     *,
@@ -2111,6 +2154,7 @@ async def _complete_route_after_doctor_guard(
             quick_now = quick_fill_entities_from_text(user_text, state.last_entities, missing_now, services)
             if quick_now:
                 quick_now = await _sanitize_doctor_in_entities(quick_now, services, label=decision.label)
+                quick_now = _suppress_grounder_rejected_slots(quick_now, decision.flags)
                 memory.merge_entities(state, quick_now, label=decision.label)
         elif decision.label == "APPOINTMENT" and state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM):
             # В активном сценарии записи продолжаем извлекать филиал/дату/время
@@ -2129,6 +2173,7 @@ async def _complete_route_after_doctor_guard(
             )
             if quick_flow:
                 quick_flow = await _sanitize_doctor_in_entities(quick_flow, services, label=decision.label)
+                quick_flow = _suppress_grounder_rejected_slots(quick_flow, decision.flags)
                 memory.merge_entities(state, quick_flow, label=decision.label)
 
     # if pending exists, try quick fill missing slots (NO LLM)
@@ -2140,6 +2185,7 @@ async def _complete_route_after_doctor_guard(
             quick = quick_fill_entities_from_text(user_text, state.last_entities, missing, services)
             if quick:
                 quick = await _sanitize_doctor_in_entities(quick, services, label=pend_label)
+                quick = _suppress_grounder_rejected_slots(quick, decision.flags)
                 memory.merge_entities(state, quick, label=pend_label)
         if pend_label == "APPOINTMENT":
             await _backfill_appointment_doctor_from_text(user_text, state, services, memory)
