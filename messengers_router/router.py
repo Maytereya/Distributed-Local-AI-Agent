@@ -89,7 +89,7 @@ from .policies import (
     service_name_conflicts_with_doctor,
 )
 from .recovery_policy import contextual_reply_kind, explicit_operator_requested
-from .services import Services, match_compound_price_service_option
+from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
 from .memory import MemoryStore
 from .city import match_city
 from .topic_registry import (
@@ -1207,13 +1207,20 @@ def _suppress_grounder_rejected_slots(
 
     Грундер санирует только ``decision.entities``; quick-fill пишет напрямую в
     ``state.last_entities`` (его читает планировщик), поэтому без этого фильтра
-    отвергнутая сущность воскресает мимо защиты (корень A′). Инвариант: если
-    у текущего решения стоит флаг отказа грундера по слоту — quick-fill НЕ
-    имеет права заново подставлять этот слот из сырого текста.
+    отвергнутая сущность воскресает мимо защиты (корень A′). Инвариант: если у
+    текущего решения стоит флаг отказа грундера по слоту — quick-fill НЕ имеет
+    права заново подставить ИЗ СЫРОГО ТЕКСТА то же невалидное значение (напр.
+    ФИО, ошибочно принятое за услугу).
+
+    Исключение (P3): значение, **подтверждённое каталогом**, остаётся —
+    оно grounded-by-source, а не сырой re-extract. Это критично для ответа на
+    pending-PRICE clarify: «Общий анализ крови» каталожно резолвится в реальную
+    услугу, и срезать её нельзя, хотя у текущего (TEST_ASSIST) решения и стоит
+    ``entity_dropped_unverified_service_name``.
 
     :param quick: сущности, извлечённые quick-fill из user_text
     :param decision_flags: флаги текущего (грундированного) решения
-    :return: quick без отвергнутых грундером слотов
+    :return: quick без отвергнутых грундером НЕвалидных слотов
     """
     if not quick:
         return quick or {}
@@ -1222,8 +1229,13 @@ def _suppress_grounder_rejected_slots(
         return quick
     out = dict(quick)
     for slot, reject_flags in _GROUNDER_REJECTED_SLOT_FLAGS.items():
-        if slot in out and (flags & reject_flags):
-            out.pop(slot, None)
+        if slot not in out or not (flags & reject_flags):
+            continue
+        value = str(out.get(slot) or "").strip()
+        # Каталожно-подтверждённую услугу не трогаем (она grounded, не re-extract).
+        if slot == "service_name" and value and resolve_price_service_name_from_catalog(value):
+            continue
+        out.pop(slot, None)
     return out
 
 
@@ -2182,7 +2194,7 @@ async def _complete_route_after_doctor_guard(
         pend_label = pending.get("label")
         missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
         if isinstance(pend_label, str) and isinstance(missing, list) and missing:
-            quick = quick_fill_entities_from_text(user_text, state.last_entities, missing, services)
+            quick = quick_fill_entities_from_text(user_text, state.last_entities, missing, services, pending_label=pend_label)
             if quick:
                 quick = await _sanitize_doctor_in_entities(quick, services, label=pend_label)
                 quick = _suppress_grounder_rejected_slots(quick, decision.flags)

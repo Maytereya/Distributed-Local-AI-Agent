@@ -1016,11 +1016,18 @@ def quick_fill_entities_from_text(
     state_entities: dict[str, Any],
     missing_rules: list[str],
     services: Services,
+    pending_label: str | None = None,
 ) -> dict[str, Any]:
     """
     Пытаемся заполнить частые слоты из текста без LLM.
     + резолв филиала (branch_id)
     + парсинг даты/времени RU
+
+    :param pending_label: метка висящего pending (если есть). Нужна для PRICE-
+        дозаполнения: при ответе на «Скажите название услуги» текущая реплика
+        («Общий анализ крови») может классифицироваться не как PRICE, и
+        ``_last_label`` к этому моменту уже перезатёрт меткой текущего хода —
+        поэтому PRICE-резолв услуги ведём по pending-метке, а не по эвристике.
     """
     t = text.strip()
     out: dict[str, Any] = quick_fill_core_entities(t, state_entities, missing_rules)
@@ -1030,6 +1037,7 @@ def quick_fill_entities_from_text(
         and (
             detect_price_intent(t)
             or str(state_entities.get("_last_label") or "") == "PRICE"
+            or pending_label == "PRICE"
         )
     ):
         current_service_name = str(state_entities.get("service_name") or state_entities.get("test_name") or "")

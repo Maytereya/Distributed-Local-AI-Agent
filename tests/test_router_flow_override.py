@@ -4021,3 +4021,42 @@ def test_appointment_active_flow_specialty_survives_dropped_service():
     )
     build_plan(decision, state, "на анализ", memory=MemoryStore())
     assert state.last_entities.get("_appointment_unbookable_target") is not True
+
+
+def test_pending_price_fill_resolves_service_via_pending_label():
+    # P2 (BUG-2026-06-02-02): a bare service reply to a PRICE clarify must resolve
+    # even when the current turn's label (and thus _last_label, clobbered by the
+    # merge of the current decision) is NOT PRICE. Drive the catalog resolution by
+    # the pending label, not by the heuristic gate. Class-level: several services.
+    for query, hint in [
+        ("Общий анализ крови", "анализ крови"),
+        ("УЗИ щитовидной железы", "щитовид"),
+    ]:
+        st = {"_last_label": "TEST_ASSIST", "city": "Самара"}  # _last_label clobbered this turn
+        q = quick_fill_entities_from_text(query, st, ["service_name"], Services(), pending_label="PRICE")
+        assert q.get("service_name"), (query, "should resolve via pending_label=PRICE")
+        assert hint in q["service_name"].lower(), (query, q.get("service_name"))
+    # без pending_label и не-PRICE контекста бот не резолвит (поведение не расширяем)
+    st = {"_last_label": "TEST_ASSIST"}
+    q = quick_fill_entities_from_text("Общий анализ крови", st, ["service_name"], Services())
+    assert not q.get("service_name")
+
+
+def test_quickfill_keeps_catalog_valid_service_despite_drop_flag():
+    # P3 (BUG-2026-06-02-02): the A′-1 suppressor must KEEP a catalog-resolved
+    # service_name (grounded-by-source — e.g. the legit answer to a pending PRICE
+    # clarify) even when the current decision carries a service drop flag. It may
+    # only strip the ungrounded raw re-extract (a FIO). Regression of f12096d.
+    keep = router_mod._suppress_grounder_rejected_slots(
+        {"service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)"},
+        {"entity_dropped_unverified_service_name", "rule_test_assist"},
+    )
+    assert keep.get("service_name") == "Общий анализ крови (Le, Er, Hb, СОЭ)"
+    # ...а ФИО-мусор по-прежнему срезается (каталог его не подтверждает)
+    for junk in ("Турмухамбетова Балслу Турмурадовна", "Иванов Пётр", "Сидоренко"):
+        out = router_mod._suppress_grounder_rejected_slots(
+            {"service_name": junk, "appointment_action": "book"},
+            {"entity_dropped_unverified_service_name"},
+        )
+        assert "service_name" not in out, junk
+        assert out.get("appointment_action") == "book", junk
