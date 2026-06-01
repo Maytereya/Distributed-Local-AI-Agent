@@ -47,12 +47,6 @@ def activate_appointment_flow(state: SessionState) -> None:
     state.dialog.phase = AppointmentPhase.COLLECTING
 
 
-def deactivate_appointment_flow(state: SessionState) -> None:
-    """Drop the active-flow marker without touching phase."""
-
-    state.last_entities.pop(_FLOW_ACTIVE, None)
-
-
 # --- Confirmation step ---------------------------------------------------
 
 def mark_appointment_confirm_pending(state: SessionState) -> None:
@@ -60,10 +54,6 @@ def mark_appointment_confirm_pending(state: SessionState) -> None:
 
     state.last_entities[_CONFIRM_PENDING] = True
     state.dialog.phase = AppointmentPhase.CONFIRM
-
-
-def clear_appointment_confirm_pending(state: SessionState) -> None:
-    state.last_entities.pop(_CONFIRM_PENDING, None)
 
 
 def finalize_appointment_confirmation(state: SessionState) -> None:
@@ -119,16 +109,8 @@ def mark_appointment_cancel_pending(state: SessionState) -> None:
     state.last_entities[_CANCEL_PENDING] = True
 
 
-def clear_appointment_cancel_pending(state: SessionState) -> None:
-    state.last_entities.pop(_CANCEL_PENDING, None)
-
-
 def mark_appointment_topic_switch_pending(state: SessionState) -> None:
     state.last_entities[_TOPIC_SWITCH_PENDING] = True
-
-
-def clear_appointment_topic_switch_pending(state: SessionState) -> None:
-    state.last_entities.pop(_TOPIC_SWITCH_PENDING, None)
 
 
 # --- Selection mode (branch vs doctor) -----------------------------------

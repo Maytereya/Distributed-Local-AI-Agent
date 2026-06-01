@@ -25,7 +25,6 @@ from ..specialty_parser import (
     extract_specialty_from_text as _shared_extract_specialty_from_text,
     matches_specialty_terms as _shared_matches_specialty_terms,
     specialty_equivalent as _shared_specialty_equivalent,
-    specialty_terms as _shared_specialty_terms,
 )
 from ._common import (
     _dedupe_str,
@@ -359,16 +358,6 @@ def _matches_uzi_doctor_profile(doc: dict[str, Any]) -> bool:
         if _unit_is_uzi(unit_name):
             return True
     return False
-
-
-def _specialty_terms(specialty: str) -> tuple[str, ...]:
-    """
-    Возвращает нормализованные термины специальности для role-матчинга.
-
-    :param specialty: каноническая специальность (например, "хирург", "лор", "узи")
-    :return: кортеж терминов/синонимов для подстрочного поиска
-    """
-    return _shared_specialty_terms(specialty)
 
 
 def _specialty_norm(value: str) -> str:
