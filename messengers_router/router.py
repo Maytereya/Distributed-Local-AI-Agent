@@ -1585,10 +1585,17 @@ async def _apply_post_nlu_guardrails(
         merged_ctx.update(decision.entities or {})
         if detect_nonbookable_walkin_intent(user_text, merged_ctx):
             entities = dict(decision.entities)
-            if not entities.get("service_name"):
-                svc = nonbookable_service_hint(user_text, merged_ctx)
-                if svc:
-                    entities["service_name"] = svc
+            svc = nonbookable_service_hint(user_text, merged_ctx)
+            # Для walk-in (анализы/ЭКГ без записи) важен КЛАСС услуги, а не строка
+            # каталога. Если service_name пуст или был мягко подставлен catalog-
+            # инъекцией (флаг catalog_service_exact — напр. ошибочный «профиль 2» на
+            # запрос «профиль 1»), заменяем генериком, чтобы не пинить/не утечь в
+            # state неверную услугу.
+            if svc and (
+                not entities.get("service_name")
+                or "catalog_service_exact" in set(decision.flags)
+            ):
+                entities["service_name"] = svc
             decision = _copy_decision(
                 decision,
                 label="ADDRESS",

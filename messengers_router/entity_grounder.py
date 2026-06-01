@@ -237,6 +237,15 @@ def _should_drop_service_name_in_active_reschedule(
     )
 
 
+# Детерминированные generic-классы из policies.nonbookable_service_hint:
+# описывают КЛАСС услуги («анализы»/«ЭКГ»), а не строку каталога. Casefold-ключи.
+_NONBOOKABLE_GENERIC_HINTS: frozenset[str] = frozenset({
+    "анализы",
+    "экг",
+    "анализы и экг",
+})
+
+
 def _should_keep_nonbookable_service_name_as_is(
     *,
     raw_value: str,
@@ -271,6 +280,12 @@ def _should_keep_nonbookable_service_name_as_is(
         return False
     if "policy_nonbookable_walkin" not in decision_flags:
         return False
+    # Generic-классы из nonbookable_service_hint намеренно описывают класс услуги,
+    # а не строку прайса, поэтому у них нет общего префикса с тем, что назвал
+    # пациент («диабетический профиль»). Они детерминированы (не LLM) и безопасны —
+    # сохраняем без prefix-проверки, которая ниже ловит только free-form галлюцинации.
+    if value.casefold() in _NONBOOKABLE_GENERIC_HINTS:
+        return True
     if user_text:
         text_lower = user_text.lower()
         value_tokens = {

@@ -143,3 +143,32 @@ def test_grounder_keeps_patient_name_for_other_when_pending_appointment():
         )
     )
     assert out.entities.get("patient_name") == "Рахманов Владимир"
+
+
+def test_keep_nonbookable_generic_hint_overrides_prefix_guard():
+    # Regression: a deterministic generic class hint from nonbookable_service_hint
+    # («анализы»/«ЭКГ») must be kept verbatim under the walk-in flag even though it
+    # shares no token-prefix with the specific instance the patient named — otherwise
+    # the grounder fuzzy-matches the text to a wrong catalog row («профиль 2»).
+    from messengers_router.entity_grounder import (
+        _should_keep_nonbookable_service_name_as_is,
+    )
+
+    walkin = {"policy_nonbookable_walkin"}
+    user_text = "Диабетический профиль 1 где можно сдать?"
+    assert _should_keep_nonbookable_service_name_as_is(
+        raw_value="анализы", decision_flags=walkin, user_text=user_text
+    )
+    assert _should_keep_nonbookable_service_name_as_is(
+        raw_value="ЭКГ", decision_flags=walkin, user_text="где сделать ЭКГ?"
+    )
+    # Anti-hallucination guard for free-form values stays intact.
+    assert not _should_keep_nonbookable_service_name_as_is(
+        raw_value="Маммопластика увеличение груди",
+        decision_flags=walkin,
+        user_text="Сдать витамин Д где?",
+    )
+    # The generic hint is kept only inside the walk-in flow.
+    assert not _should_keep_nonbookable_service_name_as_is(
+        raw_value="анализы", decision_flags=set(), user_text=user_text
+    )
