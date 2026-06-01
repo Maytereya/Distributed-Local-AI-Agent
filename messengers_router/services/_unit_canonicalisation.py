@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
 
 from ..russian_nlu import normalize_ru
 

@@ -33,7 +33,6 @@ from ._common import (
     _normalise_input,
 )
 from ._unit_canonicalisation import (
-    canonicalise_unit as _canonicalise_unit,
     is_uzi_unit as _is_uzi_unit,
     unit_matches_specialty as _unit_matches_specialty,
 )
