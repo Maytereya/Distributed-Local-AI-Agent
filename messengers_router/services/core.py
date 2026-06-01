@@ -618,7 +618,6 @@ from .prepare import (  # noqa: E402
     _maybe_compact_prepare_text as _maybe_compact_prepare_text_impl,
     _pick_prepare_candidate as _pick_prepare_candidate_impl,
     _prepare_candidates_from_analysis_api_cache as _prepare_candidates_from_analysis_api_cache_impl,
-    _prepare_from_analysis_api_cache as _prepare_from_analysis_api_cache_impl,
     _prepare_llm_validate_candidate as _prepare_llm_validate_candidate_impl,
     test_prepare as _test_prepare_impl,
 )
@@ -628,7 +627,6 @@ Services._pick_prepare_candidate = _pick_prepare_candidate_impl
 Services._prepare_candidates_from_analysis_api_cache = _prepare_candidates_from_analysis_api_cache_impl
 Services._maybe_compact_prepare_text = _maybe_compact_prepare_text_impl
 Services.test_prepare = _test_prepare_impl
-Services._prepare_from_analysis_api_cache = _prepare_from_analysis_api_cache_impl
 
 
 if __name__ == "__main__":

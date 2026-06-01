@@ -112,8 +112,6 @@ _PREPARE_SYNONYM_HINTS: dict[str, tuple[str, ...]] = {
     "вульвоскоп": ("вульвоскопия",),
 }
 
-_PREPARE_SERVICE_INFO_SYNONYMS: dict[str, tuple[str, ...]] = {}
-
 _PREPARE_SERVICE_INFO_GENERIC_TOKENS = {
     "подготовка",
     "исследование",
@@ -323,15 +321,7 @@ def _prepare_service_info_queries(raw_query: str, entity_query: str = "") -> lis
     """
 
     variants = _prepare_query_variants(raw_query, entity_query)
-    expanded = list(variants)
-    for item in variants:
-        norm = _normalise_prepare_text(item)
-        for hint, synonyms in _PREPARE_SERVICE_INFO_SYNONYMS.items():
-            if hint not in norm:
-                continue
-            expanded.extend(synonyms)
-            expanded.extend(f"подготовка к {syn}" for syn in synonyms)
-    return _dedupe_queries(expanded, max_items=16)
+    return _dedupe_queries(list(variants), max_items=16)
 
 
 def _prepare_service_info_core_tokens(text: str) -> set[str]:
@@ -582,65 +572,6 @@ def _dedupe_prepare_candidates(candidates: list[_PrepareCandidate], *, limit: in
         if len(out) >= max(1, limit):
             break
     return out
-
-
-def _service_info_row_score(queries: list[str], row: dict[str, Any]) -> tuple[float, str]:
-    """
-    Считает релевантность строки serviceInfoAll для prepare-запроса.
-
-    :param queries: подготовленные варианты запроса
-    :param row: строка из serviceInfoAll
-    :return: (score, лучшая query-вариация)
-    """
-
-    service_name = _normalise_input(str(row.get("serviceName") or ""))
-    preparation = str(row.get("preparation") or "").strip()
-    if not service_name or not preparation:
-        return 0.0, ""
-
-    best = 0.0
-    best_query = ""
-    for query in queries:
-        query_norm = _normalise_prepare_text(query)
-        if not query_norm:
-            continue
-        score = _prepare_fast_relevance_score(query_norm, preparation, title=service_name)
-        if score > best:
-            best = score
-            best_query = query_norm
-
-    return best, best_query
-
-
-def _choose_service_info_preparation(
-    rows: list[dict[str, Any]],
-    queries: list[str],
-) -> str | None:
-    """
-    Выбирает лучший текст подготовки из serviceInfoAll.
-
-    :param rows: записи serviceInfoAll
-    :param queries: варианты запроса пользователя
-    :return: текст preparation или None
-    """
-
-    ranked: list[tuple[float, int, dict[str, Any]]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        score, _ = _service_info_row_score(queries, row)
-        if score <= 0.0:
-            continue
-        preparation_len = len(str(row.get("preparation") or "").strip())
-        ranked.append((score, preparation_len, row))
-
-    if not ranked:
-        return None
-
-    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    best = ranked[0][2]
-    preparation = str(best.get("preparation") or "").strip()
-    return preparation or None
 
 
 def _is_prepare_requested_in_price_query(query_text: str) -> bool:

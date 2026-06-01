@@ -639,23 +639,3 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
         return _prepare_clarify_response(q, entities, note="prepare: no matches")
 
     return _prepare_clarify_response(q, entities, note="prepare source unavailable")
-
-
-async def _prepare_from_analysis_api_cache(
-    self: "Services",
-    query: str,
-    entities: dict[str, Any],
-) -> str | None:
-    """
-    Ищет подготовку к анализу в кэше `serviceInfoAll`.
-
-    :param query: текст запроса пользователя
-    :param entities: текущие сущности роутера
-    :return: текст поля `preparation` или None
-    """
-
-    candidates = await self._prepare_candidates_from_analysis_api_cache(query, entities)
-    best = await self._pick_prepare_candidate(query, candidates)
-    if not best:
-        return None
-    return str(best.text or "").strip() or None
