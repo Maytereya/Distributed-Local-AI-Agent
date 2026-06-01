@@ -172,6 +172,14 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
     }
 
 
+# Честный статус «результат ещё не готов»: бот не видит готового результата
+# (HTTP 404 от resultForPatient ИЛИ пустой data) — это бизнес-состояние «в работе»,
+# а НЕ тех-сбой. Не эскалируем на оператора, предлагаем повторить позднее.
+_RESULT_NOT_READY_TEXT = (
+    "Анализы в работе. Результат пока не готов – попробуйте повторить позднее."
+)
+
+
 async def test_result_status(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
     """Проверяет готовность результата анализа и формирует ссылку на него.
 
@@ -226,6 +234,17 @@ async def test_result_status(self: "Services", query: str, entities: dict[str, A
         return _result_fallback(f"resultForPatient failed: {exc}")
 
     if not isinstance(api_resp, dict) or not api_resp.get("ok"):
+        # HTTP 404 = по этим данным готового результата нет (ещё в работе / не найден).
+        # Это бизнес-состояние, а не сбой сервера → честный «в работе», БЕЗ оператора.
+        # Реальные сбои (5xx, таймаут, нет соединения → status_code 5xx/None) уходят в
+        # operator-fallback ниже.
+        if isinstance(api_resp, dict) and api_resp.get("status_code") == 404:
+            return {
+                "ready": False,
+                "note": "result_not_ready",
+                "result_preview": _RESULT_NOT_READY_TEXT,
+                "entities_used": entities,
+            }
         return _result_fallback(f"resultForPatient error: {api_resp}")
 
     payload = api_resp.get("data")
@@ -234,7 +253,7 @@ async def test_result_status(self: "Services", query: str, entities: dict[str, A
             "ready": False,
             "note": "result_not_found_or_not_ready",
             "result_payload": payload,
-            "result_preview": "По указанным данным результаты пока не найдены или еще не готовы.",
+            "result_preview": _RESULT_NOT_READY_TEXT,
             "entities_used": entities,
         }
 

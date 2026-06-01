@@ -4389,3 +4389,33 @@ def test_samara_region_tokens_recognise_lenina5_by_value_slug(monkeypatch):
     assert _region_matches_samara_tokens("Ленина 5", tokens) is True
     # Оренбург не должен попасть в самарский allowlist
     assert not any("оренбург" in t for t in tokens)
+
+
+@pytest.mark.parametrize(
+    "status_code,expect_operator",
+    [
+        (404, False),  # результат не готов / не найден → честное «в работе», без оператора
+        (500, True),   # реальный сбой сервера → оператор
+        (503, True),
+        (None, True),  # нет соединения / таймаут → оператор
+    ],
+)
+def test_result_404_is_not_ready_not_operator(monkeypatch, status_code, expect_operator):
+    # BUG-2026-06-02-03: HTTP 404 от resultForPatient = «результат не готов / не найден»
+    # (бизнес-состояние), а не тех-сбой. Класс-инвариант: когда бот не видит готового
+    # результата → честное «Анализы в работе… повторите позднее» БЕЗ эскалации на
+    # оператора; реальные сбои (5xx/таймаут/нет соединения) по-прежнему уходят на
+    # оператора. Параметризовано по статус-кодам, синтетические данные (не инстанс).
+    def fake_site_result(**kwargs):
+        return {"ok": False, "status_code": status_code, "error": f"{status_code} err", "params": kwargs}
+
+    monkeypatch.setattr(lab_tests_mod.api_nayka, "site_result_for_patient", fake_site_result)
+    entities = {"surname": "Тестов", "year": "1990", "filial": "Бг", "number": "1"}
+    res = asyncio.run(lab_tests_mod.test_result_status(None, "Тестов, 1990, Бг, 1", entities))
+    assert res.get("ready") is False, status_code
+    if expect_operator:
+        assert res.get("handoff_required") is True, status_code
+    else:
+        assert not res.get("handoff_required"), status_code
+        preview = str(res.get("result_preview") or "").lower()
+        assert "в работе" in preview and "оператор" not in preview, status_code
