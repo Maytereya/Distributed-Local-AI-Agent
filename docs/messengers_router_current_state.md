@@ -1,159 +1,142 @@
-# `messengers_router` — как сейчас работает бот
+# `messengers_router` — текущее состояние и дельта с 20 апреля 2026
 
-**Аудитория:** Владимир (команда Free Talk / LLM-first).
-**Дата среза:** 2026-06-01 · ветка `release` · модуль `messengers_router/` (~26.7k строк, ~60 файлов).
-**Зачем:** ты делаешь Free Talk (FT) — LLM-first преемник. Этот документ — карта того, как работает текущий **детерминированный** продакшн-бот: его пайплайн, NLU-контракт, набор инструментов, что он умеет и что недавно поменялось. Чтобы FT мог (а) повторить контракт, (б) не наступить на те же грабли.
+**Для:** Владимир (Free Talk / LLM-first преемник).
+**Срез:** 2026-06-02 · ветка `release` · модуль `messengers_router/` (~27k строк, ~60 файлов).
 
-> **Самый свежий структурный док** до этого — [`messengers_router_refactor_plan.md`](messengers_router_refactor_plan.md) (20.04), но это **журнал рефакторинга** (Stages 0–22), и он уже частично устарел (описывает распил `services_legacy.py` как «ещё не сделано», хотя монолит уже распилен). Чистый снимок модулей — в [`CHANGELOG_MAR_APR_2026.md`](CHANGELOG_MAR_APR_2026.md) (22.04). **Этот файл — текущая правда на 01.06.**
->
-> ⚠️ Параллельно лежит [`messengers_router_checkup_2026-06-01.md`](messengers_router_checkup_2026-06-01.md) — фул-чекап на баги/мёртвый код. Прочитай его раздел «HIGH», чтобы не перенести эти баги в FT.
+Ты знаешь, как MR работал **на 20 апреля** (по `messengers_router_refactor_plan.md`, Stages 0–22). С тех пор было ~75 коммитов. **Главное в этом доке — §1: что изменилось с 20 апреля.** §2–4 — сжатый текущий контракт/карта для справки (baseline ты в основном знаешь). Дальше сам решишь, что переносить в FT.
 
----
-
-## 1. MR vs FT в двух словах
-
-| | `messengers_router` (MR) — этот проект | Free Talk (FT) — твой |
-|---|---|---|
-| Подход | **Детерминированный роутер**: правила + LLM только на узких участках | **LLM-first**: модель ведёт диалог, код — инструменты |
-| Точка решения | жёсткий пайплайн стадий, LLM «донорствует» | LLM + tool-loop |
-| Статус | **в проде** | разрабатывается |
-| Бэкенд | один и тот же — Nayka site API (клиника, Самара) | тот же |
-
-MR и FT целятся в одни и те же сценарии (цены, запись, врачи, адреса, результаты, подготовка) и один бэкенд. Поэтому **контракт сущностей/инструментов/handoff из MR — это то, что FT должен уметь воспроизвести** (раздел 4).
+> Что НЕ изменилось с 20 апреля (твой baseline остаётся верен): 6-стадийный оркестратор `run_pipeline` (появился ~15.04, с тех пор — единственный путь роутинга; `route_patient_message` жив только для тестов), модуль `russian_nlu` (нормализация + `ENTITY_WHITELIST`), `entity_grounder`, `topic_registry`, `appointment_flow_guard`, дефолтный NLU-движок `legacy_v2` с LLM-first `_merge`. Контракт сущностей/инструментов стабилен с апреля.
 
 ---
 
-## 2. Высокоуровневая архитектура: 6-стадийный пайплайн
+## 1. Что изменилось с 20 апреля (главное)
 
-Точка входа — `endpoint.py` (стриминговый HTTP) → `orchestrator.run_pipeline()` ([`orchestrator.py:586`](../messengers_router/orchestrator.py)). Пайплайн (в коде назван «6-stage skeleton»):
+Каждый пункт: суть + ключевой коммит (можно `git show <hash>`). Сквозная тема периода — **«честность и надёжность вместо блефа» + анти-зацикливание**.
 
-```
-текст пользователя
-      │
- 1. early_guards         — safety-перехват (URGENT/COMPLAINT/MEDICAL_ADVICE по детерм. правилам,
-      │                     confidence=1.0) + явные команды → short-circuit в render
-      │  (short-circuit?) ─────────────► render
- 2. pending_dispatch     — обработка «висящих» состояний: подтверждение записи, оффер оператора,
-      │                     вторичная очередь интентов, ожидание слота
-      │  (short-circuit?) ─────────────► render
- 3. nlu_route            — классификация интента + извлечение сущностей (см. §3)
-      │
- 4. doctor_entity_guard  — верификация ФИО врача по каталогу + спекулятивный prefetch каталога услуг
-      │                     (Stage 15: verify ∥ match_catalog_service через asyncio.gather)
-      │
- 5. clarify_gate         — нужно ли уточнение перед вызовом инструментов
-      │
- 6. tool_loop            — planner строит PlanStep'ы → executor зовёт сервисы → evidence
-      │
-   render                — evidence → текст пациенту (детерм. рендер ИЛИ LLM rich-renderer + critic)
-      │
-   ответ (+ handoff на оператора, если нужно)
-```
+### 1.1 Структура кода — большой рефакторинг ЗАВЕРШЁН
+- Монолит `services.py` (~7.3k стр.) **распилен** в пакет `services/` (Stage 20–22, 20–21.04): `_common`, `_regions`, `_prepare`, `_addresses_helpers`, `_doctors_helpers`, `_prices_helpers` (хелперы) + домен-модули `prices`, `doctors`, `prepare`, `lab_tests`, `addresses`, `main_index`, `news` + `core` (фасад `Services`, бывший `services_legacy.py`). Shim сжат, домен-модули импортируют напрямую (`1f09e77`, `3ea86de`, `307dd1e`, `18bd02b`, …).
+  > `refactor_plan.md` описывает этот распил как «ещё не сделано» — **уже сделано**. Самый свежий снимок модулей — §3 ниже.
 
-Ключевые модули пайплайна:
-- `router.py` (~2480 стр.) — самый большой; хелперы стадий, prefetch-логика, сборка ответов. **Следующая цель рефакторинга**, но прод-стабилен.
-- `orchestrator.py` — сам skeleton + per-stage latency-инструментация (`_timed_stage`).
-- `planner.py` — `intent → list[PlanStep(tool=...)]`. Здесь определяется, какой инструмент дёрнуть.
-- `executor.py` — выполняет PlanStep'ы, пишет в `Evidence`.
-- `response_builder.py` — превращает `Evidence` в структурированные ответы.
+### 1.2 Честность вместо блефа (доминирующая тема)
+- **Несамарский врач** → честный отказ «запись через бота только по Самаре + оператор» вместо слепого списка из 5 филиалов (сигнал `doctor_lookup="unresolved"`) — `009fe7f`.
+- **`BUG-2026-06-01-01` (A′/B′, новейшее, в `release`):** ФИО, ошибочно классифицированное LLM как `service_name`, давало «по адресам: [5 филиалов]» для несуществующего врача. Корень: грундер дропает невалидный `service_name` из `decision.entities`, но **quick-fill заново тащит его из сырого текста в `state.last_entities` мимо грундера** (планер читает `state.last_entities`). Починено: `f12096d` (A′-1 — `_suppress_grounder_rejected_slots`), `b5795f2` (A′-2 — гвард «нет цели» читает грундированный decision, не stale specialty), `03ecb0b` (B′ — honest-refuse). Детали и инвариант — `messengers_router_bug_log.md`.
+- **Пустое расписание** в APPOINTMENT-превью → честный «свободных слотов нет → оператор» (хелпер `_no_free_slots_operator_offer`), раньше падало в «расписание не найдено» — `b54853a`.
+- **Сбой CRM vs «врача нет»:** `_fetch_schedule_source` различает `ScheduleSourceUnavailable` (→ честный handoff / stale-данные) от пустого расписания (→ пусто без handoff); молчаливые сбои fetch теперь логируются WARNING — `39fb9cc`.
+- **Stale lab-услуга** не утекает в карточку записи; guard на LLM-выдуманную услугу — `b57ba15`, `86b808e`.
+- **Prompt-честность:** запрещено выдумывать цены/сроки для multi-item lab-запросов (`d448ac9`); не предлагать «записать» на лабораторные анализы (`3f9a5d1`).
 
-> **Историческая заметка для FT:** `route_patient_message` в `router.py` — это **старый** монолитный путь. Прод его больше не зовёт (идёт через `run_pipeline`), он жив только ради тестов. Не бери его за образец — ориентируйся на `run_pipeline` + стадии.
+### 1.3 Анти-зацикливание / эскалация на оператора
+- Повтор одинакового ответа N раз → интерактивный **оффер оператора (O4)** — `ebaf794` + `ef354c5`.
+- Внутри активного APPOINTMENT-флоу repeat-guard **пропускается** (там повтор уместен) — `acc8950`.
+- Расширено распознавание явного запроса человека: «не бот» / «человек» / «оператор» — `a8b47bc`.
+- После нерабочих часов — приписка о часах работы оператора в handoff — `fd03983`.
 
----
+### 1.4 NLU
+- **Rescue rule-PRICE:** явный ценовой вопрос с `rule.label=PRICE`, который LLM-merge уронил в `OTHER`, спасается обратно в `PRICE` (узко — строго из `OTHER`, не перехватывает уверенные APPOINTMENT/ADDRESS) — `1f0acd3`.
+- Убран stale `@lru_cache` на `_extract_doctor_name` — кэш «врач не найден» больше не залипает после обновления индекса врачей — `1c609c7`.
 
-## 3. NLU: LLM-first с rule-донорами (это важно для FT)
+### 1.5 Цены
+- Care-setting адрес (на дому / в клинике) резолвится динамически из `doctor_prices` / через `priceUnit` override-карту — `aa771cc`, `b2f94f1`, `3838402`.
+- Матчинг услуги: token-prefix вместо сырой подстроки, отсев `0₽`-строк врачей, падежные формы «стоимость», guard против медицинских кросс-хитов корня — `86b808e`, `d4efa73`.
+- Сужены over-broad regex модификаторов (`ген`/`экспресс`/`дет`), скоринг по очищенным токенам (короткие аббревиатуры выживают стоп-слова) — `e832707`, `bf6f69b`.
+- Приписка «Цены актуальны для г. Самара» к ответам с ценами — `4733391`.
+- Compound-запрос: явный primary над вторичным lab-alias — `7bea980`. «<lab-abbrev> + срочно/cito» → PRICE — `114a1a6`.
 
-NLU — гибрид, и это самый поучительный для FT слой.
+### 1.6 Лаборатория / PREPARE
+- Compound «ОАК, Ферритин, Витамин Д, …» резолвится **по каждому пункту** из каталога — `703e3e8`.
+- «во сколько/когда сдать кровь» → памятка о заборе крови + адреса филиалов с часами; planner ставит `test_prepare` для запросов про тайминг визита — `0079851`, `462416d`, `e4a1a94`.
+- «антитела на корь» → «Вирус кори Ig M/Ig G» (`4e14715`); сброс конфликтующего устаревшего анализа при разном биоматериале (`5d82d3e`); уточнение generic «правила подготовки» + clear summary при handoff (`cb9a280`).
+- «Чекап» держится **широким** запросом (это категория/линейка, а не одна услуга) → `test_assist` возвращает всё семейство — `fca8cef`.
 
-- **Движок** выбирается `MR_NLU_ENGINE` ([`nlu_pipeline.py:155`](../messengers_router/nlu_pipeline.py)): дефолт в проде — **`legacy_v2`**; альтернатива — `llm_primary` (LLM как первичный классификатор).
-- **`_merge()`** ([`nlu_pipeline.py:71`](../messengers_router/nlu_pipeline.py)) — сердце гибрида. Принцип: **для не-safety меток метка LLM побеждает безусловно**, правила лишь *донорствуют* сущности в ответ LLM. Старый путь «высокая уверенность правила → пропустить LLM» был сознательно убран — он давал расхождение «зелёный eval / красный прод» (грубый regex молча перебивал верную LLM-классификацию).
-- **Safety-метки — исключение:** `{URGENT, COMPLAINT, MEDICAL_ADVICE}` ловятся детерминированными правилами с `confidence=1.0` и короткозамыкают пайплайн **до** вызова LLM (`early_guards`). FT обязан сохранить этот приоритет безопасности.
-- **Узкие rescue-правила** поверх merge — пример из свежих коммитов: явный ценовой вопрос с `rule.label=PRICE`, который LLM уронил в `OTHER`, спасается обратно в `PRICE` (`1f0acd3`). Это паттерн «LLM主, но узкий детерминированный предохранитель на дорогих ошибках».
+### 1.7 Расписание
+- Ежедневный refresh кэша врачей + восстановлена ветка «no free slots» — `e6d8402`.
+- **Демоция bare-specialty** запросов расписания: «расписание уролог» (без фамилии) → `DOCTOR_INFO` (список из JSONL-кэша) вместо загрузки 8 расписаний скопом (раньше 70+ сек / таймаут); fanout распараллелен — `02dd665`.
+- Мульти-городские врачи: сохраняем самарское присутствие, узнаём самарские филиалы по region-slug — `90a37b9`, `37c9fd1`.
+- Сброс stale `no_free_slots`-reason при матче следующего варианта фамилии (реальное расписание больше не затирается) — `4e3469d`.
 
-**Вывод для FT:** даже в LLM-first мире MR держит (1) safety-перехват до LLM, (2) донорство сущностей правилами, (3) точечные rescue на классах ошибок, которые дорого стоят пациенту. Это не «или LLM, или правила», а «LLM + тонкая детерминированная страховка».
+### 1.8 Адреса / филиалы
+- Восстановлены часы работы («График») из структурированных полей `/regions` — `063c306`.
+- Override для фикс-оборудования (флюорография/маммография): корректные адреса + handoff в регистратуру — `3838402`, `e7b9ac9`.
+- Multi-word несамарский город («Нижний Новгород», «Самарская область») ловится гео-гейтом «город не поддержан» — `978c57c`.
 
----
+### 1.9 Специальности
+- Канонический `unit→specialty` map, убраны substring-ложноположительные — `082b2b7`.
+- Процедуры → специальности для запросов «кто делает X» — `421b3d9`.
+- Маппинг unit-имён «Врач-дерматолог» / «Врач-челюстно-лицевой хирург» из live-кэша — `490a8e2`.
 
-## 4. Контракт, который FT должен воспроизвести
+### 1.10 Прочее
+- «выходные» парсятся как ближайшие сб+вс — `bdaad09`.
+- `TEST_RESULT` разрешён для **любого** города (статус результата география не ограничивает — обход самарского гейта) — `277e561`.
+- **Чистка мёртвого кода (01.06):** снесён недостижимый сервис `appointment_help` (`9c92658`), мёртвый PREPARE-скоринг (`f0b73e9`), осиротевшие state-сеттеры (`9802bfb`), dead `_static_nonbookable_branches` (`f8a3b76`); починен битый JSON-литерал в critic-prompt (`0675bff`).
 
-### Интенты (метки классификатора)
-`PRICE · APPOINTMENT · ADDRESS · DOCTOR_INFO · DOCTOR_SCHEDULE · TEST_RESULT · TEST_ASSIST · PREPARE · NEWS · MAIN_INDEX` (+ doc/справки) `· OTHER`
-Safety: `URGENT · COMPLAINT · MEDICAL_ADVICE`.
-
-### Сущности — `ENTITY_WHITELIST` (единый источник правды, [`russian_nlu.py:26`](../messengers_router/russian_nlu.py))
-29 ключей; всё, что вне whitelist, отбрасывается (`prompt_contracts.ALLOWED_ENTITY_KEYS`):
-```
-doctor_name, doctor_id, specialty, branch_name, branch_id, city, service_name,
-appointment_action, patient_name, test_name, test_goal, surname, year, filial,
-number, order_id, result_action, lang, insurance_type, accepts_children,
-child_age, date_hint, date_from, date_to, time_from, time_to,
-secondary_intents, include_promos, time_flexible
-```
-
-### Инструменты (10) — что эмитит `planner.py`, что исполняет `executor.py`
-| tool | назначение |
-|------|-----------|
-| `price_info` | стоимость услуги (+ модификаторы: cito / капиллярный / повторный / на дому / детский) |
-| `service_bundle_info` | услуга + врачи + подготовка одним пакетом; compound-запросы |
-| `doctors_info` | информация о враче / врачах специальности |
-| `doctors_schedule_week` | расписание врача на 2 недели |
-| `address_info` | адреса/филиалы + часы работы |
-| `test_assist` | подбор анализов (чекап-семейства и т.п.) |
-| `test_result_status` | статус готовности результата анализа |
-| `test_prepare` | подготовка к анализу/процедуре (скоринг + relevance-gate + LLM-валидация) |
-| `main_index_info` | общий индекс + справки (в т.ч. налоговая) |
-| `news_info` | новости/акции |
-
-### Evidence keys — контракт «executor пишет → response_builder читает»
-Константы в [`evidence_keys.py`](../messengers_router/evidence_keys.py): payload-ключи (`PRICE`, `DOCTORS_INFO`, `DOCTOR_SCHEDULE`, `TEST_ASSIST`, `PREPARE`, `ADDRESS`, …), auth-гейт (`AUTH_REQUIRED/MESSAGE`), handoff-гейт (`HANDOFF_REQUIRED/REASON/MESSAGE`).
-
-### Handoff на оператора
-Все сообщения о передаче оператору централизованы через `HANDOFF_REASON_MATRIX` в `policies.py` (`handoff_message("<reason>")`). Если FT передаёт оператору — делай это через единый reason-словарь, а не хардкодом (в MR это закрыто Stage 6, и матрица сейчас без «дыр»).
-
-### Состояние записи (appointment FSM)
-`AppointmentPhase` ([`mess_types.py`](../messengers_router/mess_types.py)): `COLLECTING → CONFIRM → …`, плюс reschedule/cancel и detection переключения темы. Управляется через `state_mutations.py` (безопасные сеттеры) и `appointment_flow_guard.py`.
-> Нюанс (см. чекап): фаза `CANCEL_CONFIRM` объявлена, но реально cancel живёт во флаге `appointment_cancel_pending`, а не в `dialog.phase`. Если FT делает свою FSM записи — заведи отмену как явное состояние сразу.
+### 1.11 Открытый долг / баги (на 02.06)
+- **Открытый класс A′** (грундер-дроп воскресает через негрундированные пути записи в `state.last_entities`): починены инстансы service_name/specialty; **отложены** сиблинги — `test_goal` в quick-fill, `_schedule_by_specialty` глотает `ScheduleSourceUnavailable` (CRM-сбой → «не найдено»), LLM-метка safety обходит детерминированный safety-шаблон. Подробности — `messengers_router_checkup_2026-06-01.md` (раздел «Task 1»).
+- M1 (`clarify_gate` отдаёт машинные коды) — дремлет под `legacy_v2`, оживёт при `llm_primary`.
+- Полный список долга/мёртвого кода — тот же чекап.
 
 ---
 
-## 5. Карта модулей (актуальная на 01.06)
+## 2. Текущий контракт (сжато)
+
+**Пайплайн** (`orchestrator.run_pipeline`): `early_guards` (safety-перехват URGENT/COMPLAINT/MEDICAL_ADVICE по regex, conf=1.0, short-circuit ДО LLM) → `pending_dispatch` (висящие состояния) → `nlu_route` (классификация + сущности) → `doctor_entity_guard` (верификация ФИО + спекулятивный prefetch каталога) → `clarify_gate` → `tool_loop` (`planner` → `executor` → `Evidence`) → `render`.
+
+**NLU `_merge()`** (`nlu_pipeline.py`): для НЕ-safety меток метка LLM побеждает безусловно, правила лишь *донорствуют* сущности; safety-метки ловятся детерминированно. Узкие rescue-правила поверх (см. §1.4). Движок — `MR_NLU_ENGINE` (дефолт `legacy_v2`).
+
+**Сущности** — `ENTITY_WHITELIST` (29 ключей, единый источник правды — `russian_nlu.py`). Всё вне whitelist отбрасывается.
+
+**Инструменты (10)** — эмитит `planner.py`, исполняет `executor.py`: `price_info`, `service_bundle_info`, `doctors_info`, `doctors_schedule_week`, `address_info`, `test_assist`, `test_result_status`, `test_prepare`, `main_index_info`, `news_info`.
+
+**Evidence** — `evidence_keys.py`: payload-ключи (`PRICE`, `DOCTORS_INFO`, `DOCTOR_SCHEDULE`, `TEST_ASSIST`, `PREPARE`, `ADDRESS`, …) + auth-гейт + handoff-гейт. Контракт «executor пишет → response_builder читает».
+
+**Handoff** — единый `HANDOFF_REASON_MATRIX` в `policies.py` (`handoff_message("<reason>")`), без хардкода и без «дыр».
+
+**Состояние записи** — `AppointmentPhase` (`mess_types.py`): `COLLECTING → CONFIRM → …` + reschedule/cancel. Нюанс: фаза `CANCEL_CONFIRM` объявлена, но cancel реально живёт во флаге `appointment_cancel_pending` (фазовая машина расходится с флаговой).
+
+**Два хранилища сущностей** (важно — источник класса A′): `state.dialog.entities` (typed, фактически write-only) и `state.last_entities` (god-object dict, который **читает планер**). Грундер санирует только `decision.entities`.
+
+**Рендер** — детерминированный (`renderer.py` / `response_builder.py`) ИЛИ LLM rich-renderer (`renderer_patient_rich`) + critic-гейт (`self_check.py`).
+
+**Prompt'ы в двух локациях** (правило проекта): `messengers_router/prompts/*` И `app_data/prompts/mr_*` — менять синхронно.
+
+---
+
+## 3. Карта модулей (актуальная на 02.06)
 
 ```
 messengers_router/
 ├── endpoint.py             — HTTP-вход, стриминг, DI сервисов, per-session lock
 ├── orchestrator.py         — 6-stage пайплайн + latency-инструментация
-├── router.py               — хелперы стадий, prefetch, сборка ответов (хотспот ~2480 стр.)
+├── router.py               — хелперы стадий, prefetch, сборка ответов (хотспот ~2500 стр.)
 ├── planner.py              — intent → PlanStep[]
 ├── executor.py             — выполнение PlanStep → Evidence
 ├── classifier.py           — интент + сущности (LLM + rule), safety-правила
 ├── nlu_pipeline.py         — выбор движка, _merge(), rescue-правила
-├── russian_nlu.py          — единая нормализация (normalize_ru), ENTITY_WHITELIST
+├── russian_nlu.py          — нормализация (normalize_ru), ENTITY_WHITELIST
 ├── specialty_parser.py     — канонизация специальностей
-├── entity_grounder.py      — «приземление» сущностей на каталог
+├── entity_grounder.py      — «приземление»/санитизация сущностей на каталог
 ├── topic_registry.py       — реестр тем (data/topic_registry.yaml)
 ├── doctor_name_port.py     — резолв ФИО по локальному индексу врачей
-├── policies.py             — HANDOFF_REASON_MATRIX, guardrails, slot-fill (~2240 стр.)
-├── flow_policy.py          — active-flow логика, clear-хелперы
+├── policies.py             — HANDOFF_REASON_MATRIX, guardrails, slot-fill, quick-fill (~2200 стр.)
+├── flow_policy.py          — active-flow логика, quick_fill_entities_from_text, clear-хелперы
 ├── appointment_flow_guard.py — FSM записи (confirm/cancel/topic-switch)
 ├── state_mutations.py      — безопасные мутации SessionState
 ├── recovery_policy.py      — повторные уточнения / low-confidence
 ├── llm_mode_policy.py / llm_runtime.py / llm_doesnt_work_fallback.py — режимы LLM + деградация
-├── dialog_graph.py         — диагностическая FSM (сейчас write-only, в trace)
-├── memory.py               — pending/state-хранилище
+├── dialog_graph.py         — диагностическая FSM (write-only, в trace)
+├── memory.py               — pending/state-хранилище, merge_entities (правила сброса)
 ├── renderer.py             — рендер ответов (детерм. + LLM rich-renderer) (~980 стр.)
 ├── response_builder.py     — Evidence → структурированные ответы
 ├── text_templates.py / service_phrase.py — шаблоны и фразы
 ├── self_check.py           — critic-гейт (само-проверка LLM-ответа)
 ├── prompt_contracts.py / prompt_registry.py — контракты и реестр prompt'ов
 ├── evidence_keys.py / mess_types.py / city.py / runtime_config.py
-├── prompts/                — prompt'ы (ДУБЛЬ: см. ниже)
-├── eval_suite/             — 62 эталонных диалога (critical/extended/server_parity/prepare_wrap)
-├── scripts/                — eval-стадии, аудиты, проверка архитектурных импортов
-└── services/               — доменный слой (бывший монолит services.py 7288 стр., распилен)
+├── prompts/                — prompt'ы (ДУБЛЬ с app_data/prompts/mr_*)
+├── eval_suite/             — эталонные диалоги (remote eval)
+└── services/               — доменный слой (бывший монолит, распилен — см. §1.1)
     ├── core.py             — Services dataclass + lifecycle + кеш-хелперы
-    ├── _common.py          — базовые утилиты (_normalise_input, runtime_*)
-    ├── prices.py / _prices_helpers.py     — цены, family-mode, модификаторы (~2360 стр.)
-    ├── doctors.py / _doctors_helpers.py   — врачи, расписание, специальности (~1470 стр.)
+    ├── _common.py          — базовые утилиты
+    ├── prices.py / _prices_helpers.py     — цены, family-mode, модификаторы
+    ├── doctors.py / _doctors_helpers.py   — врачи, расписание, специальности
     ├── prepare.py / _prepare.py           — PREPARE: скоринг + relevance-gate + LLM-wrap
     ├── lab_tests.py        — test_assist / test_result_status
     ├── addresses.py / _addresses_helpers.py / _regions.py — адреса, филиалы, часы
@@ -161,100 +144,21 @@ messengers_router/
     └── news.py             — новости
 ```
 
-### ⚠️ Prompt'ы в двух локациях (правило проекта)
-Шаблоны рендерера/критика живут в **двух** местах и должны быть синхронны:
-`messengers_router/prompts/*` **и** `app_data/prompts/mr_*`.
-На 01.06 копии `renderer_patient*` и `renderer_critic_*` **байт-в-байт идентичны** (дрейфа нет). Если FT/ты трогаешь эти prompt'ы — меняй обе копии.
+Бэкенд — один **Nayka site API** (`agent_logic_2/nayka_api/api_nayka.py`), клиника в Самаре. `Services` — фасад с дневным кешем каталогов в `agent_logic_2/nayka_api/apidata/*.jsonl` (датированные файлы). Гео-граница: онлайн-запись только по самарским филиалам; врачи могут вести приём и в другом городе (тогда оставляем самарское присутствие).
 
 ---
 
-## 6. Сервисный слой и бэкенд (Nayka)
-
-- Один бэкенд — **Nayka site API** (`agent_logic_2/nayka_api/api_nayka.py`), клиника в Самаре.
-- `Services` (в `core.py`) — фасад с дневным кешем каталогов (врачи, цены, service_info, regions) в `agent_logic_2/nayka_api/apidata/*.jsonl` (датированные файлы).
-- **Расписание:** `_fetch_schedule_source` различает (свежий коммит `39fb9cc`) **сбой CRM** (`ScheduleSourceUnavailable` → честный handoff/stale-fallback) от **«врача нет»** (пусто без handoff). Молчаливые сбои fetch теперь логируются WARNING.
-- **Гео-граница:** онлайн-запись — только самарские филиалы; врачи могут вести приём и в Самаре, и в другом городе (тогда оставляем самарское присутствие, обрезаем регионы).
-
-> Свежий каркас аудита API — [`nayka_site_api_live_audit_latest.md`](nayka_site_api_live_audit_latest.md).
-
----
-
-## 7. Рендеринг и self-check
-
-- Два пути: **детерминированный** рендер (`renderer.py` / `response_builder.py`) и **LLM rich-renderer** (prompt `renderer_patient_rich`), у которого override синхронизирован с bundle-дефолтами (`0decce5`).
-- **Critic-гейт** (`self_check.py`): LLM-ответ прогоняется через критика на безопасность/соответствие; при «unsafe» → регенерация. Схему критика см. в `prompts/renderer_critic_patient_alignment.txt` (там сейчас есть мелкий битый JSON-пример — поправить, см. чекап).
-
----
-
-## 8. Что изменилось за последние коммиты (≥10)
-
-Свежий слой — это тема **«честность и надёжность вместо блефа»** + **анти-зацикливание**. Самое полезное для FT — перенять *поведенческие принципы*, а не реализацию.
-
-**Честность по расписанию/записи (не обещать то, чего нет):**
-- `39fb9cc` — отличать **сбой CRM** от **«врача нет»**: при сбое — честный handoff или stale-данные, не вводящее в заблуждение «расписание не найдено». Молчаливые сбои → WARNING.
-- `b54853a` — честный ответ «слотов нет → оператор» в APPOINTMENT-превью (раньше падал в «расписание не найдено» на пустом расписании). Общий хелпер `_no_free_slots_operator_offer`.
-- `009fe7f` — честный отказ для врача **не из самарского** каталога: вместо слепого списка из 5 филиалов — «запись через бота только по Самаре + оператор» (сигнал `doctor_lookup="unresolved"`).
-- `277e561` — `TEST_RESULT` разрешён для любого города (обход самарского гейта — статус результата география не ограничивает).
-
-**Анти-зацикливание / эскалация на оператора:**
-- `ebaf794` + `ef354c5` — если бот повторяет одинаковый ответ N раз → интерактивный оффер оператора (O4).
-- `acc8950` — но внутри активного APPOINTMENT-флоу repeat-guard пропускается (там повтор уместен).
-
-**NLU:**
-- `1f0acd3` — rescue: явный `rule.label=PRICE` спасается, когда LLM-merge уронил в `OTHER` (узкий гейт строго по OTHER, не перехватывает уверенные APPOINTMENT/ADDRESS).
-- `fca8cef` — «чекап» держится **широким** запросом: это категория (Ежегодный/Мужской/Женский/…), а не одна услуга → `test_assist` возвращает всё семейство, а не одну строку.
-
-**Lab / PREPARE / цены (per-item точность, без выдумок):**
-- `703e3e8` — compound «ОАК, Ферритин, Витамин Д, …» резолвится **по каждому пункту** из каталога.
-- `d448ac9` — prompt: **запрещено выдумывать** цены/сроки для multi-item lab-запросов.
-- `0079851` + `462416d` + `e4a1a94` — «во сколько/когда сдать кровь» → памятка о заборе крови + адреса филиалов с часами; planner ставит `test_prepare` для запросов про тайминг визита.
-- `5d82d3e` — сбрасывать конфликтующий устаревший анализ, если биоматериал отличается.
-- `4e14715` — «антитела на корь» → «Вирус кори Ig M/Ig G».
-- `3f9a5d1` — prompt: не предлагать «записать» на лабораторные анализы (их не бронируют).
-
-**Адреса/часы:**
-- `063c306` — восстановлены часы работы филиалов («График») из структурированных полей `/regions`.
-
----
-
-## 9. Известные проблемы (НЕ переноси в FT)
-
-Полный список и статус — [`messengers_router_checkup_2026-06-01.md`](messengers_router_checkup_2026-06-01.md). Статус на 2026-06-01:
-- ✅ Гейт `pytest` снова **зелёный** (`841 passed, 0 failed`, ruff clean) — красный гейт закрыт.
-- ✅ **HIGH:** H1 (грундер «профиль 1»→«профиль 2», `a50b11a`), H2 (протухший `no_free_slots` выбрасывал реальное расписание, `4e3469d`), H3 (`@lru_cache` кешировал «врач не найден», `1c609c7`).
-- ✅ **MEDIUM:** M2 (multi-word несамарский город в гео-гейте), M3 (over-broad regex модификаторов цены `ген`/`экспресс`/`дет`), M4 (scorer по очищенным токенам — короткие аббревиатуры со стоп-словом), M5 (доступность не того врача при FIO-промахе), M6 (через снос `appointment_help`).
-- ✅ **Чистка:** снесён недостижимый сервис `appointment_help`; мёртвый PREPARE-скоринг, осиротевшие state-сеттеры, nonbookable-кластер; битый JSON-литерал в critic-prompt (U8).
-- 🟡 **Ещё открыто (маргинальное):** M1 (clarify_gate коды, спит под `legacy_v2`), edge «где сдать <abbrev>», мелкий dead-code/дублирование — см. [чекап](messengers_router_checkup_2026-06-01.md).
-
-**Уроки для FT-дизайна:** (1) не кешируй то, что зависит от изменяемого каталога; (2) при множественных кандидатах сбрасывай «негативные» причины при успешном матче; (3) сравнивай запрос с услугой по *очищенным* токенам, не по сырой строке; (4) гео-гейты должны понимать multi-word значения от LLM.
-
----
-
-## 10. Как запускать локально
-
-```bash
-# гейт (должен быть зелёным; сейчас НЕ зелёный — см. чекап)
-venv/bin/ruff check messengers_router/
-PYTHONPATH=. venv/bin/python -m pytest tests/ --ignore=tests/eval -q
-
-# remote eval (к живому серверу) — один раз перед/после деплоя, не на каждый шаг
-./run_remote_eval.sh --url http://172.16.0.16/api/messenger-generate-once
-```
-Прод — через Docker rebuild (`--build`) на тест-сервере после `release`.
-
-> Кеш-нюанс: локальный pytest берёт датированные Nayka-кеши из `agent_logic_2/nayka_api/apidata/`. Если день «перекатился» — гидрируй текущие `doctors_*/price_*/service_info_*.jsonl`, иначе live-зависимые тесты упадут по среде, а не по логике.
-
----
-
-## 11. Где правда
+## 4. Где правда
 
 | Вопрос | Источник |
 |--------|----------|
-| Как работает MR сейчас | **этот файл** |
+| Как MR работает сейчас | **этот файл** (§2–3) |
+| Что изменилось с 20.04 | **этот файл §1** |
 | Контракт сущностей | `russian_nlu.ENTITY_WHITELIST` (код — единственная правда) |
 | Инструменты | `planner.py` + `executor.py` |
 | Handoff-сообщения | `policies.HANDOFF_REASON_MATRIX` |
-| Снимок модулей (апр.) | `CHANGELOG_MAR_APR_2026.md` |
-| История рефакторинга | `messengers_router_refactor_plan.md` (журнал, частично устарел) |
-| Баги/долг на 01.06 | `messengers_router_checkup_2026-06-01.md` |
+| История рефакторинга (Stages 0–22) | `messengers_router_refactor_plan.md` (журнал на 20.04, частично устарел) |
+| Снимок модулей (апр.) | `CHANGELOG_MAR_APR_2026.md` (22.04) |
+| Баги / долг на 01–02.06 | `messengers_router_checkup_2026-06-01.md` |
+| Журнал живых багов + инварианты | `messengers_router_bug_log.md` |
 | Бэкенд Nayka | `nayka_site_api_live_audit_latest.md` |
