@@ -15,20 +15,31 @@
 
 ## ✅ Статус исправлений — обновлено 2026-06-01 (эта сессия)
 
-Красный гейт и **все 3 HIGH-бага закрыты.** Гейт: было `3 failed, 831 passed` + 2× ruff F401 → стало **`839 passed, 0 failed`, ruff clean.** 7 атомарных коммитов на `release` (каждый с red→green-тестом; после каждого прогонялся полный гейт):
+**Батч 1 — красный гейт + HIGH-баги (задеплоен).** Было `3 failed, 831 passed` + 2× ruff F401 → `839 passed, ruff clean`. Каждый коммит с red→green-тестом + полный гейт:
 
-| Находка | Коммит | Статус |
-|---|---|---|
-| Падающий тест #1 — compound `compound_clarify`→`lab` | `7bea980` | ✅ исправлено |
-| H1 / падающий тест #2 — walk-in «профиль 1»→«профиль 2» | `a50b11a` | ✅ |
-| Падающий тест #3 — unit-имена дерматолог/челюстно-лицевой из live-кэша | `490a8e2` | ✅ |
-| 2 мёртвых импорта (ruff F401: `typing.Any`, `canonicalise_unit`) | `6ee5922` | ✅ |
-| **H2** — протухший `no_free_slots` выбрасывает реальное расписание | `4e3469d` | ✅ |
-| **H3** — `@lru_cache` на `_extract_doctor_name` кеширует «врач не найден» | `1c609c7` | ✅ |
+| Находка | Коммит |
+|---|---|
+| #1 compound `compound_clarify`→`lab` | `7bea980` |
+| H1/#2 walk-in «профиль 1»→«профиль 2» | `a50b11a` |
+| #3 unit-имена дерматолог/челюстно-лицевой из live-кэша | `490a8e2` |
+| 2 мёртвых импорта (ruff F401) | `6ee5922` |
+| **H2** протухший `no_free_slots` выбрасывал реальное расписание | `4e3469d` |
+| **H3** `@lru_cache` на `_extract_doctor_name` кешировал «врач не найден» | `1c609c7` |
+| eval: `CRIT_APPT_KIM_LOOP` устойчив к live no-slots | `de80bfa` |
 
-**Следующий шаг:** one-shot remote eval / Docker rebuild на этой партии (по eval-workflow) — деплой-чекпойнт перед дальнейшими правками.
+**Батч 2 — MEDIUM + чистка мёртвого кода (не задеплоен).** Гейт `841 passed, 0 failed`, ruff clean:
 
-**Ещё открыто** (разделы 2–5 ниже не тронуты): MEDIUM-баги M1–M6, мёртвый код (`appointment_help` и пр.), дублирование, useless/obsolete.
+| Находка | Коммит |
+|---|---|
+| Мёртвый PREPARE serviceInfoAll-скоринг (D2/D3/D5) | `f0b73e9` |
+| Осиротевшие state-сеттеры + `_specialty_terms` (D6/D11) | `9802bfb` |
+| Мёртвый `_static_nonbookable_branches` кластер (D4) | `f8a3b76` |
+| **M3** over-broad regex модификаторов цены (genetic/cito/child) | `e832707` |
+| **M2** multi-word несамарский город в гео-гейте | `978c57c` |
+
+**Следующий шаг:** деплой-чекпойнт батча 2 (one-shot remote eval + Docker rebuild).
+
+**Ещё открыто:** MEDIUM — M1 (clarify_gate машинные коды, спит под `legacy_v2`), M4 (scorer по сырой строке), M5 (доступность не того врача при FIO-промахе), M6 (sentinel в недостижимом `appointment_help`); мёртвый код — недостижимый сервис `appointment_help` (D1), write-only `dialog_graph` (D8), фантом `CANCEL_CONFIRM` (D9), `ek.ATTACHMENTS` (D13), мёртвая reschedule-ветка (D14), tax-fallback (D15), `_merge(llm_mode)` (D16), опечатка-ключ « филиал»; дублирование (`route_patient_message`, lab-variant фильтр ×4, стоп-слова ×3); useless/obsolete (битый JSON в critic-prompt, словоформы в `topic_registry`).
 
 > Разделы 0–1 ниже оставлены как исходная картина «до» (для контекста); актуальный статус — в таблице выше.
 
