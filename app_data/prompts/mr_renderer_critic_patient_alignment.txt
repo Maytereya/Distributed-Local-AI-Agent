@@ -6,8 +6,7 @@
   "aligned_with_user_intent": true|false,
   "fact_consistency": true|false,
   "state_consistency": true|false,
-  "unsafe_or_policy_violation": tr
-  ue|false,
+  "unsafe_or_policy_violation": true|false,
   "score": 0.0-1.0,
   "reason_short": "краткая причина, до 200 символов"
 }
