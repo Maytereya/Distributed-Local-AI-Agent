@@ -718,6 +718,39 @@ def _resolve_best_price_row_from_queries(
     return best_row, best_score, best_matched
 
 
+def _alias_overrides_explicit_primary(
+    alias_hit: str,
+    current_service_name: str,
+    query_text: str,
+) -> bool:
+    """
+    Проверяет, перебивает ли alias-хит явную primary-услугу в compound-запросе.
+
+    Catalog-alias резолвер возвращает первую попавшуюся услугу по алиасу и может
+    схватить вторичную лабораторную позицию из запроса вида
+    «<primary> и сдать кровь на <lab>», перекрыв уже выбранную primary-услугу.
+    Если primary (``current_service_name``) явно задана, отличается от алиаса и её
+    токены присутствуют в этой реплике — это compound, и alias не должен делать
+    short-circuit: пусть scored-matcher ниже корректно ранжирует primary из текста.
+    Для честного topic-switch («а сколько стоит ЛПНП?») и synonym-запросов primary
+    в реплике отсутствует, поэтому alias сохраняется.
+
+    :param alias_hit: услуга, к которой привёл alias-резолвер
+    :param current_service_name: уже выбранная primary-услуга из state
+    :param query_text: исходный текст пользователя
+    :return: True, если alias нужно подавить (compound с присутствующей primary)
+    """
+
+    current_norm = _normalise_input(current_service_name)
+    if not current_norm or current_norm == _normalise_input(alias_hit):
+        return False
+    primary_tokens = _price_query_tokens(current_service_name)
+    if not primary_tokens:
+        return False
+    query_tokens = set(_price_query_tokens(query_text))
+    return all(token in query_tokens for token in primary_tokens)
+
+
 def resolve_price_service_name_from_catalog(
     query_text: str,
     *,
@@ -750,7 +783,9 @@ def resolve_price_service_name_from_catalog(
         return None
 
     alias_hit = _resolve_price_alias_from_catalog(query_text, catalog_rows)
-    if alias_hit:
+    if alias_hit and not _alias_overrides_explicit_primary(
+        alias_hit, current_service_name, query_text
+    ):
         return alias_hit
 
     prefer_query_over_context = _should_prefer_current_price_query_over_context(query_text, current_service_name)

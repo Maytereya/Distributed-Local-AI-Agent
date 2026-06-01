@@ -3729,6 +3729,45 @@ def test_service_bundle_info_compound_price_query_returns_clarify(monkeypatch):
     assert list(res.get("compound_price_services") or []) == ["УЗДГ сосудов шеи", "ЛПНП"]
 
 
+def test_resolve_price_service_keeps_primary_in_compound_query():
+    # Regression guard: the catalog alias resolver must NOT grab the secondary lab
+    # item («ЛПНП») and override an explicit primary that is itself present in the
+    # compound utterance — otherwise service_bundle_info loses compound_clarify.
+    from messengers_router.services._prices_helpers import (
+        resolve_price_service_name_from_catalog,
+    )
+
+    rows = [
+        {"serviceName": "УЗДГ сосудов шеи", "cost": 1800},
+        {"serviceName": "ЛПНП", "cost": 450},
+    ]
+    got = resolve_price_service_name_from_catalog(
+        "обследование уздг сосудов шеи и сдать кровь на ЛПНП, какова стоимость?",
+        current_service_name="УЗДГ сосудов шеи",
+        rows=rows,
+    )
+    assert got == "УЗДГ сосудов шеи"
+
+
+def test_resolve_price_service_still_switches_on_pure_lab_query():
+    # The fix must not over-correct: an honest topic-switch to a new service
+    # (primary absent from this turn) must still resolve via the alias.
+    from messengers_router.services._prices_helpers import (
+        resolve_price_service_name_from_catalog,
+    )
+
+    rows = [
+        {"serviceName": "УЗДГ сосудов шеи", "cost": 1800},
+        {"serviceName": "ЛПНП", "cost": 450},
+    ]
+    got = resolve_price_service_name_from_catalog(
+        "а сколько стоит ЛПНП?",
+        current_service_name="УЗДГ сосудов шеи",
+        rows=rows,
+    )
+    assert got == "ЛПНП"
+
+
 def test_service_bundle_info_enriches_tonsillotomy_with_care_setting(monkeypatch):
     svc = Services()
 
