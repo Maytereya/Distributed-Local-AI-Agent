@@ -54,6 +54,34 @@
 
 ---
 
+## 🔎 Task 1 — аудит класса «защитная ветка есть, но запрос её обходит» (2026-06-02)
+
+**Метод:** 3 параллельных read-only фокус-ревью-агента (ungrounded re-injection / soft-fallback honesty / planner-state divergence), находки верифицированы чтением кода + live-эндпоинтом + детерминированным локальным трейсом. Корень A′ запинен точно (не угадан).
+
+**Класс:** защитная функция санирует один объект (`decision.entities`), а потребитель читает другой (`state.last_entities`), куда сущность попадает вторым, негрундированным путём. Либо honest-refuse-ветка обходится мягким fallback'ом.
+
+**✅ Исправлено (этой сессией):**
+
+| # | Находка | Где | Коммит |
+|---|---|---|---|
+| A′-1 | quick-fill повторно извлекает `service_name` из user_text → state мимо грундера (корень BUG-2026-06-01-01) | [policies.py:1470](../messengers_router/policies.py) + [router.py:2106-2145](../messengers_router/router.py) | `f12096d` |
+| A′-2 | stale `specialty` из прошлой темы обходил B′-гвард (читал stale state) | [planner.py](../messengers_router/planner.py) build_plan | `b5795f2` |
+
+Подробности и инвариант — `docs/messengers_router_bug_log.md` → **BUG-2026-06-02-01**.
+
+**🟡 Подтверждено, отложено (сиблинги класса, по решению владельца):**
+
+| # | Находка | Где | Sev | Заметка |
+|---|---|---|---|---|
+| A′-3 | quick-fill `test_goal = user_text[:200]` (негрундирован) → `test_assist` | [policies.py:1466-1468](../messengers_router/policies.py) | MED | поисковый запрос, не бронируемая цель; тот же механизм, что A′-1 |
+| A′-disp | карточка записи показывает stale lab-`service_name`, если врач не указан (strip гейтится `doctor_name`) | [policies.py:2179](../messengers_router/policies.py) | MED | display-слой; после A′-1/A′-2 достигается редко |
+| B-1 | `_schedule_by_specialty` глотает `ScheduleSourceUnavailable` (`except Exception`) → CRM-сбой рендерится как «расписание не найдено» вместо honest-handoff (named-doctor путь честный — расхождение) | [doctors.py:266-267](../messengers_router/services/doctors.py) | MED | нужен сбой CRM; класс H2/`39fb9cc`, не покрыт в specialty-агрегации |
+| B-2 | LLM-метка safety (URGENT/COMPLAINT/MED_ADVICE) из `nlu_route` обходит детерминированный safety-шаблон (он гейтится `short_circuit`, который ставит только regex-`early_guards`) | [nlu_pipeline.py:97](../messengers_router/nlu_pipeline.py) + [orchestrator.py:521](../messengers_router/orchestrator.py) | потенц. HIGH (безопасность) | структурно подтверждён; достижимость зависит от прод-NLU-конфига. Защитный фикс: гейтить шаблон по `decision.label ∈ SAFETY`, а не по `short_circuit`. **Нужно подтверждение владельца по прод-конфигу.** |
+
+**⬇️ Понижено при проверке:** M1 (clarify машинные коды) — на проде НЕ воспроизвёлся (`clarify_needed=False`, ответ нормальный русский). Дремлет под `legacy_v2`, как и заявлено выше. Ordering-баг в коде есть (clarify_gate отдаёт код ДО recovery-хуманайзера), но не срабатывает в прод-дефолте → LOW/latent.
+
+---
+
 ## 0. 🔴 Красный гейт — падающие тесты (чинить первым)
 
 Документированная gate-команда (`PYTHONPATH=. venv/bin/python -m pytest tests/ --ignore=tests/eval -q`) на текущем `release` даёт **3 failed**:
