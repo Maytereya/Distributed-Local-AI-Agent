@@ -27,7 +27,7 @@
 | **H3** `@lru_cache` на `_extract_doctor_name` кешировал «врач не найден» | `1c609c7` |
 | eval: `CRIT_APPT_KIM_LOOP` устойчив к live no-slots | `de80bfa` |
 
-**Батч 2 — MEDIUM + чистка мёртвого кода (не задеплоен).** Гейт `841 passed, 0 failed`, ruff clean:
+**Батч 2 — MEDIUM + чистка мёртвого кода (задеплоен, eval ✅).** Гейт `841 passed, 0 failed`, ruff clean:
 
 | Находка | Коммит |
 |---|---|
@@ -37,9 +37,18 @@
 | **M3** over-broad regex модификаторов цены (genetic/cito/child) | `e832707` |
 | **M2** multi-word несамарский город в гео-гейте | `978c57c` |
 
-**Следующий шаг:** деплой-чекпойнт батча 2 (one-shot remote eval + Docker rebuild).
+**Батч 3 — оставшееся ценное (не задеплоен).** Гейт `841 passed, 0 failed`, ruff clean:
 
-**Ещё открыто:** MEDIUM — M1 (clarify_gate машинные коды, спит под `legacy_v2`), M4 (scorer по сырой строке), M5 (доступность не того врача при FIO-промахе), M6 (sentinel в недостижимом `appointment_help`); мёртвый код — недостижимый сервис `appointment_help` (D1), write-only `dialog_graph` (D8), фантом `CANCEL_CONFIRM` (D9), `ek.ATTACHMENTS` (D13), мёртвая reschedule-ветка (D14), tax-fallback (D15), `_merge(llm_mode)` (D16), опечатка-ключ « филиал»; дублирование (`route_patient_message`, lab-variant фильтр ×4, стоп-слова ×3); useless/obsolete (битый JSON в critic-prompt, словоформы в `topic_registry`).
+| Находка | Коммит |
+|---|---|
+| **M5** доступность не того врача при FIO-промахе | `3b00034` |
+| **D1 / M6** недостижимый сервис `appointment_help` снесён | `9c92658` |
+| **U8** битый JSON-литерал в critic-prompt | `0675bff` |
+| **M4** scorer по сырой строке (короткие аббревиатуры со стоп-словом) | `bf6f69b` |
+
+**Следующий шаг:** деплой-чекпойнт батча 3 (one-shot remote eval + Docker rebuild).
+
+**Ещё открыто (маргинальное / низкий приоритет):** MEDIUM — M1 (clarify_gate машинные коды, спит под `legacy_v2`); M4-остаток «где сдать <abbrev>» (address-intent стоп-слова не чистятся). Мёртвый код — write-only `dialog_graph` (D8), фантом `CANCEL_CONFIRM` (D9), `ek.ATTACHMENTS` (D13), мёртвая reschedule-ветка (D14), tax-fallback (D15), `_merge(llm_mode)` (D16), опечатка-ключ « филиал». Дублирование (`route_patient_message`, lab-variant фильтр ×4, стоп-слова ×3); useless (словоформы в `topic_registry`). Всё это — рефакторинг/edge, не баги с пациент-импактом.
 
 > Разделы 0–1 ниже оставлены как исходная картина «до» (для контекста); актуальный статус — в таблице выше.
 
