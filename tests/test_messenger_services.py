@@ -593,6 +593,55 @@ def test_doctors_schedule_week_doctor_not_found_string_yields_empty_no_handoff(m
     assert res.get("schedule_unavailable_reason") is None
 
 
+def test_doctors_schedule_week_clears_stale_no_slots_reason_on_later_match(monkeypatch):
+    """Regression (H2): an early surname variant returns "no free slots" (sets
+    schedule_unavailable_reason), then a LATER variant matches a real schedule.
+    The reason must be cleared on the successful match — otherwise the patient
+    is wrongly told «слотов нет → оператор» while real slots exist."""
+    svc = Services()
+
+    async def fake_doctors():
+        return [
+            {
+                "id": 1,
+                "fio": "Кузнецова Анна Ивановна",
+                "specialization": "терапевт",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+            }
+        ]
+
+    async def fake_regions():
+        return [
+            {"id": 100, "city": "Самара", "addressForSite": "г. Самара, пр. Ленина, 5"}
+        ]
+
+    async def fake_payload(candidate, _region_name=None):
+        # surname_variants("Кузнецова") == ["Кузнецова", "Кузнецов"]: the feminine
+        # variant is tried first and reports no free slots; the masculine variant
+        # resolves to a real Samara schedule with an open slot.
+        if str(candidate).strip().lower().endswith("а"):
+            return [{"_no_free_slots": True, "fio": str(candidate)}]
+        return [
+            {
+                "fio": "Кузнецов Иван Петрович",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "schedule": {"г. Самара, пр. Ленина, 5": ["2026-06-10 10:00"]},
+            }
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_doctors)
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_regions)
+    monkeypatch.setattr(svc, "_get_schedule_payload_cached", fake_payload)
+
+    res = run(svc.doctors_schedule_week("расписание", {"doctor_name": "Кузнецова"}))
+
+    assert res.get("schedule"), f"real schedule with a slot must survive, got {res!r}"
+    assert res.get("schedule_unavailable_reason") is None, (
+        f"stale no-slots reason leaked despite a real match: "
+        f"{res.get('schedule_unavailable_reason')!r}"
+    )
+
+
 def test_doctors_schedule_week_api_error_string_serves_stale(monkeypatch):
     """При строке-ошибке CRM отдаём последний валидный (positive) ответ из
     stale-окна, если он есть — и без удвоения вызовов retry-петлёй (api_error

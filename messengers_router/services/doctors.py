@@ -817,6 +817,9 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
                 continue
             if isinstance(data, list) and data and _schedule_payload_matches_doctor(data, candidate):
                 last_name = candidate
+                # Нашли реальное расписание — гасим протухший «нет слотов»,
+                # выставленный более ранним кандидатом-вариантом фамилии.
+                schedule_unavailable_reason = None
                 break
             if region_name:
                 data = await self._get_schedule_payload_cached(candidate, None)
@@ -827,6 +830,7 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
                     continue
                 if isinstance(data, list) and data and _schedule_payload_matches_doctor(data, candidate):
                     last_name = candidate
+                    schedule_unavailable_reason = None
                     break
     except Exception:
         return _service_fallback(
