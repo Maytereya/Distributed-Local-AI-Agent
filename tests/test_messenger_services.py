@@ -4501,3 +4501,39 @@ def test_prepare_blood_no_specific_rules_falls_back_to_general_memo(monkeypatch)
     # моча/кал — общей памятки нет, остаётся прежний clarify
     assert "blood-collection" not in str(urine.get("note")), urine.get("note")
     assert "живой очереди" not in str(urine.get("prepare") or "")
+
+
+@pytest.mark.parametrize(
+    "query,canonical,expected",
+    [
+        # ложная подмена: общий «узи органов», различающее слово не совпадает
+        ("УЗИ органов пищеварения", "Ультразвуковое исследование органов мошонки", False),
+        ("узи жтк + почки", "Ультразвуковое исследование плаценты", False),
+        # легитимные: различающий токен запроса есть в каноне
+        ("УЗИ почек", "Ультразвуковое исследование почек и надпочечников", True),
+        ("УЗИ печени и желчного пузыря", "Ультразвуковое исследование печени и желчного пузыря", True),
+        ("узи брюшной полости", "Ультразвуковое исследование органов брюшной полости (печень)", True),
+        ("общий анализ крови", "Общий анализ крови (Le, Er, Hb, СОЭ)", True),
+        ("стоимость ттг", "ТТГ (тиреотропный гормон)", True),
+    ],
+)
+def test_scorer_match_distinctive_overlap_guard(query, canonical, expected):
+    # BUG-2026-06-02-07: скорер прайс-каталога не должен подменять услугу, если
+    # РАЗЛИЧАЮЩИЙ токен запроса отсутствует в каноне («узи органов пищеварения» !=
+    # «узи органов мошонки»). Класс-инвариант проверки доверия скорер-матчу.
+    from messengers_router.services._prices_helpers import _scorer_match_has_distinctive_overlap
+
+    assert _scorer_match_has_distinctive_overlap(query, canonical) is expected
+
+
+def test_match_catalog_service_no_wrong_organ_substitution():
+    # End-to-end инвариант на живом каталоге: «УЗИ органов пищеварения» / «жтк + почки»
+    # НЕ должны грундиться в «...мошонки»/«...плаценты». Лучше miss (→ уточнение),
+    # чем чужая услуга. Легитимный матч (различающий токен в каноне) сохраняется.
+    s = Services()
+    for q in ("УЗИ органов пищеварения", "узи жтк + почки"):
+        m = asyncio.run(s.match_catalog_service(q))
+        canon = str(m.get("canonical") or "").lower()
+        assert "мошонк" not in canon and "плацент" not in canon, (q, m)
+    ok = asyncio.run(s.match_catalog_service("УЗИ почек"))
+    assert "почек" in str(ok.get("canonical") or "").lower(), ok

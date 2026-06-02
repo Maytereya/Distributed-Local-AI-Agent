@@ -751,6 +751,43 @@ def _alias_overrides_explicit_primary(
     return all(token in query_tokens for token in primary_tokens)
 
 
+# Generic-стволы УЗИ/процедур, которые НЕ различают конкретную услугу. Для
+# проверки доверия скорер-матчу важны именно РАЗЛИЧАЮЩИЕ токены (орган/анализ),
+# а не общее «узи»/«исследование».
+_GENERIC_SERVICE_PREFIXES = ("узи", "ультразвук", "исследов", "орган")
+
+
+def _distinctive_service_tokens(text: str) -> set[str]:
+    out: set[str] = set()
+    for t in _price_query_tokens(text):
+        if len(t) < 3:
+            continue
+        if any(t.startswith(g) or g.startswith(t) for g in _GENERIC_SERVICE_PREFIXES):
+            continue
+        out.add(t)
+    return out
+
+
+def _scorer_match_has_distinctive_overlap(query_text: str, canonical: str) -> bool:
+    """True, если у скорер-кандидата есть пересечение РАЗЛИЧАЮЩИХ токенов с запросом.
+
+    Защита от ложной подмены услуги (BUG-2026-06-02-07): «УЗИ органов пищеварения»
+    скорер тянет на «УЗИ органов мошонки» по общему «узи органов», игнорируя
+    различающее «пищеварения». Если ни один различающий токен запроса не встречается
+    в каноне — это подмена, скорер-результату доверять нельзя. Alias-путь сюда не
+    попадает (он отрабатывает раньше), поэтому аббревиатуры (ОАК и т.п.) не задеты.
+    """
+    q = _distinctive_service_tokens(query_text)
+    if not q:
+        return True  # нет различающих токенов — судить не о чем, не блокируем
+    canon_tokens = set(re.findall(r"[a-zа-яё0-9]+", _normalise_input(canonical)))
+    for qt in q:
+        for ct in canon_tokens:
+            if qt == ct or (len(qt) >= 4 and len(ct) >= 4 and qt[:4] == ct[:4]):
+                return True
+    return False
+
+
 def resolve_price_service_name_from_catalog(
     query_text: str,
     *,
@@ -794,7 +831,9 @@ def resolve_price_service_name_from_catalog(
         if text_only_queries:
             best_row, best_score, _ = _resolve_best_price_row_from_queries(text_only_queries, catalog_rows)
             if best_row and best_score >= 100:
-                return str(best_row.get("serviceName") or best_row.get("name") or "").strip() or None
+                canonical = str(best_row.get("serviceName") or best_row.get("name") or "").strip()
+                if canonical and _scorer_match_has_distinctive_overlap(query_text, canonical):
+                    return canonical
 
     queries = _build_price_catalog_queries(query_text, current_service_name=current_service_name)
     if not queries:
@@ -806,7 +845,10 @@ def resolve_price_service_name_from_catalog(
         return None
     if best_score < 100:
         return None
-    return str(best_row.get("serviceName") or best_row.get("name") or "").strip() or None
+    canonical = str(best_row.get("serviceName") or best_row.get("name") or "").strip()
+    if canonical and not _scorer_match_has_distinctive_overlap(query_text, canonical):
+        return None
+    return canonical or None
 
 
 def _is_city_only_reply(query: str) -> bool:
