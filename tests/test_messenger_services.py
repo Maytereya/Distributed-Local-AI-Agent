@@ -1646,7 +1646,10 @@ def test_test_prepare_no_matches_returns_clarify_without_handoff(monkeypatch):
     monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
     monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
 
-    res = run(svc.test_prepare("подготовка к анализу крови", {}))
+    # Не-кровяной субъект: общей памятки нет, поэтому на «нет совпадений» остаётся
+    # clarify (для крови с BUG-2026-06-02-05 теперь отдаётся памятка — см.
+    # test_prepare_blood_no_specific_rules_falls_back_to_general_memo).
+    res = run(svc.test_prepare("подготовка к гастроскопии", {}))
 
     assert "подготов" in str(res.get("prepare") or "").lower()
     assert res.get("handoff_required") is not True
@@ -4472,3 +4475,29 @@ def test_address_info_uses_regions_service_flag_not_care_setting_hardcode():
     assert any("Победы, 83" in a for a in addrs), addrs
     assert not any("Гагарина, 12" in a for a in addrs), addrs  # usi=False исключён
     assert len(addrs) == 2, addrs  # care-setting хардкод дал бы ровно 1 «Ленина 5»
+
+
+def test_prepare_blood_no_specific_rules_falls_back_to_general_memo(monkeypatch):
+    # BUG-2026-06-02-05: когда конкретных правил подготовки нет, но вопрос про
+    # сдачу КРОВИ — отдаём общую памятку забора крови (применима к любой сдаче
+    # крови), а не clarify «уточните название». Для мочи/кала — прежний clarify.
+    # Класс-инвариант: источники правил замоканы пустыми, проверяем именно fallback.
+    from messengers_router.services import prepare as prep_mod
+
+    s = Services()
+
+    async def _empty_api(q, ent):
+        return []
+
+    monkeypatch.setattr(s, "_prepare_candidates_from_analysis_api_cache", _empty_api)
+    monkeypatch.setattr(prep_mod.meilisearch, "search_meili", lambda *a, **k: "")
+
+    blood = asyncio.run(s.test_prepare("Какая подготовка к сдаче крови на РедкийАнализ123", {}))
+    urine = asyncio.run(s.test_prepare("Какая подготовка к сдаче мочи на РедкийАнализ123", {}))
+
+    assert "blood-collection general guidance" in str(blood.get("note")), blood.get("note")
+    blood_text = str(blood.get("prepare") or "")
+    assert "живой очереди" in blood_text and "натощак" in blood_text and "паспорт" in blood_text
+    # моча/кал — общей памятки нет, остаётся прежний clarify
+    assert "blood-collection" not in str(urine.get("note")), urine.get("note")
+    assert "живой очереди" not in str(urine.get("prepare") or "")

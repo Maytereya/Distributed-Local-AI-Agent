@@ -632,6 +632,18 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
             "prepare_wrap_reason": wrap_reason,
         }
 
+    # Конкретные правила подготовки не нашлись. Если вопрос про сдачу КРОВИ —
+    # отдаём общую памятку забора крови (фиксированная, предоставлена клиникой)
+    # вместо clarify: эти правила применимы к ЛЮБОЙ сдаче крови (живая очередь,
+    # строго натощак, паспорт). Для мочи/кала и пр. общей памятки нет → прежний
+    # clarify. Универсально: триггер — биоматериал «кровь» в тексте запроса.
+    if _prepare_biomaterial(q) == "blood" or raw_material == "blood":
+        return {
+            "prepare": _BLOOD_COLLECTION_GUIDANCE,
+            "note": "prepare: blood-collection general guidance fallback",
+            "entities_used": entities,
+        }
+
     if saw_non_empty:
         return _prepare_clarify_response(q, entities, note="prepare: weak relevance")
 
