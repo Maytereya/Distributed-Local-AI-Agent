@@ -53,3 +53,47 @@ def test_weekend_regex_does_not_match_unrelated_words():
 def test_explicit_date_takes_precedence_over_weekend_word():
     out = parse_date_time_ru("25.05 в выходные", today=WED)
     assert out.get("date_from") == out.get("date_to") == "2026-05-25"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "На 03.06.2026",
+        "03.06.2026",
+        "03.06",
+        "запишите на 15.06.2026",
+        "2026-06-03",
+    ],
+)
+def test_dotted_date_does_not_produce_spurious_time(text):
+    # BUG-2026-06-02-06: дата DD.MM[.YYYY] не должна ловиться time-регэкспом как
+    # «HH:MM» (разделитель «.» совпадает с DD.MM). Класс-инвариант: цифровая дата
+    # даёт date_*, но НЕ time_*.
+    out = parse_date_time_ru(text, today=WED)
+    assert out.get("date_from"), text
+    assert "time_from" not in out, (text, out)
+    assert "time_to" not in out, (text, out)
+
+
+@pytest.mark.parametrize(
+    "text,expected_from,expected_to",
+    [
+        ("в 15.30", "15:30", "15:30"),
+        ("15.30", "15:30", "15:30"),  # как дата 15.30 невалидна (месяц 30) → время
+        ("к 9 утра", "09:00", "09:00"),
+        ("с 9 до 18", "09:00", "18:00"),
+    ],
+)
+def test_dotted_time_still_parsed(text, expected_from, expected_to):
+    # Обратная сторона инварианта: явное/валидное время «HH.MM» / «в HH.MM» не
+    # должно ломаться вырезанием дат (его и не вырезаем — это не валидная дата).
+    out = parse_date_time_ru(text, today=WED)
+    assert out.get("time_from") == expected_from, (text, out)
+    assert out.get("time_to") == expected_to, (text, out)
+
+
+def test_date_and_explicit_time_both_parsed():
+    # Дата вырезается только для поиска времени; явное «в 9» рядом сохраняется.
+    out = parse_date_time_ru("03.06.2026 в 9", today=WED)
+    assert out.get("date_from") == "2026-06-03"
+    assert out.get("time_from") == "09:00"

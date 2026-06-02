@@ -1162,6 +1162,9 @@ def parse_date_time_ru(text: str, today: date | None = None) -> dict[str, Any]:
     out: dict[str, Any] = {}
     s = (text or "").strip()
     low = s.lower()
+    # Спаны распознанных ЦИФРОВЫХ дат (DD.MM[.YYYY] / ISO) — их вырежем из текста
+    # перед поиском времени, чтобы дата не ловилась time-регэкспом как «HH:MM».
+    consumed_date_spans: list[tuple[int, int]] = []
 
     if _QF_NEXT_WEEK_RE.search(low):
         out["date_hint"] = "next_week"
@@ -1199,6 +1202,7 @@ def parse_date_time_ru(text: str, today: date | None = None) -> dict[str, Any]:
             if dt:
                 out["date_from"] = out["date_to"] = dt.isoformat()
                 out.pop("date_hint", None)
+                consumed_date_spans.append(mi.span())
 
     if "date_from" not in out:
         md = _QF_DATE_DOT_RE.search(s)
@@ -1214,6 +1218,7 @@ def parse_date_time_ru(text: str, today: date | None = None) -> dict[str, Any]:
             if dt:
                 out["date_from"] = out["date_to"] = dt.isoformat()
                 out.pop("date_hint", None)
+                consumed_date_spans.append(md.span())
 
     if "date_from" not in out:
         mw = _QF_DATE_WORD_RE.search(s)
@@ -1251,30 +1256,42 @@ def parse_date_time_ru(text: str, today: date | None = None) -> dict[str, Any]:
                 out["date_from"] = out["date_to"] = dt.isoformat()
                 out.pop("date_hint", None)
 
-    tr = _QF_RANGE_TIME_RE.search(s)
+    # Время ищем по тексту, из которого ВЫРЕЗАНЫ уже распознанные цифровые даты
+    # (DD.MM[.YYYY] / ISO): иначе «03.06.2026» ловится bare-time-регэкспом как
+    # «03:06» (разделитель [:.] принимает точку). «в 15.30» не дата (месяц 30
+    # невалиден → не распознана) → не вырезается → корректно остаётся 15:30.
+    time_text = s
+    if consumed_date_spans:
+        chars = list(s)
+        for span_start, span_end in consumed_date_spans:
+            for i in range(span_start, min(span_end, len(chars))):
+                chars[i] = " "
+        time_text = "".join(chars)
+
+    tr = _QF_RANGE_TIME_RE.search(time_text)
     if tr:
         h1, m1 = int(tr.group(2)), int(tr.group(3)) if tr.group(3) else 0
         h2, m2 = int(tr.group(5)), int(tr.group(6)) if tr.group(6) else 0
         out["time_from"] = f"{h1:02d}:{m1:02d}"
         out["time_to"] = f"{h2:02d}:{m2:02d}"
     if "time_from" not in out:
-        a = _QF_AFTER_TIME_RE.search(s)
+        a = _QF_AFTER_TIME_RE.search(time_text)
         if a:
             h, m = int(a.group(2)), int(a.group(3)) if a.group(3) else 0
             out["time_from"] = f"{h:02d}:{m:02d}"
     if "time_to" not in out:
-        b = _QF_BEFORE_TIME_RE.search(s)
+        b = _QF_BEFORE_TIME_RE.search(time_text)
         if b:
             h, m = int(b.group(2)), int(b.group(3)) if b.group(3) else 0
             out["time_to"] = f"{h:02d}:{m:02d}"
     if "time_from" not in out and "time_to" not in out:
-        ex = _QF_EXACT_TIME_RE.search(s)
+        ex = _QF_EXACT_TIME_RE.search(time_text)
         if ex:
             h, m = int(ex.group(2)), int(ex.group(3)) if ex.group(3) else 0
             tm = f"{h:02d}:{m:02d}"
             out["time_from"] = out["time_to"] = tm
     if "time_from" not in out and "time_to" not in out:
-        bare = _QF_TIME_RE.search(s)
+        bare = _QF_TIME_RE.search(time_text)
         if bare:
             h, m = int(bare.group(1)), int(bare.group(2))
             tm = f"{h:02d}:{m:02d}"
