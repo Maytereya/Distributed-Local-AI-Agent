@@ -357,6 +357,25 @@ def _doctor_not_bookable_via_bot_offer(state: SessionState, memory: MemoryStore)
     )
 
 
+def _compound_uzi_via_operator_offer(state: SessionState, memory: MemoryStore) -> ResponseEnvelope:
+    """Ответ на запись УЗИ с >1 органом/исследованием (BUG-2026-06-02-08).
+
+    По решению владельца набор из нескольких УЗИ удобнее оформить через оператора
+    (комплекс/время бот не собирает), а не подбирать одну услугу вслепую.
+    """
+    reset_appointment_runtime_state(state)
+    state.last_entities["_operator_offer_pending"] = True
+    memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+    return ResponseEnvelope(
+        text=(
+            "Если нужно несколько УЗИ-исследований, удобнее оформить запись через "
+            "оператора — он подберёт комплекс и подходящее время. Перевести на оператора?"
+        ),
+        attachments=[],
+        handoff=False,
+    )
+
+
 def build_doctor_schedule_response(
     flow_label: str,
     evidence: Evidence,
@@ -482,6 +501,10 @@ def build_appointment_step_response(
         return None
 
     entities = state.last_entities
+    # Compound-УЗИ (BUG-2026-06-02-08): набор из >1 УЗИ-исследования — честно к
+    # оператору. pop → не утечёт в следующий ход. Проверяем ДО unbookable-target.
+    if entities.pop("_appointment_compound_uzi", None):
+        return _compound_uzi_via_operator_offer(state, memory)
     # B′ (BUG-2026-06-01-01): планировщик пометил запись без валидной цели
     # (дропнутая неверифицированная «услуга»/ФИО, нет врача/специальности) —
     # честно отказываем вместо самарских филиалов вслепую. pop → не утечёт в след. ход.

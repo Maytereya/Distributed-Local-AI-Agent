@@ -4060,3 +4060,60 @@ def test_quickfill_keeps_catalog_valid_service_despite_drop_flag():
         )
         assert "service_name" not in out, junk
         assert out.get("appointment_action") == "book", junk
+
+
+@pytest.mark.parametrize(
+    "text,svc,expected",
+    [
+        ("узи жтк + почки", "", True),
+        ("Можно записаться на узи жтк + почки", "", True),
+        ("УЗИ печени + поджелудочная + почки", "", True),
+        ("А плюс поджелудочная", "Ультразвуковое исследование печени и желчного пузыря", True),
+        ("И плюс почки", "Ультразвуковое исследование печени и желчного пузыря", True),
+        ("УЗИ печени и желчного пузыря", "", False),  # одна каталожная позиция
+        ("УЗИ почек", "", False),
+        ("записаться к кардиологу", "", False),
+        ("плюс поджелудочная", "прием уролога", False),  # активная запись не УЗИ
+    ],
+)
+def test_is_compound_uzi_request(text, svc, expected):
+    # BUG-2026-06-02-08: детектор УЗИ-набора (>1 органа через явное сложение).
+    from messengers_router.policies import is_compound_uzi_request
+
+    assert is_compound_uzi_request(text, svc) is expected
+
+
+def test_compound_uzi_appointment_offers_operator_not_single_service():
+    # BUG-2026-06-02-08: УЗИ-запись с >1 органом → честно к оператору (по решению
+    # владельца), а НЕ подбор одной услуги / слепые филиалы. Класс-инвариант:
+    # planner ставит маркер + пустой план → builder отдаёт оффер оператора.
+    cases = [
+        ("Можно записаться на узи жтк + почки", {"appointment_action": "book", "city": "Самара"}),
+        (
+            "А плюс поджелудочная",
+            {
+                "appointment_action": "book",
+                "city": "Самара",
+                "service_name": "Ультразвуковое исследование печени и желчного пузыря",
+                "appointment_flow_active": True,
+            },
+        ),
+    ]
+    for text, state_ent in cases:
+        state = SessionState(session_id="cmp-uzi", last_entities=dict(state_ent))
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.8,
+            entities={"appointment_action": "book"},
+            flags={"rule_appointment"},
+            needs_handoff=False,
+        )
+        plan = build_plan(decision, state, text, memory=MemoryStore())
+        assert plan.steps == [], text
+        assert state.last_entities.get("_appointment_compound_uzi") is True, text
+        res = _build_appointment_step_response("APPOINTMENT", Evidence(), state, Services(), MemoryStore())
+        assert res is not None, text
+        assert "оператор" in res.text.lower(), (text, res.text)
+        assert "по адресам" not in res.text.lower(), (text, res.text)
+        # маркер popped → не утечёт в следующий ход
+        assert state.last_entities.get("_appointment_compound_uzi") is None, text

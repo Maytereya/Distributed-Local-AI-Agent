@@ -12,7 +12,7 @@ from .flow_policy import apply_pending_override
 from .llm_mode_policy import RuntimeOptions
 from .memory import MemoryStore
 from .mess_types import Plan, PlanStep, RouteDecision, SessionState
-from .policies import missing_slots
+from .policies import is_compound_uzi_request, missing_slots
 from .topic_registry import extract_topic_id_from_flags, get_topic as topic_registry_get_topic
 
 
@@ -72,6 +72,20 @@ def build_plan(
 
         if _is_lab_visit_timing_query(user_text):
             missing = []
+
+    # Compound-УЗИ (BUG-2026-06-02-08): набор из >1 УЗИ-исследования («жтк + почки»,
+    # follow-up «плюс поджелудочная» к активной УЗИ-записи). По решению владельца
+    # такой набор честно уводим к оператору, а не подбираем одну услугу. Проверяем
+    # ДО B′/A′-2 и missing-slots, чтобы выдать корректное сообщение про оператора,
+    # а не «врача нет по Самаре» / generic clarify. cancel/reschedule не трогаем.
+    if (
+        effective_label == "APPOINTMENT"
+        and str(entities.get("appointment_action") or "").strip().lower() not in {"cancel", "reschedule"}
+        and is_compound_uzi_request(user_text, str(state.last_entities.get("service_name") or ""))
+    ):
+        state.last_entities["_appointment_compound_uzi"] = True
+        memory.clear_pending(state)
+        return Plan(label=effective_label, steps=[])
 
     # B′ + A′-2 (BUG-2026-06-01-01): если ГРУНДИРОВАННОЕ решение этого хода
     # обронило цель записи как неверифицированную (напр. ФИО, ошибочно принятое

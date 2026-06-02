@@ -896,6 +896,42 @@ def has_datetime_signal(text: str) -> bool:
     return bool(_DATE_TIME_SIGNAL_RE.search(text or ""))
 
 
+# Compound-УЗИ (BUG-2026-06-02-08): запрос УЗИ с >1 органом/исследованием.
+# Различающий маркер — ЯВНОЕ сложение элементов («жтк + почки», «плюс почки»,
+# «а ещё печень»), НЕ каталожные «и»/«,» внутри одной услуги («печени и желчного
+# пузыря» — это одна позиция каталога, не compound).
+_UZI_MARKER_RE = re.compile(r"\b(узи|ультразвук\w*)\b", re.I)
+# Все квантификаторы {3,} стоят ПОСЛЕ обязательных литералов («+»/«плюс») —
+# нет жадного сканирования перед опциональным символом → нет ReDoS.
+_UZI_COMPOUND_JOIN_RE = re.compile(
+    r"(?<![0-9])\+\s*[а-яёa-z]{3,}"   # «жтк + почки», ведущий «+ орган» (не «3+недели»)
+    r"|\bплюс\s+[а-яёa-z]{3,}"         # «плюс поджелудочная»
+    r"|\b[аи]\s+ещ[её]\b",            # «а ещё», «и ещё»
+    re.I,
+)
+
+
+def is_compound_uzi_request(text: str, state_service_name: str = "") -> bool:
+    """True для УЗИ-записи с >1 органом (явное сложение элементов).
+
+    УЗИ-контекст берём из текущей реплики ИЛИ из активной услуги записи (чтобы
+    ловить follow-up «плюс поджелудочная» к уже выбранному «УЗИ печени»). По
+    решению владельца такой набор честно уводим к оператору, а не пытаемся
+    подобрать одну услугу. Каталожные «и»/«,» (одна позиция) не считаются.
+
+    :param text: текст текущей реплики
+    :param state_service_name: услуга текущей активной записи (из state)
+    :return: True, если это УЗИ-запрос с несколькими исследованиями
+    """
+    t = str(text or "")
+    uzi_context = bool(_UZI_MARKER_RE.search(t)) or bool(
+        _UZI_MARKER_RE.search(str(state_service_name or ""))
+    )
+    if not uzi_context:
+        return False
+    return bool(_UZI_COMPOUND_JOIN_RE.search(t))
+
+
 def has_appointment_context(text: str, last_entities: dict[str, Any], appointment_action: str | None) -> bool:
     ctx = last_entities or {}
     return bool(
