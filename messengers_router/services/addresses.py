@@ -44,6 +44,7 @@ from ._regions import (
     _is_samara_city_value,
     _region_display_name,
     _region_matches_samara_tokens,
+    _service_procedure_flag,
 )
 
 if TYPE_CHECKING:
@@ -86,6 +87,13 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
         if extracted:
             service_name = extracted
     service_q = _normalise_input(service_name)
+    # Место оказания процедуры (УЗИ/анализы/ЭКГ) определяется флагом филиала из
+    # /site/regions (usi/analysis/ecg) — авторитетный источник по словам
+    # разработчика Наяки. Для таких услуг адреса берём фильтром регионов по
+    # флагу (ниже, Path live regions), а priceUnit care-setting хардкод и
+    # пересечение с локациями врачей пропускаем (они давали единственный
+    # дефолтный адрес «Ленина 5» вместо всех филиалов с флагом).
+    procedure_flag = _service_procedure_flag(service_q) if service_q else None
     city_for_static = _get_first_present(entities, ["city"])
     if city_for_static and _is_non_samara_city_value(city_for_static):
         return _service_fallback(
@@ -133,7 +141,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
                     continue
                 allowed_doctor_addresses_norm.add(_normalise_input(a))
 
-    if service_q and (appointment_mode or _is_procedure_branch_lookup_query(query, service_q)):
+    if service_q and not procedure_flag and (appointment_mode or _is_procedure_branch_lookup_query(query, service_q)):
         try:
             retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
         except Exception:
@@ -160,7 +168,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
                     "entities_used": entities,
                 }
 
-    if service_q and _is_procedure_branch_lookup_query(query, service_q):
+    if service_q and not procedure_flag and _is_procedure_branch_lookup_query(query, service_q):
         procedure_branches = await self._procedure_branches_from_index(service_q, regions)
         if procedure_branches:
             if branch_q:
@@ -228,7 +236,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
             if cur_score > prev_score:
                 by_addr[addr] = b
 
-        if appointment_mode and allowed_doctor_addresses_norm:
+        if appointment_mode and not procedure_flag and allowed_doctor_addresses_norm:
             def _is_doctor_capable(addr: str) -> bool:
                 n = _normalise_input(addr)
                 for x in allowed_doctor_addresses_norm:
@@ -244,7 +252,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
         note = "address_info: live regions API"
         if service_q:
             note += " + filtered by service flags"
-        if appointment_mode:
+        if appointment_mode and not procedure_flag:
             note += " + filtered by doctor-capable branches"
         return {
             "addresses": uniq,

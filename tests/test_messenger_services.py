@@ -4419,3 +4419,56 @@ def test_result_404_is_not_ready_not_operator(monkeypatch, status_code, expect_o
         assert not res.get("handoff_required"), status_code
         preview = str(res.get("result_preview") or "").lower()
         assert "в работе" in preview and "оператор" not in preview, status_code
+
+
+def test_service_procedure_flag_maps_usi_analysis_ecg():
+    # BUG-2026-06-02-04: место оказания процедуры определяется флагом филиала из
+    # /site/regions. Маппер услуга -> флаг: УЗИ/анализы/ЭКГ; консультация — не
+    # флаговая (None), её поведение не меняется.
+    from messengers_router.services._regions import _service_procedure_flag as flag
+
+    assert flag("Ультразвуковое исследование печени и желчного пузыря") == "usi"
+    assert flag("узи почек") == "usi"
+    assert flag("общий анализ крови") == "analysis"
+    assert flag("ЭКГ") == "ecg"
+    assert flag("прием уролога") is None
+    assert flag("") is None
+
+
+def test_address_info_uses_regions_service_flag_not_care_setting_hardcode():
+    # BUG-2026-06-02-04: адреса оказания процедуры (УЗИ/анализы/ЭКГ) берём из
+    # флага филиала /site/regions (подтверждено разработчиком Наяки), а НЕ из
+    # priceUnit care-setting хардкода (он давал единственный дефолтный «Ленина 5»)
+    # и НЕ пересекаем с локациями врачей. Услуга с флагом возвращает ВСЕ филиалы
+    # с этим флагом. Класс-инвариант на синтетических regions (не инстанс кэша).
+    fake_regions = [
+        {"id": 1, "city": "Самара", "addressForSite": "г. Самара, пр. Ленина, 5", "name": "Ленина 5", "usi": True, "analysis": True, "ecg": True},
+        {"id": 2, "city": "Самара", "addressForSite": "г. Самара, ул. Победы, 83", "name": "Победы 83", "usi": True, "analysis": True, "ecg": False},
+        {"id": 3, "city": "Самара", "addressForSite": "г. Самара, ул. Гагарина, 12", "name": "Гагарина 12", "usi": False, "analysis": True, "ecg": False},
+    ]
+    s = Services()
+
+    async def _fake_regions():
+        return list(fake_regions)
+
+    async def _fake_doctors():
+        return []
+
+    s._ensure_regions_loaded = _fake_regions
+    s._ensure_doctors_cache_loaded = _fake_doctors
+    res = asyncio.run(
+        s.address_info(
+            "Записаться на УЗИ печени",
+            {
+                "service_name": "Ультразвуковое исследование печени и желчного пузыря",
+                "__appointment_mode": True,
+                "city": "Самара",
+            },
+        )
+    )
+    addrs = res.get("addresses") or []
+    assert "filtered by service flags" in str(res.get("note")), res.get("note")
+    assert any("Ленина, 5" in a for a in addrs), addrs
+    assert any("Победы, 83" in a for a in addrs), addrs
+    assert not any("Гагарина, 12" in a for a in addrs), addrs  # usi=False исключён
+    assert len(addrs) == 2, addrs  # care-setting хардкод дал бы ровно 1 «Ленина 5»

@@ -248,6 +248,34 @@ def _norm_city(s: str) -> str:
     return t.strip()
 
 
+def _service_procedure_flag(service_q: str) -> str | None:
+    """Флаг филиала из /site/regions, определяющий МЕСТО оказания процедуры.
+
+    Возвращает 'usi' | 'analysis' | 'ecg' | None. Источник адресов оказания
+    процедуры — флаги филиалов в /site/regions (подтверждено разработчиком
+    Наяки), а НЕ priceUnit care-setting хардкод и НЕ regionName врача (это филиал
+    приёма врача, не место процедуры). Когда услуга попадает под такой флаг,
+    адреса берём фильтром регионов по флагу, а не из хардкода.
+
+    :param service_q: нормализованный/сырой текст услуги
+    :return: имя флага филиала или None (для не-флаговых услуг — напр. консультаций)
+    """
+    sq = _normalise_input(service_q or "")
+    if not sq:
+        return None
+    from ._addresses_helpers import _nonbookable_needs  # noqa: PLC0415
+
+    # УЗИ проверяем первым: его маркер не пересекается с analysis/ecg.
+    if bool(_UZI_QUERY_RE.search(sq)):
+        return "usi"
+    need_analysis, need_ekg = _nonbookable_needs(sq)
+    if need_ekg:
+        return "ecg"
+    if need_analysis:
+        return "analysis"
+    return None
+
+
 def _filter_regions_by_service_flags(regions: list[dict[str, Any]], service_q: str) -> list[dict[str, Any]]:
     sq = _normalise_input(service_q or "")
     if not sq:
