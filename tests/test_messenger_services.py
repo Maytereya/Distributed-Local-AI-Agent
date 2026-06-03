@@ -4537,3 +4537,23 @@ def test_match_catalog_service_no_wrong_organ_substitution():
         assert "мошонк" not in canon and "плацент" not in canon, (q, m)
     ok = asyncio.run(s.match_catalog_service("УЗИ почек"))
     assert "почек" in str(ok.get("canonical") or "").lower(), ok
+
+
+def test_test_assist_oak_alias_surfaces_full_blood_count_family():
+    # BUG-2026-06-02-09: bare аббревиатура «ОАК» в test_assist должна показывать и
+    # позиции ПОЛНОЙ формы «Общий анализ крови (...)» (стандартный ОАК), а не только
+    # урезанные «ОАК (без лейкоцитарной формулы и СОЭ)»/капиллярные — алиас
+    # оак→«общий анализ крови» применяется и в одиночном пути. Инвариант на каталоге.
+    from messengers_router.services._prices_helpers import _PRICE_SERVICE_ALIASES
+
+    assert "общий анализ крови" in _PRICE_SERVICE_ALIASES.get("оак", ())
+
+    s = Services()
+    res = asyncio.run(s.test_assist("Оак", {}))
+    names = [str(t.get("serviceName") or t.get("name") or "").lower() for t in (res.get("tests") or [])]
+    # полная форма «Общий анализ крови (...)» теперь в выдаче (не только «ОАК (...)»)
+    assert any("общий анализ крови" in n for n in names), names
+    # не-алиасный запрос (без alias-цели) поведение не меняет — семейства не подмешиваем
+    res2 = asyncio.run(s.test_assist("витамин д", {}))
+    names2 = [str(t.get("serviceName") or "").lower() for t in (res2.get("tests") or [])]
+    assert names2 and all("витамин" in n or "vdr" in n or "vitamin" in n.lower() for n in names2[:3]), names2

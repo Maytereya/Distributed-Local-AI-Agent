@@ -20,7 +20,12 @@ from ._common import (
     _normalise_input,
     _service_fallback,
 )
-from ._prices_helpers import SAMARA_PRICE_REGION_ID, _rank_price_rows, _resolve_multi_price_items
+from ._prices_helpers import (
+    _PRICE_SERVICE_ALIASES,
+    SAMARA_PRICE_REGION_ID,
+    _rank_price_rows,
+    _resolve_multi_price_items,
+)
 
 if TYPE_CHECKING:
     from .core import Services
@@ -157,6 +162,37 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
             }
 
     matches = _rank_price_rows(rows, test_name, limit=10)
+
+    # Алиас одиночного запроса (BUG-2026-06-02-09): _rank_price_rows ранжирует по
+    # литералу, поэтому аббревиатура («ОАК») не находит позиции, названные полной
+    # формой («Общий анализ крови (...)») — бот показывал только урезанные
+    # «ОАК (...)» / капиллярные варианты. Подмешиваем семейство по ТОЧНОЙ фразе
+    # алиас-цели (оак→«общий анализ крови») и показываем его ПЕРВЫМ. Multi-word
+    # фраза алиаса → без шума (3-буквенное «оак» цепляло бы «трОАКарная» и т.п.).
+    alias_targets = _PRICE_SERVICE_ALIASES.get(needle, ())
+    if alias_targets:
+
+        def _row_key(row: dict[str, Any]) -> str:
+            return _normalise_input(
+                str(row.get("serviceHomecode") or row.get("serviceName") or row.get("name") or "")
+            )
+
+        seen = {_row_key(r) for r in matches}
+        family: list[dict[str, Any]] = []
+        for tgt in alias_targets:
+            tgt_norm = _normalise_input(tgt)
+            if len(tgt_norm) < 6:
+                continue
+            for row in _rank_price_rows(rows, tgt, limit=10):
+                name_norm = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
+                if tgt_norm not in name_norm:
+                    continue
+                k = _row_key(row)
+                if k and k not in seen:
+                    seen.add(k)
+                    family.append(row)
+        if family:
+            matches = (family + matches)[:12]
 
     if not matches:
         return _test_assist_clarify_response(
