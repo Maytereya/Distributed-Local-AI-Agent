@@ -179,6 +179,8 @@ TAX_DOC_REQUEST_PATTERNS = [
     r"\bфнс\b",
     r"\bналог\w*\s+вычет\w*",
     r"\bсправк\w*.*\bналог\w*",
+    # обратный порядок слов: «налоговая справка» (= справка для вычета)
+    r"\bналог\w*\s+справк\w*",
     r"\bсправк\w*.*\bвычет\w*",
     r"\bсправк\w*.*\bоплат\w*.*\bмедицинск\w*.*\bуслуг\w*",
 ]
@@ -310,6 +312,11 @@ _NONBOOKABLE_ECG_RE = re.compile(r"\b(экг|электрокардиограм\
 _NONBOOKABLE_VISIT_RE = re.compile(r"\b(запис\w*|[сз]дат\w*|пройти|сделат\w*|хочу|нуж\w*|можно)\b", re.I)
 _NONBOOKABLE_SUBMIT_RE = re.compile(r"\b[сз]дат\w*\b", re.I)
 _NONBOOKABLE_PROFILE_RE = re.compile(r"\b(профил\w*|панел\w*)\b", re.I)
+# «узнать» — глагол получения информации; «узнать анализы» двусмысленно
+# (результаты vs где сдать), в отличие от «сдать анализы».
+_ANALYSIS_LOOKUP_VERB_RE = re.compile(r"\bузна\w*\b", re.I)
+# Слова, снимающие двусмысленность «узнать анализы» в пользу конкретного флоу.
+_ANALYSIS_LOOKUP_DISAMBIG_RE = re.compile(r"\b(где|куда|каки\w*|как\w*)\b", re.I)
 _DIAGNOSTIC_BOOKING_RE = re.compile(
     r"\b(сделат\w*|пройти|провест\w*|хочу|нуж\w*|можно|требует\w*|нужно)\b",
     re.I,
@@ -334,6 +341,12 @@ _QF_BRANCH_FREEFORM_RE = re.compile(
 )
 _NEAREST_SCHEDULE_HINT_RE = re.compile(
     r"\b(ближайш\w*|сам\w*\s+ранн\w*|раньше|поскорее|свободн\w*\s+окн\w*)\b",
+    re.I,
+)
+# Упоминание врача/приёма — отличает «график работы ВРАЧА» (DOCTOR_SCHEDULE)
+# от «график работы ФИЛИАЛА/клиники» (ADDRESS).
+_DOCTOR_MENTION_RE = re.compile(
+    r"\b(врач\w*|доктор\w*|специалист\w*|принима\w*|при(е|ё)м\w*)\b",
     re.I,
 )
 _QF_TIME_FRAGMENT_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
@@ -803,6 +816,27 @@ def detect_branch_hours_intent(text: str) -> bool:
     return _matches_any(raw, _WORK_HOURS_RE)
 
 
+def detect_clinic_hours_intent(text: str) -> bool:
+    """
+    Вопрос о графике/режиме работы клиники или филиала (НЕ врача, НЕ цена).
+
+    Нужен, чтобы развести коллизию слова «график»: «график работы филиалов»
+    (часы работы → ADDRESS) против «график/расписание врача» (DOCTOR_SCHEDULE).
+    Без этого голый `\\bграфик\\b` из SCHEDULE_PATTERNS перехватывал запрос о
+    часах филиала и уводил его в расписание врача без ФИО → бесполезный ответ.
+
+    :param text: текст пользователя
+    :return: True, если это вопрос о часах работы клиники/филиала без врача
+    """
+
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    if not detect_branch_hours_intent(raw):
+        return False
+    return not _DOCTOR_MENTION_RE.search(raw)
+
+
 def detect_news_intent(text: str) -> bool:
     return _matches_any(text, _NEWS_RE)
 
@@ -1051,6 +1085,41 @@ def detect_nonbookable_walkin_intent(text: str, entities: dict[str, Any] | None 
     if _BOOK_ACTION_STRICT_RE.search(t) and _DOCTOR_WORDS_RE.search(t):
         return False
     if has_doctor_context and _BOOK_ACTION_STRICT_RE.search(t):
+        return False
+    return True
+
+
+AMBIGUOUS_ANALYSIS_CLARIFY_TEXT = (
+    "Уточните, пожалуйста: вы хотите узнать результаты готовых анализов "
+    "или где можно сдать анализы?"
+)
+
+
+def detect_ambiguous_analysis_lookup(text: str) -> bool:
+    """
+    «узнать анализы» без уточнения — двусмысленно: результаты vs где сдать.
+
+    Глагол «узнать» сигналит «получить информацию», поэтому такой запрос нельзя
+    молча уводить в живую очередь (ADDRESS), как делал шорткат ≤2 слов в
+    `detect_nonbookable_walkin_intent` (BUG-2026-06-04-02). Возвращаем True,
+    чтобы задать уточняющий вопрос вместо угадывания. Явные сигналы
+    (результаты/готов, цена, подготовка, «сдать», «где/куда/какие/как»)
+    снимают двусмысленность — тогда пусть решает обычный роутинг.
+
+    :param text: текст пользователя
+    :return: True, если запрос про анализы двусмыслен (нужен уточняющий вопрос)
+    """
+
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    if not (_NONBOOKABLE_ANALYSIS_RE.search(raw) and _ANALYSIS_LOOKUP_VERB_RE.search(raw)):
+        return False
+    if detect_test_result_intent(raw) or detect_price_intent(raw) or detect_prepare_intent(raw):
+        return False
+    if _NONBOOKABLE_SUBMIT_RE.search(raw):
+        return False
+    if _ANALYSIS_LOOKUP_DISAMBIG_RE.search(raw):
         return False
     return True
 

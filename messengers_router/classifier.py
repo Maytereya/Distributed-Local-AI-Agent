@@ -40,6 +40,7 @@ from .policies import (
     detect_price_intent,
     detect_address_intent,
     detect_branch_hours_intent,
+    detect_clinic_hours_intent,
     detect_news_intent,
     detect_doctor_info_intent,
     normalize_appointment_action,
@@ -49,6 +50,8 @@ from .policies import (
     is_price_dominant_intent,
     should_treat_result_delivery_as_test_assist,
     detect_nonbookable_walkin_intent,
+    detect_ambiguous_analysis_lookup,
+    AMBIGUOUS_ANALYSIS_CLARIFY_TEXT,
     nonbookable_service_hint,
     detect_pii,
     low_confidence_policy,
@@ -1149,6 +1152,20 @@ async def deterministic_rule_decision(
             needs_handoff=False,
             context_action=_derive_context_action(text, followup_label, entities, last_entities),
         )
+    elif detect_ambiguous_analysis_lookup(text):
+        # «узнать анализы» двусмысленно (результаты vs где сдать) — спрашиваем,
+        # а не уводим вслепую в живую очередь/адреса (BUG-2026-06-04-02).
+        # Проверяем ДО test_result/walk-in/test_assist.
+        decision = RouteDecision(
+            label="OTHER",
+            confidence=0.72,
+            entities={},
+            flags=local_flags | {"rule_analysis_lookup_ambiguous"},
+            needs_handoff=False,
+            context_action="continue",
+            clarify_needed=True,
+            clarify_reason=AMBIGUOUS_ANALYSIS_CLARIFY_TEXT,
+        )
     elif detect_test_result_intent(text):
         if should_treat_result_delivery_as_test_assist(text):
             decision = RouteDecision(
@@ -1172,6 +1189,19 @@ async def deterministic_rule_decision(
                 needs_handoff=False,
                 context_action="continue",
             )
+    elif detect_clinic_hours_intent(text):
+        # «график/режим работы филиалов» — часы работы клиники, НЕ расписание
+        # врача. Проверяем ДО detect_schedule_intent, т.к. голый `\bграфик\b`
+        # из SCHEDULE_PATTERNS иначе перехватывал бы это в DOCTOR_SCHEDULE без
+        # ФИО (BUG-2026-06-04-01).
+        decision = RouteDecision(
+            label="ADDRESS",
+            confidence=0.72,
+            entities={},
+            flags=local_flags | {"rule_address_work_hours"},
+            needs_handoff=False,
+            context_action="continue",
+        )
     elif detect_schedule_intent(text):
         entities: dict[str, Any] = {}
         specialty = _extract_schedule_specialty(text)

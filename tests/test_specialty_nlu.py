@@ -6,6 +6,10 @@ from messengers_router.classifier import deterministic_rule_decision
 from messengers_router.nlu_pipeline import analyze_with_candidates
 from messengers_router.policies import missing_slots
 from messengers_router.policies import appointment_summary
+from messengers_router.policies import detect_clinic_hours_intent
+from messengers_router.policies import detect_tax_doc_request_intent
+from messengers_router.policies import detect_ambiguous_analysis_lookup
+from messengers_router.policies import AMBIGUOUS_ANALYSIS_CLARIFY_TEXT
 from messengers_router.renderer import (
     format_address_for_patient,
     format_doctor_info_for_patient,
@@ -357,6 +361,128 @@ def test_deterministic_rule_decision_branch_hours_routes_to_address():
     assert out is not None
     assert out.label == "ADDRESS"
     assert "rule_address_work_hours" in out.flags
+
+
+def test_clinic_hours_intent_class_invariant():
+    # КЛАСС: «график/режим работы» клиники/филиала без врача — это часы работы.
+    clinic_hours = [
+        "график работы филиалов",
+        "график работы филиала на Победы 83",
+        "режим работы филиалов",
+        "во сколько работают филиалы",
+        "график работы клиники",
+        "вы завтра работаете?",
+    ]
+    for t in clinic_hours:
+        assert detect_clinic_hours_intent(t) is True, t
+    # НЕ клиника: расписание/график конкретного врача, цена, нейтральное.
+    not_clinic_hours = [
+        "расписание Трубина",
+        "график работы врача Иванова",
+        "когда принимает кардиолог",
+        "сколько стоит приём врача",
+        "запишите к кардиологу",
+    ]
+    for t in not_clinic_hours:
+        assert detect_clinic_hours_intent(t) is False, t
+
+
+def test_deterministic_rule_decision_grafik_filial_routes_to_address():
+    # BUG-2026-06-04-01: голый «график» в SCHEDULE_PATTERNS перехватывал
+    # «график работы филиалов» в DOCTOR_SCHEDULE без ФИО. Класс-инвариант:
+    # любой «график/режим работы» клиники/филиала без врача → ADDRESS.
+    for t in [
+        "график работы филиалов",
+        "график работы филиала на Победы 83",
+        "режим работы филиалов",
+        "график работы клиники",
+    ]:
+        out = run(
+            deterministic_rule_decision(t, {}, allow_refine=False, attach_secondary=False)
+        )
+        assert out is not None
+        assert out.label == "ADDRESS", f"{t!r} -> {out.label}"
+        assert "rule_address_work_hours" in out.flags, t
+
+
+def test_deterministic_rule_decision_doctor_schedule_not_stolen_by_clinic_hours():
+    # Анти-over-trigger: запрос про график/расписание ВРАЧА остаётся DOCTOR_SCHEDULE.
+    for t in [
+        "расписание Трубина",
+        "график работы врача Иванова",
+        "расписание уролога Дразнина",
+    ]:
+        out = run(
+            deterministic_rule_decision(t, {}, allow_refine=False, attach_secondary=False)
+        )
+        assert out is not None
+        assert out.label == "DOCTOR_SCHEDULE", f"{t!r} -> {out.label}"
+
+
+def test_ambiguous_analysis_lookup_class_invariant():
+    # КЛАСС: «узнать анализы» (глагол «узнать» + «анализ», без уточнения) —
+    # двусмысленно (результаты vs где сдать) → нужен уточняющий вопрос.
+    ambiguous = [
+        "узнать анализы",
+        "хочу узнать анализы",
+        "узнать свои анализы",
+        "узнать про анализы",
+    ]
+    for t in ambiguous:
+        assert detect_ambiguous_analysis_lookup(t) is True, t
+    # НЕ двусмысленно: явный сигнал снимает неопределённость.
+    not_ambiguous = [
+        "результаты анализов",          # результаты → TEST_RESULT
+        "узнать результаты анализов",    # результаты → TEST_RESULT
+        "сдать анализы",                 # сдать → ADDRESS (живая очередь)
+        "где сдать анализы",             # где/сдать → ADDRESS
+        "какие анализы сдать",           # какие → TEST_ASSIST
+        "узнать стоимость анализов",     # цена → PRICE
+        "записаться к кардиологу",       # вообще не про анализы
+    ]
+    for t in not_ambiguous:
+        assert detect_ambiguous_analysis_lookup(t) is False, t
+
+
+def test_deterministic_rule_decision_ambiguous_analysis_clarifies():
+    # BUG-2026-06-04-02: «узнать анализы» уходило в ADDRESS (живая очередь,
+    # список филиалов) из-за шортката ≤2 слов в walk-in. Теперь — уточняющий
+    # вопрос вместо угадывания.
+    for t in ["узнать анализы", "хочу узнать анализы", "узнать свои анализы"]:
+        out = run(
+            deterministic_rule_decision(t, {}, allow_refine=False, attach_secondary=False)
+        )
+        assert out is not None
+        assert out.clarify_needed is True, t
+        assert out.clarify_reason == AMBIGUOUS_ANALYSIS_CLARIFY_TEXT, t
+        assert "rule_analysis_lookup_ambiguous" in out.flags, t
+        assert out.needs_handoff is False, t
+    # Анти-регресс: однозначные запросы про анализы НЕ уводятся в clarify.
+    explicit = {
+        "результаты анализов": "TEST_RESULT",
+        "сдать анализы": "ADDRESS",
+        "где сдать анализы": "ADDRESS",
+    }
+    for t, label in explicit.items():
+        out = run(
+            deterministic_rule_decision(t, {}, allow_refine=False, attach_secondary=False)
+        )
+        assert out is not None
+        assert out.clarify_needed is False, t
+        assert out.label == label, f"{t!r} -> {out.label}"
+
+
+def test_tax_doc_request_reverse_word_order():
+    # «налоговая справка» (обратный порядок слов) = справка для вычета → tax,
+    # чтобы отдать детерминированный tax-ответ, а не зависеть от meili-поиска.
+    for t in ["налоговая справка", "нужна налоговая справка", "налоговую справку"]:
+        assert detect_tax_doc_request_intent(t) is True, t
+        out = run(
+            deterministic_rule_decision(t, {}, allow_refine=False, attach_secondary=False)
+        )
+        assert out is not None
+        assert out.entities.get("doc_request_kind") == "tax", t
+        assert "doc_request_tax" in out.flags, t
 
 
 def test_deterministic_rule_decision_service_location_query_routes_to_address():
