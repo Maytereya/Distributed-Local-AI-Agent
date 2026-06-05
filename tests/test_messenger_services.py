@@ -4625,3 +4625,307 @@ def test_fold_homoglyph_token_only_for_digit_tokens():
     assert _fold_homoglyph_token("ca125") is None
     # пустая строка → None
     assert _fold_homoglyph_token("") is None
+
+
+# ---------------------------------------------------------------------------
+# BUG-2026-06-04-04 — appointment to specialty offers wrong, doctor-less branch
+# КЛАСС: any appointment+specialty query must NEVER offer a branch with 0 doctors
+# ---------------------------------------------------------------------------
+
+def _build_gynecologist_cache() -> list[dict]:
+    """
+    Derive gynecologist doctor records from the LOCAL doctors cache (data-driven).
+    The returned list is the authoritative source for expected addresses in the
+    invariant tests below — not a hardcoded address list.
+    """
+    import asyncio as _asyncio
+    from messengers_router.services import Services as _Services
+    from messengers_router.services._doctors_helpers import (
+        _doctor_role_specialty_match_level as _match,
+    )
+    from messengers_router.services._regions import _has_explicit_non_samara_regions as _non_samara
+
+    _s = _Services()
+    _doctors = _asyncio.run(_s._ensure_doctors_cache_loaded())
+    out = []
+    for d in _doctors:
+        if _match(d, "гинеколог") > 0:
+            regions_src = [str(x).strip() for x in (d.get("regions") or []) if str(x).strip()]
+            if not _non_samara(regions_src):
+                out.append(d)
+    return out
+
+
+def _expected_addresses_for_specialty(specialty: str) -> set[str]:
+    """
+    Build the expected set of Samara branch addresses for a specialty from the
+    local cache. Used by parametrized invariant tests so assertions are driven
+    by real data, not hardcoded strings.
+    """
+    import asyncio as _asyncio
+    from messengers_router.services import Services as _Services
+    from messengers_router.services._doctors_helpers import (
+        _doctor_role_specialty_match_level as _match,
+    )
+    from messengers_router.services._addresses_helpers import (
+        _looks_like_real_address as _real,
+    )
+    from messengers_router.services._regions import _has_explicit_non_samara_regions as _non_samara
+
+    _s = _Services()
+    _doctors = _asyncio.run(_s._ensure_doctors_cache_loaded())
+    addrs: set[str] = set()
+    for d in _doctors:
+        if _match(d, specialty) <= 0:
+            continue
+        regions_src = [str(x).strip() for x in (d.get("regions") or []) if str(x).strip()]
+        if _non_samara(regions_src):
+            continue
+        for a in regions_src:
+            if _real(a):
+                addrs.add(a)
+    return addrs
+
+
+# LAB-ONLY BRANCH that has zero doctors of any specialty (Гагарина 64)
+_LAB_ONLY_BRANCH = "ул.Гагарина, 64"
+
+# Minimal synthetic doctor record for a gynecologist at пр.Ленина, 5 and ул.Победы, 83
+_GYNEC_DOCTOR_AT_LENINA = {
+    "id": 1001,
+    "fio": "Тестова Анна Ивановна",
+    "specialization": "Акушер-гинеколог",
+    "regions": ["пр.Ленина, 5", "ул. Победы, 83"],
+    "units": ["Акушерство и гинекология"],
+    "unit_links": [
+        {"company_unit_name": "Акушерство и гинекология", "main": True, "specialization": "Акушер-гинеколог"},
+    ],
+}
+
+_GYNEC_DOCTOR_AT_AMINEVA = {
+    "id": 1002,
+    "fio": "Петрова Мария Сергеевна",
+    "specialization": "Акушер-гинеколог",
+    "regions": ["ул.Аминева, 29"],
+    "units": ["Акушерство и гинекология"],
+    "unit_links": [
+        {"company_unit_name": "Акушерство и гинекология", "main": True, "specialization": "Акушер-гинеколог"},
+    ],
+}
+
+
+@pytest.mark.parametrize("specialty", ["гинеколог", "кардиолог"])
+def test_address_info_appointment_specialty_never_returns_lab_only_branch_class(
+    specialty: str,
+) -> None:
+    """
+    КЛАСС (инвариант BUG-2026-06-04-04): address_info с appointment_mode+specialty
+    НИКОГДА не возвращает лабораторный/безврачебный филиал (Гагарина 64).
+    Результат — подмножество реальных веток данной специальности из локального кэша.
+    Тест DATA-DRIVEN: ожидаемые адреса выводятся из кэша, не захардкожены.
+    """
+    expected = _expected_addresses_for_specialty(specialty)
+    svc = Services()
+    result = run(
+        svc.address_info(
+            f"Запись к врачу-{specialty}",
+            {"city": "Самара", "specialty": specialty, "__appointment_mode": True},
+        )
+    )
+    returned = set(result.get("addresses") or [])
+
+    # Гагарина 64 — лабораторный пункт, 0 врачей — не должна появляться
+    assert _LAB_ONLY_BRANCH not in returned, (
+        f"Lab-only branch {_LAB_ONLY_BRANCH!r} must NEVER appear in appointment "
+        f"branch-offer for specialty {specialty!r}"
+    )
+
+    # Если кэш вернул адреса — они должны быть подмножеством врачебных веток
+    if returned and expected:
+        unexpected = returned - expected
+        assert not unexpected, (
+            f"Appointment branch-offer for {specialty!r} contains addresses NOT "
+            f"in the specialty's known branch set: {sorted(unexpected)!r}"
+        )
+
+
+def test_address_info_appointment_gynecologist_returns_nonzero_addresses(
+    monkeypatch,
+) -> None:
+    """
+    КЛАСС (инвариант BUG-2026-06-04-04): запись к гинекологу с city=Самара
+    возвращает непустой список адресов из кэша врачей (не пустой список,
+    который приводил к Гагарина 64 через safe_get_branches).
+    Используем синтетический кэш с известными гинекологами.
+    """
+    svc = Services()
+
+    async def fake_doctors():
+        return [_GYNEC_DOCTOR_AT_LENINA, _GYNEC_DOCTOR_AT_AMINEVA]
+
+    async def fake_regions():
+        return []  # regions API offline → fallback path
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_doctors)
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_regions)
+
+    result = run(
+        svc.address_info(
+            "Запись к врачу-гинекологу",
+            {"city": "Самара", "specialty": "гинеколог", "__appointment_mode": True},
+        )
+    )
+    addresses = result.get("addresses") or []
+
+    assert len(addresses) > 0, "Must return at least one gynecologist branch, not empty"
+    assert _LAB_ONLY_BRANCH not in addresses, (
+        f"Lab-only branch {_LAB_ONLY_BRANCH!r} must never appear"
+    )
+    assert "пр.Ленина, 5" in addresses or "ул.Аминева, 29" in addresses, (
+        "Expected at least one known gynecologist branch in result"
+    )
+
+
+def test_address_info_appointment_specific_branch_filter_still_works(
+    monkeypatch,
+) -> None:
+    """
+    РЕГРЕСС (BUG-2026-06-04-04): если пользователь назвал конкретный
+    филиал («Победы»), branch_q фильтр должен работать — вернуть только этот
+    адрес, а не все гинекологические ветки.
+    """
+    svc = Services()
+
+    async def fake_doctors():
+        return [_GYNEC_DOCTOR_AT_LENINA, _GYNEC_DOCTOR_AT_AMINEVA]
+
+    async def fake_regions():
+        return []
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_doctors)
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_regions)
+
+    result = run(
+        svc.address_info(
+            "Запись к врачу-гинекологу на Победы",
+            {
+                "city": "Самара",
+                "branch": "Победы",
+                "specialty": "гинеколог",
+                "__appointment_mode": True,
+            },
+        )
+    )
+    addresses = result.get("addresses") or []
+
+    # Конкретный фильтр «Победы» → только ул. Победы, 83
+    assert addresses == ["ул. Победы, 83"], (
+        f"Expected only Победы 83 with branch filter, got {addresses!r}"
+    )
+
+
+def test_address_info_non_appointment_address_query_unaffected(
+    monkeypatch,
+) -> None:
+    """
+    РЕГРЕСС (BUG-2026-06-04-04): не-appointment ADDRESS-запрос (где филиал)
+    не должен быть затронут изменениями. Specialty-фильтр активен только при
+    appointment_mode=True.
+    """
+    svc = Services()
+
+    async def fake_doctors():
+        return [_GYNEC_DOCTOR_AT_LENINA, _GYNEC_DOCTOR_AT_AMINEVA]
+
+    async def fake_regions():
+        return []
+
+    # Add a non-gynecologist doctor (терапевт) to the fake cache to distinguish
+    # specialty-filtered vs unfiltered results.
+    therapist_doc = {
+        "id": 1003,
+        "fio": "Сидоров Олег Петрович",
+        "specialization": "Терапевт",
+        "regions": ["ул.Аминева, 29"],
+        "units": ["Терапия"],
+        "unit_links": [
+            {"company_unit_name": "Терапия", "main": True, "specialization": "Терапевт"},
+        ],
+    }
+
+    async def fake_doctors_mixed():
+        return [_GYNEC_DOCTOR_AT_LENINA, therapist_doc]
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_doctors_mixed)
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_regions)
+
+    # Запрос без __appointment_mode и без specialty — specialty-фильтр НЕ должен применяться,
+    # поэтому терапевт (Аминева) и гинеколог (Ленина/Победы) оба проходят.
+    result = run(
+        svc.address_info(
+            "Где ближайший филиал",
+            {"city": "Самара"},
+        )
+    )
+    addresses = result.get("addresses") or []
+    # Обе ветки должны присутствовать — specialty-фильтр не применяется без appointment_mode
+    all_expected = {"пр.Ленина, 5", "ул. Победы, 83", "ул.Аминева, 29"}
+    returned = set(addresses)
+    assert all_expected.issubset(returned) or (
+        # Acceptable: returns at least both doctor types (терапевт + гинеколог branch present)
+        any("аминев" in a.lower() for a in addresses)
+        and any("ленин" in a.lower() or "победы" in a.lower() for a in addresses)
+    ), (
+        f"Non-appointment ADDRESS query should not apply specialty filter; got {sorted(addresses)!r}"
+    )
+    assert _LAB_ONLY_BRANCH not in addresses
+
+
+def test_response_builder_appointment_specialty_empty_evidence_offers_clarification(
+    monkeypatch,
+) -> None:
+    """
+    КЛАСС defense-in-depth (BUG-2026-06-04-04): если address evidence пуст
+    (address_info не нашёл адресов) И specialty задана, response_builder НЕ
+    должен предлагать specialty-agnostic ветки (в т.ч. Гагарина 64).
+    Вместо этого — текст-уточнение «Уточните филиал/адрес».
+    """
+    from messengers_router import evidence_keys as ek
+    from messengers_router.mess_types import Evidence, SessionState
+    from messengers_router.memory import MemoryStore
+    from messengers_router.response_builder import build_appointment_step_response
+    from messengers_router.policies import APPOINTMENT_STEP_BRANCH
+
+    svc = Services()
+    state = SessionState(
+        session_id="test-bug-2026-06-04-04",
+        last_entities={
+            "city": "Самара",
+            "specialty": "гинеколог",
+            "__appointment_mode": True,
+            "appointment_step": APPOINTMENT_STEP_BRANCH,
+        },
+    )
+    # Simulate empty address evidence (what address_info returns when it has no results)
+    evidence: Evidence = {
+        ek.ADDRESS: {"addresses": [], "branches": [], "note": "address_info: doctors cache fallback"},
+    }
+    memory = MemoryStore()
+
+    # Patch safe_get_branches to return only the lab-only Гагарина 64 branch
+    monkeypatch.setattr(
+        "messengers_router.response_builder.safe_get_branches",
+        lambda _svc: [{"id": "branch_9358", "name": _LAB_ONLY_BRANCH, "aliases": "гагарина 64 (самара)"}],
+    )
+
+    env = build_appointment_step_response("APPOINTMENT", evidence, state, svc, memory)
+
+    assert env is not None
+    text = str(env.text or "")
+    assert _LAB_ONLY_BRANCH not in text, (
+        f"Lab-only branch {_LAB_ONLY_BRANCH!r} must NOT appear in appointment text; got: {text!r}"
+    )
+    # Should be a clarification prompt, not a branch list
+    assert "уточните" in text.lower() or "адрес" in text.lower(), (
+        f"Expected clarification text when address evidence is empty; got: {text!r}"
+    )

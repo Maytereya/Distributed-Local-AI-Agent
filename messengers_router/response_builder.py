@@ -582,8 +582,27 @@ def build_appointment_step_response(
             addresses = [str(x).strip() for x in stored_options if str(x).strip()]
         if not addresses:
             branches = safe_get_branches(services)
+            # Fix C (BUG-2026-06-04-04): defense-in-depth — when a specialty is
+            # requested (appointment_mode + specialty entity set) AND the address
+            # evidence is empty or absent, do NOT fall back to the specialty-agnostic
+            # safe_get_branches list. That list can contain lab/collection-only branches
+            # (e.g. «Гагарина 64») that have zero doctors of any specialty.
+            # With empty branches the call returns [] and appointment_text_branch_prompt
+            # emits an honest "уточните филиал" line instead of a wrong address.
+            # Non-appointment ADDRESS queries and cases where address evidence is
+            # populated are not affected.
+            specialty_entity = str(
+                entities.get("specialty") or ""
+            ).strip()
+            address_evidence = evidence.get(ek.ADDRESS)
+            address_evidence_empty = (
+                not isinstance(address_evidence, dict)
+                or not address_evidence.get("addresses")
+            )
+            if specialty_entity and address_evidence_empty:
+                branches = []
             addresses = appointment_addresses_for_city(
-                evidence.get(ek.ADDRESS),
+                address_evidence,
                 branches,
                 city=city or None,
                 limit=5,

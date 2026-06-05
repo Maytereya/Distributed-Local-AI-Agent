@@ -76,6 +76,16 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
     ]
     appointment_mode = bool(entities.get("__appointment_mode"))
     branch = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city"]) or ""
+    # Track whether branch came from *only* the city entity (no specific branch/region/unit
+    # was mentioned). When true we must NOT use branch_q as a substring filter on doctor
+    # addresses — those addresses don't carry the city prefix (e.g. «пр.Ленина, 5» has no
+    # «самара») so city-as-branch filtering drops ALL valid doctor branches.
+    # City-scoping relies on the existing Samara-token logic instead.
+    _branch_is_city_only = (
+        not _get_first_present(entities, ["region", "branch", "company_unit", "unit"])
+        and bool(_get_first_present(entities, ["city"]))
+        and bool(branch)
+    )
     if not branch:
         raw_query = str(query or "").strip()
         if raw_query and (_looks_like_real_address(raw_query) or _ADDRESS_HINT_RE.search(raw_query)):
@@ -266,15 +276,35 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
         doctors = await self._ensure_doctors_cache_loaded()
     except Exception:
         doctors = []
+    # Fix A (BUG-2026-06-04-04): when branch_q is merely the CITY name (no specific
+    # street/unit was mentioned), do NOT use it as a substring filter on doctor
+    # addresses. Doctor region strings like «пр.Ленина, 5» carry no city prefix, so
+    # «самара» not in «пр.ленина, 5» would drop every valid branch. City scoping is
+    # handled by the Samara-region-token path above; here we rely on that filtering
+    # having already happened (regions were empty → we're in fallback).
+    effective_branch_q = "" if _branch_is_city_only else branch_q
+
+    # Fix B (BUG-2026-06-04-04): when specialty is set + appointment_mode, restrict
+    # fallback to doctors whose unit/specialization matches the requested specialty.
+    # This ensures only e.g. gynecologist branches appear, never a lab-only branch.
+    specialty_q = _normalise_input(
+        _get_first_present(entities, ["specialty"]) or ""
+    ) if appointment_mode else ""
+
     fallback: list[str] = []
     for d in doctors:
-        for addr in (d.get("regions") or d.get("addresses") or []):
-            a = str(addr).strip()
-            if not a:
-                continue
+        if not isinstance(d, dict):
+            continue
+        if specialty_q and _doctor_role_specialty_match_level(d, specialty_q) <= 0:
+            continue
+        regions_src = [str(x).strip() for x in (d.get("regions") or d.get("addresses") or []) if str(x).strip()]
+        # Skip doctors whose entire regions list belongs explicitly to another city.
+        if _has_explicit_non_samara_regions(regions_src):
+            continue
+        for a in regions_src:
             if not _looks_like_real_address(a):
                 continue
-            if branch_q and branch_q not in _normalise_input(a):
+            if effective_branch_q and effective_branch_q not in _normalise_input(a):
                 continue
             fallback.append(a)
     return {
