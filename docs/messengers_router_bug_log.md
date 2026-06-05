@@ -11,6 +11,26 @@
 
 ---
 
+## BUG-2026-06-04-03 — «Са-125» (кириллица) не находит маркер CA-125; бот выдаёт generic «Для какой цели…»
+
+- **Симптом (live, диалог #166):** «Са-125» → бот: «Для какой цели хотите подобрать анализы? Например: проверить щитовидку, витамины, чекап» — вместо цены/информации по онкомаркеру CA-125 (яичники).
+- **Корень (воспроизведён офлайн):** `deterministic_rule_decision("Са-125", {}, allow_refine=False)` → `None` — ни один детерминированный шаблон не распознаёт bare-name лаб-кода «Са-125». Pipeline падает в LLM → LLM возвращает `TEST_ASSIST` с **пустыми** entities → `missing_slots("TEST_ASSIST", {})` находит отсутствующие `test_goal`/`test_name` → planner выставляет pending + возвращает пустой план → response_builder показывает `CLARIFY_TEXT_MAP["TEST_ASSIST"]`. Матчер (\_rank\_price\_rows) при этом работает корректно: «Са-125» → «CA - 125 (яичники)» через digit-токен «125»; пробел до вызова сервиса так и не доходит. Вторичный пробел: нет homoglyph-fold для Cyrillic→Latin в токенизаторе (актуально для форм без разделителя, например «са125»).
+- **Инвариант (класс):** буквенно-цифровой лаб-код (короткий буквенный ПРЕФИКС → сразу цифра, ≤ 30 символов) — конкретный анализ, а НЕ пустой topic-switch. Должен уходить в `TEST_ASSIST` с заполненным `test_name`, не в generic LLM → пустые entities → clarify. Применяется к кириллическим и латинским формам одинаково. **Критично (правка ревью):** буквы префикса ограничены латиницей + кириллическими ГОМОГЛИФАМИ (а е о р с х у к в н м т + заглавные), а структура «префикс→цифра» требует цифру сразу за префиксом. Это отсекает класс «адрес/слово + номер» — «Гагарина 64», «Ленина 5», «Победы 83», «Кирова 223», «кабинет 5», «Сухова 12» — который иначе ложно опознавался как лаб-код (в т.ч. ломал бы выбор филиала). Обычные русские слова без цифры («сахар», «рак», «тироксин») не затрагиваются.
+- **Фикс-коммит:** `ed22b57` (1. `policies.py`: `_CYR_TO_LAT` map + `fold_cyrillic_homoglyphs()` + `_LAB_CODE_RE` + `detect_specific_lab_code_intent()`; 2. `classifier.py`: import + `elif detect_specific_lab_code_intent(text)` перед `elif detect_test_assist_intent` — маршрут `TEST_ASSIST` с `entities={"test_name": text}` и флагом `rule_test_assist_lab_code`; 3. `services/_prices_helpers.py`: `_PRICE_CYR_TO_LAT` + `_fold_homoglyph_token()` применяется в `_price_query_tokens` как EXTRA кандидат для digit-содержащих токенов).
+- **Покрытие:**
+  - `test_detect_specific_lab_code_intent_class_invariant` (параметризован: Са-125/CA-125/CA 19-9/СА 19-9/HbA1c/CA 15-3 → True)
+  - `test_detect_specific_lab_code_intent_negative_class` (параметризован: сахар/рак/тироксин/общий анализ крови/витамин Д/длинная строка → False; + анти-регресс адреса: Гагарина 64/Ленина 5/Победы 83/Ново-Садовая 180/Кирова 223/Аминева 29/кабинет 5/айфон 12 → False)
+  - `test_deterministic_rule_decision_ca125_cyrillic_routes_to_test_assist` (Са-125 → TEST_ASSIST + test_name + rule_test_assist_lab_code)
+  - `test_deterministic_rule_decision_ca125_latin_routes_to_test_assist` (CA-125 → аналогично)
+  - `test_missing_slots_satisfied_when_test_name_and_city_set` (нет pending при test_name+city)
+  - `test_lab_code_route_does_not_match_common_russian_words` (анти-регресс: сахар/рак/тироксин не дают rule_test_assist_lab_code)
+  - `test_rank_price_rows_cyrillic_latin_lab_codes` (параметризован: Са-125/CA-125/CA 19-9/СА 19-9 → верхняя строка каталога содержит «ca - 125» / «ca 19»)
+  - `test_rank_price_rows_common_russian_words_no_false_ca125_match` (параметризован: сахар/рак/тироксин → нет ложного матча на CA-125)
+  - `test_fold_homoglyph_token_only_for_digit_tokens` (са125→ca125; сахар/рак/ca125→None)
+  - Gate: ruff clean; test_specialty_nlu 70 passed (после ужесточения регекса) + test_messenger_services 213 passed; полный suite — фоновый ре-ран перед коммитом. **Live «после» — после деплоя** («Са-125» → цена CA-125).
+
+---
+
 ## BUG-2026-06-04-02 — «узнать анализы» выдаёт список филиалов (живая очередь) вместо вопроса про результаты
 
 - **Симптом (live, сессия 151):** «узнать анализы» → бот «Анализы выполняются без записи, в порядке живой очереди. В городе Самара доступны филиалы: [31 филиал…]». Пациент имел в виду РЕЗУЛЬТАТЫ, бот понял как «где сдать». Следом «хочу узнать свои результаты анализов» → «Переключаю на оператора» (см. примечание по сбою B ниже).
