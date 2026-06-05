@@ -312,6 +312,40 @@ _VITAMIN_CODE_MAP = {
 
 
 # ---------------------------------------------------------------------------
+# Homoglyph folding (Cyrillic→Latin) — для сравнения lab-кодов
+#
+# Применяется ТОЛЬКО к токенам, содержащим цифру (признак lab-кода),
+# как ДОПОЛНИТЕЛЬНЫЙ кандидат рядом с оригиналом. Это позволяет
+# «Са-125» → «Ca-125» совпасть с «CA - 125» без риска, что обычные
+# русские слова («сахар», «рак») ложно матчатся на латинские коды.
+# Символы-разделители (пробел, дефис) нормализуются в пустую строку
+# для нечувствительности к форматированию пробелов («CA - 125» ~ «CA-125»).
+# ---------------------------------------------------------------------------
+
+_PRICE_CYR_TO_LAT: dict[str, str] = {
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c",
+    "х": "x", "у": "y", "к": "k", "в": "b", "н": "h",
+    "м": "m", "т": "t",
+}
+
+
+def _fold_homoglyph_token(token: str) -> str | None:
+    """Fold Cyrillic homoglyphs to Latin for a single token (only if it contains a digit).
+
+    Returns folded string if the token contains a digit AND has at least one
+    homoglyph substitution, otherwise returns None (no extra candidate needed).
+    Only applied to short alphanumeric tokens to avoid corrupting Russian words.
+
+    :param token: нормализованный (lowercase) токен
+    :return: сложенный кандидат или None
+    """
+    if not token or not any(ch.isdigit() for ch in token):
+        return None
+    folded = "".join(_PRICE_CYR_TO_LAT.get(ch, ch) for ch in token)
+    return folded if folded != token else None
+
+
+# ---------------------------------------------------------------------------
 # Helpers (order preserved from services_legacy.py for diff readability)
 # ---------------------------------------------------------------------------
 
@@ -401,6 +435,14 @@ def _price_query_tokens(text: str) -> list[str]:
         if token in _PRICE_QUERY_STOPWORDS:
             continue
         out.append(token)
+        # Homoglyph-folded EXTRA candidate: for tokens containing a digit (lab codes
+        # like «са» from «са-125»), also add the Latin-folded version so that
+        # Cyrillic-typed «Са-125» can match catalog Latin «CA - 125» via the folded
+        # token «ca». Applied only to digit-bearing tokens to avoid corrupting normal
+        # Russian words. The original token is kept; folded is an additive extra.
+        folded = _fold_homoglyph_token(token)
+        if folded and folded not in out:
+            out.append(folded)
         # "прием" и "консультация" считаем взаимозаменяемыми для ранжирования цен.
         if token.startswith("прием") and "консультац" not in out:
             out.append("консультац")

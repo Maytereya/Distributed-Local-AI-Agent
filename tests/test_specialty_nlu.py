@@ -10,6 +10,8 @@ from messengers_router.policies import detect_clinic_hours_intent
 from messengers_router.policies import detect_tax_doc_request_intent
 from messengers_router.policies import detect_ambiguous_analysis_lookup
 from messengers_router.policies import AMBIGUOUS_ANALYSIS_CLARIFY_TEXT
+from messengers_router.policies import detect_specific_lab_code_intent
+import pytest
 from messengers_router.renderer import (
     format_address_for_patient,
     format_doctor_info_for_patient,
@@ -683,3 +685,87 @@ def test_service_bundle_renderer_shows_doctor_specialty_label():
     text = format_service_bundle_for_patient(payload, {})
 
     assert "Дурасов Владимир Владимирович (Хирург)" in text
+
+
+# ---------------------------------------------------------------------------
+# BUG-2026-06-04-03: Cyrillic-typed Latin lab codes (Са-125 / CA-125)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text", [
+    "Са-125",      # Cyrillic «С» + «а» + digit
+    "CA-125",      # pure Latin
+    "CA 19-9",     # Latin with space
+    "СА 19-9",     # Cyrillic homoglyphs + space
+    "HbA1c",       # mixed case lab code
+    "CA 15-3",     # another tumor marker
+])
+def test_detect_specific_lab_code_intent_class_invariant(text):
+    """КЛАСС: буквенно-цифровые лаб-коды должны детектироваться как конкретный анализ."""
+    assert detect_specific_lab_code_intent(text) is True, f"Expected True for {text!r}"
+
+
+@pytest.mark.parametrize("text", [
+    "сахар",                      # обычное русское слово
+    "рак",                        # короткое слово без цифры
+    "тироксин",                   # длинное русское слово без цифры
+    "общий анализ крови",         # многословный запрос
+    "витамин Д",                  # нет цифры (пробел + буква — не код)
+    "какие анализы сдать",        # обычный вопрос
+    "CA - 125 (яичники)",         # это строка из каталога, длиннее 30 символов
+    "",                           # пустая строка
+    # АНТИ-РЕГРЕСС (BUG-2026-06-04-03): «адрес/слово + номер» НЕ лаб-код.
+    # Критично — иначе выбор филиала «Ленина 5» уехал бы в TEST_ASSIST.
+    "Гагарина 64",
+    "Ленина 5",
+    "Победы 83",
+    "Ново-Садовая 180",
+    "Кирова 223",
+    "Аминева 29",
+    "кабинет 5",
+    "айфон 12",
+])
+def test_detect_specific_lab_code_intent_negative_class(text):
+    """КЛАСС (негативный): обычные слова и длинные строки НЕ должны детектироваться как лаб-код."""
+    assert detect_specific_lab_code_intent(text) is False, f"Expected False for {text!r}"
+
+
+def test_deterministic_rule_decision_ca125_cyrillic_routes_to_test_assist():
+    """BUG-2026-06-04-03: «Са-125» (кириллица) → TEST_ASSIST с test_name, без generic clarify."""
+    out = run(
+        deterministic_rule_decision("Са-125", {}, allow_refine=False, attach_secondary=False)
+    )
+    assert out is not None, "Са-125 должен давать детерминированный маршрут"
+    assert out.label == "TEST_ASSIST", f"Expected TEST_ASSIST, got {out.label}"
+    assert out.entities.get("test_name") == "Са-125", f"test_name должен быть 'Са-125', got {out.entities}"
+    assert "rule_test_assist_lab_code" in out.flags
+
+
+def test_deterministic_rule_decision_ca125_latin_routes_to_test_assist():
+    """CA-125 (латиница) → TEST_ASSIST с test_name."""
+    out = run(
+        deterministic_rule_decision("CA-125", {}, allow_refine=False, attach_secondary=False)
+    )
+    assert out is not None
+    assert out.label == "TEST_ASSIST"
+    assert out.entities.get("test_name") == "CA-125"
+    assert "rule_test_assist_lab_code" in out.flags
+
+
+def test_missing_slots_satisfied_when_test_name_and_city_set():
+    """missing_slots для TEST_ASSIST → [] при test_name + city (нет clarify, план создаётся)."""
+    entities = {"test_name": "Са-125", "city": "Самара"}
+    assert missing_slots("TEST_ASSIST", entities) == []
+
+
+def test_lab_code_route_does_not_match_common_russian_words():
+    """Анти-регресс: обычные русские слова «сахар», «рак» НЕ уходят в лаб-код маршрут."""
+    for text in ("сахар", "рак", "тироксин"):
+        out = run(
+            deterministic_rule_decision(text, {}, allow_refine=False, attach_secondary=False)
+        )
+        # Должно быть либо None (падёт на LLM), либо не TEST_ASSIST с rule_test_assist_lab_code
+        if out is not None:
+            assert "rule_test_assist_lab_code" not in out.flags, (
+                f"{text!r} не должен матчиться как lab-код, got flags={out.flags}"
+            )

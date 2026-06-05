@@ -4557,3 +4557,71 @@ def test_test_assist_oak_alias_surfaces_full_blood_count_family():
     res2 = asyncio.run(s.test_assist("витамин д", {}))
     names2 = [str(t.get("serviceName") or "").lower() for t in (res2.get("tests") or [])]
     assert names2 and all("витамин" in n or "vdr" in n or "vitamin" in n.lower() for n in names2[:3]), names2
+
+
+# ---------------------------------------------------------------------------
+# BUG-2026-06-04-03: Cyrillic-typed Latin lab codes — catalog match invariant
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("query,expected_fragment", [
+    ("Са-125", "ca - 125"),        # Cyrillic homoglyphs → CA - 125 (яичники)
+    ("CA-125", "ca - 125"),        # pure Latin
+    ("CA 19-9", "ca 19"),          # another tumor marker
+    ("СА 19-9", "ca 19"),          # Cyrillic СА
+])
+def test_rank_price_rows_cyrillic_latin_lab_codes(query, expected_fragment):
+    """КЛАСС (BUG-2026-06-04-03): кириллические и латинские формы лаб-кодов должны
+    матчиться на правильную строку каталога через digit-token или homoglyph-fold."""
+    from messengers_router.services._prices_helpers import _rank_price_rows
+
+    catalog = [
+        {"serviceName": "CA - 125 (яичники)", "serviceHomecode": "225", "cost": 650},
+        {"serviceName": "CA 19 - 9 (карцинома поджелудочной железы)", "serviceHomecode": "228", "cost": 800},
+        {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "serviceHomecode": "502", "cost": 390},
+        {"serviceName": "Тиреотропный гормон (ТТГ)", "serviceHomecode": "t1", "cost": 380},
+    ]
+    ranked = _rank_price_rows(catalog, query, limit=3)
+    assert ranked, f"No results for query {query!r}"
+    top_name = str(ranked[0].get("serviceName") or "").lower()
+    assert expected_fragment in top_name, (
+        f"Query {query!r}: expected '{expected_fragment}' in top result, got {top_name!r}"
+    )
+
+
+@pytest.mark.parametrize("query", [
+    "сахар",
+    "рак",
+    "тироксин",
+])
+def test_rank_price_rows_common_russian_words_no_false_ca125_match(query):
+    """КЛАСС (анти-регресс BUG-2026-06-04-03): обычные русские слова без цифр
+    НЕ должны ложно матчиться на CA-125 через homoglyph-fold."""
+    from messengers_router.services._prices_helpers import _rank_price_rows
+
+    catalog = [
+        {"serviceName": "CA - 125 (яичники)", "serviceHomecode": "225", "cost": 650},
+        {"serviceName": "CA 19 - 9 (карцинома поджелудочной железы)", "serviceHomecode": "228", "cost": 800},
+    ]
+    ranked = _rank_price_rows(catalog, query, limit=3)
+    # Русское слово без цифры не должно давать CA-125 как верхний результат
+    if ranked:
+        top_name = str(ranked[0].get("serviceName") or "").lower()
+        assert "ca - 125" not in top_name and "ca 19" not in top_name, (
+            f"Russian word {query!r} falsely matched CA catalog row: {top_name!r}"
+        )
+
+
+def test_fold_homoglyph_token_only_for_digit_tokens():
+    """_fold_homoglyph_token: fold применяется только к токенам с цифрой."""
+    from messengers_router.services._prices_helpers import _fold_homoglyph_token
+
+    # токен с цифрой и кириллическими гомоглифами → сложенный кандидат
+    assert _fold_homoglyph_token("са125") == "ca125"
+    # токен без цифры → None (не создаём лишних кандидатов)
+    assert _fold_homoglyph_token("сахар") is None
+    assert _fold_homoglyph_token("рак") is None
+    # уже чисто латинский токен с цифрой → None (нечего менять)
+    assert _fold_homoglyph_token("ca125") is None
+    # пустая строка → None
+    assert _fold_homoglyph_token("") is None

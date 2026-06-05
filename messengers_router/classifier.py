@@ -61,6 +61,7 @@ from .policies import (
     missing_slots,
     service_name_conflicts_with_doctor,
     detect_unsupported_catalog,
+    detect_specific_lab_code_intent,
 )
 
 _CLASSIFY_TIMEOUT = 45
@@ -1386,6 +1387,19 @@ async def deterministic_rule_decision(
                     confidence=0.72,
                     entities={},
                     flags=local_flags | {"rule_prepare"},
+                    needs_handoff=False,
+                    context_action="continue",
+                )
+            elif detect_specific_lab_code_intent(text):
+                # Bare Latin-coded lab marker (e.g. «Са-125», «CA-125», «HbA1c»,
+                # «CA 19-9») — конкретный анализ без ценового/контекстного слова.
+                # Роутим как TEST_ASSIST с заполненным test_name, чтобы missing_slots
+                # не сработал и test_assist() получил запрос напрямую (BUG-2026-06-04-03).
+                decision = RouteDecision(
+                    label="TEST_ASSIST",
+                    confidence=0.75,
+                    entities={"test_name": str(text).strip()},
+                    flags=local_flags | {"rule_test_assist_lab_code"},
                     needs_handoff=False,
                     context_action="continue",
                 )
