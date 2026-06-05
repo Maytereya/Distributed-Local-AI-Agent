@@ -11,6 +11,30 @@
 
 ---
 
+## BUG-2026-06-04-04 — Запись к специальности предлагает безврачебный лабораторный филиал «Гагарина, 64»
+
+- **Симптом (live, прод-трейс):** «Запись к врачу-гинекологу» → бот: «Есть возможность записи на приём к гинеколог в городе Самара по адресам: - ул.Гагарина, 64. Какой филиал вам удобен?» — тогда как «Гагарина 64» — лабораторный/заборный пункт с нулём врачей любой специальности.
+- **Корень (воспроизведён офлайн + прод-трейс):** два дефекта в цепочке:
+  1. **City-as-branch false-empty** (`messengers_router/services/addresses.py`, doctors-cache fallback ~line 280): `branch` берётся через `_get_first_present(entities, ["region","branch","company_unit","unit","city"])` — при наличии только `city="Самара"` получается `branch_q="самара"`. Строки регионов врача хранятся БЕЗ города («пр.Ленина, 5»), поэтому `"самара" not in "пр.ленина, 5"` — все адреса гинекологов отбрасываются, fallback возвращает `addresses=[]`.
+  2. **Specialty-agnostic safe_get_branches fallback** (`messengers_router/response_builder.py` ~line 584): при пустом address evidence response_builder вызывает `safe_get_branches()` (все ветки клиники, без специальности) → `appointment_addresses_for_city` с пустым address payload падает в loop по всем веткам → «Гагарина 64» (единственная в offline branches-кэше) попадает в ответ.
+- **Инвариант (класс):** appointment+specialty запрос (любая специальность, любой город) обязан предлагать ТОЛЬКО ветки с врачами данной специальности. Лабораторный/безврачебный филиал (0 врачей любой специальности) **никогда** не должен появляться в appointment branch-offer для doctor-appointment запроса. Применяется к гинекологу, кардиологу и любой другой специальности.
+- **Фикс-коммит:** `bd65843`
+- **Изменённые файлы:** `messengers_router/services/addresses.py`, `messengers_router/response_builder.py`
+- **Описание фикса:**
+  - **Fix A** (`addresses.py`): добавлен флаг `_branch_is_city_only` — когда `branch` получен исключительно из `city`-entity (нет region/branch/unit), `branch_q` НЕ применяется как substring-фильтр к адресам врачей. Полагаемся на существующую Samara-token логику для ограничения по городу.
+  - **Fix B** (`addresses.py`): в doctors-cache fallback при `appointment_mode + specialty` — итерируем только по врачам, у которых `_doctor_role_specialty_match_level(d, specialty_q) > 0`. Гарантирует только гинекологические ветки (Ленина 5, Победы 83, Аминева 29...), а не все подряд. Дополнительно применяется `_has_explicit_non_samara_regions` — фильтруем явно несамарских врачей (как и в `_procedure_branches_from_index`).
+  - **Fix C** (`response_builder.py`): defense-in-depth — при `specialty_entity` + пустом address evidence (`addresses=[]`), `branches` для `appointment_addresses_for_city` устанавливается в `[]`. Предотвращает попадание specialty-agnostic `safe_get_branches` в ответ — вместо неверного адреса выдаётся честный «Уточните филиал/адрес».
+- **Покрытие:**
+  - `test_address_info_appointment_specialty_never_returns_lab_only_branch_class` (параметризован: гинеколог/кардиолог → Гагарина 64 отсутствует; адреса — подмножество реальных веток специальности из локального кэша; DATA-DRIVEN)
+  - `test_address_info_appointment_gynecologist_returns_nonzero_addresses` (синтетический кэш: 2 гинеколога → непустой список, Гагарина 64 отсутствует)
+  - `test_address_info_appointment_specific_branch_filter_still_works` (регресс: branch=«Победы» + specialty → только ул.Победы 83)
+  - `test_address_info_non_appointment_address_query_unaffected` (регресс: без appointment_mode → specialty-фильтр НЕ применяется, терапевт + гинеколог оба в результате)
+  - `test_response_builder_appointment_specialty_empty_evidence_offers_clarification` (defense-in-depth: пустой address evidence + specialty → NO Гагарина 64 в тексте, только уточняющий вопрос)
+  - Gate: ruff clean; `test_messenger_services / test_specialty_nlu / test_router_flow_override` — зелёные (счёт — после прогона gate).
+- **⚠️ Остаточное ограничение (НЕ фиксилось, осознанно):** утечка несамарских филиалов возможна ТОЛЬКО в деградированном режиме (live `/regions` API недоступен → срабатывает doctors-cache fallback; это и был момент бага — латентность, см. BUG-2026-06-04 eval). В fallback адреса врачей хранятся без маркера города («ул. Пирогова, 4» = Новокуйбышевск, «ул.Больничная, 44Г» = Красный Яр, «Большая Садовая 139/150») — текстом их от Самары не отличить, а `_is_explicit_non_samara_region` ловит лишь формат «г. <город>». Поэтому в оффере «город Самара» в деградированном режиме может оказаться 2-3 несамарских филиала специальности. Это НАМНОГО лучше прежнего поведения (безврачебный «Гагарина 64»), и при живом API используется основной regions-путь (Samara-фильтрованный) — утечки нет. Корректный фикс: кросс-сверка `region_ids` врача с Samara-region-id (нужен живой `/regions`, который в этом пути как раз лежит) — отложено.
+
+---
+
 ## BUG-2026-06-04-03 — «Са-125» (кириллица) не находит маркер CA-125; бот выдаёт generic «Для какой цели…»
 
 - **Симптом (live, диалог #166):** «Са-125» → бот: «Для какой цели хотите подобрать анализы? Например: проверить щитовидку, витамины, чекап» — вместо цены/информации по онкомаркеру CA-125 (яичники).
