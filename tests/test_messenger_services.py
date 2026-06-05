@@ -4421,7 +4421,14 @@ def test_result_404_is_not_ready_not_operator(monkeypatch, status_code, expect_o
     else:
         assert not res.get("handoff_required"), status_code
         preview = str(res.get("result_preview") or "").lower()
-        assert "в работе" in preview and "оператор" not in preview, status_code
+        # BUG-2026-06-04-05: при 404 бот НЕ знает «не готов» vs «не найден/неверные
+        # данные/нет в этом medserver» (прод ходит в тестовый medserver). Не утверждаем
+        # ложно «Результат пока не готов» — честно «не нашёл … проверьте данные».
+        # Авто-эскалации на оператора при 404 по-прежнему НЕТ (handoff_required falsy);
+        # «оператор» в тексте — лишь предложение пользователю написать, не auto-handoff.
+        assert "не нашёл" in preview, status_code
+        assert "проверьте" in preview, status_code
+        assert "результат пока не готов" not in preview, status_code
 
 
 def test_service_procedure_flag_maps_usi_analysis_ecg():
