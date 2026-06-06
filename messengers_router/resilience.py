@@ -45,3 +45,53 @@ def classify_api_response(resp: Any, *, exc: Exception | None = None) -> str:
     if isinstance(sc, int) and 500 <= sc <= 599:
         return TECH_UNAVAILABLE
     return TECH_UNAVAILABLE
+
+
+def failure_mode_from_response(resp: Any, *, exc: Exception | None = None) -> str:
+    """Детализирует режим сбоя для логов/метрик."""
+    if exc is not None:
+        return FM_EXCEPTION
+    if not isinstance(resp, dict):
+        return FM_EXCEPTION
+    if resp.get("ok"):
+        return FM_EMPTY_DATA
+    sc = resp.get("status_code")
+    if sc == 404:
+        return FM_HTTP_404
+    if sc is None:
+        return FM_TIMEOUT
+    if isinstance(sc, int) and 500 <= sc <= 599:
+        return FM_HTTP_5XX
+    return FM_CONN_ERROR
+
+
+def log_degraded(
+    *,
+    upstream: str,
+    failure_mode: str,
+    latency_ms: int | None = None,
+    session_id: str | None = None,
+    fallback_used: bool = False,
+) -> None:
+    """Одна структурная строка на degraded-событие (Datadog-ready схема)."""
+    log.warning(
+        "degraded_upstream upstream=%s failure_mode=%s latency_ms=%s session_id=%s fallback_used=%s",
+        upstream, failure_mode, latency_ms, session_id, fallback_used,
+    )
+
+
+def mark_degraded(payload: dict, *, upstream: str, failure_mode: str, fallback_used: bool) -> dict:
+    """Помечает payload как degraded (для логов и Фаза-3 сигнала оператору)."""
+    payload["degraded"] = True
+    payload["degraded_upstream"] = upstream
+    payload["degraded_mode"] = failure_mode
+    payload["degraded_fallback_used"] = fallback_used
+    return payload
+
+
+def tech_unavailable_text(what: str = "информацию") -> str:
+    """Честное сообщение при тех-сбое апстрима."""
+    return (
+        f"По техническим причинам сейчас не удаётся загрузить {what}. "
+        "Пожалуйста, попробуйте позже или напишите «оператор»."
+    )
