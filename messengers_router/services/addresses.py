@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from agent_logic_2.nayka_api import api_price
 
 from ..policies import handoff_message
+from .. import resilience as _R
 from ..service_phrase import extract_service_phrase
 from ._addresses_helpers import (
     _addresses_to_branch_payload,
@@ -60,10 +61,17 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
     :return: словарь с адресами и данными о филиалах
     """
 
+    # /regions tech-failure can surface two ways: the call raising here (e.g. a test
+    # double, or a future direct raise), OR the real _ensure_regions_loaded swallowing
+    # the exception under its lock and setting self._regions_last_failed. Treat either as degraded.
+    regions_tech_failed = False
     try:
         regions = await self._ensure_regions_loaded()
     except Exception:
         regions = []
+        regions_tech_failed = True
+    if self._regions_last_failed:
+        regions_tech_failed = True
     # Работаем только по Самаре.
     regions = [
         r for r in regions
@@ -307,12 +315,36 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
             if effective_branch_q and effective_branch_q not in _normalise_input(a):
                 continue
             fallback.append(a)
-    return {
-        "addresses": sorted(set(fallback)),
-        "branches": [{"address": a, "phone": "", "work_time": ""} for a in sorted(set(fallback))],
+    deduped = sorted(set(fallback))
+    if regions_tech_failed and not deduped:
+        # No safe best-effort data AND /regions tech-failed → honest tech_unavailable,
+        # never misleading addresses. No auto-handoff (user can type «оператор»).
+        # failure_mode is FM_EXCEPTION (not granular http_5xx/timeout) by design: site_regions
+        # returns a bare list and RAISES on HTTP error rather than an {ok,status_code} envelope,
+        # so an exception is the only failure signal available at this layer (Phase 1).
+        _R.log_degraded(upstream="regions", failure_mode=_R.FM_EXCEPTION, fallback_used=False)
+        tech_payload = {
+            "addresses": [],
+            "branches": [],
+            "note": "address_info: regions tech_unavailable",
+            "handoff_reason": "tech_unavailable",
+            "handoff_message": _R.tech_unavailable_text("список филиалов"),
+            "entities_used": entities,
+        }
+        return _R.mark_degraded(
+            tech_payload, upstream="regions", failure_mode=_R.FM_EXCEPTION, fallback_used=False
+        )
+    payload = {
+        "addresses": deduped,
+        "branches": [{"address": a, "phone": "", "work_time": ""} for a in deduped],
         "note": "address_info: doctors cache fallback",
         "entities_used": entities,
     }
+    if regions_tech_failed:
+        # Best-effort: doctors-cache addresses served, but mark the degradation.
+        _R.log_degraded(upstream="regions", failure_mode=_R.FM_EXCEPTION, fallback_used=True)
+        payload = _R.mark_degraded(payload, upstream="regions", failure_mode=_R.FM_EXCEPTION, fallback_used=True)
+    return payload
 
 
 async def _procedure_branches_from_index(

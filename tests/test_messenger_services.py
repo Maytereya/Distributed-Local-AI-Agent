@@ -23,6 +23,7 @@ from messengers_router.services._prices_helpers import (
 )
 from messengers_router import classifier as classifier_mod
 from messengers_router import policies as policies_mod
+from messengers_router import resilience as _R
 from messengers_router import services as svc_mod
 from messengers_router.city import match_city
 from messengers_router.mess_types import Evidence, SessionState
@@ -4938,3 +4939,68 @@ def test_response_builder_appointment_specialty_empty_evidence_offers_clarificat
     assert "уточните" in text.lower() or "адрес" in text.lower(), (
         f"Expected clarification text when address evidence is empty; got: {text!r}"
     )
+
+
+def test_address_info_regions_tech_failure_marks_degraded_uses_cache(monkeypatch):
+    # /regions tech-failure (exception) + doctors-cache present → best-effort addresses
+    # served AND payload marked degraded(upstream=regions). Honest signal not lost.
+    svc = Services()
+
+    async def boom():
+        raise ConnectionError("regions down")
+
+    async def fake_doctors():
+        return [_GYNEC_DOCTOR_AT_LENINA, _GYNEC_DOCTOR_AT_AMINEVA]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", boom)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_doctors)
+    ent = {"city": "Самара", "specialty": "гинеколог", "__appointment_mode": True}
+    r = run(svc.address_info("Запись к врачу-гинекологу", ent))
+    assert r.get("degraded") is True
+    assert r.get("degraded_upstream") == "regions"
+    assert r.get("degraded_fallback_used") is True
+    assert r.get("degraded_mode") == _R.FM_EXCEPTION
+    assert len(r.get("addresses") or []) > 0          # best-effort served
+    assert _LAB_ONLY_BRANCH not in (r.get("addresses") or [])
+
+
+def test_address_info_regions_tech_failure_no_cache_is_tech_unavailable(monkeypatch):
+    # /regions tech-failure + EMPTY doctors-cache → honest tech_unavailable payload:
+    # no misleading addresses, honest text, marked degraded, NOT auto-handoff.
+    svc = Services()
+
+    async def boom():
+        raise ConnectionError("regions down")
+
+    async def empty_doctors():
+        return []
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", boom)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", empty_doctors)
+    ent = {"city": "Самара", "specialty": "гинеколог", "__appointment_mode": True}
+    r = run(svc.address_info("Запись к врачу-гинекологу", ent))
+    assert r.get("degraded") is True
+    assert r.get("degraded_upstream") == "regions"
+    assert not (r.get("addresses") or [])             # no guessing
+    assert "техническ" in str(r.get("handoff_message") or "").lower()
+    assert not r.get("handoff_required")              # no auto-escalation
+
+
+def test_address_info_regions_clean_empty_is_not_degraded(monkeypatch):
+    # REGRESSION GUARD (BUG-2026-06-04-04 invariant): /regions returns [] *successfully*
+    # (not a tech failure) + doctors-cache present → addresses served, NOT marked degraded.
+    svc = Services()
+
+    async def empty_regions():
+        return []                                     # clean empty, no failure
+
+    async def fake_doctors():
+        return [_GYNEC_DOCTOR_AT_LENINA, _GYNEC_DOCTOR_AT_AMINEVA]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", empty_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_doctors)
+    ent = {"city": "Самара", "specialty": "гинеколог", "__appointment_mode": True}
+    r = run(svc.address_info("Запись к врачу-гинекологу", ent))
+    assert not r.get("degraded")                      # clean-empty != degraded
+    assert len(r.get("addresses") or []) > 0
+    assert _LAB_ONLY_BRANCH not in (r.get("addresses") or [])

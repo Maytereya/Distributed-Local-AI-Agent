@@ -81,6 +81,7 @@ class Services:
     _doctors_cache_loaded_at: float = field(default=0.0, init=False)
     _regions_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
     _regions_cache_loaded_at: float = field(default=0.0, init=False)
+    _regions_last_failed: bool = field(default=False, init=False)
     _procedure_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
     _procedure_rows_loaded_at: float = field(default=0.0, init=False)
     _service_catalog_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
@@ -320,11 +321,11 @@ class Services:
                 regions = await asyncio.to_thread(api_nayka.site_regions)
                 if not isinstance(regions, list):
                     regions = []
+                self._regions_cache = regions
+                self._regions_cache_loaded_at = time.time()
+                self._regions_last_failed = False
             except Exception:
-                regions = []
-
-            self._regions_cache = regions
-            self._regions_cache_loaded_at = time.time()
+                self._regions_last_failed = True
             return self._regions_cache
 
     async def _samara_region_tokens(self) -> set[str]:
