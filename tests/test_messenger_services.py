@@ -4403,41 +4403,34 @@ def test_samara_region_tokens_recognise_lenina5_by_value_slug(monkeypatch):
     assert not any("оренбург" in t for t in tokens)
 
 
-@pytest.mark.parametrize(
-    "status_code,expect_operator",
-    [
-        (404, False),  # результат не готов / не найден → честное «в работе», без оператора
-        (500, True),   # реальный сбой сервера → оператор
-        (503, True),
-        (None, True),  # нет соединения / таймаут → оператор
-    ],
-)
-def test_result_404_is_not_ready_not_operator(monkeypatch, status_code, expect_operator):
-    # BUG-2026-06-02-03: HTTP 404 от resultForPatient = «результат не готов / не найден»
-    # (бизнес-состояние), а не тех-сбой. Класс-инвариант: когда бот не видит готового
-    # результата → честное «Анализы в работе… повторите позднее» БЕЗ эскалации на
-    # оператора; реальные сбои (5xx/таймаут/нет соединения) по-прежнему уходят на
-    # оператора. Параметризовано по статус-кодам, синтетические данные (не инстанс).
+@pytest.mark.parametrize("status_code", [404, 500, 503, None])
+def test_result_failure_taxonomy(monkeypatch, status_code):
+    # resilience Фаза1 / OC-1: 404 → честное «не нашёл» (NOT_FOUND, без оператора);
+    # 5xx/None → честный tech_unavailable (TECH, без авто-оператора, текст про техпричины).
     def fake_site_result(**kwargs):
         return {"ok": False, "status_code": status_code, "error": f"{status_code} err", "params": kwargs}
-
     monkeypatch.setattr(lab_tests_mod.api_nayka, "site_result_for_patient", fake_site_result)
     entities = {"surname": "Тестов", "year": "1990", "filial": "Бг", "number": "1"}
     res = asyncio.run(lab_tests_mod.test_result_status(None, "Тестов, 1990, Бг, 1", entities))
     assert res.get("ready") is False, status_code
-    if expect_operator:
-        assert res.get("handoff_required") is True, status_code
-    else:
-        assert not res.get("handoff_required"), status_code
-        preview = str(res.get("result_preview") or "").lower()
-        # BUG-2026-06-04-05: при 404 бот НЕ знает «не готов» vs «не найден/неверные
-        # данные/нет в этом medserver» (прод ходит в тестовый medserver). Не утверждаем
-        # ложно «Результат пока не готов» — честно «не нашёл … проверьте данные».
-        # Авто-эскалации на оператора при 404 по-прежнему НЕТ (handoff_required falsy);
-        # «оператор» в тексте — лишь предложение пользователю написать, не auto-handoff.
+    assert not res.get("handoff_required"), status_code
+    preview = str(res.get("result_preview") or "").lower()
+    if status_code == 404:
         assert "не нашёл" in preview, status_code
-        assert "проверьте" in preview, status_code
+        assert "техническ" not in preview, status_code
+    else:
+        assert "техническ" in preview, status_code
         assert "результат пока не готов" not in preview, status_code
+
+
+def test_result_exception_is_tech_unavailable(monkeypatch):
+    def boom(**kwargs):
+        raise ConnectionError("down")
+    monkeypatch.setattr(lab_tests_mod.api_nayka, "site_result_for_patient", boom)
+    res = asyncio.run(lab_tests_mod.test_result_status(None, "Тестов, 1990, Бг, 1",
+                      {"surname": "Тестов", "year": "1990", "filial": "Бг", "number": "1"}))
+    assert res.get("ready") is False
+    assert "техническ" in str(res.get("result_preview") or "").lower()
 
 
 def test_service_procedure_flag_maps_usi_analysis_ecg():

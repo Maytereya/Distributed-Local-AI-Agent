@@ -13,6 +13,7 @@ from urllib.parse import quote_from_bytes
 
 from agent_logic_2.nayka_api import api_nayka, api_price
 
+from .. import resilience as _R
 from ..policies import handoff_message
 from ._common import (
     _as_int,
@@ -272,32 +273,28 @@ async def test_result_status(self: "Services", query: str, entities: dict[str, A
             lang=fields["lang"],
             with_time=None,
         )
-    except Exception as exc:
-        return _result_fallback(f"resultForPatient failed: {exc}")
+        outcome = _R.classify_api_response(api_resp)
+        fmode = _R.failure_mode_from_response(api_resp)
+    except Exception:
+        api_resp, outcome, fmode = None, _R.TECH_UNAVAILABLE, _R.FM_EXCEPTION
 
-    if not isinstance(api_resp, dict) or not api_resp.get("ok"):
-        # HTTP 404 = по этим данным готового результата нет (ещё в работе / не найден).
-        # Это бизнес-состояние, а не сбой сервера → честный «в работе», БЕЗ оператора.
-        # Реальные сбои (5xx, таймаут, нет соединения → status_code 5xx/None) уходят в
-        # operator-fallback ниже.
-        if isinstance(api_resp, dict) and api_resp.get("status_code") == 404:
-            return {
-                "ready": False,
-                "note": "result_not_ready",
-                "result_preview": _RESULT_NOT_READY_TEXT,
-                "entities_used": entities,
-            }
-        return _result_fallback(f"resultForPatient error: {api_resp}")
-
-    payload = api_resp.get("data")
-    if not payload:
+    if outcome == _R.TECH_UNAVAILABLE:
+        _R.log_degraded(upstream="result_for_patient", failure_mode=fmode, fallback_used=False)
         return {
             "ready": False,
-            "note": "result_not_found_or_not_ready",
-            "result_payload": payload,
+            "note": "result_tech_unavailable",
+            "result_preview": _R.tech_unavailable_text("результаты анализов"),
+            "entities_used": entities,
+        }
+    if outcome == _R.NOT_FOUND:
+        return {
+            "ready": False,
+            "note": "result_not_ready",
             "result_preview": _RESULT_NOT_READY_TEXT,
             "entities_used": entities,
         }
+    # outcome == OK
+    payload = api_resp.get("data")
 
     link = _build_public_result_link(fields)
     if not link:
