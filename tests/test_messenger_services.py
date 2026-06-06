@@ -369,6 +369,15 @@ def test_handoff_message_supports_domain_specific_service_texts(reason, expected
     assert handoff_message(reason) == expected
 
 
+def test_handoff_message_tech_unavailable():
+    from messengers_router.policies import handoff_message
+    msg = handoff_message("tech_unavailable")
+    assert "техническ" in msg.lower()
+    from messengers_router.resilience import tech_unavailable_text
+    over = handoff_message("tech_unavailable", override=tech_unavailable_text("результаты анализов"))
+    assert "результаты анализов" in over
+
+
 def test_doctors_info_empty_cache_uses_domain_specific_handoff_message(monkeypatch):
     svc = Services()
 
