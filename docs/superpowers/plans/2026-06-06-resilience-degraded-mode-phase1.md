@@ -19,6 +19,21 @@
 
 ---
 
+## PROGRESS (обновлять при исполнении — durable resume-точка)
+
+- [x] **Task 1** resilience.py классификатор — `885883b`
+- [x] **Task 2** resilience.py log_degraded/mark_degraded/tech_unavailable_text — `74da638`
+- [x] **Task 3** HANDOFF_REASON_MATRIX `tech_unavailable` — `e8295f1`
+- [x] **Task 4** результаты 5xx/таймаут/exc → tech_unavailable (OC-1) — `d58cb5f` (full suite 954 passed)
+- [x] **Task 5** — ПОКРЫТ Task 4: `build_test_result_response` отдаёт `result_preview` как текст при `ready=False` без `missing_fields` (response_builder.py:304-306). Отдельной работы для результатов не нужно.
+- [ ] **Task 6** addresses: `_ensure_regions_loaded` сигнал тех-сбоя + best-effort/degraded — СЛЕДУЮЩАЯ
+- [ ] **Task 7** doctors_schedule tech-failure → tech_unavailable (+ response_builder рендер расписания)
+- [ ] **Task 8** api_nayka realtime fail-fast профиль (OC-2: realtime Retry total=0 + read 8с)
+
+**Resume:** свежая сессия — `git log --oneline` (последний resilience-коммит = `d58cb5f`), затем Task 6. resilience.py API: `R.OK/NOT_FOUND/TECH_UNAVAILABLE`, `classify_api_response`, `failure_mode_from_response`, `log_degraded`, `mark_degraded`, `tech_unavailable_text(what)`. В сервисах импорт: `from .. import resilience as _R`.
+
+---
+
 ## File Structure
 
 - **NEW** `messengers_router/resilience.py` — изолированный: outcome-константы, `classify_api_response`, `failure_mode_from_response`, `log_degraded`, `mark_degraded`, `tech_unavailable_text`. Без сети, без доменных зависимостей.
