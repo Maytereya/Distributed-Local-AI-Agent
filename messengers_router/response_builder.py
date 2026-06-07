@@ -577,6 +577,17 @@ def build_appointment_step_response(
             city = _DEFAULT_CITY
             state.last_entities["city"] = city
         stored_options = state.last_entities.get("appointment_branch_options")
+        # BUG-2026-06-07-01: for a doctor-specific appointment — especially reschedule,
+        # where build_appointment_schedule_preview_response returns early and never calls
+        # hydrate_appointment_context_from_schedule — source branch options from the
+        # doctor's OWN schedule regions instead of the specialty-agnostic safe_get_branches
+        # fallback, which can surface lab-only branches the doctor doesn't work at
+        # (e.g. «Гагарина 64»; same class as BUG-2026-06-04-04).
+        if doctor_selected and not (isinstance(stored_options, list) and stored_options):
+            schedule_payload = evidence.get(ek.DOCTOR_SCHEDULE)
+            if isinstance(schedule_payload, dict):
+                hydrate_appointment_context_from_schedule(state, schedule_payload)
+                stored_options = state.last_entities.get("appointment_branch_options")
         addresses = []
         if isinstance(stored_options, list):
             addresses = [str(x).strip() for x in stored_options if str(x).strip()]
