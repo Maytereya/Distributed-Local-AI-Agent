@@ -970,7 +970,7 @@ def find_doctor_schedule(
     MAX_DOCS = int(os.getenv("NAUKA_MAX_SCHEDULE_DOCS", "5"))
 
     # --- Получаем регионы ---
-    regions = site_regions()
+    regions = site_regions(realtime=True)
     region_map = {r["id"]: _region_display_name(r) for r in regions}
     region_id = None
     if region_name:
@@ -980,7 +980,7 @@ def find_doctor_schedule(
 
     # --- Получаем врачей ---
     try:
-        doctors_resp = _session_get(f"{base_url}/doctors")
+        doctors_resp = _session_get(f"{base_url}/doctors", realtime=True)
         doctors_resp.raise_for_status()
         doctors = doctors_resp.json()
     except (requests.RequestException, ValueError) as e:
@@ -1001,10 +1001,10 @@ def find_doctor_schedule(
 
     # --- Получаем companyUnit и doctorRegions ---
     try:
-        mappings = _session_get(f"{base_url}/doctorCompanyUnits")
+        mappings = _session_get(f"{base_url}/doctorCompanyUnits", realtime=True)
         mappings.raise_for_status()
         mappings = mappings.json()
-        dr_regions = _session_get(f"{base_url}/doctorRegions")
+        dr_regions = _session_get(f"{base_url}/doctorRegions", realtime=True)
         dr_regions.raise_for_status()
         dr_regions = dr_regions.json()
     except (requests.RequestException, ValueError) as e:

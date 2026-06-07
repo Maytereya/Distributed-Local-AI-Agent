@@ -113,7 +113,7 @@ def test_find_doctor_schedule_uses_extended_lookahead_window(monkeypatch):
             return _FakeResp([{"startTime": "09:30", "free": True}])
         raise AssertionError(f"Unexpected URL: {url}")
 
-    monkeypatch.setattr(api_nayka, "site_regions", lambda: [{"id": 8882, "name": "Самара", "addressForSite": "г. Самара, пр. Ленина, 5"}])
+    monkeypatch.setattr(api_nayka, "site_regions", lambda *, realtime=False: [{"id": 8882, "name": "Самара", "addressForSite": "г. Самара, пр. Ленина, 5"}])
     monkeypatch.setattr(api_nayka, "_session_get", fake_session_get)
     monkeypatch.setattr(api_nayka, "date", _FakeDate)
     monkeypatch.setattr(api_nayka, "SCHEDULE_LOOKAHEAD_DAYS", 14)
@@ -126,9 +126,10 @@ def test_find_doctor_schedule_uses_extended_lookahead_window(monkeypatch):
     assert any("endDate=2026-04-15" in url for url in seen_schedule_urls)
 
 
-def test_find_doctor_schedule_marks_schedule_and_cells_realtime(monkeypatch):
-    # OC-2 invariant: the per-doctor schedule + cells fetches (patient waiting) use the
-    # realtime fail-fast session; bulk catalog lookups stay on the background session.
+def test_find_doctor_schedule_all_upstream_calls_are_realtime(monkeypatch):
+    # OC-2 invariant (Task 8.1): ALL upstream calls in find_doctor_schedule use the
+    # realtime fail-fast session — leading catalog calls (site_regions, /doctors,
+    # /doctorCompanyUnits, /doctorRegions) AND per-day schedule + cells fetches.
     class _FakeResp:
         def __init__(self, payload):
             self._payload = payload
@@ -152,8 +153,10 @@ def test_find_doctor_schedule_marks_schedule_and_cells_realtime(monkeypatch):
             realtime_by_kind["doctors"] = rt
             return _FakeResp([{"id": 1, "fio": "Куршина Марина Владимировна", "ord": 1}])
         if url.endswith("/doctorCompanyUnits"):
+            realtime_by_kind["companyunits"] = rt
             return _FakeResp([{"worker": 1, "specialization": "педиатр"}])
         if url.endswith("/doctorRegions"):
+            realtime_by_kind["regions"] = rt
             return _FakeResp([{"worker": 1, "companyUnit": 38, "region": 8882}])
         if "/doctorSchedule?" in url:
             realtime_by_kind["schedule"] = rt
@@ -163,7 +166,11 @@ def test_find_doctor_schedule_marks_schedule_and_cells_realtime(monkeypatch):
             return _FakeResp([{"startTime": "09:30", "free": True}])
         raise AssertionError(f"Unexpected URL: {url}")
 
-    monkeypatch.setattr(api_nayka, "site_regions", lambda: [{"id": 8882, "name": "Самара", "addressForSite": "г. Самара, пр. Ленина, 5"}])
+    def fake_site_regions(*, realtime=False):
+        realtime_by_kind["site_regions"] = realtime
+        return [{"id": 8882, "name": "Самара", "addressForSite": "г. Самара, пр. Ленина, 5"}]
+
+    monkeypatch.setattr(api_nayka, "site_regions", fake_site_regions)
     monkeypatch.setattr(api_nayka, "_session_get", fake_session_get)
     monkeypatch.setattr(api_nayka, "date", _FakeDate)
     monkeypatch.setattr(api_nayka, "SCHEDULE_LOOKAHEAD_DAYS", 14)
@@ -171,9 +178,12 @@ def test_find_doctor_schedule_marks_schedule_and_cells_realtime(monkeypatch):
     result = api_nayka.find_doctor_schedule("Куршина")
 
     assert isinstance(result, list)
+    assert realtime_by_kind.get("site_regions") is True
+    assert realtime_by_kind.get("doctors") is True
+    assert realtime_by_kind.get("companyunits") is True
+    assert realtime_by_kind.get("regions") is True
     assert realtime_by_kind.get("schedule") is True
     assert realtime_by_kind.get("cells") is True
-    assert realtime_by_kind.get("doctors") is False
 
 
 def test_is_api_error_message_classification():
@@ -202,7 +212,7 @@ def test_find_doctor_schedule_returns_api_error_string_on_doctors_fetch_failure(
             raise requests.ConnectionError("read timed out")
         raise AssertionError(f"Unexpected URL after failure: {url}")
 
-    monkeypatch.setattr(api_nayka, "site_regions", lambda: [{"id": 8882, "name": "Самара"}])
+    monkeypatch.setattr(api_nayka, "site_regions", lambda *, realtime=False: [{"id": 8882, "name": "Самара"}])
     monkeypatch.setattr(api_nayka, "_session_get", fake_session_get)
 
     result = api_nayka.find_doctor_schedule("Паничева")
@@ -238,7 +248,7 @@ def test_find_doctor_schedule_logs_warning_on_schedule_fetch_failure(monkeypatch
             raise requests.ConnectionError("read timed out")
         raise AssertionError(f"Unexpected URL: {url}")
 
-    monkeypatch.setattr(api_nayka, "site_regions", lambda: [{"id": 8882, "name": "Самара"}])
+    monkeypatch.setattr(api_nayka, "site_regions", lambda *, realtime=False: [{"id": 8882, "name": "Самара"}])
     monkeypatch.setattr(api_nayka, "_session_get", fake_session_get)
 
     with caplog.at_level(logging.WARNING, logger="agent_logic_2.nayka_api.api_nayka"):
