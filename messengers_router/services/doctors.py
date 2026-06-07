@@ -19,6 +19,7 @@ from ..doctor_name_port import (
     resolve_schedule_surname,
     surname_variants,
 )
+from .. import resilience as _R
 from ..policies import handoff_message
 from ..russian_nlu import normalize_ru
 from ..service_phrase import extract_service_phrase
@@ -834,11 +835,21 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
                     schedule_unavailable_reason = None
                     break
     except Exception:
-        return _service_fallback(
+        # Hard schedule-source failure with no best-effort data at this layer →
+        # honest operator handoff (behavior unchanged); fallback_used=False accordingly.
+        _R.log_degraded(
+            upstream="doctor_schedule",
+            failure_mode=_R.FM_EXCEPTION,
+            fallback_used=False,
+        )
+        payload = _service_fallback(
             note="doctors_schedule_week unavailable",
             handoff_message=handoff_message("service_error_schedule"),
             entities=entities,
             extra={"schedule": []},
+        )
+        return _R.mark_degraded(
+            payload, upstream="doctor_schedule", failure_mode=_R.FM_EXCEPTION, fallback_used=False
         )
 
     if isinstance(data, list):

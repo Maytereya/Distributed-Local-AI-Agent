@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import logging
 
 import pytest
 
@@ -1169,6 +1170,44 @@ def test_doctors_schedule_week_negative_cache_ttl(monkeypatch):
     clock["ts"] += 4
     run(svc.doctors_schedule_week("расписание тестова", {"doctor_name": "Тестов"}))
     assert calls["count"] == 2, "Expected cache miss after negative TTL expiry"
+
+
+@pytest.mark.parametrize("exc", [RuntimeError("boom"), ConnectionError("nayka down")])
+def test_doctors_schedule_week_tech_failure_logs_degraded_and_keeps_handoff(monkeypatch, caplog, exc):
+    # CLASS INVARIANT (resilience Фаза1, Task 7): a schedule-source tech failure must
+    # (a) preserve the existing honest operator handoff (service_error_schedule),
+    # (b) emit a structured degraded_upstream log,
+    # (c) mark the payload degraded(upstream=doctor_schedule, fallback_used=False).
+    svc = Services()
+
+    async def fake_doctors():
+        return [{"id": 1, "fio": "Иванов Иван Иванович", "regions": ["г. Самара, пр. Ленина, 5"]}]
+
+    async def boom(_candidate, _region_name=None):
+        raise exc
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_doctors)
+    monkeypatch.setattr(svc, "_get_schedule_payload_cached", boom)
+
+    with caplog.at_level(logging.WARNING, logger="messengers_router.resilience"):
+        res = run(svc.doctors_schedule_week("расписание Иванова", {"doctor_name": "Иванов"}))
+
+    # (a) existing behavior preserved — NOT changed
+    assert res.get("handoff_required") is True
+    assert res.get("handoff_reason") == "service_error"
+    assert res.get("handoff_message") == handoff_message("service_error_schedule")
+    assert res.get("schedule") == []
+    assert res.get("entities_used") == {"doctor_name": "Иванов"}
+    # (b) structured degraded log emitted
+    assert "degraded_upstream" in caplog.text
+    assert "upstream=doctor_schedule" in caplog.text
+    assert "failure_mode=exception" in caplog.text
+    assert "fallback_used=False" in caplog.text
+    # (c) payload marked degraded for Phase-3 operator seam
+    assert res.get("degraded") is True
+    assert res.get("degraded_upstream") == "doctor_schedule"
+    assert res.get("degraded_mode") == _R.FM_EXCEPTION
+    assert res.get("degraded_fallback_used") is False
 
 
 def test_main_index_info_success(monkeypatch):
