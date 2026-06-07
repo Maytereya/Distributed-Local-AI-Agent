@@ -27,10 +27,10 @@
 - [x] **Task 4** результаты 5xx/таймаут/exc → tech_unavailable (OC-1) — `d58cb5f` (full suite 954 passed)
 - [x] **Task 5** — ПОКРЫТ Task 4: `build_test_result_response` отдаёт `result_preview` как текст при `ready=False` без `missing_fields` (response_builder.py:304-306). Отдельной работы для результатов не нужно.
 - [x] **Task 6** addresses: `_ensure_regions_loaded` сигнал тех-сбоя + best-effort/degraded — `2070a38` (full suite 957 passed, 1 xfailed)
-- [ ] **Task 7** doctors_schedule tech-failure → tech_unavailable (+ response_builder рендер расписания) — СЛЕДУЮЩАЯ
-- [ ] **Task 8** api_nayka realtime fail-fast профиль (OC-2: realtime Retry total=0 + read 8с)
+- [x] **Task 7** schedule tech-failure: структурный degraded-лог + `mark_degraded` (РЕШЕНИЕ ВЛАДЕЛЬЦА Option 1 — handoff сохранён, response_builder НЕ тронут) — `38292bf` (full suite 959 passed, 1 xfailed)
+- [ ] **Task 8** api_nayka realtime fail-fast профиль (OC-2: realtime Retry total=0 + read 8с) — СЛЕДУЮЩАЯ
 
-**Resume:** свежая сессия — `git log --oneline` (последний resilience-коммит = `2070a38`, Task 6 done), затем Task 7. resilience.py API: `R.OK/NOT_FOUND/TECH_UNAVAILABLE`, `classify_api_response`, `failure_mode_from_response`, `log_degraded`, `mark_degraded`, `tech_unavailable_text(what)`. В сервисах импорт: `from .. import resilience as _R`.
+**Resume:** свежая сессия — `git log --oneline` (последний resilience-коммит = `38292bf`, Tasks 6-7 done), затем Task 8. resilience.py API: `R.OK/NOT_FOUND/TECH_UNAVAILABLE`, `classify_api_response`, `failure_mode_from_response`, `log_degraded`, `mark_degraded`, `tech_unavailable_text(what)`. В сервисах импорт: `from .. import resilience as _R`.
 
 ---
 
@@ -569,6 +569,17 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Modify: `messengers_router/services/doctors.py` (`doctors_schedule_week`, 685+; exception-ветка ~836)
 - Test: `tests/test_messenger_services.py`
+
+> **РЕШЕНИЕ ВЛАДЕЛЬЦА (2026-06-07) — Option 1, scope сужен (реализовано в `38292bf`):**
+> Домен расписания УЖЕ честно обрабатывает тех-сбой: operator-handoff `service_error_schedule`
+> + stale-serve + фильтр по запрошенному врачу (зафиксировано тестами 476/515/540/576/653/738).
+> Буквальный Step 4 ниже (заменить handoff на `tech_unavailable` без авто-оператора + рендер в
+> response_builder) **НЕ выполнялся** — он сломал бы 3 теста, убрал бизнес-корректную эскалацию
+> при записи и противоречит собственному гейту плана «полный suite зелёный» + спеку §4.4.
+> **РЕАЛИЗОВАНО:** ТОЛЬКО добавлены `R.log_degraded(upstream="doctor_schedule", failure_mode=FM_EXCEPTION,
+> fallback_used=False)` + `R.mark_degraded(payload, …)` в exception-ветке (chokepoint hard-fail).
+> Поведение/handoff/`response_builder.py` НЕ изменены. stale-serve уже наблюдаем через собственный
+> лог `schedule_ttl_cache`. **Step 4 и response_builder-правка ниже — исторический текст, НЕ применять.**
 
 - [ ] **Step 1: Прочитать `doctors_schedule_week` (685-840)** — понять, где schedule-fetch падает (try/except ~836) и как сейчас формируется payload (`schedule_unavailable_reason`, `doctor_lookup`).
 
