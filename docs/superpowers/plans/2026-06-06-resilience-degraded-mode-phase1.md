@@ -30,8 +30,9 @@
 - [x] **Task 7** schedule tech-failure: структурный degraded-лог + `mark_degraded` (РЕШЕНИЕ ВЛАДЕЛЬЦА Option 1 — handoff сохранён, response_builder НЕ тронут) — `38292bf` (full suite 959 passed, 1 xfailed)
 - [x] **Task 8** api_nayka realtime fail-fast профиль (OC-2: realtime Retry total=0 + read 8с) — `2a34452` (core + 4 теста) + review-polish (2 комментария + schedule/cells realtime-тест) попал в `8a14124` (full suite 964 passed, 1 xfailed). **ФАЗА 1 ЗАВЕРШЕНА.**
   - _Примечание (git): `8a14124` под message `style(nayka): import lint` фактически содержит И lint-чистку владельца, И мой Task-8 review-polish — мой `--amend` совпал с параллельным style-коммитом владельца (между ними легли `2bf0a92` docs + lint-чип). Решение владельца: оставить как есть (ветка не запушена, сквош при мерже)._
+- [x] **Task 8.1** (из финального ревью фазы, Important-находка): полный fail-fast расписания — 4 ведущих вызова в `find_doctor_schedule` (`site_regions`/`/doctors`/`/doctorCompanyUnits`/`/doctorRegions`) помечены `realtime=True` → закрыт пробел Goal 4 на хотспоте «doctorSchedule тормозит» (cold/degraded окно). `2479aa2` (full suite 964 passed, 1 xfailed).
 
-**Resume:** **ФАЗА 1 ЗАВЕРШЕНА (Tasks 1-8).** Resilience-коммиты: `885883b` `74da638` `e8295f1` `d58cb5f` (1-4), `2070a38` (6), `38292bf` (7), `2a34452`+`8a14124` (8). resilience.py API: `R.OK/NOT_FOUND/TECH_UNAVAILABLE`, `classify_api_response`, `failure_mode_from_response`, `log_degraded`, `mark_degraded`, `tech_unavailable_text(what)`. В сервисах импорт: `from .. import resilience as _R`.
+**Resume:** **ФАЗА 1 ЗАВЕРШЕНА (Tasks 1-8 + 8.1).** Resilience-коммиты: `885883b` `74da638` `e8295f1` `d58cb5f` (1-4), `2070a38` (6), `38292bf` (7), `2a34452`+`8a14124` (8), `2479aa2` (8.1). resilience.py API: `R.OK/NOT_FOUND/TECH_UNAVAILABLE`, `classify_api_response`, `failure_mode_from_response`, `log_degraded`, `mark_degraded`, `tech_unavailable_text(what)`. В сервисах импорт: `from .. import resilience as _R`.
 
 ---
 
@@ -687,3 +688,11 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ## Заметки
 - Фаза 1 НЕ включает: `asyncio.gather` параллелизацию (Фаза 2), сигнал оператору в агрегаторе (Фаза 3), семантический матчер каталога (трек A).
 - Каждая fix-задача (4,6,7,8) перед коммитом гоняет ПОЛНЫЙ `pytest` (анти-регресс по shared-путям). Foundational (1,2,3) — целевые тесты + ruff.
+
+## Phase-2 follow-ups (из финального ревью фазы, SHIP-WITH-FOLLOWUPS)
+1. **schedule fail-fast leading-calls** — ✅ ЗАКРЫТО в Task 8.1 (`2479aa2`).
+2. **session_id** — пробросить из router-контекста во все `log_degraded` (сейчас всегда `None`; спек §7 open question — service-слой не имеет session в scope).
+3. **latency_ms** — тонкая обёртка-таймер вокруг realtime upstream-вызовов (сейчас всегда `None`; спек: optional) для полноты Datadog-схемы.
+4. **`_schedule_by_specialty` observability** — в двух `except`-ветках per-doctor fetch (doctors.py ~265-268) добавить `log_degraded` (сейчас specialty-путь молча глотает сбои, в отличие от single-doctor пути).
+5. **schedule envelope refactor** — `find_doctor_schedule` возвращает `{ok,status_code}` вместо magic-строк → гранулярный `failure_mode` (timeout vs 5xx) для расписания, убрать `is_api_error_message`-shim.
+6. **per-profile realtime connect-timeout** — отдельный `NAUKA_TIMEOUT_CONNECT_REALTIME` (сейчас realtime использует общий `REQ_CONNECT_TIMEOUT`=10с; worst-case connect+read; см. комментарий в api_nayka.py).
