@@ -28,9 +28,10 @@
 - [x] **Task 5** — ПОКРЫТ Task 4: `build_test_result_response` отдаёт `result_preview` как текст при `ready=False` без `missing_fields` (response_builder.py:304-306). Отдельной работы для результатов не нужно.
 - [x] **Task 6** addresses: `_ensure_regions_loaded` сигнал тех-сбоя + best-effort/degraded — `2070a38` (full suite 957 passed, 1 xfailed)
 - [x] **Task 7** schedule tech-failure: структурный degraded-лог + `mark_degraded` (РЕШЕНИЕ ВЛАДЕЛЬЦА Option 1 — handoff сохранён, response_builder НЕ тронут) — `38292bf` (full suite 959 passed, 1 xfailed)
-- [ ] **Task 8** api_nayka realtime fail-fast профиль (OC-2: realtime Retry total=0 + read 8с) — СЛЕДУЮЩАЯ
+- [x] **Task 8** api_nayka realtime fail-fast профиль (OC-2: realtime Retry total=0 + read 8с) — `2a34452` (core + 4 теста) + review-polish (2 комментария + schedule/cells realtime-тест) попал в `8a14124` (full suite 964 passed, 1 xfailed). **ФАЗА 1 ЗАВЕРШЕНА.**
+  - _Примечание (git): `8a14124` под message `style(nayka): import lint` фактически содержит И lint-чистку владельца, И мой Task-8 review-polish — мой `--amend` совпал с параллельным style-коммитом владельца (между ними легли `2bf0a92` docs + lint-чип). Решение владельца: оставить как есть (ветка не запушена, сквош при мерже)._
 
-**Resume:** свежая сессия — `git log --oneline` (последний resilience-коммит = `38292bf`, Tasks 6-7 done), затем Task 8. resilience.py API: `R.OK/NOT_FOUND/TECH_UNAVAILABLE`, `classify_api_response`, `failure_mode_from_response`, `log_degraded`, `mark_degraded`, `tech_unavailable_text(what)`. В сервисах импорт: `from .. import resilience as _R`.
+**Resume:** **ФАЗА 1 ЗАВЕРШЕНА (Tasks 1-8).** Resilience-коммиты: `885883b` `74da638` `e8295f1` `d58cb5f` (1-4), `2070a38` (6), `38292bf` (7), `2a34452`+`8a14124` (8). resilience.py API: `R.OK/NOT_FOUND/TECH_UNAVAILABLE`, `classify_api_response`, `failure_mode_from_response`, `log_degraded`, `mark_degraded`, `tech_unavailable_text(what)`. В сервисах импорт: `from .. import resilience as _R`.
 
 ---
 
