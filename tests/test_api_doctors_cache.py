@@ -126,6 +126,56 @@ def test_find_doctor_schedule_uses_extended_lookahead_window(monkeypatch):
     assert any("endDate=2026-04-15" in url for url in seen_schedule_urls)
 
 
+def test_find_doctor_schedule_marks_schedule_and_cells_realtime(monkeypatch):
+    # OC-2 invariant: the per-doctor schedule + cells fetches (patient waiting) use the
+    # realtime fail-fast session; bulk catalog lookups stay on the background session.
+    class _FakeResp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    class _FakeDate:
+        @classmethod
+        def today(cls):
+            return date(2026, 4, 1)
+
+    realtime_by_kind: dict[str, bool] = {}
+
+    def fake_session_get(url: str, **kwargs):
+        rt = bool(kwargs.get("realtime", False))
+        if url.endswith("/doctors"):
+            realtime_by_kind["doctors"] = rt
+            return _FakeResp([{"id": 1, "fio": "Куршина Марина Владимировна", "ord": 1}])
+        if url.endswith("/doctorCompanyUnits"):
+            return _FakeResp([{"worker": 1, "specialization": "педиатр"}])
+        if url.endswith("/doctorRegions"):
+            return _FakeResp([{"worker": 1, "companyUnit": 38, "region": 8882}])
+        if "/doctorSchedule?" in url:
+            realtime_by_kind["schedule"] = rt
+            return _FakeResp([{"id": 501, "curDate": "2026-04-14", "startTime": "09:00", "endTime": "12:00"}])
+        if "/doctorScheduleCells?" in url:
+            realtime_by_kind["cells"] = rt
+            return _FakeResp([{"startTime": "09:30", "free": True}])
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(api_nayka, "site_regions", lambda: [{"id": 8882, "name": "Самара", "addressForSite": "г. Самара, пр. Ленина, 5"}])
+    monkeypatch.setattr(api_nayka, "_session_get", fake_session_get)
+    monkeypatch.setattr(api_nayka, "date", _FakeDate)
+    monkeypatch.setattr(api_nayka, "SCHEDULE_LOOKAHEAD_DAYS", 14)
+
+    result = api_nayka.find_doctor_schedule("Куршина")
+
+    assert isinstance(result, list)
+    assert realtime_by_kind.get("schedule") is True
+    assert realtime_by_kind.get("cells") is True
+    assert realtime_by_kind.get("doctors") is False
+
+
 def test_is_api_error_message_classification():
     # Сбои обращения к CRM → True (обе ветки начинаются с «Не удалось получить»).
     assert api_nayka.is_api_error_message("Не удалось получить список врачей: timeout")

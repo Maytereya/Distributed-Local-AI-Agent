@@ -14,16 +14,16 @@ import logging
 import os
 import sys
 from collections import defaultdict
-from datetime import timedelta, datetime, date, time
+from datetime import timedelta, datetime, date
 from pathlib import Path
 from pprint import pprint
 from typing import Any, Dict, List, Set, Tuple, Union
-import requests, urllib3
+import requests
+import urllib3
 import asyncio
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-import requests
 
 from agent_logic_2 import config as c
 from agent_logic_2.nayka_api.cache_paths import resolve_cache_data_dir
@@ -64,6 +64,7 @@ SESSION.mount("http://", adapter)
 # Background cache warming keeps using SESSION (total=3) unchanged.
 _retry_realtime = Retry(
     total=0, connect=0, read=0, backoff_factor=0.0,
+    # status_forcelist + total=0: a 5xx raises MaxRetryError immediately (no retry storm)
     status_forcelist=[429,500,502,503,504],
     allowed_methods=frozenset(["GET"]),
 )
@@ -73,6 +74,9 @@ SESSION_REALTIME.mount("https://", _adapter_realtime)
 SESSION_REALTIME.mount("http://", _adapter_realtime)
 
 REALTIME_READ_TIMEOUT = float(os.getenv("NAUKA_TIMEOUT_READ_REALTIME", "8"))
+# Connect timeout intentionally reuses REQ_CONNECT_TIMEOUT (OC-2 specified read=8s only).
+# Worst case on a slow-to-connect upstream = connect+read; a per-profile realtime connect
+# timeout can be added in Phase 2 if production shows connect stalls.
 REALTIME_TIMEOUT = (REQ_CONNECT_TIMEOUT, REALTIME_READ_TIMEOUT)
 
 if CA_BUNDLE:
