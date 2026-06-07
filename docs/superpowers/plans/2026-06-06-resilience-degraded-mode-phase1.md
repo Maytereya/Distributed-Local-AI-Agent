@@ -26,11 +26,11 @@
 - [x] **Task 3** HANDOFF_REASON_MATRIX `tech_unavailable` — `e8295f1`
 - [x] **Task 4** результаты 5xx/таймаут/exc → tech_unavailable (OC-1) — `d58cb5f` (full suite 954 passed)
 - [x] **Task 5** — ПОКРЫТ Task 4: `build_test_result_response` отдаёт `result_preview` как текст при `ready=False` без `missing_fields` (response_builder.py:304-306). Отдельной работы для результатов не нужно.
-- [ ] **Task 6** addresses: `_ensure_regions_loaded` сигнал тех-сбоя + best-effort/degraded — СЛЕДУЮЩАЯ
-- [ ] **Task 7** doctors_schedule tech-failure → tech_unavailable (+ response_builder рендер расписания)
+- [x] **Task 6** addresses: `_ensure_regions_loaded` сигнал тех-сбоя + best-effort/degraded — `2070a38` (full suite 957 passed, 1 xfailed)
+- [ ] **Task 7** doctors_schedule tech-failure → tech_unavailable (+ response_builder рендер расписания) — СЛЕДУЮЩАЯ
 - [ ] **Task 8** api_nayka realtime fail-fast профиль (OC-2: realtime Retry total=0 + read 8с)
 
-**Resume:** свежая сессия — `git log --oneline` (последний resilience-коммит = `d58cb5f`), затем Task 6. resilience.py API: `R.OK/NOT_FOUND/TECH_UNAVAILABLE`, `classify_api_response`, `failure_mode_from_response`, `log_degraded`, `mark_degraded`, `tech_unavailable_text(what)`. В сервисах импорт: `from .. import resilience as _R`.
+**Resume:** свежая сессия — `git log --oneline` (последний resilience-коммит = `2070a38`, Task 6 done), затем Task 7. resilience.py API: `R.OK/NOT_FOUND/TECH_UNAVAILABLE`, `classify_api_response`, `failure_mode_from_response`, `log_degraded`, `mark_degraded`, `tech_unavailable_text(what)`. В сервисах импорт: `from .. import resilience as _R`.
 
 ---
 
