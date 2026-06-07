@@ -200,3 +200,54 @@ def test_find_doctor_schedule_logs_warning_on_schedule_fetch_failure(monkeypatch
     assert any("doctorSchedule" in m for m in warnings), warnings
     # И отдельный сигнал, что вывод «нет слотов» мог быть искажён сбоем fetch.
     assert any("no-slots" in m.lower() or "incomplete" in m.lower() for m in warnings), warnings
+
+
+# ── OC-2 realtime fail-fast profile (Task 8, resilience Фаза1) ─────────────
+
+
+def test_realtime_session_profile_is_fail_fast():
+    # CLASS INVARIANT (OC-2): realtime session = no retries + 8s read; background = total 3, unchanged.
+    rt = api_nayka.SESSION_REALTIME.get_adapter("http://x")
+    bg = api_nayka.SESSION.get_adapter("http://x")
+    assert rt.max_retries.total == 0
+    assert bg.max_retries.total == 3            # background MUST stay unchanged
+    assert api_nayka.REALTIME_TIMEOUT[1] == 8.0         # realtime read timeout
+    assert api_nayka.DEFAULT_TIMEOUT[1] == 20.0         # background read timeout unchanged
+
+
+def test_session_get_routes_by_realtime_flag(monkeypatch):
+    calls = []
+    class _Resp: ...
+    monkeypatch.setattr(api_nayka.SESSION, "get", lambda url, **kw: calls.append(("bg", url, kw.get("timeout"))) or _Resp())
+    monkeypatch.setattr(api_nayka.SESSION_REALTIME, "get", lambda url, **kw: calls.append(("rt", url, kw.get("timeout"))) or _Resp())
+    api_nayka._session_get("http://x")
+    api_nayka._session_get("http://y", realtime=True)
+    assert calls[0][0] == "bg" and calls[0][2] == api_nayka.DEFAULT_TIMEOUT
+    assert calls[1][0] == "rt" and calls[1][2] == api_nayka.REALTIME_TIMEOUT
+
+
+def test_site_regions_threads_realtime_flag(monkeypatch):
+    seen = []
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return []
+    monkeypatch.setattr(api_nayka, "_session_get", lambda url, *, realtime=False, **kw: seen.append(realtime) or _Resp())
+    api_nayka.site_regions(realtime=True)
+    api_nayka.site_regions()
+    assert seen == [True, False]
+
+
+def test_result_for_patient_uses_realtime(monkeypatch):
+    captured = {}
+    class _Resp:
+        headers = {"Content-Type": "text/plain"}
+        text = "https://naykalab.ru/result/blank.pdf"
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {}
+    def fake_get(url, *, realtime=False, **kw):
+        captured["realtime"] = realtime
+        return _Resp()
+    monkeypatch.setattr(api_nayka, "_session_get", fake_get)
+    api_nayka.site_result_for_patient(surname="Тестов", year=1990, filial="Бг", number=1)
+    assert captured.get("realtime") is True

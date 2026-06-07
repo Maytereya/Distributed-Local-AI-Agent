@@ -318,7 +318,7 @@ class Services:
                 return self._regions_cache
 
             try:
-                regions = await asyncio.to_thread(api_nayka.site_regions)
+                regions = await asyncio.to_thread(api_nayka.site_regions, realtime=True)
                 if not isinstance(regions, list):
                     regions = []
                 self._regions_cache = regions

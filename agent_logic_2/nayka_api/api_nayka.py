@@ -58,6 +58,23 @@ adapter = HTTPAdapter(max_retries=_retry)
 SESSION.mount("https://", adapter)
 SESSION.mount("http://", adapter)
 
+# --- Realtime fail-fast profile (OC-2) ---
+# Patient is waiting on the response (resultForPatient / doctorSchedule / regions-in-request):
+# no retry storm, short read timeout, so a sick upstream degrades in seconds, not 45-75s.
+# Background cache warming keeps using SESSION (total=3) unchanged.
+_retry_realtime = Retry(
+    total=0, connect=0, read=0, backoff_factor=0.0,
+    status_forcelist=[429,500,502,503,504],
+    allowed_methods=frozenset(["GET"]),
+)
+SESSION_REALTIME = requests.Session()
+_adapter_realtime = HTTPAdapter(max_retries=_retry_realtime)
+SESSION_REALTIME.mount("https://", _adapter_realtime)
+SESSION_REALTIME.mount("http://", _adapter_realtime)
+
+REALTIME_READ_TIMEOUT = float(os.getenv("NAUKA_TIMEOUT_READ_REALTIME", "8"))
+REALTIME_TIMEOUT = (REQ_CONNECT_TIMEOUT, REALTIME_READ_TIMEOUT)
+
 if CA_BUNDLE:
     VERIFY_ARG = CA_BUNDLE
 else:
@@ -66,11 +83,12 @@ else:
 if VERIFY_ARG is False:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-def _session_get(url: str, **kwargs):
+def _session_get(url: str, *, realtime: bool = False, **kwargs):
     kwargs.setdefault("auth", auth)
-    kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
+    kwargs.setdefault("timeout", REALTIME_TIMEOUT if realtime else DEFAULT_TIMEOUT)
     kwargs.setdefault("verify", VERIFY_ARG)
-    return SESSION.get(url, **kwargs)
+    sess = SESSION_REALTIME if realtime else SESSION
+    return sess.get(url, **kwargs)
 
 # Директория для кэширования данных (общая для всех контейнеров через APP_DATA_DIR)
 DATA_DIR = resolve_cache_data_dir()
@@ -841,10 +859,10 @@ def site_doctor_regions():
         return []
 
 
-def site_regions():
+def site_regions(*, realtime: bool = False):
     """Получить список регионов."""
     try:
-        resp = _session_get(f"{base_url}/regions")
+        resp = _session_get(f"{base_url}/regions", realtime=realtime)
         resp.raise_for_status()
         return resp.json()
     except (requests.RequestException, ValueError) as e:
@@ -884,7 +902,7 @@ def site_result_for_patient(
         params["time"] = bool(with_time)
 
     try:
-        resp = _session_get(f"{base_url}/resultForPatient", params=params)
+        resp = _session_get(f"{base_url}/resultForPatient", params=params, realtime=True)
         resp.raise_for_status()
 
         content_type = str(resp.headers.get("Content-Type") or "").lower()
@@ -1024,7 +1042,7 @@ def find_doctor_schedule(
                 f"&startDate={start_date}&endDate={end_date}"
             )
             try:
-                schedule_resp = _session_get(schedule_url)
+                schedule_resp = _session_get(schedule_url, realtime=True)
                 schedule_resp.raise_for_status()
                 schedule_days = schedule_resp.json()
             except (requests.RequestException, ValueError) as exc:
@@ -1040,7 +1058,7 @@ def find_doctor_schedule(
                 # --- Слоты ---
                 cells_url = f"{base_url}/doctorScheduleCells?doctorSchedule={day['id']}"
                 try:
-                    cells_resp = _session_get(cells_url)
+                    cells_resp = _session_get(cells_url, realtime=True)
                     cells_resp.raise_for_status()
                     cells = cells_resp.json()
                     free_slots = [cell.get("startTime") for cell in cells if isinstance(cell, dict) and cell.get("free")]
