@@ -70,6 +70,28 @@ _RESULTS_PORTAL_HINT = (
 )
 
 
+def _extract_result_pdf_url(data: Any) -> str | None:
+    """Достаёт прямой URL на PDF-результат из ответа ``resultForPatient``.
+
+    На OK эндпоинт отдаёт готовый результат прямой ссылкой на PDF-бланк (обычно
+    ``text/plain`` с URL в теле — см. ``api_nayka.site_result_for_patient``). На
+    случай JSON-обёртки берём первое http(s)-значение. Это РЕАЛЬНАЯ ссылка от API
+    (не bot-constructed getanaliz) — её и отдаём пациенту как сам результат.
+
+    :param data: поле ``data`` из ответа ``api_nayka``
+    :return: URL результата или ``None``, если прямой ссылки в ответе нет
+    """
+
+    if isinstance(data, str):
+        url = data.strip()
+        return url if url.startswith(("http://", "https://")) else None
+    if isinstance(data, dict):
+        for value in data.values():
+            if isinstance(value, str) and value.strip().startswith(("http://", "https://")):
+                return value.strip()
+    return None
+
+
 def _test_assist_clarify_response(entities: dict[str, Any], *, note: str) -> dict[str, Any]:
     """Возвращает безопасный fallback для подбора анализов.
 
@@ -253,8 +275,21 @@ async def test_result_status(self: "Services", query: str, entities: dict[str, A
             "result_preview": _RESULT_NOT_READY_TEXT,
             "entities_used": entities,
         }
-    # outcome == OK: результат есть на бэкенде, но прямой ссылки на него у нас нет
-    # (getanaliz.php недействителен) — отправляем пациента на портал самообслуживания.
+    # outcome == OK: бэкенд вернул готовый результат. resultForPatient на OK отдаёт
+    # ПРЯМУЮ ссылку на PDF-результат (реальная ссылка от API, не bot-constructed
+    # getanaliz) — отдаём пациенту сам результат (PDF-ссылка + вложение), а не портал.
+    pdf_url = _extract_result_pdf_url(api_resp.get("data") if isinstance(api_resp, dict) else None)
+    if pdf_url:
+        return {
+            "ready": True,
+            "note": "result_ready_pdf",
+            "result_preview": "Ваш результат готов.",
+            "result_links": [pdf_url],
+            "result_attachments": [{"type": "pdf", "name": "Результат анализа", "url": pdf_url}],
+            "entities_used": entities,
+        }
+    # OK, но прямого URL в ответе нет (неожиданный формат) — безопасно ведём на портал,
+    # чтобы не утверждать «готов» без рабочего способа открыть результат.
     return {
         "ready": True,
         "note": "result_ready_portal",

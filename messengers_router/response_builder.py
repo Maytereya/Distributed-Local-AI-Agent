@@ -282,13 +282,20 @@ def build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseE
             handoff=False,
         )
 
-    # Все исходы (готов / не найден / тех-сбой) несут готовый patient-текст в
-    # result_preview, который ведёт пациента на портал результатов (см.
-    # lab_tests.test_result_status). Прямых deep-link'ов на результат больше нет —
-    # рендерим текст как есть, без отдельной ветки «Ссылка на результат».
     preview = str(result_status.get("result_preview") or "").strip()
     text = preview or "По указанным данным результаты пока не найдены или ещё не готовы."
-    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+    # Готовый результат: resultForPatient вернул прямую ссылку на PDF — отдаём сам
+    # результат (ссылка + вложение). В остальных исходах (не найден / тех-сбой)
+    # result_preview ведёт пациента на портал результатов. Bot-constructed deep-link'ов
+    # (getanaliz) больше нет — рендерим только реальные ссылки от API.
+    links_raw = result_status.get("result_links")
+    links = [str(x).strip() for x in links_raw if str(x).strip()] if isinstance(links_raw, list) else []
+    atts_raw = result_status.get("result_attachments")
+    attachments = [a for a in atts_raw if isinstance(a, dict)] if isinstance(atts_raw, list) else []
+    if links:
+        text = f"{text}\n\nОткрыть результат: {links[0]}"
+    return ResponseEnvelope(text=text, attachments=attachments, handoff=False)
 
 
 def build_prepare_response(flow_label: str, evidence: Evidence) -> ResponseEnvelope | None:

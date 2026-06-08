@@ -1778,28 +1778,28 @@ def test_build_doctor_info_response_clears_stale_doctor_for_multi_specialty_list
     assert state.last_entities.get("doctor_id") is None
 
 
-def test_build_test_result_response_ready_renders_portal_preview():
-    # BUG-2026-06-08-01: «результат готов» рендерит portal-preview как есть, без отдельной
-    # ветки «Ссылка на результат» (deep-link getanaliz.php удалён как недействительный).
-    # Контракт: что сервис положил в result_preview — то и видит пациент.
+def test_build_test_result_response_ready_delivers_pdf_link_and_attachment():
+    # BUG-2026-06-08-01: результат готов → рендер отдаёт реальную ссылку на PDF + вложение
+    # (bot-constructed deep-link getanaliz удалён). Контракт: result_links/result_attachments
+    # от сервиса доходят до пациента; портал в этом исходе не показываем.
+    pdf = "https://naykalab.ru/result/blank.pdf"
     evidence = Evidence(
         items={
             "test_result_status": {
                 "ready": True,
-                "note": "result_ready_portal",
-                "result_preview": (
-                    "Результат по вашим данным готов. "
-                    "Посмотреть результаты можно на сайте https://naykalab.ru/samara — "
-                    "вкладка «Результаты анализов»."
-                ),
+                "note": "result_ready_pdf",
+                "result_preview": "Ваш результат готов.",
+                "result_links": [pdf],
+                "result_attachments": [{"type": "pdf", "name": "Результат анализа", "url": pdf}],
             }
         }
     )
     env = _build_test_result_response("TEST_RESULT", evidence)
     assert env is not None
-    assert "https://naykalab.ru/samara" in env.text
+    assert pdf in env.text
     assert "getanaliz" not in env.text.lower()
-    assert "Ссылка на результат" not in env.text
+    assert "naykalab.ru/samara" not in env.text
+    assert any(a.get("type") == "pdf" and a.get("url") == pdf for a in env.attachments)
 
 
 def test_build_doctor_schedule_response_hydrates_context_without_forcing_flow_active():

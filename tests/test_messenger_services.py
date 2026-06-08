@@ -4459,28 +4459,31 @@ def test_result_exception_is_tech_unavailable(monkeypatch):
     assert "техническ" in str(res.get("result_preview") or "").lower()
 
 
-# BUG-2026-06-08-01: deep-link getanaliz.php недействителен (решение владельца). Запрос
-# результатов анализов в ЛЮБОМ исходе ведёт пациента на портал naykalab.ru/samara →
-# вкладка «Результаты анализов», а НЕ на мёртвую прямую ссылку.
+# BUG-2026-06-08-01: bot-constructed deep-link getanaliz.php недействителен (удалён).
+# Уточнение владельца: результат ГОТОВ → отдаём сам результат (реальный PDF-URL от
+# resultForPatient + вложение), а НЕ ссылку на портал; во всех остальных исходах
+# (не найден / тех-сбой) → ссылка на портал naykalab.ru/samara (вкладка «Результаты анализов»).
 _RESULTS_PORTAL_URL = "https://naykalab.ru/samara"
+_READY_PDF_URL = "https://naykalab.ru/result/blank.pdf"
 
 
 @pytest.mark.parametrize(
-    "outcome,api_resp,exc",
+    "outcome,api_resp,exc,expect",
     [
-        ("ready", {"ok": True, "status_code": 200, "data": {"pdf": "<blob>"}}, None),
-        ("not_found_404", {"ok": False, "status_code": 404, "error": "404"}, None),
-        ("not_found_empty", {"ok": True, "status_code": 200, "data": ""}, None),
-        ("tech_5xx", {"ok": False, "status_code": 503, "error": "503"}, None),
-        ("tech_none", {"ok": False, "status_code": None, "error": "timeout"}, None),
-        ("tech_exc", None, ConnectionError("down")),
+        ("ready_pdf", {"ok": True, "status_code": 200, "content_type": "text/plain", "data": _READY_PDF_URL}, None, "pdf"),
+        ("ready_no_url", {"ok": True, "status_code": 200, "data": {"status": "ready"}}, None, "portal"),
+        ("not_found_404", {"ok": False, "status_code": 404, "error": "404"}, None, "portal"),
+        ("not_found_empty", {"ok": True, "status_code": 200, "data": ""}, None, "portal"),
+        ("tech_5xx", {"ok": False, "status_code": 503, "error": "503"}, None, "portal"),
+        ("tech_none", {"ok": False, "status_code": None, "error": "timeout"}, None, "portal"),
+        ("tech_exc", None, ConnectionError("down"), "portal"),
     ],
 )
-def test_result_status_every_outcome_points_to_portal_never_getanaliz(
-    monkeypatch, outcome, api_resp, exc
+def test_result_status_ready_delivers_pdf_else_portal_never_getanaliz(
+    monkeypatch, outcome, api_resp, exc, expect
 ):
-    # Инвариант КЛАССА (не инстанс): через все исходы taxonomy (OK / NOT_FOUND / TECH),
-    # на уровне сервиса И на уровне рендера — портал присутствует, getanaliz никогда.
+    # Инвариант КЛАССА (не инстанс): через все исходы taxonomy — bot-constructed deep-link
+    # getanaliz НИКОГДА; результат готов → реальный PDF от API (+вложение); иначе → портал.
     def fake_site_result(**kwargs):
         if exc is not None:
             raise exc
@@ -4490,20 +4493,29 @@ def test_result_status_every_outcome_points_to_portal_never_getanaliz(
     entities = {"surname": "Тестов", "year": "1990", "filial": "Бг", "number": "1"}
     payload = asyncio.run(lab_tests_mod.test_result_status(None, "Тестов, 1990, Бг, 1", entities))
 
-    # Сервис не строит deep-link и не оставляет result_links/result_payload.
+    # Мёртвый bot-constructed deep-link не появляется нигде (сервис И рендер).
     assert "getanaliz" not in str(payload).lower(), outcome
-    assert not payload.get("result_links"), outcome
 
-    # Рендер (то, что реально видит пациент) — единственный источник правды контракта.
     env = build_test_result_response(
         "TEST_RESULT", Evidence(items={"test_result_status": payload})
     )
     assert env is not None, outcome
     assert env.handoff is False, outcome
-    assert _RESULTS_PORTAL_URL in env.text, (outcome, env.text)
-    assert "getanaliz" not in env.text.lower(), (outcome, env.text)
-    # Указываем именно вкладку (различающий маркер портал-подсказки, заглавная Р).
-    assert "Результаты анализов" in env.text, (outcome, env.text)
+    assert "getanaliz" not in env.text.lower(), outcome
+
+    if expect == "pdf":
+        # Результат готов → отдаём сам результат (реальный PDF-URL от API) + вложение,
+        # портал НЕ показываем.
+        assert _READY_PDF_URL in env.text, (outcome, env.text)
+        assert _RESULTS_PORTAL_URL not in env.text, (outcome, env.text)
+        assert any(
+            a.get("type") == "pdf" and a.get("url") == _READY_PDF_URL for a in env.attachments
+        ), (outcome, env.attachments)
+    else:
+        # Результата нет → ссылка на портал самопроверки (вкладка «Результаты анализов»).
+        assert _RESULTS_PORTAL_URL in env.text, (outcome, env.text)
+        assert "Результаты анализов" in env.text, (outcome, env.text)
+        assert not env.attachments, (outcome, env.attachments)
 
 
 def test_service_procedure_flag_maps_usi_analysis_ecg():
