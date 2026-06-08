@@ -38,6 +38,7 @@ from ._prices_helpers import (
     resolve_price_service_name_from_catalog,  # noqa: F401 — public API re-export for messengers_router.services
 )
 from ._regions import (
+    _inject_region_cities,
     _is_explicit_non_samara_region,
     _is_samara_city_value,
     _region_display_name,
@@ -321,6 +322,10 @@ class Services:
                 regions = await asyncio.to_thread(api_nayka.site_regions, realtime=True)
                 if not isinstance(regions, list):
                     regions = []
+                # Прод-бэкенд /regions не отдаёт поле city — выводим его из иерархии
+                # parent ОДИН раз на загрузке, чтобы вся самарская фильтрация работала
+                # (без этого реальные филиалы роняются — BUG-A).
+                regions = _inject_region_cities(regions)
                 self._regions_cache = regions
                 self._regions_cache_loaded_at = time.time()
                 self._regions_last_failed = False

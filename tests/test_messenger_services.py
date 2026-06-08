@@ -4571,6 +4571,113 @@ def test_address_info_uses_regions_service_flag_not_care_setting_hardcode():
     assert len(addrs) == 2, addrs  # care-setting хардкод дал бы ровно 1 «Ленина 5»
 
 
+def test_address_info_analysis_walkin_returns_all_flagged_branches_not_single():
+    # BUG-A (2026-06-08), СЛОЙ ФЛАГ-ФИЛЬТРА (регионы УЖЕ с city — пост-инъекция):
+    # запрос про анализы (walk-in) обязан вернуть ВСЕ филиалы с analysis=True, а не
+    # один. Здесь регионы заданы с city="Самара" (как ПОСЛЕ нормализации на загрузке).
+    # Реальный прод-баг — отсутствие поля city у нового бэкенда (city выводится из
+    # parent) — покрыт test_address_info_derives_samara_city_from_parent_hierarchy ниже.
+    # Класс-инвариант: ловит «схлопывание до одного филиала» независимо от того, какой.
+    fake_regions = [
+        {"id": 1, "city": "Самара", "addressForSite": "г. Самара, пр. Ленина, 5", "name": "Ленина 5", "analysis": True},
+        {"id": 2, "city": "Самара", "addressForSite": "г. Самара, ул. Победы, 83", "name": "Победы 83", "analysis": True},
+        {"id": 3, "city": "Самара", "addressForSite": "г. Самара, ул. Гагарина, 64", "name": "Гагарина 64", "analysis": True},
+        {"id": 4, "city": "Самара", "addressForSite": "г. Самара, ул. Кирова, 223", "name": "Кирова 223", "analysis": True},
+        {"id": 5, "city": "Самара", "addressForSite": "г. Самара, ул. Авроры, 10", "name": "Авроры 10", "analysis": False},
+    ]
+    s = Services()
+
+    async def _fr():
+        return list(fake_regions)
+
+    async def _fd():
+        return []
+
+    s._ensure_regions_loaded = _fr
+    s._ensure_doctors_cache_loaded = _fd
+    res = asyncio.run(
+        s.address_info("Анализ крови", {"service_name": "анализ крови", "city": "Самара"})
+    )
+    addrs = res.get("addresses") or []
+    assert "filtered by service flags" in str(res.get("note")), res.get("note")
+    # ВСЕ 4 analysis-филиала, не один; Авроры (analysis=False) исключён.
+    assert len(addrs) == 4, addrs
+    assert any("Гагарина, 64" in a for a in addrs), addrs   # Гагарина — лишь ОДИН из, не единственный
+    assert any("Ленина, 5" in a for a in addrs), addrs
+    assert any("Кирова, 223" in a for a in addrs), addrs
+    assert not any("Авроры" in a for a in addrs), addrs
+
+
+def test_derive_region_city_walks_parent_hierarchy():
+    # BUG-A корень (прод-дамп 2026-06-08): новый бэкенд medserver-egisz /regions НЕ
+    # отдаёт поле city — город закодирован деревом parent (Все→*область→Город→филиалы).
+    # _derive_region_city поднимается по parent до ноды-города (её родитель — «…область»
+    # или корень «Все») и возвращает её имя. Спутники получают СВОЙ город, не «Самара».
+    from messengers_router.services._regions import _derive_region_city
+
+    regions = [
+        {"id": 1, "parent": None, "name": "Все"},
+        {"id": 2, "parent": 1, "name": "Самарская область"},
+        {"id": 3, "parent": 2, "name": "Самара"},
+        {"id": 8, "parent": 2, "name": "Новокуйбышевск"},
+        {"id": 101, "parent": 3, "name": "Победы 126", "addressForSite": "ул.Победы, 126"},
+        {"id": 201, "parent": 8, "name": "Пирогова 4", "addressForSite": "ул. Пирогова, 4"},
+    ]
+    byid = {r["id"]: r for r in regions}
+    assert _derive_region_city(regions[4], byid) == "Самара"          # филиал под Самарой
+    assert _derive_region_city(regions[5], byid) == "Новокуйбышевск"  # филиал-спутник
+    assert _derive_region_city(regions[2], byid) == "Самара"          # сама нода-город
+
+
+def test_address_info_derives_samara_city_from_parent_hierarchy(monkeypatch):
+    # BUG-A (прод-дамп 2026-06-08): /regions отдаёт филиалы БЕЗ поля city и с бесго­
+    # родным addressForSite («ул.Победы, 126»); город — в дереве parent. Бот обязан
+    # вывести city из parent при загрузке, иначе самарская фильтрация роняет ВСЕ
+    # реальные филиалы и остаётся 1 («Гагарина, 64» уцелел лишь потому, что «Самара»
+    # была в его name). Класс-инвариант на ПРОД-подобной сырой структуре: walk-in
+    # анализы → ВСЕ самарские analysis-филиалы; спутники (Новокуйбышевск/Тольятти)
+    # исключены по их собственному городу из иерархии.
+    import copy
+
+    from messengers_router.services import core as core_mod
+
+    raw = [
+        {"id": 1, "parent": None, "name": "Все", "addressForSite": None},
+        {"id": 2, "parent": 1, "name": "Самарская область", "addressForSite": None},
+        {"id": 3, "parent": 2, "name": "Самара", "addressForSite": None},
+        {"id": 8, "parent": 2, "name": "Новокуйбышевск", "addressForSite": None},
+        {"id": 13, "parent": 2, "name": "Тольятти", "addressForSite": None},
+        {"id": 101, "parent": 3, "name": "Победы 126", "companyName": "Наука-Самара", "addressForSite": "ул.Победы, 126", "analysis": True},
+        {"id": 102, "parent": 3, "name": "Гагарина 64", "companyName": "Наука-Самара", "addressForSite": "ул.Гагарина, 64", "analysis": True},
+        {"id": 103, "parent": 3, "name": "Ново-Садовая 180А", "companyName": "Наука-Самара", "addressForSite": "ул.Ново-Садовая, 180А", "analysis": True},
+        {"id": 201, "parent": 8, "name": "Пирогова 4", "companyName": "Наука-Самара", "addressForSite": "ул. Пирогова, 4", "analysis": True},
+        {"id": 202, "parent": 13, "name": "Революционная 16", "companyName": "Наука-Самара", "addressForSite": "г. Тольятти, ул. Революционная, 16", "analysis": True},
+    ]
+
+    def fake_site_regions(realtime=False):
+        return copy.deepcopy(raw)  # как от API — без city
+
+    monkeypatch.setattr(core_mod.api_nayka, "site_regions", fake_site_regions)
+    s = Services()
+
+    async def _fd():
+        return []
+
+    s._ensure_doctors_cache_loaded = _fd
+    res = asyncio.run(
+        s.address_info("Анализ крови", {"service_name": "анализ крови", "city": "Самара"})
+    )
+    addrs = res.get("addresses") or []
+    # ВСЕ 3 самарских analysis-филиала, не один.
+    assert any("Победы, 126" in a for a in addrs), addrs
+    assert any("Гагарина, 64" in a for a in addrs), addrs
+    assert any("Ново-Садовая, 180" in a for a in addrs), addrs
+    assert len(addrs) == 3, addrs
+    # Спутники исключены по их собственному городу из parent-иерархии.
+    assert not any("Пирогова" in a for a in addrs), addrs       # Новокуйбышевск
+    assert not any("Революционная" in a for a in addrs), addrs  # Тольятти
+
+
 def test_prepare_blood_no_specific_rules_falls_back_to_general_memo(monkeypatch):
     # BUG-2026-06-02-05: когда конкретных правил подготовки нет, но вопрос про
     # сдачу КРОВИ — отдаём общую памятку забора крови (применима к любой сдаче

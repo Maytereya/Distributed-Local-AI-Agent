@@ -95,6 +95,60 @@ def _is_explicit_non_samara_region(value: str) -> bool:
     return False
 
 
+def _derive_region_city(region: dict[str, Any], byid: dict[Any, dict[str, Any]]) -> str:
+    """Город филиала из иерархии ``parent`` нового бэкенда ``/regions``.
+
+    Прод-бэкенд (medserver-egisz) НЕ отдаёт поле ``city`` — город закодирован деревом
+    ``parent``: ``Все → <…область> → <Город> → <филиалы>``. Поднимаемся по ``parent``
+    до ноды-города (её родитель — «…область»/«…край»/«…республика» или корень «Все»)
+    и возвращаем её ``name``. Так филиал-спутник (напр. «Пирогова, 4» под
+    «Новокуйбышевск») получает СВОЙ город, а не «Самара».
+
+    :param region: регион/филиал из ``/regions``
+    :param byid: индекс ``id -> регион`` по всему списку (для резолва parent)
+    :return: имя города или собственное имя региона (фолбэк)
+    """
+    node = region
+    seen: set[Any] = set()
+    for _ in range(8):  # дерево мелкое; гард от циклов/битых ссылок
+        pid = node.get("parent")
+        if pid is None or pid in seen:
+            break
+        seen.add(pid)
+        parent = byid.get(pid)
+        if not isinstance(parent, dict):
+            break
+        pname = _normalise_input(str(parent.get("name") or ""))
+        if "област" in pname or "край" in pname or "республик" in pname or pname == "все":
+            # `node` — нода-города (её родитель — регион/страна) → его имя = город.
+            return str(node.get("name") or "").strip()
+        node = parent
+    return str(region.get("name") or "").strip()
+
+
+def _inject_region_cities(regions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Проставляет каждому региону производный ``city`` из иерархии ``parent``.
+
+    Единая точка нормализации: вызывается при загрузке ``/regions`` (см.
+    ``core._ensure_regions_loaded``), чтобы ВСЯ самарская фильтрация (``address_info``,
+    ``_samara_region_tokens``, ``prepare``, branch-payload) работала по полю ``city``.
+    Идемпотентна. Без этого новый бэкенд (без поля ``city``) ронял реальные самарские
+    филиалы — BUG-A («бот выдаёт только ул.Гагарина, 64»).
+
+    :param regions: сырой список регионов от ``api_nayka.site_regions``
+    :return: тот же список с проставленным ``city`` у каждого региона
+    """
+    if not isinstance(regions, list):
+        return regions
+    byid: dict[Any, dict[str, Any]] = {r.get("id"): r for r in regions if isinstance(r, dict)}
+    for r in regions:
+        # Сохраняем уже заданный city (если бэкенд/данные его дали); выводим из
+        # иерархии только когда поля нет — таков новый прод-бэкенд.
+        if isinstance(r, dict) and not str(r.get("city") or "").strip():
+            r["city"] = _derive_region_city(r, byid)
+    return regions
+
+
 def _region_matches_samara_tokens(region: str, samara_tokens: set[str]) -> bool:
     if not samara_tokens:
         return False

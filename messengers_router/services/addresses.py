@@ -150,8 +150,17 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
             doctors = await self._ensure_doctors_cache_loaded()
         except Exception:
             doctors = []
+        # При записи ПО СПЕЦИАЛЬНОСТИ ограничиваем допустимые адреса врачами ЭТОЙ
+        # специальности (как Fix B в doctors-cache fallback ниже). Иначе live-regions
+        # путь, отфильтровав «doctor-capable» по ЛЮБОМУ врачу, вернёт самарские клиники
+        # без нужной специальности (регресс инварианта BUG-2026-06-04-04 — оффер
+        # филиала, где нет врача запрошенной специальности). Без specialty — поведение
+        # прежнее (любые врачебные адреса).
+        appt_specialty_q = _normalise_input(_get_first_present(entities, ["specialty"]) or "")
         for d in doctors:
             if not isinstance(d, dict):
+                continue
+            if appt_specialty_q and _doctor_role_specialty_match_level(d, appt_specialty_q) <= 0:
                 continue
             for addr in (d.get("regions") or d.get("addresses") or []):
                 a = str(addr).strip()
