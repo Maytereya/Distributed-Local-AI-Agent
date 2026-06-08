@@ -4915,6 +4915,79 @@ _GYNEC_DOCTOR_AT_AMINEVA = {
 }
 
 
+def test_address_paths_do_not_cross_contaminate_diagnostic(monkeypatch):
+    # ДИАГНОСТИКА АДРЕСОВ (2026-06-08): после регион-city фикса (BUG-A) + множества
+    # прошлых правок — доказываем, что регион-адресные пути НЕ путаются. Один прод-
+    # подобный датасет (parent-иерархия без поля city, разные флаги, врачи разных
+    # спец-тей) → разные запросы → каждый отдаёт СВОЙ корректный набор. Прайс-пути
+    # (Path 2/3) замоканы пустыми, чтобы изолировать регион-пути (Path 4/5/6).
+    # Ключевые изоляции:
+    #  - лаб-точка Гагарина-64 (analysis=True, 0 врачей): ВИДНА для анализов, СКРЫТА для записи;
+    #  - usi/ecg/analysis флаги не смешиваются;
+    #  - специальности не смешиваются (гинеколог ≠ кардиолог);
+    #  - Тольятти (другой город из parent) исключён везде.
+    import copy
+
+    from messengers_router.services import addresses as addr_mod
+    from messengers_router.services import core as core_mod
+
+    raw = [
+        {"id": 1, "parent": None, "name": "Все", "addressForSite": None},
+        {"id": 2, "parent": 1, "name": "Самарская область", "addressForSite": None},
+        {"id": 3, "parent": 2, "name": "Самара", "addressForSite": None},
+        {"id": 13, "parent": 2, "name": "Тольятти", "addressForSite": None},
+        {"id": 101, "parent": 3, "name": "Ленина 5", "addressForSite": "пр.Ленина, 5", "analysis": True, "usi": True, "ecg": True, "doctorService": True},
+        {"id": 102, "parent": 3, "name": "Победы 83", "addressForSite": "ул. Победы, 83", "analysis": True, "usi": False, "ecg": True, "doctorService": True},
+        {"id": 103, "parent": 3, "name": "Гагарина 64", "addressForSite": "ул.Гагарина, 64", "analysis": True, "usi": False, "ecg": False, "doctorService": False},
+        {"id": 104, "parent": 3, "name": "Ново-Садовая", "addressForSite": "ул.Ново-Садовая, 180А", "analysis": True, "usi": True, "ecg": False, "doctorService": True},
+        {"id": 105, "parent": 3, "name": "Аминева 29", "addressForSite": "ул.Аминева, 29", "analysis": False, "usi": False, "ecg": False, "doctorService": True},
+        {"id": 201, "parent": 13, "name": "Револ 16", "addressForSite": "г. Тольятти, ул. Революционная, 16", "analysis": True, "usi": True, "ecg": True, "doctorService": True},
+    ]
+    gynec = {"id": 1, "fio": "Г Гинеколог", "specialization": "Акушер-гинеколог", "regions": ["пр.Ленина, 5", "ул.Аминева, 29"], "unit_links": [{"company_unit_name": "Акушерство и гинекология", "main": True}]}
+    cardio = {"id": 2, "fio": "К Кардиолог", "specialization": "Кардиолог", "regions": ["ул. Победы, 83"], "unit_links": [{"company_unit_name": "Кардиология", "main": True}]}
+
+    monkeypatch.setattr(core_mod.api_nayka, "site_regions", lambda realtime=False: copy.deepcopy(raw))
+    # Прайс-пути (care-setting / procedure-index) нейтрализуем → изолируем регион-пути.
+    monkeypatch.setattr(addr_mod.api_price, "load_price_by_region", lambda *a, **k: [])
+    monkeypatch.setattr(addr_mod.api_price, "resolve_diagnostic_fixed_addresses", lambda *a, **k: [])
+
+    s = Services()
+
+    async def _docs():
+        return [gynec, cardio]
+
+    s._ensure_doctors_cache_loaded = _docs
+
+    def addrs(q, ent):
+        return set(asyncio.run(s.address_info(q, ent)).get("addresses") or [])
+
+    L, P, G, NS, A = "пр.Ленина, 5", "ул. Победы, 83", "ул.Гагарина, 64", "ул.Ново-Садовая, 180А", "ул.Аминева, 29"
+
+    analysis = addrs("Где сдать анализ крови", {"service_name": "анализ крови", "city": "Самара"})
+    usi = addrs("Где сделать УЗИ", {"service_name": "УЗИ", "city": "Самара"})
+    ecg = addrs("Где сделать ЭКГ", {"service_name": "ЭКГ", "city": "Самара"})
+    gyn = addrs("Запись к гинекологу", {"specialty": "гинеколог", "city": "Самара", "__appointment_mode": True})
+    car = addrs("Запись к кардиологу", {"specialty": "кардиолог", "city": "Самара", "__appointment_mode": True})
+
+    # Path 4 — флаговые walk-in пути отдают РОВНО свой флаг-набор (Тольятти исключён иерархией):
+    assert analysis == {L, P, G, NS}, analysis      # analysis=True (вкл. лаб-Гагарина)
+    assert usi == {L, NS}, usi                       # usi=True
+    assert ecg == {L, P}, ecg                        # ecg=True
+    # Path 5 — запись по специальности отдаёт ТОЛЬКО филиалы своей спец-ти:
+    assert gyn == {L, A}, gyn                         # гинеколог: Ленина + Аминева
+    assert car == {P}, car                           # кардиолог: Победы
+    # КРОСС-ИЗОЛЯЦИЯ (главное): лаб-точка Гагарина-64 видна для анализов, СКРЫТА для записи:
+    assert G in analysis and G not in gyn and G not in car
+    # специальности не пересекаются:
+    assert L not in car and A not in car and P not in gyn
+    # флаги не смешиваются: Победы в ecg, но НЕ в usi; Ново-Садовая в usi, но НЕ в ecg:
+    assert P in ecg and P not in usi
+    assert NS in usi and NS not in ecg
+    # Тольятти (другой город) исключён ВЕЗДЕ:
+    for bucket in (analysis, usi, ecg, gyn, car):
+        assert not any("Тольятти" in a for a in bucket), bucket
+
+
 @pytest.mark.parametrize("specialty", ["гинеколог", "кардиолог"])
 def test_address_info_appointment_specialty_never_returns_lab_only_branch_class(
     specialty: str,
