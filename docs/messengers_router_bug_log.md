@@ -11,6 +11,18 @@
 
 ---
 
+## BUG-2026-06-08-03 (диагностика адресов) — запись по специальности резолвится через priceUnits care-setting → один филиал «Ленина 5» вместо всех филиалов спец-ти
+
+- **Симптом (прод-probe диагностики адресов):** «запись к гинекологу/кардиологу» → бот отдаёт ОДИН адрес «г. Самара, пр. Ленина, 5» (note `priceUnits care-setting`), хотя врачи этой специальности принимают на многих филиалах (Аминева 29, Победы 83, …). Дезинформация — будто гинекологи/кардиологи только на Ленина 5.
+- **Корень (по прод-probe + код-трейс):** в `address_info` ([addresses.py](../messengers_router/services/addresses.py)) Path 2 (priceUnits care-setting) срабатывает при `service_q AND not procedure_flag AND appointment_mode`. Для «запись к гинекологу» `service_q` = специальность как «услуга» → матчит прайс-строку «Приём гинеколога» → care-setting адрес (Ленина 5) → `return` ДО doctor-capable пути (Path 5). priceUnits-путь КОРРЕКТЕН для процедур (септопластика → место оказания), но перехватывал и **приём врача по специальности** (консультацию).
+- **Инвариант (класс):** запись/обращение ПО СПЕЦИАЛЬНОСТИ (приём врача: `appointment_mode + specialty`, `procedure_flag=None`) обязана идти на **doctor-capable** путь (ВСЕ филиалы, где принимают врачи этой спец-ти), а НЕ на priceUnits care-setting (один care-setting адрес процедуры). Процедуры (specialty НЕ задан, напр. септопластика) priceUnits-путь сохраняют. Критерий по классу (флаг `appt_by_specialty`), ловит любую специальность, не инстанс.
+- **Фикс-коммит:** `a737005`.
+- **Изменённые файлы:** `services/addresses.py` (`appt_by_specialty = appointment_mode AND specialty`; guard `not appt_by_specialty` на Path 2 priceUnits и Path 3 procedure-index → специальность-приём уходит на flag-filter + doctor-capable, который уже specialty-aware).
+- **Покрытие:** `test_address_info_appointment_by_specialty_uses_doctor_branches_not_priceunit_caresetting` (price-слой замокан в care-setting «Ленина 5» → доказывает обход priceUnits; результат — все филиалы гинеколога Ленина+Аминева, лаб-Гагарина-64 исключена). Регресс-гард: priceUnits для процедур (септопластика/тонзиллэктомия) + non-appointment specialty address + cross-contamination — зелёные. Gate: ruff clean, полный pytest.
+- **Связь:** найден ДИАГНОСТИКОЙ адресов после BUG-2026-06-08-02 (см. `docs/messengers_router_address_diagnostic_2026-06-08.md`). Pre-existing — Path 2 city-фикс не трогал; порядок путей был такой и раньше, проявилось при прод-probe. Прод-верификация после деплоя: re-run address-probe → гинеколог/кардиолог дают много филиалов (note doctor-capable, не priceUnits).
+
+---
+
 ## BUG-2026-06-08-02 (триаж BUG-A) — «только ул.Гагарина, 64» в lab/address: новый прод-бэкенд /regions не отдаёт поле `city`, бот не резолвит иерархию `parent`
 
 - **Симптом (прод):** на запросы про анализы/адреса бот выдаёт ОДИН филиал «ул.Гагарина, 64» (лаб-точка), хотя в Самаре их ~15. Рецидив через многие диалоги (анализ крови, большой список анализов и т.д.).
