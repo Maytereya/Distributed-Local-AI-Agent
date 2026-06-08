@@ -168,7 +168,16 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
                     continue
                 allowed_doctor_addresses_norm.add(_normalise_input(a))
 
-    if service_q and not procedure_flag and (appointment_mode or _is_procedure_branch_lookup_query(query, service_q)):
+    # Запись ПО СПЕЦИАЛЬНОСТИ (приём врача) — НЕ процедура: priceUnits care-setting
+    # (Path 2 ниже) и procedure-index (Path 3) её перехватывали и сужали до одного
+    # care-setting адреса («Ленина 5») вместо ВСЕХ филиалов спец-ти (дезинформация —
+    # будто врачи только там). Такие запросы ведём на doctor-capable путь, который
+    # отдаёт все филиалы этой специальности (диагностика 2026-06-08, прод-probe).
+    appt_by_specialty = appointment_mode and bool(
+        _normalise_input(_get_first_present(entities, ["specialty"]) or "")
+    )
+
+    if service_q and not procedure_flag and not appt_by_specialty and (appointment_mode or _is_procedure_branch_lookup_query(query, service_q)):
         try:
             retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
         except Exception:
@@ -195,7 +204,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
                     "entities_used": entities,
                 }
 
-    if service_q and not procedure_flag and _is_procedure_branch_lookup_query(query, service_q):
+    if service_q and not procedure_flag and not appt_by_specialty and _is_procedure_branch_lookup_query(query, service_q):
         procedure_branches = await self._procedure_branches_from_index(service_q, regions)
         if procedure_branches:
             if branch_q:

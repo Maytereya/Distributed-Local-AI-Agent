@@ -4988,6 +4988,56 @@ def test_address_paths_do_not_cross_contaminate_diagnostic(monkeypatch):
         assert not any("Тольятти" in a for a in bucket), bucket
 
 
+def test_address_info_appointment_by_specialty_uses_doctor_branches_not_priceunit_caresetting(monkeypatch):
+    # BUG (диагностика 2026-06-08, прод-probe): «запись к гинекологу» резолвилась через
+    # priceUnits care-setting (Path 2) → ОДИН адрес «Ленина 5» вместо ВСЕХ филиалов
+    # спец-ти. priceUnits-путь корректен для ПРОЦЕДУР (септопластика), но перехватывал и
+    # приём врача ПО СПЕЦИАЛЬНОСТИ → дезинформация (гинекологи будто только на Ленина 5).
+    # Фикс: appointment_mode + specialty → пропускаем priceUnits/procedure → doctor-capable.
+    import copy
+
+    from messengers_router.services import addresses as addr_mod
+    from messengers_router.services import core as core_mod
+
+    raw = [
+        {"id": 1, "parent": None, "name": "Все", "addressForSite": None},
+        {"id": 2, "parent": 1, "name": "Самарская область", "addressForSite": None},
+        {"id": 3, "parent": 2, "name": "Самара", "addressForSite": None},
+        {"id": 101, "parent": 3, "name": "Ленина 5", "addressForSite": "пр.Ленина, 5", "doctorService": True},
+        {"id": 102, "parent": 3, "name": "Аминева 29", "addressForSite": "ул.Аминева, 29", "doctorService": True},
+        {"id": 103, "parent": 3, "name": "Гагарина 64", "addressForSite": "ул.Гагарина, 64", "doctorService": False},
+    ]
+    gynec = {"id": 1, "fio": "Г Гинеколог", "specialization": "Акушер-гинеколог", "regions": ["пр.Ленина, 5", "ул.Аминева, 29"], "unit_links": [{"company_unit_name": "Акушерство и гинекология", "main": True}]}
+
+    monkeypatch.setattr(core_mod.api_nayka, "site_regions", lambda realtime=False: copy.deepcopy(raw))
+    # Воспроизводим priceUnits-перехват: price-слой ВЕРНУЛ бы care-setting «Ленина 5».
+    monkeypatch.setattr(addr_mod.api_price, "load_price_by_region", lambda *a, **k: [{"serviceName": "Прием гинеколога"}])
+    monkeypatch.setattr(addr_mod, "_select_address_price_rows", lambda *a, **k: [{"serviceName": "Прием гинеколога"}])
+    monkeypatch.setattr(addr_mod, "_care_setting_addresses_from_price_rows", lambda *a, **k: ["г. Самара, пр. Ленина, 5"])
+    monkeypatch.setattr(addr_mod.api_price, "resolve_diagnostic_fixed_addresses", lambda *a, **k: [])
+
+    s = Services()
+
+    async def _docs():
+        return [gynec]
+
+    s._ensure_doctors_cache_loaded = _docs
+
+    res = asyncio.run(
+        s.address_info("Запись к гинекологу", {"specialty": "гинеколог", "city": "Самара", "__appointment_mode": True})
+    )
+    addrs = set(res.get("addresses") or [])
+    note = str(res.get("note") or "")
+
+    # НЕ priceUnits-перехват — должно прийти из doctor-capable пути:
+    assert "priceUnits" not in note, (note, addrs)
+    # ВСЕ филиалы гинеколога (Ленина + Аминева), не один care-setting адрес:
+    assert "ул.Аминева, 29" in addrs, (note, addrs)
+    assert "пр.Ленина, 5" in addrs, (note, addrs)
+    # лаб-точка без врачей исключена:
+    assert "ул.Гагарина, 64" not in addrs, addrs
+
+
 @pytest.mark.parametrize("specialty", ["гинеколог", "кардиолог"])
 def test_address_info_appointment_specialty_never_returns_lab_only_branch_class(
     specialty: str,
