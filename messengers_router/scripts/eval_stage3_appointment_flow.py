@@ -14,6 +14,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
 
@@ -24,12 +25,42 @@ class Step:
     expect_any: tuple[str, ...]
     expect_handoff: bool
     reject_any: tuple[str, ...] = field(default_factory=tuple)
+    # Динамический ввод: если задан, user_text вычисляется из LIVE-данных в рантайме
+    # (например, реальный свободный слот из расписания), чтобы шаг не флакал на
+    # изменчивом CRM. Сигнатура: derive_text(url, post_json, session_id) -> str.
+    # Любое падение/пустой результат → fallback на статический user_text.
+    derive_text: Callable[[str, Callable[..., dict], str], str] | None = None
 
 
 @dataclass
 class Flow:
     flow_id: str
     steps: list[Step]
+
+
+def _derive_trubin_lenina_slot(url: str, poster: Callable[..., dict], session_id: str) -> str:
+    """Динамический шаг 5 HOLTER_RESCHEDULE: подставляет РЕАЛЬНЫЙ свободный слот
+    Трубина на пр.Ленина, 5 из live-расписания.
+
+    Раньше шаг хардкодил «завтра после 16:00» и флакал на parity смен (у Ленина-5
+    чередуются утренние/вечерние приёмы → «завтра» могло быть без слота после 16:00).
+    Читаем актуальное расписание отдельным запросом и берём первый свободный слот в
+    секции этого филиала. Падение/нет слота → fallback на исходный хардкод.
+    """
+    probe = poster(
+        url,
+        {"session_id": f"{session_id}_slotprobe", "text": "расписание Трубина", "debug": True},
+    )
+    bot = str(probe.get("text") or "")
+    # Якоримся на ЗАГОЛОВОК секции филиала «...Ленина, 5:» (с двоеточием — он
+    # уникален; в строке «Адреса приема: …Ленина, 5» двоеточия после адреса нет),
+    # иначе нашли бы слот соседнего филиала (Победы 83), указанного выше по тексту.
+    anchor = bot.find("Ленина, 5:")
+    region_text = bot[anchor:] if anchor >= 0 else bot
+    m = re.search(r"•\s*(\d{1,2}\s+[а-яё]+)\s*:\s*свободно в\s*(\d{1,2}:\d{2})", region_text)
+    if m:
+        return f"{m.group(1).strip()} {m.group(2)}"
+    return "завтра после 16:00"
 
 
 FLOWS: list[Flow] = [
@@ -63,7 +94,14 @@ FLOWS: list[Flow] = [
             # (рецидив 2-й раз) — кандидат на ДИНАМИЧЕСКИЙ шаг (брать филиал/слот из офера
             # бота). Пока берём пр.Ленина, 5.
             Step("пр.Ленина, 5", ("дату и время", "на какую дату", "удобное время"), False),
-            Step("завтра после 16:00", ("подтверждаете", "запись:"), False),
+            # Динамический шаг: реальный свободный слот Трубина на Ленина-5 (не хардкод
+            # «завтра после 16:00», который флакал на parity смен). Fallback внутри derive.
+            Step(
+                "завтра после 16:00",
+                ("подтверждаете", "запись:"),
+                False,
+                derive_text=_derive_trubin_lenina_slot,
+            ),
             Step("нет", ("уточните новую дату",), False),
         ],
     ),
@@ -188,7 +226,15 @@ def main() -> int:
         session_id = f"{args.session_prefix}_{run_id}_{flow.flow_id}"
         for idx, step in enumerate(flow.steps, 1):
             total += 1
-            payload = {"session_id": session_id, "text": step.user_text, "debug": True}
+            user_text = step.user_text
+            if step.derive_text is not None:
+                try:
+                    derived = step.derive_text(args.url, post_json, session_id)
+                    if derived:
+                        user_text = derived
+                except Exception:
+                    pass  # любое падение derive → fallback на статический user_text
+            payload = {"session_id": session_id, "text": user_text, "debug": True}
             try:
                 data = post_json(args.url, payload)
                 bot_text = str(data.get("text") or "")
