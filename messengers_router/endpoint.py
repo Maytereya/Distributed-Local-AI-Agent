@@ -152,10 +152,10 @@ class ResponseEnvelopeLine(BaseModel):
                             ),
                         },
                         "result_link": {
-                            "summary": "Отдача ссылки на результат в тексте",
+                            "summary": "Результаты: пациента ведём на портал результатов",
                             "value": (
-                                '{"text":"Ваши результаты готовы.","attachments":[],"handoff":false,"state_update":{}}\n'
-                                '{"text":"Ссылка на результат: https://naykalab.ru/getanaliz.php?fam=...","attachments":[],"handoff":false,"state_update":{}}\n'
+                                '{"text":"Результат по вашим данным готов.","attachments":[],"handoff":false,"state_update":{}}\n'
+                                '{"text":"Посмотреть результаты можно на сайте https://naykalab.ru/samara — вкладка «Результаты анализов».","attachments":[],"handoff":false,"state_update":{}}\n'
                             ),
                         },
                     }

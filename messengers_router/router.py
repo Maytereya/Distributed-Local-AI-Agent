@@ -2459,8 +2459,8 @@ async def patient_routing_stream(
     city_now = match_city(user_text)
     if city_now and not _is_samara_city(city_now):
         # Исключение: запрос результатов анализов работает для любого города —
-        # публичная ссылка naykalab.ru/getanaliz.php не привязана к региону,
-        # достаточно ФИО/года/филиала/номера. Пускаем такие реплики в TEST_RESULT-флоу.
+        # портал результатов (naykalab.ru/samara) не привязан к региону, достаточно
+        # ФИО/года/филиала/номера. Пускаем такие реплики в TEST_RESULT-флоу.
         if detect_test_result_intent(user_text):
             pass
         else:

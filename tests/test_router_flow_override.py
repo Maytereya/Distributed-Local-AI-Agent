@@ -1778,20 +1778,28 @@ def test_build_doctor_info_response_clears_stale_doctor_for_multi_specialty_list
     assert state.last_entities.get("doctor_id") is None
 
 
-def test_build_test_result_response_with_ready_link():
+def test_build_test_result_response_ready_renders_portal_preview():
+    # BUG-2026-06-08-01: «результат готов» рендерит portal-preview как есть, без отдельной
+    # ветки «Ссылка на результат» (deep-link getanaliz.php удалён как недействительный).
+    # Контракт: что сервис положил в result_preview — то и видит пациент.
     evidence = Evidence(
         items={
             "test_result_status": {
                 "ready": True,
-                "note": "result_link_constructed",
-                "result_links": ["https://example.com/result.pdf"],
+                "note": "result_ready_portal",
+                "result_preview": (
+                    "Результат по вашим данным готов. "
+                    "Посмотреть результаты можно на сайте https://naykalab.ru/samara — "
+                    "вкладка «Результаты анализов»."
+                ),
             }
         }
     )
     env = _build_test_result_response("TEST_RESULT", evidence)
     assert env is not None
-    assert "Ссылка на результат" in env.text
-    assert "https://example.com/result.pdf" in env.text
+    assert "https://naykalab.ru/samara" in env.text
+    assert "getanaliz" not in env.text.lower()
+    assert "Ссылка на результат" not in env.text
 
 
 def test_build_doctor_schedule_response_hydrates_context_without_forcing_flow_active():

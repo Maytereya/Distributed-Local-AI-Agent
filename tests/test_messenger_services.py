@@ -29,7 +29,7 @@ from messengers_router import services as svc_mod
 from messengers_router.city import match_city
 from messengers_router.mess_types import Evidence, SessionState
 from messengers_router.renderer import format_price_for_patient, format_service_bundle_for_patient
-from messengers_router.response_builder import build_price_response
+from messengers_router.response_builder import build_price_response, build_test_result_response
 from messengers_router.services import Services, resolve_price_service_name_from_catalog
 from messengers_router.policies import (
     build_branch_index,
@@ -96,21 +96,9 @@ def test_lab_tests_extract_result_query_fields_uses_order_id_fallback():
     }
 
 
-def test_lab_tests_build_public_result_link_keeps_cp1251_contract():
-    link = lab_tests_mod._build_public_result_link(
-        {
-            "surname": "Иванов",
-            "year": 1990,
-            "filial": "Бг",
-            "number": 12345,
-            "lang": "ru",
-        }
-    )
-
-    assert link == (
-        "https://naykalab.ru/getanaliz.php"
-        "?fam=%C8%E2%E0%ED%EE%E2&year=1990&nom=%C1%E3&nom2=12345&fast=1"
-    )
+# Прямой deep-link на результат (getanaliz.php) удалён как недействительный
+# (BUG-2026-06-08-01). Поведение замены покрыто инвариантом
+# test_result_status_every_outcome_points_to_portal_never_getanaliz (ниже).
 
 
 def test_lab_tests_test_assist_clarify_response_stays_non_handoff():
@@ -362,8 +350,6 @@ def test_doctors_info_empty_cache_returns_fallback(monkeypatch):
         ("service_error_doctors_list", "Сейчас не удалось получить список врачей автоматически. Соединяю с оператором."),
         ("service_error_schedule", "Сейчас не удалось получить расписание автоматически. Соединяю с оператором."),
         ("service_error_doctor_info", "Сейчас не удалось найти информацию автоматически. Соединяю с оператором."),
-        ("service_error_results", "Сейчас не удалось получить результаты автоматически. Соединяю с оператором."),
-        ("service_error_result_link", "Сейчас не удалось сформировать ссылку на результат автоматически. Соединяю с оператором."),
         ("service_error_prices", "Сейчас не удалось получить цены автоматически. Соединяю с оператором."),
     ],
 )
@@ -4471,6 +4457,53 @@ def test_result_exception_is_tech_unavailable(monkeypatch):
                       {"surname": "Тестов", "year": "1990", "filial": "Бг", "number": "1"}))
     assert res.get("ready") is False
     assert "техническ" in str(res.get("result_preview") or "").lower()
+
+
+# BUG-2026-06-08-01: deep-link getanaliz.php недействителен (решение владельца). Запрос
+# результатов анализов в ЛЮБОМ исходе ведёт пациента на портал naykalab.ru/samara →
+# вкладка «Результаты анализов», а НЕ на мёртвую прямую ссылку.
+_RESULTS_PORTAL_URL = "https://naykalab.ru/samara"
+
+
+@pytest.mark.parametrize(
+    "outcome,api_resp,exc",
+    [
+        ("ready", {"ok": True, "status_code": 200, "data": {"pdf": "<blob>"}}, None),
+        ("not_found_404", {"ok": False, "status_code": 404, "error": "404"}, None),
+        ("not_found_empty", {"ok": True, "status_code": 200, "data": ""}, None),
+        ("tech_5xx", {"ok": False, "status_code": 503, "error": "503"}, None),
+        ("tech_none", {"ok": False, "status_code": None, "error": "timeout"}, None),
+        ("tech_exc", None, ConnectionError("down")),
+    ],
+)
+def test_result_status_every_outcome_points_to_portal_never_getanaliz(
+    monkeypatch, outcome, api_resp, exc
+):
+    # Инвариант КЛАССА (не инстанс): через все исходы taxonomy (OK / NOT_FOUND / TECH),
+    # на уровне сервиса И на уровне рендера — портал присутствует, getanaliz никогда.
+    def fake_site_result(**kwargs):
+        if exc is not None:
+            raise exc
+        return api_resp
+
+    monkeypatch.setattr(lab_tests_mod.api_nayka, "site_result_for_patient", fake_site_result)
+    entities = {"surname": "Тестов", "year": "1990", "filial": "Бг", "number": "1"}
+    payload = asyncio.run(lab_tests_mod.test_result_status(None, "Тестов, 1990, Бг, 1", entities))
+
+    # Сервис не строит deep-link и не оставляет result_links/result_payload.
+    assert "getanaliz" not in str(payload).lower(), outcome
+    assert not payload.get("result_links"), outcome
+
+    # Рендер (то, что реально видит пациент) — единственный источник правды контракта.
+    env = build_test_result_response(
+        "TEST_RESULT", Evidence(items={"test_result_status": payload})
+    )
+    assert env is not None, outcome
+    assert env.handoff is False, outcome
+    assert _RESULTS_PORTAL_URL in env.text, (outcome, env.text)
+    assert "getanaliz" not in env.text.lower(), (outcome, env.text)
+    # Указываем именно вкладку (различающий маркер портал-подсказки, заглавная Р).
+    assert "Результаты анализов" in env.text, (outcome, env.text)
 
 
 def test_service_procedure_flag_maps_usi_analysis_ecg():

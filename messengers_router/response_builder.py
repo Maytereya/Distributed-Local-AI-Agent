@@ -273,26 +273,7 @@ def build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseE
     if not isinstance(result_status, dict):
         return None
 
-    if result_status.get("ready") is True:
-        note = str(result_status.get("note") or "")
-        preview = str(result_status.get("result_preview") or "").strip()
-        links_raw = result_status.get("result_links")
-        links = [str(x).strip() for x in links_raw] if isinstance(links_raw, list) else []
-        links = [x for x in links if x]
-        if note == "result_link_constructed":
-            text = "Сформировал ссылку для просмотра результата по указанным данным."
-        else:
-            text = "Результаты по вашим данным найдены."
-        if links:
-            if len(links) == 1:
-                text = f"{text}\n\nСсылка на результат: {links[0]}"
-            else:
-                lines = "\n".join(f"- {u}" for u in links[:5])
-                text = f"{text}\n\nСсылки на результаты:\n{lines}"
-        if preview and not links:
-            text = f"{text}\n\n{preview}"
-        return ResponseEnvelope(text=text, attachments=[], handoff=False)
-
+    # Сбор недостающих данных (ФИО/год/филиал/номер) — уточняющий вопрос.
     missing = result_status.get("missing_fields")
     if isinstance(missing, list) and missing:
         return ResponseEnvelope(
@@ -301,6 +282,10 @@ def build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseE
             handoff=False,
         )
 
+    # Все исходы (готов / не найден / тех-сбой) несут готовый patient-текст в
+    # result_preview, который ведёт пациента на портал результатов (см.
+    # lab_tests.test_result_status). Прямых deep-link'ов на результат больше нет —
+    # рендерим текст как есть, без отдельной ветки «Ссылка на результат».
     preview = str(result_status.get("result_preview") or "").strip()
     text = preview or "По указанным данным результаты пока не найдены или ещё не готовы."
     return ResponseEnvelope(text=text, attachments=[], handoff=False)

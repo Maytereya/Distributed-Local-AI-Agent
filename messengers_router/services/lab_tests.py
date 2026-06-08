@@ -9,17 +9,14 @@ from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote_from_bytes
 
 from agent_logic_2.nayka_api import api_nayka, api_price
 
 from .. import resilience as _R
-from ..policies import handoff_message
 from ._common import (
     _as_int,
     _get_first_present,
     _normalise_input,
-    _service_fallback,
 )
 from ._prices_helpers import (
     _PRICE_SERVICE_ALIASES,
@@ -30,17 +27,6 @@ from ._prices_helpers import (
 
 if TYPE_CHECKING:
     from .core import Services
-
-
-def _cp1251_urlencode(value: str) -> str:
-    """Кодирует параметр под контракт ссылки Nayka Lab.
-
-    :param value: исходное строковое значение
-    :return: URL-safe строка в кодировке Windows-1251
-    """
-
-    raw = str(value or "").strip().encode("cp1251", errors="replace")
-    return quote_from_bytes(raw, safe="")
 
 
 def _extract_result_query_fields(entities: dict[str, Any], query: str) -> dict[str, Any]:
@@ -71,27 +57,17 @@ def _extract_result_query_fields(entities: dict[str, Any], query: str) -> dict[s
     }
 
 
-def _build_public_result_link(fields: dict[str, Any]) -> str | None:
-    """Строит публичную ссылку на результат анализа.
-
-    :param fields: нормализованные поля результата
-    :return: готовая ссылка или ``None``, если данных недостаточно
-    """
-
-    surname = str(fields.get("surname") or "").strip()
-    filial = str(fields.get("filial") or "").strip()
-    year = _as_int(fields.get("year"))
-    number = _as_int(fields.get("number"))
-    if not surname or not filial or year is None or number is None:
-        return None
-    return (
-        "https://naykalab.ru/getanaliz.php"
-        f"?fam={_cp1251_urlencode(surname)}"
-        f"&year={year}"
-        f"&nom={_cp1251_urlencode(filial)}"
-        f"&nom2={number}"
-        "&fast=1"
-    )
+# Портал результатов анализов — единственный источник правды (BUG-2026-06-08-01,
+# решение владельца 2026-06-08). Прямой deep-link к результату (getanaliz.php) больше
+# НЕ формируем: он недействителен, и рабочей прямой ссылки ни на конкретный результат,
+# ни на саму вкладку у нас нет. Ведём пациента на портал, где он сам открывает вкладку
+# «Результаты анализов» и вводит свои данные. Отдавать мёртвую ссылку = дезинформация.
+RESULTS_PORTAL_URL = "https://naykalab.ru/samara"
+_RESULTS_PORTAL_HINT = (
+    f"Посмотреть результаты можно на сайте {RESULTS_PORTAL_URL} — "
+    "вкладка «Результаты анализов» (вверху слева на сайте): введите фамилию, "
+    "год рождения, филиал и номер анализа."
+)
 
 
 def _test_assist_clarify_response(entities: dict[str, Any], *, note: str) -> dict[str, Any]:
@@ -218,40 +194,22 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
 # предлагаем оператора. Авто-эскалации на оператора при 404 по-прежнему нет.
 _RESULT_NOT_READY_TEXT = (
     "Не нашёл готовый результат по этим данным. Возможно, он ещё не готов, "
-    "либо неточно указаны фамилия, год рождения, код или номер анализа — "
-    "проверьте, пожалуйста. Если результат уже должен быть готов, напишите «оператор»."
+    "либо неточно указаны фамилия, год рождения, филиал или номер анализа. "
+    "Если результат уже должен быть готов, напишите «оператор».\n\n"
+    + _RESULTS_PORTAL_HINT
 )
 
 
 async def test_result_status(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
-    """Проверяет готовность результата анализа и формирует ссылку на него.
+    """Проверяет готовность результата анализа и ведёт пациента на портал результатов.
 
     :param self: экземпляр сервисного слоя
     :param query: текст запроса пользователя
     :param entities: извлечённые NLU-сущности
-    :return: payload с готовностью результата или fallback-ответом
+    :return: payload с готовностью результата + портал для самопроверки
     """
 
     _ = self
-
-    def _result_fallback(
-        note: str,
-        message: str = handoff_message("service_error_results"),
-    ) -> dict[str, Any]:
-        """Формирует единый fallback при ошибке получения результатов.
-
-        :param note: диагностическая пометка
-        :param message: пользовательское сообщение handoff
-        :return: fallback-payload с ``ready=False``
-        """
-
-        return _service_fallback(
-            note=note,
-            handoff_message=message,
-            entities=entities,
-            reason="test_result_fallback",
-            extra={"ready": False},
-        )
 
     fields = _extract_result_query_fields(entities, query)
     missing = [key for key in ("surname", "year", "filial", "number") if not fields.get(key)]
@@ -283,7 +241,9 @@ async def test_result_status(self: "Services", query: str, entities: dict[str, A
         return {
             "ready": False,
             "note": "result_tech_unavailable",
-            "result_preview": _R.tech_unavailable_text("результаты анализов"),
+            "result_preview": (
+                _R.tech_unavailable_text("результаты анализов") + "\n\n" + _RESULTS_PORTAL_HINT
+            ),
             "entities_used": entities,
         }
     if outcome == _R.NOT_FOUND:
@@ -293,21 +253,11 @@ async def test_result_status(self: "Services", query: str, entities: dict[str, A
             "result_preview": _RESULT_NOT_READY_TEXT,
             "entities_used": entities,
         }
-    # outcome == OK
-    payload = api_resp.get("data")
-
-    link = _build_public_result_link(fields)
-    if not link:
-        return _result_fallback(
-            "result_link_build_failed",
-            handoff_message("service_error_result_link"),
-        )
-
+    # outcome == OK: результат есть на бэкенде, но прямой ссылки на него у нас нет
+    # (getanaliz.php недействителен) — отправляем пациента на портал самообслуживания.
     return {
         "ready": True,
-        "note": "result_link_constructed",
-        "result_payload": payload,
-        "result_preview": "Ссылка на результат сформирована.",
-        "result_links": [link],
+        "note": "result_ready_portal",
+        "result_preview": "Результат по вашим данным готов. " + _RESULTS_PORTAL_HINT,
         "entities_used": entities,
     }
