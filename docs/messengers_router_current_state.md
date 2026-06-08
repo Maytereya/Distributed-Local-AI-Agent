@@ -1,7 +1,7 @@
 # `messengers_router` — текущее состояние и дельта с 20 апреля 2026
 
 **Для:** Владимир (Free Talk / LLM-first преемник).
-**Срез:** 2026-06-07 · ветка `release` · модуль `messengers_router/` (~27k строк, ~61 файл).
+**Срез:** 2026-06-09 · ветка `release` · модуль `messengers_router/` (~27k строк, ~61 файл).
 
 Ты знаешь, как MR работал **на 20 апреля** (по `messengers_router_refactor_plan.md`, Stages 0–22). С тех пор было ~75 коммитов. **Главное в этом доке — §1: что изменилось с 20 апреля.** §2–4 — сжатый текущий контракт/карта для справки (baseline ты в основном знаешь). Дальше сам решишь, что переносить в FT.
 
@@ -11,7 +11,7 @@
 
 ## 1. Что изменилось с 20 апреля (главное)
 
-Каждый пункт: суть + ключевой коммит (можно `git show <hash>`). Сквозная тема периода — **«честность и надёжность вместо блефа» + анти-зацикливание**. **Новейшее (06–07.06) → §1.11 (слой устойчивости, degraded-mode Фаза 1) + `BUG-2026-06-07-01` в §1.2.**
+Каждый пункт: суть + ключевой коммит (можно `git show <hash>`). Сквозная тема периода — **«честность и надёжность вместо блефа» + анти-зацикливание**. **Новейшее (08–09.06) → §1.13 (прод-cutover findings + батч багов: regions без `city`, результаты, адреса). Перед ним (06–07.06) → §1.11 (слой устойчивости, degraded-mode Фаза 1).**
 
 ### 1.1 Структура кода — большой рефакторинг ЗАВЕРШЁН
 - Монолит `services.py` (~7.3k стр.) **распилен** в пакет `services/` (Stage 20–22, 20–21.04): `_common`, `_regions`, `_prepare`, `_addresses_helpers`, `_doctors_helpers`, `_prices_helpers` (хелперы) + домен-модули `prices`, `doctors`, `prepare`, `lab_tests`, `addresses`, `main_index`, `news` + `core` (фасад `Services`, бывший `services_legacy.py`). Shim сжат, домен-модули импортируют напрямую (`1f09e77`, `3ea86de`, `307dd1e`, `18bd02b`, …).
@@ -89,6 +89,16 @@
 - **Resilience Phase-2/3** (см. §1.11 + план): `asyncio.gather` параллелизация, оператор-сигнал в агрегаторе, `session_id`/`latency_ms` в degraded-логах, observability `_schedule_by_specialty`, envelope-рефактор `find_doctor_schedule`, per-profile realtime connect-timeout.
 - M1 (`clarify_gate` отдаёт машинные коды) — дремлет под `legacy_v2`, оживёт при `llm_primary`.
 - Полный список долга/мёртвого кода — тот же чекап.
+
+### 1.13 Прод-cutover findings + батч багов 08–09.06 ⭐ новейшее
+
+**Контекст:** переезд на прод-бэкенд `medserver-egisz` (`config.ini [NAUKA]` → `172.16.0.192/medserver-egisz`) вскрыл серию **field-mapping расхождений** — новый бэкенд отдаёт данные иначе, чем тот, под который писался бот. Журнал: `messengers_router_bug_log.md` (BUG-2026-06-08-01/02/03) + `messengers_router_address_diagnostic_2026-06-08.md`.
+
+- **⚠️ Прод `/regions` НЕ отдаёт поле `city`** — город закодирован деревом `parent` (`Все → *область → Город → филиалы`) + `companyName` («Наука-Самара»). Бот фильтровал Самару по `r.get("city")` → ронял ВСЕ реальные филиалы (**BUG-A**: анализы → 1 «Гагарина 64» вместо **31**). Фикс: `_regions._derive_region_city` выводит город из `parent`, `_inject_region_cities` проставляет на загрузке (`core._ensure_regions_loaded`, единая точка) — `88727d8`. Заодно спутники (Новокуйбышевск/Тольятти) исключаются по своему городу; вероятно чинит расписания (`_samara_region_tokens`) и распознавание филиалов (ЮГ-2).
+- **Запись по специальности → priceUnits care-setting → 1 филиал** (**BUG-2026-06-08-03**): Path 2 (priceUnits, место оказания процедуры) перехватывал приём врача по специальности (`service_q`=специальность матчила прайс «Приём гинеколога») → сужал до «Ленина 5». Фикс: `appt_by_specialty` guard на Path 2/3 → doctor-capable (ВСЕ филиалы спец-ти, specialty-aware) — `a737005`.
+- **Диагностика адресов** (`...address_diagnostic_2026-06-08.md`): 6 путей `address_info` (fixed/priceUnits/procedure-index/regions-flag/doctor-capable/fallback) проверены прод-probe + класс-инвариант-тестом — опасного смешения НЕТ (analysis/usi/ecg раздельны 31/4/25; лаб-точки не текут в специальность).
+- **Результаты анализов** (**BUG-2026-06-08-01**): bot-constructed deep-link `getanaliz.php` **мёртв (404)**; `resultForPatient` на готовом результате отдаёт **сам PDF (`application/pdf` байты)**, не URL; портал-форма (`naykalab.ru/samara` → «Результаты анализов») рабочая, выдаёт токен-ссылку `…/api/index.php?route=results/patient_download&token=…`. Бот: готов → portal-interim, не найден/тех-сбой → портал; мёртвую getanaliz больше не отдаёт — `ca0e23e`,`1fbf707`. **TODO:** прямая доставка PDF (Наяка токен-эндпоинт / агрегатор pdf-attachment).
+- **Урок для FT/будущих сессий:** field-mapping расхождения возможны и в `/doctors`, `/priceByRegion`. При region/address/schedule-багах СНАЧАЛА дёргать живой эндпоинт (`docker exec bookworm-agent python -c "from agent_logic_2.nayka_api import api_nayka; …"`), смотреть РЕАЛЬНУЮ структуру — синтетическая репродукция с выдуманным полем даёт ложный «код корректен».
 
 ---
 
