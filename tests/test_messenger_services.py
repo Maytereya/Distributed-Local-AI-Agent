@@ -5038,6 +5038,39 @@ def test_address_info_appointment_by_specialty_uses_doctor_branches_not_priceuni
     assert "ул.Гагарина, 64" not in addrs, addrs
 
 
+def test_address_info_branch_match_tolerant_space_hyphen_parens(monkeypatch):
+    # BUG-E (прод-probe 2026-06-09): филиал «ул.Челышевская, 3 (ЮГ-2)» ЕСТЬ в /regions,
+    # но запрос «ЮГ 2» его не находил — branch_q «юг 2» (пробел) ≠ «юг-2» (дефис) в
+    # скобках → 0 адресов. Матчинг филиала должен быть толерантен к пробел/дефис/скобкам
+    # (compacted-сравнение). Класс-инвариант: ловит любой филиал с разделителями.
+    import copy
+
+    from messengers_router.services import core as core_mod
+
+    raw = [
+        {"id": 1, "parent": None, "name": "Все", "addressForSite": None},
+        {"id": 2, "parent": 1, "name": "Самарская область", "addressForSite": None},
+        {"id": 3, "parent": 2, "name": "Самара", "addressForSite": None},
+        {"id": 101, "parent": 3, "name": "ЮГ-2", "addressForSite": "ул.Челышевская, 3 (ЮГ-2)", "analysis": True},
+        {"id": 102, "parent": 3, "name": "Ленина 5", "addressForSite": "пр.Ленина, 5", "analysis": True},
+    ]
+    monkeypatch.setattr(core_mod.api_nayka, "site_regions", lambda realtime=False: copy.deepcopy(raw))
+    s = Services()
+
+    async def _fd():
+        return []
+
+    s._ensure_doctors_cache_loaded = _fd
+    res = asyncio.run(
+        s.address_info("сдать анализ на ЮГ 2", {"service_name": "анализ", "branch": "ЮГ 2", "city": "Самара"})
+    )
+    addrs = res.get("addresses") or []
+    # «ЮГ 2» матчится на «(ЮГ-2)» несмотря на пробел/дефис/скобки:
+    assert any("ЮГ-2" in a or "Челышевская" in a for a in addrs), (res.get("note"), addrs)
+    # но фильтр по филиалу работает — не отдаёт ВСЕ филиалы:
+    assert not any("Ленина" in a for a in addrs), addrs
+
+
 @pytest.mark.parametrize("specialty", ["гинеколог", "кардиолог"])
 def test_address_info_appointment_specialty_never_returns_lab_only_branch_class(
     specialty: str,

@@ -84,6 +84,28 @@ def _soft_address_match(left: str, right: str) -> bool:
     )
 
 
+def _branch_query_matches(branch_q: str, hay: str) -> bool:
+    """Совпадение запрошенного филиала (`branch_q`) с текстом региона (`hay`),
+    толерантное к пробел/дефис/скобкам: «ЮГ 2» ↔ «…(ЮГ-2)» (BUG-E 2026-06-09).
+
+    Оба аргумента — уже нормализованные (`_normalise_input`) строки. Логика:
+    прямое вхождение ИЛИ compacted-вхождение (обе строки без не-алфанумерики).
+    Гард `len(compact) >= 3` — чтобы короткий запрос не over-matchил.
+
+    :param branch_q: нормализованный запрос филиала
+    :param hay: нормализованный текст региона (адрес/имя/город)
+    :return: True, если филиал совпадает
+    """
+    if not branch_q:
+        return True
+    if branch_q in hay:
+        return True
+    compact_q = re.sub(r"[^a-zа-яё0-9]+", "", branch_q)
+    if len(compact_q) < 3:
+        return False
+    return compact_q in re.sub(r"[^a-zа-яё0-9]+", "", hay)
+
+
 def _static_procedure_addresses(service_q: str) -> list[str]:
     """
     Возвращает статические адреса для процедур с известными API-пробелами.

@@ -16,6 +16,7 @@ from .. import resilience as _R
 from ..service_phrase import extract_service_phrase
 from ._addresses_helpers import (
     _addresses_to_branch_payload,
+    _branch_query_matches,
     _is_procedure_branch_lookup_query,
     _looks_like_real_address,
     _static_procedure_addresses,
@@ -134,7 +135,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
         if branch_q:
             fixed_addresses = [
                 addr for addr in fixed_addresses
-                if branch_q in _normalise_input(addr)
+                if _branch_query_matches(branch_q, _normalise_input(addr))
             ]
         if fixed_addresses:
             return {
@@ -194,7 +195,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
             if branch_q:
                 care_addresses = [
                     addr for addr in care_addresses
-                    if branch_q in _normalise_input(addr)
+                    if _branch_query_matches(branch_q, _normalise_input(addr))
                 ]
             if care_addresses:
                 return {
@@ -211,7 +212,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
                 procedure_branches = [
                     b
                     for b in procedure_branches
-                    if branch_q in _normalise_input(str(b.get("address") or ""))
+                    if _branch_query_matches(branch_q, _normalise_input(str(b.get("address") or "")))
                 ]
             if procedure_branches:
                 return {
@@ -243,7 +244,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
                 _normalise_input(str(r.get("city") or "")),
             ]
         )
-        if branch_q and branch_q not in hay:
+        if branch_q and not _branch_query_matches(branch_q, hay):
             continue
         addresses.append(disp)
         branches.append(
@@ -330,7 +331,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
         for a in regions_src:
             if not _looks_like_real_address(a):
                 continue
-            if effective_branch_q and effective_branch_q not in _normalise_input(a):
+            if effective_branch_q and not _branch_query_matches(effective_branch_q, _normalise_input(a)):
                 continue
             fallback.append(a)
     deduped = sorted(set(fallback))
