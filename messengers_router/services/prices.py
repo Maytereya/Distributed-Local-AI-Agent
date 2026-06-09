@@ -245,6 +245,17 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         retail_query,
         limit=10,
     )
+    # BUG-H sibling: query-кандидат из текста мог нести framing-шум («анализ ттг»),
+    # который даёт ПУСТУЮ выборку (AND-семантика: нет строки и с «анализ», и с «ттг»),
+    # хотя резолвленная услуга (service_name) находится. Откатываемся на неё, чтобы
+    # не терять цену на «сколько стоит анализ на <X>». Срабатывает только на пустом
+    # результате — рабочие кейсы не затрагиваются.
+    if not matches and retail_query != service_name:
+        matches = _select_patient_price_rows(
+            [p for p in price_rows if isinstance(p, dict)],
+            service_name,
+            limit=10,
+        )
     matches = _annotate_price_rows_with_care_context(matches)
     return {
         "prices": matches,
@@ -356,6 +367,14 @@ async def service_bundle_info(
             retail_query,
             limit=5,
         )
+        # BUG-H sibling: framing-шум в query-кандидате («анализ ттг») даёт ПУСТУЮ
+        # выборку, хотя резолвленная услуга находится. Откат на неё (только на пустом
+        # результате), и не подменяем service_name на шумный кандидат.
+        if not out["retail_prices"] and retail_query != service_name:
+            out["retail_prices"] = _select_patient_price_rows(retail_rows, service_name, limit=5)
+            if out["retail_prices"]:
+                retail_prefers_query_candidate = False
+                retail_query = service_name
         out["retail_prices"] = _annotate_price_rows_with_care_context(out["retail_prices"])
     except Exception:
         out["retail_prices"] = []
