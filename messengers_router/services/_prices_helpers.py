@@ -735,6 +735,14 @@ def _has_specific_price_tokens(text: str) -> bool:
     return any(tok not in _PRICE_GENERIC_SERVICE_TOKENS for tok in tokens)
 
 
+# BUG-H: «анализ/анализы/анализов» как framing-слово price-запроса («цены на
+# анализы: …», «анализы на …»). В отличие от «УЗИ»/«орган» оно почти никогда не
+# различает конкретную услугу, зато как лишний токен роняет score нужной услуги
+# ниже порога. Снимаем его ОТДЕЛЬНЫМ кандидатом (аддитивно — услуги с «анализ» в
+# названии сохраняют исходный вариант).
+_ANALYSIS_FRAMING_RE = re.compile(r"\bанализ\w*\b", re.IGNORECASE)
+
+
 def _build_price_catalog_queries(query_text: str, *, current_service_name: str = "") -> list[str]:
     """
     Собирает варианты запроса для поиска услуги в price-каталоге.
@@ -759,6 +767,9 @@ def _build_price_catalog_queries(query_text: str, *, current_service_name: str =
     extracted = _extract_price_service_from_query(raw)
     if extracted:
         queries.append(extracted)
+        framing_stripped = re.sub(r"\s+", " ", _ANALYSIS_FRAMING_RE.sub(" ", extracted)).strip()
+        if framing_stripped and framing_stripped != extracted:
+            queries.append(framing_stripped)
     phrase = extract_service_phrase(raw)
     if phrase:
         queries.append(phrase)
@@ -767,7 +778,12 @@ def _build_price_catalog_queries(query_text: str, *, current_service_name: str =
         queries.append(compact)
     if raw and _has_specific_price_tokens(raw):
         queries.append(raw)
-    return _dedupe_price_queries(queries)
+    # BUG-H: голое generic/интент-слово («анализы», «узи») — не услуга. Кандидат
+    # без единого РАЗЛИЧАЮЩЕГО токена резолвится в произвольную строку каталога
+    # («анализы» → «Общий анализ мочи») и перебивает конкретный запрос. Отсекаем
+    # такие кандидаты; если различающих не осталось → пусто → честное уточнение.
+    distinctive_queries = [q for q in queries if _distinctive_service_tokens(q)]
+    return _dedupe_price_queries(distinctive_queries)
 
 
 def _resolve_best_price_row_from_queries(
@@ -844,7 +860,7 @@ def _alias_overrides_explicit_primary(
 # Generic-стволы УЗИ/процедур, которые НЕ различают конкретную услугу. Для
 # проверки доверия скорер-матчу важны именно РАЗЛИЧАЮЩИЕ токены (орган/анализ),
 # а не общее «узи»/«исследование».
-_GENERIC_SERVICE_PREFIXES = ("узи", "ультразвук", "исследов", "орган")
+_GENERIC_SERVICE_PREFIXES = ("узи", "ультразвук", "исследов", "орган", "анализ")
 
 
 def _distinctive_service_tokens(text: str) -> set[str]:
