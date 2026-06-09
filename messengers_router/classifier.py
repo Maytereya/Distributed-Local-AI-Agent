@@ -52,6 +52,8 @@ from .policies import (
     detect_nonbookable_walkin_intent,
     detect_ambiguous_analysis_lookup,
     AMBIGUOUS_ANALYSIS_CLARIFY_TEXT,
+    detect_website_help_intent,
+    WEBSITE_HELP_TEXT,
     nonbookable_service_hint,
     detect_pii,
     low_confidence_policy,
@@ -1152,6 +1154,21 @@ async def deterministic_rule_decision(
             flags=local_flags | {followup_flag},
             needs_handoff=False,
             context_action=_derive_context_action(text, followup_label, entities, last_entities),
+        )
+    elif detect_website_help_intent(text):
+        # Навигация по сайту (корзина/личный кабинет на сайте, «сайт не работает») —
+        # не адрес филиала и не услуга клиники. Ставим ПЕРЕД ADDRESS, иначе «Где
+        # находится корзина на сайте?» уходит в адреса филиалов (BUG-C). Честный
+        # website-help как clarify (детерминированный текст, без LLM, handoff=False).
+        decision = RouteDecision(
+            label="OTHER",
+            confidence=0.72,
+            entities={},
+            flags=local_flags | {"rule_website_help"},
+            needs_handoff=False,
+            context_action="continue",
+            clarify_needed=True,
+            clarify_reason=WEBSITE_HELP_TEXT,
         )
     elif detect_ambiguous_analysis_lookup(text):
         # «узнать анализы» двусмысленно (результаты vs где сдать) — спрашиваем,
