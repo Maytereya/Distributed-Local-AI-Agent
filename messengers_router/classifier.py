@@ -54,6 +54,7 @@ from .policies import (
     AMBIGUOUS_ANALYSIS_CLARIFY_TEXT,
     detect_website_help_intent,
     WEBSITE_HELP_TEXT,
+    detect_service_code_lookup_intent,
     nonbookable_service_hint,
     detect_pii,
     low_confidence_policy,
@@ -1154,6 +1155,18 @@ async def deterministic_rule_decision(
             flags=local_flags | {followup_flag},
             needs_handoff=False,
             context_action=_derive_context_action(text, followup_label, entities, last_entities),
+        )
+    elif detect_service_code_lookup_intent(text):
+        # «Код 5437» / «услуга 5437» — цифровой homecode услуги (не буквенный
+        # result-код). Route в PRICE: price_info уже резолвит по homecode и отдаёт
+        # цену услуги. Без этого «Код 5437» уходил в LLM→TEST_RESULT (BUG-C facet 3).
+        decision = RouteDecision(
+            label="PRICE",
+            confidence=0.8,
+            entities={},
+            flags=local_flags | {"rule_price", "rule_service_code_lookup"},
+            needs_handoff=False,
+            context_action="continue",
         )
     elif detect_website_help_intent(text):
         # Навигация по сайту (корзина/личный кабинет на сайте, «сайт не работает») —

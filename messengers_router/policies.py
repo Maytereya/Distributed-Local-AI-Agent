@@ -1132,6 +1132,34 @@ def detect_website_help_intent(text: str) -> bool:
     return _matches_any(raw, _WEBSITE_HELP_RE)
 
 
+# BUG-C facet 3: «Код 5437» / «услуга 5437» — это homecode УСЛУГИ (serviceHomecode),
+# а не код результата. Различитель: result-код буквенный («Вг»/«Бг»), service-homecode
+# цифровой (3–6 цифр). Без правила «Код 5437» уходил в LLM→TEST_RESULT (просьба ФИО/года).
+# price_info уже резолвит по homecode (`_extract_homecode_query`) → достаточно route в PRICE.
+# ReDoS-safe: разделитель ограничен `{0,6}`.
+_SERVICE_CODE_LOOKUP_RE = re.compile(
+    r"\b(?:код\w*|услуг\w*)\b[\s№#:.\-]{0,6}(\d{3,6})\b",
+    re.IGNORECASE,
+)
+
+
+def detect_service_code_lookup_intent(text: str) -> bool:
+    """Запрос услуги по её цифровому коду («Код 5437», «услуга 502»).
+
+    Цифровой код после «код/услуга» = `serviceHomecode` услуги (НЕ буквенный
+    result-код «Вг»). Маршрутизируется в PRICE → `price_info` отдаёт цену услуги
+    по homecode. Голые цифры без ключевого слова и буквенные коды НЕ ловятся.
+
+    :param text: текст пользователя
+    :return: True, если это lookup услуги по цифровому коду
+    """
+
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    return bool(_SERVICE_CODE_LOOKUP_RE.search(raw))
+
+
 AMBIGUOUS_ANALYSIS_CLARIFY_TEXT = (
     "Уточните, пожалуйста: вы хотите узнать результаты готовых анализов "
     "или где можно сдать анализы?"
