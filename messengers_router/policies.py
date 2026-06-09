@@ -2425,6 +2425,77 @@ def sanitize_for_patient(text: str) -> str:
     return text
 
 
+SECURITY_DEFLECT_MESSAGE = (
+    "Я виртуальный помощник клиники: помогаю с записью, услугами, ценами и анализами. "
+    "По техническим вопросам обратитесь к администратору клиники."
+)
+
+# Подстроки, встречающиеся ТОЛЬКО при сливе внутренних данных (регистронезависимо,
+# high-precision). Намеренно БЕЗ слов из легитимных отказов («эндпоинт», «API ключ») —
+# они присутствуют в корректных ответах-отказах и не должны триггерить дефлект.
+# См. tests/test_security_disclosure_guard.py и messengers_router_bug_log.md.
+_DISCLOSURE_SIGNATURE_SUBSTRINGS = (
+    # системный/renderer-промпт: преамбулы и характерные правила
+    "ты помощник клиники в мессенджере",
+    "ты ассистент клиники",
+    "ты - ассистент пациентов клиники",
+    "ты ассистент пациентов клиники",
+    "не выдумывай цены, врачей, адреса",
+    "используй только факты из",
+    # внутренние диагностики пайплайна — никогда не для пациента
+    "запрос пациента:",
+    "классификация:",
+    "флаги:",
+    "entity_dropped_not_allowed",
+    "rule_none",
+    # утечка плейсхолдеров шаблона рендера
+    "<<user_text>>",
+    "<<label>>",
+    "<<flags>>",
+    "<<evidence>>",
+    "<<source_text>>",
+    "<<user_query>>",
+    "<<critique>>",
+    # модель/вендора (латиница не коллизит с кириллицей клинических ответов)
+    "mistral",
+    "openai",
+    "chatgpt",
+    "gpt-",
+    "gpt4",
+    "gpt 4",
+    "anthropic",
+    "claude",
+    "llama",
+    "gemini",
+    "qwen",
+    "deepseek",
+    "gigachat",
+    "yandexgpt",
+)
+
+
+def scrub_internal_disclosure(text: str | None) -> str:
+    """Output-guard: заменяет ответ на безопасный дефлект при утечке внутренностей.
+
+    Защита от information-disclosure (системный/renderer-промпт, диагностики
+    пайплайна «Классификация»/«Флаги», используемая модель/вендора). Проверяет
+    ПОЛНЫЙ текст ответа (per-chunk проверка рвёт multi-token сигнатуры). При
+    совпадении сигнатуры ответ заменяется ЦЕЛИКОМ: частичная редакция небезопасна —
+    остаток мог бы содержать другие фрагменты внутренних данных. Идемпотентна:
+    сам дефлект сигнатур не содержит. Подключена в LLM-join оркестратора (``render``).
+
+    :param text: финальный текст ответа пациенту
+    :return: исходный текст, либо ``SECURITY_DEFLECT_MESSAGE`` при утечке
+    """
+    if not text:
+        return text or ""
+    low = text.lower()
+    for sig in _DISCLOSURE_SIGNATURE_SUBSTRINGS:
+        if sig in low:
+            return SECURITY_DEFLECT_MESSAGE
+    return text
+
+
 def require_auth_for_test_result(state_is_authenticated: bool) -> tuple[bool, str]:
     if state_is_authenticated:
         return False, ""

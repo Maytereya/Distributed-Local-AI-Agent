@@ -562,6 +562,8 @@ async def render(
 
     # 4. LLM path — collect render_stream into one envelope.
     if ctx.decision is not None and ctx.evidence is not None:
+        from .policies import scrub_internal_disclosure
+
         chunks: list[str] = []
         async for chunk in renderer.render_stream(
             ctx.text,
@@ -570,8 +572,12 @@ async def render(
             runtime_options=runtime_options,
         ):
             chunks.append(chunk)
+        # Output-guard: единственный путь, способный слить системный/renderer-промпт
+        # или модель — это свободная LLM-генерация. На ПОЛНОМ тексте (а не per-chunk)
+        # ловим сигнатуры утечки и заменяем на безопасный дефлект. Покрывает оба
+        # эндпоинта (оба собирают ответ здесь). См. messengers_router_bug_log.md.
         ctx.response = ResponseEnvelope(
-            text="".join(chunks),
+            text=scrub_internal_disclosure("".join(chunks)),
             attachments=list(ctx.evidence.items.get(ek.ATTACHMENTS) or []),
             handoff=bool(ctx.decision.needs_handoff),
         )
