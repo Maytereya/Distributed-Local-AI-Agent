@@ -11,6 +11,19 @@
 
 ---
 
+## BUG-2026-06-09-08 (триаж BUG-F) — «Надо записываться?» на лаб-анализы → бот предлагает запись (противоречит «анализы без записи»)
+
+- **Симптом (прод ЮГ-2):** в контексте сдачи анализов (живая очередь, без записи) на follow-up «Надо записываться?» бот ответил «Есть возможность записи… Ленина 5. Какой филиал? / список врачей?» — противоречит собственному «анализы без записи». Лаб-анализы нельзя «записывать».
+- **Investigation (systematic-debugging, офлайн-repro):** `deterministic_rule_decision("Надо записываться?", {test_name:…})` → **APPOINTMENT** (даже с лаб-контекстом). А «нужно ли записываться на **анализы**» (со словом «анализ» в тексте) → ADDRESS верно. Причина: bare «Надо записываться?» — нет слова «анализ» в самом сообщении и нет submit-verb («сдать»), поэтому `detect_nonbookable_walkin_intent` возвращал False (follow-up branch требовал `has_submit_verb`) → `_BOOK_ACTION_STRICT_RE` («записыва\\w*») ловил APPOINTMENT-rule → оффер записи. «Надо записываться?» — это ВОПРОС о необходимости, а не действие записи.
+- **Корень:** вопрос о необходимости записи в активном лаб-контексте не распознавался как walk-in (требовался submit-verb), и booking-action-regex уводил его в APPOINTMENT.
+- **Инвариант (класс):** ВОПРОС о необходимости записи («надо/нужно ли записываться?», «нужна ли запись?», «запись обязательна?») в активном ЛАБ-контексте (`test_name`/`test_goal`/анализ-`service_name`) → честный walk-in (ADDRESS «анализы без записи, живая очередь»), НЕ APPOINTMENT. Doctor-контекст (`specialty`/`doctor_name`/`doctor_id`) ИСКЛЮЧЁН — к врачу запись нужна → APPOINTMENT (естественно: specialty/ФИО не дают `has_analysis_context`). Без контекста поведение не меняется. Класс по сигнатуре «необходимость+запись + лаб-контекст», не инстанс.
+- **Фикс-коммит:** `f347c8f`.
+- **Изменённые файлы:** `policies.py` (`detect_booking_necessity_question` + `_BOOKING_NECESSITY_RE`, ReDoS-safe; в `detect_nonbookable_walkin_intent` follow-up branch добавлен `has_necessity_q`: `(has_submit_verb or has_necessity_q) and (has_profile_hint or has_analysis_context)`), `prompts/classifier_patient.txt` (+ `mr_`) — forward-compat «вопрос о записи на анализы → ADDRESS, к врачу → APPOINTMENT».
+- **Покрытие:** `tests/test_bug_f_booking_necessity.py` — класс-инвариант (necessity-вопрос detect; «запишите меня»/«записаться к кардиологу»/цена → нет) + `detect_nonbookable_walkin_intent` (лаб-ctx → True; doctor-ctx/без ctx → False) + `deterministic_rule_decision("Надо записываться?", {test_name})` → ADDRESS+`rule_nonbookable_walkin` (не APPOINTMENT) + анти-регресс «записаться к кардиологу» → APPOINTMENT. **Gate: ruff clean, 1087 passed, 1 xfailed, ReDoS-проба зелёная.**
+- **Связь / edge:** триаж **BUG-F** закрыт. Bare «Надо записываться?» БЕЗ контекста → APPOINTMENT (неизменно) — реальный кейс BUG-F мультитёрновый (лаб-контекст из прошлого хода); no-context-bare вне scope (двусмыслен). Прод-верификация после деплоя: после хода про анализы «Надо записываться?» → «анализы без записи, живая очередь», не оффер записи.
+
+---
+
 ## BUG-2026-06-09-07 (триаж BUG-C, facet 3) — «Код 5437» (homecode услуги) мисроутится в TEST_RESULT вместо lookup услуги по коду
 
 - **Симптом (прод-диалог, после деплоя):** «Код 5437» → бот «Чтобы получить результат, укажите: фамилия, год рождения, код анализа, номер анализа» (TEST_RESULT), хотя 5437 = `serviceHomecode` услуги «Витамин B1(тиаминпирофосфат)». Пользователь дал код УСЛУГИ, бот понял как код РЕЗУЛЬТАТА.
