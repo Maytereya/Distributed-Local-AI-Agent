@@ -1054,6 +1054,33 @@ def nonbookable_service_hint(text: str, entities: dict[str, Any] | None = None) 
     return None
 
 
+# BUG-F: ВОПРОС о необходимости записи («надо/нужно ли записываться?», «нужна ли
+# запись?», «запись обязательна?») — это ВОПРОС, а не действие записи. В лаб-контексте
+# (анализы) честный ответ — «без записи, живая очередь», а не оффер APPOINTMENT.
+# ReDoS-safe: разделитель ограничен `{0,15}`, без вложенных квантификаторов.
+_BOOKING_NECESSITY_RE = re.compile(
+    r"\b(?:надо|нужно|нужна|нужен|обязательн\w*|требу\w*|необходим\w*)\b[^.?!]{0,15}\b(?:запис\w*|записыва\w*)"
+    r"|\b(?:запис\w*|записыва\w*)\b[^.?!]{0,15}\b(?:надо|нужно|нужна|нужен|обязательн\w*|требу\w*|необходим\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def detect_booking_necessity_question(text: str) -> bool:
+    """Вопрос о НЕОБХОДИМОСТИ записи («надо ли записываться?», «нужна ли запись?»).
+
+    Это вопрос, а не действие записи («запишите меня»/«записаться на X»). В лаб-
+    контексте такой вопрос = walk-in («анализы без записи»), не APPOINTMENT (BUG-F).
+
+    :param text: текст пользователя
+    :return: True, если это вопрос о необходимости записи
+    """
+
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    return bool(_BOOKING_NECESSITY_RE.search(raw))
+
+
 def detect_nonbookable_walkin_intent(text: str, entities: dict[str, Any] | None = None) -> bool:
     """
     ЭКГ и сдача анализов принимаются без записи (живая очередь),
@@ -1074,10 +1101,14 @@ def detect_nonbookable_walkin_intent(text: str, entities: dict[str, Any] | None 
     if not has_nonbookable:
         # Контекстный кейс follow-up:
         # "Диабетический профиль 1 где можно сдать?" после подбора анализов.
+        # BUG-F: ВОПРОС о необходимости записи («надо записываться?») в активном
+        # лаб-контексте — тоже walk-in (честный «без записи»), не оффер APPOINTMENT.
+        # Doctor-контекст исключён: specialty/ФИО не дают has_analysis_context.
         has_profile_hint = bool(_NONBOOKABLE_PROFILE_RE.search(t))
         has_submit_verb = bool(_NONBOOKABLE_SUBMIT_RE.search(t))
+        has_necessity_q = detect_booking_necessity_question(t)
         has_analysis_context = _has_analysis_context_entities(ent)
-        if has_submit_verb and (has_profile_hint or has_analysis_context):
+        if (has_submit_verb or has_necessity_q) and (has_profile_hint or has_analysis_context):
             has_nonbookable = True
     if not has_nonbookable:
         return False
