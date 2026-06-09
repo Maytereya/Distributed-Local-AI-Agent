@@ -23,6 +23,7 @@ from ._prices_helpers import (
     SAMARA_PRICE_REGION_ID,
     _rank_price_rows,
     _resolve_multi_price_items,
+    strip_readiness_phrasing,
 )
 
 if TYPE_CHECKING:
@@ -122,6 +123,10 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
     """
 
     test_name = _get_first_present(entities, ["test_name", "service_name"]) or query
+    # BUG-D: снять turnaround-шум («срок готовности ОАК» → «ОАК»), иначе шумовые
+    # токены ломают лексический матч по каталогу и анализ (с его deadline) не
+    # находится. deadline уже лежит в строках каталога, renderer его транслирует.
+    test_name, _ = strip_readiness_phrasing(test_name)
     needle = _normalise_input(test_name)
     if not needle:
         return _test_assist_clarify_response(entities, note="test_assist: no test query")
