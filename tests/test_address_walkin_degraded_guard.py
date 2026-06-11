@@ -54,6 +54,46 @@ def test_partial_regions_falls_back_to_full_list(monkeypatch, query, frag, min_n
     assert not (len(addrs) == 1 and "гагарина" in addrs[0].lower()), "схлопнулось на одну Гагарину"
 
 
+def test_partial_regions_usi_falls_back_to_usi_list(monkeypatch):
+    """Приоритет №2: УЗИ при частичном /regions → именно УЗИ-филиалы из fallback (seed usi=4),
+    а НЕ врачебно-несамарская утечка doctors-cache (Выезд на дом / Пирогова / Б.Садовая —
+    класс BUG-2026-06-04-04, который без гейта перехватывал УЗИ на деградации)."""
+    svc = Services()
+    _mock_regions(monkeypatch, svc, [_samara(1, "ул.Гагарина, 64")])  # схлопывание (без usi)
+    res = run(svc.address_info("где сделать УЗИ", {"service_name": "узи"}))
+    addrs = res.get("addresses") or []
+    joined = " | ".join(addrs).lower()
+    assert "выезд на дом" not in joined and "пирогова" not in joined and "садовая, 139" not in joined, (
+        f"УЗИ дал врачебно-несамарскую утечку doctors-cache: {addrs}"
+    )
+    assert len(addrs) <= 6, f"УЗИ должно дать ~4 филиала с usi-флагом, не 17 врачебных: {addrs}"
+    assert any(
+        any(k in a.lower() for k in ("ленина, 5", "кирова, 223", "ново-садовая, 180", "победы, 83"))
+        for a in addrs
+    ), f"в выдаче нет УЗИ-филиалов: {addrs}"
+
+
+def test_partial_regions_general_address_falls_back_to_full_list(monkeypatch):
+    """Приоритет №2: общий адрес/график (без услуги) при частичном /regions → полный список."""
+    svc = Services()
+    _mock_regions(monkeypatch, svc, [_samara(1, "ул.Гагарина, 64")])  # схлопывание
+    for query in ("график работы филиалов", "адреса филиалов"):
+        res = run(svc.address_info(query, {}))
+        addrs = res.get("addresses") or []
+        assert len(addrs) >= 10, f"{query!r}: general-address fallback не дал полный список ({len(addrs)})"
+        assert not (len(addrs) == 1 and "гагарина" in addrs[0].lower()), query
+
+
+def test_healthy_regions_usi_used_directly(monkeypatch):
+    """Регресс: здоровый live с usi-флагами → live-фильтр (НЕ fallback на seed)."""
+    svc = Services()
+    rows = [_samara(i, f"ул. Тест {i}", usi=(i < 3)) for i in range(12)]
+    _mock_regions(monkeypatch, svc, rows)
+    res = run(svc.address_info("где сделать УЗИ", {"service_name": "узи"}))
+    addrs = res.get("addresses") or []
+    assert len(addrs) == 3, f"здоровый live должен дать 3 usi, не seed-fallback: {addrs}"
+
+
 def test_healthy_regions_used_directly(monkeypatch):
     """Здоровый live (≥порога) → используется как есть."""
     svc = Services()
@@ -88,6 +128,24 @@ def test_seed_is_healthy_sanity():
     seed = SB.load_seed()
     assert SB.is_healthy_samara(seed), "seed unhealthy — проверь nonbookable_points.json"
     assert SB._analysis_count(seed) >= 25
+
+
+def test_seed_carries_verified_usi_and_doctor_flags():
+    """Seed обогащён usi/doctorService (сверено с живым /regions, пробой 2026-06-11).
+
+    Без этих флагов cold-start fallback для УЗИ/приёма отдавал бы 0 филиалов
+    (раньше usi/doctorService хардкодились False). Класс-гард: маппинг
+    has_usi/has_doctor → usi/doctorService не теряется при правках load_seed.
+    """
+    seed = SB.load_seed()
+    usi = [r for r in seed if r.get("usi")]
+    doctor = [r for r in seed if r.get("doctorService")]
+    assert len(usi) == 4, f"usi филиалов в seed: {len(usi)} (ожидалось 4)"
+    assert len(doctor) >= 9, f"doctorService филиалов в seed: {len(doctor)} (ожидалось ≥9)"
+    # УЗИ-филиалы — авторитетный набор из BUG-2026-06-02-04 / пробоя
+    usi_addr = " ".join(r.get("addressForSite", "") for r in usi)
+    for need in ("Ленина, 5", "Победы, 83", "Кирова, 223", "Ново-Садовая, 180А"):
+        assert need in usi_addr, f"УЗИ-филиал отсутствует в seed: {need}"
 
 
 def test_snapshot_path_isolated_from_real_apidata():

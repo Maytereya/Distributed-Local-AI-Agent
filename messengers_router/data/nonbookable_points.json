@@ -5,42 +5,52 @@
       "phone": "+7 846 277 77 03",
       "work_time": "ПН-ПТ 7.00-20.00; СБ 7.00-18.00; ВС 7.00-16.00",
       "has_analysis": true,
-      "has_ekg": true
+      "has_ekg": true,
+      "has_usi": true,
+      "has_doctor": true
     },
     {
       "address": "г.Самара, ул.Ново-Садовая, 106, кор.82",
       "phone": "+7 846 277 77 03",
       "work_time": "ПН-ПТ 7.00-20.00; СБ 7.00-20.00; ВС 7.00-16.00",
       "has_analysis": false,
-      "has_ekg": false
+      "has_ekg": false,
+      "has_doctor": true
     },
     {
       "address": "г.Самара, ул.Победы, 83",
       "phone": "+7 846 957 83 93",
       "work_time": "ПН-ПТ 7.00-20.00; СБ 7.00-16.00; ВС 7.00-16.00",
       "has_analysis": true,
-      "has_ekg": true
+      "has_ekg": true,
+      "has_usi": true,
+      "has_doctor": true
     },
     {
       "address": "г.Самара, пр.Кирова, 223",
       "phone": "+7 846 250 80 85",
       "work_time": "ПН-ПТ 7.00-20.00; СБ 7.00-16.00; ВС 7.00-16.00",
       "has_analysis": true,
-      "has_ekg": true
+      "has_ekg": true,
+      "has_usi": true,
+      "has_doctor": true
     },
     {
       "address": "г.Самара, ул.Ново-Садовая, 180А",
       "phone": "+7 846 953 78 37",
       "work_time": "ПН-ПТ 7.00-19.30; СБ 7.00-16.00; ВС 7.00-16.00",
       "has_analysis": true,
-      "has_ekg": true
+      "has_ekg": true,
+      "has_usi": true,
+      "has_doctor": true
     },
     {
       "address": "г.Самара, ул.Осетинская, 4",
       "phone": "+7 846 254 16 62",
       "work_time": "ПН-ПТ 7.00-18.30; СБ 8.00-14.00; ВС 8.00-14.00",
       "has_analysis": true,
-      "has_ekg": true
+      "has_ekg": true,
+      "has_doctor": true
     },
     {
       "address": "г.Самара, ул.Арцыбушевская, 175",
@@ -124,7 +134,8 @@
       "phone": "+7 846 250 03 75",
       "work_time": "ПН-ПТ 7.00-18.00; СБ 8.00-16.00; ВС 8.00-16.00",
       "has_analysis": true,
-      "has_ekg": true
+      "has_ekg": true,
+      "has_doctor": true
     },
     {
       "address": "г.Самара, ул.Победы, 126",
@@ -180,7 +191,8 @@
       "phone": "+7 846 254 04 34",
       "work_time": "ПН-ПТ 7.00-18.30; СБ 8.00-15.00; ВС 8.00-15.00",
       "has_analysis": true,
-      "has_ekg": true
+      "has_ekg": true,
+      "has_doctor": true
     },
     {
       "address": "г.Самара, ул.Красноармейская, 72",
@@ -201,7 +213,8 @@
       "phone": "+7 846 955 00 56",
       "work_time": "ПН-ПТ 7.00-18.00; СБ 8.00-15.00; ВС 8.00-15.00",
       "has_analysis": true,
-      "has_ekg": true
+      "has_ekg": true,
+      "has_doctor": true
     },
     {
       "address": "г.Самара, ул.С.Лазо, 44",

@@ -118,10 +118,11 @@ def load_seed() -> list[dict[str, Any]]:
     """Seed-список филиалов Самары из committed `data/nonbookable_points.json`.
 
     Это существующий статический файл клиники (32 филиала, точные адреса/телефоны/
-    графики, флаги has_analysis/has_ekg). Маппим его строки в форму /regions, чтобы
-    fallback тёк через address_info. usi/doctorService в файле не отслеживаются
-    (он про walk-in заборные точки) → False; их добирает last-good снапшот живого
-    /regions. Cold-start fallback покрывает главный кейс — walk-in анализы/ЭКГ.
+    графики, флаги has_analysis/has_ekg/has_usi/has_doctor). Маппим его строки в форму
+    /regions, чтобы fallback тёк через address_info. Флаги usi/doctorService сверены с
+    живым /regions (пробой 2026-06-11: usi=4, doctorService=9) — cold-start fallback
+    теперь покрывает не только walk-in анализы/ЭКГ, но и УЗИ/приём. Богаче этого —
+    last-good снапшот живого /regions (несёт ВСЕ флаги), который перекрывает seed.
     """
     global _seed_cache
     if _seed_cache is not None:
@@ -143,8 +144,8 @@ def load_seed() -> list[dict[str, Any]]:
                 "addressForSite": addr,
                 "analysis": bool(r.get("has_analysis", True)),
                 "ecg": bool(r.get("has_ekg", False)),
-                "usi": False,
-                "doctorService": False,
+                "usi": bool(r.get("has_usi", False)),
+                "doctorService": bool(r.get("has_doctor", False)),
                 "phone": str(r.get("phone") or "").strip(),
                 "work_time": str(r.get("work_time") or "").strip(),
             })

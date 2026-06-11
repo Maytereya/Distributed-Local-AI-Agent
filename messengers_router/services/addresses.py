@@ -106,12 +106,20 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
     # пересечение с локациями врачей пропускаем (они давали единственный
     # дефолтный адрес «Ленина 5» вместо всех филиалов с флагом).
     procedure_flag = _service_procedure_flag(service_q) if service_q else None
-    # Walk-in анализы/ЭКГ (Диалог #232): при схлопывании живого /regions до ≤1
-    # («Гагарина 64» — единственная с «Самара» в name) отдаём ПОЛНЫЙ статический
-    # список заборных точек, а не один филиал. Гейт строгий — ТОЛЬКО walk-in
-    # заборные услуги (не запись/специальность: у них procedure_flag=None; не
-    # конкретный филиал). Запись к врачу с tech-fail идёт прежним doctors-cache путём.
-    if procedure_flag in ("analysis", "ecg") and not appointment_mode and not branch_q:
+    # При схлопывании живого /regions до ≤1 («Гагарина 64» — единственная с «Самара»
+    # в name) отдаём ПОЛНЫЙ статический список, а не один филиал / врачебно-несамарскую
+    # утечку doctors-cache (приоритет №2 + класс BUG-2026-06-04-04). Покрываем:
+    #   • walk-in заборные analysis/ECG/УЗИ (procedure_flag) — фильтр по флагу ниже
+    #     отберёт нужный тип из fallback (seed сверен с /regions 2026-06-11: usi=4);
+    #   • общий запрос адреса/графика без услуги («адреса/график/расписание работы
+    #     филиалов»: service_q пуст, procedure_flag=None) — фильтра нет → все филиалы.
+    # Источник: снапшот (last-good live, со ВСЕМИ флагами) → seed (cold-start).
+    # Запись/специальность/конкретный филиал (appointment_mode / branch_q) не трогаем —
+    # отдельный путь (S3). УЗИ может законно иметь мало точек, но триггер — схлопывание
+    # ВСЕГО самарского среза (is_healthy_samara), а не малое число usi-филиалов.
+    _walkin_fallback = procedure_flag in ("analysis", "ecg", "usi")
+    _general_address_fallback = procedure_flag is None and not service_q
+    if (_walkin_fallback or _general_address_fallback) and not appointment_mode and not branch_q:
         from ._samara_branches import fallback_branches, is_healthy_samara  # noqa: PLC0415
 
         if not is_healthy_samara(regions):
