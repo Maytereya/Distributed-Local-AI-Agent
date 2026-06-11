@@ -296,12 +296,6 @@ def _extract_region_work_time(region: dict[str, Any]) -> str:
     return ""
 
 
-def _norm_city(s: str) -> str:
-    t = _normalise_input(s or "")
-    t = re.sub(r"^г\.?\s*", "", t)
-    return t.strip()
-
-
 def _service_procedure_flag(service_q: str) -> str | None:
     """Флаг филиала из /site/regions, определяющий МЕСТО оказания процедуры.
 
