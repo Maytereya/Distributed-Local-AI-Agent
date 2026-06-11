@@ -374,6 +374,9 @@ def test_clinic_hours_intent_class_invariant():
         "во сколько работают филиалы",
         "график работы клиники",
         "вы завтра работаете?",
+        # «расписание работы» филиала/клиники — синоним часов работы (BUG-2026-06-11-02)
+        "расписание работы филиалов",
+        "расписание работы клиники",
     ]
     for t in clinic_hours:
         assert detect_clinic_hours_intent(t) is True, t
@@ -381,6 +384,7 @@ def test_clinic_hours_intent_class_invariant():
     not_clinic_hours = [
         "расписание Трубина",
         "график работы врача Иванова",
+        "расписание работы врача Иванова",
         "когда принимает кардиолог",
         "сколько стоит приём врача",
         "запишите к кардиологу",
@@ -398,6 +402,9 @@ def test_deterministic_rule_decision_grafik_filial_routes_to_address():
         "график работы филиала на Победы 83",
         "режим работы филиалов",
         "график работы клиники",
+        # BUG-2026-06-11-02: «расписание работы филиалов» уходило в DOCTOR_SCHEDULE
+        "расписание работы филиалов",
+        "расписание работы клиники",
     ]:
         out = run(
             deterministic_rule_decision(t, {}, allow_refine=False, attach_secondary=False)
@@ -412,6 +419,7 @@ def test_deterministic_rule_decision_doctor_schedule_not_stolen_by_clinic_hours(
     for t in [
         "расписание Трубина",
         "график работы врача Иванова",
+        "расписание работы врача Иванова",
         "расписание уролога Дразнина",
     ]:
         out = run(
