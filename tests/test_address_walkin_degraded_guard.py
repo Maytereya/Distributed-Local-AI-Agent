@@ -86,5 +86,33 @@ def test_specific_branch_query_keeps_branch(monkeypatch):
 def test_seed_is_healthy_sanity():
     """Гард окружения: seed-снапшот валиден и правдоподобен (≥порога analysis-филиалов)."""
     seed = SB.load_seed()
-    assert SB.is_healthy_samara(seed), "seed unhealthy — проверь samara_branches_seed.json"
+    assert SB.is_healthy_samara(seed), "seed unhealthy — проверь nonbookable_points.json"
     assert SB._analysis_count(seed) >= 25
+
+
+def test_snapshot_path_isolated_from_real_apidata():
+    """Класс-инвариант (BUG-2026-06-11-01): тест-гейт самодостаточен.
+
+    S1-persist пишет last-good снапшот на диск из настоящего `_ensure_regions_loaded`.
+    Если снапшот-путь указывает в РЕАЛЬНЫЙ apidata, тест, мокающий здоровый /regions,
+    заражает fallback другого теста (тот читает чужие 2-3 филиала вместо 31 seed).
+    conftest изолирует путь в tmp — проверяем, что он ВНЕ реального кэш-каталога.
+    """
+    from agent_logic_2.nayka_api import cache_paths
+
+    real_dir = cache_paths.resolve_cache_data_dir().resolve()
+    snap = SB._snapshot_path()
+    assert snap is not None
+    assert real_dir not in snap.resolve().parents, (
+        f"снапшот-путь {snap} внутри реального apidata {real_dir} — "
+        "conftest-изоляция не активна, гейт зависит от состояния диска"
+    )
+
+
+def test_persist_then_load_roundtrip_in_isolation():
+    """Механизм снапшота цел: persist здорового среза → load его читает (в изоляции)."""
+    rows = [_samara(i, f"ул. Тест {i}") for i in range(5)]
+    SB.persist_snapshot(rows)
+    loaded = SB.load_snapshot()
+    assert SB.is_healthy_samara(loaded)
+    assert len(loaded) == 5
