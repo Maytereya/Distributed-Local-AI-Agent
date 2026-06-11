@@ -258,6 +258,32 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
         )
 
     uniq = sorted(set(addresses))
+    # DEFENSE (Диалог #232): walk-in по анализам в Самаре всегда даёт МНОГО филиалов
+    # (~31 заборных точек — все имеют analysis-флаг). Если живой /regions (не tech-fail)
+    # вернул ≤1 самарский филиал — это почти наверняка ЧАСТИЧНЫЙ/деградированный ответ
+    # (parent-иерархия пришла неполной → BUG-A city-derivation не сработал →
+    # уцелел только name-based «Гагарина 64»). Не блефуем одиноким филиалом — честный
+    # degraded-ответ. Только analysis (ЭКГ/УЗИ могут законно иметь мало точек);
+    # конкретный branch-запрос и запись к врачу не трогаем.
+    if (
+        not regions_tech_failed
+        and procedure_flag == "analysis"
+        and not appointment_mode
+        and not branch_q
+        and len(uniq) <= 1
+    ):
+        _R.log_degraded(upstream="regions", failure_mode=_R.FM_EXCEPTION, fallback_used=False)
+        degraded_payload = {
+            "addresses": [],
+            "branches": [],
+            "note": "address_info: implausibly few samara walk-in branches (suspected partial /regions)",
+            "handoff_reason": "tech_unavailable",
+            "handoff_message": _R.tech_unavailable_text("список филиалов"),
+            "entities_used": entities,
+        }
+        return _R.mark_degraded(
+            degraded_payload, upstream="regions", failure_mode=_R.FM_EXCEPTION, fallback_used=False
+        )
     if uniq:
         by_addr: dict[str, dict[str, Any]] = {}
         for b in branches:
