@@ -329,6 +329,16 @@ class Services:
                 self._regions_cache = regions
                 self._regions_cache_loaded_at = time.time()
                 self._regions_last_failed = False
+                # Персист last-good самарского снапшота (Диалог #232): если живой
+                # /regions ЗДОРОВ — сохраняем самарский срез на диск, чтобы при
+                # будущем частичном ответе отдать полный список, а не одну «Гагарину 64».
+                # persist_snapshot сам пропускает нездоровый срез.
+                try:
+                    from ._samara_branches import persist_snapshot, samara_subset  # noqa: PLC0415
+
+                    persist_snapshot(samara_subset(regions))
+                except Exception:  # pragma: no cover - диск best-effort
+                    pass
             except Exception:
                 self._regions_last_failed = True
             return self._regions_cache

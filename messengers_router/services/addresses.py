@@ -43,7 +43,6 @@ from ._regions import (
     _filter_regions_by_service_flags,
     _has_explicit_non_samara_regions,
     _is_non_samara_city_value,
-    _is_samara_city_value,
     _region_display_name,
     _region_matches_samara_tokens,
     _service_procedure_flag,
@@ -73,16 +72,10 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
         regions_tech_failed = True
     if self._regions_last_failed:
         regions_tech_failed = True
-    # Работаем только по Самаре.
-    regions = [
-        r for r in regions
-        if isinstance(r, dict)
-        and (
-            _is_samara_city_value(str(r.get("city") or ""))
-            or "самара" in _normalise_input(str(r.get("name") or ""))
-            or "самара" in _normalise_input(str(r.get("addressForSite") or ""))
-        )
-    ]
+    # Работаем только по Самаре — централизованный фильтр (S2: одна копия вместо 3).
+    from ._samara_branches import samara_subset  # noqa: PLC0415
+
+    regions = samara_subset(regions)
     appointment_mode = bool(entities.get("__appointment_mode"))
     branch = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city"]) or ""
     # Track whether branch came from *only* the city entity (no specific branch/region/unit
@@ -113,6 +106,19 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
     # пересечение с локациями врачей пропускаем (они давали единственный
     # дефолтный адрес «Ленина 5» вместо всех филиалов с флагом).
     procedure_flag = _service_procedure_flag(service_q) if service_q else None
+    # Walk-in анализы/ЭКГ (Диалог #232): при схлопывании живого /regions до ≤1
+    # («Гагарина 64» — единственная с «Самара» в name) отдаём ПОЛНЫЙ статический
+    # список заборных точек, а не один филиал. Гейт строгий — ТОЛЬКО walk-in
+    # заборные услуги (не запись/специальность: у них procedure_flag=None; не
+    # конкретный филиал). Запись к врачу с tech-fail идёт прежним doctors-cache путём.
+    if procedure_flag in ("analysis", "ecg") and not appointment_mode and not branch_q:
+        from ._samara_branches import fallback_branches, is_healthy_samara  # noqa: PLC0415
+
+        if not is_healthy_samara(regions):
+            fb = fallback_branches()
+            if fb:
+                regions = fb
+                regions_tech_failed = False
     city_for_static = _get_first_present(entities, ["city"])
     if city_for_static and _is_non_samara_city_value(city_for_static):
         return _service_fallback(
