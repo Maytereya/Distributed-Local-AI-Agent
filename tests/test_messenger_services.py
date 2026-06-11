@@ -96,9 +96,9 @@ def test_lab_tests_extract_result_query_fields_uses_order_id_fallback():
     }
 
 
-# Прямой deep-link на результат (getanaliz.php) удалён как недействительный
-# (BUG-2026-06-08-01). Поведение замены покрыто инвариантом
-# test_result_status_every_outcome_points_to_portal_never_getanaliz (ниже).
+# Прямой deep-link на результат (getanaliz.php) ВОССТАНОВЛЕН (BUG-2026-06-11-04, сайт
+# починил функционал). Способ — pure link из данных пациента, без API. Контракт ссылки
+# покрыт test_result_status_builds_getanaliz_link_without_api + cp1251-инвариантом (ниже).
 
 
 def test_lab_tests_test_assist_clarify_response_stays_non_handoff():
@@ -4429,93 +4429,58 @@ def test_samara_region_tokens_recognise_lenina5_by_value_slug(monkeypatch):
     assert not any("оренбург" in t for t in tokens)
 
 
-@pytest.mark.parametrize("status_code", [404, 500, 503, None])
-def test_result_failure_taxonomy(monkeypatch, status_code):
-    # resilience Фаза1 / OC-1: 404 → честное «не нашёл» (NOT_FOUND, без оператора);
-    # 5xx/None → честный tech_unavailable (TECH, без авто-оператора, текст про техпричины).
-    def fake_site_result(**kwargs):
-        return {"ok": False, "status_code": status_code, "error": f"{status_code} err", "params": kwargs}
-    monkeypatch.setattr(lab_tests_mod.api_nayka, "site_result_for_patient", fake_site_result)
-    entities = {"surname": "Тестов", "year": "1990", "filial": "Бг", "number": "1"}
-    res = asyncio.run(lab_tests_mod.test_result_status(None, "Тестов, 1990, Бг, 1", entities))
-    assert res.get("ready") is False, status_code
-    assert not res.get("handoff_required"), status_code
-    preview = str(res.get("result_preview") or "").lower()
-    if status_code == 404:
-        assert "не нашёл" in preview, status_code
-        assert "техническ" not in preview, status_code
-    else:
-        assert "техническ" in preview, status_code
-        assert "результат пока не готов" not in preview, status_code
-
-
-def test_result_exception_is_tech_unavailable(monkeypatch):
-    def boom(**kwargs):
-        raise ConnectionError("down")
-    monkeypatch.setattr(lab_tests_mod.api_nayka, "site_result_for_patient", boom)
-    res = asyncio.run(lab_tests_mod.test_result_status(None, "Тестов, 1990, Бг, 1",
-                      {"surname": "Тестов", "year": "1990", "filial": "Бг", "number": "1"}))
-    assert res.get("ready") is False
-    assert "техническ" in str(res.get("result_preview") or "").lower()
-
-
-# BUG-2026-06-08-01: bot-constructed deep-link getanaliz.php недействителен (удалён).
-# Уточнение владельца: результат ГОТОВ → отдаём сам результат (реальный PDF-URL от
-# resultForPatient + вложение), а НЕ ссылку на портал; во всех остальных исходах
-# (не найден / тех-сбой) → ссылка на портал naykalab.ru/samara (вкладка «Результаты анализов»).
-_RESULTS_PORTAL_URL = "https://naykalab.ru/samara"
-_READY_PDF_URL = "https://naykalab.ru/result/blank.pdf"
-
-
-@pytest.mark.parametrize(
-    "outcome,api_resp,exc,expect",
-    [
-        ("ready_pdf", {"ok": True, "status_code": 200, "content_type": "text/plain", "data": _READY_PDF_URL}, None, "pdf"),
-        ("ready_no_url", {"ok": True, "status_code": 200, "data": {"status": "ready"}}, None, "portal"),
-        ("not_found_404", {"ok": False, "status_code": 404, "error": "404"}, None, "portal"),
-        ("not_found_empty", {"ok": True, "status_code": 200, "data": ""}, None, "portal"),
-        ("tech_5xx", {"ok": False, "status_code": 503, "error": "503"}, None, "portal"),
-        ("tech_none", {"ok": False, "status_code": None, "error": "timeout"}, None, "portal"),
-        ("tech_exc", None, ConnectionError("down"), "portal"),
-    ],
+# BUG-2026-06-11-04: getanaliz.php-ссылка восстановлена (программист сайта починил
+# функционал 2026-06-11; формат прежний). Способ — прямая ссылка из данных пациента,
+# БЕЗ resultForPatient API (решение владельца: «даже не нужно никаких АПИ» — сайт сам
+# показывает результат либо «не готово», нет зависимости от флаки-апстрима / ложного
+# «не готово» при 404). Реверсирует BUG-2026-06-08-01 (там ссылка была мёртвой).
+_OWNER_EXAMPLE_LINK = (
+    "https://naykalab.ru/getanaliz.php?fam=%D2%E5%F1%F2&year=1993&nom=%C2%E3&nom2=9996&fast=1"
 )
-def test_result_status_ready_delivers_pdf_else_portal_never_getanaliz(
-    monkeypatch, outcome, api_resp, exc, expect
-):
-    # Инвариант КЛАССА (не инстанс): через все исходы taxonomy — bot-constructed deep-link
-    # getanaliz НИКОГДА; результат готов → реальный PDF от API (+вложение); иначе → портал.
-    def fake_site_result(**kwargs):
-        if exc is not None:
-            raise exc
-        return api_resp
 
-    monkeypatch.setattr(lab_tests_mod.api_nayka, "site_result_for_patient", fake_site_result)
-    entities = {"surname": "Тестов", "year": "1990", "filial": "Бг", "number": "1"}
-    payload = asyncio.run(lab_tests_mod.test_result_status(None, "Тестов, 1990, Бг, 1", entities))
 
-    # Мёртвый bot-constructed deep-link не появляется нигде (сервис И рендер).
-    assert "getanaliz" not in str(payload).lower(), outcome
+def test_result_status_builds_getanaliz_link_without_api():
+    # Класс-инвариант: полные поля → getanaliz-ссылка. resultForPatient НЕ вызывается —
+    # это СТРУКТУРНО гарантировано (lab_tests больше не импортирует api_nayka).
+    assert not hasattr(lab_tests_mod, "api_nayka"), "api_nayka не должен быть в lab_tests (pure link)"
 
-    env = build_test_result_response(
-        "TEST_RESULT", Evidence(items={"test_result_status": payload})
-    )
-    assert env is not None, outcome
-    assert env.handoff is False, outcome
-    assert "getanaliz" not in env.text.lower(), outcome
+    entities = {"surname": "Тест", "year": 1993, "filial": "Вг", "number": 9996}
+    res = asyncio.run(lab_tests_mod.test_result_status(None, "результаты", entities))
+    assert res.get("ready") is True
+    assert res.get("note") == "result_link_constructed"
+    link = (res.get("result_links") or [None])[0]
+    # точный контракт ссылки = живой пример программиста (cp1251: Тест=%D2%E5%F1%F2, Вг=%C2%E3)
+    assert link == _OWNER_EXAMPLE_LINK, link
+    # рендерится пациенту (без вложений — отдаём ссылку, не PDF-байты)
+    env = build_test_result_response("TEST_RESULT", Evidence(items={"test_result_status": res}))
+    assert env is not None and env.handoff is False
+    assert _OWNER_EXAMPLE_LINK in env.text
+    assert not env.attachments
 
-    if expect == "pdf":
-        # Результат готов → отдаём сам результат (реальный PDF-URL от API) + вложение,
-        # портал НЕ показываем.
-        assert _READY_PDF_URL in env.text, (outcome, env.text)
-        assert _RESULTS_PORTAL_URL not in env.text, (outcome, env.text)
-        assert any(
-            a.get("type") == "pdf" and a.get("url") == _READY_PDF_URL for a in env.attachments
-        ), (outcome, env.attachments)
-    else:
-        # Результата нет → ссылка на портал самопроверки (вкладка «Результаты анализов»).
-        assert _RESULTS_PORTAL_URL in env.text, (outcome, env.text)
-        assert "Результаты анализов" in env.text, (outcome, env.text)
-        assert not env.attachments, (outcome, env.attachments)
+
+def test_result_link_cp1251_encoding_class_invariant():
+    # Класс (не инстанс): фамилия и код ВСЕГДА Windows-1251 + URL-encode (контракт сайта),
+    # год и номер — голые цифры, хвост fast=1. Ловит любую фамилию/код.
+    from urllib.parse import quote_from_bytes
+
+    from messengers_router.services.lab_tests import _build_public_result_link
+    for surname, filial in [("Тест", "Вг"), ("Иванов", "су"), ("Щербакова", "АБ")]:
+        link = _build_public_result_link(
+            {"surname": surname, "year": 2000, "filial": filial, "number": 7}
+        )
+        fam_enc = quote_from_bytes(surname.encode("cp1251"), safe="")
+        nom_enc = quote_from_bytes(filial.encode("cp1251"), safe="")
+        assert f"fam={fam_enc}" in link, surname
+        assert f"nom={nom_enc}" in link, filial
+        assert "year=2000" in link and "nom2=7" in link and link.endswith("&fast=1")
+
+
+def test_result_status_missing_fields_asks_clarification():
+    # Неполные данные → запрос недостающих полей, ссылку не строим (без API).
+    res = asyncio.run(lab_tests_mod.test_result_status(None, "результаты", {"surname": "Тест"}))
+    assert res.get("ready") is False
+    assert res.get("note") == "missing_result_fields"
+    assert set(res.get("missing_fields") or []) >= {"year", "filial", "number"}
 
 
 def test_service_procedure_flag_maps_usi_analysis_ecg():

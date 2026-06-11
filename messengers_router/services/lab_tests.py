@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote_from_bytes
 
-from agent_logic_2.nayka_api import api_nayka, api_price
+from agent_logic_2.nayka_api import api_price
 
-from .. import resilience as _R
 from ._common import (
     _as_int,
     _get_first_present,
@@ -58,39 +58,56 @@ def _extract_result_query_fields(entities: dict[str, Any], query: str) -> dict[s
     }
 
 
-# Портал результатов анализов — единственный источник правды (BUG-2026-06-08-01,
-# решение владельца 2026-06-08). Прямой deep-link к результату (getanaliz.php) больше
-# НЕ формируем: он недействителен, и рабочей прямой ссылки ни на конкретный результат,
-# ни на саму вкладку у нас нет. Ведём пациента на портал, где он сам открывает вкладку
-# «Результаты анализов» и вводит свои данные. Отдавать мёртвую ссылку = дезинформация.
+def _cp1251_urlencode(value: str) -> str:
+    """Кодирует параметр под контракт ссылки Nayka Lab (Windows-1251 + URL-encode).
+
+    Фамилия и код анализа на сайте кодируются в cp1251 и URL-экранируются (подтверждено
+    программистом сайта 2026-06-11: «Фамилия и код в кодировке Windows-1251, URL-encoded»).
+
+    :param value: исходное строковое значение
+    :return: URL-safe строка в кодировке Windows-1251
+    """
+
+    raw = str(value or "").strip().encode("cp1251", errors="replace")
+    return quote_from_bytes(raw, safe="")
+
+
+def _build_public_result_link(fields: dict[str, Any]) -> str | None:
+    """Строит публичную ссылку на результат анализа (getanaliz.php).
+
+    Ссылка копирует форму сайта + ``fast=1`` (без API): сайт сам показывает готовый
+    результат либо «не готово». Восстановлена 2026-06-11 после починки функционала на
+    стороне сайта (была снята как мёртвая в BUG-2026-06-08-01 — теперь рабочая, прежний
+    формат). ``fam``/``nom`` — Windows-1251 URL-encoded; ``year``/``nom2`` — числа.
+
+    :param fields: нормализованные поля результата (surname/year/filial/number)
+    :return: готовая ссылка или ``None``, если данных недостаточно
+    """
+
+    surname = str(fields.get("surname") or "").strip()
+    filial = str(fields.get("filial") or "").strip()
+    year = _as_int(fields.get("year"))
+    number = _as_int(fields.get("number"))
+    if not surname or not filial or year is None or number is None:
+        return None
+    return (
+        "https://naykalab.ru/getanaliz.php"
+        f"?fam={_cp1251_urlencode(surname)}"
+        f"&year={year}"
+        f"&nom={_cp1251_urlencode(filial)}"
+        f"&nom2={number}"
+        "&fast=1"
+    )
+
+
+# Портал результатов — defensive-fallback, если ссылку собрать не удалось (крайне
+# маловероятно: поля проверены выше). Основной путь — прямая getanaliz-ссылка.
 RESULTS_PORTAL_URL = "https://naykalab.ru/samara"
 _RESULTS_PORTAL_HINT = (
     f"Посмотреть результаты можно на сайте {RESULTS_PORTAL_URL} — "
     "вкладка «Результаты анализов» (вверху слева на сайте): введите фамилию, "
     "год рождения, филиал и номер анализа."
 )
-
-
-def _extract_result_pdf_url(data: Any) -> str | None:
-    """Достаёт прямой URL на PDF-результат из ответа ``resultForPatient``.
-
-    На OK эндпоинт отдаёт готовый результат прямой ссылкой на PDF-бланк (обычно
-    ``text/plain`` с URL в теле — см. ``api_nayka.site_result_for_patient``). На
-    случай JSON-обёртки берём первое http(s)-значение. Это РЕАЛЬНАЯ ссылка от API
-    (не bot-constructed getanaliz) — её и отдаём пациенту как сам результат.
-
-    :param data: поле ``data`` из ответа ``api_nayka``
-    :return: URL результата или ``None``, если прямой ссылки в ответе нет
-    """
-
-    if isinstance(data, str):
-        url = data.strip()
-        return url if url.startswith(("http://", "https://")) else None
-    if isinstance(data, dict):
-        for value in data.values():
-            if isinstance(value, str) and value.strip().startswith(("http://", "https://")):
-                return value.strip()
-    return None
 
 
 def _test_assist_clarify_response(entities: dict[str, Any], *, note: str) -> dict[str, Any]:
@@ -219,21 +236,26 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
 # результаты. Поэтому НЕ утверждаем «Результат пока не готов» как факт (это
 # дезинформация) — честно перечисляем возможные причины, просим проверить данные и
 # предлагаем оператора. Авто-эскалации на оператора при 404 по-прежнему нет.
-_RESULT_NOT_READY_TEXT = (
-    "Не нашёл готовый результат по этим данным. Возможно, он ещё не готов, "
-    "либо неточно указаны фамилия, год рождения, филиал или номер анализа. "
-    "Если результат уже должен быть готов, напишите «оператор».\n\n"
-    + _RESULTS_PORTAL_HINT
+_RESULT_LINK_TEXT = (
+    "Результат по вашим данным доступен по ссылке ниже. "
+    "Если анализ ещё не готов, сайт сообщит об этом."
 )
 
 
 async def test_result_status(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
-    """Проверяет готовность результата анализа и ведёт пациента на портал результатов.
+    """Отдаёт пациенту прямую ссылку на результат анализа (getanaliz.php).
+
+    Ссылка самодостаточна (копирует форму сайта + ``fast=1``, кодировка Windows-1251):
+    сайт сам показывает готовый результат либо «не готово». API ``resultForPatient`` НЕ
+    зовём (решение владельца 2026-06-11: «даже не нужно никаких АПИ») — это убирает
+    зависимость от флаки-апстрима и риск ложного «не готово» при 404 (ср. BUG-2026-06-04-05).
+    Сайт — источник правды готовности. Ссылка была снята как мёртвая в BUG-2026-06-08-01,
+    восстановлена после починки функционала на стороне сайта (2026-06-11, формат прежний).
 
     :param self: экземпляр сервисного слоя
     :param query: текст запроса пользователя
     :param entities: извлечённые NLU-сущности
-    :return: payload с готовностью результата + портал для самопроверки
+    :return: payload со ссылкой на результат (или запрос недостающих полей)
     """
 
     _ = self
@@ -248,56 +270,19 @@ async def test_result_status(self: "Services", query: str, entities: dict[str, A
             "entities_used": entities,
         }
 
-    try:
-        api_resp = await asyncio.to_thread(
-            api_nayka.site_result_for_patient,
-            surname=fields["surname"],
-            year=int(fields["year"]),
-            filial=fields["filial"],
-            number=int(fields["number"]),
-            lang=fields["lang"],
-            with_time=None,
-        )
-        outcome = _R.classify_api_response(api_resp)
-        fmode = _R.failure_mode_from_response(api_resp)
-    except Exception:
-        api_resp, outcome, fmode = None, _R.TECH_UNAVAILABLE, _R.FM_EXCEPTION
-
-    if outcome == _R.TECH_UNAVAILABLE:
-        _R.log_degraded(upstream="result_for_patient", failure_mode=fmode, fallback_used=False)
-        return {
-            "ready": False,
-            "note": "result_tech_unavailable",
-            "result_preview": (
-                _R.tech_unavailable_text("результаты анализов") + "\n\n" + _RESULTS_PORTAL_HINT
-            ),
-            "entities_used": entities,
-        }
-    if outcome == _R.NOT_FOUND:
-        return {
-            "ready": False,
-            "note": "result_not_ready",
-            "result_preview": _RESULT_NOT_READY_TEXT,
-            "entities_used": entities,
-        }
-    # outcome == OK: бэкенд вернул готовый результат. resultForPatient на OK отдаёт
-    # ПРЯМУЮ ссылку на PDF-результат (реальная ссылка от API, не bot-constructed
-    # getanaliz) — отдаём пациенту сам результат (PDF-ссылка + вложение), а не портал.
-    pdf_url = _extract_result_pdf_url(api_resp.get("data") if isinstance(api_resp, dict) else None)
-    if pdf_url:
+    link = _build_public_result_link(fields)
+    if link:
         return {
             "ready": True,
-            "note": "result_ready_pdf",
-            "result_preview": "Ваш результат готов.",
-            "result_links": [pdf_url],
-            "result_attachments": [{"type": "pdf", "name": "Результат анализа", "url": pdf_url}],
+            "note": "result_link_constructed",
+            "result_preview": _RESULT_LINK_TEXT,
+            "result_links": [link],
             "entities_used": entities,
         }
-    # OK, но прямого URL в ответе нет (неожиданный формат) — безопасно ведём на портал,
-    # чтобы не утверждать «готов» без рабочего способа открыть результат.
+    # Поля есть, но ссылку собрать не удалось (крайне маловероятно) — безопасный портал.
     return {
-        "ready": True,
-        "note": "result_ready_portal",
-        "result_preview": "Результат по вашим данным готов. " + _RESULTS_PORTAL_HINT,
+        "ready": False,
+        "note": "result_link_build_failed",
+        "result_preview": "Результаты можно проверить на сайте. " + _RESULTS_PORTAL_HINT,
         "entities_used": entities,
     }
