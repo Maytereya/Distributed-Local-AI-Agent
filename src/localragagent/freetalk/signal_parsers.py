@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 import re
 
-from messengers_router.specialty_parser import extract_specialty_from_text as extract_shared_specialty_from_text
+from ..ports.freetalk_specialty_port import extract_specialty_from_text as extract_shared_specialty_from_text
 
 
 DOCTOR_ANAPHORA_RE = re.compile(r"\b(его|него|нему|ним|он|у\s+него|у\s+него\s+же|у\s+неё|ее|её|она)\b", re.I)
@@ -21,6 +21,7 @@ SERVICE_VARIANT_RE = re.compile(r"\b(с\s+наркозом|без\s+наркоз
 DATE_FILTER_RE = re.compile(
     r"\b("
     r"сегодня|завтра|послезавтра|"
+    r"выходн\w*|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье|пн|вт|ср|чт|пт|сб|вс|"
     r"на\s+следующ(?:ей|ую)\s+неделе|"
     r"на\s+этой\s+неделе|"
     r"\d{4}-\d{2}-\d{2}|"
@@ -53,6 +54,12 @@ DATE_WORD_RE = re.compile(
     r"(января|январь|февраля|февраль|марта|март|апреля|апрель|мая|май|июня|июнь|июля|июль|августа|август|"
     r"сентября|сентябрь|октября|октябрь|ноября|ноябрь|декабря|декабрь)"
     r"(?:\s+(\d{4}))?\b",
+    re.I,
+)
+WEEKEND_RE = re.compile(r"\bвыходн\w*\b", re.I)
+WEEKDAY_RE = re.compile(
+    r"\b(?:в|во|на)\s+"
+    r"(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье|пн|вт|ср|чт|пт|сб|вс)\b",
     re.I,
 )
 PERSON_NAME_RE = re.compile(
@@ -175,6 +182,25 @@ MONTH_NAME_TO_NUMBER = {
     "ноябрь": 11,
     "декабря": 12,
     "декабрь": 12,
+}
+WEEKDAY_TO_INDEX = {
+    "понедельник": 0,
+    "пн": 0,
+    "вторник": 1,
+    "вт": 1,
+    "среду": 2,
+    "среда": 2,
+    "ср": 2,
+    "четверг": 3,
+    "чт": 3,
+    "пятницу": 4,
+    "пятница": 4,
+    "пт": 4,
+    "субботу": 5,
+    "суббота": 5,
+    "сб": 5,
+    "воскресенье": 6,
+    "вс": 6,
 }
 DOCTOR_REFERENCE_TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё\-]+", re.I)
 DOCTOR_ROLE_TOKEN_RE = re.compile(
@@ -362,12 +388,25 @@ def extract_branch_reference(text: str) -> str:
     return candidate
 
 
-def extract_date_filters(text: str) -> dict[str, str]:
+def _nearest_weekday(today: date, weekday_index: int) -> date:
+    delta = (int(weekday_index) - today.weekday()) % 7
+    return today + timedelta(days=delta)
+
+
+def _nearest_weekend(today: date) -> tuple[date, date]:
+    if today.weekday() == 6:
+        saturday = today + timedelta(days=6)
+    else:
+        saturday = today + timedelta(days=(5 - today.weekday()) % 7)
+    return saturday, saturday + timedelta(days=1)
+
+
+def extract_date_filters(text: str, *, today: date | None = None) -> dict[str, str]:
     out: dict[str, str] = {}
     source = str(text or "").strip()
     if not source:
         return out
-    today = datetime.now().date()
+    today = today or datetime.now().date()
     lowered = source.lower()
     if "послезавтра" in lowered:
         target = today + timedelta(days=2)
@@ -431,6 +470,20 @@ def extract_date_filters(text: str) -> dict[str, str]:
                 return out
         iso = target.isoformat()
         return {"date": iso, "date_from": iso, "date_to": iso}
+    weekday_match = WEEKDAY_RE.search(source)
+    if weekday_match:
+        weekday = WEEKDAY_TO_INDEX.get(str(weekday_match.group(1) or "").strip().lower())
+        if weekday is not None:
+            target = _nearest_weekday(today, weekday)
+            iso = target.isoformat()
+            return {"date": iso, "date_from": iso, "date_to": iso}
+    if WEEKEND_RE.search(source):
+        saturday, sunday = _nearest_weekend(today)
+        return {
+            "date": "weekend",
+            "date_from": saturday.isoformat(),
+            "date_to": sunday.isoformat(),
+        }
     return out
 
 

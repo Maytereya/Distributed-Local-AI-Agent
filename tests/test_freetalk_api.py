@@ -18,6 +18,10 @@ def test_freetalk_generate_once_endpoint_uses_api_key_and_helper(monkeypatch):
             tool_name="doctors_info",
             reply_kind="final",
             source_fragments=[api_mod.FreeTalkSourceFragment(text="ok", source="clinic_data")],
+            outcome="ok",
+            degraded=True,
+            handoff=True,
+            attachments=[{"type": "pdf", "url": "https://example.org/result.pdf"}],
             debug={"dialog_state": {}},
         )
 
@@ -37,6 +41,10 @@ def test_freetalk_generate_once_endpoint_uses_api_key_and_helper(monkeypatch):
     assert body["source"] == "clinic_data"
     assert body["tool_name"] == "doctors_info"
     assert body["reply_kind"] == "final"
+    assert body["outcome"] == "ok"
+    assert body["degraded"] is True
+    assert body["handoff"] is True
+    assert body["attachments"] == [{"type": "pdf", "url": "https://example.org/result.pdf"}]
     assert body["debug"] == {"dialog_state": {}}
     assert observed == {
         "text": "Привет",

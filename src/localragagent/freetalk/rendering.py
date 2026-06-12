@@ -179,12 +179,17 @@ def fallback_render(tool_name: str, payload: dict[str, Any]) -> str:
         return handoff_text
 
     if tool_name == "test_result_status":
-        links = [str(x).strip() for x in (payload.get("result_links") or []) if str(x).strip()]
-        if payload.get("ready") and links:
-            return f"Результат готов. Ссылка: {links[0]}"
         missing = payload.get("missing_fields") or []
         if missing:
             return "Чтобы проверить результат, уточните: " + ", ".join(str(x) for x in missing)
+        links = [str(x).strip() for x in (payload.get("result_links") or []) if str(x).strip()]
+        preview = str(payload.get("result_preview") or "").strip()
+        if preview:
+            if links:
+                return f"{preview}\n\nОткрыть результат: {links[0]}"
+            return preview
+        if payload.get("ready") and links:
+            return f"Результат готов. Ссылка: {links[0]}"
         return "По указанным данным результат пока не найден или еще не готов."
 
     if tool_name == "test_prepare":

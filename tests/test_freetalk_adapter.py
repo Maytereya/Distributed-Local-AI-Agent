@@ -727,6 +727,23 @@ def test_adapter_prepares_address_call_with_branch_mapping():
     assert "branch_name" not in prepared.backend_entities
 
 
+def test_adapter_marks_address_call_as_appointment_mode_for_specialty_booking():
+    adapter = FreeTalkAdapter()
+
+    prepared = adapter.prepare_tool_call(
+        tool_name="address_info",
+        user_message="Хочу записаться к гинекологу",
+        entities={
+            "appointment_action": "book",
+            "specialty": "гинеколог",
+        },
+    )
+
+    assert prepared.ft_entities["appointment_action"] == "book"
+    assert prepared.backend_entities["specialty"] == "гинеколог"
+    assert prepared.backend_entities["__appointment_mode"] is True
+
+
 def test_adapter_normalizes_address_entities_used_to_ft_shape():
     adapter = FreeTalkAdapter()
     prepared = adapter.prepare_tool_call(

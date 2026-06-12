@@ -73,6 +73,13 @@ def test_schedule_short_query_routes_to_schedule_tools():
     assert plan[:2] == ["doctors_schedule_week", "doctors_info"]
 
 
+def test_bare_specialty_schedule_query_demotes_to_doctors_info_first():
+    text = "Расписание уролога"
+    assert is_medical_query(text) is True
+    plan = select_tool_plan(text, include_meili_tools=True)
+    assert plan[:2] == ["doctors_info", "doctors_schedule_week"]
+
+
 def test_slots_query_routes_to_schedule_tools():
     text = "Есть свободные слоты у Дразнина?"
     assert is_medical_query(text) is True

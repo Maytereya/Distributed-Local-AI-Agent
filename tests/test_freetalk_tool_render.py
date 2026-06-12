@@ -13,6 +13,7 @@ from localragagent.freetalk.agent import FreeTalkAgent
 from localragagent.freetalk.routing_contract import ClinicalDecision
 from localragagent.freetalk.config import FreeTalkConfig
 from localragagent.freetalk.contracts import AgentReply, DialogState
+from localragagent.freetalk.rendering import fallback_render
 from localragagent.freetalk.tool_dispatcher import ToolDispatcher
 
 
@@ -112,6 +113,93 @@ def test_tool_dispatcher_treats_clarify_text_as_useful_data():
     result = asyncio.run(dispatcher.call("price_info", "цена узи", entities={}))
 
     assert result.found is True
+
+
+def test_tool_dispatcher_marks_result_pdf_attachments_and_outcome():
+    async def ready_pdf(_query: str, _entities: dict[str, object]) -> dict[str, object]:
+        return {
+            "ready": True,
+            "note": "result_ready_pdf",
+            "result_preview": "Ваш результат готов.",
+            "result_links": ["https://example.org/result.pdf"],
+            "result_attachments": [
+                {"type": "pdf", "name": "Результат анализа", "url": "https://example.org/result.pdf"}
+            ],
+        }
+
+    dispatcher = ToolDispatcher({"test_result_status": ready_pdf})
+    result = asyncio.run(dispatcher.call("test_result_status", "результат", entities={}))
+
+    assert result.found is True
+    assert result.outcome == "ok"
+    assert result.attachments == [
+        {"type": "pdf", "name": "Результат анализа", "url": "https://example.org/result.pdf"}
+    ]
+
+
+def test_tool_dispatcher_marks_tech_unavailable_degraded_outcome():
+    async def tech_unavailable(_query: str, _entities: dict[str, object]) -> dict[str, object]:
+        return {
+            "ready": False,
+            "note": "result_tech_unavailable",
+            "result_preview": "По техническим причинам сейчас не удаётся загрузить результаты анализов.",
+            "degraded": True,
+        }
+
+    dispatcher = ToolDispatcher({"test_result_status": tech_unavailable})
+    result = asyncio.run(dispatcher.call("test_result_status", "результат", entities={}))
+
+    assert result.found is True
+    assert result.outcome == "tech_unavailable"
+    assert result.degraded is True
+
+
+def test_result_status_fallback_render_uses_preview_links_and_portal_text():
+    text = fallback_render(
+        "test_result_status",
+        {
+            "ready": True,
+            "note": "result_ready_pdf",
+            "result_preview": "Ваш результат готов.",
+            "result_links": ["https://example.org/result.pdf"],
+        },
+    )
+
+    assert "Ваш результат готов" in text
+    assert "Открыть результат: https://example.org/result.pdf" in text
+
+    portal = fallback_render(
+        "test_result_status",
+        {
+            "ready": True,
+            "note": "result_ready_portal",
+            "result_preview": "Результат по вашим данным готов. Откройте портал результатов.",
+        },
+    )
+    assert portal == "Результат по вашим данным готов. Откройте портал результатов."
+
+
+def test_address_payload_without_city_fields_is_useful_and_rendered():
+    async def regions_without_city(_query: str, _entities: dict[str, object]) -> dict[str, object]:
+        return {
+            "addresses": [
+                "г. Самара, пр. Ленина, 5",
+                "г. Самара, ул. Гагарина, 64",
+            ],
+            "branches": [
+                {"address": "г. Самара, пр. Ленина, 5", "name": "Ленина"},
+                {"address": "г. Самара, ул. Гагарина, 64", "name": "Гагарина"},
+            ],
+            "note": "address_info: live regions without city field",
+        }
+
+    dispatcher = ToolDispatcher({"address_info": regions_without_city})
+    result = asyncio.run(dispatcher.call("address_info", "адреса филиалов", entities={}))
+    text = fallback_render("address_info", result.payload)
+
+    assert result.found is True
+    assert "Ленина" in text
+    assert "Гагарина" in text
 
 
 def test_clinic_data_fallback_detector_handles_typo_and_clinic_context():

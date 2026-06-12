@@ -6,7 +6,7 @@ from dataclasses import asdict
 import json
 from typing import Any
 
-from .routing_contract import normalize_clarify_type
+from .routing_contract import normalize_clarify_type, normalize_missing_slots
 from .contracts import DialogState
 
 
@@ -38,17 +38,12 @@ SESSION_MEMORY_ENTITY_KEYS: tuple[str, ...] = (
 
 
 def merge_missing_slots(primary: list[str], secondary: list[str]) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
+    raw: list[str] = []
     for bucket in (primary or [], secondary or []):
         values = bucket if isinstance(bucket, list) else [bucket]
         for source in values:
-            slot = str(source or "").strip().lower()
-            if not slot or slot in seen:
-                continue
-            seen.add(slot)
-            out.append(slot)
-    return out
+            raw.append(str(source or "").strip())
+    return normalize_missing_slots(raw)
 
 
 def filter_missing_slots_by_entities(missing_slots: list[str], entities: dict[str, Any]) -> list[str]:
@@ -72,7 +67,7 @@ def filter_missing_slots_by_entities(missing_slots: list[str], entities: dict[st
     branch_known = bool(str(entities.get("branch_name") or entities.get("city") or "").strip())
     date_known = bool(str(entities.get("date") or entities.get("date_from") or "").strip())
     time_known = bool(str(entities.get("time") or entities.get("time_from") or "").strip())
-    for slot in (missing_slots or []):
+    for slot in normalize_missing_slots(list(missing_slots or [])):
         name = str(slot or "").strip().lower()
         if not name:
             continue
@@ -124,7 +119,7 @@ def copy_dialog_state(dialog_state: DialogState | None) -> DialogState:
         entities=dict(dialog_state.entities or {}),
         candidate_entities=dict(dialog_state.candidate_entities or {}),
         confirmation_target=str(dialog_state.confirmation_target or ""),
-        missing_slots=list(dialog_state.missing_slots or []),
+        missing_slots=normalize_missing_slots(list(dialog_state.missing_slots or [])),
         clarify_type=normalize_clarify_type(dialog_state.clarify_type),
         tool_plan=list(dialog_state.tool_plan or []),
         response_policy=str(dialog_state.response_policy or ""),
@@ -138,7 +133,7 @@ def copy_dialog_state(dialog_state: DialogState | None) -> DialogState:
         flow_stage=str(dialog_state.flow_stage or ""),
         flow_interruptible=bool(dialog_state.flow_interruptible),
         flow_resume_question=str(dialog_state.flow_resume_question or ""),
-        expected_slots=[str(x).strip() for x in list(dialog_state.expected_slots or []) if str(x).strip()],
+        expected_slots=normalize_missing_slots(list(dialog_state.expected_slots or [])),
         flow_non_answer_count=max(0, int(dialog_state.flow_non_answer_count or 0)),
         flow_non_answer_kind=str(dialog_state.flow_non_answer_kind or ""),
     )
@@ -201,7 +196,7 @@ def dialog_state_from_payload(payload: dict[str, Any] | None) -> DialogState:
             str(k): v for k, v in candidate_entities.items() if str(k).strip() and str(v or "").strip()
         },
         confirmation_target=str(data.get("confirmation_target") or "").strip(),
-        missing_slots=[str(x).strip() for x in missing_slots if str(x).strip()],
+        missing_slots=normalize_missing_slots(missing_slots),
         clarify_type=normalize_clarify_type(data.get("clarify_type")),
         tool_plan=[str(x).strip() for x in tool_plan if str(x).strip()],
         response_policy=str(data.get("response_policy") or "").strip() or "general_only",
@@ -215,7 +210,7 @@ def dialog_state_from_payload(payload: dict[str, Any] | None) -> DialogState:
         flow_stage=str(data.get("flow_stage") or "").strip(),
         flow_interruptible=bool(data.get("flow_interruptible")),
         flow_resume_question=str(data.get("flow_resume_question") or "").strip(),
-        expected_slots=[str(x).strip() for x in expected_slots if str(x).strip()],
+        expected_slots=normalize_missing_slots(expected_slots),
         flow_non_answer_count=max(0, flow_non_answer_count),
         flow_non_answer_kind=str(data.get("flow_non_answer_kind") or "").strip(),
     )

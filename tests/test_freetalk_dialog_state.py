@@ -564,6 +564,21 @@ def test_dialog_state_payload_roundtrip_preserves_flow_descriptor():
     assert restored.flow_non_answer_kind == "uncertainty"
 
 
+def test_dialog_state_from_payload_normalizes_missing_slots_from_redis():
+    restored = dialog_state_from_payload(
+        {
+            "route": "clinical",
+            "intent": "test_result",
+            "missing_slots": ["surname", "birth_year", "made_up_slot"],
+            "expected_slots": ["result_filial", "result_number", "unknown_slot"],
+            "tool_plan": ["test_result_status"],
+        }
+    )
+
+    assert restored.missing_slots == ["result_surname", "result_year_of_birth"]
+    assert restored.expected_slots == ["result_analysis_code", "result_analysis_number"]
+
+
 class FuzzyPriceServices:
     def __init__(self) -> None:
         self.last_entities: dict[str, object] = {}

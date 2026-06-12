@@ -154,6 +154,42 @@ def test_parse_clinical_decision_keeps_non_branch_missing_slots_for_price():
     assert decision.clarify_question == ""
 
 
+def test_parse_clinical_decision_normalizes_and_drops_unknown_missing_slots():
+    decision = parse_clinical_decision(
+        {
+            "intent": "test_result",
+            "missing_slots": [
+                "surname",
+                "birth_year",
+                "result_filial",
+                "result_number",
+                "made_up_slot",
+            ],
+            "tool_plan": ["test_result_status"],
+        },
+        include_meili_tools=False,
+    )
+
+    assert decision.missing_slots == [
+        "result_surname",
+        "result_year_of_birth",
+        "result_analysis_code",
+        "result_analysis_number",
+    ]
+
+
+def test_parse_clinical_decision_expands_doctor_or_specialty_missing_slot():
+    decision = parse_clinical_decision(
+        {
+            "intent": "doctor_schedule",
+            "missing_slots": ["doctor_name_or_specialty", "doctor_id"],
+        },
+        include_meili_tools=False,
+    )
+
+    assert decision.missing_slots == ["doctor_name", "specialty"]
+
+
 def test_clarify_type_for_slots_marks_identify_and_missing_auth_data():
     assert clarify_type_for_slots("doctor_schedule", ["doctor_name", "specialty"]) == "identify"
     assert clarify_type_for_slots("test_result", ["result_analysis_number"]) == "missing_auth_data"

@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+TOOL_OUTCOME_OK = "ok"
+TOOL_OUTCOME_NOT_FOUND = "not_found"
+TOOL_OUTCOME_TECH_UNAVAILABLE = "tech_unavailable"
+TOOL_OUTCOME_ERROR = "error"
+
 
 @dataclass(slots=True)
 class SessionContext:
@@ -19,6 +24,10 @@ class ToolCallResult:
     payload: dict[str, Any]
     found: bool
     error: str = ""
+    outcome: str = TOOL_OUTCOME_OK
+    degraded: bool = False
+    handoff: bool = False
+    attachments: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -81,3 +90,6 @@ class AgentReply:
     source_fragments: list[dict[str, str]] = field(default_factory=list)
     next_session_id: str = ""
     handoff: bool = False
+    outcome: str = ""
+    degraded: bool = False
+    attachments: list[dict[str, Any]] = field(default_factory=list)

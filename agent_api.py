@@ -149,6 +149,13 @@ class FreeTalkResponse(BaseModel):
         default_factory=list,
         description="Трассировка источников ответа.",
     )
+    outcome: str = Field(default="", description="Технический/бизнес-исход tool_call: ok/not_found/tech_unavailable/error.")
+    degraded: bool = Field(default=False, description="True, если ответ построен в degraded-mode.")
+    handoff: bool = Field(default=False, description="True, если FT просит перевести диалог к оператору.")
+    attachments: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Вложения, например PDF результата анализа.",
+    )
     debug: dict[str, Any] = Field(
         default_factory=dict,
         description="Диагностика FT: dialog_state, session_entity_memory, tool_payload, history_tail.",
@@ -258,6 +265,10 @@ async def _run_freetalk_once(
             "dialog_state": dialog_state_payload,
             "session_entity_memory": session_entity_memory,
             "tool_payload": dict(reply.tool_payload or {}),
+            "outcome": str(reply.outcome or ""),
+            "degraded": bool(reply.degraded),
+            "handoff": bool(reply.handoff),
+            "attachments": list(reply.attachments or []),
             "history_tail": history_tail,
             "summary": summary,
         }
@@ -282,6 +293,10 @@ async def _run_freetalk_once(
             for fragment in (reply.source_fragments or [])
             if isinstance(fragment, dict)
         ],
+        outcome=str(reply.outcome or ""),
+        degraded=bool(reply.degraded),
+        handoff=bool(reply.handoff),
+        attachments=[dict(item) for item in (reply.attachments or []) if isinstance(item, dict)],
         debug=debug_payload,
     )
 

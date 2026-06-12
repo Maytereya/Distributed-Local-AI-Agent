@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 import sys
 
@@ -68,6 +69,42 @@ def test_extract_date_and_time_filters():
         "time_to": "21:00",
     }
     assert extract_time_filters("после 15:30")["time_from"] == "15:30"
+
+
+def test_extract_date_filters_supports_weekend_and_weekday_ranges():
+    assert extract_date_filters("на выходных", today=date(2026, 5, 20)) == {
+        "date": "weekend",
+        "date_from": "2026-05-23",
+        "date_to": "2026-05-24",
+    }
+    assert extract_date_filters("на выходных", today=date(2026, 5, 23)) == {
+        "date": "weekend",
+        "date_from": "2026-05-23",
+        "date_to": "2026-05-24",
+    }
+    assert extract_date_filters("на выходных", today=date(2026, 5, 24)) == {
+        "date": "weekend",
+        "date_from": "2026-05-30",
+        "date_to": "2026-05-31",
+    }
+    assert extract_date_filters("в субботу", today=date(2026, 5, 20)) == {
+        "date": "2026-05-23",
+        "date_from": "2026-05-23",
+        "date_to": "2026-05-23",
+    }
+    assert extract_date_filters("25.05 в выходные", today=date(2026, 5, 20)) == {
+        "date": "2026-05-25",
+        "date_from": "2026-05-25",
+        "date_to": "2026-05-25",
+    }
+
+
+def test_weekend_text_is_not_treated_as_branch_reference():
+    assert extract_branch_reference("на выходных") == ""
+    entities = extract_contextual_entities("на выходных утром")
+    assert "branch_name" not in entities
+    assert entities["date"] == "weekend"
+    assert entities["time_from"] == "08:00"
 
 
 def test_extract_service_variant():

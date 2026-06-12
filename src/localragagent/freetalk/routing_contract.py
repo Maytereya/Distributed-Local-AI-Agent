@@ -112,6 +112,55 @@ _ENTITY_KEYS: set[str] = {
     "result_analysis_number",
 }
 
+_KNOWN_MISSING_SLOTS: set[str] = {
+    "appointment_action",
+    "doctor_name",
+    "specialty",
+    "service_or_analysis_name",
+    "branch_or_city",
+    "branch_name",
+    "city",
+    "date",
+    "date_from",
+    "date_to",
+    "time",
+    "time_from",
+    "time_to",
+    "patient_name",
+    "result_surname",
+    "result_year_of_birth",
+    "result_analysis_code",
+    "result_analysis_number",
+}
+
+_MISSING_SLOT_ALIASES: dict[str, tuple[str, ...]] = {
+    "doctor": ("doctor_name",),
+    "doctor_id": ("doctor_name",),
+    "doctor_or_specialty": ("doctor_name", "specialty"),
+    "doctor_name_or_specialty": ("doctor_name", "specialty"),
+    "doctor_name/specialty": ("doctor_name", "specialty"),
+    "service": ("service_or_analysis_name",),
+    "service_name": ("service_or_analysis_name",),
+    "test_name": ("service_or_analysis_name",),
+    "analysis_name": ("service_or_analysis_name",),
+    "service_or_test_name": ("service_or_analysis_name",),
+    "branch": ("branch_or_city",),
+    "region": ("branch_or_city",),
+    "filial": ("branch_or_city",),
+    "surname": ("result_surname",),
+    "result_last_name": ("result_surname",),
+    "birth_year": ("result_year_of_birth",),
+    "year": ("result_year_of_birth",),
+    "result_year": ("result_year_of_birth",),
+    "analysis_code": ("result_analysis_code",),
+    "result_filial": ("result_analysis_code",),
+    "result_analysis_filial": ("result_analysis_code",),
+    "analysis_number": ("result_analysis_number",),
+    "number": ("result_analysis_number",),
+    "result_number": ("result_analysis_number",),
+    "order_number": ("result_analysis_number",),
+}
+
 
 @dataclass(slots=True)
 class ClinicalDecision:
@@ -159,18 +208,26 @@ def _coerce_entities(value: Any) -> dict[str, Any]:
     return out
 
 
-def _coerce_missing_slots(value: Any) -> list[str]:
+def normalize_missing_slots(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     out: list[str] = []
     seen: set[str] = set()
     for item in value:
-        slot = str(item or "").strip().lower()
-        if not slot or slot in seen:
+        raw = str(item or "").strip().lower()
+        if not raw:
             continue
-        seen.add(slot)
-        out.append(slot)
+        slots = _MISSING_SLOT_ALIASES.get(raw, (raw,))
+        for slot in slots:
+            if slot not in _KNOWN_MISSING_SLOTS or slot in seen:
+                continue
+            seen.add(slot)
+            out.append(slot)
     return out
+
+
+def _coerce_missing_slots(value: Any) -> list[str]:
+    return normalize_missing_slots(value)
 
 
 def _coerce_tool_plan(value: Any) -> list[str]:

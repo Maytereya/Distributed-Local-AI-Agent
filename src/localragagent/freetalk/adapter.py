@@ -47,6 +47,7 @@ _SERVICE_ENTITY_KEYS: tuple[str, ...] = (
 )
 
 _ADDRESS_ENTITY_KEYS: tuple[str, ...] = (
+    "appointment_action",
     "branch_name",
     "city",
     "service_name",
@@ -237,7 +238,7 @@ def _normalize_address_ft_entities(entities: dict[str, Any]) -> dict[str, Any]:
     service_entities = _normalize_service_ft_entities(entities)
     out: dict[str, Any] = {}
     for key in _ADDRESS_ENTITY_KEYS:
-        value = str(service_entities.get(key) or "").strip()
+        value = str(service_entities.get(key) or (entities or {}).get(key) or "").strip()
         if value:
             out[key] = value
     return out
@@ -255,6 +256,8 @@ def _address_backend_entities(ft_entities: dict[str, Any]) -> dict[str, Any]:
         value = str(ft_entities.get(key) or "").strip()
         if value:
             backend[key] = value
+    if str(ft_entities.get("appointment_action") or "").strip().lower() in {"book", "reschedule", "cancel"}:
+        backend["__appointment_mode"] = True
     return backend
 
 

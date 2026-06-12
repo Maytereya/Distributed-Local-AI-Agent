@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Pattern
 
+from .signal_parsers import extract_specialty_reference, looks_like_specific_doctor_reference
+
 
 def _compile(pattern: str) -> Pattern[str]:
     return re.compile(pattern, re.I)
@@ -156,6 +158,15 @@ def is_about_agent_query(text: str) -> bool:
     return bool(_ABOUT_AGENT_RE.search(q))
 
 
+def _is_bare_specialty_schedule_query(text: str) -> bool:
+    q = str(text or "").strip()
+    if not q or not _SCHEDULE_RE.search(q):
+        return False
+    if looks_like_specific_doctor_reference(q):
+        return False
+    return bool(extract_specialty_reference(q))
+
+
 def select_tool_plan(text: str, *, include_meili_tools: bool) -> list[str]:
     q = str(text or "")
 
@@ -177,6 +188,8 @@ def select_tool_plan(text: str, *, include_meili_tools: bool) -> list[str]:
     if _RESULT_RE.search(q):
         return ["test_result_status", "test_assist"]
     if _SCHEDULE_RE.search(q):
+        if _is_bare_specialty_schedule_query(q):
+            return ["doctors_info", "doctors_schedule_week"]
         return ["doctors_schedule_week", "doctors_info"]
     if _PRICE_RE.search(q):
         return ["price_info", "service_bundle_info", "test_assist"]
