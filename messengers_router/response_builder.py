@@ -285,10 +285,9 @@ def build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseE
     preview = str(result_status.get("result_preview") or "").strip()
     text = preview or "По указанным данным результаты пока не найдены или ещё не готовы."
 
-    # Готовый результат: resultForPatient вернул прямую ссылку на PDF — отдаём сам
-    # результат (ссылка + вложение). В остальных исходах (не найден / тех-сбой)
-    # result_preview ведёт пациента на портал результатов. Bot-constructed deep-link'ов
-    # (getanaliz) больше нет — рендерим только реальные ссылки от API.
+    # Рендерим прямую ссылку на результат из result_links (getanaliz.php, BUG-2026-06-11-04 —
+    # восстановлена). Generic: что в result_links, то и показываем («Открыть результат: …»).
+    # Вложения (result_attachments) — если есть; в pure-link режиме их нет.
     links_raw = result_status.get("result_links")
     links = [str(x).strip() for x in links_raw if str(x).strip()] if isinstance(links_raw, list) else []
     atts_raw = result_status.get("result_attachments")
