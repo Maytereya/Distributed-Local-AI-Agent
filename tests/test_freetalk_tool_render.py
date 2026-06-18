@@ -442,6 +442,35 @@ def test_render_schedule_details_reports_no_slots_when_weekend_filter_excludes_a
     assert "по выбранным фильтрам" in text.lower()
 
 
+def test_render_schedule_details_names_branch_time_filters_when_no_slots_match():
+    payload = {
+        "entities_used_ft": {
+            "branch_name": "Ленина",
+            "time": "утром",
+            "time_from": "08:00",
+            "time_to": "12:00",
+        },
+        "schedule": [
+            {
+                "fio": "Дразнин Антон Владимирович",
+                "schedule": {
+                    "г. Самара, пр. Ленина, 5": [
+                        {"date": "2026-05-22", "slots": ["16:00"]},
+                    ]
+                },
+            }
+        ],
+    }
+
+    text = FreeTalkAgent._render_schedule_details(payload)
+
+    assert "Дразнин" in text
+    assert "Ленина" in text
+    assert "утром" in text
+    assert "16:00" not in text
+    assert "по выбранным фильтрам" in text.lower()
+
+
 def test_doctor_followup_message_detected_with_pronoun_and_memory():
     agent = FreeTalkAgent(
         config=_cfg(),

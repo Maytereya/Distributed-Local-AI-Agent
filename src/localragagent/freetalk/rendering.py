@@ -134,7 +134,9 @@ def render_schedule_details(payload: dict[str, Any]) -> str:
 
         if row_lines == 0:
             if has_filter:
-                lines.append("   По выбранным фильтрам свободные окна по этому врачу не найдены.")
+                filter_label = _schedule_filter_label(payload)
+                suffix = f" ({filter_label})" if filter_label else ""
+                lines.append(f"   По выбранным фильтрам{suffix} свободные окна по этому врачу не найдены.")
             else:
                 lines.append("   Свободные окна по этому врачу не найдены, уточните дату или филиал.")
         lines.append("")
@@ -165,6 +167,37 @@ def _schedule_filter_entities(payload: dict[str, Any]) -> dict[str, str]:
 
 def _has_schedule_filter(payload: dict[str, Any]) -> bool:
     return bool(_schedule_filter_entities(payload))
+
+
+def _schedule_filter_label(payload: dict[str, Any]) -> str:
+    filters = _schedule_filter_entities(payload)
+    parts: list[str] = []
+    branch = str(filters.get("branch_name") or "").strip()
+    if branch:
+        parts.append(f"филиал: {branch}")
+
+    date = str(filters.get("date") or "").strip()
+    date_from = str(filters.get("date_from") or "").strip()
+    date_to = str(filters.get("date_to") or "").strip()
+    if date and date not in {date_from, date_to}:
+        parts.append(f"дата: {date}")
+    elif date_from and date_to and date_from != date_to:
+        parts.append(f"даты: {date_from} - {date_to}")
+    elif date_from or date_to:
+        parts.append(f"дата: {date_from or date_to}")
+
+    time_value = str(filters.get("time") or "").strip()
+    time_from = str(filters.get("time_from") or "").strip()
+    time_to = str(filters.get("time_to") or "").strip()
+    if time_value:
+        parts.append(f"время: {time_value}")
+    elif time_from and time_to:
+        parts.append(f"время: {time_from}-{time_to}")
+    elif time_from:
+        parts.append(f"время: с {time_from}")
+    elif time_to:
+        parts.append(f"время: до {time_to}")
+    return ", ".join(parts)
 
 
 def _schedule_region_matches_filter(region_name: str, payload: dict[str, Any]) -> bool:
