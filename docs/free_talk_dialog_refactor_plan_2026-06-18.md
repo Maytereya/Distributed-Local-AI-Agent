@@ -644,7 +644,7 @@ result_context:
 
 ## Этап 8. Price Relevance
 
-Статус: pending  
+Статус: completed 2026-06-18
 Приоритет: P2
 
 Задачи:
