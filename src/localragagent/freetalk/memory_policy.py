@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from .contracts import DialogState
@@ -133,6 +134,19 @@ def should_clarify_doctor_choice_from_memory(
     return bool(str(memory_entities.get("specialty") or "").strip() or memory_entities.get("doctor_options"))
 
 
+def _normalize_name_probe(value: str) -> str:
+    return re.sub(r"[^a-zа-яё0-9]+", " ", str(value or "").lower().replace("ё", "е")).strip()
+
+
+def _doctor_surname_is_mentioned(text: str, doctor_name: str) -> bool:
+    doctor_norm = _normalize_name_probe(doctor_name)
+    text_norm = _normalize_name_probe(text)
+    if not doctor_norm or not text_norm:
+        return False
+    surname = doctor_norm.split()[0]
+    return bool(surname and surname in text_norm)
+
+
 def extract_schedule_memory_entities(payload: dict[str, Any]) -> dict[str, Any]:
     schedule = payload.get("schedule") if isinstance(payload, dict) else []
     if not isinstance(schedule, list):
@@ -258,10 +272,22 @@ async def enrich_entities_from_session_memory(
     uses_result_tool = "test_result_status" in plan
     has_contextual_entities = bool(contextual_entities)
 
-    if uses_doctor_tools and not str(out.get("doctor_name") or "").strip():
+    if uses_doctor_tools:
         remembered = await memory.get_meta_str(session_id, LAST_DOCTOR_NAME_KEY, "")
         remembered = str(remembered or memory_entities.get("doctor_name") or "").strip()
-        if remembered and (
+        current_doctor = str(out.get("doctor_name") or "").strip()
+        if (
+            current_doctor
+            and remembered
+            and DOCTOR_ANAPHORA_RE.search(str(user_message or ""))
+            and not _doctor_surname_is_mentioned(user_message, current_doctor)
+        ):
+            out["doctor_name"] = remembered
+            out["doctor_name_source"] = "session_memory_anaphora"
+            out.pop("doctor_name_match_status", None)
+            out.pop("doctor_name_candidate", None)
+            enriched_keys.append("doctor_name")
+        elif not current_doctor and remembered and (
             active_state
             or has_contextual_entities
             or DOCTOR_ANAPHORA_RE.search(str(user_message or ""))

@@ -1361,6 +1361,18 @@ class ScheduleFollowupServices:
         }
 
 
+class MisgroundedScheduleFollowupServices(ScheduleFollowupServices):
+    async def match_catalog_doctor(self, raw_text_or_name: str) -> dict[str, str]:
+        probe = str(raw_text_or_name or "").lower()
+        if "хорошо" in probe:
+            return {
+                "status": "exact",
+                "canonical": "Хорошун Оксана Ивановна",
+                "query": "Хорошо",
+            }
+        return await super().match_catalog_doctor(raw_text_or_name)
+
+
 class ScheduleFollowupAgent(FreeTalkAgent):
     async def _route_clinical_decision(
         self,
@@ -1523,6 +1535,30 @@ def test_contextual_schedule_followup_reuses_doctor_and_filters():
     assert services.calls[1]["branch_name"] == "Ленина"
     assert services.calls[1]["time"] == "утром"
     assert services.calls[1]["time_from"] == "08:00"
+
+
+def test_anaphoric_schedule_followup_prefers_remembered_doctor_over_false_catalog_hit():
+    memory = InMemoryMemory()
+    services = MisgroundedScheduleFollowupServices()
+    agent = ScheduleFollowupAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "schedule_followup_false_catalog_hit"
+
+    reply1 = asyncio.run(agent.chat("Подскажи расписание Дразнина", session_id))
+    assert reply1.tool_name == "doctors_schedule_week"
+
+    reply2 = asyncio.run(agent.chat("Хорошо! А можешь найти расписание его работы?", session_id))
+
+    assert reply2.tool_name == "doctors_schedule_week"
+    assert len(services.calls) >= 2
+    assert services.calls[1]["doctor_name"] == "Дразнин Антон Владимирович"
+    assert "Хорошун" not in str(services.calls[1])
 
 
 def test_broad_specialty_list_does_not_store_random_doctor_for_anaphora():

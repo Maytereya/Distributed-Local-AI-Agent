@@ -781,15 +781,18 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
             "entities_used": entities,
         }
 
-    region_name = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "city", "branch_name"])
-    if region_name and _is_non_samara_city_value(region_name):
+    region_name = _get_first_present(entities, ["region", "branch", "company_unit", "unit", "branch_name"])
+    city_name = _get_first_present(entities, ["city"])
+    if city_name and _is_non_samara_city_value(city_name):
         return _service_fallback(
-            note=f"doctors_schedule_week unsupported city: {region_name}",
+            note=f"doctors_schedule_week unsupported city: {city_name}",
             handoff_message=handoff_message("city_not_supported"),
             entities=entities,
             reason="city_not_supported",
             extra={"schedule": []},
         )
+    if not region_name and city_name:
+        region_name = city_name
     if region_name and _is_samara_city_value(region_name):
         region_name = None
 
