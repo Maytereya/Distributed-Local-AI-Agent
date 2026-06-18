@@ -1379,6 +1379,103 @@ class ScheduleFollowupAgent(FreeTalkAgent):
         return ""
 
 
+class BroadSpecialtyServices:
+    def __init__(self) -> None:
+        self.schedule_called = False
+
+    async def get_catalog_health(self) -> dict[str, object]:
+        return {"ok": True}
+
+    async def match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = "") -> dict[str, str]:
+        _ = raw_text_or_name, current_service_name
+        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
+
+    async def match_catalog_doctor(self, raw_text_or_name: str) -> dict[str, str]:
+        _ = raw_text_or_name
+        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
+
+    async def doctors_info(self, query: str, entities: dict[str, object]) -> dict[str, object]:
+        _ = query, entities
+        return {
+            "doctors": [
+                {
+                    "fio": "Панина Мария Игоревна",
+                    "specialization": "Дерматовенеролог",
+                    "regions": ["г. Самара, пр. Ленина, 5"],
+                },
+                {
+                    "fio": "Семенов Андрей Петрович",
+                    "specialization": "Дерматовенеролог",
+                    "regions": ["г. Самара, ул. Победы, 83"],
+                },
+            ],
+            "entities_used": {"specialty": "дерматовенеролог"},
+            "note": "doctors_info",
+        }
+
+    async def doctors_schedule_week(self, query: str, entities: dict[str, object]) -> dict[str, object]:
+        _ = query, entities
+        self.schedule_called = True
+        raise AssertionError("schedule must not run until user picks a concrete doctor")
+
+    def tool_handlers(self, *, include_meili_tools: bool) -> dict[str, object]:
+        _ = include_meili_tools
+        return {
+            "doctors_info": self.doctors_info,
+            "doctors_schedule_week": self.doctors_schedule_week,
+        }
+
+
+class BroadSpecialtyAgent(FreeTalkAgent):
+    async def _route_clinical_decision(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        dialog_state: DialogState,
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        _ = context, dialog_state, remembered_doctor
+        text = str(user_message or "").strip().lower()
+        if "дермат" in text:
+            return ClinicalDecision(
+                intent="doctor_info",
+                confidence=0.95,
+                entities={"specialty": "дерматовенеролог"},
+                missing_slots=[],
+                clarify_question="",
+                tool_plan=["doctors_info", "doctors_schedule_week"],
+                source="test",
+            )
+        if "распис" in text or "его" in text:
+            return ClinicalDecision(
+                intent="doctor_schedule",
+                confidence=0.95,
+                entities={},
+                missing_slots=[],
+                clarify_question="",
+                tool_plan=["doctors_schedule_week", "doctors_info"],
+                source="test",
+            )
+        return ClinicalDecision(
+            intent="unknown",
+            confidence=0.2,
+            entities={},
+            missing_slots=[],
+            clarify_question="",
+            tool_plan=[],
+            source="test",
+        )
+
+    async def _llm_json(self, prompt: str) -> dict[str, object]:
+        _ = prompt
+        return {}
+
+    async def _llm_text(self, prompt: str) -> str:
+        _ = prompt
+        return ""
+
+
 def test_contextual_schedule_followup_reuses_doctor_and_filters():
     memory = InMemoryMemory()
     services = ScheduleFollowupServices()
@@ -1403,3 +1500,39 @@ def test_contextual_schedule_followup_reuses_doctor_and_filters():
     assert services.calls[1]["branch_name"] == "Ленина"
     assert services.calls[1]["time"] == "утром"
     assert services.calls[1]["time_from"] == "08:00"
+
+
+def test_broad_specialty_list_does_not_store_random_doctor_for_anaphora():
+    memory = InMemoryMemory()
+    services = BroadSpecialtyServices()
+    agent = BroadSpecialtyAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "broad_specialty_no_random_doctor"
+
+    first = asyncio.run(agent.chat("Покажи дерматовенерологов", session_id))
+    assert first.tool_name == "doctors_info"
+    assert "панина" in first.text.lower()
+    assert "семенов" in first.text.lower()
+    assert asyncio.run(memory.get_meta_str(session_id, "last_doctor_name", "")) == ""
+
+    stored = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_entity_memory", "")))
+    assert stored["specialty"] == "дерматовенеролог"
+    assert [row["fio"] for row in stored["doctor_options"]] == [
+        "Панина Мария Игоревна",
+        "Семенов Андрей Петрович",
+    ]
+
+    second = asyncio.run(agent.chat("Покажи его расписание", session_id))
+    low = second.text.lower()
+    assert second.tool_name == ""
+    assert "выберите" in low
+    assert "конкретного врача" in low
+    assert "панина" in low
+    assert "семенов" in low
+    assert services.schedule_called is False

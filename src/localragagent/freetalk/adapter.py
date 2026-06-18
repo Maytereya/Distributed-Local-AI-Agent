@@ -264,12 +264,16 @@ def _address_backend_entities(ft_entities: dict[str, Any]) -> dict[str, Any]:
 def _extract_payload_doctor_name(tool_name: str, payload: dict[str, Any]) -> str:
     bucket = payload.get("doctors") if str(tool_name or "").strip() == "doctors_info" else payload.get("schedule")
     if isinstance(bucket, list):
+        names: list[str] = []
         for row in bucket:
             if not isinstance(row, dict):
                 continue
             fio = str(row.get("fio") or "").strip()
             if fio:
-                return fio
+                names.append(fio)
+        unique_names = list(dict.fromkeys(names))
+        if len(unique_names) == 1:
+            return unique_names[0]
 
     entities_used = payload.get("entities_used") if isinstance(payload, dict) else {}
     if isinstance(entities_used, dict):

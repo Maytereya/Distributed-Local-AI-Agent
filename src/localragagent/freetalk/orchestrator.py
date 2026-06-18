@@ -13,6 +13,10 @@ from .medical_toolloop import (
     MedicalToolLoopRuntime,
     execute_medical_tool_loop as _execute_medical_tool_loop_helper,
 )
+from .memory_policy import (
+    doctor_choice_clarification_text,
+    should_clarify_doctor_choice_from_memory,
+)
 from .observability import log_event
 from .routing_prompting import build_general_prompt
 from .tool_dispatcher import ToolDispatcher
@@ -821,6 +825,47 @@ async def medical_reply(
                 candidate=str(candidate_entities.get(confirmation_target) or "")[:120],
             )
             return AgentReply(text=confirm_text, source="clinic_data")
+
+    if should_clarify_doctor_choice_from_memory(
+        user_message=user_message,
+        tool_plan=tool_plan,
+        entities=entities,
+        memory_entities=session_memory_entities,
+        remembered_doctor=remembered_doctor,
+    ):
+        clarify_text = doctor_choice_clarification_text(session_memory_entities)
+        choice_entities = dict(agent._public_entities(entities))
+        specialty = str(session_memory_entities.get("specialty") or "").strip()
+        if specialty and not str(choice_entities.get("specialty") or "").strip():
+            choice_entities["specialty"] = specialty
+        next_attempt = int(effective_state.clarify_count or 0) + 1
+        await agent._save_dialog_state(
+            context.session_id,
+            agent._build_clinical_state(
+                intent=dialog_act.intent,
+                entities=choice_entities,
+                candidate_entities=candidate_entities,
+                confirmation_target="",
+                missing_slots=["doctor_name"],
+                clarify_type="identify",
+                tool_plan=tool_plan,
+                confidence=dialog_act.confidence,
+                clarify_count=next_attempt,
+                last_tool=effective_state.last_tool,
+                phase="collecting",
+                open_question=clarify_text,
+            ),
+        )
+        await agent._save_session_entity_memory(context.session_id, choice_entities)
+        log_event(
+            "doctor_choice_clarification_requested",
+            level=logging.WARNING,
+            session_id=context.session_id,
+            intent=dialog_act.intent,
+            specialty=specialty,
+            options_count=len(session_memory_entities.get("doctor_options") or []),
+        )
+        return AgentReply(text=clarify_text, source="clinic_data")
 
     log_event(
         "medical_plan_selected",

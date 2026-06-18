@@ -32,6 +32,7 @@ SESSION_MEMORY_ENTITY_KEYS: tuple[str, ...] = (
     "result_analysis_code",
     "result_analysis_number",
     "doctor_id",
+    "doctor_options",
     "appointment_windows",
     "appointment_branch_options",
 )

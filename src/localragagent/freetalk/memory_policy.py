@@ -31,21 +31,29 @@ def extract_primary_doctor_name(tool_name: str, payload: dict[str, Any]) -> str:
 
     doctors = payload.get("doctors") if isinstance(payload, dict) else []
     if isinstance(doctors, list):
+        names: list[str] = []
         for row in doctors:
             if not isinstance(row, dict):
                 continue
             fio = str(row.get("fio") or "").strip()
             if fio:
-                return fio
+                names.append(fio)
+        unique_names = list(dict.fromkeys(names))
+        if len(unique_names) == 1:
+            return unique_names[0]
 
     schedule = payload.get("schedule") if isinstance(payload, dict) else []
     if isinstance(schedule, list):
+        names = []
         for row in schedule:
             if not isinstance(row, dict):
                 continue
             fio = str(row.get("fio") or "").strip()
             if fio:
-                return fio
+                names.append(fio)
+        unique_names = list(dict.fromkeys(names))
+        if len(unique_names) == 1:
+            return unique_names[0]
 
     if tool_name == "doctors_schedule_week":
         direct = str(payload.get("doctor_name") or payload.get("fio") or "").strip()
@@ -53,6 +61,76 @@ def extract_primary_doctor_name(tool_name: str, payload: dict[str, Any]) -> str:
             return direct
 
     return ""
+
+
+def extract_doctor_options(payload: dict[str, Any], *, limit: int = 6) -> list[dict[str, str]]:
+    doctors = payload.get("doctors") if isinstance(payload, dict) else []
+    if not isinstance(doctors, list):
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for row in doctors:
+        if not isinstance(row, dict):
+            continue
+        fio = str(row.get("fio") or "").strip()
+        if not fio or fio in seen:
+            continue
+        seen.add(fio)
+        option = {"fio": fio}
+        spec = str(row.get("specialization") or row.get("specialty") or "").strip()
+        if spec:
+            option["specialization"] = spec
+        regions = row.get("regions") or row.get("addresses")
+        if isinstance(regions, list):
+            clean_regions = [str(x).strip() for x in regions if str(x).strip()]
+            if clean_regions:
+                option["branches"] = "; ".join(clean_regions[:3])
+        out.append(option)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def doctor_choice_clarification_text(memory_entities: dict[str, Any]) -> str:
+    specialty = str(memory_entities.get("specialty") or "").strip()
+    options = memory_entities.get("doctor_options")
+    doctors = [x for x in options if isinstance(x, dict)] if isinstance(options, list) else []
+    if specialty:
+        head = f"Выберите, пожалуйста, конкретного врача по специальности {specialty}, и я покажу его расписание."
+    else:
+        head = "Выберите, пожалуйста, конкретного врача, и я покажу его расписание."
+    if not doctors:
+        return head
+    lines = [head]
+    for row in doctors[:6]:
+        fio = str(row.get("fio") or "").strip()
+        if not fio:
+            continue
+        spec = str(row.get("specialization") or "").strip()
+        branches = str(row.get("branches") or "").strip()
+        suffix_parts = [part for part in (spec, branches) if part]
+        suffix = f" ({'; '.join(suffix_parts)})" if suffix_parts else ""
+        lines.append(f"- {fio}{suffix}")
+    return "\n".join(lines)
+
+
+def should_clarify_doctor_choice_from_memory(
+    *,
+    user_message: str,
+    tool_plan: list[str],
+    entities: dict[str, Any],
+    memory_entities: dict[str, Any],
+    remembered_doctor: str,
+) -> bool:
+    if not DOCTOR_ANAPHORA_RE.search(str(user_message or "")):
+        return False
+    if not ({"doctors_schedule_week", "doctors_info"} & set(tool_plan or [])):
+        return False
+    if str(entities.get("doctor_name") or entities.get("doctor_id") or remembered_doctor or "").strip():
+        return False
+    if str(memory_entities.get("doctor_name") or "").strip():
+        return False
+    return bool(str(memory_entities.get("specialty") or "").strip() or memory_entities.get("doctor_options"))
 
 
 def extract_schedule_memory_entities(payload: dict[str, Any]) -> dict[str, Any]:
@@ -101,6 +179,15 @@ def tool_payload_memory_entities(tool_name: str, payload: dict[str, Any]) -> dic
     doctor_name = extract_primary_doctor_name(tool_name, payload)
     if doctor_name:
         out["doctor_name"] = doctor_name
+    if tool_name in {"doctors_info", "doctors_schedule_week"}:
+        entities_used_ft = payload.get("entities_used_ft") if isinstance(payload, dict) else {}
+        if isinstance(entities_used_ft, dict):
+            specialty = str(entities_used_ft.get("specialty") or "").strip()
+            if specialty:
+                out["specialty"] = specialty
+        options = extract_doctor_options(payload)
+        if options:
+            out["doctor_options"] = options
     if tool_name in {"price_info", "service_bundle_info", "test_prepare", "test_assist"}:
         entities_used_ft = payload.get("entities_used_ft") if isinstance(payload, dict) else {}
         if isinstance(entities_used_ft, dict):
