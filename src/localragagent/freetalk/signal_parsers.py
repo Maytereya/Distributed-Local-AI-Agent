@@ -587,6 +587,11 @@ def extract_result_lookup_fields(text: str, *, expected_slots: list[str] | tuple
         if "result_analysis_code" in slots and "result_analysis_code" not in out and RESULT_CODE_TOKEN_RE.match(compact):
             out["result_analysis_code"] = compact
             continue
+        if "result_analysis_code" in slots and "result_analysis_code" not in out:
+            city = extract_city_reference(compact)
+            if city:
+                out["result_analysis_code"] = city
+                continue
         if "result_surname" in slots and "result_surname" not in out:
             person_name = extract_person_name(compact)
             if person_name:

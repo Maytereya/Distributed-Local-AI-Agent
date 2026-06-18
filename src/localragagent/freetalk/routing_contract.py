@@ -354,9 +354,9 @@ def clarify_question_for_slots(intent: str, missing_slots: list[str]) -> str:
     if "result_year_of_birth" in slots:
         result_labels.append("год рождения")
     if "result_analysis_code" in slots:
-        result_labels.append("код анализа")
+        result_labels.append("код анализа или филиал")
     if "result_analysis_number" in slots:
-        result_labels.append("номер анализа")
+        result_labels.append("номер анализа / номер заказа")
     if result_labels:
         return "Для проверки результата уточните: " + ", ".join(result_labels) + "."
     return "Уточните, пожалуйста, ваш запрос по клинике, чтобы я корректно выполнил поиск."
@@ -407,6 +407,27 @@ def parse_clinical_decision(
             missing_slots = sanitized_slots
             clarify_type = ""
             clarify_question = ""
+    if intent == "doctor_schedule":
+        blocked_slots = {
+            "branch_name",
+            "branch_or_city",
+            "city",
+            "date",
+            "date_from",
+            "date_to",
+            "time",
+            "time_from",
+            "time_to",
+        }
+        sanitized_slots = [slot for slot in missing_slots if slot not in blocked_slots]
+        if len(sanitized_slots) != len(missing_slots):
+            missing_slots = sanitized_slots
+            if not missing_slots:
+                clarify_type = ""
+                clarify_question = ""
+            else:
+                clarify_type = clarify_type_for_slots(intent, missing_slots)
+                clarify_question = ""
 
     return ClinicalDecision(
         intent=intent,

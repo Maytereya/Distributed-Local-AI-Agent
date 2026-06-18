@@ -190,6 +190,24 @@ def test_parse_clinical_decision_expands_doctor_or_specialty_missing_slot():
     assert decision.missing_slots == ["doctor_name", "specialty"]
 
 
+def test_parse_clinical_decision_drops_schedule_narrowing_missing_slots():
+    decision = parse_clinical_decision(
+        {
+            "intent": "doctor_schedule",
+            "entities": {"doctor_name": "Дразнин Антон Владимирович"},
+            "missing_slots": ["date", "time", "branch_name"],
+            "clarify_type": "narrow_choice",
+            "clarify_question": "На какую неделю нужно расписание?",
+            "tool_plan": ["doctors_schedule_week"],
+        },
+        include_meili_tools=False,
+    )
+
+    assert decision.missing_slots == []
+    assert decision.clarify_type == ""
+    assert decision.clarify_question == ""
+
+
 def test_clarify_type_for_slots_marks_identify_and_missing_auth_data():
     assert clarify_type_for_slots("doctor_schedule", ["doctor_name", "specialty"]) == "identify"
     assert clarify_type_for_slots("test_result", ["result_analysis_number"]) == "missing_auth_data"

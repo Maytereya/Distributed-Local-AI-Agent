@@ -499,6 +499,33 @@ def test_result_lookup_complete_tuple_executes_tool_without_router_reentry():
     assert services.last_entities["number"] == "12345"
 
 
+def test_result_lookup_accepts_city_as_result_filial_in_active_flow():
+    memory = InMemoryMemory()
+    services = ResultServices()
+    agent = TerminalResultAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "result_terminal_city_filial"
+
+    reply1 = asyncio.run(agent.chat("Проверь результат анализа", session_id))
+    low = reply1.text.lower()
+    assert "фамилию пациента" in low
+    assert "номер заказа" in low
+
+    reply2 = asyncio.run(agent.chat("Иванов, 1990, Самара, 12345", session_id))
+    assert reply2.tool_name == "test_result_status"
+    assert "результат готов" in reply2.text.lower()
+    assert services.last_entities["surname"] == "Иванов"
+    assert services.last_entities["year"] == "1990"
+    assert services.last_entities["filial"] == "Самара"
+    assert services.last_entities["number"] == "12345"
+
+
 def test_operator_request_bypasses_guard_and_active_slot_flow():
     memory = InMemoryMemory()
     services = ResultServices()

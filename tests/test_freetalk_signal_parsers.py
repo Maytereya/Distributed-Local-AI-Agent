@@ -186,6 +186,20 @@ def test_extract_result_lookup_fields_supports_partial_tuple():
         "result_analysis_code": "Бг",
         "result_analysis_number": "12345",
     }
+    assert extract_result_lookup_fields(
+        "Иванов, 1990, Самара, 12345",
+        expected_slots=[
+            "result_surname",
+            "result_year_of_birth",
+            "result_analysis_code",
+            "result_analysis_number",
+        ],
+    ) == {
+        "result_surname": "Иванов",
+        "result_year_of_birth": "1990",
+        "result_analysis_code": "Самара",
+        "result_analysis_number": "12345",
+    }
 
 
 def test_split_mixed_utterance_only_on_controlled_markers():

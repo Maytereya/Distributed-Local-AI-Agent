@@ -900,11 +900,14 @@ async def medical_reply(
         clarify_type = str(dialog_act.clarify_type or state_clarify_type or "").strip()
         if not clarify_type:
             clarify_type = agent._clarify_type_for_slots(dialog_act.intent, missing_slots)
-        clarify_text = str(dialog_act.clarify_question or "").strip()
-        if not clarify_text:
-            clarify_text = str(effective_state.open_question or "").strip()
-        if not clarify_text:
+        if str(dialog_act.intent or "").strip().lower() == "test_result":
             clarify_text = agent._clarify_question_for_slots(dialog_act.intent, missing_slots)
+        else:
+            clarify_text = str(dialog_act.clarify_question or "").strip()
+            if not clarify_text:
+                clarify_text = str(effective_state.open_question or "").strip()
+            if not clarify_text:
+                clarify_text = agent._clarify_question_for_slots(dialog_act.intent, missing_slots)
         next_attempt = int(effective_state.clarify_count or 0) + 1
         await agent._save_dialog_state(
             context.session_id,
