@@ -1495,6 +1495,7 @@ def test_contextual_schedule_followup_reuses_doctor_and_filters():
 
     reply2 = asyncio.run(agent.chat("А на Ленина утром?", session_id))
     assert reply2.tool_name == "doctors_schedule_week"
+    assert reply2.handoff is False
     assert len(services.calls) >= 2
     assert services.calls[1]["doctor_name"] == "Дразнин Антон Владимирович"
     assert services.calls[1]["branch_name"] == "Ленина"

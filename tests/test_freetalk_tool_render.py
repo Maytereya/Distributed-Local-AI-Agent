@@ -358,6 +358,90 @@ def test_render_schedule_details_includes_region_dates_and_slots():
     assert "выберите дату и время" in text.lower()
 
 
+def test_render_schedule_details_deduplicates_slots_and_days():
+    payload = {
+        "schedule": [
+            {
+                "fio": "Дразнин Антон Владимирович",
+                "schedule": {
+                    "г. Самара, пр. Ленина, 5": [
+                        {
+                            "date": "2026-04-10",
+                            "slots": ["09:00", "09:00", "09:30"],
+                        },
+                        {
+                            "date": "2026-04-10",
+                            "slots": ["09:30", "10:00"],
+                        },
+                    ]
+                },
+            }
+        ],
+    }
+
+    text = FreeTalkAgent._render_schedule_details(payload)
+    assert text.count("10 апреля") == 1
+    assert text.count("09:00") == 1
+    assert text.count("09:30") == 1
+    assert text.count("10:00") == 1
+
+
+def test_render_schedule_details_filters_weekend_payload_before_rendering():
+    payload = {
+        "entities_used_ft": {
+            "date": "weekend",
+            "date_from": "2026-05-23",
+            "date_to": "2026-05-24",
+        },
+        "schedule": [
+            {
+                "fio": "Дразнин Антон Владимирович",
+                "schedule": {
+                    "г. Самара, пр. Ленина, 5": [
+                        {"date": "2026-05-22", "slots": ["09:00"]},
+                        {"date": "2026-05-23", "slots": ["10:00"]},
+                        {"date": "2026-05-25", "slots": ["11:00"]},
+                    ]
+                },
+            }
+        ],
+    }
+
+    text = FreeTalkAgent._render_schedule_details(payload)
+    assert "23 мая" in text
+    assert "10:00" in text
+    assert "22 мая" not in text
+    assert "25 мая" not in text
+    assert "09:00" not in text
+    assert "11:00" not in text
+
+
+def test_render_schedule_details_reports_no_slots_when_weekend_filter_excludes_all_days():
+    payload = {
+        "entities_used_ft": {
+            "date": "weekend",
+            "date_from": "2026-05-23",
+            "date_to": "2026-05-24",
+        },
+        "schedule": [
+            {
+                "fio": "Дразнин Антон Владимирович",
+                "schedule": {
+                    "г. Самара, пр. Ленина, 5": [
+                        {"date": "2026-05-22", "slots": ["09:00"]},
+                        {"date": "2026-05-25", "slots": ["11:00"]},
+                    ]
+                },
+            }
+        ],
+    }
+
+    text = FreeTalkAgent._render_schedule_details(payload)
+    assert "22 мая" not in text
+    assert "25 мая" not in text
+    assert "по выбранным фильтрам" in text.lower()
+
+
 def test_doctor_followup_message_detected_with_pronoun_and_memory():
     agent = FreeTalkAgent(
         config=_cfg(),

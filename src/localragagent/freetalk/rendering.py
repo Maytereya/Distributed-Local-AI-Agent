@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any
 
 _MONTHS_RU = {
@@ -19,6 +20,9 @@ _MONTHS_RU = {
     11: "ноября",
     12: "декабря",
 }
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_HHMM_RE = re.compile(r"^\d{1,2}:\d{2}$")
 
 
 def top_list(values: list[Any], limit: int = 5) -> list[Any]:
@@ -58,12 +62,17 @@ def schedule_day_line(day: dict[str, Any]) -> tuple[str, bool]:
     date_label = format_iso_date_human(str(day.get("date") or ""))
     slots_raw = day.get("slots")
     slots: list[str] = []
+    seen_slots: set[str] = set()
     if isinstance(slots_raw, list):
         for item in slots_raw:
             text = str(item or "").strip()
             if not text:
                 continue
-            slots.append(text[:5] if len(text) >= 5 else text)
+            value = text[:5] if len(text) >= 5 else text
+            if value in seen_slots:
+                continue
+            seen_slots.add(value)
+            slots.append(value)
 
     if slots:
         title = date_label or "Ближайшая дата"
@@ -88,6 +97,7 @@ def render_schedule_details(payload: dict[str, Any]) -> str:
     lines: list[str] = ["Нашел расписание:"]
     rendered = 0
     has_free_slots = False
+    has_filter = _has_schedule_filter(payload)
     for row in top_list(schedule, 3):
         if not isinstance(row, dict):
             continue
@@ -100,9 +110,12 @@ def render_schedule_details(payload: dict[str, Any]) -> str:
         row_lines = 0
         if isinstance(row_schedule, dict):
             for region_name, days in list(row_schedule.items())[:2]:
+                if not _schedule_region_matches_filter(str(region_name or ""), payload):
+                    continue
                 day_lines: list[str] = []
-                if isinstance(days, list):
-                    for day in days[:4]:
+                filtered_days = _filtered_schedule_days(days, payload)
+                if filtered_days:
+                    for day in filtered_days[:4]:
                         preview, day_has_free = schedule_day_line(day)
                         if not preview:
                             continue
@@ -120,7 +133,10 @@ def render_schedule_details(payload: dict[str, Any]) -> str:
                 row_lines += len(day_lines)
 
         if row_lines == 0:
-            lines.append("   Свободные окна по этому врачу не найдены, уточните дату или филиал.")
+            if has_filter:
+                lines.append("   По выбранным фильтрам свободные окна по этому врачу не найдены.")
+            else:
+                lines.append("   Свободные окна по этому врачу не найдены, уточните дату или филиал.")
         lines.append("")
 
     if rendered == 0:
@@ -133,6 +149,156 @@ def render_schedule_details(payload: dict[str, Any]) -> str:
         lines.append("Если хотите записаться, выберите дату и время из предложенных, и я продолжу запись.")
 
     return "\n".join([line for line in lines if str(line).strip()]).strip()
+
+
+def _schedule_filter_entities(payload: dict[str, Any]) -> dict[str, str]:
+    entities = payload.get("entities_used_ft") if isinstance(payload, dict) else {}
+    if not isinstance(entities, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key in ("branch_name", "date", "date_from", "date_to", "time", "time_from", "time_to"):
+        value = str(entities.get(key) or "").strip()
+        if value:
+            out[key] = value
+    return out
+
+
+def _has_schedule_filter(payload: dict[str, Any]) -> bool:
+    return bool(_schedule_filter_entities(payload))
+
+
+def _schedule_region_matches_filter(region_name: str, payload: dict[str, Any]) -> bool:
+    branch_name = _schedule_filter_entities(payload).get("branch_name", "")
+    if not branch_name:
+        return True
+    region_norm = _normalize_filter_text(region_name)
+    branch_norm = _normalize_filter_text(branch_name)
+    return bool(region_norm == branch_norm or branch_norm in region_norm or region_norm in branch_norm)
+
+
+def _filtered_schedule_days(days: Any, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(days, list):
+        return []
+    filters = _schedule_filter_entities(payload)
+    grouped: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        date_value = str(day.get("date") or "").strip()
+        if not _schedule_date_matches_filter(date_value, filters):
+            continue
+        filtered = _schedule_day_with_time_filter(day, filters)
+        if not filtered:
+            continue
+        key = str(filtered.get("date") or date_value or len(order))
+        if key not in grouped:
+            grouped[key] = dict(filtered)
+            order.append(key)
+            grouped[key]["slots"] = _dedupe_slots(grouped[key].get("slots"))
+            continue
+        existing = grouped[key]
+        merged_slots = _dedupe_slots(list(existing.get("slots") or []) + list(filtered.get("slots") or []))
+        if merged_slots:
+            existing["slots"] = merged_slots
+        if not str(existing.get("start") or "").strip() and str(filtered.get("start") or "").strip():
+            existing["start"] = filtered.get("start")
+        if not str(existing.get("end") or "").strip() and str(filtered.get("end") or "").strip():
+            existing["end"] = filtered.get("end")
+    return [grouped[key] for key in order]
+
+
+def _schedule_day_with_time_filter(day: dict[str, Any], filters: dict[str, str]) -> dict[str, Any]:
+    out = dict(day)
+    slots_raw = day.get("slots")
+    has_time_filter = bool(filters.get("time") or filters.get("time_from") or filters.get("time_to"))
+    if isinstance(slots_raw, list):
+        slots = _dedupe_slots(slots_raw)
+        if has_time_filter:
+            slots = [slot for slot in slots if _schedule_time_matches_filter(slot, filters)]
+        if not slots:
+            return {}
+        out["slots"] = slots
+        return out
+    if has_time_filter and not _schedule_interval_matches_filter(day, filters):
+        return {}
+    return out
+
+
+def _schedule_date_matches_filter(date_value: str, filters: dict[str, str]) -> bool:
+    if not filters.get("date") and not filters.get("date_from") and not filters.get("date_to"):
+        return True
+    if not _ISO_DATE_RE.match(date_value):
+        return False
+    exact = filters.get("date", "")
+    if exact and exact not in {"weekend", "next_week", "this_week"} and _ISO_DATE_RE.match(exact):
+        return date_value == exact
+    date_from = filters.get("date_from", "")
+    date_to = filters.get("date_to", "") or date_from
+    if date_from and date_to and _ISO_DATE_RE.match(date_from) and _ISO_DATE_RE.match(date_to):
+        return date_from <= date_value <= date_to
+    if exact == "weekend":
+        try:
+            return datetime.fromisoformat(date_value).weekday() >= 5
+        except Exception:
+            return False
+    return True
+
+
+def _schedule_time_matches_filter(time_value: str, filters: dict[str, str]) -> bool:
+    value = str(time_value or "").strip()[:5]
+    if not _HHMM_RE.match(value):
+        return False
+    requested = filters.get("time", "")
+    time_from = filters.get("time_from", "")
+    time_to = filters.get("time_to", "")
+    if requested and _HHMM_RE.match(requested) and not time_to:
+        return value == requested[:5]
+    if time_from and value < time_from[:5]:
+        return False
+    if time_to and value > time_to[:5]:
+        return False
+    return True
+
+
+def _schedule_interval_matches_filter(day: dict[str, Any], filters: dict[str, str]) -> bool:
+    start = str(day.get("start") or "").strip()[:5]
+    end = str(day.get("end") or "").strip()[:5]
+    if not (start or end):
+        return False
+    requested = filters.get("time", "")
+    time_from = filters.get("time_from", "")
+    time_to = filters.get("time_to", "")
+    if requested and _HHMM_RE.match(requested) and not time_to:
+        return (not start or start <= requested[:5]) and (not end or requested[:5] <= end)
+    lower = time_from[:5] if time_from else start
+    upper = time_to[:5] if time_to else end
+    if start and upper and upper < start:
+        return False
+    if end and lower and lower > end:
+        return False
+    return True
+
+
+def _dedupe_slots(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        value = str(item or "").strip()
+        if not value:
+            continue
+        value = value[:5] if len(value) >= 5 else value
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _normalize_filter_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower().replace("ё", "е"))
 
 
 def schedule_payload_stats(payload: dict[str, Any]) -> dict[str, Any]:

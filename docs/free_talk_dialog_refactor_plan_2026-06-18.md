@@ -615,7 +615,7 @@ result_context:
 
 ## Этап 7. Schedule Filters / Dedup / Follow-Up
 
-Статус: pending  
+Статус: completed 2026-06-18
 Приоритет: P1
 
 Задачи:
@@ -639,11 +639,7 @@ result_context:
 
 Затрагиваемые файлы:
 
-- `signal_parsers.py`;
-- `followup_policy.py`;
-- `adapter.py`;
 - `rendering.py`;
-- `memory_policy.py`;
 - tests.
 
 ## Этап 8. Price Relevance
