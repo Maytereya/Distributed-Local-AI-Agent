@@ -211,6 +211,41 @@ def _infer_freetalk_reply_kind(
     return "final"
 
 
+def _freetalk_debug_turn_fields(
+    *,
+    text: str,
+    dialog_state: dict[str, Any],
+    session_entity_memory: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        from localragagent.freetalk.dialog_state import dialog_state_from_payload
+        from localragagent.freetalk.turn_policy import classify_turn
+
+        state = dialog_state_from_payload(dialog_state)
+        decision = classify_turn(str(text or ""), dialog_state=state)
+        turn_kind = decision.kind
+        flow_relation = decision.flow_relation
+        source_mode = decision.source_mode
+    except Exception:
+        turn_kind = ""
+        flow_relation = ""
+        source_mode = ""
+    entity_keys = sorted(
+        str(key)
+        for key, value in (session_entity_memory or {}).items()
+        if str(key or "").strip() and str(value or "").strip()
+    )
+    return {
+        "turn_kind": turn_kind,
+        "flow_relation": flow_relation,
+        "source_mode": source_mode,
+        "memory_updates": {
+            "entity_keys": entity_keys,
+            "has_entity_memory": bool(entity_keys),
+        },
+    }
+
+
 def _import_freetalk_runner() -> Any:
     module_name = "localragagent.freetalk.runner"
     try:
@@ -272,6 +307,13 @@ async def _run_freetalk_once(
             "history_tail": history_tail,
             "summary": summary,
         }
+        debug_payload.update(
+            _freetalk_debug_turn_fields(
+                text=text,
+                dialog_state=dialog_state_payload,
+                session_entity_memory=session_entity_memory,
+            )
+        )
 
     return FreeTalkResponse(
         text=str(reply.text or "").strip(),

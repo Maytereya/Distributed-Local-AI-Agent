@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from pathlib import Path
 import sys
 
@@ -124,6 +125,27 @@ class InMemoryPersist:
         extra: dict[str, object] | None = None,
     ) -> None:
         _ = session_id, summary, key_facts, open_loops, extra
+
+
+def test_entity_memory_wrappers_emit_observability_events(caplog):
+    memory = InMemoryMemory()
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    caplog.set_level(logging.INFO, logger="localragagent.freetalk")
+
+    asyncio.run(agent._save_session_entity_memory("obs_memory", {"doctor_name": "Дразнин Антон Владимирович"}))
+    asyncio.run(agent._clear_session_entity_memory_keys("obs_memory", ["doctor_name"]))
+
+    log_text = caplog.text
+    assert "event=entity_memory_updated" in log_text
+    assert "keys=doctor_name" in log_text
+    assert "event=entity_memory_cleared" in log_text
 
 
 class ResultServices:

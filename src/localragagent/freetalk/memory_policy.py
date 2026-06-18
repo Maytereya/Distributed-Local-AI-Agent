@@ -352,3 +352,10 @@ async def remember_doctor_from_tool_result(
         tool_name=tool_name,
         doctor_name=doctor,
     )
+    log_event(
+        "focus_changed",
+        session_id=session_id,
+        focus_type="doctor",
+        focus_value=doctor,
+        source_tool=tool_name,
+    )

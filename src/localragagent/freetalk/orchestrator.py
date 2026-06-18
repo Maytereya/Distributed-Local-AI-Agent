@@ -110,6 +110,24 @@ async def chat(
         flow_relation=turn_decision.flow_relation,
         reason=turn_decision.reason,
     )
+    if turn_decision.source_mode:
+        log_event(
+            "source_mode_selected",
+            session_id=sid,
+            source_mode=turn_decision.source_mode,
+            kind=turn_decision.kind,
+            reason=turn_decision.reason,
+        )
+    if turn_decision.flow_relation and turn_decision.flow_relation != "none":
+        log_event(
+            "active_flow_relation",
+            session_id=sid,
+            flow_relation=turn_decision.flow_relation,
+            flow_kind=str(dialog_state.flow_kind or ""),
+            flow_stage=str(dialog_state.flow_stage or ""),
+            kind=turn_decision.kind,
+            reason=turn_decision.reason,
+        )
     if turn_decision.control_action == CONTROL_ACTION_HANDOFF_OPERATOR:
         await agent.memory.clear_session(sid)
         next_session_id = agent._new_session_id()
