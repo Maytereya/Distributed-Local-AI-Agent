@@ -94,6 +94,20 @@ def test_merge_missing_slots_from_plan_for_test_result_is_granular():
     assert "result_surname" not in missing
 
 
+def test_merge_missing_slots_from_plan_for_test_result_ignores_aux_test_assist_slot():
+    missing = merge_missing_slots_from_plan(
+        ["test_result_status", "test_assist"],
+        entities={},
+        intent="test_result",
+    )
+
+    assert "result_surname" in missing
+    assert "result_year_of_birth" in missing
+    assert "result_analysis_code" in missing
+    assert "result_analysis_number" in missing
+    assert "service_or_analysis_name" not in missing
+
+
 def test_parse_clinical_decision_infers_missing_auth_data_clarify_type():
     decision = parse_clinical_decision(
         {

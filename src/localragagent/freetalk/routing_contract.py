@@ -302,7 +302,9 @@ def merge_missing_slots_from_plan(tool_plan: list[str], entities: dict[str, Any]
             missing.append("doctor_name")
             missing.append("specialty")
 
-    if any(tool in {"price_info", "service_bundle_info", "test_prepare", "test_assist"} for tool in plan):
+    if "test_result_status" not in plan and any(
+        tool in {"price_info", "service_bundle_info", "test_prepare", "test_assist"} for tool in plan
+    ):
         if not service_known and not doctor_known:
             missing.append("service_or_analysis_name")
 
