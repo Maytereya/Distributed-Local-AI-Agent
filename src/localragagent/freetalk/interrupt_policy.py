@@ -181,6 +181,12 @@ def apply_interrupt_precheck(
                 resume_question=_resume_question(state),
             ),
         )
+    if active_flow and _looks_like_general_topic_reentry(user_message=user_message, dialog_state=state):
+        return InterruptPrecheckResult(
+            handled=True,
+            clear_state=True,
+            reentry_message=user_message,
+        )
     if active_flow and _looks_like_topic_switch_candidate(user_message=user_message, dialog_state=state):
         return InterruptPrecheckResult(
             handled=True,
@@ -472,6 +478,21 @@ def _looks_like_topic_switch_candidate(*, user_message: str, dialog_state: Dialo
     if _looks_like_preview_inside_flow(probe, dialog_state):
         return False
     return _looks_like_new_topic_message(probe)
+
+
+def _looks_like_general_topic_reentry(*, user_message: str, dialog_state: DialogState) -> bool:
+    probe = str(user_message or "").strip()
+    if not probe or "?" not in probe or len(probe.split()) < 5:
+        return False
+    if _is_same_flow_continuation(probe, dialog_state):
+        return False
+    if _looks_like_flow_local_signal(probe, dialog_state):
+        return False
+    if looks_like_slot_correction(probe):
+        return False
+    if select_tool_plan(probe, include_meili_tools=True):
+        return False
+    return True
 
 
 def _should_request_interrupt_arbiter(*, user_message: str, dialog_state: DialogState) -> bool:
