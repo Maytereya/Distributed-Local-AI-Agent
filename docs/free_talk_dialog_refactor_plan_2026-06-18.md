@@ -498,7 +498,7 @@ result_context:
 
 ## Этап 4. Source Routing: Web / Contact / Local / Clinical / General
 
-Статус: pending  
+Статус: completed 2026-06-18
 Приоритет: P1
 
 Задачи:
@@ -611,10 +611,6 @@ result_context:
 Затрагиваемые файлы:
 
 - `appointment_policy.py`;
-- `flow_local_policy.py`;
-- `memory_policy.py`;
-- `signal_parsers.py`;
-- `rendering.py`;
 - tests.
 
 ## Этап 7. Schedule Filters / Dedup / Follow-Up
