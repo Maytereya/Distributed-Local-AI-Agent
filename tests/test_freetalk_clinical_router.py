@@ -9,11 +9,14 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from localragagent.freetalk.routing_contract import (
+    ClinicalDecision,
     clarify_type_for_slots,
     clarify_question_for_slots,
     merge_missing_slots_from_plan,
     parse_clinical_decision,
 )
+from localragagent.freetalk.contracts import DialogState
+from localragagent.freetalk.routing_policy import infer_intent_from_tool_plan, resolve_dialog_act
 from localragagent.freetalk.routing_prompting import build_clinical_router_prompt, build_post_tool_verifier_prompt
 
 
@@ -206,6 +209,41 @@ def test_parse_clinical_decision_drops_schedule_narrowing_missing_slots():
     assert decision.missing_slots == []
     assert decision.clarify_type == ""
     assert decision.clarify_question == ""
+
+
+def test_result_status_tool_plan_infers_test_result_before_test_assist():
+    assert infer_intent_from_tool_plan(["test_result_status", "test_assist"]) == "test_result"
+
+
+def test_resolve_dialog_act_overrides_llm_tests_for_result_lookup():
+    act = resolve_dialog_act(
+        user_message="Проверь результат анализа",
+        decision=ClinicalDecision(
+            intent="tests",
+            confidence=0.82,
+            entities={},
+            missing_slots=["service_or_analysis_name"],
+            clarify_question="Уточните, пожалуйста, точное название услуги или анализа.",
+            tool_plan=["test_assist"],
+            source="llm_router",
+        ),
+        dialog_state=DialogState(),
+        active_dialog_state=False,
+        web_search_signal=False,
+        web_search_available=False,
+        medical_regex=True,
+        medical_fallback=True,
+        doctor_followup_hint=False,
+        contextual_followup_hint=False,
+        clinical_min_confidence=0.65,
+        include_meili_tools=False,
+    )
+
+    assert act.intent == "test_result"
+    assert act.tool_plan[:2] == ["test_result_status", "test_assist"]
+    assert act.missing_slots == []
+    assert act.clarify_question == ""
+    assert act.source == "heuristic_result_override"
 
 
 def test_clarify_type_for_slots_marks_identify_and_missing_auth_data():
