@@ -114,6 +114,12 @@ class InMemoryMemory:
         self.meta.pop(sid, None)
 
 
+class GeneralMedicalAnswerAgent(FreeTalkAgent):
+    async def _llm_text(self, prompt: str) -> str:
+        _ = prompt
+        return "Спазм может проявляться ощущением подергивания, дискомфортом и затруднением глубокого вдоха."
+
+
 class InMemoryPersist:
     async def append_snapshot(
         self,
@@ -146,6 +152,27 @@ def test_entity_memory_wrappers_emit_observability_events(caplog):
     assert "event=entity_memory_updated" in log_text
     assert "keys=doctor_name" in log_text
     assert "event=entity_memory_cleared" in log_text
+
+
+def test_general_medical_answer_gets_general_information_marker():
+    agent = GeneralMedicalAnswerAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    reply = asyncio.run(
+        agent._general_reply(
+            "Спазм диафрагмы у взрослых людей. Насколько частая проблема и в каких симптомах может выражаться?",
+            SessionContext(session_id="general_medical_marker", summary="", turns=[]),
+        )
+    )
+
+    assert reply.source == "general_knowledge"
+    assert "Это общая информация, не из данных клиники." in reply.text
+    assert "Спазм может проявляться" in reply.text
 
 
 class ResultServices:

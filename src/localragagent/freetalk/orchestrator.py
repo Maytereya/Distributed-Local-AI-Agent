@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import re
 from typing import Any
 
 from .adapter import FreeTalkAdapter
@@ -25,6 +26,13 @@ from .turn_policy import (
     CONTROL_ACTION_HANDOFF_OPERATOR,
     CONTROL_ACTION_RESET_SESSION,
     classify_turn,
+)
+
+
+_GENERAL_MEDICAL_MARKER = "Это общая информация, не из данных клиники."
+_GENERAL_MEDICAL_TOPIC_RE = re.compile(
+    r"\b(симптом|болезн|заболеван|лечен|лечить|диагноз|диагностик|проблем|спазм|боль|частая|часто)\w*\b",
+    re.I,
 )
 
 
@@ -607,12 +615,18 @@ async def general_reply(agent: Any, user_message: str, context: SessionContext) 
         text = "Уточните, пожалуйста, вопрос. Если это медицинская тема клиники, я запрошу данные через инструменты."
         log_event("general_llm_empty_fallback", level=logging.WARNING, session_id=context.session_id)
     else:
+        if _looks_like_general_medical_answer_context(user_message) and _GENERAL_MEDICAL_MARKER.lower() not in text.lower():
+            text = f"{_GENERAL_MEDICAL_MARKER}\n\n{text}"
         log_event(
             "general_llm_answered",
             session_id=context.session_id,
             answer_chars=len(text),
         )
     return AgentReply(text=text, source="general_knowledge")
+
+
+def _looks_like_general_medical_answer_context(user_message: str) -> bool:
+    return bool(_GENERAL_MEDICAL_TOPIC_RE.search(str(user_message or "")))
 
 
 async def medical_reply(
