@@ -644,20 +644,17 @@ def test_active_appointment_stop_uses_global_interrupt_and_clears_flow():
     asyncio.run(agent.chat("А есть расписание работы Трубина?", session_id))
     asyncio.run(agent.chat("Мне надо записаться к нему. На 16.04, 09:00", session_id))
 
-    confirm = asyncio.run(agent.chat("неправильно, стоп", session_id))
-    assert "прекратить текущий сценарий" in confirm.text.lower()
-
-    state = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
-    assert state["phase"] == "interrupt_confirm_flow"
-
-    stopped = asyncio.run(agent.chat("да", session_id))
-    assert "остановил текущий сценарий" in stopped.text.lower()
+    stopped = asyncio.run(agent.chat("неправильно, стоп", session_id))
+    assert "диалог очищен" in stopped.text.lower()
+    assert stopped.next_session_id
+    assert stopped.next_session_id != session_id
+    assert asyncio.run(memory.get_turn_count(session_id)) == 0
     assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
     assert asyncio.run(memory.get_meta_str(session_id, "clinical_entity_memory", "")) == ""
     assert asyncio.run(memory.get_meta_str(session_id, "last_doctor_name", "")) == ""
 
 
-def test_active_appointment_stop_can_resume_current_flow():
+def test_active_appointment_feedback_resets_without_resume_confirmation():
     memory = InMemoryMemory()
     services = AppointmentServices()
     agent = AppointmentAgent(
@@ -673,16 +670,13 @@ def test_active_appointment_stop_can_resume_current_flow():
     asyncio.run(agent.chat("А есть расписание работы Трубина?", session_id))
     asyncio.run(agent.chat("Мне надо записаться к нему. На 16.04, 09:00", session_id))
 
-    confirm = asyncio.run(agent.chat("это бред", session_id))
-    assert "прекратить текущий сценарий" in confirm.text.lower()
-
-    resume = asyncio.run(agent.chat("нет", session_id))
-    assert "фио" in resume.text.lower()
-
-    resumed_state = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
-    assert resumed_state["intent"] == "appointment"
-    assert resumed_state["phase"] == "appointment_collecting"
-    assert resumed_state["missing_slots"] == ["patient_name"]
+    reset = asyncio.run(agent.chat("это бред", session_id))
+    assert "сбрасываю" in reset.text.lower()
+    assert reset.next_session_id
+    assert reset.next_session_id != session_id
+    assert asyncio.run(memory.get_turn_count(session_id)) == 0
+    assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
+    assert asyncio.run(memory.get_meta_str(session_id, "clinical_entity_memory", "")) == ""
 
 
 def test_active_appointment_schedule_request_returns_cached_schedule_preview():
@@ -767,7 +761,7 @@ def test_tool_handoff_uses_global_session_reset():
     assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
 
 
-def test_hard_reset_session_confirmation_clears_session_and_rotates_id():
+def test_hard_reset_session_clears_session_and_rotates_id():
     memory = InMemoryMemory()
     services = AppointmentServices()
     agent = AppointmentAgent(
@@ -782,13 +776,7 @@ def test_hard_reset_session_confirmation_clears_session_and_rotates_id():
 
     asyncio.run(agent.chat("А есть расписание работы Трубина?", session_id))
 
-    confirm = asyncio.run(agent.chat("очисти диалог", session_id))
-    assert "очистить весь диалог" in confirm.text.lower()
-
-    confirmed_state = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
-    assert confirmed_state["phase"] == "interrupt_confirm_session"
-
-    cleared = asyncio.run(agent.chat("да", session_id))
+    cleared = asyncio.run(agent.chat("очисти диалог", session_id))
     assert "диалог очищен" in cleared.text.lower()
     assert cleared.next_session_id
     assert cleared.next_session_id != session_id

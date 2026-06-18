@@ -202,6 +202,27 @@ def test_address_payload_without_city_fields_is_useful_and_rendered():
     assert "Гагарина" in text
 
 
+def test_address_payload_renders_phone_and_work_time_when_available():
+    text = fallback_render(
+        "address_info",
+        {
+            "addresses": ["г. Самара, пр. Ленина, 5"],
+            "branches": [
+                {
+                    "address": "г. Самара, пр. Ленина, 5",
+                    "phone": "+7 846 277 77 03",
+                    "work_time": "будни 07:00-20:00",
+                }
+            ],
+            "note": "address_info: live regions API",
+        },
+    )
+
+    assert "контакты" in text.lower()
+    assert "+7 846 277 77 03" in text
+    assert "будни 07:00-20:00" in text
+
+
 def test_clinic_data_fallback_detector_handles_typo_and_clinic_context():
     agent = FreeTalkAgent(
         config=_cfg(),

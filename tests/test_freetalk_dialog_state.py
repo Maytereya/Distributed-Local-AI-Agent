@@ -232,6 +232,44 @@ class ResultDialogAgent(FreeTalkAgent):
         return ""
 
 
+class TerminalResultAgent(FreeTalkAgent):
+    async def _route_clinical_decision(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        dialog_state: DialogState,
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        _ = context, dialog_state, remembered_doctor
+        calls = int(getattr(self, "route_calls", 0)) + 1
+        setattr(self, "route_calls", calls)
+        if calls > 1:
+            raise AssertionError("complete result lookup must not re-enter clinical router")
+        return ClinicalDecision(
+            intent="test_result",
+            confidence=0.93,
+            entities={},
+            missing_slots=[
+                "result_surname",
+                "result_year_of_birth",
+                "result_analysis_code",
+                "result_analysis_number",
+            ],
+            clarify_question="Для проверки результата уточните: фамилию пациента, год рождения, код анализа, номер анализа.",
+            tool_plan=["test_result_status"],
+            source="test",
+        )
+
+    async def _llm_json(self, prompt: str) -> dict[str, object]:
+        _ = prompt
+        return {}
+
+    async def _llm_text(self, prompt: str) -> str:
+        _ = prompt
+        return ""
+
+
 class PartialTupleResultAgent(FreeTalkAgent):
     async def _route_clinical_decision(
         self,
@@ -411,6 +449,94 @@ def test_dialog_state_accumulates_result_slots_across_turns():
     assert services.last_entities["filial"] == "Бг"
     assert services.last_entities["number"] == "12345"
     assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
+
+
+def test_result_lookup_complete_tuple_executes_tool_without_router_reentry():
+    memory = InMemoryMemory()
+    services = ResultServices()
+    agent = TerminalResultAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "result_terminal_without_router"
+
+    reply1 = asyncio.run(agent.chat("Проверь результат анализа", session_id))
+    assert "фамилию пациента" in reply1.text.lower()
+
+    reply2 = asyncio.run(agent.chat("Иванов, 1990, Бг, 12345", session_id))
+    assert reply2.tool_name == "test_result_status"
+    assert "результат готов" in reply2.text.lower()
+    assert getattr(agent, "route_calls", 0) == 1
+    assert services.last_entities["surname"] == "Иванов"
+    assert services.last_entities["year"] == "1990"
+    assert services.last_entities["filial"] == "Бг"
+    assert services.last_entities["number"] == "12345"
+
+
+def test_operator_request_bypasses_guard_and_active_slot_flow():
+    memory = InMemoryMemory()
+    services = ResultServices()
+    agent = ResultDialogAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "operator_global_control"
+    state = DialogState(
+        route="clinical",
+        intent="price",
+        missing_slots=["service_or_analysis_name"],
+        phase="collecting",
+        open_question="Уточните услугу.",
+        flow_active=True,
+        flow_kind="clarify",
+        flow_stage="collecting",
+        flow_interruptible=True,
+        expected_slots=["service_or_analysis_name"],
+    )
+    asyncio.run(
+        memory.set_meta_str(
+            session_id,
+            "clinical_dialog_state",
+            json.dumps(dialog_state_payload(state), ensure_ascii=False),
+        )
+    )
+    asyncio.run(memory.set_meta_str(session_id, "ctx_guard_state", "awaiting_immediate"))
+
+    reply = asyncio.run(agent.chat("дай оператора", session_id))
+
+    assert reply.handoff is True
+    assert reply.next_session_id
+    assert "оператор" in reply.text.lower()
+    assert session_id not in memory.meta
+
+
+def test_negative_feedback_resets_even_without_active_flow():
+    memory = InMemoryMemory()
+    services = ResultServices()
+    agent = ResultDialogAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "negative_feedback_global_control"
+    asyncio.run(memory.set_meta_str(session_id, "clinical_entity_memory", "{\"doctor_name\":\"Дразнин\"}"))
+
+    reply = asyncio.run(agent.chat("ты несешь бред", session_id))
+
+    assert reply.next_session_id
+    assert "сбрасываю" in reply.text.lower()
+    assert session_id not in memory.meta
 
 
 def test_flow_local_partial_result_tuple_accumulates_without_llm_second_turn():

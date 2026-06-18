@@ -17,6 +17,11 @@ from .observability import log_event
 from .routing_prompting import build_general_prompt
 from .tool_dispatcher import ToolDispatcher
 from .tool_planning import is_about_agent_query, should_use_web_search
+from .turn_policy import (
+    CONTROL_ACTION_HANDOFF_OPERATOR,
+    CONTROL_ACTION_RESET_SESSION,
+    classify_turn,
+)
 
 
 @dataclass(slots=True)
@@ -89,6 +94,50 @@ async def chat(
         sid,
         history_tail_turns=agent.config.history_tail_turns,
     )
+    dialog_state = await agent._load_dialog_state(sid)
+    session_memory_entities = await agent._load_session_entity_memory(sid)
+    turn_decision = classify_turn(user_message, dialog_state=dialog_state)
+    log_event(
+        "turn_classified",
+        session_id=sid,
+        kind=turn_decision.kind,
+        control_action=turn_decision.control_action,
+        source_mode=turn_decision.source_mode,
+        flow_relation=turn_decision.flow_relation,
+        reason=turn_decision.reason,
+    )
+    if turn_decision.control_action == CONTROL_ACTION_HANDOFF_OPERATOR:
+        await agent.memory.clear_session(sid)
+        next_session_id = agent._new_session_id()
+        log_event(
+            "global_control_handled",
+            level=logging.WARNING,
+            session_id=sid,
+            action=turn_decision.control_action,
+            next_session_id=next_session_id,
+        )
+        return AgentReply(
+            text=turn_decision.reply_text,
+            source="system",
+            next_session_id=next_session_id,
+            handoff=True,
+        )
+    if turn_decision.control_action == CONTROL_ACTION_RESET_SESSION:
+        await agent.memory.clear_session(sid)
+        next_session_id = agent._new_session_id()
+        log_event(
+            "global_control_handled",
+            level=logging.WARNING,
+            session_id=sid,
+            action=turn_decision.control_action,
+            next_session_id=next_session_id,
+        )
+        return AgentReply(
+            text=turn_decision.reply_text,
+            source="system",
+            next_session_id=next_session_id,
+        )
+
     guard_state = await agent.memory.get_meta_str(sid, guard.state_key, guard.none_state)
 
     guard_reply = await agent._handle_guard_decision(
@@ -118,9 +167,7 @@ async def chat(
             await agent._maybe_compact(sid)
         return guard_reply
 
-    dialog_state = await agent._load_dialog_state(sid)
     remembered_doctor = await agent.memory.get_meta_str(sid, agent._last_doctor_name_key(), "")
-    session_memory_entities = await agent._load_session_entity_memory(sid)
     interrupt_precheck = await agent._interrupt_precheck(
         user_message=user_message,
         dialog_state=dialog_state,
@@ -233,7 +280,49 @@ async def chat(
                 if getattr(flow_local_precheck, "next_state", None) is not None:
                     await agent._save_dialog_state(sid, flow_local_precheck.next_state)
                 reentry_message = str(getattr(flow_local_precheck, "reentry_message", "") or "").strip()
-                if reentry_message:
+                terminal_tool_plan = [
+                    str(tool).strip()
+                    for tool in getattr(flow_local_precheck, "terminal_tool_plan", []) or []
+                    if str(tool).strip()
+                ]
+                if terminal_tool_plan:
+                    terminal_entities = getattr(flow_local_precheck, "terminal_entities", None)
+                    if not isinstance(terminal_entities, dict):
+                        terminal_entities = dict(getattr(flow_local_precheck, "save_memory_entities", {}) or {})
+                    terminal_intent = str(getattr(flow_local_precheck, "terminal_intent", "") or "").strip()
+                    if not terminal_intent:
+                        terminal_intent = "unknown"
+                    terminal_state = (
+                        flow_local_precheck.next_state
+                        if getattr(flow_local_precheck, "next_state", None) is not None
+                        else dialog_state
+                    )
+                    dialog_act = DialogAct(
+                        route="clinical",
+                        intent=terminal_intent,
+                        entities=dict(terminal_entities or {}),
+                        confidence=1.0,
+                        missing_slots=[],
+                        clarify_type="",
+                        clarify_question="",
+                        tool_plan=terminal_tool_plan,
+                        response_policy="tool_only",
+                        source="flow_terminal",
+                    )
+                    log_event(
+                        "flow_local_terminal_tool",
+                        session_id=sid,
+                        intent=dialog_act.intent,
+                        tool_plan=",".join(dialog_act.tool_plan),
+                        flow_kind=str(terminal_state.flow_kind or ""),
+                    )
+                    reply = await agent._execute_dialog_act(
+                        user_message=user_message,
+                        context=context,
+                        dialog_act=dialog_act,
+                        dialog_state=terminal_state,
+                    )
+                elif reentry_message:
                     dialog_state = await agent._load_dialog_state(sid)
                     remembered_doctor = await agent.memory.get_meta_str(sid, agent._last_doctor_name_key(), "")
                     dialog_act = await agent._build_dialog_act(

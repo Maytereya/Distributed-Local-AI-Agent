@@ -51,6 +51,9 @@ class FlowLocalPrecheckResult:
     reentry_message: str = ""
     pending_topic_switch_message: str = ""
     pending_continue_message: str = ""
+    terminal_intent: str = ""
+    terminal_tool_plan: list[str] = field(default_factory=list)
+    terminal_entities: dict[str, Any] = field(default_factory=dict)
 
 
 _TOPIC_QUESTION_RE = re.compile(
@@ -313,7 +316,9 @@ def _apply_result_lookup_slot_entities(
             open_question="",
         ),
         save_memory_entities=entities,
-        reprocess_current_message=True,
+        terminal_intent="test_result",
+        terminal_tool_plan=["test_result_status"],
+        terminal_entities=entities,
     )
 
 
@@ -398,7 +403,7 @@ def _looks_like_explicit_switch_part(text: str) -> bool:
 
 
 def _has_meaningful_flow_update(result: FlowLocalPrecheckResult, dialog_state: DialogState) -> bool:
-    if result.reprocess_current_message or result.handoff or result.clear_state:
+    if result.reprocess_current_message or result.handoff or result.clear_state or result.terminal_tool_plan:
         return True
     if result.save_memory_entities:
         return True

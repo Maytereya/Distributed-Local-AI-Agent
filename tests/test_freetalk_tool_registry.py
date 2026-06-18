@@ -29,6 +29,21 @@ def test_freeform_find_request_prefers_web_search():
     assert should_use_web_search(text) is True
 
 
+def test_clinic_contact_query_uses_address_tool_not_web_search():
+    text = "Найди в сети телефоны клиники Наука Самара"
+    assert is_medical_query(text) is True
+    assert should_use_web_search(text, allow_for_medical=True) is False
+    plan = select_tool_plan(text, include_meili_tools=True)
+    assert plan[:1] == ["address_info"]
+
+
+def test_non_clinic_phone_query_is_not_forced_to_clinic_tools():
+    text = "найди в сети телефон справочной аэропорта"
+    assert is_medical_query(text) is False
+    assert should_use_web_search(text, allow_for_medical=True) is True
+    assert select_tool_plan(text, include_meili_tools=True) == []
+
+
 def test_medical_query_does_not_trigger_web_search_by_default():
     text = "Поищи в интернете, кто из терапевтов принимает в клинике"
     assert is_medical_query(text) is True

@@ -227,6 +227,28 @@ def fallback_render(tool_name: str, payload: dict[str, Any]) -> str:
 
     if tool_name == "address_info":
         addresses = [str(x).strip() for x in (payload.get("addresses") or []) if str(x).strip()]
+        branches = [x for x in (payload.get("branches") or []) if isinstance(x, dict)]
+        if branches:
+            has_contact = any(
+                str(row.get("phone") or row.get("work_time") or "").strip()
+                for row in branches
+            )
+            lines = ["Нашел контакты филиалов:" if has_contact else "Нашел адреса филиалов:"]
+            seen: set[str] = set()
+            for row in top_list(branches, 6):
+                addr = str(row.get("address") or row.get("name") or "").strip()
+                if not addr or addr in seen:
+                    continue
+                seen.add(addr)
+                lines.append(f"- {addr}")
+                phone = str(row.get("phone") or "").strip()
+                work_time = str(row.get("work_time") or "").strip()
+                if phone:
+                    lines.append(f"  Телефон: {phone}")
+                if work_time:
+                    lines.append(f"  График: {work_time}")
+            if len(lines) > 1:
+                return "\n".join(lines)
         if addresses:
             lines = ["Нашел адреса филиалов:"]
             lines.extend(f"- {addr}" for addr in top_list(addresses, 6))

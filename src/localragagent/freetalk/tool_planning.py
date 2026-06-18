@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Pattern
 
 from .signal_parsers import extract_specialty_reference, looks_like_specific_doctor_reference
+from .turn_policy import is_clinic_contact_request
 
 
 def _compile(pattern: str) -> Pattern[str]:
@@ -46,7 +47,7 @@ _MEDICAL_TOPIC_RE = _compile(
     r"офтальмолог|лор|отоларинголог|специалист|прием|приём|приним|консультац|"
     r"запис|запись|перенес|отмена\s+запис|"
     r"расписан|график|услуг|процедур|анализ|тест|лаборатор|подготовк|адрес|"
-    r"филиал|результат|узи|мрт|кт|слот|окн"
+    r"филиал|регистратур|результат|узи|мрт|кт|слот|окн"
     r")\w*\b"
 )
 _PRICE_RE = _compile(r"\b(цена|стоим|прайс|сколько\s+стоит)\b")
@@ -61,7 +62,11 @@ _SCHEDULE_RE = _compile(
     r"слот\w*|окн\w*"
     r")\b"
 )
-_ADDRESS_RE = _compile(r"\b(адрес|филиал|где\s+сдать|где\s+находит)\b")
+_ADDRESS_RE = _compile(
+    r"\b("
+    r"адрес|филиал|где\s+сдать|где\s+находит|регистратур\w*"
+    r")\b"
+)
 _RESULT_RE = _compile(r"\b(результат\w*|result|номер\s+анализа|год\s+рожд)\b")
 _DOCTOR_RE = _compile(
     r"\b("
@@ -125,6 +130,8 @@ def _is_explicit_meili_query(text: str) -> bool:
 
 def is_medical_query(text: str) -> bool:
     q = str(text or "")
+    if is_clinic_contact_request(q):
+        return True
     if _is_explicit_meili_query(q):
         return True
     if _is_clinic_news_query(q):
@@ -137,6 +144,8 @@ def is_medical_query(text: str) -> bool:
 def should_use_web_search(text: str, *, allow_for_medical: bool = False) -> bool:
     q = str(text or "")
     if not q.strip():
+        return False
+    if is_clinic_contact_request(q):
         return False
     if _is_explicit_meili_query(q):
         return False
@@ -180,6 +189,9 @@ def select_tool_plan(text: str, *, include_meili_tools: bool) -> list[str]:
         if _NEWS_RE.search(q):
             return ["news_info", "main_index_info"]
         return ["main_index_info", "news_info"]
+
+    if is_clinic_contact_request(q):
+        return ["address_info"]
 
     if _APPOINTMENT_RE.search(q):
         return ["doctors_schedule_week", "doctors_info", "address_info"]
