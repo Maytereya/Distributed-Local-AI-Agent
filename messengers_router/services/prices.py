@@ -42,6 +42,7 @@ from ._prices_helpers import (
     _PRICE_CONSULT_HINT_RE,
     _PRICE_REQUEST_RE,
     _annotate_price_rows_with_care_context,
+    _apply_service_synonyms,
     _build_compound_price_clarify_payload,
     _build_multi_price_payload,
     _build_price_family_payload,
@@ -102,8 +103,10 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         if doctor_id and q_resolved_fio:
             resolved_doctor_fio = q_resolved_fio
             doctor_name = q_resolved_fio
-    entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
-    query_text = str(query or "").strip()
+    # Нормализуем пациентские синонимы к терминам каталога (BUG-2026-06-23-01:
+    # «забор крови»→«взятие крови», «электромиография»→«ЭМГ») до матчинга услуги.
+    entity_service_name = _apply_service_synonyms(_get_first_present(entities, ["service_name", "test_name"]) or "")
+    query_text = _apply_service_synonyms(str(query or "").strip())
     has_price_request = bool(query_text and _PRICE_REQUEST_RE.search(query_text))
     if _is_price_show_all_request(query_text):
         family_payload = _price_family_payload_from_context(entities, show_all=True)
@@ -282,8 +285,10 @@ async def service_bundle_info(
     top_n: int | None = None,
 ) -> dict[str, Any]:
     top_limit = _coerce_top_n(top_n, default=DOCTORS_TOP_N)
-    entity_service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
-    query_text = str(query or "").strip()
+    # Нормализуем пациентские синонимы к терминам каталога (BUG-2026-06-23-01:
+    # «забор крови»→«взятие крови», «электромиография»→«ЭМГ») до матчинга услуги.
+    entity_service_name = _apply_service_synonyms(_get_first_present(entities, ["service_name", "test_name"]) or "")
+    query_text = _apply_service_synonyms(str(query or "").strip())
     if _is_price_show_all_request(query_text):
         family_payload = _price_family_payload_from_context(entities, show_all=True)
         if family_payload:
