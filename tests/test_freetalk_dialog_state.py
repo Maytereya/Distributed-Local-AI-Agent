@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from pathlib import Path
 import sys
 
@@ -113,6 +114,12 @@ class InMemoryMemory:
         self.meta.pop(sid, None)
 
 
+class GeneralMedicalAnswerAgent(FreeTalkAgent):
+    async def _llm_text(self, prompt: str) -> str:
+        _ = prompt
+        return "Спазм может проявляться ощущением подергивания, дискомфортом и затруднением глубокого вдоха."
+
+
 class InMemoryPersist:
     async def append_snapshot(
         self,
@@ -124,6 +131,48 @@ class InMemoryPersist:
         extra: dict[str, object] | None = None,
     ) -> None:
         _ = session_id, summary, key_facts, open_loops, extra
+
+
+def test_entity_memory_wrappers_emit_observability_events(caplog):
+    memory = InMemoryMemory()
+    agent = FreeTalkAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    caplog.set_level(logging.INFO, logger="localragagent.freetalk")
+
+    asyncio.run(agent._save_session_entity_memory("obs_memory", {"doctor_name": "Дразнин Антон Владимирович"}))
+    asyncio.run(agent._clear_session_entity_memory_keys("obs_memory", ["doctor_name"]))
+
+    log_text = caplog.text
+    assert "event=entity_memory_updated" in log_text
+    assert "keys=doctor_name" in log_text
+    assert "event=entity_memory_cleared" in log_text
+
+
+def test_general_medical_answer_gets_general_information_marker():
+    agent = GeneralMedicalAnswerAgent(
+        config=_cfg(),
+        services=None,  # type: ignore[arg-type]
+        memory=None,  # type: ignore[arg-type]
+        persist=None,  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    reply = asyncio.run(
+        agent._general_reply(
+            "Спазм диафрагмы у взрослых людей. Насколько частая проблема и в каких симптомах может выражаться?",
+            SessionContext(session_id="general_medical_marker", summary="", turns=[]),
+        )
+    )
+
+    assert reply.source == "general_knowledge"
+    assert "Это общая информация, не из данных клиники." in reply.text
+    assert "Спазм может проявляться" in reply.text
 
 
 class ResultServices:
@@ -219,6 +268,44 @@ class ResultDialogAgent(FreeTalkAgent):
             },
             missing_slots=[],
             clarify_question="",
+            tool_plan=["test_result_status"],
+            source="test",
+        )
+
+    async def _llm_json(self, prompt: str) -> dict[str, object]:
+        _ = prompt
+        return {}
+
+    async def _llm_text(self, prompt: str) -> str:
+        _ = prompt
+        return ""
+
+
+class TerminalResultAgent(FreeTalkAgent):
+    async def _route_clinical_decision(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        dialog_state: DialogState,
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        _ = context, dialog_state, remembered_doctor
+        calls = int(getattr(self, "route_calls", 0)) + 1
+        setattr(self, "route_calls", calls)
+        if calls > 1:
+            raise AssertionError("complete result lookup must not re-enter clinical router")
+        return ClinicalDecision(
+            intent="test_result",
+            confidence=0.93,
+            entities={},
+            missing_slots=[
+                "result_surname",
+                "result_year_of_birth",
+                "result_analysis_code",
+                "result_analysis_number",
+            ],
+            clarify_question="Для проверки результата уточните: фамилию пациента, год рождения, код анализа, номер анализа.",
             tool_plan=["test_result_status"],
             source="test",
         )
@@ -413,6 +500,121 @@ def test_dialog_state_accumulates_result_slots_across_turns():
     assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
 
 
+def test_result_lookup_complete_tuple_executes_tool_without_router_reentry():
+    memory = InMemoryMemory()
+    services = ResultServices()
+    agent = TerminalResultAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "result_terminal_without_router"
+
+    reply1 = asyncio.run(agent.chat("Проверь результат анализа", session_id))
+    assert "фамилию пациента" in reply1.text.lower()
+
+    reply2 = asyncio.run(agent.chat("Иванов, 1990, Бг, 12345", session_id))
+    assert reply2.tool_name == "test_result_status"
+    assert "результат готов" in reply2.text.lower()
+    assert getattr(agent, "route_calls", 0) == 1
+    assert services.last_entities["surname"] == "Иванов"
+    assert services.last_entities["year"] == "1990"
+    assert services.last_entities["filial"] == "Бг"
+    assert services.last_entities["number"] == "12345"
+
+
+def test_result_lookup_accepts_city_as_result_filial_in_active_flow():
+    memory = InMemoryMemory()
+    services = ResultServices()
+    agent = TerminalResultAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "result_terminal_city_filial"
+
+    reply1 = asyncio.run(agent.chat("Проверь результат анализа", session_id))
+    low = reply1.text.lower()
+    assert "фамилию пациента" in low
+    assert "номер заказа" in low
+
+    reply2 = asyncio.run(agent.chat("Иванов, 1990, Самара, 12345", session_id))
+    assert reply2.tool_name == "test_result_status"
+    assert "результат готов" in reply2.text.lower()
+    assert services.last_entities["surname"] == "Иванов"
+    assert services.last_entities["year"] == "1990"
+    assert services.last_entities["filial"] == "Самара"
+    assert services.last_entities["number"] == "12345"
+
+
+def test_operator_request_bypasses_guard_and_active_slot_flow():
+    memory = InMemoryMemory()
+    services = ResultServices()
+    agent = ResultDialogAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "operator_global_control"
+    state = DialogState(
+        route="clinical",
+        intent="price",
+        missing_slots=["service_or_analysis_name"],
+        phase="collecting",
+        open_question="Уточните услугу.",
+        flow_active=True,
+        flow_kind="clarify",
+        flow_stage="collecting",
+        flow_interruptible=True,
+        expected_slots=["service_or_analysis_name"],
+    )
+    asyncio.run(
+        memory.set_meta_str(
+            session_id,
+            "clinical_dialog_state",
+            json.dumps(dialog_state_payload(state), ensure_ascii=False),
+        )
+    )
+    asyncio.run(memory.set_meta_str(session_id, "ctx_guard_state", "awaiting_immediate"))
+
+    reply = asyncio.run(agent.chat("дай оператора", session_id))
+
+    assert reply.handoff is True
+    assert reply.next_session_id
+    assert "оператор" in reply.text.lower()
+    assert session_id not in memory.meta
+
+
+def test_negative_feedback_resets_even_without_active_flow():
+    memory = InMemoryMemory()
+    services = ResultServices()
+    agent = ResultDialogAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "negative_feedback_global_control"
+    asyncio.run(memory.set_meta_str(session_id, "clinical_entity_memory", "{\"doctor_name\":\"Дразнин\"}"))
+
+    reply = asyncio.run(agent.chat("ты несешь бред", session_id))
+
+    assert reply.next_session_id
+    assert "сбрасываю" in reply.text.lower()
+    assert session_id not in memory.meta
+
+
 def test_flow_local_partial_result_tuple_accumulates_without_llm_second_turn():
     memory = InMemoryMemory()
     services = ResultServices()
@@ -562,6 +764,21 @@ def test_dialog_state_payload_roundtrip_preserves_flow_descriptor():
     assert restored.expected_slots == ["patient_name"]
     assert restored.flow_non_answer_count == 2
     assert restored.flow_non_answer_kind == "uncertainty"
+
+
+def test_dialog_state_from_payload_normalizes_missing_slots_from_redis():
+    restored = dialog_state_from_payload(
+        {
+            "route": "clinical",
+            "intent": "test_result",
+            "missing_slots": ["surname", "birth_year", "made_up_slot"],
+            "expected_slots": ["result_filial", "result_number", "unknown_slot"],
+            "tool_plan": ["test_result_status"],
+        }
+    )
+
+    assert restored.missing_slots == ["result_surname", "result_year_of_birth"]
+    assert restored.expected_slots == ["result_analysis_code", "result_analysis_number"]
 
 
 class FuzzyPriceServices:
@@ -1198,6 +1415,18 @@ class ScheduleFollowupServices:
         }
 
 
+class MisgroundedScheduleFollowupServices(ScheduleFollowupServices):
+    async def match_catalog_doctor(self, raw_text_or_name: str) -> dict[str, str]:
+        probe = str(raw_text_or_name or "").lower()
+        if "хорошо" in probe:
+            return {
+                "status": "exact",
+                "canonical": "Хорошун Оксана Ивановна",
+                "query": "Хорошо",
+            }
+        return await super().match_catalog_doctor(raw_text_or_name)
+
+
 class ScheduleFollowupAgent(FreeTalkAgent):
     async def _route_clinical_decision(
         self,
@@ -1210,6 +1439,103 @@ class ScheduleFollowupAgent(FreeTalkAgent):
         _ = context, dialog_state, remembered_doctor
         text = str(user_message or "").strip().lower()
         if "распис" in text or "дразнин" in text:
+            return ClinicalDecision(
+                intent="doctor_schedule",
+                confidence=0.95,
+                entities={},
+                missing_slots=[],
+                clarify_question="",
+                tool_plan=["doctors_schedule_week", "doctors_info"],
+                source="test",
+            )
+        return ClinicalDecision(
+            intent="unknown",
+            confidence=0.2,
+            entities={},
+            missing_slots=[],
+            clarify_question="",
+            tool_plan=[],
+            source="test",
+        )
+
+    async def _llm_json(self, prompt: str) -> dict[str, object]:
+        _ = prompt
+        return {}
+
+    async def _llm_text(self, prompt: str) -> str:
+        _ = prompt
+        return ""
+
+
+class BroadSpecialtyServices:
+    def __init__(self) -> None:
+        self.schedule_called = False
+
+    async def get_catalog_health(self) -> dict[str, object]:
+        return {"ok": True}
+
+    async def match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = "") -> dict[str, str]:
+        _ = raw_text_or_name, current_service_name
+        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
+
+    async def match_catalog_doctor(self, raw_text_or_name: str) -> dict[str, str]:
+        _ = raw_text_or_name
+        return {"status": "miss", "canonical": "", "query": raw_text_or_name}
+
+    async def doctors_info(self, query: str, entities: dict[str, object]) -> dict[str, object]:
+        _ = query, entities
+        return {
+            "doctors": [
+                {
+                    "fio": "Панина Мария Игоревна",
+                    "specialization": "Дерматовенеролог",
+                    "regions": ["г. Самара, пр. Ленина, 5"],
+                },
+                {
+                    "fio": "Семенов Андрей Петрович",
+                    "specialization": "Дерматовенеролог",
+                    "regions": ["г. Самара, ул. Победы, 83"],
+                },
+            ],
+            "entities_used": {"specialty": "дерматовенеролог"},
+            "note": "doctors_info",
+        }
+
+    async def doctors_schedule_week(self, query: str, entities: dict[str, object]) -> dict[str, object]:
+        _ = query, entities
+        self.schedule_called = True
+        raise AssertionError("schedule must not run until user picks a concrete doctor")
+
+    def tool_handlers(self, *, include_meili_tools: bool) -> dict[str, object]:
+        _ = include_meili_tools
+        return {
+            "doctors_info": self.doctors_info,
+            "doctors_schedule_week": self.doctors_schedule_week,
+        }
+
+
+class BroadSpecialtyAgent(FreeTalkAgent):
+    async def _route_clinical_decision(
+        self,
+        *,
+        user_message: str,
+        context: SessionContext,
+        dialog_state: DialogState,
+        remembered_doctor: str,
+    ) -> ClinicalDecision:
+        _ = context, dialog_state, remembered_doctor
+        text = str(user_message or "").strip().lower()
+        if "дермат" in text:
+            return ClinicalDecision(
+                intent="doctor_info",
+                confidence=0.95,
+                entities={"specialty": "дерматовенеролог"},
+                missing_slots=[],
+                clarify_question="",
+                tool_plan=["doctors_info", "doctors_schedule_week"],
+                source="test",
+            )
+        if "распис" in text or "его" in text:
             return ClinicalDecision(
                 intent="doctor_schedule",
                 confidence=0.95,
@@ -1257,8 +1583,69 @@ def test_contextual_schedule_followup_reuses_doctor_and_filters():
 
     reply2 = asyncio.run(agent.chat("А на Ленина утром?", session_id))
     assert reply2.tool_name == "doctors_schedule_week"
+    assert reply2.handoff is False
     assert len(services.calls) >= 2
     assert services.calls[1]["doctor_name"] == "Дразнин Антон Владимирович"
     assert services.calls[1]["branch_name"] == "Ленина"
     assert services.calls[1]["time"] == "утром"
     assert services.calls[1]["time_from"] == "08:00"
+
+
+def test_anaphoric_schedule_followup_prefers_remembered_doctor_over_false_catalog_hit():
+    memory = InMemoryMemory()
+    services = MisgroundedScheduleFollowupServices()
+    agent = ScheduleFollowupAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "schedule_followup_false_catalog_hit"
+
+    reply1 = asyncio.run(agent.chat("Подскажи расписание Дразнина", session_id))
+    assert reply1.tool_name == "doctors_schedule_week"
+
+    reply2 = asyncio.run(agent.chat("Хорошо! А можешь найти расписание его работы?", session_id))
+
+    assert reply2.tool_name == "doctors_schedule_week"
+    assert len(services.calls) >= 2
+    assert services.calls[1]["doctor_name"] == "Дразнин Антон Владимирович"
+    assert "Хорошун" not in str(services.calls[1])
+
+
+def test_broad_specialty_list_does_not_store_random_doctor_for_anaphora():
+    memory = InMemoryMemory()
+    services = BroadSpecialtyServices()
+    agent = BroadSpecialtyAgent(
+        config=_cfg(),
+        services=services,  # type: ignore[arg-type]
+        memory=memory,  # type: ignore[arg-type]
+        persist=InMemoryPersist(),  # type: ignore[arg-type]
+        system_prompt="FT test",
+        web_search=None,
+    )
+    session_id = "broad_specialty_no_random_doctor"
+
+    first = asyncio.run(agent.chat("Покажи дерматовенерологов", session_id))
+    assert first.tool_name == "doctors_info"
+    assert "панина" in first.text.lower()
+    assert "семенов" in first.text.lower()
+    assert asyncio.run(memory.get_meta_str(session_id, "last_doctor_name", "")) == ""
+
+    stored = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_entity_memory", "")))
+    assert stored["specialty"] == "дерматовенеролог"
+    assert [row["fio"] for row in stored["doctor_options"]] == [
+        "Панина Мария Игоревна",
+        "Семенов Андрей Петрович",
+    ]
+
+    second = asyncio.run(agent.chat("Покажи его расписание", session_id))
+    low = second.text.lower()
+    assert second.tool_name == ""
+    assert "выберите" in low
+    assert "конкретного врача" in low
+    assert "панина" in low
+    assert "семенов" in low
+    assert services.schedule_called is False

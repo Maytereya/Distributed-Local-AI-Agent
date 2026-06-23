@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from .contracts import DialogState
@@ -31,21 +32,29 @@ def extract_primary_doctor_name(tool_name: str, payload: dict[str, Any]) -> str:
 
     doctors = payload.get("doctors") if isinstance(payload, dict) else []
     if isinstance(doctors, list):
+        names: list[str] = []
         for row in doctors:
             if not isinstance(row, dict):
                 continue
             fio = str(row.get("fio") or "").strip()
             if fio:
-                return fio
+                names.append(fio)
+        unique_names = list(dict.fromkeys(names))
+        if len(unique_names) == 1:
+            return unique_names[0]
 
     schedule = payload.get("schedule") if isinstance(payload, dict) else []
     if isinstance(schedule, list):
+        names = []
         for row in schedule:
             if not isinstance(row, dict):
                 continue
             fio = str(row.get("fio") or "").strip()
             if fio:
-                return fio
+                names.append(fio)
+        unique_names = list(dict.fromkeys(names))
+        if len(unique_names) == 1:
+            return unique_names[0]
 
     if tool_name == "doctors_schedule_week":
         direct = str(payload.get("doctor_name") or payload.get("fio") or "").strip()
@@ -53,6 +62,89 @@ def extract_primary_doctor_name(tool_name: str, payload: dict[str, Any]) -> str:
             return direct
 
     return ""
+
+
+def extract_doctor_options(payload: dict[str, Any], *, limit: int = 6) -> list[dict[str, str]]:
+    doctors = payload.get("doctors") if isinstance(payload, dict) else []
+    if not isinstance(doctors, list):
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for row in doctors:
+        if not isinstance(row, dict):
+            continue
+        fio = str(row.get("fio") or "").strip()
+        if not fio or fio in seen:
+            continue
+        seen.add(fio)
+        option = {"fio": fio}
+        spec = str(row.get("specialization") or row.get("specialty") or "").strip()
+        if spec:
+            option["specialization"] = spec
+        regions = row.get("regions") or row.get("addresses")
+        if isinstance(regions, list):
+            clean_regions = [str(x).strip() for x in regions if str(x).strip()]
+            if clean_regions:
+                option["branches"] = "; ".join(clean_regions[:3])
+        out.append(option)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def doctor_choice_clarification_text(memory_entities: dict[str, Any]) -> str:
+    specialty = str(memory_entities.get("specialty") or "").strip()
+    options = memory_entities.get("doctor_options")
+    doctors = [x for x in options if isinstance(x, dict)] if isinstance(options, list) else []
+    if specialty:
+        head = f"Выберите, пожалуйста, конкретного врача по специальности {specialty}, и я покажу его расписание."
+    else:
+        head = "Выберите, пожалуйста, конкретного врача, и я покажу его расписание."
+    if not doctors:
+        return head
+    lines = [head]
+    for row in doctors[:6]:
+        fio = str(row.get("fio") or "").strip()
+        if not fio:
+            continue
+        spec = str(row.get("specialization") or "").strip()
+        branches = str(row.get("branches") or "").strip()
+        suffix_parts = [part for part in (spec, branches) if part]
+        suffix = f" ({'; '.join(suffix_parts)})" if suffix_parts else ""
+        lines.append(f"- {fio}{suffix}")
+    return "\n".join(lines)
+
+
+def should_clarify_doctor_choice_from_memory(
+    *,
+    user_message: str,
+    tool_plan: list[str],
+    entities: dict[str, Any],
+    memory_entities: dict[str, Any],
+    remembered_doctor: str,
+) -> bool:
+    if not DOCTOR_ANAPHORA_RE.search(str(user_message or "")):
+        return False
+    if not ({"doctors_schedule_week", "doctors_info"} & set(tool_plan or [])):
+        return False
+    if str(entities.get("doctor_name") or entities.get("doctor_id") or remembered_doctor or "").strip():
+        return False
+    if str(memory_entities.get("doctor_name") or "").strip():
+        return False
+    return bool(str(memory_entities.get("specialty") or "").strip() or memory_entities.get("doctor_options"))
+
+
+def _normalize_name_probe(value: str) -> str:
+    return re.sub(r"[^a-zа-яё0-9]+", " ", str(value or "").lower().replace("ё", "е")).strip()
+
+
+def _doctor_surname_is_mentioned(text: str, doctor_name: str) -> bool:
+    doctor_norm = _normalize_name_probe(doctor_name)
+    text_norm = _normalize_name_probe(text)
+    if not doctor_norm or not text_norm:
+        return False
+    surname = doctor_norm.split()[0]
+    return bool(surname and surname in text_norm)
 
 
 def extract_schedule_memory_entities(payload: dict[str, Any]) -> dict[str, Any]:
@@ -101,6 +193,15 @@ def tool_payload_memory_entities(tool_name: str, payload: dict[str, Any]) -> dic
     doctor_name = extract_primary_doctor_name(tool_name, payload)
     if doctor_name:
         out["doctor_name"] = doctor_name
+    if tool_name in {"doctors_info", "doctors_schedule_week"}:
+        entities_used_ft = payload.get("entities_used_ft") if isinstance(payload, dict) else {}
+        if isinstance(entities_used_ft, dict):
+            specialty = str(entities_used_ft.get("specialty") or "").strip()
+            if specialty:
+                out["specialty"] = specialty
+        options = extract_doctor_options(payload)
+        if options:
+            out["doctor_options"] = options
     if tool_name in {"price_info", "service_bundle_info", "test_prepare", "test_assist"}:
         entities_used_ft = payload.get("entities_used_ft") if isinstance(payload, dict) else {}
         if isinstance(entities_used_ft, dict):
@@ -171,10 +272,22 @@ async def enrich_entities_from_session_memory(
     uses_result_tool = "test_result_status" in plan
     has_contextual_entities = bool(contextual_entities)
 
-    if uses_doctor_tools and not str(out.get("doctor_name") or "").strip():
+    if uses_doctor_tools:
         remembered = await memory.get_meta_str(session_id, LAST_DOCTOR_NAME_KEY, "")
         remembered = str(remembered or memory_entities.get("doctor_name") or "").strip()
-        if remembered and (
+        current_doctor = str(out.get("doctor_name") or "").strip()
+        if (
+            current_doctor
+            and remembered
+            and DOCTOR_ANAPHORA_RE.search(str(user_message or ""))
+            and not _doctor_surname_is_mentioned(user_message, current_doctor)
+        ):
+            out["doctor_name"] = remembered
+            out["doctor_name_source"] = "session_memory_anaphora"
+            out.pop("doctor_name_match_status", None)
+            out.pop("doctor_name_candidate", None)
+            enriched_keys.append("doctor_name")
+        elif not current_doctor and remembered and (
             active_state
             or has_contextual_entities
             or DOCTOR_ANAPHORA_RE.search(str(user_message or ""))
@@ -264,4 +377,11 @@ async def remember_doctor_from_tool_result(
         session_id=session_id,
         tool_name=tool_name,
         doctor_name=doctor,
+    )
+    log_event(
+        "focus_changed",
+        session_id=session_id,
+        focus_type="doctor",
+        focus_value=doctor,
+        source_tool=tool_name,
     )

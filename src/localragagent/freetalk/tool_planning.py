@@ -6,6 +6,9 @@ import re
 from dataclasses import dataclass
 from typing import Pattern
 
+from .signal_parsers import extract_specialty_reference, looks_like_specific_doctor_reference
+from .turn_policy import is_clinic_contact_request
+
 
 def _compile(pattern: str) -> Pattern[str]:
     return re.compile(pattern, re.I)
@@ -44,7 +47,7 @@ _MEDICAL_TOPIC_RE = _compile(
     r"офтальмолог|лор|отоларинголог|специалист|прием|приём|приним|консультац|"
     r"запис|запись|перенес|отмена\s+запис|"
     r"расписан|график|услуг|процедур|анализ|тест|лаборатор|подготовк|адрес|"
-    r"филиал|результат|узи|мрт|кт|слот|окн"
+    r"филиал|регистратур|результат|узи|мрт|кт|слот|окн"
     r")\w*\b"
 )
 _PRICE_RE = _compile(r"\b(цена|стоим|прайс|сколько\s+стоит)\b")
@@ -59,7 +62,11 @@ _SCHEDULE_RE = _compile(
     r"слот\w*|окн\w*"
     r")\b"
 )
-_ADDRESS_RE = _compile(r"\b(адрес|филиал|где\s+сдать|где\s+находит)\b")
+_ADDRESS_RE = _compile(
+    r"\b("
+    r"адрес|филиал|где\s+сдать|где\s+находит|регистратур\w*"
+    r")\b"
+)
 _RESULT_RE = _compile(r"\b(результат\w*|result|номер\s+анализа|год\s+рожд)\b")
 _DOCTOR_RE = _compile(
     r"\b("
@@ -123,6 +130,8 @@ def _is_explicit_meili_query(text: str) -> bool:
 
 def is_medical_query(text: str) -> bool:
     q = str(text or "")
+    if is_clinic_contact_request(q):
+        return True
     if _is_explicit_meili_query(q):
         return True
     if _is_clinic_news_query(q):
@@ -135,6 +144,8 @@ def is_medical_query(text: str) -> bool:
 def should_use_web_search(text: str, *, allow_for_medical: bool = False) -> bool:
     q = str(text or "")
     if not q.strip():
+        return False
+    if is_clinic_contact_request(q):
         return False
     if _is_explicit_meili_query(q):
         return False
@@ -156,6 +167,15 @@ def is_about_agent_query(text: str) -> bool:
     return bool(_ABOUT_AGENT_RE.search(q))
 
 
+def _is_bare_specialty_schedule_query(text: str) -> bool:
+    q = str(text or "").strip()
+    if not q or not _SCHEDULE_RE.search(q):
+        return False
+    if looks_like_specific_doctor_reference(q):
+        return False
+    return bool(extract_specialty_reference(q))
+
+
 def select_tool_plan(text: str, *, include_meili_tools: bool) -> list[str]:
     q = str(text or "")
 
@@ -170,6 +190,9 @@ def select_tool_plan(text: str, *, include_meili_tools: bool) -> list[str]:
             return ["news_info", "main_index_info"]
         return ["main_index_info", "news_info"]
 
+    if is_clinic_contact_request(q):
+        return ["address_info"]
+
     if _APPOINTMENT_RE.search(q):
         return ["doctors_schedule_week", "doctors_info", "address_info"]
     if _CLINIC_DOCTOR_LIST_RE.search(q):
@@ -177,6 +200,8 @@ def select_tool_plan(text: str, *, include_meili_tools: bool) -> list[str]:
     if _RESULT_RE.search(q):
         return ["test_result_status", "test_assist"]
     if _SCHEDULE_RE.search(q):
+        if _is_bare_specialty_schedule_query(q):
+            return ["doctors_info", "doctors_schedule_week"]
         return ["doctors_schedule_week", "doctors_info"]
     if _PRICE_RE.search(q):
         return ["price_info", "service_bundle_info", "test_assist"]

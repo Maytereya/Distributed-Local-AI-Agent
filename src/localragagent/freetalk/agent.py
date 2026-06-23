@@ -158,6 +158,7 @@ _SESSION_MEMORY_ENTITY_KEYS: tuple[str, ...] = (
     "result_analysis_code",
     "result_analysis_number",
     "doctor_id",
+    "doctor_options",
 )
 
 
@@ -799,9 +800,21 @@ class FreeTalkAgent:
 
     async def _save_session_entity_memory(self, session_id: str, entities: dict[str, Any]) -> None:
         await _save_session_entity_memory_helper(self.memory, session_id, entities)
+        keys = ",".join(sorted(str(key) for key, value in (entities or {}).items() if str(value or "").strip()))
+        log_event(
+            "entity_memory_updated",
+            session_id=session_id,
+            keys=keys,
+        )
 
     async def _clear_session_entity_memory_keys(self, session_id: str, keys: list[str] | tuple[str, ...]) -> None:
         await _clear_session_entity_memory_keys_helper(self.memory, session_id, keys)
+        clear_keys = ",".join(sorted(str(key) for key in (keys or []) if str(key or "").strip()))
+        log_event(
+            "entity_memory_cleared",
+            session_id=session_id,
+            keys=clear_keys,
+        )
 
     @staticmethod
     def _last_doctor_name_key() -> str:

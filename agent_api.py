@@ -149,6 +149,13 @@ class FreeTalkResponse(BaseModel):
         default_factory=list,
         description="Трассировка источников ответа.",
     )
+    outcome: str = Field(default="", description="Технический/бизнес-исход tool_call: ok/not_found/tech_unavailable/error.")
+    degraded: bool = Field(default=False, description="True, если ответ построен в degraded-mode.")
+    handoff: bool = Field(default=False, description="True, если FT просит перевести диалог к оператору.")
+    attachments: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Вложения, например PDF результата анализа.",
+    )
     debug: dict[str, Any] = Field(
         default_factory=dict,
         description="Диагностика FT: dialog_state, session_entity_memory, tool_payload, history_tail.",
@@ -202,6 +209,41 @@ def _infer_freetalk_reply_kind(
     if _freetalk_dialog_state_is_active(dialog_state):
         return "clarify"
     return "final"
+
+
+def _freetalk_debug_turn_fields(
+    *,
+    text: str,
+    dialog_state: dict[str, Any],
+    session_entity_memory: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        from localragagent.freetalk.dialog_state import dialog_state_from_payload
+        from localragagent.freetalk.turn_policy import classify_turn
+
+        state = dialog_state_from_payload(dialog_state)
+        decision = classify_turn(str(text or ""), dialog_state=state)
+        turn_kind = decision.kind
+        flow_relation = decision.flow_relation
+        source_mode = decision.source_mode
+    except Exception:
+        turn_kind = ""
+        flow_relation = ""
+        source_mode = ""
+    entity_keys = sorted(
+        str(key)
+        for key, value in (session_entity_memory or {}).items()
+        if str(key or "").strip() and str(value or "").strip()
+    )
+    return {
+        "turn_kind": turn_kind,
+        "flow_relation": flow_relation,
+        "source_mode": source_mode,
+        "memory_updates": {
+            "entity_keys": entity_keys,
+            "has_entity_memory": bool(entity_keys),
+        },
+    }
 
 
 def _import_freetalk_runner() -> Any:
@@ -258,9 +300,20 @@ async def _run_freetalk_once(
             "dialog_state": dialog_state_payload,
             "session_entity_memory": session_entity_memory,
             "tool_payload": dict(reply.tool_payload or {}),
+            "outcome": str(reply.outcome or ""),
+            "degraded": bool(reply.degraded),
+            "handoff": bool(reply.handoff),
+            "attachments": list(reply.attachments or []),
             "history_tail": history_tail,
             "summary": summary,
         }
+        debug_payload.update(
+            _freetalk_debug_turn_fields(
+                text=text,
+                dialog_state=dialog_state_payload,
+                session_entity_memory=session_entity_memory,
+            )
+        )
 
     return FreeTalkResponse(
         text=str(reply.text or "").strip(),
@@ -282,6 +335,10 @@ async def _run_freetalk_once(
             for fragment in (reply.source_fragments or [])
             if isinstance(fragment, dict)
         ],
+        outcome=str(reply.outcome or ""),
+        degraded=bool(reply.degraded),
+        handoff=bool(reply.handoff),
+        attachments=[dict(item) for item in (reply.attachments or []) if isinstance(item, dict)],
         debug=debug_payload,
     )
 

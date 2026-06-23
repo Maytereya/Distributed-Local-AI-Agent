@@ -965,6 +965,70 @@ def test_doctors_schedule_week_city_samara_calls_unfiltered_region(monkeypatch):
     assert res["entities_used"].get("region_name") is None
 
 
+def test_doctors_schedule_week_branch_name_lenina_is_not_unsupported_city(monkeypatch):
+    svc = Services()
+    calls: list[object] = []
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Иванов Иван",
+                "specialization": "терапевт",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "units": ["Терапия"],
+            }
+        ]
+
+    async def fake_samara_tokens():
+        return {"г. самара, пр. ленина, 5"}
+
+    async def fake_schedule_payload(_last_name, region_name=None):
+        calls.append(region_name)
+        return [
+            {
+                "fio": "Иванов Иван",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "schedule": {"г. Самара, пр. Ленина, 5": [{"date": "2026-03-09", "slots": ["09:00"]}]},
+            }
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+    monkeypatch.setattr(svc, "_samara_region_tokens", fake_samara_tokens)
+    monkeypatch.setattr(svc, "_get_schedule_payload_cached", fake_schedule_payload)
+
+    res = run(svc.doctors_schedule_week("А на Ленина утром?", {"doctor_name": "Иванов", "branch_name": "Ленина"}))
+
+    assert res["schedule"], "Branch follow-up must keep schedule lookup alive"
+    assert res.get("handoff_required") is not True
+    assert res.get("handoff_reason") != "city_not_supported"
+    assert calls and calls[0] == "Ленина"
+    assert res["entities_used"].get("region_name") == "Ленина"
+
+
+def test_doctors_schedule_week_explicit_non_samara_city_still_handoffs(monkeypatch):
+    svc = Services()
+
+    async def fake_ensure_cache():
+        return [
+            {
+                "id": 1,
+                "fio": "Иванов Иван",
+                "specialization": "терапевт",
+                "regions": ["г. Самара, пр. Ленина, 5"],
+                "units": ["Терапия"],
+            }
+        ]
+
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_ensure_cache)
+
+    res = run(svc.doctors_schedule_week("Иванов в Оренбурге", {"doctor_name": "Иванов", "city": "Оренбург"}))
+
+    assert res.get("handoff_required") is True
+    assert res.get("handoff_reason") == "city_not_supported"
+    assert res.get("schedule") == []
+
+
 def test_doctors_schedule_week_cache_hit(monkeypatch):
     svc = Services(
         schedule_fresh_ttl_seconds=30,

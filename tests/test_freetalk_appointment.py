@@ -15,6 +15,7 @@ from localragagent.freetalk.appointment_policy import apply_appointment_precheck
 from localragagent.freetalk.config import FreeTalkConfig
 from localragagent.freetalk.contracts import DialogState, SessionContext
 from localragagent.freetalk.routing_contract import ClinicalDecision
+from localragagent.freetalk.signal_parsers import extract_contextual_entities
 
 
 def _cfg() -> FreeTalkConfig:
@@ -332,6 +333,205 @@ class ToolHandoffAgent(FreeTalkAgent):
         return ""
 
 
+def _appointment_dialog_state(
+    *,
+    phase: str = "appointment_confirm",
+    entities: dict[str, object] | None = None,
+    missing_slots: list[str] | None = None,
+    open_question: str = "",
+) -> DialogState:
+    slots = list(missing_slots or [])
+    flow_stage = "confirm" if "confirm" in phase else "collecting"
+    return DialogState(
+        route="clinical",
+        intent="appointment",
+        entities=dict(entities or {}),
+        missing_slots=slots,
+        phase=phase,
+        open_question=open_question,
+        flow_active=True,
+        flow_kind="appointment",
+        flow_stage=flow_stage,
+        flow_interruptible=True,
+        flow_resume_question=open_question,
+        expected_slots=slots,
+    )
+
+
+def test_appointment_confirmation_time_repair_updates_only_time():
+    text = "Нет, не 09:00, а 11:00"
+    result = apply_appointment_precheck(
+        user_message=text,
+        dialog_state=_appointment_dialog_state(
+            entities={
+                "appointment_action": "book",
+                "doctor_name": "Трубин Алексей Юрьевич",
+                "date": "2026-04-16",
+                "date_from": "2026-04-16",
+                "date_to": "2026-04-16",
+                "time": "09:00",
+                "time_from": "09:00",
+                "branch_name": "г. Самара, пр. Ленина, 5",
+                "patient_name": "Иванов Иван Иванович",
+                "appointment_windows": [
+                    {"date": "2026-04-16", "time": "09:00", "branch_name": "г. Самара, пр. Ленина, 5"},
+                    {"date": "2026-04-16", "time": "11:00", "branch_name": "г. Самара, пр. Ленина, 5"},
+                ],
+            },
+            open_question="Продолжить запись?",
+        ),
+        memory_entities={},
+        contextual_entities=extract_contextual_entities(text),
+    )
+
+    assert result.handled is True
+    assert result.next_state is not None
+    assert result.next_state.phase == "appointment_confirm"
+    assert result.next_state.entities["time"] == "11:00"
+    assert result.next_state.entities["doctor_name"] == "Трубин Алексей Юрьевич"
+    assert result.next_state.entities["patient_name"] == "Иванов Иван Иванович"
+    assert "11:00" in result.reply_text
+
+
+def test_appointment_unavailable_time_keeps_flow_and_offers_cached_alternatives():
+    text = "Нет, в 19:00"
+    result = apply_appointment_precheck(
+        user_message=text,
+        dialog_state=_appointment_dialog_state(
+            entities={
+                "appointment_action": "book",
+                "doctor_name": "Трубин Алексей Юрьевич",
+                "date": "2026-04-16",
+                "date_from": "2026-04-16",
+                "date_to": "2026-04-16",
+                "time": "09:00",
+                "time_from": "09:00",
+                "branch_name": "г. Самара, пр. Ленина, 5",
+                "patient_name": "Иванов Иван Иванович",
+                "appointment_windows": [
+                    {"date": "2026-04-16", "time": "09:00", "branch_name": "г. Самара, пр. Ленина, 5"},
+                    {"date": "2026-04-16", "time": "11:00", "branch_name": "г. Самара, пр. Ленина, 5"},
+                ],
+            },
+            open_question="Продолжить запись?",
+        ),
+        memory_entities={},
+        contextual_entities=extract_contextual_entities(text),
+    )
+
+    assert result.handled is True
+    assert result.next_state is not None
+    low = result.reply_text.lower()
+    assert "нет записи" in low
+    assert "09:00" in result.reply_text
+    assert "11:00" in result.reply_text
+    assert result.next_state.phase == "appointment_collecting"
+    assert "time" in result.next_state.missing_slots
+    assert "time" not in result.next_state.entities
+    assert result.next_state.entities["patient_name"] == "Иванов Иван Иванович"
+
+
+def test_appointment_time_range_uses_cached_available_window():
+    text = "вечером"
+    result = apply_appointment_precheck(
+        user_message=text,
+        dialog_state=_appointment_dialog_state(
+            phase="appointment_collecting",
+            missing_slots=["time"],
+            entities={
+                "appointment_action": "book",
+                "doctor_name": "Трубин Алексей Юрьевич",
+                "date": "2026-04-16",
+                "date_from": "2026-04-16",
+                "date_to": "2026-04-16",
+                "branch_name": "г. Самара, пр. Ленина, 5",
+                "patient_name": "Иванов Иван Иванович",
+                "appointment_windows": [
+                    {"date": "2026-04-16", "time": "11:00", "branch_name": "г. Самара, пр. Ленина, 5"},
+                    {"date": "2026-04-16", "time": "17:30", "branch_name": "г. Самара, пр. Ленина, 5"},
+                ],
+            },
+            open_question="Уточните время.",
+        ),
+        memory_entities={},
+        contextual_entities=extract_contextual_entities(text),
+    )
+
+    assert result.handled is True
+    assert result.next_state is not None
+    assert result.next_state.phase == "appointment_confirm"
+    assert result.next_state.entities["time"] == "17:30"
+    assert "17:30" in result.reply_text
+
+
+def test_appointment_doctor_repair_keeps_flow_without_old_window_context():
+    text = "Нет, не Трубин, а Дразнин"
+    result = apply_appointment_precheck(
+        user_message=text,
+        dialog_state=_appointment_dialog_state(
+            entities={
+                "appointment_action": "book",
+                "doctor_name": "Трубин Алексей Юрьевич",
+                "date": "2026-04-16",
+                "date_from": "2026-04-16",
+                "date_to": "2026-04-16",
+                "time": "09:00",
+                "time_from": "09:00",
+                "branch_name": "г. Самара, пр. Ленина, 5",
+                "patient_name": "Иванов Иван Иванович",
+                "appointment_windows": [
+                    {"date": "2026-04-16", "time": "09:00", "branch_name": "г. Самара, пр. Ленина, 5"},
+                ],
+            },
+            open_question="Продолжить запись?",
+        ),
+        memory_entities={},
+        contextual_entities=extract_contextual_entities(text),
+    )
+
+    assert result.handled is True
+    assert result.next_state is not None
+    assert result.next_state.phase == "appointment_collecting"
+    assert result.next_state.entities["doctor_name"] == "Дразнин"
+    assert result.next_state.entities["patient_name"] == "Иванов Иван Иванович"
+    assert "appointment_windows" not in result.next_state.entities
+    assert "date" in result.next_state.missing_slots
+    assert "time" in result.next_state.missing_slots
+
+
+def test_appointment_patient_name_repair_keeps_selected_window():
+    text = "Нет, ФИО Петров Петр Петрович"
+    result = apply_appointment_precheck(
+        user_message=text,
+        dialog_state=_appointment_dialog_state(
+            entities={
+                "appointment_action": "book",
+                "doctor_name": "Трубин Алексей Юрьевич",
+                "date": "2026-04-16",
+                "date_from": "2026-04-16",
+                "date_to": "2026-04-16",
+                "time": "09:00",
+                "time_from": "09:00",
+                "branch_name": "г. Самара, пр. Ленина, 5",
+                "patient_name": "Иванов Иван Иванович",
+                "appointment_windows": [
+                    {"date": "2026-04-16", "time": "09:00", "branch_name": "г. Самара, пр. Ленина, 5"},
+                ],
+            },
+            open_question="Продолжить запись?",
+        ),
+        memory_entities={},
+        contextual_entities=extract_contextual_entities(text),
+    )
+
+    assert result.handled is True
+    assert result.next_state is not None
+    assert result.next_state.phase == "appointment_confirm"
+    assert result.next_state.entities["patient_name"] == "Петров Петр Петрович"
+    assert result.next_state.entities["time"] == "09:00"
+    assert "Петров Петр Петрович" in result.reply_text
+
+
 def test_schedule_to_appointment_flow_uses_slot_and_finishes_with_handoff():
     memory = InMemoryMemory()
     services = AppointmentServices()
@@ -644,20 +844,17 @@ def test_active_appointment_stop_uses_global_interrupt_and_clears_flow():
     asyncio.run(agent.chat("А есть расписание работы Трубина?", session_id))
     asyncio.run(agent.chat("Мне надо записаться к нему. На 16.04, 09:00", session_id))
 
-    confirm = asyncio.run(agent.chat("неправильно, стоп", session_id))
-    assert "прекратить текущий сценарий" in confirm.text.lower()
-
-    state = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
-    assert state["phase"] == "interrupt_confirm_flow"
-
-    stopped = asyncio.run(agent.chat("да", session_id))
-    assert "остановил текущий сценарий" in stopped.text.lower()
+    stopped = asyncio.run(agent.chat("неправильно, стоп", session_id))
+    assert "диалог очищен" in stopped.text.lower()
+    assert stopped.next_session_id
+    assert stopped.next_session_id != session_id
+    assert asyncio.run(memory.get_turn_count(session_id)) == 0
     assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
     assert asyncio.run(memory.get_meta_str(session_id, "clinical_entity_memory", "")) == ""
     assert asyncio.run(memory.get_meta_str(session_id, "last_doctor_name", "")) == ""
 
 
-def test_active_appointment_stop_can_resume_current_flow():
+def test_active_appointment_feedback_resets_without_resume_confirmation():
     memory = InMemoryMemory()
     services = AppointmentServices()
     agent = AppointmentAgent(
@@ -673,16 +870,13 @@ def test_active_appointment_stop_can_resume_current_flow():
     asyncio.run(agent.chat("А есть расписание работы Трубина?", session_id))
     asyncio.run(agent.chat("Мне надо записаться к нему. На 16.04, 09:00", session_id))
 
-    confirm = asyncio.run(agent.chat("это бред", session_id))
-    assert "прекратить текущий сценарий" in confirm.text.lower()
-
-    resume = asyncio.run(agent.chat("нет", session_id))
-    assert "фио" in resume.text.lower()
-
-    resumed_state = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
-    assert resumed_state["intent"] == "appointment"
-    assert resumed_state["phase"] == "appointment_collecting"
-    assert resumed_state["missing_slots"] == ["patient_name"]
+    reset = asyncio.run(agent.chat("это бред", session_id))
+    assert "сбрасываю" in reset.text.lower()
+    assert reset.next_session_id
+    assert reset.next_session_id != session_id
+    assert asyncio.run(memory.get_turn_count(session_id)) == 0
+    assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
+    assert asyncio.run(memory.get_meta_str(session_id, "clinical_entity_memory", "")) == ""
 
 
 def test_active_appointment_schedule_request_returns_cached_schedule_preview():
@@ -767,7 +961,7 @@ def test_tool_handoff_uses_global_session_reset():
     assert asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")) == ""
 
 
-def test_hard_reset_session_confirmation_clears_session_and_rotates_id():
+def test_hard_reset_session_clears_session_and_rotates_id():
     memory = InMemoryMemory()
     services = AppointmentServices()
     agent = AppointmentAgent(
@@ -782,13 +976,7 @@ def test_hard_reset_session_confirmation_clears_session_and_rotates_id():
 
     asyncio.run(agent.chat("А есть расписание работы Трубина?", session_id))
 
-    confirm = asyncio.run(agent.chat("очисти диалог", session_id))
-    assert "очистить весь диалог" in confirm.text.lower()
-
-    confirmed_state = json.loads(asyncio.run(memory.get_meta_str(session_id, "clinical_dialog_state", "")))
-    assert confirmed_state["phase"] == "interrupt_confirm_session"
-
-    cleared = asyncio.run(agent.chat("да", session_id))
+    cleared = asyncio.run(agent.chat("очисти диалог", session_id))
     assert "диалог очищен" in cleared.text.lower()
     assert cleared.next_session_id
     assert cleared.next_session_id != session_id

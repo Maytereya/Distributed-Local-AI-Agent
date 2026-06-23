@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .adapter_contracts import AdapterToolRequest, AdapterToolResult, PreparedToolCall
@@ -47,6 +48,7 @@ _SERVICE_ENTITY_KEYS: tuple[str, ...] = (
 )
 
 _ADDRESS_ENTITY_KEYS: tuple[str, ...] = (
+    "appointment_action",
     "branch_name",
     "city",
     "service_name",
@@ -56,6 +58,21 @@ _ADDRESS_ENTITY_KEYS: tuple[str, ...] = (
     "doctor_id",
     "specialty",
 )
+
+_PRICE_QUERY_STOPWORDS = {
+    "стоимость",
+    "сколько",
+    "стоит",
+    "цена",
+    "цену",
+    "прайс",
+    "узнать",
+    "подскажите",
+    "подскажи",
+    "пожалуйста",
+    "клиника",
+    "клинике",
+}
 
 
 def _extract_appointment_schedule_context(payload: dict[str, Any]) -> tuple[list[dict[str, str]], list[str]]:
@@ -154,6 +171,106 @@ def _compose_service_name(service_name: str, service_variant: str) -> str:
     return f"{base} {variant}".strip()
 
 
+def _price_query_text(prepared_call: PreparedToolCall) -> str:
+    entities = dict(prepared_call.ft_entities or {})
+    for key in ("service_name", "test_name"):
+        value = str(entities.get(key) or "").strip()
+        if value:
+            return value
+    return str(prepared_call.backend_query or "").strip()
+
+
+def _normalize_price_text(value: str) -> str:
+    text = str(value or "").strip().lower().replace("ё", "е")
+    text = re.sub(r"\bоак\b", " общий анализ крови ", text)
+    text = re.sub(r"[^0-9a-zа-я]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _price_token_key(token: str) -> str:
+    raw = str(token or "").strip().lower()
+    if raw.startswith("общ"):
+        return "общ"
+    if raw.startswith("кров"):
+        return "кров"
+    if raw.startswith("моч"):
+        return "моч"
+    if raw.startswith("анализ"):
+        return "анализ"
+    if raw.startswith("биохим"):
+        return "биохим"
+    if raw.startswith("глюкоз"):
+        return "глюкоз"
+    if len(raw) > 6:
+        return raw[:6]
+    return raw
+
+
+def _price_tokens(value: str) -> list[str]:
+    normalized = _normalize_price_text(value)
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for token in normalized.split():
+        if len(token) < 2 or token in _PRICE_QUERY_STOPWORDS:
+            continue
+        key = _price_token_key(token)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        tokens.append(key)
+    return tokens
+
+
+def _price_relevance_score(row: dict[str, Any], *, query_text: str, query_tokens: list[str]) -> float:
+    name = str(row.get("serviceName") or row.get("name") or "").strip()
+    if not name or not query_tokens:
+        return 0.0
+    row_tokens = set(_price_tokens(name))
+    if not row_tokens:
+        return 0.0
+    query_set = set(query_tokens)
+    overlap = query_set & row_tokens
+    coverage = len(overlap) / max(1, len(query_set))
+    score = coverage * 100.0
+    normalized_query = _normalize_price_text(query_text)
+    normalized_name = _normalize_price_text(name)
+    if normalized_query and normalized_query == normalized_name:
+        score += 120.0
+    elif normalized_query and normalized_query in normalized_name:
+        score += 80.0
+    if query_set <= row_tokens:
+        score += 60.0
+    elif coverage < 0.67:
+        score -= 30.0
+    return score
+
+
+def _rank_price_rows(rows: Any, *, prepared_call: PreparedToolCall) -> tuple[list[dict[str, Any]], bool]:
+    if not isinstance(rows, list):
+        return [], False
+    price_rows = [dict(row) for row in rows if isinstance(row, dict)]
+    if len(price_rows) < 2:
+        return price_rows, False
+    query_text = _price_query_text(prepared_call)
+    query_tokens = _price_tokens(query_text)
+    if not query_tokens:
+        return price_rows, False
+
+    scored = [
+        (
+            _price_relevance_score(row, query_text=query_text, query_tokens=query_tokens),
+            index,
+            row,
+        )
+        for index, row in enumerate(price_rows)
+    ]
+    ranked = [row for _, _, row in sorted(scored, key=lambda item: (-item[0], item[1]))]
+    changed = [row.get("serviceName") or row.get("name") for row in ranked] != [
+        row.get("serviceName") or row.get("name") for row in price_rows
+    ]
+    return ranked, changed
+
+
 def _result_backend_entities(ft_entities: dict[str, Any], original: dict[str, Any]) -> dict[str, Any]:
     backend_entities = {
         key: value
@@ -237,7 +354,7 @@ def _normalize_address_ft_entities(entities: dict[str, Any]) -> dict[str, Any]:
     service_entities = _normalize_service_ft_entities(entities)
     out: dict[str, Any] = {}
     for key in _ADDRESS_ENTITY_KEYS:
-        value = str(service_entities.get(key) or "").strip()
+        value = str(service_entities.get(key) or (entities or {}).get(key) or "").strip()
         if value:
             out[key] = value
     return out
@@ -255,18 +372,24 @@ def _address_backend_entities(ft_entities: dict[str, Any]) -> dict[str, Any]:
         value = str(ft_entities.get(key) or "").strip()
         if value:
             backend[key] = value
+    if str(ft_entities.get("appointment_action") or "").strip().lower() in {"book", "reschedule", "cancel"}:
+        backend["__appointment_mode"] = True
     return backend
 
 
 def _extract_payload_doctor_name(tool_name: str, payload: dict[str, Any]) -> str:
     bucket = payload.get("doctors") if str(tool_name or "").strip() == "doctors_info" else payload.get("schedule")
     if isinstance(bucket, list):
+        names: list[str] = []
         for row in bucket:
             if not isinstance(row, dict):
                 continue
             fio = str(row.get("fio") or "").strip()
             if fio:
-                return fio
+                names.append(fio)
+        unique_names = list(dict.fromkeys(names))
+        if len(unique_names) == 1:
+            return unique_names[0]
 
     entities_used = payload.get("entities_used") if isinstance(payload, dict) else {}
     if isinstance(entities_used, dict):
@@ -582,10 +705,17 @@ class FreeTalkAdapter:
         if str(tool_name or "").strip() == "price_info":
             family_variants = out.get("family_variants")
             prices = out.get("prices")
+            ranking_changed = False
             if isinstance(family_variants, list) and family_variants and not isinstance(prices, list):
+                ranked, ranking_changed = _rank_price_rows(family_variants, prepared_call=prepared_call)
                 visible_limit = max(1, int(out.get("visible_limit") or 5))
                 showing_all = bool(out.get("showing_all"))
-                out["prices"] = list(family_variants if showing_all else family_variants[:visible_limit])
+                out["prices"] = list(ranked if showing_all else ranked[:visible_limit])
+            elif isinstance(prices, list) and prices:
+                ranked, ranking_changed = _rank_price_rows(prices, prepared_call=prepared_call)
+                out["prices"] = ranked
+            if ranking_changed:
+                out["price_ranking_applied"] = True
         normalized_entities_used = _normalize_service_entities_used(tool_name, out, prepared_call)
         if normalized_entities_used:
             out["entities_used_ft"] = normalized_entities_used

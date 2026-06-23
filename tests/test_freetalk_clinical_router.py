@@ -9,11 +9,14 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from localragagent.freetalk.routing_contract import (
+    ClinicalDecision,
     clarify_type_for_slots,
     clarify_question_for_slots,
     merge_missing_slots_from_plan,
     parse_clinical_decision,
 )
+from localragagent.freetalk.contracts import DialogState
+from localragagent.freetalk.routing_policy import infer_intent_from_tool_plan, resolve_dialog_act
 from localragagent.freetalk.routing_prompting import build_clinical_router_prompt, build_post_tool_verifier_prompt
 
 
@@ -91,6 +94,20 @@ def test_merge_missing_slots_from_plan_for_test_result_is_granular():
     assert "result_surname" not in missing
 
 
+def test_merge_missing_slots_from_plan_for_test_result_ignores_aux_test_assist_slot():
+    missing = merge_missing_slots_from_plan(
+        ["test_result_status", "test_assist"],
+        entities={},
+        intent="test_result",
+    )
+
+    assert "result_surname" in missing
+    assert "result_year_of_birth" in missing
+    assert "result_analysis_code" in missing
+    assert "result_analysis_number" in missing
+    assert "service_or_analysis_name" not in missing
+
+
 def test_parse_clinical_decision_infers_missing_auth_data_clarify_type():
     decision = parse_clinical_decision(
         {
@@ -152,6 +169,95 @@ def test_parse_clinical_decision_keeps_non_branch_missing_slots_for_price():
     assert decision.missing_slots == ["service_or_analysis_name"]
     assert decision.clarify_type == ""
     assert decision.clarify_question == ""
+
+
+def test_parse_clinical_decision_normalizes_and_drops_unknown_missing_slots():
+    decision = parse_clinical_decision(
+        {
+            "intent": "test_result",
+            "missing_slots": [
+                "surname",
+                "birth_year",
+                "result_filial",
+                "result_number",
+                "made_up_slot",
+            ],
+            "tool_plan": ["test_result_status"],
+        },
+        include_meili_tools=False,
+    )
+
+    assert decision.missing_slots == [
+        "result_surname",
+        "result_year_of_birth",
+        "result_analysis_code",
+        "result_analysis_number",
+    ]
+
+
+def test_parse_clinical_decision_expands_doctor_or_specialty_missing_slot():
+    decision = parse_clinical_decision(
+        {
+            "intent": "doctor_schedule",
+            "missing_slots": ["doctor_name_or_specialty", "doctor_id"],
+        },
+        include_meili_tools=False,
+    )
+
+    assert decision.missing_slots == ["doctor_name", "specialty"]
+
+
+def test_parse_clinical_decision_drops_schedule_narrowing_missing_slots():
+    decision = parse_clinical_decision(
+        {
+            "intent": "doctor_schedule",
+            "entities": {"doctor_name": "Дразнин Антон Владимирович"},
+            "missing_slots": ["date", "time", "branch_name"],
+            "clarify_type": "narrow_choice",
+            "clarify_question": "На какую неделю нужно расписание?",
+            "tool_plan": ["doctors_schedule_week"],
+        },
+        include_meili_tools=False,
+    )
+
+    assert decision.missing_slots == []
+    assert decision.clarify_type == ""
+    assert decision.clarify_question == ""
+
+
+def test_result_status_tool_plan_infers_test_result_before_test_assist():
+    assert infer_intent_from_tool_plan(["test_result_status", "test_assist"]) == "test_result"
+
+
+def test_resolve_dialog_act_overrides_llm_tests_for_result_lookup():
+    act = resolve_dialog_act(
+        user_message="Проверь результат анализа",
+        decision=ClinicalDecision(
+            intent="tests",
+            confidence=0.82,
+            entities={},
+            missing_slots=["service_or_analysis_name"],
+            clarify_question="Уточните, пожалуйста, точное название услуги или анализа.",
+            tool_plan=["test_assist"],
+            source="llm_router",
+        ),
+        dialog_state=DialogState(),
+        active_dialog_state=False,
+        web_search_signal=False,
+        web_search_available=False,
+        medical_regex=True,
+        medical_fallback=True,
+        doctor_followup_hint=False,
+        contextual_followup_hint=False,
+        clinical_min_confidence=0.65,
+        include_meili_tools=False,
+    )
+
+    assert act.intent == "test_result"
+    assert act.tool_plan[:2] == ["test_result_status", "test_assist"]
+    assert act.missing_slots == []
+    assert act.clarify_question == ""
+    assert act.source == "heuristic_result_override"
 
 
 def test_clarify_type_for_slots_marks_identify_and_missing_auth_data():

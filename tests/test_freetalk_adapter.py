@@ -603,6 +603,66 @@ def test_adapter_normalizes_price_family_variants_to_prices():
     assert result.ft_payload["prices"][1]["serviceName"] == "Общий анализ крови (полный)"
 
 
+def test_adapter_ranks_price_family_variants_by_query_relevance():
+    adapter = FreeTalkAdapter()
+    prepared = adapter.prepare_tool_call(
+        tool_name="price_info",
+        user_message="Сколько стоит общий анализ крови?",
+        entities={"service_name": "общий анализ крови"},
+    )
+
+    result = adapter.normalize_tool_payload(
+        tool_name="price_info",
+        payload={
+            "service_kind": "family_query",
+            "family_variants": [
+                {"serviceName": "Глюкоза крови", "cost": 250},
+                {"serviceName": "Общий анализ мочи", "cost": 320},
+                {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "cost": 390},
+                {"serviceName": "Общий анализ крови (полный)", "cost": 490},
+            ],
+            "visible_limit": 3,
+            "showing_all": False,
+            "note": "price_oak_canonical",
+        },
+        prepared_call=prepared,
+    )
+
+    names = [row["serviceName"] for row in result.ft_payload["prices"]]
+    assert names[:2] == [
+        "Общий анализ крови (Le, Er, Hb, СОЭ)",
+        "Общий анализ крови (полный)",
+    ]
+    assert "Глюкоза крови" not in names[:2]
+    assert result.ft_payload["price_ranking_applied"] is True
+
+
+def test_adapter_ranks_existing_price_rows_by_query_relevance():
+    adapter = FreeTalkAdapter()
+    prepared = adapter.prepare_tool_call(
+        tool_name="price_info",
+        user_message="Стоимость ОАК",
+        entities={"service_name": "ОАК"},
+    )
+
+    result = adapter.normalize_tool_payload(
+        tool_name="price_info",
+        payload={
+            "prices": [
+                {"serviceName": "Глюкоза крови", "cost": 250},
+                {"serviceName": "ОАК", "cost": 390},
+                {"serviceName": "Общий анализ крови развернутый", "cost": 490},
+            ],
+            "note": "price_info",
+        },
+        prepared_call=prepared,
+    )
+
+    names = [row["serviceName"] for row in result.ft_payload["prices"]]
+    assert names[:2] == ["ОАК", "Общий анализ крови развернутый"]
+    assert names[-1] == "Глюкоза крови"
+
+
 def test_adapter_keeps_test_name_for_test_assist_calls():
     adapter = FreeTalkAdapter()
 
@@ -725,6 +785,23 @@ def test_adapter_prepares_address_call_with_branch_mapping():
     assert prepared.backend_entities["city"] == "Самара"
     assert prepared.backend_entities["service_name"] == "ФГДС с седацией"
     assert "branch_name" not in prepared.backend_entities
+
+
+def test_adapter_marks_address_call_as_appointment_mode_for_specialty_booking():
+    adapter = FreeTalkAdapter()
+
+    prepared = adapter.prepare_tool_call(
+        tool_name="address_info",
+        user_message="Хочу записаться к гинекологу",
+        entities={
+            "appointment_action": "book",
+            "specialty": "гинеколог",
+        },
+    )
+
+    assert prepared.ft_entities["appointment_action"] == "book"
+    assert prepared.backend_entities["specialty"] == "гинеколог"
+    assert prepared.backend_entities["__appointment_mode"] is True
 
 
 def test_adapter_normalizes_address_entities_used_to_ft_shape():

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import re
 from typing import Any
 
 from .adapter import FreeTalkAdapter
@@ -13,10 +14,26 @@ from .medical_toolloop import (
     MedicalToolLoopRuntime,
     execute_medical_tool_loop as _execute_medical_tool_loop_helper,
 )
+from .memory_policy import (
+    doctor_choice_clarification_text,
+    should_clarify_doctor_choice_from_memory,
+)
 from .observability import log_event
 from .routing_prompting import build_general_prompt
 from .tool_dispatcher import ToolDispatcher
 from .tool_planning import is_about_agent_query, should_use_web_search
+from .turn_policy import (
+    CONTROL_ACTION_HANDOFF_OPERATOR,
+    CONTROL_ACTION_RESET_SESSION,
+    classify_turn,
+)
+
+
+_GENERAL_MEDICAL_MARKER = "Это общая информация, не из данных клиники."
+_GENERAL_MEDICAL_TOPIC_RE = re.compile(
+    r"\b(симптом|болезн|заболеван|лечен|лечить|диагноз|диагностик|проблем|спазм|боль|частая|часто)\w*\b",
+    re.I,
+)
 
 
 @dataclass(slots=True)
@@ -89,6 +106,68 @@ async def chat(
         sid,
         history_tail_turns=agent.config.history_tail_turns,
     )
+    dialog_state = await agent._load_dialog_state(sid)
+    session_memory_entities = await agent._load_session_entity_memory(sid)
+    turn_decision = classify_turn(user_message, dialog_state=dialog_state)
+    log_event(
+        "turn_classified",
+        session_id=sid,
+        kind=turn_decision.kind,
+        control_action=turn_decision.control_action,
+        source_mode=turn_decision.source_mode,
+        flow_relation=turn_decision.flow_relation,
+        reason=turn_decision.reason,
+    )
+    if turn_decision.source_mode:
+        log_event(
+            "source_mode_selected",
+            session_id=sid,
+            source_mode=turn_decision.source_mode,
+            kind=turn_decision.kind,
+            reason=turn_decision.reason,
+        )
+    if turn_decision.flow_relation and turn_decision.flow_relation != "none":
+        log_event(
+            "active_flow_relation",
+            session_id=sid,
+            flow_relation=turn_decision.flow_relation,
+            flow_kind=str(dialog_state.flow_kind or ""),
+            flow_stage=str(dialog_state.flow_stage or ""),
+            kind=turn_decision.kind,
+            reason=turn_decision.reason,
+        )
+    if turn_decision.control_action == CONTROL_ACTION_HANDOFF_OPERATOR:
+        await agent.memory.clear_session(sid)
+        next_session_id = agent._new_session_id()
+        log_event(
+            "global_control_handled",
+            level=logging.WARNING,
+            session_id=sid,
+            action=turn_decision.control_action,
+            next_session_id=next_session_id,
+        )
+        return AgentReply(
+            text=turn_decision.reply_text,
+            source="system",
+            next_session_id=next_session_id,
+            handoff=True,
+        )
+    if turn_decision.control_action == CONTROL_ACTION_RESET_SESSION:
+        await agent.memory.clear_session(sid)
+        next_session_id = agent._new_session_id()
+        log_event(
+            "global_control_handled",
+            level=logging.WARNING,
+            session_id=sid,
+            action=turn_decision.control_action,
+            next_session_id=next_session_id,
+        )
+        return AgentReply(
+            text=turn_decision.reply_text,
+            source="system",
+            next_session_id=next_session_id,
+        )
+
     guard_state = await agent.memory.get_meta_str(sid, guard.state_key, guard.none_state)
 
     guard_reply = await agent._handle_guard_decision(
@@ -118,9 +197,7 @@ async def chat(
             await agent._maybe_compact(sid)
         return guard_reply
 
-    dialog_state = await agent._load_dialog_state(sid)
     remembered_doctor = await agent.memory.get_meta_str(sid, agent._last_doctor_name_key(), "")
-    session_memory_entities = await agent._load_session_entity_memory(sid)
     interrupt_precheck = await agent._interrupt_precheck(
         user_message=user_message,
         dialog_state=dialog_state,
@@ -233,7 +310,49 @@ async def chat(
                 if getattr(flow_local_precheck, "next_state", None) is not None:
                     await agent._save_dialog_state(sid, flow_local_precheck.next_state)
                 reentry_message = str(getattr(flow_local_precheck, "reentry_message", "") or "").strip()
-                if reentry_message:
+                terminal_tool_plan = [
+                    str(tool).strip()
+                    for tool in getattr(flow_local_precheck, "terminal_tool_plan", []) or []
+                    if str(tool).strip()
+                ]
+                if terminal_tool_plan:
+                    terminal_entities = getattr(flow_local_precheck, "terminal_entities", None)
+                    if not isinstance(terminal_entities, dict):
+                        terminal_entities = dict(getattr(flow_local_precheck, "save_memory_entities", {}) or {})
+                    terminal_intent = str(getattr(flow_local_precheck, "terminal_intent", "") or "").strip()
+                    if not terminal_intent:
+                        terminal_intent = "unknown"
+                    terminal_state = (
+                        flow_local_precheck.next_state
+                        if getattr(flow_local_precheck, "next_state", None) is not None
+                        else dialog_state
+                    )
+                    dialog_act = DialogAct(
+                        route="clinical",
+                        intent=terminal_intent,
+                        entities=dict(terminal_entities or {}),
+                        confidence=1.0,
+                        missing_slots=[],
+                        clarify_type="",
+                        clarify_question="",
+                        tool_plan=terminal_tool_plan,
+                        response_policy="tool_only",
+                        source="flow_terminal",
+                    )
+                    log_event(
+                        "flow_local_terminal_tool",
+                        session_id=sid,
+                        intent=dialog_act.intent,
+                        tool_plan=",".join(dialog_act.tool_plan),
+                        flow_kind=str(terminal_state.flow_kind or ""),
+                    )
+                    reply = await agent._execute_dialog_act(
+                        user_message=user_message,
+                        context=context,
+                        dialog_act=dialog_act,
+                        dialog_state=terminal_state,
+                    )
+                elif reentry_message:
                     dialog_state = await agent._load_dialog_state(sid)
                     remembered_doctor = await agent.memory.get_meta_str(sid, agent._last_doctor_name_key(), "")
                     dialog_act = await agent._build_dialog_act(
@@ -496,12 +615,18 @@ async def general_reply(agent: Any, user_message: str, context: SessionContext) 
         text = "Уточните, пожалуйста, вопрос. Если это медицинская тема клиники, я запрошу данные через инструменты."
         log_event("general_llm_empty_fallback", level=logging.WARNING, session_id=context.session_id)
     else:
+        if _looks_like_general_medical_answer_context(user_message) and _GENERAL_MEDICAL_MARKER.lower() not in text.lower():
+            text = f"{_GENERAL_MEDICAL_MARKER}\n\n{text}"
         log_event(
             "general_llm_answered",
             session_id=context.session_id,
             answer_chars=len(text),
         )
     return AgentReply(text=text, source="general_knowledge")
+
+
+def _looks_like_general_medical_answer_context(user_message: str) -> bool:
+    return bool(_GENERAL_MEDICAL_TOPIC_RE.search(str(user_message or "")))
 
 
 async def medical_reply(
@@ -733,6 +858,47 @@ async def medical_reply(
             )
             return AgentReply(text=confirm_text, source="clinic_data")
 
+    if should_clarify_doctor_choice_from_memory(
+        user_message=user_message,
+        tool_plan=tool_plan,
+        entities=entities,
+        memory_entities=session_memory_entities,
+        remembered_doctor=remembered_doctor,
+    ):
+        clarify_text = doctor_choice_clarification_text(session_memory_entities)
+        choice_entities = dict(agent._public_entities(entities))
+        specialty = str(session_memory_entities.get("specialty") or "").strip()
+        if specialty and not str(choice_entities.get("specialty") or "").strip():
+            choice_entities["specialty"] = specialty
+        next_attempt = int(effective_state.clarify_count or 0) + 1
+        await agent._save_dialog_state(
+            context.session_id,
+            agent._build_clinical_state(
+                intent=dialog_act.intent,
+                entities=choice_entities,
+                candidate_entities=candidate_entities,
+                confirmation_target="",
+                missing_slots=["doctor_name"],
+                clarify_type="identify",
+                tool_plan=tool_plan,
+                confidence=dialog_act.confidence,
+                clarify_count=next_attempt,
+                last_tool=effective_state.last_tool,
+                phase="collecting",
+                open_question=clarify_text,
+            ),
+        )
+        await agent._save_session_entity_memory(context.session_id, choice_entities)
+        log_event(
+            "doctor_choice_clarification_requested",
+            level=logging.WARNING,
+            session_id=context.session_id,
+            intent=dialog_act.intent,
+            specialty=specialty,
+            options_count=len(session_memory_entities.get("doctor_options") or []),
+        )
+        return AgentReply(text=clarify_text, source="clinic_data")
+
     log_event(
         "medical_plan_selected",
         session_id=context.session_id,
@@ -748,11 +914,14 @@ async def medical_reply(
         clarify_type = str(dialog_act.clarify_type or state_clarify_type or "").strip()
         if not clarify_type:
             clarify_type = agent._clarify_type_for_slots(dialog_act.intent, missing_slots)
-        clarify_text = str(dialog_act.clarify_question or "").strip()
-        if not clarify_text:
-            clarify_text = str(effective_state.open_question or "").strip()
-        if not clarify_text:
+        if str(dialog_act.intent or "").strip().lower() == "test_result":
             clarify_text = agent._clarify_question_for_slots(dialog_act.intent, missing_slots)
+        else:
+            clarify_text = str(dialog_act.clarify_question or "").strip()
+            if not clarify_text:
+                clarify_text = str(effective_state.open_question or "").strip()
+            if not clarify_text:
+                clarify_text = agent._clarify_question_for_slots(dialog_act.intent, missing_slots)
         next_attempt = int(effective_state.clarify_count or 0) + 1
         await agent._save_dialog_state(
             context.session_id,

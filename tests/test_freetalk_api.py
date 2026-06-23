@@ -3,6 +3,25 @@ from fastapi.testclient import TestClient
 import agent_api as api_mod
 
 
+def test_freetalk_debug_turn_fields_include_policy_and_memory_keys():
+    fields = api_mod._freetalk_debug_turn_fields(
+        text="найди в сети актуальные рекомендации",
+        dialog_state={
+            "intent": "appointment",
+            "flow_active": True,
+            "flow_kind": "appointment",
+            "missing_slots": ["patient_name"],
+        },
+        session_entity_memory={"doctor_name": "Дразнин Антон Владимирович"},
+    )
+
+    assert fields["turn_kind"] == "web"
+    assert fields["flow_relation"] == "switch"
+    assert fields["source_mode"] == "web"
+    assert fields["memory_updates"]["has_entity_memory"] is True
+    assert fields["memory_updates"]["entity_keys"] == ["doctor_name"]
+
+
 def test_freetalk_generate_once_endpoint_uses_api_key_and_helper(monkeypatch):
     observed = {}
 
@@ -18,6 +37,10 @@ def test_freetalk_generate_once_endpoint_uses_api_key_and_helper(monkeypatch):
             tool_name="doctors_info",
             reply_kind="final",
             source_fragments=[api_mod.FreeTalkSourceFragment(text="ok", source="clinic_data")],
+            outcome="ok",
+            degraded=True,
+            handoff=True,
+            attachments=[{"type": "pdf", "url": "https://example.org/result.pdf"}],
             debug={"dialog_state": {}},
         )
 
@@ -37,6 +60,10 @@ def test_freetalk_generate_once_endpoint_uses_api_key_and_helper(monkeypatch):
     assert body["source"] == "clinic_data"
     assert body["tool_name"] == "doctors_info"
     assert body["reply_kind"] == "final"
+    assert body["outcome"] == "ok"
+    assert body["degraded"] is True
+    assert body["handoff"] is True
+    assert body["attachments"] == [{"type": "pdf", "url": "https://example.org/result.pdf"}]
     assert body["debug"] == {"dialog_state": {}}
     assert observed == {
         "text": "Привет",

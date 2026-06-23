@@ -13,6 +13,7 @@ from localragagent.freetalk.agent import FreeTalkAgent
 from localragagent.freetalk.routing_contract import ClinicalDecision
 from localragagent.freetalk.config import FreeTalkConfig
 from localragagent.freetalk.contracts import AgentReply, DialogState
+from localragagent.freetalk.rendering import fallback_render
 from localragagent.freetalk.tool_dispatcher import ToolDispatcher
 
 
@@ -112,6 +113,114 @@ def test_tool_dispatcher_treats_clarify_text_as_useful_data():
     result = asyncio.run(dispatcher.call("price_info", "цена узи", entities={}))
 
     assert result.found is True
+
+
+def test_tool_dispatcher_marks_result_pdf_attachments_and_outcome():
+    async def ready_pdf(_query: str, _entities: dict[str, object]) -> dict[str, object]:
+        return {
+            "ready": True,
+            "note": "result_ready_pdf",
+            "result_preview": "Ваш результат готов.",
+            "result_links": ["https://example.org/result.pdf"],
+            "result_attachments": [
+                {"type": "pdf", "name": "Результат анализа", "url": "https://example.org/result.pdf"}
+            ],
+        }
+
+    dispatcher = ToolDispatcher({"test_result_status": ready_pdf})
+    result = asyncio.run(dispatcher.call("test_result_status", "результат", entities={}))
+
+    assert result.found is True
+    assert result.outcome == "ok"
+    assert result.attachments == [
+        {"type": "pdf", "name": "Результат анализа", "url": "https://example.org/result.pdf"}
+    ]
+
+
+def test_tool_dispatcher_marks_tech_unavailable_degraded_outcome():
+    async def tech_unavailable(_query: str, _entities: dict[str, object]) -> dict[str, object]:
+        return {
+            "ready": False,
+            "note": "result_tech_unavailable",
+            "result_preview": "По техническим причинам сейчас не удаётся загрузить результаты анализов.",
+            "degraded": True,
+        }
+
+    dispatcher = ToolDispatcher({"test_result_status": tech_unavailable})
+    result = asyncio.run(dispatcher.call("test_result_status", "результат", entities={}))
+
+    assert result.found is True
+    assert result.outcome == "tech_unavailable"
+    assert result.degraded is True
+
+
+def test_result_status_fallback_render_uses_preview_links_and_portal_text():
+    text = fallback_render(
+        "test_result_status",
+        {
+            "ready": True,
+            "note": "result_ready_pdf",
+            "result_preview": "Ваш результат готов.",
+            "result_links": ["https://example.org/result.pdf"],
+        },
+    )
+
+    assert "Ваш результат готов" in text
+    assert "Открыть результат: https://example.org/result.pdf" in text
+
+    portal = fallback_render(
+        "test_result_status",
+        {
+            "ready": True,
+            "note": "result_ready_portal",
+            "result_preview": "Результат по вашим данным готов. Откройте портал результатов.",
+        },
+    )
+    assert portal == "Результат по вашим данным готов. Откройте портал результатов."
+
+
+def test_address_payload_without_city_fields_is_useful_and_rendered():
+    async def regions_without_city(_query: str, _entities: dict[str, object]) -> dict[str, object]:
+        return {
+            "addresses": [
+                "г. Самара, пр. Ленина, 5",
+                "г. Самара, ул. Гагарина, 64",
+            ],
+            "branches": [
+                {"address": "г. Самара, пр. Ленина, 5", "name": "Ленина"},
+                {"address": "г. Самара, ул. Гагарина, 64", "name": "Гагарина"},
+            ],
+            "note": "address_info: live regions without city field",
+        }
+
+    dispatcher = ToolDispatcher({"address_info": regions_without_city})
+    result = asyncio.run(dispatcher.call("address_info", "адреса филиалов", entities={}))
+    text = fallback_render("address_info", result.payload)
+
+    assert result.found is True
+    assert "Ленина" in text
+    assert "Гагарина" in text
+
+
+def test_address_payload_renders_phone_and_work_time_when_available():
+    text = fallback_render(
+        "address_info",
+        {
+            "addresses": ["г. Самара, пр. Ленина, 5"],
+            "branches": [
+                {
+                    "address": "г. Самара, пр. Ленина, 5",
+                    "phone": "+7 846 277 77 03",
+                    "work_time": "будни 07:00-20:00",
+                }
+            ],
+            "note": "address_info: live regions API",
+        },
+    )
+
+    assert "контакты" in text.lower()
+    assert "+7 846 277 77 03" in text
+    assert "будни 07:00-20:00" in text
 
 
 def test_clinic_data_fallback_detector_handles_typo_and_clinic_context():
@@ -247,6 +356,119 @@ def test_render_schedule_details_includes_region_dates_and_slots():
     assert "09:00" in text
     assert "10 апреля" in text
     assert "выберите дату и время" in text.lower()
+
+
+def test_render_schedule_details_deduplicates_slots_and_days():
+    payload = {
+        "schedule": [
+            {
+                "fio": "Дразнин Антон Владимирович",
+                "schedule": {
+                    "г. Самара, пр. Ленина, 5": [
+                        {
+                            "date": "2026-04-10",
+                            "slots": ["09:00", "09:00", "09:30"],
+                        },
+                        {
+                            "date": "2026-04-10",
+                            "slots": ["09:30", "10:00"],
+                        },
+                    ]
+                },
+            }
+        ],
+    }
+
+    text = FreeTalkAgent._render_schedule_details(payload)
+    assert text.count("10 апреля") == 1
+    assert text.count("09:00") == 1
+    assert text.count("09:30") == 1
+    assert text.count("10:00") == 1
+
+
+def test_render_schedule_details_filters_weekend_payload_before_rendering():
+    payload = {
+        "entities_used_ft": {
+            "date": "weekend",
+            "date_from": "2026-05-23",
+            "date_to": "2026-05-24",
+        },
+        "schedule": [
+            {
+                "fio": "Дразнин Антон Владимирович",
+                "schedule": {
+                    "г. Самара, пр. Ленина, 5": [
+                        {"date": "2026-05-22", "slots": ["09:00"]},
+                        {"date": "2026-05-23", "slots": ["10:00"]},
+                        {"date": "2026-05-25", "slots": ["11:00"]},
+                    ]
+                },
+            }
+        ],
+    }
+
+    text = FreeTalkAgent._render_schedule_details(payload)
+    assert "23 мая" in text
+    assert "10:00" in text
+    assert "22 мая" not in text
+    assert "25 мая" not in text
+    assert "09:00" not in text
+    assert "11:00" not in text
+
+
+def test_render_schedule_details_reports_no_slots_when_weekend_filter_excludes_all_days():
+    payload = {
+        "entities_used_ft": {
+            "date": "weekend",
+            "date_from": "2026-05-23",
+            "date_to": "2026-05-24",
+        },
+        "schedule": [
+            {
+                "fio": "Дразнин Антон Владимирович",
+                "schedule": {
+                    "г. Самара, пр. Ленина, 5": [
+                        {"date": "2026-05-22", "slots": ["09:00"]},
+                        {"date": "2026-05-25", "slots": ["11:00"]},
+                    ]
+                },
+            }
+        ],
+    }
+
+    text = FreeTalkAgent._render_schedule_details(payload)
+    assert "22 мая" not in text
+    assert "25 мая" not in text
+    assert "по выбранным фильтрам" in text.lower()
+
+
+def test_render_schedule_details_names_branch_time_filters_when_no_slots_match():
+    payload = {
+        "entities_used_ft": {
+            "branch_name": "Ленина",
+            "time": "утром",
+            "time_from": "08:00",
+            "time_to": "12:00",
+        },
+        "schedule": [
+            {
+                "fio": "Дразнин Антон Владимирович",
+                "schedule": {
+                    "г. Самара, пр. Ленина, 5": [
+                        {"date": "2026-05-22", "slots": ["16:00"]},
+                    ]
+                },
+            }
+        ],
+    }
+
+    text = FreeTalkAgent._render_schedule_details(payload)
+
+    assert "Дразнин" in text
+    assert "Ленина" in text
+    assert "утром" in text
+    assert "16:00" not in text
+    assert "по выбранным фильтрам" in text.lower()
 
 
 def test_doctor_followup_message_detected_with_pronoun_and_memory():

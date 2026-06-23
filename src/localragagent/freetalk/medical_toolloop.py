@@ -13,7 +13,7 @@ from .routing_contract import (
     clarify_type_for_slots,
     merge_missing_slots_from_plan,
 )
-from .contracts import AgentReply
+from .contracts import AgentReply, TOOL_OUTCOME_TECH_UNAVAILABLE
 from .medical_pretool_policy import build_clinical_state
 from .observability import log_event
 
@@ -24,6 +24,29 @@ def _payload_requests_handoff(payload: dict[str, Any]) -> bool:
     if bool(payload.get("handoff_required")):
         return True
     return bool(str(payload.get("handoff_message") or "").strip())
+
+
+def _payload_attachments(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    raw = payload.get("attachments")
+    if not isinstance(raw, list):
+        raw = payload.get("result_attachments")
+    if not isinstance(raw, list):
+        return []
+    return [dict(item) for item in raw if isinstance(item, dict)]
+
+
+def _tech_unavailable_text(payload: dict[str, Any]) -> str:
+    if isinstance(payload, dict):
+        for key in ("result_preview", "handoff_message", "message"):
+            text = str(payload.get(key) or "").strip()
+            if text:
+                return text
+    return (
+        "По техническим причинам сейчас не удаётся загрузить данные клиники. "
+        "Пожалуйста, попробуйте позже или напишите «оператор»."
+    )
 
 
 @dataclass(slots=True)
@@ -104,6 +127,53 @@ async def execute_medical_tool_loop(
             prepared_call.backend_query,
             entities=prepared_call.backend_entities,
         )
+        if isinstance(result.payload, dict) and result.payload:
+            adapted_result = runtime.adapter.normalize_tool_payload(
+                tool_name=result.tool_name,
+                payload=result.payload,
+                prepared_call=prepared_call,
+            )
+            result.payload = dict(adapted_result.ft_payload or {})
+
+        outcome = str(getattr(result, "outcome", "") or "").strip().lower()
+        degraded = bool(getattr(result, "degraded", False)) or bool(
+            result.payload.get("degraded") if isinstance(result.payload, dict) else False
+        )
+        handoff = bool(getattr(result, "handoff", False)) or _payload_requests_handoff(result.payload)
+        attachments = list(getattr(result, "attachments", []) or [])
+        if not attachments:
+            attachments = _payload_attachments(result.payload)
+
+        if outcome == TOOL_OUTCOME_TECH_UNAVAILABLE:
+            log_event(
+                "medical_tool_call_tech_unavailable",
+                level=logging.WARNING,
+                session_id=context.session_id,
+                tool_name=tool_name,
+                degraded=degraded,
+                payload_note=str(result.payload.get("note") or "")[:160],
+            )
+            answer = ""
+            if isinstance(result.payload, dict) and result.payload:
+                answer = await runtime.render_tool_reply(
+                    user_message=context.user_message,
+                    tool_name=result.tool_name,
+                    tool_payload=result.payload,
+                )
+            if not str(answer or "").strip():
+                answer = _tech_unavailable_text(result.payload)
+            await runtime.clear_dialog_state(context.session_id)
+            return AgentReply(
+                text=answer,
+                source="clinic_data",
+                tool_name=result.tool_name,
+                tool_payload=result.payload,
+                handoff=handoff,
+                outcome=outcome,
+                degraded=degraded,
+                attachments=attachments,
+            )
+
         if result.error:
             log_event(
                 "medical_tool_call_error",
@@ -121,13 +191,6 @@ async def execute_medical_tool_loop(
                 payload_note=str(result.payload.get("note") or "")[:160],
             )
             continue
-
-        adapted_result = runtime.adapter.normalize_tool_payload(
-            tool_name=result.tool_name,
-            payload=result.payload,
-            prepared_call=prepared_call,
-        )
-        result.payload = dict(adapted_result.ft_payload or {})
 
         if result.tool_name == "doctors_schedule_week":
             stats = runtime.schedule_payload_stats(result.payload)
@@ -153,13 +216,16 @@ async def execute_medical_tool_loop(
             payload_keys=",".join(sorted(str(k) for k in result.payload.keys())),
             answer_chars=len(answer),
         )
-        if _payload_requests_handoff(result.payload):
+        if handoff:
             return AgentReply(
                 text=answer,
                 source="clinic_data",
                 tool_name=result.tool_name,
                 tool_payload=result.payload,
                 handoff=True,
+                outcome=outcome,
+                degraded=degraded,
+                attachments=attachments,
             )
         verification = await runtime.post_tool_verify(
             user_message=context.user_message,
@@ -224,6 +290,9 @@ async def execute_medical_tool_loop(
                 source="clinic_data",
                 tool_name=result.tool_name,
                 tool_payload=result.payload,
+                outcome=outcome,
+                degraded=degraded,
+                attachments=attachments,
             )
         if verification.answer_policy == "not_found":
             await runtime.clear_dialog_state(context.session_id)
@@ -232,6 +301,9 @@ async def execute_medical_tool_loop(
                 source="clinic_data",
                 tool_name=result.tool_name,
                 tool_payload=result.payload,
+                outcome=outcome,
+                degraded=degraded,
+                attachments=attachments,
             )
         await runtime.clear_dialog_state(context.session_id)
         return AgentReply(
@@ -239,6 +311,9 @@ async def execute_medical_tool_loop(
             source="clinic_data",
             tool_name=result.tool_name,
             tool_payload=result.payload,
+            outcome=outcome,
+            degraded=degraded,
+            attachments=attachments,
         )
 
     log_event(

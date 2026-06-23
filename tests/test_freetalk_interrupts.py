@@ -103,6 +103,30 @@ def test_topic_switch_builds_confirm_state_for_active_flow():
     assert result.next_state.phase == "interrupt_confirm_topic_switch"
 
 
+def test_general_question_during_active_clarify_reenters_without_confirm():
+    result = apply_interrupt_precheck(
+        user_message="Спазм диафрагмы у взрослых людей. Насколько частая проблема и в каких симптомах может выражаться?",
+        dialog_state=DialogState(
+            route="clinical",
+            intent="doctor_info",
+            phase="collecting",
+            open_question="Уточните врача.",
+            flow_active=True,
+            flow_kind="clarify",
+            flow_stage="collecting",
+            flow_interruptible=True,
+            flow_resume_question="Уточните врача.",
+            expected_slots=["doctor_name"],
+        ),
+        memory_entities={},
+    )
+
+    assert result.handled is True
+    assert result.clear_state is True
+    assert result.reentry_message.startswith("Спазм диафрагмы")
+    assert result.next_state is None
+
+
 def test_expected_slot_answer_is_not_treated_as_topic_switch():
     result = apply_interrupt_precheck(
         user_message="Суворов",

@@ -24,6 +24,20 @@ def resolve_dialog_act(
     include_meili_tools: bool,
     fallback_contextual_tool_plan: list[str] | None = None,
 ) -> DialogAct:
+    heuristic_tool_plan = select_tool_plan(
+        user_message,
+        include_meili_tools=include_meili_tools,
+    )
+    if "test_result_status" in heuristic_tool_plan and decision.intent != "test_result":
+        decision.intent = "test_result"
+        decision.tool_plan = heuristic_tool_plan
+        decision.missing_slots = [
+            slot for slot in list(decision.missing_slots or []) if str(slot or "").startswith("result_")
+        ]
+        decision.clarify_type = ""
+        decision.clarify_question = ""
+        decision.source = "heuristic_result_override"
+
     if active_dialog_state:
         if decision.intent == "unknown" and str(dialog_state.intent or "").strip():
             decision.intent = str(dialog_state.intent or "").strip()
@@ -58,10 +72,7 @@ def resolve_dialog_act(
             fallback_reason = "low_confidence"
         else:
             fallback_reason = "heuristic_fallback"
-        fallback_tool_plan = select_tool_plan(
-            user_message,
-            include_meili_tools=include_meili_tools,
-        )
+        fallback_tool_plan = list(heuristic_tool_plan)
         if not fallback_tool_plan and contextual_followup_hint:
             fallback_tool_plan = list(fallback_contextual_tool_plan or [])
         fallback_intent = decision.intent
@@ -95,6 +106,8 @@ def resolve_dialog_act(
 
 def infer_intent_from_tool_plan(tool_plan: list[str]) -> str:
     plan = list(tool_plan or [])
+    if "test_result_status" in plan:
+        return "test_result"
     if "doctors_schedule_week" in plan:
         return "doctor_schedule"
     if "doctors_info" in plan:
@@ -105,8 +118,6 @@ def infer_intent_from_tool_plan(tool_plan: list[str]) -> str:
         return "prepare"
     if "test_assist" in plan:
         return "tests"
-    if "test_result_status" in plan:
-        return "test_result"
     if "address_info" in plan:
         return "address"
     if "news_info" in plan:
