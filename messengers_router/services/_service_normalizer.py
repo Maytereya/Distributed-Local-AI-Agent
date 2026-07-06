@@ -21,10 +21,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from agent_logic_2 import config as _cfg
-
 from ..llm_runtime import generate_text
 from ..prompt_registry import load_prompt_text
+from ..runtime_config import config as _cfg
 from ..russian_nlu import normalize_ru
 from ..service_phrase import extract_service_phrase
 from ._prices_helpers import _PRICE_REQUEST_RE
@@ -34,6 +33,7 @@ logger = logging.getLogger(__name__)
 # Kill-switch: [MESSENGER_ROUTER] llm_service_normalization = false в config.ini
 # (правится руками на хосте, рестарт контейнера; по умолчанию ВКЛ — слой fail-open
 # и срабатывает только на промахах, где сегодня пациент получает бесполезный clarify).
+# Host-конфиг ТОЛЬКО через runtime_config-порт (правило arch-гардрейла проекта).
 _ENABLED: bool = bool(getattr(_cfg, "MR_LLM_SERVICE_NORMALIZATION", True))
 
 _CACHE: dict[str, str | None] = {}
