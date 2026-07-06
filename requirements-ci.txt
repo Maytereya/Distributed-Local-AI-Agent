@@ -1,0 +1,17 @@
+# Минимальный набор зависимостей для CI-джоба lint+hermetic-tests
+# (.github/workflows/tests.yml). Версии = пины из requirements.txt (локальный venv),
+# чтобы CI и локальный гейт проверяли одно и то же. Полный requirements.txt (325
+# пинов, torch и пр.) в CI не ставим: долго и не нужно герметичному подмножеству.
+# Набор выведен AST-сканом импортов цепочки messengers_router + agent_logic_2
+# (config/ollama_settings/nayka_api) + hermetic-тесты (см. workflow).
+fastapi==0.115.9
+meilisearch==0.33.1
+ollama==0.5.1
+pandas==2.2.3
+pydantic==2.10.5
+PyYAML==6.0.2
+requests==2.32.3
+ruff==0.9.9
+tenacity==8.5.0
+urllib3==2.3.0
+pytest==9.0.2
