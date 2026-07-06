@@ -133,7 +133,13 @@ ENV/
 env.bak/
 venv.bak/
 agent_logic_2/config.ini
-agent_logic_2/config.py
+# NB: config.PY (код-модуль) — НЕ игнорируем: он tracked и обязан быть в git.
+# Строка `agent_logic_2/config.py` убрана 2026-06-26 — была миной (свежедобавленные
+# правки файла git add пропускал бы при пересоздании файла).
+
+# macOS
+.DS_Store
+**/.DS_Store
 
 # Spyder project settings
 .spyderproject
