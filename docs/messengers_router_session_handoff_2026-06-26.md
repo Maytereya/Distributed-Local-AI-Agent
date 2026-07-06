@@ -21,7 +21,7 @@
 | П3 | `d5bb6b0` | stage_timings → debug-ответ (после деплоя); scripts/measure_latency_baseline.py; baseline: rule p50=1.59с, llm p50=17.3с (docs/latency_baseline_2026-06-26.json) |
 | П4 | `8cf39ca` | docs/ops_ollama_quant_procedure.md — **исполняет владелец на сервере** (квант q8/q4 + NUM_PARALLEL, A/B через eval) |
 | П5 | `aa4f4ef` | LLM-нормализация услуг (вариант B): `services/_service_normalizer.py`, интеграция в match_catalog_service (fallback-only → верификация → fuzzy-кандидат → confirm-флоу). Промпт `service_normalizer` ×2 локации. Kill-switch `[MESSENGER_ROUTER] llm_service_normalization=false`. 17 тестов |
-| П6 | (коммит после гейта — см. git log: «feat(price): корзина анализов S1-S3») | сплиттер `\n`/`•`; сегментация сплошного списка ПО КАТАЛОГУ с гардами (анти-глотание соседей, анти-подмена B1≠B12, алиасы в обход гардов); честный «Не распознал: …». 8 тестов `test_multi_price_cart.py` |
+| П6 | `4ebe6a1` + **hotfix следом** («fix(lab): распаковка (items, unrecognized)…») | сплиттер `\n`/`•`; сегментация сплошного списка ПО КАТАЛОГУ с гардами (анти-глотание соседей, анти-подмена B1≠B12, алиасы в обход гардов); честный «Не распознал: …». 8 тестов `test_multi_price_cart.py`. ⚠️ Инцидент: `4ebe6a1` ушёл при КРАСНОМ гейте (10 failed — пропущен второй вызывающий `lab_tests.py:162` при смене сигнатуры на tuple); hotfix закоммичен через цепочку с жёстким стопом по exit-коду. Урок в памяти `feedback-gate-exit-code-discipline`: коммит ТОЛЬКО через `pytest && git commit`, греп вызывающих по всему репо при смене сигнатур |
 
 Все под полным гейтом (последний: 1158 passed + П6). Bug-log: FEAT-2026-06-26-П5/П6.
 

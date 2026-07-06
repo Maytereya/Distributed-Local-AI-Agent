@@ -154,12 +154,14 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
         return _test_assist_clarify_response(entities, note="test_assist source unavailable")
     rows = [p for p in price_rows if isinstance(p, dict)]
 
-    # Мульти-услуговый запрос (через `,` / `;` / ` и ` / `+` / `/`): резолвим
-    # каждую услугу через каталог с алиасами (ОАК→общий анализ крови и т.п.),
-    # отдаём LLM реальные цены ВСЕХ найденных позиций. LLM не сможет
-    # «дофантазировать» недостающие (защищено правилом промпта). Однопредметные
-    # запросы и пробельные перечисления идут стандартным single-bag путём ниже.
-    multi_items = _resolve_multi_price_items(str(query or ""), rows)
+    # Мульти-услуговый запрос (через `,` / `;` / ` и ` / `+` / `/`, а после П6 —
+    # и переносы/сплошные списки): резолвим каждую услугу через каталог с алиасами
+    # (ОАК→общий анализ крови и т.п.), отдаём LLM реальные цены ВСЕХ найденных
+    # позиций. LLM не сможет «дофантазировать» недостающие (защищено правилом
+    # промпта). Однопредметные запросы идут стандартным single-bag путём ниже.
+    # П6: функция возвращает (items, unrecognized); нераспознанные здесь не
+    # рендерятся (test_assist-путь), их честный показ — price_info/multi payload.
+    multi_items, _multi_unrecognized = _resolve_multi_price_items(str(query or ""), rows)
     if multi_items:
         merged: list[dict[str, Any]] = []
         seen: set[str] = set()

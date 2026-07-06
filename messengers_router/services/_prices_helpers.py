@@ -2312,11 +2312,8 @@ def _segment_items_by_catalog(
         low = tok.lower()
         return low in _MULTI_PRICE_NOISE_WORDS or len(low) < 2
 
-    def _window_ok(window_tokens: list[str], canonical: str) -> bool:
-        """Анти-глотание соседей: у МНОГОсловного окна КАЖДЫЙ содержательный токен
-        обязан находиться в каноне (префикс-4 по нормализованным словам). Иначе
-        фаззи-resolve принимает окно за счёт одного сильного токена и съедает
-        чужие позиции («ОАК ОАМ ОБЩИЙ» → Общий анализ крови, ОАМ пропала)."""
+    def _tokens_covered(window_tokens: list[str], canonical: str) -> bool:
+        """Каждый содержательный токен находится в каноне (префикс-4)."""
         canon_words = [w for w in _normalise_input(canonical).split() if w]
         for tok in window_tokens:
             norm = _normalise_input(tok)
@@ -2326,6 +2323,20 @@ def _segment_items_by_catalog(
             if not any(w.startswith(pref) or norm.startswith(w[:4]) for w in canon_words):
                 return False
         return True
+
+    # Анти-шинковка одиночной многословной услуги («cito общий анализ крови»,
+    # «узи брюшной полости»): если ВЕСЬ контент-ран резолвится как ОДНА услуга
+    # И каждый его токен покрыт каноном — это не список (single-путь разберётся).
+    # Покрытие обязательно: мега-список тоже фаззи-резолвится «во что-то одно»
+    # по сильному токену, но канон не покрывает остальные позиции.
+    content_tokens = [t for t in tokens if not _is_noise(t)]
+    if len(content_tokens) < 4:
+        return [], []
+    whole_canonical = resolve_price_service_name_from_catalog(
+        " ".join(content_tokens), rows=retail_rows
+    )
+    if whole_canonical and _tokens_covered(content_tokens, whole_canonical):
+        return [], []
 
     recognized: list[str] = []
     unrecognized: list[str] = []
@@ -2354,7 +2365,9 @@ def _segment_items_by_catalog(
                 # обязан присутствовать в каноне («Витамин B1» ≠ «Витамин B12»).
                 if not _scorer_match_has_distinctive_overlap(candidate, canonical):
                     continue
-                if window > 1 and not _window_ok(window_tokens, canonical):
+                # Анти-глотание соседей: у многословного окна КАЖДЫЙ токен обязан
+                # быть в каноне («ОАК ОАМ ОБЩИЙ» → одна услуга — запрещено).
+                if window > 1 and not _tokens_covered(window_tokens, canonical):
                     continue
             recognized.append(candidate)
             i += window
