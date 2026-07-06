@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import sys
+import threading
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta, datetime, date
@@ -152,6 +154,49 @@ try:
     SCHEDULE_LOOKAHEAD_DAYS = max(7, int(os.getenv("NAUKA_SCHEDULE_LOOKAHEAD_DAYS", "14")))
 except Exception:
     SCHEDULE_LOOKAHEAD_DAYS = 14
+
+# TTL-кэш «шапки» find_doctor_schedule: справочники site_regions + /doctors +
+# /doctorCompanyUnits + /doctorRegions меняются ~раз в день (прецедент:
+# doctors_mem_ttl_seconds=300 в messengers_router/services/core.py), но
+# запрашивались realtime на КАЖДЫЙ запрос расписания — 4 последовательных HTTP,
+# ~4-5с из 6.4с (замер 2026-07-07, после П7-параллелизации fanout стали узким
+# местом). СЛОТЫ (/doctorSchedule + /doctorScheduleCells) НЕ кэшируются —
+# требование владельца: слоты живые на каждый запрос, «даже предыдущей минуты»
+# не показываем. 0 (и меньше) = кэш выключен, прежнее поведение.
+try:
+    SCHEDULE_REFS_TTL_SECONDS = float(os.getenv("NAUKA_SCHEDULE_REFS_TTL_SECONDS", "300"))
+except Exception:
+    SCHEDULE_REFS_TTL_SECONDS = 300.0
+
+_SCHEDULE_REFS_CACHE: dict = {}
+_SCHEDULE_REFS_LOCK = threading.Lock()
+
+
+def _cached_schedule_ref(key: str, fetch):
+    """Отдать справочник из TTL-кэша или сходить в CRM.
+
+    Ошибка fetch пробрасывается и НЕ кэшируется; пустой/falsy результат тоже не
+    кэшируется (site_regions при сбое мягко отдаёт [] — нельзя отравить кэш
+    пустым списком на весь TTL). Fetch идёт вне лока: конкурентные промахи могут
+    сходить в CRM параллельно (не хуже прежнего поведения без кэша).
+
+    :param key: имя справочника (ключ кэша)
+    :param fetch: thunk, выполняющий реальный запрос
+    :return: результат fetch (возможно, из кэша)
+    """
+
+    ttl = SCHEDULE_REFS_TTL_SECONDS
+    if ttl <= 0:
+        return fetch()
+    with _SCHEDULE_REFS_LOCK:
+        hit = _SCHEDULE_REFS_CACHE.get(key)
+        if hit is not None and (time.monotonic() - hit[0]) < ttl:
+            return hit[1]
+    value = fetch()
+    if value:
+        with _SCHEDULE_REFS_LOCK:
+            _SCHEDULE_REFS_CACHE[key] = (time.monotonic(), value)
+    return value
 
 
 def _normalise_text(text: str) -> str:
@@ -970,8 +1015,8 @@ def find_doctor_schedule(
     # Лимитер на количество врачей, чтобы не штурмовать API при большом числе совпадений
     MAX_DOCS = int(os.getenv("NAUKA_MAX_SCHEDULE_DOCS", "5"))
 
-    # --- Получаем регионы ---
-    regions = site_regions(realtime=True)
+    # --- Получаем регионы (шапка: TTL-кэш, при сбое site_regions отдаёт []) ---
+    regions = _cached_schedule_ref("site_regions", lambda: site_regions(realtime=True))
     region_map = {r["id"]: _region_display_name(r) for r in regions}
     region_id = None
     if region_name:
@@ -979,11 +1024,14 @@ def find_doctor_schedule(
         if not region_id:
             return f"Регион '{region_name}' не найден."
 
-    # --- Получаем врачей ---
+    # --- Получаем врачей (шапка: TTL-кэш; ошибка не кэшируется) ---
+    def _fetch_doctors_ref():
+        resp = _session_get(f"{base_url}/doctors", realtime=True)
+        resp.raise_for_status()
+        return resp.json()
+
     try:
-        doctors_resp = _session_get(f"{base_url}/doctors", realtime=True)
-        doctors_resp.raise_for_status()
-        doctors = doctors_resp.json()
+        doctors = _cached_schedule_ref("doctors", _fetch_doctors_ref)
     except (requests.RequestException, ValueError) as e:
         logger.warning(
             "find_doctor_schedule: /doctors fetch failed last_name=%r error=%s",
@@ -1000,14 +1048,20 @@ def find_doctor_schedule(
         matched_ids = sorted(matched_doctors.keys(), key=lambda i: doctor_dict[i]["fio"])[:MAX_DOCS]
         matched_doctors = {i: doctor_dict[i] for i in matched_ids}
 
-    # --- Получаем companyUnit и doctorRegions ---
+    # --- Получаем companyUnit и doctorRegions (шапка: TTL-кэш; ошибки не кэшируются) ---
+    def _fetch_company_units_ref():
+        resp = _session_get(f"{base_url}/doctorCompanyUnits", realtime=True)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _fetch_doctor_regions_ref():
+        resp = _session_get(f"{base_url}/doctorRegions", realtime=True)
+        resp.raise_for_status()
+        return resp.json()
+
     try:
-        mappings = _session_get(f"{base_url}/doctorCompanyUnits", realtime=True)
-        mappings.raise_for_status()
-        mappings = mappings.json()
-        dr_regions = _session_get(f"{base_url}/doctorRegions", realtime=True)
-        dr_regions.raise_for_status()
-        dr_regions = dr_regions.json()
+        mappings = _cached_schedule_ref("doctor_company_units", _fetch_company_units_ref)
+        dr_regions = _cached_schedule_ref("doctor_regions", _fetch_doctor_regions_ref)
     except (requests.RequestException, ValueError) as e:
         logger.warning(
             "find_doctor_schedule: doctorCompanyUnits/doctorRegions fetch failed "

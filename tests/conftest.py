@@ -33,3 +33,19 @@ def _isolate_samara_snapshot(tmp_path, monkeypatch):
     snap = tmp_path / "samara_branches_snapshot.json"
     monkeypatch.setattr(_sb, "_snapshot_path", lambda: snap)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_schedule_refs_cache():
+    """TTL-кэш «шапки» find_doctor_schedule (справочники CRM) — чистим между тестами.
+
+    Кэш module-level и живёт процесс: без очистки справочник, закэшированный
+    фейком одного теста, дожил бы до чужого теста (тот мокает _session_get и
+    ждёт СВОЙ /doctors) → порядкозависимые ложные падения. Тот же класс проблемы,
+    что _isolate_samara_snapshot выше.
+    """
+    from agent_logic_2.nayka_api import api_nayka
+
+    api_nayka._SCHEDULE_REFS_CACHE.clear()
+    yield
+    api_nayka._SCHEDULE_REFS_CACHE.clear()
