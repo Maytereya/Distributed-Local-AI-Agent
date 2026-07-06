@@ -18,6 +18,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      # FreeTalk-гейт импортирует localragagent.freetalk → httpx; без установки
+      # шаг падал ModuleNotFoundError на голом раннере (джоб был красным всегда).
+      # Остальные два скрипта — чистый stdlib (ast) и зависимостей не требуют.
+      - name: Install minimal deps for FreeTalk gate
+        run: python3 -m pip install httpx
+
       - name: Run messengers_router architecture checks
         run: python3 messengers_router/scripts/check_architecture_imports.py
 

@@ -32,6 +32,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-ci.txt
+          # Пакеты репо (messengers_router и др.) должны импортироваться из тестов:
+          # editable-установка по pyproject; --no-deps — зависимости уже стоят выше.
+          pip install -e . --no-deps
 
       - name: Ruff (messengers_router + tests)
         run: ruff check messengers_router tests

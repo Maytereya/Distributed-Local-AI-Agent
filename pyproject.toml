@@ -39,3 +39,9 @@ exclude = [
   ".venv*",
   ".agent_venv*",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# sys.path.insert(...) ПЕРЕД импортами — стандартный паттерн тестов этого репо
+# (freetalk-тесты подключают src/ до импорта localragagent). Правило E402 для
+# tests/ осознанно выключено; для пакетов остаётся (дефолтные правила ruff).
+"tests/*" = ["E402"]

@@ -1,5 +1,4 @@
 # tests/test_russian_nlu.py
-import pytest
 from messengers_router.russian_nlu import normalize_ru, ENTITY_WHITELIST
 
 
