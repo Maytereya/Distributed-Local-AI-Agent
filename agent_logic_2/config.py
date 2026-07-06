@@ -179,6 +179,7 @@ class MessengerRouterConfig:
     mr_schedule_cache_log_events: bool
     debug_raw_output: bool
     llm_procedure_normalization: bool
+    llm_service_normalization: bool
     debug_final_input: bool
     url: str
 
@@ -331,6 +332,15 @@ settings = Settings(
             default=False,
             legacy_key="LLM_PROCEDURE_NORMALIZATION",
         ),
+        # П5 (вариант B): LLM-нормализация услуги на промахах лексики. Fail-open,
+        # верифицируется каталогом → по умолчанию ВКЛ; kill-switch в config.ini:
+        # [MESSENGER_ROUTER] llm_service_normalization = false
+        llm_service_normalization=_get_bool(
+            "MESSENGER_ROUTER",
+            "llm_service_normalization",
+            default=True,
+            legacy_key="LLM_SERVICE_NORMALIZATION",
+        ),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -443,6 +453,7 @@ MR_SCHEDULE_CACHE_MAX_KEYS = settings.messenger_router.mr_schedule_cache_max_key
 MR_SCHEDULE_CACHE_LOG_EVENTS = settings.messenger_router.mr_schedule_cache_log_events
 DEBUG_RAW_OUTPUT = settings.messenger_router.debug_raw_output
 LLM_PROCEDURE_NORMALIZATION = settings.messenger_router.llm_procedure_normalization
+MR_LLM_SERVICE_NORMALIZATION = settings.messenger_router.llm_service_normalization
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

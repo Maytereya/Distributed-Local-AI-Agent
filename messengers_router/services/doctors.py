@@ -988,4 +988,34 @@ async def match_catalog_service(
                 "matched_key": hit[0],
             }
 
+    # П5 (вариант B, BUG-2026-06-23-01 «Открыто»): exact и difflib промахнулись.
+    # Для service-похожих текстов (фраза услуги ИЛИ price-intent — гейт держит LLM
+    # подальше от обычных ходов записи, где miss штатен) LLM переписывает
+    # формулировку в термин каталога («коагулограмма»→«гемостазиограмма»).
+    # Выходу LLM НЕ доверяем: он обязан пройти тот же resolve по каталогу; после
+    # верификации отдаётся как FUZZY-кандидат → существующий confirm-флоу
+    # («Вы имели в виду …?»), не молчаливый exact. Любой сбой → прежний miss.
+    from ._service_normalizer import (  # noqa: PLC0415 — локальный импорт, как соседние
+        llm_normalize_service_query,
+        should_attempt_llm_normalization,
+    )
+
+    raw = str(raw_text_or_name or "")
+    if should_attempt_llm_normalization(raw):
+        normalized = await llm_normalize_service_query(raw)
+        if normalized:
+            verified = resolve_price_service_name_from_catalog(
+                normalized,
+                current_service_name="",
+                rows=catalog_rows,
+            )
+            if verified:
+                return {
+                    "status": "fuzzy",
+                    "query": queries[0],
+                    "canonical": str(verified).strip(),
+                    "matched_key": "llm_normalized",
+                    "llm_normalized": normalized,
+                }
+
     return {"status": "miss", "query": queries[0], "canonical": ""}
