@@ -14,6 +14,7 @@ import logging
 import os
 import sys
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta, datetime, date
 from pathlib import Path
 from pprint import pprint
@@ -1018,6 +1019,19 @@ def find_doctor_schedule(
     start_date = date.today().isoformat()
     end_date = (date.today() + timedelta(days=SCHEDULE_LOOKAHEAD_DAYS)).isoformat()
 
+    # П7 (Resilience Phase 2): fanout «филиалы × дни» распараллелен. Раньше все
+    # /doctorSchedule (по филиалам) и /doctorScheduleCells (по дням) шли строго
+    # последовательно: 2 филиала × 12 дней = ~26 HTTP-вызовов цепочкой (7.2с
+    # Трубин, baseline-2026-06-26). Два фазовых пула с ограничением воркеров
+    # (не душить medserver): фаза A — /doctorSchedule по независимым филиалам,
+    # фаза B — /doctorScheduleCells по плоскому списку всех дней всех филиалов.
+    # Вложенных сабмитов в ОДИН пул нет — иначе дедлок при заполнении воркеров.
+    # ПОРЯДОК результатов детерминирован: executor.map возвращает по порядку
+    # сабмита (филиалы — порядок doctorRegions, дни — порядок /doctorSchedule),
+    # не по прибытию ответов. SESSION шарится между потоками — это уже так для
+    # конкурентных find_doctor_schedule из _schedule_by_specialty (gather×8).
+    fanout_workers = max(1, int(os.getenv("NAUKA_SCHEDULE_FANOUT_WORKERS", "4")))
+
     # --- Собираем расписания ---
     result = []
     matched_but_without_slots = False
@@ -1033,56 +1047,82 @@ def find_doctor_schedule(
         if not doctor_reg_entries:
             continue
 
-        # Мержим расписание по регионам!
-        schedules_by_region = defaultdict(list)
-        region_names = set()
-        for region_entry in doctor_reg_entries:
+        # Фаза A: /doctorSchedule по всем филиалам врача параллельно.
+        def _fetch_region_days(region_entry: dict[str, Any], *, _doctor_id=doctor_id) -> tuple[list[dict[str, Any]] | None, bool]:
+            """Вернуть ``(schedule_days | None, fetch_error)`` для одного филиала."""
             company_unit = region_entry["companyUnit"]
             reg_id = region_entry["region"]
-            region_name_val = region_map.get(reg_id) or SPECIAL_REGION_NAMES.get(reg_id) or f"[ID {reg_id}]"
-            # --- Запрашиваем расписание ---
             schedule_url = (
-                f"{base_url}/doctorSchedule?doctor={doctor_id}&companyUnit={company_unit}&region={reg_id}"
+                f"{base_url}/doctorSchedule?doctor={_doctor_id}&companyUnit={company_unit}&region={reg_id}"
                 f"&startDate={start_date}&endDate={end_date}"
             )
             try:
                 schedule_resp = _session_get(schedule_url, realtime=True)
                 schedule_resp.raise_for_status()
-                schedule_days = schedule_resp.json()
+                return schedule_resp.json(), False
             except (requests.RequestException, ValueError) as exc:
-                any_fetch_error = True
                 logger.warning(
                     "find_doctor_schedule: /doctorSchedule fetch failed, skipping region "
                     "doctor_id=%s region_id=%s url=%s error=%s",
-                    doctor_id, reg_id, schedule_url, exc,
+                    _doctor_id, reg_id, schedule_url, exc,
                 )
+                return None, True
+
+        with ThreadPoolExecutor(max_workers=fanout_workers) as pool:
+            region_days = list(pool.map(_fetch_region_days, doctor_reg_entries))
+
+        # Плоский список дней всех филиалов: (индекс филиала, day).
+        day_jobs: list[tuple[int, dict[str, Any]]] = []
+        for region_idx, (schedule_days, fetch_error) in enumerate(region_days):
+            if fetch_error:
+                any_fetch_error = True
                 continue
-            region_rows: list[dict[str, Any]] = []
-            for day in schedule_days:
-                # --- Слоты ---
-                cells_url = f"{base_url}/doctorScheduleCells?doctorSchedule={day['id']}"
-                try:
-                    cells_resp = _session_get(cells_url, realtime=True)
-                    cells_resp.raise_for_status()
-                    cells = cells_resp.json()
-                    free_slots = [cell.get("startTime") for cell in cells if isinstance(cell, dict) and cell.get("free")]
-                except (requests.RequestException, ValueError) as exc:
-                    any_fetch_error = True
-                    logger.warning(
-                        "find_doctor_schedule: /doctorScheduleCells fetch failed, treating day as no free slots "
-                        "doctor_id=%s schedule_day_id=%s url=%s error=%s",
-                        doctor_id, day.get("id"), cells_url, exc,
-                    )
-                    free_slots = []
-                if not free_slots:
-                    continue
-                region_rows.append({
-                    "date": day.get("curDate"),
-                    "start": day.get("startTime"),
-                    "end": day.get("endTime"),
-                    "slots": free_slots
-                })
+            for day in schedule_days or []:
+                day_jobs.append((region_idx, day))
+
+        # Фаза B: /doctorScheduleCells по всем дням всех филиалов параллельно.
+        def _fetch_day_cells(job: tuple[int, dict[str, Any]], *, _doctor_id=doctor_id) -> tuple[int, dict[str, Any], list[Any], bool]:
+            """Вернуть ``(индекс филиала, day, free_slots, fetch_error)`` для одного дня."""
+            region_idx, day = job
+            cells_url = f"{base_url}/doctorScheduleCells?doctorSchedule={day['id']}"
+            try:
+                cells_resp = _session_get(cells_url, realtime=True)
+                cells_resp.raise_for_status()
+                cells = cells_resp.json()
+                free_slots = [cell.get("startTime") for cell in cells if isinstance(cell, dict) and cell.get("free")]
+                return region_idx, day, free_slots, False
+            except (requests.RequestException, ValueError) as exc:
+                logger.warning(
+                    "find_doctor_schedule: /doctorScheduleCells fetch failed, treating day as no free slots "
+                    "doctor_id=%s schedule_day_id=%s url=%s error=%s",
+                    _doctor_id, day.get("id"), cells_url, exc,
+                )
+                return region_idx, day, [], True
+
+        with ThreadPoolExecutor(max_workers=fanout_workers) as pool:
+            day_results = list(pool.map(_fetch_day_cells, day_jobs))
+
+        rows_by_region_idx: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for region_idx, day, free_slots, fetch_error in day_results:
+            if fetch_error:
+                any_fetch_error = True
+            if not free_slots:
+                continue
+            rows_by_region_idx[region_idx].append({
+                "date": day.get("curDate"),
+                "start": day.get("startTime"),
+                "end": day.get("endTime"),
+                "slots": free_slots
+            })
+
+        # Сборка в исходном порядке doctorRegions (мержим расписание по регионам!)
+        schedules_by_region = defaultdict(list)
+        region_names = set()
+        for region_idx, region_entry in enumerate(doctor_reg_entries):
+            region_rows = rows_by_region_idx.get(region_idx) or []
             if region_rows:
+                reg_id = region_entry["region"]
+                region_name_val = region_map.get(reg_id) or SPECIAL_REGION_NAMES.get(reg_id) or f"[ID {reg_id}]"
                 region_names.add(region_name_val)
                 schedules_by_region[region_name_val].extend(region_rows)
 
