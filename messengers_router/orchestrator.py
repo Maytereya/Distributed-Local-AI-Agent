@@ -530,7 +530,13 @@ async def render(
 
     # 2. Clarify gate
     if ctx.should_clarify:
-        ctx.response = ResponseEnvelope(text=ctx.clarify_text)
+        # П9: clarify-решение может нести needs_handoff (rule_sick_leave —
+        # детерминированный текст + перевод на оператора); до этого все clarify
+        # шли с handoff=False, так что для них поведение не меняется.
+        ctx.response = ResponseEnvelope(
+            text=ctx.clarify_text,
+            handoff=bool(ctx.decision is not None and ctx.decision.needs_handoff),
+        )
         return ctx
 
     if ctx.decision is not None:

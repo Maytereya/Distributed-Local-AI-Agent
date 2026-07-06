@@ -54,6 +54,8 @@ from .policies import (
     AMBIGUOUS_ANALYSIS_CLARIFY_TEXT,
     detect_website_help_intent,
     WEBSITE_HELP_TEXT,
+    detect_sick_leave_intent,
+    SICK_LEAVE_HANDOFF_TEXT,
     detect_service_code_lookup_intent,
     nonbookable_service_hint,
     detect_pii,
@@ -1107,6 +1109,22 @@ async def deterministic_rule_decision(
             flags=local_flags | {"medical_advice"},
             needs_handoff=True,
             context_action="new_topic",
+        )
+    elif detect_sick_leave_intent(text):
+        # П9 faithfulness: факты про оформление БЛ не подтверждены владельцем →
+        # не утверждаем ни «оформляем», ни «не оформляем» (25.06 бот галлюцинировал
+        # отказ), а переводим на оператора. ПЕРЕД doc_request: «справка о
+        # нетрудоспособности» — это БЛ, не generic-справка. Текст детерминирован
+        # (clarify_reason), needs_handoff=True доносит сигнал до агрегатора.
+        decision = RouteDecision(
+            label="OTHER",
+            confidence=CONFIDENCE.rule_hardcode,
+            entities={},
+            flags=local_flags | {"rule_sick_leave"},
+            needs_handoff=True,
+            context_action="new_topic",
+            clarify_needed=True,
+            clarify_reason=SICK_LEAVE_HANDOFF_TEXT,
         )
     elif (unsupported := _build_unsupported_catalog_decision(text, local_flags)) is not None:
         decision = unsupported
