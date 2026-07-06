@@ -2204,10 +2204,31 @@ def _parse_price_kind_ambiguous_result(raw: str) -> str | None:
     return None
 
 
-_MULTI_PRICE_SPLIT_RE = re.compile(r"\s*(?:,|;|\bи\b|\+|/)\s*", re.I)
+# П6 «корзина» (BUG-B): + `\n` и `•` — реальные списки пациентов идут переносами
+# строк/маркерами, а не запятыми. Дефис НЕ разделитель (В12-дефицит, АТ-ТПО).
+_MULTI_PRICE_SPLIT_RE = re.compile(r"\s*(?:,|;|\bи\b|\+|/|\n|•)\s*", re.I)
 _MULTI_PRICE_SERVICE_HINT_RE = re.compile(
     r"[a-zа-яё]{3,}",
     re.I,
+)
+# Шумовые фрагменты списка («Сколько будет стоить?», «итого») — отбрасываются
+# МОЛЧА: это не услуга и не «нераспознанная позиция» (иначе пациент увидел бы
+# «Не распознал: Сколько будет стоить» — бессмыслица).
+_MULTI_PRICE_NOISE_RE = re.compile(
+    r"^(?:сколько(?:\s+будет)?\s+сто[ии]\w*|стоимост\w*|цен\w*|прайс\w*|итого|всего|посчитай\w*)[\s?!.]*$",
+    re.I,
+)
+# Слова-шум для токен-рана при сегментации по каталогу (S2): цена/вежливость/
+# служебные. Пропускаются МОЛЧА (не услуги и не «нераспознанные») и РАЗРЫВАЮТ
+# окна n-грамм (услуга не может содержать «пожалуйста» внутри).
+_MULTI_PRICE_NOISE_WORDS = frozenset(
+    {
+        "сколько", "будет", "стоит", "стоить", "стоимость", "цена", "цены", "цен",
+        "прайс", "итого", "всего", "посчитай", "посчитайте", "подскажите",
+        "пожалуйста", "скажите", "здравствуйте", "добрый", "день", "вечер", "утро",
+        "спасибо", "нужно", "надо", "хочу", "можно", "меня", "мне", "нам", "себя",
+        "после", "перед", "возле", "около", "завтра", "сегодня", "послезавтра",
+    }
 )
 
 
@@ -2243,6 +2264,9 @@ def _split_price_query_items(query_text: str) -> list[str]:
             continue
         if _normalise_input(frag) in _PRICE_QUERY_STOPWORDS:
             continue
+        # П6: шумовой хвост списка («Сколько будет стоить?») — не услуга; молча мимо.
+        if _MULTI_PRICE_NOISE_RE.match(frag):
+            continue
         fragments.append(frag)
 
     seen: set[str] = set()
@@ -2256,24 +2280,118 @@ def _split_price_query_items(query_text: str) -> list[str]:
     return unique
 
 
+def _segment_items_by_catalog(
+    query_text: str,
+    retail_rows: list[dict[str, Any]],
+) -> tuple[list[str], list[str]]:
+    """S2 «корзины» (BUG-B): сегментирует сплошной токен-ран ПО КАТАЛОГУ.
+
+    Реальные списки пациентов часто идут одной строкой CAPS без разделителей
+    («ОАК ОАМ ОБЩИЙ БЕЛОК ГЛЮКОЗА …»). Где кончается одна услуга и начинается
+    другая, решают ДАННЫЕ: жадный longest-match n-грамм (окно 3→1) через тот же
+    `resolve_price_service_name_from_catalog` — лексикон = сам прайс («ОБЩИЙ
+    БЕЛОК» — 2 токена, «ОАК» — 1). Нераспознанные токены копятся отдельно
+    (S3 — честный «не распознал»), шумовые слова цены отбрасываются молча.
+
+    :param query_text: исходный текст (сплошной список)
+    :param retail_rows: строки retail-прайса региона
+    :return: (фрагменты-услуги в порядке появления, нераспознанные токены)
+    """
+
+    head = re.sub(
+        r"^\s*(?:стоимость|цена|сколько\s+стоит|прайс)\s+",
+        "",
+        str(query_text or "").strip(),
+        flags=re.I,
+    )
+    tokens = [t for t in re.findall(r"[0-9A-Za-zА-Яа-яЁё\-]+", head) if t][:40]
+    if len(tokens) < 4:
+        return [], []
+
+    def _is_noise(tok: str) -> bool:
+        low = tok.lower()
+        return low in _MULTI_PRICE_NOISE_WORDS or len(low) < 2
+
+    def _window_ok(window_tokens: list[str], canonical: str) -> bool:
+        """Анти-глотание соседей: у МНОГОсловного окна КАЖДЫЙ содержательный токен
+        обязан находиться в каноне (префикс-4 по нормализованным словам). Иначе
+        фаззи-resolve принимает окно за счёт одного сильного токена и съедает
+        чужие позиции («ОАК ОАМ ОБЩИЙ» → Общий анализ крови, ОАМ пропала)."""
+        canon_words = [w for w in _normalise_input(canonical).split() if w]
+        for tok in window_tokens:
+            norm = _normalise_input(tok)
+            if len(norm) < 3:
+                continue
+            pref = norm[:4]
+            if not any(w.startswith(pref) or norm.startswith(w[:4]) for w in canon_words):
+                return False
+        return True
+
+    recognized: list[str] = []
+    unrecognized: list[str] = []
+    i = 0
+    while i < len(tokens):
+        if _is_noise(tokens[i]):
+            i += 1
+            continue
+        matched = False
+        for window in (3, 2, 1):
+            if i + window > len(tokens):
+                continue
+            window_tokens = tokens[i : i + window]
+            # Услуга не может содержать шум-слово внутри — окно разрывается.
+            if window > 1 and any(_is_noise(t) for t in window_tokens):
+                continue
+            candidate = " ".join(window_tokens)
+            canonical = resolve_price_service_name_from_catalog(candidate, rows=retail_rows)
+            if not canonical:
+                continue
+            # Курируемый алиас (ОАК/ОАМ/…) точен по построению — гарды ниже минует
+            # (канон алиаса не содержит букв аббревиатуры, overlap их зарезал бы).
+            is_alias = _normalise_input(candidate) in _PRICE_SERVICE_ALIASES
+            if not is_alias:
+                # Гард подмены (класс BUG-2026-06-02-07): различающий токен запроса
+                # обязан присутствовать в каноне («Витамин B1» ≠ «Витамин B12»).
+                if not _scorer_match_has_distinctive_overlap(candidate, canonical):
+                    continue
+                if window > 1 and not _window_ok(window_tokens, canonical):
+                    continue
+            recognized.append(candidate)
+            i += window
+            matched = True
+            break
+        if not matched:
+            unrecognized.append(tokens[i])
+            i += 1
+    return recognized, unrecognized
+
+
 def _resolve_multi_price_items(
     query_text: str,
     retail_rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[str]]:
     """Разрешает фрагменты мульти-услугового запроса в реальные услуги каталога.
 
-    Возвращает список словарей `{"service_name", "prices"}` только если ≥2
-    фрагментов успешно приземлились на каталог. Иначе — пустой список
-    (fallback на стандартный single-service путь).
+    Возвращает `(items, unrecognized)`: items — список `{"service_name", "prices"}`
+    только если ≥2 фрагментов приземлились на каталог (иначе пусто — fallback на
+    single-service путь); unrecognized — позиции списка, которые каталогом не
+    распознались (S3: честно перечисляются пациенту, не замалчиваются).
 
     :param query_text: исходный запрос пользователя
     :param retail_rows: строки retail-прайса региона
-    :return: список разрешённых услуг с top-рядами цен
+    :return: (разрешённые услуги с top-рядами цен, нераспознанные позиции)
     """
 
     fragments = _split_price_query_items(query_text)
+    unrecognized: list[str] = []
     if len(fragments) < 2:
-        return []
+        # S2: разделителей нет — пробуем сегментацию сплошного списка по каталогу.
+        seg_fragments, seg_unrecognized = _segment_items_by_catalog(query_text, retail_rows)
+        if len(seg_fragments) >= 2:
+            fragments = seg_fragments
+            unrecognized = seg_unrecognized
+        else:
+            return [], []
 
     resolved: list[dict[str, Any]] = []
     seen_names: set[str] = set()
@@ -2284,12 +2402,14 @@ def _resolve_multi_price_items(
             alias_variants = _PRICE_SERVICE_ALIASES.get(_normalise_input(extracted), ())
             service_name = str(alias_variants[0] or "").strip() if alias_variants else ""
         if not service_name:
+            unrecognized.append(frag)
             continue
         key = _normalise_input(service_name)
         if key in seen_names:
             continue
         top_rows = _select_patient_price_rows(retail_rows, service_name, limit=2)
         if not top_rows:
+            unrecognized.append(frag)
             continue
         seen_names.add(key)
         resolved.append(
@@ -2300,8 +2420,8 @@ def _resolve_multi_price_items(
         )
 
     if len(resolved) < 2:
-        return []
-    return resolved
+        return [], []
+    return resolved, unrecognized
 
 
 def _build_multi_price_payload(
@@ -2319,7 +2439,7 @@ def _build_multi_price_payload(
     :return: family-query-совместимый payload либо None
     """
 
-    items = _resolve_multi_price_items(query_text, retail_rows)
+    items, unrecognized = _resolve_multi_price_items(query_text, retail_rows)
     if not items:
         return None
 
@@ -2337,7 +2457,7 @@ def _build_multi_price_payload(
 
     service_name = ", ".join(str(item["service_name"]) for item in items)
     visible_limit = len(variants)
-    return {
+    payload: dict[str, Any] = {
         "service_name": service_name,
         "service_kind": "family_query",
         "family_variants": variants,
@@ -2347,6 +2467,15 @@ def _build_multi_price_payload(
         "show_all_hint": "",
         "note": "price_multi_service",
     }
+    if unrecognized:
+        # S3 «корзины» (BUG-B): нераспознанные позиции честно перечисляем —
+        # молчание о них дезинформировало бы полнотой ответа.
+        shown = ", ".join(dict.fromkeys(str(u).strip() for u in unrecognized if str(u).strip()))
+        if shown:
+            payload["unrecognized_note"] = (
+                f"Не распознал: {shown}. Уточните эти названия — помогу по ним отдельно."
+            )
+    return payload
 
 
 def _compound_price_secondary_lab_service(

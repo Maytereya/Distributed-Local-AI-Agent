@@ -399,6 +399,12 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
     if hint:
         lines.append("")
         lines.append(hint)
+    # П6 «корзина» (BUG-B, S3): честно показываем позиции списка, которые не
+    # удалось распознать по каталогу, — не замалчиваем неполноту ответа.
+    unrecognized_note = str(payload.get("unrecognized_note") or "").strip()
+    if unrecognized_note:
+        lines.append("")
+        lines.append(unrecognized_note)
     lines.append("Если нужно, помогу выбрать подходящий вариант или подскажу подготовку.")
     return _append_samara_disclaimer("\n".join(lines).strip())
 
