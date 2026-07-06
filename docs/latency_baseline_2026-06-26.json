@@ -1,0 +1,211 @@
+{
+ "rows": [
+  {
+   "rep": 0,
+   "kind": "rule",
+   "text": "адреса филиалов",
+   "ok": true,
+   "seconds": 1.45,
+   "stage_timings": null
+  },
+  {
+   "rep": 0,
+   "kind": "rule",
+   "text": "график работы филиалов",
+   "ok": true,
+   "seconds": 1.57,
+   "stage_timings": null
+  },
+  {
+   "rep": 0,
+   "kind": "rule",
+   "text": "сколько стоит общий анализ крови",
+   "ok": true,
+   "seconds": 7.49,
+   "stage_timings": null
+  },
+  {
+   "rep": 0,
+   "kind": "rule",
+   "text": "где сдать анализы",
+   "ok": true,
+   "seconds": 0.46,
+   "stage_timings": null
+  },
+  {
+   "rep": 0,
+   "kind": "rule",
+   "text": "Код 5437",
+   "ok": true,
+   "seconds": 2.4,
+   "stage_timings": null
+  },
+  {
+   "rep": 0,
+   "kind": "llm",
+   "text": "какую модель ты используешь",
+   "ok": true,
+   "seconds": 15.36,
+   "stage_timings": null
+  },
+  {
+   "rep": 0,
+   "kind": "llm",
+   "text": "у вас есть парковка возле клиники?",
+   "ok": true,
+   "seconds": 15.03,
+   "stage_timings": null
+  },
+  {
+   "rep": 0,
+   "kind": "llm",
+   "text": "расскажите о вашей клинике",
+   "ok": true,
+   "seconds": 17.3,
+   "stage_timings": null
+  },
+  {
+   "rep": 1,
+   "kind": "rule",
+   "text": "адреса филиалов",
+   "ok": true,
+   "seconds": 1.43,
+   "stage_timings": null
+  },
+  {
+   "rep": 1,
+   "kind": "rule",
+   "text": "график работы филиалов",
+   "ok": true,
+   "seconds": 1.62,
+   "stage_timings": null
+  },
+  {
+   "rep": 1,
+   "kind": "rule",
+   "text": "сколько стоит общий анализ крови",
+   "ok": true,
+   "seconds": 7.53,
+   "stage_timings": null
+  },
+  {
+   "rep": 1,
+   "kind": "rule",
+   "text": "где сдать анализы",
+   "ok": true,
+   "seconds": 0.45,
+   "stage_timings": null
+  },
+  {
+   "rep": 1,
+   "kind": "rule",
+   "text": "Код 5437",
+   "ok": true,
+   "seconds": 2.32,
+   "stage_timings": null
+  },
+  {
+   "rep": 1,
+   "kind": "llm",
+   "text": "какую модель ты используешь",
+   "ok": true,
+   "seconds": 15.55,
+   "stage_timings": null
+  },
+  {
+   "rep": 1,
+   "kind": "llm",
+   "text": "у вас есть парковка возле клиники?",
+   "ok": true,
+   "seconds": 14.91,
+   "stage_timings": null
+  },
+  {
+   "rep": 1,
+   "kind": "llm",
+   "text": "расскажите о вашей клинике",
+   "ok": true,
+   "seconds": 17.32,
+   "stage_timings": null
+  },
+  {
+   "rep": 2,
+   "kind": "rule",
+   "text": "адреса филиалов",
+   "ok": true,
+   "seconds": 1.42,
+   "stage_timings": null
+  },
+  {
+   "rep": 2,
+   "kind": "rule",
+   "text": "график работы филиалов",
+   "ok": true,
+   "seconds": 1.59,
+   "stage_timings": null
+  },
+  {
+   "rep": 2,
+   "kind": "rule",
+   "text": "сколько стоит общий анализ крови",
+   "ok": true,
+   "seconds": 7.45,
+   "stage_timings": null
+  },
+  {
+   "rep": 2,
+   "kind": "rule",
+   "text": "где сдать анализы",
+   "ok": true,
+   "seconds": 0.39,
+   "stage_timings": null
+  },
+  {
+   "rep": 2,
+   "kind": "rule",
+   "text": "Код 5437",
+   "ok": true,
+   "seconds": 2.26,
+   "stage_timings": null
+  },
+  {
+   "rep": 2,
+   "kind": "llm",
+   "text": "какую модель ты используешь",
+   "ok": true,
+   "seconds": 20.58,
+   "stage_timings": null
+  },
+  {
+   "rep": 2,
+   "kind": "llm",
+   "text": "у вас есть парковка возле клиники?",
+   "ok": true,
+   "seconds": 20.26,
+   "stage_timings": null
+  },
+  {
+   "rep": 2,
+   "kind": "llm",
+   "text": "расскажите о вашей клинике",
+   "ok": true,
+   "seconds": 19.1,
+   "stage_timings": null
+  }
+ ],
+ "summary": {
+  "rule": {
+   "n": 15,
+   "p50": 1.59,
+   "p95": 7.49,
+   "max": 7.53
+  },
+  "llm": {
+   "n": 9,
+   "p50": 17.3,
+   "p95": 20.58,
+   "max": 20.58
+  }
+ },
+ "ts": 1783351887.808115
+}

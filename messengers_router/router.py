@@ -2306,9 +2306,21 @@ async def route_patient_message(
 
 
 
-def _debug_meta(decision: RouteDecision, plan: Plan, evidence: Evidence, state: SessionState, pending: Any) -> dict[str, Any]:
+def _debug_meta(
+    decision: RouteDecision,
+    plan: Plan,
+    evidence: Evidence,
+    state: SessionState,
+    pending: Any,
+    stage_timings: dict[str, float] | None = None,
+) -> dict[str, Any]:
     nlu_trace = _extract_nlu_trace(evidence)
+    # stage_timings считаются оркестратором на КАЖДЫЙ запрос (orchestrator._timed_stage),
+    # но раньше в debug-ответ не прокидывались. Нужны для p50/p95 пер-стейдж
+    # (П3 дорожной карты: baseline до/после кванта ollama). Additive, только debug=true.
+    timings = {"stage_timings": dict(stage_timings)} if stage_timings else {}
     return {
+        **timings,
         "decision": {
             "label": decision.label,
             "confidence": decision.confidence,
@@ -2531,7 +2543,7 @@ async def patient_routing_stream(
             text="",
             attachments=[],
             handoff=False,
-            state_update={"debug": _debug_meta(decision, plan, evidence, state, pending)},
+            state_update={"debug": _debug_meta(decision, plan, evidence, state, pending, stage_timings=ctx.stage_timings)},
         )
 
     response = _maybe_offer_operator_on_repeat(response, state, memory)

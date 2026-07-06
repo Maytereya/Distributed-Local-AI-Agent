@@ -163,6 +163,24 @@ def test_debug_meta_contains_nlu_fields():
     assert meta["decision"]["clarify_slots"] == ["service_name"]
     assert meta["decision"]["intent_candidates"] == ["PRICE", "APPOINTMENT"]
     assert meta["nlu_trace"]["final_decision"]["label"] == "PRICE"
+    # Без stage_timings ключ отсутствует (совместимость со старыми потребителями debug).
+    assert "stage_timings" not in meta
+
+
+def test_debug_meta_exposes_stage_timings_when_given():
+    # П3 дорожной карты: тайминги оркестратора прокидываются в debug-ответ —
+    # база для p50/p95 пер-стейдж (сравнение до/после кванта ollama).
+    decision = RouteDecision(label="PRICE", confidence=0.9)
+    evidence = Evidence()
+    meta = _debug_meta(
+        decision,
+        Plan(label="PRICE"),
+        evidence,
+        SessionState(session_id="dbg"),
+        None,
+        stage_timings={"nlu_route": 12.5, "render": 830.0},
+    )
+    assert meta["stage_timings"] == {"nlu_route": 12.5, "render": 830.0}
 
 
 def test_secondary_intents_preserve_llm_metadata():
