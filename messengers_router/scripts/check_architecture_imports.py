@@ -40,6 +40,8 @@ LAYER_BY_MODULE: dict[str, str] = {
     "context_summary": "policy",
     "self_check": "policy",
     "topic_registry": "policy",
+    # Orchestration (2026-06: оркестратор — активный прод-путь, зовётся из router)
+    "orchestrator": "orchestration",
     # Domain primitives
     "mess_types": "domain",
     "city": "domain",
@@ -48,8 +50,18 @@ LAYER_BY_MODULE: dict[str, str] = {
     "prompt_contracts": "domain",
     "service_phrase": "domain",
     "llm_doesnt_work_fallback": "domain",
+    # 2026-06 актуализация (карта отстала от апрель-июньских рефакторов и чек
+    # краснел на каждом пуше): все четыре — самодостаточные примитивы без
+    # внутренних импортов (кроме domain→domain), см. commit-историю.
+    "evidence_keys": "domain",
+    "resilience": "domain",
+    "russian_nlu": "domain",
+    "specialty_parser": "domain",
+    "state_mutations": "domain",
     # Infrastructure / adapters
-    "services": "infrastructure",
+    # NB: `services` — теперь ПАКЕТ (services/*.py) и этим чекером НЕ сканируется
+    # (glob только top-level *.py). Это осознанное слепое пятно: правила для
+    # пакета — отдельный трек (architecture_review_2026-06-26 §5).
     "memory": "infrastructure",
     "llm_runtime": "infrastructure",
     "prompt_registry": "infrastructure",
@@ -65,16 +77,27 @@ ALLOWED_LAYER_IMPORTS: dict[str, set[str]] = {
     "policy": {"domain", "infrastructure", "port"},
     "domain": set(),
     "infrastructure": {"domain", "port"},
-    "port": set(),
+    # Порту можно брать чистые domain-примитивы (normalize_ru и т.п.) — domain
+    # ничего внутреннего не импортирует, циклов породить не может. Кейс вскрылся
+    # 2026-06 при добавлении russian_nlu в карту (doctor_name_port:20).
+    "port": {"domain"},
 }
 
 
 ALLOWED_DIRECT_AGENT_LOGIC_IMPORTS = {
     "runtime_config",
     "doctor_name_port",
-    "services",
     "llm_runtime",
     "prompt_registry",
+}
+
+# Известный цикл strangler-fig миграции: orchestrator постепенно замещает
+# route_patient_message (router зовёт orchestrator.run_pipeline, стадии
+# оркестратора зовут router._* хелперы). Осознанный ВРЕМЕННЫЙ долг —
+# см. docs/architecture_review_2026-06-26.md §5 («задокументированная миграция»).
+# Любые ДРУГИЕ циклы по-прежнему валят чек.
+KNOWN_CYCLE_EXCEPTIONS: set[frozenset[str]] = {
+    frozenset({"orchestrator", "router"}),
 }
 
 
@@ -249,6 +272,8 @@ def run_checks() -> int:
     # Cycles
     cycles = find_cycles(graph)
     for component in cycles:
+        if frozenset(component) in KNOWN_CYCLE_EXCEPTIONS:
+            continue
         violations.append(f"Import cycle detected: {' -> '.join(component)}")
 
     # Cross-layer rules
