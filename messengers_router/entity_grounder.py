@@ -33,7 +33,9 @@ _CONTROL_KEYS = {
     "_catalog_service_query",
     # NEWS promo follow-up (rule_news_promo_followup): выбор акции из списка
     # номером/названием + прокинутый контекст показанных акций для news_info.
+    # promo_query_for — маркер «выдано для этого хода» (анти-протухание).
     "promo_query",
+    "promo_query_for",
     "promo_pick_index",
     "_promo_context",
 }

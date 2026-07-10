@@ -435,13 +435,22 @@ def _sync_promo_context(state: SessionState, payload: dict[str, Any]) -> None:
     :return: None
     """
 
+    # Гигиена: promo_query/promo_pick_index из followup-решения мержатся в
+    # состояние диалога и без чистки переживают ход — протухший promo_query
+    # перебивал живой текст следующего запроса (прод-баг 10.07 «все»).
+    state.last_entities.pop("promo_query", None)
+    state.last_entities.pop("promo_query_for", None)
+    state.last_entities.pop("promo_pick_index", None)
+
     news = payload.get("news")
     mode = str(payload.get("mode") or "")
-    if mode in ("list", "miss") and isinstance(news, list) and news:
+    if mode in ("list", "miss", "detail") and isinstance(news, list) and news:
         titles = [str(x.get("title") or "").strip() for x in news if isinstance(x, dict)]
         titles = [t for t in titles if t]
         if titles:
-            state.last_entities["_promo_context"] = {"titles": titles}
+            # mode нужен followup-правилу: после detail-карточки вопрос
+            # («а до какого числа она действует?») переспрашивает ЕЁ же.
+            state.last_entities["_promo_context"] = {"titles": titles, "mode": mode}
             return
     state.last_entities.pop("_promo_context", None)
 

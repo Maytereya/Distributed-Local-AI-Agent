@@ -52,6 +52,7 @@ _PROMO_STOPWORDS = {
     "клиника", "клинике", "клиники", "вас", "вам", "меня", "мне", "нет",
     "под", "названием", "название", "называется", "именем", "хорошо",
     "спасибо", "пожалуйста", "здравствуйте", "добрый", "день", "интересует",
+    "все", "всё",
 }
 
 _ORDINAL_WORDS = {
@@ -279,11 +280,30 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
         deduped.append(p)
     active = deduped
 
-    # «все» / «покажи все акции» — полный список без капа топ-N.
-    show_all = bool(re.search(r"\bвс[её]\b", _norm(entities.get("promo_query") or query or "")))
-    list_limit = None if show_all else _PROMO_LIST_LIMIT
+    # ВАЖНО: promo_query валиден только если выдан правилом ДЛЯ ЭТОГО хода
+    # (маркер promo_query_for == живой текст). Merge оркестратора переносит
+    # entities в состояние диалога, и протухший promo_query перебивал живые
+    # запросы следующих ходов (прод-баг 10.07: после «все» все запросы про
+    # акции отдавали один и тот же список). Валидный promo_query приоритетен:
+    # вопросная ветка кладёт туда НАЗВАНИЕ карточки при вопросе «до какого
+    # числа действует?».
+    promo_query = str(entities.get("promo_query") or "")
+    if promo_query and str(entities.get("promo_query_for") or "") != str(query or ""):
+        promo_query = ""  # протухшее из merge прошлых ходов
+    effective_query = promo_query or str(query or "")
 
-    effective_query = str(entities.get("promo_query") or query or "")
+    # «все» / «покажи все акции» — полный список без капа, БЕЗ токен-поиска
+    # (прод-баг 10.07: «все» уходило в поиск и матчило «всех» в тексте
+    # «Социальной скидки» → список из одной акции вместо полного).
+    if re.search(r"\bвс[её]\b", _norm(effective_query)):
+        return {
+            "news": [_promo_public_fields(p) for p in active],
+            "mode": "list",
+            "total_active": len(active),
+            "entities_used": entities,
+        }
+    list_limit = _PROMO_LIST_LIMIT
+
     pick = _resolve_pick_index(effective_query, entities)
     if pick is not None:
         stashed = entities.get("_promo_context")

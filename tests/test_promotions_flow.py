@@ -292,14 +292,18 @@ def test_list_response_stashes_promo_context(promo_env):
     assert isinstance(ctx, dict) and ctx.get("titles")
 
 
-def test_detail_response_clears_promo_context(promo_env):
+def test_detail_response_stashes_detail_context(promo_env):
+    """После карточки контекст живёт с mode=detail — для вопроса «до какого числа?»."""
     payload = run(news_mod.news_info(None, "акция чекап", {}))
     ev = Evidence()
     ev.put(ek.NEWS, payload)
     state = SessionState(session_id="promo-ctx2")
     state.last_entities["_promo_context"] = {"titles": ["x"]}
+    state.last_entities["promo_query"] = "протухшее"
     build_news_response("NEWS", ev, state)
-    assert "_promo_context" not in state.last_entities
+    ctx = state.last_entities.get("_promo_context")
+    assert ctx == {"titles": ["ЧЕКАП + ВИТАМИН D"], "mode": "detail"}
+    assert "promo_query" not in state.last_entities, "гигиена: promo_query не переживает ход"
 
 
 # --- v1.2: широкий routing-корпус (структура запроса не должна влиять) ----------
@@ -372,9 +376,52 @@ def test_list_caps_and_reports_hidden(promo_env, monkeypatch):
 def test_show_all_uncaps_list(promo_env, monkeypatch):
     monkeypatch.setattr(news_mod.api_nayka, "site_promotions", lambda *, realtime=False: _many_promos(12))
     payload = run(news_mod.news_info(None, "покажи все акции", {}))
+    assert payload["mode"] == "list", "«все» — список, НЕ токен-поиск (прод-баг: матч «всех» в тексте)"
     assert len(payload["news"]) == 12
     text = format_news_for_patient(payload, {})
     assert "и ещё" not in text
+
+
+def test_show_all_word_never_searches(promo_env):
+    """Прод-баг 10.07: «все» матчило «всех» в тексте «Социальной скидки» →
+    список из одной акции. «все» = полный список, всегда list-mode."""
+    payload = run(news_mod.news_info(None, "все", {"promo_query": "все", "promo_query_for": "все"}))
+    assert payload["mode"] == "list"
+    assert len(payload["news"]) >= 3
+
+
+def test_stale_promo_query_does_not_hijack(promo_env):
+    """Прод-баг 10.07: promo_query="все" из merge прошлого хода перебивал живой
+    запрос — «Интересует акция «доктор Шубин»» отдавал тот же список."""
+    stale = {"promo_query": "все", "promo_query_for": "все", "_promo_context": {"titles": ["x"]}}
+    payload = run(news_mod.news_info(None, "Интересует акция «доктор Шубин»", stale))
+    assert payload["mode"] == "detail"
+    assert _titles(payload)[0] == "Доктор Шубин в Самаре"
+
+
+def test_question_after_detail_reshows_card(promo_env):
+    """Прод-баг 10.07: «а до какого числа она действует» после карточки →
+    OTHER-дефлект. Теперь: вопрос про единственную карточку → она же повторно."""
+    ctx_detail = {
+        "_promo_context": {"titles": ["Доктор Шубин в Самаре"], "mode": "detail"},
+        "_last_label": "NEWS",
+    }
+    d = run(deterministic_rule_decision("а до какого числа она действует?", ctx_detail))
+    assert d is not None and d.label == "NEWS" and "rule_news_promo_followup" in d.flags
+    payload = run(news_mod.news_info(None, "а до какого числа она действует?", d.entities))
+    assert payload["mode"] == "detail"
+    assert _titles(payload) == ["Доктор Шубин в Самаре"]
+
+
+def test_question_after_list_does_not_fire():
+    """После СПИСКА (несколько акций) вопрос «до какого числа…» неоднозначен —
+    вопросная ветка не хватает его (уйдёт обычным путём)."""
+    ctx_list = {
+        "_promo_context": {"titles": ["А", "Б"], "mode": "list"},
+        "_last_label": "NEWS",
+    }
+    d = run(deterministic_rule_decision("а до какого числа она действует?", ctx_list))
+    assert d is None or "rule_news_promo_followup" not in d.flags
 
 
 def test_show_all_followup_after_list(promo_env, monkeypatch):
@@ -384,6 +431,39 @@ def test_show_all_followup_after_list(promo_env, monkeypatch):
     monkeypatch.setattr(news_mod.api_nayka, "site_promotions", lambda *, realtime=False: _many_promos(12))
     payload = run(news_mod.news_info(None, "все", d.entities))
     assert len(payload["news"]) == 12
+
+
+# --- регресс класса «протухшие entities через merge» (прод-диалог 10.07) --------
+
+def test_full_pipeline_promo_chain(promo_env):
+    """3-ходовая цепочка через run_pipeline КАК НА ПРОДЕ: entities followup-хода
+    мержатся в состояние диалога и не должны отравлять следующие ходы.
+    Прод-баг: после «все» ход «Интересует акция «доктор Шубин»» отдавал тот же
+    список из одной акции (протухший promo_query="все" перебивал живой текст)."""
+    from messengers_router.memory import MemoryStore
+    from messengers_router.orchestrator import run_pipeline
+    from messengers_router.services import Services
+
+    state = SessionState(session_id="promo-chain-regression")
+    services = Services()
+    memory = MemoryStore()
+
+    async def turn(text):
+        ctx = await run_pipeline(text, state, services=services, memory=memory)
+        resp = ctx.response.text if ctx.response else ""
+        memory.append_turn(state, "user", text)
+        memory.append_turn(state, "assistant", resp)
+        return resp
+
+    r1 = run(turn("какие акции сейчас есть"))
+    assert "Сейчас в клинике действуют акции:" in r1
+
+    r2 = run(turn("все"))
+    assert "ЧЕКАП + ВИТАМИН D" in r2, f"«все» должен отдать полный список, got: {r2[:120]}"
+    assert "Доктор Шубин в Самаре" in r2
+
+    r3 = run(turn("Интересует акция «доктор Шубин»"))
+    assert "Акция «Доктор Шубин в Самаре»" in r3, f"ожидалась карточка, got: {r3[:120]}"
 
 
 # --- api_nayka: base64-image не тащим -------------------------------------------

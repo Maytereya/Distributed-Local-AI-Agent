@@ -502,6 +502,15 @@ _PROMO_PICK_TEXT_RE = re.compile(
     r"\s*[!.,?]*\s*$",
     re.I,
 )
+# Вопрос ПРО показанную карточку акции («а до какого числа она действует?»,
+# «какие условия?», «кому подходит?») — прод-диалог 10.07: уходил в LLM→OTHER
+# «Не совсем понял ваш запрос». Детерминированный ответ = повторная карточка
+# (в ней срок и условия). Только после detail-карточки (одна акция в контексте).
+_PROMO_QUESTION_TEXT_RE = re.compile(
+    r"\b(?:до\s+какого|когда\s+заканчива|какой\s+срок|сколько\s+(?:ещё\s+|еще\s+)?действ"
+    r"|срок\w*\s+действ|какие\s+услови|что\s+за\s+услови|кому\s+подход|для\s+кого)\w*",
+    re.I,
+)
 
 
 def _promo_followup_entities(text: str, last_entities: dict[str, Any]) -> dict[str, Any] | None:
@@ -529,9 +538,26 @@ def _promo_followup_entities(text: str, last_entities: dict[str, Any]) -> dict[s
     raw = str(text or "").strip()
     if not raw or len(raw) > 60:
         return None
-    passthrough = {"promo_query": raw, "_promo_context": {"titles": [str(t) for t in titles]}}
+    ctx_mode = str(ctx.get("mode") or "") if isinstance(ctx, dict) else ""
+    # promo_query_for = сырой текст ХОДА, для которого выдан promo_query:
+    # merge оркестратора переносит entities в состояние диалога, и без маркера
+    # протухший promo_query перебивал живые запросы следующих ходов
+    # (прод-баг 10.07: после «все» всё отвечалось одним списком).
+    passthrough = {
+        "promo_query": raw,
+        "promo_query_for": raw,
+        "_promo_context": {"titles": [str(t) for t in titles]},
+    }
     if _PROMO_FOLLOWUP_TEXT_RE.fullmatch(raw) or _PROMO_PICK_TEXT_RE.fullmatch(raw):
         return passthrough
+    if ctx_mode == "detail" and len(titles) == 1 and _PROMO_QUESTION_TEXT_RE.search(raw):
+        # Вопрос про единственную показанную карточку → переспросить ЕЁ же
+        # (детерминированный re-detail: срок и условия в карточке).
+        return {
+            "promo_query": str(titles[0]),
+            "promo_query_for": raw,
+            "_promo_context": {"titles": [str(titles[0])], "mode": "detail"},
+        }
     tokens = re.findall(r"[a-zа-яе0-9]{3,}", raw.lower().replace("ё", "е"))
     if tokens and len(tokens) <= 4:
         for title in titles:
