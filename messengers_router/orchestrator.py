@@ -576,6 +576,10 @@ async def render(
             ctx.decision,
             ctx.evidence,
             runtime_options=runtime_options,
+            # Хвост диалога: без него follow-up («а это подходит студентам?»
+            # после карточки акции) LLM отвечал вслепую. Текущая реплика в
+            # history не входит (append_turn после пайплайна).
+            history=list(ctx.state.history or []),
         ):
             chunks.append(chunk)
         # Output-guard: единственный путь, способный слить системный/renderer-промпт

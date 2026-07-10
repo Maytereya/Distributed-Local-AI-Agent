@@ -47,7 +47,53 @@ _RU_MONTH_GEN = {
 }
 
 
-def _final_prompt(user_text: str, decision: RouteDecision, evidence: Evidence) -> str:
+# Бюджеты контекста диалога в LLM-промпте: последние ходы целиком важнее
+# древних, длинные ответы бота (списки акций/врачей) обрезаются по краю.
+_DIALOG_CTX_MAX_TURNS = 6
+_DIALOG_CTX_PER_MSG = 300
+_DIALOG_CTX_BUDGET = 1500
+_DIALOG_CTX_EMPTY = "(диалог только начался)"
+
+
+def _format_dialog_context(history: list[Any] | None) -> str:
+    """Хвост диалога для LLM-рендера: «Пациент:/Ассистент:» с бюджетом длины.
+
+    До 2026-07-10 рендер видел ТОЛЬКО текущую реплику — follow-up «а это
+    подходит студентам?» после карточки акции уходил в общие слова/оператора.
+    Multi-turn вытягивали рукописные followup-правила по одному кейсу; хвост
+    истории решает класс. Текущая реплика в history не входит (append_turn
+    идёт ПОСЛЕ пайплайна) — дублирования с <<USER_TEXT>> нет.
+
+    :param history: state.history — список {"role": "user"|"assistant", "text": ...}
+    :return: текстовый блок для <<DIALOG_CONTEXT>>
+    """
+
+    items = [
+        (str(h.get("role") or ""), str(h.get("text") or "").strip())
+        for h in (history or [])
+        if isinstance(h, dict) and str(h.get("text") or "").strip()
+    ]
+    if not items:
+        return _DIALOG_CTX_EMPTY
+
+    lines: list[str] = []
+    used = 0
+    for role, text in reversed(items[-_DIALOG_CTX_MAX_TURNS:]):
+        snippet = text if len(text) <= _DIALOG_CTX_PER_MSG else text[:_DIALOG_CTX_PER_MSG].rstrip() + "…"
+        line = ("Пациент: " if role == "user" else "Ассистент: ") + snippet.replace("\n", " ")
+        if used + len(line) > _DIALOG_CTX_BUDGET and lines:
+            break
+        lines.append(line)
+        used += len(line)
+    return "\n".join(reversed(lines))
+
+
+def _final_prompt(
+    user_text: str,
+    decision: RouteDecision,
+    evidence: Evidence,
+    history: list[Any] | None = None,
+) -> str:
     tmpl = load_prompt_text("renderer_patient")
     flags = ", ".join(sorted(decision.flags))
     evidence_txt = json.dumps(evidence.items, ensure_ascii=False)
@@ -56,6 +102,7 @@ def _final_prompt(user_text: str, decision: RouteDecision, evidence: Evidence) -
         .replace("<<LABEL>>", decision.label)
         .replace("<<FLAGS>>", flags)
         .replace("<<EVIDENCE>>", evidence_txt)
+        .replace("<<DIALOG_CONTEXT>>", _format_dialog_context(history))
     ).strip()
 
 
@@ -64,6 +111,7 @@ def _final_prompt_rich(
     decision: RouteDecision,
     evidence: Evidence,
     critique: str = "",
+    history: list[Any] | None = None,
 ) -> str:
     tmpl = load_prompt_text("renderer_patient_rich")
     flags = ", ".join(sorted(decision.flags))
@@ -74,6 +122,7 @@ def _final_prompt_rich(
         .replace("<<FLAGS>>", flags)
         .replace("<<EVIDENCE>>", evidence_txt)
         .replace("<<CRITIQUE>>", critique or "Нет")
+        .replace("<<DIALOG_CONTEXT>>", _format_dialog_context(history))
     ).strip()
 
 
@@ -948,8 +997,9 @@ async def _rich_generate_once(
     *,
     queue_timeout_ms: int,
     critique: str = "",
+    history: list[Any] | None = None,
 ) -> str:
-    prompt = _final_prompt_rich(user_text, decision, evidence, critique=critique)
+    prompt = _final_prompt_rich(user_text, decision, evidence, critique=critique, history=history)
     raw = await generate_text(
         prompt,
         timeout_s=timeout,
@@ -987,12 +1037,14 @@ async def render_stream(
     decision: RouteDecision,
     evidence: Evidence,
     runtime_options: RuntimeOptions | None = None,
+    *,
+    history: list[Any] | None = None,
 ) -> AsyncGenerator[str, None]:
     opts = runtime_options or RuntimeOptions()
     queue_timeout_ms = int(opts.queue_timeout_ms)
 
     if opts.llm_mode != "rich":
-        prompt = _final_prompt(user_text, decision, evidence)
+        prompt = _final_prompt(user_text, decision, evidence, history=history)
         async for chunk in generate_stream_text(
             prompt,
             timeout_s=timeout,
@@ -1006,6 +1058,7 @@ async def render_stream(
         decision,
         evidence,
         queue_timeout_ms=queue_timeout_ms,
+        history=history,
     )
     if not opts.self_check:
         yield answer
@@ -1031,5 +1084,6 @@ async def render_stream(
             evidence,
             queue_timeout_ms=queue_timeout_ms,
             critique=critique_reason,
+            history=history,
         )
     yield answer

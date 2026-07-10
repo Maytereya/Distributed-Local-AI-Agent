@@ -265,8 +265,8 @@ def test_render_uses_prebuilt_structured_response_and_sets_secondary_offer_pendi
 
 
 def test_render_collects_stream_into_response_envelope(monkeypatch):
-    async def fake_render_stream(user_text, decision, evidence, runtime_options=None):
-        _ = user_text, decision, evidence, runtime_options
+    async def fake_render_stream(user_text, decision, evidence, runtime_options=None, *, history=None):
+        _ = user_text, decision, evidence, runtime_options, history
         yield "hello "
         yield "world"
 

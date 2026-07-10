@@ -130,8 +130,8 @@ def test_scrub_handles_empty_text():
 def test_render_scrubs_leaked_prompt_from_llm_answer(monkeypatch):
     """Wiring: LLM-путь оркестратора отдаёт дефлект, если генерация слила промпт."""
 
-    async def fake_render_stream(user_text, decision, evidence, runtime_options=None):
-        _ = user_text, decision, evidence, runtime_options
+    async def fake_render_stream(user_text, decision, evidence, runtime_options=None, *, history=None):
+        _ = user_text, decision, evidence, runtime_options, history
         # эмулируем «послушный» LLM, выгрузивший системный промпт частями
         yield "Ты помощник клиники в мессенджере.\n"
         yield "Классификация: OTHER\nФлаги: rule_none"
@@ -153,8 +153,8 @@ def test_render_scrubs_leaked_prompt_from_llm_answer(monkeypatch):
 def test_render_passes_legit_llm_answer_unchanged(monkeypatch):
     """Анти-over-trigger на уровне wiring: легитимный LLM-ответ не подменяется."""
 
-    async def fake_render_stream(user_text, decision, evidence, runtime_options=None):
-        _ = user_text, decision, evidence, runtime_options
+    async def fake_render_stream(user_text, decision, evidence, runtime_options=None, *, history=None):
+        _ = user_text, decision, evidence, runtime_options, history
         yield "Приём уролога стоит 2 700 руб. "
         yield "Адрес: пр. Ленина, 5."
 
