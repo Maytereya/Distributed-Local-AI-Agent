@@ -1,18 +1,35 @@
-"""Модуль домена новостей клиники.
+"""Модуль домена акций клиники (NEWS-интент).
 
-Содержит миграцию ``news_info`` из ``services_legacy`` (Stage 21).
-Метод обращается к meili-индексу ``news`` и возвращает активные новости;
-деградация источника считается некритичной — возвращается пустой список
-без принудительного handoff.
+До 2026-07-10 источником был meili-индекс ``news`` с почтовыми дайджестами
+(«НОВОСТИ ЗА 05.11») — пациент получал бессодержательный список. Теперь
+источник — CRM ``/promotions`` (обёртка ``api_nayka.site_promotions``,
+TTL-кэш справочника): настоящие названия, условия, сроки.
+
+Фильтрация:
+- по сроку: ``endDate``/``startDate`` — ISO-datetime с TZ (endDate=2026-12-30
+  T20:00+00:00 = 31.12 00:00 по Самаре, т.е. «до 31 декабря»);
+- по региону: ``regions`` — узлы дерева /regions (1=«Все», 2=«Самарская
+  область», 3=«Самара», потомки 3 = филиалы). Бот самарский → показываем
+  акции, чьи регионы пересекаются с {узел «Самара» + его предки + потомки}.
+  Пенза/Нефтегорск-only скрываются (у них свои цены — показать самарцу чужую
+  цену = дезинформация). Если /regions недоступен — консервативно оставляем
+  только явное «Все» (id=1) и акции без регионов.
+
+Режимы ответа (``mode`` в payload): ``list`` (какие акции есть), ``detail``
+(нашли конкретную по названию/номеру), ``miss`` (честный промах поиска +
+актуальный список). Деградация источника некритична — пустой список без
+принудительного handoff (прежнее поведение).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
-from agent_logic_1 import meilisearch_client as meilisearch
+from agent_logic_2.nayka_api import api_nayka
 
 if TYPE_CHECKING:
     from .core import Services
@@ -20,30 +37,242 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Самара = UTC+4: endDate приходит в UTC, «до какого числа» пациенту показываем
+# по местному календарю (2026-12-30T20:00Z = 31.12 00:00 местного = «до 31.12»).
+_SAMARA_UTC_OFFSET = timedelta(hours=4)
 
-async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
-    """Получает активные новости из meili-индекса ``news``.
+# Слова запроса, не несущие названия акции («какие акции есть сейчас?» → список).
+_PROMO_STOPWORDS = {
+    "акция", "акции", "акцию", "акций", "акциях", "скидка", "скидки", "скидку",
+    "спецпредложение", "спецпредложения", "предложение", "предложения",
+    "новости", "новость", "какие", "какая", "что", "есть", "сейчас", "теперь",
+    "действует", "действуют", "актуальные", "актуальная", "расскажи",
+    "расскажите", "покажи", "покажите", "подскажи", "подскажите", "уточни",
+    "уточните", "подробнее", "условия", "про", "для", "как", "или", "это",
+    "клиника", "клинике", "клиники", "вас", "вам", "меня", "мне", "нет",
+}
 
-    :param self: экземпляр сервисного слоя
-    :param query: текст запроса пользователя (используется как keyword)
-    :param entities: извлечённые NLU-сущности
-    :return: словарь с полем ``news`` (список) и ``entities_used``
+_ORDINAL_WORDS = {
+    "первый": 1, "первая": 1, "первое": 1, "первую": 1, "первом": 1,
+    "второй": 2, "вторая": 2, "второе": 2, "вторую": 2,
+    "третий": 3, "третья": 3, "третье": 3, "третью": 3,
+    "четвертый": 4, "четвертая": 4, "четвертую": 4,
+    "пятый": 5, "пятая": 5, "пятую": 5,
+    "шестой": 6, "шестая": 6, "шестую": 6,
+    "седьмой": 7, "седьмая": 7, "седьмую": 7,
+    "восьмой": 8, "восьмая": 8, "восьмую": 8,
+}
+
+_PROMO_LIST_LIMIT = 8
+
+
+def _norm(text: Any) -> str:
+    return re.sub(r"\s+", " ", str(text or "").lower().replace("ё", "е")).strip()
+
+
+def _promo_tokens(query: str) -> list[str]:
+    """Содержательные токены запроса (без стоп-слов и коротышей)."""
+
+    tokens = re.findall(r"[a-zа-яе0-9]{3,}", _norm(query))
+    return [t for t in tokens if t not in _PROMO_STOPWORDS]
+
+
+def _parse_promo_dt(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _promo_is_active(promo: dict[str, Any], now_utc: datetime) -> bool:
+    end = _parse_promo_dt(promo.get("endDate"))
+    if end is not None and now_utc > end:
+        return False
+    start = _parse_promo_dt(promo.get("startDate"))
+    if start is not None and now_utc < start:
+        return False
+    return True
+
+
+def promo_end_display(promo: dict[str, Any]) -> str:
+    """«31.12.2026» по самарскому календарю; пусто, если endDate нет/кривой."""
+
+    end = _parse_promo_dt(promo.get("endDate"))
+    if end is None:
+        return ""
+    return (end + _SAMARA_UTC_OFFSET).strftime("%d.%m.%Y")
+
+
+def _samara_relevant_region_ids(regions: list[Any]) -> set[int] | None:
+    """Узел «Самара» + предки (Самарская область, Все) + потомки (филиалы).
+
+    :param regions: живое дерево /regions (id/parent/name)
+    :return: множество релевантных id или None, если узел «Самара» не найден
+             (деградация — caller фильтрует консервативно)
     """
 
+    nodes = [r for r in regions if isinstance(r, dict) and r.get("id") is not None]
+    if not nodes:
+        return None
+    by_id = {r["id"]: r for r in nodes}
+    children: dict[Any, list[Any]] = {}
+    for r in nodes:
+        children.setdefault(r.get("parent"), []).append(r["id"])
+
+    samara_ids = [r["id"] for r in nodes if _norm(r.get("name")) == "самара"]
+    if not samara_ids:
+        return None
+
+    relevant: set[int] = set()
+    for sid in samara_ids:
+        relevant.add(sid)
+        cursor = by_id.get(sid, {}).get("parent")
+        hops = 0
+        while cursor is not None and hops < 10:  # предки; гард от цикла в данных
+            relevant.add(cursor)
+            cursor = by_id.get(cursor, {}).get("parent")
+            hops += 1
+        stack = list(children.get(sid, []))
+        while stack:  # потомки (филиалы Самары)
+            node = stack.pop()
+            if node in relevant:
+                continue
+            relevant.add(node)
+            stack.extend(children.get(node, []))
+    return relevant
+
+
+def _promo_in_samara(promo: dict[str, Any], relevant: set[int] | None) -> bool:
+    promo_regions = [r for r in (promo.get("regions") or []) if r is not None]
+    if not promo_regions:
+        return True  # без привязки = для всех
+    if relevant is None:
+        # /regions недоступен: консервативно пропускаем только явное «Все» (id=1)
+        return 1 in promo_regions
+    return any(r in relevant for r in promo_regions)
+
+
+def _promo_public_fields(promo: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": promo.get("id"),
+        "title": str(promo.get("title") or "").strip(),
+        "subtitle": str(promo.get("subtitle") or "").strip(),
+        "text": str(promo.get("text") or "").strip(),
+        "end_display": promo_end_display(promo),
+        "is_analysis": bool(promo.get("isAnalysis")),
+        "is_doctor_service": bool(promo.get("isDoctorService")),
+    }
+
+
+def _score_promo(tokens: list[str], promo: dict[str, Any]) -> tuple[int, int]:
+    """(титульные попадания, текстовые попадания) содержательных токенов."""
+
+    title = _norm(promo.get("title")) + " " + _norm(promo.get("subtitle"))
+    body = _norm(promo.get("text"))
+    title_hits = sum(1 for t in tokens if t in title)
+    text_hits = sum(1 for t in tokens if t in body)
+    return title_hits, text_hits
+
+
+def _resolve_pick_index(query: str, entities: dict[str, Any]) -> int | None:
+    """Номер акции из follow-up: «2», «про вторую», promo_pick_index из правила."""
+
+    pick = entities.get("promo_pick_index")
+    if isinstance(pick, int) and pick > 0:
+        return pick
+    m = re.fullmatch(
+        r"\s*(?:расскажи(?:те)?\s+)?(?:про\s+|номер\s+)?(\d{1,2})\s*[!.,?]*\s*",
+        str(query or ""),
+        flags=re.I,
+    )
+    if m:
+        return int(m.group(1))
+    for word, idx in _ORDINAL_WORDS.items():
+        if re.search(rf"\b{word}\b", _norm(query)):
+            return idx
+    return None
+
+
+async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
+    """Актуальные акции клиники из CRM /promotions: список / поиск / детали.
+
+    :param self: экземпляр сервисного слоя
+    :param query: текст запроса пользователя
+    :param entities: NLU-сущности (+ promo_query/promo_pick_index из follow-up правила)
+    :return: payload с ``news`` (список публичных полей акций), ``mode`` и
+             ``entities_used``
+    """
+
+    _ = self
     try:
-        hits = await asyncio.to_thread(
-            meilisearch.search_news_active,
-            index_name="news",
-            keyword=query or None,
-            limit=10,
-            sort=["from_ts:desc"],
-        )
+        promos_raw = await asyncio.to_thread(api_nayka.site_promotions, realtime=True)
     except Exception:
-        # Для новостей деградация источника не критична: возвращаем пустой ответ
-        # без принудительного handoff.
+        # Деградация источника акций некритична: пустой ответ без handoff.
+        return {"news": [], "mode": "list", "note": "news source unavailable", "entities_used": entities}
+    try:
+        regions = await asyncio.to_thread(api_nayka.site_regions, realtime=True)
+    except Exception:
+        regions = []
+
+    now_utc = datetime.now(timezone.utc)
+    relevant = _samara_relevant_region_ids(regions if isinstance(regions, list) else [])
+    active = [
+        p for p in (promos_raw if isinstance(promos_raw, list) else [])
+        if isinstance(p, dict) and _promo_is_active(p, now_utc) and _promo_in_samara(p, relevant)
+    ]
+
+    effective_query = str(entities.get("promo_query") or query or "")
+    pick = _resolve_pick_index(effective_query, entities)
+    if pick is not None:
+        stashed = entities.get("_promo_context")
+        titles = stashed.get("titles") if isinstance(stashed, dict) else None
+        if isinstance(titles, list) and 1 <= pick <= len(titles):
+            wanted = _norm(titles[pick - 1])
+            for p in active:
+                if _norm(p.get("title")) == wanted:
+                    return {
+                        "news": [_promo_public_fields(p)],
+                        "mode": "detail",
+                        "entities_used": entities,
+                    }
+        # Номер без валидного контекста — отдаём список (ниже) с подсказкой.
+
+    tokens = _promo_tokens(effective_query)
+    if tokens:
+        scored = sorted(
+            ((_score_promo(tokens, p), i, p) for i, p in enumerate(active)),
+            key=lambda x: (-x[0][0], -x[0][1], x[1]),
+        )
+        best_title, best_text = scored[0][0] if scored else (0, 0)
+        if best_title > 0:
+            top = [p for (t, x), _i, p in scored if t == best_title and best_title > 0][:2]
+            return {
+                "news": [_promo_public_fields(p) for p in top],
+                "mode": "detail",
+                "entities_used": entities,
+            }
+        if best_text > 0:
+            hits = [p for (t, x), _i, p in scored if x > 0][:_PROMO_LIST_LIMIT]
+            return {
+                "news": [_promo_public_fields(p) for p in hits],
+                "mode": "list",
+                "entities_used": entities,
+            }
         return {
-            "news": [],
-            "note": "news source unavailable",
+            "news": [_promo_public_fields(p) for p in active[:_PROMO_LIST_LIMIT]],
+            "mode": "miss",
+            "query_echo": effective_query.strip()[:80],
             "entities_used": entities,
         }
-    return {"news": hits, "entities_used": entities}
+
+    return {
+        "news": [_promo_public_fields(p) for p in active[:_PROMO_LIST_LIMIT]],
+        "mode": "list",
+        "entities_used": entities,
+    }

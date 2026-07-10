@@ -491,6 +491,55 @@ def _is_price_family_show_all_followup(text: str, last_entities: dict[str, Any])
     )
 
 
+_PROMO_FOLLOWUP_TEXT_RE = re.compile(
+    r"^\s*(?:уточни(?:те)?|подробнее|расскажи(?:те)?(?:\s+подробнее)?|условия(?:\s+акции)?|давай(?:те)?)\s*[!.,?]*\s*$",
+    re.I,
+)
+_PROMO_PICK_TEXT_RE = re.compile(
+    r"^\s*(?:расскажи(?:те)?\s+)?(?:про\s+|номер\s+)?"
+    r"(?:\d{1,2}|перв\w+|втор\w+|трет\w+|четв[её]рт\w+|пят\w+|шест\w+|седьм\w+|восьм\w+)"
+    r"\s*[!.,?]*\s*$",
+    re.I,
+)
+
+
+def _promo_followup_entities(text: str, last_entities: dict[str, Any]) -> dict[str, Any] | None:
+    """Follow-up после списка акций: «уточни», номер/порядковое или название.
+
+    Активно ТОЛЬКО сразу после NEWS-ответа (гард `_last_label`, как у
+    `_price_family_context`) при наличии `_promo_context` из
+    build_news_response — прод-диалог 09.07 показал, что «Уточни» после списка
+    акций уходил в LLM→OTHER-дефлект. Название матчится строго: ВСЕ
+    содержательные токены короткой реплики должны найтись в ОДНОМ названии —
+    «сколько стоит чекап» сюда не попадает (длиннее и с price-сигналом уйдёт
+    своим правилом раньше по chain'у).
+
+    :param text: реплика пользователя
+    :param last_entities: сессионный контекст
+    :return: entities для NEWS-продолжения или None
+    """
+
+    ctx = last_entities.get("_promo_context")
+    titles = ctx.get("titles") if isinstance(ctx, dict) else None
+    if not isinstance(titles, list) or not titles:
+        return None
+    if str(last_entities.get("_last_label") or "").strip().upper() != "NEWS":
+        return None
+    raw = str(text or "").strip()
+    if not raw or len(raw) > 60:
+        return None
+    passthrough = {"promo_query": raw, "_promo_context": {"titles": [str(t) for t in titles]}}
+    if _PROMO_FOLLOWUP_TEXT_RE.fullmatch(raw) or _PROMO_PICK_TEXT_RE.fullmatch(raw):
+        return passthrough
+    tokens = re.findall(r"[a-zа-яе0-9]{3,}", raw.lower().replace("ё", "е"))
+    if tokens and len(tokens) <= 4:
+        for title in titles:
+            norm_title = str(title).lower().replace("ё", "е")
+            if all(tok in norm_title for tok in tokens):
+                return passthrough
+    return None
+
+
 def _seed_entities_from_memory(last_entities: dict[str, Any]) -> dict[str, Any]:
     keep = (
         "doctor_id", "doctor_name", "specialty",
@@ -1154,6 +1203,17 @@ async def deterministic_rule_decision(
             confidence=0.86,
             entities={},
             flags=local_flags | {"rule_price_family_show_all"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+    elif (promo_followup := _promo_followup_entities(text, last_entities)) is not None:
+        # Продолжение NEWS после списка акций: «уточни» / номер / название.
+        # Прод-диалог 09.07: «Уточни» после списка уходил в LLM→OTHER-дефлект.
+        decision = RouteDecision(
+            label="NEWS",
+            confidence=0.85,
+            entities=promo_followup,
+            flags=local_flags | {"rule_news_promo_followup"},
             needs_handoff=False,
             context_action="continue",
         )

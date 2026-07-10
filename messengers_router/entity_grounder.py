@@ -31,6 +31,11 @@ _CONTROL_KEYS = {
     "_catalog_doctor_query",
     "_catalog_service_candidate",
     "_catalog_service_query",
+    # NEWS promo follow-up (rule_news_promo_followup): выбор акции из списка
+    # номером/названием + прокинутый контекст показанных акций для news_info.
+    "promo_query",
+    "promo_pick_index",
+    "_promo_context",
 }
 
 _GENERIC_SERVICE_FALLBACK_RE = re.compile(

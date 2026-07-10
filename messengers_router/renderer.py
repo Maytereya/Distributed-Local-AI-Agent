@@ -828,33 +828,77 @@ def format_address_for_patient(
     return "\n".join([x for x in lines if x is not None]).strip()
 
 
+_PROMO_DETAIL_TEXT_CAP = 900
+
+
+def _promo_detail_block(item: dict[str, Any]) -> str:
+    """Карточка акции: название, выгода, срок, условия (обрезка по абзацу)."""
+
+    title = str(item.get("title") or "").strip()
+    subtitle = str(item.get("subtitle") or "").strip()
+    end_display = str(item.get("end_display") or "").strip()
+    text = str(item.get("text") or "").strip()
+
+    lines = [f"Акция «{title}»" if title else "Акция"]
+    if subtitle:
+        lines.append(subtitle)
+    if end_display:
+        lines.append(f"Действует до {end_display}.")
+    if text:
+        if len(text) > _PROMO_DETAIL_TEXT_CAP:
+            cut = text[:_PROMO_DETAIL_TEXT_CAP]
+            # режем по границе абзаца/предложения, не посреди слова
+            boundary = max(cut.rfind("\n"), cut.rfind(". "))
+            text = (cut[: boundary + 1] if boundary > 200 else cut).rstrip() + " …"
+        lines.append("")
+        lines.append(text)
+    return "\n".join(lines)
+
+
 def format_news_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
+    """Акции из CRM /promotions: детали, список или честный промах поиска.
+
+    Источник детерминированный (без LLM): текст акции — как ведёт клиника в CRM.
+    """
+
+    _ = entities
     news = payload.get("news")
     if not isinstance(news, list):
         news = []
+    news = [x for x in news if isinstance(x, dict)]
+    mode = str(payload.get("mode") or "list")
 
     if not news:
-        city = str(entities.get("city") or "").strip()
-        if city:
+        if str(payload.get("note") or "") == "news source unavailable":
             return (
-                f"По вашему запросу в городе {city} сейчас нет подходящих активных акций. "
-                "Могу подсказать адреса филиалов или стоимость нужной услуги."
+                "Сейчас не получилось загрузить список акций. Попробуйте чуть позже — "
+                "или могу подсказать стоимость нужной услуги."
             )
-        return "По вашему запросу сейчас нет подходящих активных акций. Могу подсказать адреса филиалов или стоимость услуги."
+        return (
+            "Сейчас активных акций нет. Могу подсказать адреса филиалов "
+            "или стоимость нужной услуги."
+        )
 
-    lines: list[str] = ["Нашёл актуальные предложения:"]
-    for i, item in enumerate(news[:5], 1):
-        if not isinstance(item, dict):
-            continue
-        title = str(item.get("title") or item.get("name") or item.get("subject") or "").strip()
-        url = str(item.get("url") or item.get("link") or "").strip()
-        if not title:
-            title = "Акция"
-        lines.append(f"{i}. {title}")
-        if url:
-            lines.append(url)
+    if mode == "detail":
+        blocks = [_promo_detail_block(item) for item in news[:2]]
+        blocks.append("Могу подсказать стоимость услуги или помочь с записью.")
+        return "\n\n".join(blocks).strip()
+
+    lines: list[str] = []
+    if mode == "miss":
+        q = str(payload.get("query_echo") or "").strip()
+        lines.append(
+            f"Не нашёл акцию по запросу «{q}». Сейчас действуют:" if q
+            else "Такую акцию не нашёл. Сейчас действуют:"
+        )
+    else:
+        lines.append("Сейчас в клинике действуют акции:")
+    for i, item in enumerate(news, 1):
+        title = str(item.get("title") or "").strip() or "Акция"
+        subtitle = str(item.get("subtitle") or "").strip()
+        lines.append(f"{i}. {title}" + (f" — {subtitle}" if subtitle else ""))
     lines.append("")
-    lines.append("Если нужно, могу уточнить условия акции по вашему филиалу.")
+    lines.append("Напишите номер или название акции — расскажу условия.")
     return "\n".join(lines).strip()
 
 

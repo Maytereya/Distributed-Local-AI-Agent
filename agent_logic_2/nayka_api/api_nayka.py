@@ -920,6 +920,34 @@ def site_regions(*, realtime: bool = False):
         return []
 
 
+def site_promotions(*, realtime: bool = False) -> list:
+    """Список акций /promotions (справочник, TTL-кэш как у шапки расписания).
+
+    `image` (base64-JPEG, сотни КБ на акцию) и `contentType` отбрасываются СРАЗУ
+    — в чат-пайплайн и в кэш блобы не тащим. Ошибка сети/JSON пробрасывается
+    (caller решает: для акций деградация некритична). Замер 2026-07-10: живой
+    ответ — 40 акций, поля title/subtitle/text/endDate/regions/services.
+
+    :param realtime: использовать fail-fast realtime-профиль HTTP
+    :return: список dict-акций без image/contentType
+    """
+
+    def _fetch() -> list:
+        resp = _session_get(f"{base_url}/promotions", realtime=realtime)
+        resp.raise_for_status()
+        data = resp.json()
+        out: list = []
+        for p in data if isinstance(data, list) else []:
+            if isinstance(p, dict):
+                q = dict(p)
+                q.pop("image", None)
+                q.pop("contentType", None)
+                out.append(q)
+        return out
+
+    return _cached_schedule_ref("promotions", _fetch)
+
+
 def site_result_for_patient(
     *,
     surname: str,

@@ -422,12 +422,37 @@ def build_address_response(
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 
+def _sync_promo_context(state: SessionState, payload: dict[str, Any]) -> None:
+    """Сохраняет список показанных акций для follow-up «уточни»/«номер N».
+
+    После списка/промаха пациент отвечает номером или названием — правило
+    `_promo_followup_entities` (classifier) продолжит NEWS по этому контексту
+    (гард по `_last_label == NEWS`, как у `_price_family_context`). После
+    detail-карточки контекст очищается — выбирать больше не из чего.
+
+    :param state: состояние сессии
+    :param payload: payload `news_info`
+    :return: None
+    """
+
+    news = payload.get("news")
+    mode = str(payload.get("mode") or "")
+    if mode in ("list", "miss") and isinstance(news, list) and news:
+        titles = [str(x.get("title") or "").strip() for x in news if isinstance(x, dict)]
+        titles = [t for t in titles if t]
+        if titles:
+            state.last_entities["_promo_context"] = {"titles": titles}
+            return
+    state.last_entities.pop("_promo_context", None)
+
+
 def build_news_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
     if flow_label != "NEWS":
         return None
     news_payload = evidence.get(ek.NEWS)
     if not isinstance(news_payload, dict):
         return None
+    _sync_promo_context(state, news_payload)
     text = format_news_for_patient(news_payload, state.last_entities)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
