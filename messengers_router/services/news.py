@@ -50,6 +50,8 @@ _PROMO_STOPWORDS = {
     "расскажите", "покажи", "покажите", "подскажи", "подскажите", "уточни",
     "уточните", "подробнее", "условия", "про", "для", "как", "или", "это",
     "клиника", "клинике", "клиники", "вас", "вам", "меня", "мне", "нет",
+    "под", "названием", "название", "называется", "именем", "хорошо",
+    "спасибо", "пожалуйста", "здравствуйте", "добрый", "день", "интересует",
 }
 
 _ORDINAL_WORDS = {
@@ -265,6 +267,21 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
         p for p in (promos_raw if isinstance(promos_raw, list) else [])
         if isinstance(p, dict) and _promo_is_active(p, now_utc) and _promo_in_samara(p, relevant)
     ]
+    # Дедуп по нормализованному названию: CRM ведёт дубли («Социальная скидка»
+    # заведена дважды под разные регионы) — пациенту показываем одну.
+    seen_titles: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for p in active:
+        key = _norm(p.get("title"))
+        if key and key in seen_titles:
+            continue
+        seen_titles.add(key)
+        deduped.append(p)
+    active = deduped
+
+    # «все» / «покажи все акции» — полный список без капа топ-N.
+    show_all = bool(re.search(r"\bвс[её]\b", _norm(entities.get("promo_query") or query or "")))
+    list_limit = None if show_all else _PROMO_LIST_LIMIT
 
     effective_query = str(entities.get("promo_query") or query or "")
     pick = _resolve_pick_index(effective_query, entities)
@@ -306,14 +323,16 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
                 "entities_used": entities,
             }
         return {
-            "news": [_promo_public_fields(p) for p in active[:_PROMO_LIST_LIMIT]],
+            "news": [_promo_public_fields(p) for p in active[:list_limit]],
             "mode": "miss",
             "query_echo": candidate.strip()[:80],
+            "total_active": len(active),
             "entities_used": entities,
         }
 
     return {
-        "news": [_promo_public_fields(p) for p in active[:_PROMO_LIST_LIMIT]],
+        "news": [_promo_public_fields(p) for p in active[:list_limit]],
         "mode": "list",
+        "total_active": len(active),
         "entities_used": entities,
     }

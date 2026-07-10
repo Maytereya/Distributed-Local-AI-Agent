@@ -897,6 +897,12 @@ def format_news_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -
         title = str(item.get("title") or "").strip() or "Акция"
         subtitle = str(item.get("subtitle") or "").strip()
         lines.append(f"{i}. {title}" + (f" — {subtitle}" if subtitle else ""))
+    try:
+        hidden = int(payload.get("total_active") or 0) - len(news)
+    except (TypeError, ValueError):
+        hidden = 0
+    if hidden > 0:
+        lines.append(f"…и ещё {hidden} — напишите «все», покажу полный список.")
     lines.append("")
     lines.append("Напишите номер или название акции — расскажу условия.")
     return "\n".join(lines).strip()

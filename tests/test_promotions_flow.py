@@ -302,6 +302,90 @@ def test_detail_response_clears_promo_context(promo_env):
     assert "_promo_context" not in state.last_entities
 
 
+# --- v1.2: широкий routing-корпус (структура запроса не должна влиять) ----------
+
+PROMO_ROUTING_POSITIVE = [
+    "какие акции сейчас есть?",
+    "Хорошо, какие акции сейчас есть и скидки?",
+    "есть скидки на анализы?",
+    "какие у вас спецпредложения?",
+    "есть промокод?",
+    "какие у вас бонусы?",
+    "действуют ли акционные предложения?",
+    "СКИДКИ ЕСТЬ?!",
+    "здравствуйте, подскажите пожалуйста про акции",
+]
+
+PROMO_ROUTING_NEGATIVE = [
+    "сколько стоит ОАК",            # цена конкретной услуги — PRICE-домен
+    "где дешевле сдать ОАК?",       # сравнение цены — не акции
+    "запишите к кардиологу",        # запись
+    "график работы филиалов",       # адрес/график
+]
+
+
+@pytest.mark.parametrize("text", PROMO_ROUTING_POSITIVE, ids=[t[:30] for t in PROMO_ROUTING_POSITIVE])
+def test_promo_routing_positive_any_structure(text):
+    d = run(deterministic_rule_decision(text, {}))
+    assert d is not None and d.label == "NEWS", f"{text!r} должен уходить в NEWS правилом"
+
+
+@pytest.mark.parametrize("text", PROMO_ROUTING_NEGATIVE, ids=[t[:30] for t in PROMO_ROUTING_NEGATIVE])
+def test_promo_routing_negative(text):
+    d = run(deterministic_rule_decision(text, {}))
+    assert d is None or d.label != "NEWS", f"{text!r} НЕ должен уходить в NEWS"
+
+
+# --- v1.2: дедуп дублей CRM + «показать все» -------------------------------------
+
+def _many_promos(n):
+    return [
+        {
+            "id": 100 + i, "title": f"Акция номер {i}", "subtitle": "",
+            "text": f"Условия акции {i}.", "endDate": None, "startDate": None,
+            "regions": [1], "isAnalysis": False, "isDoctorService": False,
+        }
+        for i in range(1, n + 1)
+    ]
+
+
+def test_duplicate_titles_deduped(promo_env, monkeypatch):
+    """CRM ведёт дубли («Социальная скидка» ×2) — пациенту показываем одну."""
+    promos = [dict(p) for p in _PROMOS]
+    dup = dict(promos[0], id=999, regions=[3])
+    promos.append(dup)
+    monkeypatch.setattr(news_mod.api_nayka, "site_promotions", lambda *, realtime=False: promos)
+    payload = run(news_mod.news_info(None, "какие акции есть?", {}))
+    titles = _titles(payload)
+    assert titles.count("ЧЕКАП + ВИТАМИН D") == 1
+
+
+def test_list_caps_and_reports_hidden(promo_env, monkeypatch):
+    monkeypatch.setattr(news_mod.api_nayka, "site_promotions", lambda *, realtime=False: _many_promos(12))
+    payload = run(news_mod.news_info(None, "какие акции есть?", {}))
+    assert len(payload["news"]) == 8
+    assert payload["total_active"] == 12
+    text = format_news_for_patient(payload, {})
+    assert "и ещё 4" in text and "«все»" in text
+
+
+def test_show_all_uncaps_list(promo_env, monkeypatch):
+    monkeypatch.setattr(news_mod.api_nayka, "site_promotions", lambda *, realtime=False: _many_promos(12))
+    payload = run(news_mod.news_info(None, "покажи все акции", {}))
+    assert len(payload["news"]) == 12
+    text = format_news_for_patient(payload, {})
+    assert "и ещё" not in text
+
+
+def test_show_all_followup_after_list(promo_env, monkeypatch):
+    """После капнутого списка «все» продолжает NEWS и снимает кап."""
+    d = run(deterministic_rule_decision("все", dict(_PROMO_LAST)))
+    assert d is not None and d.label == "NEWS" and "rule_news_promo_followup" in d.flags
+    monkeypatch.setattr(news_mod.api_nayka, "site_promotions", lambda *, realtime=False: _many_promos(12))
+    payload = run(news_mod.news_info(None, "все", d.entities))
+    assert len(payload["news"]) == 12
+
+
 # --- api_nayka: base64-image не тащим -------------------------------------------
 
 def test_site_promotions_strips_image_and_caches(monkeypatch):
