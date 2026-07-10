@@ -3668,16 +3668,29 @@ def test_address_info_uses_family_expansion_when_top_price_rows_hide_second_care
 
 
 def test_news_info(monkeypatch):
+    """NEWS-источник = CRM /promotions (FEAT-2026-07-10-ПРОМО), не meili.
+
+    Раньше тест мокал meilisearch и после смены источника «проходил» через
+    ЖИВУЮ сеть к CRM (негерметично — падал без VPN). Мокаем новый источник.
+    """
+    from messengers_router.services import news as news_mod
+
     svc = Services()
 
-    def fake_news(**_kwargs):
-        return [{"title": "Акция", "content": "Описание"}]
+    def fake_promos(**_kwargs):
+        return [{
+            "id": 1, "title": "Акция", "subtitle": "", "text": "Описание",
+            "endDate": None, "startDate": None, "regions": [1],
+            "isAnalysis": False, "isDoctorService": False,
+        }]
 
-    monkeypatch.setattr(svc_mod.meilisearch, "search_news_active", fake_news)
+    monkeypatch.setattr(news_mod.api_nayka, "site_promotions", fake_promos)
+    monkeypatch.setattr(news_mod.api_nayka, "site_regions", lambda **_kw: [])
 
     res = run(svc.news_info("акция", {}))
 
     assert res["news"], "Expected news hits"
+    assert res["news"][0]["title"] == "Акция"
 
 
 def test_get_branches(monkeypatch):

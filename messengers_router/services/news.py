@@ -77,6 +77,42 @@ def _promo_tokens(query: str) -> list[str]:
     return [t for t in tokens if t not in _PROMO_STOPWORDS]
 
 
+_PROMO_KEYWORD_RE = re.compile(r"\b(?:акци\w*|скидк\w*|спецпредложени\w*|новост\w*)\b", re.I)
+
+
+def _promo_name_candidate(query: str, *, from_followup: bool) -> str:
+    """Кандидат НАЗВАНИЯ акции из запроса — класс-фикс против вежливой обвязки.
+
+    Прод-диалог 10.07: «Хорошо, какие акции сейчас есть и скидки?» уходил в
+    «Не нашёл акцию по запросу „Хорошо, …“» — «хорошо» не стоп-слово, и весь
+    вопрос считался поиском. Правило класса: названием считается только то,
+    что стоит ПОСЛЕ слова «акция/скидка/…» («акция почему нет сил» → «почему
+    нет сил»); всё до него — обвязка. Слова «акция» нет (follow-up после
+    списка) → кандидат = вся реплика. Пустой кандидат = запрос списка.
+
+    :param query: реплика пользователя
+    :param from_followup: реплика пришла из promo-follow-up правила
+    :return: кандидат названия (может быть пустым)
+    """
+
+    raw = str(query or "").strip()
+    matches = list(_PROMO_KEYWORD_RE.finditer(raw))
+    if matches:
+        return raw[matches[-1].end():].strip(" \t«»\"'.,!?—-:;")
+    return raw if from_followup else ""
+
+
+def _token_matches(token: str, haystack: str) -> bool:
+    """Токен матчится подстрокой или общим префиксом ≥5 (падежи: витамином→витамин)."""
+
+    if token in haystack:
+        return True
+    if len(token) < 5:
+        return False
+    prefix = token[:5]
+    return any(w.startswith(prefix) for w in haystack.split())
+
+
 def _parse_promo_dt(value: Any) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
@@ -159,11 +195,14 @@ def _promo_in_samara(promo: dict[str, Any], relevant: set[int] | None) -> bool:
 
 
 def _promo_public_fields(promo: dict[str, Any]) -> dict[str, Any]:
+    text = str(promo.get("text") or "").strip()
+    # CRM вклеивает в текст кнопку сайта «Подробнее» — пациенту это мусорный хвост.
+    text = re.sub(r"\s*подробнее\W*$", "", text, flags=re.I)
     return {
         "id": promo.get("id"),
         "title": str(promo.get("title") or "").strip(),
         "subtitle": str(promo.get("subtitle") or "").strip(),
-        "text": str(promo.get("text") or "").strip(),
+        "text": text,
         "end_display": promo_end_display(promo),
         "is_analysis": bool(promo.get("isAnalysis")),
         "is_doctor_service": bool(promo.get("isDoctorService")),
@@ -175,8 +214,8 @@ def _score_promo(tokens: list[str], promo: dict[str, Any]) -> tuple[int, int]:
 
     title = _norm(promo.get("title")) + " " + _norm(promo.get("subtitle"))
     body = _norm(promo.get("text"))
-    title_hits = sum(1 for t in tokens if t in title)
-    text_hits = sum(1 for t in tokens if t in body)
+    title_hits = sum(1 for t in tokens if _token_matches(t, title))
+    text_hits = sum(1 for t in tokens if _token_matches(t, body))
     return title_hits, text_hits
 
 
@@ -243,7 +282,9 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
                     }
         # Номер без валидного контекста — отдаём список (ниже) с подсказкой.
 
-    tokens = _promo_tokens(effective_query)
+    from_followup = bool(entities.get("promo_query"))
+    candidate = _promo_name_candidate(effective_query, from_followup=from_followup)
+    tokens = _promo_tokens(candidate)
     if tokens:
         scored = sorted(
             ((_score_promo(tokens, p), i, p) for i, p in enumerate(active)),
@@ -267,7 +308,7 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
         return {
             "news": [_promo_public_fields(p) for p in active[:_PROMO_LIST_LIMIT]],
             "mode": "miss",
-            "query_echo": effective_query.strip()[:80],
+            "query_echo": candidate.strip()[:80],
             "entities_used": entities,
         }
 

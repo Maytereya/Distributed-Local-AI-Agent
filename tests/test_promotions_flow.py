@@ -76,6 +76,12 @@ _PROMOS = [
         "text": "Только в филиале пр. Ленина, 5.", "endDate": None, "startDate": None,
         "regions": [8882], "isAnalysis": False, "isDoctorService": True,
     },
+    {
+        "id": 6, "title": "Доктор Шубин в Самаре", "subtitle": "",
+        "text": "Лечение острой и хронической боли в день обращения Подробнее",
+        "endDate": "2027-12-30T20:00:00.000+00:00", "startDate": None,
+        "regions": [3], "isAnalysis": False, "isDoctorService": True,
+    },
 ]
 
 
@@ -141,6 +147,42 @@ def test_search_miss_is_honest(promo_env):
     payload = run(news_mod.news_info(None, "акция почему нет сил", {}))
     assert payload["mode"] == "miss"
     assert _titles(payload), "при промахе показываем актуальный список"
+    assert payload["query_echo"] == "почему нет сил", "эхо — кандидат названия, не вся фраза"
+
+
+def test_polite_wrapper_is_list_not_miss(promo_env):
+    """Прод-диалог 10.07: «Хорошо, какие акции сейчас есть и скидки?» уходил в
+    «Не нашёл акцию по запросу „Хорошо, …“». Обвязка ДО слова «акции» — не
+    название; после «скидки» пусто → это запрос списка."""
+    payload = run(news_mod.news_info(None, "Хорошо, какие акции сейчас есть и скидки?", {}))
+    assert payload["mode"] == "list"
+    assert len(payload["news"]) >= 3
+
+
+@pytest.mark.parametrize("text", [
+    "Интересует акция «доктор Шубин»",
+    "расскажите про акцию доктора Шубина",
+])
+def test_search_by_partial_name_finds_detail(promo_env, text):
+    payload = run(news_mod.news_info(None, text, {}))
+    assert payload["mode"] == "detail"
+    assert _titles(payload)[0] == "Доктор Шубин в Самаре"
+
+
+def test_case_tolerant_match(promo_env):
+    """Падежи: «акция с витамином» → «ЧЕКАП + ВИТАМИН D» (префикс-матч ≥5)."""
+    payload = run(news_mod.news_info(None, "расскажи про акцию с витамином", {}))
+    assert payload["mode"] == "detail"
+    assert _titles(payload)[0] == "ЧЕКАП + ВИТАМИН D"
+
+
+def test_trailing_podrobnee_stripped(promo_env):
+    """Кнопка сайта «Подробнее», вклеенная в текст CRM, не показывается пациенту."""
+    payload = run(news_mod.news_info(None, "акция доктор Шубин", {}))
+    assert payload["mode"] == "detail"
+    text = payload["news"][0]["text"]
+    assert not text.lower().endswith("подробнее")
+    assert "в день обращения" in text
 
 
 def test_pick_by_number_from_context(promo_env):
