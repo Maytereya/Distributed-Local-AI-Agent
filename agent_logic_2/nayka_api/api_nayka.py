@@ -1031,6 +1031,45 @@ def site_result_for_patient(
         }
 
 
+def _merge_schedule_rows_by_date(rows: list) -> list:
+    """Мержит дни ОДНОГО филиала по дате — против задвоенных дней.
+
+    У врача может быть несколько записей в /doctorRegions на один region через
+    разные companyUnit (прод-проба Трубина 10.07: unit 17 + unit 92, оба
+    «пр.Ленина, 5») — каждая даёт свой /doctorSchedule, и без мержа пациент
+    видел одинаковые дни дважды. Мерж: слоты = union без дублей (сортировка
+    по времени только при реальном мерже — одиночный день остаётся байт-в-байт
+    как из API), окно приёма = min(start)..max(end), порядок дат first-seen.
+
+    :param rows: строки дней одного региона ({date, start, end, slots})
+    :return: строки без дублей дат
+    """
+
+    merged: dict = {}
+    order: list = []
+    for row in rows:
+        key = str(row.get("date") or "")
+        if key not in merged:
+            item = dict(row)
+            item["slots"] = list(row.get("slots") or [])
+            merged[key] = item
+            order.append(key)
+            continue
+        cur = merged[key]
+        seen = set(cur["slots"])
+        for slot in row.get("slots") or []:
+            if slot not in seen:
+                cur["slots"].append(slot)
+                seen.add(slot)
+        cur["slots"].sort()  # "HH:MM" сортируется лексикографически корректно
+        row_start, row_end = str(row.get("start") or ""), str(row.get("end") or "")
+        if row_start and (not cur.get("start") or row_start < str(cur["start"])):
+            cur["start"] = row.get("start")
+        if row_end and (not cur.get("end") or row_end > str(cur["end"])):
+            cur["end"] = row.get("end")
+    return [merged[k] for k in order]
+
+
 def find_doctor_schedule(
         last_name: str,
         region_name: str = None  # теперь не обязательно
@@ -1207,6 +1246,12 @@ def find_doctor_schedule(
                 region_name_val = region_map.get(reg_id) or SPECIAL_REGION_NAMES.get(reg_id) or f"[ID {reg_id}]"
                 region_names.add(region_name_val)
                 schedules_by_region[region_name_val].extend(region_rows)
+        # Две привязки к одному адресу (разные companyUnit) → дни задваивались;
+        # мержим по дате внутри каждого адреса.
+        schedules_by_region = {
+            name: _merge_schedule_rows_by_date(rows_list)
+            for name, rows_list in schedules_by_region.items()
+        }
 
         # Специализация
         spec = None
