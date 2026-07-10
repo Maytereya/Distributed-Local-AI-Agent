@@ -115,3 +115,58 @@ def test_orchestrator_passes_state_history_to_renderer(monkeypatch):
 
     assert out.response is not None and out.response.text == "ответ"
     assert captured["history"] == state.history
+
+
+def test_orchestrator_trims_trailing_current_user_message(monkeypatch):
+    """Cursor-ревью 10.07: эндпоинты дописывают текущую реплику в history ДО
+    пайплайна — она не должна дублироваться в контексте с «Запрос пациента»."""
+    captured = {}
+
+    async def fake_render_stream(user_text, decision, evidence, runtime_options=None, *, history=None):
+        _ = user_text, decision, evidence, runtime_options
+        captured["history"] = history
+        yield "ответ"
+
+    monkeypatch.setattr("messengers_router.renderer.render_stream", fake_render_stream)
+
+    state = SessionState(session_id="dlg-ctx-trim")
+    past = [_turn("user", "какие акции есть?"), _turn("assistant", "1. ЧЕКАП")]
+    state.history = past + [_turn("user", "а вторая какая?")]  # как после endpoint.append_turn
+    ctx = OrchestratorContext(text="а вторая какая?", state=state)
+    ctx.decision = _decision()
+    ctx.evidence = Evidence()
+
+    run(render(ctx))
+
+    assert captured["history"] == past, "текущая реплика срезана с хвоста"
+
+
+# --- идемпотентность append_turn (класс: два писателя истории) -----------------
+
+def test_append_turn_dedupes_consecutive_same_turn():
+    from messengers_router.memory import MemoryStore
+
+    memory = MemoryStore()
+    state = SessionState(session_id="dedupe")
+    memory.append_turn(state, "user", "привет")
+    memory.append_turn(state, "user", "привет")          # endpoint + router
+    memory.append_turn(state, "assistant", "здравствуйте")
+    memory.append_turn(state, "assistant", "здравствуйте")
+    assert state.history == [
+        {"role": "user", "text": "привет"},
+        {"role": "assistant", "text": "здравствуйте"},
+    ]
+
+
+def test_append_turn_keeps_legit_repeats_and_different_texts():
+    from messengers_router.memory import MemoryStore
+
+    memory = MemoryStore()
+    state = SessionState(session_id="dedupe2")
+    # пациент дважды шлёт «да», бот дважды отвечает одинаково — через ход НЕ дедупим
+    memory.append_turn(state, "user", "да")
+    memory.append_turn(state, "assistant", "Принято")
+    memory.append_turn(state, "user", "да")
+    memory.append_turn(state, "assistant", "Принято")
+    memory.append_turn(state, "user", "нет")  # другой текст той же роли
+    assert [h["text"] for h in state.history] == ["да", "Принято", "да", "Принято", "нет"]

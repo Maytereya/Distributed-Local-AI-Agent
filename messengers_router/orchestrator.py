@@ -570,16 +570,22 @@ async def render(
     if ctx.decision is not None and ctx.evidence is not None:
         from .policies import scrub_internal_disclosure
 
+        # Хвост диалога: без него follow-up («а это подходит студентам?» после
+        # карточки акции) LLM отвечал вслепую. Эндпоинты дописывают ТЕКУЩУЮ
+        # реплику пользователя в history ДО пайплайна (router докидывает после,
+        # дедуп в append_turn) — срезаем её с хвоста, иначе она дублируется
+        # с «Запрос пациента» в промпте (Cursor-ревью 10.07).
+        history = list(ctx.state.history or [])
+        if history and isinstance(history[-1], dict) \
+                and history[-1].get("role") == "user" and history[-1].get("text") == ctx.text:
+            history = history[:-1]
         chunks: list[str] = []
         async for chunk in renderer.render_stream(
             ctx.text,
             ctx.decision,
             ctx.evidence,
             runtime_options=runtime_options,
-            # Хвост диалога: без него follow-up («а это подходит студентам?»
-            # после карточки акции) LLM отвечал вслепую. Текущая реплика в
-            # history не входит (append_turn после пайплайна).
-            history=list(ctx.state.history or []),
+            history=history,
         ):
             chunks.append(chunk)
         # Output-guard: единственный путь, способный слить системный/renderer-промпт

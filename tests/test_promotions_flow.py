@@ -466,6 +466,34 @@ def test_full_pipeline_promo_chain(promo_env):
     assert "Акция «Доктор Шубин в Самаре»" in r3, f"ожидалась карточка, got: {r3[:120]}"
 
 
+def test_endpoint_flow_history_has_no_duplicates(promo_env):
+    """Каждый ход писали ДВАЖДЫ (endpoint до пайплайна + router после) — history
+    задваивалась, а диалоговый контекст LLM показывал реплики по два раза
+    (Cursor-ревью 10.07). Порядок вызовов — ровно как endpoint /messenger-generate-once."""
+    from messengers_router import router
+    from messengers_router.memory import MemoryStore
+    from messengers_router.services import Services
+
+    services, memory = Services(), MemoryStore()
+    state = SessionState(session_id="endpoint-history-dedupe")
+    text = "какие акции есть?"
+
+    async def endpoint_turn():
+        memory.append_turn(state, "user", text)
+        parts = []
+        async for env in router.patient_routing_stream(text, state, services, memory, debug=False):
+            if env.text:
+                parts.append(env.text)
+        final = "".join(parts).strip()
+        if final:
+            memory.append_turn(state, "assistant", final)
+
+    run(endpoint_turn())
+
+    roles = [h["role"] for h in state.history]
+    assert roles == ["user", "assistant"], f"история задвоена: {roles}"
+
+
 # --- api_nayka: base64-image не тащим -------------------------------------------
 
 def test_site_promotions_strips_image_and_caches(monkeypatch):

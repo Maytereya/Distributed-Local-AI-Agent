@@ -94,6 +94,22 @@ class MemoryStore:
     # ---------- history ----------
 
     def append_turn(self, state: SessionState, role: str, text: str, limit: int = 20) -> None:
+        """Дописывает ход в историю. Идемпотентно к подряд идущему дублю.
+
+        У истории ДВА писателя (endpoint пишет user ДО пайплайна и assistant
+        после; patient_routing_stream — обоих в конце основного пути): каждый
+        ход задваивался, бюджет 20 позиций = фактически 10 ходов, а диалоговый
+        контекст LLM-рендера показывал реплики дважды (Cursor-ревью 10.07).
+        Убрать одного писателя нельзя дёшево: ранние выходы стрима (оператор /
+        не-Самара / precheck) покрыты только endpoint'ом. Дедуп подряд идущей
+        пары той же роли с тем же текстом решает класс: легитимные повторы
+        пациента разделены ходом ассистента и не схлопываются.
+        """
+
+        if state.history:
+            last = state.history[-1]
+            if isinstance(last, dict) and last.get("role") == role and last.get("text") == text:
+                return
         state.history.append({"role": role, "text": text})
         if len(state.history) > limit:
             state.history = state.history[-limit:]
