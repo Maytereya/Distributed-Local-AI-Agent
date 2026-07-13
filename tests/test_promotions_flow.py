@@ -496,6 +496,29 @@ def test_endpoint_flow_history_has_no_duplicates(promo_env):
 
 # --- api_nayka: base64-image не тащим -------------------------------------------
 
+def test_news_info_uses_cached_regions_not_live_each_turn(promo_env, monkeypatch):
+    """#3 (аудит): дерево регионов берётся из TTL-кэша, а не дёргается в CRM
+    на каждый промо-ход. Два запроса акций → один поход за регионами."""
+    calls = {"regions": 0}
+    real = api_nayka.site_regions
+
+    def counting(*a, **kw):
+        calls["regions"] += 1
+        return list(_REGIONS)
+
+    monkeypatch.setattr(api_nayka, "SCHEDULE_REFS_TTL_SECONDS", 300.0)
+    api_nayka._SCHEDULE_REFS_CACHE.clear()
+    monkeypatch.setattr(api_nayka, "site_regions", counting)
+    # promo_env замокал news_mod.api_nayka.site_regions напрямую — вернём кэш-путь
+    monkeypatch.setattr(news_mod.api_nayka, "site_regions", counting)
+
+    run(news_mod.news_info(None, "какие акции есть?", {}))
+    run(news_mod.news_info(None, "какие акции есть?", {}))
+    api_nayka._SCHEDULE_REFS_CACHE.clear()
+    _ = real
+    assert calls["regions"] == 1, f"регионы должны браться из кэша (походов: {calls['regions']})"
+
+
 def test_site_promotions_strips_image_and_caches(monkeypatch):
     calls = {"n": 0}
 

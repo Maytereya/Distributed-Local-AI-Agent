@@ -3932,6 +3932,32 @@ def test_appointment_continuation_keeps_context_doctor_not_unbookable():
         "врач из appointment-треда — не unbookable"
 
 
+def test_appointment_continuation_rescue_requires_datetime_signal():
+    # Аудит-самопроверка: рескью контекстного врача только для продолжения
+    # слотом/датой. Если ход НЕ несёт дату/время (пациент назвал услугу, а не
+    # время), рескью не срабатывает — честный unbookable, а не молчаливое
+    # удержание старого врача.
+    state = SessionState(
+        session_id="appt-no-datetime",
+        last_entities={
+            "appointment_action": "book",
+            "doctor_name": "Ким",
+            "city": "Самара",
+            "_last_label": "APPOINTMENT",
+        },
+    )
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.66,
+        entities={},  # ни врача, ни даты/времени в свежем ходу
+        flags={"entity_dropped_unverified_service_name"},
+        needs_handoff=False,
+    )
+    build_plan(decision, state, "запишите на процедуру XYZ", memory=MemoryStore())
+    assert state.last_entities.get("_appointment_unbookable_target") is True, \
+        "без сигнала даты/времени рескью не удерживает контекстного врача"
+
+
 def test_appointment_continuation_rescue_requires_prev_appointment_label():
     # Граница: конкретный врач в контексте, но прошлый ход НЕ APPOINTMENT
     # (сменилась тема) — рескью не срабатывает, остаётся прежнее поведение.

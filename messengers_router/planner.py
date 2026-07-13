@@ -12,7 +12,7 @@ from .flow_policy import apply_pending_override
 from .llm_mode_policy import RuntimeOptions
 from .memory import MemoryStore
 from .mess_types import Plan, PlanStep, RouteDecision, SessionState
-from .policies import is_compound_uzi_request, missing_slots
+from .policies import has_datetime_signal, is_compound_uzi_request, missing_slots
 from .topic_registry import extract_topic_id_from_flags, get_topic as topic_registry_get_topic
 
 
@@ -112,9 +112,18 @@ def build_plan(
         # системе». Конкретный РЕЗОЛВНУТЫЙ врач из непосредственно предыдущего
         # APPOINTMENT-хода — валидная цель (A′-2 запрещает подмену только stale
         # SPECIALTY/service, не конкретным doctor_name/doctor_id).
+        # Гейт по сигналу даты/времени: рескью — ТОЛЬКО для продолжения записи
+        # слотом/датой («на завтра на 9:00»), где цель = уже известный врач. Если
+        # пациент назвал новую услугу/цель, а не время (has_datetime_signal=False),
+        # рескью НЕ срабатывает — честный unbookable вместо молчаливого удержания
+        # старого врача (самопроверка аудита: не удерживаем контекст, когда ход —
+        # не продолжение). Называние НОВОГО врача сюда не попадает: оно идёт через
+        # doctor-резолв (флаг doctor_like), а не unverified_service.
         prev_label = str(state.last_entities.get("_last_label") or "").strip().upper()
-        appointment_thread_doctor = prev_label == "APPOINTMENT" and bool(
-            state.last_entities.get("doctor_id") or state.last_entities.get("doctor_name")
+        appointment_thread_doctor = (
+            prev_label == "APPOINTMENT"
+            and bool(state.last_entities.get("doctor_id") or state.last_entities.get("doctor_name"))
+            and has_datetime_signal(user_text)
         )
         if (
             appt_action not in {"cancel", "reschedule"}

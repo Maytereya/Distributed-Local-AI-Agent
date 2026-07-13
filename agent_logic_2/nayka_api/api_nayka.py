@@ -876,6 +876,21 @@ def site_company_units():
         return []
 
 
+def site_regions_cached(*, realtime: bool = False) -> list:
+    """`site_regions` через общий TTL-кэш справочников (ключ ``site_regions``).
+
+    Дерево регионов меняется реже, чем происходят запросы (акции фильтруются по
+    региону на КАЖДОМ ходу — `services/news.py`). Тот же кэш и ключ, что у шапки
+    `find_doctor_schedule` — один поход в CRM обслуживает оба потребителя.
+    Пустой ответ (сбой сети — `site_regions` мягко отдаёт []) не кэшируется.
+
+    :param realtime: использовать fail-fast realtime-профиль HTTP
+    :return: дерево регионов (возможно, из кэша)
+    """
+
+    return _cached_schedule_ref("site_regions", lambda: site_regions(realtime=realtime))
+
+
 def site_doctors():
     """Получить список врачей."""
     try:
@@ -1083,7 +1098,7 @@ def find_doctor_schedule(
     MAX_DOCS = int(os.getenv("NAUKA_MAX_SCHEDULE_DOCS", "5"))
 
     # --- Получаем регионы (шапка: TTL-кэш, при сбое site_regions отдаёт []) ---
-    regions = _cached_schedule_ref("site_regions", lambda: site_regions(realtime=True))
+    regions = site_regions_cached(realtime=True)
     region_map = {r["id"]: _region_display_name(r) for r in regions}
     region_id = None
     if region_name:

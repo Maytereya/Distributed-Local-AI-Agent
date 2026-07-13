@@ -258,7 +258,9 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
         # Деградация источника акций некритична: пустой ответ без handoff.
         return {"news": [], "mode": "list", "note": "news source unavailable", "entities_used": entities}
     try:
-        regions = await asyncio.to_thread(api_nayka.site_regions, realtime=True)
+        # Дерево регионов через общий TTL-кэш справочников (шарится с шапкой
+        # расписания) — не ходим в CRM за /regions на каждый промо-ход.
+        regions = await asyncio.to_thread(api_nayka.site_regions_cached, realtime=True)
     except Exception:
         regions = []
 
