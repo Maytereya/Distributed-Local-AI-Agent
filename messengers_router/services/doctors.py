@@ -38,6 +38,7 @@ from ._doctors_helpers import (
     _SCHEDULE_QUERY_RE,
     _SERVICE_QUERY_SIGNAL_RE,
     _compact_specialization,
+    _compact_specialization_service_lines,
     _dedupe_doctors_by_fio,
     _doctor_catalog_query_candidates,
     _doctor_matches_fio,
@@ -607,6 +608,11 @@ async def doctors_info(
         limit = min(limit, 3)
 
     filtered = filtered[:limit]
+    # Полное CRM-описание («уточнение», у УЗИ-врачей 1.5К+ символов каждое) —
+    # только когда спрошен КОНКРЕТНЫЙ врач. Список по специальности/процедуре
+    # показывает выжимку: кейс 08.07 «УЗИ органов мошонки» отдавал ~12К
+    # символов на 4 врачей — телеграм резал ответ на два сообщения.
+    is_specific_doctor = bool(fio_q or resolved_surname) or len(filtered) == 1
     compact: list[dict[str, Any]] = []
     for d in filtered:
         row = dict(d)
@@ -615,7 +621,14 @@ async def doctors_info(
             preferred_specialty=spec_q,
             preferred_service=service_q,
         )
-        row["specialization"] = _compact_specialization(display_spec)
+        if is_specific_doctor:
+            row["specialization"] = _compact_specialization(display_spec)
+        elif service_q:
+            # Процедурный запрос: в карточке — строки про ЭТУ процедуру
+            # («…и органов мошонки»), а не голова описания про брюшную полость.
+            row["specialization"] = _compact_specialization_service_lines(display_spec, service_q)
+        else:
+            row["specialization"] = _compact_specialization(display_spec, max_lines=4, max_chars=260)
         compact.append(row)
 
     return {

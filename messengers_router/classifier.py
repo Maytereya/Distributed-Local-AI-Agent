@@ -1419,11 +1419,22 @@ async def deterministic_rule_decision(
                 context_action="continue",
             )
         elif specialty and not appointment_intent and not price_intent and not prepare_intent:
+            # Кейс 08.07 «УЗИ органов мошонки»: ветка оставляла ТОЛЬКО specialty,
+            # и пациент получал ВСЕХ УЗИ-врачей с полными CRM-описаниями (~12К
+            # символов), включая не делающих процедуру. Если фраза-услуга
+            # специфичнее специальности («узи ОРГАНОВ МОШОНКИ» ≠ «узи») —
+            # передаём её: doctors_info отфильтрует по _doctor_matches_service.
+            info_entities: dict[str, Any] = {"specialty": specialty}
+            info_flags = {"rule_doctor_info_specialty"}
+            svc_phrase = _extract_service_keyword(text)
+            if svc_phrase and normalize_ru(svc_phrase) != normalize_ru(specialty):
+                info_entities["service_name"] = svc_phrase
+                info_flags.add("rule_doctor_info_procedure_detail")
             decision = RouteDecision(
                 label="DOCTOR_INFO",
                 confidence=CONFIDENCE.moderate,
-                entities={"specialty": specialty},
-                flags=local_flags | {"rule_doctor_info_specialty"},
+                entities=info_entities,
+                flags=local_flags | info_flags,
                 needs_handoff=False,
                 context_action="continue",
             )

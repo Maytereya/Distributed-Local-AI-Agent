@@ -83,7 +83,11 @@ _LABEL_ENTITY_WHITELIST: dict[str, set[str]] = {
         "date_hint",
     },
     "DOCTOR_SCHEDULE": {"doctor_id", "doctor_name", "specialty", "branch_name", "city"},
-    "DOCTOR_INFO": {"doctor_id", "doctor_name", "specialty"},
+    # service_name: процедурная конкретика («УЗИ органов мошонки») — без неё
+    # doctors_info не может отфильтровать врачей по процедуре (кейс 08.07:
+    # правило передавало услугу, граундер молча дропал → пациент получал ВСЕХ
+    # УЗИ-врачей, включая не делающих процедуру).
+    "DOCTOR_INFO": {"doctor_id", "doctor_name", "specialty", "service_name"},
     "PRICE": {"service_name", "city", "branch_id", "branch_name", "doctor_name", "doctor_id"},
     "ADDRESS": {"city", "branch_id", "branch_name", "service_name"},
     "TEST_RESULT": {"surname", "year", "filial", "number", "lang", "result_action", "order_id"},

@@ -812,12 +812,26 @@ def _service_tokens(service_name: str) -> list[str]:
     return out
 
 
+# Generic-стволы процедурных запросов: матчат ЛЮБОГО профильного врача и не
+# должны сами по себе давать совпадение (принцип «различающего токена»,
+# BUG-2026-06-09-04). Кейс 08.07: «УЗИ органов мошонки» матчил Ларионову по
+# «узи» + «органов» («органов малого таза»), хотя мошонку она не делает.
+_PROCEDURE_GENERIC_TOKENS = {
+    "узи", "экг", "мрт", "кт", "ультразвуковое", "ультразвуковой",
+    "исследование", "исследования", "диагностика", "диагностики",
+    "органов", "орган", "органа", "процедура", "процедуры", "анализ",
+}
+
+
 def _doctor_matches_service(doc: dict[str, Any], service_name: str) -> bool:
     """
     Проверяет, выполняет ли врач конкретную процедуру/услугу.
 
     В этом фильтре используем только профильные текстовые поля врача
     (specialization и link-level specialization), т.к. запрос процедурный.
+    Совпадение обязано включать хотя бы один РАЗЛИЧАЮЩИЙ токен («мошонки»,
+    «брюшной») — generic-стволы («узи», «органов») общие для всех врачей
+    профиля и конкретику не несут.
 
     :param doc: карточка врача
     :param service_name: название услуги от NLU/эвристики
@@ -838,10 +852,20 @@ def _doctor_matches_service(doc: dict[str, Any], service_name: str) -> bool:
         return False
 
     matched = 0
+    distinctive_total = 0
+    distinctive_matched = 0
     for tok in tokens:
         stem = _stem_service_token(tok)
+        is_generic = tok in _PROCEDURE_GENERIC_TOKENS or stem in _PROCEDURE_GENERIC_TOKENS
+        if not is_generic:
+            distinctive_total += 1
         if tok in hay or (stem and stem in hay):
             matched += 1
+            if not is_generic:
+                distinctive_matched += 1
+
+    if distinctive_total > 0 and distinctive_matched == 0:
+        return False
 
     if len(tokens) == 1:
         return matched >= 1
@@ -961,6 +985,49 @@ def _compact_specialization(
 
     compact = "\n".join(out).strip()
     if isinstance(max_chars, int) and max_chars > 0 and len(compact) > max_chars:
+        compact = compact[:max_chars].rstrip() + "..."
+    return compact
+
+
+def _compact_specialization_service_lines(
+    text: str,
+    service_q: str,
+    max_lines: int = 3,
+    max_chars: int = 260,
+) -> str:
+    """Выжимка описания врача ПОД процедурный запрос: строки с токенами услуги.
+
+    Пациент спросил «УЗИ органов мошонки» — в компактной карточке должна быть
+    строка «…и органов мошонки», а не первые строки про брюшную полость
+    (кейс 08.07). Нет совпавших строк → обычная голова описания.
+
+    :param text: полное CRM-описание врача
+    :param service_q: процедурный запрос
+    :param max_lines: максимум релевантных строк
+    :param max_chars: жёсткий предел длины
+    :return: компактный текст специализации
+    """
+
+    tokens = [
+        t for t in _service_tokens(service_q)
+        if t not in _PROCEDURE_GENERIC_TOKENS
+        and _stem_service_token(t) not in _PROCEDURE_GENERIC_TOKENS
+    ]
+    if not tokens:
+        return _compact_specialization(text, max_lines=4, max_chars=max_chars)
+    hits: list[str] = []
+    for ln in (ln.strip() for ln in str(text or "").splitlines()):
+        if not ln:
+            continue
+        low = _normalise_input(ln)
+        if any(t in low or _stem_service_token(t) in low for t in tokens):
+            hits.append(ln)
+            if len(hits) >= max_lines:
+                break
+    if not hits:
+        return _compact_specialization(text, max_lines=4, max_chars=max_chars)
+    compact = "\n".join(hits)
+    if len(compact) > max_chars:
         compact = compact[:max_chars].rstrip() + "..."
     return compact
 
