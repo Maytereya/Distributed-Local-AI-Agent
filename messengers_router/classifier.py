@@ -190,6 +190,13 @@ _PROCEDURE_DOCTOR_INFO_RE = re.compile(
     r"(кто|какой|какая|какие)\b.*\b(делает|выполняет|проводит)\b)\b",
     re.I,
 )
+# Диагностические модальности, где «специальность» = метод исследования, а не
+# врачебная специализация: только для них процедурная детализация услуги
+# («УЗИ органов мошонки») имеет смысл (см. specialty-ветку doctor_info).
+_PROCEDURE_MODALITY_RE = re.compile(
+    r"\b(узи|ультразвук\w*|экг|мрт|кт|фгдс|фкс|рентген\w*|флюорограф\w*|колоноскоп\w*|холтер\w*)\b",
+    re.I,
+)
 
 def _extract_json(text: str) -> dict[str, Any] | None:
     if not text:
@@ -1426,8 +1433,21 @@ async def deterministic_rule_decision(
             # передаём её: doctors_info отфильтрует по _doctor_matches_service.
             info_entities: dict[str, Any] = {"specialty": specialty}
             info_flags = {"rule_doctor_info_specialty"}
+            # Процедурную детализацию цепляем ТОЛЬКО для диагностических
+            # модальностей (узи/экг/мрт…), где «специальность» = метод, а фраза
+            # — его уточнение («УЗИ органов мошонки»): гард = фраза содержит
+            # основу специальности. Иначе _extract_service_keyword выдирает шум
+            # («Скажите, кто из кардиологов принимает и по какому адресу» →
+            # «Какому адресу») и фильтр отсекает всех врачей (регресс eval 13.07).
+            spec_norm = normalize_ru(specialty)
             svc_phrase = _extract_service_keyword(text)
-            if svc_phrase and normalize_ru(svc_phrase) != normalize_ru(specialty):
+            if (
+                svc_phrase
+                and _PROCEDURE_MODALITY_RE.search(specialty)
+                and spec_norm
+                and spec_norm in normalize_ru(svc_phrase)
+                and normalize_ru(svc_phrase) != spec_norm
+            ):
                 info_entities["service_name"] = svc_phrase
                 info_flags.add("rule_doctor_info_procedure_detail")
             decision = RouteDecision(

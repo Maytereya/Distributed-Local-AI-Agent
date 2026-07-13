@@ -46,6 +46,28 @@ def test_bare_specialty_unchanged(text, spec):
     assert "service_name" not in d.entities, "голая специальность — без service-фильтра"
 
 
+@pytest.mark.parametrize("text", [
+    "Скажите, кто из кардиологов принимает и по какому адресу?",  # eval-регресс 13.07
+    "какие неврологи принимают",
+    "кто из хирургов ведёт приём",
+])
+def test_non_modality_specialty_never_gets_noise_service(text):
+    """Регресс eval 13.07: у НЕ-диагностической специальности процедурная ветка
+    не должна цеплять шум _extract_service_keyword («Какому адресу») —
+    иначе _doctor_matches_service отсекает всех врачей специальности."""
+    d = run(deterministic_rule_decision(text, {}))
+    assert d is not None and d.label == "DOCTOR_INFO"
+    assert "service_name" not in d.entities, f"ложный service_name: {d.entities.get('service_name')!r}"
+    assert "rule_doctor_info_procedure_detail" not in d.flags
+
+
+def test_modality_specialty_keeps_procedure_detail():
+    """Другая модальность (ЭКГ/УЗИ) с конкретикой — детализация сохраняется."""
+    d = run(deterministic_rule_decision("узи брюшной полости", {}))
+    assert d is not None and d.entities.get("specialty") == "узи"
+    assert "брюшной" in str(d.entities.get("service_name") or "").lower()
+
+
 # --- 2-3. фильтр + компактность ----------------------------------------------------
 
 _LONG_DESC_WITH = (
