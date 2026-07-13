@@ -105,7 +105,22 @@ def build_plan(
             or target_src.get("doctor_name")
             or str(target_src.get("specialty") or "").strip()
         )
-        if appt_action not in {"cancel", "reschedule"} and not has_grounded_target:
+        # Продолжение ТОЙ ЖЕ записи (eval CRIT_APPT_KIM_LOOP_001): врач назван на
+        # прошлом ходу, но flow не стал active (ход 1 «Ким» упёрся в «нет слотов»
+        # → operator-offer, COLLECTING не наступил). На ходу «на завтра на 9:00»
+        # target_src=decision.entities без врача → ложный unbookable «врача нет в
+        # системе». Конкретный РЕЗОЛВНУТЫЙ врач из непосредственно предыдущего
+        # APPOINTMENT-хода — валидная цель (A′-2 запрещает подмену только stale
+        # SPECIALTY/service, не конкретным doctor_name/doctor_id).
+        prev_label = str(state.last_entities.get("_last_label") or "").strip().upper()
+        appointment_thread_doctor = prev_label == "APPOINTMENT" and bool(
+            state.last_entities.get("doctor_id") or state.last_entities.get("doctor_name")
+        )
+        if (
+            appt_action not in {"cancel", "reschedule"}
+            and not has_grounded_target
+            and not appointment_thread_doctor
+        ):
             state.last_entities["_appointment_unbookable_target"] = True
             memory.clear_pending(state)
             return Plan(label=effective_label, steps=[])

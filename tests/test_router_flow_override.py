@@ -3905,6 +3905,57 @@ def test_appointment_dropped_unverified_target_does_not_offer_branches():
         assert state.last_entities.get("_appointment_unbookable_target") is True, leaked
 
 
+def test_appointment_continuation_keeps_context_doctor_not_unbookable():
+    # eval CRIT_APPT_KIM_LOOP_001: врач назван на прошлом APPOINTMENT-ходу
+    # (Ким, резолвнут), но flow не стал active (ход 1 упёрся в «нет слотов» →
+    # operator-offer). На ходу «на завтра на 9:00» decision.entities без врача +
+    # dropped-флаг → раньше ложный unbookable «этого врача нет в системе».
+    # Конкретный врач из ТОГО ЖЕ appointment-треда — валидная цель.
+    state = SessionState(
+        session_id="appt-continuation",
+        last_entities={
+            "appointment_action": "book",
+            "doctor_name": "Ким",
+            "city": "Самара",
+            "_last_label": "APPOINTMENT",
+        },
+    )
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.66,
+        entities={"date_hint": "tomorrow", "time_from": "09:00"},
+        flags={"entity_dropped_unverified_service_name", "flow_datetime_appointment_override"},
+        needs_handoff=False,
+    )
+    build_plan(decision, state, "на завтра на 9:00", memory=MemoryStore())
+    assert state.last_entities.get("_appointment_unbookable_target") is not True, \
+        "врач из appointment-треда — не unbookable"
+
+
+def test_appointment_continuation_rescue_requires_prev_appointment_label():
+    # Граница: конкретный врач в контексте, но прошлый ход НЕ APPOINTMENT
+    # (сменилась тема) — рескью не срабатывает, остаётся прежнее поведение.
+    state = SessionState(
+        session_id="appt-not-thread",
+        last_entities={
+            "appointment_action": "book",
+            "service_name": "Иванов Пётр",  # junk-цель, дропнута
+            "city": "Самара",
+            "_last_label": "PRICE",
+        },
+    )
+    decision = RouteDecision(
+        label="APPOINTMENT",
+        confidence=0.7,
+        entities={"appointment_action": "book"},
+        flags={"entity_dropped_unverified_service_name", "rule_appointment"},
+        needs_handoff=False,
+    )
+    plan = build_plan(decision, state, "Записаться к Иванов Пётр", memory=MemoryStore())
+    _ = plan
+    assert state.last_entities.get("_appointment_unbookable_target") is True
+
+
 def test_appointment_unbookable_target_marker_yields_honest_refusal():
     # The marker set by the planner makes the appointment step honestly refuse
     # (booking only for Samara branches → operator), not list branches blindly.
