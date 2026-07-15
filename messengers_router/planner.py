@@ -12,8 +12,7 @@ from .flow_policy import apply_pending_override
 from .llm_mode_policy import RuntimeOptions
 from .memory import MemoryStore
 from .mess_types import Plan, PlanStep, RouteDecision, SessionState
-from .policies import has_datetime_signal, is_compound_uzi_request, missing_slots
-from agent_logic_2.nayka_api import api_price
+from .policies import has_datetime_signal, is_compound_uzi_request, is_fixed_equipment_service, missing_slots
 from .topic_registry import extract_topic_id_from_flags, get_topic as topic_registry_get_topic
 
 
@@ -156,7 +155,7 @@ def build_plan(
                 or entities.get("test_name")
                 or ""
             ).strip() or user_text
-            if api_price.resolve_diagnostic_fixed_addresses(fe_probe):
+            if is_fixed_equipment_service(fe_probe):
                 state.last_entities["_appointment_fixed_equipment"] = True
                 memory.clear_pending(state)
                 return Plan(label=effective_label, steps=[])

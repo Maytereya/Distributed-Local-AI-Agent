@@ -297,6 +297,22 @@ def _matches_any(text: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
     return any(p.search(t) for p in patterns)
 
 _DIAGNOSTIC_RE = re.compile(r"\b(экг|узи|мрт|кт|фгдс|фкс|рентген|флюорограф|колоноскоп|холтер)\b", re.I)
+
+# Fixed-equipment процедуры (флюорограф/маммограф на Ленина 5): нет приёмного
+# врача-радиолога, запись только через регистратуру. Детектор в policy-слое,
+# т.к. planner (orchestration) не может импортить host api_price (arch-гардрейл).
+# ДЕРЖАТЬ СИНХРОННО с api_price.DIAGNOSTIC_PROCEDURE_FIXED_ADDRESSES (там же адрес).
+_FIXED_EQUIPMENT_RE = re.compile(r"\b(маммограф\w*|флюорограф\w*)\b", re.I)
+
+
+def is_fixed_equipment_service(text: str) -> bool:
+    """Запрос про флюорографию/маммографию (fixed-equipment → регистратура).
+
+    :param text: текст запроса или название услуги
+    :return: True, если это флюорография/маммография
+    """
+
+    return bool(_FIXED_EQUIPMENT_RE.search(str(text or "")))
 _DOCTOR_WORDS_RE = re.compile(
     r"\b(врач\w*|специалист\w*|кардиолог\w*|эндокринолог\w*|уролог\w*|гинеколог\w*|терапевт\w*|педиатр\w*|невролог\w*|лор\w*|хирург\w*|стоматолог\w*|гастроэнтеролог\w*|онколог\w*|проктолог\w*|дерматолог\w*|дерматовенеролог\w*|эндоскопист\w*|эндоскопи\w*|офтальмолог\w*)\b",
     re.I,
