@@ -18,6 +18,7 @@ from ._common import (
     _get_first_present,
     _normalise_input,
 )
+from ._result_timing_validator import is_result_timing_question
 from ._prices_helpers import (
     _PRICE_SERVICE_ALIASES,
     SAMARA_PRICE_REGION_ID,
@@ -243,6 +244,13 @@ _RESULT_LINK_TEXT = (
     "Если анализ ещё не готов, сайт сообщит об этом."
 )
 
+# Справочный вопрос о сроках готовности (прод #675): сроки зависят от анализа,
+# достоверно не знаем → честно к оператору (не выдумываем, не просим ФИО/год).
+_RESULT_TIMING_OPERATOR_TEXT = (
+    "Точные сроки готовности результата зависят от конкретного анализа — "
+    "их подскажет оператор. Соединяю с оператором."
+)
+
 
 async def test_result_status(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
     """Отдаёт пациенту прямую ссылку на результат анализа (getanaliz.php).
@@ -265,6 +273,20 @@ async def test_result_status(self: "Services", query: str, entities: dict[str, A
     fields = _extract_result_query_fields(entities, query)
     missing = [key for key in ("surname", "year", "filial", "number") if not fields.get(key)]
     if missing:
+        # Прод #675: справочный вопрос о СРОКАХ готовности («результат отдают
+        # сразу?», «через сколько готов?») попадал в result-lookup → бот просил
+        # фамилию/год. Данных пациента нет (missing) → проверяем, не про сроки
+        # ли вопрос. Сроки достоверно не знаем (принцип «не выдумывать») →
+        # honest handoff на оператора. Fail-safe В СТОРОНУ LOOKUP: валидатор
+        # отклоняет в сроки только на уверенном сигнале, иначе — обычный clarify.
+        if await is_result_timing_question(query):
+            return {
+                "ready": False,
+                "note": "result_timing_to_operator",
+                "timing_to_operator": True,
+                "handoff_message": _RESULT_TIMING_OPERATOR_TEXT,
+                "entities_used": entities,
+            }
         return {
             "ready": False,
             "note": "missing_result_fields",

@@ -273,6 +273,16 @@ def build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseE
     if not isinstance(result_status, dict):
         return None
 
+    # Справочный вопрос о СРОКАХ готовности (прод #675) — честно к оператору,
+    # НЕ просим фамилию/год (сроки достоверно не знаем). Проверяем ДО
+    # missing-clarify: сервис уже решил через LLM-валидатор (fail-safe lookup).
+    if result_status.get("timing_to_operator"):
+        return ResponseEnvelope(
+            text=str(result_status.get("handoff_message") or "").strip(),
+            attachments=[],
+            handoff=True,
+        )
+
     # Сбор недостающих данных (ФИО/год/филиал/номер) — уточняющий вопрос.
     missing = result_status.get("missing_fields")
     if isinstance(missing, list) and missing:

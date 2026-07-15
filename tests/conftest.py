@@ -66,3 +66,18 @@ def _hermetic_patient_name_validator(monkeypatch):
 
     monkeypatch.setattr(_router, "is_patient_name_reply", _accept)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_result_timing_validator(monkeypatch):
+    """LLM-различитель сроков результата (#2) герметичен: fail-safe = lookup
+    (прежнее поведение TEST_RESULT). Тесты валидатора импортируют модуль
+    напрямую; интеграционные переопределяют мок явно.
+    """
+    from messengers_router.services import lab_tests as _lab
+
+    async def _lookup(_text):
+        return False
+
+    monkeypatch.setattr(_lab, "is_result_timing_question", _lookup)
+    yield
