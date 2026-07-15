@@ -49,3 +49,20 @@ def _isolate_schedule_refs_cache():
     api_nayka._SCHEDULE_REFS_CACHE.clear()
     yield
     api_nayka._SCHEDULE_REFS_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_patient_name_validator(monkeypatch):
+    """LLM-валидатор ФИО (#3) герметичен по умолчанию: fail-open = прежнее
+    поведение записи (принять по форме). Иначе полный router-флоу записи в
+    116 appointment-тестах дёргал бы реальный generate_text (флакость/задержка).
+    Тесты самого валидатора импортируют модуль напрямую; интеграционные —
+    переопределяют этот мок явно (monkeypatch после autouse побеждает).
+    """
+    import messengers_router.router as _router
+
+    async def _accept(_text):
+        return True
+
+    monkeypatch.setattr(_router, "is_patient_name_reply", _accept)
+    yield

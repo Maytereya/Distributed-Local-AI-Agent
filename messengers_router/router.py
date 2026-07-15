@@ -90,6 +90,7 @@ from .policies import (
 )
 from .recovery_policy import contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
+from .services._patient_name_validator import is_patient_name_reply
 from .memory import MemoryStore
 from .city import match_city
 from .topic_registry import (
@@ -1916,6 +1917,21 @@ async def _resolve_nlu_decision_before_doctor_guard(
         services,
     )
     if appointment_prelock is not None:
+        # #3 (прод #668): ФИО принимается формой `_looks_like_patient_fio`
+        # (2+ кириллических слова), поэтому «Время изменени» (коррекция) прошло
+        # как имя → «Запись: Время Изменени…». LLM-валидатор отсекает команду/
+        # коррекцию ТОЛЬКО на приёме нового ФИО в активной записи; отвергнутое
+        # → штатный путь `__clear_patient_name` (сброс + переспрос ФИО).
+        # Fail-open внутри валидатора: сбой/таймаут/kill-switch → принять по форме.
+        if (
+            is_appointment_waiting_patient_name(
+                pending_before_nlu if isinstance(pending_before_nlu, dict) else None
+            )
+            and appointment_prelock.get("patient_name")
+            and not await is_patient_name_reply(str(appointment_prelock.get("patient_name")))
+        ):
+            appointment_prelock.pop("patient_name", None)
+            appointment_prelock["__clear_patient_name"] = True
         clear_service_name = bool(appointment_prelock.pop("__clear_service_name", False))
         clear_patient_name = bool(appointment_prelock.pop("__clear_patient_name", False))
         if clear_service_name:
