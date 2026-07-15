@@ -49,27 +49,62 @@ _NOISE_RE = re.compile(r"^(ответ в процессе|печатает)[.…
 _TELEGRAM_LIMIT = 4096
 
 
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
 @dataclass
 class Dialog:
     conv: str
-    user_msgs: list[str] = field(default_factory=list)
-    bot_msgs: list[str] = field(default_factory=list)
+    events: list[tuple[str, str]] = field(default_factory=list)  # ('user'|'bot', text) в порядке лога
     operator_fallback: int = 0
+
+    def add_user(self, text: str) -> None:
+        self.events.append(("user", text))
+
+    def add_bot(self, text: str) -> None:
+        self.events.append(("bot", text))
+
+    @property
+    def user_msgs(self) -> list[str]:
+        return [t for r, t in self.events if r == "user"]
+
+    @property
+    def bot_msgs(self) -> list[str]:
+        return [t for r, t in self.events if r == "bot"]
+
+    def _loop_repeats(self) -> tuple[int, str]:
+        """Настоящий луп: ОДИН ответ бота на РАЗНЫЕ реплики пользователя.
+
+        Кейс УЗИ-мошонки: «рекомендуй»/«кто топ» (разное) → один список.
+        Повтор одного и того же вопроса пациентом (дважды «Флюорография» →
+        тот же ответ) НЕ считается лупом — это ожидаемо.
+        Возвращает (число повторов, сниппет ответа).
+        """
+        pairs: dict[str, list[str]] = defaultdict(list)  # ответ → список реплик-до
+        last_user: str | None = None
+        for role, text in self.events:
+            if role == "user":
+                last_user = _norm(text)
+            elif role == "bot" and last_user is not None:
+                pairs[_norm(text)[:200]].append(last_user)
+        best_n, best_key = 0, ""
+        for ans_key, users in pairs.items():
+            if not ans_key:
+                continue
+            distinct_users = len(set(users))
+            if len(users) >= 2 and distinct_users >= 2 and len(users) > best_n:
+                best_n, best_key = len(users), ans_key
+        return best_n, best_key[:70]
 
     def flags(self) -> list[tuple[str, str]]:
         """Красные флаги диалога: (код, человекочитаемая причина)."""
         out: list[tuple[str, str]] = []
         if self.operator_fallback:
             out.append(("operator_fallback", f"оператор-фолбэк ×{self.operator_fallback} (бот не обслужил)"))
-        # повтор-луп: один и тот же ответ бота ≥2 раз (кейс УЗИ-мошонки)
-        seen: dict[str, int] = defaultdict(int)
-        for m in self.bot_msgs:
-            key = re.sub(r"\s+", " ", m.strip().lower())[:200]
-            if key:
-                seen[key] += 1
-        repeats = max(seen.values(), default=0)
+        repeats, snippet = self._loop_repeats()
         if repeats >= 2:
-            out.append(("repeat_loop", f"идентичный ответ бота ×{repeats}"))
+            out.append(("repeat_loop", f"один ответ на {repeats} разных реплик: «{snippet}…»"))
         deflects = sum(1 for m in self.bot_msgs if _DEFLECT_RE.search(m))
         if deflects >= 2:
             out.append(("clarify_loop", f"дефлект «не понял» ×{deflects}"))
@@ -126,7 +161,7 @@ def parse_log(lines: list[str]) -> dict[str, Dialog]:
             if chat:
                 chat_to_conv[chat] = conv
             if text:
-                dlg(conv).user_msgs.append(text)
+                dlg(conv).add_user(text)
             continue
 
         m = _RE_SENDING.search(line)
@@ -137,7 +172,7 @@ def parse_log(lines: list[str]) -> dict[str, Dialog]:
             if _OPERATOR_FALLBACK_RE.search(text):
                 d.operator_fallback += 1
             elif text and not _NOISE_RE.match(text):
-                d.bot_msgs.append(text)
+                d.add_bot(text)
             continue
 
         m = _RE_EDIT.search(line)
@@ -148,7 +183,7 @@ def parse_log(lines: list[str]) -> dict[str, Dialog]:
                 if _OPERATOR_FALLBACK_RE.search(text):
                     dlg(conv).operator_fallback += 1
                 else:
-                    dlg(conv).bot_msgs.append(text)
+                    dlg(conv).add_bot(text)
             continue
 
     return dialogs

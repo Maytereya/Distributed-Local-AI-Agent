@@ -58,7 +58,24 @@ def test_operator_fallback_flagged_not_counted_as_answer():
 def test_repeat_loop_detected():
     d = _dialogs()["700"]
     codes = [c for c, _ in d.flags()]
-    assert "repeat_loop" in codes, "три идентичных ответа на УЗИ-мошонку — луп"
+    assert "repeat_loop" in codes, "один список на три РАЗНЫЕ реплики — луп (УЗИ-мошонка)"
+
+
+def test_same_question_repeated_is_not_a_loop():
+    """Прод-обкатка 15.07: пациент дважды пишет «Флюорография» и получает тот же
+    ответ — это НЕ баг (тот же вопрос → тот же ответ). Луп = один ответ на
+    РАЗНЫЕ реплики, а не любой повтор."""
+    log = (
+        "2026-07-15 10:00:00,000 [INFO] ...run_telegram: Received from Fluo (chat=900): Флюорография\n"
+        "2026-07-15 10:00:00,100 [INFO] channels_app.services: Incoming message conv=#900 from Fluo: Флюорография\n"
+        "2026-07-15 10:00:01,000 [INFO] channels_app.adapters.telegram: Telegram edit msg_id=1 in chat=900: Флюорография ведётся через регистратуру филиала на Ленина 5\n"
+        "2026-07-15 10:05:00,000 [INFO] ...run_telegram: Received from Fluo (chat=900): Флюорография\n"
+        "2026-07-15 10:05:00,100 [INFO] channels_app.services: Incoming message conv=#900 from Fluo: Флюорография\n"
+        "2026-07-15 10:05:01,000 [INFO] channels_app.adapters.telegram: Telegram edit msg_id=2 in chat=900: Флюорография ведётся через регистратуру филиала на Ленина 5\n"
+    )
+    d = parse_log(log.splitlines())["900"]
+    codes = [c for c, _ in d.flags()]
+    assert "repeat_loop" not in codes, "тот же вопрос → тот же ответ не должен быть лупом"
 
 
 def test_clarify_loop_detected():
