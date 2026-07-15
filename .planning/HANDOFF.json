@@ -1,0 +1,123 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-04-17T12:14:20.817Z",
+  "phase": "8",
+  "phase_name": "extract test-result helpers into services/lab_tests",
+  "phase_dir": "docs/messengers_router_refactor_plan.md",
+  "plan": 8,
+  "task": 1,
+  "total_tasks": 17,
+  "status": "paused",
+  "completed_tasks": [
+    {
+      "id": 0,
+      "name": "Normalize baseline contract and clear pre-existing lint debt",
+      "status": "done",
+      "commit": "e492ecb"
+    },
+    {
+      "id": 1,
+      "name": "Remove dead imports in router/NLU pipeline",
+      "status": "done",
+      "commit": "e492ecb"
+    },
+    {
+      "id": 2,
+      "name": "Make guardrail_precheck synchronous",
+      "status": "done",
+      "commit": "f388318"
+    },
+    {
+      "id": 3,
+      "name": "Log swallowed exceptions instead of hiding them",
+      "status": "done",
+      "commit": "36cfe69"
+    },
+    {
+      "id": 4,
+      "name": "Route evidence handoff check through policies helper",
+      "status": "done",
+      "commit": "da77de9"
+    },
+    {
+      "id": 5,
+      "name": "Unify reset_appointment_runtime_state (Option A)",
+      "status": "done",
+      "commit": "9f9483b"
+    },
+    {
+      "id": 6,
+      "name": "Centralise handoff messages via HANDOFF_REASON_MATRIX (Option B)",
+      "status": "done",
+      "commit": "d026414"
+    },
+    {
+      "id": 7,
+      "name": "Collapse overlapping state-clear helpers (Option B)",
+      "status": "done",
+      "commit": "2833bf7"
+    }
+  ],
+  "remaining_tasks": [
+    {
+      "id": 8,
+      "name": "Extract test-result helpers into services/lab_tests",
+      "status": "not_started"
+    },
+    {
+      "id": 9,
+      "name": "Split quick_fill_core_entities by entity domain",
+      "status": "not_started"
+    },
+    {
+      "id": 10,
+      "name": "Choose evidence schema direction",
+      "status": "not_started"
+    }
+  ],
+  "blockers": [
+    {
+      "description": "Remote eval has not been rerun after RUN_ID=1776366965; last known blocker was 04_stage5_golden_corpus socket.timeout.",
+      "type": "external",
+      "workaround": "Use local pytest/ruff for coding confidence; treat server-side Stage 5 or full eval as a separate follow-up once branch is pushed."
+    }
+  ],
+  "human_actions_pending": [
+    {
+      "action": "Optionally push refactor/core and rerun server-side Stage 5/full eval later",
+      "context": "Local verification is green through Stage 7, but remote parity is still unverified after the historical Stage 5 timeout.",
+      "blocking": false
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "Stage 5 used Option A",
+      "rationale": "Hard reset of appointment runtime plus dialog clear prevents stale APPOINTMENT state from leaking into later turns.",
+      "phase": "5"
+    },
+    {
+      "decision": "Stage 6 used Option B",
+      "rationale": "Per-domain HANDOFF_REASON_MATRIX keys preserve user-facing text exactly and minimize eval wording regression risk.",
+      "phase": "6"
+    },
+    {
+      "decision": "Stage 7 used Option B",
+      "rationale": "Named clear helpers with a shared core keep intent explicit without creating a single oversized reason-switch function.",
+      "phase": "7"
+    },
+    {
+      "decision": "Renderer not-found texts were intentionally excluded from HANDOFF_REASON_MATRIX",
+      "rationale": "They are not operator handoff reasons and should not be mixed into the handoff contract.",
+      "phase": "6"
+    }
+  ],
+  "uncommitted_files": [
+    ".gitignore",
+    "docs/messengers_router_refactor_plan.md",
+    "docs/superpowers/plans/2026-04-16-dialog-state-migration.md",
+    "docs/superpowers/plans/2026-04-16-refactor-summary.md",
+    "docs/superpowers/plans/2026-04-16-services-modularization.md"
+  ],
+  "next_action": "Read docs/messengers_router_refactor_plan.md Stage 8 section, inspect messengers_router/services/lab_tests.py and services_legacy.py test-result helpers, then start Stage 8 with TDD in refactor/core.",
+  "context_notes": "Branch refactor/core is ahead of origin by 4 commits from Stages 4-7. Stage 7 is already committed as 2833bf7. The repo also contains unrelated local user changes and untracked files outside the refactor scope; do not include them in Stage 8 commits. Local pytest depends on hydrated 20260417 Nayka cache files under agent_logic_2/nayka_api/apidata."
+}

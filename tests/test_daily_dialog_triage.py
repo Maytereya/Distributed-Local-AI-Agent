@@ -11,11 +11,11 @@ from scripts.analyze_daily_dialogs import build_digest, dump_conversations, pars
 # Синтетический лог: формат строк 1:1 с прод-воркером. Каждый входящий — пара
 # «Received from USER (chat=..)» + «Incoming ... conv=#N from USER» (мост chat↔conv).
 _LOG = """\
-2026-07-10 16:00:16,311 [INFO] channels_app.management.commands.run_telegram: Received from Losinui (chat=111): Стоимость колоноскопии
-2026-07-10 16:00:16,315 [INFO] channels_app.services: Incoming message conv=#619 from Losinui: Стоимость колоноскопии
+2026-07-10 16:00:16,311 [INFO] channels_app.management.commands.run_telegram: Received from user_alpha (chat=111): Стоимость колоноскопии
+2026-07-10 16:00:16,315 [INFO] channels_app.services: Incoming message conv=#619 from user_alpha: Стоимость колоноскопии
 2026-07-10 16:00:20,034 [INFO] channels_app.adapters.telegram: Telegram edit msg_id=5941 in chat=111: По услуге колоноскопия нашёл следующее: 1) цена 3500
-2026-07-10 16:15:08,765 [INFO] channels_app.management.commands.run_telegram: Received from Anastasiiichik (chat=222): Дементьев 1995 стб 493
-2026-07-10 16:15:08,769 [INFO] channels_app.services: Incoming message conv=#524 from Anastasiiichik: Дементьев 1995 стб 493
+2026-07-10 16:15:08,765 [INFO] channels_app.management.commands.run_telegram: Received from user_beta (chat=222): Иванов 1995 стб 493
+2026-07-10 16:15:08,769 [INFO] channels_app.services: Incoming message conv=#524 from user_beta: Иванов 1995 стб 493
 2026-07-10 16:15:08,815 [INFO] channels_app.services: Sending to telegram:222 conv=#524: Ожидайте, оператор скоро ответит.
 2026-07-10 22:21:09,000 [INFO] channels_app.management.commands.run_telegram: Received from UziGuy (chat=333): УЗИ органов мошонки
 2026-07-10 22:21:10,000 [INFO] channels_app.services: Incoming message conv=#700 from UziGuy: УЗИ органов мошонки

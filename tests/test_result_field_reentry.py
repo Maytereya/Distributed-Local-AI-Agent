@@ -1,6 +1,6 @@
 """Пере-ввод данных результата с изменённым полем перезаписывает stale (прод #673).
 
-#673: пациент прислал «Тимакова, 1960, БН, 385» → ссылка, затем «Тимакова, 1960,
+#673: пациент прислал «Петрова, 1960, БН, 385» → ссылка, затем «Петрова, 1960,
 БР, 385» (сменил филиал БН→БР) — но поля уже заполнены (missing=[]), парсер
 `_fill_test_result_entities` гейтился по missing → return до парсинга → филиал
 остался БН, ссылка по СТАРОМУ филиалу.
@@ -18,9 +18,9 @@ from messengers_router.policies import _fill_test_result_entities
 
 def test_full_reentry_overwrites_filled_filial():
     out = {}
-    _fill_test_result_entities("Тимакова, 1960, БР, 385", [], out)  # missing=[] — данные уже были
+    _fill_test_result_entities("Петрова, 1960, БР, 385", [], out)  # missing=[] — данные уже были
     assert out.get("filial") == "БР", "полный ре-ввод должен перезаписать stale филиал"
-    assert out.get("surname") == "Тимакова"
+    assert out.get("surname") == "Петрова"
     assert out.get("year") == 1960
     assert out.get("number") == 385
 
@@ -64,7 +64,7 @@ def test_router_reextracts_result_fields_on_reentry():
 
     services, memory = Services(), MemoryStore()
     state = asyncio.run(memory.aget("reentry-router"))
-    asyncio.run(run_turn(state, services, memory, "Тимакова, 1960, БН, 385"))
+    asyncio.run(run_turn(state, services, memory, "Петрова, 1960, БН, 385"))
     assert state.last_entities.get("filial") == "БН"
-    asyncio.run(run_turn(state, services, memory, "Тимакова, 1960, БР, 385"))
+    asyncio.run(run_turn(state, services, memory, "Петрова, 1960, БР, 385"))
     assert state.last_entities.get("filial") == "БР", "смена филиала должна переписать stale БН"

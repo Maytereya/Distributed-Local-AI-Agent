@@ -11,7 +11,7 @@
     ./venv/bin/python scripts/analyze_daily_dialogs.py day.log
 
 Формат лога (наблюдён 10.07):
-    ... channels_app.services: Incoming message conv=#619 from Losinui: <text>
+    ... channels_app.services: Incoming message conv=#619 from user_alpha: <text>
     ... channels_app.services: Sending to telegram:<chat> conv=#524: <text>
     ... channels_app.adapters.telegram: Telegram edit msg_id=.. in chat=<chat>: <text>
     ... channels_app.management...run_telegram: Received from X (chat=<chat>): <text>

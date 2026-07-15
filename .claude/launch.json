@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Gradio Interface (Main Web UI)",
+      "runtimeExecutable": "/Users/maxten/Dev/Distributed-Local-AI-Agent2/venv/bin/python",
+      "runtimeArgs": ["gradio_interface.py"],
+      "port": 7860
+    },
+    {
+      "name": "Agent API (FastAPI/Uvicorn)",
+      "runtimeExecutable": "/Users/maxten/Dev/Distributed-Local-AI-Agent2/venv/bin/uvicorn",
+      "runtimeArgs": ["agent_api:app", "--host", "0.0.0.0", "--port", "8010", "--reload"],
+      "port": 8010
+    },
+    {
+      "name": "Messenger Simulator (Test Client)",
+      "runtimeExecutable": "/Users/maxten/Dev/Distributed-Local-AI-Agent2/venv/bin/python",
+      "runtimeArgs": ["messenger_simulator.py", "http://localhost:8010/api/messenger-generate", "test_session"],
+      "port": 0
+    }
+  ]
+}
