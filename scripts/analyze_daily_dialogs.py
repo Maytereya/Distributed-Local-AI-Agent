@@ -224,10 +224,34 @@ def build_digest(dialogs: dict[str, Dialog], top_n: int = 15) -> str:
     return "\n".join(lines)
 
 
+def dump_conversations(dialogs: dict[str, Dialog], convs: list[str]) -> str:
+    """Выгрузка ходов конкретных диалогов — для курируемой передачи на разбор.
+
+    Позволяет вытащить ТОЛЬКО отобранные подозрительные conv (а не весь дневной
+    PII) → реплей через debug-эндпоинт / разбор Claude.
+    """
+    out: list[str] = []
+    for conv in convs:
+        d = dialogs.get(conv)
+        if d is None:
+            out.append(f"=== conv #{conv}: не найден в логе ===\n")
+            continue
+        reasons = "; ".join(r for _c, r in d.flags()) or "нет флагов"
+        out.append(f"=== conv #{conv} (флаги: {reasons}) ===")
+        for role, text in d.events:
+            tag = "пациент" if role == "user" else "бот    "
+            out.append(f"  [{tag}] {text}")
+        if d.operator_fallback:
+            out.append(f"  [оператор-фолбэк ×{d.operator_fallback}]")
+        out.append("")
+    return "\n".join(out)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Эвристический триаж дневных диалогов бота.")
     ap.add_argument("logfile", nargs="?", default="-", help="лог воркера (или - для stdin)")
     ap.add_argument("--top", type=int, default=15)
+    ap.add_argument("--conv", default="", help="выгрузить ходы конкретных диалогов (через запятую), без дайджеста")
     args = ap.parse_args()
 
     if args.logfile == "-":
@@ -237,6 +261,10 @@ def main() -> None:
             lines = fh.readlines()
 
     dialogs = parse_log(lines)
+    if args.conv.strip():
+        convs = [c.strip().lstrip("#") for c in args.conv.split(",") if c.strip()]
+        print(dump_conversations(dialogs, convs))
+        return
     print(build_digest(dialogs, top_n=args.top))
 
 

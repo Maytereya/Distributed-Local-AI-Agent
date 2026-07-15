@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from scripts.analyze_daily_dialogs import build_digest, parse_log
+from scripts.analyze_daily_dialogs import build_digest, dump_conversations, parse_log
 
 # Синтетический лог: формат строк 1:1 с прод-воркером. Каждый входящий — пара
 # «Received from USER (chat=..)» + «Incoming ... conv=#N from USER» (мост chat↔conv).
@@ -110,3 +110,18 @@ def test_digest_renders_summary_and_top():
     assert "С красными флагами: **3**" in digest
     assert "conv #700" in digest
     assert "conv #619" not in digest  # чистый — не в топе
+
+
+def test_dump_conversations_extracts_named_turns():
+    # Курируемая выгрузка конкретных conv (только отобранные, не весь дневной PII)
+    out = dump_conversations(_dialogs(), ["700", "524"])
+    assert "conv #700" in out and "conv #524" in out
+    assert "conv #619" not in out  # не запрашивали
+    assert "[пациент] УЗИ органов мошонки" in out
+    assert "[бот    ] 1. Казакова" in out
+    assert "оператор-фолбэк" in out  # #524 маркер
+
+
+def test_dump_conversations_missing_conv_is_reported():
+    out = dump_conversations(_dialogs(), ["999"])
+    assert "conv #999: не найден" in out
