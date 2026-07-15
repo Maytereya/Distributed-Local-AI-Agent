@@ -13,6 +13,7 @@ from .llm_mode_policy import RuntimeOptions
 from .memory import MemoryStore
 from .mess_types import Plan, PlanStep, RouteDecision, SessionState
 from .policies import has_datetime_signal, is_compound_uzi_request, missing_slots
+from agent_logic_2.nayka_api import api_price
 from .topic_registry import extract_topic_id_from_flags, get_topic as topic_registry_get_topic
 
 
@@ -133,6 +134,32 @@ def build_plan(
             state.last_entities["_appointment_unbookable_target"] = True
             memory.clear_pending(state)
             return Plan(label=effective_label, steps=[])
+
+    # Fixed-equipment (флюорограф/маммограф на Ленина 5): у клиники нет
+    # приёмного врача-радиолога, запись ведёт ТОЛЬКО регистратура. Перехват
+    # уже стоял в doctors_schedule_week (расписание) и addresses (адрес), но НЕ
+    # в APPOINTMENT-пути → прод #668: «Записаться на флюорографию» проходил
+    # полный booking. Перехватываем ДО сбора слотов; cancel/reschedule не
+    # трогаем (отмена такой записи — обычный путь). Ответ — response_builder.
+    if effective_label == "APPOINTMENT":
+        # action/service — из свежего decision.entities с фолбэком на контекст
+        # (entities == state.last_entities): в активном флоу цель уже в state,
+        # на первом ходу — в decision.
+        fe_action = str(
+            decision.entities.get("appointment_action") or entities.get("appointment_action") or ""
+        ).strip().lower()
+        if fe_action not in {"cancel", "reschedule"}:
+            fe_probe = str(
+                decision.entities.get("service_name")
+                or decision.entities.get("test_name")
+                or entities.get("service_name")
+                or entities.get("test_name")
+                or ""
+            ).strip() or user_text
+            if api_price.resolve_diagnostic_fixed_addresses(fe_probe):
+                state.last_entities["_appointment_fixed_equipment"] = True
+                memory.clear_pending(state)
+                return Plan(label=effective_label, steps=[])
 
     if missing:
         memory.set_pending(state, label=effective_label, missing_slots=missing)

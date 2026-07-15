@@ -535,6 +535,15 @@ def build_appointment_step_response(
     # честно отказываем вместо самарских филиалов вслепую. pop → не утечёт в след. ход.
     if entities.pop("_appointment_unbookable_target", None):
         return _doctor_not_bookable_via_bot_offer(state, memory)
+    # Fixed-equipment (флюорограф/маммограф): запись только через регистратуру
+    # Ленина 5 (прод #668). Готовый статический handoff-текст; телефон не нужен.
+    if entities.pop("_appointment_fixed_equipment", None):
+        from .policies import handoff_message
+
+        return ResponseEnvelope(
+            text=handoff_message("schedule_via_registry_fixed_equipment"),
+            handoff=True,
+        )
     activate_appointment_flow(state)
     action = str(entities.get("appointment_action") or "").strip().lower()
     if action == "cancel":
