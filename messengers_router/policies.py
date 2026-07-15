@@ -1713,22 +1713,22 @@ def _fill_test_result_entities(text: str, missing_rules: list[str], out: dict[st
     if m_oid:
         out["order_id"] = m_oid.group(1)
 
-    if not _missing_rules_include(missing_rules, "surname", "year", "filial", "number"):
-        return
-
-    ordered = _QF_RESULT_ORDERED_RE.match(t)
+    # Полный ordered ре-ввод «фамилия, год, филиал, номер» перезаписывает ВСЕГДА,
+    # ДО missing-гейта: это явный повторный ввод всех 4 полей (прод #673 — смена
+    # филиала БН→БР при уже заполненных полях). Без этого missing-гейт возвращал
+    # раньше парсинга → новые данные не извлекались, ссылка по stale-филиалу.
+    ordered = _QF_RESULT_ORDERED_RE.match(t) or _QF_RESULT_ORDERED_SPACE_RE.match(t)
     if ordered:
         out["surname"] = ordered.group(1).strip().capitalize()
         out["year"] = int(ordered.group(2))
         out["filial"] = ordered.group(3).strip()
         out["number"] = int(ordered.group(4))
-    else:
-        ordered_space = _QF_RESULT_ORDERED_SPACE_RE.match(t)
-        if ordered_space:
-            out["surname"] = ordered_space.group(1).strip().capitalize()
-            out["year"] = int(ordered_space.group(2))
-            out["filial"] = ordered_space.group(3).strip()
-            out["number"] = int(ordered_space.group(4))
+        return
+
+    # Точечный ввод (только год / только слово) — под прежним missing-гейтом:
+    # случайное слово не должно перетирать уже заполненное поле.
+    if not _missing_rules_include(missing_rules, "surname", "year", "filial", "number"):
+        return
 
     m_surname = _QF_RESULT_SURNAME_RE.search(t)
     if m_surname:

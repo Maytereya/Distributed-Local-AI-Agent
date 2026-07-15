@@ -2215,6 +2215,17 @@ async def _complete_route_after_doctor_guard(
                 quick_flow = await _sanitize_doctor_in_entities(quick_flow, services, label=decision.label)
                 quick_flow = _suppress_grounder_rejected_slots(quick_flow, decision.flags)
                 memory.merge_entities(state, quick_flow, label=decision.label)
+        elif decision.label == "TEST_RESULT":
+            # Ре-ввод данных результата с изменённым полем (прод #673): required
+            # слоты уже заполнены (missing_now пусто), но пациент прислал полный
+            # ordered ре-ввод «фамилия, год, филиал, номер» (смена филиала
+            # БН→БР) — переизвлекаем и перезаписываем stale. missing=[] →
+            # _fill_test_result_entities перезаписывает ТОЛЬКО на полный ordered,
+            # одиночное слово не перетирает. Симметрично APPOINTMENT-пути выше.
+            quick_re = quick_fill_entities_from_text(user_text, state.last_entities, [], services)
+            result_re = {k: quick_re[k] for k in ("surname", "year", "filial", "number") if k in quick_re}
+            if result_re:
+                memory.merge_entities(state, result_re, label=decision.label)
 
     # if pending exists, try quick fill missing slots (NO LLM)
     pending = memory.get_pending(state)
