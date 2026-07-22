@@ -69,6 +69,22 @@ def _hermetic_patient_name_validator(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_service_slot_validator(monkeypatch):
+    """LLM-валидатор слота услуги (#4) герметичен по умолчанию: fail-open = прежнее
+    поведение записи (принять по форме). Иначе appointment-тесты дёргали бы реальный
+    generate_text. Тесты самого валидатора импортируют модуль напрямую;
+    интеграционные — переопределяют мок явно (monkeypatch после autouse побеждает).
+    """
+    import messengers_router.router as _router
+
+    async def _accept(_text):
+        return True
+
+    monkeypatch.setattr(_router, "is_service_name_reply", _accept)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_result_timing_validator(monkeypatch):
     """LLM-различитель сроков результата (#2) герметичен: fail-safe = lookup
     (прежнее поведение TEST_RESULT). Тесты валидатора импортируют модуль

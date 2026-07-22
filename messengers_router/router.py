@@ -91,6 +91,7 @@ from .policies import (
 from .recovery_policy import contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
 from .services._patient_name_validator import is_patient_name_reply
+from .services._service_slot_validator import is_service_name_reply
 from .memory import MemoryStore
 from .city import match_city
 from .topic_registry import (
@@ -1932,6 +1933,21 @@ async def _resolve_nlu_decision_before_doctor_guard(
         ):
             appointment_prelock.pop("patient_name", None)
             appointment_prelock["__clear_patient_name"] = True
+        # #4 (аудит 2026-07-22): service_name-слот принимает командные слова формой
+        # `_SERVICE_SINGLE_WORD_RE` (любое слово ≥4 букв) → «Запись: … Поменяй …
+        # Подтверждаете?». LLM-валидатор отсекает команду ТОЛЬКО на приёме НОВОЙ
+        # услуги (свежий slot-update этого хода) и только для ОДНОСЛОВНОЙ реплики
+        # (командо-риск; многословные услуги «УЗИ брюшной полости» LLM не дёргают).
+        # Отвергнутое → штатный `__clear_service_name` (сброс + переспрос услуги).
+        # Fail-open внутри валидатора: сбой/таймаут/kill-switch → принять по форме.
+        _svc_slot = str(appointment_prelock.get("service_name") or "").strip()
+        if (
+            _svc_slot
+            and len(_svc_slot.split()) == 1  # командо-риск: одно слово
+            and not await is_service_name_reply(_svc_slot)
+        ):
+            appointment_prelock.pop("service_name", None)
+            appointment_prelock["__clear_service_name"] = True
         clear_service_name = bool(appointment_prelock.pop("__clear_service_name", False))
         clear_patient_name = bool(appointment_prelock.pop("__clear_patient_name", False))
         if clear_service_name:
