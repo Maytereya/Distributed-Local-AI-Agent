@@ -915,6 +915,128 @@ def _scorer_match_has_distinctive_overlap(query_text: str, canonical: str) -> bo
     return False
 
 
+# ---------------------------------------------------------------------------
+# Различающий токен СЕМЕЙСТВА анализов (гепатит С/В/А, и т.п.)
+#
+# Класс дефекта `family_discriminator_dropped` (SEVERE, дезинформация ценой):
+# 1-символьная буква-дискриминатор («гепатит С» → «с») отбрасывалась
+# `_price_query_tokens` (len<2), запрос схлопывался в ствол → приземлялся на
+# ПЕРВУЮ строку семейства («Гепатит В - HBsAg» 350₽) — пациент получал цену
+# ЧУЖОГО гепатита. Единый гард на двух catalog-aware стыках (single-резолвер +
+# family-builder) вместо правки глобального токенизатора: узкий триггер,
+# минимальный blast radius.
+#
+# Механизм CATALOG-DERIVED — без списка болезней в коде: «семейство» = ствол
+# ≥6 симв., у которого в самом прайсе ≥2 РАЗНЫХ буквенных варианта в позиции
+# сразу после ствола (Гепатит А/В/С/D/E). Работает для любого такого семейства.
+# ---------------------------------------------------------------------------
+
+_FAMILY_LETTER_FOLD = {
+    "а": "a", "в": "b", "с": "c", "д": "d", "е": "e", "к": "k", "ц": "c", "г": "g",
+}
+
+# Запрос: «<ствол ≥6 симв> <ОДИНОЧНАЯ буква>», где буква — ПОСЛЕДНИЙ символ.
+# Требование «последний» отсекает предлоги: «гепатит В крови» (В=предлог, за ним
+# «крови») и «гепатит С суммарные» (за С — различающий токен, и так матчится
+# обычным путём) → оба НЕ дискриминатор. Ровно ОДНА буква (без цифр) держит scope
+# на буквенных семействах (гепатит А/В/С/D/Е); кодовые семейства (аллерген f1,
+# витамин B12, тиреоид т3) сюда НЕ попадают — это отдельный трек, иные механизмы.
+_FAMILY_QUERY_DISCRIMINATOR_RE = re.compile(r"\b([а-яёa-z]{6,})\s+([а-яёa-z])\s*$", re.I)
+
+
+def _fold_family_letter(token: str) -> str:
+    """Сворачивает буквенный дискриминатор к канону (кириллица→латиница)."""
+    low = str(token or "").strip().lower()
+    if not low:
+        return ""
+    return f"{_FAMILY_LETTER_FOLD.get(low[0], low[0])}{low[1:]}"
+
+
+def _family_query_discriminator(query_text: str) -> tuple[str, str] | None:
+    """``(stem6, folded_letter)`` если запрос = «<ствол≥6> <буква>» (буква —
+    последний токен), иначе ``None``. Витамины идут своим (composite-token)
+    путём — их пропускаем, чтобы не задвоить логику.
+
+    :param query_text: исходный price-запрос
+    :return: (6-символьный корень ствола, свёрнутая буква) либо None
+    """
+    if _extract_vitamin_designator(query_text):
+        return None
+    m = _FAMILY_QUERY_DISCRIMINATOR_RE.search(_normalise_input(query_text))
+    if not m:
+        return None
+    return m.group(1)[:6], _fold_family_letter(m.group(2))
+
+
+def _row_family_letter(name: str, stem6: str) -> str | None:
+    """Буквенный дискриминатор строки прайса сразу после ствола ``stem6``.
+
+    :param name: название услуги из каталога
+    :param stem6: 6-символьный корень ствола семейства
+    :return: свёрнутая буква варианта либо None, если строка не «<ствол> <буква>»
+    """
+    if not stem6:
+        return None
+    m = re.search(
+        rf"\b{re.escape(stem6)}[а-яёa-z]*\s+[–—-]?\s*([а-яёa-z]\d{{0,2}})\b",
+        _normalise_input(name),
+    )
+    return _fold_family_letter(m.group(1)) if m else None
+
+
+def _family_discriminator_context(
+    query_text: str, rows: list[dict[str, Any]]
+) -> tuple[str, str] | None:
+    """``(stem6, letter)`` только если запрос несёт букву-дискриминатор И ствол —
+    реальное семейство каталога (≥2 РАЗНЫХ буквы в позиции после ствола). Иначе
+    ``None`` (обычный путь). Никакого хардкода болезней — только структура прайса.
+
+    :param query_text: исходный price-запрос
+    :param rows: строки прайса (для проверки, что ствол — семейство)
+    :return: (корень ствола, искомая буква) либо None
+    """
+    disc = _family_query_discriminator(query_text)
+    if disc is None:
+        return None
+    stem6, letter = disc
+    letters: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_letter = _row_family_letter(str(row.get("serviceName") or row.get("name") or ""), stem6)
+        if row_letter:
+            letters.add(row_letter)
+            if len(letters) >= 2:
+                return stem6, letter
+    return None
+
+
+def restrict_rows_to_family_letter(
+    query_text: str, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Оставляет из ``rows`` ТОЛЬКО строки буквы-дискриминатора запроса.
+
+    Нужна в single/lab-ветке ``price_info`` для МАЛЫХ семейств (гепатит А/D/E —
+    <3 вариантов, family-mode не триггерит), чтобы в ответ на «гепатит А» не
+    всплыла чужая буква (В/С). Если запрос без дискриминатора — возвращает
+    ``rows`` как есть. Если буквы нет в каталоге — вернёт пусто (→ честное
+    уточнение, а не чужая цена). Catalog-derived, см. ``_family_discriminator_context``.
+
+    :param query_text: исходный price-запрос
+    :param rows: строки-кандидаты прайса
+    :return: строки нужной буквы, исходный список (нет дискриминатора) либо пусто
+    """
+    ctx = _family_discriminator_context(query_text, rows)
+    if ctx is None:
+        return rows
+    stem6, letter = ctx
+    return [
+        row
+        for row in rows
+        if _row_family_letter(str(row.get("serviceName") or row.get("name") or ""), stem6) == letter
+    ]
+
+
 def resolve_price_service_name_from_catalog(
     query_text: str,
     *,
@@ -947,10 +1069,23 @@ def resolve_price_service_name_from_catalog(
     if not catalog_rows:
         return None
 
+    # Гард различающего токена семейства (family_discriminator_dropped): если
+    # запрос указывает семейство+букву (гепатит С), single-резолвер НЕ вправе
+    # вернуть строку с ДРУГОЙ буквой (Гепатит В) — это дезинформация ценой.
+    # При несовпадении отдаём None: сработает family-mode (список только С) или
+    # уточнение. `_letter_ok` пропускает всё, если дискриминатора нет.
+    family_disc = _family_discriminator_context(query_text, catalog_rows)
+
+    def _letter_ok(name: str | None) -> bool:
+        if not family_disc or not name:
+            return True
+        stem6, want_letter = family_disc
+        return _row_family_letter(name, stem6) == want_letter
+
     alias_hit = _resolve_price_alias_from_catalog(query_text, catalog_rows)
     if alias_hit and not _alias_overrides_explicit_primary(
         alias_hit, current_service_name, query_text
-    ):
+    ) and _letter_ok(alias_hit):
         return alias_hit
 
     prefer_query_over_context = _should_prefer_current_price_query_over_context(query_text, current_service_name)
@@ -960,7 +1095,7 @@ def resolve_price_service_name_from_catalog(
             best_row, best_score, _ = _resolve_best_price_row_from_queries(text_only_queries, catalog_rows)
             if best_row and best_score >= 100:
                 canonical = str(best_row.get("serviceName") or best_row.get("name") or "").strip()
-                if canonical and _scorer_match_has_distinctive_overlap(query_text, canonical):
+                if canonical and _scorer_match_has_distinctive_overlap(query_text, canonical) and _letter_ok(canonical):
                     return canonical
 
     queries = _build_price_catalog_queries(query_text, current_service_name=current_service_name)
@@ -975,6 +1110,8 @@ def resolve_price_service_name_from_catalog(
         return None
     canonical = str(best_row.get("serviceName") or best_row.get("name") or "").strip()
     if canonical and not _scorer_match_has_distinctive_overlap(query_text, canonical):
+        return None
+    if not _letter_ok(canonical):
         return None
     return canonical or None
 
@@ -1766,6 +1903,21 @@ def _build_family_candidate_rows(
         ):
             best_rows = candidate_rows
             best_base_names = candidate_base_names
+
+    # Фильтр различающего токена семейства: если запрос несёт букву (гепатит С),
+    # в семействе оставляем ТОЛЬКО строки этой буквы — иначе пациент видит чужие
+    # варианты (гепатит В) в ответе на запрос про С. Пусто (буквы нет в каталоге)
+    # → оставляем как есть (generic-фолбэк, не хуже прежнего).
+    family_disc = _family_discriminator_context(query_text, rows)
+    if family_disc is not None:
+        stem6, letter = family_disc
+        filtered = [
+            row
+            for row in best_rows
+            if _row_family_letter(str(row.get("serviceName") or row.get("name") or ""), stem6) == letter
+        ]
+        if filtered:
+            best_rows = filtered
 
     return best_rows
 

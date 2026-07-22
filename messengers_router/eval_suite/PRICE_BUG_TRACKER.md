@@ -77,6 +77,8 @@ Generic disease-query приземлялся в одну каноническу�
 **Серверная проверка:**
 Подтверждено прогоном `run_remote_eval.sh` (`run_id=1775676454`): `stage5 PRICE 13/13`, `critical 46/46`.
 
+**Follow-up (2026-07-22, `family_discriminator_dropped`):** P01 чинил ГОЛОЕ «гепатит» (family-mode). Но «гепатит С»/«гепатит В» (с буквой) обходили family и приземлялись на ЧУЖУЮ строку (С → «Гепатит В - HBsAg» 350₽): различающая буква выбрасывалась токенизатором. Фикс — catalog-derived гард различающей буквы на 3 стыках. См. `docs/messengers_router_bug_log.md → BUG-2026-07-22-HEPATITIS-PRICE` и `tests/test_price_family_discriminator.py`.
+
 ## P02. Стоимость АлАТ
 
 **Статус:** `FIXED_SERVER`

@@ -58,6 +58,7 @@ from ._prices_helpers import (
     _resolve_ambiguous_price_kind_with_llm,
     _select_patient_price_rows,
     resolve_price_service_name_from_catalog,
+    restrict_rows_to_family_letter,
 )
 from ._regions import (
     _has_explicit_non_samara_regions,
@@ -243,8 +244,15 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         query_candidate = _extract_price_service_from_query(query_text)
         if _should_prefer_retail_query_candidate(query_candidate or "", service_name):
             retail_query = query_candidate or service_name
+    # Гард различающего токена семейства для МАЛЫХ семейств (гепатит А/D/E —
+    # <3 вариантов, family-mode их не берёт): если запрос несёт букву, ранжируем
+    # ТОЛЬКО по строкам этой буквы, иначе всплывёт чужой гепатит (В за запрос про А).
+    # Для запросов без дискриминатора список не меняется.
+    family_scoped_rows = restrict_rows_to_family_letter(
+        query_text, [p for p in price_rows if isinstance(p, dict)]
+    )
     matches = _select_patient_price_rows(
-        [p for p in price_rows if isinstance(p, dict)],
+        family_scoped_rows,
         retail_query,
         limit=10,
     )
@@ -255,7 +263,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     # результате — рабочие кейсы не затрагиваются.
     if not matches and retail_query != service_name:
         matches = _select_patient_price_rows(
-            [p for p in price_rows if isinstance(p, dict)],
+            family_scoped_rows,
             service_name,
             limit=10,
         )
