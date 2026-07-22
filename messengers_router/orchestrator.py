@@ -492,7 +492,7 @@ async def tool_loop(
     return ctx
 
 
-async def render(
+async def _render_impl(
     ctx: OrchestratorContext,
     runtime_options: Any | None = None,
     services: Any | None = None,
@@ -568,8 +568,6 @@ async def render(
 
     # 4. LLM path — collect render_stream into one envelope.
     if ctx.decision is not None and ctx.evidence is not None:
-        from .policies import scrub_internal_disclosure
-
         # Хвост диалога: без него follow-up («а это подходит студентам?» после
         # карточки акции) LLM отвечал вслепую. Эндпоинты дописывают ТЕКУЩУЮ
         # реплику пользователя в history ДО пайплайна (router докидывает после,
@@ -588,12 +586,11 @@ async def render(
             history=history,
         ):
             chunks.append(chunk)
-        # Output-guard: единственный путь, способный слить системный/renderer-промпт
-        # или модель — это свободная LLM-генерация. На ПОЛНОМ тексте (а не per-chunk)
-        # ловим сигнатуры утечки и заменяем на безопасный дефлект. Покрывает оба
-        # эндпоинта (оба собирают ответ здесь). См. messengers_router_bug_log.md.
+        # Output-guard применяется ЕДИНОЙ воронкой в render() (обёртка над
+        # _render_impl) — на ПОЛНОМ тексте ЛЮБОГО пути (stream/prebuilt/PREPARE/
+        # pending), а не только этого. Здесь — сырой join. См. bug_log § scrub-funnel.
         ctx.response = ResponseEnvelope(
-            text=scrub_internal_disclosure("".join(chunks)),
+            text="".join(chunks),
             attachments=list(ctx.evidence.items.get(ek.ATTACHMENTS) or []),
             handoff=bool(ctx.decision.needs_handoff),
         )
@@ -602,6 +599,42 @@ async def render(
 
     # 5. Defensive fallback — tool_loop bailed early (no services/memory)
     ctx.response = ResponseEnvelope(text="")
+    return ctx
+
+
+async def render(
+    ctx: OrchestratorContext,
+    runtime_options: Any | None = None,
+    services: Any | None = None,
+    memory: Any | None = None,
+) -> OrchestratorContext:
+    """Единая output-воронка перед отправкой пациенту.
+
+    Строит ответ (`_render_impl`), затем прогоняет ЕГО текст через
+    `scrub_internal_disclosure` ровно ОДИН раз — на ЛЮБОМ пути (stream, prebuilt/
+    PREPARE-wrap, pending, safety-шаблоны). Раньше scrub стоял только на stream-
+    ветке (ложный инвариант «единственный путь свободной генерации — render_stream»),
+    и PREPARE-wrap (вторая свободная LLM-генерация) выходил через prebuilt МИМО
+    guard'а. Идемпотентность scrub делает единичное применение безопасным для
+    детерминированных ответов (сам дефлект сигнатур не содержит).
+
+    :param ctx: контекст пайплайна
+    :param runtime_options: runtime-настройки LLM/NLU
+    :param services: сервисный слой для deterministic-builders
+    :param memory: memory-store для deterministic-builders
+    :return: контекст с финальным (защищённым output-guard'ом) ctx.response
+    """
+
+    from .policies import scrub_internal_disclosure
+
+    ctx = await _render_impl(
+        ctx,
+        runtime_options=runtime_options,
+        services=services,
+        memory=memory,
+    )
+    if ctx.response is not None and getattr(ctx.response, "text", None):
+        ctx.response.text = scrub_internal_disclosure(ctx.response.text)
     return ctx
 
 

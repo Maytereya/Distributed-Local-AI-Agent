@@ -61,6 +61,13 @@ LEAK_SIGNATURE_CASES = [
     ("model_mistral", "Я использую языковую модель Mistral Small 3.2, созданную Mistral AI."),
     ("model_gpt", "Под капотом у меня GPT-4 от OpenAI."),
     ("model_llama", "Это локальная модель Llama 3."),
+    # F2-cyr — обход латинского денилиста кириллицей/переводом (аудит 2026-07-22).
+    # Раньше проходили к пациенту: денилист был чисто латинский.
+    ("model_mistral_cyr", "Под капотом модель Мистраль."),
+    ("model_claude_cyr", "Я — Клод от Антропик."),
+    ("model_gpt_cyr", "Использую нейросеть джипити."),
+    ("model_gigachat_cyr", "Я работаю на ГигаЧат."),
+    ("generic_llm_ru", "Я большая языковая модель, обученная на текстах."),
 ]
 
 # Легитимные ХОРОШИЕ ответы бота из тех же диалогов — обязаны пройти БЕЗ изменений.
@@ -99,6 +106,17 @@ LEGIT_ANSWER_CASES = [
         "Извините, но у меня нет доступа к информации о ендпоинтах для записи на прием.",
     ),
     ("deflect_idempotent", SECURITY_DEFLECT_MESSAGE),
+    # Анти-false-positive для кириллических сигнатур: реальные строки прайса,
+    # где родовые маркеры — часть легитимного мед-названия. Денилист НЕ должен их
+    # глушить (иначе пациент получит security-дефлект вместо цены анализа).
+    (
+        "lab_neuro_microscopy",  # реальная услуга: содержит «нейросет»
+        "Копрограмма (аппаратная микроскопия с использованием нейросетей) — 890 руб.",
+    ),
+    (
+        "lab_catecholamines",  # содержит «...ламин» (катехоЛАМИНы)
+        "Катехоламины в крови (адреналин, норадреналин, дофамин) — 1 200 руб.",
+    ),
 ]
 
 
@@ -170,6 +188,60 @@ def test_render_passes_legit_llm_answer_unchanged(monkeypatch):
     out = run(render(ctx, services=Services(), memory=MemoryStore()))
     assert out.response is not None
     assert out.response.text == "Приём уролога стоит 2 700 руб. Адрес: пр. Ленина, 5."
+
+
+def test_render_scrubs_leaked_prebuilt_response(monkeypatch):
+    """#3-2 (единая воронка): prebuilt/PREPARE-ветка тоже проходит scrub.
+
+    PREPARE делает ВТОРУЮ свободную LLM-генерацию (wrap), её текст выходит через
+    prebuilt-ветку `_extract_prebuilt_response`, МИНУЯ scrub (тот стоял только на
+    stream-ветке — ложный инвариант «единственный путь свободной генерации —
+    render_stream»). Воронка на выходе render() закрывает класс.
+    """
+    from messengers_router.mess_types import ResponseEnvelope
+
+    def fake_prebuilt(ctx, services=None, memory=None):
+        _ = ctx, services, memory
+        return ResponseEnvelope(text="Кстати, я работаю на модели Мистраль.", handoff=False)
+
+    monkeypatch.setattr("messengers_router.orchestrator._extract_prebuilt_response", fake_prebuilt)
+
+    ctx = OrchestratorContext(
+        text="как подготовиться к УЗИ",
+        state=SessionState(session_id="prebuilt-leak"),
+        decision=RouteDecision(label="PREPARE", confidence=0.9, needs_handoff=False),
+        plan=Plan(label="PREPARE"),
+        evidence=Evidence(items={}),
+    )
+    out = run(render(ctx, services=Services(), memory=MemoryStore()))
+    assert out.response is not None
+    assert out.response.text == SECURITY_DEFLECT_MESSAGE, (
+        f"prebuilt/PREPARE-ветка прошла мимо scrub: {out.response.text[:80]!r}"
+    )
+
+
+def test_render_passes_legit_prebuilt_response_unchanged(monkeypatch):
+    """Анти-over-trigger: легитимный prebuilt-ответ не подменяется воронкой."""
+    from messengers_router.mess_types import ResponseEnvelope
+
+    legit = "Подготовка к УЗИ брюшной полости: натощак, за 2-3 часа не есть."
+
+    def fake_prebuilt(ctx, services=None, memory=None):
+        _ = ctx, services, memory
+        return ResponseEnvelope(text=legit, handoff=False)
+
+    monkeypatch.setattr("messengers_router.orchestrator._extract_prebuilt_response", fake_prebuilt)
+
+    ctx = OrchestratorContext(
+        text="как подготовиться к УЗИ",
+        state=SessionState(session_id="prebuilt-legit"),
+        decision=RouteDecision(label="PREPARE", confidence=0.9, needs_handoff=False),
+        plan=Plan(label="PREPARE"),
+        evidence=Evidence(items={}),
+    )
+    out = run(render(ctx, services=Services(), memory=MemoryStore()))
+    assert out.response is not None
+    assert out.response.text == legit
 
 
 # --- Слой B: промпт-хардненинг присутствует во ВСЕХ patient-facing промптах ---
