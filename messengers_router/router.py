@@ -93,6 +93,12 @@ from .policies import (
 from .recovery_policy import contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
 from .services._patient_name_validator import is_patient_name_reply
+from .services._samara_perimeter import (
+    branch_name_for_place,
+    is_branch_address_word,
+    is_samara_perimeter_text,
+    match_perimeter_place,
+)
 from .services._service_slot_validator import is_service_name_reply
 from .memory import MemoryStore
 from .city import match_city
@@ -2335,6 +2341,21 @@ async def _complete_route_after_doctor_guard(
     # Явный город в текущей реплике должен уметь исправлять/обновлять контекст
     # даже если city уже был заполнен ранее неверно.
     city_hint_now = match_city(user_text)
+    # П4: место самарского периметра — это Самара, а не «другой город». При
+    # ЯВНОМ упоминании места со своим филиалом («в южном городе», «Мехзавод»)
+    # ещё и подставляем этот филиал: иначе пациент получал дамп восемнадцати
+    # адресов Самары (прод 10.08). Спутники своих филиалов не имеют — для них
+    # только город.
+    perimeter_place = (
+        match_perimeter_place(user_text)
+        if decision.label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
+        else None
+    )
+    if perimeter_place:
+        city_hint_now = _DEFAULT_CITY
+        branch_for_place = branch_name_for_place(perimeter_place)
+        if branch_for_place and not str(state.last_entities.get("branch_name") or "").strip():
+            memory.merge_entities(state, {"branch_name": branch_for_place}, label=decision.label)
     if city_hint_now and decision.label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
         memory.merge_entities(state, {"city": city_hint_now}, label=decision.label)
     elif decision.label in {"APPOINTMENT", "ADDRESS", "TEST_ASSIST", "DOCTOR_INFO", "DOCTOR_SCHEDULE", "PRICE"}:
@@ -2671,6 +2692,19 @@ async def patient_routing_stream(
         return
 
     city_now = match_city(user_text)
+    # П4: самарский периметр. Тридцать филиалов узла «Самара» стоят в черте
+    # города, три — вне её (пос. Придорожный «Южный город», п. Мехзавод, ЮГ-2),
+    # плюс спутники по решению владельца №5 (Новокуйбышевск, Кинель, Смышляевка,
+    # Стройкерамика). Их обслуживаем как Самару. Без этого гарда адрес
+    # собственного филиала выглядел чужим городом: «пр-т Николаевский»
+    # `match_city` резолвит в город «Николаевский» из справочника → пациента
+    # уводило к оператору «Сейчас могу помочь только по Самаре».
+    if (
+        city_now
+        and not _is_samara_city(city_now)
+        and (is_samara_perimeter_text(user_text) or is_branch_address_word(city_now))
+    ):
+        city_now = _DEFAULT_CITY
     if city_now and not _is_samara_city(city_now):
         # Исключение: запрос результатов анализов работает для любого города —
         # портал результатов (naykalab.ru/samara) не привязан к региону, достаточно
