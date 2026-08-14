@@ -17,6 +17,11 @@ from ..prompt_registry import load_prompt_text
 from ..russian_nlu import normalize_ru
 from ..service_phrase import extract_service_phrase
 from ._addresses_helpers import _extract_homecode_query
+from ._biomaterial import (
+    mis_synonym_service,
+    service_accepts_biomaterial,
+    split_biomaterial_tail,
+)
 from ._common import _as_int, _normalise_input
 from ._doctors_helpers import (
     _UZI_LINE_RE,
@@ -1211,7 +1216,13 @@ def resolve_price_service_name_from_catalog(
     Приземляет пользовательский price-запрос на реальную услугу из price-каталога.
 
     Используется как узкий catalog-grounded слой для `PRICE`, чтобы не
-    перечислять лабораторные анализы и процедуры в regex/anchors.
+    перечислять лабораторные анализы и процедуры в regex/anchors. ЕДИНАЯ точка
+    (14 вызовов из 7 модулей: цены, запись, подготовка, поиск врача), поэтому
+    слои МИС подключены здесь, а не в каждом вызывающем.
+
+    Порядок слоёв: синоним МИС (высшее доверие) → лексический матч по каталогу →
+    снятие биоматериала и повторный матч. LLM-нормализатор работает ПОСЛЕ, у
+    вызывающего.
 
     :param query_text: исходный текст пользователя
     :param current_service_name: услуга из текущего state, если уже есть
@@ -1220,6 +1231,102 @@ def resolve_price_service_name_from_catalog(
     """
 
     query_text = _apply_service_synonyms(query_text)
+    # Слой 1 — `serviceSynonyms` МИС: прямое «слово пациента → услуга», высшее
+    # доверие. Поле заполняет клиника (на срезе 14.08 пусто) — механика
+    # подключена заранее и включается сама по мере наполнения справочника.
+    synonym_hit = mis_synonym_service(query_text)
+    if synonym_hit and _catalog_has_service_name(synonym_hit, rows):
+        return synonym_hit
+    core = _resolve_price_service_core(
+        query_text, current_service_name=current_service_name, rows=rows
+    )
+    # Слой 3 — биоматериал: снять и перепроверить (см. `_biomaterial`).
+    return _resolve_with_biomaterial_stripped(
+        query_text,
+        core,
+        current_service_name=current_service_name,
+        rows=rows,
+    )
+
+
+def _catalog_has_service_name(service_name: str, rows: list[dict[str, Any]] | None) -> bool:
+    """Есть ли такая услуга в прайсе (синоним МИС может указывать на услугу вне среза)."""
+
+    target = _normalise_input(service_name)
+    if not target:
+        return False
+    catalog_rows = rows
+    if catalog_rows is None:
+        try:
+            loaded = api_price.load_price_by_region(SAMARA_PRICE_REGION_ID)
+        except Exception:
+            return False
+        catalog_rows = [row for row in loaded if isinstance(row, dict)]
+    return any(
+        _normalise_input(str(row.get("serviceName") or row.get("name") or "")) == target
+        for row in catalog_rows
+        if isinstance(row, dict)
+    )
+
+
+def _resolve_with_biomaterial_stripped(
+    query_text: str,
+    core_result: str | None,
+    *,
+    current_service_name: str = "",
+    rows: list[dict[str, Any]] | None = None,
+) -> str | None:
+    """Снимает хвост-биоматериал и предпочитает результат, ПОДТВЕРЖДЁННЫЙ МИС.
+
+    Прод 10.08: «мазок на микрофлору с поверхности задней стенки глотки» не
+    матчился вовсе, а «сколько стоит мазок на микрофлору с задней стенки глотки»
+    приземлялся на «Обработка задней стенки глотки … СО2 лазера» — упоминание
+    материала уводило в ЧУЖУЮ услугу.
+
+    Результат со снятым материалом принимается ТОЛЬКО если справочник МИС
+    подтверждает: найденная услуга этот материал принимает. Биоматериал при этом
+    НЕ идентифицирует услугу (один соскоб подходит к 44 услугам, «кровь из вены»
+    — к 1103) — он только снимается и служит проверкой.
+
+    :param query_text: исходный запрос
+    :param core_result: результат обычного лексического матча (может быть None)
+    :param current_service_name: услуга из state
+    :param rows: строки прайса
+    :return: уточнённое название услуги либо исходный результат
+    """
+
+    head, tail = split_biomaterial_tail(query_text)
+    if not tail or not head:
+        return core_result
+    stripped = _resolve_price_service_core(
+        head, current_service_name=current_service_name, rows=rows
+    )
+    if not stripped or stripped == core_result:
+        return core_result
+    # Ключевая проверка: услуга без материала должна ПРИНИМАТЬ названный материал.
+    if service_accepts_biomaterial(stripped, tail) is not True:
+        return core_result
+    # Исходный матч сохраняем, только если он тоже принимает этот материал —
+    # иначе это подмена по локативному совпадению (лазерная обработка глотки).
+    if core_result and service_accepts_biomaterial(core_result, tail) is True:
+        return core_result
+    return stripped
+
+
+def _resolve_price_service_core(
+    query_text: str,
+    *,
+    current_service_name: str = "",
+    rows: list[dict[str, Any]] | None = None,
+) -> str | None:
+    """Лексический матч по прайсу — исходное тело резолвера (слой 2).
+
+    :param query_text: текст запроса (уже с применёнными синонимами)
+    :param current_service_name: услуга из текущего state
+    :param rows: опционально заранее загруженные строки priceByRegion
+    :return: каноническое название услуги из каталога либо None
+    """
+
     catalog_rows = rows
     if catalog_rows is None:
         try:
