@@ -16,6 +16,35 @@ from .policies import has_datetime_signal, is_compound_uzi_request, is_fixed_equ
 from .topic_registry import extract_topic_id_from_flags, get_topic as topic_registry_get_topic
 
 
+def _unbookable_target_kind(user_text: str, decision_flags: set[str]) -> str:
+    """Классифицирует ОБРОНЁННУЮ цель записи, чтобы отказ говорил по делу.
+
+    Единый текст отказа всегда утверждал «этого врача нет в системе онлайн-записи»
+    — и на представившегося по ФИО пациента (прод 11.07), и на названную УСЛУГУ
+    («Могу ли я завтра пройти гинекологическое УЗИ», прод 18.07). Логика отказа
+    верна (не выдумываем филиалы под неопознанную цель, `BUG-2026-06-01-01`),
+    неверна была формулировка.
+
+    :param user_text: реплика пациента этого хода
+    :param decision_flags: флаги грундированного решения
+    :return: ``doctor`` | ``service`` | ``patient_name`` | ``unknown``
+    """
+
+    from .flow_policy import looks_like_patient_fio
+    from .service_phrase import extract_service_phrase
+
+    text = str(user_text or "").strip()
+    if "entity_dropped_doctor_like_service_name" in decision_flags:
+        return "doctor"
+    # Собственное имя пациента НЕ является целью записи: на «<ФИО>» отвечаем
+    # вопросом о цели, а не «такого врача нет».
+    if text and looks_like_patient_fio(text):
+        return "patient_name"
+    if text and extract_service_phrase(text):
+        return "service"
+    return "unknown"
+
+
 def _build_other_plan_from_topic_registry(
     decision: RouteDecision,
     user_text: str,
@@ -130,7 +159,13 @@ def build_plan(
             and not has_grounded_target
             and not appointment_thread_doctor
         ):
-            state.last_entities["_appointment_unbookable_target"] = True
+            # П5: тип обронённой цели решает ТЕКСТ отказа. Раньше он всегда был
+            # про врача («этого врача нет в системе онлайн-записи») — и пациент,
+            # который просто представился по ФИО или назвал УСЛУГУ («гинекологическое
+            # УЗИ»), получал ответ не по делу (прод 11.07 и 18.07).
+            state.last_entities["_appointment_unbookable_target"] = _unbookable_target_kind(
+                user_text, set(decision.flags)
+            )
             memory.clear_pending(state)
             return Plan(label=effective_label, steps=[])
 

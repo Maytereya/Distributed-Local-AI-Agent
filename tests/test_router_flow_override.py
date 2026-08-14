@@ -3902,7 +3902,7 @@ def test_appointment_dropped_unverified_target_does_not_offer_branches():
         )
         plan = build_plan(decision, state, f"Записаться к {leaked}", memory=MemoryStore())
         assert "address_info" not in [s.tool for s in plan.steps], leaked
-        assert state.last_entities.get("_appointment_unbookable_target") is True, leaked
+        assert state.last_entities.get("_appointment_unbookable_target"), leaked  # П5: маркер несёт ТИП цели
 
 
 def test_appointment_continuation_keeps_context_doctor_not_unbookable():
@@ -3928,7 +3928,7 @@ def test_appointment_continuation_keeps_context_doctor_not_unbookable():
         needs_handoff=False,
     )
     build_plan(decision, state, "на завтра на 9:00", memory=MemoryStore())
-    assert state.last_entities.get("_appointment_unbookable_target") is not True, \
+    assert not state.last_entities.get("_appointment_unbookable_target"), \
         "врач из appointment-треда — не unbookable"
 
 
@@ -3954,7 +3954,7 @@ def test_appointment_continuation_rescue_requires_datetime_signal():
         needs_handoff=False,
     )
     build_plan(decision, state, "запишите на процедуру XYZ", memory=MemoryStore())
-    assert state.last_entities.get("_appointment_unbookable_target") is True, \
+    assert state.last_entities.get("_appointment_unbookable_target"), \
         "без сигнала даты/времени рескью не удерживает контекстного врача"
 
 
@@ -3979,7 +3979,7 @@ def test_appointment_continuation_rescue_requires_prev_appointment_label():
     )
     plan = build_plan(decision, state, "Записаться к Иванов Пётр", memory=MemoryStore())
     _ = plan
-    assert state.last_entities.get("_appointment_unbookable_target") is True
+    assert state.last_entities.get("_appointment_unbookable_target")
 
 
 def test_appointment_unbookable_target_marker_yields_honest_refusal():
@@ -4059,7 +4059,7 @@ def test_appointment_dropped_target_with_stale_specialty_still_refuses():
         )
         plan = build_plan(decision, state, "Записаться к Несуществующему Врачу Ивановичу", memory=MemoryStore())
         assert "address_info" not in [s.tool for s in plan.steps], stale_specialty
-        assert state.last_entities.get("_appointment_unbookable_target") is True, stale_specialty
+        assert state.last_entities.get("_appointment_unbookable_target"), stale_specialty
 
 
 def test_appointment_dropped_target_clean_state_refuses_not_clarifies():
@@ -4080,7 +4080,7 @@ def test_appointment_dropped_target_clean_state_refuses_not_clarifies():
     mem = MemoryStore()
     plan = build_plan(decision, state, "Записаться к Несуществующему Врачу", memory=mem)
     assert plan.steps == []
-    assert state.last_entities.get("_appointment_unbookable_target") is True
+    assert state.last_entities.get("_appointment_unbookable_target")
     assert mem.get_pending(state) is None  # honest refuse, NOT a clarify loop
 
 
@@ -4105,7 +4105,7 @@ def test_appointment_active_flow_specialty_survives_dropped_service():
         needs_handoff=False,
     )
     build_plan(decision, state, "на анализ", memory=MemoryStore())
-    assert state.last_entities.get("_appointment_unbookable_target") is not True
+    assert not state.last_entities.get("_appointment_unbookable_target")
 
 
 def test_pending_price_fill_resolves_service_via_pending_label():

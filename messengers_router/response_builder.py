@@ -336,23 +336,57 @@ def _no_free_slots_operator_offer(state: SessionState, memory: MemoryStore) -> R
     )
 
 
-def _doctor_not_bookable_via_bot_offer(state: SessionState, memory: MemoryStore) -> ResponseEnvelope:
-    """Ответ на «выбран конкретный врач, которого нет в системе онлайн-записи».
+# П5: причина отказа одна (цель записи не подтверждена), но ПРЕДМЕТ разный.
+# Единый текст всегда говорил про врача — и представившемуся по ФИО пациенту
+# (прод 11.07), и на названную услугу «гинекологическое УЗИ» (прод 18.07).
+_UNBOOKABLE_TARGET_LEAD: dict[str, str] = {
+    "doctor": (
+        "К сожалению, этого врача нет в системе онлайн-записи — через бот "
+        "запись возможна только по филиалам в Самаре."
+    ),
+    "service": (
+        "К сожалению, эту услугу я не нашёл в системе онлайн-записи — через бот "
+        "запись возможна только по филиалам в Самаре."
+    ),
+    "patient_name": (
+        "Пока не понял, к какому врачу или на какую услугу вас записать — "
+        "напишите специальность или название услуги."
+    ),
+    "unknown": (
+        "Пока не понял, к какому врачу или на какую услугу вас записать — "
+        "напишите специальность или название услуги."
+    ),
+}
+_UNBOOKABLE_TARGET_TAIL = "Могу перевести на оператора, чтобы уточнить запись. Перевести на оператора?"
+
+
+def _doctor_not_bookable_via_bot_offer(
+    state: SessionState,
+    memory: MemoryStore,
+    *,
+    kind: str = "doctor",
+) -> ResponseEnvelope:
+    """Ответ на «цель записи не подтверждена системой онлайн-записи».
 
     Онлайн-запись через бот доступна только по филиалам в Самаре. Если врача
     нет в самарском каталоге (например, принимает только в Оренбурге — регион
     исключён из кэша через EXCLUDED_REGION_ROOTS), нельзя предлагать самарские
     филиалы вслепую: честно сообщаем об ограничении и предлагаем оператора.
+
+    Логика отказа неизменна (`BUG-2026-06-01-01`), различается только предмет:
+    врач / услуга / нераспознанная цель (П5). Собственное имя пациента целью
+    записи не считается — на него отвечаем вопросом о цели, а не «врача нет».
+
+    :param state: состояние сессии
+    :param memory: memory-store
+    :param kind: тип обронённой цели (`doctor`/`service`/`patient_name`/`unknown`)
     """
     reset_appointment_runtime_state(state)
     state.last_entities["_operator_offer_pending"] = True
     memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+    lead = _UNBOOKABLE_TARGET_LEAD.get(str(kind or "").strip(), _UNBOOKABLE_TARGET_LEAD["doctor"])
     return ResponseEnvelope(
-        text=(
-            "К сожалению, этого врача нет в системе онлайн-записи — через бот "
-            "запись возможна только по филиалам в Самаре. Могу перевести на "
-            "оператора, чтобы уточнить запись. Перевести на оператора?"
-        ),
+        text=f"{lead} {_UNBOOKABLE_TARGET_TAIL}",
         attachments=[],
         handoff=False,
     )
@@ -543,8 +577,11 @@ def build_appointment_step_response(
     # B′ (BUG-2026-06-01-01): планировщик пометил запись без валидной цели
     # (дропнутая неверифицированная «услуга»/ФИО, нет врача/специальности) —
     # честно отказываем вместо самарских филиалов вслепую. pop → не утечёт в след. ход.
-    if entities.pop("_appointment_unbookable_target", None):
-        return _doctor_not_bookable_via_bot_offer(state, memory)
+    # Значение маркера — ТИП обронённой цели (П5), он выбирает формулировку.
+    unbookable_kind = entities.pop("_appointment_unbookable_target", None)
+    if unbookable_kind:
+        kind = unbookable_kind if isinstance(unbookable_kind, str) else "doctor"
+        return _doctor_not_bookable_via_bot_offer(state, memory, kind=kind)
     # Fixed-equipment (флюорограф/маммограф): запись только через регистратуру
     # Ленина 5 (прод #668). Готовый статический handoff-текст; телефон не нужен.
     if entities.pop("_appointment_fixed_equipment", None):
