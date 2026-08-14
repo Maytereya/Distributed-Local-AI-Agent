@@ -74,6 +74,7 @@ from .policies import (
     apply_verified_doctor_override,
     detect_nonbookable_walkin_intent,
     detect_appointment_action,
+    detect_test_assist_goal_phrasing,
     detect_test_assist_intent,
     detect_test_result_intent,
     detect_prepare_intent,
@@ -1385,6 +1386,63 @@ async def _inject_catalog_candidates(
     )
 
 
+def _relabel_test_assist_catalog_hit_as_price(
+    decision: RouteDecision,
+    *,
+    user_text: str,
+) -> RouteDecision:
+    """П1: реплика приземлилась на РЕАЛЬНУЮ услугу каталога → это PRICE.
+
+    Прод 31.07/09.08 (кластер №2 триажа: 17 диалогов, 82% провал): пациент
+    называет анализ («С-реактивный белок», «спермограмма», «липидограмма») — и
+    получает воронку подбора «Для какой цели хотите подобрать анализы?».
+    Корень — МАРШРУТИЗАЦИЯ, не поиск: каталог такие названия резолвит, но голое
+    название без ценового глагола (особенно вторым ходом, когда пациент
+    продолжает список) размечается как TEST_ASSIST, а `REQUIRED_SLOTS`
+    TEST_ASSIST требует `test_goal|test_name` — `service_name` его не закрывает,
+    и строится generic clarify.
+
+    Инвариант (класс): воронка подбора существует ровно для случая «услуга НЕ
+    найдена». Если exact-матч по каталогу состоялся — цель реплики известна,
+    это PRICE. Мутирует ТОЛЬКО метку: сущности каталожная инъекция уже проставила.
+
+    Ставится ПОСЛЕ `_apply_post_nlu_guardrails` намеренно: устоявшиеся политики
+    (walk-in «где сдать», prepare, адрес) сильнее — если guardrails увели метку
+    из TEST_ASSIST, переклейка не срабатывает вовсе.
+
+    Три исключения, где exact-матч не означает «спросили цену»:
+    - категорийный запрос («чекап» — линейка пакетов): до сюда не доходит,
+      `should_try_service` для него выключается и exact-матча нет;
+    - вопрос о СРОКАХ готовности результата (`result_delivery_info`): анализ
+      назван, но спрашивают не цену — цену показывать нельзя;
+    - формулировка ЦЕЛИ подбора («какие анализы сдать для профилактики»):
+      матчер приземляет её на случайную строку по одному общему токену
+      («…для ПРОФИЛАКТИКИ» → «Здоровая молодость: курс для профилактики и
+      восстановления»), а спрашивают не цену этой услуги.
+
+    :param decision: решение после каталожной инъекции и guardrails
+    :param user_text: исходная реплика пациента (для гарда формулировки цели)
+    :return: решение с меткой `PRICE`, если сработал класс, иначе исходное
+    """
+
+    if decision.label != "TEST_ASSIST":
+        return decision
+    flags = set(decision.flags or set())
+    if "catalog_service_exact" not in flags:
+        return decision
+    if not str((decision.entities or {}).get("service_name") or "").strip():
+        return decision
+    if "result_delivery_info" in flags:
+        return decision
+    if detect_test_assist_goal_phrasing(user_text):
+        return _copy_decision(decision, flags=flags | {"test_assist_goal_phrasing_kept"})
+    return _copy_decision(
+        decision,
+        label="PRICE",
+        flags=flags | {"test_assist_catalog_hit_is_price"},
+    )
+
+
 def _maybe_start_catalog_confirm(
     *,
     decision: RouteDecision,
@@ -2051,6 +2109,7 @@ async def _complete_route_after_doctor_guard(
         prefetched_service=catalog_prefetch,
     )
     decision = await _apply_post_nlu_guardrails(decision, state, user_text, services, memory)
+    decision = _relabel_test_assist_catalog_hit_as_price(decision, user_text=user_text)
 
     if decision.label == "DOCTOR_SCHEDULE":
         # Очищаем хвосты сценария записи, чтобы расписание не фильтровалось
