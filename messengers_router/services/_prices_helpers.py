@@ -208,6 +208,18 @@ _PRICE_QUERY_STOPWORDS = {
     "подскажи",
     "скажите",
     "пожалуйста",
+    # Недостающие словоформы уже перечисленных выше разговорных слов
+    # («нужно/надо», «возможно», «стоит»). Без них гард неудовлетворимого
+    # уточнения принимал «нужен»/«возможна»/«стоить» за значащее уточнение и
+    # блокировал живые запросы («мне НУЖЕН анализ на ферритин»). Тот же принцип,
+    # что у падежных форм «цена»/«стоимость» выше.
+    "нужен",
+    "нужна",
+    "нужны",
+    "возможен",
+    "возможна",
+    "возможны",
+    "стоить",
 }
 _PRICE_QUERY_CANONICAL_TOKENS = {
     "алт": "алат",
@@ -895,6 +907,21 @@ def _distinctive_service_tokens(text: str) -> set[str]:
     return out
 
 
+def _token_covered_by(token: str, pool: set[str] | frozenset[str]) -> bool:
+    """True, если токен присутствует в наборе точно или префиксом (4 символа).
+
+    Префиксное сравнение — то же правило, которым `_scorer_match_has_distinctive_overlap`
+    сопоставляет словоформы («кардиолога» ↔ «кардиолог»); вынесено, чтобы гарды
+    судили о покрытии одинаково.
+    """
+    if token in pool:
+        return True
+    if len(token) < 4:
+        return False
+    prefix = token[:4]
+    return any(len(candidate) >= 4 and candidate[:4] == prefix for candidate in pool)
+
+
 def _scorer_match_has_distinctive_overlap(query_text: str, canonical: str) -> bool:
     """True, если у скорер-кандидата есть пересечение РАЗЛИЧАЮЩИХ токенов с запросом.
 
@@ -908,10 +935,147 @@ def _scorer_match_has_distinctive_overlap(query_text: str, canonical: str) -> bo
     if not q:
         return True  # нет различающих токенов — судить не о чем, не блокируем
     canon_tokens = set(re.findall(r"[a-zа-яё0-9]+", _normalise_input(canonical)))
-    for qt in q:
-        for ct in canon_tokens:
-            if qt == ct or (len(qt) >= 4 and len(ct) >= 4 and qt[:4] == ct[:4]):
-                return True
+    return any(_token_covered_by(qt, canon_tokens) for qt in q)
+
+
+# ---------------------------------------------------------------------------
+# Неудовлетворимое уточнение (класс `unsatisfiable_qualifier_dropped`)
+#
+# Прод 13.08: «А возможна ли онлайн консультация?» → бот отвечал про обычный
+# приём. Проверено офлайн — уточнение отбрасывалось у 5 из 10 фраз: «онлайн»,
+# «по ОМС», «по телефону», «удалённо», «по видеосвязи». Опаснее всех ОМС:
+# пациент спрашивает про полис, получает платную цену.
+#
+# `_scorer_match_has_distinctive_overlap` не спасает — ему достаточно ОДНОГО
+# совпавшего токена («консультация»); отсутствие «онлайн» он не проверяет.
+#
+# Механизм CATALOG-DERIVED (как у family-дискриминатора, без списков в коде):
+# словарь допустимых токенов = сам прайс. Если различающий токен запроса не
+# покрыт найденной услугой И не встречается НИ В ОДНОЙ строке каталога — такое
+# свойство клиника вообще не предоставляет, подставлять услугу без него нельзя.
+# Токен, каталогу известный, гард НЕ трогает: различать варианты внутри каталога
+# — работа family-дискриминатора и scorer-overlap, не эта.
+# ---------------------------------------------------------------------------
+
+_CATALOG_VOCAB_CACHE: dict[tuple[int, str, str], frozenset[str]] = {}
+# Минимальный размер среза, на котором утверждение «такого слова в прайсе нет»
+# осмысленно. Живой прайс Самары — ~3700 строк; синтетические тестовые срезы —
+# единицы строк, там гард обязан молчать.
+_CATALOG_VOCAB_MIN_ROWS = 100
+
+
+def _catalog_token_vocabulary(rows: list[dict[str, Any]]) -> frozenset[str]:
+    """Множество всех токенов названий услуг каталога.
+
+    Кэшируется по «отпечатку» среза (размер + первое/последнее имя): каталог за
+    ход не меняется, а строить словарь по 3600+ строкам на каждый из 14 вызовов
+    резолвера было бы дорого.
+
+    :param rows: строки priceByRegion
+    :return: замороженное множество токенов
+    """
+
+    if not rows:
+        return frozenset()
+    key = (
+        len(rows),
+        str(rows[0].get("serviceName") or rows[0].get("name") or "")[:48],
+        str(rows[-1].get("serviceName") or rows[-1].get("name") or "")[:48],
+    )
+    cached = _CATALOG_VOCAB_CACHE.get(key)
+    if cached is not None:
+        return cached
+    vocab: set[str] = set()
+    for row in rows:
+        name = str(row.get("serviceName") or row.get("name") or "")
+        if name:
+            # ТОТ ЖЕ токенайзер, что и на стороне запроса: иначе несимметричные
+            # производные (гомоглиф-фолдинг кодов «с91»→«c91», синонимы
+            # «прием»↔«консультац») выглядели бы как «каталогу неизвестно» и гард
+            # срабатывал бы на самих названиях каталога.
+            vocab.update(_price_query_tokens(name))
+            vocab.update(re.findall(r"[a-zа-яё0-9]+", _normalise_input(name)))
+        # Homecode — тоже «слово каталога»: «Код 5437» это валидный запрос
+        # услуги по коду, а не неудовлетворимое уточнение.
+        homecode = str(row.get("serviceHomecode") or row.get("homecode") or "")
+        if homecode:
+            vocab.update(re.findall(r"[a-zа-яё0-9]+", _normalise_input(homecode)))
+    frozen = frozenset(vocab)
+    if len(_CATALOG_VOCAB_CACHE) >= 4:
+        _CATALOG_VOCAB_CACHE.clear()
+    _CATALOG_VOCAB_CACHE[key] = frozen
+    return frozen
+
+
+def query_has_unsatisfiable_qualifier(
+    query_text: str,
+    rows: list[dict[str, Any]] | None = None,
+) -> bool:
+    """Публичный гард: в реплике есть уточнение, которого каталог не знает вовсе.
+
+    Нужен на стыках, где нет «найденной услуги», но есть fallback на сырую фразу
+    из запроса: без него отказ single-резолвера обходился
+    `_extract_price_service_from_query` и пациент всё равно получал цену услуги
+    без запрошенного свойства («приём терапевта по ОМС» → платный приём).
+
+    :param query_text: исходный текст пользователя
+    :param rows: строки priceByRegion (если не переданы — грузим сами)
+    :return: True, если уточнение неудовлетворимо каталогом
+    """
+
+    catalog_rows = rows
+    if catalog_rows is None:
+        try:
+            loaded = api_price.load_price_by_region(SAMARA_PRICE_REGION_ID)
+        except Exception:
+            return False
+        catalog_rows = [row for row in loaded if isinstance(row, dict)]
+    return _match_drops_unsatisfiable_qualifier(query_text, "", catalog_rows)
+
+
+def _match_drops_unsatisfiable_qualifier(
+    query_text: str,
+    canonical: str,
+    rows: list[dict[str, Any]],
+) -> bool:
+    """True, если запрос несёт уточнение, которого каталог не может удовлетворить.
+
+    :param query_text: вариант запроса, на котором состоялось совпадение
+    :param canonical: найденное название услуги
+    :param rows: строки priceByRegion (источник словаря допустимых токенов)
+    :return: True — совпадение засчитывать нельзя (уточнение потеряно)
+    """
+
+    # Гард утверждает «клиника такого свойства НЕ оказывает — во всём прайсе
+    # этого слова нет». Утверждение опирается на ПОЛНЫЙ прайс: на синтетическом
+    # срезе из пары строк словарь — не словарь клиники, и любой обычный запрос
+    # выглядел бы как неудовлетворимый. Ниже порога молчим.
+    if len(rows) < _CATALOG_VOCAB_MIN_ROWS:
+        return False
+    tokens = _distinctive_service_tokens(query_text)
+    if not tokens:
+        return False
+    # Запрос услуги ПО КОДУ («Код 5437», «услуга 5437») резолвится по homecode,
+    # а не по названию: обрамляющие слова тут не уточнение услуги.
+    if _extract_homecode_query(query_text):
+        return False
+    canon_tokens = set(re.findall(r"[a-zа-яё0-9]+", _normalise_input(canonical)))
+    vocab = _catalog_token_vocabulary(rows)
+    if not vocab:
+        return False
+    for token in tokens:
+        # Против НАЙДЕННОЙ услуги сравниваем с префиксным допуском — там речь о
+        # словоформах одного слова («кардиолога» ↔ «кардиолог»).
+        if _token_covered_by(token, canon_tokens):
+            continue
+        # Против ВСЕГО каталога — только точное совпадение. Префиксный допуск
+        # здесь ложно «оправдывает» уточнение чужим словом с тем же началом:
+        # «УДАЛённая консультация» ← «УДАЛение», «ВИДЕосвязи» ← «ВИДЕокольпоскопия»,
+        # «ТЕЛЕфону» ← «ТЕЛЕмедицина». Токенайзер по обе стороны один и тот же,
+        # поэтому словоформы каталога уже нормализованы симметрично.
+        if token in vocab:
+            continue
+        return True
     return False
 
 
@@ -1092,10 +1256,17 @@ def resolve_price_service_name_from_catalog(
     if prefer_query_over_context:
         text_only_queries = _build_price_catalog_queries(query_text, current_service_name="")
         if text_only_queries:
-            best_row, best_score, _ = _resolve_best_price_row_from_queries(text_only_queries, catalog_rows)
+            best_row, best_score, _ = _resolve_best_price_row_from_queries(
+                text_only_queries, catalog_rows
+            )
             if best_row and best_score >= 100:
                 canonical = str(best_row.get("serviceName") or best_row.get("name") or "").strip()
-                if canonical and _scorer_match_has_distinctive_overlap(query_text, canonical) and _letter_ok(canonical):
+                if (
+                    canonical
+                    and _scorer_match_has_distinctive_overlap(query_text, canonical)
+                    and _letter_ok(canonical)
+                    and not _match_drops_unsatisfiable_qualifier(query_text, canonical, catalog_rows)
+                ):
                     return canonical
 
     queries = _build_price_catalog_queries(query_text, current_service_name=current_service_name)
@@ -1112,6 +1283,13 @@ def resolve_price_service_name_from_catalog(
     if canonical and not _scorer_match_has_distinctive_overlap(query_text, canonical):
         return None
     if not _letter_ok(canonical):
+        return None
+    # Гард неудовлетворимого уточнения (класс `unsatisfiable_qualifier_dropped`).
+    # Судим по СЫРОМУ тексту: варианты запроса как раз и отбрасывают уточнение
+    # («приём кардиолога онлайн» → вариант «прием кардиолог»), поэтому по ним
+    # потерю не увидеть. Разговорную обвязку («мне нужен», «подскажите», «хочу
+    # узнать») снимает `_PRICE_QUERY_STOPWORDS` внутри токенайзера.
+    if canonical and _match_drops_unsatisfiable_qualifier(query_text, canonical, catalog_rows):
         return None
     return canonical or None
 
@@ -2107,6 +2285,19 @@ def _build_price_family_payload(
     if len(ranked) < 2:
         return None
 
+    # Гард неудовлетворимого уточнения — ВТОРОЙ стык (как у family-дискриминатора
+    # гепатитов). Single-резолвер уже отказывает «приём терапевта по ОМС», но без
+    # этой проверки запрос проваливался в family-режим и получал список ЧУЖИХ
+    # платных приёмов (хирург, мануальный терапевт) — дезинформация вместо
+    # честного «не нашёл». «Найденное» здесь — весь предложенный список: если
+    # уточнение не удовлетворено НИ ОДНИМ вариантом и вообще не встречается в
+    # каталоге, показывать список нельзя.
+    offered_names = " ".join(
+        str(row.get("serviceName") or row.get("name") or "") for row in ranked
+    )
+    if _match_drops_unsatisfiable_qualifier(query_text, offered_names, rows):
+        return None
+
     ranked = _annotate_price_rows_with_care_context(ranked)
 
     service_name = family_query
@@ -2606,6 +2797,28 @@ def _build_multi_price_payload(
 
     items, unrecognized = _resolve_multi_price_items(query_text, retail_rows)
     if not items:
+        return None
+
+    # Гард неудовлетворимого уточнения — ТРЕТИЙ стык. Мульти-путь режет реплику
+    # на фрагменты, и уточнение теряется между ними: «приём терапевта по ОМС»
+    # распадался на «приём терапевта» + мусор и выдавал список платных приёмов
+    # (хирург, мануальный терапевт). Каждый фрагмент по отдельности гард в
+    # single-резолвере пропускает — проверяем реплику целиком против того, что
+    # реально предлагаем.
+    #
+    # Нераспознанную позицию засчитываем как «предложенное» ТОЛЬКО если она —
+    # самостоятельный пункт списка: тогда S3 честно перечислит её пациенту
+    # («Не распознал: КВАНТОВЫЙ АНАЛИЗ АУРЫ»). Если же слово живёт ВНУТРИ
+    # фразы, из которой мы вытащили услуги («приём терапевта по ОМС» — один
+    # пункт), то оно молча поглощено, и список показывать нельзя.
+    top_level = {_normalise_input(part) for part in _split_price_query_items(query_text)}
+    honest_unrecognized = [
+        str(part) for part in unrecognized if _normalise_input(str(part)) in top_level
+    ]
+    offered_names = " ".join(
+        [str(item.get("service_name") or "") for item in items] + honest_unrecognized
+    )
+    if _match_drops_unsatisfiable_qualifier(query_text, offered_names, retail_rows):
         return None
 
     variants: list[dict[str, Any]] = []

@@ -57,6 +57,7 @@ from ._prices_helpers import (
     _rank_price_rows,
     _resolve_ambiguous_price_kind_with_llm,
     _select_patient_price_rows,
+    query_has_unsatisfiable_qualifier,
     resolve_price_service_name_from_catalog,
     restrict_rows_to_family_letter,
 )
@@ -149,7 +150,13 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             query_service_name = resolve_price_service_name_from_catalog(
                 query_text,
                 current_service_name=entity_service_name,
-            ) or _extract_price_service_from_query(query_text)
+            )
+            # Гард неудовлетворимого уточнения — ЧЕТВЁРТЫЙ стык. Отказ резолвера
+            # обходился этим fallback'ом: «приём терапевта по ОМС» → сырая фраза
+            # «прием терапевт» → ранжирование → платная цена. Если каталог такого
+            # свойства не знает вовсе — честное «не нашёл», а не цена без него.
+            if not query_service_name and not query_has_unsatisfiable_qualifier(query_text):
+                query_service_name = _extract_price_service_from_query(query_text)
         service_name = _select_effective_price_service_name(
             entity_service_name,
             query_service_name,
@@ -339,7 +346,11 @@ async def service_bundle_info(
         query_service_name = resolve_price_service_name_from_catalog(
             query_text,
             current_service_name=entity_service_name,
-        ) or _extract_price_service_from_query(query_text)
+        )
+        # Тот же гард, что в `price_info` (см. комментарий там): fallback на сырую
+        # фразу не имеет права обходить отказ по неудовлетворимому уточнению.
+        if not query_service_name and not query_has_unsatisfiable_qualifier(query_text, retail_rows):
+            query_service_name = _extract_price_service_from_query(query_text)
     service_name = _select_effective_price_service_name(
         entity_service_name,
         query_service_name,
