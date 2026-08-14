@@ -162,6 +162,22 @@ TEST_ASSIST_GOAL_PATTERNS = [
     r"\bскрининг\b",
 ]
 
+# П6-2 (решение владельца 14.08): проверку СУЩЕСТВУЮЩЕЙ записи бот не делает —
+# распознаём намерение и предлагаем оператора вопросом, НЕ предлагая создать
+# новую запись. Дополнение владельца: ОТМЕНА записи обрабатывается так же.
+#
+# Формулировки намеренно узкие: причастие/притяжательное («я ЗАПИСАН», «МОЯ
+# запись», «запись В СИЛЕ») либо глагол проверки рядом со словом «запись».
+# Голое «записаться» сюда не попадает — это создание записи, обычный APPOINTMENT.
+APPOINTMENT_CHECK_PATTERNS = [
+    r"\b(?:я|мы)\s+записан\w*\b",
+    r"\bменя\s+записал\w*\b",
+    r"\bмо(?:я|ю|ей|е[йя])\s+запис\w+",
+    r"\b(?:провер\w+|подтверд\w+|уточн\w+|узнать)\b[^.?!]{0,24}\bзапис[ьи]\w*\b",
+    r"\bзапис[ьи]\w*\b[^.?!]{0,12}\b(?:в\s+силе|подтвержден\w*|состоит\w*|актуальн\w*)\b",
+    r"\bесть\s+ли\b[^.?!]{0,16}\bзапис[ьи]\w*\b",
+]
+
 PREPARE_PATTERNS = [
     r"\bподготов\w*\b",
     r"\bкак\s+подготов\w*\b",
@@ -293,6 +309,7 @@ _TEST_INTERPRET_RE = _compile_patterns(TEST_INTERPRET_PATTERNS)
 _TEST_RESULT_RE = _compile_patterns(TEST_RESULT_PATTERNS)
 _TEST_ASSIST_RE = _compile_patterns(TEST_ASSIST_PATTERNS)
 _TEST_ASSIST_GOAL_RE = _compile_patterns(TEST_ASSIST_GOAL_PATTERNS)
+_APPOINTMENT_CHECK_RE = _compile_patterns(APPOINTMENT_CHECK_PATTERNS)
 # «Чекап» — это КАТЕГОРИЯ (меню) лабораторных пакетов, а не одна услуга:
 # в каталоге Самары это «Ежегодный Чекап», «Мужской/Женский чекап
 # Базовый/Стандартный/Расширенный». Такой запрос нельзя схлопывать в одну
@@ -840,6 +857,30 @@ def detect_appointment_action(text: str) -> str | None:
         return "reschedule"
     if has_book:
         return "book"
+    return None
+
+
+def detect_existing_appointment_request(text: str) -> str | None:
+    """Обращение по СУЩЕСТВУЮЩЕЙ записи: проверить её или отменить.
+
+    Решение владельца (14.08): проверку существующей записи бот не выполняет —
+    распознаём намерение и предлагаем оператора вопросом, не предлагая создать
+    новую. Отмена записи (дополнение владельца) идёт тем же путём: реквизиты
+    отмены бот не собирает.
+
+    :param text: реплика пациента
+    :return: ``check`` | ``cancel`` | None
+    """
+
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    # Отмену проверяем ПЕРВОЙ: «отмените МОЮ ЗАПИСЬ» подходит под обе формы,
+    # но действие в ней — отмена (перенос сюда не относится, у него свой путь).
+    if detect_appointment_action(raw) == "cancel":
+        return "cancel"
+    if _matches_any(raw, _APPOINTMENT_CHECK_RE):
+        return "check"
     return None
 
 

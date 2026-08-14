@@ -83,6 +83,7 @@ from .policies import (
     detect_doc_request_intent,
     detect_schedule_intent,
     detect_doctor_info_intent,
+    detect_existing_appointment_request,
     has_datetime_signal,
     is_test_assist_category_term,
     normalize_appointment_action,
@@ -1443,6 +1444,84 @@ def _relabel_test_assist_catalog_hit_as_price(
     )
 
 
+_EXISTING_APPOINTMENT_OFFER: dict[str, str] = {
+    "check": (
+        "Проверить или подтвердить уже оформленную запись я не могу — эти данные "
+        "видит только оператор. Перевести на оператора?"
+    ),
+    "cancel": (
+        "Отменить уже оформленную запись я не могу — это делает оператор. "
+        "Перевести на оператора?"
+    ),
+}
+
+
+def _maybe_offer_operator_for_existing_appointment(
+    *,
+    decision: RouteDecision,
+    user_text: str,
+    state: SessionState,
+    memory: MemoryStore,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """П6-2: обращение по СУЩЕСТВУЮЩЕЙ записи → оператор вопросом.
+
+    Решение владельца (14.08): проверку существующей записи бот не выполняет —
+    распознаём намерение и предлагаем оператора, НЕ предлагая создать новую
+    запись. Дополнение владельца: отмена записи обрабатывается так же —
+    реквизиты отмены бот не собирает.
+
+    Не срабатывает внутри АКТИВНОГО сценария записи: там «отменить» значит
+    «прервать текущее оформление» (`cancel_confirm`), а не «отменить
+    существующую запись». Перенос (`reschedule`) сюда не относится — у него
+    свой путь, решение владельца его не касалось.
+
+    :param decision: решение после guardrails
+    :param user_text: реплика пациента
+    :param state: состояние сессии
+    :param memory: memory-store
+    :return: готовый routing triple либо None
+    """
+
+    if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
+        return None
+    if state.last_entities.get("_operator_offer_pending"):
+        return None
+    if state.last_entities.get("appointment_flow_active"):
+        return None
+    if state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM):
+        return None
+    kind = detect_existing_appointment_request(user_text)
+    if kind is None:
+        return None
+
+    reset_appointment_runtime_state(state)
+    memory.clear_pending(state)
+    state.last_entities["_operator_offer_pending"] = True
+    memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+    return (
+        _copy_decision(
+            decision,
+            label="OTHER",
+            entities={},
+            flags=set(decision.flags) | {"existing_appointment_operator_offer", f"existing_appointment_{kind}"},
+            source="existing_appointment",
+            confidence=max(decision.confidence, 0.9),
+            needs_handoff=False,
+        ),
+        Plan(label="OTHER"),
+        Evidence(
+            items={
+                # Переиспользуем существующий канал оффера оператора — рендерер
+                # уже умеет его отдавать, новая плумбинг-ветка не нужна.
+                ek.OPERATOR_OFFER_RESPONSE: {
+                    "text": _EXISTING_APPOINTMENT_OFFER[kind],
+                    "handoff": False,
+                }
+            }
+        ),
+    )
+
+
 def _maybe_start_catalog_confirm(
     *,
     decision: RouteDecision,
@@ -2110,6 +2189,15 @@ async def _complete_route_after_doctor_guard(
     )
     decision = await _apply_post_nlu_guardrails(decision, state, user_text, services, memory)
     decision = _relabel_test_assist_catalog_hit_as_price(decision, user_text=user_text)
+
+    existing_appointment = _maybe_offer_operator_for_existing_appointment(
+        decision=decision,
+        user_text=user_text,
+        state=state,
+        memory=memory,
+    )
+    if existing_appointment is not None:
+        return existing_appointment
 
     if decision.label == "DOCTOR_SCHEDULE":
         # Очищаем хвосты сценария записи, чтобы расписание не фильтровалось

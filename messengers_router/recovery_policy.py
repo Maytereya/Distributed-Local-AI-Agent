@@ -44,6 +44,15 @@ _LOW_CONF_CLARIFY_OPTIONS_TEXT = (
 RecoveryKind = Literal["none", "clarify", "handoff"]
 
 
+# П6-3 (решение владельца 14.08): после ДВУХ непонятых подряд предлагаем
+# оператора ВОПРОСОМ, а не переводим принудительно — принудительный перевод
+# сбрасывал людей, которым бот отвечает нормально. Формулировка совпадает с
+# анти-залипным гардом `_maybe_offer_operator_on_repeat`, чтобы пациент видел
+# один и тот же оффер независимо от того, какой механизм сработал.
+OPERATOR_OFFER_AFTER_UNCLEAR = 2
+UNCLEAR_OPERATOR_OFFER_TEXT = "Похоже, мне не удаётся помочь с этим в чате. Перевести на оператора?"
+
+
 @dataclass
 class RecoveryAction:
     kind: RecoveryKind
@@ -51,6 +60,9 @@ class RecoveryAction:
     handoff: bool = False
     reason: str = ""
     unclear_count: int = 0
+    # True → вызывающий обязан поставить operator-offer pending: следующий ход
+    # обработает «да/нет» через `_handle_operator_offer_pending`.
+    offer_operator: bool = False
 
 
 def explicit_operator_requested(user_text: str) -> bool:
@@ -173,14 +185,24 @@ def evaluate_recovery(
     n += 1
     state_entities["_nlu_unclear_count"] = n
 
-    if n >= max(1, int(max_unclear)):
+    # П6-3: на ВТОРОМ непонятом подряд — оффер оператора ВОПРОСОМ. Раньше здесь
+    # на третьем ходу стоял принудительный `handoff=True`; владелец 14.08 решил
+    # не переводить принудительно. Текст уточнения сохраняем: пациент видит и
+    # переспрос, и предложение — и сам выбирает.
+    if n >= max(1, min(int(max_unclear), OPERATOR_OFFER_AFTER_UNCLEAR)):
         state_entities["_nlu_unclear_count"] = 0
+        clarify_text = (
+            _structured_clarify_text(decision, flow_label, summary, user_text)
+            if is_structured_clarify
+            else _build_recovery_text(user_text, summary, flow_label)
+        )
         return RecoveryAction(
-            kind="handoff",
-            text=handoff_message("low_confidence"),
-            handoff=True,
-            reason="low_confidence_escalation",
+            kind="clarify",
+            text=f"{clarify_text}\n\n{UNCLEAR_OPERATOR_OFFER_TEXT}",
+            handoff=False,
+            reason="low_confidence_operator_offer",
             unclear_count=n,
+            offer_operator=True,
         )
 
     if n == 1:

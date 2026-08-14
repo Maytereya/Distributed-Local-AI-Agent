@@ -181,6 +181,12 @@ def _extract_recovery_response(
             recovery.reason or "clarify",
             list(decision.clarify_slots) if decision.clarify_slots else [],
         )
+        if recovery.offer_operator:
+            # П6-3: оффер оператора ВОПРОСОМ. Следующий ход разбирает «да/нет»
+            # через `_handle_operator_offer_pending` (иное — снимает offer и
+            # обычный роутинг, без ловушки) — тот же механизм, что у анти-залипа.
+            ctx.state.last_entities["_operator_offer_pending"] = True
+            memory.set_pending(ctx.state, label="OTHER", missing_slots=["operator_offer_confirm"])
         return ResponseEnvelope(text=recovery.text or LOW_CONF_CLARIFY_TEXT, handoff=False)
     return None
 
