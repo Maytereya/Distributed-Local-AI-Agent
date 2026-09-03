@@ -8,7 +8,7 @@
 
 Запуск с Mac (сервер режет по source-IP, эндпоинт с Mac доступен):
     ./venv/bin/python messengers_router/scripts/measure_latency_baseline.py \
-        --url http://172.16.0.16/api/messenger-generate-once --reps 3 \
+        --url http://172.16.0.28/api/messenger-generate-once --reps 3 \
         --out /tmp/latency_baseline.json
 
 Последовательно (не грузим прод), свежий session_id на пробу (без pending-заражения).
@@ -50,7 +50,7 @@ def _pct(values: list[float], p: float) -> float:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", default="http://172.16.0.16/api/messenger-generate-once")
+    ap.add_argument("--url", default="http://172.16.0.28/api/messenger-generate-once")
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--timeout", type=int, default=120)
     ap.add_argument("--out", default="")

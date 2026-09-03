@@ -1,6 +1,6 @@
 """Собирает живые ответы бота для набора презентационных кейсов.
 
-Работает против http://172.16.0.16/api/messenger-generate-once.
+Работает против http://172.16.0.28/api/messenger-generate-once.
 Каждый кейс — либо single-turn, либо цепочка с единой session_id.
 Результат сохраняется в docs/demo_cases.json для потребителя —
 scripts/build_client_slides_v2.py.
@@ -15,7 +15,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-URL = "http://172.16.0.16/api/messenger-generate-once"
+URL = "http://172.16.0.28/api/messenger-generate-once"
 TIMEOUT = 45
 LLM_MODE = "hybrid"
 

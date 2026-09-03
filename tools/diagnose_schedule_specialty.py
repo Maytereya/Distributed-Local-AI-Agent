@@ -16,7 +16,7 @@
     PYTHONPATH=. python3 tools/diagnose_schedule_specialty.py "расписание флюорография"
     PYTHONPATH=. python3 tools/diagnose_schedule_specialty.py "расписание флюорография" --refresh-doctors
     PYTHONPATH=. python3 tools/diagnose_schedule_specialty.py "расписание флюорография" --live-schedule
-    PYTHONPATH=. python3 tools/diagnose_schedule_specialty.py "расписание флюорография" --hit-bot http://172.16.0.16/api/messenger-generate-once
+    PYTHONPATH=. python3 tools/diagnose_schedule_specialty.py "расписание флюорография" --hit-bot http://172.16.0.28/api/messenger-generate-once
 
 При запуске без --refresh-doctors используется локальный JSONL-кэш (может отставать
 от прода). Все live-вызовы требуют корректно настроенных env-переменных Nayka API.
@@ -309,7 +309,7 @@ def main() -> int:
     parser.add_argument("--live-schedule", action="store_true",
                         help="Дёргать live расписание для каждого top-кандидата")
     parser.add_argument("--hit-bot", default=None,
-                        help="URL messenger-endpoint, например http://172.16.0.16/api/messenger-generate-once")
+                        help="URL messenger-endpoint, например http://172.16.0.28/api/messenger-generate-once")
     args = parser.parse_args()
 
     try:

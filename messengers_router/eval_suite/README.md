@@ -19,7 +19,7 @@
 
 ```bash
 bash messengers_router/eval_suite/run_remote_eval.sh \
-  --url http://172.16.0.16/api/messenger-generate-once \
+  --url http://172.16.0.28/api/messenger-generate-once \
   --session-prefix s_test
 ```
 
@@ -37,7 +37,7 @@ bash messengers_router/eval_suite/run_remote_eval.sh \
 
 ```bash
 bash messengers_router/eval_suite/run_remote_eval.sh \
-  --url http://172.16.0.16/api/messenger-generate-once \
+  --url http://172.16.0.28/api/messenger-generate-once \
   --session-prefix s_test \
   --golden-version v2
 ```
@@ -46,7 +46,7 @@ bash messengers_router/eval_suite/run_remote_eval.sh \
 
 ```bash
 bash messengers_router/eval_suite/run_remote_eval.sh \
-  --url http://172.16.0.16/api/messenger-generate-once \
+  --url http://172.16.0.28/api/messenger-generate-once \
   --session-prefix s_test \
   --cases messengers_router/eval_suite/critical_cases_server_parity.jsonl
 ```
@@ -55,7 +55,7 @@ bash messengers_router/eval_suite/run_remote_eval.sh \
 
 ```bash
 bash messengers_router/eval_suite/run_remote_eval.sh \
-  --url http://172.16.0.16/api/messenger-generate-once \
+  --url http://172.16.0.28/api/messenger-generate-once \
   --session-prefix s_test \
   --prepare-wrap-cases messengers_router/eval_suite/prepare_wrap_cases.jsonl
 ```
@@ -64,7 +64,7 @@ bash messengers_router/eval_suite/run_remote_eval.sh \
 
 ```bash
 bash messengers_router/eval_suite/run_remote_eval.sh \
-  --url http://172.16.0.16/api/messenger-generate-once \
+  --url http://172.16.0.28/api/messenger-generate-once \
   --session-prefix s_test \
   --skip-coverage-check
 ```
@@ -73,7 +73,7 @@ bash messengers_router/eval_suite/run_remote_eval.sh \
 
 ```bash
 python3 messengers_router/eval_suite/eval_critical_cases.py \
-  --url http://172.16.0.16/api/messenger-generate-once \
+  --url http://172.16.0.28/api/messenger-generate-once \
   --cases messengers_router/eval_suite/critical_cases_extended.jsonl \
   --session-prefix s_test_ext \
   --llm-mode hybrid
@@ -91,7 +91,7 @@ bash messengers_router/eval_suite/run_remote_eval.sh \
 
 ```bash
 python3 messengers_router/scripts/eval_stage5_corpus.py \
-  --url http://172.16.0.16/api/messenger-generate-once \
+  --url http://172.16.0.28/api/messenger-generate-once \
   --golden messengers_router/messengers_mds_to_collect_thoughts/analysis/golden_versions/stage5_golden_extension_v3.jsonl \
   --session-prefix s_test_stage5_ext
 ```
@@ -143,14 +143,14 @@ python3 messengers_router/scripts/eval_stage5_corpus.py \
 ### В терминале (прямо в IDE), в корне проекта запуск:
 
 bash messengers_router/eval_suite/run_remote_eval.sh \
-  --url http://172.16.0.16/api/messenger-generate-once \
+  --url http://172.16.0.28/api/messenger-generate-once \
   --session-prefix s_test \
   --golden-version v2
 
 ### Если кастомный (или свой) набор критичных кейсов:
 ```bash
 bash messengers_router/eval_suite/run_remote_eval.sh \
-  --url http://172.16.0.16/api/messenger-generate-once \
+  --url http://172.16.0.28/api/messenger-generate-once \
   --session-prefix s_test \
   --cases messengers_router/eval_suite/critical_cases.jsonl
 ```

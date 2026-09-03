@@ -1,4 +1,4 @@
-#START: python messenger_simulator.py "http://172.16.0.16/api/messenger-generate" s_test
+#START: python messenger_simulator.py "http://172.16.0.28/api/messenger-generate" s_test
 # Модуль тестирования роутера для общения с пациентами через месенджеры.
 
 import json
@@ -205,8 +205,8 @@ def repl():
     if len(sys.argv) < 2:
         print("Usage: python messenger_simulator.py <url> [session_id] [host_header]")
         print('Example: python messenger_simulator.py "http://localhost:8000/v1/agent/stream" local_test')
-        print('Example: python messenger_simulator.py "http://172.16.0.16/api/messenger-generate" s_test')
-        print('Example: python messenger_simulator.py "http://172.16.0.16/api/messenger-generate" s_test ontheflyai.ru')
+        print('Example: python messenger_simulator.py "http://172.16.0.28/api/messenger-generate" s_test')
+        print('Example: python messenger_simulator.py "http://172.16.0.28/api/messenger-generate" s_test ontheflyai.ru')
         sys.exit(1)
 
     url = sys.argv[1]

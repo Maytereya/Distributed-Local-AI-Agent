@@ -3,12 +3,12 @@ set -uo pipefail
 
 # Единый запуск eval-стадий для удаленного endpoint.
 # Запускать из корня репозитория:
-#   bash messengers_router/eval_suite/run_remote_eval.sh --url http://172.16.0.16/api/messenger-generate-once
+#   bash messengers_router/eval_suite/run_remote_eval.sh --url http://172.16.0.28/api/messenger-generate-once
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-URL="http://172.16.0.16/api/messenger-generate-once"
+URL="${EVAL_URL:-http://172.16.0.28/api/messenger-generate-once}"
 SESSION_PREFIX="s_eval_remote"
 GOLDEN_VERSION=""
 HOST_HEADER=""
@@ -53,7 +53,8 @@ Usage:
   bash messengers_router/eval_suite/run_remote_eval.sh [options]
 
 Options:
-  --url <url>                Endpoint URL (default: http://localhost:8000/api/messenger-generate-once)
+  --url <url>                Endpoint URL (default: http://172.16.0.28/api/messenger-generate-once,
+                             переопределяется переменной окружения EVAL_URL)
   --session-prefix <prefix>  Session prefix for all eval runs
   --golden-version <vN>      Stage5 golden version, e.g. v2
   --host-header <host>       Optional Host header for critical eval script

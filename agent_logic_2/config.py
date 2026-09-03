@@ -349,7 +349,7 @@ settings = Settings(
         ),
         url=_get_str(
             "MESSENGER_ROUTER",
-            "url", default="http://172.16.0.16/api/messenger-generate",
+            "url", default="http://172.16.0.28/api/messenger-generate",
             legacy_key="MESSENGER_API_URL"),
     ),
     router=RouterConfig(
