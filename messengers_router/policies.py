@@ -2444,6 +2444,13 @@ def _price_row_matches_service(row_name: str, expected_service: str) -> bool:
             # подавление СКРЫЛО БЫ законную цену.
             if _common_prefix_len(tok, other) >= 6:
                 return True
+    # Аббревиатура против развёрнутого названия — общих токенов нет вовсе:
+    # пациент говорит «УЗИ», каталог пишет «с ультразвуковым исследованием».
+    # Тот же механизм, что глушит «оам» в гарде мульти-расчёта. Спрашиваем
+    # проектный экстрактор: читает ли он в обеих строках одну специальность.
+    expected_specialty = extract_specialty_from_text(expected_service)
+    if expected_specialty and expected_specialty == extract_specialty_from_text(row_name):
+        return True
     return False
 
 
