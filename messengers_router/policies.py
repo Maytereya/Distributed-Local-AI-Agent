@@ -2392,13 +2392,98 @@ def is_context_negative(text: str) -> bool:
     return _is_negative_text(text)
 
 
-def extract_price_rub(price_payload: dict[str, Any] | None) -> str | None:
+# Служебные слова консультационных строк: есть почти у каждой, поэтому
+# совпадение по ним НИЧЕГО не различает и в проверке не участвует.
+_PRICE_MATCH_GENERIC_TOKENS = frozenset(
+    {
+        "прием", "осмотр", "консультация", "консультации", "врач", "врача",
+        "первичный", "повторный", "первичная", "повторная", "услуга", "услуги",
+    }
+)
+
+
+def _price_service_tokens(value: str) -> set[str]:
+    """Значащие буквенные токены названия услуги."""
+
+    return set(re.findall(r"[a-zа-я]{3,}", normalize_ru(value or "")))
+
+
+def _price_row_matches_service(row_name: str, expected_service: str) -> bool:
+    """
+    Проверяет, что строка прайса относится к предлагаемой услуге.
+
+    Сравнение по общему значащему токену с префиксным допуском на словоформу
+    («ортопед» ↔ «ортопеда»). Если у ожидаемой услуги нет ни одного
+    различающего токена (только служебные слова), судить не о чем — не
+    блокируем.
+
+    :param row_name: название услуги из строки прайса
+    :param expected_service: услуга, которую бот предлагает записать
+    :return: True — цену этой строки называть можно
+    """
+
+    expected = _price_service_tokens(expected_service) - _PRICE_MATCH_GENERIC_TOKENS
+    if not expected:
+        return True
+    row = _price_service_tokens(row_name)
+    if not row:
+        return False
+    for tok in expected:
+        for other in row:
+            if tok == other:
+                return True
+            short, long_ = (tok, other) if len(tok) <= len(other) else (other, tok)
+            if len(short) >= 5 and long_.startswith(short):
+                return True
+            # Общий корень длиной 6+ — родственные термины каталога
+            # («дерматолог» ↔ «дерматовенеролога»), которые полным префиксом
+            # не совпадают. Проверка здесь ПОДТВЕРЖДАЮЩАЯ, а не выбирающая:
+            # строку уже выбрал резолвер, гард лишь отсекает грубое
+            # несоответствие, поэтому склоняется в сторону разрешения —
+            # ложный пропуск сохраняет прежнее поведение, а ложное
+            # подавление СКРЫЛО БЫ законную цену.
+            if _common_prefix_len(tok, other) >= 6:
+                return True
+    return False
+
+
+def _common_prefix_len(a: str, b: str) -> int:
+    """Длина общего префикса двух строк."""
+
+    n = 0
+    for ca, cb in zip(a, b):
+        if ca != cb:
+            break
+        n += 1
+    return n
+
+
+def extract_price_rub(
+    price_payload: dict[str, Any] | None,
+    *,
+    expected_service: str | None = None,
+) -> str | None:
+    """
+    Достаёт цену из payload `price_info`.
+
+    :param price_payload: результат `price_info`
+    :param expected_service: услуга, для которой цена называется. Если задана,
+        цена возвращается ТОЛЬКО когда строка прайса действительно относится
+        к этой услуге — иначе называется цена чужой услуги
+        (класс `datetime_answer_as_service`, прод-диалог #1109).
+    :return: цена в рублях строкой или None
+    """
+
     if not isinstance(price_payload, dict):
         return None
     prices = price_payload.get("prices")
     if not isinstance(prices, list) or not prices:
         return None
     first = prices[0] if isinstance(prices[0], dict) else {}
+    if expected_service:
+        row_name = str(first.get("serviceName") or first.get("name") or "")
+        if not _price_row_matches_service(row_name, expected_service):
+            return None
     for k in ("servicePrice", "price", "service_price", "amount", "cost"):
         v = first.get(k)
         if isinstance(v, (int, float)):

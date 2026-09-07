@@ -717,7 +717,7 @@ def build_appointment_step_response(
         clear_appointment_branch_options(state)
         if action in {"cancel", "reschedule"}:
             memory.set_pending(state, label="APPOINTMENT", missing_slots=["_any_of:date_from,time_from,date_hint"])
-        price_rub = extract_price_rub(evidence.get(ek.PRICE))
+        price_rub = extract_price_rub(evidence.get(ek.PRICE), expected_service=service)
         branch = str(entities.get("branch_name") or entities.get("city") or "выбранном филиале").strip()
         return ResponseEnvelope(
             text=appointment_text_datetime_prompt(service, branch, price_rub),

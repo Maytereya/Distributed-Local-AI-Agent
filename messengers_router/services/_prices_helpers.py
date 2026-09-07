@@ -588,9 +588,100 @@ def _resolve_price_alias_from_catalog(query_text: str, rows: list[dict[str, Any]
     return None
 
 
+# ---------------------------------------------------------------------------
+# Ответ ДАТОЙ/ВРЕМЕНЕМ — не запрос услуги
+#
+# Класс дефекта `datetime_answer_as_service` (SEVERE, дезинформация ценой).
+# На шаге APPOINTMENT бот спрашивает «На какую дату и время вам удобно?».
+# Ответ пациента доходил до `_extract_price_service_from_query`, тот отдавал
+# его как КАНДИДАТА В УСЛУГИ («6.09.2026» → «6 09 2026»), а `_rank_price_rows`
+# матчил цифры на `serviceHomecode` каталога:
+#     «6.09.2026» → homecode 2026 → «Индейка (F284)»          →    850 руб.
+#     «10:30»     → «Абонемент на 10 сеансов массажа»         → 21 250 руб.
+# Пациенту называлась цена ЧУЖОЙ услуги вместо цены приёма врача
+# (прод, диалог #1109: «записать на приём к ортопед ... стоимость 850 руб»
+# при реальной цене приёма 2700 руб).
+#
+# Гард СТРУКТУРНЫЙ, не словарный: у даты и времени есть форма («д.м.гггг»,
+# «чч:мм»), которой нет у кода услуги («Код 5437» — целое число), поэтому
+# homecode-запросы он не задевает. Срабатывает, только если КРОМЕ даты/времени
+# в реплике не осталось ни одного значащего слова: «сколько стоит приём
+# завтра» гардом не глушится.
+# ---------------------------------------------------------------------------
+
+_DATETIME_SHAPED_RE = re.compile(
+    r"(?:"
+    r"\d{4}-\d{1,2}-\d{1,2}"                    # ISO: 2026-09-06
+    r"|\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?"     # 6.09.2026, 6/9, 06-09-26
+    r"|\d{1,2}[:.]\d{2}"                         # 10:30, 14.00
+    r")"
+)
+_MONTH_WORD_RE = re.compile(
+    r"\b(?:январ\w*|феврал\w*|март\w*|апрел\w*|ма[йя]\w*|июн\w*|июл\w*|"
+    r"август\w*|сентябр\w*|октябр\w*|ноябр\w*|декабр\w*)\b"
+)
+_RELATIVE_DAY_RE = re.compile(
+    r"\b(?:сегодня|завтра|послезавтра|вчера|утром|утра|днем|вечером|вечера|"
+    r"ночью|понедельник\w*|вторник\w*|сред[ауы]|четверг\w*|пятниц\w*|"
+    r"суббот\w*|воскресен\w*)\b"
+)
+# Словами о часах/минутах — только точные формы: `час\w*` поймал бы «часть».
+_CLOCK_WORD_RE = re.compile(r"\b(?:часов|часа|часу|час|минут\w*|мин)\b")
+# Служебная обвязка даты: предлоги и слова-указатели. Триггером НЕ являются.
+_DATETIME_FILLER_RE = re.compile(
+    r"\b(?:в|во|на|к|ко|с|со|до|про|около|числа|числу|число|время|дата|дату)\b"
+)
+
+_DATETIME_TRIGGER_RES = (
+    _DATETIME_SHAPED_RE,
+    _MONTH_WORD_RE,
+    _RELATIVE_DAY_RE,
+    _CLOCK_WORD_RE,
+)
+
+
+def _is_datetime_only_query(text: str) -> bool:
+    """
+    Определяет, что реплика состоит только из даты/времени.
+
+    :param text: сырой текст реплики пациента
+    :return: True — реплику нельзя трактовать как название услуги
+    """
+
+    s = _normalise_input(text).strip()
+    if not s:
+        return False
+    if not any(rx.search(s) for rx in _DATETIME_TRIGGER_RES):
+        return False
+    rest = s
+    for rx in _DATETIME_TRIGGER_RES:
+        rest = rx.sub(" ", rest)
+    rest = _DATETIME_FILLER_RE.sub(" ", rest)
+    # Голый остаток из цифр («20 ноября 2026» → «20 2026») услугу не уточняет.
+    return not re.findall(r"[a-zа-я]{3,}", rest)
+
+
+def _price_raw_query_fallback(query_text: str) -> str:
+    """
+    Сырой текст запроса как fallback-имя услуги.
+
+    Отдаёт пустую строку для реплик-дат/времени: иначе `or query_text` ниже
+    возвращает то самое, что отсёк `_extract_price_service_from_query`, и
+    дата снова уезжает в матчинг по каталогу (см. `datetime_answer_as_service`).
+
+    :param query_text: исходный пользовательский запрос
+    :return: текст для family-матчинга либо пустая строка
+    """
+
+    return "" if _is_datetime_only_query(query_text) else str(query_text or "")
+
+
 def _extract_price_service_from_query(query: str) -> str | None:
     raw = str(query or "").strip()
     if not raw:
+        return None
+    # Ответ датой/временем на вопрос о записи — не название услуги.
+    if _is_datetime_only_query(raw):
         return None
     if _PRICE_CONSULT_HINT_RE.search(raw):
         specialty = _extract_specialty_from_text(raw)
@@ -1979,7 +2070,10 @@ def _family_query_root_tokens(query_text: str) -> list[str]:
     :return: список значимых токенов, отсортированных по длине
     """
 
-    family_query = str(_extract_price_service_from_query(query_text) or query_text).strip()
+    family_query = str(
+        _extract_price_service_from_query(query_text)
+        or _price_raw_query_fallback(query_text)
+    ).strip()
     tokens: list[str] = []
     seen: set[str] = set()
     for token in _price_query_tokens(family_query):
@@ -2117,7 +2211,10 @@ def _build_family_candidate_rows(
     :return: candidate-строки family-кластера
     """
 
-    family_query = str(_extract_price_service_from_query(query_text) or query_text).strip()
+    family_query = str(
+        _extract_price_service_from_query(query_text)
+        or _price_raw_query_fallback(query_text)
+    ).strip()
     if not family_query:
         return []
 
@@ -2227,7 +2324,10 @@ def _is_family_query_candidate(query_text: str, rows: list[dict[str, Any]]) -> b
     if _query_nonbase_price_flags(query_text):
         return False
 
-    family_query = str(_extract_price_service_from_query(query_text) or query_text).strip()
+    family_query = str(
+        _extract_price_service_from_query(query_text)
+        or _price_raw_query_fallback(query_text)
+    ).strip()
     tokens = [tok for tok in _price_query_tokens(family_query) if tok not in _PRICE_GENERIC_SERVICE_TOKENS]
     if not tokens or len(tokens) > 4:
         return False
@@ -2384,7 +2484,10 @@ def _build_price_family_payload(
         if oak_payload is not None:
             return oak_payload
 
-    family_query = str(_extract_price_service_from_query(query_text) or query_text).strip()
+    family_query = str(
+        _extract_price_service_from_query(query_text)
+        or _price_raw_query_fallback(query_text)
+    ).strip()
     if not _is_family_query_candidate(query_text, rows):
         return None
 
