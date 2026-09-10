@@ -52,6 +52,7 @@ def _service_info_base_url() -> str:
 
 BASE_URL = _service_info_base_url()
 ENDPOINT_SERVICE_INFO_ALL = f"{BASE_URL}/site/serviceInfoAll"
+ENDPOINT_SERVICE_INFO_ONE = f"{BASE_URL}/site/serviceInfo"
 AUTH = requests.auth.HTTPBasicAuth(c.nayka_login, c.nayka_pass)
 VERIFY_TLS = getattr(c, "nayka_verify_tls", False)
 HTTP_TIMEOUT = getattr(c, "nayka_timeout", 60)
@@ -159,11 +160,21 @@ def _cleanup_old() -> None:
 
 
 def _has_useful_text(row: dict[str, Any]) -> bool:
-    """Проверяет, что в записи есть полезный текст для дальнейшего поиска."""
+    """Проверяет, что в записи есть полезный текст для дальнейшего поиска.
 
-    for field in ("description", "indication", "preparation"):
-        value = str(row.get(field) or "").strip()
-        if value:
+    `serviceSynonyms` входит в список наравне с описаниями: синоним — самостоятельная
+    причина сохранить запись. Клиника заполняет поле постепенно, и услуга, у которой
+    заполнены ТОЛЬКО синонимы, иначе молча выпала бы из выгрузки — снаружи это
+    выглядит как «бот не понимает синонимы», хотя работа сделана.
+    """
+
+    for field in ("description", "indication", "preparation", "serviceSynonyms"):
+        value = row.get(field)
+        if isinstance(value, (list, tuple, set)):
+            if any(str(item or "").strip() for item in value):
+                return True
+            continue
+        if str(value or "").strip():
             return True
     return False
 
@@ -179,6 +190,68 @@ def fetch_service_info_all() -> list[dict[str, Any]]:
     response.raise_for_status()
     payload = response.json()
     return payload if isinstance(payload, list) else []
+
+
+def fetch_service_info_one(service_id: Any) -> dict[str, Any]:
+    """
+    Загружает карточку ОДНОЙ услуги (`site/serviceInfo/{id}`).
+
+    :param service_id: идентификатор услуги
+    :return: запись API (пустой словарь, если ответ не словарь)
+    """
+
+    response = SESSION.get(
+        f"{ENDPOINT_SERVICE_INFO_ONE}/{service_id}",
+        timeout=HTTP_TIMEOUT,
+        verify=VERIFY_TLS,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if isinstance(payload, list):
+        payload = payload[0] if payload else {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def backfill_service_synonyms(path: Path | None = None) -> int:
+    """
+    Добирает `serviceSynonyms` поштучно для строк, где массовый метод отдал пусто.
+
+    Массовый `serviceInfoAll` теряет это поле (замер 10.09: 0 заполненных из 8472,
+    при том что поштучный метод по той же услуге отдаёт значение). Добор идёт ПОСЛЕ
+    суточной выгрузки и вне пути пациента: ~1622 запроса, около 6 минут.
+
+    Строки с уже заполненным полем не трогаются — когда клиника починит массовый
+    метод, добор станет холостым и его можно будет снять без правки данных.
+    Сбой на отдельной услуге не роняет прогон: значение просто остаётся пустым.
+
+    :param path: файл дневного среза (по умолчанию — сегодняшний)
+    :return: сколько строк удалось дозаполнить
+    """
+
+    target = path or service_info_path()
+    if not target.exists():
+        return 0
+    rows = jsonl_read(target)
+    filled = 0
+    for row in rows:
+        if str(row.get("serviceSynonyms") or "").strip():
+            continue
+        service_id = row.get("serviceId")
+        if service_id is None:
+            continue
+        try:
+            fresh = fetch_service_info_one(service_id)
+        except Exception as exc:
+            log.debug("serviceInfo/%s недоступен, синонимы пропущены: %s", service_id, exc)
+            continue
+        value = fresh.get("serviceSynonyms")
+        if str(value or "").strip():
+            row["serviceSynonyms"] = value
+            filled += 1
+    if filled:
+        jsonl_write(target, rows)
+    log.info("✅ синонимы добраны поштучно: %s строк из %s", filled, len(rows))
+    return filled
 
 
 def update_service_info(force: bool = False) -> Path:
@@ -234,6 +307,15 @@ async def _refresh_service_info_once() -> None:
         log.info("✅ [DAILY REFRESH] serviceInfoAll обновлён")
     except Exception as exc:
         log.warning("⚠️ [DAILY REFRESH] serviceInfoAll refresh failed: %s", exc)
+        return
+    # Добор синонимов — отдельным шагом и отдельным try: он длится ~6 минут и его
+    # сбой не должен обесценивать уже скачанный срез. Холодный старт
+    # (`load_service_info` на отсутствующем файле) добор НЕ делает — иначе первый
+    # же запрос пациента ждал бы эти минуты.
+    try:
+        await asyncio.to_thread(backfill_service_synonyms)
+    except Exception as exc:
+        log.warning("⚠️ [DAILY REFRESH] добор синонимов не удался: %s", exc)
 
 
 async def _service_info_refresh_loop() -> None:
