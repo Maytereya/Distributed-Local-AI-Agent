@@ -18,6 +18,7 @@ from ..russian_nlu import normalize_ru
 from ..service_phrase import extract_service_phrase
 from ._addresses_helpers import _extract_homecode_query
 from ._biomaterial import (
+    mis_synonym_candidates,
     mis_synonym_service,
     service_accepts_biomaterial,
     split_biomaterial_tail,
@@ -3009,6 +3010,62 @@ def _resolve_multi_price_items(
     if len(resolved) < 2:
         return [], []
     return resolved, unrecognized
+
+
+def _build_synonym_fork_payload(
+    query_text: str,
+    retail_rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Развилка, когда синоним МИС указывает на НЕСКОЛЬКО услуг.
+
+    9% живого словаря клиники неоднозначны: «оак» повешен на три услуги, «рак» —
+    на пять разных онкомаркеров, «вэб» — на девять. Выбрать одну молча значило бы
+    назвать цену чужого исследования; решение владельца (2026-07-22, класс
+    `family_discriminator_dropped`) — «при неоднозначности список вариантов, а не
+    единственная возможно чужая цена».
+
+    Payload той же формы, что у мульти-услугового пути, чтобы рендер показал
+    список без отдельной ветки.
+
+    :param query_text: реплика пациента
+    :param retail_rows: строки прайса региона
+    :return: family-совместимый payload либо None (синонима нет / он однозначен)
+    """
+
+    candidates = mis_synonym_candidates(query_text)
+    if len(candidates) < 2:
+        return None
+
+    variants: list[dict[str, Any]] = []
+    shown: list[str] = []
+    for name in candidates:
+        # Синоним может указывать на услугу, которой нет в прайсе региона —
+        # в развилку такие не попадают (иначе пациент выберет недоступное).
+        rows = _select_patient_price_rows(retail_rows, name, limit=1)
+        rows = [r for r in rows if _normalise_input(str(r.get("serviceName") or "")) == _normalise_input(name)]
+        if not rows:
+            continue
+        shown.append(name)
+        label = f"По услуге «{name}»"
+        for row in rows:
+            annotated = dict(row)
+            annotated["care_setting_label"] = label
+            annotated["care_setting_address"] = ""
+            variants.append(annotated)
+
+    if len(shown) < 2:
+        return None
+
+    return {
+        "service_name": ", ".join(shown),
+        "service_kind": "family_query",
+        "family_variants": variants,
+        "showing_all": True,
+        "visible_limit": len(variants),
+        "remaining_count": 0,
+        "show_all_hint": "",
+        "note": "price_synonym_ambiguous",
+    }
 
 
 def _build_multi_price_payload(

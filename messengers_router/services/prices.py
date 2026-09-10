@@ -46,6 +46,7 @@ from ._prices_helpers import (
     _build_compound_price_clarify_payload,
     _build_multi_price_payload,
     _build_price_family_payload,
+    _build_synonym_fork_payload,
     _extract_price_service_from_query,
     _is_city_only_reply,
     _is_generic_uzi_price_request,
@@ -232,6 +233,17 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             "service_name_effective": str(multi_payload.get("service_name") or "").strip(),
         }
         return multi_payload
+    # Синоним МИС указывает на несколько услуг («оак» → 3, «рак» → 5): показываем
+    # ВСЕ варианты, выбирает пациент. Стоит ПОСЛЕ мульти-пути, чтобы корзина
+    # («оак, ферритин») по-прежнему считалась как корзина, и ДО семейного —
+    # словарь клиники доверенней лексической догадки.
+    synonym_fork = _build_synonym_fork_payload(query_text, retail_rows_clean)
+    if synonym_fork is not None and not doctor_id:
+        synonym_fork["entities_used"] = {
+            **entities,
+            "service_name_effective": str(synonym_fork.get("service_name") or "").strip(),
+        }
+        return synonym_fork
     family_payload = _build_price_family_payload(
         query_text,
         retail_rows_clean,

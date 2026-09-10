@@ -60,6 +60,21 @@ _LOCATIVE_FILLER = frozenset(
 # «нос») — часто само название услуги или её различающий токен, снимать нельзя.
 _MIN_TAIL_TOKENS = 2
 
+# Речевая обвязка вокруг названия услуги. Список ЛИНГВИСТИЧЕСКИЙ (как пациент
+# оформляет просьбу), а не медицинский — услуг и болезней тут нет и быть не
+# должно. Нужен, чтобы отличить «синоним НАЗЫВАЕТ услугу» («сколько стоит
+# тироксин») от «синоним случайно встретился внутри чужого названия» («CA 15 - 3
+# (молочная железа)» ← «ca» = кальций). Свип 09.09: без этого 182 названия
+# каталога из 1200 уводились в чужую услугу.
+_SPEECH_WRAPPER = frozenset({
+    "сколько", "стоит", "стоимость", "цена", "цену", "по", "чем",
+    "хочу", "хочется", "надо", "нужно", "нужен", "нужна", "можно", "могу",
+    "сдать", "сдаю", "сдам", "сдача", "сделать", "пройти", "записаться", "запишите",
+    "подскажите", "скажите", "уточните", "пожалуйста", "здравствуйте", "добрый", "день",
+    "а", "и", "ли", "это", "мне", "у", "вас", "в", "на", "с", "со", "за", "от", "до",
+    "анализ", "анализы", "услуга", "услуги", "тест",
+})
+
 
 def _tokens(text: str) -> list[str]:
     return _TOKEN_RE.findall(_normalise_input(text))
@@ -72,6 +87,11 @@ class _MisVocabularies:
         self.biomat_tokens: frozenset[str] = frozenset()
         self.biomat_phrases: tuple[frozenset[str], ...] = ()
         self.synonym_to_service: dict[str, str] = {}
+        # Все услуги на синоним. 9% живого словаря клиники неоднозначны («вэб» →
+        # 9 услуг, «рак» → 4 онкомаркера), поэтому кандидаты храним полностью, а
+        # `synonym_to_service` оставляем ТОЛЬКО для однозначных — молча выбрать
+        # одну из четырёх значило бы вернуть класс «дезинформация ценой».
+        self.synonym_candidates: dict[str, tuple[str, ...]] = {}
         self.biomat_by_service: dict[str, tuple[frozenset[str], ...]] = {}
 
 
@@ -89,6 +109,7 @@ def _cache_key() -> tuple[str, float] | None:
 
 def _build_vocabularies(rows: list[dict[str, Any]]) -> _MisVocabularies:
     vocab = _MisVocabularies()
+    candidates: dict[str, list[str]] = {}
     biomat_tokens: set[str] = set()
     phrases: set[frozenset[str]] = set()
     for row in rows:
@@ -112,13 +133,19 @@ def _build_vocabularies(rows: list[dict[str, Any]]) -> _MisVocabularies:
         raw_syn = row.get("serviceSynonyms")
         syn_values = raw_syn if isinstance(raw_syn, list) else [raw_syn]
         for value in syn_values:
-            for part in re.split(r"[,;]", str(value or "")):
+            # Разделители задаёт клиника руками: в выгрузке встречаются и запятые,
+            # и точки с запятой, и «|| Хламидия трахоматис ||».
+            for part in re.split(r"[,;]|\|\|", str(value or "")):
                 key = _normalise_input(part)
                 if key and service_name:
-                    vocab.synonym_to_service.setdefault(key, service_name)
+                    seen = candidates.setdefault(key, [])
+                    if service_name not in seen:
+                        seen.append(service_name)
 
     vocab.biomat_tokens = frozenset(biomat_tokens)
     vocab.biomat_phrases = tuple(phrases)
+    vocab.synonym_candidates = {k: tuple(v) for k, v in candidates.items()}
+    vocab.synonym_to_service = {k: v[0] for k, v in candidates.items() if len(v) == 1}
     return vocab
 
 
@@ -142,20 +169,96 @@ def _vocabularies() -> _MisVocabularies:
     return vocab
 
 
-def mis_synonym_service(query_text: str) -> str | None:
-    """Услуга по ТОЧНОМУ синониму из МИС (`serviceSynonyms`) — высшее доверие.
+def _synonym_index(vocab: _MisVocabularies) -> dict[str, tuple[tuple[str, ...], str]]:
+    """Индекс «первый токен синонима → (токены, ключ)» для поиска по вхождению."""
 
-    Клиника заполняет поле; на текущем срезе оно пустое, поэтому функция
-    возвращает None и ничего не меняет. Механика подключена заранее.
+    source = vocab.synonym_candidates or {k: (v,) for k, v in vocab.synonym_to_service.items()}
+    index: dict[str, list[tuple[tuple[str, ...], str]]] = {}
+    for key in source:
+        toks = tuple(_tokens(key))
+        if toks:
+            index.setdefault(toks[0], []).append((toks, key))
+    return index
 
-    :param query_text: реплика/фраза пациента
+
+def _match_synonym_key(query_text: str, vocab: _MisVocabularies) -> str | None:
+    """Самый длинный синоним, входящий в реплику непрерывной цепочкой токенов.
+
+    Сверка реплики ЦЕЛИКОМ обесценивает словарь: живая формулировка почти всегда
+    несёт вокруг названия глаголы и вежливость («кровь с лейкоформулой сдать
+    хочу»). Ищем вхождение, но ТОЛЬКО по границам токенов — иначе «оак» нашёлся
+    бы внутри «трОАКарная». Из нескольких подошедших берём длиннейший: он точнее
+    («глюкоза в моче» важнее, чем просто «моча»).
+
+    :param query_text: реплика пациента
+    :param vocab: разобранные словари МИС
+    :return: ключ словаря либо None
+    """
+
+    q = _tokens(query_text)
+    if not q:
+        return None
+    index = _synonym_index(vocab)
+    best: str | None = None
+    best_len = 0
+    for pos, token in enumerate(q):
+        for toks, key in index.get(token, ()):
+            n = len(toks)
+            if n <= best_len or pos + n > len(q):
+                continue
+            if tuple(q[pos : pos + n]) != toks:
+                continue
+            # Синоним обязан НАЗЫВАТЬ услугу: всё, что осталось сверх него, —
+            # только речевая обвязка. Содержательный остаток означает, что
+            # синоним встретился внутри чужого названия.
+            rest = q[:pos] + q[pos + n :]
+            if any(tok not in _SPEECH_WRAPPER for tok in rest):
+                continue
+            best, best_len = key, n
+    return best
+
+
+def mis_synonym_candidates(
+    query_text: str, *, vocab: _MisVocabularies | None = None
+) -> tuple[str, ...]:
+    """Все услуги, на которые указывает синоним из реплики.
+
+    9% живого словаря клиники неоднозначны: «вэб» → 9 услуг, «рак» → 4 разных
+    онкомаркера, «холестерин» → 4 анализа. Вызывающая сторона обязана развести
+    их развилкой, а не выбирать молча.
+
+    :param query_text: реплика пациента
+    :param vocab: словари МИС (по умолчанию — дневной срез)
+    :return: кортеж канонических названий услуг (пустой, если синонима нет)
+    """
+
+    vocab = vocab if vocab is not None else _vocabularies()
+    key = _match_synonym_key(query_text, vocab)
+    if key is None:
+        return ()
+    if vocab.synonym_candidates:
+        return vocab.synonym_candidates.get(key, ())
+    single = vocab.synonym_to_service.get(key)
+    return (single,) if single else ()
+
+
+def mis_synonym_service(
+    query_text: str, *, vocab: _MisVocabularies | None = None
+) -> str | None:
+    """Услуга по синониму МИС — ТОЛЬКО когда синоним однозначен.
+
+    Однозначный синоним — высшее доверие: клиника прямо сказала «это слово
+    означает вот эту услугу». Неоднозначный отдаётся как None: выбрать одну из
+    нескольких молча — это класс «дезинформация ценой», см.
+    `mis_synonym_candidates`.
+
+    :param query_text: реплика пациента
+    :param vocab: словари МИС (по умолчанию — дневной срез)
     :return: каноническое название услуги либо None
     """
 
-    key = _normalise_input(query_text)
-    if not key:
-        return None
-    return _vocabularies().synonym_to_service.get(key)
+    found = mis_synonym_candidates(query_text, vocab=vocab)
+    return found[0] if len(found) == 1 else None
 
 
 def split_biomaterial_tail(text: str) -> tuple[str, str]:
