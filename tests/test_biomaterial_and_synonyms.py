@@ -20,7 +20,7 @@
 Биоматериал НЕ идентифицирует услугу — «соскоб с задней стенки глотки» подходит
 к 44 услугам, «кровь из вены» — к 1103.
 
-`serviceSynonyms` (высшее доверие) клиника заполняет; на срезе 14.08 поле пустое
+`serviceSynonyms` (высшее доверие) клиника начала заполнять 15.09.2026; на срезе
 у всех 1613 строк, поэтому механика проверяется на подставленном справочнике.
 """
 
@@ -45,13 +45,39 @@ def _resolve(q: str) -> str | None:
 
 # --- Гарды окружения ------------------------------------------------------
 
-def test_mis_snapshot_has_biomat_and_no_synonyms_yet():
-    """Фиксируем состояние справочника, на котором построен фикс: biomatNames
-    заполнен почти везде, serviceSynonyms клиника ещё не заполнила."""
+def test_mis_snapshot_shape_is_sane():
+    """Состояние справочника, на котором построены оба слоя.
+
+    Растяжка `serviceSynonyms == 0` сработала 15.09.2026: клиника начала
+    заполнять поле (295 услуг на тот день). Считать конкретное число больше
+    нельзя — оно растёт по мере работы администратора, и гейт краснел бы от
+    чужих данных. Проверяем ФОРМУ, а не количество.
+    """
     with_biomat = sum(1 for r in INFO if r.get("biomatNames"))
-    with_syn = sum(1 for r in INFO if r.get("serviceSynonyms"))
     assert with_biomat > len(INFO) * 0.9, (with_biomat, len(INFO))
-    assert with_syn == 0, "serviceSynonyms заполнили — снять этот гард и добавить кейсы"
+
+
+def test_filled_synonyms_point_at_real_services():
+    """Инвариант наполнения: синоним обязан указывать на услугу ИЗ ЭТОГО среза.
+
+    Клиника заполняет поле руками; опечатка в названии услуги сделала бы
+    синоним мёртвым — резолвер его отбросит, а снаружи это выглядит как
+    «бот не понимает». Тест ловит такой разрыв на самих данных.
+
+    Если синонимы ещё не доехали (пустой срез) — проверять нечего, тест молчит.
+    """
+    names = {str(r.get("serviceName") or "").strip().lower() for r in INFO}
+    vocab = bio._build_vocabularies(INFO)
+    if not vocab.synonym_candidates:
+        pytest.skip("serviceSynonyms в срезе пусто — проверять нечего")
+
+    orphans = [
+        (key, svc)
+        for key, services in vocab.synonym_candidates.items()
+        for svc in services
+        if svc.strip().lower() not in names
+    ]
+    assert not orphans, f"синонимы указывают на услуги вне среза: {orphans[:5]}"
 
 
 def test_biomaterial_does_not_identify_service():

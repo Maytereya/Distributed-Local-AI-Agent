@@ -97,3 +97,31 @@ def _hermetic_result_timing_validator(monkeypatch):
 
     monkeypatch.setattr(_lab, "is_result_timing_question", _lookup)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_mis_synonyms(monkeypatch):
+    """Герметичны ТОЛЬКО синонимы МИС; биоматериалы остаются живыми.
+
+    Синонимы заполняет КЛИНИКА, и дневной срез меняется без единой правки кода.
+    15.09.2026 гейт покраснел именно так: администратор заполнила 295 услуг, и
+    три теста, читавшие живой срез, поменяли поведение при неизменном коде.
+    Гейт обязан быть воспроизводимым, поэтому синонимы по умолчанию пусты, а
+    тесты про них подставляют свой словарь явно (monkeypatch после autouse
+    побеждает) либо передают `vocab=` параметром.
+
+    `biomatNames` не трогаем: поле заполнено у 98% услуг давно и стабильно, на
+    нём построен слой снятия биоматериала, и подмена сломала бы его тесты.
+    """
+    from messengers_router.services import _biomaterial as _bio
+
+    real = _bio._vocabularies
+
+    def _without_synonyms() -> "_bio._MisVocabularies":
+        vocab = real()
+        vocab.synonym_to_service = {}
+        vocab.synonym_candidates = {}
+        return vocab
+
+    monkeypatch.setattr(_bio, "_vocabularies", _without_synonyms)
+    yield
