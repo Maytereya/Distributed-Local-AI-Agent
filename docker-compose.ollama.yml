@@ -1,0 +1,82 @@
+# Ollama — LLM-бэкенд бота. ОТДЕЛЬНЫЙ compose-файл намеренно.
+#
+# Зачем отдельно: у ollama другой жизненный цикл. Она меняется редко, а рестарт
+# стоит дорого — выгрузка модели и повторная загрузка 53 ГБ с диска. Будь она в
+# общем docker-compose.yml, любой `docker compose up -d` при деплое бота мог бы
+# её пересоздать и уронить LLM на несколько минут.
+#
+# Управление:
+#   docker compose -f docker-compose.ollama.yml up -d
+#   docker compose -f docker-compose.ollama.yml logs -f
+#
+# История: 15.09.2026 прод лежал сутки, потому что контейнер был поднят руками
+# через `docker run`, и его конфигурация нигде не хранилась. При пересоздании
+# потерялась сеть local_net, а до того отсутствовал OLLAMA_SCHED_SPREAD.
+# Этот файл существует, чтобы такое не повторилось.
+
+services:
+  ollama:
+    # Решение владельца 15.09.2026: оставляем `latest`, чтобы не обновлять руками.
+    # Риск известен — версия меняется не когда вышло обновление, а когда кто-то
+    # пересоздаст контейнер. Компенсируется healthcheck'ом ниже.
+    # Проверенный в бою образ на 15.09 — 0.33.2 (id 020e4134285e); если после
+    # обновления что-то сломается, откат: docker tag 020e4134285e ollama/ollama:rollback
+    # и временно подставить этот тег сюда.
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: always
+    ports:
+      - "11434:11434"
+    volumes:
+      # Именованный том: здесь лежат ~240 ГБ моделей. При пересоздании
+      # контейнера том сохраняется, но потерять его — самая дорогая ошибка.
+      - ollama:/root/.ollama
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - OLLAMA_HOST=0.0.0.0:11434
+      # Раскладка модели по НЕСКОЛЬКИМ картам. Без неё ollama кладёт модель на
+      # одну карту (24 ГБ), и mistral fp16 (53 ГБ с учётом контекста) не влезает
+      # вовсе. `--gpus all` этого НЕ заменяет: он лишь делает карты видимыми.
+      - OLLAMA_SCHED_SPREAD=1
+      - OLLAMA_CONTEXT_LENGTH=24576
+      # NUM_PARALLEL множит KV-кэш: при 2 и контексте 24576 модель занимает
+      # 53 ГБ вместо 44.7. Уменьшать до 1, если упрётесь в память.
+      - OLLAMA_NUM_PARALLEL=2
+      - OLLAMA_MAX_QUEUE=128
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_KEEP_ALIVE=6h
+      - OLLAMA_LOAD_TIMEOUT=10m
+    # Ловит «сервер не поднялся» — в том числе несовместимую версию после
+    # обновления latest. ВАЖНО про границы: проверка бьёт по API, который был
+    # жив и 15.09, когда бот лежал сутки. Тот отказ случался при ЗАГРУЗКЕ модели,
+    # и healthcheck его бы не увидел. Для такого класса нужен монитор на уровне
+    # бота — «нет успешных ответов LLM за N минут».
+    # start_period: обнаружение карт при старте занимает ~37 с (замер 15.09).
+    # Учтите: unhealthy не перезапускает контейнер — `restart: always` реагирует
+    # на выход процесса, а не на статус проверки. Это видимость, не автолечение.
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - local_net
+
+networks:
+  local_net:
+    external: true
+
+volumes:
+  # Том создан вне compose — подхватываем существующий, а не создаём новый.
+  ollama:
+    external: true
