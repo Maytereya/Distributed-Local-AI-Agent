@@ -82,6 +82,15 @@ def _looks_like_pii(phrase: str) -> bool:
     return bool(_PII_RE.search(phrase))
 
 
+def _unquote_csv(line: str) -> str:
+    """Снимает кавычки и удвоение из однополевой CSV-строки, отданной COPY."""
+
+    value = line.strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        value = value[1:-1].replace('""', '"')
+    return value.replace("\\n", " ").strip()
+
+
 def extract_candidates(texts: list[str]) -> Counter:
     """Собирает частотник фрагментов, похожих на название услуги.
 
@@ -128,20 +137,36 @@ def extract_candidates(texts: list[str]) -> Counter:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("logfile", help="лог бот-воркера агрегатора")
+    parser.add_argument("logfile", help="лог бот-воркера агрегатора либо CSV/текст с репликами")
+    parser.add_argument(
+        "--format",
+        choices=("log", "texts"),
+        default="log",
+        help=(
+            "log — вывод `docker logs` бот-воркера (по умолчанию); "
+            "texts — по одной реплике пациента в строке, как отдаёт выгрузка из "
+            "базы агрегатора: COPY (SELECT text FROM core_message WHERE sender='user')"
+        ),
+    )
     parser.add_argument("-o", "--out", default="synonym_candidates.csv")
     parser.add_argument("--min-count", type=int, default=2, help="порог частоты")
     args = parser.parse_args()
 
     lines = Path(args.logfile).read_text(encoding="utf-8", errors="ignore").splitlines()
-    dialogs = parse_log(lines)
-    texts = [
-        text
-        for dialog in dialogs.values()
-        for who, text in dialog.events
-        if who == "user"
-    ]
-    print(f"диалогов: {len(dialogs)}, реплик пациентов: {len(texts)}")
+    if args.format == "texts":
+        # Выгрузка из БД агрегатора: одна реплика в строке. Источник лучше логов —
+        # docker logs ротируются и хранят дни, а в `core_message` вся история.
+        texts = [_unquote_csv(line) for line in lines if line.strip()]
+        print(f"реплик пациентов: {len(texts)}")
+    else:
+        dialogs = parse_log(lines)
+        texts = [
+            text
+            for dialog in dialogs.values()
+            for who, text in dialog.events
+            if who == "user"
+        ]
+        print(f"диалогов: {len(dialogs)}, реплик пациентов: {len(texts)}")
 
     candidates = extract_candidates(texts)
     frequent = [(p, c) for p, c in candidates.most_common() if c >= args.min_count]
