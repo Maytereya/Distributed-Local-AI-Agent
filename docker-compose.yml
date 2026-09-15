@@ -100,24 +100,55 @@ services:
     networks:
       - local_net
 
-  certbot:
-    image: certbot/certbot
-    container_name: certbot
+  chroma_container:
+    image: chromadb/chroma@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
+    container_name: chroma_container
+    restart: always
+    ports:
+      - "8000:8000"
     volumes:
-      - /etc/letsencrypt:/etc/letsencrypt
-      - /home/vl/bookworm_app/Distributed-Local-AI-Agent/nginx/html:/var/www/certbot/html
-    depends_on:
-      - nginx
-    command:
-      - certonly
-      - --webroot
-      - -w
-      - /var/www/certbot/html
-      - --email=rakhmanov-v@ya.ru
-      - --agree-tos
-      - --no-eff-email
-      - -d
-      - ontheflyai.ru
+      - /home/vl/chroma-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -ec
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8000;
+          printf 'GET /api/v2/heartbeat HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3;
+          grep -q '200 OK' <&3
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - local_net
+
+  meili_server:
+    image: getmeili/meilisearch:v1.19.1@sha256:abab6e9054572fea9fd409cf0f4fe3b65f6c8e70cd0f213004592b6d0e9587ac
+    container_name: meili_server
+    restart: always
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_ENV: development
+      MEILI_HTTP_ADDR: 0.0.0.0:7700
+      MEILI_SERVER_PROVIDER: docker
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:?MEILI_MASTER_KEY must be set in .env}
+    volumes:
+      - /home/vl/meili_data_v1_19:/meili_data
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - --max-time
+        - "3"
+        - http://127.0.0.1:7700/health
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       - local_net
 
