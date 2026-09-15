@@ -377,3 +377,31 @@ def test_fork_orders_candidates_by_price_ascending(monkeypatch):
 
     costs = [float(v.get("cost") or 0) for v in payload["family_variants"]]
     assert costs == sorted(costs), costs
+
+
+def test_synonym_survives_a_dropped_preposition():
+    """Потерянный предлог не должен ломать синоним.
+
+    Прод 15.09: «сколько стоит кровь С лейкоформулой» доходило до матчера как
+    «сколько стоит кровь лейкоформулой» — предлог срезается выше по пути. Синоним
+    в словаре записан с предлогом, матч шёл непрерывной цепочкой токенов и не
+    складывался. Пациент получал «Похоже, вы имели в виду "Лейкоцитарная
+    формула"?» — это ДРУГОЕ исследование, 210 руб. против 550.
+
+    Инвариант: предлоги не значащая часть названия услуги ни в словаре клиники,
+    ни в реплике пациента. Сверяем последовательности без них.
+    """
+    vocab = _vocab_for([("Общий анализ крови (полный)", "кровь с лейкоформулой")])
+    for phrase in (
+        "сколько стоит кровь с лейкоформулой",
+        "сколько стоит кровь лейкоформулой",
+        "кровь лейкоформулой",
+    ):
+        assert bio.mis_synonym_candidates(phrase, vocab=vocab) == ("Общий анализ крови (полный)",), phrase
+
+
+def test_preposition_tolerance_does_not_open_the_door_to_hijacking():
+    """Послабление не должно вернуть перехват чужих названий."""
+    vocab = _vocab_for([("Кальций ионизированный", "ca")])
+    assert bio.mis_synonym_candidates("CA 15 - 3 (молочная железа)", vocab=vocab) == ()
+    assert bio.mis_synonym_candidates("Candida albicans (M5)", vocab=vocab) == ()

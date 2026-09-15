@@ -169,13 +169,26 @@ def _vocabularies() -> _MisVocabularies:
     return vocab
 
 
+def _significant_tokens(text: str) -> list[str]:
+    """Токены без предлогов.
+
+    Предлоги не значащая часть названия услуги ни в словаре клиники, ни в
+    реплике пациента: «кровь С лейкоформулой» и «кровь лейкоформулой» — одно и
+    то же. Прод 15.09: предлог срезался выше по пути, синоним переставал
+    находиться, и пациенту предлагали ЧУЖУЮ услугу («Лейкоцитарная формула»
+    210 руб. вместо ОАК 550 руб.).
+    """
+
+    return [tok for tok in _tokens(text) if tok not in _PREPOSITIONS]
+
+
 def _synonym_index(vocab: _MisVocabularies) -> dict[str, tuple[tuple[str, ...], str]]:
-    """Индекс «первый токен синонима → (токены, ключ)» для поиска по вхождению."""
+    """Индекс «первый значащий токен синонима → (токены, ключ)» для вхождения."""
 
     source = vocab.synonym_candidates or {k: (v,) for k, v in vocab.synonym_to_service.items()}
     index: dict[str, list[tuple[tuple[str, ...], str]]] = {}
     for key in source:
-        toks = tuple(_tokens(key))
+        toks = tuple(_significant_tokens(key))
         if toks:
             index.setdefault(toks[0], []).append((toks, key))
     return index
@@ -195,7 +208,7 @@ def _match_synonym_key(query_text: str, vocab: _MisVocabularies) -> str | None:
     :return: ключ словаря либо None
     """
 
-    q = _tokens(query_text)
+    q = _significant_tokens(query_text)
     if not q:
         return None
     index = _synonym_index(vocab)
