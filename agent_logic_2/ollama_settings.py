@@ -185,12 +185,28 @@ def write_main_model_name(name: str) -> bool:
 
 class LLMName:
     current_llm: Optional[str] = None
+    # mtime файла на момент последнего чтения. Кэш по времени правки, а не «на
+    # всю жизнь процесса»: Gradio и бот живут в РАЗНЫХ контейнерах, файл у них
+    # общий, а память нет. Инцидент 15.09.2026 — модель переключили рычагом,
+    # файл перезаписался, а прод сутки работал на старой модели, потому что
+    # `current_llm` читался один раз при старте. Снаружи выглядело так, будто
+    # модель сменилась. Тот же приём применён к дневному срезу МИС.
+    _mtime: Optional[float] = None
     models_list = []
 
 
     @classmethod
+    def _file_mtime(cls) -> Optional[float]:
+        """Время правки файла модели; None — файла нет или он недоступен."""
+        try:
+            return main_model_path.stat().st_mtime
+        except Exception:
+            return None
+
+    @classmethod
     def ensure_initialized(cls) -> None:
-        if cls.current_llm is not None:
+        mtime = cls._file_mtime()
+        if cls.current_llm is not None and mtime == cls._mtime:
             return
 
         settings_dir.mkdir(parents=True, exist_ok=True)
@@ -209,6 +225,7 @@ class LLMName:
             logger.info("✅ Инициализирована LLM: %s из %s", name, main_model_path)
 
         cls.current_llm = name
+        cls._mtime = mtime
 
     @classmethod
     def get(cls) -> str:
@@ -232,6 +249,7 @@ class LLMName:
                 return f"❌ Не удалось сохранить LLM: {name}"
 
             cls.current_llm = name
+            cls._mtime = cls._file_mtime()
 
         return f"✅ Выбрана LLM {name}"
 
