@@ -357,3 +357,23 @@ def test_basket_still_wins_over_synonym_fork(monkeypatch):
 
     payload = asyncio.run(Services().price_info("ферритин, глюкоза", {}))
     assert payload.get("note") != "price_synonym_ambiguous"
+
+
+def test_fork_orders_candidates_by_price_ascending(monkeypatch):
+    """Развилка показывает варианты от дешёвого к дорогому.
+
+    До этого порядок брался из выгрузки МИС, то есть был произвольным с точки
+    зрения пациента. Для списка, между которым человек выбирает, порядок — часть
+    ответа: дешёвое первым, дороже ниже.
+    """
+    from messengers_router.services import _prices_helpers as ph
+
+    names = ["CA 19 - 9 (карцинома поджелудочной железы)", "HE4", "CA 15 - 3 (молочная железа)"]
+    vocab = _vocab_for([(n, "рак") for n in names])
+    monkeypatch.setattr(bio, "_vocabularies", lambda: vocab)
+
+    payload = ph._build_synonym_fork_payload("сколько стоит рак", ROWS)
+    assert payload is not None
+
+    costs = [float(v.get("cost") or 0) for v in payload["family_variants"]]
+    assert costs == sorted(costs), costs

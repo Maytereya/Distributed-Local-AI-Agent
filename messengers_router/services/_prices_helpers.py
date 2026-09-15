@@ -3056,6 +3056,12 @@ def _build_synonym_fork_payload(
     if len(shown) < 2:
         return None
 
+    # Порядок — часть ответа: пациент выбирает из списка, поэтому дешёвое идёт
+    # первым. Без сортировки варианты шли в порядке выгрузки МИС, произвольном
+    # с точки зрения человека. Строки без цены — в конец, чтобы не возглавляли
+    # список нулём.
+    variants.sort(key=lambda row: (row.get("cost") is None, float(row.get("cost") or 0)))
+
     return {
         "service_name": ", ".join(shown),
         "service_kind": "family_query",
