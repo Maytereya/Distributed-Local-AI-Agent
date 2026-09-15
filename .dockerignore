@@ -3,5 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.log
+.env
+.env.*
 .git
 .idea
