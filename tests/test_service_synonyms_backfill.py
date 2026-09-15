@@ -74,3 +74,50 @@ def test_backfill_survives_per_service_failures(monkeypatch, tmp_path: Path):
     rows = {r["serviceId"]: r for r in api_service_info.jsonl_read(cache)}
     assert rows[1]["serviceSynonyms"] is None
     assert rows[2]["serviceSynonyms"] == "бэ"
+
+
+def test_backfill_skips_sweep_when_bulk_already_delivered(monkeypatch, tmp_path: Path):
+    """Клиника починила массовый метод 15.09 — поштучный обход стал лишним.
+
+    Пока `serviceInfoAll` отдавал `serviceSynonyms: null`, добор был единственным
+    способом получить словарь. Теперь выгрузка несёт синонимы сама, и обход 1344
+    услуг каждое утро — бессмысленные запросы к чужому API.
+
+    Условие простое: если в срезе есть ХОТЬ ОДИН синоним, значит метод работает,
+    и доверяем ему. Если массовая выгрузка снова отдаст пусто — добор включится
+    сам и останется страховкой.
+
+    Факт вызова считаем счётчиком, а НЕ исключением из мока: `backfill` ловит
+    `Exception` целиком, поэтому проброшенный AssertionError был бы проглочен и
+    тест позеленел бы впустую (наблюдалось при написании).
+    """
+    cache = tmp_path / "service_info_20260915.jsonl"
+    _write(cache, [
+        {"serviceId": 1, "serviceName": "A", "serviceSynonyms": "из массовой выгрузки"},
+        {"serviceId": 2, "serviceName": "B", "serviceSynonyms": None},
+    ])
+    calls: list[object] = []
+
+    def _record(sid):
+        calls.append(sid)
+        return {"serviceId": sid, "serviceSynonyms": "не должно попасть"}
+
+    monkeypatch.setattr(api_service_info, "fetch_service_info_one", _record)
+
+    assert api_service_info.backfill_service_synonyms(cache) == 0
+    assert calls == [], f"поштучный обход не нужен, а был вызван: {calls}"
+
+
+def test_backfill_still_runs_when_bulk_returned_nothing(monkeypatch, tmp_path: Path):
+    """Страховка: массовый метод снова сломался — добор обязан включиться."""
+    cache = tmp_path / "service_info_20260915.jsonl"
+    _write(cache, [{"serviceId": 7, "serviceName": "C", "serviceSynonyms": None}])
+    calls: list[object] = []
+
+    def _record(sid):
+        calls.append(sid)
+        return {"serviceId": sid, "serviceSynonyms": "добрано поштучно"}
+
+    monkeypatch.setattr(api_service_info, "fetch_service_info_one", _record)
+    assert api_service_info.backfill_service_synonyms(cache) == 1
+    assert calls == [7]
