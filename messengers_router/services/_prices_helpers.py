@@ -3129,7 +3129,20 @@ def _build_multi_price_payload(
     offered_names = " ".join(
         [str(item.get("service_name") or "") for item in items] + honest_unrecognized
     )
-    if _match_drops_unsatisfiable_qualifier(query_text, offered_names, retail_rows):
+    # Гард судит ОСТАТОК, а не реплику целиком (решение владельца 16.09,
+    # BUG-2026-09-07-GUARD-OVER-BLOCK). Разбор реплики целиком объявлял
+    # пациентское слово несуществующим на основании словаря каталога: «холестерин»
+    # резолвер ЗНАЕТ (алиас → Липидограмма), а в названиях прайса такого слова
+    # нет, и полностью распознанная корзина возвращала None. Синоним, который
+    # резолвер уже понял, удовлетворён по определению — судить его нечем и незачем.
+    #
+    # Остаток — это `unrecognized`: то, что не поглотил ни один слой резолвера.
+    # Разница с П2 при этом сохраняется без единого списка слов: «ОМС» после
+    # разбора «приём терапевта по ОМС» остаётся в остатке и НЕ попадает в
+    # `honest_unrecognized` (это не самостоятельный пункт списка), поэтому гард
+    # по-прежнему гасит платный приём на вопрос про полис.
+    residue = " ".join(str(part) for part in unrecognized)
+    if residue and _match_drops_unsatisfiable_qualifier(residue, offered_names, retail_rows):
         return None
 
     variants: list[dict[str, Any]] = []
