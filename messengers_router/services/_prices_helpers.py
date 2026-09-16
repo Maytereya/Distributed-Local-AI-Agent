@@ -1821,10 +1821,18 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
     # Фикс: если первое значимое слово серviceName совпадает с
     # query или с одним из её tokens — даём +90, чтобы перекрыть
     # tie-breaker по name_gap.
+    # Порядок слов в запросе смысла не несёт: «т3 общий» и «общий т3» — одно и
+    # то же. Сравнение с `tokens[0]` давало бонус только одному из порядков, и
+    # через порог `best_score < 100` в `_resolve_price_service_core` это
+    # превращалось из подсказки ранжирования в вердикт «услуги нет»:
+    # «общий т3» → 180 ✓, «т3 общий» → 90 ✗. Смотрим на ВСЕ токены запроса —
+    # ровно так, как описано абзацем выше. Цели бонуса это не меняет: у
+    # «Антитела к рецепторам ТТГ» головное слово «антитела», и в запросе «ттг»
+    # его нет ни первым, ни любым другим.
+    # См. BUG-2026-09-17-WORD-ORDER-DECIDES-EXISTENCE.
     if tokens and row_tokens:
         head_token = row_tokens[0]
-        query_first_token = tokens[0]
-        if head_token == query or head_token == query_first_token:
+        if head_token == query or head_token in tokens:
             score += 90
 
     # Слегка понижаем заведомо нерелевантный общий тариф.
