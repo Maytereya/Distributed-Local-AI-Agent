@@ -8,6 +8,7 @@ heavy router/service modules.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 from .russian_nlu import normalize_ru
 
@@ -232,6 +233,16 @@ def extract_specialties_from_text(text: str) -> tuple[str, ...]:
     return tuple(found)
 
 
+# Разбор зависит ТОЛЬКО от текста: всё, что читается ниже, — модульные
+# константы (кортеж, скомпилированные регекспы, словарь на чтение). Кэш нужен
+# не ради микрооптимизации: `_price_row_score` зовёт эту функцию с ОДНИМ И ТЕМ
+# ЖЕ запросом для каждой строки прайса, и на живом каталоге это 21 979 вызовов
+# и 1 076 971 внутренний вызов на одну корзину — 76% времени сборки.
+# См. BUG-2026-09-16-SPECIALTY-PARSE-PER-ROW.
+#
+# Объём кэша с запасом на весь каталог: помимо запросов сюда приходят названия
+# строк прайса (3662 на регион), и вытеснять их запросами не хочется.
+@lru_cache(maxsize=16384)
 def extract_specialty_from_text(text: str) -> str:
     probe = str(text or "")
     proc_match = PROCEDURE_TO_SPECIALTY_RE.search(probe)

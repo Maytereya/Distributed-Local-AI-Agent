@@ -104,3 +104,46 @@ def test_multi_payload_without_unrecognized_has_no_note():
     assert not payload.get("unrecognized_note")
     rendered = format_price_for_patient(payload, {})
     assert "не распознал" not in rendered.lower()
+
+
+# --- инвариант цикла не пересчитывается по строкам --------------------------
+
+def test_cart_assembly_does_not_reparse_query_per_price_row():
+    """Класс `loop_invariant_recomputed_per_row`.
+
+    16.09 `_price_row_score` звал `extract_specialty_from_text(query)` ДЛЯ
+    КАЖДОЙ строки прайса: на живом каталоге это 21 979 разборов ОДНОГО И ТОГО
+    ЖЕ запроса на одну корзину — 76% времени сборки. Пациент этого не видел
+    только потому, что маршрут до корзины не доходил.
+
+    Проверяем не секунды, а СТРУКТУРУ: сколько раз реально выполнился разбор.
+    Порог по времени пришлось бы ставить между 3 и 1 секундой, и на другой
+    машине он ловил бы её скорость, а не дефект. Число разборов от машины не
+    зависит. См. BUG-2026-09-16-SPECIALTY-PARSE-PER-ROW.
+    """
+
+    from messengers_router.specialty_parser import extract_specialty_from_text
+
+    # Именно assert, а не skip. Пропуск означал бы, что снятие мемоизации делает
+    # тест молчаливым — ровно тот тип молчаливого ущерба, против которого он и
+    # поставлен. Если инвариант станут держать иначе (вынесут вызов из цикла),
+    # тест надо переписать под новый механизм, а не дать ему тихо исчезнуть.
+    assert hasattr(extract_specialty_from_text, "cache_info"), (
+        "разбор специальности больше не мемоизирован; если вызов вынесен из "
+        "построчного цикла — перепишите тест под подсчёт вынесенных вызовов"
+    )
+
+    rows = _rows()
+    assert len(rows) > 1000, "нужен живой каталог, иначе порог ничего не значит"
+
+    extract_specialty_from_text.cache_clear()
+    payload = _build_multi_price_payload("ферритин, глюкоза, холестерин", rows)
+    misses = extract_specialty_from_text.cache_info().misses
+
+    assert payload is not None
+    # Разборов должно быть порядка числа РАЗНЫХ текстов (запрос и его фрагменты),
+    # а не числа строк прайса. Запас десятикратный: ловим класс, а не единицы.
+    assert misses < len(rows) // 10, (
+        f"разбор специальности выполнился {misses} раз при {len(rows)} строках прайса — "
+        "похоже, он снова считается внутри построчного цикла"
+    )
