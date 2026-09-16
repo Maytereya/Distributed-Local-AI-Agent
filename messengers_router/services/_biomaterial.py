@@ -332,3 +332,28 @@ def service_accepts_biomaterial(service_name: str, biomaterial: str) -> bool | N
         if tail_tokens <= (set(phrase) | allowed_extra):
             return True
     return False
+
+
+def is_biomaterial_phrase(text: str) -> bool:
+    """Состоит ли фраза ТОЛЬКО из слов-биоматериалов МИС.
+
+    Нужна, чтобы отличить ЗАГОЛОВОК списка от его пункта: пациент пишет
+    «Кровь: АЛТ, АСТ, ГГТП», и «Кровь» здесь — не услуга, а указание на
+    материал. Без этого разрез по двоеточию делал «Кровь» отдельной позицией,
+    и она находила «Кровь на стерильность» — услугу, которой пациент не
+    называл (BUG-2026-09-16-CART-DROPS-SHORT-CODE).
+
+    Судим по словарю МИС, а не по списку слов в коде: `biomatNames` заполнен у
+    98% услуг и обновляется вместе со справочником.
+
+    :param text: фрагмент реплики
+    :return: True, если все значащие слова фрагмента — названия биоматериалов
+    """
+
+    vocab = _vocabularies()
+    if not vocab.biomat_tokens:
+        return False
+    tokens = _significant_tokens(text)
+    if not tokens:
+        return False
+    return all(token in vocab.biomat_tokens for token in tokens)

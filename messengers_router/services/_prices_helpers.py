@@ -18,6 +18,7 @@ from ..russian_nlu import normalize_ru
 from ..service_phrase import extract_service_phrase
 from ._addresses_helpers import _extract_homecode_query
 from ._biomaterial import (
+    is_biomaterial_phrase,
     mis_synonym_candidates,
     mis_synonym_service,
     service_accepts_biomaterial,
@@ -2806,7 +2807,11 @@ def _parse_price_kind_ambiguous_result(raw: str) -> str | None:
 
 # П6 «корзина» (BUG-B): + `\n` и `•` — реальные списки пациентов идут переносами
 # строк/маркерами, а не запятыми. Дефис НЕ разделитель (В12-дефицит, АТ-ТПО).
-_MULTI_PRICE_SPLIT_RE = re.compile(r"\s*(?:,|;|\bи\b|\+|/|\n|•)\s*", re.I)
+# Двоеточие — разделитель наравне с запятой. Пациент пишет «Кровь: АЛТ, АСТ,
+# ГГТП, цистатин С», и без него первый пункт остаётся склеенным с названием
+# биоматериала: «Кровь: АЛТ» не резолвится, хотя «АЛТ» → АлАТ 205 ₽ находится.
+# См. BUG-2026-09-16-CART-DROPS-SHORT-CODE.
+_MULTI_PRICE_SPLIT_RE = re.compile(r"\s*(?:,|;|:|\bи\b|\+|/|\n|•)\s*", re.I)
 _MULTI_PRICE_SERVICE_HINT_RE = re.compile(
     r"[a-zа-яё]{3,}",
     re.I,
@@ -2832,6 +2837,39 @@ _MULTI_PRICE_NOISE_WORDS = frozenset(
 )
 
 
+def _fragment_can_name_service(fragment: str) -> bool:
+    """Может ли фрагмент списка называть услугу.
+
+    Инвариант (`list_drops_resolvable_item`): позиция, которую одиночный
+    резолвер находит САМА, не может молча исчезнуть внутри списка. Проверка
+    `[a-zа-яё]{3,}` требовала три подряд БУКВЫ, поэтому «т3» и «т4» —
+    буква с цифрой — выбрасывались ДО резолва, и «т3, т4, ттг» отдавало пусто.
+    Пациент не видел ни цены, ни отказа. При этом «т3»/«т4» уже лежали в
+    `_PRICE_SHORT_TOKEN_WHITELIST`: два слоя расходились в одном словаре.
+
+    Словарь коротких обозначений берём оттуда же, откуда его берёт резолвер, и
+    из синонимов МИС — заводить свой список в коде нельзя (CLAUDE.md).
+
+    :param fragment: фрагмент списка после разрезания по разделителям
+    :return: True, если фрагмент имеет право дойти до резолвера
+    """
+
+    if _MULTI_PRICE_SERVICE_HINT_RE.search(fragment):
+        return True
+    norm = _normalise_input(fragment)
+    if not norm:
+        return False
+    # Чисто числовой фрагмент услугой быть не может. Отдельно важно, что в
+    # словаре синонимов МИС есть ключи-обрывки («2», «11», «18») от разреза
+    # химических названий по запятой — пускать их сюда нельзя,
+    # см. BUG-2026-09-16-NUMERIC-SYNONYM-SHARD.
+    if not any(ch.isalpha() for ch in norm):
+        return False
+    if norm in _PRICE_SHORT_TOKEN_WHITELIST:
+        return True
+    return bool(mis_synonym_candidates(norm))
+
+
 def _split_price_query_items(query_text: str) -> list[str]:
     """Делит мульти-услуговый price-запрос на отдельные фрагменты-услуги.
 
@@ -2855,12 +2893,20 @@ def _split_price_query_items(query_text: str) -> list[str]:
     if not head:
         head = raw
 
+    # Заголовок списка, а не его пункт: «Кровь: АЛТ, АСТ, ГГТП» — указание на
+    # материал. Снимаем ДО разреза, иначе «Кровь» станет позицией и найдёт
+    # «Кровь на стерильность» — услугу, которой пациент не называл. Судим по
+    # словарю биоматериалов МИС, списка слов в коде тут быть не должно.
+    prefix, colon, rest = head.partition(":")
+    if colon and rest.strip() and is_biomaterial_phrase(prefix):
+        head = rest.strip()
+
     fragments: list[str] = []
     for chunk in _MULTI_PRICE_SPLIT_RE.split(head):
         frag = chunk.strip(" ?!.,;:-–—")
         if not frag:
             continue
-        if not _MULTI_PRICE_SERVICE_HINT_RE.search(frag):
+        if not _fragment_can_name_service(frag):
             continue
         if _normalise_input(frag) in _PRICE_QUERY_STOPWORDS:
             continue

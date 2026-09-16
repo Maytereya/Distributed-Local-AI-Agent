@@ -147,3 +147,78 @@ def test_cart_assembly_does_not_reparse_query_per_price_row():
         f"разбор специальности выполнился {misses} раз при {len(rows)} строках прайса — "
         "похоже, он снова считается внутри построчного цикла"
     )
+
+
+# --- позиция не исчезает молча в списке -------------------------------------
+
+def test_short_designations_survive_the_list_splitter():
+    """Класс `list_drops_resolvable_item`: два слоя не вправе расходиться в
+    одном и том же словаре коротких обозначений.
+
+    `_MULTI_PRICE_SERVICE_HINT_RE` требовал три подряд БУКВЫ, поэтому «т3»,
+    «т4» и «rw» выбрасывались сплиттером ДО резолва — «т3, т4, ттг» отдавало
+    пусто, и пациент не видел ни цены, ни отказа. При этом все три уже лежали в
+    `_PRICE_SHORT_TOKEN_WHITELIST`, который уважает токенайзер резолвера.
+
+    Судим ПРЯМО по словарю, а не через резолв живого каталога: в гейте синонимы
+    МИС герметично пусты (`_hermetic_mis_synonyms`), и «т3» там не резолвится
+    вовсе — проверка «резолвится ли по отдельности» молча пропускала бы ровно
+    те случаи, ради которых тест написан. Словарь же — контракт между слоями,
+    и он от дневного среза не зависит.
+
+    См. BUG-2026-09-16-CART-DROPS-SHORT-CODE.
+    """
+
+    from messengers_router.services._prices_helpers import (
+        _PRICE_SHORT_TOKEN_WHITELIST,
+        _split_price_query_items,
+    )
+
+    lost = [
+        short
+        for short in sorted(_PRICE_SHORT_TOKEN_WHITELIST)
+        if short not in _split_price_query_items(f"{short}, ферритин")
+    ]
+    assert not lost, (
+        f"сплиттер выбрасывает обозначения из словаря резолвера: {lost}"
+    )
+
+
+def test_biomaterial_header_is_not_treated_as_a_service():
+    """Заголовок списка — не его пункт.
+
+    Пациент пишет «Кровь: АЛТ, АСТ, ГГТП, цистатин С». После того как двоеточие
+    стало разделителем, «Кровь» едва не превратилась в позицию и находила
+    «Кровь на стерильность» — услугу, которой пациент не называл. Отличаем по
+    словарю биоматериалов МИС, не по списку слов в коде.
+    """
+
+    from messengers_router.services._prices_helpers import (
+        _resolve_multi_price_items,
+        _split_price_query_items,
+    )
+
+    rows = _rows()
+    fragments = _split_price_query_items("Кровь: АЛТ, АСТ, ГГТП, цистатин С")
+    assert "Кровь" not in fragments and "кровь" not in fragments, fragments
+
+    items, _unrecognized = _resolve_multi_price_items("Кровь: АЛТ, АСТ, ГГТП, цистатин С", rows)
+    names = " | ".join(str(i.get("service_name") or "") for i in items)
+    assert "стерильность" not in names.lower(), f"заголовок стал услугой: {names}"
+    # Позиции, которые пациент действительно назвал, должны найтись.
+    assert "АлАТ" in names and "АсАТ" in names, names
+
+
+def test_numeric_fragment_cannot_name_a_service():
+    """Чисто числовой фрагмент услугой не становится.
+
+    В словаре синонимов МИС есть ключи-обрывки от разреза химических названий
+    по запятой («2» → Мочевая кислота, «11» → Витамин А). Сплиттер обязан
+    отбрасывать такие фрагменты, иначе «сколько стоит 2, глюкоза» назовёт
+    пациенту цену мочевой кислоты. См. BUG-2026-09-16-NUMERIC-SYNONYM-SHARD.
+    """
+
+    from messengers_router.services._prices_helpers import _split_price_query_items
+
+    fragments = _split_price_query_items("сколько стоит 2, глюкоза")
+    assert [f for f in fragments if f.strip().isdigit()] == [], fragments
