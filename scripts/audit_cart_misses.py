@@ -72,10 +72,39 @@ from messengers_router.services._prices_helpers import (  # noqa: E402
     _token_covered_by,
     resolve_price_service_name_from_catalog,
 )
+from agent_logic_2.nayka_api import api_service_info  # noqa: E402
 from scripts.analyze_daily_dialogs import parse_log  # noqa: E402
 
 # Корзина — это ДВЕ и более позиции. Одна позиция мульти-расчётом не является.
 _MIN_CART_ITEMS = 2
+
+
+def pin_latest_service_info() -> str:
+    """Прикрепляет словарь МИС к САМОМУ СВЕЖЕМУ срезу, а не к «сегодняшнему».
+
+    Зачем: срез датирован по Самаре (UTC+4). После самарской полуночи файла «на
+    сегодня» ещё нет, `load_service_info` уходит скачивать его у клиники, без
+    VPN получает отказ — и `_vocabularies()` по своей конструкции возвращает
+    ПУСТОЙ словарь, молча. Свип в этот момент меряет бота без 872 синонимов и
+    несравним с прогоном часом раньше: 16.09 это превратило 74% промахов гарда
+    в 82% «не распознано» и выглядело как успех починки.
+
+    Диагностика обязана быть воспроизводимой в любой час, поэтому берём
+    новейший СУЩЕСТВУЮЩИЙ срез и говорим вслух, какой именно.
+
+    :return: строка с описанием использованного среза
+    """
+
+    today = api_service_info.service_info_path()
+    if today.exists():
+        return f"{today.name} (срез на сегодня)"
+    snapshots = sorted(today.parent.glob("service_info_*.jsonl"))
+    if not snapshots:
+        return "срезов МИС нет — словарь синонимов будет пуст"
+    latest = snapshots[-1]
+    api_service_info.service_info_path = lambda *a, **k: latest  # type: ignore[assignment]
+    _biomaterial._VOCAB_CACHE.clear()
+    return f"{latest.name} (на сегодня среза нет, взят последний)"
 
 # Известные живые промахи: две формулировки из хэндоффа 16.09 и то, что
 # воспроизведено на проде 16.09. Держим отдельно от порождённого корпуса —
@@ -373,10 +402,23 @@ def main() -> None:
     # --size, осознанно.
     parser.add_argument("--size", type=int, default=40, help="размер порождённого корпуса")
     parser.add_argument("--seed", type=int, default=0, help="сдвиг выборки порождённого корпуса")
+    # Порождённый корпус зависит от длины словаря МИС, а клиника дополняет его
+    # ежедневно: словарь вырос на ОДИН термин — и выборка сместилась целиком.
+    # Поэтому «до/после» сравнивают, только закрепив корпус: выгрузить здесь,
+    # затем подать обоим прогонам через --corpus.
+    parser.add_argument("--dump-corpus", help="записать использованный корпус в файл")
     parser.add_argument("--prod", help="эндпоинт для атрибуции маршрута (ВЫКЛ по умолчанию)")
     parser.add_argument("--max-probes", type=int, default=10, help="предел запросов к проду")
     parser.add_argument("--timeout", type=int, default=120)
     args = parser.parse_args()
+
+    print(f"срез МИС: {pin_latest_service_info()}")
+    synonyms = len(_biomaterial._vocabularies().synonym_to_service)
+    print(f"синонимов МИС в словаре: {synonyms}")
+    if not synonyms:
+        # Пустой словарь — не «ноль промахов», а другой бот. Молчать нельзя:
+        # прогон без синонимов несравним с прогоном с ними.
+        print("  ВНИМАНИЕ: словарь синонимов ПУСТ — цифры несравнимы с прогоном, где он есть")
 
     rows = [r for r in api_price.load_price_by_region(SAMARA_PRICE_REGION_ID) if isinstance(r, dict)]
     print(f"прайс региона {SAMARA_PRICE_REGION_ID}: {len(rows)} строк")
@@ -396,6 +438,10 @@ def main() -> None:
     else:
         queries = list(KNOWN_LIVE_CARTS) + build_corpus(rows, size=args.size, seed=args.seed)
         print(f"корпус из живых данных: {len(queries)} корзин (из них известных живых: {len(KNOWN_LIVE_CARTS)})")
+
+    if args.dump_corpus:
+        Path(args.dump_corpus).write_text("\n".join(queries) + "\n", encoding="utf-8")
+        print(f"корпус выгружен: {args.dump_corpus}")
 
     # Сборка корзины на живом каталоге стоит единицы секунд на реплику, поэтому
     # прогресс печатаем с принудительным сбросом: без него вывод буферизуется и
