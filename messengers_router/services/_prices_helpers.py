@@ -2358,8 +2358,25 @@ def _is_family_query_candidate(query_text: str, rows: list[dict[str, Any]]) -> b
     if len(candidate_rows) < 2:
         return False
 
+    # Точное совпадение с названием услуги — НЕ неоднозначность. «Биохимия крови»
+    # есть в прайсе дословно, и предлагать к ней «Биохимический анализ кала»
+    # вторым вариантом бессмысленно. Порог ниже опускается до двух, поэтому без
+    # этой проверки точные запросы превращались бы в развилки.
+    exact_wanted = _normalise_input(family_query)
+    if exact_wanted and any(
+        _normalise_input(str(row.get("serviceName") or row.get("name") or "")) == exact_wanted
+        for row in rows
+    ):
+        return False
+
     base_names = _family_variant_base_names(candidate_rows)
-    return len(base_names) >= 3
+    # ДВА варианта — уже неоднозначность, и самая опасная: молчаливый выбор из
+    # двух стоит ровно разницы в цене. Жалоба 15.09: «фиброколоноскопия» отдавала
+    # частичную процедуру за 3 000 вместо тотальной за 7 000, причём услугу за
+    # 3 000 клиника пациентам не называет вовсе. Порог в три оставлял этот случай
+    # неохваченным и противоречил решению владельца 2026-07-22: при
+    # неоднозначности — список вариантов, а не единственная (возможно чужая) цена.
+    return len(base_names) >= 2
 
 
 _OAK_ALIAS_RE = re.compile(r"\bоак\b", re.I)

@@ -2803,10 +2803,16 @@ def test_price_info_hiv_returns_multiple_relevant_variants(monkeypatch):
 
     res = run(svc.price_info("стоимость вич", {}))
 
-    assert len(res.get("prices") or []) >= 2
-    names = [str(row.get("serviceName") or "").lower() for row in (res.get("prices") or []) if isinstance(row, dict)]
-    assert any("кровь на вич" in name for name in names)
-    assert any("экспресс" in name for name in names)
+    # Суть проверки — пациент видит ОБА варианта и выбирает сам. С 16.09 такой
+    # запрос идёт семейной развилкой (порог опущен с трёх вариантов до двух:
+    # выбор из двух — самая опасная неоднозначность, см. BUG-2026-09-16-FKS-
+    # PARTIAL-VARIANT), и варианты лежат в `family_variants`, а не в `prices`.
+    # Проверяем СОДЕРЖАНИЕ, не форму payload.
+    shown = list(res.get("prices") or []) + list(res.get("family_variants") or [])
+    assert len(shown) >= 2, res
+    names = [str(row.get("serviceName") or "").lower() for row in shown if isinstance(row, dict)]
+    assert any("кровь на вич" in name for name in names), names
+    assert any("экспресс" in name for name in names), names
 
 
 def test_resolve_price_service_name_prefers_adult_uzi_over_child():
