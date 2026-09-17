@@ -207,3 +207,44 @@ def test_layer_is_silent_without_mis_catalog(monkeypatch):
     )
     assert bio.mis_synonym_service("что угодно") is None
     assert bio.service_accepts_biomaterial("Глюкоза", "кровь из вены") is None
+
+
+# --- обрывки разбора: ключ обязан быть похож на название -------------------
+
+def test_synonym_keys_always_contain_a_letter():
+    """Класс `parsed_field_yields_impossible_key`.
+
+    Разделители в `serviceSynonyms` задаёт клиника руками, и запятые встречаются
+    ВНУТРИ химических названий: «11, 13-диметил-7-(1,5-диметилгексил)…». Разрез
+    превращал одно название в обрывки, и каждый становился ключом словаря — на
+    срезе 17.09 таких было шесть: «1», «2», «6», «9», «11», «18». Через них бот
+    отвечал на «сколько стоит 2» ценой мочевой кислоты.
+
+    Судим по живому срезу, а не по списку примеров: обрывки меняются вместе с
+    данными клиники. См. BUG-2026-09-16-NUMERIC-SYNONYM-SHARD.
+    """
+    vocab = bio._build_vocabularies(INFO)
+    if not vocab.synonym_candidates:
+        pytest.skip("serviceSynonyms в срезе пусто — проверять нечего")
+
+    letterless = sorted(k for k in vocab.synonym_candidates if not any(c.isalpha() for c in k))
+    assert not letterless, f"ключи словаря без единой буквы: {letterless}"
+
+    # Обратная сторона: короткие обозначения с буквой законны и должны остаться.
+    short_legit = [k for k in vocab.synonym_candidates if len(k) <= 2 and any(c.isalpha() for c in k)]
+    assert short_legit, "фильтр съел все короткие обозначения — это перебор"
+
+
+def test_numeric_reply_does_not_name_a_service(monkeypatch):
+    """Ответ цифрой не может обернуться ценой.
+
+    Бот сам печатает пациенту нумерованные списки и предлагает выбрать, поэтому
+    «2» — естественный ход диалога, а не странный ввод.
+    """
+    monkeypatch.setattr(bio, "_vocabularies", lambda: bio._build_vocabularies(INFO))
+
+    from messengers_router.services import _prices_helpers as ph
+
+    monkeypatch.setattr(ph, "mis_synonym_service", bio.mis_synonym_service)
+    for query in ("сколько стоит 2", "цена 11", "18"):
+        assert ph.resolve_price_service_name_from_catalog(query, rows=ROWS) is None, query

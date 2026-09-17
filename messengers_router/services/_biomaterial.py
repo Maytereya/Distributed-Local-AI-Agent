@@ -107,6 +107,30 @@ def _cache_key() -> tuple[str, float] | None:
     return (str(path), stat.st_mtime)
 
 
+def _can_be_a_synonym(key: str) -> bool:
+    """Мог ли человек написать это как НАЗВАНИЕ услуги.
+
+    Разделители в `serviceSynonyms` задаёт клиника руками, и запятые встречаются
+    ВНУТРИ химических названий: «11, 13-диметил-7-(1,5-диметилгексил)…». Разрез
+    по запятой превращает одно название в обрывки, и каждый обрывок становился
+    полноправным ключом словаря. На срезе 17.09 таких ключей шесть — «1», «2»,
+    «6», «9», «11», «18», — и через них бот отвечал на «сколько стоит 2» ценой
+    мочевой кислоты. Опаснее, чем кажется: бот сам печатает нумерованные списки
+    и предлагает выбрать, так что «2» — естественный ход диалога.
+
+    Правило минимальное: в названии услуги обязана быть хоть одна БУКВА. Порог
+    по длине не годится — «ca», «fe», «lh», «p4», «т3», «rw» и ещё два десятка
+    коротких ключей законны, их клиника завела осознанно.
+
+    См. BUG-2026-09-16-NUMERIC-SYNONYM-SHARD.
+
+    :param key: нормализованный ключ-кандидат
+    :return: True, если ключ может быть названием услуги
+    """
+
+    return any(char.isalpha() for char in key)
+
+
 def _build_vocabularies(rows: list[dict[str, Any]]) -> _MisVocabularies:
     vocab = _MisVocabularies()
     candidates: dict[str, list[str]] = {}
@@ -137,10 +161,11 @@ def _build_vocabularies(rows: list[dict[str, Any]]) -> _MisVocabularies:
             # и точки с запятой, и «|| Хламидия трахоматис ||».
             for part in re.split(r"[,;]|\|\|", str(value or "")):
                 key = _normalise_input(part)
-                if key and service_name:
-                    seen = candidates.setdefault(key, [])
-                    if service_name not in seen:
-                        seen.append(service_name)
+                if not key or not service_name or not _can_be_a_synonym(key):
+                    continue
+                seen = candidates.setdefault(key, [])
+                if service_name not in seen:
+                    seen.append(service_name)
 
     vocab.biomat_tokens = frozenset(biomat_tokens)
     vocab.biomat_phrases = tuple(phrases)
