@@ -248,3 +248,64 @@ def test_numeric_reply_does_not_name_a_service(monkeypatch):
     monkeypatch.setattr(ph, "mis_synonym_service", bio.mis_synonym_service)
     for query in ("сколько стоит 2", "цена 11", "18"):
         assert ph.resolve_price_service_name_from_catalog(query, rows=ROWS) is None, query
+
+
+# --- биоматериал в остатке -------------------------------------------------
+
+def test_named_biomaterial_does_not_block_the_synonym(monkeypatch):
+    """«кровь на сахар» → Глюкоза, а не «Свекла сахарная (F227)».
+
+    Анти-перехват требовал, чтобы сверх синонима остались только слова речевой
+    обвязки. «Сахар» — синоним Глюкозы в словаре клиники, но в остатке
+    оставалось «кровь», и верный синоним гасился: пациент получал аллергопанель
+    на свёклу за 650 ₽ вместо Глюкозы за 190 ₽. Пациент называет материал
+    постоянно, и это не признак чужого названия.
+    См. BUG-2026-09-07-PREFIX-COLLISION.
+    """
+    monkeypatch.setattr(bio, "_vocabularies", lambda: bio._build_vocabularies(INFO))
+
+    from messengers_router.services import _prices_helpers as ph
+
+    monkeypatch.setattr(ph, "mis_synonym_service", bio.mis_synonym_service)
+    found = ph.resolve_price_service_name_from_catalog("кровь на сахар", rows=ROWS)
+    assert found == "Глюкоза", found
+
+
+def test_biomaterial_in_rest_must_be_accepted_by_the_service(monkeypatch):
+    """Материал засчитывается не на слово: услуга обязана его ПРИНИМАТЬ.
+
+    Первая версия правки пускала в остаток любое слово-биоматериал, и «моча на
+    белок» съезжал с «Белок в моче (разовая порция)» на «Общий белок» —
+    сыворотку вместо мочи. Свип это поймал до коммита.
+    """
+    monkeypatch.setattr(bio, "_vocabularies", lambda: bio._build_vocabularies(INFO))
+
+    from messengers_router.services import _prices_helpers as ph
+
+    monkeypatch.setattr(ph, "mis_synonym_service", bio.mis_synonym_service)
+    found = ph.resolve_price_service_name_from_catalog("моча на белок", rows=ROWS)
+    assert found and "моч" in found.lower(), f"материал потерян: {found!r}"
+
+
+def test_catalog_names_are_not_hijacked_by_synonyms(monkeypatch):
+    """Встречный свип анти-перехвата (CLAUDE.md: к каждому гарду — свип в обе стороны).
+
+    Послабление в анти-перехвате могло открыть дорогу тому, ради чего он и
+    ставился: свип 09.09 показал, что без гарда 182 названия каталога из 1200
+    уводились в чужую услугу. Проверяем по ВСЕМУ каталогу.
+
+    Порог, а не ноль: два расхождения предсуществуют и относятся к выбору
+    синонимов самой клиникой («Расширенная гемостазиограмма» → «Гемостазиограмма
+    (скрининг)»), а не к механике.
+    """
+    monkeypatch.setattr(bio, "_vocabularies", lambda: bio._build_vocabularies(INFO))
+
+    names = sorted({str(r.get("serviceName") or "").strip() for r in ROWS if r.get("serviceName")})
+    assert len(names) > 1000, "нужен живой каталог"
+
+    hijacked = []
+    for name in names:
+        got = bio.mis_synonym_service(name)
+        if got and got.strip().lower() != name.strip().lower():
+            hijacked.append((name, got))
+    assert len(hijacked) <= 3, f"синоним уводит названия каталога в чужую услугу: {hijacked[:5]}"

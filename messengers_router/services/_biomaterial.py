@@ -219,6 +219,35 @@ def _synonym_index(vocab: _MisVocabularies) -> dict[str, tuple[tuple[str, ...], 
     return index
 
 
+def _rest_is_only_wrapper_and_accepted_biomaterial(
+    rest: list[str], key: str, vocab: _MisVocabularies
+) -> bool:
+    """Годится ли остаток реплики сверх найденного синонима.
+
+    Годится речевая обвязка, а также название биоматериала — но ТОЛЬКО если
+    услуга, на которую указывает синоним, этот материал принимает по
+    `biomatNames`. Пациент называет материал постоянно («кровь на ТТГ», «моча на
+    белок»), и само по себе это не признак чужого названия; а вот материал,
+    которого услуга не принимает, — как раз признак.
+
+    :param rest: токены реплики сверх синонима
+    :param key: найденный ключ словаря синонимов
+    :param vocab: разобранные словари МИС
+    :return: True, если остаток не мешает засчитать синоним
+    """
+
+    services = vocab.synonym_candidates.get(key) or ()
+    for token in rest:
+        if token in _SPEECH_WRAPPER:
+            continue
+        if token not in vocab.biomat_tokens:
+            return False
+        # Материал назван — пусть хоть одна услуга-кандидат его принимает.
+        if not any(service_accepts_biomaterial(name, token, vocab=vocab) for name in services):
+            return False
+    return True
+
+
 def _match_synonym_key(query_text: str, vocab: _MisVocabularies) -> str | None:
     """Самый длинный синоним, входящий в реплику непрерывной цепочкой токенов.
 
@@ -247,10 +276,31 @@ def _match_synonym_key(query_text: str, vocab: _MisVocabularies) -> str | None:
             if tuple(q[pos : pos + n]) != toks:
                 continue
             # Синоним обязан НАЗЫВАТЬ услугу: всё, что осталось сверх него, —
-            # только речевая обвязка. Содержательный остаток означает, что
-            # синоним встретился внутри чужого названия.
+            # только речевая обвязка ИЛИ название биоматериала. Содержательный
+            # остаток означает, что синоним встретился внутри чужого названия.
+            #
+            # Биоматериал добавлен 17.09: «кровь на сахар» несёт синоним «сахар»
+            # → Глюкоза, но в остатке оставалось «кровь», и анти-перехват гасил
+            # верный синоним — пациент получал «Свекла сахарная (F227)» 650 ₽
+            # вместо Глюкозы 190 ₽. Пациент называет материал сплошь и рядом
+            # («кровь на ТТГ», «моча на белок»), и это НЕ признак чужого
+            # названия. Словарь берём из `biomatNames` МИС — заполнен у 98%
+            # услуг; своего списка слов в коде не заводим (CLAUDE.md).
+            #
+            # Материал в остатке засчитывается НЕ на слово: услуга, на которую
+            # указывает синоним, обязана его ПРИНИМАТЬ. Это дисциплина самого
+            # модуля («biomatNames — снятие и ПРОВЕРКА, не идентификация»), и
+            # без неё правка чинит одно и ломает другое: свип поймал, что «моча
+            # на белок» съезжал с «Белок в моче (разовая порция)» на «Общий
+            # белок» — сыворотку вместо мочи. Проверка это отсекает: «Общий
+            # белок» мочу не принимает, синоним не засчитывается, и остаётся
+            # верный лексический матч.
+            #
+            # «Группа крови» по-прежнему оставляет в остатке «группа» —
+            # содержательное слово, не материал, — и гард срабатывает как
+            # раньше. См. BUG-2026-09-07-PREFIX-COLLISION.
             rest = q[:pos] + q[pos + n :]
-            if any(tok not in _SPEECH_WRAPPER for tok in rest):
+            if not _rest_is_only_wrapper_and_accepted_biomaterial(rest, key, vocab):
                 continue
             best, best_len = key, n
     return best
@@ -338,15 +388,20 @@ def split_biomaterial_tail(text: str) -> tuple[str, str]:
     return " ".join(head), " ".join(tail)
 
 
-def service_accepts_biomaterial(service_name: str, biomaterial: str) -> bool | None:
+def service_accepts_biomaterial(
+    service_name: str, biomaterial: str, *, vocab: _MisVocabularies | None = None
+) -> bool | None:
     """Принимает ли услуга такой биоматериал (по `biomatNames` МИС).
 
     :param service_name: каноническое название услуги из каталога
     :param biomaterial: снятая фраза-биоматериал
+    :param vocab: словари МИС (по умолчанию — дневной срез); передаётся явно,
+        когда вызывающий уже держит их в руках и не хочет повторного разбора
     :return: True/False, либо None — услуги нет в справочнике МИС (судить нечем)
     """
 
-    phrases = _vocabularies().biomat_by_service.get(_normalise_input(service_name))
+    vocab = vocab if vocab is not None else _vocabularies()
+    phrases = vocab.biomat_by_service.get(_normalise_input(service_name))
     if not phrases:
         return None
     tail_tokens = {t for t in _tokens(biomaterial) if t not in _PREPOSITIONS}
