@@ -15,7 +15,7 @@ from typing import Any
 
 from .city import looks_like_address, match_city
 from .doctor_name_port import resolve_cached_doctor_name_candidate, surname_variants
-from .russian_nlu import normalize_ru
+from .russian_nlu import common_prefix_len, normalize_ru
 from .service_phrase import extract_service_phrase
 from .specialty_parser import extract_specialty_from_text
 
@@ -2442,7 +2442,7 @@ def _price_row_matches_service(row_name: str, expected_service: str) -> bool:
             # несоответствие, поэтому склоняется в сторону разрешения —
             # ложный пропуск сохраняет прежнее поведение, а ложное
             # подавление СКРЫЛО БЫ законную цену.
-            if _common_prefix_len(tok, other) >= 6:
+            if common_prefix_len(tok, other) >= 6:
                 return True
     # Аббревиатура против развёрнутого названия — общих токенов нет вовсе:
     # пациент говорит «УЗИ», каталог пишет «с ультразвуковым исследованием».
@@ -2454,15 +2454,6 @@ def _price_row_matches_service(row_name: str, expected_service: str) -> bool:
     return False
 
 
-def _common_prefix_len(a: str, b: str) -> int:
-    """Длина общего префикса двух строк."""
-
-    n = 0
-    for ca, cb in zip(a, b):
-        if ca != cb:
-            break
-        n += 1
-    return n
 
 
 def extract_price_rub(

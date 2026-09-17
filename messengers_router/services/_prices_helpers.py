@@ -14,7 +14,7 @@ from typing import Any
 from agent_logic_2.nayka_api import api_price
 
 from ..prompt_registry import load_prompt_text
-from ..russian_nlu import normalize_ru
+from ..russian_nlu import common_prefix_len, normalize_ru, tokens_share_stem
 from ..service_phrase import extract_service_phrase
 from ._addresses_helpers import _extract_homecode_query
 from ._biomaterial import (
@@ -1064,12 +1064,7 @@ def _token_covered_by(token: str, pool: set[str] | frozenset[str]) -> bool:
     сопоставляет словоформы («кардиолога» ↔ «кардиолог»); вынесено, чтобы гарды
     судили о покрытии одинаково.
     """
-    if token in pool:
-        return True
-    if len(token) < 4:
-        return False
-    prefix = token[:4]
-    return any(len(candidate) >= 4 and candidate[:4] == prefix for candidate in pool)
+    return any(tokens_share_stem(token, candidate, length=4) for candidate in pool)
 
 
 def _scorer_match_has_distinctive_overlap(query_text: str, canonical: str) -> bool:
@@ -1731,15 +1726,6 @@ def _score_price_rows(
     return out
 
 
-def _common_prefix_len(a: str, b: str) -> int:
-    """Длина общего префикса двух строк."""
-    n = min(len(a), len(b))
-    i = 0
-    while i < n and a[i] == b[i]:
-        i += 1
-    return i
-
-
 # Синонимы для токенов СТРОКИ прайса (расширяем row-set, НЕ query-токены —
 # иначе раздувается token_count и завышается порог _is_price_match_strong).
 # Пациент пишет «антитела на корь», а в прайсе — «Вирус кори Ig M/Ig G»:
@@ -1833,7 +1819,7 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
             for rt in row_tokens:
                 if len(rt) < 5:
                     continue
-                shared = _common_prefix_len(tok, rt)
+                shared = common_prefix_len(tok, rt)
                 if shared < 5:
                     continue
                 diverge_in_query = len(tok) - shared
@@ -2083,7 +2069,6 @@ def _expand_family_rows_by_root_token(
     token = _normalise_price_token(root_token)
     if len(token) < 4:
         return []
-    needle = token[:4]
     candidate_rows: list[dict[str, Any]] = []
     seen_keys: set[tuple[str, str]] = set()
 
@@ -2097,10 +2082,7 @@ def _expand_family_rows_by_root_token(
             [_normalise_price_token(tok) for tok in _PRICE_TOKEN_RE.findall(raw_name)],
             raw_text=raw_name,
         )
-        if not any(
-            len(rt) >= 4 and (rt.startswith(needle) or needle.startswith(rt[:4]))
-            for rt in row_tokens
-        ):
+        if not any(tokens_share_stem(token, rt, length=4) for rt in row_tokens):
             continue
         dedup_key = (
             _normalise_input(raw_name),
@@ -3006,6 +2988,11 @@ def _segment_items_by_catalog(
             norm = _normalise_input(tok)
             if len(norm) < 3:
                 continue
+            # Правило НАМЕРЕННО шире общего `tokens_share_stem`: здесь
+            # трёхсимвольный токен вправе войти в более длинное слово каталога
+            # («оак» ↔ «оакбб»), потому что сплошной CAPS-ран режется вслепую и
+            # запас нужен. Сверка со `tokens_share_stem(length=4)` дала 725
+            # расхождений ровно на этих коротких парах — поэтому не мигрируем.
             pref = norm[:4]
             if not any(w.startswith(pref) or norm.startswith(w[:4]) for w in canon_words):
                 return False

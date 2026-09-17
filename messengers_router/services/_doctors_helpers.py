@@ -15,7 +15,7 @@ from ..doctor_name_port import (
     extract_doctor_name_candidate,
     surname_variants,
 )
-from ..russian_nlu import normalize_ru
+from ..russian_nlu import normalize_ru, tokens_share_stem
 from ..service_phrase import extract_service_phrase
 from ..specialty_parser import (
     ENDOSCOPY_SERVICE_RE as _ENDOSCOPY_SERVICE_RE,
@@ -1361,15 +1361,7 @@ def _should_prefer_retail_query_candidate(query_candidate: str, service_name: st
         candidate_covers_service_base = True
         for candidate_token in candidate_tokens:
             if not any(
-                service_token == candidate_token
-                or (
-                    len(candidate_token) >= 4
-                    and len(service_token) >= 4
-                    and (
-                        service_token.startswith(candidate_token[:4])
-                        or candidate_token.startswith(service_token[:4])
-                    )
-                )
+                tokens_share_stem(service_token, candidate_token, length=4)
                 for service_token in service_tokens
             ):
                 candidate_covers_service_base = False

@@ -135,3 +135,22 @@ def test_head_bonus_still_prefers_base_service_over_subspecialty():
     found = resolve_price_service_name_from_catalog("ттг", rows=_rows())
     assert found, "«ттг» обязан находить услугу"
     assert "антител" not in _normalise_input(found), f"«ттг» снова уводит в субспециальное: {found!r}"
+
+
+def test_same_short_word_matches_itself():
+    """`tokens_share_stem` с порогом 4 не вправе развести слово с самим собой.
+
+    Сверка объединённого правила со старыми шестью формами поймала 725 таких
+    пар на живом словаре каталога: «оак» короче порога и переставал совпадать
+    сам с собой. Поэтому в правиле есть явное короткое замыкание по равенству.
+    """
+
+    from messengers_router.russian_nlu import tokens_share_stem
+
+    assert tokens_share_stem("оак", "оак", length=4)
+    assert tokens_share_stem("оам", "оам", length=6)
+    assert not tokens_share_stem("оак", "оам", length=4)
+    assert not tokens_share_stem("", "", length=4), "пустые строки словом не считаются"
+    # Порог обязан оставаться явным: одинаковое начало короче порога — не матч.
+    assert not tokens_share_stem("кров", "кровь", length=5)
+    assert tokens_share_stem("кровь", "кровяной", length=4)
