@@ -33,6 +33,7 @@ from .entity_grounder import (
 from .flow_policy import (
     apply_context_action,
     clear_on_handoff,
+    clear_on_topic_switch,
     fill_date_from_schedule_windows,
     get_secondary_queue,
     is_appointment_waiting_patient_name,
@@ -2673,6 +2674,15 @@ async def patient_routing_stream(
         services.ensure_background_refresh_started()
     except Exception:
         logger.warning("background_refresh_start_failed", exc_info=True)
+
+    from . import button_menu
+
+    if button_menu.action_for(button_id) is not None:
+        # Нажатие кнопки — явная смена темы. Подпись кнопки не может стать
+        # ответом на висящий вопрос: дату записи, «да/нет» оффера оператора,
+        # подтверждение услуги. Поэтому сбрасываем тему ДО всех ранних проверок,
+        # включая предпроверку активной записи.
+        clear_on_topic_switch(state, memory)
 
     # Явный запрос оператора должен иметь абсолютный приоритет.
     if explicit_operator_requested(user_text):

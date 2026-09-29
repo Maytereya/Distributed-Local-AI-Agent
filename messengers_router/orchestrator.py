@@ -54,6 +54,19 @@ class OrchestratorContext:
     # via ``_complete_route_after_doctor_guard`` → ``_inject_catalog_candidates``.
     catalog_prefetch: dict[str, Any] | None = None
 
+    @property
+    def content_text(self) -> str:
+        """Слова пациента в этом ходе — то, из чего можно извлекать сущности.
+
+        У нажатия кнопки-уточнения или кнопки-перевода слов пациента нет: в
+        `text` лежит подпись кнопки, а она не содержание (см. button_menu). Иначе
+        дозаполнение и предзагрузка каталога находят по «Цена приёма врача»
+        приём хирурга (зонд 29.09).
+        """
+        if self.decision is not None and self.decision.source == "button":
+            return ""
+        return self.text
+
 
 @asynccontextmanager
 async def _timed_stage(ctx: OrchestratorContext, name: str) -> AsyncIterator[None]:
@@ -363,6 +376,30 @@ async def pending_dispatch(
     return ctx
 
 
+def _button_decision(button_id: str, action: Any) -> RouteDecision:
+    """Решение по нажатой кнопке: тема и сущности — из смысла кнопки, не из подписи."""
+    flags = {"button", f"button:{button_id}", *action.flags}
+    if action.mode == "handoff":
+        return RouteDecision(
+            label=action.label,
+            confidence=1.0,
+            flags=flags,
+            needs_handoff=True,
+            context_action="new_topic",
+            source="button",
+            clarify_needed=True,
+            clarify_reason=action.text,
+        )
+    return RouteDecision(
+        label=action.label,
+        confidence=1.0,
+        entities=dict(action.entities),
+        flags=flags,
+        context_action="new_topic",
+        source="button",
+    )
+
+
 async def nlu_route(
     ctx: OrchestratorContext,
     services: Any | None = None,
@@ -376,7 +413,15 @@ async def nlu_route(
     :return: обновлённый контекст
     """
 
-    if services is not None and memory is not None:
+    from . import button_menu
+
+    action = button_menu.action_for(ctx.button_id) if ctx.button_id else None
+    if action is not None and action.mode in ("slot", "handoff"):
+        # Нажатие кнопки — явный выбор темы: подпись не разбирается NLU и не даёт
+        # сущностей (см. button_menu). Недостающее спросит штатный планировщик.
+        ctx.decision = _button_decision(ctx.button_id, action)
+        ctx.nlu_debug = {"source": "button", "button_id": ctx.button_id}
+    elif services is not None and memory is not None:
         from . import router
 
         ctx.decision, ctx.nlu_debug = await router._resolve_nlu_decision_before_doctor_guard(
@@ -422,7 +467,7 @@ async def doctor_entity_guard(
 
     ctx.decision, ctx.catalog_prefetch = await router._verify_decision_and_prefetch_catalog(
         decision=ctx.decision,
-        user_text=ctx.text,
+        user_text=ctx.content_text,
         state=ctx.state,
         services=services,
     )
@@ -482,7 +527,7 @@ async def tool_loop(
 
     decision, plan, evidence = await router._complete_route_after_doctor_guard(
         decision=ctx.decision,
-        user_text=ctx.text,
+        user_text=ctx.content_text,
         state=ctx.state,
         services=services,
         memory=memory,
