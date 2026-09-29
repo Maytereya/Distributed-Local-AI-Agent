@@ -1,0 +1,45 @@
+# Тестовый экземпляр бота — рядом с продом, для проверки ветки ДО релиза (29.09).
+#
+# Зачем: у бота один экземпляр — прод. Тестовый поднимает ТОЛЬКО agent-api из
+# проверяемой ветки на отдельном порту; LLM, поиск и МИС — общие с продом (бот к
+# ним только читает). Тестовый Telegram-бот шлюза указывает сюда вместо прода.
+#
+# Разворачивает администратор сервера.
+#   1. Отдельная папка рядом с прод-репозиторием, НЕ сам прод-репозиторий:
+#        git clone <репозиторий> <папка-теста> && cd <папка-теста>
+#        git checkout <проверяемая ветка>
+#   2. config.ini — копия продового (он вне git): agent_logic_2/config.ini
+#   3. Запуск отдельным проектом:
+#        docker compose -p agent-test -f docker-compose.test.yml up -d --build
+#   4. Проверка: curl -s localhost:8011/docs >/dev/null && echo ok
+#   Обновить ветку: git pull && ту же команду из шага 3.
+#   Убрать:        docker compose -p agent-test -f docker-compose.test.yml down
+#
+# НЕЛЬЗЯ:
+#   * запускать из прод-папки: app_data станет общим, и переключатель модели в
+#     тестовом экземпляре переключит прод (main_model.txt побеждает config.ini);
+#   * --remove-orphans: снесёт контейнеры соседних проектов;
+#   * менять container_name на прод-имена (agent-api, bookworm-agent) — это держит
+#     тест tests/test_compose_test_instance.py.
+
+services:
+  agent-api-test:
+    build: .
+    container_name: agent-api-test
+    restart: unless-stopped
+    ports:
+      - "8011:8010"
+    volumes:
+      # Относительно папки ТЕСТА — свой app_data, отдельный от прода.
+      - ./app_data:/app_data
+      - ./messengers_router/data/topic_registry.yaml:/app/messengers_router/data/topic_registry.yaml
+    environment:
+      - AGENT_API_KEY=${AGENT_API_KEY:-}
+      - TOKENIZERS_PARALLELISM=false
+    command: [ "uvicorn", "agent_api:app", "--host", "0.0.0.0", "--port", "8010" ]
+    networks:
+      - local_net
+
+networks:
+  local_net:
+    external: true
