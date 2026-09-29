@@ -26,6 +26,16 @@ router = APIRouter()
 log = logging.getLogger(__name__)
 
 
+def _button_kwargs(button_id: str) -> dict[str, str]:
+    """`button_id` передаётся роутеру только когда он есть.
+
+    Запрос без кнопки обрабатывается ровно как раньше, и вызов роутера у него
+    прежний — правило, общее со шлюзом («путь без кнопок не меняется»).
+    """
+    button_id = (button_id or "").strip()
+    return {"button_id": button_id} if button_id else {}
+
+
 @lru_cache(maxsize=1)
 def get_memory_store() -> MemoryStore:
     return MemoryStore(ttl_seconds=3600, pending_ttl_seconds=900)
@@ -90,6 +100,14 @@ class MessengerGenerateRequest(BaseModel):
         le=120000,
         description="Максимальное ожидание в очереди LLM (мс).",
         examples=[30000],
+    )
+    button_id: str = Field(
+        default="",
+        description=(
+            "Идентификатор нажатой кнопки меню Telegram (необязательно). Список — «Таблица "
+            "экранов», контракт со шлюзом. Подпись кнопки при этом передаётся в `text`."
+        ),
+        examples=["menu.price.test"],
     )
 
 
@@ -198,6 +216,7 @@ async def messenger_generate(
                 memory,
                 debug=False,
                 runtime_options=runtime_options,
+                **_button_kwargs(payload.button_id),
             ):
                 if env.text:
                     assistant_parts.append(str(env.text))
@@ -286,6 +305,7 @@ async def messenger_generate_once(
                 memory,
                 debug=payload.debug,
                 runtime_options=runtime_options,
+                **_button_kwargs(payload.button_id),
             ):
                 if env.text:
                     parts.append(env.text)

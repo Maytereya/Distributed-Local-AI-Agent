@@ -2667,6 +2667,7 @@ async def patient_routing_stream(
     memory: MemoryStore,
     debug: bool = False,
     runtime_options: RuntimeOptions | None = None,
+    button_id: str = "",
 ) -> AsyncGenerator[ResponseEnvelope, None]:
     try:
         services.ensure_background_refresh_started()
@@ -2751,6 +2752,8 @@ async def patient_routing_stream(
             services=services,
             memory=memory,
             runtime_options=runtime_options,
+            # Только когда кнопка есть: путь без кнопок не меняется.
+            **({"button_id": button_id} if button_id else {}),
         )
         response = ctx.response
         decision = ctx.decision

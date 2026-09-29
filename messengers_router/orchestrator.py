@@ -35,6 +35,7 @@ class OrchestratorContext:
 
     text: str
     state: SessionState
+    button_id: str = ""
     decision: RouteDecision | None = None
     should_clarify: bool = False
     clarify_text: str = ""
@@ -650,6 +651,7 @@ async def run_pipeline(
     services: Any | None = None,
     memory: Any | None = None,
     runtime_options: Any | None = None,
+    button_id: str = "",
 ) -> OrchestratorContext:
     """Прогоняет сообщение через 6-stage skeleton оркестратора.
 
@@ -661,7 +663,7 @@ async def run_pipeline(
     :return: финальный контекст после прохождения стадий
     """
 
-    ctx = OrchestratorContext(text=text, state=state)
+    ctx = OrchestratorContext(text=text, state=state, button_id=button_id)
     async with _timed_stage(ctx, "early_guards"):
         ctx = await early_guards(ctx, runtime_options=runtime_options)
     if ctx.short_circuit:
