@@ -107,6 +107,24 @@ def test_word_order_does_not_decide_whether_service_exists():
     )
 
 
+def test_known_word_order_loss_is_pinned():
+    """«лучезапястного узи» теряет услугу — известный хвост фикса порядка слов.
+
+    Свип выше берёт выборку из живого прайса и после его обновления может этот
+    случай не встретить: 29.09 прайс обновился, и свип стал зелёным при живом
+    дефекте. Поэтому случай закреплён отдельно. После починки ветка xfail
+    перестанет срабатывать, и тест станет обычной анти-регрессией.
+    """
+    rows = _rows()
+    assert resolve_price_service_name_from_catalog("узи лучезапястного", rows=rows), (
+        "предусловие: услуга есть в прайсе"
+    )
+    reverse = resolve_price_service_name_from_catalog("лучезапястного узи", rows=rows)
+    if reverse is None:
+        pytest.xfail("известный дефект: перестановка слов теряет «лучезапястного узи»")
+    assert reverse
+
+
 @pytest.mark.parametrize(
     ("direct", "reversed_"),
     [
