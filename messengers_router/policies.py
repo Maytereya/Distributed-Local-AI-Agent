@@ -715,7 +715,6 @@ _UNSUPPORTED_SERVICE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
 )
 _UNSUPPORTED_SPECIALIST_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("офтальмолог", re.compile(r"\bофтальмолог\w*\b", re.I)),
     ("детский хирург", re.compile(r"\bдет\w*\s+хирург\w*\b", re.I)),
     ("детский уролог", re.compile(r"\bдет\w*\s+уролог\w*\b", re.I)),
     ("детский кардиолог", re.compile(r"\bдет\w*\s+кардиолог\w*\b", re.I)),
