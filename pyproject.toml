@@ -45,3 +45,8 @@ exclude = [
 # (freetalk-тесты подключают src/ до импорта localragagent). Правило E402 для
 # tests/ осознанно выключено; для пакетов остаётся (дефолтные правила ruff).
 "tests/*" = ["E402"]
+
+[tool.pytest.ini_options]
+# Тесты с @pytest.mark.live ходят в живые системы и в гейт не входят
+# (см. «Изоляция сети» в tests/conftest.py). Запуск вручную: pytest -m live.
+addopts = "-m 'not live'"

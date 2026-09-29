@@ -49,7 +49,9 @@ def test_bare_specialty_unchanged(text, spec):
 @pytest.mark.parametrize("text", [
     "Скажите, кто из кардиологов принимает и по какому адресу?",  # eval-регресс 13.07
     "какие неврологи принимают",
-    "кто из хирургов ведёт приём",
+    # Правила относят эту фразу к записи (APPOINTMENT); верно её классифицирует
+    # только LLM. Тест держался на живой прод-LLM — поэтому live (29.09).
+    pytest.param("кто из хирургов ведёт приём", marks=pytest.mark.live),
 ])
 def test_non_modality_specialty_never_gets_noise_service(text):
     """Регресс eval 13.07: у НЕ-диагностической специальности процедурная ветка

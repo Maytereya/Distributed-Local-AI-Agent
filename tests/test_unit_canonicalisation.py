@@ -204,6 +204,7 @@ def test_known_units_have_reasonable_count() -> None:
 # 6. Smoke на текущих живых данных doctors_*.jsonl
 # ---------------------------------------------------------------------------
 
+@pytest.mark.live  # проверяет данные клиники, а не код: падает, когда МИС заводит новый unit
 def test_smoke_against_live_doctors_cache() -> None:
     """Все unit_names из текущего doctors-кэша должны быть либо в
     карте канонизации, либо известно отсутствовать там (для ранее

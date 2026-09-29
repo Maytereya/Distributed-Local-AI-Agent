@@ -125,3 +125,152 @@ def _hermetic_mis_synonyms(monkeypatch):
 
     monkeypatch.setattr(_bio, "_vocabularies", _without_synonyms)
     yield
+
+
+# --- Изоляция сети (29.09) ----------------------------------------------------
+#
+# Гейт обязан быть герметичным. Через локальный `config.ini` тесты ходили в
+# прод-LLM (ollama на хосте прода) и в МИС клиники: при плохой сети прогон шёл
+# больше часа и всё это время грузил LLM, которая отвечает пациентам.
+#
+# Теперь любое соединение не на localhost падает СРАЗУ, как при реальном отказе
+# сети (исключение — наследник ConnectionError, поэтому код идёт по своему
+# штатному пути деградации). Каждая попытка записывается и видна в сводке прогона.
+#
+# Тест, которому живые системы нужны по смыслу, помечается @pytest.mark.live.
+# В гейт такие тесты не входят (addopts в pyproject.toml); запуск вручную:
+# `pytest -m live`.
+#
+# Защита ставится на весь прогон в pytest_configure, а не на каждый тест: иначе
+# фоновые потоки бота выходили бы в сеть в промежутках между тестами.
+
+import errno
+import ipaddress
+import socket
+
+_REAL_CONNECT = socket.socket.connect
+_REAL_CONNECT_EX = socket.socket.connect_ex
+_REAL_GETADDRINFO = socket.getaddrinfo
+
+try:
+    from urllib3.util.retry import Retry as _Urllib3Retry
+
+    _REAL_RETRY_SLEEP = _Urllib3Retry.sleep
+except ImportError:  # pragma: no cover — urllib3 приходит с requests
+    _Urllib3Retry = None
+
+_NETWORK = {"blocked": True, "test": "<сбор тестов>"}
+_NETWORK_ATTEMPTS: list[tuple[str, str]] = []
+
+
+class NetworkBlockedError(ConnectionRefusedError):
+    """Тест попытался выйти в сеть. Для кода это обычный отказ соединения."""
+
+
+def _is_local_host(host) -> bool:
+    if isinstance(host, bytes):
+        host = host.decode(errors="replace")
+    if host in (None, "", "localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_ip_literal(host) -> bool:
+    if isinstance(host, bytes):
+        host = host.decode(errors="replace")
+    try:
+        ipaddress.ip_address(host)
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def _blocks(address) -> bool:
+    if not _NETWORK["blocked"] or isinstance(address, (str, bytes)):  # AF_UNIX — локально
+        return False
+    return not _is_local_host(address[0])
+
+
+def _record(target: str) -> None:
+    _NETWORK_ATTEMPTS.append((_NETWORK["test"], target))
+
+
+def _guarded_connect(sock, address):
+    if _blocks(address):
+        target = f"{address[0]}:{address[1]}"
+        _record(target)
+        raise NetworkBlockedError(errno.ECONNREFUSED, f"тестам запрещена сеть: {target}")
+    return _REAL_CONNECT(sock, address)
+
+
+def _guarded_connect_ex(sock, address):
+    if _blocks(address):
+        _record(f"{address[0]}:{address[1]}")
+        return errno.ECONNREFUSED
+    return _REAL_CONNECT_EX(sock, address)
+
+
+def _guarded_getaddrinfo(host, *args, **kwargs):
+    # DNS — тоже сеть. IP-литералы разрешаются без неё и пропускаются: их
+    # остановит connect.
+    if _NETWORK["blocked"] and not _is_local_host(host) and not _is_ip_literal(host):
+        name = host.decode(errors="replace") if isinstance(host, bytes) else str(host)
+        _record(f"{name} (DNS)")
+        raise socket.gaierror(socket.EAI_NONAME, f"тестам запрещена сеть: {name}")
+    return _REAL_GETADDRINFO(host, *args, **kwargs)
+
+
+def _guarded_retry_sleep(self, response=None):
+    # Пока сеть закрыта, повторы urllib3 не ждут: попытка всё равно упадёт сразу,
+    # а пауза-backoff, умноженная на число запросов, превращала прогон в часы —
+    # обновление цен шло отдельным запросом на каждого врача (29.09).
+    if _NETWORK["blocked"]:
+        return None
+    return _REAL_RETRY_SLEEP(self, response)
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "live: тест ходит в живые системы (прод-LLM, МИС) — в гейт не входит; "
+        "запуск вручную: pytest -m live",
+    )
+    socket.socket.connect = _guarded_connect
+    socket.socket.connect_ex = _guarded_connect_ex
+    socket.getaddrinfo = _guarded_getaddrinfo
+    if _Urllib3Retry is not None:
+        _Urllib3Retry.sleep = _guarded_retry_sleep
+
+
+def pytest_unconfigure(config):
+    socket.socket.connect = _REAL_CONNECT
+    socket.socket.connect_ex = _REAL_CONNECT_EX
+    socket.getaddrinfo = _REAL_GETADDRINFO
+    if _Urllib3Retry is not None:
+        _Urllib3Retry.sleep = _REAL_RETRY_SLEEP
+
+
+@pytest.fixture(autouse=True)
+def _network_per_test(request):
+    """Помечает, какой тест идёт, и снимает запрет только для @pytest.mark.live."""
+    _NETWORK["test"] = request.node.nodeid
+    _NETWORK["blocked"] = request.node.get_closest_marker("live") is None
+    yield
+    _NETWORK["blocked"] = True
+    _NETWORK["test"] = "<между тестами>"
+
+
+def pytest_terminal_summary(terminalreporter):
+    if not _NETWORK_ATTEMPTS:
+        return
+    by_target: dict[str, set[str]] = {}
+    for test, target in _NETWORK_ATTEMPTS:
+        by_target.setdefault(target, set()).add(test)
+    terminalreporter.section("попытки выйти в сеть (заблокированы)")
+    for target, tests in sorted(by_target.items(), key=lambda kv: -len(kv[1])):
+        terminalreporter.write_line(f"{target}: {len(tests)} тест(ов)")
+        for test in sorted(tests)[:5]:
+            terminalreporter.write_line(f"    {test}")
