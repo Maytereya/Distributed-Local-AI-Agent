@@ -584,6 +584,24 @@ async def service_bundle_info(
                     cost = _as_int(row.get("cost")) or 0
                     candidate_rows.append((1, 1, -cost, doctor_id, row))
 
+        query_specialty = _extract_specialty_from_text(query_text) or _extract_specialty_from_text(service_name)
+        if service_kind == "doctor_consult" and not query_specialty:
+            # Специальность не распознана («рефлексотерапевта», «репродуктолога») —
+            # фильтра по специальности ниже не будет, и в список шли любые врачи с
+            # «приёмом» в прайсе: на рефлексотерапевта бот называл колопроктолога и
+            # лимфолога с их ценами. Верим только точной связи из МИС — врач оказывает
+            # ИМЕННО эту услугу (тот же код, что у розничной строки). Нет связи — нет
+            # списка (свип 30.09, tests/test_price_consult_doctor_links.py).
+            candidate_rows = []
+            for row in doctor_prices if target_homecode else []:
+                if not isinstance(row, dict):
+                    continue
+                row_code = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
+                linked_doctor_id = _as_int(row.get("doctorId"))
+                row_cost = _as_int(row.get("cost")) or 0
+                if row_code == target_homecode and row_cost > 0 and linked_doctor_id in by_id:
+                    candidate_rows.append((260, 1, -row_cost, linked_doctor_id, row))
+
         candidate_rows.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
         best_row_by_doctor: dict[int, dict[str, Any]] = {}
         for _, _, _, doctor_id, row in candidate_rows:
@@ -606,7 +624,6 @@ async def service_bundle_info(
         # а только bool «есть/нет окон»).
         # Жалоба заказчика 2026-05-05: «сколько стоит приём кардиолога»
         # уходил в 4-минутный таймаут (eval P3 / CRIT_PRICE_CONSULT_UROLOGIST_001).
-        query_specialty = _extract_specialty_from_text(query_text) or _extract_specialty_from_text(service_name)
         _AVAILABILITY_TIMEOUT_S = 25.0
         _AVAILABILITY_CONCURRENCY = 8
         _availability_sem = asyncio.Semaphore(_AVAILABILITY_CONCURRENCY)
