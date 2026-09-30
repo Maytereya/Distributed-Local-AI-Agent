@@ -290,3 +290,50 @@ def test_region_city_derivation_has_one_implementation():
 
     assert _regions._inject_region_cities is region_city.inject_region_cities
     assert _regions._derive_region_city is region_city.derive_region_city
+
+
+# --- empty_snapshot_is_not_success (30.09) ------------------------------------
+# Пустой doctor_prices писался с «✅ doctor_prices обновлён (0 цен…)» — и так
+# ~16 недель никто не видел, что в ответах о цене приёма пропали врачи. Пустая
+# сборка — ошибка в логе, а бот работает на последнем непустом срезе: сбой МИС в
+# 08:15 не должен стирать врачей из ответов на сутки.
+def _patch_builder_returning_nothing(monkeypatch, target: Path):
+    monkeypatch.setattr(api_price, "doctor_prices_path", lambda date=None: target)
+    monkeypatch.setattr(api_price, "cleanup_old", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        api_price,
+        "_load_doctors",
+        lambda: [{"id": 1, "fio": "Кардиолог Самары", "region_ids": [101], "regions": ["пр.Ленина, 5"]}],
+    )
+    monkeypatch.setattr(api_price.api_nayka, "site_doctor_regions", lambda: [{"worker": 1, "region": 101, "companyUnit": 17}])
+    monkeypatch.setattr(api_price.api_nayka, "site_doctors", lambda: [])
+    monkeypatch.setattr(api_price.api_nayka, "site_regions", _prod_like_regions)
+    monkeypatch.setattr(api_price, "fetch_doctor_prices", lambda *args, **kwargs: [])  # МИС не отдала ничего
+
+
+def test_empty_doctor_prices_build_keeps_last_nonempty_snapshot(monkeypatch, tmp_path: Path, caplog):
+    previous = tmp_path / "doctor_prices_20260929.jsonl"
+    good = {"doctorId": 1, "regionId": 101, "serviceName": "Прием кардиолога", "cost": 3000}
+    api_price.jsonl_write(previous, [good])
+    target = tmp_path / "doctor_prices_20260930.jsonl"
+    _patch_builder_returning_nothing(monkeypatch, target)
+
+    with caplog.at_level("INFO", logger=api_price.log.name):
+        api_price.update_doctor_prices(force=True)
+
+    assert api_price.jsonl_read(target) == [good]
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert errors and "ПУСТЫМ" in errors[0].getMessage()
+    assert not any("✅" in r.getMessage() for r in caplog.records)
+
+
+def test_empty_doctor_prices_build_without_previous_is_an_error_not_success(monkeypatch, tmp_path: Path, caplog):
+    target = tmp_path / "doctor_prices_20260930.jsonl"
+    _patch_builder_returning_nothing(monkeypatch, target)
+
+    with caplog.at_level("INFO", logger=api_price.log.name):
+        api_price.update_doctor_prices(force=True)
+
+    assert target.exists() and api_price.jsonl_read(target) == []  # файл есть: иначе каждый запрос пересобирал бы срез
+    assert any(r.levelname == "ERROR" and "ПУСТЫМ" in r.getMessage() for r in caplog.records)
+    assert not any("✅" in r.getMessage() for r in caplog.records)

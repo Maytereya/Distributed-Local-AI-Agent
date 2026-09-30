@@ -728,17 +728,46 @@ def update_doctor_prices(force: bool = False) -> Path:
                     "deadline": s.get("deadline"),
                 })
 
+    if not rows:
+        # Пустой срез — не «обновлён»: с ним в каждом ответе о цене приёма стоит
+        # «подходящих врачей не нашёл». ~16 недель так и было, а лог писал ✅
+        # (BUG-2026-09-25-NO-DOCTORS-FOUND-FALSE). Оставляем последний непустой срез,
+        # чтобы сбой МИС в час сборки не стирал врачей из ответов на сутки.
+        previous = _latest_nonempty_doctor_prices(fn)
+        if previous is not None:
+            rows = jsonl_read(previous)
+        log.error(
+            "❌ doctor_prices собран ПУСТЫМ (врачей: %s, API-вызовов: %s, пропущено врачей: %s) — %s",
+            len(all_doctor_ids),
+            calls_total,
+            skipped,
+            f"оставлен последний непустой срез {previous.name}"
+            if previous is not None
+            else "непустого среза нет, врачей в ответах о цене не будет",
+        )
+    else:
+        log.info(
+            "✅ doctor_prices обновлён (%s цен, пропущено врачей: %s, API-вызовов: %s, с companyUnitId: %s): %s",
+            len(rows),
+            skipped,
+            calls_total,
+            calls_with_company_unit,
+            fn,
+        )
     jsonl_write(fn, rows)
-    log.info(
-        "✅ doctor_prices обновлён (%s цен, пропущено врачей: %s, API-вызовов: %s, с companyUnitId: %s): %s",
-        len(rows),
-        skipped,
-        calls_total,
-        calls_with_company_unit,
-        fn,
-    )
     cleanup_old(PRICES_DIR, "doctor_prices", CACHE_TTL_DAYS)
     return fn
+
+
+def _latest_nonempty_doctor_prices(today: Path) -> Optional[Path]:
+    """Самый свежий непустой срез doctor_prices в папке сегодняшнего (включая его самого)."""
+    for candidate in sorted(today.parent.glob("doctor_prices_*.jsonl"), reverse=True):
+        try:
+            if candidate.stat().st_size > 0:
+                return candidate
+        except OSError:
+            continue
+    return None
 
 def load_doctor_prices() -> List[Dict[str, Any]]:
     fn = doctor_prices_path()
