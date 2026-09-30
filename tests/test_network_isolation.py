@@ -42,9 +42,13 @@ def test_localhost_is_allowed():
 
 
 @pytest.mark.live
-def test_live_marker_is_excluded_from_gate():
+def test_live_marker_is_excluded_from_gate(request):
     # Под addopts `-m 'not live'` этот тест не выбирается. Если он выполнился в
     # обычном прогоне — фильтр живых тестов сломан.
+    # Ручной `pytest -m live` выбирает его законно, и там он молчит (30.09): иначе
+    # прогон перед деплоем всегда кончался «1 failed», и к красному привыкали.
+    if "live" in request.config.getoption("markexpr"):
+        pytest.skip("ручной прогон живых тестов")
     pytest.fail("тест с @pytest.mark.live попал в гейт")
 
 
