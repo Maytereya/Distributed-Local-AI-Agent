@@ -5399,3 +5399,29 @@ def test_address_info_regions_clean_empty_is_not_degraded(monkeypatch):
     assert not r.get("degraded")                      # clean-empty != degraded
     assert len(r.get("addresses") or []) > 0
     assert _LAB_ONLY_BRANCH not in (r.get("addresses") or [])
+
+
+def test_get_branches_derives_city_on_prod_like_regions_and_caches_it(monkeypatch):
+    # Класс BUG-A / one_city_rule (30.09): у /regions medserver-egisz нет поля city.
+    # get_branches при пустом кэше сам качал /regions и клал СЫРЫЕ строки в общий
+    # кэш — и до конца TTL все потребители видели только филиалы с «Самара» в
+    # названии (сигнатура «одна Гагарина 64»). Вывод города — тот же, что в
+    # _ensure_regions_loaded.
+    svc = Services()
+    raw = [
+        {"id": 1, "parent": None, "name": "Все"},
+        {"id": 2, "parent": 1, "name": "Самарская область"},
+        {"id": 3, "parent": 2, "name": "Самара"},
+        {"id": 8, "parent": 2, "name": "Новокуйбышевск"},
+        {"id": 101, "parent": 3, "name": "Победы 126", "addressForSite": "ул.Победы, 126"},
+        {"id": 102, "parent": 3, "name": "Гагарина 64 Самара", "addressForSite": "ул.Гагарина, 64"},
+        {"id": 201, "parent": 8, "name": "Пирогова 4", "addressForSite": "ул. Пирогова, 4"},
+    ]
+    monkeypatch.setattr(svc_mod.api_nayka, "site_regions", lambda: [dict(r) for r in raw])
+
+    names = [b["name"] for b in svc.get_branches()]
+
+    assert any("Победы" in n for n in names), names  # самарский филиал без «Самара» в адресе
+    assert any("Гагарина" in n for n in names), names
+    assert not any("Пирогова" in n for n in names), names  # спутник — свой город
+    assert all(str(r.get("city") or "").strip() for r in svc._regions_cache)

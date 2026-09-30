@@ -539,8 +539,11 @@ class Services:
             try:
                 data = api_nayka.site_regions()
                 if isinstance(data, list):
-                    regions = data
-                    self._regions_cache = data
+                    # Тот же вывод города, что в _ensure_regions_loaded: список идёт в
+                    # общий кэш, и сырые строки без city до конца TTL роняли самарские
+                    # филиалы у всех потребителей — «одна Гагарина 64» (класс BUG-A).
+                    regions = _inject_region_cities(data)
+                    self._regions_cache = regions
                     self._regions_cache_loaded_at = time.time()
             except Exception:
                 regions = []
