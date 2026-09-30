@@ -337,3 +337,69 @@ def test_empty_doctor_prices_build_without_previous_is_an_error_not_success(monk
     assert target.exists() and api_price.jsonl_read(target) == []  # файл есть: иначе каждый запрос пересобирал бы срез
     assert any(r.levelname == "ERROR" and "ПУСТЫМ" in r.getMessage() for r in caplog.records)
     assert not any("✅" in r.getMessage() for r in caplog.records)
+
+
+def test_load_doctor_prices_never_rebuilds_inside_patient_request_when_a_snapshot_exists(monkeypatch, tmp_path: Path):
+    # Срез датирован по часам сервера (UTC): с 00:00 UTC до обновления в 08:15 по
+    # Самаре файла «на сегодня» нет, и первый вопрос о цене приёма запускал полную
+    # сборку ПРЯМО В ЗАПРОСЕ пациента. Пока срез был пустым (0 запросов к МИС), это
+    # было мгновенно; после починки — ~400 запросов и минуты ожидания, а каждый
+    # параллельный запрос запускал бы свою сборку. Берём последний непустой срез,
+    # свежий соберёт фоновое обновление.
+    yesterday = tmp_path / "doctor_prices_20260929.jsonl"
+    good = {"doctorId": 1, "serviceName": "Прием кардиолога", "cost": 3000}
+    api_price.jsonl_write(yesterday, [good])
+    monkeypatch.setattr(api_price, "doctor_prices_path", lambda date=None: tmp_path / "doctor_prices_20260930.jsonl")
+
+    def rebuild_in_request(force: bool = False):
+        raise AssertionError("сборка среза внутри запроса пациента")
+
+    monkeypatch.setattr(api_price, "update_doctor_prices", rebuild_in_request)
+
+    assert api_price.load_doctor_prices() == [good]
+
+
+def test_load_doctor_prices_does_not_rebuild_in_request_when_today_snapshot_is_empty(monkeypatch, tmp_path: Path):
+    # Пустой сегодняшний срез (так на проде в день деплоя починки) пересоберёт фон
+    # на старте сервиса, а не первый пациент, спросивший цену приёма.
+    today = tmp_path / "doctor_prices_20260930.jsonl"
+    today.write_text("", encoding="utf-8")
+    monkeypatch.setattr(api_price, "doctor_prices_path", lambda date=None: today)
+
+    def rebuild_in_request(force: bool = False):
+        raise AssertionError("сборка среза внутри запроса пациента")
+
+    monkeypatch.setattr(api_price, "update_doctor_prices", rebuild_in_request)
+
+    assert api_price.load_doctor_prices() == []
+
+
+def test_service_start_rebuilds_empty_today_snapshot_in_background(monkeypatch, tmp_path: Path):
+    import asyncio
+
+    today = tmp_path / "doctor_prices_20260930.jsonl"
+    today.write_text("", encoding="utf-8")
+    units = tmp_path / "price_units_20260930.jsonl"
+    units.write_text('{"id": 146}\n', encoding="utf-8")
+    monkeypatch.setattr(api_price, "doctor_prices_path", lambda date=None: today)
+    monkeypatch.setattr(api_price, "price_units_path", lambda date=None: units)
+    monkeypatch.setattr(api_price, "_PRICE_REFRESH_TASK", None)
+    calls: list[str] = []
+
+    async def fake_refresh_once():
+        calls.append("refresh")
+
+    async def idle_loop():
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(api_price, "_refresh_doctor_prices_once", fake_refresh_once)
+    monkeypatch.setattr(api_price, "_doctor_prices_refresh_loop", idle_loop)
+
+    async def service_start():
+        assert api_price.ensure_daily_price_refresh_started()
+        await asyncio.sleep(0)
+        api_price._PRICE_REFRESH_TASK.cancel()
+
+    asyncio.run(service_start())
+
+    assert calls == ["refresh"]

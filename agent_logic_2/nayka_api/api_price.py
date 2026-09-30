@@ -769,10 +769,27 @@ def _latest_nonempty_doctor_prices(today: Path) -> Optional[Path]:
             continue
     return None
 
+def _has_rows(path: Path) -> bool:
+    try:
+        return path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def load_doctor_prices() -> List[Dict[str, Any]]:
     fn = doctor_prices_path()
-    if not fn.exists():
-        update_doctor_prices()
+    if _has_rows(fn):
+        return jsonl_read(fn)
+    # Сегодняшнего среза нет или он пуст: срез датирован по часам сервера, и с
+    # полуночи до обновления в 08:15 по Самаре его нет каждый день. Сборка — сотни
+    # запросов к МИС и минуты; внутри запроса пациента её не делаем, берём последний
+    # непустой срез. Свежий соберёт фоновое обновление (08:15 или старт сервиса).
+    previous = _latest_nonempty_doctor_prices(fn)
+    if previous is not None:
+        return jsonl_read(previous)
+    if fn.exists():
+        return []  # пустой срез пересоберёт фон, не первый спросивший пациент
+    update_doctor_prices()  # срезов нет совсем — первый запуск
     return jsonl_read(fn)
 
 
@@ -827,7 +844,9 @@ def ensure_daily_price_refresh_started() -> bool:
         _PRICE_REFRESH_TASK = loop.create_task(_doctor_prices_refresh_loop())
         log.info("▶️ [DAILY REFRESH] Планировщик doctor_prices запущен")
         try:
-            if not doctor_prices_path().exists() or not price_units_path().exists():
+            # Пустой сегодняшний срез — тоже повод пересобрать на старте: так срез,
+            # записанный пустым до починки NO-DOCTORS-FOUND-FALSE, не ждёт утра.
+            if not _has_rows(doctor_prices_path()) or not price_units_path().exists():
                 loop.create_task(_refresh_doctor_prices_once())
         except Exception:
             pass
