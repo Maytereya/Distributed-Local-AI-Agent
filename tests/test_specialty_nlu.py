@@ -657,7 +657,9 @@ def test_service_bundle_renderer_no_doctors_uses_operator_handoff_hint():
         "show_prepare": False,
     }
     text = format_service_bundle_for_patient(payload, {})
-    assert "передам запрос оператору" in text.lower()
+    # Решение владельца 30.09: нет ни одного врача с ценой — перевод на оператора
+    # (tests/test_price_no_doctor_prices_handoff.py), а не «передам, если нужно».
+    assert "подскажет оператор — соединяю" in text.lower()
     assert "подробное расписание выбранного врача" not in text.lower()
 
 

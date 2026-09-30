@@ -19,7 +19,7 @@ from typing import Any, AsyncGenerator
 from .llm_mode_policy import RuntimeOptions
 from .llm_runtime import generate_stream_text, generate_text
 from .mess_types import Evidence, RouteDecision, ResponseEnvelope
-from .policies import sanitize_for_patient
+from .policies import handoff_message, sanitize_for_patient
 from .prompt_registry import load_prompt_text
 from .russian_nlu import normalize_ru
 from .self_check import build_critic_prompt, parse_critic_result, should_regenerate
@@ -459,6 +459,23 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
     return _append_samara_disclaimer("\n".join(lines).strip())
 
 
+def service_bundle_needs_operator(payload: dict[str, Any]) -> bool:
+    """Ответ о цене врачебной услуги, где нет ни одного врача с ценой, — к оператору.
+
+    Решение владельца 30.09. Раньше такой ответ писал «Подходящих врачей по этой
+    услуге сейчас не нашёл» — ложное отсутствие: у рефлексотерапевта и офтальмолога
+    врачи есть, в МИС нет только их цен (BUG-2026-09-25-NO-DOCTORS-FOUND-FALSE).
+    Одно условие для текста (рендер) и для перевода (response_builder).
+    """
+    if str(payload.get("clarify_text") or "").strip():
+        return False
+    service_kind = str(payload.get("service_kind") or "").strip().lower()
+    if service_kind in {"lab", "diagnostic_no_doctor", "family_query"}:
+        return False
+    doctors = payload.get("doctors")
+    return not (isinstance(doctors, list) and doctors)
+
+
 def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
     clarify_text = str(payload.get("clarify_text") or "").strip()
     if clarify_text:
@@ -521,7 +538,7 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
                 avail_txt = _availability_text_for_doctor(doc)
                 lines.append(f"{i}. {fio}{specialty_suffix} — {price_txt}; {avail_txt}.")
         else:
-            lines.append("2) Подходящих врачей по этой услуге сейчас не нашёл.")
+            lines.append(f"2) {handoff_message('price_doctors_via_operator')}")
 
     if not is_consult and show_prepare:
         if prepare_text:
@@ -534,7 +551,7 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
     elif service_kind == "diagnostic_no_doctor":
         lines.append("Если нужно, подскажу подходящие филиалы для прохождения исследования.")
     elif not doctors:
-        lines.append("Если нужно, передам запрос оператору для уточнения по этой услуге.")
+        pass  # перевод на оператора уже в пункте 2 (service_bundle_needs_operator)
     elif len(doctors) == 1:
         lines.append("Если нужно, покажу подробное расписание этого врача.")
     else:

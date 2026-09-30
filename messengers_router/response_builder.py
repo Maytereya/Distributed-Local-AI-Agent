@@ -50,6 +50,7 @@ from .renderer import (
     format_news_for_patient,
     format_price_for_patient,
     format_service_bundle_for_patient,
+    service_bundle_needs_operator,
 )
 from .services import Services
 
@@ -221,7 +222,8 @@ def build_service_bundle_response(flow_label: str, evidence: Evidence, state: Se
             "• «Стоимость УЗИ молочных желез»\n\n"
             "Так я смогу точно сказать цену и формат услуги."
         )
-    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+        return ResponseEnvelope(text=text, attachments=[], handoff=False)
+    return ResponseEnvelope(text=text, attachments=[], handoff=service_bundle_needs_operator(payload))
 
 
 def build_doctor_info_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
