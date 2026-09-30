@@ -942,7 +942,16 @@ def _specialty_label_for_doctor(doc: dict[str, Any], *, preferred_specialty: str
     """
 
     preferred = _normalise_input(preferred_specialty)
-    if preferred and _doctor_matches_primary_specialty(doc, preferred):
+    if preferred and (
+        _doctor_matches_primary_specialty(doc, preferred)
+        # Специальность из вопроса у врача есть, но не основная (инфекционист с
+        # основным «гепатолог»): подпись — она, а не основная, иначе в списке
+        # терапевтов стоит «(Гирудотерапевт)» (свип 30.09).
+        or any(
+            _is_direct_specialty_text_match(unit_name, preferred)
+            for unit_name in _collect_role_unit_names(doc, main_value=False)
+        )
+    ):
         return preferred_specialty.strip().capitalize()
 
     for unit_name in _collect_role_unit_names(doc, main_value=True) + _collect_role_unit_names(doc, main_value=False):

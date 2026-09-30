@@ -23,6 +23,7 @@ from ._common import (
 )
 from ._doctors_helpers import (
     _classify_catalog_service_kind,
+    _collect_role_unit_names,
     _compact_specialization,
     _doctor_matches_primary_specialty,
     _doctor_sort_key,
@@ -30,6 +31,7 @@ from ._doctors_helpers import (
     _has_reliable_doctor_service_link,
     _is_clean_consultation_row_name,
     _is_consultation_service_query,
+    _is_direct_specialty_text_match,
     _pick_display_specialization,
     _select_effective_price_service_name,
     _should_prefer_retail_query_candidate,
@@ -608,8 +610,38 @@ async def service_bundle_info(
             if doctor_id not in best_row_by_doctor:
                 best_row_by_doctor[doctor_id] = row
 
+        # Врачи, у которых в МИС есть ровно эта услуга (тот же код, что у розничной
+        # строки). Одного кода мало: МИС отдаёт «грязные» строки (приём кардиолога у
+        # ревматолога — test_service_bundle_info_consult_filters_doctors_by_primary_specialty).
+        exact_code_doctor_ids: set[int] = set()
+        for row in doctor_prices if target_homecode else []:
+            if not isinstance(row, dict) or (_as_int(row.get("cost")) or 0) <= 0:
+                continue
+            row_code = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
+            linked_doctor_id = _as_int(row.get("doctorId"))
+            if row_code == target_homecode and linked_doctor_id is not None:
+                exact_code_doctor_ids.add(linked_doctor_id)
+
+        def _eligible(doctor_id: int) -> bool:
+            if doctor_id not in by_id:
+                return False
+            if service_kind != "doctor_consult" or not query_specialty:
+                return True
+            doc = by_id[doctor_id]
+            if _doctor_matches_primary_specialty(doc, query_specialty):
+                return True
+            # Не основное подразделение, но ровно эта специальность И ровно эта услуга
+            # по коду МИС: инфекционист с основным подразделением «гепатолог» (свип 30.09).
+            return doctor_id in exact_code_doctor_ids and any(
+                _is_direct_specialty_text_match(unit, query_specialty)
+                for unit in _collect_role_unit_names(doc, main_value=False)
+            )
+
+        # Специальность — ДО обрезки до top_limit: раньше обрезали по порядку сортировки
+        # среди всех врачей со словом «приём», и нужного специалиста вытесняли
+        # терапевты — список выходил пустым (свип 30.09, «приём инфекциониста»).
         doctor_cards = sorted(
-            [by_id[doctor_id] for doctor_id in best_row_by_doctor if doctor_id in by_id],
+            [by_id[doctor_id] for doctor_id in best_row_by_doctor if _eligible(doctor_id)],
             key=_doctor_sort_key,
         )[:top_limit]
 
@@ -639,8 +671,6 @@ async def service_bundle_info(
             пропустить (specialty mismatch / no doctor_id)."""
             doctor_id = _as_int(doc.get("id"))
             if doctor_id is None:
-                return None
-            if service_kind == "doctor_consult" and query_specialty and not _doctor_matches_primary_specialty(doc, query_specialty):
                 return None
             async with _availability_sem:
                 try:

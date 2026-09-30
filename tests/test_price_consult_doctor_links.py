@@ -73,3 +73,48 @@ def test_consult_price_lists_only_doctors_who_provide_this_service(monkeypatch, 
     payload = _bundle(monkeypatch, query)
 
     assert [d["fio"] for d in payload.get("doctors") or []] == expected
+
+
+def test_doctor_who_provides_this_exact_service_is_not_cut_before_specialty_filter(monkeypatch):
+    # Свип 30.09: «приём инфекциониста» → врачей 0, хотя по коду МИС приём
+    # инфекциониста ведёт врач, у которой ОСНОВНОЕ подразделение — гепатолог.
+    # Два дефекта: список обрезался до N по порядку сортировки ДО фильтра по
+    # специальности (и нужного врача вытесняли терапевты со словом «приём»), а
+    # фильтр по основной специальности отсекал врача с точной связью по коду.
+    # С переводом на оператора при пустом списке каждый такой случай — ложный перевод.
+    therapists = [
+        {"id": 100 + i, "fio": f"Терапевт {i}", "ord": i, "regions": [_SAMARA], "main_units": ["Врач терапевт"], "units": ["Врач терапевт"]}
+        for i in range(1, 6)
+    ]
+    infectionist = {
+        "id": 200, "fio": "Инфекционист Анна", "ord": 99, "regions": [_SAMARA],
+        "main_units": ["Врач-гепатолог"], "units": ["Врач-инфекционист", "Врач-гепатолог"],
+    }
+    doctor_prices = [
+        {"doctorId": d["id"], "fio": d["fio"], "serviceName": "Прием (осмотр, консультация) врача-терапевта", "serviceHomecode": "13.1.1", "cost": 2700}
+        for d in therapists
+    ] + [
+        {"doctorId": 200, "fio": "Инфекционист Анна", "serviceName": "Прием (осмотр, консультация) врача-инфекциониста", "serviceHomecode": "33.1.1", "cost": 2700},
+    ]
+    retail = [{"serviceName": "Прием (осмотр, консультация) врача-инфекциониста", "serviceHomecode": "33.1.1", "cost": 2700}]
+    svc = Services()
+
+    async def fake_regions():
+        return [{"id": 1, "addressForSite": _SAMARA, "city": "Самара"}]
+
+    async def fake_doctors():
+        return [dict(d) for d in therapists + [infectionist]]
+
+    monkeypatch.setattr(svc, "_ensure_regions_loaded", fake_regions)
+    monkeypatch.setattr(svc, "_ensure_doctors_cache_loaded", fake_doctors)
+    monkeypatch.setattr(svc_mod.api_price, "load_price_by_region", lambda _region_id: [dict(r) for r in retail])
+    monkeypatch.setattr(svc_mod.api_price, "load_doctor_prices", lambda: [dict(r) for r in doctor_prices])
+    monkeypatch.setattr(svc_mod.api_nayka, "find_doctor_schedule", lambda *args, **kwargs: [])
+
+    payload = asyncio.run(svc.service_bundle_info("сколько стоит приём инфекциониста", {}))
+
+    assert [d["fio"] for d in payload.get("doctors") or []] == ["Инфекционист Анна"]
+    # Подпись — специальность из вопроса, которая у врача есть, а не основная
+    # («Гепатолог»): у терапевта-гирудотерапевта в ответе про терапевта eval
+    # запрещает «гирудотерап» (CRIT_PRICE_CONSULT_THERAPIST_NO_HIRUDO_001).
+    assert payload["doctors"][0]["specialty_label"] == "Инфекционист"
