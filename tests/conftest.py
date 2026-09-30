@@ -232,6 +232,41 @@ def _guarded_retry_sleep(self, response=None):
     return _REAL_RETRY_SLEEP(self, response)
 
 
+_PINNED_SNAPSHOT_LOADERS: list[tuple[object, str, object]] = []
+
+
+def _pin_latest_mis_snapshots() -> None:
+    """Гейт не скачивает справочники МИС: берёт последний существующий срез.
+
+    Срез датирован по Самаре, и утром файла «на сегодня» ещё нет — загрузчик идёт
+    его качать. С закрытой сетью это роняло СБОР тестов (30.09:
+    test_biomaterial_and_synonyms читает service_info при импорте). CLAUDE.md
+    велит для любого офлайн-замера прикреплять ОБА среза — служебный справочник и
+    прайс. Явно переданная дата уважается: подмена только для «сегодня».
+    """
+    from agent_logic_2.nayka_api import api_price, api_service_info
+
+    def latest_if_missing(real_path_fn, pattern_of):
+        def path(*args, **kwargs):
+            target = real_path_fn(*args, **kwargs)
+            # Подменяем только файл НА СЕГОДНЯ: явная дата (позиционная или
+            # именованная) даёт другое имя файла и уважается как есть.
+            if target.exists() or api_service_info.today_str() not in target.name:
+                return target
+            snapshots = sorted(target.parent.glob(pattern_of(*args)))
+            return snapshots[-1] if snapshots else target
+
+        return path
+
+    for module, attr, pattern_of in (
+        (api_service_info, "service_info_path", lambda *a: "service_info_*.jsonl"),
+        (api_price, "price_by_region_path", lambda region_id, *a: f"price_region_{str(region_id).strip()}_*.jsonl"),
+    ):
+        real = getattr(module, attr)
+        _PINNED_SNAPSHOT_LOADERS.append((module, attr, real))
+        setattr(module, attr, latest_if_missing(real, pattern_of))
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
@@ -243,6 +278,7 @@ def pytest_configure(config):
     socket.getaddrinfo = _guarded_getaddrinfo
     if _Urllib3Retry is not None:
         _Urllib3Retry.sleep = _guarded_retry_sleep
+    _pin_latest_mis_snapshots()
 
 
 def pytest_unconfigure(config):
@@ -251,6 +287,9 @@ def pytest_unconfigure(config):
     socket.getaddrinfo = _REAL_GETADDRINFO
     if _Urllib3Retry is not None:
         _Urllib3Retry.sleep = _REAL_RETRY_SLEEP
+    for module, attr, real in _PINNED_SNAPSHOT_LOADERS:
+        setattr(module, attr, real)
+    _PINNED_SNAPSHOT_LOADERS.clear()
 
 
 @pytest.fixture(autouse=True)

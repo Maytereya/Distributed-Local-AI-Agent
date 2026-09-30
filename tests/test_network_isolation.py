@@ -46,3 +46,16 @@ def test_live_marker_is_excluded_from_gate():
     # Под addopts `-m 'not live'` этот тест не выбирается. Если он выполнился в
     # обычном прогоне — фильтр живых тестов сломан.
     pytest.fail("тест с @pytest.mark.live попал в гейт")
+
+
+def test_gate_reads_latest_mis_snapshots_without_network():
+    # 30.09: утром файла справочника «на сегодня» ещё нет (срез датирован по
+    # Самаре), загрузчик шёл его качать — и с закрытой сетью падал СБОР тестов
+    # (test_biomaterial_and_synonyms читает service_info при импорте). Гейт обязан
+    # брать последний существующий срез, а не скачивать.
+    from agent_logic_2.nayka_api import api_price, api_service_info
+
+    if not list(api_service_info.service_info_path().parent.glob("service_info_*.jsonl")):
+        pytest.skip("в этом checkout нет ни одного среза МИС")
+    assert api_service_info.load_service_info()
+    assert api_price.load_price_by_region(3)
