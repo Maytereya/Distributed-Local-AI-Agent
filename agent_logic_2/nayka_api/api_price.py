@@ -15,7 +15,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from agent_logic_2 import config as c
-from agent_logic_2.nayka_api import api_nayka
+from agent_logic_2.nayka_api import api_nayka, region_city
 from agent_logic_2.nayka_api.cache_paths import resolve_cache_data_dir
 
 try:
@@ -211,6 +211,23 @@ def _is_samara_region_row(row: dict[str, Any]) -> bool:
     if city == "самара":
         return True
     return "самара" in name or "самара" in addr
+
+
+def _samara_region_ids(regions: Any) -> set[int]:
+    """id самарских регионов из сырого ``/regions``.
+
+    Поля ``city`` у medserver-egisz нет — город сначала выводится из дерева ``parent``
+    (той же функцией, что у роутера). Без этого признак находил 3 самарских региона из
+    33, сборщик не делал ни одного запроса, и ``doctor_prices`` каждый день был пустым
+    (BUG-2026-09-25-NO-DOCTORS-FOUND-FALSE).
+    """
+    rows = [dict(r) for r in regions if isinstance(r, dict)] if isinstance(regions, list) else []
+    out: set[int] = set()
+    for row in region_city.inject_region_cities(rows):
+        rid = _as_int(row.get("id"))
+        if rid is not None and _is_samara_region_row(row):
+            out.add(rid)
+    return out
 
 
 def latest_file(dir_: Path, pattern: str) -> Path:
@@ -627,7 +644,6 @@ def update_doctor_prices(force: bool = False) -> Path:
 
     # 4) Регионные имена fallback из /regions.
     region_name_by_id: Dict[int, str] = {}
-    samara_region_ids: set[int] = set()
     try:
         regions = api_nayka.site_regions()
     except Exception:
@@ -641,8 +657,7 @@ def update_doctor_prices(force: bool = False) -> Path:
         name = str(row.get("addressForSite") or row.get("name") or "").strip()
         if name:
             region_name_by_id[rid] = name
-        if _is_samara_region_row(row):
-            samara_region_ids.add(rid)
+    samara_region_ids = _samara_region_ids(regions)
 
     # 5) Ограничиваем doctor_prices только самарскими регионами.
     if samara_region_ids:

@@ -206,3 +206,87 @@ def test_update_doctor_prices_filters_non_samara_regions(monkeypatch, tmp_path: 
     # Проверяем, что запросы в doctorServicePricesByRegion ушли только по Самаре (regionId=10).
     assert calls
     assert all(region_id == 10 for _, region_id, _ in calls)
+
+
+# --- BUG-2026-09-25-NO-DOCTORS-FOUND-FALSE (30.09) ---------------------------
+# /regions бэкенда medserver-egisz НЕ отдаёт поле city: город — в дереве parent
+# (Все → область → город → филиалы), у филиала адрес без города. Тесты выше
+# кормили сборщик старой структурой с city и были зелёными, а на проде сборщик
+# находил 3 «самарских» региона из 33, не делал ни одного запроса и каждый день
+# писал пустой doctor_prices → «подходящих врачей не нашёл» в каждом ответе о цене
+# приёма. Структура ниже повторяет прод (см. тест BUG-A в test_messenger_services).
+_PROD_LIKE_REGIONS = [
+    {"id": 1, "parent": None, "name": "Все", "addressForSite": None},
+    {"id": 2, "parent": 1, "name": "Самарская область", "addressForSite": None},
+    {"id": 3, "parent": 2, "name": "Самара", "addressForSite": None},
+    {"id": 8, "parent": 2, "name": "Новокуйбышевск", "addressForSite": None},
+    {"id": 101, "parent": 3, "name": "Ленина 5", "companyName": "Наука-Самара", "addressForSite": "пр.Ленина, 5"},
+    {"id": 102, "parent": 3, "name": "Гагарина 64 Самара", "companyName": "Наука-Самара", "addressForSite": "ул.Гагарина, 64"},
+    {"id": 201, "parent": 8, "name": "Пирогова 4", "companyName": "Наука-Самара", "addressForSite": "ул. Пирогова, 4"},
+]
+
+
+def _prod_like_regions():
+    return [dict(r) for r in _PROD_LIKE_REGIONS]
+
+
+def test_update_doctor_prices_finds_samara_doctors_on_prod_like_regions(monkeypatch, tmp_path: Path):
+    target = tmp_path / "doctor_prices_20260930.jsonl"
+    monkeypatch.setattr(api_price, "doctor_prices_path", lambda date=None: target)
+    monkeypatch.setattr(api_price, "cleanup_old", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        api_price,
+        "_load_doctors",
+        lambda: [
+            {"id": 1, "fio": "Кардиолог Самары", "region_ids": [101], "regions": ["пр.Ленина, 5"]},
+            {"id": 2, "fio": "Врач спутника", "region_ids": [201], "regions": ["ул. Пирогова, 4"]},
+        ],
+    )
+    monkeypatch.setattr(
+        api_price.api_nayka,
+        "site_doctor_regions",
+        lambda: [
+            {"worker": 1, "region": 101, "companyUnit": 17},
+            {"worker": 2, "region": 201, "companyUnit": 17},
+        ],
+    )
+    monkeypatch.setattr(api_price.api_nayka, "site_doctors", lambda: [])
+    monkeypatch.setattr(api_price.api_nayka, "site_regions", _prod_like_regions)
+
+    calls: list[tuple[int, int]] = []
+
+    def fake_fetch(doctor_id, region_id, company_unit_id=None, is_favorite=False):
+        _ = company_unit_id, is_favorite
+        calls.append((int(doctor_id), int(region_id)))
+        return [{"serviceName": "Прием (осмотр, консультация) врача-кардиолога", "cost": 3000}]
+
+    monkeypatch.setattr(api_price, "fetch_doctor_prices", fake_fetch)
+
+    api_price.update_doctor_prices(force=True)
+
+    assert (1, 101) in calls  # самарский филиал без «Самара» в адресе
+    assert all(region_id != 201 for _, region_id in calls)  # спутник — свой город
+    rows = api_price.jsonl_read(target)
+    assert [row["doctorId"] for row in rows] == [1]
+
+
+def test_doctor_prices_and_router_agree_which_regions_are_samara():
+    # Инвариант one_city_rule: сборщик цен и роутер судят о Самаре по ОДНОМУ
+    # выведенному городу. Разойдутся — одна из частей бота снова потеряет филиалы.
+    from messengers_router.services._regions import _inject_region_cities
+    from messengers_router.services._samara_branches import samara_subset
+
+    router_ids = {r["id"] for r in samara_subset(_inject_region_cities(_prod_like_regions()))}
+
+    assert api_price._samara_region_ids(_prod_like_regions()) == router_ids
+    assert {101, 102} <= router_ids and 201 not in router_ids
+
+
+def test_region_city_derivation_has_one_implementation():
+    # Вывод города из дерева parent — одна функция на весь код. Копия в сборщике
+    # цен и была этим багом: фикс BUG-A (88727d8) починил роутер, копия осталась.
+    from agent_logic_2.nayka_api import region_city
+    from messengers_router.services import _regions
+
+    assert _regions._inject_region_cities is region_city.inject_region_cities
+    assert _regions._derive_region_city is region_city.derive_region_city
