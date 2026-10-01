@@ -51,6 +51,83 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Поля документа базы знаний, в которых лежит текст, — в порядке приоритета (как у
+# `meilisearch_client.search_meili`).
+_DOCUMENT_TEXT_FIELDS = ("content", "html", "csv", "description", "indication", "preparation", "body")
+_DOCUMENT_MAX_CHARS = 12000
+
+
+def _document_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(x).strip() for x in value if str(x).strip())
+    if isinstance(value, dict):
+        return " ".join(str(v).strip() for v in value.values() if str(v).strip())
+    return str(value).strip()
+
+
+def _search_main_index_documents(query: str, limit: int = 3) -> list[dict[str, str]]:
+    """Найденные документы базы знаний клиники — каждый отдельно, с заголовком.
+
+    `search_meili(..., output_mode="content_only")` склеивает найденное в один текст без
+    границ. Склейку получает LLM-обёртка — она выбирает строки о процедуре пациента. Но
+    запасной путь без LLM резал пункты из всей склейки, и подготовка к спирали получила
+    строки памятки «ФКС + ФГДС» со слабительным и «Фортрансом»
+    (BUG-2026-10-01-PREPARE-FALLBACK-MIXES-DOCS). Путям без LLM — один документ отсюда.
+    Клиент Meilisearch — общий (`agent_logic_1.meilisearch_client`), его не меняем.
+
+    :param query: поисковый запрос
+    :param limit: сколько документов вернуть
+    :return: [{"id", "title", "content"}]; ошибка поиска — исключение
+    """
+
+    client = meilisearch.get_meilisearch_client()
+    meilisearch.ensure_default_indexes_once()
+    hits = client.index("main_index").search(query, {"limit": limit}).get("hits", [])
+    documents: list[dict[str, str]] = []
+    for hit in hits if isinstance(hits, list) else []:
+        if not isinstance(hit, dict):
+            continue
+        content = next((_document_text(hit.get(key)) for key in _DOCUMENT_TEXT_FIELDS if _document_text(hit.get(key))), "")
+        if not content:
+            continue
+        documents.append(
+            {
+                "id": str(hit.get("id") or ""),
+                "title": _document_text(hit.get("title")),
+                "content": content[:_DOCUMENT_MAX_CHARS],
+            }
+        )
+    return documents
+
+
+def _best_single_document(query: str, variant: str) -> str:
+    """Текст одного документа базы знаний, лучше всех подходящего к вопросу.
+
+    Для путей без LLM: запасной ответ, короткий текст, выключенная обёртка. При равной
+    оценке — порядок поиска. Ничего подходящего — пустая строка (тогда — склейка, как
+    раньше: лучше прежний ответ, чем никакого).
+    """
+
+    try:
+        documents = _search_main_index_documents(variant)
+    except Exception:
+        return ""
+    best_text, best_score = "", 0.0
+    for document in documents:
+        text = html_cleaner.strip_html(document["content"]).strip()
+        title = document.get("title") or ""
+        score = max(
+            _prepare_fast_relevance_score(query, text, title=title),
+            _prepare_fast_relevance_score(variant, text, title=title),
+        )
+        if text and score > best_score:
+            best_text, best_score = text, score
+    return best_text
+
 
 # ---------------------------------------------------------------------------
 # Migrated Services methods (kept in legacy's declaration order).
@@ -270,20 +347,25 @@ async def _maybe_compact_prepare_text(
     self: "Services",
     query: str,
     source_text: str,
+    *,
+    single_source: str = "",
 ) -> tuple[str, str, str]:
     """
     Компактирует длинный PREPARE-текст через LLM с безопасным fallback.
 
     :param query: исходный запрос пациента
-    :param source_text: текст подготовки из источника
+    :param source_text: текст подготовки из источника (у базы знаний — склейка документов)
+    :param single_source: один документ о процедуре пациента; им отвечают все пути без
+        LLM, склейку видит только LLM-обёртка (BUG-2026-10-01-PREPARE-FALLBACK-MIXES-DOCS)
     :return: (итоговый текст, статус wrap, причина/диагностика)
     """
 
     text = str(source_text or "").strip()
     if not text:
         return "", "empty_source", "no_source_text"
+    plain = str(single_source or "").strip() or text
     if not _common_mod._runtime_bool("MR_PREPARE_LLM_WRAP_ENABLED", True):
-        return text, "disabled", "llm_wrap_disabled"
+        return plain, "disabled", "llm_wrap_disabled"
 
     min_chars = _common_mod._runtime_int(
         "MR_PREPARE_LLM_WRAP_MIN_CHARS",
@@ -292,7 +374,7 @@ async def _maybe_compact_prepare_text(
         max_value=12000,
     )
     if len(text) < min_chars:
-        return text, "short_source", "below_min_chars"
+        return plain, "short_source", "below_min_chars"
 
     source_max_chars = _common_mod._runtime_int(
         "MR_PREPARE_LLM_WRAP_SOURCE_MAX_CHARS",
@@ -301,11 +383,12 @@ async def _maybe_compact_prepare_text(
         max_value=30000,
     )
     source_for_prompt = text[:source_max_chars].strip()
+    plain_for_fallback = plain[:source_max_chars].strip()
 
     def _fallback_or_source(reason: str) -> tuple[str, str, str]:
         compacted = build_prepare_fallback_answer(
             query,
-            source_for_prompt,
+            plain_for_fallback,
             max_chars=_common_mod._runtime_int(
                 "MR_PREPARE_FALLBACK_MAX_CHARS",
                 1600,
@@ -319,11 +402,11 @@ async def _maybe_compact_prepare_text(
                 max_value=10,
             ),
         )
-        if compacted and len(compacted) < len(text):
+        if compacted and len(compacted) < len(plain):
             return compacted, "fallback_compact", reason
         if compacted:
-            return text, "fallback_not_shorter", reason
-        return text, "fallback_failed", reason
+            return plain, "fallback_not_shorter", reason
+        return plain, "fallback_failed", reason
 
     prompt = _prepare_wrap_prompt(query, source_for_prompt)
     if not prompt:
@@ -623,7 +706,11 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
 
     meili_best = await self._pick_prepare_candidate(q, meili_candidates)
     if meili_best:
-        compacted, wrap_status, wrap_reason = await self._maybe_compact_prepare_text(q, meili_best.text)
+        # Склейку документов видит только LLM-обёртка; путям без неё — один документ.
+        single = await asyncio.to_thread(_best_single_document, q, meili_best.query_variant)
+        compacted, wrap_status, wrap_reason = await self._maybe_compact_prepare_text(
+            q, meili_best.text, single_source=single
+        )
         return {
             "prepare": compacted,
             "note": "prepare: main_index",
