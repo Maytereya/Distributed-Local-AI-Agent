@@ -498,7 +498,10 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
     lines: list[str] = [f"По услуге «{service_name}» нашёл следующее:"]
 
     if retail_prices:
-        if service_kind == "lab" and len(retail_prices) > 1:
+        # Несколько строк, которые LLM признала той услугой (`price_llm_select`), —
+        # варианты на выбор, как у анализов: прятать вторую цену нельзя (решение
+        # владельца 22.07: при неоднозначности — список, а не одна цена).
+        if len(retail_prices) > 1 and (service_kind == "lab" or payload.get("llm_selected")):
             lines.append("1) Розничные варианты:")
             for price_row in retail_prices[:5]:
                 if not isinstance(price_row, dict):

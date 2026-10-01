@@ -179,3 +179,7 @@ apidata/
 messengers_router/чаты из ватсап для ии/
 app_data/settings/users_db.json
 data/
+
+# Журналы бота на хосте (подсказки синонимов для клиники и т. п.): данные пациентов
+# не коммитим — репозиторий публичный.
+app_data/journals/

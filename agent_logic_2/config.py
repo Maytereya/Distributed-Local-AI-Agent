@@ -180,6 +180,7 @@ class MessengerRouterConfig:
     debug_raw_output: bool
     llm_procedure_normalization: bool
     llm_service_normalization: bool
+    llm_price_service_select: bool
     debug_final_input: bool
     url: str
 
@@ -341,6 +342,14 @@ settings = Settings(
             default=True,
             legacy_key="LLM_SERVICE_NORMALIZATION",
         ),
+        # Выбор строки прайса LLM (01.10, класс «цена не той услуги»). Fail-open —
+        # по умолчанию ВКЛ; kill-switch: [MESSENGER_ROUTER] llm_price_service_select = false
+        llm_price_service_select=_get_bool(
+            "MESSENGER_ROUTER",
+            "llm_price_service_select",
+            default=True,
+            legacy_key="LLM_PRICE_SERVICE_SELECT",
+        ),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -454,6 +463,7 @@ MR_SCHEDULE_CACHE_LOG_EVENTS = settings.messenger_router.mr_schedule_cache_log_e
 DEBUG_RAW_OUTPUT = settings.messenger_router.debug_raw_output
 LLM_PROCEDURE_NORMALIZATION = settings.messenger_router.llm_procedure_normalization
 MR_LLM_SERVICE_NORMALIZATION = settings.messenger_router.llm_service_normalization
+MR_LLM_PRICE_SERVICE_SELECT = settings.messenger_router.llm_price_service_select
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

@@ -114,6 +114,19 @@ def _extract_usage(res: Any) -> dict[str, int]:
     return usage
 
 
+def _generation_options(override: dict[str, Any] | None) -> Any:
+    """Общие параметры генерации и правка поверх них на один вызов.
+
+    Выбор строки прайса просит temperature 0: одинаковый вопрос — одинаковые строки.
+    Без правки уходит тот же объект `Options`, что и раньше.
+    """
+
+    base = ollama_settings.options_set()
+    if not override:
+        return base
+    return type(base)(**{**base.model_dump(exclude_none=True), **override})
+
+
 async def generate_text_with_usage(
     prompt: str,
     *,
@@ -122,6 +135,7 @@ async def generate_text_with_usage(
     fmt: str | None = None,
     llm: str | None = None,
     think: bool | None = None,
+    options: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, int]]:
     model = llm or LLMName.get()
     resolved_think = ollama_settings.resolve_think(think)
@@ -145,7 +159,7 @@ async def generate_text_with_usage(
                 _OLLAMA_CLIENT.generate(
                     model=model,
                     prompt=prompt,
-                    options=ollama_settings.options_set(),
+                    options=_generation_options(options),
                     format=fmt,
                     keep_alive=-1,
                     think=resolved_think,
@@ -208,6 +222,7 @@ async def generate_text(
     fmt: str | None = None,
     llm: str | None = None,
     think: bool | None = None,
+    options: dict[str, Any] | None = None,
 ) -> str:
     text, _usage = await generate_text_with_usage(
         prompt,
@@ -216,6 +231,7 @@ async def generate_text(
         fmt=fmt,
         llm=llm,
         think=think,
+        options=options,
     )
     return text
 

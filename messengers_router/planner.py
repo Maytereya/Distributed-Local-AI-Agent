@@ -303,10 +303,14 @@ def build_plan(
     if label == "PRICE":
         service_known = bool(str(entities.get("service_name") or entities.get("test_name") or "").strip())
         doctor_known = bool(entities.get("doctor_id") or entities.get("doctor_name"))
+        # Пациент спросил цену — строку прайса выбирает LLM (`_price_select_llm`). Цена
+        # попутно, в шагах записи и карточки врача, идёт по правилам: там LLM лишь
+        # добавила бы секунду каждому ходу.
+        price_entities = {**entities, "__price_question": True}
         if service_known and not doctor_known:
-            steps.append(PlanStep(tool="service_bundle_info", input={"query": user_text, "entities": dict(entities)}))
+            steps.append(PlanStep(tool="service_bundle_info", input={"query": user_text, "entities": price_entities}))
         else:
-            steps.append(PlanStep(tool="price_info", input={"query": user_text, "entities": dict(entities)}))
+            steps.append(PlanStep(tool="price_info", input={"query": user_text, "entities": price_entities}))
         return Plan(label=label, steps=steps)
 
     if label == "ADDRESS":
