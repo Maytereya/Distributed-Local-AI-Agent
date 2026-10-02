@@ -138,10 +138,11 @@ topics:
       regex: []
       exclude_keywords: []
     route:
-      strategy: "meili_first"
-      sources:
-        - kind: "meili"
-          index: "main_index"
+      # Решение владельца 02.10: вызов на дом оформляет оператор. В базе знаний по этой
+      # теме — скрипт администратора, пациенту его не пересказываем.
+      strategy: "handoff"
+      message_key: "home_visit"
+      sources: []
     context:
       interrupts_active_appointment: true
       require_cancel_confirm_if_appointment_active: true

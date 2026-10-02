@@ -105,8 +105,10 @@ from .memory import MemoryStore
 from .city import match_city
 from .topic_registry import (
     build_topic_flag,
+    extract_topic_id_from_flags,
     match_topic,
 )
+from .topic_registry import get_topic as topic_registry_get_topic
 from .runtime_config import config as c
 
 _DEFAULT_CITY = "Самара"
@@ -1554,6 +1556,48 @@ def _maybe_offer_operator_for_existing_appointment(
     )
 
 
+def _maybe_topic_handoff(
+    *,
+    decision: RouteDecision,
+    state: SessionState,
+    memory: MemoryStore,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Тема со стратегией `handoff` в реестре тем — сразу оператор, текстом темы.
+
+    Какие темы ведёт оператор, решают данные (`route.strategy` и `route.message_key` в
+    `topic_registry.yaml`), а не код. Срочные, жалобы и медицинские вопросы тема не
+    перехватывает — у них свои шаблоны.
+    """
+
+    if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
+        return None
+    topic_id = extract_topic_id_from_flags(decision.flags)
+    topic = topic_registry_get_topic(topic_id) if topic_id else None
+    route = topic.get("route") if isinstance(topic, dict) else None
+    if not isinstance(route, dict) or str(route.get("strategy") or "").strip().lower() != "handoff":
+        return None
+    memory.clear_pending(state)
+    return (
+        _copy_decision(
+            decision,
+            label="OTHER",
+            entities={},
+            flags=set(decision.flags) | {"topic_handoff"},
+            source="topic_registry",
+            needs_handoff=False,
+        ),
+        Plan(label="OTHER"),
+        Evidence(
+            items={
+                ek.OPERATOR_OFFER_RESPONSE: {
+                    "text": handoff_message(str(route.get("message_key") or "")),
+                    "handoff": True,
+                }
+            }
+        ),
+    )
+
+
 def _maybe_start_catalog_confirm(
     *,
     decision: RouteDecision,
@@ -2236,6 +2280,10 @@ async def _complete_route_after_doctor_guard(
     )
     if existing_appointment is not None:
         return existing_appointment
+
+    topic_handoff = _maybe_topic_handoff(decision=decision, state=state, memory=memory)
+    if topic_handoff is not None:
+        return topic_handoff
 
     if decision.label == "DOCTOR_SCHEDULE":
         # Очищаем хвосты сценария записи, чтобы расписание не фильтровалось
