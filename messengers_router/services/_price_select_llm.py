@@ -240,15 +240,18 @@ def _journal_path() -> Path:
 
 
 def _record_synonym_suggestion(phrase: str, terms: list[str], rows: list[dict[str, Any]]) -> None:
-    """Пациент назвал услугу словом, которого в прайсе нет; LLM нашла её по термину.
+    """Пациент назвал услугу словом, которого в прайсе нет.
 
-    Это кандидат в синонимы МИС: клиника проверит и заведёт сама. Пишем только фразу
-    услуги — не всю реплику пациента.
+    Это кандидат в синонимы МИС: клиника проверит и заведёт сама (поле синонимов МИС
+    бот уже читает — синоним работает без правки кода). `found` — нашла ли услугу LLM
+    по термину; промахи («спирометрия», а в прайсе «Спирография») клинике нужнее всего:
+    без синонима их не найдёт никто. Пишем только фразу услуги — не всю реплику.
     """
 
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "phrase": phrase,
+        "found": bool(rows),
         "terms": terms,
         "services": [
             {"name": _row_name(row), "homecode": str(row.get("serviceHomecode") or row.get("homecode") or "").strip()}
@@ -327,12 +330,18 @@ async def select_price_rows(
     chosen, terms = first
     if chosen:
         return PriceSelection(rows=tuple(_prefer_base_variants(chosen, question)))
+    # Промах — когда услугу не нашли ни правила (`candidates` пуст), ни LLM: такое
+    # слово пациента — кандидат в синонимы для клиники (см. `_record_synonym_suggestion`).
     if not terms:
+        if not candidates:
+            _record_synonym_suggestion(phrase or question, [], [])
         return None
 
     pool_by_terms = await asyncio.to_thread(_build_pool, terms, rows, per_text=_PER_TERM_LIMIT)
     second = await _ask(question, pool_by_terms)
     if second is None or not second[0]:
+        if second is not None and not candidates:
+            _record_synonym_suggestion(phrase or question, terms, [])
         return None
     chosen = _prefer_base_variants(second[0], question)
     _record_synonym_suggestion(phrase or question, terms, chosen)

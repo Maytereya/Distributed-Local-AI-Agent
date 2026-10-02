@@ -517,3 +517,35 @@ def test_price_question_skips_did_you_mean_for_a_service_guess():
     # Запись по-прежнему уточняет догадку «да/нет».
     appointment = RouteDecision(label="APPOINTMENT", confidence=0.9, entities=dict(guess))
     assert router_mod._maybe_start_catalog_confirm(decision=appointment, state=state, memory=MemoryStore()) is not None
+
+
+# --- Промахи — в журнал синонимов для клиники (02.10) ---------------------------------
+#
+# Владелец 02.10: «у нас появилось поле синонимов — используем его». Синоним клиники
+# бот читает уже (слой 1 резолвера), правка кода не нужна. Нужно, чтобы клиника узнала,
+# КАКИЕ слова заводить: раньше журнал писал только находки LLM, а промах «спирометрия»
+# (в прайсе «Спирография», LLM предложила «ФВД») не оставлял следа.
+
+
+def _journal(tmp_path) -> list[dict]:
+    path = tmp_path / "price_synonym_suggestions.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def test_miss_is_journaled_for_the_clinic(monkeypatch, tmp_path):
+    _fake_llm(monkeypatch, lambda prompt, rows: {"match": [], "search_terms": ["функция внешнего дыхания"]})
+    assert run(PS.select_price_rows("сколько стоит спирометрия", RETAIL + _FULL_SIZE)) is None
+
+    entry = _journal(tmp_path)[-1]
+    assert entry["phrase"] == "спирометрия"
+    assert entry["found"] is False and entry["services"] == []
+    assert entry["terms"] == ["функция внешнего дыхания"]
+
+
+def test_rules_answer_is_not_a_miss(monkeypatch, tmp_path):
+    # Правила что-то нашли — это не «ничего не нашли», в журнал промахов не идёт.
+    _fake_llm(monkeypatch, lambda prompt, rows: {"match": [], "search_terms": []})
+    run(PS.select_price_rows("сколько стоит массаж", RETAIL, candidates=[_THERAPIST]))
+    assert _journal(tmp_path) == []
