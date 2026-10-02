@@ -231,13 +231,14 @@ def _extract_pending_response(
     from .recovery_policy import contextual_reply_kind
 
     missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
-    catalog_pending_reply = (
-        plan.label == "OTHER"
-        and isinstance(missing, list)
-        and "catalog_confirm" in missing
-        and isinstance(evidence.get(ek.CATALOG_CONFIRM_RESPONSE), dict)
-    )
-    if catalog_pending_reply:
+    # Обработчик выставил pending под СВОЙ готовый ответ (вопрос «да/нет»): ответ —
+    # его, а не общий переспрос по пустому слоту. Без этого оффер оператора по
+    # существующей записи превращался в «Уточните, пожалуйста, детали запроса»
+    # (BUG-2026-09-25-CANCEL-OFFER-PREEMPTED, инвариант handler_answer_preempted_by_pending).
+    own_answer = {"catalog_confirm": ek.CATALOG_CONFIRM_RESPONSE, "operator_offer_confirm": ek.OPERATOR_OFFER_RESPONSE}
+    if plan.label == "OTHER" and any(
+        slot in missing and isinstance(evidence.get(key), dict) for slot, key in own_answer.items()
+    ):
         return None
 
     if (

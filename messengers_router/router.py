@@ -1505,6 +1505,29 @@ def _maybe_offer_operator_for_existing_appointment(
 
     reset_appointment_runtime_state(state)
     memory.clear_pending(state)
+    if kind == "cancel":
+        # Решение владельца 25.09 (заменяет 14.08 для отмены): сразу оператор, без
+        # вопроса — тот же текст, что у кнопки «Перенести или отменить запись».
+        return (
+            _copy_decision(
+                decision,
+                label="OTHER",
+                entities={},
+                flags=set(decision.flags) | {"existing_appointment_operator_handoff", "existing_appointment_cancel"},
+                source="existing_appointment",
+                confidence=max(decision.confidence, 0.9),
+                needs_handoff=False,
+            ),
+            Plan(label="OTHER"),
+            Evidence(
+                items={
+                    ek.OPERATOR_OFFER_RESPONSE: {
+                        "text": handoff_message("existing_appointment_change"),
+                        "handoff": True,
+                    }
+                }
+            ),
+        )
     state.last_entities["_operator_offer_pending"] = True
     memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
     return (

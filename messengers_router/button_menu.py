@@ -55,9 +55,7 @@ BUTTONS: dict[str, ButtonAction] = {
     "menu.appointment.book": _slot("APPOINTMENT"),
     "menu.appointment.schedule": _slot("DOCTOR_SCHEDULE"),
     # Решение владельца 25.09: существующую запись меняет только оператор, без вопроса.
-    "menu.appointment.change": _handoff(
-        "APPOINTMENT", "Перенести или отменить запись поможет оператор — соединяю."
-    ),
+    "menu.appointment.change": _handoff("APPOINTMENT", handoff_message("existing_appointment_change")),
     "menu.appointment.prepare": _slot("PREPARE"),
     # --- Сдать анализы
     "menu.tests.where": _pass("ADDRESS"),

@@ -23,7 +23,7 @@ from messengers_router import router as router_mod
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import Evidence, RouteDecision, SessionState
 from messengers_router.nlu_pipeline import NLUResult
-from messengers_router.policies import detect_existing_appointment_request
+from messengers_router.policies import detect_existing_appointment_request, handoff_message
 from messengers_router.recovery_policy import (
     UNCLEAR_OPERATOR_OFFER_TEXT,
     evaluate_recovery,
@@ -119,32 +119,74 @@ def _install_stubs(monkeypatch, label: str = "APPOINTMENT"):
     monkeypatch.setattr(router_mod, "execute_plan", fake_execute_plan)
 
 
-@pytest.mark.parametrize(
-    "text, marker",
-    [
-        ("Проверьте пожалуйста мою запись", "existing_appointment_check"),
-        ("хочу отменить запись", "existing_appointment_cancel"),
-    ],
-    ids=["check", "cancel"],
-)
-def test_existing_appointment_routes_to_operator_offer(monkeypatch, text, marker):
+def test_existing_appointment_check_routes_to_operator_offer(monkeypatch):
     _install_stubs(monkeypatch)
-    state = SessionState(session_id=f"p6-{marker}")
+    state = SessionState(session_id="p6-check")
     memory = MemoryStore()
 
     decision, plan, evidence = run(
-        router_mod.route_patient_message(text, state, Services(), memory)
+        router_mod.route_patient_message("Проверьте пожалуйста мою запись", state, Services(), memory)
     )
 
     assert decision.label == "OTHER"
     assert plan.label == "OTHER"
-    assert marker in decision.flags
+    assert "existing_appointment_check" in decision.flags
     payload = evidence.get("operator_offer_response")
     assert isinstance(payload, dict)
     assert str(payload.get("text") or "").endswith("Перевести на оператора?")
-    # Оффер — ВОПРОС, а не принудительный перевод.
+    # Проверка записи — ВОПРОС, а не принудительный перевод (решение 14.08).
     assert payload.get("handoff") is False
     assert state.last_entities.get("_operator_offer_pending") is True
+
+
+@pytest.mark.parametrize("text", ["хочу отменить запись", "Отменить запись", "Отмените запись на 24.09 в 18:30"])
+def test_existing_appointment_cancel_hands_off_at_once(monkeypatch, text):
+    # Решение владельца 25.09 (заменяет 14.08 для отмены): сразу оператор, без
+    # вопроса, тем же текстом, что у кнопки «Перенести или отменить запись».
+    _install_stubs(monkeypatch)
+    state = SessionState(session_id="p6-cancel")
+    memory = MemoryStore()
+
+    decision, _plan, evidence = run(router_mod.route_patient_message(text, state, Services(), memory))
+
+    assert "existing_appointment_cancel" in decision.flags
+    payload = evidence.get("operator_offer_response")
+    assert payload == {"text": handoff_message("existing_appointment_change"), "handoff": True}
+    assert not state.last_entities.get("_operator_offer_pending")
+    assert memory.get_pending(state) is None
+
+
+def _patient_sees(text: str) -> tuple[str, bool]:
+    async def go():
+        state, memory = SessionState(session_id="p6-render"), MemoryStore()
+        out = [env async for env in router_mod.patient_routing_stream(text, state, Services(), memory)]
+        return "".join(env.text for env in out if env.text), any(env.handoff for env in out)
+
+    return run(go())
+
+
+@pytest.mark.parametrize(
+    ("text", "expected", "handoff"),
+    [
+        ("Проверьте пожалуйста мою запись", "Перевести на оператора?", False),
+        ("Отменить запись", "Перенести или отменить запись поможет оператор — соединяю.", True),
+    ],
+    ids=["check", "cancel"],
+)
+def test_patient_sees_the_handler_answer_not_a_generic_clarify(monkeypatch, text, expected, handoff):
+    """Инвариант `handler_answer_preempted_by_pending` — через ПОЛНЫЙ рендер.
+
+    Тесты выше смотрят тройку решения: в evidence ответ лежал верный, а пациент
+    получал «Уточните, пожалуйста, детали запроса» — рендер отдавал общий переспрос
+    по pending раньше готового ответа (BUG-2026-09-25-CANCEL-OFFER-PREEMPTED).
+    """
+
+    _install_stubs(monkeypatch)
+    answer, handed_off = _patient_sees(text)
+
+    assert expected in answer, answer
+    assert "Уточните, пожалуйста, детали запроса" not in answer
+    assert handed_off is handoff
 
 
 def test_existing_appointment_does_not_offer_new_booking(monkeypatch):
