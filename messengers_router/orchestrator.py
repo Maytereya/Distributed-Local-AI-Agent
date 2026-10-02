@@ -570,11 +570,16 @@ async def _render_impl(
 
     from . import renderer
 
-    # 1. Safety short-circuits — use sync templates, no LLM needed
+    # 1. Safety short-circuits — use sync templates, no LLM needed.
+    # URGENT — шаблоном всегда: и от правил, и от LLM. Метка URGENT от LLM уходила в
+    # свободную генерацию на пустых данных, и рендер писал «клиника не предоставляет
+    # вызов врача на дом» (BUG-2026-09-25-HOME-VISIT-AS-URGENT, инвариант
+    # llm_safety_without_template).
+    if ctx.decision is not None and ctx.decision.label == "URGENT":
+        ctx.response = renderer.render_urgent()
+        return ctx
     if ctx.short_circuit and ctx.decision is not None:
-        if ctx.decision.label == "URGENT":
-            ctx.response = renderer.render_urgent()
-        elif ctx.decision.label == "COMPLAINT":
+        if ctx.decision.label == "COMPLAINT":
             ctx.response = renderer.render_complaint()
         elif ctx.decision.label == "MEDICAL_ADVICE":
             ctx.response = renderer.render_medical_advice()
