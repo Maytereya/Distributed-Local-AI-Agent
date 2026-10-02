@@ -57,7 +57,7 @@ from ._doctors_helpers import (
     _service_catalog_query_candidates,
     _specialty_priority_rank,
 )
-from ._prices_helpers import resolve_price_service_name_from_catalog
+from ._prices_helpers import keeps_family_letter, resolve_price_service_name_from_catalog
 from ._regions import (
     _extract_region_phone,
     _has_explicit_non_samara_regions,
@@ -939,6 +939,7 @@ async def match_catalog_service(
     raw_text_or_name: str,
     *,
     current_service_name: str = "",
+    context_text: str = "",
 ) -> dict[str, Any]:
     """
     Матчит услугу по объединенному каталогу услуг клиники:
@@ -968,7 +969,10 @@ async def match_catalog_service(
             current_service_name="",
             rows=catalog_rows,
         )
-        if exact:
+        # Варианты запроса и выделенная фраза теряют букву семейства («гепатит с» →
+        # «гепатит»), а синоним клиники «гепатит» ведёт на гепатит В. Букву судим по
+        # реплике пациента целиком (`context_text`). См. BUG-2026-10-02-SYNONYM-DROPS-LETTER.
+        if exact and keeps_family_letter(context_text or raw_text_or_name, exact, catalog_rows):
             return {
                 "status": "exact",
                 "query": query,

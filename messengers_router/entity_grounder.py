@@ -542,6 +542,7 @@ async def ground_decision_entities(
                     match = await services.match_catalog_service(
                         phrase,
                         current_service_name=str(state.last_entities.get("service_name") or ""),
+                        context_text=user_text,
                     )
                     status = str(match.get("status") or "")
                     nonbookable_keep = "policy_nonbookable_walkin" in set(decision.flags)

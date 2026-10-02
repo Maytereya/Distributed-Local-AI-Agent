@@ -1192,6 +1192,7 @@ async def _verify_decision_and_prefetch_catalog(
     service_coro = services.match_catalog_service(
         plan["query"],
         current_service_name=plan["current_service_name"],
+        context_text=user_text,
     )
     verified, service_match = await asyncio.gather(verify_coro, service_coro)
     return verified, {"query": plan["query"], "match": service_match}
@@ -1346,6 +1347,7 @@ async def _inject_catalog_candidates(
             service_coro = services.match_catalog_service(
                 service_query,
                 current_service_name=str(state.last_entities.get("service_name") or ""),
+                context_text=user_text,
             )
 
     doctor_match: dict[str, Any] | None = None

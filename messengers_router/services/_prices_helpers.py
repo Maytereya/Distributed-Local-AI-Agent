@@ -1271,6 +1271,21 @@ def _fold_family_letter(token: str) -> str:
     return f"{_FAMILY_LETTER_FOLD.get(low[0], low[0])}{low[1:]}"
 
 
+def _strip_trailing_price_noise(query_text: str) -> str:
+    """Снимает с конца реплики слова вопроса о цене: «гепатит с цена» → «гепатит с».
+
+    Буква-различитель обязана стоять последней (иначе «гепатит в крови» — предлог), но
+    пациенты пишут «гепатит с цена», «гепатит с сколько стоит?» — и буква терялась:
+    синоним клиники «гепатит» отдавал гепатит В (02.10, BUG-2026-10-02-SYNONYM-DROPS-LETTER).
+    Слова вопроса о цене — те же, что режет корзина (`_MULTI_PRICE_NOISE_WORDS`).
+    """
+
+    tokens = re.findall(r"[а-яёa-z0-9]+", _normalise_input(query_text))
+    while tokens and tokens[-1] in _MULTI_PRICE_NOISE_WORDS:
+        tokens.pop()
+    return " ".join(tokens)
+
+
 def _family_query_discriminator(query_text: str) -> tuple[str, str] | None:
     """``(stem6, folded_letter)`` если запрос = «<ствол≥6> <буква>» (буква —
     последний токен), иначе ``None``. Витамины идут своим (composite-token)
@@ -1281,7 +1296,7 @@ def _family_query_discriminator(query_text: str) -> tuple[str, str] | None:
     """
     if _extract_vitamin_designator(query_text):
         return None
-    m = _FAMILY_QUERY_DISCRIMINATOR_RE.search(_normalise_input(query_text))
+    m = _FAMILY_QUERY_DISCRIMINATOR_RE.search(_strip_trailing_price_noise(query_text))
     if not m:
         return None
     return m.group(1)[:6], _fold_family_letter(m.group(2))
@@ -1385,7 +1400,11 @@ def resolve_price_service_name_from_catalog(
     # доверие. Поле заполняет клиника (на срезе 14.08 пусто) — механика
     # подключена заранее и включается сама по мере наполнения справочника.
     synonym_hit = mis_synonym_service(query_text)
-    if synonym_hit and _catalog_has_service_name(synonym_hit, rows):
+    if (
+        synonym_hit
+        and _catalog_has_service_name(synonym_hit, rows)
+        and keeps_family_letter(query_text, synonym_hit, rows)
+    ):
         return synonym_hit
     core = _resolve_price_service_core(
         query_text, current_service_name=current_service_name, rows=rows
@@ -1399,24 +1418,43 @@ def resolve_price_service_name_from_catalog(
     )
 
 
+def _catalog_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Строки прайса региона: переданные или загруженные (сбой загрузки — пусто)."""
+
+    if rows is None:
+        try:
+            rows = api_price.load_price_by_region(SAMARA_PRICE_REGION_ID)
+        except Exception:
+            return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
 def _catalog_has_service_name(service_name: str, rows: list[dict[str, Any]] | None) -> bool:
     """Есть ли такая услуга в прайсе (синоним МИС может указывать на услугу вне среза)."""
 
     target = _normalise_input(service_name)
     if not target:
         return False
-    catalog_rows = rows
-    if catalog_rows is None:
-        try:
-            loaded = api_price.load_price_by_region(SAMARA_PRICE_REGION_ID)
-        except Exception:
-            return False
-        catalog_rows = [row for row in loaded if isinstance(row, dict)]
     return any(
         _normalise_input(str(row.get("serviceName") or row.get("name") or "")) == target
-        for row in catalog_rows
-        if isinstance(row, dict)
+        for row in _catalog_rows(rows)
     )
+
+
+def keeps_family_letter(query_text: str, service_name: str, rows: list[dict[str, Any]] | None) -> bool:
+    """Синоним МИС не вправе сменить букву семейства («гепатит с» → «Гепатит В»).
+
+    02.10 в справочнике клиники у «Гепатит В - HBsAg» был синоним «гепатит» без буквы,
+    и слой синонимов отдавал гепатит В на «гепатит с» и «гепатит а» — мимо гарда буквы
+    второго слоя. Решение владельца 22.07 (буквенные семейства): чужая буква —
+    дезинформация ценой. См. BUG-2026-10-02-SYNONYM-DROPS-LETTER.
+    """
+
+    family = _family_discriminator_context(query_text, _catalog_rows(rows))
+    if family is None:
+        return True
+    stem6, letter = family
+    return _row_family_letter(service_name, stem6) == letter
 
 
 def _resolve_with_biomaterial_stripped(

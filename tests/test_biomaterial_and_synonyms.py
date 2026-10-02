@@ -309,3 +309,57 @@ def test_catalog_names_are_not_hijacked_by_synonyms(monkeypatch):
         if got and got.strip().lower() != name.strip().lower():
             hijacked.append((name, got))
     assert len(hijacked) <= 3, f"синоним уводит названия каталога в чужую услугу: {hijacked[:5]}"
+
+
+# --- Класс `synonym_drops_family_letter` (02.10) ------------------------------
+#
+# В справочнике клиники у «Гепатит В - HBsAg» был синоним «гепатит» без буквы, и
+# слой синонимов отдавал гепатит В на «сколько стоит анализ на гепатит с». Гард
+# буквы стоял только во втором слое. Инвариант: буква семейства, названная
+# пациентом, не меняется ни одним слоем резолвера; синоним без буквы — это слово
+# клиники для её услуги, и на запрос без буквы он работает как раньше.
+# См. BUG-2026-10-02-SYNONYM-DROPS-LETTER.
+
+
+def _family_letter_rows():
+    """Буквенные семейства живого прайса: {(ствол, буква): строка}."""
+    from messengers_router.services import _prices_helpers as ph
+
+    families: dict[tuple[str, str], str] = {}
+    for row in ROWS:
+        name = str(row.get("serviceName") or "")
+        stem = name.split()[0].lower()[:6] if name.split() else ""
+        letter = ph._row_family_letter(name, stem) if len(stem) == 6 else None
+        if letter:
+            families.setdefault((stem, letter), name)
+    return families
+
+
+def test_broad_clinic_synonym_does_not_change_family_letter(monkeypatch):
+    from messengers_router.services import _prices_helpers as ph
+
+    families = _family_letter_rows()
+    assert ("гепати", "b") in families and ("гепати", "c") in families, "нужны гепатиты B и C в прайсе"
+    fake = bio._MisVocabularies()
+    fake.synonym_to_service = {"гепатит": families[("гепати", "b")]}
+    monkeypatch.setattr(bio, "_vocabularies", lambda: fake)
+    monkeypatch.setattr(ph, "mis_synonym_service", bio.mis_synonym_service)
+
+    for question in (
+        "сколько стоит анализ на гепатит с", "гепатит с", "гепатит С", "анализ на гепатит а",
+        "гепатит с цена", "гепатит с сколько стоит?",
+    ):
+        found = ph.resolve_price_service_name_from_catalog(question, rows=ROWS)
+        family = ph._family_discriminator_context(question, ROWS)
+        assert family is not None, question
+        assert found is None or ph._row_family_letter(found, family[0]) == family[1], (question, found)
+    # Без буквы синоним клиники работает как раньше.
+    assert ph.resolve_price_service_name_from_catalog("сколько стоит гепатит", rows=ROWS) == families[("гепати", "b")]
+
+
+def test_preposition_after_stem_is_not_a_family_letter():
+    """Анти-регрессия решения 22.07: «гепатит в крови» — предлог, а не гепатит В."""
+    from messengers_router.services import _prices_helpers as ph
+
+    assert ph._family_discriminator_context("анализ на гепатит в крови", ROWS) is None
+    assert ph._family_discriminator_context("гепатит с цена", ROWS) == ("гепати", "c")

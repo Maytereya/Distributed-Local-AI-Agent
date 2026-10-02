@@ -572,7 +572,7 @@ def test_route_message_starts_catalog_confirm_for_fuzzy_doctor(monkeypatch):
         _ = self, raw_text_or_name
         return {"status": "fuzzy", "query": "евграфова", "canonical": "Евграфова"}
 
-    async def fake_match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = ""):
+    async def fake_match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = "", context_text: str = ""):
         _ = self, raw_text_or_name, current_service_name
         return {"status": "miss", "query": "", "canonical": ""}
 
@@ -639,7 +639,7 @@ def test_route_message_keeps_checkup_category_broad(monkeypatch):
     # Каталог ВСЕГДА вернул бы exact на «Ежегодный Чекап» — без гарда это
     # запиннило бы service_name и схлопнуло линейку. Гард должен не дать
     # применить этот результат для категорийного запроса.
-    async def fake_match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = ""):
+    async def fake_match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = "", context_text: str = ""):
         _ = self, current_service_name
         if "чекап" in str(raw_text_or_name or "").lower():
             return {"status": "exact", "query": raw_text_or_name, "canonical": "Ежегодный Чекап"}
@@ -762,7 +762,7 @@ def test_patient_routing_stream_renders_catalog_confirm_response(monkeypatch):
         _ = self, raw_text_or_name
         return {"status": "fuzzy", "query": "евграфова", "canonical": "Евграфова"}
 
-    async def fake_match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = ""):
+    async def fake_match_catalog_service(self, raw_text_or_name: str, *, current_service_name: str = "", context_text: str = ""):
         _ = self, raw_text_or_name, current_service_name
         return {"status": "miss", "query": "", "canonical": ""}
 

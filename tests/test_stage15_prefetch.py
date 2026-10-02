@@ -118,7 +118,7 @@ def test_verify_and_prefetch_runs_both_in_parallel_when_safe(monkeypatch):
         return decision
 
     class FakeServices:
-        async def match_catalog_service(self, query, *, current_service_name=""):
+        async def match_catalog_service(self, query, *, current_service_name="", context_text=""):
             _ = current_service_name
             calls.append("service")
             return {"status": "exact", "canonical": query.upper(), "query": query}
@@ -186,7 +186,7 @@ def test_inject_reuses_prefetch_when_query_matches(monkeypatch):
         async def match_catalog_doctor(self, *_a, **_k):  # pragma: no cover
             raise AssertionError("doctor match must not fire for this case")
 
-        async def match_catalog_service(self, query, *, current_service_name=""):
+        async def match_catalog_service(self, query, *, current_service_name="", context_text=""):
             _ = current_service_name
             refetch_calls.append(query)
             raise AssertionError("service match must reuse prefetch, not re-fetch")
@@ -220,7 +220,7 @@ def test_inject_refetches_when_prefetch_query_differs(monkeypatch):
     observed_query: list[str] = []
 
     class FakeServices:
-        async def match_catalog_service(self, query, *, current_service_name=""):
+        async def match_catalog_service(self, query, *, current_service_name="", context_text=""):
             _ = current_service_name
             observed_query.append(query)
             return {"status": "fuzzy", "canonical": "Холтер", "query": query}
