@@ -441,3 +441,79 @@ def test_per_call_options_override_general_generation_settings(monkeypatch):
 
     run(llm_runtime.generate_text("промпт", timeout_s=5, queue_timeout_ms=1000))
     assert seen["options"].model_dump(exclude_none=True) == {"temperature": 0.2, "top_p": 0.9}
+
+
+# --- Класс `price_asks_named_service` (02.10): LLM-выбор достижим на полном пути -------
+#
+# Слой выбора строки работал только там, где услугу уже узнали правила. Где не узнали —
+# ровно там, где LLM нужнее всего, — его отсекали три правила раньше: планировщик
+# переспрашивал «название услуги» (проверка сущностей отбросила незнакомое слово), гард
+# П2 принимал незнакомое слово за уточнение «по ОМС», воронка «Похоже, вы имели в
+# виду…» выносила на «да/нет» одну догадку по похожему слову. Тест второго прохода выше
+# был зелёным на прайсе из четырёх строк — на нём гард П2 молчит. Здесь прайс
+# полноразмерный. См. BUG-2026-10-02-PRICE-ASKS-NAMED-SERVICE.
+
+_FULL_SIZE = [{"serviceName": f"Услуга {i}", "serviceHomecode": f"9.{i}", "cost": 100} for i in range(200)]
+
+
+def test_service_named_in_other_words_reaches_llm_on_full_catalog(monkeypatch):
+    calls: list = []
+
+    def decide(prompt, rows):
+        if "Эзофагогастродуоденоскопия (ФГДС)" in rows:
+            return {"match": [rows["Эзофагогастродуоденоскопия (ФГДС)"]], "search_terms": []}
+        return {"match": [], "search_terms": ["ФГДС"]}
+
+    _fake_llm(monkeypatch, decide, calls)
+    sel = run(PS.select_price_rows("сколько стоит гастроскопия", RETAIL + _FULL_SIZE))
+
+    assert sel is not None and [r["serviceName"] for r in sel.rows] == ["Эзофагогастродуоденоскопия (ФГДС)"]
+    assert len(calls) == 2
+
+
+def test_qualifier_next_to_known_service_still_stays_with_rules_on_full_catalog(monkeypatch):
+    # Анти-регрессия П2: «по ОМС» рядом с узнанной услугой — LLM не зовём.
+    calls: list = []
+    _fake_llm(monkeypatch, _pick("Прием (осмотр, консультация) врача-терапевта"), calls)
+    assert run(PS.select_price_rows("Сколько стоит приём терапевта по ОМС", RETAIL + _FULL_SIZE)) is None
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("text", "asks"),
+    [
+        ("сколько стоит спирометрия", False),
+        ("сколько стоит т4 свободный", False),
+        ("гепатит с цена", False),
+        ("сколько стоит", True),
+        ("а это сколько?", True),
+    ],
+)
+def test_planner_does_not_ask_for_a_service_the_patient_named(text: str, asks: bool):
+    from messengers_router.memory import MemoryStore
+    from messengers_router.mess_types import RouteDecision, SessionState
+    from messengers_router.planner import build_plan
+
+    state = SessionState(session_id="t")
+    state.last_entities = {}
+    plan = build_plan(RouteDecision(label="PRICE", confidence=0.9), state, text, MemoryStore())
+
+    assert (not plan.steps) is asks, plan
+    if not asks:
+        assert plan.steps[0].tool == "price_info"
+        assert plan.steps[0].input["entities"].get("__price_question")
+
+
+def test_price_question_skips_did_you_mean_for_a_service_guess():
+    from messengers_router import router as router_mod
+    from messengers_router.memory import MemoryStore
+    from messengers_router.mess_types import RouteDecision, SessionState
+
+    guess = {"_catalog_service_candidate": "Инфузионная терапия препаратом «Неодолпассе» 1 введение", "_catalog_service_query": "капельница"}
+    state = SessionState(session_id="t")
+    price = RouteDecision(label="PRICE", confidence=0.9, entities=dict(guess))
+    assert router_mod._maybe_start_catalog_confirm(decision=price, state=state, memory=MemoryStore()) is None
+
+    # Запись по-прежнему уточняет догадку «да/нет».
+    appointment = RouteDecision(label="APPOINTMENT", confidence=0.9, entities=dict(guess))
+    assert router_mod._maybe_start_catalog_confirm(decision=appointment, state=state, memory=MemoryStore()) is not None

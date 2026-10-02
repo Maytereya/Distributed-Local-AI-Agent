@@ -563,6 +563,17 @@ def strip_readiness_phrasing(text: str) -> tuple[str, bool]:
     return " ".join(tokens).strip(" " + _EDGE), True
 
 
+def price_question_names_service(text: str) -> bool:
+    """Есть ли в реплике слова об услуге, кроме самого вопроса о цене.
+
+    «сколько стоит», «а это сколько?», «да» — нет: услугу держит контекст диалога.
+    «сколько стоит спирометрия» — есть, даже если правила такой услуги не знают: её
+    ищет LLM-выбор строки прайса (`_price_select_llm`), а планировщик не переспрашивает.
+    """
+
+    return bool(_price_query_tokens(text))
+
+
 def _price_query_tokens(text: str) -> list[str]:
     s = _normalise_input(text)
     out: list[str] = []
@@ -1176,6 +1187,24 @@ def query_has_unsatisfiable_qualifier(
             return False
         catalog_rows = [row for row in loaded if isinstance(row, dict)]
     return _match_drops_unsatisfiable_qualifier(query_text, "", catalog_rows)
+
+
+def query_names_service_in_other_words(query_text: str, rows: list[dict[str, Any]] | None = None) -> bool:
+    """Ни одного различающего слова реплики нет в прайсе: услуга названа по-своему.
+
+    «гастроскопия», «спирометрия», «капельница» — в прайсе «ФГДС», «Спирография»,
+    «инфузионная терапия». Для гарда П2 такое слово неотличимо от уточнения «по ОМС»,
+    но это не уточнение к узнанной услуге, а сама услуга другими словами: её ищет
+    LLM вторым кругом, по медицинским терминам. Уточнение П2 стоит РЯДОМ с узнанной
+    услугой («приём терапевта по ОМС») — тогда здесь False.
+    См. BUG-2026-10-02-PRICE-ASKS-NAMED-SERVICE.
+    """
+
+    tokens = _distinctive_service_tokens(query_text)
+    vocab = _catalog_token_vocabulary(_catalog_rows(rows))
+    if not tokens or not vocab:
+        return False
+    return not any(token in vocab or _fold_homoglyph_token(token) in vocab for token in tokens)
 
 
 def _match_drops_unsatisfiable_qualifier(

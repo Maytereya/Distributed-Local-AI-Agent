@@ -45,7 +45,9 @@ from ._prices_helpers import (
     _query_nonbase_price_flags,
     _rank_price_rows,
     _row_nonbase_price_flags,
+    price_question_names_service,
     query_has_unsatisfiable_qualifier,
+    query_names_service_in_other_words,
 )
 
 logger = logging.getLogger(__name__)
@@ -289,11 +291,13 @@ async def select_price_rows(
     if not question or not rows:
         return None
     # Ответ цифрой, «да», «а сколько стоит?» — своих слов об услуге нет, её держит контекст.
-    if not _price_query_tokens(question):
+    if not price_question_names_service(question):
         return None
     # «по ОМС» и другие уточнения, которых в прайсе нет вовсе: правила честно говорят
-    # «не нашёл» (решение владельца, П2) — не даём LLM найти «почти то».
-    if query_has_unsatisfiable_qualifier(question, rows):
+    # «не нашёл» (решение владельца, П2) — не даём LLM найти «почти то». Но если
+    # незнакомы ВСЕ слова об услуге («гастроскопия»), это не уточнение, а услуга
+    # другим словом — её и ищет LLM (правило 3 промпта само отсекает «по ОМС»).
+    if query_has_unsatisfiable_qualifier(question, rows) and not query_names_service_in_other_words(question, rows):
         return None
 
     phrase = str(_extract_price_service_from_query(question) or "").strip()

@@ -1548,6 +1548,12 @@ def _maybe_start_catalog_confirm(
         entity_key = "doctor_name"
         canonical = doctor_candidate
         query = str(entities.get("_catalog_doctor_query") or "").strip()
+    elif decision.label == "PRICE":
+        # Вопрос о цене: догадку правил по похожему слову не выносим на «да/нет» —
+        # «капельница» → «Инфузионная терапия препаратом «Неодолпассе»», хотя в прайсе
+        # есть и общая инфузионная терапия. Строку выбирает LLM (`_price_select_llm`)
+        # среди всех вариантов. См. BUG-2026-10-02-PRICE-ASKS-NAMED-SERVICE.
+        return None
     else:
         kind = "service"
         entity_key = "service_name"

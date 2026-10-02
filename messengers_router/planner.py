@@ -195,6 +195,21 @@ def build_plan(
                 memory.clear_pending(state)
                 return Plan(label=effective_label, steps=[])
 
+    # Пациент назвал услугу своими словами, но правила её не узнали («спирометрия»,
+    # «т4 свободный», «гепатит с цена»): не переспрашиваем название, которое уже
+    # прозвучало. Инструмент цены отдаёт реплику LLM-выбору строки прайса — он найдёт
+    # строку или честно ответит «уточните название». Город здесь не довод
+    # переспрашивать: цены — только по Самаре. См. BUG-2026-10-02-PRICE-ASKS-NAMED-SERVICE.
+    if (
+        effective_label == "PRICE"
+        and "service_name" in missing
+        and set(missing) <= {"service_name", "_any_of:city,branch_name,branch_id"}
+    ):
+        from .services._prices_helpers import price_question_names_service
+
+        if price_question_names_service(user_text):
+            missing = []
+
     if missing:
         memory.set_pending(state, label=effective_label, missing_slots=missing)
         return Plan(label=effective_label, steps=[])
