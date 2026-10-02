@@ -63,3 +63,60 @@ def test_ophthalmologist_is_not_denied(text: str):
     # Решение владельца 29.09: офтальмолог в клинике есть («Врач-офтальмолог»).
     match = detect_unsupported_catalog(text)
     assert match is None or match.kind != "unsupported_specialist", match
+
+
+# --- Класс `stoplist_refuses_lab_test` (02.10) --------------------------------
+#
+# «хочу сделать анализ на гепатит с», «можно сделать тест на грипп» → «клиника не
+# оказывает данную услугу». Стоп-лист прививок ловил «сделать/поставить» рядом с
+# названием болезни, а анализы на эти инфекции в прайсе есть. Инвариант: анализ,
+# который есть в прайсе, стоп-лист не объявляет недоступным; запрос самой прививки
+# — по-прежнему отказ (решение владельца: прививок в клинике нет).
+# См. BUG-2026-10-02-STOPLIST-REFUSES-LAB-TEST.
+
+_INFECTION_WORDS = ("гепатит", "грипп", "кори", "корь", "краснух", "паротит", "ветрян", "полиомиелит", "пневмокок")
+
+
+def _infection_test_names() -> list[str]:
+    from agent_logic_2.nayka_api import api_price
+    from messengers_router.services._prices_helpers import SAMARA_PRICE_REGION_ID
+
+    rows = [r for r in api_price.load_price_by_region(SAMARA_PRICE_REGION_ID) if isinstance(r, dict)]
+    assert len(rows) > 1000, "нужен живой прайс региона"
+    names = []
+    for row in rows:
+        name = str(row.get("serviceName") or "")
+        low = name.lower()
+        if any(word in low for word in _INFECTION_WORDS) and "вакцин" not in low and "привив" not in low:
+            names.append(name)
+    return names
+
+
+def test_lab_test_for_infection_in_price_is_not_refused():
+    names = _infection_test_names()
+    assert len(names) >= 10, f"мало анализов на инфекции в прайсе ({len(names)}) — выборка не о том"
+    refused = []
+    for name in names:
+        words = " ".join(name.split()[:3])
+        for phrase in (f"хочу сделать анализ на {words}", f"можно сделать тест {words}", f"поставить анализ {words}"):
+            match = detect_unsupported_catalog(phrase)
+            if match is not None:
+                refused.append((phrase, match.canonical_name))
+    assert not refused, f"анализ из прайса объявлен недоступным в {len(refused)} фразах: {refused[:5]}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["хочу сделать анализ на гепатит с", "можно сделать тест на грипп", "сделать анализ на корь"],
+)
+def test_reported_lab_tests_are_not_refused(text: str):
+    assert detect_unsupported_catalog(text) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["сделать прививку от гриппа", "поставить прививку от кори", "вакцина от гепатита в", "сколько стоит вакцинация от клеща"],
+)
+def test_vaccination_requests_are_still_refused(text: str):
+    match = detect_unsupported_catalog(text)
+    assert match is not None and match.canonical_name == "вакцинация", match
