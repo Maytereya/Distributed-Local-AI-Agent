@@ -2995,21 +2995,52 @@ def _segment_items_by_catalog(
         return low in _MULTI_PRICE_NOISE_WORDS or len(low) < 2
 
     def _tokens_covered(window_tokens: list[str], canonical: str) -> bool:
-        """Каждый содержательный токен находится в каноне (префикс-4)."""
-        canon_words = [w for w in _normalise_input(canonical).split() if w]
-        for tok in window_tokens:
-            norm = _normalise_input(tok)
-            if len(norm) < 3:
-                continue
+        """Каждый содержательный токен есть в каноне (префикс-4), и хотя бы один —
+        в его НАЗВАНИИ, а не только в скобках.
+
+        Канон режется на слова, а не по пробелам: «(полный)(соэ,le» и
+        «врача-хирурга» — это «полный», «соэ», «врача», «хирурга». Резка по
+        пробелам не находила в них слов пациента, гард анти-шинковки отвечал
+        «это список», и одна услуга резалась на корзину: «общий анализ крови
+        полный» → ОАК + «Полный съемный протез» (82 из 234 названий прайса,
+        набранных словами). Якорь вне скобок нужен обратной стороне той же
+        проверки: составная услуга перечисляет в скобках компоненты, и окно
+        «креатинин мочевина» иначе «покрыто» строкой «Оценка риска
+        камнеобразования (… креатинин, мочевина …)».
+        См. BUG-2026-10-01-BASKET-SPLITS-ONE-SERVICE.
+        """
+        canon = _normalise_input(canonical)
+        canon_words = _PRICE_TOKEN_RE.findall(canon)
+        name_words = _PRICE_TOKEN_RE.findall(re.sub(r"\([^)]*\)", " ", canon))
+
+        def _found_in(norm: str, words: list[str]) -> bool:
             # Правило НАМЕРЕННО шире общего `tokens_share_stem`: здесь
             # трёхсимвольный токен вправе войти в более длинное слово каталога
             # («оак» ↔ «оакбб»), потому что сплошной CAPS-ран режется вслепую и
             # запас нужен. Сверка со `tokens_share_stem(length=4)` дала 725
             # расхождений ровно на этих коротких парах — поэтому не мигрируем.
+            # Обратный префикс — только от слов канона из трёх букв и длиннее:
+            # обрывки вроде «l» (из «l-формула») или «с» совпали бы с любым
+            # токеном на эту букву. «узи» ↔ «ультразвуковое» — как в ранжировании.
             pref = norm[:4]
-            if not any(w.startswith(pref) or norm.startswith(w[:4]) for w in canon_words):
+            price_norm = _normalise_price_token(norm)
+            return any(
+                w.startswith(pref)
+                or (len(w) >= 3 and norm.startswith(w[:4]))
+                or _normalise_price_token(w) == price_norm
+                for w in words
+            )
+
+        checked = anchored = False
+        for tok in window_tokens:
+            norm = _normalise_input(tok)
+            if len(norm) < 3:
+                continue
+            if not _found_in(norm, canon_words):
                 return False
-        return True
+            checked = True
+            anchored = anchored or _found_in(norm, name_words)
+        return anchored or not checked
 
     # Анти-шинковка одиночной многословной услуги («cito общий анализ крови»,
     # «узи брюшной полости»): если ВЕСЬ контент-ран резолвится как ОДНА услуга
