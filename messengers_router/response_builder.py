@@ -338,8 +338,7 @@ def _no_free_slots_operator_offer(state: SessionState, memory: MemoryStore) -> R
     и в APPOINTMENT. Сбрасывает runtime-стейт записи и переводит диалог в ожидание
     подтверждения перевода на оператора."""
     reset_appointment_runtime_state(state)
-    state.last_entities["_operator_offer_pending"] = True
-    memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+    mark_operator_offer_pending(state, memory)
     return ResponseEnvelope(
         text=(
             "Врач найден, но свободных слотов нет в ближайшие 2 недели. "
@@ -396,8 +395,7 @@ def _doctor_not_bookable_via_bot_offer(
     :param kind: тип обронённой цели (`doctor`/`service`/`patient_name`/`unknown`)
     """
     reset_appointment_runtime_state(state)
-    state.last_entities["_operator_offer_pending"] = True
-    memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+    mark_operator_offer_pending(state, memory)
     lead = _UNBOOKABLE_TARGET_LEAD.get(str(kind or "").strip(), _UNBOOKABLE_TARGET_LEAD["doctor"])
     return ResponseEnvelope(
         text=f"{lead} {_UNBOOKABLE_TARGET_TAIL}",
@@ -413,8 +411,7 @@ def _compound_uzi_via_operator_offer(state: SessionState, memory: MemoryStore) -
     (комплекс/время бот не собирает), а не подбирать одну услугу вслепую.
     """
     reset_appointment_runtime_state(state)
-    state.last_entities["_operator_offer_pending"] = True
-    memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+    mark_operator_offer_pending(state, memory)
     return ResponseEnvelope(
         text=(
             "Если нужно несколько УЗИ-исследований, удобнее оформить запись через "

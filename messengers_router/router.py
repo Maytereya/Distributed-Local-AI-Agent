@@ -66,6 +66,7 @@ from .response_builder import (
     build_price_response as response_build_price_response,
     build_service_bundle_response as response_build_service_bundle_response,
     build_test_result_response as response_build_test_result_response,
+    mark_operator_offer_pending,
 )
 from .russian_nlu import normalize_ru
 from .policies import (
@@ -488,8 +489,7 @@ def _maybe_offer_operator_on_repeat(
     if repeat_count >= 2:  # 3-й одинаковый ответ подряд = после 2-го повтора
         state.last_entities["_answer_repeat_count"] = 0
         reset_appointment_runtime_state(state)
-        state.last_entities["_operator_offer_pending"] = True
-        memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+        mark_operator_offer_pending(state, memory)
         response.text = f"{text}\n\n{_REPEAT_GUARD_OFFER}"
     return response
 
@@ -1530,8 +1530,7 @@ def _maybe_offer_operator_for_existing_appointment(
                 }
             ),
         )
-    state.last_entities["_operator_offer_pending"] = True
-    memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+    mark_operator_offer_pending(state, memory)
     return (
         _copy_decision(
             decision,
