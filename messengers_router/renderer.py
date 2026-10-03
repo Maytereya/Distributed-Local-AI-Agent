@@ -25,7 +25,11 @@ from .russian_nlu import normalize_ru
 from .self_check import build_critic_prompt, parse_critic_result, should_regenerate
 from .runtime_config import config as c
 
-timeout = 300
+# Бюджет свободного ответа LLM целиком: очередь, разбор промпта и генерация (владелец
+# 03.10: 60 с вместо 300). Раньше 300 с стояли только на СТАРТЕ потока — ollama отдаёт
+# генератор без обращения к сети, и само чтение потока не ограничивалось ничем. Целиком
+# бюджет держит оркестратор; истёк — передача оператору тем же текстом, что при сбое.
+RENDER_TIMEOUT_S = 60
 try:
     DOCTORS_TOP_N = max(1, int(c.MR_DOCTORS_TOP_N))
 except Exception:
@@ -1023,7 +1027,7 @@ async def _rich_generate_once(
     prompt = _final_prompt_rich(user_text, decision, evidence, critique=critique, history=history)
     raw = await generate_text(
         prompt,
-        timeout_s=timeout,
+        timeout_s=RENDER_TIMEOUT_S,
         queue_timeout_ms=queue_timeout_ms,
     )
     return sanitize_for_patient(raw.strip())
@@ -1046,7 +1050,7 @@ async def _rich_self_check(
     )
     raw = await generate_text(
         prompt,
-        timeout_s=timeout,
+        timeout_s=RENDER_TIMEOUT_S,
         queue_timeout_ms=queue_timeout_ms,
         fmt="json",
     )
@@ -1068,7 +1072,7 @@ async def render_stream(
         prompt = _final_prompt(user_text, decision, evidence, history=history)
         async for chunk in generate_stream_text(
             prompt,
-            timeout_s=timeout,
+            timeout_s=RENDER_TIMEOUT_S,
             queue_timeout_ms=queue_timeout_ms,
         ):
             yield sanitize_for_patient(chunk)

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -13,6 +15,8 @@ from typing import Any, AsyncIterator
 
 from . import evidence_keys as ek
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
+
+logger = logging.getLogger(__name__)
 
 _SAFETY_LABELS = {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}
 
@@ -637,14 +641,26 @@ async def _render_impl(
                 and history[-1].get("role") == "user" and history[-1].get("text") == ctx.text:
             history = history[:-1]
         chunks: list[str] = []
-        async for chunk in renderer.render_stream(
-            ctx.text,
-            ctx.decision,
-            ctx.evidence,
-            runtime_options=runtime_options,
-            history=history,
-        ):
-            chunks.append(chunk)
+        try:
+            # Бюджет ответа целиком — очередь к LLM, разбор промпта и генерация
+            # (`renderer.RENDER_TIMEOUT_S`, решение владельца 03.10).
+            async with asyncio.timeout(renderer.RENDER_TIMEOUT_S):
+                async for chunk in renderer.render_stream(
+                    ctx.text,
+                    ctx.decision,
+                    ctx.evidence,
+                    runtime_options=runtime_options,
+                    history=history,
+                ):
+                    chunks.append(chunk)
+        except TimeoutError:
+            from .policies import handoff_message
+
+            logger.warning(
+                "render_timeout: label=%s budget=%ss chars=%s", ctx.decision.label, renderer.RENDER_TIMEOUT_S, sum(map(len, chunks))
+            )
+            ctx.response = ResponseEnvelope(text=handoff_message("service_error"), handoff=True)
+            return ctx
         # Output-guard применяется ЕДИНОЙ воронкой в render() (обёртка над
         # _render_impl) — на ПОЛНОМ тексте ЛЮБОГО пути (stream/prebuilt/PREPARE/
         # pending), а не только этого. Здесь — сырой join. См. bug_log § scrub-funnel.
