@@ -35,6 +35,7 @@ from converters import html_cleaner
 from ..llm_runtime import generate_text
 from ..prompt_registry import load_prompt_text
 from . import _common as _common_mod
+from ._prepare import _prepare_names_subject, _prepare_subject_phrase, _prepare_term_roots
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,11 @@ SOURCE_KB = "main_index"
 _EXCERPT_CHARS = 300
 _LLM_TIMEOUT_S = 12
 _LLM_QUEUE_TIMEOUT_MS = 3000
-# Без LLM при ничьей на первом месте отдаём обе памятки; больше — уже не выбор, а куча.
-_MAX_MEMOS_WITHOUT_LLM = 2
+# Больше двух памяток в одном ответе — уже не выбор, а куча: и LLM (практически
+# одинаковые памятки, решение владельца 03.10), и выбор без LLM (ничья) — не больше двух.
+_MAX_MEMOS = 2
+# Сколько текста каждой памятки показывать LLM при сравнении подготовки.
+_SAME_TEXT_CHARS = 2500
 
 # Переходное правило (решение владельца 02.10): памятки пациенту в базе знаний названы
 # «ПАМЯТКА …». Когда клиника перенесёт их в МИС, базу знаний из подготовки убрать
@@ -112,8 +116,11 @@ def _build_prompt(question: str, memos: Sequence[PrepareMemo]) -> str:
     ).strip()
 
 
-def _parse_choice(raw: str, count: int) -> int | None:
-    """Номер памятки (1..count), 0 — LLM сказала «подходящей нет»; None — ответ не годится."""
+def _parse_choice(raw: str, count: int) -> tuple[int, ...] | None:
+    """Номера памяток (1..count): один или два; пусто — LLM сказала «подходящей нет».
+
+    :return: кортеж номеров; None — ответ не годится (не JSON, номер вне списка, больше двух)
+    """
 
     try:
         data = json.loads(str(raw or "").strip())
@@ -123,12 +130,21 @@ def _parse_choice(raw: str, count: int) -> int | None:
         return None
     choice = data.get("match")
     if choice is None:
-        return 0
-    try:
-        num = int(choice)
-    except (TypeError, ValueError):
-        return None
-    return num if 1 <= num <= count else None
+        return ()
+    items = choice if isinstance(choice, list) else [choice]
+    numbers: list[int] = []
+    for item in items:
+        if isinstance(item, bool):
+            return None
+        try:
+            num = int(item)
+        except (TypeError, ValueError):
+            return None
+        if not 1 <= num <= count:
+            return None
+        if num not in numbers:
+            numbers.append(num)
+    return tuple(numbers) if 1 <= len(numbers) <= _MAX_MEMOS else None
 
 
 def _choose_without_llm(memos: Sequence[PrepareMemo]) -> tuple[PrepareMemo, ...]:
@@ -152,7 +168,56 @@ def _choose_without_llm(memos: Sequence[PrepareMemo]) -> tuple[PrepareMemo, ...]
         return ()
     best = max(memo.score for memo in named)
     top = tuple(memo for memo in named if math.isclose(memo.score, best, abs_tol=1e-6))
-    return top if len(top) <= _MAX_MEMOS_WITHOUT_LLM else ()
+    return top if len(top) <= _MAX_MEMOS else ()
+
+
+def _twin_candidate(question: str, chosen: PrepareMemo, memos: Sequence[PrepareMemo]) -> PrepareMemo | None:
+    """Ещё одна карточка МИС, в НАЗВАНИИ которой — слова пациента.
+
+    На «подготовка к ттг» LLM выбирает «ТТГ (TSH) тиреотропный гормон»; «Антитела к
+    рецепторам ТТГ» — тоже ТТГ, и памятка у неё по сути та же. Синоним клиники сюда не
+    засчитывается: «холестерин» у клиники указывает и на «Триглицериды».
+
+    :return: лучшая по оценке правил такая карточка или None
+    """
+
+    if chosen.source != SOURCE_MIS:
+        return None
+    subject_roots = _prepare_term_roots(_prepare_subject_phrase(question))
+    twins = [
+        memo
+        for memo in memos
+        if memo is not chosen
+        and memo.source == SOURCE_MIS
+        and _prepare_names_subject(subject_roots, _prepare_term_roots(memo.title))
+    ]
+    return max(twins, key=lambda memo: memo.score) if twins else None
+
+
+async def _same_preparation(first: PrepareMemo, second: PrepareMemo) -> bool:
+    """LLM: подготовка в двух памятках практически одинаковая? Сбой — «нет» (одна памятка)."""
+
+    prompt = (
+        load_prompt_text("prepare_same_memo")
+        .replace("<<TITLE_1>>", first.title)
+        .replace("<<TEXT_1>>", first.text[:_SAME_TEXT_CHARS])
+        .replace("<<TITLE_2>>", second.title)
+        .replace("<<TEXT_2>>", second.text[:_SAME_TEXT_CHARS])
+    ).strip()
+    try:
+        raw = await generate_text(
+            prompt,
+            timeout_s=_LLM_TIMEOUT_S,
+            queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS,
+            fmt="json",
+            think=False,
+            options={"temperature": 0},
+        )
+        data = json.loads(str(raw or "").strip())
+    except Exception as exc:  # без ответа LLM вторую памятку не добавляем
+        logger.warning("prepare_same_memo_failed: %s", type(exc).__name__)
+        return False
+    return isinstance(data, dict) and data.get("same") is True
 
 
 async def select_prepare_memos(
@@ -163,7 +228,9 @@ async def select_prepare_memos(
 ) -> tuple[PrepareMemo, ...]:
     """Памятки, предмет которых — анализ или процедура из вопроса; пусто — таких нет.
 
-    LLM выбирает одну. Без LLM — `_choose_without_llm`: одна или две при ничьей.
+    LLM выбирает одну; если ещё одна карточка МИС названа словами пациента и подготовка в
+    ней практически та же (`_same_preparation`) — обе. Без LLM — `_choose_without_llm`:
+    одна или две при ничьей.
 
     :param question: вопрос пациента
     :param memos: кандидаты (`PrepareMemo`)
@@ -193,4 +260,11 @@ async def select_prepare_memos(
     if choice is None:
         logger.warning("prepare_memo_select_bad_reply: %r", str(raw or "")[:200])
         return _choose_without_llm(memos)
-    return (memos[choice - 1],) if choice else ()
+    chosen = tuple(memos[num - 1] for num in choice)
+    if len(chosen) == 1:
+        # Решение владельца 03.10: практически одинаковые памятки — обе, пациент выберет.
+        # Отдельный короткий вопрос: в одном промпте с выбором правило модель не держала.
+        twin = _twin_candidate(question, chosen[0], memos)
+        if twin is not None and await _same_preparation(chosen[0], twin):
+            return (chosen[0], twin)
+    return chosen

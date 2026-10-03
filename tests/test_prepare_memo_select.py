@@ -25,7 +25,10 @@ BUG-2026-10-01-PREPARE-MENTION-AS-SUBJECT: выбор по совпадению 
   нет («сахар» → «Глюкоза»);
 - вариант запроса без предмета не вытесняет настоящий кандидат: «Сдаче крови» из
   извлечения для записи давал 0.40 всем памяткам крови против 0.38 у «Ферритина»;
-- промпт выбора одинаков в обеих локациях.
+- промпт выбора одинаков в обеих локациях;
+- две памятки с LLM — только когда вторая карточка МИС названа словами пациента И LLM
+  подтвердила, что подготовка практически та же («ТТГ (TSH)» и «Антитела к рецепторам
+  ТТГ», решение владельца 03.10); синоним клиники двойника не даёт.
 """
 
 from __future__ import annotations
@@ -147,6 +150,88 @@ def test_selection_prompt_is_the_same_in_both_locations():
     assert router_copy == prod_copy
 
 
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ('{"match": [1, 2]}', (1, 2)),
+        ('{"match": [2, 2]}', (2,)),
+        ('{"match": [1, 2, 3]}', None),
+        ('{"match": [true]}', None),
+        ('{"match": []}', None),
+    ],
+)
+def test_choice_may_be_a_list_of_at_most_two(reply, expected):
+    assert PS._parse_choice(reply, 3) == expected
+
+
+# --- Две практически одинаковые памятки (решение владельца 03.10) ----------------
+
+_TSH = PS.PrepareMemo(PS.SOURCE_MIS, "ТТГ (TSH) тиреотропный гормон", "Кровь натощак через 8–14 часов.", 0.38, True)
+_TRAB = PS.PrepareMemo(PS.SOURCE_MIS, "Антитела к рецепторам ТТГ", "Забор крови натощак через 8–14 часов.", 0.38, True)
+
+
+def _llm_script(monkeypatch, replies: list) -> list[str]:
+    prompts: list[str] = []
+
+    async def fake(prompt, **kwargs):
+        prompts.append(prompt)
+        reply = replies.pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+    monkeypatch.setattr(PS, "generate_text", fake)
+    return prompts
+
+
+def test_practically_identical_memo_is_added(monkeypatch):
+    prompts = _llm_script(monkeypatch, ['{"match": 1}', '{"same": true}'])
+
+    assert run(PS.select_prepare_memos("подготовка к ттг", [_TSH, _TRAB])) == (_TSH, _TRAB)
+    assert "«Антитела к рецепторам ТТГ»" in prompts[1] and "«ТТГ (TSH) тиреотропный гормон»" in prompts[1]
+
+
+@pytest.mark.parametrize("second_reply", ['{"same": false}', "не JSON", TimeoutError("llm")])
+def test_memo_with_different_or_unknown_preparation_is_not_added(monkeypatch, second_reply):
+    _llm_script(monkeypatch, ['{"match": 1}', second_reply])
+    assert run(PS.select_prepare_memos("подготовка к ттг", [_TSH, _TRAB])) == (_TSH,)
+
+
+def test_no_comparison_without_a_twin_named_by_the_patient(monkeypatch):
+    transferrin = PS.PrepareMemo(PS.SOURCE_MIS, "Трансферрин", "Кровь натощак.", 0.2, False)
+    prompts = _llm_script(monkeypatch, ['{"match": 1}'])
+
+    assert run(PS.select_prepare_memos("подготовка к ферритину", [_FERRITIN, transferrin])) == (_FERRITIN,)
+    assert len(prompts) == 1
+
+
+def test_clinic_synonym_alone_does_not_make_a_twin(monkeypatch):
+    # Синоним клиники «холестерин» указывает и на «Триглицериды» — это не название.
+    cholesterol = PS.PrepareMemo(PS.SOURCE_MIS, "Холестерол", "Кровь натощак.", 1.0, True)
+    triglycerides = PS.PrepareMemo(PS.SOURCE_MIS, "Триглицериды", "Кровь натощак.", 1.0, True)
+    prompts = _llm_script(monkeypatch, ['{"match": 1}'])
+
+    chosen = run(PS.select_prepare_memos("подготовка к анализу на холестерин", [cholesterol, triglycerides]))
+
+    assert chosen == (cholesterol,) and len(prompts) == 1
+
+
+def test_knowledge_base_variants_are_never_twins(monkeypatch):
+    # «С наркозом» и «без наркоза» — разная подготовка; база знаний в сравнение не идёт.
+    without = PS.PrepareMemo(PS.SOURCE_KB, "ПАМЯТКА ФКС без наркоза", "Бесшлаковая диета 3 дня.")
+    with_anesthesia = PS.PrepareMemo(PS.SOURCE_KB, "ПАМЯТКА ФКС с наркозом", "Бесшлаковая диета, не есть 6 часов.")
+    prompts = _llm_script(monkeypatch, ['{"match": 1}'])
+
+    assert run(PS.select_prepare_memos("подготовка к ФКС", [without, with_anesthesia])) == (without,)
+    assert len(prompts) == 1
+
+
+def test_same_memo_prompt_is_the_same_in_both_locations():
+    router_copy = (_REPO / "messengers_router/prompts/prepare_same_memo.txt").read_text(encoding="utf-8")
+    prod_copy = (_REPO / "app_data/prompts/mr_prepare_same_memo.txt").read_text(encoding="utf-8")
+    assert router_copy == prod_copy
+
+
 # --- Без LLM: только карточки МИС, названные предметом --------------------------
 
 
@@ -222,7 +307,7 @@ def test_tie_without_llm_answers_with_both_memos_each_under_its_title(monkeypatc
     res = run(Services().test_prepare("подготовка к ттг", {"__runtime_llm_mode": "strict"}))
     text = res["prepare"]
 
-    assert res["note"] == "prepare: several memos without llm"
+    assert res["note"] == "prepare: several memos"
     tsh_at, antibodies_at = text.index("«ТТГ (TSH) тиреотропный гормон»:"), text.index("«Антитела к рецепторам ТТГ»:")
     assert "после 8-14 часового перерыва в еде." in text[tsh_at:antibodies_at], "перенос строки склеен"
     assert "в одной лаборатории" in text[antibodies_at:] and "в одной лаборатории" not in text[:antibodies_at]

@@ -480,15 +480,15 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
             "prepare_wrap_reason": wrap_reason,
         }
     if chosen:
-        # Без LLM при ничьей — обе памятки (решение владельца 03.10), каждая под своим
-        # названием и только своим текстом; LLM-обёртку не зовём — она только что не ответила.
+        # Две практически одинаковые памятки (LLM) или ничья без LLM — обе, каждая под
+        # своим названием и только своим текстом (решения владельца 03.10).
         return {
             "prepare": _several_memos_answer(chosen),
-            "note": "prepare: several memos without llm",
+            "note": "prepare: several memos",
             "prepare_source_title": " | ".join(memo.title for memo in chosen),
             "entities_used": entities,
             "prepare_wrap_status": "several_memos",
-            "prepare_wrap_reason": "tie_without_llm",
+            "prepare_wrap_reason": "several_memos",
         }
 
     # Конкретные правила подготовки не нашлись. Если вопрос про сдачу КРОВИ —
