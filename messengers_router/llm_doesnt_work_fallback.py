@@ -186,6 +186,36 @@ def _extract_target_phrase(query: str) -> str:
     return target
 
 
+_LINE_END_RE = re.compile(r"[.!?:;»)]$")
+_LIST_ITEM_RE = re.compile(r"\d+[.)]\s")
+
+
+def join_wrapped_lines(text: str) -> list[str]:
+    """Строки текста без переносов посреди фразы.
+
+    Памятки МИС приходят из HTML с переносами внутри предложения («Проба крови отбирается
+    только до проведения / рентгеноконтрастных исследований.»), и построчная нарезка
+    отдавала пациенту обрывки. Строка продолжает предыдущую, если та не закончена знаком
+    препинания, а эта начинается со строчной буквы или с числа («…не менее / 30 минут»),
+    но не с номера пункта списка.
+
+    :param text: текст памятки
+    :return: непустые строки без лишних пробелов
+    """
+
+    out: list[str] = []
+    for raw in str(text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw).strip()
+        if not line:
+            continue
+        continues = line[0].islower() or (line[0].isdigit() and not _LIST_ITEM_RE.match(line))
+        if out and continues and not _LINE_END_RE.search(out[-1]):
+            out[-1] = f"{out[-1]} {line}"
+        else:
+            out.append(line)
+    return out
+
+
 def _split_segments(source_text: str) -> list[str]:
     raw = str(source_text or "")
     if not raw.strip():
@@ -193,7 +223,8 @@ def _split_segments(source_text: str) -> list[str]:
 
     # Сначала делим по строкам/буллетам, затем дополнительно по завершенным фразам.
     pre = raw.replace("•", "\n").replace("—", "-")
-    lines = [ln.strip(" \t-") for ln in pre.splitlines() if ln.strip()]
+    lines = [ln.strip(" \t-") for ln in join_wrapped_lines(pre)]
+    lines = [ln for ln in lines if ln]
     if not lines:
         lines = [raw]
 
@@ -286,15 +317,13 @@ def _pick_segments(query: str, source_text: str, *, max_points: int) -> list[str
     return [row[2] for row in top]
 
 
-def _format_answer(query: str, segments: list[str], *, max_chars: int) -> str:
+def _format_answer(query: str, segments: list[str], *, max_chars: int, intro: str = "") -> str:
     if not segments:
         return ""
 
-    target = _extract_target_phrase(query)
-    if target:
-        intro = f"Подготовка к {target}:"
-    else:
-        intro = "Краткая подготовка по вашему запросу:"
+    if not intro:
+        target = _extract_target_phrase(query)
+        intro = f"Подготовка к {target}:" if target else "Краткая подготовка по вашему запросу:"
 
     bullets = [f"- {re.sub(r'\\s+', ' ', seg).strip()}" for seg in segments if str(seg).strip()]
     if not bullets:
@@ -325,6 +354,7 @@ def build_prepare_fallback_answer(
     *,
     max_chars: int = 1600,
     max_points: int = 7,
+    intro: str = "",
 ) -> str:
     """
     Строит короткий детерминированный PREPARE-ответ без участия LLM.
@@ -333,6 +363,7 @@ def build_prepare_fallback_answer(
     :param source_text: сырой текст из выбранного источника
     :param max_chars: верхняя граница длины ответа
     :param max_points: максимум пунктов в итоговом ответе
+    :param intro: первая строка ответа; по умолчанию «Подготовка к …» из запроса
     :return: компактный ответ; пустая строка, если собрать его не удалось
     """
 
@@ -343,7 +374,7 @@ def build_prepare_fallback_answer(
     limit = max(400, min(4000, int(max_chars)))
 
     chosen = _pick_segments(query, source, max_points=points)
-    answer = _format_answer(query, chosen, max_chars=limit)
+    answer = _format_answer(query, chosen, max_chars=limit, intro=intro)
     if answer.strip():
         return answer.strip()
     return ""

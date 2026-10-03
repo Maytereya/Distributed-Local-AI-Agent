@@ -309,7 +309,17 @@ def build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseE
     return ResponseEnvelope(text=text, attachments=attachments, handoff=False)
 
 
-def build_prepare_response(flow_label: str, evidence: Evidence) -> ResponseEnvelope | None:
+def mark_operator_offer_pending(state: SessionState, memory: MemoryStore) -> None:
+    """Оффер оператора задан вопросом: «да» следующим ходом разбирает
+    `router._handle_operator_offer_pending`, любой другой ответ снимает оффер."""
+
+    state.last_entities["_operator_offer_pending"] = True
+    memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+
+
+def build_prepare_response(
+    flow_label: str, evidence: Evidence, state: SessionState, memory: MemoryStore
+) -> ResponseEnvelope | None:
     if flow_label != "PREPARE":
         return None
     payload = evidence.get(ek.PREPARE)
@@ -318,6 +328,8 @@ def build_prepare_response(flow_label: str, evidence: Evidence) -> ResponseEnvel
     text = str(payload.get("prepare") or "").strip()
     if not text:
         return None
+    if payload.get("operator_offer"):
+        mark_operator_offer_pending(state, memory)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 
@@ -760,7 +772,7 @@ def build_first_structured_response(
         lambda: build_service_bundle_response(flow_label, evidence, state),
         lambda: build_price_response(flow_label, evidence, state),
         lambda: build_test_result_response(flow_label, evidence),
-        lambda: build_prepare_response(flow_label, evidence),
+        lambda: build_prepare_response(flow_label, evidence, state, memory),
         lambda: build_doctor_schedule_response(flow_label, evidence, state, memory),
         lambda: build_doctor_info_response(flow_label, evidence, state),
         lambda: build_address_response(flow_label, evidence, state, memory, decision, user_text),

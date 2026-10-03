@@ -31,6 +31,8 @@ from messengers_router.mess_types import Evidence, SessionState
 from messengers_router.renderer import format_price_for_patient, format_service_bundle_for_patient
 from messengers_router.response_builder import build_price_response, build_test_result_response
 from messengers_router.services import Services, resolve_price_service_name_from_catalog
+from messengers_router.services import prepare as prepare_mod
+from messengers_router.services._prepare_select_llm import SOURCE_KB, PrepareMemo
 from messengers_router.policies import (
     build_branch_index,
     extract_specialty,
@@ -1354,23 +1356,40 @@ def test_test_assist_price_by_region(monkeypatch):
     assert res["tests"], "Expected matches in priceByRegion"
 
 
-def test_test_prepare_meili(monkeypatch):
+def _prepare_llm_picks(monkeypatch, title_part: str | None, *, kb: tuple = ()) -> list:
+    """Подставной выбор памятки: «LLM» берёт памятку с `title_part` в названии (None —
+    подходящей нет). Сам выбор проверяют тесты `test_prepare_memo_select.py`; здесь —
+    что предложено и как из выбранного строится ответ. Возвращает предложенные списки."""
+
+    offered: list = []
+
+    async def fake_select(question, memos, **kwargs):
+        offered.append(list(memos))
+        if title_part is None:
+            return ()
+        return tuple(m for m in memos if title_part.lower() in m.title.lower())[:1]
+
+    monkeypatch.setattr(prepare_mod, "select_prepare_memos", fake_select)
+    monkeypatch.setattr(prepare_mod, "kb_patient_memos", lambda: tuple(kb))
+    return offered
+
+
+def _offered_titles(offered: list) -> list[str]:
+    return [memo.title for memos in offered for memo in memos]
+
+
+def test_test_prepare_answers_from_kb_patient_memo(monkeypatch):
     svc = Services()
-    captured: dict[str, object] = {}
+    memo = PrepareMemo(SOURCE_KB, "ПАМЯТКА Гастроскопия (без наркоза)", "Утром в день исследования не есть и не пить.")
 
     monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
+    _prepare_llm_picks(monkeypatch, "гастроскопия", kb=(memo,))
 
-    def fake_search(_index, _query, *args, **kwargs):
-        captured["kwargs"] = dict(kwargs)
-        return "<i>подготовка к анализу крови: натощак</i>"
+    res = run(svc.test_prepare("Как подготовиться к ФГДС?", {}))
 
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: "подготовка к анализу крови: натощак")
-
-    res = run(svc.test_prepare("анализ крови", {}))
-
-    assert res["prepare"] == "подготовка к анализу крови: натощак"
-    assert captured.get("kwargs") == {"output_mode": "content_only", "max_chars": 12000}
+    assert res["prepare"] == memo.text
+    assert res["note"] == "prepare: main_index"
+    assert res["prepare_source_title"] == memo.title
 
 
 def test_test_prepare_prefers_service_info_preparation(monkeypatch):
@@ -1386,16 +1405,13 @@ def test_test_prepare_prefers_service_info_preparation(monkeypatch):
             }
         ],
     )
-
-    def fail_meili(*_args, **_kwargs):
-        raise AssertionError("Meili fallback must not run when serviceInfoAll matched")
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fail_meili)
+    _prepare_llm_picks(monkeypatch, "холестерин")
 
     res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {"service_name": "Холестерин"}))
 
     assert "натощак" in str(res.get("prepare") or "").lower()
     assert res["note"] == "prepare: serviceInfoAll"
+    assert res["prepare_source_title"] == "Анализ крови на холестерин"
 
 
 def test_test_prepare_prefers_service_info_for_analysis_name_query(monkeypatch):
@@ -1411,11 +1427,7 @@ def test_test_prepare_prefers_service_info_for_analysis_name_query(monkeypatch):
             }
         ],
     )
-
-    def fail_meili(*_args, **_kwargs):
-        raise AssertionError("Meili fallback must not run when serviceInfoAll matched")
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fail_meili)
+    _prepare_llm_picks(monkeypatch, "холестерин")
 
     res = run(svc.test_prepare("Анализ крови на холестерин", {"service_name": "Холестерин"}))
 
@@ -1423,7 +1435,7 @@ def test_test_prepare_prefers_service_info_for_analysis_name_query(monkeypatch):
     assert res["note"] == "prepare: serviceInfoAll"
 
 
-def test_test_prepare_falls_back_to_meili_when_service_info_prepare_is_generic_heading(monkeypatch):
+def test_test_prepare_memo_with_only_a_heading_is_not_offered(monkeypatch):
     svc = Services()
 
     monkeypatch.setattr(
@@ -1436,21 +1448,13 @@ def test_test_prepare_falls_back_to_meili_when_service_info_prepare_is_generic_h
             }
         ],
     )
-
-    def fake_search(_index, _query, *args, **kwargs):
-        return "Подготовка к пайпель-биопсии: забор проводится на 7-11 день цикла."
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(
-        svc_mod.html_cleaner,
-        "strip_html",
-        lambda s: str(s).replace("<h1>", "").replace("</h1>", "").strip(),
-    )
+    offered = _prepare_llm_picks(monkeypatch, "пайпель")
 
     res = run(svc.test_prepare("Как подготовиться к пайпель-биопсии?", {"service_name": "Пайпель-биопсия"}))
 
+    assert "Пайпель-биопсия" not in _offered_titles(offered)
+    assert res.get("operator_offer") is True
     assert "пайпель-биопс" in str(res.get("prepare") or "").lower()
-    assert res.get("note") != "prepare: serviceInfoAll"
 
 
 def test_test_prepare_does_not_match_unrelated_service_info_by_generic_prepare_token(monkeypatch):
@@ -1466,16 +1470,12 @@ def test_test_prepare_does_not_match_unrelated_service_info_by_generic_prepare_t
             }
         ],
     )
-
-    def fake_search(_index, _query, *args, **kwargs):
-        return "Подготовка к ЭКГ: специальной подготовки не требуется."
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+    # Даже «LLM», готовая взять ЭЛИ-тест, не может: правила его не предлагают.
+    offered = _prepare_llm_picks(monkeypatch, "ЭЛИ")
 
     res = run(svc.test_prepare("ЭКГ подскажите", {"service_name": "ЭКГ"}))
 
-    assert "к экг" in str(res.get("prepare") or "").lower()
+    assert not any("ЭЛИ" in title for title in _offered_titles(offered))
     assert "взятие крови производится натощак" not in str(res.get("prepare") or "").lower()
 
 
@@ -1496,21 +1496,17 @@ def test_test_prepare_prefers_exact_service_info_row_over_generic_similar_name(m
             },
         ],
     )
-
-    def fail_meili(*_args, **_kwargs):
-        raise AssertionError("Meili fallback must not run when exact serviceInfoAll matched")
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fail_meili)
+    offered = _prepare_llm_picks(monkeypatch, "ЭКГ")
 
     res = run(svc.test_prepare("ЭКГ подскажите", {"service_name": "ЭКГ"}))
 
+    assert _offered_titles(offered) == ["ЭКГ"]
     assert "к экг" in str(res.get("prepare") or "").lower()
     assert res["note"] == "prepare: serviceInfoAll"
 
 
-def test_test_prepare_rejects_unrelated_hormone_service_info_and_falls_back_to_meili(monkeypatch):
+def test_test_prepare_memo_rejected_by_llm_never_reaches_the_patient(monkeypatch):
     svc = Services()
-    calls = {"meili": 0}
 
     monkeypatch.setattr(
         svc_mod.api_service_info,
@@ -1526,13 +1522,7 @@ def test_test_prepare_rejects_unrelated_hormone_service_info_and_falls_back_to_m
             }
         ],
     )
-
-    def fake_search(_index, _query, *args, **kwargs):
-        calls["meili"] += 1
-        return "Подготовка к анализу крови на гормоны: кровь сдаётся утром натощак."
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+    _prepare_llm_picks(monkeypatch, None)
 
     res = run(
         svc.test_prepare(
@@ -1542,10 +1532,10 @@ def test_test_prepare_rejects_unrelated_hormone_service_info_and_falls_back_to_m
     )
 
     answer = str(res.get("prepare") or "").lower()
-    assert calls["meili"] >= 1
+    # Про кровь — общая памятка забора крови клиники.
     assert "натощак" in answer
     assert "формалин" not in answer
-    assert res.get("note") != "prepare: serviceInfoAll"
+    assert res.get("note") == "prepare: blood-collection general guidance fallback"
 
 
 def test_prepare_roots_match_does_not_match_holesterol_with_sterile_substring():
@@ -1576,34 +1566,20 @@ def test_test_prepare_cholesterol_not_confused_by_urogenital_soskob(monkeypatch)
             },
         ],
     )
-
-    def fail_meili(*_args, **_kwargs):
-        raise AssertionError("Meili fallback must not run when serviceInfoAll matched")
-
-    def fake_runtime_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
-        values = {
-            "MR_PREPARE_RELEVANCE_LOW_THRESHOLD": 0.30,
-            "MR_PREPARE_RELEVANCE_HIGH_THRESHOLD": 0.60,
-            "MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD": 0.08,
-        }
-        return values.get(name, default)
-
-    def fake_runtime_bool(name: str, default: bool) -> bool:
-        if name in {"MR_PREPARE_LLM_WRAP_ENABLED", "MR_PREPARE_RELEVANCE_LLM_ENABLED"}:
-            return False
-        return default
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fail_meili)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
-    monkeypatch.setattr(_common_mod, "_runtime_float", fake_runtime_float)
-    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
+    offered = _prepare_llm_picks(monkeypatch, "холестерин")
+    monkeypatch.setattr(
+        _common_mod,
+        "_runtime_bool",
+        lambda name, default: False if name == "MR_PREPARE_LLM_WRAP_ENABLED" else default,
+    )
 
     res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {}))
     answer = str(res.get("prepare") or "").lower()
+
+    assert "Gardnerella vaginalis [кач.]" not in _offered_titles(offered)
     assert "холестерин" in answer
     assert "натощак" in answer
     assert "урогениталь" not in answer
-    assert "стерильн" not in answer
     assert res.get("note") == "prepare: serviceInfoAll"
 
 
@@ -1624,187 +1600,26 @@ def test_prepare_relevance_gate_thresholds(monkeypatch):
     assert _svc_prepare_relevance_gate(0.45, 0.30) == "llm"
 
 
-def test_test_prepare_mid_score_uses_llm_validator_and_accepts_api(monkeypatch):
-    svc = Services()
-    llm_calls = {"n": 0}
-
-    monkeypatch.setattr(
-        svc_mod.api_service_info,
-        "load_service_info",
-        lambda: [
-            {
-                "serviceName": "Гормональный профиль",
-                "preparation": "Кровь рекомендуется сдавать утром натощак, воду пить можно.",
-            }
-        ],
-    )
-
-    def fail_meili(*_args, **_kwargs):
-        raise AssertionError("Meili fallback must not run when API candidate approved by LLM")
-
-    async def fake_generate_text(prompt, *, timeout_s, queue_timeout_ms, fmt=None, llm=None, think=None):
-        llm_calls["n"] += 1
-        assert fmt == "json"
-        assert "гормон" in str(prompt).lower()
-        return '{"verdict":"RELEVANT","confidence":0.86,"reason":"тема подготовки совпадает"}'
-
-    def fake_runtime_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
-        values = {
-            "MR_PREPARE_RELEVANCE_LOW_THRESHOLD": 0.25,
-            "MR_PREPARE_RELEVANCE_HIGH_THRESHOLD": 0.95,
-            "MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD": 0.20,
-        }
-        return values.get(name, default)
-
-    def fake_runtime_bool(name: str, default: bool) -> bool:
-        if name == "MR_PREPARE_LLM_WRAP_ENABLED":
-            return False
-        if name == "MR_PREPARE_RELEVANCE_LLM_ENABLED":
-            return True
-        return default
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fail_meili)
-    monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
-    monkeypatch.setattr(_common_mod, "_runtime_float", fake_runtime_float)
-    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
-
-    res = run(svc.test_prepare("Кровь на гормоны сдают натощак?", {}))
-
-    assert llm_calls["n"] == 1
-    assert "натощак" in str(res.get("prepare") or "").lower()
-    assert res.get("note") == "prepare: serviceInfoAll"
-
-
-def test_test_prepare_mid_score_llm_reject_falls_back_to_meili(monkeypatch):
-    svc = Services()
-    llm_calls = {"n": 0}
-    meili_calls = {"n": 0}
-
-    monkeypatch.setattr(
-        svc_mod.api_service_info,
-        "load_service_info",
-        lambda: [
-            {
-                "serviceName": "Анализ крови на гормоны",
-                "preparation": "Подготовка к исследованию. Необходимо заполнить анкету пациента.",
-            }
-        ],
-    )
-
-    async def fake_generate_text(prompt, *, timeout_s, queue_timeout_ms, fmt=None, llm=None, think=None):
-        llm_calls["n"] += 1
-        assert fmt == "json"
-        p = str(prompt or "").lower()
-        if "необходимо заполнить анкету" in p:
-            return '{"verdict":"IRRELEVANT","confidence":0.91,"reason":"нет конкретной подготовки по запросу"}'
-        if "кровь сдаётся утром натощак" in p:
-            return '{"verdict":"RELEVANT","confidence":0.89,"reason":"релевантная подготовка к анализу"}'
-        return '{"verdict":"IRRELEVANT","confidence":0.60,"reason":"неуверенно"}'
-
-    def fake_search(_index, _query, *args, **kwargs):
-        meili_calls["n"] += 1
-        return "Подготовка к анализу крови на гормоны: кровь сдаётся утром натощак."
-
-    def fake_runtime_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
-        values = {
-            "MR_PREPARE_RELEVANCE_LOW_THRESHOLD": 0.15,
-            "MR_PREPARE_RELEVANCE_HIGH_THRESHOLD": 0.95,
-            "MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD": 0.20,
-        }
-        return values.get(name, default)
-
-    def fake_runtime_bool(name: str, default: bool) -> bool:
-        if name == "MR_PREPARE_LLM_WRAP_ENABLED":
-            return False
-        if name == "MR_PREPARE_RELEVANCE_LLM_ENABLED":
-            return True
-        return default
-
-    monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
-    monkeypatch.setattr(_common_mod, "_runtime_float", fake_runtime_float)
-    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
-
-    res = run(svc.test_prepare("Кровь на гормоны сдают натощак?", {}))
-
-    assert llm_calls["n"] >= 2
-    assert meili_calls["n"] >= 1
-    assert "натощак" in str(res.get("prepare") or "").lower()
-    assert res.get("note") == "prepare: main_index"
-
-
-def test_test_prepare_no_matches_returns_clarify_without_handoff(monkeypatch):
+def test_test_prepare_no_memo_offers_operator_without_handoff(monkeypatch):
     svc = Services()
 
     monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
+    _prepare_llm_picks(monkeypatch, None)
 
-    def fake_search(_index, _query, *args, **kwargs):
-        return "Совпадений не найдено, cформулируйте запрос иначе"
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
-
-    # Не-кровяной субъект: общей памятки нет, поэтому на «нет совпадений» остаётся
-    # clarify (для крови с BUG-2026-06-02-05 теперь отдаётся памятка — см.
+    # Не-кровяной предмет: общей памятки нет. Оффер оператора — вопросом, без
+    # перевода (для крови с BUG-2026-06-02-05 отдаётся памятка — см.
     # test_prepare_blood_no_specific_rules_falls_back_to_general_memo).
     res = run(svc.test_prepare("подготовка к гастроскопии", {}))
 
-    assert "подготов" in str(res.get("prepare") or "").lower()
+    assert "гастроскопии" in str(res.get("prepare") or "").lower()
+    assert "оператор" in str(res.get("prepare") or "").lower()
+    assert res.get("operator_offer") is True
     assert res.get("handoff_required") is not True
 
 
-def test_test_prepare_uses_fallback_variant_query(monkeypatch):
-    svc = Services()
-    calls: list[str] = []
-
-    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
-
-    def fake_search(_index, _query, *args, **kwargs):
-        calls.append(str(_query))
-        if str(_query).strip().lower() == "как подготовиться к вульвоскопии":
-            return "Совпадений не найдено, cформулируйте запрос иначе"
-        if str(_query).strip().lower() == "подготовка к вульвоскопии":
-            return "Подготовка к вульвоскопии: за 24 часа исключить половые контакты."
-        return "Совпадений не найдено, cформулируйте запрос иначе"
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
-
-    res = run(svc.test_prepare("Как подготовиться к вульвоскопии?", {}))
-
-    assert res.get("handoff_required") is not True
-    assert "вульвоскоп" in str(res.get("prepare") or "").lower()
-    assert any("как подготовиться к вульвоскопии" in q.lower() for q in calls)
-    assert any("подготовка к вульвоскопии" in q.lower() for q in calls)
-
-
-def test_test_prepare_handles_noisy_prefix_rules_of_prepare(monkeypatch):
-    svc = Services()
-    calls: list[str] = []
-
-    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
-
-    def fake_search(_index, _query, *args, **kwargs):
-        calls.append(str(_query))
-        if str(_query).strip().lower() == "подготовка к фгдс с наркозом":
-            return "Подготовка к ФГДС с наркозом: натощак, без курения за 3 часа."
-        return "Совпадений не найдено, cформулируйте запрос иначе"
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
-
-    res = run(svc.test_prepare("Здравствуйте! Какие правила подготовки к ФГДС с наркозом?", {}))
-
-    assert "фгдс" in str(res.get("prepare") or "").lower()
-    assert any("подготовка к фгдс с наркозом" in q.lower() for q in calls)
-
-
-def test_test_prepare_compacts_long_meili_answer_with_llm_wrap(monkeypatch):
+def test_test_prepare_compacts_long_memo_with_llm_wrap(monkeypatch):
     svc = Services()
     calls: dict[str, int] = {"llm": 0}
-
-    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
 
     source_text = (
         "Подготовка к пайпель-биопсии эндометрия: процедура проводится на 7-11 день цикла. "
@@ -1813,8 +1628,9 @@ def test_test_prepare_compacts_long_meili_answer_with_llm_wrap(monkeypatch):
         "За 2-3 часа желательно опорожнить мочевой пузырь. При наличии анализов возьмите их с собой."
     )
 
-    def fake_search(_index, _query, *args, **kwargs):
-        return source_text
+    memo = PrepareMemo(SOURCE_KB, "ПАМЯТКА Пайпель-биопсия эндометрия", source_text)
+    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
+    _prepare_llm_picks(monkeypatch, "пайпель", kb=(memo,))
 
     async def fake_generate_text(prompt, *, timeout_s, queue_timeout_ms, fmt=None, llm=None, think=None):
         calls["llm"] += 1
@@ -1826,8 +1642,6 @@ def test_test_prepare_compacts_long_meili_answer_with_llm_wrap(monkeypatch):
             "- За 24 часа не используйте вагинальные свечи и спринцевания."
         )
 
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
     monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
 
     def fake_runtime_bool(name: str, default: bool) -> bool:
@@ -1845,7 +1659,7 @@ def test_test_prepare_compacts_long_meili_answer_with_llm_wrap(monkeypatch):
 
     res = run(svc.test_prepare("Как подготовиться к пайпель-биопсии?", {"service_name": "Пайпель-биопсия"}))
 
-    assert calls["llm"] >= 2
+    assert calls["llm"] == 1
     assert "за 48 часов" in str(res.get("prepare") or "").lower()
     assert len(str(res.get("prepare") or "")) < len(source_text)
     assert res.get("prepare_wrap_status") == "llm_wrapped"
@@ -1854,21 +1668,21 @@ def test_test_prepare_compacts_long_meili_answer_with_llm_wrap(monkeypatch):
 def test_test_prepare_llm_wrap_uses_deterministic_fallback_on_invalid_compaction(monkeypatch):
     svc = Services()
 
-    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
-
     source_text = (
         "Подготовка к анализу крови на холестерин: кровь сдаётся натощак 8-12 часов, "
         "разрешена негазированная вода, за сутки исключить алкоголь и жирную пищу."
     )
 
-    def fake_search(_index, _query, *args, **kwargs):
-        return source_text
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [{"serviceName": "Холестерол", "preparation": source_text}],
+    )
+    _prepare_llm_picks(monkeypatch, "холестерол")
 
     async def fake_generate_text(*args, **kwargs):
         return "NO_RELEVANT_CONTENT"
 
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
     monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
 
     def fake_runtime_bool(name: str, default: bool) -> bool:
@@ -1897,29 +1711,27 @@ def test_test_prepare_llm_wrap_uses_deterministic_fallback_on_invalid_compaction
 def test_test_prepare_llm_wrap_timeout_uses_deterministic_fallback(monkeypatch):
     svc = Services()
 
-    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
-
     source_text = (
         "Подготовка к анализу крови на холестерин: кровь сдают натощак 8-12 часов. "
         "Разрешена только негазированная вода. За сутки исключить алкоголь и жирную пищу. "
         "Стоимость услуги 490 руб. Адреса и запись уточняйте у администратора."
     )
 
-    def fake_search(_index, _query, *args, **kwargs):
-        return source_text
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [{"serviceName": "Холестерол", "preparation": source_text}],
+    )
+    _prepare_llm_picks(monkeypatch, "холестерол")
 
     async def fake_generate_text(*args, **kwargs):
         raise TimeoutError("llm timeout")
 
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
     monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
 
     def fake_runtime_bool(name: str, default: bool) -> bool:
         if name == "MR_PREPARE_LLM_WRAP_ENABLED":
             return True
-        if name == "MR_PREPARE_RELEVANCE_LLM_ENABLED":
-            return False
         return default
 
     def fake_runtime_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
@@ -1951,43 +1763,6 @@ def test_prepare_subject_hint_prefers_full_phrase_from_query_over_truncated_enti
     assert hint == "гастроскопии"
 
 
-def test_test_prepare_main_index_override_after_llm_reject(monkeypatch):
-    svc = Services()
-
-    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
-
-    meili_text = (
-        "ПАМЯТКА ПАЦИЕНТУ ФКС + ФГДС с наркозом. "
-        "Подготовка к исследованию: за день исключить тяжелую пищу, "
-        "утром в день исследования не есть и не пить, "
-        "воду можно за 3 часа до процедуры."
-    )
-
-    def fake_search(_index, _query, *args, **kwargs):
-        return meili_text
-
-    async def fake_llm_reject(_query, _candidate):
-        return False, 0.90, "mixed_document"
-
-    def fake_runtime_bool(name: str, default: bool) -> bool:
-        if name == "MR_PREPARE_LLM_WRAP_ENABLED":
-            return False
-        if name == "MR_PREPARE_RELEVANCE_LLM_ENABLED":
-            return True
-        return default
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
-    monkeypatch.setattr(svc, "_prepare_llm_validate_candidate", fake_llm_reject)
-    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
-
-    res = run(svc.test_prepare("Как подготовиться к ФГДС?", {"service_name": "ФГДС"}))
-
-    assert res.get("note") == "prepare: main_index"
-    assert "подготов" in str(res.get("prepare") or "").lower()
-    assert "фгдс" in str(res.get("prepare") or "").lower()
-
-
 def test_test_assist_source_unavailable_returns_clarify_without_handoff(monkeypatch):
     svc = Services()
 
@@ -2002,7 +1777,7 @@ def test_test_assist_source_unavailable_returns_clarify_without_handoff(monkeypa
     assert "подобрать анализы" in str(res.get("message") or "").lower()
 
 
-def test_test_prepare_falls_back_to_meili_when_service_info_has_no_preparation(monkeypatch):
+def test_test_prepare_service_without_preparation_is_not_offered(monkeypatch):
     svc = Services()
 
     monkeypatch.setattr(
@@ -2010,16 +1785,12 @@ def test_test_prepare_falls_back_to_meili_when_service_info_has_no_preparation(m
         "load_service_info",
         lambda: [{"serviceName": "Анализ крови на холестерин", "preparation": ""}],
     )
-
-    def fake_search(_index, _query, *args, **kwargs):
-        return "Подготовка к анализу крови на холестерин: кровь сдают натощак."
-
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+    offered = _prepare_llm_picks(monkeypatch, "холестерин")
 
     res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {"service_name": "Холестерин"}))
 
-    assert "натощак" in str(res.get("prepare") or "").lower()
+    assert "Анализ крови на холестерин" not in _offered_titles(offered)
+    assert res.get("operator_offer") is True
 
 
 def test_test_result_status_stub():

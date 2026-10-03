@@ -309,6 +309,7 @@ class _PrepareCandidate:
     score: float = 0.0
     margin: float = 0.0
     note: str = ""
+    named: bool = False
 
 
 def _prepare_service_info_queries(raw_query: str, entity_query: str = "") -> list[str]:
@@ -322,6 +323,31 @@ def _prepare_service_info_queries(raw_query: str, entity_query: str = "") -> lis
 
     variants = _prepare_query_variants(raw_query, entity_query)
     return _dedupe_queries(list(variants), max_items=16)
+
+
+def _is_prepare_framing_token(token: str) -> bool:
+    """Слово, которым пациент оформляет вопрос о подготовке, а не называет предмет.
+
+    «Анализ», «кровь», формы «подготов…» и «сда…» (сдать, сдача, сдают) — предмета
+    подготовки они не называют и только размывают поиск.
+    """
+
+    return token in _PREPARE_SERVICE_INFO_GENERIC_TOKENS or token.startswith(("подготов", "сда"))
+
+
+def _prepare_subject_phrase(text: str) -> str:
+    """Предмет вопроса о подготовке без обвязки впереди: «подготовка к анализу на сахар» → «на сахар».
+
+    Словарь синонимов клиники засчитывает синоним, только если вокруг него одна речевая
+    обвязка (`mis_synonym_candidates`), а «подготовка к анализу» в неё не входит: без этой
+    вырезки «сахар» не находил «Глюкозу», «витамин д» — «Витамин D» (стенд 02.10).
+    Предлоги в остатке словарь отбрасывает сам.
+    """
+
+    tokens = _extract_prepare_entity_phrase(text).split()
+    while tokens and _is_prepare_framing_token(tokens[0]):
+        tokens.pop(0)
+    return " ".join(tokens)
 
 
 def _prepare_service_info_core_tokens(text: str) -> set[str]:
@@ -342,13 +368,7 @@ def _prepare_service_info_core_tokens(text: str) -> set[str]:
     has_empty_stomach_phrase = re.search(r"голод\w*\s+желуд", norm) is not None
     out: set[str] = set()
     for token in tokens:
-        if token in _PREPARE_SERVICE_INFO_GENERIC_TOKENS:
-            continue
-        # Формы "подготов..." не несут предметного смысла и размывают match.
-        if token.startswith("подготов"):
-            continue
-        # "сдают/сдать/сдача" — служебные слова для формулировки вопроса.
-        if token.startswith("сда"):
+        if _is_prepare_framing_token(token):
             continue
         # Фразу "на голодный желудок" приводим к каноничному "натощак".
         if has_empty_stomach_phrase and (token.startswith("голод") or token.startswith("желуд")):
@@ -393,6 +413,26 @@ def _prepare_roots_match(query_root: str, candidate_roots: set[str]) -> bool:
         if len(query_root) >= 7 and len(cand) >= 7 and query_root[:6] == cand[:6]:
             return True
     return False
+
+
+def _prepare_names_subject(subject_roots: set[str], title_roots: set[str]) -> bool:
+    """Название услуги называет предмет вопроса: каждое его слово есть в названии.
+
+    Строже, чем `_prepare_roots_match`: слово то же с точностью до окончания (до двух
+    букв при основе от четырёх), без общего начала разных слов. Иначе «колоноскопия»
+    называла бы «Колонофлор-16» (анализ кала) — тот самый класс «упоминание принято за
+    предмет», — а «глюкоза» — «Глюкозотолерантный тест».
+
+    :param subject_roots: корни предмета вопроса
+    :param title_roots: корни названия услуги
+    :return: True, если все слова предмета есть в названии
+    """
+
+    def same_word(a: str, b: str) -> bool:
+        short, long = sorted((a, b), key=len)
+        return a == b or (len(short) >= 4 and long.startswith(short) and len(long) - len(short) <= 2)
+
+    return bool(subject_roots) and all(any(same_word(s, t) for t in title_roots) for s in subject_roots)
 
 
 def _prepare_roots_coverage(query_roots: set[str], candidate_roots: set[str]) -> float:
@@ -627,6 +667,31 @@ def _prepare_clarify_response(query: str, entities: dict[str, Any], *, note: str
     }
 
 
+def _prepare_no_memo_response(query: str, entities: dict[str, Any], *, note: str) -> dict[str, Any]:
+    """Памятки о предмете вопроса нет — оффер оператора вопросом, а не «уточните название».
+
+    Пациент назвал процедуру, памятки к ней у клиники нет (в МИС их заводят постепенно,
+    `docs/CLINIC_REQUEST_MIS_PREPARATION_MEMOS_2026-10-02.md`). Просьба уточнить название
+    тут ведёт по кругу: пациент повторит то же слово и получит тот же ответ.
+
+    :param query: текст запроса пользователя
+    :param entities: текущие сущности роутера
+    :param note: диагностическая пометка источника
+    :return: payload PREPARE с флагом `operator_offer`
+    """
+
+    subject = _prepare_subject_hint(query, entities)
+    return {
+        "prepare": (
+            f"Памятки по подготовке к «{subject}» у меня нет — подскажет оператор. "
+            "Перевести на оператора?"
+        ),
+        "operator_offer": True,
+        "note": note,
+        "entities_used": entities,
+    }
+
+
 def _is_prepare_relevant(query: str, content: str) -> bool:
     content_norm = _normalise_input(content)
     if not content_norm:
@@ -735,6 +800,12 @@ def _is_prepare_wrap_output_usable(query: str, source_text: str, wrapped: str) -
     return True
 
 
+def _is_generic_prepare_heading(text: str) -> bool:
+    """«Подготовка к исследованию» и подобные — заголовок памятки без единого указания."""
+
+    return _normalise_input(text).strip(" .:") in _PREPARE_GENERIC_HEADINGS
+
+
 def _is_prepare_content_actionable(content: str) -> bool:
     """
     Отсекает слишком общий/шаблонный текст подготовки.
@@ -746,7 +817,7 @@ def _is_prepare_content_actionable(content: str) -> bool:
     norm = _normalise_input(content)
     if not norm:
         return False
-    if norm in _PREPARE_GENERIC_HEADINGS:
+    if _is_generic_prepare_heading(content):
         return False
 
     tokens = re.findall(r"[a-zа-я0-9]{3,}", norm)

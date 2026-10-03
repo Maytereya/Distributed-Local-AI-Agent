@@ -9,37 +9,41 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from agent_logic_1 import meilisearch_client as meilisearch
 from agent_logic_2.nayka_api import api_service_info
 from converters import html_cleaner
 
 from .. import llm_runtime as llm_runtime_mod
-from ..llm_doesnt_work_fallback import build_prepare_fallback_answer
+from ..llm_doesnt_work_fallback import build_prepare_fallback_answer, join_wrapped_lines
 from . import _common as _common_mod
+from ._biomaterial import mis_synonym_candidates
 from ._common import (
     _get_first_present,
-    _is_meili_error_text,
-    _is_meili_no_matches_text,
+    _normalise_catalog_text,
 )
+from ._prepare_select_llm import SOURCE_MIS, PrepareMemo, kb_patient_memos, select_prepare_memos
 from ._prepare import (
     _PREPARE_RELEVANCE_VERDICT_IRRELEVANT,
     _PREPARE_RELEVANCE_VERDICT_RELEVANT,
     _PrepareCandidate,
     _dedupe_prepare_candidates,
     _has_prepare_strong_hints,
+    _is_generic_prepare_heading,
     _is_prepare_content_actionable,
     _is_prepare_service_info_usable,
     _is_prepare_wrap_output_usable,
     _parse_prepare_relevance_validator,
     _prepare_clarify_response,
+    _prepare_no_memo_response,
     _prepare_fast_relevance_score,
-    _prepare_query_variants,
+    _prepare_names_subject,
     _prepare_relevance_gate,
     _prepare_relevance_prompt,
     _prepare_roots_coverage,
     _prepare_service_info_queries,
+    _prepare_subject_phrase,
     _prepare_term_roots,
     _prepare_wrap_clean,
     _prepare_wrap_prompt,
@@ -50,6 +54,9 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+# Сколько памяток МИС (лучших по совпадению слов) показывать LLM при выборе.
+_PREPARE_MIS_CANDIDATES = 10
 
 # Поля документа базы знаний, в которых лежит текст, — в порядке приоритета (как у
 # `meilisearch_client.search_meili`).
@@ -290,7 +297,7 @@ async def _prepare_candidates_from_analysis_api_cache(
     entities: dict[str, Any],
 ) -> list["Any"]:
     """
-    Возвращает отсортированные prepare-кандидаты из serviceInfoAll.
+    Памятки МИС (serviceInfoAll) — кандидаты для выбора LLM: годные, лучшие первыми.
 
     :param query: исходный запрос пользователя
     :param entities: сущности роутера
@@ -298,9 +305,10 @@ async def _prepare_candidates_from_analysis_api_cache(
     """
 
     entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
-    if not _prepare_term_roots(" ".join(x for x in (query, entity_query) if x)):
-        return []
-    queries = _prepare_service_info_queries(query, entity_query)
+    # Вариант без предмета («Сдаче крови», «Анализу» — такое кладёт в service_name
+    # извлечение для записи) даёт 0.40 любой памятке с конкретными указаниями и
+    # вытесняет из кандидатов настоящую: «Ферритин» (0.38) не доходил до LLM (стенд 02.10).
+    queries = [variant for variant in _prepare_service_info_queries(query, entity_query) if _prepare_term_roots(variant)]
     if not queries:
         return []
 
@@ -309,6 +317,17 @@ async def _prepare_candidates_from_analysis_api_cache(
     except Exception:
         return []
 
+    # Услуги, которые клиника завела синонимом слова пациента («сахар» → «Глюкоза»), —
+    # кандидаты первыми: в тексте их памятки слова пациента может не быть вовсе.
+    subject = _prepare_subject_phrase(query)
+    synonym_titles = {
+        _normalise_catalog_text(name)
+        for text in (query, entity_query, subject)
+        if text
+        for name in mis_synonym_candidates(text)
+    }
+    # Название карточки называет предмет вопроса — опора выбора без LLM (`_choose_without_llm`).
+    subject_roots = _prepare_term_roots(subject)
     candidates: list[Any] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -318,7 +337,8 @@ async def _prepare_candidates_from_analysis_api_cache(
         if not service_name or not preparation:
             continue
 
-        best_score = 0.0
+        by_synonym = _normalise_catalog_text(service_name) in synonym_titles
+        best_score = 1.0 if by_synonym else 0.0
         best_query = ""
         for query_variant in queries:
             score = _prepare_fast_relevance_score(query_variant, preparation, title=service_name)
@@ -327,6 +347,15 @@ async def _prepare_candidates_from_analysis_api_cache(
                 best_query = query_variant
 
         if best_score <= 0.0:
+            continue
+        # Синоним — слово самой клиники: предмет назван, нужна лишь содержательная памятка.
+        # Проверка по словам вопроса отбросила бы «Глюкозу» на «сахар» — слова «сахар» в
+        # её памятке нет.
+        text = html_cleaner.strip_html(preparation).strip()
+        if by_synonym:
+            if not _is_prepare_content_actionable(text):
+                continue
+        elif not _is_prepare_service_info_usable(query, text, title=service_name):
             continue
 
         candidates.append(
@@ -337,6 +366,7 @@ async def _prepare_candidates_from_analysis_api_cache(
                 service_title=service_name,
                 score=best_score,
                 note="prepare: serviceInfoAll candidate",
+                named=by_synonym or _prepare_names_subject(subject_roots, _prepare_term_roots(service_name)),
             )
         )
 
@@ -593,6 +623,31 @@ async def _lab_collection_branches_answer(self: "Services", query: str = "") -> 
     return "\n\n".join(parts)
 
 
+def _several_memos_answer(memos: Sequence[PrepareMemo]) -> str:
+    """Несколько памяток в одном ответе — каждая целиком под своим названием.
+
+    Склейка без границ уже давала пациенту подготовку к чужой процедуре
+    (BUG-2026-10-01-PREPARE-FALLBACK-MIXES-DOCS), поэтому каждая памятка — отдельным
+    блоком; длинную сжимаем без LLM и только из её собственного текста.
+    """
+
+    max_chars = _common_mod._runtime_int("MR_PREPARE_FALLBACK_MAX_CHARS", 1600, min_value=400, max_value=4000)
+    max_points = _common_mod._runtime_int("MR_PREPARE_FALLBACK_MAX_POINTS", 7, min_value=3, max_value=10)
+    parts = ["Подходят несколько памяток клиники — посмотрите ту, что про ваш анализ."]
+    for memo in memos:
+        heading = (memo.title if memo.title.startswith("«") else f"«{memo.title}»") + ":"
+        lines = [line for line in join_wrapped_lines(memo.text) if not _is_generic_prepare_heading(line)]
+        full = "\n".join(lines)
+        if len(full) <= max_chars:
+            parts.append(f"{heading}\n{full}")
+            continue
+        short = build_prepare_fallback_answer(
+            memo.title, memo.text, max_chars=max_chars, max_points=max_points, intro=heading
+        )
+        parts.append(short or f"{heading}\n{full[:max_chars].rstrip()}…")
+    return "\n\n".join(parts)
+
+
 async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
     raw_query = str(query or "").strip()
     # «Во сколько/когда прийти сдать кровь» — вопрос про время/место сдачи,
@@ -636,94 +691,55 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
             note="prepare: generic query, asking for specific subject",
         )
 
-    api_candidates = await self._prepare_candidates_from_analysis_api_cache(q, entities)
-    api_best = await self._pick_prepare_candidate(q, api_candidates)
-    if api_best:
-        api_cached_cleaned = html_cleaner.strip_html(api_best.text).strip()
-        if not _is_prepare_service_info_usable(q, api_cached_cleaned, title=api_best.service_title):
-            api_best = None
-        else:
-            api_best.text = api_cached_cleaned
-    if api_best:
-        compacted, wrap_status, wrap_reason = await self._maybe_compact_prepare_text(q, api_best.text)
+    # Памятку выбирает LLM: предмет памятки — процедура пациента, а не то, что в ней
+    # упомянуто (BUG-2026-10-01-PREPARE-MENTION-AS-SUBJECT). Кандидаты — памятки МИС и,
+    # в переходный период, памятки пациенту из базы знаний; скрипты администраторов в
+    # подготовку не попадают (решения владельца 02.10).
+    mis_candidates = await self._prepare_candidates_from_analysis_api_cache(q, entities)
+    memos = [
+        PrepareMemo(
+            source=SOURCE_MIS,
+            title=cand.service_title,
+            text=html_cleaner.strip_html(cand.text).strip(),
+            score=cand.score,
+            named=cand.named,
+        )
+        for cand in mis_candidates[:_PREPARE_MIS_CANDIDATES]
+    ]
+    memos.extend(await asyncio.to_thread(kb_patient_memos))
+    chosen = await select_prepare_memos(
+        q, memos, runtime_llm_mode=str(entities.get("__runtime_llm_mode") or "")
+    )
+    if len(chosen) == 1:
+        memo = chosen[0]
+        compacted, wrap_status, wrap_reason = await self._maybe_compact_prepare_text(
+            q, memo.text, single_source=memo.text
+        )
         return {
             "prepare": compacted,
-            "note": "prepare: serviceInfoAll",
+            "note": f"prepare: {memo.source}",
+            "prepare_source_title": memo.title,
             "entities_used": entities,
             "prepare_wrap_status": wrap_status,
             "prepare_wrap_reason": wrap_reason,
         }
-
-    variants = _prepare_query_variants(q, entity_query)
-    if not variants:
-        variants = [q]
-
-    meili_candidates: list[Any] = []
-    saw_no_matches = False
-    saw_non_empty = False
-    saw_service_error = False
-    for candidate in variants:
-        try:
-            raw = await asyncio.to_thread(
-                meilisearch.search_meili,
-                "main_index",
-                candidate,
-                output_mode="content_only",
-                max_chars=12000,
-            )
-            cleaned = html_cleaner.strip_html(raw).strip()
-        except Exception:
-            saw_service_error = True
-            continue
-
-        if _is_meili_error_text(cleaned):
-            saw_service_error = True
-            continue
-
-        if _is_meili_no_matches_text(cleaned):
-            saw_no_matches = True
-            continue
-
-        if not cleaned:
-            continue
-
-        saw_non_empty = True
-        score = max(
-            _prepare_fast_relevance_score(q, cleaned),
-            _prepare_fast_relevance_score(candidate, cleaned),
-        )
-        if score <= 0.0:
-            continue
-        meili_candidates.append(
-            _PrepareCandidate(
-                source="main_index",
-                text=cleaned,
-                query_variant=candidate,
-                score=score,
-                note="prepare: main_index candidate",
-            )
-        )
-
-    meili_best = await self._pick_prepare_candidate(q, meili_candidates)
-    if meili_best:
-        # Склейку документов видит только LLM-обёртка; путям без неё — один документ.
-        single = await asyncio.to_thread(_best_single_document, q, meili_best.query_variant)
-        compacted, wrap_status, wrap_reason = await self._maybe_compact_prepare_text(
-            q, meili_best.text, single_source=single
-        )
+    if chosen:
+        # Без LLM при ничьей — обе памятки (решение владельца 03.10), каждая под своим
+        # названием и только своим текстом; LLM-обёртку не зовём — она только что не ответила.
         return {
-            "prepare": compacted,
-            "note": "prepare: main_index",
+            "prepare": _several_memos_answer(chosen),
+            "note": "prepare: several memos without llm",
+            "prepare_source_title": " | ".join(memo.title for memo in chosen),
             "entities_used": entities,
-            "prepare_wrap_status": wrap_status,
-            "prepare_wrap_reason": wrap_reason,
+            "prepare_wrap_status": "several_memos",
+            "prepare_wrap_reason": "tie_without_llm",
         }
 
     # Конкретные правила подготовки не нашлись. Если вопрос про сдачу КРОВИ —
-    # отдаём общую памятку забора крови (фиксированная, предоставлена клиникой)
-    # вместо clarify: эти правила применимы к ЛЮБОЙ сдаче крови (живая очередь,
-    # строго натощак, паспорт). Для мочи/кала и пр. общей памятки нет → прежний
-    # clarify. Универсально: триггер — биоматериал «кровь» в тексте запроса.
+    # отдаём общую памятку забора крови (фиксированная, предоставлена клиникой):
+    # эти правила применимы к ЛЮБОЙ сдаче крови (живая очередь, строго натощак,
+    # паспорт). Для мочи/кала и пр. общей памятки нет — предлагаем оператора.
+    # Универсально: триггер — биоматериал «кровь» в тексте запроса.
     if _prepare_biomaterial(q) == "blood" or raw_material == "blood":
         return {
             "prepare": _BLOOD_COLLECTION_GUIDANCE,
@@ -731,10 +747,5 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
             "entities_used": entities,
         }
 
-    if saw_non_empty:
-        return _prepare_clarify_response(q, entities, note="prepare: weak relevance")
-
-    if saw_no_matches or not saw_service_error:
-        return _prepare_clarify_response(q, entities, note="prepare: no matches")
-
-    return _prepare_clarify_response(q, entities, note="prepare source unavailable")
+    note = "prepare: no memo about the subject" if memos else "prepare: no matches"
+    return _prepare_no_memo_response(q, entities, note=note)

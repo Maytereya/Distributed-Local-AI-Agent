@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from messengers_router import services as svc_mod
 from messengers_router.services import Services
+from messengers_router.services import prepare as prepare_mod
 from messengers_router.services.prepare import _prepare_biomaterial
 
 
@@ -27,47 +27,52 @@ def test_prepare_biomaterial_detection(text, expected):
     assert _prepare_biomaterial(text) == expected
 
 
-def _patch_meili(monkeypatch, seen):
-    def fake_search(_index, query, *args, **kwargs):
-        seen.append(query)
-        return "Совпадений не найдено, cформулируйте запрос иначе"
+def _spy_prepare_inputs(monkeypatch, svc) -> list[dict]:
+    """Что подготовка передала дальше: сущности для поиска памяток МИС и вопрос для LLM."""
 
-    monkeypatch.setattr(svc_mod.meilisearch, "search_meili", fake_search)
-    monkeypatch.setattr(svc_mod.html_cleaner, "strip_html", lambda s: s)
+    seen: list[dict] = []
+
+    async def candidates(query, entities):
+        seen.append({"entities": dict(entities)})
+        return []
+
+    async def select(question, memos, **kwargs):
+        seen.append({"question": question})
+        return ()
+
+    monkeypatch.setattr(svc, "_prepare_candidates_from_analysis_api_cache", candidates)
+    monkeypatch.setattr(prepare_mod, "select_prepare_memos", select)
+    monkeypatch.setattr(prepare_mod, "kb_patient_memos", lambda: ())
+    return seen
+
+
+def _entity_texts(seen: list[dict]) -> str:
+    return " ".join(
+        str(rec["entities"].get(key) or "") for rec in seen if "entities" in rec for key in ("test_name", "service_name")
+    ).lower()
 
 
 def test_prepare_drops_conflicting_stale_biomaterial(monkeypatch):
     """«сдать кровь» при stale service_name=«общий анализ мочи» не должен
-    тянуть мочу в варианты подготовки (регрессия N5)."""
+    тянуть мочу в поиск подготовки (регрессия N5)."""
     svc = Services()
-
-    async def no_api_candidates(*_a, **_k):
-        return []
-
-    monkeypatch.setattr(svc, "_prepare_candidates_from_analysis_api_cache", no_api_candidates)
-    seen: list[str] = []
-    _patch_meili(monkeypatch, seen)
+    seen = _spy_prepare_inputs(monkeypatch, svc)
 
     # «подготовка к сдаче крови» (не вопрос про время) идёт обычным prepare-путём,
     # где и работает дроп конфликтного stale-биоматериала.
     res = run(svc.test_prepare("подготовка к сдаче крови", {"service_name": "общий анализ мочи"}))
 
-    assert not any("моч" in q.lower() for q in seen), seen
-    assert any("кров" in q.lower() for q in seen), seen
+    assert any("entities" in rec for rec in seen), "поиск памяток не дошёл до МИС"
+    assert "моч" not in _entity_texts(seen), seen
+    assert all("моч" not in rec.get("question", "") for rec in seen), seen
     assert "prepare" in str(res.get("note") or "")
 
 
 def test_prepare_keeps_consistent_stale_biomaterial(monkeypatch):
     """Совместимый stale (кровь) сохраняется — это не конфликт."""
     svc = Services()
-
-    async def no_api_candidates(*_a, **_k):
-        return []
-
-    monkeypatch.setattr(svc, "_prepare_candidates_from_analysis_api_cache", no_api_candidates)
-    seen: list[str] = []
-    _patch_meili(monkeypatch, seen)
+    seen = _spy_prepare_inputs(monkeypatch, svc)
 
     run(svc.test_prepare("подготовка к сдаче крови", {"service_name": "общий анализ крови"}))
 
-    assert any("общий анализ крови" in q.lower() for q in seen), seen
+    assert "общий анализ крови" in _entity_texts(seen), seen
