@@ -30,6 +30,7 @@ import pytest
 from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info, snapshots
 
 _YESTERDAY_ROW = {"serviceName": "Общий анализ крови", "cost": 390}
+_REAL_CLEANUP_OLD = api_price.cleanup_old  # до подмены фикстурой: для теста самой очистки
 
 
 @pytest.fixture(autouse=True)
@@ -171,6 +172,26 @@ def test_doctors_loader_does_not_retry_mis_on_every_request(monkeypatch, tmp_pat
     assert len(calls) == 1
 
 
+# --- Ежедневное обновление и мусор на диске (03.10) --------------------------------
+
+
+def test_cleanup_sweeps_stale_snapshots_of_every_region(monkeypatch, tmp_path: Path):
+    # Регион, который больше не запрашивают, копил файлы вечно: очистка шла только по
+    # региону, который обновляли (на диске — пустой прайс региона 1 от 02.06).
+    monkeypatch.setattr(api_price, "cleanup_old", _REAL_CLEANUP_OLD)  # настоящая — по временной папке
+    stale_other = tmp_path / "price_region_1_20260602.jsonl"
+    stale_other.write_text("", encoding="utf-8")
+    old_own = _snapshot(tmp_path / "price_region_3_20200101.jsonl", [_YESTERDAY_ROW])
+    today = tmp_path / f"price_region_3_{api_price.datetime.now():%Y%m%d}.jsonl"
+    monkeypatch.setattr(api_price, "price_by_region_path", lambda region_id, date=None: today)
+    monkeypatch.setattr(api_price, "fetch_price_by_region", lambda region_id: [_YESTERDAY_ROW])
+
+    api_price.update_price_by_region(3, force=True)
+
+    assert today.exists()
+    assert not stale_other.exists() and not old_own.exists()
+
+
 def test_failed_write_leaves_no_temp_file(tmp_path: Path):
     target = tmp_path / "price_units_20261003.jsonl"
 
@@ -181,3 +202,62 @@ def test_failed_write_leaves_no_temp_file(tmp_path: Path):
     with pytest.raises(OSError):
         snapshots.write_rows(target, broken_rows())
     assert list(tmp_path.iterdir()) == []
+
+
+def test_run_daily_waits_until_the_next_run_time(monkeypatch):
+    import asyncio
+    from datetime import datetime
+
+    waits: list[float] = []
+    runs: list[int] = []
+
+    async def fake_sleep(seconds):
+        waits.append(seconds)
+
+    async def job():
+        runs.append(1)
+        if len(runs) == 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(snapshots.asyncio, "sleep", fake_sleep)
+    clock = iter([datetime(2026, 10, 3, 23, 50), datetime(2026, 10, 4, 0, 6)])
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(snapshots.run_daily(0, 5, job, lambda: next(clock)))
+
+    assert waits == [15 * 60, 24 * 3600 - 60]  # 23:50 → 00:05; 00:06 → завтра 00:05
+
+
+def test_service_start_downloads_missing_price_list_in_background(monkeypatch, tmp_path: Path):
+    import asyncio
+
+    today = tmp_path / "price_region_3_20261003.jsonl"
+    monkeypatch.setattr(api_price, "price_by_region_path", lambda region_id, date=None: today)
+    monkeypatch.setattr(api_price, "doctor_prices_path", lambda date=None: _snapshot(tmp_path / "doctor_prices_20261003.jsonl", [_YESTERDAY_ROW]))
+    monkeypatch.setattr(api_price, "price_units_path", lambda date=None: _snapshot(tmp_path / "price_units_20261003.jsonl", [{"id": 1}]))
+    monkeypatch.setattr(api_price, "_PRICE_REFRESH_TASK", None)
+    monkeypatch.setattr(api_price, "_PRICE_LIST_REFRESH_TASK", None)
+    calls: list[str] = []
+
+    async def fake_price_list_refresh():
+        calls.append("прайс")
+
+    async def idle():
+        await asyncio.sleep(3600)
+
+    async def idle_daily(*_args, **_kwargs):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(api_price, "_refresh_price_list_once", fake_price_list_refresh)
+    monkeypatch.setattr(api_price, "_doctor_prices_refresh_loop", idle)
+    monkeypatch.setattr(api_price.snapshots, "run_daily", idle_daily)
+
+    async def service_start():
+        assert api_price.ensure_daily_price_refresh_started()
+        await asyncio.sleep(0)
+        api_price._PRICE_REFRESH_TASK.cancel()
+        api_price._PRICE_LIST_REFRESH_TASK.cancel()
+
+    asyncio.run(service_start())
+
+    assert calls == ["прайс"]

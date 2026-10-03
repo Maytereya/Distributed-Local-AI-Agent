@@ -16,12 +16,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Awaitable, Callable, Iterable
 
 log = logging.getLogger(__name__)
 
@@ -123,4 +125,25 @@ def load_daily(
             mark_failed(path)
     source = latest_nonempty(path)
     return read(source) if source is not None else []
+
+
+async def run_daily(hour: int, minute: int, job: Callable[[], Awaitable[Any]], now: Callable[[], datetime]) -> None:
+    """Вечный цикл: `job` каждый день в `hour:minute` по часам `now` (самарское время).
+
+    :param hour: час запуска
+    :param minute: минута запуска
+    :param job: корутина-функция обновления; свои ошибки она гасит сама
+    :param now: текущее время в нужном поясе
+    """
+
+    while True:
+        current = now()
+        target = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if current >= target:
+            target += timedelta(days=1)
+        try:
+            await asyncio.sleep(max(1.0, (target - current).total_seconds()))
+        except Exception:
+            pass  # прерванный сон — пересчитать цель на следующем круге
+        await job()
 

@@ -383,7 +383,9 @@ def update_price_by_region(region_id: Any, force: bool = False) -> Path:
     data = snapshots.require_rows(fetch_price_by_region(region_id), f"priceByRegion({region_id})")
     jsonl_write(fn, data)
     log.info("✅ priceByRegion(%s) обновлён (%s строк): %s", region_id, len(data), fn)
-    cleanup_old(PRICE_BY_REGION_DIR, f"price_region_{str(region_id).strip()}", CACHE_TTL_DAYS)
+    # Чистим старые срезы ВСЕХ регионов: регион, который больше не запрашивают, иначе
+    # копил бы файлы вечно (на диске нашёлся пустой прайс региона 1 от 02.06).
+    cleanup_old(PRICE_BY_REGION_DIR, "price_region", CACHE_TTL_DAYS)
     return fn
 
 
@@ -768,14 +770,6 @@ def load_doctor_prices() -> List[Dict[str, Any]]:
     return jsonl_read(fn)
 
 
-def _next_doctor_prices_refresh_dt() -> datetime:
-    now = _now_samara()
-    target = now.replace(hour=8, minute=15, second=0, microsecond=0)
-    if now >= target:
-        target = target + timedelta(days=1)
-    return target
-
-
 async def _refresh_doctor_prices_once() -> None:
     """
     Обновляет doctor_prices и связанные справочники прайса в фоновом режиме.
@@ -795,6 +789,14 @@ async def _refresh_doctor_prices_once() -> None:
         log.warning("⚠️ [DAILY REFRESH] priceUnits refresh failed: %s", e)
 
 
+def _next_doctor_prices_refresh_dt() -> datetime:
+    now = _now_samara()
+    target = now.replace(hour=8, minute=15, second=0, microsecond=0)
+    if now >= target:
+        target = target + timedelta(days=1)
+    return target
+
+
 async def _doctor_prices_refresh_loop() -> None:
     while True:
         target = _next_doctor_prices_refresh_dt()
@@ -807,9 +809,28 @@ async def _doctor_prices_refresh_loop() -> None:
         await _refresh_doctor_prices_once()
 
 
+# Регион бота — Самара (`SAMARA_PRICE_REGION_ID` в messengers_router). Срез прайса
+# датирован по Самаре, ежедневного обновления у него не было: первый ценовой вопрос после
+# полуночи качал прайс прямо в запросе пациента. Теперь — в фоне сразу после смены даты.
+BOT_PRICE_REGION_ID = 3
+_PRICE_LIST_REFRESH_AT = (0, 5)
+_PRICE_LIST_REFRESH_TASK = None
+
+
+async def _refresh_price_list_once() -> None:
+    """Прайс региона бота на сегодня — в фоне; сбой МИС не трогает вчерашний срез."""
+
+    try:
+        await asyncio.to_thread(update_price_by_region, BOT_PRICE_REGION_ID, True)
+        log.info("✅ [DAILY REFRESH] priceByRegion(%s) обновлён", BOT_PRICE_REGION_ID)
+    except Exception as e:
+        log.warning("⚠️ [DAILY REFRESH] priceByRegion(%s) refresh failed: %s", BOT_PRICE_REGION_ID, e)
+
+
 def ensure_daily_price_refresh_started() -> bool:
-    """Запускает фоновый refresh doctor_prices и priceUnits в 08:15 по Самаре."""
-    global _PRICE_REFRESH_TASK
+    """Запускает фоновый refresh doctor_prices и priceUnits в 08:15 по Самаре,
+    прайса региона бота — в 00:05."""
+    global _PRICE_REFRESH_TASK, _PRICE_LIST_REFRESH_TASK
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -818,6 +839,13 @@ def ensure_daily_price_refresh_started() -> bool:
     if _PRICE_REFRESH_TASK is None or _PRICE_REFRESH_TASK.done():
         _PRICE_REFRESH_TASK = loop.create_task(_doctor_prices_refresh_loop())
         log.info("▶️ [DAILY REFRESH] Планировщик doctor_prices запущен")
+        if _PRICE_LIST_REFRESH_TASK is None or _PRICE_LIST_REFRESH_TASK.done():
+            hour, minute = _PRICE_LIST_REFRESH_AT
+            _PRICE_LIST_REFRESH_TASK = loop.create_task(
+                snapshots.run_daily(hour, minute, _refresh_price_list_once, _now_samara)
+            )
+            if not _has_rows(price_by_region_path(BOT_PRICE_REGION_ID)):
+                loop.create_task(_refresh_price_list_once())
         try:
             # Пустой сегодняшний срез — тоже повод пересобрать на старте: так срез,
             # записанный пустым до починки NO-DOCTORS-FOUND-FALSE, не ждёт утра.
