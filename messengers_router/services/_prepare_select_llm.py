@@ -30,12 +30,11 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from agent_logic_1 import meilisearch_client as meilisearch
-from converters import html_cleaner
 
 from ..llm_runtime import generate_text
 from ..prompt_registry import load_prompt_text
 from . import _common as _common_mod
-from ._prepare import _prepare_names_subject, _prepare_subject_phrase, _prepare_term_roots
+from ._prepare import _memo_plain_text, _prepare_names_subject, _prepare_subject_phrase, _prepare_term_roots
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +94,7 @@ def kb_patient_memos() -> tuple[PrepareMemo, ...]:
     for doc in docs:
         doc = dict(doc) if not isinstance(doc, dict) else doc
         title = str(doc.get("title") or "").strip()
-        text = html_cleaner.strip_html(str(doc.get("content") or "")).strip()
+        text = _memo_plain_text(str(doc.get("content") or ""))
         if text and _KB_PATIENT_MEMO_TITLE_RE.search(title):
             memos.append(PrepareMemo(source=SOURCE_KB, title=title, text=text))
     _kb_cache.update(at=now, memos=tuple(memos))

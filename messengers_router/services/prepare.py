@@ -12,7 +12,6 @@ import re
 from typing import TYPE_CHECKING, Any, Sequence
 
 from agent_logic_2.nayka_api import api_service_info
-from converters import html_cleaner
 
 from .. import llm_runtime as llm_runtime_mod
 from ..llm_doesnt_work_fallback import build_prepare_fallback_answer, join_wrapped_lines
@@ -30,6 +29,7 @@ from ._prepare import (
     _is_prepare_content_actionable,
     _is_prepare_service_info_usable,
     _is_prepare_wrap_output_usable,
+    _memo_plain_text,
     _prepare_clarify_response,
     _prepare_no_memo_response,
     _prepare_fast_relevance_score,
@@ -115,7 +115,7 @@ async def _prepare_candidates_from_analysis_api_cache(
         # Синоним — слово самой клиники: предмет назван, нужна лишь содержательная памятка.
         # Проверка по словам вопроса отбросила бы «Глюкозу» на «сахар» — слова «сахар» в
         # её памятке нет.
-        text = html_cleaner.strip_html(preparation).strip()
+        text = _memo_plain_text(preparation)
         if by_synonym:
             if not _is_prepare_content_actionable(text):
                 continue
@@ -381,28 +381,45 @@ async def _lab_collection_branches_answer(self: "Services", query: str = "") -> 
     return "\n\n".join(parts)
 
 
-def _several_memos_answer(memos: Sequence[PrepareMemo]) -> str:
-    """Несколько памяток в одном ответе — каждая целиком под своим названием.
+# Одна памятка МИС уходит целиком, если короче этого; длинную сжимаем без LLM. Запас до
+# 4096 символов (лимит Telegram) — на заголовок и приписки рендера.
+_SINGLE_MEMO_MAX_CHARS = 3500
 
-    Склейка без границ уже давала пациенту подготовку к чужой процедуре
-    (BUG-2026-10-01-PREPARE-FALLBACK-MIXES-DOCS), поэтому каждая памятка — отдельным
-    блоком; длинную сжимаем без LLM и только из её собственного текста.
+
+def _memo_block(memo: PrepareMemo, heading: str, *, max_chars: int) -> str:
+    """Памятка под заголовком: текст клиники как есть, только склеены переносы строк.
+
+    Длиннее `max_chars` — сжатие без LLM и только из её собственного текста: склейка
+    разных памяток уже давала пациенту подготовку к чужой процедуре
+    (BUG-2026-10-01-PREPARE-FALLBACK-MIXES-DOCS).
     """
 
-    max_chars = _common_mod._runtime_int("MR_PREPARE_FALLBACK_MAX_CHARS", 1600, min_value=400, max_value=4000)
+    lines = [line for line in join_wrapped_lines(memo.text) if not _is_generic_prepare_heading(line)]
+    full = "\n".join(lines)
+    if len(full) <= max_chars:
+        return f"{heading}\n{full}"
     max_points = _common_mod._runtime_int("MR_PREPARE_FALLBACK_MAX_POINTS", 7, min_value=3, max_value=10)
+    short = build_prepare_fallback_answer(memo.title, memo.text, max_chars=max_chars, max_points=max_points, intro=heading)
+    return short or f"{heading}\n{full[:max_chars].rstrip()}…"
+
+
+def _quoted(title: str) -> str:
+    return title if title.startswith("«") else f"«{title}»"
+
+
+def _single_memo_answer(memo: PrepareMemo) -> str:
+    """Памятка МИС — как есть, без переписывания LLM (решение владельца 03.10): она уже
+    написана для пациентов, а переписывание стоило 11–20 с ответа."""
+
+    return _memo_block(memo, f"Памятка клиники {_quoted(memo.title)}:", max_chars=_SINGLE_MEMO_MAX_CHARS)
+
+
+def _several_memos_answer(memos: Sequence[PrepareMemo]) -> str:
+    """Несколько памяток в одном ответе — каждая отдельным блоком под своим названием."""
+
+    max_chars = _common_mod._runtime_int("MR_PREPARE_FALLBACK_MAX_CHARS", 1600, min_value=400, max_value=4000)
     parts = ["Подходят несколько памяток клиники — посмотрите ту, что про ваш анализ."]
-    for memo in memos:
-        heading = (memo.title if memo.title.startswith("«") else f"«{memo.title}»") + ":"
-        lines = [line for line in join_wrapped_lines(memo.text) if not _is_generic_prepare_heading(line)]
-        full = "\n".join(lines)
-        if len(full) <= max_chars:
-            parts.append(f"{heading}\n{full}")
-            continue
-        short = build_prepare_fallback_answer(
-            memo.title, memo.text, max_chars=max_chars, max_points=max_points, intro=heading
-        )
-        parts.append(short or f"{heading}\n{full[:max_chars].rstrip()}…")
+    parts.extend(_memo_block(memo, f"{_quoted(memo.title)}:", max_chars=max_chars) for memo in memos)
     return "\n\n".join(parts)
 
 
@@ -458,7 +475,7 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
         PrepareMemo(
             source=SOURCE_MIS,
             title=cand.service_title,
-            text=html_cleaner.strip_html(cand.text).strip(),
+            text=_memo_plain_text(cand.text),
             score=cand.score,
             named=cand.named,
         )
@@ -468,7 +485,18 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
     chosen = await select_prepare_memos(
         q, memos, runtime_llm_mode=str(entities.get("__runtime_llm_mode") or "")
     )
+    if len(chosen) == 1 and chosen[0].source == SOURCE_MIS:
+        memo = chosen[0]
+        return {
+            "prepare": _single_memo_answer(memo),
+            "note": f"prepare: {memo.source}",
+            "prepare_source_title": memo.title,
+            "entities_used": entities,
+            "prepare_wrap_status": "not_wrapped",
+            "prepare_wrap_reason": "mis_memo_as_is",
+        }
     if len(chosen) == 1:
+        # Памятки базы знаний длинные (ФКС — 5,7–7,3 тыс. символов, больше лимита сообщения) — их ужимает LLM.
         memo = chosen[0]
         compacted, wrap_status, wrap_reason = await self._maybe_compact_prepare_text(q, memo.text)
         return {

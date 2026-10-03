@@ -306,6 +306,20 @@ def _prepare_service_info_queries(raw_query: str, entity_query: str = "") -> lis
     return _dedupe_queries(list(variants), max_items=16)
 
 
+_BLOCK_TAG_RE = re.compile(r"<\s*br\s*/?\s*>|</\s*(?:p|div|li|h[1-6]|tr|ul|ol)\s*>", re.I)
+
+
+def _memo_plain_text(html: str) -> str:
+    """Текст памятки без HTML; блочные теги — переносы строк.
+
+    `html_cleaner.strip_html` склеивает соседние абзацы и пункты без пробела
+    («исследованиюКровь»): раньше это прятала LLM-обёртка, а памятки МИС с 03.10
+    уходят пациенту как есть.
+    """
+
+    return html_cleaner.strip_html(_BLOCK_TAG_RE.sub("\n", str(html or ""))).strip()
+
+
 def _is_prepare_framing_token(token: str) -> bool:
     """Слово, которым пациент оформляет вопрос о подготовке, а не называет предмет.
 

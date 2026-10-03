@@ -1647,6 +1647,40 @@ def test_test_prepare_compacts_long_memo_with_llm_wrap(monkeypatch):
     assert res.get("prepare_wrap_status") == "llm_wrapped"
 
 
+def test_test_prepare_mis_memo_is_sent_as_is_without_llm(monkeypatch):
+    # Решение владельца 03.10: памятки МИС уже написаны для пациентов, переписывание LLM
+    # стоило 11–20 с ответа. Отдаём текст клиники, склеив переносы строк из HTML.
+    svc = Services()
+
+    monkeypatch.setattr(
+        svc_mod.api_service_info,
+        "load_service_info",
+        lambda: [
+            {
+                "serviceName": "ТТГ (TSH) тиреотропный гормон",
+                "preparation": (
+                    "<p>Подготовка к исследованию</p><p>Кровь лучше сдавать утром натощак, после 8-14 часового\n"
+                    "      перерыва в еде. Воду пить не запрещается.</p>"
+                ),
+            }
+        ],
+    )
+    _prepare_llm_picks(monkeypatch, "ттг")
+
+    async def no_llm(*_args, **_kwargs):
+        raise AssertionError("памятку МИС не переписываем")
+
+    monkeypatch.setattr(llm_runtime_mod, "generate_text", no_llm)
+
+    res = run(svc.test_prepare("подготовка к ттг", {}))
+    text = str(res.get("prepare") or "")
+
+    assert text.startswith("Памятка клиники «ТТГ (TSH) тиреотропный гормон»:")
+    assert "после 8-14 часового перерыва в еде." in text
+    assert "Подготовка к исследованию" not in text
+    assert res.get("prepare_wrap_status") == "not_wrapped"
+
+
 def test_test_prepare_llm_wrap_uses_deterministic_fallback_on_invalid_compaction(monkeypatch):
     svc = Services()
 
@@ -1655,12 +1689,9 @@ def test_test_prepare_llm_wrap_uses_deterministic_fallback_on_invalid_compaction
         "разрешена негазированная вода, за сутки исключить алкоголь и жирную пищу."
     )
 
-    monkeypatch.setattr(
-        svc_mod.api_service_info,
-        "load_service_info",
-        lambda: [{"serviceName": "Холестерол", "preparation": source_text}],
-    )
-    _prepare_llm_picks(monkeypatch, "холестерол")
+    # Обёртка — только для памяток базы знаний: памятки МИС отдаются как есть.
+    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
+    _prepare_llm_picks(monkeypatch, "холестерин", kb=(PrepareMemo(SOURCE_KB, "ПАМЯТКА Холестерин", source_text),))
 
     async def fake_generate_text(*args, **kwargs):
         return "NO_RELEVANT_CONTENT"
@@ -1699,12 +1730,9 @@ def test_test_prepare_llm_wrap_timeout_uses_deterministic_fallback(monkeypatch):
         "Стоимость услуги 490 руб. Адреса и запись уточняйте у администратора."
     )
 
-    monkeypatch.setattr(
-        svc_mod.api_service_info,
-        "load_service_info",
-        lambda: [{"serviceName": "Холестерол", "preparation": source_text}],
-    )
-    _prepare_llm_picks(monkeypatch, "холестерол")
+    # Обёртка — только для памяток базы знаний: памятки МИС отдаются как есть.
+    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
+    _prepare_llm_picks(monkeypatch, "холестерин", kb=(PrepareMemo(SOURCE_KB, "ПАМЯТКА Холестерин", source_text),))
 
     async def fake_generate_text(*args, **kwargs):
         raise TimeoutError("llm timeout")
