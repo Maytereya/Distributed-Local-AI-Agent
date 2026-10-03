@@ -789,24 +789,8 @@ async def _refresh_doctor_prices_once() -> None:
         log.warning("⚠️ [DAILY REFRESH] priceUnits refresh failed: %s", e)
 
 
-def _next_doctor_prices_refresh_dt() -> datetime:
-    now = _now_samara()
-    target = now.replace(hour=8, minute=15, second=0, microsecond=0)
-    if now >= target:
-        target = target + timedelta(days=1)
-    return target
-
-
 async def _doctor_prices_refresh_loop() -> None:
-    while True:
-        target = _next_doctor_prices_refresh_dt()
-        now = _now_samara()
-        wait_sec = max(1.0, (target - now).total_seconds())
-        try:
-            await asyncio.sleep(wait_sec)
-        except Exception:
-            pass
-        await _refresh_doctor_prices_once()
+    await snapshots.run_daily(8, 15, _refresh_doctor_prices_once, _now_samara)
 
 
 # Регион бота — Самара (`SAMARA_PRICE_REGION_ID` в messengers_router). Срез прайса

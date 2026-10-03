@@ -303,16 +303,6 @@ def load_service_info() -> list[dict[str, Any]]:
     return snapshots.load_daily(service_info_path(), lambda: update_service_info(force=True), jsonl_read)
 
 
-def _next_service_info_refresh_dt() -> datetime:
-    """Возвращает время следующего фонового обновления serviceInfoAll."""
-
-    now = _now_samara()
-    target = now.replace(hour=8, minute=20, second=0, microsecond=0)
-    if now >= target:
-        target = target + timedelta(days=1)
-    return target
-
-
 async def _refresh_service_info_once() -> None:
     """Один раз обновляет serviceInfoAll в фоне."""
 
@@ -333,17 +323,9 @@ async def _refresh_service_info_once() -> None:
 
 
 async def _service_info_refresh_loop() -> None:
-    """Поддерживает ежедневное обновление serviceInfoAll по расписанию."""
+    """Поддерживает ежедневное обновление serviceInfoAll в 08:20 по Самаре."""
 
-    while True:
-        target = _next_service_info_refresh_dt()
-        now = _now_samara()
-        wait_sec = max(1.0, (target - now).total_seconds())
-        try:
-            await asyncio.sleep(wait_sec)
-        except Exception:
-            pass
-        await _refresh_service_info_once()
+    await snapshots.run_daily(8, 20, _refresh_service_info_once, _now_samara)
 
 
 def ensure_daily_service_info_refresh_started() -> bool:

@@ -654,13 +654,6 @@ def get_cached_doctors_data() -> list:
 # ==========================
 _refresh_task = None
 
-def _next_refresh_dt() -> datetime:
-    now = _now_samara()
-    target = now.replace(hour=7, minute=45, second=0, microsecond=0)
-    if now >= target:
-        target = target + timedelta(days=1)
-    return target
-
 async def _refresh_once():
     try:
         # 1) Врачи
@@ -680,16 +673,7 @@ async def _refresh_once():
         print(f"⚠️ [DAILY REFRESH] Ошибка обновления кэша: {e}")
 
 async def _daily_refresh_loop():
-    while True:
-        target = _next_refresh_dt()
-        now = _now_samara()
-        wait_sec = max(1.0, (target - now).total_seconds())
-        try:
-            await asyncio.sleep(wait_sec)
-        except Exception:
-            # если sleep прерван, цикл продолжится и пересчитает target
-            pass
-        await _refresh_once()
+    await snapshots.run_daily(7, 45, _refresh_once, _now_samara)
 
 def ensure_daily_refresh_started() -> bool:
     """Запускает фоновую задачу обновления кэша в 07:45 по Самаре (idempotent).
