@@ -15,7 +15,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from agent_logic_2 import config as c
-from agent_logic_2.nayka_api import api_nayka, region_city
+from agent_logic_2.nayka_api import api_nayka, region_city, snapshots
 from agent_logic_2.nayka_api.cache_paths import resolve_cache_data_dir
 
 try:
@@ -173,9 +173,7 @@ def _now_samara() -> datetime:
     return datetime.utcnow() + timedelta(hours=4)
 
 def jsonl_write(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
-    with path.open("w", encoding="utf-8") as f:
-        for row in rows:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    snapshots.write_rows(path, rows)
 
 def jsonl_read(path: Path) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
@@ -382,7 +380,7 @@ def update_price_by_region(region_id: Any, force: bool = False) -> Path:
         return fn
 
     log.info("⏬ Скачиваем priceByRegion(%s)...", region_id)
-    data = fetch_price_by_region(region_id)
+    data = snapshots.require_rows(fetch_price_by_region(region_id), f"priceByRegion({region_id})")
     jsonl_write(fn, data)
     log.info("✅ priceByRegion(%s) обновлён (%s строк): %s", region_id, len(data), fn)
     cleanup_old(PRICE_BY_REGION_DIR, f"price_region_{str(region_id).strip()}", CACHE_TTL_DAYS)
@@ -390,10 +388,10 @@ def update_price_by_region(region_id: Any, force: bool = False) -> Path:
 
 
 def load_price_by_region(region_id: Any) -> List[Dict[str, Any]]:
-    fn = price_by_region_path(region_id)
-    if not fn.exists():
-        update_price_by_region(region_id)
-    return jsonl_read(fn)
+    """Прайс региона: сегодняшний срез, при сбое или пустом ответе МИС — последний непустой."""
+    return snapshots.load_daily(
+        price_by_region_path(region_id), lambda: update_price_by_region(region_id, force=True), jsonl_read
+    )
 
 
 def update_price_units(force: bool = False) -> Path:
@@ -409,7 +407,7 @@ def update_price_units(force: bool = False) -> Path:
         return fn
 
     log.info("⏬ Скачиваем priceUnits...")
-    data = fetch_price_units()
+    data = snapshots.require_rows(fetch_price_units(), "priceUnits")
     jsonl_write(fn, data)
     log.info("✅ priceUnits обновлён (%s строк): %s", len(data), fn)
     cleanup_old(PRICE_UNITS_DIR, "price_units", CACHE_TTL_DAYS)
@@ -420,21 +418,11 @@ def load_price_units() -> List[Dict[str, Any]]:
     """
     Загружает из локального кэша справочник priceUnits.
 
-    Если кэш за сегодня отсутствует, сначала скачивает его из API.
+    Сегодняшний срез; нет или пуст — скачать; не вышло — последний непустой.
 
     :return: список словарей со справочными разделами прайса
     """
-    fn = price_units_path()
-    if not fn.exists():
-        try:
-            update_price_units()
-        except Exception as e:
-            log.warning("⚠️ Не удалось обновить priceUnits за сегодня: %s", e)
-            try:
-                fn = latest_file(PRICE_UNITS_DIR, "price_units_*.jsonl")
-            except FileNotFoundError:
-                raise
-    return jsonl_read(fn)
+    return snapshots.load_daily(price_units_path(), lambda: update_price_units(force=True), jsonl_read)
 
 
 def build_price_units_index(rows: Optional[Iterable[Dict[str, Any]]] = None) -> Dict[int, Dict[str, Any]]:
@@ -759,21 +747,8 @@ def update_doctor_prices(force: bool = False) -> Path:
     return fn
 
 
-def _latest_nonempty_doctor_prices(today: Path) -> Optional[Path]:
-    """Самый свежий непустой срез doctor_prices в папке сегодняшнего (включая его самого)."""
-    for candidate in sorted(today.parent.glob("doctor_prices_*.jsonl"), reverse=True):
-        try:
-            if candidate.stat().st_size > 0:
-                return candidate
-        except OSError:
-            continue
-    return None
-
-def _has_rows(path: Path) -> bool:
-    try:
-        return path.stat().st_size > 0
-    except OSError:
-        return False
+_latest_nonempty_doctor_prices = snapshots.latest_nonempty
+_has_rows = snapshots.has_rows
 
 
 def load_doctor_prices() -> List[Dict[str, Any]]:

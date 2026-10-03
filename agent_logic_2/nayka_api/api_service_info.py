@@ -19,6 +19,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from agent_logic_2 import config as c
+from agent_logic_2.nayka_api import snapshots
 from agent_logic_2.nayka_api.cache_paths import resolve_cache_data_dir
 
 try:
@@ -105,11 +106,9 @@ def today_str() -> str:
 
 
 def jsonl_write(path: Path, rows: list[dict[str, Any]]) -> None:
-    """Сохраняет список словарей в JSONL-файл."""
+    """Сохраняет список словарей в JSONL-файл (атомарно)."""
 
-    with path.open("w", encoding="utf-8") as f:
-        for row in rows:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    snapshots.write_rows(path, rows)
 
 
 def jsonl_read(path: Path) -> list[dict[str, Any]]:
@@ -282,7 +281,9 @@ def update_service_info(force: bool = False) -> Path:
     log.info("⏬ Скачиваем serviceInfoAll...")
     rows = fetch_service_info_all()
     filtered = [row for row in rows if isinstance(row, dict) and _has_useful_text(row)]
-    jsonl_write(target, filtered)
+    # Пустой ответ не затирает срез: обновление в 08:20 перезаписывает файл, скачанный
+    # ночью, и без этой проверки бот до следующего утра остался бы без памяток и синонимов.
+    jsonl_write(target, snapshots.require_rows(filtered, "serviceInfoAll"))
     log.info("✅ serviceInfoAll обновлён (%s строк): %s", len(filtered), target)
     _cleanup_old()
     return target
@@ -292,13 +293,14 @@ def load_service_info() -> list[dict[str, Any]]:
     """
     Загружает актуальный serviceInfoAll из дневного кэша.
 
+    Сегодняшний срез; нет или пуст — скачать; не вышло — последний непустой. Раньше сбой
+    скачивания после самарской полуночи молча оставлял бота без словаря синонимов
+    (`_biomaterial._vocabularies` гасит исключение и возвращает пустой словарь).
+
     :return: список записей serviceInfoAll
     """
 
-    target = service_info_path()
-    if not target.exists():
-        update_service_info()
-    return jsonl_read(target)
+    return snapshots.load_daily(service_info_path(), lambda: update_service_info(force=True), jsonl_read)
 
 
 def _next_service_info_refresh_dt() -> datetime:

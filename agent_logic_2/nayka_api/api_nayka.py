@@ -29,6 +29,7 @@ from urllib3.util.retry import Retry
 
 
 from agent_logic_2 import config as c
+from agent_logic_2.nayka_api import snapshots
 from agent_logic_2.nayka_api.cache_paths import resolve_cache_data_dir
 
 try:
@@ -621,11 +622,16 @@ def get_cached_doctors_data() -> list:
         print(f"[DEBUG] Кэш за активную дату {active} не найден — обновляем через API!")
 
     # Для расписаний и doctor-resolution сначала пытаемся получить свежий список врачей.
-    try:
-        doctors = get_all_doctors()
-    except Exception as e:
-        print(f"⚠️ Не удалось обновить список врачей через API: {e}")
-        doctors = []
+    # После сбоя — не чаще раза в 10 минут: пока МИС не отвечает, каждый запрос пациента
+    # иначе ждал тайм-аут скачивания (до минут) ради того же вчерашнего кэша.
+    doctors = []
+    if snapshots.retry_allowed(existing_file):
+        try:
+            doctors = get_all_doctors()
+        except Exception as e:
+            print(f"⚠️ Не удалось обновить список врачей через API: {e}")
+        if not doctors:
+            snapshots.mark_failed(existing_file)
 
     if doctors:
         save_doctors_data(doctors)
