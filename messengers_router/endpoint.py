@@ -21,6 +21,7 @@ from .memory import MemoryStore
 from .router import patient_routing_stream
 from .services import Services
 from .policies import handoff_message, operator_after_hours_note
+from .warm_up import schedule_warm_up
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -50,6 +51,23 @@ def get_services() -> Services:
         log.error("get_services_init_failed", exc_info=True)
         raise
     return services
+
+
+async def _on_startup() -> None:
+    """Старт сервиса: планировщики ежедневных обновлений и прогрев — до первого пациента.
+
+    Раньше планировщики запускал первый запрос, а справочники и модель LLM грузились
+    в нём же (замер 03.10: первый ответ после деплоя — 66 с).
+    """
+
+    try:
+        get_services()
+    except Exception:
+        log.error("startup_services_failed", exc_info=True)
+    schedule_warm_up()
+
+
+router.on_startup.append(_on_startup)
 
 
 # ---------------------------------------------------------------------
