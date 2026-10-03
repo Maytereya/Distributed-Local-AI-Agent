@@ -11,7 +11,6 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, Sequence
 
-from agent_logic_1 import meilisearch_client as meilisearch
 from agent_logic_2.nayka_api import api_service_info
 from converters import html_cleaner
 
@@ -25,23 +24,16 @@ from ._common import (
 )
 from ._prepare_select_llm import SOURCE_MIS, PrepareMemo, kb_patient_memos, select_prepare_memos
 from ._prepare import (
-    _PREPARE_RELEVANCE_VERDICT_IRRELEVANT,
-    _PREPARE_RELEVANCE_VERDICT_RELEVANT,
     _PrepareCandidate,
     _dedupe_prepare_candidates,
-    _has_prepare_strong_hints,
     _is_generic_prepare_heading,
     _is_prepare_content_actionable,
     _is_prepare_service_info_usable,
     _is_prepare_wrap_output_usable,
-    _parse_prepare_relevance_validator,
     _prepare_clarify_response,
     _prepare_no_memo_response,
     _prepare_fast_relevance_score,
     _prepare_names_subject,
-    _prepare_relevance_gate,
-    _prepare_relevance_prompt,
-    _prepare_roots_coverage,
     _prepare_service_info_queries,
     _prepare_subject_phrase,
     _prepare_term_roots,
@@ -58,237 +50,9 @@ logger = logging.getLogger(__name__)
 # Сколько памяток МИС (лучших по совпадению слов) показывать LLM при выборе.
 _PREPARE_MIS_CANDIDATES = 10
 
-# Поля документа базы знаний, в которых лежит текст, — в порядке приоритета (как у
-# `meilisearch_client.search_meili`).
-_DOCUMENT_TEXT_FIELDS = ("content", "html", "csv", "description", "indication", "preparation", "body")
-_DOCUMENT_MAX_CHARS = 12000
-
-
-def _document_text(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, (list, tuple, set)):
-        return ", ".join(str(x).strip() for x in value if str(x).strip())
-    if isinstance(value, dict):
-        return " ".join(str(v).strip() for v in value.values() if str(v).strip())
-    return str(value).strip()
-
-
-def _search_main_index_documents(query: str, limit: int = 3) -> list[dict[str, str]]:
-    """Найденные документы базы знаний клиники — каждый отдельно, с заголовком.
-
-    `search_meili(..., output_mode="content_only")` склеивает найденное в один текст без
-    границ. Склейку получает LLM-обёртка — она выбирает строки о процедуре пациента. Но
-    запасной путь без LLM резал пункты из всей склейки, и подготовка к спирали получила
-    строки памятки «ФКС + ФГДС» со слабительным и «Фортрансом»
-    (BUG-2026-10-01-PREPARE-FALLBACK-MIXES-DOCS). Путям без LLM — один документ отсюда.
-    Клиент Meilisearch — общий (`agent_logic_1.meilisearch_client`), его не меняем.
-
-    :param query: поисковый запрос
-    :param limit: сколько документов вернуть
-    :return: [{"id", "title", "content"}]; ошибка поиска — исключение
-    """
-
-    client = meilisearch.get_meilisearch_client()
-    meilisearch.ensure_default_indexes_once()
-    hits = client.index("main_index").search(query, {"limit": limit}).get("hits", [])
-    documents: list[dict[str, str]] = []
-    for hit in hits if isinstance(hits, list) else []:
-        if not isinstance(hit, dict):
-            continue
-        content = next((_document_text(hit.get(key)) for key in _DOCUMENT_TEXT_FIELDS if _document_text(hit.get(key))), "")
-        if not content:
-            continue
-        documents.append(
-            {
-                "id": str(hit.get("id") or ""),
-                "title": _document_text(hit.get("title")),
-                "content": content[:_DOCUMENT_MAX_CHARS],
-            }
-        )
-    return documents
-
-
-def _best_single_document(query: str, variant: str) -> str:
-    """Текст одного документа базы знаний, лучше всех подходящего к вопросу.
-
-    Для путей без LLM: запасной ответ, короткий текст, выключенная обёртка. При равной
-    оценке — порядок поиска. Ничего подходящего — пустая строка (тогда — склейка, как
-    раньше: лучше прежний ответ, чем никакого).
-    """
-
-    try:
-        documents = _search_main_index_documents(variant)
-    except Exception:
-        return ""
-    best_text, best_score = "", 0.0
-    for document in documents:
-        text = html_cleaner.strip_html(document["content"]).strip()
-        title = document.get("title") or ""
-        score = max(
-            _prepare_fast_relevance_score(query, text, title=title),
-            _prepare_fast_relevance_score(variant, text, title=title),
-        )
-        if text and score > best_score:
-            best_text, best_score = text, score
-    return best_text
-
-
 # ---------------------------------------------------------------------------
 # Migrated Services methods (kept in legacy's declaration order).
 # ---------------------------------------------------------------------------
-
-
-async def _prepare_llm_validate_candidate(
-    self: "Services",
-    query: str,
-    candidate: "Any",
-) -> tuple[bool, float, str]:
-    """
-    LLM-валидация релевантности для кандидата PREPARE в серой зоне score.
-
-    :param query: запрос пользователя
-    :param candidate: кандидат из API/Meili
-    :return: (релевантно, confidence, reason)
-    """
-
-    if not _common_mod._runtime_bool("MR_PREPARE_RELEVANCE_LLM_ENABLED", True):
-        return False, 0.0, "llm_disabled"
-
-    prompt = _prepare_relevance_prompt(
-        query,
-        candidate.text,
-        source_kind=candidate.source,
-        service_title=candidate.service_title,
-    )
-    if not prompt:
-        return False, 0.0, "empty_prompt"
-
-    timeout_s = _common_mod._runtime_int(
-        "MR_PREPARE_RELEVANCE_LLM_TIMEOUT_S",
-        15,
-        min_value=1,
-        max_value=60,
-    )
-    queue_timeout_ms = _common_mod._runtime_int(
-        "MR_PREPARE_RELEVANCE_LLM_QUEUE_TIMEOUT_MS",
-        3000,
-        min_value=200,
-        max_value=20000,
-    )
-    try:
-        raw = await llm_runtime_mod.generate_text(
-            prompt,
-            timeout_s=timeout_s,
-            queue_timeout_ms=queue_timeout_ms,
-            fmt="json",
-            think=False,
-        )
-    except Exception as e:
-        logger.info("prepare relevance llm skipped: %s", e.__class__.__name__)
-        return False, 0.0, "llm_unavailable"
-
-    return _parse_prepare_relevance_validator(str(raw or ""))
-
-
-async def _pick_prepare_candidate(
-    self: "Services",
-    query: str,
-    candidates: list["Any"],
-) -> "Any | None":
-    """
-    Выбирает лучший кандидат PREPARE по fast-score + LLM в серой зоне.
-
-    :param query: запрос пользователя
-    :param candidates: кандидаты из источников
-    :return: лучший релевантный кандидат или None
-    """
-
-    ranked = _dedupe_prepare_candidates(candidates, limit=12)
-    if not ranked:
-        return None
-
-    max_llm_checks = _common_mod._runtime_int(
-        "MR_PREPARE_RELEVANCE_LLM_MAX_CHECKS",
-        2,
-        min_value=1,
-        max_value=8,
-    )
-    llm_checks = 0
-    query_roots = _prepare_term_roots(query)
-    for idx, cand in enumerate(ranked):
-        next_score = ranked[idx + 1].score if idx + 1 < len(ranked) else 0.0
-        margin = max(0.0, float(cand.score) - float(next_score))
-        cand.margin = margin
-        gate = _prepare_relevance_gate(cand.score, cand.margin)
-        if gate == "accept":
-            cand.note = (cand.note + "; " if cand.note else "") + "prepare_fast_gate=accept"
-            return cand
-        if gate == "reject":
-            cand.note = (cand.note + "; " if cand.note else "") + "prepare_fast_gate=reject"
-            continue
-
-        if cand.source == "serviceInfoAll" and query_roots:
-            title_roots = _prepare_term_roots(cand.service_title)
-            title_cov = _prepare_roots_coverage(query_roots, title_roots)
-            if title_cov >= 0.99 and _has_prepare_strong_hints(cand.text):
-                cand.note = (
-                    (cand.note + "; " if cand.note else "")
-                    + "prepare_fast_gate=accept_service_title_anchor"
-                )
-                return cand
-
-        if llm_checks >= max_llm_checks:
-            cand.note = (cand.note + "; " if cand.note else "") + "prepare_llm_skipped=max_checks"
-            continue
-
-        llm_checks += 1
-        ok, confidence, reason = await self._prepare_llm_validate_candidate(query, cand)
-        cand.note = (
-            (cand.note + "; " if cand.note else "")
-            + f"prepare_llm={_PREPARE_RELEVANCE_VERDICT_RELEVANT if ok else _PREPARE_RELEVANCE_VERDICT_IRRELEVANT}"
-            + f"({confidence:.2f})"
-            + (f":{reason}" if reason else "")
-        )
-        if ok:
-            return cand
-
-        # Quality-first override for Meili mixed-docs:
-        # если LLM отверг из-за "смешанности", но у кандидата высокий fast-score,
-        # полное покрытие корней запроса и actionable-текст, пропускаем в wrapper.
-        if cand.source == "main_index" and query_roots:
-            body_roots = _prepare_term_roots(cand.text)
-            body_cov = _prepare_roots_coverage(query_roots, body_roots)
-            override_score = _common_mod._runtime_float(
-                "MR_PREPARE_MAIN_INDEX_OVERRIDE_SCORE",
-                0.70,
-                min_value=0.30,
-                max_value=0.95,
-            )
-            if (
-                cand.score >= override_score
-                and body_cov >= 0.99
-                and _is_prepare_content_actionable(cand.text)
-            ):
-                cand.note = (
-                    (cand.note + "; " if cand.note else "")
-                    + "prepare_llm_reject_override_main_index"
-                )
-                return cand
-
-        if reason in {"llm_unavailable", "llm_non_json", "llm_disabled", "empty_prompt"}:
-            fallback_score = _common_mod._runtime_float(
-                "MR_PREPARE_RELEVANCE_LLM_UNAVAILABLE_ACCEPT_SCORE",
-                0.40,
-                min_value=0.10,
-                max_value=0.95,
-            )
-            if cand.score >= fallback_score:
-                cand.note = (cand.note + "; " if cand.note else "") + "prepare_llm_fallback_fast_accept"
-                return cand
-    return None
 
 
 async def _prepare_candidates_from_analysis_api_cache(
@@ -377,25 +141,20 @@ async def _maybe_compact_prepare_text(
     self: "Services",
     query: str,
     source_text: str,
-    *,
-    single_source: str = "",
 ) -> tuple[str, str, str]:
     """
     Компактирует длинный PREPARE-текст через LLM с безопасным fallback.
 
     :param query: исходный запрос пациента
-    :param source_text: текст подготовки из источника (у базы знаний — склейка документов)
-    :param single_source: один документ о процедуре пациента; им отвечают все пути без
-        LLM, склейку видит только LLM-обёртка (BUG-2026-10-01-PREPARE-FALLBACK-MIXES-DOCS)
+    :param source_text: текст одной выбранной памятки
     :return: (итоговый текст, статус wrap, причина/диагностика)
     """
 
     text = str(source_text or "").strip()
     if not text:
         return "", "empty_source", "no_source_text"
-    plain = str(single_source or "").strip() or text
     if not _common_mod._runtime_bool("MR_PREPARE_LLM_WRAP_ENABLED", True):
-        return plain, "disabled", "llm_wrap_disabled"
+        return text, "disabled", "llm_wrap_disabled"
 
     min_chars = _common_mod._runtime_int(
         "MR_PREPARE_LLM_WRAP_MIN_CHARS",
@@ -404,7 +163,7 @@ async def _maybe_compact_prepare_text(
         max_value=12000,
     )
     if len(text) < min_chars:
-        return plain, "short_source", "below_min_chars"
+        return text, "short_source", "below_min_chars"
 
     source_max_chars = _common_mod._runtime_int(
         "MR_PREPARE_LLM_WRAP_SOURCE_MAX_CHARS",
@@ -413,12 +172,11 @@ async def _maybe_compact_prepare_text(
         max_value=30000,
     )
     source_for_prompt = text[:source_max_chars].strip()
-    plain_for_fallback = plain[:source_max_chars].strip()
 
     def _fallback_or_source(reason: str) -> tuple[str, str, str]:
         compacted = build_prepare_fallback_answer(
             query,
-            plain_for_fallback,
+            source_for_prompt,
             max_chars=_common_mod._runtime_int(
                 "MR_PREPARE_FALLBACK_MAX_CHARS",
                 1600,
@@ -432,11 +190,11 @@ async def _maybe_compact_prepare_text(
                 max_value=10,
             ),
         )
-        if compacted and len(compacted) < len(plain):
+        if compacted and len(compacted) < len(text):
             return compacted, "fallback_compact", reason
         if compacted:
-            return plain, "fallback_not_shorter", reason
-        return plain, "fallback_failed", reason
+            return text, "fallback_not_shorter", reason
+        return text, "fallback_failed", reason
 
     prompt = _prepare_wrap_prompt(query, source_for_prompt)
     if not prompt:
@@ -712,9 +470,7 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
     )
     if len(chosen) == 1:
         memo = chosen[0]
-        compacted, wrap_status, wrap_reason = await self._maybe_compact_prepare_text(
-            q, memo.text, single_source=memo.text
-        )
+        compacted, wrap_status, wrap_reason = await self._maybe_compact_prepare_text(q, memo.text)
         return {
             "prepare": compacted,
             "note": f"prepare: {memo.source}",

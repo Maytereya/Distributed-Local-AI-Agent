@@ -19,7 +19,6 @@ from ..prompt_registry import load_prompt_text
 from . import _common as _common_mod
 from ._common import (
     _doc_tokens,
-    _extract_json_object,
     _get_first_present,
     _normalise_input,
 )
@@ -174,24 +173,6 @@ _PREPARE_STRONG_HINTS = (
 # ---------------------------------------------------------------------------
 # String constants
 # ---------------------------------------------------------------------------
-
-_PREPARE_RELEVANCE_VALIDATOR_FALLBACK_PROMPT = (
-    "Ты валидатор релевантности ответа по подготовке к анализу/процедуре.\n"
-    "Проверь, соответствует ли КАНДИДАТ запросу пациента.\n"
-    "Требования:\n"
-    "1) Используй только смысл запроса и кандидата.\n"
-    "2) Если тема не совпадает или ответ слишком общий — IRRELEVANT.\n"
-    "3) Верни строго JSON без markdown.\n"
-    "Формат JSON:\n"
-    "{\"verdict\":\"RELEVANT|IRRELEVANT\",\"confidence\":0.0,\"reason\":\"кратко\"}\n\n"
-    "ЗАПРОС:\n<<USER_QUERY>>\n\n"
-    "ИСТОЧНИК:\n<<SOURCE_KIND>>\n\n"
-    "СЕРВИС:\n<<SERVICE_TITLE>>\n\n"
-    "КАНДИДАТ:\n<<CANDIDATE_TEXT>>\n"
-)
-
-_PREPARE_RELEVANCE_VERDICT_RELEVANT = "RELEVANT"
-_PREPARE_RELEVANCE_VERDICT_IRRELEVANT = "IRRELEVANT"
 
 _PREPARE_LLM_WRAP_NO_RELEVANT = "NO_RELEVANT_CONTENT"
 
@@ -498,93 +479,15 @@ def _prepare_fast_relevance_score(query: str, content: str, *, title: str = "") 
     return max(0.0, min(1.0, score))
 
 
-def _prepare_relevance_thresholds() -> tuple[float, float, float]:
+def _prepare_relevance_low_threshold() -> float:
     """
-    Возвращает пороги релевантности для fast gate.
+    Нижний порог оценки, ниже которого памятка не годится в кандидаты.
 
-    :return: (low_threshold, high_threshold, margin_threshold)
+    :return: порог 0..1
     """
 
-    # Quality-first defaults: шире серая зона, чтобы чаще подключать LLM-валидатор.
     # Reference _common_mod so monkeypatching _runtime_float on the module works in tests.
-    low = _common_mod._runtime_float("MR_PREPARE_RELEVANCE_LOW_THRESHOLD", 0.28, min_value=0.05, max_value=0.95)
-    high = _common_mod._runtime_float("MR_PREPARE_RELEVANCE_HIGH_THRESHOLD", 0.78, min_value=0.10, max_value=0.99)
-    margin = _common_mod._runtime_float("MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD", 0.18, min_value=0.01, max_value=0.60)
-    if low >= high:
-        low = max(0.05, high - 0.10)
-    return low, high, margin
-
-
-def _prepare_relevance_gate(score: float, margin: float) -> str:
-    """
-    Решает fast gate для кандидата подготовки.
-
-    :param score: fast relevance score
-    :param margin: разрыв между top1 и top2
-    :return: "accept" | "llm" | "reject"
-    """
-
-    low, high, margin_threshold = _prepare_relevance_thresholds()
-    value = max(0.0, min(1.0, float(score)))
-    gap = max(0.0, float(margin))
-    if value < low:
-        return "reject"
-    if value >= high and gap >= margin_threshold:
-        return "accept"
-    return "llm"
-
-
-def _prepare_relevance_prompt(
-    query: str,
-    candidate_text: str,
-    *,
-    source_kind: str,
-    service_title: str = "",
-) -> str:
-    """
-    Формирует prompt для LLM-валидации релевантности prepare-кандидата.
-
-    :param query: исходный запрос пациента
-    :param candidate_text: кандидатный текст ответа
-    :param source_kind: источник кандидата (serviceInfoAll/main_index)
-    :param service_title: serviceName для API-кандидата
-    :return: prompt string
-    """
-
-    try:
-        tmpl = load_prompt_text("prepare_relevance_validator")
-    except Exception:
-        tmpl = _PREPARE_RELEVANCE_VALIDATOR_FALLBACK_PROMPT
-    return (
-        str(tmpl or "")
-        .replace("<<USER_QUERY>>", str(query or "").strip())
-        .replace("<<SOURCE_KIND>>", str(source_kind or "").strip())
-        .replace("<<SERVICE_TITLE>>", str(service_title or "").strip())
-        .replace("<<CANDIDATE_TEXT>>", str(candidate_text or "").strip())
-        .strip()
-    )
-
-
-def _parse_prepare_relevance_validator(raw: str) -> tuple[bool, float, str]:
-    """
-    Парсит JSON-ответ LLM-валидатора релевантности.
-
-    :param raw: raw-ответ LLM
-    :return: (is_relevant, confidence, reason)
-    """
-
-    obj = _extract_json_object(raw)
-    if not isinstance(obj, dict):
-        return False, 0.0, "llm_non_json"
-
-    verdict = str(obj.get("verdict") or "").strip().upper()
-    try:
-        confidence = float(obj.get("confidence"))
-    except Exception:
-        confidence = 0.0
-    confidence = max(0.0, min(1.0, confidence))
-    reason = str(obj.get("reason") or "").strip()
-    return verdict == _PREPARE_RELEVANCE_VERDICT_RELEVANT, confidence, reason
+    return _common_mod._runtime_float("MR_PREPARE_RELEVANCE_LOW_THRESHOLD", 0.28, min_value=0.05, max_value=0.95)
 
 
 def _dedupe_prepare_candidates(candidates: list[_PrepareCandidate], *, limit: int = 12) -> list[_PrepareCandidate]:
@@ -700,7 +603,7 @@ def _is_prepare_relevant(query: str, content: str) -> bool:
         return False
 
     score = _prepare_fast_relevance_score(query, content)
-    low, _, _ = _prepare_relevance_thresholds()
+    low = _prepare_relevance_low_threshold()
     dynamic_cutoff = max(0.20, low * 0.85)
     if score < dynamic_cutoff:
         return False
@@ -849,7 +752,7 @@ def _is_prepare_service_info_usable(query: str, content: str, *, title: str = ""
         return False
 
     score = _prepare_fast_relevance_score(query, content, title=title)
-    low, _, _ = _prepare_relevance_thresholds()
+    low = _prepare_relevance_low_threshold()
     if score < low and title and _prepare_term_roots(query):
         title_cov = _prepare_roots_coverage(_prepare_term_roots(query), _prepare_term_roots(title))
         if title_cov >= 0.99 and _has_prepare_strong_hints(content):

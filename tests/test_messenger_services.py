@@ -14,7 +14,6 @@ from messengers_router.services._doctors_helpers import (
     _service_name_matches_specialty as _svc_service_name_matches_specialty,
 )
 from messengers_router.services._prepare import (
-    _prepare_relevance_gate as _svc_prepare_relevance_gate,
     _prepare_roots_match as _svc_prepare_roots_match,
     _prepare_subject_hint as _svc_prepare_subject_hint,
 )
@@ -1581,23 +1580,6 @@ def test_test_prepare_cholesterol_not_confused_by_urogenital_soskob(monkeypatch)
     assert "натощак" in answer
     assert "урогениталь" not in answer
     assert res.get("note") == "prepare: serviceInfoAll"
-
-
-def test_prepare_relevance_gate_thresholds(monkeypatch):
-    def fake_runtime_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
-        values = {
-            "MR_PREPARE_RELEVANCE_LOW_THRESHOLD": 0.30,
-            "MR_PREPARE_RELEVANCE_HIGH_THRESHOLD": 0.60,
-            "MR_PREPARE_RELEVANCE_MARGIN_THRESHOLD": 0.10,
-        }
-        return values.get(name, default)
-
-    monkeypatch.setattr(_common_mod, "_runtime_float", fake_runtime_float)
-
-    assert _svc_prepare_relevance_gate(0.20, 0.30) == "reject"
-    assert _svc_prepare_relevance_gate(0.72, 0.12) == "accept"
-    assert _svc_prepare_relevance_gate(0.72, 0.01) == "llm"
-    assert _svc_prepare_relevance_gate(0.45, 0.30) == "llm"
 
 
 def test_test_prepare_no_memo_offers_operator_without_handoff(monkeypatch):
@@ -4500,8 +4482,9 @@ def test_address_info_derives_samara_city_from_parent_hierarchy(monkeypatch):
 def test_prepare_blood_no_specific_rules_falls_back_to_general_memo(monkeypatch):
     # BUG-2026-06-02-05: когда конкретных правил подготовки нет, но вопрос про
     # сдачу КРОВИ — отдаём общую памятку забора крови (применима к любой сдаче
-    # крови), а не clarify «уточните название». Для мочи/кала — прежний clarify.
-    # Класс-инвариант: источники правил замоканы пустыми, проверяем именно fallback.
+    # крови), а не clarify «уточните название». Для мочи/кала общей памятки нет —
+    # оффер оператора. Класс-инвариант: источники памяток (МИС и база знаний)
+    # замоканы пустыми, проверяем именно запасной путь.
     from messengers_router.services import prepare as prep_mod
 
     s = Services()
@@ -4510,7 +4493,7 @@ def test_prepare_blood_no_specific_rules_falls_back_to_general_memo(monkeypatch)
         return []
 
     monkeypatch.setattr(s, "_prepare_candidates_from_analysis_api_cache", _empty_api)
-    monkeypatch.setattr(prep_mod.meilisearch, "search_meili", lambda *a, **k: "")
+    monkeypatch.setattr(prep_mod, "kb_patient_memos", lambda: ())
 
     blood = asyncio.run(s.test_prepare("Какая подготовка к сдаче крови на РедкийАнализ123", {}))
     urine = asyncio.run(s.test_prepare("Какая подготовка к сдаче мочи на РедкийАнализ123", {}))
@@ -4518,9 +4501,10 @@ def test_prepare_blood_no_specific_rules_falls_back_to_general_memo(monkeypatch)
     assert "blood-collection general guidance" in str(blood.get("note")), blood.get("note")
     blood_text = str(blood.get("prepare") or "")
     assert "живой очереди" in blood_text and "натощак" in blood_text and "паспорт" in blood_text
-    # моча/кал — общей памятки нет, остаётся прежний clarify
+    # моча/кал — общей памятки нет, оффер оператора
     assert "blood-collection" not in str(urine.get("note")), urine.get("note")
     assert "живой очереди" not in str(urine.get("prepare") or "")
+    assert urine.get("operator_offer") is True
 
 
 @pytest.mark.parametrize(
