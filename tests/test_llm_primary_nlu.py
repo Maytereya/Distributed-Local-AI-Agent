@@ -2,6 +2,8 @@ import asyncio
 import inspect
 import logging
 
+import pytest
+
 from messengers_router import classifier
 from messengers_router.llm_mode_policy import normalize_runtime_options
 from messengers_router.mess_types import RouteDecision, SessionState
@@ -203,6 +205,43 @@ def test_secondary_intents_preserve_llm_metadata():
     assert out.clarify_reason == "slot_request"
     assert out.clarify_slots == ["city"]
     assert out.intent_candidates == ["PRICE", "APPOINTMENT"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "нужно ли отменять лекарства перед анализом",
+        "надо ли отменить витамины перед сдачей крови",
+        "я перенесла ковид, какие анализы сдать",
+        "плохо переношу голод, можно ли позавтракать перед анализом",
+        "сместился цикл, когда сдавать гормоны",
+    ],
+)
+def test_rule_verb_lookalikes_are_not_appointment(text):
+    # Класс «похоже по буквам» (BUG-2026-10-04-APPOINTMENT-VERB-LOOKALIKE): правило по
+    # началу слова «перен-/смест-/отмен-» отдавало в запись вопросы о подготовке и
+    # анализах. Без объекта записи правило о записи молчит — решает LLM.
+    decision = run(classifier.deterministic_rule_decision(text, {}, allow_refine=False, attach_secondary=False))
+
+    assert decision is None or decision.label != "APPOINTMENT"
+
+
+@pytest.mark.parametrize(
+    ("text", "action"),
+    [
+        ("отменить запись", "cancel"),
+        ("хочу отменить приём у кардиолога", "cancel"),
+        ("перенести запись на пятницу", "reschedule"),
+        ("можно сместить время приёма?", "reschedule"),
+        ("перезаписаться на другой день", "reschedule"),
+    ],
+)
+def test_rule_cancel_and_reschedule_with_appointment_object_stay_appointment(text, action):
+    decision = run(classifier.deterministic_rule_decision(text, {}, allow_refine=False, attach_secondary=False))
+
+    assert decision is not None
+    assert decision.label == "APPOINTMENT"
+    assert decision.entities.get("appointment_action") == action
 
 
 def test_rule_appointment_does_not_keep_doctor_as_service_name():

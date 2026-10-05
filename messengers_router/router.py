@@ -85,6 +85,7 @@ from .policies import (
     detect_doc_request_intent,
     detect_schedule_intent,
     detect_doctor_info_intent,
+    detect_appointment_change_without_object,
     detect_existing_appointment_request,
     has_datetime_signal,
     is_test_assist_category_term,
@@ -94,6 +95,7 @@ from .policies import (
 )
 from .recovery_policy import contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
+from .services._appointment_change_validator import is_own_appointment_change
 from .services._patient_name_validator import is_patient_name_reply
 from .services._samara_perimeter import (
     branch_name_for_place,
@@ -1467,6 +1469,46 @@ _EXISTING_APPOINTMENT_OFFER: dict[str, str] = {
 }
 
 
+async def _confirm_appointment_change_verb(
+    decision: RouteDecision,
+    *,
+    user_text: str,
+    state: SessionState,
+) -> RouteDecision:
+    """«Отменить / перенести» без слова «запись»: о записи ли речь — решает LLM.
+
+    С 04.10 правило записи срабатывает только на объекте записи; голый глагол — кандидат.
+    Классификатор NLU «хочу отменить, заболела» относит к «прочему» (свип 04.10: пациент
+    получал «Не совсем понял ваш запрос»), а «нужно ли отменять лекарства перед
+    анализом» — верно к подготовке. Различает короткий вопрос к LLM; сбой LLM — как до
+    04.10: просьба о записи (отмену увидит оператор).
+
+    :param decision: решение после guardrails
+    :param user_text: реплика пациента
+    :param state: состояние сессии
+    :return: APPOINTMENT с действием записи либо исходное решение
+    """
+
+    if decision.label in {"APPOINTMENT", "URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
+        return decision
+    if state.last_entities.get("appointment_flow_active"):
+        return decision
+    if state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM):
+        return decision
+    action = detect_appointment_change_without_object(user_text)
+    if action is None or await is_own_appointment_change(user_text) is False:
+        return decision
+    return _copy_decision(
+        decision,
+        label="APPOINTMENT",
+        entities={"appointment_action": normalize_appointment_action(action, user_text)},
+        flags=set(decision.flags) | {"appointment_change_verb"},
+        source="appointment_change_verb",
+        confidence=max(decision.confidence, 0.9),
+        needs_handoff=False,
+    )
+
+
 def _maybe_offer_operator_for_existing_appointment(
     *,
     decision: RouteDecision,
@@ -1502,6 +1544,10 @@ def _maybe_offer_operator_for_existing_appointment(
     if state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM):
         return None
     kind = detect_existing_appointment_request(user_text)
+    if kind is None and decision.label == "APPOINTMENT" and decision.entities.get("appointment_action") == "cancel":
+        # Отмену без слова «запись» распознал не детектор, а LLM («не смогу прийти,
+        # отмените») — тоже сразу оператор: реквизиты отмены бот не собирает (25.09).
+        kind = "cancel"
     if kind is None:
         return None
 
@@ -2270,6 +2316,7 @@ async def _complete_route_after_doctor_guard(
     )
     decision = await _apply_post_nlu_guardrails(decision, state, user_text, services, memory)
     decision = _relabel_test_assist_catalog_hit_as_price(decision, user_text=user_text)
+    decision = await _confirm_appointment_change_verb(decision, user_text=user_text, state=state)
 
     existing_appointment = _maybe_offer_operator_for_existing_appointment(
         decision=decision,

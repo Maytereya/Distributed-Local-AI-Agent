@@ -181,6 +181,7 @@ class MessengerRouterConfig:
     llm_procedure_normalization: bool
     llm_service_normalization: bool
     llm_price_service_select: bool
+    llm_appointment_change_validation: bool
     debug_final_input: bool
     url: str
 
@@ -350,6 +351,14 @@ settings = Settings(
             default=True,
             legacy_key="LLM_PRICE_SERVICE_SELECT",
         ),
+        # «Отменить / перенести» без слова «запись» — спросить LLM, о записи ли речь
+        # (05.10). Сбой LLM — как раньше, просьба о записи; по умолчанию ВКЛ;
+        # kill-switch: [MESSENGER_ROUTER] llm_appointment_change_validation = false
+        llm_appointment_change_validation=_get_bool(
+            "MESSENGER_ROUTER",
+            "llm_appointment_change_validation",
+            default=True,
+        ),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -464,6 +473,7 @@ DEBUG_RAW_OUTPUT = settings.messenger_router.debug_raw_output
 LLM_PROCEDURE_NORMALIZATION = settings.messenger_router.llm_procedure_normalization
 MR_LLM_SERVICE_NORMALIZATION = settings.messenger_router.llm_service_normalization
 MR_LLM_PRICE_SERVICE_SELECT = settings.messenger_router.llm_price_service_select
+MR_LLM_APPOINTMENT_CHANGE_VALIDATION = settings.messenger_router.llm_appointment_change_validation
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

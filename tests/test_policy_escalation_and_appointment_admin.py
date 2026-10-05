@@ -76,27 +76,35 @@ def test_online_policy_prompt_copies_are_identical():
         ("записаться на приём", None),
         ("запишите меня на завтра", None),
         ("перенести запись", None),
+        # Перенос — путь переноса на боте (04.10), а не «проверить запись не могу».
+        ("перенесите мою запись на пятницу", None),
         ("сколько стоит приём кардиолога", None),
         ("Иванов Иван Иванович", None),
+        # «Похоже по буквам» (BUG-2026-10-04-APPOINTMENT-VERB-LOOKALIKE): глагол без
+        # объекта записи — не обращение по записи, и оператору сразу не уходит.
+        ("нужно ли отменять лекарства перед анализом", None),
+        ("надо ли отменить витамины перед сдачей крови", None),
+        ("я перенесла ковид, какие анализы сдать", None),
     ],
     ids=[
         "check_verb", "check_participle", "confirm", "in_force", "have_any",
         "cancel_plain", "cancel_my", "cancel_visit",
-        "book_new", "book_plain", "book_imperative", "reschedule", "price", "fio",
+        "book_new", "book_plain", "book_imperative", "reschedule", "reschedule_my", "price", "fio",
+        "lookalike_cancel_drugs", "lookalike_cancel_vitamins", "lookalike_carried_illness",
     ],
 )
 def test_existing_appointment_detector(text, expected):
     assert detect_existing_appointment_request(text) == expected
 
 
-def _install_stubs(monkeypatch, label: str = "APPOINTMENT"):
+def _install_stubs(monkeypatch, label: str = "APPOINTMENT", entities: dict | None = None):
     async def fake_analyze_with_candidates(_text, _state, runtime_options=None):
         _ = runtime_options
         return NLUResult(
             decision=RouteDecision(
                 label=label,
                 confidence=0.9,
-                entities={},
+                entities=dict(entities or {}),
                 flags={"rule_appointment"},
                 needs_handoff=False,
             ),
@@ -154,6 +162,82 @@ def test_existing_appointment_cancel_hands_off_at_once(monkeypatch, text):
     assert payload == {"text": handoff_message("existing_appointment_change"), "handoff": True}
     assert not state.last_entities.get("_operator_offer_pending")
     assert memory.get_pending(state) is None
+
+
+def _llm_says(monkeypatch, verdict: bool | None) -> list[str]:
+    asked: list[str] = []
+
+    async def validator(text):
+        asked.append(text)
+        return verdict
+
+    monkeypatch.setattr(router_mod, "is_own_appointment_change", validator)
+    return asked
+
+
+def _route(text: str, session_id: str):
+    state = SessionState(session_id=session_id)
+    return run(router_mod.route_patient_message(text, state, Services(), MemoryStore()))
+
+
+@pytest.mark.parametrize("text", ["нужно ли отменять лекарства перед анализом", "надо ли отменить витамины перед сдачей крови"])
+def test_cancel_verb_without_appointment_is_not_sent_to_operator(monkeypatch, text):
+    # Прод 04.10: вопрос о подготовке со словом «отменить» получал «Перенести или
+    # отменить запись поможет оператор — соединяю» и уходил оператору. Глагол без
+    # объекта записи — вопрос к LLM; она отвечает «другое».
+    _install_stubs(monkeypatch, label="PREPARE")
+    asked = _llm_says(monkeypatch, False)
+
+    decision, _plan, evidence = _route(text, "p6-lookalike")
+
+    assert asked == [text]
+    assert decision.label == "PREPARE"
+    assert not {f for f in decision.flags if f.startswith("existing_appointment")}
+    assert evidence.get("operator_offer_response") is None
+
+
+# Свип 04.10 (прод-LLM): без слова «запись» классификатор NLU относит эти просьбы к
+# «прочему», и пациент получал «Не совсем понял ваш запрос».
+_CANCEL_WITHOUT_OBJECT = ["хочу отменить, заболела", "не смогу прийти, отмените пожалуйста"]
+
+
+@pytest.mark.parametrize("verdict", [True, None], ids=["llm_yes", "llm_unavailable"])
+@pytest.mark.parametrize("text", _CANCEL_WITHOUT_OBJECT)
+def test_cancel_without_appointment_word_goes_to_operator(monkeypatch, text, verdict):
+    # LLM подтвердила или не ответила (тогда — как до 04.10): отмена — сразу оператор.
+    _install_stubs(monkeypatch, label="OTHER")
+    _llm_says(monkeypatch, verdict)
+
+    decision, _plan, evidence = _route(text, "p6-cancel-no-object")
+
+    assert "existing_appointment_cancel" in decision.flags
+    assert evidence.get("operator_offer_response") == {"text": handoff_message("existing_appointment_change"), "handoff": True}
+
+
+def test_reschedule_without_appointment_word_stays_with_the_bot(monkeypatch):
+    # Перенос — на боте (решение владельца 04.10): путь переноса, не оператор.
+    _install_stubs(monkeypatch, label="OTHER")
+    _llm_says(monkeypatch, True)
+
+    decision, _plan, evidence = _route("хочу перенести на пятницу", "p6-reschedule-no-object")
+
+    assert decision.label == "APPOINTMENT"
+    assert decision.entities.get("appointment_action") == "reschedule"
+    assert evidence.get("operator_offer_response") is None
+
+
+@pytest.mark.parametrize("text", ["отменить запись", *_CANCEL_WITHOUT_OBJECT])
+def test_cancel_recognized_by_llm_classifier_goes_to_operator(monkeypatch, text):
+    # Инвариант: отмена существующей записи — сразу оператор, кто бы её ни распознал —
+    # правило или классификатор LLM (APPOINTMENT с действием «отмена»).
+    _install_stubs(monkeypatch, label="APPOINTMENT", entities={"appointment_action": "cancel"})
+    asked = _llm_says(monkeypatch, True)
+
+    decision, _plan, evidence = _route(text, "p6-llm-cancel")
+
+    assert asked == []  # метка уже APPOINTMENT — лишнего вопроса к LLM нет
+    assert "existing_appointment_cancel" in decision.flags
+    assert evidence.get("operator_offer_response", {}).get("handoff") is True
 
 
 def _patient_sees(text: str) -> tuple[str, bool]:

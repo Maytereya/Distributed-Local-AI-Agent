@@ -221,15 +221,17 @@ TAX_DOC_REQUEST_PATTERNS = [
     r"\bсправк\w*.*\bоплат\w*.*\bмедицинск\w*.*\bуслуг\w*",
 ]
 
+# Глаголы «перенести / сместить / отменить» без объекта записи сюда не входят (04.10):
+# правило по началу слова отдавало в запись «нужно ли ОТМЕНЯТЬ лекарства перед
+# анализом» (и сразу оператору) и «я ПЕРЕНЕСЛА ковид, какие анализы сдать». С объектом
+# («отменить запись», «перенести приём») правило срабатывает по самому объекту, без
+# объекта — решает LLM (BUG-2026-10-04-APPOINTMENT-VERB-LOOKALIKE).
 APPOINTMENT_INTENT_PATTERNS = [
     r"\bзапис\w*",
     r"\bзапиш\w*",
     r"\bзапись\b",
     r"\bпри(е|ё)м\w*",
-    r"\bперен\w*",
-    r"\bсмест\w*",
     r"\bперезапис\w*",
-    r"\bотмен\w*",
     r"\bконсультаци\w*",
     r"\bхолтер\w*",
 ]
@@ -334,6 +336,7 @@ def _matches_any(text: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
     t = text or ""
     return any(p.search(t) for p in patterns)
 
+_APPOINTMENT_OBJECT_RE = re.compile(r"\b(?:запис|при[её]м|визит|талон)\w*", re.I)
 _DIAGNOSTIC_RE = re.compile(r"\b(экг|узи|мрт|кт|фгдс|фкс|рентген|флюорограф|колоноскоп|холтер)\b", re.I)
 
 # Fixed-equipment процедуры (флюорограф/маммограф на Ленина 5): нет приёмного
@@ -876,13 +879,38 @@ def detect_existing_appointment_request(text: str) -> str | None:
     raw = str(text or "").strip()
     if not raw:
         return None
-    # Отмену проверяем ПЕРВОЙ: «отмените МОЮ ЗАПИСЬ» подходит под обе формы,
-    # но действие в ней — отмена (перенос сюда не относится, у него свой путь).
-    if detect_appointment_action(raw) == "cancel":
-        return "cancel"
+    action = detect_appointment_action(raw)
+    # Отмену проверяем ПЕРВОЙ: «отмените МОЮ ЗАПИСЬ» подходит под обе формы, но
+    # действие в ней — отмена. Только при объекте записи: «нужно ли отменять лекарства
+    # перед анализом» — вопрос о подготовке, а не отмена записи.
+    if action == "cancel":
+        return "cancel" if _APPOINTMENT_OBJECT_RE.search(raw) else None
+    # Перенос — путь переноса на боте (решение владельца 04.10), не «проверка записи»:
+    # «перенесите мою запись на пятницу» раньше получало «проверить запись я не могу».
+    if action == "reschedule":
+        return None
     if _matches_any(raw, _APPOINTMENT_CHECK_RE):
         return "check"
     return None
+
+
+def detect_appointment_change_without_object(text: str) -> str | None:
+    """Глагол отмены или переноса без объекта записи — кандидат для вопроса к LLM.
+
+    «Хочу отменить, заболела» — отмена записи, «нужно ли отменять лекарства перед
+    анализом» — вопрос о подготовке: по буквам их не различить, а классификатор NLU
+    первую относит к «прочему» (свип 04.10, BUG-2026-10-04-APPOINTMENT-VERB-LOOKALIKE).
+    С объектом записи («отменить запись») решает правило — сюда такие фразы не попадают.
+
+    :param text: реплика пациента
+    :return: ``cancel`` | ``reschedule`` | ``ambiguous`` (оба глагола) | None
+    """
+
+    raw = str(text or "")
+    action = detect_appointment_action(raw)
+    if action not in {"cancel", "reschedule", "ambiguous"} or _APPOINTMENT_OBJECT_RE.search(raw):
+        return None
+    return action
 
 
 def detect_price_intent(text: str) -> bool:

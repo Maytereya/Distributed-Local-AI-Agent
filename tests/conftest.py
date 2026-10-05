@@ -100,6 +100,21 @@ def _hermetic_result_timing_validator(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_appointment_change_validator(monkeypatch):
+    """LLM-различитель «отменить / перенести» без слова «запись» герметичен: None =
+    LLM не ответила, бот ведёт себя как до 04.10 (просьба о записи). Тесты, которым
+    важен ответ LLM, переопределяют мок явно.
+    """
+    import messengers_router.router as _router
+
+    async def _unavailable(_text):
+        return None
+
+    monkeypatch.setattr(_router, "is_own_appointment_change", _unavailable)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_mis_synonyms(monkeypatch):
     """Герметичны ТОЛЬКО синонимы МИС; биоматериалы остаются живыми.
 
