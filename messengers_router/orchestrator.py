@@ -583,11 +583,16 @@ async def _render_impl(
     if ctx.decision is not None and ctx.decision.label == "URGENT":
         ctx.response = renderer.render_urgent()
         return ctx
+    # Медвопрос — тоже шаблоном всегда (решение владельца 04.10). Метка от LLM уходила
+    # в свободную генерацию, и на «болит голова три дня, что делать?» модель отвечала
+    # фразой для непрофильных вопросов: «По техническим вопросам обратитесь к
+    # администратору клиники» (BUG-2026-10-04-MEDICAL-ADVICE-FREE-TEXT).
+    if ctx.decision is not None and ctx.decision.label == "MEDICAL_ADVICE":
+        ctx.response = renderer.render_medical_advice()
+        return ctx
     if ctx.short_circuit and ctx.decision is not None:
         if ctx.decision.label == "COMPLAINT":
             ctx.response = renderer.render_complaint()
-        elif ctx.decision.label == "MEDICAL_ADVICE":
-            ctx.response = renderer.render_medical_advice()
         if ctx.response is not None:
             return ctx
 
