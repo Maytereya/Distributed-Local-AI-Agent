@@ -605,9 +605,12 @@ async def _render_impl(
     # Медвопрос — тоже шаблоном всегда (решение владельца 04.10). Метка от LLM уходила
     # в свободную генерацию, и на «болит голова три дня, что делать?» модель отвечала
     # фразой для непрофильных вопросов: «По техническим вопросам обратитесь к
-    # администратору клиники» (BUG-2026-10-04-MEDICAL-ADVICE-FREE-TEXT).
+    # администратору клиники» (BUG-2026-10-04-MEDICAL-ADVICE-FREE-TEXT). Шаблон называет
+    # врачей клиники, к которым идут с такими жалобами (05.10); не вышло — общий шаблон.
     if ctx.decision is not None and ctx.decision.label == "MEDICAL_ADVICE":
-        ctx.response = renderer.render_medical_advice()
+        from .services import _symptom_specialists
+
+        ctx.response = renderer.render_medical_advice(await _symptom_specialists.advise(ctx.text, services))
         return ctx
     if ctx.short_circuit and ctx.decision is not None:
         if ctx.decision.label == "COMPLAINT":
@@ -760,7 +763,9 @@ async def run_pipeline(
         ctx = await early_guards(ctx, runtime_options=runtime_options)
     if ctx.short_circuit:
         async with _timed_stage(ctx, "render"):
-            return await render(ctx, runtime_options=runtime_options)
+            # Сервисы нужны и здесь: медвопрос по правилу («что со мной? болит горло»)
+            # подбирает врачей клиники так же, как по метке LLM.
+            return await render(ctx, runtime_options=runtime_options, services=services, memory=memory)
     async with _timed_stage(ctx, "pending_dispatch"):
         ctx = await pending_dispatch(
             ctx,

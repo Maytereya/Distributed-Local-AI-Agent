@@ -115,6 +115,21 @@ def _hermetic_appointment_change_validator(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_symptom_specialists(monkeypatch):
+    """Совет «к каким врачам с такой жалобой» (LLM) герметичен: None = прежний шаблон
+    медвопроса. Тесты совета вызывают сохранённый настоящий `advise` или
+    `pick_specialists` напрямую.
+    """
+    from messengers_router.services import _symptom_specialists as _sym
+
+    async def _no_advice(_text, _services):
+        return None
+
+    monkeypatch.setattr(_sym, "advise", _no_advice)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_mis_synonyms(monkeypatch):
     """Герметичны ТОЛЬКО синонимы МИС; биоматериалы остаются живыми.
 

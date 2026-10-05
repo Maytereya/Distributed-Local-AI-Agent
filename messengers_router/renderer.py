@@ -991,7 +991,24 @@ def render_urgent() -> ResponseEnvelope:
     return ResponseEnvelope(text=txt, handoff=True)
 
 
-def render_medical_advice() -> ResponseEnvelope:
+def render_medical_advice(advice: Any = None) -> ResponseEnvelope:
+    """Ответ на медвопрос: без диагноза; к каким врачам клиники обратиться — если известно.
+
+    :param advice: `SpecialistAdvice` (services/_symptom_specialists) или None — общий шаблон
+    """
+
+    if advice is not None and getattr(advice, "urgent", False):
+        return render_urgent()
+    specialties = tuple(getattr(advice, "specialties", ()) or ())
+    if specialties:
+        whom = "специалисту нашей клиники" if len(specialties) == 1 else "специалистам нашей клиники"
+        txt = (
+            "Поставить диагноз и назначить лечение в чате я не могу, но с такими жалобами обычно обращаются "
+            f"к {whom}: {', '.join(specialties)}.\n\n"
+            "Могу записать на приём, подсказать расписание или стоимость приёма — напишите, к какому врачу.\n"
+            "Если станет резко хуже — вызывайте скорую: 103."
+        )
+        return ResponseEnvelope(text=txt, handoff=False)
     txt = (
         "Я не могу поставить диагноз или назначить лечение в чате.\n\n"
         "Могу помочь:\n"
