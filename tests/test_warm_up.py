@@ -45,6 +45,7 @@ def test_service_start_does_not_wait_for_warm_up(monkeypatch):
 
     monkeypatch.setattr(warm_up, "warm_up", slow_warm_up)
     monkeypatch.setattr(endpoint, "get_services", lambda: None)
+    monkeypatch.setattr(endpoint, "schedule_warm_up", warm_up.schedule_warm_up)  # conftest глушит
 
     async def service_start():
         await asyncio.wait_for(endpoint._on_startup(), timeout=1)  # не ждёт прогрева

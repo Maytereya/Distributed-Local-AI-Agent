@@ -127,6 +127,25 @@ def _hermetic_mis_synonyms(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_background_jobs(monkeypatch):
+    """Фоновые обновления справочников и прогрев в тестах не запускаются.
+
+    С 03.10 старт сервиса (`TestClient(app)` → `_on_startup`) запускает настоящие
+    планировщики обновлений и прогрев. Скачать они ничего не могут — сеть закрыта, —
+    но обновление врачей после неудачи чистило «старые» срезы и 04.10 стёрло настоящий
+    кэш врачей разработчика: 15 тестов упали на пустом каталоге врачей. Тесты самих
+    планировщиков вызывают их напрямую (`api_price.ensure_…`, `warm_up.warm_up`);
+    тест старта сервиса возвращает настоящий `schedule_warm_up` явно.
+    """
+    from messengers_router import endpoint
+    from messengers_router.services import Services
+
+    monkeypatch.setattr(Services, "ensure_background_refresh_started", lambda self: None)
+    monkeypatch.setattr(endpoint, "schedule_warm_up", lambda: None)
+    yield
+
+
 # --- Изоляция сети (29.09) ----------------------------------------------------
 #
 # Гейт обязан быть герметичным. Через локальный `config.ini` тесты ходили в
