@@ -18,7 +18,9 @@
 - пустой ответ МИС не записывается и не затирает срез;
 - нет сегодняшнего среза и МИС недоступна — последний непустой срез, а не пусто/ошибка;
 - после сбоя следующая попытка скачать — не раньше чем через `RETRY_AFTER_S`;
-- запись атомарна: читатель видит прежний файл или новый целиком.
+- запись атомарна: читатель видит прежний файл или новый целиком;
+- старые срезы удаляются только после записи нового (04.10: обновление врачей без ответа
+  МИС стирало последний рабочий срез).
 """
 
 from __future__ import annotations
@@ -170,6 +172,56 @@ def test_doctors_loader_does_not_retry_mis_on_every_request(monkeypatch, tmp_pat
     for _ in range(3):
         assert api_nayka.get_cached_doctors_data() == []
     assert len(calls) == 1
+
+
+def _doctors_refresh_env(monkeypatch, tmp_path: Path, fetched: list[dict]) -> None:
+    from agent_logic_2.nayka_api import doctors_cc_info
+
+    monkeypatch.setattr(api_nayka, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(api_nayka, "get_active_date_str", lambda: "20261004")
+    monkeypatch.setattr(api_nayka, "get_all_doctors", lambda: fetched)
+    monkeypatch.setattr(doctors_cc_info, "get_doctors_cc_info", lambda force=False: [])
+
+
+def test_failed_doctors_refresh_keeps_last_good_snapshot(monkeypatch, tmp_path: Path):
+    # 04.10: утреннее обновление без ответа МИС всё равно чистило «старые» срезы и стирало
+    # последний рабочий — бот оставался без врачей («каталог врачей недоступен»).
+    import asyncio
+
+    good = _snapshot(tmp_path / "doctors_20200101.jsonl", [{"id": 1, "fio": "Иванов"}])
+    _doctors_refresh_env(monkeypatch, tmp_path, fetched=[])
+
+    asyncio.run(api_nayka._refresh_once())
+
+    assert good.exists()
+    assert api_nayka.find_existing_doctors_file() == good
+
+
+def test_failed_doctors_write_keeps_last_good_snapshot(monkeypatch, tmp_path: Path):
+    good = _snapshot(tmp_path / "doctors_20200101.jsonl", [{"id": 1, "fio": "Иванов"}])
+    _doctors_refresh_env(monkeypatch, tmp_path, fetched=[])
+
+    def disk_full(path, rows):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(snapshots, "write_rows", disk_full)
+
+    with pytest.raises(OSError):
+        api_nayka.save_doctors_data([{"id": 2, "fio": "Петров"}])
+    assert good.exists()
+
+
+def test_doctors_refresh_replaces_stale_snapshots_after_writing(monkeypatch, tmp_path: Path):
+    import asyncio
+
+    stale = _snapshot(tmp_path / "doctors_20200101.jsonl", [{"id": 1, "fio": "Иванов"}])
+    fresh = [{"id": 2, "fio": "Петров"}]
+    _doctors_refresh_env(monkeypatch, tmp_path, fetched=fresh)
+
+    asyncio.run(api_nayka._refresh_once())
+
+    assert not stale.exists()
+    assert api_nayka.load_doctors_data(tmp_path / "doctors_20261004.jsonl") == fresh
 
 
 # --- Ежедневное обновление и мусор на диске (03.10) --------------------------------

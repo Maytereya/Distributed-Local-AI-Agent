@@ -376,20 +376,24 @@ def get_date_from_filename(file: Path) -> str:
     return file.stem.split("_")[-1]
 
 
-def save_doctors_data(doctors: list):
-    """Сохраняет список врачей в формате JSONL — по одному врачу на строку (для активной даты)."""
+def save_doctors_data(doctors: list) -> bool:
+    """Сохраняет список врачей в формате JSONL — по одному врачу на строку (для активной даты).
+
+    Старые срезы удаляются только ПОСЛЕ записи нового: до неё последний рабочий срез —
+    единственный источник врачей для бота (04.10 очистка без записи стёрла его целиком).
+
+    :return: True, если срез записан
+    """
     if not doctors:
         print("⚠️ Пустой список врачей не сохраняем, чтобы не затереть рабочий кэш")
-        return
-    # Чистим лишнее, но сохраняем активную и вчерашнюю датy
-    cleanup_old_doctors_files()
-
+        return False
     date_str = get_active_date_str()
     filename = DATA_DIR / f"doctors_{date_str}.jsonl"
-    with open(filename, "w", encoding="utf-8") as f:
-        for doc in doctors:
-            f.write(json.dumps(doc, ensure_ascii=False) + "\n")
+    snapshots.write_rows(filename, doctors)
     print(f"✅ Врачи сохранены в формате JSONL: {filename}")
+    # Чистим лишнее, но сохраняем активную и вчерашнюю дату
+    cleanup_old_doctors_files()
+    return True
 
 
 def load_doctors_data(file: Path) -> list:
@@ -658,10 +662,10 @@ async def _refresh_once():
     try:
         # 1) Врачи
         docs = await asyncio.to_thread(get_all_doctors)
-        save_doctors_data(docs)
-        # подчистим, оставив активную и вчерашнюю
-        cleanup_old_doctors_files()
-        print("✅ [DAILY REFRESH] Кэш врачей обновлён")
+        if save_doctors_data(docs):  # старые срезы чистит сама запись — и только после неё
+            print("✅ [DAILY REFRESH] Кэш врачей обновлён")
+        else:
+            print("⚠️ [DAILY REFRESH] МИС не вернула врачей — остаётся прежний срез")
         # 2) Заметки call-центра (zametka_button_*.json)
         try:
             from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info as _get_cc
