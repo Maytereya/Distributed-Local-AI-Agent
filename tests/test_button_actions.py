@@ -247,6 +247,17 @@ def test_text_request_keeps_the_label_question():
     assert answer not in {a.text for a in button_menu.BUTTONS.values()}
 
 
+@pytest.mark.parametrize("button_id", [b for b in _ids("slot") if button_menu.BUTTONS[b].label == "PRICE"])
+def test_price_hint_does_not_invite_a_list(button_id):
+    # BTN-1 (ревью 05.10): «Можно несколько через запятую» звало в путь, где список
+    # сводится к одной услуге — «ферритин, глюкоза, холестерин» → только «Липидограмма»
+    # (открытый П2: корзина с пациентскими синонимами). Пока корзина не починена,
+    # подсказка цены просит одно название.
+    hint = button_menu.BUTTONS[button_id].text.lower()
+    assert "через запятую" not in hint
+    assert "несколько" not in hint
+
+
 def test_booking_needed_button_answers_walk_in_rule():
     # Кнопка из раздела «Сдать анализы»: штатный walk-in ответ, а не оффер записи.
     assert "без записи" in _press("menu.tests.booking_needed")
