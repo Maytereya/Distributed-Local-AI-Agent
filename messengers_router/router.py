@@ -87,6 +87,7 @@ from .policies import (
     detect_doctor_info_intent,
     detect_appointment_change_without_object,
     detect_existing_appointment_request,
+    detect_urgent,
     has_datetime_signal,
     is_test_assist_category_term,
     normalize_appointment_action,
@@ -2809,7 +2810,35 @@ async def patient_routing_stream(
         # включая предпроверку активной записи.
         clear_on_topic_switch(state, memory)
 
-    # Явный запрос оператора должен иметь абсолютный приоритет.
+    # Неотложное состояние — первым: раньше явного запроса оператора, охраны города и
+    # предпроверки записи. Срочность проверялась только внутри пайплайна, и «задыхаюсь»
+    # посреди подтверждения записи получало «Подтвердите запись…», из другого города —
+    # «только по Самаре», а «оператор! хочу покончить с собой» — голое «Соединяю с
+    # оператором» (ночью ещё и часы операторов), всё без совета вызвать скорую
+    # (BUG-2026-10-05-URGENT-INSIDE-APPOINTMENT). Здесь — только регулярка срочности, не
+    # каскад правил; ответ — тот же шаблон, что у метки URGENT, он и переводит на оператора.
+    # Summary не пересобираем: clear_on_handoff его обнуляет, как у явного оператора.
+    if detect_urgent(user_text):
+        from . import renderer
+
+        clear_on_handoff(state, memory)
+        urgent = renderer.render_urgent()
+        yield ResponseEnvelope(
+            text=urgent.text,
+            attachments=list(urgent.attachments),
+            handoff=urgent.handoff,
+            state_update=_early_debug_state_update(
+                debug,
+                label="URGENT",
+                handoff=urgent.handoff,
+                flags={"urgent"},
+                context_action="new_topic",
+                confidence=1.0,
+            ),
+        )
+        return
+
+    # Явный запрос оператора — приоритет над всем, кроме срочного (оно выше).
     if explicit_operator_requested(user_text):
         clear_on_handoff(state, memory)
         yield ResponseEnvelope(
