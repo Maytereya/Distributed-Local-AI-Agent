@@ -298,9 +298,28 @@ def _extract_pending_response(
         missing if isinstance(missing, list) else [],
     )
     return ResponseEnvelope(
-        text=clarification_question(plan.label, missing if isinstance(missing, list) else [], ctx.state.last_entities),
+        text=_button_hint(decision)
+        or clarification_question(plan.label, missing if isinstance(missing, list) else [], ctx.state.last_entities),
         handoff=False,
     )
+
+
+def _button_hint(decision: Any) -> str:
+    """Подсказка нажатой кнопки — что и в каком виде написать (решение владельца 04.10).
+
+    Общий вопрос метки («Скажите, пожалуйста, название услуги/анализа») одинаков для
+    текста и кнопок; после нажатия пациент ещё не знает, как сформулировать запрос,
+    поэтому у кнопок-тем свой вопрос с примером.
+    """
+
+    from . import button_menu
+
+    for flag in getattr(decision, "flags", ()) or ():
+        if str(flag).startswith("button:"):
+            action = button_menu.action_for(str(flag).split(":", 1)[1])
+            if action is not None and action.mode == "slot":
+                return action.text
+    return ""
 
 
 async def early_guards(

@@ -224,6 +224,29 @@ def test_button_press_never_guesses_a_catalog_service(button_id):
     assert "имели в виду" not in _press(button_id).lower()
 
 
+# --- подсказка кнопки: что и в каком виде написать (решение владельца 04.10) -----
+
+
+@pytest.mark.parametrize("button_id", [b for b in _ids("slot") if button_menu.BUTTONS[b].text])
+def test_slot_button_press_shows_what_to_write(button_id):
+    # После нажатия пациент ещё не знает, как сформулировать запрос: общий вопрос метки
+    # («Скажите, пожалуйста, название услуги») заменяет вопрос кнопки с примером.
+    answer = _press(button_id)
+    assert answer == button_menu.BUTTONS[button_id].text
+    assert "например" in answer
+
+
+def test_text_request_keeps_the_label_question():
+    # Подсказка — только на ход нажатия: тот же недостающий слот, названный текстом,
+    # спрашивается штатным вопросом метки.
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    out = _stream("сколько стоит", SessionState(session_id="text-price"), services, MemoryStore())
+    answer = "".join(e.text for e in out if e.text)
+    assert answer
+    assert answer not in {a.text for a in button_menu.BUTTONS.values()}
+
+
 def test_booking_needed_button_answers_walk_in_rule():
     # Кнопка из раздела «Сдать анализы»: штатный walk-in ответ, а не оффер записи.
     assert "без записи" in _press("menu.tests.booking_needed")

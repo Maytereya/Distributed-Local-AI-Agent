@@ -38,8 +38,9 @@ class ButtonAction:
     text: str = ""
 
 
-def _slot(label: str, **entities: str) -> ButtonAction:
-    return ButtonAction(label=label, mode="slot", entities=tuple(entities.items()))
+def _slot(label: str, hint: str = "", **entities: str) -> ButtonAction:
+    """Кнопка-тема; `hint` — вопрос с примером, что написать (вместо общего вопроса метки)."""
+    return ButtonAction(label=label, mode="slot", entities=tuple(entities.items()), text=hint)
 
 
 def _handoff(label: str, text: str) -> ButtonAction:
@@ -52,11 +53,19 @@ def _pass(label: str) -> ButtonAction:
 
 BUTTONS: dict[str, ButtonAction] = {
     # --- Записаться к врачу
-    "menu.appointment.book": _slot("APPOINTMENT"),
+    "menu.appointment.book": _slot(
+        "APPOINTMENT",
+        "К какому врачу или на какую услугу записать? Напишите специальность или услугу — "
+        "например: «кардиолог», «гинеколог», «УЗИ брюшной полости».",
+    ),
     "menu.appointment.schedule": _slot("DOCTOR_SCHEDULE"),
     # Решение владельца 25.09: существующую запись меняет только оператор, без вопроса.
     "menu.appointment.change": _handoff("APPOINTMENT", handoff_message("existing_appointment_change")),
-    "menu.appointment.prepare": _slot("PREPARE"),
+    "menu.appointment.prepare": _slot(
+        "PREPARE",
+        "К какой процедуре нужна подготовка? Напишите её название — например: "
+        "«гастроскопия», «колоноскопия».",
+    ),
     # --- Сдать анализы
     "menu.tests.where": _pass("ADDRESS"),
     # Кнопка из раздела «Сдать анализы»: контекст анализов известен заранее. Штатный
@@ -70,9 +79,17 @@ BUTTONS: dict[str, ButtonAction] = {
         entities=(("service_name", "анализы"),),
         flags=frozenset({"policy_nonbookable_walkin"}),
     ),
-    "menu.tests.prepare": _slot("PREPARE"),
+    "menu.tests.prepare": _slot(
+        "PREPARE",
+        "К какому анализу нужна подготовка? Напишите название — например: "
+        "«общий анализ крови», «ферритин», «ТТГ».",
+    ),
     "menu.tests.suggest": _slot("TEST_ASSIST"),
-    "menu.tests.price": _slot("PRICE"),
+    "menu.tests.price": _slot(
+        "PRICE",
+        "Какой анализ интересует? Напишите название — например: «общий анализ крови», «ферритин». "
+        "Можно несколько через запятую.",
+    ),
     # --- Результаты анализов
     "menu.results.lookup": _slot("TEST_RESULT"),
     "menu.results.missing": _slot("TEST_RESULT"),
@@ -81,8 +98,15 @@ BUTTONS: dict[str, ButtonAction] = {
     # до появления сроков в ответах честно переводим на оператора.
     "menu.results.eta": _handoff("TEST_ASSIST", "Срок готовности результата подскажет оператор — соединяю."),
     # --- Сколько стоит
-    "menu.price.test": _slot("PRICE"),
-    "menu.price.doctor": _slot("PRICE"),
+    "menu.price.test": _slot(
+        "PRICE",
+        "Какой анализ интересует? Напишите название — например: «общий анализ крови», «ферритин». "
+        "Можно несколько через запятую.",
+    ),
+    "menu.price.doctor": _slot(
+        "PRICE",
+        "К какому врачу? Напишите специальность — например: «кардиолог», «невролог», «гинеколог».",
+    ),
     "menu.price.promo": _pass("NEWS"),
     # --- Адреса и часы работы (лист, решение владельца 28.09)
     "menu.address": _pass("ADDRESS"),
