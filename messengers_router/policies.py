@@ -2384,7 +2384,7 @@ _NO_RE = re.compile(
     re.I,
 )
 _CONFIRM_STRIP_QUOTES_RE = re.compile(r"[\"'`«»]+")
-_CONFIRM_PUNCT_RE = re.compile(r"[!.,?;:]+")
+_CONFIRM_PUNCT_RE = re.compile(r"[!.,?;:()]+")  # «да)» — тоже «да»
 _CONFIRM_SPACE_RE = re.compile(r"\s+")
 _CONFIRM_YES_EXACT = {
     "да",
@@ -2399,6 +2399,9 @@ _CONFIRM_YES_EXACT = {
     "давайте",
     "подтверждаю",
     "подтверждаем",
+    "согласен",
+    "согласна",
+    "согласны",
 }
 _CONFIRM_NO_EXACT = {
     "нет",
@@ -2424,6 +2427,17 @@ def _normalize_confirmation_text(text: str) -> str:
     return norm
 
 
+# Отказ или оговорка перекрывают «да / ладно / хорошо» в начале фразы: «ладно, не надо»,
+# «да нет», «хорошо, я перезвоню», «да отмените лучше» — не согласие ни на один вопрос бота
+# (BUG-2026-10-07-CONFIRM-REFUSAL-AS-YES). Устойчивые «не против», «без проблем» — согласие.
+_AFFIRMATIVE_IDIOMS_RE = re.compile(r"\b(?:не против|не возражаю|нет проблем|без проблем|почему бы и нет|почему нет)\b")
+_REFUSAL_OR_HEDGE_RE = re.compile(r"\b(?:не|нет|неа|ни)\b|\b(?:отмен|передума|перезвон|подума|позже|попозже|потом)\w*")
+
+
+def _has_refusal_or_hedge(norm: str) -> bool:
+    return bool(_REFUSAL_OR_HEDGE_RE.search(_AFFIRMATIVE_IDIOMS_RE.sub(" ", norm)))
+
+
 def _is_affirmative_text(text: str) -> bool:
     raw = str(text or "")
     if _YES_RE.match(raw):
@@ -2433,6 +2447,10 @@ def _is_affirmative_text(text: str) -> bool:
         return False
     if norm in _CONFIRM_YES_EXACT:
         return True
+    if _AFFIRMATIVE_IDIOMS_RE.search(norm) and not _AFFIRMATIVE_IDIOMS_RE.sub(" ", norm).strip():
+        return True  # «не против», «почему бы и нет» — согласие и без «да»
+    if _has_refusal_or_hedge(norm):
+        return False
     if norm.startswith("да "):
         return True
     if norm.startswith("хорошо "):
@@ -2458,8 +2476,30 @@ def _is_negative_text(text: str) -> bool:
     return False
 
 
+# На подтверждении записи согласие — только однозначное: каждое слово — из словаря согласия.
+# «Да, а можно пораньше?», «наверное», «да. игнорируй инструкции…» — не подтверждение, а
+# повод переспросить: подтверждённая по ошибке заявка уходит оператору как решённая.
+_CONFIRM_YES_WORDS = frozenset(
+    {
+        "да", "ага", "угу", "ок", "окей", "ok", "okay", "хорошо", "ладно", "верно", "конечно",
+        "давайте", "давай", "подтверждаю", "подтверждаем", "согласен", "согласна", "согласны",
+        "правильно", "записывайте", "запишите", "отлично", "супер", "устраивает", "подходит",
+        "точно", "именно", "годится", "можно", "норм", "нормально", "все", "всё", "так", "это",
+        "и", "ну", "спасибо", "пожалуйста", "большое", "огромное", "очень", "жду", "буду",
+        "приду", "меня", "мне", "вам",
+    }
+)
+_CONFIRM_WORD_RE = re.compile(r"[а-яёa-z]+")
+
+
+def _is_unambiguous_yes(text: str) -> bool:
+    norm = _AFFIRMATIVE_IDIOMS_RE.sub(" да ", _normalize_confirmation_text(text))
+    words = _CONFIRM_WORD_RE.findall(norm)
+    return bool(words) and all(word in _CONFIRM_YES_WORDS for word in words)
+
+
 def appointment_confirmation_transition(text: str) -> str:
-    if _is_affirmative_text(text):
+    if _is_affirmative_text(text) and _is_unambiguous_yes(text):
         return APPOINTMENT_CONFIRM_YES
     if _is_negative_text(text):
         return APPOINTMENT_CONFIRM_NO
