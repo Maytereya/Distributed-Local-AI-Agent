@@ -404,12 +404,13 @@ async def pending_dispatch(
 def _button_decision(button_id: str, action: Any) -> RouteDecision:
     """Решение по нажатой кнопке: тема и сущности — из смысла кнопки, не из подписи."""
     flags = {"button", f"button:{button_id}", *action.flags}
-    if action.mode == "handoff":
+    if action.mode in ("handoff", "hint"):
+        # Готовый текст кнопки; «hint» — без оператора и без висящего вопроса.
         return RouteDecision(
             label=action.label,
             confidence=1.0,
             flags=flags,
-            needs_handoff=True,
+            needs_handoff=action.mode == "handoff",
             context_action="new_topic",
             source="button",
             clarify_needed=True,
@@ -441,7 +442,7 @@ async def nlu_route(
     from . import button_menu
 
     action = button_menu.action_for(ctx.button_id) if ctx.button_id else None
-    if action is not None and action.mode in ("slot", "handoff"):
+    if action is not None and action.mode in ("slot", "handoff", "hint"):
         # Нажатие кнопки — явный выбор темы: подпись не разбирается NLU и не даёт
         # сущностей (см. button_menu). Недостающее спросит штатный планировщик.
         ctx.decision = _button_decision(ctx.button_id, action)

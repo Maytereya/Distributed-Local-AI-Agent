@@ -8,12 +8,14 @@
 Подпись кнопки приходит в `text` (у API min_length=1), но словами пациента НЕ
 является. Зонд 29.09 по проду: «Цена приёма врача», прочитанная как текст, дала
 услугу «приём врача» и цену хирурга; «Подготовка к процедуре» — поиск правил
-подготовки к «процедуре». Отсюда три режима:
+подготовки к «процедуре». Отсюда четыре режима:
 
 * ``slot`` — тема из кнопки, сущности — только из СМЫСЛА кнопки (обычно ни
   одной), NLU не вызывается. Недостающее спрашивает штатный планировщик и
   запоминает контекст (pending), поэтому ответ пациента разбирается в теме кнопки.
 * ``handoff`` — готовый текст и перевод на оператора.
+* ``hint`` — готовый текст-подсказка без оператора и без висящего вопроса: следующую
+  фразу пациента разбирает обычный текстовый путь.
 * ``pass`` — подпись сама по себе полноценный запрос («Адреса и часы работы»,
   «Акции и скидки»), и текстовый путь отвечает верно (зонд 29.09): идёт как
   обычный текст.
@@ -32,7 +34,7 @@ from .policies import SICK_LEAVE_HANDOFF_TEXT, handoff_message
 @dataclass(frozen=True)
 class ButtonAction:
     label: str
-    mode: str  # "slot" | "handoff" | "pass"
+    mode: str  # "slot" | "handoff" | "hint" | "pass"
     entities: tuple[tuple[str, str], ...] = ()
     flags: frozenset[str] = frozenset()
     text: str = ""
@@ -47,6 +49,10 @@ def _handoff(label: str, text: str) -> ButtonAction:
     return ButtonAction(label=label, mode="handoff", text=text)
 
 
+def _hint(label: str, text: str) -> ButtonAction:
+    return ButtonAction(label=label, mode="hint", text=text)
+
+
 def _pass(label: str) -> ButtonAction:
     return ButtonAction(label=label, mode="pass")
 
@@ -59,8 +65,15 @@ BUTTONS: dict[str, ButtonAction] = {
         "например: «кардиолог», «гинеколог», «УЗИ брюшной полости».",
     ),
     "menu.appointment.schedule": _slot("DOCTOR_SCHEDULE"),
-    # Решение владельца 25.09: существующую запись меняет только оператор, без вопроса.
-    "menu.appointment.change": _handoff("APPOINTMENT", handoff_message("existing_appointment_change")),
+    # Решение владельца 07.10 (вместо перевода 25.09): перенос — на боте, отмена — оператор.
+    # Подсказка учит формату, который понимают текстовые пути: «перенести запись к …» —
+    # перенос, «отменить запись» — сразу оператор.
+    "menu.appointment.change": _hint(
+        "APPOINTMENT",
+        "Перенести запись помогу. Напишите фамилию врача и на какой день перенести — например: "
+        "«перенести запись к Иванову на пятницу».\n"
+        "Отменить запись поможет оператор — напишите «отменить запись».",
+    ),
     "menu.appointment.prepare": _slot(
         "PREPARE",
         "К какой процедуре нужна подготовка? Напишите её название — например: "

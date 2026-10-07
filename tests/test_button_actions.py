@@ -24,6 +24,7 @@ from messengers_router import router as router_mod
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import Label, ResponseEnvelope, RouteDecision, SessionState
 from messengers_router.orchestrator import OrchestratorContext, nlu_route
+from messengers_router.policies import handoff_message
 from messengers_router.services import Services
 
 # Контракт со шлюзом: «Таблица экранов, версия 1» — кнопки, которые доходят до бота.
@@ -109,6 +110,15 @@ def test_handoff_button_answers_with_its_text(button_id, monkeypatch):
     ctx, nlu_calls = _route(button_id, monkeypatch)
     assert nlu_calls == []
     assert ctx.decision.needs_handoff is True
+    assert ctx.decision.clarify_needed is True
+    assert ctx.decision.clarify_reason == button_menu.BUTTONS[button_id].text
+
+
+@pytest.mark.parametrize("button_id", _ids("hint"))
+def test_hint_button_answers_with_its_text_without_operator(button_id, monkeypatch):
+    ctx, nlu_calls = _route(button_id, monkeypatch)
+    assert nlu_calls == []
+    assert ctx.decision.needs_handoff is False
     assert ctx.decision.clarify_needed is True
     assert ctx.decision.clarify_reason == button_menu.BUTTONS[button_id].text
 
@@ -271,3 +281,41 @@ def test_eta_button_does_not_answer_something_else():
     ctx_text = _press("menu.results.eta")
     assert "подобрать анализы" not in ctx_text.lower()
     assert button_menu.BUTTONS["menu.results.eta"].mode == "handoff"
+
+
+# --- «Перенести или отменить»: подсказка формата, дальше — текстовые пути (07.10) ----
+
+
+def _press_then_say(button_id: str, reply: str) -> tuple[str, bool, str, bool]:
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+    state, memory = SessionState(session_id=f"hint-{button_id}-{abs(hash(reply))}"), MemoryStore()
+    pressed = _stream(GATEWAY_V1_TITLES[button_id], state, services, memory, button_id=button_id)
+    answered = _stream(reply, state, services, memory)
+    return (
+        "".join(e.text for e in pressed if e.text),
+        any(e.handoff for e in pressed),
+        "".join(e.text for e in answered if e.text),
+        any(e.handoff for e in answered),
+    )
+
+
+def test_change_button_teaches_format_instead_of_calling_operator():
+    # Решение владельца 07.10: перенос — на боте, поэтому кнопка не переводит сразу, а
+    # подсказывает, что написать; отмена по-прежнему у оператора.
+    hint, handoff, _, _ = _press_then_say("menu.appointment.change", "перенести запись")
+    assert hint == button_menu.BUTTONS["menu.appointment.change"].text
+    assert handoff is False
+    assert "перенести запись" in hint and "отменить запись" in hint
+
+
+def test_change_button_reschedule_reply_stays_with_the_bot():
+    _, _, answer, handoff = _press_then_say("menu.appointment.change", "перенести запись к Дразнину на пятницу")
+    assert handoff is False
+    assert "оператор" not in answer.lower()
+
+
+def test_change_button_cancel_reply_goes_to_operator():
+    _, _, answer, handoff = _press_then_say("menu.appointment.change", "отменить запись")
+    assert handoff is True
+    assert answer.startswith(handoff_message("existing_appointment_change"))

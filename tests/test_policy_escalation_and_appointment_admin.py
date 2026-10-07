@@ -150,7 +150,7 @@ def test_existing_appointment_check_routes_to_operator_offer(monkeypatch):
 @pytest.mark.parametrize("text", ["хочу отменить запись", "Отменить запись", "Отмените запись на 24.09 в 18:30"])
 def test_existing_appointment_cancel_hands_off_at_once(monkeypatch, text):
     # Решение владельца 25.09 (заменяет 14.08 для отмены): сразу оператор, без
-    # вопроса, тем же текстом, что у кнопки «Перенести или отменить запись».
+    # вопроса (кнопка «Перенести или отменить» с 07.10 — подсказка, см. test_button_actions).
     _install_stubs(monkeypatch)
     state = SessionState(session_id="p6-cancel")
     memory = MemoryStore()

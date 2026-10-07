@@ -32,6 +32,7 @@ FOLLOW_UPS = {
     "menu.appointment.prepare": "УЗИ брюшной полости",
     "menu.tests.prepare": "ферритин",
     "menu.appointment.book": "кардиолог",
+    "menu.appointment.change": "перенести запись к Дразнину на пятницу",
 }
 
 # Обычные вопросы пациентов (свип 28.09): до и после деплоя должны совпадать.
