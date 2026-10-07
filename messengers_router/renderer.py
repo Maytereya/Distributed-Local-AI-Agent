@@ -983,12 +983,10 @@ def format_news_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -
 
 
 def render_urgent() -> ResponseEnvelope:
-    txt = (
-        "Похоже, ситуация может быть срочной.\n\n"
-        "Если есть угроза жизни (трудно дышать, сильная боль, кровь, потеря сознания) — вызовите скорую помощь.\n"
-        "Если это не экстренно — напишите, что нужно: запись к врачу/адрес/стоимость, и я помогу."
-    )
-    return ResponseEnvelope(text=txt, handoff=True)
+    # Решение владельца 07.10: срочное бот не ведёт и инструкций не даёт — только передача
+    # оператору. Ночью обработчик сам допишет часы операторов; что пациент ночью не получит
+    # совета позвонить в скорую, владелец принял осознанно (BUG-2026-10-07-URGENT-BY-WORD).
+    return ResponseEnvelope(text="Соединяю с оператором.", handoff=True)
 
 
 def render_medical_advice(advice: Any = None) -> ResponseEnvelope:
