@@ -89,6 +89,7 @@ from .policies import (
     detect_existing_appointment_request,
     detect_urgent,
     has_datetime_signal,
+    is_specialty_word,
     is_test_assist_category_term,
     normalize_appointment_action,
     nonbookable_service_hint,
@@ -1166,9 +1167,11 @@ def _plan_service_catalog_prefetch(
         return None
 
     query = str(entities.get("test_name") or user_text or "")
-    if not query:
+    if not query or is_specialty_word(query):
         return None
     current = str(last.get("service_name") or "")
+    if is_specialty_word(current):
+        current = ""  # «Терапевту» — врач, не услуга: каталог по буквам дал бы «ТЭС-терапию»
     return {"query": query, "current_service_name": current}
 
 
@@ -1343,7 +1346,14 @@ async def _inject_catalog_candidates(
         service_query = str(
             entities.get("service_name") or entities.get("test_name") or user_text or ""
         )
-        if (
+        # Название врача в любом падеже — не услуга: каталог по буквам превращал
+        # «Терапевту» в «ТЭС-терапию», и запись уходила не к тому врачу (07.10).
+        current_service = str(state.last_entities.get("service_name") or "")
+        if is_specialty_word(current_service):
+            current_service = ""
+        if is_specialty_word(service_query):
+            pass
+        elif (
             prefetched_service is not None
             and prefetched_service.get("query") == service_query
         ):
@@ -1351,7 +1361,7 @@ async def _inject_catalog_candidates(
         else:
             service_coro = services.match_catalog_service(
                 service_query,
-                current_service_name=str(state.last_entities.get("service_name") or ""),
+                current_service_name=current_service,
                 context_text=user_text,
             )
 

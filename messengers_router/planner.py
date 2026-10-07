@@ -12,7 +12,13 @@ from .flow_policy import apply_pending_override
 from .llm_mode_policy import RuntimeOptions
 from .memory import MemoryStore
 from .mess_types import Plan, PlanStep, RouteDecision, SessionState
-from .policies import has_datetime_signal, is_compound_uzi_request, is_fixed_equipment_service, missing_slots
+from .policies import (
+    has_datetime_signal,
+    is_compound_uzi_request,
+    is_fixed_equipment_service,
+    is_specialty_word,
+    missing_slots,
+)
 from .topic_registry import extract_topic_id_from_flags, get_topic as topic_registry_get_topic
 
 
@@ -75,6 +81,21 @@ def _build_other_plan_from_topic_registry(
             return [PlanStep(tool="main_index_info", input=base_input)]
 
     return []
+
+
+def _appointment_price_steps(user_text: str, entities: dict[str, Any]) -> list[PlanStep]:
+    """Цена в шаге записи без врача по фамилии.
+
+    Запись к специальности («к неврологу») — без цены, пока врач не выбран (решение
+    владельца 25.09, подтверждено 07.10): у специальности десятки строк приёма, а цену по
+    сырому тексту резолвер искал по буквам — «Невролиз» за 30 000 вместо приёма
+    (BUG-2026-09-25-SPECIALTY-HITS-PROCEDURE). Запись на услугу — прежний `price_info`.
+    """
+
+    service = str(entities.get("service_name") or entities.get("test_name") or "").strip()
+    if entities.get("specialty") and (not service or is_specialty_word(service)):
+        return []
+    return [PlanStep(tool="price_info", input={"query": user_text, "entities": dict(entities)}, required=False)]
 
 
 def build_plan(
@@ -312,7 +333,7 @@ def build_plan(
                         required=not flow_active,
                     )
                 )
-                steps.append(PlanStep(tool="price_info", input={"query": user_text, "entities": dict(entities)}, required=False))
+                steps.extend(_appointment_price_steps(user_text, entities))
         return Plan(label=label, steps=steps)
 
     if label == "PRICE":

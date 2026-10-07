@@ -2861,6 +2861,17 @@ def _specialty_named_alone(service: str) -> str:
     return ""
 
 
+def is_specialty_word(text: str) -> bool:
+    """Текст — только название врача в любом падеже: «Терапевту», «невролога», «лор».
+
+    Такое слово — не услуга: каталог по буквам превращал «Терапевту» в «ТЭС-терапию»,
+    «Гинекологу» — в «УЗИ гинекологическое», «Неврологу» — в «Невролиз» (07.10,
+    BUG-2026-09-25-SPECIALTY-HITS-PROCEDURE).
+    """
+
+    return bool(_specialty_named_alone(text))
+
+
 def appointment_service_display(entities: dict[str, Any]) -> str:
     service_raw = str(entities.get("service_name") or entities.get("test_name") or "").strip()
     doctor_name = str(entities.get("doctor_name") or "").strip()
