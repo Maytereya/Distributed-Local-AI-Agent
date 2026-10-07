@@ -1386,9 +1386,10 @@ def test_test_prepare_answers_from_kb_patient_memo(monkeypatch):
 
     res = run(svc.test_prepare("Как подготовиться к ФГДС?", {}))
 
-    assert res["prepare"] == memo.text
+    assert res["prepare"] == f"Памятка клиники «{memo.title}»:\n{memo.text}"
     assert res["note"] == "prepare: main_index"
     assert res["prepare_source_title"] == memo.title
+    assert res["prepare_wrap_status"] == "not_wrapped"
 
 
 def test_test_prepare_prefers_service_info_preparation(monkeypatch):
@@ -1599,52 +1600,29 @@ def test_test_prepare_no_memo_offers_operator_without_handoff(monkeypatch):
     assert res.get("handoff_required") is not True
 
 
-def test_test_prepare_compacts_long_memo_with_llm_wrap(monkeypatch):
+def test_test_prepare_kb_memo_is_sent_as_is_without_llm(monkeypatch):
+    # Решение владельца 07.10: пересказ LLM ошибался в дозах и времени («Пикопреп» при
+    # дневной колоноскопии); длинный ответ шлюз режет на сообщения.
     svc = Services()
-    calls: dict[str, int] = {"llm": 0}
-
     source_text = (
         "Подготовка к пайпель-биопсии эндометрия: процедура проводится на 7-11 день цикла. "
         "За 48 часов необходимо исключить половые контакты. За 24 часа не использовать "
         "вагинальные свечи и спринцевания. В день процедуры не применять кремы в интимной зоне. "
         "За 2-3 часа желательно опорожнить мочевой пузырь. При наличии анализов возьмите их с собой."
     )
-
     memo = PrepareMemo(SOURCE_KB, "ПАМЯТКА Пайпель-биопсия эндометрия", source_text)
     monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
     _prepare_llm_picks(monkeypatch, "пайпель", kb=(memo,))
 
-    async def fake_generate_text(prompt, *, timeout_s, queue_timeout_ms, fmt=None, llm=None, think=None):
-        calls["llm"] += 1
-        assert "пайпель" in str(prompt).lower()
-        return (
-            "Для подготовки к пайпель-биопсии:\n"
-            "- Проводите исследование на 7-11 день цикла.\n"
-            "- За 48 часов исключите половые контакты.\n"
-            "- За 24 часа не используйте вагинальные свечи и спринцевания."
-        )
+    async def no_llm(*_args, **_kwargs):
+        raise AssertionError("памятку базы знаний не переписываем")
 
-    monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
-
-    def fake_runtime_bool(name: str, default: bool) -> bool:
-        if name == "MR_PREPARE_LLM_WRAP_ENABLED":
-            return True
-        return default
-
-    def fake_runtime_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
-        if name == "MR_PREPARE_LLM_WRAP_MIN_CHARS":
-            return 1
-        return default
-
-    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
-    monkeypatch.setattr(_common_mod, "_runtime_int", fake_runtime_int)
+    monkeypatch.setattr(llm_runtime_mod, "generate_text", no_llm)
 
     res = run(svc.test_prepare("Как подготовиться к пайпель-биопсии?", {"service_name": "Пайпель-биопсия"}))
 
-    assert calls["llm"] == 1
-    assert "за 48 часов" in str(res.get("prepare") or "").lower()
-    assert len(str(res.get("prepare") or "")) < len(source_text)
-    assert res.get("prepare_wrap_status") == "llm_wrapped"
+    assert source_text in str(res.get("prepare") or "")
+    assert res.get("prepare_wrap_status") == "not_wrapped"
 
 
 def test_test_prepare_mis_memo_is_sent_as_is_without_llm(monkeypatch):
@@ -1681,89 +1659,33 @@ def test_test_prepare_mis_memo_is_sent_as_is_without_llm(monkeypatch):
     assert res.get("prepare_wrap_status") == "not_wrapped"
 
 
-def test_test_prepare_llm_wrap_uses_deterministic_fallback_on_invalid_compaction(monkeypatch):
+def test_test_prepare_kb_memo_drops_prices_but_keeps_the_rest(monkeypatch):
+    # Цены в памятках базы знаний устаревают — цена из прайса МИС (решение владельца 07.10):
+    # раздел «Стоимость услуг» снимается целиком, в тексте — только суммы.
     svc = Services()
-
     source_text = (
-        "Подготовка к анализу крови на холестерин: кровь сдаётся натощак 8-12 часов, "
-        "разрешена негазированная вода, за сутки исключить алкоголь и жирную пищу."
+        "Кровь сдают натощак 8-12 часов. Разрешена только негазированная вода. Стоимость услуги 490 руб. "
+        "Адреса и запись уточняйте у администратора.\n"
+        "1. ОАК с L-формулой-490руб.\n"
+        "2. Коагулограмма: МНО- 230 руб., тромбиновое время -220 руб., АЧТВ- 230 руб (взятие крови 150 руб)\n"
+        "3. ЭКГ-650 руб. Если сдавать анализы в клинике «Наука», то общая сумма составит: 1 320 руб +ЭКГ 650 руб.\n"
+        "Если сдать срочно! готовы анализы в течение 3-х часов, то стоимость составит 2630 руб + ЭКГ 650р.\n"
+        "7. Стоимость услуг:\n"
+        "Тотальная фиброколоноскопия (ФКС) 7 000 руб.\n"
+        "Полипэктомия 1 категория – 1500 руб."
     )
-
-    # Обёртка — только для памяток базы знаний: памятки МИС отдаются как есть.
     monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
     _prepare_llm_picks(monkeypatch, "холестерин", kb=(PrepareMemo(SOURCE_KB, "ПАМЯТКА Холестерин", source_text),))
 
-    async def fake_generate_text(*args, **kwargs):
-        return "NO_RELEVANT_CONTENT"
-
-    monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
-
-    def fake_runtime_bool(name: str, default: bool) -> bool:
-        if name == "MR_PREPARE_LLM_WRAP_ENABLED":
-            return True
-        return default
-
-    def fake_runtime_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
-        if name == "MR_PREPARE_LLM_WRAP_MIN_CHARS":
-            return 1
-        return default
-
-    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
-    monkeypatch.setattr(_common_mod, "_runtime_int", fake_runtime_int)
-
     res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {"service_name": "Холестерин"}))
-
     answer = str(res.get("prepare") or "")
-    assert "холестерин" in answer.lower()
-    assert "натощак" in answer.lower()
-    assert "стоим" not in answer.lower()
-    assert res.get("prepare_wrap_status") in {"fallback_compact", "fallback_not_shorter"}
-    assert res.get("prepare_wrap_reason") == "llm_wrap_invalid_output"
 
-
-def test_test_prepare_llm_wrap_timeout_uses_deterministic_fallback(monkeypatch):
-    svc = Services()
-
-    source_text = (
-        "Подготовка к анализу крови на холестерин: кровь сдают натощак 8-12 часов. "
-        "Разрешена только негазированная вода. За сутки исключить алкоголь и жирную пищу. "
-        "Стоимость услуги 490 руб. Адреса и запись уточняйте у администратора."
-    )
-
-    # Обёртка — только для памяток базы знаний: памятки МИС отдаются как есть.
-    monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
-    _prepare_llm_picks(monkeypatch, "холестерин", kb=(PrepareMemo(SOURCE_KB, "ПАМЯТКА Холестерин", source_text),))
-
-    async def fake_generate_text(*args, **kwargs):
-        raise TimeoutError("llm timeout")
-
-    monkeypatch.setattr(llm_runtime_mod, "generate_text", fake_generate_text)
-
-    def fake_runtime_bool(name: str, default: bool) -> bool:
-        if name == "MR_PREPARE_LLM_WRAP_ENABLED":
-            return True
-        return default
-
-    def fake_runtime_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
-        if name == "MR_PREPARE_LLM_WRAP_MIN_CHARS":
-            return 1
-        if name == "MR_PREPARE_FALLBACK_MAX_CHARS":
-            return 800
-        return default
-
-    monkeypatch.setattr(_common_mod, "_runtime_bool", fake_runtime_bool)
-    monkeypatch.setattr(_common_mod, "_runtime_int", fake_runtime_int)
-
-    res = run(svc.test_prepare("Как подготовиться к анализу на холестерин?", {"service_name": "Холестерин"}))
-
-    answer = str(res.get("prepare") or "")
-    assert "натощак" in answer.lower()
-    assert "стоим" not in answer.lower()
-    assert "руб" not in answer.lower()
-    assert len(answer) < len(source_text)
-    assert res.get("prepare_wrap_status") == "fallback_compact"
-    assert "TimeoutError" in str(res.get("prepare_wrap_reason") or "")
-
+    assert "руб" not in answer.lower() and "стоимост" not in answer.lower() and "сумма" not in answer.lower()
+    for kept in ("натощак", "Адреса и запись уточняйте", "1. ОАК с L-формулой", "2. Коагулограмма: МНО, тромбиновое время, АЧТВ", "3. ЭКГ"):
+        assert kept in answer, kept
+    assert "Полипэктомия" not in answer  # раздел цен снят целиком
+    assert "Если сдать срочно! готовы анализы в течение 3-х часов." in answer  # факт без цены остаётся
+    assert "650р" not in answer and "Если сдавать анализы" not in answer  # условие, где была только цена, снято
 
 def test_prepare_subject_hint_prefers_full_phrase_from_query_over_truncated_entity():
     hint = _svc_prepare_subject_hint(

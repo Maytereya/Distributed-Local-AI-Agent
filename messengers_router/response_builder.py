@@ -56,6 +56,7 @@ from .services import Services
 
 _DEFAULT_CITY = "Самара"
 _COMPOUND_PRICE_PENDING_KEY = "_compound_price_pending"
+PREPARE_VARIANT_PENDING_KEY = "_prepare_variant_pending"
 
 _UNSUPPORTED_CATALOG_TEXT: dict[str, str] = {
     "unsupported_service": "К сожалению, в данный момент клиника не оказывает данную услугу. Приносим извинения за неудобства.",
@@ -330,6 +331,9 @@ def build_prepare_response(
         return None
     if payload.get("operator_offer"):
         mark_operator_offer_pending(state, memory)
+    if isinstance(payload.get("prepare_variants"), dict):
+        # Вопрос «с наркозом или без?» — ответ разберёт `_handle_prepare_variant_pending`.
+        state.last_entities[PREPARE_VARIANT_PENDING_KEY] = {"titles": dict(payload["prepare_variants"])}
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 

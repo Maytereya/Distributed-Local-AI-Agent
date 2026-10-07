@@ -299,10 +299,9 @@ def test_tie_without_llm_answers_with_both_memos_each_under_its_title(monkeypatc
     monkeypatch.setattr(prepare_mod, "kb_patient_memos", lambda: ())
 
     async def must_not_call(*_args, **_kwargs):
-        raise AssertionError("в strict LLM не зовём — ни для выбора, ни для обёртки")
+        raise AssertionError("в strict LLM не зовём")
 
     monkeypatch.setattr(PS, "generate_text", must_not_call)
-    monkeypatch.setattr(prepare_mod.llm_runtime_mod, "generate_text", must_not_call)
 
     res = run(Services().test_prepare("подготовка к ттг", {"__runtime_llm_mode": "strict"}))
     text = res["prepare"]

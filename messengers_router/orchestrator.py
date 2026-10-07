@@ -382,6 +382,7 @@ async def pending_dispatch(
     for handler in (
         router._handle_catalog_confirm_pending,
         router._handle_appointment_action_pending,
+        router._handle_prepare_variant_pending,
         router._handle_compound_price_pending,
         router._handle_secondary_queue_pending,
     ):

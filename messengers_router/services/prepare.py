@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Any, Sequence
 
 from agent_logic_2.nayka_api import api_service_info
 
-from .. import llm_runtime as llm_runtime_mod
 from ..llm_doesnt_work_fallback import build_prepare_fallback_answer, join_wrapped_lines
 from . import _common as _common_mod
 from ._biomaterial import mis_synonym_candidates
@@ -28,7 +27,6 @@ from ._prepare import (
     _is_generic_prepare_heading,
     _is_prepare_content_actionable,
     _is_prepare_service_info_usable,
-    _is_prepare_wrap_output_usable,
     _memo_plain_text,
     _prepare_clarify_response,
     _prepare_no_memo_response,
@@ -37,8 +35,6 @@ from ._prepare import (
     _prepare_service_info_queries,
     _prepare_subject_phrase,
     _prepare_term_roots,
-    _prepare_wrap_clean,
-    _prepare_wrap_prompt,
 )
 
 if TYPE_CHECKING:
@@ -135,98 +131,6 @@ async def _prepare_candidates_from_analysis_api_cache(
         )
 
     return _dedupe_prepare_candidates(candidates, limit=16)
-
-
-async def _maybe_compact_prepare_text(
-    self: "Services",
-    query: str,
-    source_text: str,
-) -> tuple[str, str, str]:
-    """
-    Компактирует длинный PREPARE-текст через LLM с безопасным fallback.
-
-    :param query: исходный запрос пациента
-    :param source_text: текст одной выбранной памятки
-    :return: (итоговый текст, статус wrap, причина/диагностика)
-    """
-
-    text = str(source_text or "").strip()
-    if not text:
-        return "", "empty_source", "no_source_text"
-    if not _common_mod._runtime_bool("MR_PREPARE_LLM_WRAP_ENABLED", True):
-        return text, "disabled", "llm_wrap_disabled"
-
-    min_chars = _common_mod._runtime_int(
-        "MR_PREPARE_LLM_WRAP_MIN_CHARS",
-        700,
-        min_value=120,
-        max_value=12000,
-    )
-    if len(text) < min_chars:
-        return text, "short_source", "below_min_chars"
-
-    source_max_chars = _common_mod._runtime_int(
-        "MR_PREPARE_LLM_WRAP_SOURCE_MAX_CHARS",
-        9000,
-        min_value=500,
-        max_value=30000,
-    )
-    source_for_prompt = text[:source_max_chars].strip()
-
-    def _fallback_or_source(reason: str) -> tuple[str, str, str]:
-        compacted = build_prepare_fallback_answer(
-            query,
-            source_for_prompt,
-            max_chars=_common_mod._runtime_int(
-                "MR_PREPARE_FALLBACK_MAX_CHARS",
-                1600,
-                min_value=400,
-                max_value=4000,
-            ),
-            max_points=_common_mod._runtime_int(
-                "MR_PREPARE_FALLBACK_MAX_POINTS",
-                7,
-                min_value=3,
-                max_value=10,
-            ),
-        )
-        if compacted and len(compacted) < len(text):
-            return compacted, "fallback_compact", reason
-        if compacted:
-            return text, "fallback_not_shorter", reason
-        return text, "fallback_failed", reason
-
-    prompt = _prepare_wrap_prompt(query, source_for_prompt)
-    if not prompt:
-        return _fallback_or_source("empty_prompt")
-
-    timeout_s = _common_mod._runtime_int(
-        "MR_PREPARE_LLM_WRAP_TIMEOUT_S",
-        30,
-        min_value=3,
-        max_value=90,
-    )
-    queue_timeout_ms = _common_mod._runtime_int(
-        "MR_PREPARE_LLM_WRAP_QUEUE_TIMEOUT_MS",
-        6000,
-        min_value=300,
-        max_value=30000,
-    )
-    try:
-        raw = await llm_runtime_mod.generate_text(
-            prompt,
-            timeout_s=timeout_s,
-            queue_timeout_ms=queue_timeout_ms,
-            think=False,
-        )
-    except Exception as e:
-        logger.info("prepare llm wrap skipped: %s", e.__class__.__name__)
-        return _fallback_or_source(f"llm_wrap_error:{e.__class__.__name__}")
-
-    wrapped = _prepare_wrap_clean(str(raw or ""))
-    if not _is_prepare_wrap_output_usable(query, source_for_prompt, wrapped):
-        return _fallback_or_source("llm_wrap_invalid_output")
-    return wrapped, "llm_wrapped", "ok"
 
 
 # Голый запрос подготовки: «правила подготовки», «как подготовиться»,
@@ -381,20 +285,60 @@ async def _lab_collection_branches_answer(self: "Services", query: str = "") -> 
     return "\n\n".join(parts)
 
 
-# Одна памятка МИС уходит целиком, если короче этого; длинную сжимаем без LLM. Запас до
-# 4096 символов (лимит Telegram) — на заголовок и приписки рендера.
-_SINGLE_MEMO_MAX_CHARS = 3500
+# Памятка уходит целиком: длинный ответ шлюз режет на несколько сообщений Telegram (07.10).
+# Предел — защита от аномально длинного текста, а не сжатие памятки.
+_SINGLE_MEMO_MAX_CHARS = 12000
+
+# Цены в памятках базы знаний устаревают — цена из прайса МИС, а не из памятки (решение
+# владельца 07.10): раздел «Стоимость услуг» снимаем целиком, в тексте — только суммы
+# («ОАК с L-формулой-490руб.» → «ОАК с L-формулой»), названия анализов остаются.
+_PRICE_SECTION_RE = re.compile(r"^\W*(?:\d+\s*[.)]\s*)?стоимост\w*\s+услуг", re.I)
+# «…, то стоимость составит 2630 руб + ЭКГ 650р.» — ценовая часть предложения.
+_PRICE_CLAUSE_RE = re.compile(
+    r",?\s*(?:то\s+)?(?:общая\s+)?(?:стоимост\w*|сумм\w*)\s+(?:составит|составляет|будет)?\s*:?[^.!?]*\d[^.!?]*",
+    re.I,
+)
+_PRICE_PARENS_RE = re.compile(r"\s*\([^()]*\d[^()]*(?:руб|р\.)[^()]*\)", re.I)
+_PRICE_RE = re.compile(r"\s*[-–—:]?\s*\d[\d\s]*(?:[.,]\d+)?\s*(?:руб\w*\.?|р\.|₽)", re.I)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _sentence_without_price(sentence: str) -> str:
+    """Предложение без цены; условие «Если …», у которого была только цена, — пусто."""
+
+    without_clause = _PRICE_CLAUSE_RE.sub("", sentence)
+    if without_clause != sentence and sentence.lstrip().lower().startswith("если"):
+        return ""  # «Если сдавать анализы в клинике, то общая сумма составит …» — только цена
+    if without_clause != sentence and not without_clause.rstrip().endswith((".", "!", "?")):
+        without_clause = without_clause.rstrip() + "."
+    result = _PRICE_RE.sub("", without_clause)
+    return result if re.search(r"[а-яёa-z0-9]", result, re.I) else ""  # «Стоимость услуги 490 руб.» — целиком цена
+
+
+def _without_prices(lines: list[str]) -> list[str]:
+    out: list[str] = []
+    for line in lines:
+        if _PRICE_SECTION_RE.match(line):
+            break
+        sentences = _SENTENCE_SPLIT_RE.split(_PRICE_PARENS_RE.sub("", line))
+        cleaned = " ".join(s for s in (_sentence_without_price(s) for s in sentences) if s.strip())
+        cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned).rstrip()
+        if cleaned.strip() or not line.strip():
+            out.append(cleaned)
+    return out
 
 
 def _memo_block(memo: PrepareMemo, heading: str, *, max_chars: int) -> str:
     """Памятка под заголовком: текст клиники как есть, только склеены переносы строк.
 
-    Длиннее `max_chars` — сжатие без LLM и только из её собственного текста: склейка
-    разных памяток уже давала пациенту подготовку к чужой процедуре
-    (BUG-2026-10-01-PREPARE-FALLBACK-MIXES-DOCS).
+    Памятка базы знаний — без цен. Длиннее `max_chars` — сжатие без LLM и только из её
+    собственного текста: склейка разных памяток уже давала пациенту подготовку к чужой
+    процедуре (BUG-2026-10-01-PREPARE-FALLBACK-MIXES-DOCS).
     """
 
     lines = [line for line in join_wrapped_lines(memo.text) if not _is_generic_prepare_heading(line)]
+    if memo.source != SOURCE_MIS:
+        lines = _without_prices(lines)
     full = "\n".join(lines)
     if len(full) <= max_chars:
         return f"{heading}\n{full}"
@@ -408,8 +352,9 @@ def _quoted(title: str) -> str:
 
 
 def _single_memo_answer(memo: PrepareMemo) -> str:
-    """Памятка МИС — как есть, без переписывания LLM (решение владельца 03.10): она уже
-    написана для пациентов, а переписывание стоило 11–20 с ответа."""
+    """Памятка — как есть, без переписывания LLM: МИС — решение владельца 03.10 (переписывание
+    стоило 11–20 с), база знаний — 07.10 (пересказ ошибался в дозах и времени: «Пикопреп»
+    при дневной колоноскопии, «по схеме» без схемы)."""
 
     return _memo_block(memo, f"Памятка клиники {_quoted(memo.title)}:", max_chars=_SINGLE_MEMO_MAX_CHARS)
 
@@ -417,10 +362,73 @@ def _single_memo_answer(memo: PrepareMemo) -> str:
 def _several_memos_answer(memos: Sequence[PrepareMemo]) -> str:
     """Несколько памяток в одном ответе — каждая отдельным блоком под своим названием."""
 
-    max_chars = _common_mod._runtime_int("MR_PREPARE_FALLBACK_MAX_CHARS", 1600, min_value=400, max_value=4000)
     parts = ["Подходят несколько памяток клиники — посмотрите ту, что про ваш анализ."]
-    parts.extend(_memo_block(memo, f"{_quoted(memo.title)}:", max_chars=max_chars) for memo in memos)
+    parts.extend(_memo_block(memo, f"{_quoted(memo.title)}:", max_chars=_SINGLE_MEMO_MAX_CHARS) for memo in memos)
     return "\n\n".join(parts)
+
+
+# Варианты одной процедуры в базе знаний: «ФКС без наркоза» / «ФКС с наркозом» — подготовка
+# разная, и без ответа пациента бот выбирал одну наугад (решение владельца 07.10: спросить).
+_ANESTHESIA_QUESTION = (
+    "Подготовка зависит от наркоза. Исследование будет с наркозом (во сне) или без наркоза? "
+    "Напишите «с наркозом» или «без наркоза»."
+)
+_WITHOUT_ANESTHESIA_RE = re.compile(r"без\s+(?:наркоз|анестез|седац)", re.I)
+_WITH_ANESTHESIA_RE = re.compile(r"наркоз|анестез|седац|медикаментозн\w*\s+сн|\bво\s+сне\b", re.I)
+_VARIANT_NOISE_RE = re.compile(r"памятк\w*|без\s+наркоз\w*|с\s+наркоз\w*|[()]", re.I)
+
+
+def _anesthesia_of(text: str) -> str | None:
+    if _WITHOUT_ANESTHESIA_RE.search(text):
+        return "without"
+    return "with" if _WITH_ANESTHESIA_RE.search(text) else None
+
+
+def anesthesia_reply(text: str) -> str | None:
+    """Ответ на вопрос о наркозе: «with», «without», «both» (не знает) или None."""
+
+    choice = _anesthesia_of(text)
+    if choice:
+        return choice
+    if re.search(r"\bбез\b", text, re.I):
+        return "without"
+    if re.search(r"не\s+знаю|не\s+решил|\bоб[еа]\b", text, re.I):
+        return "both"
+    return None
+
+
+def _variant_key(title: str) -> str:
+    return " ".join(_VARIANT_NOISE_RE.sub(" ", title.lower()).split())
+
+
+def _anesthesia_variants(memo: PrepareMemo, kb_memos: Sequence[PrepareMemo]) -> dict[str, PrepareMemo]:
+    """Памятки той же процедуры с наркозом и без; меньше двух вариантов — пусто."""
+
+    key = _variant_key(memo.title)
+    variants = {kind: m for m in kb_memos if _variant_key(m.title) == key and (kind := _anesthesia_of(m.title))}
+    return variants if len(variants) == 2 else {}
+
+
+def prepare_variant_payload(titles: dict[str, str], choice: str) -> dict[str, Any] | None:
+    """Памятка по ответу о наркозе (`_handle_prepare_variant_pending`); «both» — обе."""
+
+    by_title = {m.title: m for m in kb_patient_memos()}
+    if choice == "both":
+        memos = [by_title[t] for t in titles.values() if t in by_title]
+        text = _several_memos_answer(memos) if memos else ""
+    else:
+        memo = by_title.get(str(titles.get(choice) or ""))
+        memos = [memo] if memo else []
+        text = _single_memo_answer(memo) if memo else ""
+    if not text:
+        return None
+    return {
+        "prepare": text,
+        "note": "prepare: anesthesia variant",
+        "prepare_source_title": " | ".join(m.title for m in memos),
+        "prepare_wrap_status": "not_wrapped",
+        "prepare_wrap_reason": "kb_memo_as_is",
+    }
 
 
 async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
@@ -496,16 +504,28 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
             "prepare_wrap_reason": "mis_memo_as_is",
         }
     if len(chosen) == 1:
-        # Памятки базы знаний длинные (ФКС — 5,7–7,3 тыс. символов, больше лимита сообщения) — их ужимает LLM.
+        # Памятка базы знаний — как есть, без цен (решение владельца 07.10): пересказ LLM
+        # ошибался в дозах и времени, а длинный ответ шлюз режет на сообщения. Есть варианты
+        # «с наркозом / без», а пациент о наркозе не написал, — сначала спросить.
         memo = chosen[0]
-        compacted, wrap_status, wrap_reason = await self._maybe_compact_prepare_text(q, memo.text)
+        variants = _anesthesia_variants(memo, await asyncio.to_thread(kb_patient_memos))
+        if variants:
+            choice = _anesthesia_of(raw_query)
+            if choice is None:
+                return {
+                    "prepare": _ANESTHESIA_QUESTION,
+                    "prepare_variants": {kind: m.title for kind, m in variants.items()},
+                    "note": "prepare: anesthesia question",
+                    "entities_used": entities,
+                }
+            memo = variants[choice]
         return {
-            "prepare": compacted,
+            "prepare": _single_memo_answer(memo),
             "note": f"prepare: {memo.source}",
             "prepare_source_title": memo.title,
             "entities_used": entities,
-            "prepare_wrap_status": wrap_status,
-            "prepare_wrap_reason": wrap_reason,
+            "prepare_wrap_status": "not_wrapped",
+            "prepare_wrap_reason": "kb_memo_as_is",
         }
     if chosen:
         # Две практически одинаковые памятки (LLM) или ничья без LLM — обе, каждая под

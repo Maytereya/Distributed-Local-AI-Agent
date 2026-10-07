@@ -98,6 +98,7 @@ from .policies import (
 from .recovery_policy import contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
 from .services._appointment_change_validator import is_own_appointment_change
+from .services.prepare import anesthesia_reply, prepare_variant_payload
 from .services._patient_name_validator import is_patient_name_reply
 from .services._samara_perimeter import (
     branch_name_for_place,
@@ -675,6 +676,52 @@ async def _handle_appointment_action_pending(
                 }
             }
         ),
+    )
+
+
+async def _handle_prepare_variant_pending(
+    *,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Ответ на «с наркозом или без?» — нужная памятка базы знаний как есть (07.10).
+
+    «с наркозом / во сне» и «без» — своя памятка; «не знаю» — обе; «да / нет» — переспрос
+    один раз, потом обе; другая тема — вопрос снимается, ход идёт обычным путём.
+    """
+
+    from .response_builder import PREPARE_VARIANT_PENDING_KEY
+
+    pending = state.last_entities.get(PREPARE_VARIANT_PENDING_KEY)
+    if not isinstance(pending, dict):
+        return None
+    if explicit_operator_requested(user_text):
+        state.last_entities.pop(PREPARE_VARIANT_PENDING_KEY, None)
+        return None
+    choice = anesthesia_reply(user_text)
+    if choice is None and contextual_reply_kind(user_text) in {"yes", "no"}:
+        if not pending.get("asked_again"):
+            pending["asked_again"] = True
+            text = "Напишите, пожалуйста: «с наркозом» или «без наркоза»."
+            return (
+                RouteDecision(label="PREPARE", confidence=0.9, flags={"prepare_variant_reask"}, source="prepare_variant"),
+                Plan(label="PREPARE"),
+                Evidence(items={ek.PREPARE: {"prepare": text}}),  # вопрос остаётся висеть с asked_again
+            )
+        choice = "both"
+    state.last_entities.pop(PREPARE_VARIANT_PENDING_KEY, None)
+    if choice is None:
+        return None
+    payload = await asyncio.to_thread(prepare_variant_payload, dict(pending.get("titles") or {}), choice)
+    if payload is None:
+        return None
+    return (
+        RouteDecision(label="PREPARE", confidence=0.95, flags={"prepare_variant_chosen"}, source="prepare_variant"),
+        Plan(label="PREPARE"),
+        Evidence(items={ek.PREPARE: payload}),
     )
 
 
@@ -2626,6 +2673,16 @@ async def route_patient_message(
     )
     if appointment_action_result is not None:
         return appointment_action_result
+
+    prepare_variant_result = await _handle_prepare_variant_pending(
+        user_text=user_text,
+        state=state,
+        services=services,
+        memory=memory,
+        runtime_options=runtime_options,
+    )
+    if prepare_variant_result is not None:
+        return prepare_variant_result
 
     compound_price_result = await _handle_compound_price_pending(
         user_text=user_text,

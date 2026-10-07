@@ -631,13 +631,11 @@ Services.test_assist = _test_assist_impl
 Services.test_result_status = _test_result_status_impl
 
 from .prepare import (  # noqa: E402
-    _maybe_compact_prepare_text as _maybe_compact_prepare_text_impl,
     _prepare_candidates_from_analysis_api_cache as _prepare_candidates_from_analysis_api_cache_impl,
     test_prepare as _test_prepare_impl,
 )
 
 Services._prepare_candidates_from_analysis_api_cache = _prepare_candidates_from_analysis_api_cache_impl
-Services._maybe_compact_prepare_text = _maybe_compact_prepare_text_impl
 Services.test_prepare = _test_prepare_impl
 
 

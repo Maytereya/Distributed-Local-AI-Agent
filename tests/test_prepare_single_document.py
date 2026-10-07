@@ -10,8 +10,11 @@ BUG-2026-10-01-PREPARE-FALLBACK-MIXES-DOCS: «Как подготовиться 
 запасной путь, короткий текст — работает только с ней. Скрипты администраторов (спираль,
 кольпоскопия) кандидатами не становятся вовсе: решение владельца 02.10.
 
-Инвариант класса `prepare_mixes_documents`: в ответ и в промпт обёртки попадает текст
-одной выбранной памятки; памятки, которые LLM не выбрала, пациент не видит.
+С 07.10 памятка базы знаний уходит как есть — без обёртки LLM (решение владельца: пересказ
+ошибался в дозах и времени).
+
+Инвариант класса `prepare_mixes_documents`: в ответ попадает текст одной выбранной памятки;
+памятки, которые LLM не выбрала, пациент не видит.
 """
 
 from __future__ import annotations
@@ -19,7 +22,6 @@ from __future__ import annotations
 import asyncio
 
 from messengers_router.services import Services
-from messengers_router.services import _common as _common_mod
 from messengers_router.services import core as svc_mod
 from messengers_router.services import prepare as prepare_mod
 from messengers_router.services._prepare_select_llm import SOURCE_KB, PrepareMemo
@@ -42,7 +44,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def _services(monkeypatch, *, pick: str | None, wrap_enabled: bool, gastro: PrepareMemo = _GASTRO) -> Services:
+def _services(monkeypatch, *, pick: str | None, gastro: PrepareMemo = _GASTRO) -> Services:
     svc = Services()
     monkeypatch.setattr(svc_mod.api_service_info, "load_service_info", lambda: [])
     monkeypatch.setattr(prepare_mod, "kb_patient_memos", lambda: (gastro, _COLONOSCOPY))
@@ -53,70 +55,45 @@ def _services(monkeypatch, *, pick: str | None, wrap_enabled: bool, gastro: Prep
         return (next(memo for memo in memos if pick in memo.title),)
 
     monkeypatch.setattr(prepare_mod, "select_prepare_memos", select)
-    monkeypatch.setattr(
-        _common_mod,
-        "_runtime_bool",
-        lambda name, default: wrap_enabled if name == "MR_PREPARE_LLM_WRAP_ENABLED" else default,
-    )
     return svc
 
 
 def _long(memo: PrepareMemo) -> PrepareMemo:
-    # Обёртка включается с 700 символов.
     filler = " ".join(f"Пункт {i}: возьмите паспорт и направление врача." for i in range(1, 25))
     return PrepareMemo(memo.source, memo.title, f"{memo.text} {filler}")
 
 
 def test_answer_is_the_one_chosen_memo(monkeypatch):
-    svc = _services(monkeypatch, pick="Гастроскопия", wrap_enabled=False)
+    svc = _services(monkeypatch, pick="Гастроскопия")
 
     res = run(svc.test_prepare("Как подготовиться к гастроскопии под наркозом?", {}))
 
-    assert res["prepare"] == _GASTRO.text
+    assert _GASTRO.text in res["prepare"]
     assert res["prepare_source_title"] == _GASTRO.title
 
 
-def test_fallback_after_rejected_llm_wrap_stays_within_one_memo(monkeypatch):
-    # 01.10 на проде обёртка вернула негодный ответ, и запасной путь нарезал пункты
-    # из склейки. Теперь запасному пути нечего смешивать.
-    svc = _services(monkeypatch, pick="Гастроскопия", wrap_enabled=True, gastro=_long(_GASTRO))
+def test_long_memo_goes_as_is_without_llm_and_without_other_memos(monkeypatch):
+    # До 07.10 длинную памятку ужимала LLM; 01.10 её негодный ответ заменял запасной путь,
+    # который нарезал пункты из склейки. Теперь — текст выбранной памятки целиком.
+    svc = _services(monkeypatch, pick="Гастроскопия", gastro=_long(_GASTRO))
 
-    async def broken_wrap(prompt: str, **kwargs):
-        return "не то"
+    async def no_llm(*_args, **_kwargs):
+        raise AssertionError("памятку не переписываем")
 
-    monkeypatch.setattr("messengers_router.services.prepare.llm_runtime_mod.generate_text", broken_wrap)
+    monkeypatch.setattr("messengers_router.llm_runtime.generate_text", no_llm)
 
     res = run(svc.test_prepare("Как подготовиться к гастроскопии под наркозом?", {}))
-    text = str(res.get("prepare") or "").lower()
+    text = str(res.get("prepare") or "")
 
-    assert res.get("prepare_wrap_status") == "fallback_compact"
-    assert "не есть и не пить" in text
+    assert res.get("prepare_wrap_status") == "not_wrapped"
+    assert "Пункт 24: возьмите паспорт и направление врача." in text
     for foreign in _FOREIGN:
-        assert foreign not in text, f"запасной путь смешал памятки: «{foreign}»"
-
-
-def test_llm_wrap_sees_only_the_chosen_memo(monkeypatch):
-    # До 02.10 обёртка получала склейку и сама выбирала нужное; теперь выбор сделан
-    # раньше, и чужая памятка в промпт обёртки не попадает.
-    svc = _services(monkeypatch, pick="Гастроскопия", wrap_enabled=True, gastro=_long(_GASTRO))
-    prompts: list[str] = []
-
-    async def wrap(prompt: str, **kwargs):
-        prompts.append(prompt)
-        return "не то"
-
-    monkeypatch.setattr("messengers_router.services.prepare.llm_runtime_mod.generate_text", wrap)
-
-    run(svc.test_prepare("Как подготовиться к гастроскопии под наркозом?", {}))
-
-    assert prompts and "не есть и не пить" in prompts[-1].lower()
-    for foreign in _FOREIGN:
-        assert foreign not in prompts[-1].lower()
+        assert foreign not in text.lower(), f"в ответ попала чужая памятка: «{foreign}»"
 
 
 def test_memos_about_other_procedures_do_not_answer_for_it(monkeypatch):
     # Подходящей памятки нет — оффер оператора, а не чужая подготовка.
-    svc = _services(monkeypatch, pick=None, wrap_enabled=False)
+    svc = _services(monkeypatch, pick=None)
 
     res = run(svc.test_prepare("Как подготовиться к введению спирали?", {}))
     text = str(res.get("prepare") or "").lower()
