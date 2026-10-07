@@ -17,7 +17,7 @@ from .city import looks_like_address, match_city
 from .doctor_name_port import resolve_cached_doctor_name_candidate, surname_variants
 from .russian_nlu import common_prefix_len, normalize_ru
 from .service_phrase import extract_service_phrase
-from .specialty_parser import extract_specialty_from_text
+from .specialty_parser import SPECIALTY_CANONICAL, extract_specialty_from_text
 
 # ---------------------------------------------------------------------------
 # Часы работы операторов (Самара) и after-hours примечание для handoff.
@@ -2767,6 +2767,60 @@ def _service_looks_like_stale_lab_test(service: str) -> bool:
     return bool(_STALE_LAB_SERVICE_RE.search(service))
 
 
+_CONSONANT_END_RE = re.compile(r"[бвгджзклмнпрстфхцчшщ]$")
+
+
+def _specialty_dative(specialty: str) -> str | None:
+    """«кардиолог» → «кардиологу», «пластический хирург» → «пластическому хирургу».
+
+    Названия врачей — существительные мужского рода на согласную (дательный: +у) и
+    прилагательные на -ый/-ой/-кий/-гий/-хий (дательный: -ому); первая часть сложного
+    прилагательного на -о («сердечно-…») не склоняется. Остальное («эндоскопия»,
+    «узи») — None: вызывающий оставит прежний текст.
+    """
+
+    words: list[str] = []
+    for word in str(specialty or "").lower().split():
+        parts = word.split("-")
+        out: list[str] = []
+        for i, part in enumerate(parts):
+            if part.endswith(("ый", "ой", "кий", "гий", "хий")):
+                out.append(part[:-2] + "ому")
+            elif _CONSONANT_END_RE.search(part):
+                out.append(part + "у")
+            elif part.endswith("о") and i < len(parts) - 1:
+                out.append(part)
+            else:
+                return None
+        words.append("-".join(out))
+    return " ".join(words) or None
+
+
+def _is_word_form(raw: str, canonical: str) -> bool:
+    stem = canonical[:-2] if canonical.endswith(("ый", "ий", "ой")) else canonical
+    return raw.startswith(stem) and len(raw) - len(stem) <= 3
+
+
+_SPECIALTIES_LONGEST_FIRST = tuple(sorted(SPECIALTY_CANONICAL, key=len, reverse=True))
+
+
+def _specialty_named_alone(service: str) -> str:
+    """Специальность в любом падеже и без других слов: «Неврологу» → «невролог».
+
+    Пациентская форма попадает в `service_name` как есть, и шаблон «записи на {услуга}»
+    давал «на Кардиолог», «на Неврологу» (зонд кнопок 04.10). Сверка каждого слова с
+    основой названия из справочника специальностей отсекает услуги, которые лишь ведут
+    к специальности («холтер», «УЗИ брюшной полости»).
+    """
+
+    raw_words = str(service or "").lower().replace("ё", "е").replace("-", " ").split()
+    for spec in _SPECIALTIES_LONGEST_FIRST:
+        spec_words = spec.replace("-", " ").split()
+        if len(spec_words) == len(raw_words) and all(map(_is_word_form, raw_words, spec_words)):
+            return spec
+    return ""
+
+
 def appointment_service_display(entities: dict[str, Any]) -> str:
     service_raw = str(entities.get("service_name") or entities.get("test_name") or "").strip()
     doctor_name = str(entities.get("doctor_name") or "").strip()
@@ -2791,8 +2845,13 @@ def appointment_service_display(entities: dict[str, Any]) -> str:
         if doctor_name:
             return f"приём к врачу {doctor_name}"
         if specialty:
-            return f"приём к {specialty}"
+            return f"приём к {_specialty_dative(specialty) or specialty}"
         return "услугу"
+    # Врач, названный пациентом как услуга («кардиолог», «к неврологу»): «приём к
+    # кардиологу» вместо «записи на Кардиолог» (07.10).
+    dative = _specialty_dative(_specialty_named_alone(service_raw))
+    if dative:
+        return f"приём к {dative}"
     return service_raw
 
 
