@@ -515,6 +515,57 @@ async def _resolve_doctor_id_from_name(
     return _as_int(first.get("id")), str(first.get("fio") or "").strip() or None
 
 
+def _coerce_doctor_id(doc: dict[str, Any]) -> int | None:
+    try:
+        return int(doc.get("id"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+_SERVICE_CODE_STOPWORDS = frozenset({"на", "и", "с", "со", "по", "в", "во", "для", "кто", "делает", "делают", "врач", "врачи", "к"})
+
+
+def _service_name_tokens(text: str) -> set[str]:
+    return {t for t in re.findall(r"[a-zа-я0-9]+", _normalise_input(text)) if len(t) >= 2 and t not in _SERVICE_CODE_STOPWORDS}
+
+
+async def _doctor_ids_by_service_code(service_q: str) -> set[int]:
+    """Врачи услуги по связи «врач ↔ услуга» в МИС (`doctor_prices`), а не по словам описания.
+
+    L-06(а), BUG-2026-10-05-FGDS-DOCTORS-NOT-FOUND: в описании врача написано
+    «эзофагогастродуоденоскопия», пациент пишет «ФГДС», и текстовый фильтр отсеивал всех
+    эндоскопистов, хотя МИС связывает ФГДС (код 30.1.1.1) с врачами напрямую. Берём только
+    СИЛЬНОЕ совпадение названия строки: все слова запроса есть в названии, либо это
+    однозначный синоним МИС. Слабое («гастроскопия» ≈ «Гастрин») — дело LLM-выбора (ход (в)):
+    иначе пациент увидел бы врачей чужой услуги.
+
+    :param service_q: нормализованное название услуги из запроса
+    :return: id врачей; пусто, если связи нет или срез недоступен
+    """
+
+    query_tokens = _service_name_tokens(service_q)
+    if not query_tokens:
+        return set()
+    try:
+        rows = await asyncio.to_thread(api_price.load_doctor_prices)
+    except Exception:  # срез цен врачей недоступен — остаётся текстовый фильтр
+        return set()
+    from ._biomaterial import mis_synonym_service
+
+    synonym = _normalise_input(mis_synonym_service(service_q) or "")
+    ids: set[int] = set()
+    for row in rows:
+        if not isinstance(row, dict) or row.get("doctorId") is None:
+            continue
+        name = str(row.get("serviceName") or "")
+        if query_tokens <= _service_name_tokens(name) or (synonym and _normalise_input(name) == synonym):
+            try:
+                ids.add(int(row["doctorId"]))
+            except (TypeError, ValueError):
+                continue
+    return ids
+
+
 async def doctors_info(
     self: "Services",
     query: str,
@@ -582,7 +633,7 @@ async def doctors_info(
 
     keyword = keyword.strip()
 
-    def match_doc(doc: dict[str, Any], *, require_service: bool = True) -> bool:
+    def match_doc(doc: dict[str, Any], *, require_service: bool = True, require_specialty: bool = True) -> bool:
         fio = _normalise_input(str(doc.get("fio", "")))
         spec_text = _normalise_input(str(doc.get("specialization", "")))
         raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
@@ -601,7 +652,7 @@ async def doctors_info(
         if fio_q:
             if not _doctor_matches_fio(fio, fio_q, resolved_surname):
                 return False
-        if spec_q:
+        if spec_q and require_specialty:
             if role_query:
                 if role_levels.get(id(doc), 0) <= 0:
                     return False
@@ -629,6 +680,20 @@ async def doctors_info(
         and _is_mapped_procedure_specialty_query(query, spec_q)
     ):
         filtered = [d for d in doctors if match_doc(d, require_service=False)]
+    if not filtered and service_q and not fio_q:
+        # L-06(а): текстовый фильтр никого не нашёл — берём врачей по связи с услугой в МИС.
+        # Специальность из правила «процедура → роль» здесь не фильтрует: связь из МИС точнее.
+        coded_ids = await _doctor_ids_by_service_code(service_q)
+        if coded_ids:
+            filtered = [
+                d
+                for d in doctors
+                if _coerce_doctor_id(d) in coded_ids and match_doc(d, require_service=False, require_specialty=False)
+            ]
+    # L-06(б): фильтр по услуге опустошил непустой список — это не «врача нет».
+    service_filter_emptied = bool(
+        not filtered and service_q and spec_q and not fio_q and any(match_doc(d, require_service=False) for d in doctors)
+    )
     filtered = _dedupe_doctors_by_fio(filtered)
     if role_query:
         filtered = sorted(
@@ -673,6 +738,7 @@ async def doctors_info(
     return {
         "doctors": compact,
         "note": "doctors_info: from cached registry (jsonl)",
+        "service_filter_emptied": service_filter_emptied,
         "cache_file": self._doctors_cache_path,
         "entities_used": {
             "doctor_query": fio_q,

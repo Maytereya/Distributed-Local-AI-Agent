@@ -234,7 +234,15 @@ def build_service_bundle_response(flow_label: str, evidence: Evidence, state: Se
     return ResponseEnvelope(text=text, attachments=[], handoff=service_bundle_needs_operator(payload))
 
 
-def build_doctor_info_response(flow_label: str, evidence: Evidence, state: SessionState) -> ResponseEnvelope | None:
+DOCTORS_BY_SERVICE_NOT_FOUND_OFFER = (
+    "Врачей по запросу «{service}» в онлайн-справочнике не нашёл — точно подскажет оператор. "
+    "Перевести на оператора?"
+)
+
+
+def build_doctor_info_response(
+    flow_label: str, evidence: Evidence, state: SessionState, memory: MemoryStore | None = None
+) -> ResponseEnvelope | None:
     if flow_label != "DOCTOR_INFO":
         return None
     doctors_info_payload = evidence.get(ek.DOCTORS_INFO)
@@ -243,6 +251,15 @@ def build_doctor_info_response(flow_label: str, evidence: Evidence, state: Sessi
     doctors_raw = doctors_info_payload.get("doctors")
     doctors = doctors_raw if isinstance(doctors_raw, list) else []
     used = doctors_info_payload.get("entities_used")
+    if not doctors and doctors_info_payload.get("service_filter_emptied") and memory is not None:
+        # L-06(б): врачи специальности есть, отсеял фильтр по словам услуги — это не «врача
+        # нет» (FGDS-DOCTORS-NOT-FOUND), а повод спросить оператора (пункт 3 принципов).
+        service = str((used or {}).get("service_query") or "").strip() if isinstance(used, dict) else ""
+        mark_operator_offer_pending(state, memory)
+        return ResponseEnvelope(
+            text=DOCTORS_BY_SERVICE_NOT_FOUND_OFFER.format(service=service or "эту услугу"),
+            handoff=False,
+        )
     explicit_doctor_query = False
     if isinstance(used, dict):
         explicit_doctor_query = bool(str(used.get("doctor_query") or "").strip() or str(used.get("doctor_resolved") or "").strip())
@@ -776,7 +793,7 @@ def build_first_structured_response(
         lambda: build_test_result_response(flow_label, evidence),
         lambda: build_prepare_response(flow_label, evidence, state, memory),
         lambda: build_doctor_schedule_response(flow_label, evidence, state, memory),
-        lambda: build_doctor_info_response(flow_label, evidence, state),
+        lambda: build_doctor_info_response(flow_label, evidence, state, memory),
         lambda: build_address_response(flow_label, evidence, state, memory, decision, user_text),
         lambda: build_news_response(flow_label, evidence, state),
         lambda: build_appointment_schedule_preview_response(flow_label, evidence, state, memory),
