@@ -1227,6 +1227,39 @@ def _plan_service_catalog_prefetch(
     return {"query": query, "current_service_name": current}
 
 
+async def _promote_bare_doctor_name(
+    decision: RouteDecision,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+) -> RouteDecision:
+    """Голая фамилия врача — расписание этого врача, а не свободный ответ (08.10).
+
+    Живой пациент 08.10: «Бородина» → «у меня нет информации о враче с фамилией Бородина»,
+    хотя врач в справочнике есть и со слотами. LLM ставит голой фамилии OTHER, а для OTHER
+    сущность врача выбрасывается. Ответ — как на «когда принимает Бородина»: карточка и слоты.
+    Только когда сообщение целиком — ФИО врача справочника (`doctor_surname_for_bare_name`).
+    Не в отмене и переносе: фамилия там — врач существующей записи, ответ — оператор или
+    перенос (разбор переписки 08.10: 4 из 13 голых фамилий шли после «отменить запись»).
+    """
+
+    if decision.label != "OTHER" or decision.source == "button":
+        return decision
+    if str(state.last_entities.get("appointment_action") or "") in {"cancel", "reschedule"}:
+        return decision
+    surname = await services.doctor_surname_for_bare_name(user_text)
+    if not surname:
+        return decision
+    return _copy_decision(
+        decision,
+        label="DOCTOR_SCHEDULE",
+        entities={"doctor_name": surname},
+        flags=set(decision.flags) | {"bare_doctor_name"},
+        needs_handoff=False,
+        source="guardrail_post",
+    )
+
+
 async def _verify_decision_and_prefetch_catalog(
     *,
     decision: RouteDecision,
@@ -1243,6 +1276,7 @@ async def _verify_decision_and_prefetch_catalog(
     where ``prefetch`` is ``{"query": str, "match": dict | None}`` or ``None``.
     """
 
+    decision = await _promote_bare_doctor_name(decision, user_text, state, services)
     plan = _plan_service_catalog_prefetch(decision, state, user_text)
     if plan is None:
         verified = await _verify_doctor_entity(decision, services, user_text)

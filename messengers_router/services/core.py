@@ -613,6 +613,7 @@ from .doctors import (  # noqa: E402
     _resolve_doctor_id_from_name as _resolve_doctor_id_from_name_impl,
     _schedule_by_specialty as _schedule_by_specialty_impl,
     doctors_info as _doctors_info_impl,
+    doctor_surname_for_bare_name as _doctor_surname_for_bare_name_impl,
     doctors_schedule_week as _doctors_schedule_week_impl,
     match_catalog_doctor as _match_catalog_doctor_impl,
     match_catalog_service as _match_catalog_service_impl,
@@ -624,6 +625,7 @@ Services.match_catalog_service = _match_catalog_service_impl
 Services._schedule_by_specialty = _schedule_by_specialty_impl
 Services._doctor_availability_snapshot = _doctor_availability_snapshot_impl
 Services.resolve_doctor_name = _resolve_doctor_name_impl
+Services.doctor_surname_for_bare_name = _doctor_surname_for_bare_name_impl
 Services._resolve_doctor_id_from_name = _resolve_doctor_id_from_name_impl
 Services.doctors_info = _doctors_info_impl
 Services.doctors_schedule_week = _doctors_schedule_week_impl

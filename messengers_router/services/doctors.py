@@ -430,6 +430,45 @@ async def resolve_doctor_name(self: "Services", raw_text_or_name: str) -> str | 
     return None
 
 
+_BARE_NAME_CHARS_RE = re.compile(r"[^а-яё.\-\s]", re.I)
+_BARE_NAME_WORD_RE = re.compile(r"[а-яё]+(?:-[а-яё]+)*\.?", re.I)
+
+
+def _name_word(value: str) -> str:
+    return value.casefold().replace("ё", "е")
+
+
+async def doctor_surname_for_bare_name(self: "Services", text: str) -> str | None:
+    """Сообщение только из ФИО врача справочника → его фамилия; иначе ``None`` (08.10).
+
+    «Бородина», «трубин», «Бородина Наталья Михайловна», «Трубин А.Ю.». Совпадение — точное,
+    по словам ФИО одного врача (слово целиком или инициал), и фамилия среди них есть:
+    нечёткий `resolve_doctor_name` разбирает «хорошо» как «Хорошун», а для голой реплики это
+    недопустимо — «хорошо» и «спасибо» пишут постоянно.
+
+    :param text: сообщение пациента целиком
+    :return: фамилия врача, как в справочнике, или ``None``
+    """
+
+    raw = str(text or "").strip().rstrip("?!,").strip()
+    if not raw or _BARE_NAME_CHARS_RE.search(raw):
+        return None
+    words = [_name_word(w) for w in _BARE_NAME_WORD_RE.findall(raw)]
+    if not 1 <= len(words) <= 3:
+        return None
+    for doc in await self._ensure_doctors_cache_loaded():
+        fio = str(doc.get("fio") or "").split()
+        parts = [_name_word(p) for p in fio]
+        if not parts or parts[0] not in words:
+            continue
+        if all(
+            w in parts or (len(w) == 2 and w.endswith(".") and any(p.startswith(w[0]) for p in parts[1:]))
+            for w in words
+        ):
+            return fio[0]
+    return None
+
+
 async def _resolve_doctor_id_from_name(
     self: "Services",
     raw_text_or_name: str,
