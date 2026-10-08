@@ -38,7 +38,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from agent_logic_2.nayka_api import api_service_info
+from agent_logic_2.nayka_api import api_service_info, snapshots
 
 from ._common import _normalise_input
 
@@ -98,13 +98,29 @@ class _MisVocabularies:
 _VOCAB_CACHE: dict[tuple[str, float], _MisVocabularies] = {}
 
 
-def _cache_key() -> tuple[str, float] | None:
+def _vocab_source() -> Path | None:
+    """Срез, из которого строятся словари: «на сегодня» или последний непустой.
+
+    После самарской полуночи файла «на сегодня» нет до цикла 08:20 или первого скачивания.
+    Раньше ключ кэша смотрел только его, и словари ночью были ПУСТЫМИ: 65% из 214 синонимов
+    теряли цену, 5% получали чужую (DATA-1, ревью 05.10). Откат на последний непустой срез
+    (`snapshots.latest_nonempty`) — тот же, что у загрузчиков с 03.10.
+    """
+
     try:
-        path: Path = api_service_info.service_info_path()
-        stat = path.stat()
-    except Exception:
+        return snapshots.latest_nonempty(api_service_info.service_info_path())
+    except OSError:
         return None
-    return (str(path), stat.st_mtime)
+
+
+def _cache_key() -> tuple[str, float] | None:
+    source = _vocab_source()
+    if source is None:
+        return None
+    try:
+        return (str(source), source.stat().st_mtime)
+    except OSError:
+        return None
 
 
 def _can_be_a_synonym(key: str) -> bool:
@@ -184,11 +200,15 @@ def _vocabularies() -> _MisVocabularies:
     if cached is not None:
         return cached
     try:
-        rows = [row for row in api_service_info.load_service_info() if isinstance(row, dict)]
-    except Exception as exc:  # каталог МИС недоступен — слой просто молчит
-        log.info("service_info недоступен, словари МИС пропущены: %s", exc)
+        # Читаем найденный срез с диска напрямую: через `load_service_info` ночью пошло бы
+        # скачивание 45 МБ прямо в обработке вопроса пациента (DATA-7).
+        rows = [row for row in api_service_info.jsonl_read(Path(key[0])) if isinstance(row, dict)]
+    except (OSError, ValueError) as exc:  # срез битый или пропал — слой молчит, но громко
+        log.warning("service_info не прочитан, словари МИС пусты: %s", exc)
         return _MisVocabularies()
     vocab = _build_vocabularies(rows)
+    if not vocab.synonym_candidates:
+        log.warning("словари МИС пусты: в срезе %s нет синонимов (%d строк)", Path(key[0]).name, len(rows))
     _VOCAB_CACHE.clear()
     _VOCAB_CACHE[key] = vocab
     return vocab
