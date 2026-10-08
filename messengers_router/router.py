@@ -436,6 +436,18 @@ def _clear_operator_offer_pending(state: SessionState, memory: MemoryStore) -> N
 # O4 анти-залип: минимальная длина «содержательного» ответа (короткие
 # «да/нет/ок» не считаем поводом для детекта повтора).
 _REPEAT_GUARD_MIN_LEN = 24
+# Пункт 5 принципов (docs/ARCHITECTURE_PRINCIPLES.md, 08.10): шаг дважды без продвижения →
+# оператор. Для ответа-ВОПРОСА (бот чего-то ждёт: «Укажите…», «Скажите…», «…?») оффер —
+# на первом повторе; раньше был на втором, и петли из двух одинаковых вопросов на трафике
+# проходили незамеченными. Ответ с данными (ссылка на результат, цена, список) — на втором,
+# как раньше: второй анализ по той же ссылке — законный повтор, а не залип (встречный свип
+# 08.10 по 1 613 реальным диалогам).
+_REPEAT_GUARD_AFTER_REPEATS_QUESTION = 1
+_REPEAT_GUARD_AFTER_REPEATS_ANSWER = 2
+_REPEAT_ASKS_RE = re.compile(
+    r"\?\s*$|^(?:уточните|укажите|скажите|напишите|выберите|чтобы|для какой цели|из какого города|какой|какая|какие|к какому)",
+    re.I,
+)
 _REPEAT_GUARD_OFFER = "Похоже, мне не удаётся помочь с этим в чате. Перевести на оператора?"
 
 
@@ -457,10 +469,12 @@ def _repeat_norm(text: str) -> str:
 
 
 def _maybe_offer_operator_on_repeat(
-    response: ResponseEnvelope, state: SessionState, memory: MemoryStore
+    response: ResponseEnvelope, state: SessionState, memory: MemoryStore, user_text: str = ""
 ) -> ResponseEnvelope:
-    """Анти-залип: если бот выдаёт один и тот же ответ подряд, после 2-го
-    повтора (3-й одинаковый ответ) предлагает перевод на оператора.
+    """Анти-залип: бот второй раз подряд задаёт тот же ВОПРОС (третий раз — тот же ответ с
+    данными) на ДРУГУЮ реплику пациента → к ответу добавляется «Перевести на оператора?».
+
+    Пациент повторил тот же вопрос — тот же ответ законен и повтором не считается.
 
     Переиспользует существующий operator-offer-pending: следующий ход
     обрабатывает ``_handle_operator_offer_pending`` (да→handoff, нет→продолжаем,
@@ -475,10 +489,14 @@ def _maybe_offer_operator_on_repeat(
     :param response: финальный ответ текущего хода
     :param state: состояние сессии (счётчик в last_entities)
     :param memory: хранилище pending-слотов
+    :param user_text: реплика пациента этого хода
     :return: тот же response (возможно, с offer-вопросом)
     """
     text = (response.text or "").strip()
     norm = _repeat_norm(text)
+    user_norm = " ".join(str(user_text or "").lower().split())
+    same_question = bool(user_norm) and user_norm == state.last_entities.get("_last_user_norm")
+    state.last_entities["_last_user_norm"] = user_norm
     # Не вмешиваемся в handoff, пустые/короткие ответы, ответы про оператора,
     # уже-висящий offer (напр. кейс «нет слотов» сам ставит operator-offer) и
     # активный appointment-flow (у него свои attempt-счётчики и эскалация).
@@ -494,11 +512,18 @@ def _maybe_offer_operator_on_repeat(
         return response
 
     prev = str(state.last_entities.get("_last_answer_norm") or "")
-    repeat_count = int(state.last_entities.get("_answer_repeat_count") or 0) + 1 if norm == prev else 0
+    repeat_count = int(state.last_entities.get("_answer_repeat_count") or 0)
+    if norm != prev:
+        repeat_count = 0
+    elif not same_question:
+        repeat_count += 1
     state.last_entities["_last_answer_norm"] = norm
     state.last_entities["_answer_repeat_count"] = repeat_count
 
-    if repeat_count >= 2:  # 3-й одинаковый ответ подряд = после 2-го повтора
+    threshold = (
+        _REPEAT_GUARD_AFTER_REPEATS_QUESTION if _REPEAT_ASKS_RE.search(text) else _REPEAT_GUARD_AFTER_REPEATS_ANSWER
+    )
+    if repeat_count >= threshold:
         state.last_entities["_answer_repeat_count"] = 0
         reset_appointment_runtime_state(state)
         mark_operator_offer_pending(state, memory)
@@ -3172,7 +3197,7 @@ async def patient_routing_stream(
             state_update={"debug": _debug_meta(decision, plan, evidence, state, pending, stage_timings=ctx.stage_timings)},
         )
 
-    response = _maybe_offer_operator_on_repeat(response, state, memory)
+    response = _maybe_offer_operator_on_repeat(response, state, memory, user_text)
 
     memory.append_turn(state, role="user", text=user_text)
     memory.append_turn(state, role="assistant", text=response.text)

@@ -34,8 +34,9 @@ def _turn(state: SessionState, memory: MemoryStore, text: str) -> bool:
 
 
 def test_repeat_escalates_when_only_result_url_changes():
-    """Пациент правит данные → URL меняется, смысл тот же. На 3-м смысловом
-    повторе гард обязан предложить оператора (в проде — не срабатывал)."""
+    """Пациент правит данные → URL меняется, смысл тот же. На 3-м одинаковом по смыслу
+    ответе гард обязан предложить оператора (в проде — не срабатывал). Ссылка — ответ с
+    данными, не вопрос: второй раз подряд она законна (второй анализ)."""
     memory = MemoryStore()
     state = SessionState(session_id="dyn-url")
     offers = [
@@ -47,8 +48,7 @@ def test_repeat_escalates_when_only_result_url_changes():
 
 
 def test_identical_answer_still_escalates():
-    """Анти-регресс: полностью идентичный ответ (без URL-динамики) по-прежнему
-    эскалирует на 3-м повторе."""
+    """Анти-регресс: полностью идентичный ответ с данными по-прежнему эскалирует на 3-м."""
     memory = MemoryStore()
     state = SessionState(session_id="identical")
     same = _answer_with_url("276")
