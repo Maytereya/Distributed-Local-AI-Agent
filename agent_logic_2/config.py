@@ -182,6 +182,7 @@ class MessengerRouterConfig:
     llm_service_normalization: bool
     llm_price_service_select: bool
     llm_appointment_change_validation: bool
+    llm_existing_appointment_validation: bool
     llm_symptom_specialists: bool
     debug_final_input: bool
     url: str
@@ -360,6 +361,14 @@ settings = Settings(
             "llm_appointment_change_validation",
             default=True,
         ),
+        # «Мои записи», «мне подтверждена запись?» — спросить LLM, о своей ли оформленной
+        # записи речь (08.10). Сбой LLM — как раньше; по умолчанию ВКЛ; kill-switch:
+        # [MESSENGER_ROUTER] llm_existing_appointment_validation = false
+        llm_existing_appointment_validation=_get_bool(
+            "MESSENGER_ROUTER",
+            "llm_existing_appointment_validation",
+            default=True,
+        ),
         # Медвопрос: к каким врачам клиники обратиться с жалобой — выбирает LLM (05.10).
         # Сбой LLM — прежний шаблон медвопроса; по умолчанию ВКЛ; kill-switch:
         # [MESSENGER_ROUTER] llm_symptom_specialists = false
@@ -483,6 +492,7 @@ LLM_PROCEDURE_NORMALIZATION = settings.messenger_router.llm_procedure_normalizat
 MR_LLM_SERVICE_NORMALIZATION = settings.messenger_router.llm_service_normalization
 MR_LLM_PRICE_SERVICE_SELECT = settings.messenger_router.llm_price_service_select
 MR_LLM_APPOINTMENT_CHANGE_VALIDATION = settings.messenger_router.llm_appointment_change_validation
+MR_LLM_EXISTING_APPOINTMENT_VALIDATION = settings.messenger_router.llm_existing_appointment_validation
 MR_LLM_SYMPTOM_SPECIALISTS = settings.messenger_router.llm_symptom_specialists
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url

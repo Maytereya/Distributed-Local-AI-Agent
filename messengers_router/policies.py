@@ -966,6 +966,55 @@ def detect_appointment_change_without_object(text: str) -> str | None:
     return action
 
 
+# Явная просьба о НОВОЙ записи: инфинитив или повелительное наклонение. Такие фразы LLM
+# не задаём — их подавляющее большинство среди реплик со словом «запись».
+_NEW_BOOKING_REQUEST_RE = re.compile(
+    r"\b(?:записаться|записать|запишите|запиши|записывайте|записываюсь|записываться|хочу\s+на\s+при[её]м)\b",
+    re.I,
+)
+_EXISTING_APPOINTMENT_CANDIDATE_MAX_LEN = 300
+# Признак УЖЕ оформленной записи: «мои / у меня», прошедшее время («записана»,
+# «записывался», «была запись»), «проверить / посмотреть / узнать запись», «забыла»,
+# конкретное время. Без него «Запись на УЗИ» и «Приём уролога» — новая запись, и LLM
+# их не задаём: живой свип 08.10 — модель на таких коротких фразах отвечает «своя»
+# даже вопреки примеру в промпте.
+_EXISTING_APPOINTMENT_MARKER_RE = re.compile(
+    r"\b(?:мо[йяеию]\w*|у\s+(?:меня|нас|него|неё|нее|мамы|сына|дочери|ребенка|ребёнка))\b"
+    r"|\bзаписа(?:н|на|ны|но|ли|лся|лась|лись)\b|\bзаписывал\w*|\bзабыл\w*"
+    r"|\b(?:была?|был|произвед\w+|совершен\w*|прошла|сделал\w*)\s+(?:\w+\s+){0,2}запис\w*"
+    r"|\bзапис\w*\s+(?:была|был|стоит|совершена|прошла)\b"
+    r"|\b(?:провер|посмотр|просмотр|узна|уточн|сведени|информаци|подтвержд)\w*(?:\s+\w+){0,3}\s+(?:о\s+|об\s+)?запис\w*"
+    r"|\b\d{1,2}[:.]\d{2}\b",
+    re.I,
+)
+
+
+def detect_existing_appointment_candidate(text: str) -> bool:
+    """Реплика может быть вопросом о СВОЕЙ уже оформленной записи — кандидат для LLM.
+
+    Детектор `detect_existing_appointment_request` узкий и пропускал формулировки из
+    реальной переписки: «Мои записи», «Мои приёмы», «Мне подтверждена запись?», «Я к лору
+    записывался на сегодня» (BUG-2026-10-08-EXISTING-APPT-LOOKUP-MISSED). Расширять регэкс
+    под каждую фразу не будем: правило лишь отбирает кандидатов (есть объект записи и
+    признак уже оформленной записи, нет явной просьбы записаться и цены, детектор и
+    глагол отмены/переноса молчат), а «спрашивает ли о своей записи» решает LLM.
+
+    :param text: реплика пациента
+    :return: True, если реплику стоит показать LLM-различителю
+    """
+
+    raw = str(text or "").strip()
+    if not raw or len(raw) > _EXISTING_APPOINTMENT_CANDIDATE_MAX_LEN:
+        return False
+    if not _APPOINTMENT_OBJECT_RE.search(raw) or _NEW_BOOKING_REQUEST_RE.search(raw):
+        return False
+    if not _EXISTING_APPOINTMENT_MARKER_RE.search(raw):
+        return False
+    if detect_existing_appointment_request(raw) is not None or detect_price_intent(raw):
+        return False
+    return detect_appointment_action(raw) not in {"cancel", "reschedule", "ambiguous"}
+
+
 def detect_price_intent(text: str) -> bool:
     return _matches_any(text, _PRICE_RE)
 

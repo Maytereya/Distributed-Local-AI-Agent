@@ -115,6 +115,21 @@ def _hermetic_appointment_change_validator(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_existing_appointment_validator(monkeypatch):
+    """LLM-различитель «своя оформленная запись или новая» герметичен: None = LLM не
+    ответила, решение не меняется (как до 08.10). Тесты, которым важен ответ LLM,
+    переопределяют мок явно.
+    """
+    import messengers_router.router as _router
+
+    async def _unavailable(_text):
+        return None
+
+    monkeypatch.setattr(_router, "is_own_existing_appointment", _unavailable)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_symptom_specialists(monkeypatch):
     """Совет «к каким врачам с такой жалобой» (LLM) герметичен: None = прежний шаблон
     медвопроса. Тесты совета вызывают сохранённый настоящий `advise` или

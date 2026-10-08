@@ -87,6 +87,7 @@ from .policies import (
     detect_schedule_intent,
     detect_doctor_info_intent,
     detect_appointment_change_without_object,
+    detect_existing_appointment_candidate,
     detect_existing_appointment_request,
     detect_urgent,
     extract_specialty,
@@ -102,6 +103,7 @@ from .service_phrase import extract_service_phrase
 from .recovery_policy import contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
 from .services._appointment_change_validator import is_own_appointment_change
+from .services._existing_appointment_validator import is_own_existing_appointment
 from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE
 from .services.prepare import anesthesia_reply, prepare_variant_payload
 from .services._patient_name_validator import is_patient_name_reply
@@ -1606,6 +1608,44 @@ async def _confirm_appointment_change_verb(
     )
 
 
+async def _confirm_existing_appointment_question(
+    decision: RouteDecision,
+    *,
+    user_text: str,
+    state: SessionState,
+) -> RouteDecision:
+    """«Мои записи», «мне подтверждена запись?»: о своей ли оформленной записи речь — решает LLM.
+
+    Узкий детектор пропускал формулировки из реальной переписки, и они уходили в новую
+    запись, в «Пока не понял» или в поиск результата (BUG-2026-10-08-EXISTING-APPT-LOOKUP-MISSED).
+    Правило отбирает кандидатов, LLM различает «своя / новая / другое». Сбой LLM — как до
+    08.10: решение не меняется.
+
+    :param decision: решение после guardrails
+    :param user_text: реплика пациента
+    :param state: состояние сессии
+    :return: решение с пометкой `existing_appointment_llm=check` либо исходное
+    """
+
+    if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
+        return decision
+    if state.last_entities.get("_operator_offer_pending") or state.last_entities.get("appointment_flow_active"):
+        return decision
+    if state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM):
+        return decision
+    if decision.entities.get("appointment_action") in {"cancel", "reschedule"}:
+        return decision
+    if not detect_existing_appointment_candidate(user_text):
+        return decision
+    if await is_own_existing_appointment(user_text) is not True:
+        return decision
+    return _copy_decision(
+        decision,
+        entities={**decision.entities, "existing_appointment_llm": "check"},
+        flags=set(decision.flags) | {"existing_appointment_llm"},
+    )
+
+
 def _maybe_offer_operator_for_existing_appointment(
     *,
     decision: RouteDecision,
@@ -1645,6 +1685,9 @@ def _maybe_offer_operator_for_existing_appointment(
         # Отмену без слова «запись» распознал не детектор, а LLM («не смогу прийти,
         # отмените») — тоже сразу оператор: реквизиты отмены бот не собирает (25.09).
         kind = "cancel"
+    if kind is None and decision.entities.get("existing_appointment_llm") == "check":
+        # Вопрос о своей записи распознал не детектор, а LLM («Мои записи»).
+        kind = "check"
     if kind is None:
         return None
 
@@ -2486,6 +2529,7 @@ async def _complete_route_after_doctor_guard(
     decision = await _apply_post_nlu_guardrails(decision, state, user_text, services, memory)
     decision = _relabel_test_assist_catalog_hit_as_price(decision, user_text=user_text)
     decision = await _confirm_appointment_change_verb(decision, user_text=user_text, state=state)
+    decision = await _confirm_existing_appointment_question(decision, user_text=user_text, state=state)
 
     existing_appointment = _maybe_offer_operator_for_existing_appointment(
         decision=decision,
