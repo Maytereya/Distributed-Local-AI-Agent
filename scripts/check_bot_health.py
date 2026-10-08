@@ -11,6 +11,11 @@
 Запуск (cron, раз в 10-15 минут):
     ./venv/bin/python scripts/check_bot_health.py --url http://ХОСТ/api/messenger-generate-once
 
+Сторож видеокарт (с 08.10, урок 28–31.08: после работ на сервере ollama молча ушла с GPU на
+процессор, ответы шли по 60 с, а зонд оставался «здоров»):
+    ... --ollama http://ХОСТ:11434
+проверяет `/api/ps`: модель загружена и целиком в памяти видеокарт.
+
 Коды возврата: 0 — здоров, 1 — болен (текст причины в stderr), 2 — не достучались.
 Пригоден для cron с отправкой письма при ненулевом коде.
 """
@@ -77,13 +82,52 @@ def probe(url: str, timeout: int) -> tuple[bool, str]:
     return True, f"ок за {elapsed:.0f}с, метка {label or '—'}"
 
 
+def gpu_verdict(ps_payload: dict) -> tuple[bool, str]:
+    """Модель целиком на видеокартах? `/api/ps`: `size` — весь объём, `size_vram` — в памяти GPU.
+
+    :param ps_payload: ответ `/api/ps` ollama
+    :return: (здоров, описание)
+    """
+
+    models = ps_payload.get("models") or []
+    if not models:
+        return False, "ollama: ни одна модель не загружена"
+    worst = None
+    for model in models:
+        size = int(model.get("size") or 0)
+        vram = int(model.get("size_vram") or 0)
+        share = vram / size if size else 0.0
+        if worst is None or share < worst[1]:
+            worst = (str(model.get("name") or "?"), share)
+    name, share = worst
+    if share < 0.999:
+        return False, f"ollama: модель {name} на GPU только на {share:.0%} — остальное на процессоре"
+    return True, f"ollama: {len(models)} модель(и) целиком на GPU"
+
+
+def check_gpu(ollama_url: str, timeout: int) -> tuple[bool, str]:
+    with urllib.request.urlopen(ollama_url.rstrip("/") + "/api/ps", timeout=timeout) as response:
+        return gpu_verdict(json.loads(response.read().decode("utf-8")))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True, help="эндпоинт messenger-generate-once")
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--retries", type=int, default=2,
                         help="повторы перед вердиктом: единичный таймаут не повод будить")
+    parser.add_argument("--ollama", default="", help="адрес ollama для сторожа видеокарт (необязательно)")
     args = parser.parse_args()
+
+    if args.ollama:
+        try:
+            gpu_ok, gpu_detail = check_gpu(args.ollama, min(args.timeout, 30))
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            print(f"НЕДОСТУПЕН: ollama: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 2
+        if not gpu_ok:
+            print(f"БОЛЕН: {gpu_detail}", file=sys.stderr)
+            return 1
 
     last = ""
     for attempt in range(1, args.retries + 1):
