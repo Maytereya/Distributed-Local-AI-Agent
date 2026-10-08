@@ -571,6 +571,59 @@ async def tool_loop(
     return ctx
 
 
+_EMPTY_EVIDENCE_IGNORED_KEYS = frozenset({ek.ATTACHMENTS, "debug_trace"})
+_EMPTY_PAYLOAD_SERVICE_KEYS = frozenset({"note", "entities_used", "cache_file", "source", "query"})
+EMPTY_EVIDENCE_REPLIES: dict[str, str] = {
+    "THANKS": "Пожалуйста! Если появятся вопросы — пишите.",
+    "BYE": "Всего доброго! Если понадобится помощь — пишите.",
+    "ACK": "Хорошо. Если появятся вопросы — пишите.",
+    "QUESTION": "По этому вопросу у меня нет данных — точно ответит оператор. Перевести на оператора?",
+}
+EMPTY_EVIDENCE_NEUTRAL = "Напишите, пожалуйста, вопрос подробнее — или я переведу вас на оператора."
+
+
+def _evidence_is_empty(evidence: Any) -> bool:
+    """Нет ни одного содержательного результата инструментов (служебные поля не в счёт)."""
+
+    for key, value in (getattr(evidence, "items", None) or {}).items():
+        if key in _EMPTY_EVIDENCE_IGNORED_KEYS:
+            continue
+        if isinstance(value, dict):
+            if any(bool(v) for k, v in value.items() if k not in _EMPTY_PAYLOAD_SERVICE_KEYS):
+                return False
+        elif value:
+            return False
+    return True
+
+
+async def _empty_evidence_response(ctx: OrchestratorContext, memory: Any | None = None) -> ResponseEnvelope | None:
+    """L-05 (решение владельца 08.10): на ходу без данных LLM выбирает вид реплики, текст — шаблон.
+
+    Пункты 1–3 принципов: факты печатает код; LLM выбирает из закрытого списка; данных нет —
+    честный путь к оператору. Выключатель снят — None, и ход уходит в прежний свободный текст.
+    """
+
+    from .services import _empty_evidence_reply as reply
+    from .text_templates import INTRO_TEXT, LOW_CONF_CLARIFY_TEXT
+
+    if not reply.enabled():
+        return None
+    kind = await reply.classify_empty_evidence_turn(ctx.text)
+    if kind == "ABOUT_BOT":
+        return ResponseEnvelope(text=INTRO_TEXT, handoff=False)
+    if kind == "NOISE":
+        return ResponseEnvelope(text=LOW_CONF_CLARIFY_TEXT, handoff=False)
+    if kind == "QUESTION":
+        if memory is not None:
+            from .response_builder import mark_operator_offer_pending
+
+            mark_operator_offer_pending(ctx.state, memory)
+        return ResponseEnvelope(text=EMPTY_EVIDENCE_REPLIES["QUESTION"], handoff=False)
+    if kind in EMPTY_EVIDENCE_REPLIES:
+        return ResponseEnvelope(text=EMPTY_EVIDENCE_REPLIES[kind], handoff=False)
+    return ResponseEnvelope(text=EMPTY_EVIDENCE_NEUTRAL, handoff=False)
+
+
 async def _render_impl(
     ctx: OrchestratorContext,
     runtime_options: Any | None = None,
@@ -657,6 +710,13 @@ async def _render_impl(
         ctx.response = prebuilt
         _mark_secondary_offer_pending(ctx)
         return ctx
+
+    # 4a. L-05: данных нет — свободный текст LLM не пишем (класс 4 журнала).
+    if ctx.decision is not None and ctx.evidence is not None and _evidence_is_empty(ctx.evidence):
+        empty_reply = await _empty_evidence_response(ctx, memory=memory)
+        if empty_reply is not None:
+            ctx.response = empty_reply
+            return ctx
 
     # 4. LLM path — collect render_stream into one envelope.
     if ctx.decision is not None and ctx.evidence is not None:

@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import asyncio
 
 from messengers_router.mess_types import Evidence, RouteDecision, SessionState
@@ -29,6 +31,16 @@ from messengers_router.renderer import (
     _final_prompt_rich,
     _format_dialog_context,
 )
+
+
+@pytest.fixture(autouse=True)
+def _free_text_path_under_test(monkeypatch):
+    """Файл проверяет механику свободного текста LLM; ход здесь без данных, а такие ходы с L-05
+    (08.10) до свободного текста не доходят — правило L-05 отключаем явно."""
+    from messengers_router.services import _empty_evidence_reply
+
+    monkeypatch.setattr(_empty_evidence_reply, "enabled", lambda: False)
+
 
 
 def run(coro):

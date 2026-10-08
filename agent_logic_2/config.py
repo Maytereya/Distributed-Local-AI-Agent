@@ -183,6 +183,7 @@ class MessengerRouterConfig:
     llm_price_service_select: bool
     llm_appointment_change_validation: bool
     llm_existing_appointment_validation: bool
+    llm_empty_evidence_reply: bool
     llm_symptom_specialists: bool
     debug_final_input: bool
     url: str
@@ -369,6 +370,14 @@ settings = Settings(
             "llm_existing_appointment_validation",
             default=True,
         ),
+        # Ход без данных: LLM выбирает вид реплики, текст печатает код (L-05, 08.10).
+        # Выключить — вернуть свободный текст LLM; по умолчанию ВКЛ; kill-switch:
+        # [MESSENGER_ROUTER] llm_empty_evidence_reply = false
+        llm_empty_evidence_reply=_get_bool(
+            "MESSENGER_ROUTER",
+            "llm_empty_evidence_reply",
+            default=True,
+        ),
         # Медвопрос: к каким врачам клиники обратиться с жалобой — выбирает LLM (05.10).
         # Сбой LLM — прежний шаблон медвопроса; по умолчанию ВКЛ; kill-switch:
         # [MESSENGER_ROUTER] llm_symptom_specialists = false
@@ -493,6 +502,7 @@ MR_LLM_SERVICE_NORMALIZATION = settings.messenger_router.llm_service_normalizati
 MR_LLM_PRICE_SERVICE_SELECT = settings.messenger_router.llm_price_service_select
 MR_LLM_APPOINTMENT_CHANGE_VALIDATION = settings.messenger_router.llm_appointment_change_validation
 MR_LLM_EXISTING_APPOINTMENT_VALIDATION = settings.messenger_router.llm_existing_appointment_validation
+MR_LLM_EMPTY_EVIDENCE_REPLY = settings.messenger_router.llm_empty_evidence_reply
 MR_LLM_SYMPTOM_SPECIALISTS = settings.messenger_router.llm_symptom_specialists
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url

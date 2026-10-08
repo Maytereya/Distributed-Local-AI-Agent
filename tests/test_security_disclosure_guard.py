@@ -29,6 +29,16 @@ from messengers_router.services import Services
 from messengers_router.memory import MemoryStore
 
 
+@pytest.fixture(autouse=True)
+def _free_text_path_under_test(monkeypatch):
+    """Файл проверяет механику свободного текста LLM; ход здесь без данных, а такие ходы с L-05
+    (08.10) до свободного текста не доходят — правило L-05 отключаем явно."""
+    from messengers_router.services import _empty_evidence_reply
+
+    monkeypatch.setattr(_empty_evidence_reply, "enabled", lambda: False)
+
+
+
 def run(coro):
     return asyncio.run(coro)
 

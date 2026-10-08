@@ -130,6 +130,20 @@ def _hermetic_existing_appointment_validator(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_empty_evidence_reply(monkeypatch):
+    """Различитель вида реплики на ходу без данных (L-05) герметичен: None = LLM не ответила,
+    бот отвечает нейтральной фразой. Тесты, которым важен вид, переопределяют мок явно.
+    """
+    from messengers_router.services import _empty_evidence_reply as _empty
+
+    async def _unavailable(_text):
+        return None
+
+    monkeypatch.setattr(_empty, "classify_empty_evidence_turn", _unavailable)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_symptom_specialists(monkeypatch):
     """Совет «к каким врачам с такой жалобой» (LLM) герметичен: None = прежний шаблон
     медвопроса. Тесты совета вызывают сохранённый настоящий `advise` или
