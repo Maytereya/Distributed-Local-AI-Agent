@@ -61,7 +61,15 @@ _UNSUPPORTED_CATALOG_TEXT: dict[str, str] = {
 }
 
 
-def build_unsupported_catalog_response(evidence: Evidence) -> ResponseEnvelope | None:
+# L-06в (ревью 05.10, решение владельца 08.10): отказ стоп-листа — с оффером оператора.
+# Стоп-лист — список в коде и бывает неправ (трафик 08.10: «клиника не оказывает» на рентген,
+# который есть); оператор проверит по живым данным. Пункт 3 принципов: честный путь дальше.
+UNSUPPORTED_CATALOG_OPERATOR_OFFER = "Если хотите уточнить, переведу на оператора. Перевести?"
+
+
+def build_unsupported_catalog_response(
+    evidence: Evidence, state: SessionState | None = None, memory: MemoryStore | None = None
+) -> ResponseEnvelope | None:
     payload = evidence.get(ek.UNSUPPORTED_CATALOG)
     if not isinstance(payload, dict):
         return None
@@ -69,6 +77,9 @@ def build_unsupported_catalog_response(evidence: Evidence) -> ResponseEnvelope |
     text = _UNSUPPORTED_CATALOG_TEXT.get(kind)
     if not text:
         return None
+    if state is not None and memory is not None:
+        mark_operator_offer_pending(state, memory)
+        text = f"{text}\n\n{UNSUPPORTED_CATALOG_OPERATOR_OFFER}"
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 
@@ -758,7 +769,7 @@ def build_first_structured_response(
         lambda: build_catalog_confirm_response(evidence),
         lambda: build_catalog_health_response(evidence),
         lambda: build_operator_offer_response(evidence),
-        lambda: build_unsupported_catalog_response(evidence),
+        lambda: build_unsupported_catalog_response(evidence, state, memory),
         lambda: build_main_index_info_response(evidence),
         lambda: build_service_bundle_response(flow_label, evidence, state),
         lambda: build_price_response(flow_label, evidence, state),

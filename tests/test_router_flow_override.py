@@ -842,8 +842,13 @@ def test_patient_routing_stream_short_circuits_unsupported_catalog(monkeypatch):
     out = _run_stream_once("Где сделать МРТ?", state, services, memory)
 
     assert out
-    assert out[0].text == "К сожалению, в данный момент клиника не оказывает данную услугу. Приносим извинения за неудобства."
+    # L-06в (08.10): отказ стоп-листа — с оффером оператора вопросом, без принудительного перевода.
+    assert out[0].text == (
+        "К сожалению, в данный момент клиника не оказывает данную услугу. Приносим извинения за неудобства."
+        "\n\nЕсли хотите уточнить, переведу на оператора. Перевести?"
+    )
     assert out[0].handoff is False
+    assert state.last_entities.get("_operator_offer_pending") is True
 
 
 def test_patient_routing_stream_unsupported_specialist_does_not_pollute_state(monkeypatch):
@@ -882,7 +887,7 @@ def test_patient_routing_stream_unsupported_specialist_does_not_pollute_state(mo
     out = _run_stream_once("Здравствуйте! К детскому кардиологу можно попасть?", state, services, memory)
 
     assert out
-    assert out[0].text == "Данные врачи не ведут прием."
+    assert out[0].text == "Данные врачи не ведут прием.\n\nЕсли хотите уточнить, переведу на оператора. Перевести?"
     assert out[0].handoff is False
     assert state.last_entities.get("specialty") is None
     assert state.last_entities.get("_last_label") is None
