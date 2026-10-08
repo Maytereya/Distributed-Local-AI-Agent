@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..llm_runtime import generate_text
+from ..llm_runtime import DECISION_OPTIONS, generate_text
 from ..prompt_registry import load_prompt_text
 from ..runtime_config import config as _cfg
 
@@ -73,6 +73,7 @@ async def is_patient_name_reply(text: str) -> bool:
             prompt,
             timeout_s=_LLM_TIMEOUT_S,
             queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS,
+            options=DECISION_OPTIONS,
         )
         # Отвергаем ТОЛЬКО на явном «OTHER». Любой иной ответ (FIO/мусор/пусто)
         # → принять (fail-open): валидатор не должен зарезать валидное имя.
@@ -81,7 +82,9 @@ async def is_patient_name_reply(text: str) -> bool:
             verdict = False
     except Exception as exc:  # fail-open: любой сбой = принять по форме
         logger.warning("patient_name_validator_failed: %s", type(exc).__name__)
-        verdict = True
+        # Сбой (таймаут, очередь, ошибка) НЕ кэшируем: иначе минутная перегрузка ollama
+        # закрепляла бы вердикт до рестарта для всех пациентов (ревью DLA, LLM-1, 08.10).
+        return True
 
     if len(_CACHE) >= _CACHE_CAP:
         _CACHE.clear()

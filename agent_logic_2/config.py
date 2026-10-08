@@ -184,6 +184,10 @@ class MessengerRouterConfig:
     llm_appointment_change_validation: bool
     llm_existing_appointment_validation: bool
     llm_empty_evidence_reply: bool
+    llm_patient_name_validation: bool
+    llm_service_slot_validation: bool
+    llm_result_timing_validation: bool
+    prepare_relevance_llm_enabled: bool
     llm_symptom_specialists: bool
     debug_final_input: bool
     url: str
@@ -378,6 +382,12 @@ settings = Settings(
             "llm_empty_evidence_reply",
             default=True,
         ),
+        # Выключатели LLM-проверок, которые журнал обещал, а config.py не объявлял — поэтому
+        # они были всегда включены (ревью DLA, LLM-1; объявлены 08.10). По умолчанию ВКЛ.
+        llm_patient_name_validation=_get_bool("MESSENGER_ROUTER", "llm_patient_name_validation", default=True),
+        llm_service_slot_validation=_get_bool("MESSENGER_ROUTER", "llm_service_slot_validation", default=True),
+        llm_result_timing_validation=_get_bool("MESSENGER_ROUTER", "llm_result_timing_validation", default=True),
+        prepare_relevance_llm_enabled=_get_bool("MESSENGER_ROUTER", "prepare_relevance_llm_enabled", default=True),
         # Медвопрос: к каким врачам клиники обратиться с жалобой — выбирает LLM (05.10).
         # Сбой LLM — прежний шаблон медвопроса; по умолчанию ВКЛ; kill-switch:
         # [MESSENGER_ROUTER] llm_symptom_specialists = false
@@ -503,6 +513,10 @@ MR_LLM_PRICE_SERVICE_SELECT = settings.messenger_router.llm_price_service_select
 MR_LLM_APPOINTMENT_CHANGE_VALIDATION = settings.messenger_router.llm_appointment_change_validation
 MR_LLM_EXISTING_APPOINTMENT_VALIDATION = settings.messenger_router.llm_existing_appointment_validation
 MR_LLM_EMPTY_EVIDENCE_REPLY = settings.messenger_router.llm_empty_evidence_reply
+MR_LLM_PATIENT_NAME_VALIDATION = settings.messenger_router.llm_patient_name_validation
+MR_LLM_SERVICE_SLOT_VALIDATION = settings.messenger_router.llm_service_slot_validation
+MR_LLM_RESULT_TIMING_VALIDATION = settings.messenger_router.llm_result_timing_validation
+MR_PREPARE_RELEVANCE_LLM_ENABLED = settings.messenger_router.prepare_relevance_llm_enabled
 MR_LLM_SYMPTOM_SPECIALISTS = settings.messenger_router.llm_symptom_specialists
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url

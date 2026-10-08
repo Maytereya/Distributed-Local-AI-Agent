@@ -28,6 +28,11 @@ try:
 except Exception:
     _MAX_CONCURRENCY = _DEFAULT_MAX_CONCURRENCY
 _SEMAPHORE = asyncio.Semaphore(max(1, _MAX_CONCURRENCY))
+
+# Параметры коротких решений (валидаторы, различители: ответ — одно слово). Явно на месте
+# вызова, а не из общих настроек Gradio: одинаковый вопрос — одинаковое решение, ответ не
+# растекается (ревью DLA, L-03/LLM-2, 08.10).
+DECISION_OPTIONS: dict[str, Any] = {"temperature": 0, "num_predict": 24}
 _OLLAMA_CLIENT = AsyncClient(c.ollama_url)
 
 

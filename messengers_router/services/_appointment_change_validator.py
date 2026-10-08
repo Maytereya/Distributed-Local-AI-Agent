@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 
-from ..llm_runtime import generate_text
+from ..llm_runtime import DECISION_OPTIONS, generate_text
 from ..prompt_registry import load_prompt_text
 from ..runtime_config import config as _cfg
 
@@ -58,7 +58,9 @@ async def is_own_appointment_change(text: str) -> bool | None:
 
     try:
         prompt = load_prompt_text("appointment_change_validator").replace("<<TEXT>>", raw)
-        answer = await generate_text(prompt, timeout_s=_LLM_TIMEOUT_S, queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS, think=False)
+        answer = await generate_text(
+            prompt, timeout_s=_LLM_TIMEOUT_S, queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS, think=False, options=DECISION_OPTIONS
+        )
     except Exception as exc:  # сбой LLM — решает вызывающий, как до 04.10
         logger.warning("appointment_change_validator_failed: %s", type(exc).__name__)
         return None

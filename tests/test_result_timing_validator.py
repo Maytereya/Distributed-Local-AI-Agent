@@ -33,7 +33,7 @@ def _clear_and_enable(monkeypatch):
 
 
 def _mock_llm(monkeypatch, answer):
-    async def fake_generate(prompt, *, timeout_s=None, queue_timeout_ms=None):
+    async def fake_generate(prompt, *, timeout_s=None, queue_timeout_ms=None, **_kwargs):
         _ = prompt, timeout_s, queue_timeout_ms
         if isinstance(answer, Exception):
             raise answer

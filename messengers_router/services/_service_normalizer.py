@@ -108,7 +108,8 @@ async def llm_normalize_service_query(query: str) -> str | None:
         answer = _sanitize_llm_answer(raw, q)
     except Exception as exc:  # fail-open: любой сбой = прежний честный miss
         logger.warning("service_normalizer_failed: %s", type(exc).__name__)
-        answer = None
+        # Сбой НЕ кэшируем (ревью DLA, LLM-1, 08.10): следующий ход спросит LLM снова.
+        return None
 
     if len(_CACHE) >= _CACHE_CAP:
         _CACHE.clear()

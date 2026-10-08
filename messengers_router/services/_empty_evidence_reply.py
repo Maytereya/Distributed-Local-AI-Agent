@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 
-from ..llm_runtime import generate_text
+from ..llm_runtime import DECISION_OPTIONS, generate_text
 from ..prompt_registry import load_prompt_text
 from ..runtime_config import config as _cfg
 
@@ -57,7 +57,9 @@ async def classify_empty_evidence_turn(text: str) -> str | None:
         return _CACHE[key]
     try:
         prompt = load_prompt_text("empty_evidence_kind").replace("<<TEXT>>", raw)
-        answer = await generate_text(prompt, timeout_s=_LLM_TIMEOUT_S, queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS, think=False)
+        answer = await generate_text(
+            prompt, timeout_s=_LLM_TIMEOUT_S, queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS, think=False, options=DECISION_OPTIONS
+        )
     except Exception as exc:  # сбой LLM — нейтральный ответ у вызывающего
         logger.warning("empty_evidence_kind_failed: %s", type(exc).__name__)
         return None
