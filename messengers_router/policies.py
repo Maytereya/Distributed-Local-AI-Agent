@@ -1265,6 +1265,17 @@ def detect_booking_necessity_question(text: str) -> bool:
     return bool(_BOOKING_NECESSITY_RE.search(raw))
 
 
+def strip_booking_necessity(text: str) -> str:
+    """Реплика без самого вопроса о записи: «а на УЗИ брюшной полости нужна запись?» → «а на УЗИ брюшной полости ?».
+
+    Остаток — то, о чём спрашивают: по нему видно, названа ли в вопросе своя услуга.
+    Без вырезки выделитель услуги берёт «…нужна запись» в название, а «нужно ли
+    записываться?» каталог находит как «Запись фотоизображения на флеш-карту» (08.10).
+    """
+
+    return _BOOKING_NECESSITY_RE.sub(" ", str(text or ""))
+
+
 def detect_nonbookable_walkin_intent(text: str, entities: dict[str, Any] | None = None) -> bool:
     """
     ЭКГ и сдача анализов принимаются без записи (живая очередь),

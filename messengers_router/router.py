@@ -26,6 +26,7 @@ from .classifier import analyze
 from .context_summary import update_summary
 from .dialog_graph import GraphEngine
 from .entity_grounder import (
+    _NONBOOKABLE_GENERIC_HINTS,
     ground_decision_entities,
     sanitize_doctor_entities,
     verify_doctor_entities_in_decision,
@@ -88,16 +89,20 @@ from .policies import (
     detect_appointment_change_without_object,
     detect_existing_appointment_request,
     detect_urgent,
+    extract_specialty,
     has_datetime_signal,
     is_specialty_word,
     is_test_assist_category_term,
     normalize_appointment_action,
     nonbookable_service_hint,
     service_name_conflicts_with_doctor,
+    strip_booking_necessity,
 )
+from .service_phrase import extract_service_phrase
 from .recovery_policy import contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
 from .services._appointment_change_validator import is_own_appointment_change
+from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE
 from .services.prepare import anesthesia_reply, prepare_variant_payload
 from .services._patient_name_validator import is_patient_name_reply
 from .services._samara_perimeter import (
@@ -1841,6 +1846,77 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
     return await executor_execute_plan(plan, state, services)
 
 
+_WALKIN_FLAGS = frozenset({"rule_nonbookable_walkin", "policy_nonbookable_walkin"})
+
+
+async def _guard_walkin_named_service(
+    decision: RouteDecision,
+    *,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+) -> RouteDecision:
+    """«Без записи» — только про анализы и ЭКГ, не про услугу, которую пациент назвал сам (08.10).
+
+    Walk-in по контексту (BUG-F: «нужна запись?» в лаб-контексте — живая очередь) не видел,
+    что фраза называет другую услугу: после кнопки «Нужно ли записываться» «а на УЗИ
+    брюшной полости нужна запись?» → «УЗИ … без записи». Стоит после grounding: только
+    здесь известны и решение walk-in, и услуга из реплики.
+
+    - Своя лаб-улика в реплике («сдать кровь», «анализ», «ЭКГ») — решение правила остаётся.
+    - Своей услуги в реплике нет — ответ про класс из контекста («анализы»), а не про
+      строку каталога, найденную по словам вопроса.
+    - Услуга названа — вид решает каталог МИС: анализ (есть срок готовности) — без записи;
+      иначе или неизвестно — запись, «без записи» не утверждаем. Как и
+      `_classify_catalog_service_kind`, анализом не считаем то, что сам пациент назвал
+      процедурой: каталог по буквам даёт «гастроскопию» → «Гастрин» (K14).
+    """
+
+    if decision.label != "ADDRESS" or decision.source == "button" or not (_WALKIN_FLAGS & set(decision.flags)):
+        return decision
+    if detect_nonbookable_walkin_intent(user_text):
+        return decision
+    asked_about = strip_booking_necessity(user_text)
+    specialty = extract_specialty(asked_about)
+
+    def to_booking(**named: str) -> RouteDecision:
+        # Класс из контекста («анализы» от кнопки) — не услуга записи: иначе запись
+        # подхватит его из состояния («Есть возможность записи на анализы», свип 08.10).
+        if str(state.last_entities.get("service_name") or "").casefold() in _NONBOOKABLE_GENERIC_HINTS:
+            state.last_entities.pop("service_name", None)
+        entities = {k: v for k, v in decision.entities.items() if k != "service_name"}
+        return _copy_decision(
+            decision,
+            label="APPOINTMENT",
+            entities={**entities, **named},
+            flags=(set(decision.flags) - _WALKIN_FLAGS) | {"walkin_named_bookable_service"},
+            source="guardrail_post",
+        )
+
+    if specialty:
+        # «а на приём к неврологу нужна запись?» — врач: выделитель услуги приём не видит.
+        return to_booking(specialty=specialty)
+    phrase = extract_service_phrase(asked_about)
+    if not phrase:
+        hint = nonbookable_service_hint(user_text, state.last_entities) or "анализы"
+        if decision.entities.get("service_name") == hint:
+            return decision
+        return _copy_decision(
+            decision,
+            entities={**decision.entities, "service_name": hint},
+            flags=set(decision.flags) | {"walkin_context_class"},
+        )
+    match = await services.match_catalog_service(phrase, context_text=user_text)
+    canonical = str(match.get("canonical") or "").strip() if match.get("status") in {"exact", "fuzzy"} else ""
+    is_lab = bool(canonical) and await services.is_lab_catalog_service(canonical)
+    named_procedure = bool(_PRICE_PROCEDURE_LIKE_RE.search(phrase))
+    if is_lab and not named_procedure:
+        return decision
+    if canonical and match.get("status") == "exact" and not is_lab:
+        return to_booking(service_name=canonical)
+    return to_booking()
+
+
 async def _apply_post_nlu_guardrails(
     decision: RouteDecision,
     state: SessionState,
@@ -2492,6 +2568,7 @@ async def _complete_route_after_doctor_guard(
             entities=grounding.entities,
             flags=set(decision.flags) | set(grounding.flags),
         )
+    decision = await _guard_walkin_named_service(decision, user_text=user_text, state=state, services=services)
 
     catalog_confirm = _maybe_start_catalog_confirm(
         decision=decision,

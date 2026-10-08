@@ -467,6 +467,9 @@ class Services:
                             "name": name,
                             "serviceHomecode": str(row.get("serviceHomecode") or row.get("homecode") or "").strip(),
                             "cost": _as_int(row.get("cost")) or 0,
+                            # Срок готовности есть только у анализов — по нему каталог
+                            # отличает анализ от записываемой услуги (`is_lab_catalog_service`).
+                            "deadline": str(row.get("deadline") or "").strip(),
                         }
                     )
 
@@ -492,6 +495,28 @@ class Services:
                 "catalog_rows": len(deduped),
             }
             return self._service_catalog_rows_cache
+
+    async def is_lab_catalog_service(self, service_name: str) -> bool:
+        """
+        Анализ ли услуга по данным МИС: у строк анализов в прайсе есть срок готовности.
+
+        Срез 04.10: срок есть у 1 610 строк из 3 670, и все они — анализы (пять консультаций
+        стёкол и профиль перед эндоскопией — тоже лабораторные); у УЗИ, ФГДС, приёмов — нет.
+        Услуга, которой нет в каталоге, анализом не считается.
+
+        :param service_name: каноническое название услуги из каталога
+        :return: True, если хотя бы у одной строки с таким названием есть срок готовности
+        """
+
+        target = _normalise_catalog_text(service_name)
+        if not target:
+            return False
+        rows = await self._ensure_service_catalog_rows_loaded()
+        return any(
+            row.get("deadline")
+            for row in rows
+            if _normalise_catalog_text(str(row.get("serviceName") or row.get("name") or "")) == target
+        )
 
     async def get_catalog_health(self) -> dict[str, Any]:
         """
