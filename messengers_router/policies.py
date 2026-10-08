@@ -706,6 +706,13 @@ APPOINTMENT_STEP_DATETIME = "select_datetime"
 APPOINTMENT_STEP_PATIENT = "collect_patient_name"
 APPOINTMENT_STEP_CONFIRM = "confirm"
 APPOINTMENT_STEP_DONE = "done"
+# Вариант A записи (решение владельца 08.10, повестка рефакторинга №6): после цели и
+# филиала бот один раз спрашивает пожелание по времени и цитирует его оператору как есть;
+# дату, время, ФИО и карточку «Подтверждаете?» не собирает — оператор берёт их по живому
+# расписанию. Шаги DATETIME / PATIENT / CONFIRM политика больше не выдаёт.
+APPOINTMENT_STEP_WISH = "ask_time_wish"
+APPOINTMENT_STEP_HANDOFF = "handoff_with_summary"
+APPOINTMENT_WISH_MAX_LEN = 300
 APPOINTMENT_CONFIRM_YES = "yes"
 APPOINTMENT_CONFIRM_NO = "no"
 APPOINTMENT_CONFIRM_OTHER = "other"
@@ -2290,12 +2297,15 @@ def _appointment_required_slots(entities: dict[str, Any]) -> list[str]:
     action = str(entities.get("appointment_action") or "").strip().lower()
     if action in {"unknown", "ambiguous"}:
         return ["appointment_action"]
-    if action in {"cancel", "reschedule"}:
+    if action == "cancel":
         return [
             "appointment_action",
             "_any_of:doctor_id,doctor_name",
             "patient_name",
         ]
+    if action == "reschedule":
+        # Вариант A (08.10): ФИО пациента бот не собирает — запись найдёт оператор.
+        return ["appointment_action", "_any_of:doctor_id,doctor_name"]
     return REQUIRED_SLOTS.get("APPOINTMENT", [])
 
 
@@ -2417,21 +2427,80 @@ def handoff_message(reason: str | None = None, override: str | None = None) -> s
 
 
 def appointment_step_policy(entities: dict[str, Any]) -> str:
+    """Следующий шаг записи по варианту A: филиал → пожелание по времени → оператор.
+
+    Перенос филиал не спрашивает: запись уже есть, оператор найдёт её сам. Пожелание
+    спрашивается один раз (`_appointment_wish_asked`): ответа нет — всё равно перевод,
+    петли на этом шаге быть не может (пункт 5 принципов).
+    """
+
+    action = str(entities.get("appointment_action") or "").strip().lower()
     branch_selected = bool(entities.get("branch_id") or entities.get("branch_name"))
-    has_date_time = bool(
-        (entities.get("date_from") or entities.get("date_hint"))
-        and (entities.get("time_from") or entities.get("time_flexible"))
-    )
-    has_patient_name = bool(str(entities.get("patient_name") or "").strip())
-    if not branch_selected:
+    if action != "reschedule" and not branch_selected:
         return APPOINTMENT_STEP_BRANCH
-    if not has_date_time:
-        return APPOINTMENT_STEP_DATETIME
-    if not has_patient_name:
-        return APPOINTMENT_STEP_PATIENT
-    if not entities.get("appointment_confirm_pending") and not entities.get("appointment_confirmed"):
-        return APPOINTMENT_STEP_CONFIRM
-    return APPOINTMENT_STEP_DONE
+    if not str(entities.get("appointment_wish") or "").strip() and not entities.get("_appointment_wish_asked"):
+        return APPOINTMENT_STEP_WISH
+    return APPOINTMENT_STEP_HANDOFF
+
+
+_TIME_WISH_RE = re.compile(
+    r"\b(?:понедельник\w*|вторник\w*|сред[уаеы]|четверг\w*|пятниц\w*|суббот\w*|воскресен\w*"
+    r"|утр\w*|вечер\w*|дн[её]м|обед\w*|сегодня|завтра|послезавтра|выходн\w*|будн\w*"
+    r"|(?:на\s+)?(?:этой|следующей|той)\s+неделе)\b",
+    re.I,
+)
+
+
+def looks_like_time_wish(text: str) -> bool:
+    """Назвал ли пациент удобное время своими словами — для варианта A записи.
+
+    Шире `has_datetime_signal`: тот не видит дней недели и частей дня («на пятницу», «в
+    субботу утром»), а здесь их достаточно — пожелание уходит оператору как есть, без разбора.
+    """
+
+    raw = str(text or "")
+    return bool(_TIME_WISH_RE.search(raw)) or has_datetime_signal(raw)
+
+
+def appointment_text_wish_prompt(service: str, branch: str, price_rub: str | None, *, reschedule: bool = False) -> str:
+    """Вопрос о пожелании по времени — один раз, ответ уходит оператору дословно."""
+
+    ask = (
+        "Когда вам удобно прийти? Напишите своими словами — например, «завтра после 17» "
+        "или «в субботу утром». Оператор подберёт время по расписанию и подтвердит запись."
+    )
+    if reschedule:
+        return (
+            f"Перенос записи: {service}. На когда хотите перенести? Напишите своими словами — "
+            "оператор найдёт вашу запись и подберёт новое время."
+        )
+    if price_rub:
+        return f"Да, можем записать на {service} ({branch}), стоимость {price_rub} руб. {ask}"
+    return f"Да, можем записать на {service} ({branch}). {ask}"
+
+
+def appointment_handoff_summary(entities: dict[str, Any]) -> str:
+    """Сводка для оператора: цель, филиал и пожелание пациента КАК ЕСТЬ, без ФИО и разбора дат.
+
+    Шлюз передаёт оператору только текст ответа (структурированной сводки нет), поэтому
+    сводка — первая строка сообщения о переводе.
+    """
+
+    action = str(entities.get("appointment_action") or "").strip().lower()
+    service = appointment_service_display(entities)
+    wish = " ".join(str(entities.get("appointment_wish") or "").split())[:APPOINTMENT_WISH_MAX_LEN]
+    wish_part = f"Пожелание по времени: «{wish}»." if wish else "Пожелание по времени не указано."
+    if action == "reschedule":
+        return (
+            f"Перенос записи: {service}. {wish_part}\n"
+            "Передаю оператору — он найдёт вашу запись и подберёт новое время."
+        )
+    place = str(entities.get("branch_name") or entities.get("city") or "").strip()
+    target = f"{service}, {place}" if place else service
+    return (
+        f"Заявка на запись: {target}. {wish_part}\n"
+        "Передаю оператору — он подберёт время по расписанию и подтвердит запись."
+    )
 
 
 _YES_RE = re.compile(

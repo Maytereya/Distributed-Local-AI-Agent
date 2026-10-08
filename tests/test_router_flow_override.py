@@ -2234,7 +2234,8 @@ def test_missing_slots_reschedule_requires_concrete_doctor_even_with_specialty()
         {"appointment_action": "reschedule", "specialty": "кардиолог"},
     )
     assert "_any_of:doctor_id,doctor_name" in missing
-    assert "patient_name" in missing
+    # Вариант A (08.10): ФИО пациента для переноса не собираем — запись найдёт оператор.
+    assert "patient_name" not in missing
 
 
 def test_memory_merge_entities_reschedule_clears_stale_specialty_context():
@@ -2452,16 +2453,19 @@ def test_detect_prepare_intent_covers_fasting_and_prepare_questions():
     assert detect_prepare_intent("как подготовиться к анализу?") is True
 
 
-def test_appointment_step_policy_accepts_time_flexible_as_datetime():
-    step = appointment_step_policy(
-        {
-            "branch_name": "Ленина 5",
-            "date_hint": "tomorrow",
-            "time_flexible": True,
-            "patient_name": "Иванов Иван Иванович",
-        }
-    )
-    assert step == "confirm"
+def test_appointment_step_policy_variant_a_branch_wish_handoff():
+    # Вариант A (08.10): филиал → пожелание (один раз) → перевод. Дата, время и ФИО шаг не
+    # меняют: даже «полностью заполненная» запись не уходит в карточку «Подтверждаете?».
+    assert appointment_step_policy({"specialty": "терапевт"}) == "select_branch"
+    assert appointment_step_policy({"branch_name": "Ленина 5"}) == "ask_time_wish"
+    assert appointment_step_policy(
+        {"branch_name": "Ленина 5", "date_hint": "tomorrow", "time_flexible": True, "patient_name": "Иванов Иван"}
+    ) == "ask_time_wish"
+    assert appointment_step_policy({"branch_name": "Ленина 5", "appointment_wish": "завтра утром"}) == "handoff_with_summary"
+    # Спросили, ответа нет — всё равно перевод: петли на этом шаге не бывает.
+    assert appointment_step_policy({"branch_name": "Ленина 5", "_appointment_wish_asked": True}) == "handoff_with_summary"
+    # Перенос филиал не спрашивает.
+    assert appointment_step_policy({"appointment_action": "reschedule", "doctor_name": "Трубин"}) == "ask_time_wish"
 
 
 def test_appointment_summary_renders_time_flexible():
@@ -2593,7 +2597,7 @@ def test_apply_context_action_new_topic_clears_pending_and_dialog():
     assert state.dialog.phase == ""
 
 
-def test_build_appointment_step_response_patient_step_sets_pending():
+def test_build_appointment_step_response_wish_step_sets_pending():
     state = SessionState(
         session_id="appt-step",
         last_entities={
@@ -2609,10 +2613,13 @@ def test_build_appointment_step_response_patient_step_sets_pending():
     env = _build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
 
     assert env is not None
-    assert "фио пациента" in env.text.lower()
+    assert env.handoff is False
+    assert "когда вам удобно прийти" in env.text.lower()
+    assert "фио" not in env.text.lower()
     pending = memory.get_pending(state)
     assert isinstance(pending, dict)
     assert pending.get("label") == "APPOINTMENT"
+    assert pending.get("missing") == ["appointment_wish"]
 
 
 def test_build_appointment_step_response_doctor_selection_mode_renders_doctors():
@@ -2648,7 +2655,7 @@ def test_build_appointment_step_response_doctor_selection_mode_renders_doctors()
     assert "расписание" in env.text.lower()
 
 
-def test_build_appointment_step_response_reschedule_full_data_requests_confirmation():
+def test_build_appointment_step_response_reschedule_hands_off_with_summary():
     state = SessionState(
         session_id="appt-step-reschedule-confirm",
         last_entities={
@@ -2658,6 +2665,7 @@ def test_build_appointment_step_response_reschedule_full_data_requests_confirmat
             "date_hint": "tomorrow",
             "time_from": "16:00",
             "patient_name": "Петров Петр Петрович",
+            "appointment_wish": "завтра в 16:00",
         },
     )
     evidence = Evidence(items={})
@@ -2666,10 +2674,13 @@ def test_build_appointment_step_response_reschedule_full_data_requests_confirmat
 
     env = _build_appointment_step_response("APPOINTMENT", evidence, state, services, memory)
 
+    # Вариант A (08.10): перенос — сводка оператору, без карточки «Подтверждаете?» и без ФИО.
     assert env is not None
-    assert env.handoff is False
-    assert "подтверждаете" in env.text.lower()
-    assert state.last_entities.get("appointment_confirm_pending") is True
+    assert env.handoff is True
+    assert env.text.startswith("Перенос записи: Холтер. Пожелание по времени: «завтра в 16:00».")
+    assert "подтверждаете" not in env.text.lower()
+    assert "Петров" not in env.text
+    assert not state.last_entities.get("appointment_confirm_pending")
 
 
 def test_build_appointment_step_response_cancel_renders_russian_date_hint():
@@ -2958,12 +2969,14 @@ def test_patient_routing_stream_prelocks_reschedule_doctor_reply_before_nlu(monk
     services.ensure_background_refresh_started = lambda: None
     services.resolve_doctor_name = fake_resolve_doctor_name  # type: ignore[method-assign]
     memory = MemoryStore()
-    memory.set_pending(state, label="APPOINTMENT", missing_slots=["_any_of:doctor_id,doctor_name", "patient_name"])
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["_any_of:doctor_id,doctor_name"])
 
     out = _run_stream_once("Трубин", state, services, memory)
 
+    # Вариант A (08.10): после врача — вопрос о пожелании по времени, ФИО не спрашиваем.
     assert len(out) == 1
-    assert "фио пациента" in out[0].text.lower()
+    assert "на когда хотите перенести" in out[0].text.lower()
+    assert "фио" not in out[0].text.lower()
     assert state.last_entities.get("doctor_name") == "Трубин Алексей Юрьевич"
 
 
@@ -3102,9 +3115,12 @@ def test_patient_routing_stream_datetime_after_schedule_resets_stale_patient_nam
 
     out = _run_stream_once("на завтра на 12:00", state, services, memory)
 
+    # Вариант A (08.10): время после расписания — пожелание, сразу перевод со сводкой;
+    # ФИО (тем более устаревшее) в сводку не попадает.
     assert len(out) == 1
-    assert "фио пациента" in out[0].text.lower()
-    assert state.last_entities.get("patient_name") is None
+    assert out[0].handoff is True
+    assert "Пожелание по времени: «на завтра на 12:00»" in out[0].text
+    assert "Старый Пациент" not in out[0].text
 
 
 @pytest.mark.parametrize(

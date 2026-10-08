@@ -284,7 +284,10 @@ def build_plan(
 
     if label == "APPOINTMENT":
         action = str(entities.get("appointment_action") or "").strip().lower()
-        if action == "cancel":
+        if action in {"cancel", "reschedule"}:
+            # Перенос по варианту A (08.10): врач + пожелание → оператор; филиалы и окна
+            # врача не показываем, а сбой расписания давал бы «не удалось получить
+            # расписание» вместо сводки переноса.
             return Plan(label=label, steps=steps)
         # Дропнутая-цель → честный отказ обрабатывается выше, ДО missing-slots
         # (см. ранний guard «B′ + A′-2»), поэтому сюда доходит только запись с

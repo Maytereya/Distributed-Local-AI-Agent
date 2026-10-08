@@ -572,6 +572,8 @@ _APPOINTMENT_RUNTIME_KEYS: tuple[str, ...] = (
     "branch_id",
     "branch_name",
     "patient_name",
+    "appointment_wish",
+    "_appointment_wish_asked",
 )
 _APPOINTMENT_FULL_CONTEXT_KEYS: tuple[str, ...] = (
     "doctor_id",

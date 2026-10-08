@@ -71,6 +71,8 @@ from .response_builder import (
 )
 from .russian_nlu import normalize_ru
 from .policies import (
+    APPOINTMENT_WISH_MAX_LEN,
+    looks_like_time_wish,
     missing_slots,
     handoff_message,
     evidence_requires_handoff,
@@ -466,6 +468,37 @@ def _repeat_norm(text: str) -> str:
     """
     stripped = _REPEAT_URL_RE.sub("", str(text or ""))
     return " ".join(stripped.lower().split())
+
+
+def _capture_appointment_wish(decision: RouteDecision, user_text: str, state: SessionState, memory: MemoryStore) -> None:
+    """Вариант A записи (08.10): пожелание по времени сохраняется ДОСЛОВНО — для сводки оператору.
+
+    Источники: ответ на вопрос «Когда вам удобно?» (висящий слот `appointment_wish`) — любой
+    текст; или реплика, в которой пациент сам назвал время («на завтра утром»). Дату и время
+    не разбираем в графы: разбор ошибался («03.06» → 03:06), а оператор всё равно сверяет с
+    расписанием.
+
+    :param decision: решение хода
+    :param user_text: реплика пациента
+    :param state: состояние сессии
+    :param memory: хранилище pending
+    """
+
+    if decision.label != "APPOINTMENT":
+        return
+    if str(state.last_entities.get("appointment_action") or "").strip().lower() == "cancel":
+        return
+    raw = " ".join(str(user_text or "").split())[:APPOINTMENT_WISH_MAX_LEN]
+    if not raw:
+        return
+    pending = memory.get_pending(state)
+    missing = pending.get("missing") if isinstance(pending, dict) else None
+    if isinstance(pending, dict) and pending.get("label") == "APPOINTMENT" and isinstance(missing, list) and "appointment_wish" in missing:
+        state.last_entities["appointment_wish"] = raw
+        memory.clear_pending(state)
+        return
+    if looks_like_time_wish(raw):
+        state.last_entities["appointment_wish"] = raw
 
 
 def _maybe_offer_operator_on_repeat(
@@ -1941,6 +1974,9 @@ def build_plan(
     memory: MemoryStore,
     runtime_options: RuntimeOptions | None = None,
 ) -> Plan:
+    # Все пути роутера строят план здесь — пожелание по времени (вариант A) не теряется,
+    # какой бы веткой ни пришла реплика.
+    _capture_appointment_wish(decision, user_text, state, memory)
     return planner_build_plan(decision, state, user_text, memory, runtime_options=runtime_options)
 
 

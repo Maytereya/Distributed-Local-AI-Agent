@@ -16,7 +16,6 @@ from .mess_types import AppointmentPhase, ResponseEnvelope, SessionState
 from .state_mutations import (
     finalize_appointment_confirmation,
     mark_appointment_cancel_pending,
-    mark_appointment_confirm_pending,
     mark_appointment_topic_switch_pending,
     reject_appointment_confirmation,
 )
@@ -24,14 +23,15 @@ from .policies import (
     APPOINTMENT_CONFIRM_NO,
     APPOINTMENT_CONFIRM_YES,
     appointment_confirmation_transition,
+    appointment_service_display,
     appointment_summary,
     appointment_text_cancel_confirm,
     appointment_text_cancelled,
-    appointment_text_confirm_prompt,
     appointment_text_confirmed_handoff,
     appointment_text_reask_confirm,
     appointment_text_reask_datetime,
     appointment_text_topic_switch_confirm,
+    appointment_text_wish_prompt,
     clarification_question,
     detect_address_intent,
     detect_doc_request_intent,
@@ -181,6 +181,19 @@ def is_likely_topic_switch_from_appointment(user_text: str) -> bool:
     return ("?" in text) and (len(text.split()) >= 4)
 
 
+def _appointment_wish_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
+    """Вариант A (08.10): вернуться к записи — значит снова спросить пожелание по времени."""
+
+    entities = state.last_entities
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["appointment_wish"])
+    entities["_appointment_wish_asked"] = True
+    action = str(entities.get("appointment_action") or "").strip().lower()
+    branch = str(entities.get("branch_name") or entities.get("city") or "выбранном филиале").strip()
+    return appointment_text_wish_prompt(
+        appointment_service_display(entities), branch, None, reschedule=action == "reschedule"
+    )
+
+
 def _appointment_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
     pending = memory.get_pending(state)
     missing: list[str] = []
@@ -188,6 +201,8 @@ def _appointment_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
         raw_missing = pending.get("missing")
         if isinstance(raw_missing, list):
             missing = [str(x) for x in raw_missing if str(x).strip()]
+    if "appointment_wish" in missing:
+        return _appointment_wish_resume_prompt(state, memory)
     if not missing:
         missing = missing_slots("APPOINTMENT", state.last_entities)
     if missing:
@@ -197,9 +212,8 @@ def _appointment_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
     if state.dialog.phase == AppointmentPhase.CONFIRM:
         return appointment_text_reask_confirm()
 
-    summary = appointment_summary(state.last_entities)
-    mark_appointment_confirm_pending(state)
-    return appointment_text_confirm_prompt(summary)
+    # Вариант A: карточки «Подтверждаете?» нет — цель и филиал есть, спрашиваем пожелание.
+    return _appointment_wish_resume_prompt(state, memory)
 
 
 def run_appointment_precheck(

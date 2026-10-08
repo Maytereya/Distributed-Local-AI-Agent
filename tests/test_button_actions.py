@@ -309,10 +309,13 @@ def test_change_button_teaches_format_instead_of_calling_operator():
     assert "перенести запись" in hint and "отменить запись" in hint
 
 
-def test_change_button_reschedule_reply_stays_with_the_bot():
+def test_change_button_reschedule_reply_hands_off_with_summary():
+    # Вариант A (08.10) заменяет «перенос на боте» (07.10): врач + пожелание → оператор со
+    # сводкой. Само нажатие кнопки по-прежнему отвечает подсказкой, без перевода.
     _, _, answer, handoff = _press_then_say("menu.appointment.change", "перенести запись к Дразнину на пятницу")
-    assert handoff is False
-    assert "оператор" not in answer.lower()
+    assert handoff is True
+    assert answer.startswith("Перенос записи:"), answer
+    assert "Пожелание по времени: «перенести запись к Дразнину на пятницу»" in answer
 
 
 def test_change_button_cancel_reply_goes_to_operator():

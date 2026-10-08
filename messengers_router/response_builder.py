@@ -20,24 +20,20 @@ from .state_mutations import (
     activate_appointment_flow,
     clear_appointment_branch_options,
     clear_appointment_selection_mode,
-    mark_appointment_confirm_pending,
     reset_appointment_confirmation_flags,
     set_appointment_branch_options,
     set_appointment_selection_mode,
 )
 from .policies import (
     APPOINTMENT_STEP_BRANCH,
-    APPOINTMENT_STEP_CONFIRM,
-    APPOINTMENT_STEP_DATETIME,
-    APPOINTMENT_STEP_PATIENT,
+    APPOINTMENT_STEP_HANDOFF,
+    APPOINTMENT_STEP_WISH,
     appointment_addresses_for_city,
+    appointment_handoff_summary,
     appointment_service_display,
     appointment_step_policy,
-    appointment_summary,
     appointment_text_branch_prompt,
-    appointment_text_confirm_prompt,
-    appointment_text_datetime_prompt,
-    appointment_text_patient_name_prompt,
+    appointment_text_wish_prompt,
     _render_appointment_date_part,
     clarification_question,
     extract_price_rub,
@@ -728,28 +724,22 @@ def build_appointment_step_response(
             handoff=False,
         )
 
-    if appointment_step == APPOINTMENT_STEP_DATETIME:
+    if appointment_step == APPOINTMENT_STEP_WISH:
+        # Вариант A (08.10): один вопрос о времени, ответ уходит оператору дословно.
         clear_appointment_branch_options(state)
-        if action in {"cancel", "reschedule"}:
-            memory.set_pending(state, label="APPOINTMENT", missing_slots=["_any_of:date_from,time_from,date_hint"])
-        price_rub = extract_price_rub(evidence.get(ek.PRICE), expected_service=service)
+        state.last_entities["_appointment_wish_asked"] = True
+        memory.set_pending(state, label="APPOINTMENT", missing_slots=["appointment_wish"])
+        price_rub = None if action == "reschedule" else extract_price_rub(evidence.get(ek.PRICE), expected_service=service)
         branch = str(entities.get("branch_name") or entities.get("city") or "выбранном филиале").strip()
         return ResponseEnvelope(
-            text=appointment_text_datetime_prompt(service, branch, price_rub),
+            text=appointment_text_wish_prompt(service, branch, price_rub, reschedule=action == "reschedule"),
             handoff=False,
         )
 
-    if appointment_step == APPOINTMENT_STEP_PATIENT:
-        memory.set_pending(state, label="APPOINTMENT", missing_slots=["patient_name"])
-        return ResponseEnvelope(
-            text=appointment_text_patient_name_prompt(),
-            handoff=False,
-        )
-
-    if appointment_step == APPOINTMENT_STEP_CONFIRM:
-        mark_appointment_confirm_pending(state)
-        summary = appointment_summary(entities)
-        return ResponseEnvelope(text=appointment_text_confirm_prompt(summary), handoff=False)
+    if appointment_step == APPOINTMENT_STEP_HANDOFF:
+        # Сводка — в тексте: шлюз передаёт оператору только текст (структурной сводки нет).
+        # Состояние записи очистит clear_on_handoff в patient_routing_stream.
+        return ResponseEnvelope(text=appointment_handoff_summary(entities), handoff=True)
 
     return None
 

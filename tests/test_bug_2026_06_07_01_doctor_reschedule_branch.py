@@ -100,6 +100,11 @@ def test_doctor_branch_offer_uses_doctors_own_schedule_not_lab_fallback(
         f"[action={appointment_action!r}] Lab-only branch {_LAB_ONLY_BRANCH!r} "
         f"must NOT appear in doctor branch offer; got: {text!r}"
     )
+    if appointment_action == "reschedule":
+        # Вариант A (08.10): перенос филиал не спрашивает — врач + пожелание → оператор.
+        # Инвариант класса держится: чужой лабораторный адрес не показан.
+        assert "На когда хотите перенести" in text, text
+        return
     # The doctor's own branch(es) should be offered.
     assert _DOCTOR_BRANCH_1 in text or _DOCTOR_BRANCH_2 in text, (
         f"[action={appointment_action!r}] Expected at least one of the doctor's "
