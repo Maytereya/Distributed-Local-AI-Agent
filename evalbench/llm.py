@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -192,8 +193,13 @@ class ResponseCache:
         self._data[key] = response
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps({"key": key, "site": site, "response": response}, ensure_ascii=False) + "\n")
+            line = (json.dumps({"key": key, "site": site, "response": response}, ensure_ascii=False) + "\n").encode("utf-8")
+            # Одна запись O_APPEND — строки параллельных частей прогона (--shard) не перемешиваются.
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)
 
 
 # --------------------------------------------------------------------------- клиент

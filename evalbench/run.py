@@ -144,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--ids", help="только эти id через запятую")
     ap.add_argument("--split", choices=("dev", "test"))
     ap.add_argument("--name", help="имя прогона (по умолчанию <sha>_<режим>_<профиль>)")
+    ap.add_argument("--shard", help="часть K/N набора (K с 1): N процессов параллельно; склейка — evalbench.merge")
     args = ap.parse_args(argv)
 
     code_root = args.code_root.resolve()
@@ -159,8 +160,15 @@ def main(argv: list[str] | None = None) -> int:
         split=args.split,
         limit=args.limit,
     )
+    if args.shard:
+        k, n = (int(x) for x in args.shard.split("/"))
+        if not 1 <= k <= n:
+            ap.error("--shard K/N: 1 ≤ K ≤ N")
+        cases = cases[k - 1 :: n]
     sha = git_sha(code_root)
     name = args.name or f"{sha}_{args.mode}_{args.profile}"
+    if args.shard:
+        name = f"{name}.part{args.shard.replace('/', 'of')}"
     run_dir = PRIVATE_ROOT / "runs" / name
     run_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(PRIVATE_ROOT, 0o700)
