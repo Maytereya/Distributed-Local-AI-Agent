@@ -58,6 +58,7 @@
 | Текущее состояние прода, очередь работ | `docs/HANDOFF_*.md` — **самый свежий по дате** (сейчас 2026-10-01) |
 | Разбор дефекта, ПОЧЕМУ сделано так | `docs/messengers_router_bug_log.md` — читать до правки смежного кода |
 | Что обещано заказчику | `docs/TZ_TOPIC_BUTTONS_AND_CALCULATOR_2026-08-17.md` |
+| Замер «было / стало» (стенд, карточка) | `evalbench/` (`python -m evalbench.run` / `.card`); данные и прогоны — `~/Dev/dla-private/bench/`, вне репо; прогон с `valid=false` не принимать |
 | Устаревшее | `docs/archive/` — не ориентир |
 | FreeTalk (ДРУГАЯ подсистема, владелец Владимир) | `docs/free_talk_*`, `docs/readme_first.md`, `src/localragagent/` — **не трогать**, находки передавать владельцу |
 
