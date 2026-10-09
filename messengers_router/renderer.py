@@ -309,13 +309,16 @@ def _age_or_none(value: Any) -> int | None:
 
 
 def doctor_audience_lines(doc: dict[str, Any]) -> list[str]:
-    """Строки карточки врача о возрасте пациентов и ДМС — только по данным МИС.
+    """Строки карточки врача о стаже, возрасте пациентов и ДМС — только по данным МИС.
 
     Пустое поле ничего не показывает: «МИС не заполнила» не превращается в «не принимает»
     (пункт 1 принципов; возраст на 09.10 заполнен у 23 из 329 врачей).
     """
 
     lines: list[str] = []
+    experience = str(doc.get("experience") or "").strip()
+    if experience:
+        lines.append(f"Стаж: {experience}")
     low, high = _age_or_none(doc.get("min_age_patient")), _age_or_none(doc.get("max_age_patient"))
     if low is not None and high is not None:
         lines.append(f"Принимает детей до {high} лет" if low == 0 else f"Принимает пациентов от {low} до {high} лет")

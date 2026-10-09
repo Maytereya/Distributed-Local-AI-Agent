@@ -289,6 +289,12 @@ def _filter_region_entries_with_schedule(
         region_id = entry.get("region")
         if not company_unit or not region_id:
             continue
+        # `hasSchedule` из /site/doctorRegions — «расписание есть вообще». Сверка 09.10 на 518
+        # парах: False ни разу не разошёлся с проверкой «окна на 7 дней» (228 из 228), True —
+        # шире (у 47 пар окна дальше недели). Поэтому False пропускаем без запроса — результат
+        # тот же, запросов к МИС на ~44% меньше; True проверяем как раньше.
+        if entry.get("hasSchedule") is False:
+            continue
         if _has_schedule(doctor_id, company_unit, region_id, start_iso, end_iso):
             result.append(entry)
     return result
@@ -431,7 +437,8 @@ def get_all_doctors() -> List[Dict]:
         {
           id, fio, ord, specialization, regions, region_ids, units,
           unit_links[{company_unit_id, company_unit_name, main, specialization}],
-          main_units, main_specializations, inaccessible_dms, min_age_patient, max_age_patient
+          main_units, main_specializations, inaccessible_dms, min_age_patient, max_age_patient,
+          experience, qualification, education
         }.
     """
     _SCHEDULE_CACHE.clear()
@@ -605,6 +612,11 @@ def get_all_doctors() -> List[Dict]:
             "inaccessible_dms": doctor.get("inaccessibilityDms") if "inaccessibilityDms" in doctor else None,
             "min_age_patient": doctor.get("minAgePatient"),
             "max_age_patient": doctor.get("maxAgePatient"),
+            # Стаж («43 года»), квалификация и образование — тексты МИС как есть (09.10, решение
+            # владельца); на 09.10 стаж у 326 из 326, квалификация у 186, образование у 315.
+            "experience": str(doctor.get("experience") or "").strip() or None,
+            "qualification": str(doctor.get("qualification") or "").strip() or None,
+            "education": str(doctor.get("education") or "").strip() or None,
         }
 
         result.append(doctor_data)
