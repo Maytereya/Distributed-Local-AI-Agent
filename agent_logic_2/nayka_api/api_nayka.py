@@ -431,7 +431,7 @@ def get_all_doctors() -> List[Dict]:
         {
           id, fio, ord, specialization, regions, region_ids, units,
           unit_links[{company_unit_id, company_unit_name, main, specialization}],
-          main_units, main_specializations
+          main_units, main_specializations, inaccessible_dms, min_age_patient, max_age_patient
         }.
     """
     _SCHEDULE_CACHE.clear()
@@ -599,6 +599,12 @@ def get_all_doctors() -> List[Dict]:
             "unit_links": unit_links_payload,
             "main_units": main_units,
             "main_specializations": main_specializations,
+            # С 09.10 (решение владельца): ДМС и возраст пациентов из /site/doctors — раньше
+            # сборщик их отбрасывал. None = МИС не заполнила (не «нет»): возраст на 09.10
+            # заполнен у 23 из 329 врачей.
+            "inaccessible_dms": doctor.get("inaccessibilityDms") if "inaccessibilityDms" in doctor else None,
+            "min_age_patient": doctor.get("minAgePatient"),
+            "max_age_patient": doctor.get("maxAgePatient"),
         }
 
         result.append(doctor_data)

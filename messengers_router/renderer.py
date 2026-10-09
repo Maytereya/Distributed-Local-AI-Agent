@@ -301,6 +301,38 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
     return "\n".join([line for line in lines if line is not None]).strip()
 
 
+def _age_or_none(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None and str(value).strip() != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
+def doctor_audience_lines(doc: dict[str, Any]) -> list[str]:
+    """Строки карточки врача о возрасте пациентов и ДМС — только по данным МИС.
+
+    Пустое поле ничего не показывает: «МИС не заполнила» не превращается в «не принимает»
+    (пункт 1 принципов; возраст на 09.10 заполнен у 23 из 329 врачей).
+    """
+
+    lines: list[str] = []
+    low, high = _age_or_none(doc.get("min_age_patient")), _age_or_none(doc.get("max_age_patient"))
+    if low is not None and high is not None:
+        lines.append(f"Принимает детей до {high} лет" if low == 0 else f"Принимает пациентов от {low} до {high} лет")
+    elif low is not None:
+        if low == 0:
+            lines.append("Принимает взрослых и детей")
+        elif low >= 18:
+            lines.append(f"Принимает взрослых (с {low} лет)")
+        else:
+            lines.append(f"Принимает пациентов с {low} лет")
+    elif high is not None:
+        lines.append(f"Принимает детей до {high} лет")
+    if doc.get("inaccessible_dms") is True:
+        lines.append("Приём по ДМС не ведёт")
+    return lines
+
+
 def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
     docs = payload.get("doctors")
     if not isinstance(docs, list) or not docs:
@@ -334,6 +366,7 @@ def format_doctor_info_for_patient(payload: dict[str, Any], entities: dict[str, 
             clean_regions = [str(r).strip() for r in regions if str(r).strip()]
             if clean_regions:
                 lines.append(f"Адреса приема: {', '.join(clean_regions)}")
+        lines.extend(doctor_audience_lines(doc))
         lines.append("")
 
     if single_selected:
