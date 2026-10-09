@@ -20,7 +20,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from .prices import PricePair, price_verdict
+from .prices import PriceCatalog, PricePair, price_verdict
 from .world import PRIVATE_ROOT
 
 OUTCOME_ORDER = (
@@ -58,6 +58,19 @@ def _pct(values: list[int], q: float) -> int | None:
     return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
 
 
+def rescore_prices(header: dict[str, Any], turns: list[dict[str, Any]]) -> None:
+    """Пары «услуга — цена» заново по сохранённому ответу: правка детектора не требует перепрогона."""
+
+    apidata = PRIVATE_ROOT / "worlds" / str(header.get("world", {}).get("date")) / "apidata"
+    if not apidata.is_dir():
+        return
+    catalog = PriceCatalog.from_world(apidata)
+    for t in turns:
+        pairs = catalog.pairs(t.get("answer") or "")
+        t["price_pairs"] = [p.__dict__ for p in pairs]
+        t["unsourced_prices"] = sum(1 for p in pairs if p.status == "unsourced")
+
+
 def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> dict[str, Any]:
     n = len(turns)
     outcomes = Counter(t["outcome"] for t in turns)
@@ -82,6 +95,9 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
         "clarify": outcomes.get("clarify", 0) + outcomes.get("not_understood", 0),
         "no_info": outcomes.get("no_info", 0),
         "unsourced_turns": sum(1 for t in turns if t.get("unsourced_prices")),
+        "unattributed_turns": sum(
+            1 for t in turns if any(p["status"] == "unattributed" for p in t.get("price_pairs") or [])
+        ),
         "leak": sum(1 for t in turns if t.get("leak")),
         "long_1500": sum(1 for t in turns if t.get("chars", 0) > 1500),
         "price_labeled": sum(verdicts.values()),
@@ -136,6 +152,7 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]]) -> str:
         ("Срочное: полнота", "urgent_recall"),
         ("Срочное: ложное на двойниках", "urgent_false"),
         ("Цена без источника (ходов)", "unsourced_turns"),
+        ("Цена без привязки к услуге (ходов)", "unattributed_turns"),
         ("Перевод на оператора", "handoff"),
         ("  из них технический", "handoff_tech"),
         ("Оффер оператора", "operator_offer"),
@@ -162,7 +179,15 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]]) -> str:
     lines.append("|---|" + "---|" * len(runs))
     for key in OUTCOME_ORDER:
         lines.append(f"| {key} | " + " | ".join(str(m["outcomes"].get(key, 0)) for _, m in runs) + " |")
-    if len(runs) == 2:
+    comparable = len(runs) == 2 and all(
+        runs[0][0].get(k) == runs[1][0].get(k) for k in ("mode", "llm_mode", "cases")
+    ) and runs[0][0].get("world", {}).get("date") == runs[1][0].get("world", {}).get("date") and runs[0][0].get(
+        "world", {}
+    ).get("profile") == runs[1][0].get("world", {}).get("profile")
+    if len(runs) == 2 and not comparable:
+        lines.append("")
+        lines.append("**Правило ≤3 не применимо:** прогоны в разных режимах LLM, мирах или наборах — это срез, а не «было / стало».")
+    if comparable:
         _, before = runs[0]
         _, after = runs[1]
         prevented = before["foreign"] - after["foreign"]
@@ -187,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     loaded = []
     for ref in args.runs[:2]:
         header, turns = load_run(ref)
+        rescore_prices(header, turns)
         loaded.append((header, metrics(turns, labels)))
     print(render(loaded))
     return 0

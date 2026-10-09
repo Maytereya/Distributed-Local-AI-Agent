@@ -9,8 +9,10 @@
   ценой — нашлось: пара (serviceId, цена);
 - сумма, которой нет ни у одной строки прайса и ни у одной цены врача, — «цена без
   источника» (принцип 1: факты печатает код из МИС);
-- сумма есть в данных, но название в строке не найдено — «без привязки» (строки врачей
-  «ФИО — N руб.», склейки): считается отдельно, в метрику не идёт.
+- строка врача «ФИО (Специальность) — N руб.» с ценой из цен врачей — `doctor`; сумма из
+  текста акции МИС — `promo`;
+- сумма есть в данных, но строка ничем не объяснена — «без привязки»: так выглядит выдуманная
+  LLM цена, совпавшая с чьей-то ценой прайса (adversary «1 990 руб.»).
 """
 
 from __future__ import annotations
@@ -20,6 +22,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+# Строка врача в карточке цены: «Тюрин А. А. (Хирург) — 3 000 руб.;».
+# Специальности может не быть: «2. Шульга Вера Михайловна — 2 800 руб.;».
+_DOCTOR_LINE_RE = re.compile(
+    r"\([А-ЯЁа-яё\- ]{3,}\)\s*—\s*\d|^\s*\d+\.\s+[А-ЯЁ][а-яё\-]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+(?:\s+\(|\s*—)"
+)
 _AMOUNT_RE = re.compile(r"(?<![\d.,])(\d{1,3}(?:[\s  ]\d{3})+|\d+)(?:[.,]\d{1,2})?\s*(?:руб|₽)", re.I)
 
 
@@ -36,13 +43,13 @@ class PricePair:
     amount: int
     service_id: int | None
     name: str | None
-    status: str  # matched | unattributed | unsourced
+    status: str  # matched | doctor | promo | unattributed | unsourced
 
 
 class PriceCatalog:
-    """Прайс региона из среза мира + множество цен врачей."""
+    """Прайс региона из среза мира + цены врачей и акций (известные источники без привязки к строке)."""
 
-    def __init__(self, rows: list[dict], doctor_costs: set[int] | None = None) -> None:
+    def __init__(self, rows: list[dict], doctor_costs: set[int] | None = None, promo_costs: set[int] | None = None) -> None:
         self.by_cost: dict[int, list[tuple[str, int]]] = {}
         self.names: dict[int, str] = {}
         for row in rows:
@@ -59,6 +66,7 @@ class PriceCatalog:
         for cands in self.by_cost.values():
             cands.sort(key=lambda c: -len(c[0]))
         self.doctor_costs = doctor_costs or set()
+        self.promo_costs = promo_costs or set()
 
     @classmethod
     def from_world(cls, apidata: Path, region: int = 3) -> "PriceCatalog":
@@ -72,7 +80,14 @@ class PriceCatalog:
                         doctor_costs.add(int(round(float(row.get(key)))))
                     except (TypeError, ValueError):
                         pass
-        return cls(rows, doctor_costs)
+        # Цены акций (МИС /promotions, запись мира): «3710 ₽ вместо 5300 ₽» — источник есть, хоть и не прайс.
+        promo_costs: set[int] = set()
+        promo = apidata.parent / "captured" / "promotions.json"
+        if promo.is_file():
+            for item in json.loads(promo.read_text(encoding="utf-8")):
+                blob = " ".join(str(item.get(k) or "") for k in ("title", "subtitle", "text")) if isinstance(item, dict) else ""
+                promo_costs.update(_amount(m.group(1)) for m in _AMOUNT_RE.finditer(blob))
+        return cls(rows, doctor_costs, promo_costs)
 
     def pairs(self, text: str) -> list[PricePair]:
         out: list[PricePair] = []
@@ -83,6 +98,10 @@ class PriceCatalog:
                 found = next(((name, sid) for name, sid in self.by_cost.get(amount, ()) if name in norm_line), None)
                 if found is not None:
                     out.append(PricePair(amount, found[1], self.names.get(found[1]), "matched"))
+                elif amount in self.doctor_costs and _DOCTOR_LINE_RE.search(line):
+                    out.append(PricePair(amount, None, None, "doctor"))
+                elif amount in self.promo_costs:
+                    out.append(PricePair(amount, None, None, "promo"))
                 elif amount in self.by_cost or amount in self.doctor_costs:
                     out.append(PricePair(amount, None, None, "unattributed"))
                 else:

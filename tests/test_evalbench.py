@@ -177,13 +177,18 @@ _ROWS = [
 
 
 def test_price_pairs_match_unsourced_and_unattributed():
-    catalog = PriceCatalog(_ROWS, doctor_costs={2700})
+    catalog = PriceCatalog(_ROWS, doctor_costs={2700}, promo_costs={3710})
     pairs = catalog.pairs(
         "Общий анализ крови с лейкоформулой — 750 руб.\n"
         "Глюкоза — 1 990 руб.\n"
-        "Иванов Иван (Невролог) — 2 700 руб.;"
+        "Иванов Иван Иванович (Невролог) — 2 700 руб.;\n"
+        "2. Петрова Анна Сергеевна — 2 700 руб.; расписание временно недоступно.\n"
+        "Анализы перед операцией 3710 ₽ вместо 5300 ₽\n"
+        "Стоимость этой услуги — 300 руб."
     )
-    assert [(p.status, p.service_id) for p in pairs] == [("matched", 2), ("unsourced", None), ("unattributed", None)]
+    assert [(p.status, p.service_id) for p in pairs] == [
+        ("matched", 2), ("unsourced", None), ("doctor", None), ("doctor", None), ("promo", None), ("unsourced", None), ("unattributed", None),
+    ]
 
 
 def test_price_verdicts():
