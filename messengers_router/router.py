@@ -20,6 +20,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
+from . import turn_telemetry
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -1189,6 +1190,23 @@ def _apply_appointment_continuity_overrides(
     return decision
 
 
+def _note_decision(decision: RouteDecision | None, evidence: Evidence | None, stage_timings: dict[str, float] | None) -> None:
+    """Решение хода в телеметрию: метка, подпись NLU, первое правило, пустота данных."""
+
+    if decision is None:
+        return
+    from .orchestrator import _evidence_is_empty
+
+    rule = next((f for f in sorted(decision.flags or []) if str(f).startswith("rule_")), None)
+    turn_telemetry.note(
+        label=decision.label,
+        decision_source=decision.source,
+        rule=rule,
+        evidence_empty=_evidence_is_empty(evidence) if evidence is not None else None,
+        stage_ms={k: int(v) for k, v in (stage_timings or {}).items()},
+    )
+
+
 def _early_debug_state_update(
     debug: bool,
     *,
@@ -1198,6 +1216,10 @@ def _early_debug_state_update(
     context_action: str = "continue",
     confidence: float = 0.95,
 ) -> dict[str, Any]:
+    # Все ранние выходы (срочное, оператор, город, предпроверка записи) проходят здесь —
+    # одна точка для телеметрии хода, и при debug=false тоже.
+    reason = sorted(flags or set())[0] if flags else context_action
+    turn_telemetry.note(answer_source=f"precheck:{reason}", label=label, decision_source="router_precheck")
     if not debug:
         return {}
     return {
@@ -3211,6 +3233,7 @@ async def patient_routing_stream(
             raise RuntimeError("orchestrator returned no response")
     except Exception as e:
         logger.exception("patient_routing_stream failed for session_id=%s", state.session_id)
+        turn_telemetry.override(answer_source="route_error", error=type(e).__name__)
         fallback_text = handoff_message("service_error")
         state_update: dict[str, Any] = {}
         if debug:
@@ -3233,7 +3256,11 @@ async def patient_routing_stream(
             state_update={"debug": _debug_meta(decision, plan, evidence, state, pending, stage_timings=ctx.stage_timings)},
         )
 
-    response = _maybe_offer_operator_on_repeat(response, state, memory, user_text)
+    _note_decision(decision, evidence, ctx.stage_timings)
+    offered = _maybe_offer_operator_on_repeat(response, state, memory, user_text)
+    if offered is not response:
+        turn_telemetry.override(answer_source="operator_offer_on_repeat")
+    response = offered
 
     memory.append_turn(state, role="user", text=user_text)
     memory.append_turn(state, role="assistant", text=response.text)

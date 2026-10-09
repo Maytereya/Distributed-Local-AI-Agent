@@ -205,6 +205,19 @@ def _no_background_jobs(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _turn_telemetry_to_tmp(tmp_path, monkeypatch):
+    """Строки телеметрии хода тесты пишут во временный каталог, не в `app_data/journals`.
+
+    Иначе каждый прогон гейта дописывал бы тысячи строк в журнал разработчика, а журнал
+    прода читается при разборе трафика (ход (а), 09.10).
+    """
+    from messengers_router import turn_telemetry
+
+    monkeypatch.setattr(turn_telemetry, "_journal_path", lambda: tmp_path / "turns.jsonl")
+    yield
+
+
 # --- Изоляция сети (29.09) ----------------------------------------------------
 #
 # Гейт обязан быть герметичным. Через локальный `config.ini` тесты ходили в

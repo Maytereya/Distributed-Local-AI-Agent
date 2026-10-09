@@ -24,6 +24,7 @@ from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info
 from converters import html_cleaner  # noqa: F401 — tests patch svc_mod.html_cleaner
 from schedule_ttl_cache import AsyncListTTLStaleCache
 
+from .. import turn_telemetry
 from ._common import (
     _as_int,
     _normalise_catalog_text,
@@ -61,6 +62,44 @@ class ScheduleSourceUnavailable(RuntimeError):
         исключение в честный handoff ``service_error_schedule`` вместо
         вводящего в заблуждение «расписание не найдено».
     """
+
+
+def _newest_snapshot(folder: Any, pattern: str) -> str | None:
+    """Имя самого свежего непустого среза в каталоге (для отпечатка мира в телеметрии)."""
+
+    try:
+        files = sorted((p for p in folder.glob(pattern) if p.stat().st_size > 0), reverse=True)
+    except OSError:
+        return None
+    return files[0].name if files else None
+
+
+def _world_fingerprint() -> dict[str, Any]:
+    """Отпечаток мира хода: модель LLM, срезы МИС, размер словаря синонимов (DATA-13).
+
+    Только имена файлов и числа. Живёт в сервисном слое: ядро не импортирует клиента МИС
+    напрямую (храповик переносимости).
+    """
+
+    from agent_logic_2.ollama_settings import LLMName
+
+    from . import _biomaterial
+
+    try:
+        synonyms = len(_biomaterial._vocabularies().synonym_candidates)
+    except Exception:
+        synonyms = None
+    return {
+        "model": LLMName.get(),
+        "price": _newest_snapshot(api_price.PRICE_BY_REGION_DIR, "price_region_*.jsonl"),
+        "doctor_prices": _newest_snapshot(api_price.PRICES_DIR, "doctor_prices_*.jsonl"),
+        "service_info": _newest_snapshot(api_service_info.SERVICE_INFO_DIR, "service_info_*.jsonl"),
+        "doctors": _newest_snapshot(api_nayka.DATA_DIR, "doctors_*.jsonl"),
+        "synonyms": synonyms,
+    }
+
+
+turn_telemetry.set_world_provider(_world_fingerprint)
 
 
 @dataclass

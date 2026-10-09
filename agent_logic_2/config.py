@@ -189,6 +189,7 @@ class MessengerRouterConfig:
     llm_result_timing_validation: bool
     prepare_relevance_llm_enabled: bool
     llm_symptom_specialists: bool
+    turn_telemetry: bool
     debug_final_input: bool
     url: str
 
@@ -396,6 +397,10 @@ settings = Settings(
             "llm_symptom_specialists",
             default=True,
         ),
+        # Телеметрия хода — одна строка на ход, только числа и ключи (ход (а) рефакторинга,
+        # решение владельца 08.10). По умолчанию ВКЛ; kill-switch:
+        # [MESSENGER_ROUTER] turn_telemetry = false
+        turn_telemetry=_get_bool("MESSENGER_ROUTER", "turn_telemetry", default=True),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -518,6 +523,7 @@ MR_LLM_SERVICE_SLOT_VALIDATION = settings.messenger_router.llm_service_slot_vali
 MR_LLM_RESULT_TIMING_VALIDATION = settings.messenger_router.llm_result_timing_validation
 MR_PREPARE_RELEVANCE_LLM_ENABLED = settings.messenger_router.prepare_relevance_llm_enabled
 MR_LLM_SYMPTOM_SPECIALISTS = settings.messenger_router.llm_symptom_specialists
+MR_TURN_TELEMETRY = settings.messenger_router.turn_telemetry
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

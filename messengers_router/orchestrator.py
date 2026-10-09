@@ -14,6 +14,7 @@ from time import perf_counter
 from typing import Any, AsyncIterator
 
 from . import evidence_keys as ek
+from . import turn_telemetry
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 
 logger = logging.getLogger(__name__)
@@ -656,6 +657,7 @@ async def _render_impl(
     # llm_safety_without_template).
     if ctx.decision is not None and ctx.decision.label == "URGENT":
         ctx.response = renderer.render_urgent()
+        turn_telemetry.note(answer_source="safety:urgent")
         return ctx
     # Медвопрос — тоже шаблоном всегда (решение владельца 04.10). Метка от LLM уходила
     # в свободную генерацию, и на «болит голова три дня, что делать?» модель отвечала
@@ -666,11 +668,13 @@ async def _render_impl(
         from .services import _symptom_specialists
 
         ctx.response = renderer.render_medical_advice(await _symptom_specialists.advise(ctx.text, services))
+        turn_telemetry.note(answer_source="safety:medical_advice")
         return ctx
     if ctx.short_circuit and ctx.decision is not None:
         if ctx.decision.label == "COMPLAINT":
             ctx.response = renderer.render_complaint()
         if ctx.response is not None:
+            turn_telemetry.note(answer_source="safety:complaint")
             return ctx
 
     # 2. Clarify gate
@@ -682,6 +686,7 @@ async def _render_impl(
             text=ctx.clarify_text,
             handoff=bool(ctx.decision is not None and ctx.decision.needs_handoff),
         )
+        turn_telemetry.note(answer_source="clarify")
         return ctx
 
     if ctx.decision is not None:
@@ -692,16 +697,19 @@ async def _render_impl(
             from .text_templates import INTRO_TEXT
 
             ctx.response = ResponseEnvelope(text=INTRO_TEXT, attachments=[], handoff=False)
+            turn_telemetry.note(answer_source="intro")
             return ctx
 
     recovery_response = _extract_recovery_response(ctx, memory=memory)
     if recovery_response is not None:
         ctx.response = recovery_response
+        turn_telemetry.note(answer_source="recovery")
         return ctx
 
     pending_response = _extract_pending_response(ctx, memory=memory)
     if pending_response is not None:
         ctx.response = pending_response
+        turn_telemetry.note(answer_source="pending")
         return ctx
 
     # 3. Deterministic/pre-built path — response is already encoded in evidence.
@@ -709,6 +717,7 @@ async def _render_impl(
     if prebuilt is not None:
         ctx.response = prebuilt
         _mark_secondary_offer_pending(ctx)
+        turn_telemetry.note(answer_source="prebuilt")
         return ctx
 
     # 4a. L-05: данных нет — свободный текст LLM не пишем (класс 4 журнала).
@@ -716,6 +725,7 @@ async def _render_impl(
         empty_reply = await _empty_evidence_response(ctx, memory=memory)
         if empty_reply is not None:
             ctx.response = empty_reply
+            turn_telemetry.note(answer_source="empty_evidence")
             return ctx
 
     # 4. LLM path — collect render_stream into one envelope.
@@ -749,6 +759,7 @@ async def _render_impl(
                 "render_timeout: label=%s budget=%ss chars=%s", ctx.decision.label, renderer.RENDER_TIMEOUT_S, sum(map(len, chunks))
             )
             ctx.response = ResponseEnvelope(text=handoff_message("service_error"), handoff=True)
+            turn_telemetry.note(answer_source="render_timeout")
             return ctx
         # Output-guard применяется ЕДИНОЙ воронкой в render() (обёртка над
         # _render_impl) — на ПОЛНОМ тексте ЛЮБОГО пути (stream/prebuilt/PREPARE/
@@ -759,10 +770,12 @@ async def _render_impl(
             handoff=bool(ctx.decision.needs_handoff),
         )
         _mark_secondary_offer_pending(ctx)
+        turn_telemetry.note(answer_source="llm_free")
         return ctx
 
     # 5. Defensive fallback — tool_loop bailed early (no services/memory)
     ctx.response = ResponseEnvelope(text="")
+    turn_telemetry.note(answer_source="defensive_empty")
     return ctx
 
 

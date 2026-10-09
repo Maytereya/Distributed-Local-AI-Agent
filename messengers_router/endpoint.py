@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from . import turn_telemetry
 from .llm_mode_policy import normalize_runtime_options
 from .memory import MemoryStore
 from .router import patient_routing_stream
@@ -226,6 +227,9 @@ async def messenger_generate(
         # debug=False — осознанно
         assistant_parts: list[str] = []
         after_hours_note_added = False
+        handoff = False
+        # Ход открывается внутри генератора: потоковый ответ читается в другой задаче.
+        turn = turn_telemetry.begin("stream", session_id=session_id, llm_mode=runtime_options.llm_mode, button_id=payload.button_id)
         try:
             async for env in patient_routing_stream(
                 text,
@@ -238,6 +242,7 @@ async def messenger_generate(
             ):
                 if env.text:
                     assistant_parts.append(str(env.text))
+                handoff = handoff or bool(env.handoff)
                 out_text = env.text or ""
                 # При переключении на оператора во внерабочее время дописываем
                 # часы операторов (один раз за ответ). Бот сам работает всегда.
@@ -254,6 +259,7 @@ async def messenger_generate(
                 }
                 yield (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
         except Exception:
+            handoff = True
             fallback = {
                 "text": handoff_message("service_error"),
                 "attachments": [],
@@ -263,6 +269,7 @@ async def messenger_generate(
             yield (json.dumps(fallback, ensure_ascii=False) + "\n").encode("utf-8")
         finally:
             assistant_text = "".join(assistant_parts).strip()
+            turn_telemetry.finish(turn, handoff=handoff, chars=len(assistant_text))
             if assistant_text:
                 memory.append_turn(state, "assistant", assistant_text)
             await memory.aset(state)
@@ -307,6 +314,8 @@ async def messenger_generate_once(
     )
 
     state = await memory.aget(session_id)
+    turn = turn_telemetry.begin("once", session_id=session_id, llm_mode=runtime_options.llm_mode, button_id=payload.button_id)
+    out_text, out_handoff = "", False
     try:
         memory.append_turn(state, "user", text)
 
@@ -362,7 +371,9 @@ async def messenger_generate_once(
         )
         if out.text:
             memory.append_turn(state, "assistant", out.text)
+        out_text, out_handoff = out.text, out.handoff
         # JSONResponse чтобы Swagger красиво показал тело
         return JSONResponse(content=out.model_dump())
     finally:
+        turn_telemetry.finish(turn, handoff=out_handoff, chars=len(out_text))
         await memory.aset(state)

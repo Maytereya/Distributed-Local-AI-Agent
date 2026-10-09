@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import os as _os
+import sys as _sys
 import time as _time
 import uuid as _uuid
 from contextlib import asynccontextmanager
@@ -20,6 +21,7 @@ from ollama import AsyncClient
 from agent_logic_2 import ollama_settings
 from agent_logic_2.ollama_settings import LLMName
 
+from . import turn_telemetry
 from .runtime_config import config as c
 
 _DEFAULT_MAX_CONCURRENCY = 5
@@ -75,6 +77,27 @@ def _log_prompt_event(event: str, payload: dict[str, Any]) -> None:
 
 class LLMQueueTimeoutError(RuntimeError):
     pass
+
+
+def _caller_site() -> str:
+    """Место вызова для телеметрии хода — модуль, позвавший runtime (`classifier`, `renderer`…)."""
+
+    frame = _sys._getframe(1)
+    while frame is not None and frame.f_globals.get("__name__") == __name__:
+        frame = frame.f_back
+    if frame is None:
+        return "unknown"
+    return str(frame.f_globals.get("__name__") or "unknown").rsplit(".", 1)[-1]
+
+
+def _outcome(exc: BaseException) -> str:
+    if isinstance(exc, LLMQueueTimeoutError):
+        return "queue_timeout"
+    if isinstance(exc, asyncio.TimeoutError):
+        return "timeout"
+    if isinstance(exc, asyncio.CancelledError):
+        return "cancelled"
+    return f"error:{type(exc).__name__}"
 
 
 def _extract_response_text(res: Any) -> str:
@@ -158,8 +181,11 @@ async def generate_text_with_usage(
                 "prompt": prompt,
             },
         )
+    site = _caller_site()
+    queue_ms = 0
     try:
         async with llm_slot(queue_timeout_ms):
+            queue_ms = int((_time.monotonic() - started_at) * 1000)
             res = await asyncio.wait_for(
                 _OLLAMA_CLIENT.generate(
                     model=model,
@@ -171,15 +197,15 @@ async def generate_text_with_usage(
                 ),
                 timeout=max(5, int(timeout_s)),
             )
-    except asyncio.TimeoutError:
-        if _prompt_log_enabled():
-            _log_prompt_event(
-                "prompt_timeout",
-                {"id": request_id, "duration_s": round(_time.monotonic() - started_at, 3)},
-            )
-        raise
-    except Exception as exc:
-        if _prompt_log_enabled():
+    except BaseException as exc:
+        turn_telemetry.note_llm(site, _outcome(exc), int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms)
+        if isinstance(exc, asyncio.TimeoutError):
+            if _prompt_log_enabled():
+                _log_prompt_event(
+                    "prompt_timeout",
+                    {"id": request_id, "duration_s": round(_time.monotonic() - started_at, 3)},
+                )
+        elif isinstance(exc, Exception) and _prompt_log_enabled():
             _log_prompt_event(
                 "prompt_error",
                 {
@@ -192,6 +218,7 @@ async def generate_text_with_usage(
         raise
     text = _extract_response_text(res)
     usage = _extract_usage(res)
+    turn_telemetry.note_llm(site, "ok", int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, usage=usage)
     if _prompt_log_enabled():
         _log_prompt_event(
             "prompt_response",
@@ -251,19 +278,33 @@ async def generate_stream_text(
 ) -> AsyncGenerator[str, None]:
     model = llm or LLMName.get()
     resolved_think = ollama_settings.resolve_think(think)
-    async with llm_slot(queue_timeout_ms):
-        stream = await asyncio.wait_for(
-            _OLLAMA_CLIENT.generate(
-                model=model,
-                prompt=prompt,
-                options=ollama_settings.options_set(),
-                stream=True,
-                keep_alive=-1,
-                think=resolved_think,
-            ),
-            timeout=max(5, int(timeout_s)),
-        )
-        async for chunk in stream:
-            text = _extract_response_text(chunk)
-            if text:
-                yield text
+    site = _caller_site()
+    started_at = _time.monotonic()
+    queue_ms = 0
+    usage: dict[str, int] = {}
+    try:
+        async with llm_slot(queue_timeout_ms):
+            queue_ms = int((_time.monotonic() - started_at) * 1000)
+            stream = await asyncio.wait_for(
+                _OLLAMA_CLIENT.generate(
+                    model=model,
+                    prompt=prompt,
+                    options=ollama_settings.options_set(),
+                    stream=True,
+                    keep_alive=-1,
+                    think=resolved_think,
+                ),
+                timeout=max(5, int(timeout_s)),
+            )
+            async for chunk in stream:
+                text = _extract_response_text(chunk)
+                if getattr(chunk, "done", False):
+                    usage = _extract_usage(chunk)
+                if text:
+                    yield text
+    except BaseException as exc:
+        # GeneratorExit — потребитель закрыл поток (бюджет рендера): это не сбой модели.
+        outcome = "closed" if isinstance(exc, GeneratorExit) else _outcome(exc)
+        turn_telemetry.note_llm(site, outcome, int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms)
+        raise
+    turn_telemetry.note_llm(site, "ok", int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, usage=usage)
