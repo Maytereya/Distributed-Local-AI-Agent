@@ -58,6 +58,26 @@ def _pct(values: list[int], q: float) -> int | None:
     return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
 
 
+def refresh_expectations(header: dict[str, Any], turns: list[dict[str, Any]]) -> None:
+    """Ожидания (срочно / нет) — из текущих файлов наборов: решение по эталону применяется и к
+    старым прогонам без перепрогона (09.10: u031 перешёл в двойники)."""
+
+    expected: dict[tuple[str, str], Any] = {}
+    for ref in header.get("sets") or []:
+        path = Path(ref).expanduser()
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parent.parent / path
+        if path.is_file():
+            for line in path.open(encoding="utf-8"):
+                if line.strip():
+                    row = json.loads(line)
+                    expected[(path.stem, row["id"])] = row.get("expect_urgent")
+    for t in turns:
+        key = (t.get("set"), t["id"])
+        if key in expected:
+            t["expect_urgent"] = expected[key]
+
+
 def rescore_prices(header: dict[str, Any], turns: list[dict[str, Any]]) -> None:
     """Пары «услуга — цена» заново по сохранённому ответу: правка детектора не требует перепрогона."""
 
@@ -212,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
     loaded = []
     for ref in args.runs[:2]:
         header, turns = load_run(ref)
+        refresh_expectations(header, turns)
         rescore_prices(header, turns)
         loaded.append((header, metrics(turns, labels)))
     print(render(loaded))
