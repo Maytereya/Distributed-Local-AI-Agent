@@ -75,7 +75,7 @@ def _enter_code_root(code_root: Path) -> None:
         sys.path.insert(1, str(REPO_ROOT))
 
 
-async def _run_cases(cases, *, client: HarnessClient, tpl: Templates, catalog: PriceCatalog, llm_mode: str, run_name: str, out, progress) -> dict[str, Any]:
+async def _run_cases(cases, *, client: HarnessClient, world: FrozenWorld, tpl: Templates, catalog: PriceCatalog, llm_mode: str, run_name: str, out, progress) -> dict[str, Any]:
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
     from messengers_router.services import Services
@@ -118,6 +118,7 @@ async def _run_cases(cases, *, client: HarnessClient, tpl: Templates, catalog: P
             **outcome.as_row(),
             "stage_ms": ((body.get("state_update") or {}).get("debug") or {}).get("stage_timings"),
             "llm_calls": [c.__dict__ for c in calls],
+            "telemetry": world.take_telemetry(),
         }
         out.write(json.dumps(row, ensure_ascii=False) + "\n")
         out.flush()
@@ -204,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
 
                     started = time.time()
                     stats = asyncio.run(
-                        _run_cases(cases, client=client, tpl=tpl, catalog=catalog, llm_mode=args.llm_mode, run_name=name, out=out, progress=progress)
+                        _run_cases(cases, client=client, world=world, tpl=tpl, catalog=catalog, llm_mode=args.llm_mode, run_name=name, out=out, progress=progress)
                     )
                 finally:
                     llm_runtime._OLLAMA_CLIENT = real_client
@@ -228,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
                     "net_attempts": Counter(world.net.attempts).most_common(),
                     "cleanup_calls": world.cleanup_calls,
                     "suppressed_writes": Counter(world.side_writes).most_common(),
+                    "unavailable_calls": Counter(world.unavailable_calls).most_common(),
                     "synonym_journal_lines": world.journal_lines(),
                     "seconds": round(time.time() - started, 1),
                 }

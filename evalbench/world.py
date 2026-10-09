@@ -302,6 +302,8 @@ class FrozenWorld:
         self.net = NetGuard(allow_hosts=frozenset(h for h in allow_hosts if h))
         self.cleanup_calls: list[str] = []
         self.side_writes: list[str] = []
+        self.telemetry: list[dict[str, Any]] = []
+        self.unavailable_calls: list[str] = []
         self._undo: list[tuple[Any, str, Any]] = []
         self._tmp: tempfile.TemporaryDirectory | None = None
         self.captured = self._load_captured()
@@ -380,6 +382,17 @@ class FrozenWorld:
             raise _Unavailable("стенд: скачивание врачей выключено")
 
         self._set(api_nayka, "get_all_doctors", no_download)
+        self._pin_today_snapshots(api_price, api_service_info, snapshots)
+
+        # Живые методы МИС (расписание и его «шапка» /doctors) в мире недоступны: отказ как при
+        # сбое сети, но без похода в сеть — счётчик отдельный, прогон он не портит.
+        import requests
+
+        def mis_unavailable(url, *_a, **_kw):
+            self.unavailable_calls.append(str(url).rsplit("/api/", 1)[-1].split("?")[0])
+            raise requests.ConnectionError("стенд: живой метод МИС недоступен")
+
+        self._set(api_nayka, "_session_get", mis_unavailable)
 
         # Живые источники: запись мира или «недоступно».
         regions = self.captured.get("regions")
@@ -410,8 +423,48 @@ class FrozenWorld:
         self._set(_price_select_llm, "_journal_path", lambda: journal)
         self._set(llm_runtime, "_prompt_log_enabled", lambda: False)
         self._journal = journal
+        self._capture_turn_telemetry()
 
         self.net.install()
+
+    def _pin_today_snapshots(self, api_price: Any, api_service_info: Any, snapshots: Any) -> None:
+        """Срез «на сегодня», которого в мире нет, — последний непустой не позже (как гейт, conftest).
+
+        Иначе загрузчик идёт качать его у МИС: на проде в этот день файл был бы, в копии мира — нет.
+        Явно переданная дата уважается.
+        """
+
+        def latest_if_missing(real: Callable[..., Path]) -> Callable[..., Path]:
+            def path(*args: Any, **kwargs: Any) -> Path:
+                target = real(*args, **kwargs)
+                if target.exists():
+                    return target
+                return snapshots.latest_nonempty(target) or target
+
+            return path
+
+        for module, attr in (
+            (api_service_info, "service_info_path"),
+            (api_price, "price_by_region_path"),
+            (api_price, "price_units_path"),
+            (api_price, "doctor_prices_path"),
+        ):
+            self._set(module, attr, latest_if_missing(getattr(module, attr)))
+
+    def _capture_turn_telemetry(self) -> None:
+        """Строки телеметрии хода (если она есть в этой версии бота) — в память прогона, не в журнал."""
+
+        try:
+            from messengers_router import turn_telemetry
+        except ImportError:  # версия до телеметрии (бейслайн 2b9278d)
+            return
+        self._set(turn_telemetry, "_emit", self.telemetry.append)
+
+    def take_telemetry(self) -> dict[str, Any] | None:
+        """Строка телеметрии последнего хода (или None, если её нет в этой версии)."""
+
+        rows, self.telemetry[:] = list(self.telemetry), []
+        return rows[-1] if rows else None
 
     def _install_kb(self, meili: Any) -> None:
         docs = self.captured.get("kb_main_index")

@@ -227,3 +227,35 @@ def test_turn_outcomes_from_envelope_debug_and_session_state():
     assert nothing.outcome == "no_info"
     broken = classify_turn(_body("", handoff=True, error="boom"), {}, tpl, catalog)
     assert broken.outcome == "tech_error"
+
+
+def test_world_keeps_turn_telemetry_out_of_the_real_journal(tmp_path):
+    """Стенд на версии с телеметрией: строки хода — в память прогона, настоящий журнал не трогается."""
+
+    from messengers_router import turn_telemetry
+
+    root = ev_world.build_world(_apidata(tmp_path), "20261008", tmp_path / "world")
+    real_emit = turn_telemetry._emit
+    with ev_world.FrozenWorld(root, "day") as world:
+        token = turn_telemetry.begin("once", session_id="s")
+        turn_telemetry.note(answer_source="prebuilt")
+        turn_telemetry.finish(token, handoff=False, chars=3)
+        row = world.take_telemetry()
+    assert row["answer_source"] == "prebuilt" and world.take_telemetry() is None
+    assert turn_telemetry._emit is real_emit
+
+
+def test_world_pins_missing_today_snapshot_and_keeps_live_mis_offline(tmp_path):
+    """Нет среза «на сегодня» — последний непустой, без похода в МИС; живые методы МИС — отказ без сети."""
+
+    import requests
+
+    from agent_logic_2.nayka_api import api_nayka, api_service_info
+
+    root = ev_world.build_world(_apidata(tmp_path), "20261008", tmp_path / "world")
+    with ev_world.FrozenWorld(root, "night") as world:  # ночь: «сегодня» по Самаре — 20261009
+        assert api_service_info.service_info_path().name == "service_info_20261003.jsonl"
+        assert api_service_info.service_info_path("20261001").name == "service_info_20261001.jsonl"
+        with pytest.raises(requests.ConnectionError):
+            api_nayka._session_get("http://mis/api/v1/site/doctors")
+        assert world.unavailable_calls == ["v1/site/doctors"] and world.net.attempts == []
