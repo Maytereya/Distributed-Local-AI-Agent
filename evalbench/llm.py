@@ -170,35 +170,39 @@ class ResponseCache:
 
     Хранится вне репо (в нём промпты с репликами пациентов). Повторный прогон «после»
     с теми же промптами не грузит LLM и не шумит температурой.
+
+    В записи — отпечаток параметров генерации (`options`): ответ, записанный при других параметрах
+    (температура 0,2 вместо 0), при повторе не подходит. Записи до 10.10 параметров не хранят и
+    подходят всегда. При дублях побеждает ПЕРВАЯ подходящая запись — её видел прогон, против которого
+    сравнивают (дубли дают параллельные части и повторные живые прогоны).
     """
 
     def __init__(self, path: Path | None) -> None:
         self.path = path
-        self._data: dict[str, str] = {}
+        self._data: dict[str, list[tuple[str | None, str]]] = {}
         if path is not None and path.exists():
             for line in path.open(encoding="utf-8"):
                 if line.strip():
                     row = json.loads(line)
-                    # Дубли ключа бывают (параллельные части, повторные живые прогоны): побеждает ПЕРВАЯ
-                    # запись — её видел прогон, против которого сравнивают.
-                    self._data.setdefault(row["key"], row["response"])
+                    self._data.setdefault(row["key"], []).append((row.get("options"), row["response"]))
 
     @staticmethod
-    def key(model: str, prompt: str, fmt: Any, stream: bool, options: str = "") -> str:
-        """Ключ записи; `options` — отпечаток параметров генерации, пусто — параметры по умолчанию
-        (так ключи записей до 10.10 остаются в силе)."""
-
-        raw = json.dumps([model, fmt, bool(stream), prompt] + ([options] if options else []), ensure_ascii=False)
+    def key(model: str, prompt: str, fmt: Any, stream: bool) -> str:
+        raw = json.dumps([model, fmt, bool(stream), prompt], ensure_ascii=False)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    def get(self, key: str) -> str | None:
-        return self._data.get(key)
+    def get(self, key: str, options: str = "") -> str | None:
+        for recorded, response in self._data.get(key, ()):
+            if recorded is None or recorded == options:
+                return response
+        return None
 
-    def put(self, key: str, response: str, site: str) -> None:
-        self._data.setdefault(key, response)
+    def put(self, key: str, response: str, site: str, options: str = "") -> None:
+        self._data.setdefault(key, []).append((options, response))
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            line = (json.dumps({"key": key, "site": site, "response": response}, ensure_ascii=False) + "\n").encode("utf-8")
+            row = {"key": key, "site": site, "options": options, "response": response}
+            line = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
             # Одна запись O_APPEND — строки параллельных частей прогона (--shard) не перемешиваются.
             fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
             try:
@@ -248,7 +252,7 @@ class HarnessClient:
             raise ValueError("режиму с настоящей LLM нужен настоящий клиент")
 
     def _options_fingerprint(self, options: Any) -> str:
-        """Отпечаток параметров генерации, если они не по умолчанию (температура 0 у коротких решений)."""
+        """Отпечаток параметров генерации (температура, длина ответа); умолчание — пустая строка."""
 
         if options is None:
             return ""
@@ -291,8 +295,9 @@ class HarnessClient:
             record("adversary")
             return _response(model, text, stream)
 
-        key = ResponseCache.key(model, prompt, format, stream, self._options_fingerprint(kwargs.get("options")))
-        cached = self.cache.get(key) if self.cache is not None and self.mode in ("cached", "replay") else None
+        key = ResponseCache.key(model, prompt, format, stream)
+        opts = self._options_fingerprint(kwargs.get("options"))
+        cached = self.cache.get(key, opts) if self.cache is not None and self.mode in ("cached", "replay") else None
         if cached is not None:
             record("cache_hit")
             return _response(model, cached, stream)
@@ -329,7 +334,7 @@ class HarnessClient:
         finally:
             self._last_live = time.monotonic()
         if self.cache is not None:
-            self.cache.put(key, text, site)
+            self.cache.put(key, text, site, opts)
         record("ok", eval_count)
         return _response(model, text, stream)
 

@@ -316,16 +316,21 @@ def test_cancelled_live_call_is_recorded():
 
 
 def test_cache_keeps_first_answer_and_separates_generation_options(tmp_path):
-    """Дубли ключа — первая запись (её видел бейслайн); температура 0 — отдельный ключ, умолчание — прежний."""
+    """Дубли — первая запись (её видел бейслайн); ответ при других параметрах генерации не подходит;
+    записи без параметров (до 10.10) подходят всегда."""
 
     path = tmp_path / "cache.jsonl"
-    first = ev_llm.ResponseCache(path)
     key = ev_llm.ResponseCache.key("m", "p", None, False)
-    first.put(key, "первый", "s")
-    ev_llm.ResponseCache(path).put(key, "второй", "s")
-    assert ev_llm.ResponseCache(path).get(key) == "первый"
+    ev_llm.ResponseCache(path).put(key, "при 0,2", "s", '{"temperature": 0.2}')
+    ev_llm.ResponseCache(path).put(key, "второй при 0,2", "s", '{"temperature": 0.2}')
+    cache = ev_llm.ResponseCache(path)
+    assert cache.get(key, '{"temperature": 0.2}') == "при 0,2"
+    assert cache.get(key, '{"temperature": 0}') is None
+
+    legacy = tmp_path / "legacy.jsonl"
+    legacy.write_text(json.dumps({"key": key, "site": "s", "response": "старый"}, ensure_ascii=False) + "\n")
+    assert ev_llm.ResponseCache(legacy).get(key, '{"temperature": 0}') == "старый"
 
     client = ev_llm.HarnessClient(mode="adversary", sites=ev_llm.SiteIndex.from_templates({}), default_options={"temperature": 0.2})
     assert client._options_fingerprint({"temperature": 0.2}) == ""
     assert client._options_fingerprint({"temperature": 0, "num_predict": 24}) != ""
-    assert ev_llm.ResponseCache.key("m", "p", None, False, "") == key
