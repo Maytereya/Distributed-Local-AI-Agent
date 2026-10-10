@@ -245,8 +245,9 @@ _RESULT_LINK_TEXT = (
 )
 
 # Справочный вопрос о сроках готовности (прод #675): сроки зависят от анализа,
-# достоверно не знаем → честно к оператору (не выдумываем, не просим ФИО/год).
-_RESULT_TIMING_OPERATOR_TEXT = (
+# достоверно не знаем → честно к оператору (не выдумываем, не просим ФИО/год). Тот же текст —
+# у вопроса о сроке в ценовом ходе (понимание хода, `router._maybe_readiness_handoff`).
+RESULT_TIMING_OPERATOR_TEXT = (
     "Точные сроки готовности результата зависят от конкретного анализа — "
     "их подскажет оператор. Соединяю с оператором."
 )
@@ -284,7 +285,7 @@ async def test_result_status(self: "Services", query: str, entities: dict[str, A
                 "ready": False,
                 "note": "result_timing_to_operator",
                 "timing_to_operator": True,
-                "handoff_message": _RESULT_TIMING_OPERATOR_TEXT,
+                "handoff_message": RESULT_TIMING_OPERATOR_TEXT,
                 "entities_used": entities,
             }
         return {

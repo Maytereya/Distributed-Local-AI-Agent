@@ -108,6 +108,7 @@ from .services import Services, match_compound_price_service_option, resolve_pri
 from .services._appointment_change_validator import is_own_appointment_change
 from .services._existing_appointment_validator import is_own_existing_appointment
 from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE
+from .services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
 from .services.prepare import anesthesia_reply, prepare_variant_payload
 from .services._patient_name_validator import is_patient_name_reply
 from .services._samara_perimeter import (
@@ -1629,15 +1630,10 @@ def _relabel_test_assist_catalog_hit_as_price(
     if decision.label != "TEST_ASSIST":
         return decision
     flags = set(decision.flags or set())
-    # Понимание хода (ход (б), шаг 1, `on`) решает по свойству, о котором спросили, а не по
-    # флагу доставки: вопрос о сроке — не цена (READINESS-AS-PRICE); список узнанных каталогом
-    # услуг — цена, как одна узнанная услуга (П1).
+    # Понимание хода (ход (б), шаг 1, `on`): список узнанных каталогом услуг — цена, как одна
+    # узнанная услуга (П1). Вопрос о сроке сюда не доходит как цена: его переводит
+    # `_maybe_readiness_handoff` (READINESS-AS-PRICE).
     understanding = turn_understanding.acting()
-    if understanding is not None and understanding.facet == "readiness":
-        if "catalog_service_exact" not in flags:
-            return decision
-        turn_understanding.note_acted("readiness_not_price")
-        return _copy_decision(decision, flags=flags | {"understanding_readiness_kept"})
     if (
         understanding is not None
         and understanding.is_list
@@ -1887,6 +1883,39 @@ def _maybe_topic_handoff(
                 }
             }
         ),
+    )
+
+
+def _maybe_readiness_handoff(
+    *,
+    decision: RouteDecision,
+    state: SessionState,
+    memory: MemoryStore,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Понимание хода (ход (б), шаг 1, `on`): вопрос о сроке готовности — честный перевод.
+
+    Срока бот пока не знает (BUG-2026-09-29-NO-TURNAROUND). Переклеенный в цену вопрос получал
+    цену (READINESS-AS-PRICE), а оставленный подбору анализов — свободный текст LLM со сроками
+    («ОАМ готов через 1–2 дня», «13–14 дней» — числа не из данных, принцип 1) или вопрос о цели
+    подбора (стенд 10.10, живая LLM). Текст — тот же, что у справочного вопроса о сроках в пути
+    результатов (прод #675); кнопка «Когда будет готов» по тому же решению переводит сразу.
+    """
+
+    understanding = turn_understanding.acting()
+    if understanding is None or understanding.facet != "readiness" or decision.label not in {"PRICE", "TEST_ASSIST"}:
+        return None
+    turn_understanding.note_acted("readiness_to_operator")
+    memory.clear_pending(state)
+    return (
+        _copy_decision(
+            decision,
+            label="OTHER",
+            entities={},
+            flags=set(decision.flags) | {"understanding_readiness_handoff"},
+            needs_handoff=False,
+        ),
+        Plan(label="OTHER"),
+        Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": RESULT_TIMING_OPERATOR_TEXT, "handoff": True}}),
     )
 
 
@@ -2655,6 +2684,10 @@ async def _complete_route_after_doctor_guard(
     topic_handoff = _maybe_topic_handoff(decision=decision, state=state, memory=memory)
     if topic_handoff is not None:
         return topic_handoff
+
+    readiness_handoff = _maybe_readiness_handoff(decision=decision, state=state, memory=memory)
+    if readiness_handoff is not None:
+        return readiness_handoff
 
     if decision.label == "DOCTOR_SCHEDULE":
         # Очищаем хвосты сценария записи, чтобы расписание не фильтровалось

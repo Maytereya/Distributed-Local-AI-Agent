@@ -13,7 +13,8 @@ BUG-2026-10-05-READINESS-AS-PRICE: «когда будет готов анали
 Инварианты класса:
 - список из названий, которые каталог узнаёт, — цена каждой позиции, текстом и ответом на
   кнопку цены, со словом «сколько стоит» и без него, в новом диалоге и поверх старой услуги;
-- вопрос о сроке готовности не получает цену.
+- вопрос о сроке готовности не получает цену — и сроков свободным текстом LLM тоже: срока бот
+  не знает, поэтому честный перевод на оператора (как кнопка «Когда будет готов»).
 
 Ход (б), шаг 1 (L-14): `услуги[]` + `свойство` на метке «цена», под выключателем
 `turn_understanding_price`. Тесты включают его явно (`on`): по умолчанию шаг в тени, и тогда
@@ -50,6 +51,7 @@ READINESS = [
     "сколько делается анализ на ферритин",
     "сколько готовится ферритин",
     "сколько готовятся анализы",
+    "когда будет готов анализ на ферритин и глюкозу",
 ]
 
 
@@ -72,8 +74,16 @@ def test_every_listed_service_gets_its_price(path, items, mini_prod_world, under
     assert "руб" in answer, record[-1]["text"]
 
 
+@pytest.mark.parametrize("before", [(), (("menu.price.test", "Цена анализа"),)], ids=["text", "after_price_button"])
 @pytest.mark.parametrize("question", READINESS)
-def test_readiness_question_gets_no_price(question, mini_prod_world, understanding_on):  # noqa: F811
+def test_readiness_question_gets_honest_operator_not_price(question, before, mini_prod_world, understanding_on):  # noqa: F811
+    """Срок бот не знает (NO-TURNAROUND): не цена и не сроки свободным текстом LLM, а честный
+    перевод — тот же текст, что у справочного вопроса о сроках в пути результатов (прод #675)."""
+
+    from messengers_router.services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
+
     with ev_world.FrozenWorld(mini_prod_world, "day"):
-        (turn,) = run_dialog([question], f"ready-{abs(hash(question))}")
+        record = run_dialog([*before, question], f"ready-{len(before)}-{abs(hash(question))}")
+    turn = record[-1]
     assert "руб" not in turn["text"].lower(), turn["text"]
+    assert (turn["text"], turn["handoff"]) == (RESULT_TIMING_OPERATOR_TEXT, True)

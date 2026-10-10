@@ -54,7 +54,9 @@ ON_PLANNED: dict[str, str] = {
     "list_button_three": "ответ на кнопку цены списком — корзина",
     "list_button_oak_oam": "ответ на кнопку цены списком — корзина",
     "list_over_stale_context": "список поверх прошлой услуги — корзина; подготовка — про список, не про ТТГ",
-    "readiness_when": "вопрос о сроке — не цена (READINESS-AS-PRICE)",
+    "readiness_when": "вопрос о сроке — честный перевод, не цена (READINESS-AS-PRICE)",
+    "readiness_named": "вопрос о сроке — честный перевод, не подбор анализов",
+    "readiness_generic": "вопрос о сроке — честный перевод, не подбор анализов",
 }
 
 
