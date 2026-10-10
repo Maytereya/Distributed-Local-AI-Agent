@@ -4,8 +4,10 @@
 
 Инварианты класса:
 - сильное совпадение по данным (дословное название, синоним МИС, код) — только эти строки, без LLM;
-- слабое совпадение, а LLM не ответила внятно: цены слабой строки в ответе нет — до 5 названий,
-  покрывающих все слова пациента, без цен; таких нет — честный перевод на оператора;
+- слабое совпадение, а LLM не ответила внятно: ОДНА слабая строка не показывается с ценой — до 5
+  названий с самым различающим словом пациента, без цен; таких нет — честный перевод; СПИСОК правил
+  (≥2 строк) остаётся списком (решение владельца 11.10 по замеру: строгий вариант B прятал и списки
+  с нужной строкой — форму 22.07);
 - LLM не нашла услугу и во втором круге — «не нашёл», без чужой цены;
 - политика заменяет только слабое предложение правил: правила ничего не предложили — их ответ;
 - off и shadow не меняют ни одного ответа; on меняет только объявленные диалоги (`POLICY_PLANNED`) —
@@ -33,19 +35,10 @@ _PRICE_PROMPT_MARK = "ответить пациенту на вопрос о ц�
 
 # Диалоги, которые под on (LLM недоступна) отвечают иначе, — с причиной; разбор диффа 11.10.
 POLICY_PLANNED: dict[str, str] = {
-    "one_gastroscopy": "слабое совпадение «Гастрин» без LLM — перевод вместо чужой цены",
     "family_glucose": "дословное название «Глюкоза» — только эта строка, без мочи и синовиальной жидкости",
     "name_with_commas": "дословное название с уточнением в скобках — ровно эта строка",
-    "name_with_plus": "вместо мусорного списка с ценами — одно название целиком, без цены",
-    "one_blood_draw": "вместо списка чужих анализов с ценами — названия без цен",
-    "one_ttg": "вариант B: ТТГ — слабое совпадение, названия без цен",
-    "list_over_stale_context": "вариант B на первом ходе («ттг»); корзина — L-15",
-    "one_oak_words": "вариант B: «общий анализ крови» не дословное название — названия без цен",
-    "family_vitamin_d_all": "вариант B: семейство витамина D — названия без цен",
-    "one_neurologist": "вариант B: пять вариантов приёма невролога — названия без цен",
-    "name_with_and": "вариант B: одна похожая услуга — название без цены",
-    "one_oak_abbr": "алиас кода — не данные: в гейте нет синонимов МИС, названия «ОАК (…)» без цен",
     "synonym_fork_oak": "синоним МИС «оак» — ровно его услуги из справочника клиники, без хвоста семейства",
+    "name_with_and": "одна слабая строка без LLM — её название без цены, выбирает пациент",
 }
 
 
@@ -120,19 +113,20 @@ def _turn(question: str, session: str, mini_prod_world) -> dict:
     return turn
 
 
-def test_weak_match_without_llm_never_shows_its_price(mini_prod_world, monkeypatch):
+def test_single_weak_row_without_llm_is_named_without_its_price(mini_prod_world, monkeypatch):
+    _policy(monkeypatch, "on")
+    turn = _turn("сколько стоит экспресс тест определения сифилиса антитела igg igm к", "policy-single", mini_prod_world)
+    assert "руб" not in turn["text"] and "520" not in turn["text"]
+    assert "«Экспресс-тест для определения сифилиса (антитела IgG и IgM к Treponema pallidum)»" in turn["text"]
+
+
+def test_weak_list_without_llm_stays_the_rules_list(mini_prod_world, monkeypatch):
+    # Сужение варианта B (решение 11.10): список остаётся — при живой LLM его решает выбор модели
+    # (`test_choose_price.py::test_gastroscopy_is_fgds_by_model_term_not_gastrin_by_letters`).
     _policy(monkeypatch, "on")
     turn = _turn("сколько стоит гастроскопия", "policy-gastro", mini_prod_world)
-    assert turn["handoff"] is True
-    assert "руб" not in turn["text"] and "Гастрин" not in turn["text"]
-
-
-def test_weak_match_without_llm_lists_names_covering_all_words_without_prices(mini_prod_world, monkeypatch):
-    _policy(monkeypatch, "on")
-    turn = _turn("сколько стоит прием невролога", "policy-neuro", mini_prod_world)
-    names = [line[2:] for line in turn["text"].splitlines() if line.startswith("— ")]
-    assert turn["handoff"] is False and "руб" not in turn["text"]
-    assert 1 < len(names) <= 5 and all("невролог" in name.lower() for name in names)
+    assert turn["text"] == _golden()["one_gastroscopy"][0]["text"]
+    assert turn["telemetry"]["price_policy"] == "rules_list"
 
 
 @pytest.mark.parametrize("choose_mode", ["off", "on"])
@@ -169,9 +163,9 @@ def test_strong_match_is_shown_without_llm(mini_prod_world, monkeypatch):
 
 def test_shadow_writes_the_decision_and_keeps_the_answer(mini_prod_world, monkeypatch):
     _policy(monkeypatch, "shadow")
-    turn = _turn("сколько стоит гастроскопия", "policy-shadow", mini_prod_world)
-    assert turn["text"] == _golden()["one_gastroscopy"][0]["text"]
-    assert turn["telemetry"]["price_policy"] == "handoff"
+    turn = _turn("сколько стоит экспресс тест определения сифилиса антитела igg igm к", "policy-shadow", mini_prod_world)
+    assert turn["text"] == _golden()["name_with_and"][0]["text"]
+    assert turn["telemetry"]["price_policy"] == "names"
 
 
 def test_too_general_or_empty_rules_proposal_keeps_the_rules_answer(monkeypatch, tmp_path):

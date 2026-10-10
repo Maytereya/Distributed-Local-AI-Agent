@@ -330,13 +330,14 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     # Что спросил пациент, решает LLM (класс «цена не той услуги», решение владельца
     # 30.09); правила собирают кандидатов, их ответ — первый кандидат и ответ по
     # умолчанию, если LLM молчит. LLM зовётся не больше одного раза за вызов.
-    async def _llm_select(proposal: list[dict[str, Any]]) -> Any:
+    async def _llm_select(proposal: list[dict[str, Any]], shown: list[dict[str, Any]]) -> Any:
         if not entities.get("__price_question"):
             return None  # цена попутно (запись, карточка врача) — по правилам, без LLM
         return await select_price_rows(
             str(query or ""),
             retail_rows_clean,
             candidates=proposal,
+            shown=shown,
             hints=[service_name],
             context=entity_service_name,
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
@@ -370,7 +371,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     if family_payload and not doctor_id:
         variants = list(family_payload.get("family_variants") or [])
         shown = variants[: int(family_payload.get("visible_limit") or 10)]
-        selection = await _llm_select(variants)
+        selection = await _llm_select(variants, shown)
         stop = _match_policy_payload(selection, str(query or ""), entities)
         if stop is not None:
             return stop
@@ -383,7 +384,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         }
         return family_payload
     if not needle:
-        selection = await _llm_select([])
+        selection = await _llm_select([], [])
         stop = _match_policy_payload(selection, str(query or ""), entities)
         if stop is not None:
             return stop
@@ -420,7 +421,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             limit=10,
         )
     # Рендер показывает пациенту до пяти строк — их и сверяем.
-    selection = await _llm_select(matches)
+    selection = await _llm_select(matches, matches[:5])
     stop = _match_policy_payload(selection, str(query or ""), entities)
     if stop is not None:
         return stop
@@ -487,13 +488,14 @@ async def service_bundle_info(
     # 30.09): «приём эндокринолога» → не «приём хирурга (эндокринологическое
     # отделение)». Правила собирают кандидатов, их ответ — первый кандидат и ответ по
     # умолчанию, если LLM молчит. LLM зовётся не больше одного раза за вызов.
-    async def _llm_select(proposal: list[dict[str, Any]], rules_guess: str = "") -> Any:
+    async def _llm_select(proposal: list[dict[str, Any]], shown: list[dict[str, Any]], rules_guess: str = "") -> Any:
         if not entities.get("__price_question"):
             return None  # цена попутно (запись, карточка врача) — по правилам, без LLM
         return await select_price_rows(
             str(query or ""),
             retail_rows,
             candidates=proposal,
+            shown=shown,
             hints=[rules_guess],
             context=entity_service_name,
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
@@ -515,7 +517,7 @@ async def service_bundle_info(
     if family_payload:
         variants = list(family_payload.get("family_variants") or [])
         shown = variants[: int(family_payload.get("visible_limit") or 10)]
-        selection = await _llm_select(variants)
+        selection = await _llm_select(variants, shown)
         stop = _match_policy_payload(selection, str(query or ""), entities)
         if stop is not None:
             return stop
@@ -562,7 +564,7 @@ async def service_bundle_info(
     }
     if not needle:
         if llm_rows is None:
-            selection = await _llm_select([])
+            selection = await _llm_select([], [])
             stop = _match_policy_payload(selection, str(query or ""), entities)
             if stop is not None:
                 return stop
@@ -617,7 +619,7 @@ async def service_bundle_info(
             is_consult_query=_is_consultation_service_query(service_name),
         )
         shown = out["retail_prices"] if shown_kind == "lab" else out["retail_prices"][:1]
-        selection = await _llm_select(out["retail_prices"], service_name)
+        selection = await _llm_select(out["retail_prices"], shown, service_name)
         stop = _match_policy_payload(selection, str(query or ""), entities)
         if stop is not None:
             return stop

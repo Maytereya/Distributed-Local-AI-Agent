@@ -30,11 +30,13 @@
 Политика силы совпадения (L-13, решение владельца 07.10 — вариант B), выключатель
 `[MESSENGER_ROUTER] price_match_policy` (по умолчанию `shadow` — решение только в телеметрию хода):
 под `on` сильное совпадение по данным (дословное название, синоним МИС, код) — только эти строки, без
-LLM; LLM не нашла услугу и во втором круге — честное «не нашёл»; LLM не ответила внятно — до 5
-названий, покрывающих все слова пациента, без цен (выбирает пациент), а нет таких — оператор.
-Политика заменяет только слабое предложение правил (место, где могла быть чужая цена): правила
-ничего не предложили или названо слишком общее — их прежний ответ (уточнение, «не нашёл»). Правила
-без LLM по замыслу (strict, ответ без своих слов об услуге, «по ОМС», выключатель) — как раньше.
+LLM; LLM не нашла услугу и во втором круге — честное «не нашёл»; LLM не ответила внятно, а правила
+показали бы ОДНУ слабую строку — до 5 названий без цен (выбирает пациент), а нет таких — оператор;
+показали бы СПИСОК (≥2 строк) — список правил остаётся (решение владельца 11.10 по замеру: строгий
+вариант B прятал и списки с нужной строкой — форму 22.07 «при неоднозначности — список»). Политика
+заменяет только слабое предложение правил: правила ничего не предложили или названо слишком общее —
+их прежний ответ. Без LLM по замыслу (strict, ответ без своих слов об услуге, «по ОМС», выключатель)
+— как раньше.
 """
 
 from __future__ import annotations
@@ -272,18 +274,40 @@ def _strong_rows(question: str, pool: list[dict[str, Any]], retail_rows: list[di
     return out
 
 
-def _whole_word_names(question: str, pool: list[dict[str, Any]]) -> tuple[str, ...]:
-    """Вариант B (L-13): названия строк, в которых есть ВСЕ слова пациента целыми словами.
+_TOKEN_DF_CACHE: dict[tuple[int, str], dict[str, int]] = {}
 
-    По началу слова и по одному слову из нескольких — нельзя: на «гастроскопию» первым оказался бы
-    «Гастрин», на «ттг т4 свободный» — «Свободный тестостерон». Сравниваются нормализованные токены
-    (множества), без регулярок; порядок — как у кандидатов правил.
+
+def _token_df(retail_rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Во скольких названиях прайса встречается слово (кэш по отпечатку среза)."""
+
+    key = (len(retail_rows), _row_name(retail_rows[0])[:48] if retail_rows else "")
+    cached = _TOKEN_DF_CACHE.get(key)
+    if cached is None:
+        cached = {}
+        for name in {_row_name(row) for row in retail_rows}:
+            for token in set(_price_query_tokens(name)):
+                cached[token] = cached.get(token, 0) + 1
+        _TOKEN_DF_CACHE.clear()
+        _TOKEN_DF_CACHE[key] = cached
+    return cached
+
+
+def _whole_word_names(question: str, pool: list[dict[str, Any]], retail_rows: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Вариант B (L-13): названия строк, в которых есть самое различающее слово пациента целиком.
+
+    Различающее — самое редкое в названиях прайса: родовые слова («анализ», «тест», «приём») часты и
+    отпадают сами, без списка слов. По началу слова нельзя: на «гастроскопию» первым оказался бы
+    «Гастрин»; слова нет в прайсе вовсе — названий нет (честный перевод). Порядок — как у кандидатов.
     """
 
     wanted = set(_price_query_tokens(question))
     if not wanted:
         return ()
-    names = [_row_name(row) for row in pool if wanted <= set(_price_query_tokens(_row_name(row)))]
+    df = _token_df(retail_rows)
+    key = min(wanted, key=lambda token: (df.get(token, 0), token))
+    if not df.get(key):
+        return ()
+    names = [_row_name(row) for row in pool if key in set(_price_query_tokens(_row_name(row)))]
     return tuple(dict.fromkeys(name for name in names if name))[:_VARIANT_B_LIMIT]
 
 
@@ -399,6 +423,7 @@ async def select_price_rows(
     retail_rows: list[dict[str, Any]],
     *,
     candidates: Sequence[dict[str, Any]] = (),
+    shown: Sequence[dict[str, Any]] = (),
     hints: Sequence[str] = (),
     context: str = "",
     runtime_llm_mode: str = "",
@@ -409,6 +434,8 @@ async def select_price_rows(
     :param retail_rows: строки прайса региона
     :param candidates: ответ правил — всегда в списке для LLM первым, чтобы его можно
         было подтвердить («оак» → «Общий анализ крови», а не только строки со словом «ОАК»)
+    :param shown: строки, которые правила покажут пациенту (политика L-13: список из ≥2 строк при
+        недоступной LLM остаётся списком правил)
     :param hints: подсказки только для поиска кандидатов — выбор правил
     :param context: сущность NLU / услуга из диалога — тоже только для поиска
         кандидатов; в подсказку LLM не идёт
@@ -457,19 +484,22 @@ async def select_price_rows(
             return PriceSelection(rows=tuple(strong), status="strong")
     record = policy != "off" and not strong  # решение политики ещё не записано в телеметрию
 
-    def settle(legacy: PriceSelection | None, decided: PriceSelection | None) -> PriceSelection | None:
+    def settle(legacy: PriceSelection | None, decided: PriceSelection | None, label: str = "") -> PriceSelection | None:
         """Под on — решение политики (None — прежний ответ правил); под off / shadow — прежний
         результат, тень пишет решение в телеметрию."""
 
         if record:
-            turn_telemetry.note(price_policy=_policy_label(decided))
+            turn_telemetry.note(price_policy=label or _policy_label(decided))
         return decided if policy == "on" else legacy
 
-    def unavailable() -> PriceSelection | None:
+    def unavailable() -> tuple[PriceSelection | None, str]:
         # Правила ничего не предложили — чужой цены не было, их честный ответ остаётся.
         if not candidates:
-            return None
-        return PriceSelection(rows=(), status="unavailable", names=_whole_word_names(question, pool))
+            return None, "rules"
+        # Правила покажут список — при неоднозначности список, а не одна цена (решение 22.07).
+        if len(shown) >= 2:
+            return None, "rules_list"
+        return PriceSelection(rows=(), status="unavailable", names=_whole_word_names(question, pool, rows)), ""
 
     def none_fit(reason: str) -> PriceSelection | None:
         # Названо слишком общее или не услуга — уточнение правил честнее, чем «не нашёл».
@@ -483,7 +513,7 @@ async def select_price_rows(
 
     first = await _ask(question, pool)
     if first is None:
-        return settle(None, unavailable())
+        return settle(None, *unavailable())
     chosen, terms, reason = first
     if chosen:
         picked = PriceSelection(rows=tuple(_prefer_base_variants(chosen, question)))
@@ -498,7 +528,7 @@ async def select_price_rows(
     pool_by_terms = await asyncio.to_thread(_build_pool, terms, rows, per_text=_PER_TERM_LIMIT)
     second = await _ask(question, pool_by_terms)
     if second is None:
-        return settle(None, unavailable())
+        return settle(None, *unavailable())
     if not second[0]:
         if not candidates:
             _record_synonym_suggestion(phrase or question, terms, [])
