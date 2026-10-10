@@ -187,8 +187,17 @@ class ResponseCache:
                     self._data.setdefault(row["key"], []).append((row.get("options"), row["response"]))
 
     @staticmethod
-    def key(model: str, prompt: str, fmt: Any, stream: bool) -> str:
-        raw = json.dumps([model, fmt, bool(stream), prompt], ensure_ascii=False)
+    def key(model: str, prompt: str, fmt: Any, stream: bool, system: str | None = None) -> str:
+        """Схема ответа (dict) — в каноническом виде, инструкция роли system — часть ключа.
+
+        Ключ записи без system и со строковым форматом прежний: записанные ответы в силе.
+        """
+
+        fmt_key = json.dumps(fmt, sort_keys=True, ensure_ascii=False) if isinstance(fmt, dict) else fmt
+        parts: list[Any] = [model, fmt_key, bool(stream), prompt]
+        if system:
+            parts.append(system)
+        raw = json.dumps(parts, ensure_ascii=False)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def get(self, key: str, options: str = "") -> str | None:
@@ -267,15 +276,26 @@ class HarnessClient:
         out, self.calls = self.calls, []
         return out
 
-    async def generate(self, model: str = "", prompt: str | None = None, *, stream: bool = False, format: Any = None, **kwargs: Any):  # noqa: A002 — имя параметра как у ollama
+    async def generate(
+        self,
+        model: str = "",
+        prompt: str | None = None,
+        *,
+        stream: bool = False,
+        format: Any = None,  # noqa: A002 — имя параметра как у ollama
+        system: str | None = None,
+        **kwargs: Any,
+    ):
         prompt = prompt or ""
-        site = self.sites.site_of(prompt)
+        # Модель видит инструкцию (роль system) и данные хода вместе — по ним место вызова и adversary.
+        seen = f"{system}\n\n{prompt}" if system else prompt
+        site = self.sites.site_of(seen)
         started = time.monotonic()
         fmt = format if isinstance(format, str) else ("schema" if format else None)
 
         def record(outcome: str, eval_count: int | None = None) -> None:
             self.calls.append(
-                CallRecord(site, self.mode, outcome, int((time.monotonic() - started) * 1000), stream, fmt, len(prompt), eval_count)
+                CallRecord(site, self.mode, outcome, int((time.monotonic() - started) * 1000), stream, fmt, len(seen), eval_count)
             )
 
         if site == "unknown":
@@ -288,14 +308,14 @@ class HarnessClient:
             record("timeout")
             raise asyncio.TimeoutError()
         if self.mode == "adversary":
-            text = adversary_answer(site, prompt)
+            text = adversary_answer(site, seen)
             if text is None:
                 record("unknown_site")
                 raise ConnectionError(f"стенд: нет ответа adversary для {site}")
             record("adversary")
             return _response(model, text, stream)
 
-        key = ResponseCache.key(model, prompt, format, stream)
+        key = ResponseCache.key(model, prompt, format, stream, system=system)
         opts = self._options_fingerprint(kwargs.get("options"))
         cached = self.cache.get(key, opts) if self.cache is not None and self.mode in ("cached", "replay") else None
         if cached is not None:
@@ -312,6 +332,8 @@ class HarnessClient:
         if wait > 0:
             await asyncio.sleep(wait)
         self.live_calls += 1
+        if system is not None:
+            kwargs["system"] = system
         try:
             res = await self.real.generate(model=model, prompt=prompt, stream=stream, format=format, **kwargs)
             if stream:

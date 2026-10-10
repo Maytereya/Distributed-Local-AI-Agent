@@ -248,6 +248,71 @@ async def generate_text_with_usage(
     return text, usage
 
 
+async def generate_structured(
+    *,
+    site: str,
+    system: str | None,
+    user: str,
+    schema: dict[str, Any] | str | None,
+    options: dict[str, Any],
+    timeout_s: float,
+    queue_timeout_ms: int,
+    inherit_options: bool = False,
+    llm: str | None = None,
+) -> tuple[str, dict[str, int]]:
+    """Короткое решение по закрытому списку (ход (в) рефакторинга, `choose()`).
+
+    Инструкция — в роли system, данные хода (текст пациента, варианты) — в роли user (SEC-3:
+    реплика не становится частью инструкции); форма ответа — JSON Schema; параметры генерации —
+    явные параметры места вызова, без общих настроек Gradio и операторского эндпоинта (LLM-2:
+    одинаковый вопрос — одинаковое решение); место вызова — явное, а не имя модуля.
+
+    Роли передаются полем `system` у /api/generate: сервер собирает из `system` и `prompt` те же
+    сообщения [system, user], что и /api/chat, а подделки LLM (стенд, гейт, тесты) реализуют один
+    метод `generate`.
+
+    :param site: место вызова — в телеметрию хода (`choose_<задача>`, как имя промпта)
+    :param system: инструкция; None — прежний промпт одной строкой (перенос клиента без смены
+        промпта: запрос к модели тот же, что был до переноса)
+    :param user: данные хода
+    :param schema: JSON Schema ответа (dict); "json" или None — у прежнего промпта
+    :param options: параметры генерации места вызова — целиком
+    :param inherit_options: поверх общих настроек, как было до переноса (только прежний промпт)
+    :return: (сырой текст ответа модели, счётчики токенов)
+    :raises: `LLM_UNAVAILABLE_ERRORS` и `asyncio.TimeoutError` — их ловит вызывающий
+    """
+
+    request: dict[str, Any] = {
+        "model": llm or LLMName.get(),
+        "prompt": user,
+        "options": _generation_options(options) if inherit_options else dict(options),
+        "format": schema,
+        "keep_alive": -1,
+        "think": ollama_settings.resolve_think(False),
+    }
+    if system is not None:
+        request["system"] = system
+    if _prompt_log_enabled():
+        _log_prompt_event("prompt_request", {"site": site, "fmt": schema, "system": system, "prompt": user})
+    started_at = _time.monotonic()
+    queue_ms = 0
+    try:
+        async with llm_slot(queue_timeout_ms):
+            queue_ms = int((_time.monotonic() - started_at) * 1000)
+            res = await asyncio.wait_for(_OLLAMA_CLIENT.generate(**request), timeout=max(1.0, float(timeout_s)))
+    except BaseException as exc:
+        turn_telemetry.note_llm(site, _outcome(exc), int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms)
+        if isinstance(exc, Exception) and _prompt_log_enabled():
+            _log_prompt_event("prompt_error", {"site": site, "error_type": type(exc).__name__})
+        raise
+    text = _extract_response_text(res)
+    usage = _extract_usage(res)
+    turn_telemetry.note_llm(site, "ok", int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, usage=usage)
+    if _prompt_log_enabled():
+        _log_prompt_event("prompt_response", {"site": site, "response": text, "usage": usage})
+    return text, usage
+
+
 @asynccontextmanager
 async def llm_slot(queue_timeout_ms: int) -> AsyncGenerator[None, None]:
     timeout_s = max(1.0, float(queue_timeout_ms) / 1000.0)

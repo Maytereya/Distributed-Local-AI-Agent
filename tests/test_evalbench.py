@@ -108,6 +108,57 @@ def test_replay_serves_recorded_answer_and_counts_miss(tmp_path):
     assert [c.outcome for c in replay.take_turn_calls()] == ["cache_hit", "replay_miss"]
 
 
+_ROLE_TEMPLATE = (
+    "Инструкция выбора для проверки стенда: выбери номер позиции из списка ниже.\n"
+    "<<DATA>>\n"
+    "Сообщение пациента: «<<QUESTION>>»\n"
+)
+
+
+def test_site_of_role_call_is_found_by_its_system_instruction():
+    # Ход (в): инструкция — в роли system, в `prompt` только данные хода; место вызова — по обоим.
+    index = ev_llm.SiteIndex.from_templates({"choose_demo": _ROLE_TEMPLATE})
+    client = ev_llm.HarnessClient(mode="down", sites=index)
+    system = _ROLE_TEMPLATE.split("<<DATA>>")[0].strip()
+    for kwargs in ({"system": system, "prompt": "Сообщение пациента: «оак»"}, {"prompt": "Сообщение пациента: «оак»"}):
+        with pytest.raises(ConnectionError):
+            asyncio.run(client.generate(model="m", **kwargs))
+    assert [(c.site, c.outcome) for c in client.take_turn_calls()] == [("choose_demo", "down"), ("unknown", "unknown_site")]
+
+
+def test_cache_key_of_recorded_answers_is_unchanged_and_system_is_part_of_new_keys():
+    import hashlib
+
+    old = hashlib.sha256(json.dumps(["m", "json", False, "p"], ensure_ascii=False).encode("utf-8")).hexdigest()
+    assert ev_llm.ResponseCache.key("m", "p", "json", False) == old
+    assert ev_llm.ResponseCache.key("m", "p", "json", False, system="S1") != ev_llm.ResponseCache.key("m", "p", "json", False, system="S2")
+    schema = {"type": "object", "properties": {"a": {}, "b": {}}}
+    same = {"properties": {"b": {}, "a": {}}, "type": "object"}
+    assert ev_llm.ResponseCache.key("m", "p", schema, False) == ev_llm.ResponseCache.key("m", "p", same, False)
+
+
+def test_role_call_is_replayed_and_passed_to_the_real_client(tmp_path):
+    index = ev_llm.SiteIndex.from_templates({"choose_demo": _ROLE_TEMPLATE})
+    system = _ROLE_TEMPLATE.split("<<DATA>>")[0].strip()
+    cache = ev_llm.ResponseCache(tmp_path / "cache.jsonl")
+    cache.put(ev_llm.ResponseCache.key("m", "данные", {"type": "object"}, False, system=system), '{"picks": [1]}', "choose_demo")
+    replay = ev_llm.HarnessClient(mode="replay", sites=index, cache=ev_llm.ResponseCache(tmp_path / "cache.jsonl"))
+    assert asyncio.run(replay.generate(model="m", prompt="данные", system=system, format={"type": "object"})).response == '{"picks": [1]}'
+
+    seen: list[dict] = []
+
+    class _Real:
+        async def generate(self, **kwargs):
+            seen.append(kwargs)
+            from ollama import GenerateResponse
+
+            return GenerateResponse(model="m", response='{"picks": []}', done=True)
+
+    live = ev_llm.HarnessClient(mode="real", sites=index, real=_Real())
+    asyncio.run(live.generate(model="m", prompt="данные", system=system, format={"type": "object"}))
+    assert seen[0]["system"] == system and seen[0]["prompt"] == "данные"
+
+
 # --------------------------------------------------------------------------- мир
 
 
