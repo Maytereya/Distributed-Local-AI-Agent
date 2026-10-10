@@ -8,7 +8,8 @@
 - ответ модели — недоверенный ввод: не JSON, номер вне списка, лишние номера, bool или строка
   вместо числа, неизвестный исход или код причины → INVALID целиком; пусто → NONE_FIT; исход →
   OUTCOME (исход побеждает выбор: срочность только поднимается);
-- сбой, тайм-аут, бюджет хода, предохранитель → UNAVAILABLE; политика — у вызывающего;
+- сбой, тайм-аут, бюджет хода, предохранитель, сломанный промпт задачи → UNAVAILABLE; политика —
+  у вызывающего, ход не падает;
 - кэшируются только внятные ответы; сбой и мусор не кэшируются; кэш хранит номера, а id берёт из
   вариантов текущего вызова;
 - прежний промпт клиента (`LegacyWire`) уходит без роли system, с прежним форматом и параметрами,
@@ -191,6 +192,14 @@ def test_failure_is_unavailable_and_not_cached(monkeypatch, exc):
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", fake)
     assert [_choose().status for _ in range(2)] == [ch.Status.UNAVAILABLE] * 2
     assert len(fake.calls) == 2
+
+
+def test_broken_task_prompt_is_unavailable_not_a_crashed_turn(llm, monkeypatch):
+    # Промпт на хосте (app_data/prompts) отредактировали и потеряли маркер данных: ход не падает,
+    # решение — «LLM недоступна», дальше политика вызывающего.
+    monkeypatch.setattr(ch, "load_prompt_text", lambda key: "Инструкция без маркера данных: <<QUESTION>>")
+    assert _choose().status is ch.Status.UNAVAILABLE
+    assert llm.calls == []
 
 
 def test_invalid_is_not_cached(monkeypatch):

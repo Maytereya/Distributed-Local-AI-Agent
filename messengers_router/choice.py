@@ -322,13 +322,17 @@ async def choose(task: Task, question: str, options: Sequence[Option], *, legacy
     """
 
     options = tuple(options)
-    if legacy is None:
-        system, user = render(task, question, options)
-        schema: Any = answer_schema(task, options)
-        gen_options: dict[str, Any] = {"temperature": 0, "num_predict": task.num_predict}
-    else:
-        system, user = None, legacy.prompt(question, options)
-        schema, gen_options = legacy.fmt, dict(legacy.options)
+    try:
+        if legacy is None:
+            system, user = render(task, question, options)
+            schema: Any = answer_schema(task, options)
+            gen_options: dict[str, Any] = {"temperature": 0, "num_predict": task.num_predict}
+        else:
+            system, user = None, legacy.prompt(question, options)
+            schema, gen_options = legacy.fmt, dict(legacy.options)
+    except (OSError, ValueError) as exc:  # промпт задачи сломан или пропал на хосте — ход не роняем
+        logger.error("choose_prompt_broken: %s %s", task.name, exc)
+        return _noted(task, Choice(Status.UNAVAILABLE), len(options))
     key = _cache_key(task.site, system, user, schema)
     hit = _cache_get(key)
     if hit is not None:
