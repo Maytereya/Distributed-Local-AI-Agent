@@ -77,6 +77,7 @@ tests/test_resilience.py
 tests/test_result_field_reentry.py
 tests/test_result_timing_integration.py
 tests/test_result_timing_validator.py
+tests/test_rules_ratchet.py
 tests/test_russian_nlu.py
 tests/test_safety_templates.py
 tests/test_samara_perimeter.py
