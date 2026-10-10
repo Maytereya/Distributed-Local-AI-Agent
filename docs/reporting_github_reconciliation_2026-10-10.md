@@ -205,3 +205,27 @@ Telegram-чаты, обязательный Origin, receipts без повтор
 29 тестов отчётности и пять тестов прав; всего в двух ветках — 596 проверок.
 Тестовое окружение отключает срок хранения соединений для корректной очистки
 БД между async-тестами. Production-настройка соединений не менялась.
+
+## Зафиксированный результат push 10.10
+
+- [security_test](https://github.com/Maytereya/Distributed-Local-AI-Agent/tree/security_test):
+  commit c103c22647dc05aadbade258cf4c5f576e5f4944 с кодом и проверками.
+- [private_agregator](https://github.com/vrudnev/support-messenger-aggregator/tree/private_agregator):
+  commit 7bc000bd1a1005f160cd2f6805939a749cb4d139; общие модули закреплены
+  SHA256 и ссылкой на исходный RAG commit. Приватный код в публичный repo не включён.
+- GitHub подтвердил обе ревизии. release остаётся 6b4fabf, отдельный main — 87119e0.
+  Локальный изменённый checkout и пользовательские правки сохранены отдельно.
+- Временные PostgreSQL и scratch network удалены. Запущенные API, poller,
+  web, worker, Monitor и Ollama сохранили прежние image ID. Новую миграцию
+  reporting.0004 и проверочные образы в live не применяли.
+
+**Дополнительный пункт до merge:** при push GitHub сообщил о 315 Dependabot
+предупреждениях default branch: 8 critical, 128 high, 141 moderate, 38 low.
+[Список GitHub](https://github.com/Maytereya/Distributed-Local-AI-Agent/security/dependabot)
+требует отдельного просмотра: проверить критические/high предупреждения,
+сопоставить пакеты и версии с реально запущенными компонентами, оценить
+доступность уязвимого пути, обновить затронутые зависимости и повторить
+регрессии. Список отдельных advisory пока не получен. Это наблюдение о
+репозитории, не подтверждение эксплуатации или утечки и не заключение
+о полном составе уязвимостей на сервере. 596 функциональных/защитных тестов
+не заменяют этот аудит. До него автоматическое слияние в release не выполнять.
