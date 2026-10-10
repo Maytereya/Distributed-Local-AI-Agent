@@ -26,6 +26,15 @@
 модуль (перенос доказывается на записанных ответах прод-LLM: на стенде `replay` ответы обязаны
 совпасть с `off`); `on` — роли system/user, JSON Schema, коды причин (промпт
 `choose_price_service`). Политика сбоя во всех режимах прежняя; её меняет L-13 отдельным шагом.
+
+Политика силы совпадения (L-13, решение владельца 07.10 — вариант B), выключатель
+`[MESSENGER_ROUTER] price_match_policy` (по умолчанию `shadow` — решение только в телеметрию хода):
+под `on` сильное совпадение по данным (дословное название, синоним МИС, код) — только эти строки, без
+LLM; LLM не нашла услугу и во втором круге — честное «не нашёл»; LLM не ответила внятно — до 5
+названий, покрывающих все слова пациента, без цен (выбирает пациент), а нет таких — оператор.
+Политика заменяет только слабое предложение правил (место, где могла быть чужая цена): правила
+ничего не предложили или названо слишком общее — их прежний ответ (уточнение, «не нашёл»). Правила
+без LLM по замыслу (strict, ответ без своих слов об услуге, «по ОМС», выключатель) — как раньше.
 """
 
 from __future__ import annotations
@@ -40,10 +49,12 @@ from typing import Any, Sequence
 
 from agent_logic_2.persist import DATA_DIR, ensure_dir
 
+from .. import turn_telemetry
 from ..choice import LegacyWire, Option, Task, choose
 from ..llm_runtime import generate_text
 from ..prompt_registry import load_prompt_text
 from ..runtime_config import config as _cfg
+from ._biomaterial import mis_synonym_candidates
 from ._common import _normalise_catalog_text
 from ._prices_helpers import (
     _apply_service_synonyms,
@@ -87,6 +98,15 @@ PRICE_TASK = Task(
     queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS,
 )
 _CHOOSE_MODES = ("off", "legacy", "on")
+_POLICY_MODES = ("off", "shadow", "on")
+_VARIANT_B_LIMIT = 5
+
+
+def match_policy() -> str:
+    """Политика силы совпадения (L-13): off | shadow | on."""
+
+    raw = str(getattr(_cfg, "MR_PRICE_MATCH_POLICY", "shadow") or "").strip().lower()
+    return raw if raw in _POLICY_MODES else "shadow"
 
 
 def _choose_mode() -> str:
@@ -96,10 +116,18 @@ def _choose_mode() -> str:
 
 @dataclass(frozen=True)
 class PriceSelection:
-    """Строки прайса, которые LLM признала той услугой (уже без непрошеных вариантов)."""
+    """Строки прайса, которые LLM признала той услугой (уже без непрошеных вариантов).
+
+    `status` — решение политики силы совпадения (L-13; не `picked` — только под
+    `price_match_policy = on`): `picked` — выбор LLM; `strong` — сильное совпадение по данным, без
+    LLM; `none_fit` — LLM не нашла услугу и во втором круге; `unavailable` — LLM не ответила внятно
+    на слабом совпадении, `names` — до 5 названий совпадений целым словом (вариант B).
+    """
 
     rows: tuple[dict[str, Any], ...]
     search_terms: tuple[str, ...] = ()
+    status: str = "picked"
+    names: tuple[str, ...] = ()
 
 
 def _row_key(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -222,6 +250,51 @@ def _parse_reply(raw: str, pool_size: int) -> tuple[list[int], list[str]] | None
     return match, clean_terms[:_MAX_TERMS]
 
 
+def _strong_rows(question: str, pool: list[dict[str, Any]], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Сильное совпадение по данным (L-13, решение владельца 07.10): дословное название, синоним МИС,
+    код услуги — без LLM.
+
+    «Название до скобок» сюда не входит: скобка бывает значимым уточнением («ОАК (без лейкоцитарной
+    формулы и СОЭ)» на «оак» — урезанный вариант, а не общий анализ). Курируемые аббревиатуры кода
+    (`_PRICE_SERVICE_ALIASES`) тоже не входят — их строку выбирает LLM.
+    """
+
+    key = _normalise_catalog_text(_extract_price_service_from_query(question) or question)
+    if not key:
+        return []
+    synonyms = set(mis_synonym_candidates(question))
+    by_code = [row for row in retail_rows if key.isdigit() and str(row.get("serviceHomecode") or "").strip() == key]
+    out: list[dict[str, Any]] = []
+    for row in [*pool, *by_code]:
+        name = _row_name(row)
+        if (key == _normalise_catalog_text(name) or name in synonyms or row in by_code) and row not in out:
+            out.append(row)
+    return out
+
+
+def _whole_word_names(question: str, pool: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Вариант B (L-13): названия строк, в которых есть ВСЕ слова пациента целыми словами.
+
+    По началу слова и по одному слову из нескольких — нельзя: на «гастроскопию» первым оказался бы
+    «Гастрин», на «ттг т4 свободный» — «Свободный тестостерон». Сравниваются нормализованные токены
+    (множества), без регулярок; порядок — как у кандидатов правил.
+    """
+
+    wanted = set(_price_query_tokens(question))
+    if not wanted:
+        return ()
+    names = [_row_name(row) for row in pool if wanted <= set(_price_query_tokens(_row_name(row)))]
+    return tuple(dict.fromkeys(name for name in names if name))[:_VARIANT_B_LIMIT]
+
+
+def _policy_label(selection: PriceSelection | None) -> str:
+    if selection is None:
+        return "rules"
+    if selection.status == "unavailable":
+        return "names" if selection.names else "handoff"
+    return {"none_fit": "not_found"}.get(selection.status, selection.status)
+
+
 def _legacy_answer(raw: str, _options: Sequence[Option]) -> dict[str, Any] | None:
     """Прежняя форма ответа ({"match", "search_terms"}) → форма модуля; строгость разбора — модуля."""
 
@@ -234,8 +307,9 @@ def _legacy_answer(raw: str, _options: Sequence[Option]) -> dict[str, Any] | Non
     return {"picks": data.get("match", []), "search_terms": data.get("search_terms", [])}
 
 
-async def _ask(question: str, pool: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]] | None:
-    """Выбор LLM по пулу кандидатов: (строки «та услуга» в порядке пула, термины) или None — сбой."""
+async def _ask(question: str, pool: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str], str] | None:
+    """Выбор LLM по пулу кандидатов: (строки «та услуга» в порядке пула, термины, код причины пустого
+    выбора) или None — сбой; код причины есть только у промпта модуля (`on`)."""
 
     mode = _choose_mode()
     if mode == "off":
@@ -247,12 +321,12 @@ async def _ask(question: str, pool: list[dict[str, Any]]) -> tuple[list[dict[str
         else None
     )
     choice = await choose(PRICE_TASK, question, options, legacy=legacy)
-    if choice.failed:  # прежняя политика: сбой и мусор — ответ правил
+    if choice.failed:  # сбой и мусор — решение политики (L-13) или прежний ответ правил
         return None
-    return [pool[index] for index in sorted(int(i) for i in choice.ids)], list(choice.terms)
+    return [pool[index] for index in sorted(int(i) for i in choice.ids)], list(choice.terms), choice.reason
 
 
-async def _ask_directly(question: str, pool: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]] | None:
+async def _ask_directly(question: str, pool: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str], str] | None:
     """Прежний вызов и разбор (`choose_price = off`); уходит, когда модуль принят на стенде."""
 
     try:
@@ -273,7 +347,7 @@ async def _ask_directly(question: str, pool: list[dict[str, Any]]) -> tuple[list
         logger.warning("price_llm_select_bad_reply: %r", str(raw or "")[:200])
         return None
     match, terms = parsed
-    return [pool[i - 1] for i in sorted(match)], terms
+    return [pool[i - 1] for i in sorted(match)], terms, ""
 
 
 # Условия, которые меняют саму услугу для пациента. «Комплекс/программа» сюда не входят:
@@ -375,32 +449,64 @@ async def select_price_rows(
         _build_pool, texts, rows, per_text=_PER_QUERY_LIMIT, first=shown, fallback_texts=words
     )
     pool += [row for row in rest if _row_key(row) not in {_row_key(r) for r in pool}][: max(0, _POOL_LIMIT - len(pool))]
+    policy = match_policy()
+    strong = _strong_rows(question, pool, rows)
+    if strong and policy != "off":
+        turn_telemetry.note(price_policy="strong")
+        if policy == "on":
+            return PriceSelection(rows=tuple(strong), status="strong")
+    record = policy != "off" and not strong  # решение политики ещё не записано в телеметрию
+
+    def settle(legacy: PriceSelection | None, decided: PriceSelection | None) -> PriceSelection | None:
+        """Под on — решение политики (None — прежний ответ правил); под off / shadow — прежний
+        результат, тень пишет решение в телеметрию."""
+
+        if record:
+            turn_telemetry.note(price_policy=_policy_label(decided))
+        return decided if policy == "on" else legacy
+
+    def unavailable() -> PriceSelection | None:
+        # Правила ничего не предложили — чужой цены не было, их честный ответ остаётся.
+        if not candidates:
+            return None
+        return PriceSelection(rows=(), status="unavailable", names=_whole_word_names(question, pool))
+
+    def none_fit(reason: str) -> PriceSelection | None:
+        # Названо слишком общее или не услуга — уточнение правил честнее, чем «не нашёл».
+        if not candidates or reason in ("too_general", "not_a_service"):
+            return None
+        return PriceSelection(rows=(), status="none_fit")
+
     # Дословное название позиции («ферритин» = «Ферритин»): правила не ошибаются.
     if phrase_norm and any(_normalise_catalog_text(_row_name(row)) == phrase_norm for row in pool):
         return None
 
     first = await _ask(question, pool)
     if first is None:
-        return None
-    chosen, terms = first
+        return settle(None, unavailable())
+    chosen, terms, reason = first
     if chosen:
-        return PriceSelection(rows=tuple(_prefer_base_variants(chosen, question)))
+        picked = PriceSelection(rows=tuple(_prefer_base_variants(chosen, question)))
+        return settle(picked, picked)
     # Промах — когда услугу не нашли ни правила (`candidates` пуст), ни LLM: такое
     # слово пациента — кандидат в синонимы для клиники (см. `_record_synonym_suggestion`).
     if not terms:
         if not candidates:
             _record_synonym_suggestion(phrase or question, [], [])
-        return None
+        return settle(None, none_fit(reason))
 
     pool_by_terms = await asyncio.to_thread(_build_pool, terms, rows, per_text=_PER_TERM_LIMIT)
     second = await _ask(question, pool_by_terms)
-    if second is None or not second[0]:
-        if second is not None and not candidates:
+    if second is None:
+        return settle(None, unavailable())
+    if not second[0]:
+        if not candidates:
             _record_synonym_suggestion(phrase or question, terms, [])
-        return None
+        return settle(None, none_fit(second[2]))
     chosen = _prefer_base_variants(second[0], question)
     _record_synonym_suggestion(phrase or question, terms, chosen)
-    return PriceSelection(rows=tuple(chosen), search_terms=tuple(terms))
+    picked = PriceSelection(rows=tuple(chosen), search_terms=tuple(terms))
+    return settle(picked, picked)
 
 
 def rows_overlap(left: Sequence[dict[str, Any]], right: Sequence[dict[str, Any]]) -> bool:

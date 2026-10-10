@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from agent_logic_2.nayka_api import api_price
 
 from ..policies import handoff_message
+from ..text_templates import price_names_without_prices_text, price_not_found_text
 from ._addresses_helpers import _extract_homecode_query
 from ._common import (
     DOCTORS_TOP_N,
@@ -99,6 +100,31 @@ def _llm_family_payload(service_name: str, rows: list[dict[str, Any]], *, visibl
         else "",
         "note": "price_llm_select",
     }
+
+
+def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, Any]) -> dict[str, Any] | None:
+    """Политика силы совпадения (L-13) под `price_match_policy = on`: вместо ответа правил — честное
+    «не нашёл» (LLM не нашла услугу и во втором круге) или названия без цен (LLM не ответила внятно
+    на слабом совпадении; названий целым словом нет — перевод на оператора). Иначе None — дальше как
+    раньше. Одна форма для `price_info` и `service_bundle_info`: оба рендера печатают `clarify_text`.
+    """
+
+    status = getattr(selection, "status", "")
+    if status not in ("none_fit", "unavailable"):
+        return None
+    phrase = str(_extract_price_service_from_query(query_text) or query_text or "").strip()
+    used = {**entities, "service_name_effective": phrase}
+    note = f"price_match_policy: {status}"
+    if status == "unavailable" and not selection.names:
+        return _service_fallback(
+            note=note,
+            handoff_message=handoff_message("low_confidence"),
+            entities=used,
+            reason="low_confidence",
+            extra={"prices": [], "retail_prices": []},
+        )
+    text = price_not_found_text(phrase) if status == "none_fit" else price_names_without_prices_text(phrase, selection.names)
+    return {"service_name": phrase, "prices": [], "retail_prices": [], "doctors": [], "clarify_text": text, "note": note, "entities_used": used}
 
 
 def _llm_selection_service_name(query_text: str, rows: list[dict[str, Any]]) -> str:
@@ -325,7 +351,11 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     if family_payload and not doctor_id:
         variants = list(family_payload.get("family_variants") or [])
         shown = variants[: int(family_payload.get("visible_limit") or 10)]
-        llm_rows = reconcile_with_proposal(shown, await _llm_select(variants))
+        selection = await _llm_select(variants)
+        stop = _match_policy_payload(selection, str(query or ""), entities)
+        if stop is not None:
+            return stop
+        llm_rows = reconcile_with_proposal(shown, selection)
         if llm_rows is not None:
             return _llm_answer(llm_rows)
         family_payload["entities_used"] = {
@@ -334,7 +364,11 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         }
         return family_payload
     if not needle:
-        llm_rows = reconcile_with_proposal([], await _llm_select([]))
+        selection = await _llm_select([])
+        stop = _match_policy_payload(selection, str(query or ""), entities)
+        if stop is not None:
+            return stop
+        llm_rows = reconcile_with_proposal([], selection)
         if llm_rows is not None:
             return _llm_answer(llm_rows)
         return {"prices": [], "note": "no service query", "entities_used": entities}
@@ -367,7 +401,11 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             limit=10,
         )
     # Рендер показывает пациенту до пяти строк — их и сверяем.
-    llm_rows = reconcile_with_proposal(matches[:5], await _llm_select(matches))
+    selection = await _llm_select(matches)
+    stop = _match_policy_payload(selection, str(query or ""), entities)
+    if stop is not None:
+        return stop
+    llm_rows = reconcile_with_proposal(matches[:5], selection)
     if llm_rows is not None:
         return _llm_answer(llm_rows)
     matches = _annotate_price_rows_with_care_context(matches)
@@ -458,7 +496,11 @@ async def service_bundle_info(
     if family_payload:
         variants = list(family_payload.get("family_variants") or [])
         shown = variants[: int(family_payload.get("visible_limit") or 10)]
-        llm_rows = reconcile_with_proposal(shown, await _llm_select(variants))
+        selection = await _llm_select(variants)
+        stop = _match_policy_payload(selection, str(query or ""), entities)
+        if stop is not None:
+            return stop
+        llm_rows = reconcile_with_proposal(shown, selection)
         if llm_rows is None:
             family_payload["top_n_applied"] = top_limit
             family_payload["entities_used"] = entities
@@ -501,7 +543,11 @@ async def service_bundle_info(
     }
     if not needle:
         if llm_rows is None:
-            llm_rows = reconcile_with_proposal([], await _llm_select([]))
+            selection = await _llm_select([])
+            stop = _match_policy_payload(selection, str(query or ""), entities)
+            if stop is not None:
+                return stop
+            llm_rows = reconcile_with_proposal([], selection)
         if not llm_rows:
             out["note"] = "service_bundle_info: no service query"
             return out
@@ -552,7 +598,11 @@ async def service_bundle_info(
             is_consult_query=_is_consultation_service_query(service_name),
         )
         shown = out["retail_prices"] if shown_kind == "lab" else out["retail_prices"][:1]
-        llm_rows = reconcile_with_proposal(shown, await _llm_select(out["retail_prices"], service_name))
+        selection = await _llm_select(out["retail_prices"], service_name)
+        stop = _match_policy_payload(selection, str(query or ""), entities)
+        if stop is not None:
+            return stop
+        llm_rows = reconcile_with_proposal(shown, selection)
         if llm_rows is not None and len(llm_rows) > 1 and not rows_overlap(llm_rows, out["retail_prices"]):
             # Правила промахнулись целиком, а LLM нашла несколько вариантов — их и
             # показываем на выбор, без врачей чужой услуги.

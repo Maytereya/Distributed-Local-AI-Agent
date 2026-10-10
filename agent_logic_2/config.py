@@ -198,6 +198,7 @@ class MessengerRouterConfig:
     choose_cache_ttl_s: int
     choose_price: str
     choose_symptom: str
+    price_match_policy: str
     debug_final_input: bool
     url: str
 
@@ -438,6 +439,10 @@ settings = Settings(
         # прежний промпт через модуль; on — врач названием из перечня ролей МИС (не больше двух), исходы
         # «срочно» и «не жалоба». Политика сбоя прежняя. [MESSENGER_ROUTER] choose_symptom
         choose_symptom=_get_enum("MESSENGER_ROUTER", "choose_symptom", default="off", allowed={"off", "legacy", "on"}),
+        # Политика силы совпадения для цены (L-13, решение владельца 07.10 — вариант B): off — прежняя;
+        # shadow — решение только в телеметрию хода (price_policy); on — сильное совпадение по данным без
+        # LLM, «не нашла» — честное «не нашёл», сбой LLM на слабом совпадении — названия без цен.
+        price_match_policy=_get_enum("MESSENGER_ROUTER", "price_match_policy", default="shadow", allowed={"off", "shadow", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -569,6 +574,7 @@ MR_LLM_DECISION_BREAKER_OPEN_S = settings.messenger_router.llm_decision_breaker_
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
 MR_CHOOSE_PRICE = settings.messenger_router.choose_price
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
+MR_PRICE_MATCH_POLICY = settings.messenger_router.price_match_policy
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 
