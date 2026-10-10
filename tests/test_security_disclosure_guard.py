@@ -179,11 +179,15 @@ def test_render_scrubs_leaked_prompt_from_llm_answer(monkeypatch):
 
 
 def test_render_passes_legit_llm_answer_unchanged(monkeypatch):
-    """Анти-over-trigger на уровне wiring: легитимный LLM-ответ не подменяется."""
+    """Анти-over-trigger на уровне wiring: легитимный LLM-ответ не подменяется.
+
+    Без суммы: денежные суммы со свободного текста LLM снимает money_guard (пункт 1
+    принципов, 08.10; tests/test_llm_free_money_guard.py).
+    """
 
     async def fake_render_stream(user_text, decision, evidence, runtime_options=None, *, history=None):
         _ = user_text, decision, evidence, runtime_options, history
-        yield "Приём уролога стоит 2 700 руб. "
+        yield "Уролог принимает по записи. "
         yield "Адрес: пр. Ленина, 5."
 
     monkeypatch.setattr("messengers_router.renderer.render_stream", fake_render_stream)
@@ -197,7 +201,7 @@ def test_render_passes_legit_llm_answer_unchanged(monkeypatch):
     )
     out = run(render(ctx, services=Services(), memory=MemoryStore()))
     assert out.response is not None
-    assert out.response.text == "Приём уролога стоит 2 700 руб. Адрес: пр. Ленина, 5."
+    assert out.response.text == "Уролог принимает по записи. Адрес: пр. Ленина, 5."
 
 
 def test_render_scrubs_leaked_prebuilt_response(monkeypatch):

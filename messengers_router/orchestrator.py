@@ -781,8 +781,16 @@ async def _render_impl(
         # Output-guard применяется ЕДИНОЙ воронкой в render() (обёртка над
         # _render_impl) — на ПОЛНОМ тексте ЛЮБОГО пути (stream/prebuilt/PREPARE/
         # pending), а не только этого. Здесь — сырой join. См. bug_log § scrub-funnel.
+        # Денежные суммы снимаются ТОЛЬКО здесь, на свободной генерации: цену печатает код
+        # из прайса (prebuilt), LLM чисел своим текстом не пишет (пункт 1 принципов, 08.10).
+        from .money_guard import guard_free_text
+
+        text, money_cut = guard_free_text("".join(chunks))
+        if money_cut:
+            logger.info("llm_free_money_cut: label=%s sentences=%s", ctx.decision.label, money_cut)
+            turn_telemetry.note(money_cut=money_cut)
         ctx.response = ResponseEnvelope(
-            text="".join(chunks),
+            text=text,
             attachments=list(ctx.evidence.items.get(ek.ATTACHMENTS) or []),
             handoff=bool(ctx.decision.needs_handoff),
         )
