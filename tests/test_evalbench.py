@@ -420,3 +420,23 @@ def test_cache_keeps_first_answer_and_separates_generation_options(tmp_path):
     client = ev_llm.HarnessClient(mode="adversary", sites=ev_llm.SiteIndex.from_templates({}), default_options={"temperature": 0.2})
     assert client._options_fingerprint({"temperature": 0.2}) == ""
     assert client._options_fingerprint({"temperature": 0, "num_predict": 24}) != ""
+
+
+# --------------------------------------------------------------------------- карточка
+
+
+def test_card_counts_differing_answers_and_choice_slo():
+    from evalbench import card
+
+    before = [{"set": "g", "id": "1", "answer": "Цена 500 руб."}, {"set": "g", "id": "2", "answer": "Соединяю с оператором."}]
+    after = [{"set": "g", "id": "1", "answer": "Цена 500 руб. "}, {"set": "g", "id": "2", "answer": "Другой ответ"}, {"set": "g", "id": "3", "answer": "x"}]
+    assert card.answer_diff(before, after) == (1, 2, ["2"])
+
+    turn = {"id": "1", "outcome": "answer", "handoff": False, "urgent": False, "ms": 10}
+    turns = [
+        {**turn, "telemetry": {"choose": [{"task": "price_service", "status": "picked", "ms": 900}, {"task": "price_service", "status": "picked", "ms": 0, "cached": True}]}},
+        {**turn, "id": "2", "telemetry": {"choose": [{"task": "price_service", "status": "unavailable", "ms": 3000}]}},
+        {**turn, "id": "3", "telemetry": None},
+    ]
+    m = card.metrics(turns, {})
+    assert (m["choose_n"], m["choose_unavailable"], m["choose_invalid"], m["choose_p95_ms"]) == (3, 1, 0, 3000)

@@ -165,6 +165,9 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
     urgent_cases = [t for t in turns if t.get("expect_urgent") is True]
     twins = [t for t in turns if t.get("expect_urgent") is False]
     spec = Counter(t["specialty_verdict"] for t in turns if t.get("specialty_verdict"))
+    # Решения модуля выбора (ход (в)) — из телеметрии хода; SLO: UNAVAILABLE <2%, p95 выбора <4 с.
+    choices = [c for t in turns for c in (t.get("telemetry") or {}).get("choose") or []]
+    choose_status = Counter(c["status"] for c in choices)
     llm = Counter(c["outcome"] for t in turns for c in t.get("llm_calls") or [])
     sites = Counter(c["site"] for t in turns for c in t.get("llm_calls") or [])
     ms = [t["ms"] for t in turns]
@@ -196,6 +199,10 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
         "symptom_n": sum(spec.values()),
         **{f"symptom_{k}": spec.get(k, 0) for k in ("right", "acceptable", "partial", "wrong", "none")},
         "symptom_not_for_patients": sum(1 for t in turns if t.get("specialty_not_for_patients")),
+        "choose_n": len(choices),
+        "choose_unavailable": choose_status.get("unavailable", 0),
+        "choose_invalid": choose_status.get("invalid", 0),
+        "choose_p95_ms": _pct([c["ms"] for c in choices if not c.get("cached")], 0.95),
         "p50_ms": _pct(ms, 0.5),
         "p95_ms": _pct(ms, 0.95),
         "llm_calls": sum(llm.values()),
@@ -211,7 +218,20 @@ def _fmt(value: Any) -> str:
     return "—" if value is None else str(value)
 
 
-def render(runs: list[tuple[dict[str, Any], dict[str, Any]]]) -> str:
+def answer_diff(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> tuple[int, int, list[str]]:
+    """Сколько общих вопросов получили разный текст ответа: (отличаются, общих, первые id).
+
+    Для A/A и доказательства переноса без смены поведения (ход (в): `legacy` против `off` на
+    записанных ответах должно быть 0).
+    """
+
+    by_key = {(t.get("set"), t["id"]): str(t.get("answer") or "").strip() for t in left}
+    shared = [(t.get("set"), t["id"], str(t.get("answer") or "").strip()) for t in right if (t.get("set"), t["id"]) in by_key]
+    differ = [qid for qset, qid, text in shared if by_key[(qset, qid)] != text]
+    return len(differ), len(shared), differ[:10]
+
+
+def render(runs: list[tuple[dict[str, Any], dict[str, Any]]], diff: tuple[int, int, list[str]] | None = None) -> str:
     lines = ["# Карточка замера", ""]
     for header, _m in runs:
         world = header.get("world", {})
@@ -258,6 +278,10 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]]) -> str:
         ("  неверно", "symptom_wrong"),
         ("  врач не назван", "symptom_none"),
         ("  назвал роль не для пациента", "symptom_not_for_patients"),
+        ("Выбор (choose): решений", "choose_n"),
+        ("  LLM недоступна (UNAVAILABLE)", "choose_unavailable"),
+        ("  ответ не разобран (INVALID)", "choose_invalid"),
+        ("  p95 выбора, мс", "choose_p95_ms"),
         ("Цена без источника (ходов)", "unsourced_turns"),
         ("Цена без привязки к услуге (ходов)", "unattributed_turns"),
         ("Перевод на оператора", "handoff"),
@@ -279,6 +303,9 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]]) -> str:
         elif len(runs) == 2:
             delta = " |"
         lines.append(f"| {title} | " + " | ".join(_fmt(v) for v in vals) + (" |" + delta if delta else " |"))
+    if diff is not None:
+        lines.append("")
+        lines.append(f"**Ответ отличается:** {diff[0]} из {diff[1]} общих вопросов" + (f" (например: {', '.join(diff[2])})" if diff[2] else ""))
     lines.append("")
     lines.append("**Исходы ходов:**")
     lines.append("")
@@ -322,13 +349,14 @@ def main(argv: list[str] | None = None) -> int:
         keys = [{(t.get("set"), t["id"]) for t in turns} for _, turns in runs]
         shared = keys[0] & keys[1]
         runs = [(dict(h, cases=len(shared), done=len(shared)), [t for t in turns if (t.get("set"), t["id"]) in shared]) for h, turns in runs]
+    diff = answer_diff(runs[0][1], runs[1][1]) if len(runs) == 2 else None
     loaded = []
     for header, turns in runs:
         refresh_expectations(header, turns)
         rescore_prices(header, turns)
         score_specialties(header, turns)
         loaded.append((header, metrics(turns, labels)))
-    print(render(loaded))
+    print(render(loaded, diff))
     return 0
 
 
