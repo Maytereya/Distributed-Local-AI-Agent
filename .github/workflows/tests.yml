@@ -1,12 +1,14 @@
 name: Lint & Hermetic Tests
 
 # Ловит регрессии NLU-правил/политик на каждом пуше (включая пуши без локального
-# гейта). Гоняет ТОЛЬКО герметичное подмножество тестов: без сети, без локальных
-# кэшей каталога (agent_logic_2/nayka_api/apidata/*.jsonl не в git), без config.ini
-# (agent_logic_2/config.py default-safe — работает на дефолтах). ПОЛНЫЙ suite
-# (~1140 тестов, требует кэшей) остаётся локальным гейтом перед коммитом:
+# гейта). Гоняет герметичное подмножество: без сети, без локальных кэшей каталога
+# (agent_logic_2/nayka_api/apidata/*.jsonl не в git), без config.ini (agent_logic_2/config.py
+# default-safe). Список файлов — tests/hermetic_files.txt (10.10: 102 файла, ~1690 тестов;
+# проверено копией CI — Python 3.12 + requirements-ci.txt, без конфига и срезов).
+# ПОЛНЫЙ suite (~2840 тестов, требует кэшей) остаётся локальным гейтом перед коммитом:
 # ./venv/bin/python -m pytest -q -p no:cacheprovider
-# Расширение списка: добавляй файл, только если он зелёный без сети/кэшей/конфига.
+# Расширение списка: добавляй файл, только если он зелёный без сети/кэшей/конфига;
+# список только растёт (tests/test_hermetic_files_ratchet.py).
 
 on:
   push:
@@ -24,7 +26,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"  # как на проде (3.12.3), решение 08.10
           cache: pip
           cache-dependency-path: requirements-ci.txt
 
@@ -40,12 +42,4 @@ jobs:
         run: ruff check messengers_router tests
 
       - name: Hermetic tests (no network / no caches / no config.ini)
-        run: >
-          pytest -q -p no:cacheprovider
-          tests/test_specialty_nlu.py
-          tests/test_date_parsing.py
-          tests/test_security_disclosure_guard.py
-          tests/test_unit_canonicalisation.py
-          tests/test_bug_c_website_help.py
-          tests/test_bug_f_booking_necessity.py
-          tests/test_security_probe.py
+        run: pytest -q -p no:cacheprovider $(cat tests/hermetic_files.txt)
