@@ -197,6 +197,7 @@ class MessengerRouterConfig:
     llm_decision_breaker_open_s: int
     choose_cache_ttl_s: int
     choose_price: str
+    choose_symptom: str
     debug_final_input: bool
     url: str
 
@@ -433,6 +434,10 @@ settings = Settings(
         # legacy — прежний промпт через модуль (доказательство переноса на записанных ответах);
         # on — роли, JSON Schema, коды причин. Политика сбоя прежняя. [MESSENGER_ROUTER] choose_price
         choose_price=_get_enum("MESSENGER_ROUTER", "choose_price", default="off", allowed={"off", "legacy", "on"}),
+        # Симптом → врач на модуле choose() (ход (в), клиент 2): off — прежний вызов и разбор; legacy —
+        # прежний промпт через модуль; on — врач названием из перечня ролей МИС (не больше двух), исходы
+        # «срочно» и «не жалоба». Политика сбоя прежняя. [MESSENGER_ROUTER] choose_symptom
+        choose_symptom=_get_enum("MESSENGER_ROUTER", "choose_symptom", default="off", allowed={"off", "legacy", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -563,6 +568,7 @@ MR_LLM_DECISION_BREAKER_FAILURES = settings.messenger_router.llm_decision_breake
 MR_LLM_DECISION_BREAKER_OPEN_S = settings.messenger_router.llm_decision_breaker_open_s
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
 MR_CHOOSE_PRICE = settings.messenger_router.choose_price
+MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

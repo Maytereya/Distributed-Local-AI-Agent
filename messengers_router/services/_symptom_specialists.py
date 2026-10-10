@@ -14,15 +14,22 @@
 медвопроса (без диагноза, с оператором).
 
 Kill-switch: [MESSENGER_ROUTER] llm_symptom_specialists = false (config.ini, дефолт ВКЛ).
+
+Выбор — на модуле `choose()` (ход (в), клиент 2), выключатель `[MESSENGER_ROUTER] choose_symptom`:
+`off` (по умолчанию) — прежний вызов и разбор; `legacy` — прежний промпт через модуль (перенос
+доказывается на записанных ответах); `on` — модель называет врача из перечня ролей МИС (`enum`
+названий в JSON Schema, не больше двух — решение владельца 10.10), код сверяет; исходы «срочно»
+(срочность можно только поднять) и «не жалоба». Политика сбоя прежняя: прежний шаблон медвопроса.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Sequence
 
+from ..choice import LegacyWire, Option, Status, Task, choose
 from ..llm_runtime import DECISION_OPTIONS, generate_text
 from ..prompt_registry import load_prompt_text
 from ..runtime_config import config as _cfg
@@ -50,6 +57,21 @@ _NUMBER_RE = re.compile(r"\d+")
 _NOT_RECEPTION_RE = re.compile(
     r"диагностик|(?<![а-я])узи(?![а-я])|анестезиолог|медицинская сестра|физиотерап|эндоскопист|-\s*при[её]м\b"
 )
+
+
+# Задача модуля выбора: 1–2 врача первой очереди названиями из перечня; срочно или не жалоба.
+SYMPTOM_TASK = Task(
+    name="symptom_specialists",
+    max_picks=2,
+    by_text=True,
+    outcomes=("urgent", "not_complaint"),
+    num_predict=96,
+    timeout_s=_LLM_TIMEOUT_S,
+    queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS,
+)
+# Прежний промпт допускал до MAX_SPECIALTIES номеров — столько принимает и строгий разбор его ответа.
+_LEGACY_TASK = replace(SYMPTOM_TASK, max_picks=MAX_SPECIALTIES)
+_CHOOSE_MODES = ("off", "legacy", "on")
 
 
 @dataclass(frozen=True)
@@ -115,6 +137,46 @@ def _parse(answer: str, specialties: Sequence[str]) -> SpecialistAdvice | None:
     return SpecialistAdvice(specialties=tuple(picked[:MAX_SPECIALTIES])) if picked else None
 
 
+def _choose_mode() -> str:
+    raw = str(getattr(_cfg, "MR_CHOOSE_SYMPTOM", "off") or "").strip().lower()
+    return raw if raw in _CHOOSE_MODES else "off"
+
+
+def _legacy_answer(raw: str, options: Sequence[Option]) -> dict[str, Any] | None:
+    """Прежний ответ одной строкой («3, 12» / СРОЧНО / НЕТ) → форма модуля; строгость — модуля.
+
+    Номер вне списка остаётся числом, и модуль не примет такой ответ целиком (прежний разбор молча
+    отбрасывал такой номер и брал остальные — известное отличие переноса).
+    """
+
+    lines = str(raw or "").strip().splitlines()
+    first = lines[0].strip().strip('"«»\'`.,:;!').upper() if lines else ""
+    if first.startswith("СРОЧНО"):
+        return {"picks": [], "outcome": "urgent"}
+    if not first or first.startswith("НЕТ"):
+        return {"picks": [], "outcome": "not_complaint"}
+    numbers = [int(n) for n in _NUMBER_RE.findall(first)]
+    if not numbers:
+        return None
+    return {"picks": [options[n - 1].text if 1 <= n <= len(options) else n for n in numbers], "outcome": "none"}
+
+
+async def _pick_by_choice(text: str, specialties: Sequence[str], *, legacy: bool) -> SpecialistAdvice | None:
+    options = [Option(id=name, text=name) for name in specialties]
+    if legacy:
+        numbered = "\n".join(f"{i}. {name}" for i, name in enumerate(specialties, 1))
+        prompt = load_prompt_text("symptom_specialists").replace("<<TEXT>>", text).replace("<<SPECIALTIES>>", numbered)
+        wire = LegacyWire(prompt=lambda _q, _o: prompt, answer=_legacy_answer, fmt=None, options=DECISION_OPTIONS)
+        choice = await choose(_LEGACY_TASK, text, options, legacy=wire)
+    else:
+        choice = await choose(SYMPTOM_TASK, text, options)
+    if choice.status is Status.OUTCOME and choice.outcome == "urgent":
+        return SpecialistAdvice(urgent=True)
+    if choice.status is Status.PICKED:
+        return SpecialistAdvice(specialties=choice.ids)
+    return None  # не жалоба, ничего не подошло, сбой — прежний шаблон медвопроса
+
+
 async def pick_specialists(text: str, specialties: Sequence[str]) -> SpecialistAdvice | None:
     """К каким из специальностей клиники обратиться с жалобой — решает LLM по номеру.
 
@@ -128,6 +190,9 @@ async def pick_specialists(text: str, specialties: Sequence[str]) -> SpecialistA
     raw = str(text or "").strip()
     if not raw or len(raw) > _MAX_LEN or not specialties:
         return None
+    mode = _choose_mode()
+    if mode != "off":
+        return await _pick_by_choice(raw, specialties, legacy=mode == "legacy")
     numbered = "\n".join(f"{i}. {name}" for i, name in enumerate(specialties, 1))
     try:
         prompt = load_prompt_text("symptom_specialists").replace("<<TEXT>>", raw).replace("<<SPECIALTIES>>", numbered)

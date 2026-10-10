@@ -137,6 +137,85 @@ def test_llm_choice_is_parsed_strictly(monkeypatch, answer, expected):
     assert "2. невролог" in prompts[0]
 
 
+# --- выбор на модуле choose() (ход (в), клиент 2) ------------------------------------
+
+
+class _Client:
+    """Клиент ollama модуля выбора: запоминает запрос, отвечает заданным текстом или падает."""
+
+    def __init__(self, reply) -> None:
+        self.reply, self.calls = reply, []
+
+    async def generate(self, **kwargs):
+        from ollama import GenerateResponse
+
+        self.calls.append(kwargs)
+        if isinstance(self.reply, Exception):
+            raise self.reply
+        return GenerateResponse(model="m", response=self.reply, done=True)
+
+
+def _choose_mode(monkeypatch, mode: str, reply) -> _Client:
+    from messengers_router import llm_runtime
+
+    client = _Client(reply)
+    monkeypatch.setattr(S._cfg, "MR_CHOOSE_SYMPTOM", mode, raising=False)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", client)
+    return client
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("2, 1", S.SpecialistAdvice(specialties=("невролог", "терапевт"))),
+        ("Номера: 3.", S.SpecialistAdvice(specialties=("кардиолог",))),
+        ("2, 2, 4, 1", S.SpecialistAdvice(specialties=("невролог", "оториноларинголог", "терапевт"))),
+        ("СРОЧНО", S.SpecialistAdvice(urgent=True)),
+        ("НЕТ", None),
+        ("0, 99", None),
+        ("3, 99", None),  # известное отличие переноса: номеру вне списка не верим целиком
+        ("2, 4, 1, 3", None),  # и лишним номерам (прежний разбор обрезал до трёх)
+        ("не знаю", None),
+        (TimeoutError(), None),
+    ],
+)
+def test_legacy_mode_sends_the_old_request_and_judges_strictly(monkeypatch, answer, expected):
+    client = _choose_mode(monkeypatch, "legacy", answer)
+
+    assert asyncio.run(S.pick_specialists("у меня болит голова 3 дня", _SPECIALTIES)) == expected
+    request = client.calls[0]
+    assert "system" not in request and request["format"] is None
+    assert "«у меня болит голова 3 дня»" in request["prompt"] and "2. невролог" in request["prompt"]
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        ('{"picks": ["невролог", "терапевт"], "outcome": "none"}', S.SpecialistAdvice(specialties=("невролог", "терапевт"))),
+        ('{"picks": [], "outcome": "urgent"}', S.SpecialistAdvice(urgent=True)),
+        ('{"picks": ["кардиолог"], "outcome": "urgent"}', S.SpecialistAdvice(urgent=True)),
+        ('{"picks": [], "outcome": "not_complaint"}', None),
+        ('{"picks": [], "outcome": "none"}', None),
+        ('{"picks": ["хирург"], "outcome": "none"}', None),
+        ('{"picks": ["невролог", "кардиолог", "терапевт"], "outcome": "none"}', None),
+        ('{"picks": [2], "outcome": "none"}', None),
+        ("2, 1", None),
+        (ConnectionError("ollama down"), None),
+    ],
+    ids=["two", "urgent", "urgent_wins", "not_complaint", "none_fit", "not_in_list", "three", "number", "old_format", "failure"],
+)
+def test_on_mode_names_doctors_from_the_clinic_list_only(monkeypatch, reply, expected):
+    client = _choose_mode(monkeypatch, "on", reply)
+
+    assert asyncio.run(S.pick_specialists("у меня болит голова 3 дня", _SPECIALTIES)) == expected
+    request = client.calls[0]
+    picks = request["format"]["properties"]["picks"]
+    assert picks["items"]["enum"] == _SPECIALTIES and picks["maxItems"] == 2
+    assert request["format"]["properties"]["outcome"]["enum"] == ["none", "urgent", "not_complaint"]
+    assert "болит голова" not in request["system"] and "«у меня болит голова 3 дня»" in request["prompt"]
+    assert "- кардиолог" in request["prompt"]
+
+
 def test_kill_switch_and_empty_catalog_skip_llm(monkeypatch):
     prompts = _llm_answers(monkeypatch, "1")
 
