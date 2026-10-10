@@ -1,0 +1,13 @@
+# Small overlay on the verified reporting image; the Telegram poller can stay r3.
+ARG BASE_IMAGE=local/reporting-aggregator:appeals-r3
+FROM ${BASE_IMAGE}
+COPY reporting_projection.py /app/
+COPY reporting /app/reporting/
+COPY urls.py /app/config/urls.py
+COPY base.html /app/operator_panel/templates/operator_panel/base.html
+COPY vendor /app/operator_panel/static/operator_panel/vendor/
+# Build with --network=none and no production env/mounts. Worker mode bypasses
+# the legacy .env; collectstatic updates WhiteNoise's manifest for local CSS.
+USER root
+RUN REPORTING_WORKER=1 DJANGO_SECRET_KEY=synthetic-static-build-only DATABASE_URL=sqlite:///:memory: python manage.py collectstatic --noinput --verbosity 0
+USER appuser

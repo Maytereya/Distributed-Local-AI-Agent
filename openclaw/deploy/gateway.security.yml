@@ -1,0 +1,18 @@
+services:
+  openclaw-gateway:
+    networks: [default, local_net]
+    user: "1000:1000"
+    volumes: !override
+      - /home/vl/.openclaw:/home/node/.openclaw
+      - /home/vl/.openclaw/workspace:/home/node/.openclaw/workspace
+      - /home/vl/.reporting-secrets/monitor.curl:/run/secrets/monitor.curl:ro
+      - /home/vl/.reporting-secrets/monitor_api_token:/run/secrets/monitor_api_token:ro
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+  openclaw-cli:
+    networks: [default, local_net]
+networks:
+  local_net:
+    external: true

@@ -1,0 +1,4 @@
+ARG BASE_IMAGE=local/reporting-monitor-base:20261009
+FROM ${BASE_IMAGE}
+COPY docker_broker.py probe_contract.py aggregator_stats.sql reporting_projection.py /app/
+CMD ["python", "/app/docker_broker.py"]

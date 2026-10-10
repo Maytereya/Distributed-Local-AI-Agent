@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh host metrics each minute
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=60
+AccuracySec=5
+Unit=reporting-host-metrics.service
+
+[Install]
+WantedBy=timers.target

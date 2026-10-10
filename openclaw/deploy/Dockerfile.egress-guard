@@ -1,0 +1,4 @@
+FROM local/reporting-monitor-base:20261009
+COPY egress_guard.py /app/egress_guard.py
+USER 1000:1000
+ENTRYPOINT ["python3", "/app/egress_guard.py"]

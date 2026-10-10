@@ -1,0 +1,6 @@
+ARG BASE_IMAGE=local/reporting-bookworm-base:20261009
+FROM ${BASE_IMAGE}
+COPY privacy_logging.py secure_runtime_metrics.py dashboard_security.py gradio_interface.py /app/
+COPY system_data.py restart_container.py /app/container_managenment/
+ENV GRADIO_ANALYTICS_ENABLED=False HF_HUB_DISABLE_TELEMETRY=1 DO_NOT_TRACK=1
+CMD ["python", "-c", "from privacy_logging import install_privacy_logging; install_privacy_logging(suppress_console=True); from dashboard_security import install_dashboard_policy; install_dashboard_policy(); import runpy; runpy.run_path('gradio_interface.py',run_name='__main__')"]

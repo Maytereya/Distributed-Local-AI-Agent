@@ -707,6 +707,7 @@ async def _render_impl(
     # 3. Deterministic/pre-built path — response is already encoded in evidence.
     prebuilt = _extract_prebuilt_response(ctx, services=services, memory=memory)
     if prebuilt is not None:
+        ctx._reporting_structured = True
         ctx.response = prebuilt
         _mark_secondary_offer_pending(ctx)
         return ctx

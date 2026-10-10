@@ -1,0 +1,4 @@
+# Pending overlay. Use AFTER monitor.security.yml; broker stays r5.
+services:
+  openclaw-monitor:
+    image: local/reporting-monitor:security-r6

@@ -126,6 +126,10 @@ celerybeat.pid
 
 # Environments
 .env
+*.env
+openclaw/openclaw.json
+private_agregator/
+integrations/support_messenger_aggregator/
 .venv
 env/
 venv/

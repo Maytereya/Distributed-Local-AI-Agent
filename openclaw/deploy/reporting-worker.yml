@@ -1,0 +1,27 @@
+services:
+  reporting-worker:
+    image: local/reporting-aggregator:appeals-r3
+    container_name: reporting-worker
+    user: "1000:1000"
+    restart: unless-stopped
+    command: [python, manage.py, reporting_worker]
+    env_file: [/home/vl/.reporting-secrets/reporting-worker.env]
+    networks:
+      local_net:
+        ipv4_address: 172.18.0.17
+      aggregator_db:
+        ipv4_address: 172.19.0.6
+    dns: [172.18.0.240]
+    read_only: true
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    cap_drop: [ALL]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1
+    security_opt: [no-new-privileges:true]
+networks:
+  local_net:
+    external: true
+  aggregator_db:
+    external: true
+    name: support-messenger-aggregator_default

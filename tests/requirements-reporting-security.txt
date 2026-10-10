@@ -1,0 +1,8 @@
+# Optional dependencies for security checks of the separate Django service.
+Django==5.2.10
+djangorestframework==3.16.1
+channels==4.3.2
+daphne==4.2.1
+django-simple-history==3.11.0
+python-telegram-bot==21.10
+psycopg[binary]==3.3.2

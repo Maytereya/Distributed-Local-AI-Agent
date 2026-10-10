@@ -1,0 +1,48 @@
+services:
+  agent-api:
+    networks: !override
+      local_net:
+        ipv4_address: 172.18.0.7
+    image: local/reporting-agent-api:appeals-r3
+    dns: [172.18.0.240]
+    cap_drop: [ALL]
+    pids_limit: 512
+    environment:
+      MESSENGER_API_KEY_FILE: /run/secrets/messenger_api_key
+      MESSENGER_ALLOW_DEBUG: "0"
+      HTTP_PROXY: http://reporting-egress-guard:3129
+      HTTPS_PROXY: http://reporting-egress-guard:3129
+      NO_PROXY: localhost,127.0.0.1,ollama,meili_server,chroma_container,whisper-gpu,172.18.0.0/16,172.16.0.16,172.16.0.192
+      NAUKA_VERIFY_TLS: "1"
+    volumes:
+      - /home/vl/.reporting-secrets/messenger_api_key:/run/secrets/messenger_api_key:ro
+    security_opt:
+      - no-new-privileges:true
+  bookworm-agent:
+    image: local/reporting-bookworm:security-r2
+    cap_drop: [ALL]
+    pids_limit: 512
+    dns: [172.18.0.240]
+    security_opt: [no-new-privileges:true]
+    networks: !override
+      local_net:
+        ipv4_address: 172.18.0.14
+    environment:
+      DOCKER_BROKER_SOCKET: /run/monitor-broker/docker.sock
+      HTTP_PROXY: http://reporting-egress-guard:3129
+      HTTPS_PROXY: http://reporting-egress-guard:3129
+      NO_PROXY: localhost,127.0.0.1,ollama,meili_server,chroma_container,whisper-gpu,172.18.0.0/16,172.16.0.16,172.16.0.192
+      GRADIO_ANALYTICS_ENABLED: "False"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      DO_NOT_TRACK: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+    volumes: !override
+      - /opt/hf-cache:/root/.cache/huggingface
+      - /opt/bookworm_app/Distributed-Local-AI-Agent/app_data:/app_data
+      - /opt/bookworm_app/Distributed-Local-AI-Agent/messengers_router/data/topic_registry.yaml:/app/messengers_router/data/topic_registry.yaml:ro
+      - reporting_broker_socket:/run/monitor-broker:ro
+volumes:
+  reporting_broker_socket:
+    external: true
+    name: openclaw-monitor_broker_socket

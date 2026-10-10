@@ -1,0 +1,14 @@
+{
+  "name": "ai-server-monitor",
+  "version": "1.1.0",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.2.23",
+      "minGatewayVersion": "2026.2.23"
+    }
+  }
+}

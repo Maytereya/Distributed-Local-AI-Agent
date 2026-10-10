@@ -1,0 +1,3 @@
+FROM local/reporting-agent-api:security-r1
+COPY reporting_contract.py operator_signals.py /app/
+COPY reporting_facts.py endpoint.py mess_types.py router.py orchestrator.py recovery_policy.py /app/messengers_router/

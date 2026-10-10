@@ -1,0 +1,36 @@
+{
+  "id": "ai-server-monitor",
+  "name": "AI Server Monitor",
+  "description": "Returns the local AI server monitor report to OpenClaw.",
+  "contracts": {
+    "tools": [
+      "ai_server_monitor_report",
+      "ai_server_monitor_brief_report",
+      "ai_server_telegram_pulse_report",
+      "ai_server_failure_summary",
+      "ai_server_failure_card",
+      "ai_server_security_report"
+    ]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "reportUrl": {
+        "type": "string"
+      },
+      "checkUrl": {
+        "type": "string"
+      },
+      "briefReportUrl": {
+        "type": "string"
+      },
+      "pulseReportUrl": {
+        "type": "string"
+      }
+    }
+  }
+}

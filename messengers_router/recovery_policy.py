@@ -66,10 +66,14 @@ class RecoveryAction:
 
 
 def explicit_operator_requested(user_text: str) -> bool:
+    from operator_signals import operator_refused
+    if operator_refused(user_text): return False
     return bool(_OPERATOR_REQUEST_RE.search(str(user_text or "")))
 
 
 def contextual_reply_kind(user_text: str) -> Literal["yes", "no", "other"]:
+    from operator_signals import operator_refused
+    if operator_refused(user_text): return "no"
     if is_context_affirmative(user_text):
         return "yes"
     if is_context_negative(user_text):

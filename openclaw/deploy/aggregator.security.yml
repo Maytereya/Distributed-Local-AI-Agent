@@ -1,0 +1,46 @@
+services:
+  # Shared host credential: root:1000, mode 0440, protected parent directory.
+  # API reads as UID 0; web/poller read as GID 1000. Check all three users with
+  # check_messenger_key_access.sh before accepting any credentials/mount change.
+  web:
+    image: local/reporting-aggregator:appeals-r3
+    dns: [172.18.0.240]
+    networks: !override
+      local_net:
+        ipv4_address: 172.18.0.3
+      default:
+        ipv4_address: 172.19.0.4
+    cap_drop: [ALL]
+    pids_limit: 256
+    environment:
+      KNOWLEDGE_API_KEY_FILE: /run/secrets/messenger_api_key
+      DJANGO_DEBUG: "False"
+      TELEGRAM_PROXY_URL: http://reporting-egress-guard:3130
+      HTTP_PROXY: http://reporting-egress-guard:3129
+      HTTPS_PROXY: http://reporting-egress-guard:3129
+      NO_PROXY: localhost,127.0.0.1,agent-api,postgres,redis,web,172.18.0.0/16,172.19.0.0/16
+    volumes:
+      - /home/vl/.reporting-secrets/messenger_api_key:/run/secrets/messenger_api_key:ro
+    security_opt:
+      - no-new-privileges:true
+  telegram_bot:
+    image: local/reporting-aggregator:appeals-r3
+    dns: [172.18.0.240]
+    cap_drop: [ALL]
+    pids_limit: 128
+    networks: !override
+      local_net:
+        ipv4_address: 172.18.0.10
+      default:
+        ipv4_address: 172.19.0.5
+    environment:
+      KNOWLEDGE_API_KEY_FILE: /run/secrets/messenger_api_key
+      DJANGO_DEBUG: "False"
+      TELEGRAM_PROXY_URL: http://reporting-egress-guard:3130
+      HTTP_PROXY: http://reporting-egress-guard:3129
+      HTTPS_PROXY: http://reporting-egress-guard:3129
+      NO_PROXY: localhost,127.0.0.1,agent-api,postgres,redis,web,172.18.0.0/16,172.19.0.0/16
+    volumes:
+      - /home/vl/.reporting-secrets/messenger_api_key:/run/secrets/messenger_api_key:ro
+    security_opt:
+      - no-new-privileges:true

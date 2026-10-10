@@ -3235,6 +3235,10 @@ async def patient_routing_stream(
 
     response = _maybe_offer_operator_on_repeat(response, state, memory, user_text)
 
+    from .reporting_facts import scenario_facts
+    ctx.response = response
+    response.reporting = scenario_facts(ctx, memory)
+
     memory.append_turn(state, role="user", text=user_text)
     memory.append_turn(state, role="assistant", text=response.text)
     update_summary(state, reason="normal")

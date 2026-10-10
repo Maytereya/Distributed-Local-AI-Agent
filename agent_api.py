@@ -1,4 +1,8 @@
 from __future__ import annotations
+from privacy_logging import install_privacy_logging
+
+install_privacy_logging(suppress_console=True)
+
 import asyncio
 import importlib
 import json
@@ -6,11 +10,14 @@ from pathlib import Path
 import sys
 import uuid
 from typing import Any, AsyncGenerator, Dict, Literal, Optional
-from fastapi import FastAPI, Header, HTTPException, Request, Security
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Security
 from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
 from messengers_router.endpoint import router as messenger_router
+from api_security import verify_messenger_api_key, verify_secret
 import agent_logic_2.config as c
 
 # ------------------------------------------------------------------------------
@@ -32,10 +39,17 @@ API для работы с ИИ-агентом клиники.
 """,
 )
 
+
+@app.exception_handler(RequestValidationError)
+async def safe_validation_error(request: Request, exc: RequestValidationError):
+    # FastAPI's default validation response includes the submitted input values.
+    return JSONResponse(status_code=422, content={"detail": "Invalid request"})
+
 # роуты мессенджеров
 app.include_router(
     messenger_router,
     tags=["for-messengers"],
+    dependencies=[Depends(verify_messenger_api_key)],
 )
 
 EXPECTED_API_KEY = c.AGENT_API_KEY.strip()
@@ -49,11 +63,7 @@ def verify_api_key(api_key: str | None = Security(api_key_header)) -> None:
             status_code=500,
             detail="Server misconfigured: AGENT_API_KEY is empty",
         )
-    if not api_key or api_key != EXPECTED_API_KEY:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API key",
-        )
+    verify_secret(api_key, EXPECTED_API_KEY)
 
 # ------------------------------------------------------------------------------
 # Models

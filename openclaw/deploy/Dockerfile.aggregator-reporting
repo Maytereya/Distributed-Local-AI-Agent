@@ -1,0 +1,11 @@
+FROM local/reporting-aggregator:security-r2
+COPY reporting_contract.py reporting_projection.py reporting_time.py operator_signals.py /app/
+COPY settings.py /app/config/settings.py
+COPY models.py /app/core/models.py
+COPY 0009_channelidentity_is_test.py /app/core/migrations/
+COPY reporting /app/reporting/
+COPY knowledge_client.py /app/bot/knowledge_client.py
+COPY escalation.py /app/bot/escalation.py
+COPY services.py /app/channels_app/services.py
+COPY telegram.py base.py /app/channels_app/adapters/
+COPY run_telegram.py /app/channels_app/management/commands/

@@ -15,6 +15,8 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from api_security import messenger_debug_allowed
+from reporting_contract import unknown_contract, validate_contract
 
 from .llm_mode_policy import normalize_runtime_options
 from .memory import MemoryStore
@@ -75,6 +77,7 @@ router.on_startup.append(_on_startup)
 # ---------------------------------------------------------------------
 
 class MessengerGenerateRequest(BaseModel):
+    operator_offer_pending: bool = False
     session_id: str = Field(
         default="anon",
         description="ID диалога/чата. Используйте один и тот же session_id для продолжения контекста.",
@@ -140,6 +143,7 @@ class ResponseEnvelopeOut(BaseModel):
     Итоговый ответ (для debug endpoint без стрима).
     """
     text: str = Field(default="", description="Итоговый текст ответа (уже склеенный).")
+    reporting: dict[str, Any] = Field(default_factory=unknown_contract)
     attachments: list[Attachment] = Field(default_factory=list, description="Вложения (если есть).")
     handoff: bool = Field(default=False, description="Нужно передать диалог оператору.")
     state_update: dict[str, Any] = Field(default_factory=dict, description="Диагностика/обновления состояния (только debug-once).")
@@ -150,6 +154,8 @@ class ResponseEnvelopeLine(BaseModel):
     ОДНА строка NDJSON (для streaming endpoint).
     """
     text: str = Field(default="", description="Фрагмент текста (delta). Клиент должен склеивать.")
+    reporting: dict[str, Any] = Field(default_factory=unknown_contract)
+    is_final: bool = True
     attachments: list[Attachment] = Field(default_factory=list, description="Вложения (если есть).")
     handoff: bool = Field(default=False, description="Сигнал передать оператору (обычно отдельной строкой в конце).")
     state_update: dict[str, Any] = Field(default_factory=dict, description="(В стриме не используется).")
@@ -220,6 +226,7 @@ async def messenger_generate(
     )
 
     state = await memory.aget(session_id)
+    if payload.operator_offer_pending: state.last_entities["_operator_offer_pending"] = True
     memory.append_turn(state, "user", text)
 
     async def event_stream():
@@ -250,6 +257,8 @@ async def messenger_generate(
                     "text": out_text,
                     "attachments": env.attachments or [],
                     "handoff": bool(env.handoff),
+                    "reporting": validate_contract(getattr(env,"reporting",None)),
+                    "is_final": True,
                     "state_update": {},  # в стриме не используем
                 }
                 yield (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
@@ -258,6 +267,8 @@ async def messenger_generate(
                 "text": handoff_message("service_error"),
                 "attachments": [],
                 "handoff": True,
+                "reporting": unknown_contract("technical_error"),
+                "is_final": True,
                 "state_update": {},
             }
             yield (json.dumps(fallback, ensure_ascii=False) + "\n").encode("utf-8")
@@ -295,6 +306,7 @@ async def messenger_generate_once(
     memory: MemoryStore = Depends(get_memory_store),
     services: Services = Depends(get_services),
 ):
+    payload.debug = messenger_debug_allowed(payload.debug)
     session_id = payload.session_id or "anon"
     text = payload.text.strip()
     text = text.encode("utf-8", "ignore").decode("utf-8")
@@ -307,12 +319,14 @@ async def messenger_generate_once(
     )
 
     state = await memory.aget(session_id)
+    if payload.operator_offer_pending: state.last_entities["_operator_offer_pending"] = True
     try:
         memory.append_turn(state, "user", text)
 
         parts: list[str] = []
         attachments: list[Attachment] = []
         handoff = False
+        reporting = unknown_contract()
         state_update: dict[str, Any] = {}
 
         try:
@@ -325,6 +339,8 @@ async def messenger_generate_once(
                 runtime_options=runtime_options,
                 **_button_kwargs(payload.button_id),
             ):
+                if not (env.state_update or {}).get("debug"):
+                    reporting = validate_contract(getattr(env,"reporting",None))
                 if env.text:
                     parts.append(env.text)
 
@@ -345,6 +361,7 @@ async def messenger_generate_once(
             parts = [handoff_message("service_error")]
             attachments = []
             handoff = True
+            reporting = unknown_contract("technical_error")
             if payload.debug:
                 state_update = {"debug": {"endpoint_error": str(e)}}
 
@@ -359,6 +376,7 @@ async def messenger_generate_once(
             attachments=attachments,
             handoff=handoff,
             state_update=state_update,
+            reporting=reporting,
         )
         if out.text:
             memory.append_turn(state, "assistant", out.text)

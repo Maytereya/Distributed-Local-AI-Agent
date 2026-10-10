@@ -1,0 +1,7 @@
+ARG BASE_IMAGE=local/reporting-monitor-base:20261009
+FROM ${BASE_IMAGE}
+COPY openclaw_monitor.py /app/openclaw_monitor.py
+COPY probe_contract.py /app/probe_contract.py
+COPY reporting_time.py report_outbox.py /app/
+COPY reporting_projection.py /app/
+COPY host_metrics_contract.py /app/

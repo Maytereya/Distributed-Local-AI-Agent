@@ -1,0 +1,50 @@
+services:
+  openclaw-monitor:
+    image: local/reporting-monitor:security-r5
+    user: "1000:1000"
+    environment:
+      DOCKER_BROKER_SOCKET: /run/monitor-broker/docker.sock
+      TELEGRAM_MONITOR_BOT_TOKEN_FILE: /run/secrets/telegram_monitor_bot_token
+    depends_on:
+      docker-broker:
+        condition: service_started
+    volumes: !override
+      - /home/vl/.reporting-secrets/telegram_monitor_bot_token:/run/secrets/telegram_monitor_bot_token:ro
+      - /home/vl/openclaw-monitor/config.json:/etc/openclaw-monitor/config.json:ro
+      - /home/vl/openclaw-monitor/data:/data
+      - /home/vl/.reporting-secrets/monitor_api_token:/run/secrets/monitor_api_token:ro
+      - /home/vl/.reporting-secrets/monitor_health.curl:/run/secrets/monitor_health.curl:ro
+      - /home/vl/openclaw-monitor/security_review.json:/etc/openclaw-monitor/security_review.json:ro
+      - /home/vl/.reporting-host-metrics:/host-metrics:ro
+      - broker_socket:/run/monitor-broker:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop: [ALL]
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: [CMD, curl, --config, /run/secrets/monitor_health.curl, --fail, --silent, --max-time, "5", --output, /dev/null, http://127.0.0.1:18080/healthz]
+      interval: 30s
+      timeout: 6s
+      start_period: 120s
+      retries: 3
+  docker-broker:
+    user: "0:1000"
+    image: local/reporting-docker-broker:security-r5
+    container_name: openclaw-docker-broker
+    restart: unless-stopped
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - broker_socket:/run/monitor-broker
+volumes:
+  broker_socket:

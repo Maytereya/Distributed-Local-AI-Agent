@@ -1,0 +1,5 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY api_security.py privacy_logging.py agent_api.py /app/
+# This file is patched from the live source to retain Telegram button/warm-up support.
+COPY endpoint.py /app/messengers_router/endpoint.py

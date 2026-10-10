@@ -1,0 +1,20 @@
+[Unit]
+Description=Local numeric host metrics for private server reports
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/reporting/host_metrics.py
+TimeoutStartSec=30
+User=root
+Group=1000
+UMask=0027
+PrivateNetwork=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/vl/.reporting-host-metrics
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_NETLINK

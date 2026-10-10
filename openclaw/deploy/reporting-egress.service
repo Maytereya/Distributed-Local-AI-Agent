@@ -1,0 +1,13 @@
+[Unit]
+Description=Outbound restrictions for the local Telegram reporting services
+Before=docker.service
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /usr/local/lib/reporting/egress-policy.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

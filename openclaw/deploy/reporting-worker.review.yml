@@ -1,0 +1,4 @@
+# Pending overlay. Use AFTER reporting-worker.yml; preserves all restrictions.
+services:
+  reporting-worker:
+    image: local/reporting-aggregator:appeals-r4

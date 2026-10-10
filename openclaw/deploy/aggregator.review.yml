@@ -1,0 +1,4 @@
+# Pending overlay. Use AFTER aggregator.security.yml; update only web.
+services:
+  web:
+    image: local/reporting-aggregator:appeals-r4

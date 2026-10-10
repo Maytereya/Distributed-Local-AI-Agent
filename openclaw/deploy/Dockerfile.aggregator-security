@@ -1,0 +1,9 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY privacy_logging.py /app/
+COPY settings.py asgi.py /app/config/
+COPY knowledge_client.py /app/bot/
+COPY permissions.py consumers.py views.py /app/operator_panel/
+COPY security_policy.py services.py /app/channels_app/
+COPY telegram.py /app/channels_app/adapters/
+COPY run_telegram.py /app/channels_app/management/commands/

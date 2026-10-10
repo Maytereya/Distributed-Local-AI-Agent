@@ -1,0 +1,11 @@
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssh-server python3 bash coreutils findutils curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* /etc/ssh/ssh_host_* \
+    && useradd -m -u 1000 -s /bin/bash sandbox && passwd -d sandbox \
+    && mkdir -p /srv/workspaces /run/sshd \
+    && chown -R 1000:1000 /srv/workspaces
+COPY sshd.sandbox.conf /etc/ssh/sshd.sandbox.conf
+USER 1000:1000
+EXPOSE 2222
+CMD ["/usr/sbin/sshd", "-D", "-e", "-f", "/etc/ssh/sshd.sandbox.conf"]

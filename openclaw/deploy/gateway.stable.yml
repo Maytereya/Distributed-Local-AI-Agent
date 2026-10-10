@@ -1,0 +1,53 @@
+services:
+  openclaw-gateway:
+    image: ghcr.io/openclaw/openclaw:2026.9.9@sha256:7f10d5cc975a90b65192eaa099454fe33ce8ce2390806c61c65cd868e9ef730d
+    user: "1000:1000"
+    entrypoint: [node, openclaw.mjs]
+    command: [gateway, --bind, lan, --port, "18789"]
+    environment:
+      HTTPS_PROXY: http://reporting-egress-guard:3128
+      HTTP_PROXY: http://reporting-egress-guard:3128
+      NO_PROXY: localhost,127.0.0.1,ollama,openclaw-monitor,openclaw-sandbox,172.18.0.0/16,172.22.0.0/16
+    volumes: !override
+      - /home/vl/.openclaw:/home/node/.openclaw
+      - /home/vl/.openclaw/workspace:/home/node/.openclaw/workspace
+      - /home/vl/.reporting-deploy/security-r3/extensions:/extensions:ro
+      - /home/vl/.reporting-secrets/monitor_api_token:/run/secrets/monitor_api_token:ro
+      - /home/vl/.reporting-secrets/sandbox_identity:/run/secrets/sandbox_identity:ro
+      - /home/vl/.reporting-secrets/sandbox_known_hosts:/run/secrets/sandbox_known_hosts:ro
+      - /home/vl/.reporting-secrets/gateway_password:/run/secrets/gateway_password:ro
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    dns: [172.18.0.240]
+    networks:
+      default:
+        ipv4_address: 172.20.0.2
+      local_net:
+        ipv4_address: 172.18.0.8
+      sandbox_private:
+        ipv4_address: 172.22.0.3
+  ssh-sandbox:
+    image: local/openclaw-ssh-sandbox:security-r1
+    container_name: openclaw-ssh-sandbox
+    user: "1000:1000"
+    read_only: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    volumes:
+      - /home/vl/.openclaw-sandbox-workspaces:/srv/workspaces
+      - /home/vl/.reporting-secrets/sandbox_host_key:/keys/ssh_host_ed25519_key:ro
+      - /home/vl/.reporting-secrets/sandbox_identity.pub:/keys/authorized_keys:ro
+    networks:
+      sandbox_private:
+        aliases: [openclaw-sandbox]
+networks:
+  local_net:
+    external: true
+  sandbox_private:
+    internal: true

@@ -1,0 +1,4 @@
+# The projection schema stays v1; only safe card formatting changes.
+ARG BASE_IMAGE=local/reporting-monitor:security-r5
+FROM ${BASE_IMAGE}
+COPY reporting_projection.py /app/

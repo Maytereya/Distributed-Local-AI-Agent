@@ -251,3 +251,4 @@ class ResponseEnvelope:
     attachments: list[dict[str, Any]] = field(default_factory=list)  # [{"type":"pdf","name":"...","url":"..."}]
     handoff: bool = False
     state_update: dict[str, Any] = field(default_factory=dict)
+    reporting: dict[str, Any] = field(default_factory=dict)

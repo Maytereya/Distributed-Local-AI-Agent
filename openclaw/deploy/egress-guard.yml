@@ -1,0 +1,18 @@
+services:
+  egress-guard:
+    image: local/reporting-egress-guard:security-r2
+    container_name: reporting-egress-guard
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 192m
+    cpus: 1
+    networks:
+      local_net:
+        ipv4_address: 172.18.0.240
+networks:
+  local_net:
+    external: true
