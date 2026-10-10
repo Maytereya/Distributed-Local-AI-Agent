@@ -196,6 +196,7 @@ class MessengerRouterConfig:
     llm_decision_breaker_failures: int
     llm_decision_breaker_open_s: int
     choose_cache_ttl_s: int
+    choose_price: str
     debug_final_input: bool
     url: str
 
@@ -428,6 +429,10 @@ settings = Settings(
         # Кэш внятных ответов модуля выбора (ход (в), L-12): секунд жизни; сбой и мусор не кэшируются.
         # Коротко — ошибка модели не становится ответом всем на часы; 0 — без кэша (стенд меряет без него).
         choose_cache_ttl_s=_get_int("MESSENGER_ROUTER", "choose_cache_ttl_s", 1800, min_value=0, max_value=86400),
+        # Выбор строки прайса на модуле choose() (ход (в), клиент 1): off — прежний вызов и разбор;
+        # legacy — прежний промпт через модуль (доказательство переноса на записанных ответах);
+        # on — роли, JSON Schema, коды причин. Политика сбоя прежняя. [MESSENGER_ROUTER] choose_price
+        choose_price=_get_enum("MESSENGER_ROUTER", "choose_price", default="off", allowed={"off", "legacy", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -557,6 +562,7 @@ MR_LLM_DECISION_TURN_SECONDS = settings.messenger_router.llm_decision_turn_secon
 MR_LLM_DECISION_BREAKER_FAILURES = settings.messenger_router.llm_decision_breaker_failures
 MR_LLM_DECISION_BREAKER_OPEN_S = settings.messenger_router.llm_decision_breaker_open_s
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
+MR_CHOOSE_PRICE = settings.messenger_router.choose_price
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

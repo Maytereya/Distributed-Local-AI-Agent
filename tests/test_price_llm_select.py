@@ -17,6 +17,9 @@
   7) термин, которым LLM нашла услугу во втором проходе, пишется в журнал для клиники —
      синонимы заносит клиника, не мы.
 LLM в тестах замокана; живое поведение — свип по прайсу и remote eval.
+
+Каждый инвариант — во всех режимах выключателя `choose_price` (ход (в), клиент 1): прежний вызов
+(`off`), прежний промпт через модуль `choose()` (`legacy`) и роли + JSON Schema (`on`).
 """
 
 from __future__ import annotations
@@ -26,7 +29,9 @@ import json
 import re
 
 import pytest
+from ollama import GenerateResponse
 
+from messengers_router import llm_runtime
 from messengers_router.services import _price_select_llm as PS
 from messengers_router.services import Services
 from messengers_router.services import core as svc_mod
@@ -61,7 +66,12 @@ def _rows_in_prompt(prompt: str) -> dict[str, int]:
 
 
 def _fake_llm(monkeypatch, decide, calls: list | None = None):
-    """decide(prompt, rows_by_name) -> dict ответа LLM (будет сериализован в JSON)."""
+    """decide(prompt, rows_by_name) -> ответ LLM в прежней форме ({"match", "search_terms"}) или строка-мусор.
+
+    Подменяет оба пути выбора (`choose_price`): прежний вызов (`generate_text`) и клиент ollama
+    модуля `choose()`. В форме модуля (роль system, JSON Schema) ответ переводится в `picks` /
+    `reason` / `search_terms`; мусор уходит как есть.
+    """
 
     async def fake_generate_text(prompt: str, **kwargs):
         if calls is not None:
@@ -69,7 +79,41 @@ def _fake_llm(monkeypatch, decide, calls: list | None = None):
         reply = decide(prompt, _rows_in_prompt(prompt))
         return reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
 
+    class _Client:
+        async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
+            seen = f"{system}\n\n{prompt}" if system else prompt
+            if calls is not None:
+                calls.append(seen)
+            reply = decide(seen, _rows_in_prompt(seen))
+            if system is not None and not isinstance(reply, str):
+                match = reply.get("match", [])
+                reply = {"picks": match, "reason": "none" if match else "other_service", "search_terms": reply.get("search_terms", [])}
+            text = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
+            return GenerateResponse(model="m", response=text, done=True)
+
     monkeypatch.setattr(PS, "generate_text", fake_generate_text)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _Client())
+
+
+def _failing_llm(monkeypatch):
+    async def boom(*_args, **_kwargs):
+        raise TimeoutError("llm busy")
+
+    class _Busy:
+        generate = staticmethod(boom)
+
+    monkeypatch.setattr(PS, "generate_text", boom)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _Busy())
+
+
+@pytest.fixture(autouse=True, params=("off", "legacy", "on"))
+def choose_mode(request, monkeypatch):
+    """Каждый инвариант — во всех режимах выключателя `choose_price` (ход (в), клиент 1)."""
+
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_CHOOSE_PRICE", request.param, raising=False)
+    return request.param
 
 
 def _pick(*names: str):
@@ -122,10 +166,7 @@ def test_garbage_reply_keeps_rules_answer(monkeypatch, reply):
 
 
 def test_llm_failure_keeps_rules_answer(monkeypatch):
-    async def boom(prompt: str, **kwargs):
-        raise TimeoutError("llm busy")
-
-    monkeypatch.setattr(PS, "generate_text", boom)
+    _failing_llm(monkeypatch)
     assert run(PS.select_price_rows("сколько стоит приём эндокринолога", RETAIL)) is None
 
 

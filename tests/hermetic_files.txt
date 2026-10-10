@@ -107,3 +107,4 @@ tests/test_warm_up.py
 tests/test_hermetic_files_ratchet.py
 tests/test_llm_structured.py
 tests/test_choice.py
+tests/test_choose_price.py

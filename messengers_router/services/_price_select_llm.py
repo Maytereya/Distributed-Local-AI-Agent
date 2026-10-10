@@ -20,6 +20,12 @@
 Отказоустойчивость: сбой, таймаут, мусор, режим strict, kill-switch → None, и инструмент
 отвечает как раньше. «Не нашла» тоже None: LLM заменяет ответ правил только тем, что
 положительно выбрала (`reconcile_with_proposal`).
+
+Выбор — на модуле `choose()` (ход (в), L-12), выключатель `[MESSENGER_ROUTER] choose_price`:
+`off` (по умолчанию) — прежний вызов и разбор; `legacy` — прежний промпт и форма ответа через
+модуль (перенос доказывается на записанных ответах прод-LLM: на стенде `replay` ответы обязаны
+совпасть с `off`); `on` — роли system/user, JSON Schema, коды причин (промпт
+`choose_price_service`). Политика сбоя во всех режимах прежняя; её меняет L-13 отдельным шагом.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from typing import Any, Sequence
 
 from agent_logic_2.persist import DATA_DIR, ensure_dir
 
+from ..choice import LegacyWire, Option, Task, choose
 from ..llm_runtime import generate_text
 from ..prompt_registry import load_prompt_text
 from ..runtime_config import config as _cfg
@@ -69,6 +76,22 @@ _LLM_TIMEOUT_S = 12
 _LLM_QUEUE_TIMEOUT_MS = 3000
 
 _JOURNAL_NAME = "price_synonym_suggestions.jsonl"
+
+# Задача модуля выбора: номера строк прайса, причина пустого выбора, до 3 терминов второго круга.
+PRICE_TASK = Task(
+    name="price_service",
+    reasons=("other_service", "qualifier_absent", "too_general", "not_a_service"),
+    max_terms=_MAX_TERMS,
+    num_predict=192,
+    timeout_s=_LLM_TIMEOUT_S,
+    queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS,
+)
+_CHOOSE_MODES = ("off", "legacy", "on")
+
+
+def _choose_mode() -> str:
+    raw = str(getattr(_cfg, "MR_CHOOSE_PRICE", "off") or "").strip().lower()
+    return raw if raw in _CHOOSE_MODES else "off"
 
 
 @dataclass(frozen=True)
@@ -199,7 +222,39 @@ def _parse_reply(raw: str, pool_size: int) -> tuple[list[int], list[str]] | None
     return match, clean_terms[:_MAX_TERMS]
 
 
+def _legacy_answer(raw: str, _options: Sequence[Option]) -> dict[str, Any] | None:
+    """Прежняя форма ответа ({"match", "search_terms"}) → форма модуля; строгость разбора — модуля."""
+
+    try:
+        data = json.loads(str(raw or "").strip())
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {"picks": data.get("match", []), "search_terms": data.get("search_terms", [])}
+
+
 async def _ask(question: str, pool: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]] | None:
+    """Выбор LLM по пулу кандидатов: (строки «та услуга» в порядке пула, термины) или None — сбой."""
+
+    mode = _choose_mode()
+    if mode == "off":
+        return await _ask_directly(question, pool)
+    options = [Option(id=str(index), text=f"{_row_name(row)} — {_row_cost(row)} руб.") for index, row in enumerate(pool)]
+    legacy = (
+        LegacyWire(prompt=lambda q, _opts: _build_prompt(q, pool), answer=_legacy_answer, fmt="json", options={"temperature": 0})
+        if mode == "legacy"
+        else None
+    )
+    choice = await choose(PRICE_TASK, question, options, legacy=legacy)
+    if choice.failed:  # прежняя политика: сбой и мусор — ответ правил
+        return None
+    return [pool[index] for index in sorted(int(i) for i in choice.ids)], list(choice.terms)
+
+
+async def _ask_directly(question: str, pool: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]] | None:
+    """Прежний вызов и разбор (`choose_price = off`); уходит, когда модуль принят на стенде."""
+
     try:
         raw = await generate_text(
             _build_prompt(question, pool),
