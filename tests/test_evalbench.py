@@ -264,3 +264,49 @@ def test_world_pins_missing_today_snapshot_and_keeps_live_mis_offline(tmp_path):
         with pytest.raises(requests.ConnectionError):
             api_nayka._session_get("http://mis/api/v1/site/doctors")
         assert world.unavailable_calls == ["v1/site/doctors"] and world.net.attempts == []
+
+
+# --------------------------------------------------------------------------- симптом → врач
+
+from evalbench.specialties import SpecialtyMatcher, specialty_verdict  # noqa: E402
+
+_ROLES = ["терапевт", "мануальный терапевт", "уролог", "уролог-андролог", "хирург, флеболог", "оториноларинголог", "акушер-гинеколог", "невролог"]
+
+
+def test_specialties_named_with_cases_aliases_and_longest_match():
+    m = SpecialtyMatcher(_ROLES)
+    assert m.named("обращаются к специалистам нашей клиники: невролог, терапевт.") == ["невролог", "терапевт"]
+    assert m.named("Запишитесь к неврологу или к мануальному терапевту") == ["невролог", "мануальный терапевт"]
+    assert m.named("1. Иванов Иван Иванович (Лор) — 2 000 руб.") == ["оториноларинголог"]
+    assert m.named("к урологу-андрологу") == ["уролог-андролог"]
+    assert m.named("Флеболог принимает на Ленина") == ["флеболог"]
+    assert m.named("гинекологу") == ["акушер-гинеколог"]
+    assert m.named("Сколько стоит УЗИ?") == []
+
+
+def test_specialty_verdicts():
+    core, ok = ["невролог"], ["терапевт"]
+    assert specialty_verdict(["невролог"], core, ok) == "right"
+    assert specialty_verdict(["терапевт"], core, ok) == "acceptable"
+    assert specialty_verdict(["невролог", "уролог"], core, ok) == "partial"
+    assert specialty_verdict(["уролог"], core, ok) == "wrong"
+    assert specialty_verdict([], core, ok) == "none"
+
+
+def test_cancelled_live_call_is_recorded():
+    """Вызов, оборванный тайм-аутом места вызова, попадает в счётчик (09.10: зависшие ходы были «без LLM»)."""
+
+    class _Hang:
+        async def generate(self, **_kw):
+            await asyncio.sleep(10)
+
+    index = ev_llm.SiteIndex.from_templates({"service_normalizer": _templates()["service_normalizer"]})
+    client = ev_llm.HarnessClient(mode="real", sites=index, real=_Hang())
+    prompt = _filled(_templates()["service_normalizer"])
+
+    async def call():
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(client.generate(model="m", prompt=prompt), 0.05)
+
+    asyncio.run(call())
+    assert [c.outcome for c in client.take_turn_calls()] == ["cancelled"]

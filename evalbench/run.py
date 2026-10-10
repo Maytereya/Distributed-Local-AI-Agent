@@ -66,6 +66,18 @@ def _sha8(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
 
 
+def _llm_reachable(url: str, timeout_s: float = 8.0) -> bool:
+    """Отвечает ли сервер LLM (`/api/version`) — до прогона, а не тайм-аутом на каждом вопросе."""
+
+    import urllib.request
+
+    try:
+        urllib.request.urlopen(url.rstrip("/") + "/api/version", timeout=timeout_s).read()
+    except Exception:
+        return False
+    return True
+
+
 def _enter_code_root(code_root: Path) -> None:
     """Бот импортируется из `code_root`; относительные пути бота (app_data) — от него же."""
 
@@ -179,6 +191,9 @@ def main(argv: list[str] | None = None) -> int:
 
     live = args.mode in ("real", "cached")
     allow = (host_of(bot_config.ollama_url),) if live else ()
+    if live and not _llm_reachable(bot_config.ollama_url):
+        print("[evalbench] прод-LLM не отвечает (VPN?) — живой прогон не начат", file=sys.__stderr__)
+        return 3
     console = sys.__stderr__
     header: dict[str, Any] = {}
     with open(run_dir / "bot.log", "w", encoding="utf-8") as log_fh, open(run_dir / "turns.jsonl", "w", encoding="utf-8") as out:

@@ -303,6 +303,10 @@ class HarnessClient:
         except asyncio.TimeoutError:
             record("timeout")
             raise
+        except asyncio.CancelledError:
+            # Вызов оборвал тайм-аут места вызова (asyncio.wait_for) — это тоже исход, не пропуск.
+            record("cancelled")
+            raise
         except Exception as exc:
             record(f"error:{type(exc).__name__}")
             raise

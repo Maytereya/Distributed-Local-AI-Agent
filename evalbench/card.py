@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from .prices import PriceCatalog, PricePair, price_verdict
+from .specialties import SpecialtyMatcher, specialty_verdict
 from .world import PRIVATE_ROOT
 
 OUTCOME_ORDER = (
@@ -78,6 +80,60 @@ def refresh_expectations(header: dict[str, Any], turns: list[dict[str, Any]]) ->
             t["expect_urgent"] = expected[key]
 
 
+# Роли МИС, к которым с жалобой не направляют: назвать их пациенту — ошибка при любой разметке.
+NOT_FOR_PATIENTS = {
+    "узи", "ультразвуковой диагностики", "функциональной диагностики", "медицинская сестра по физиотерапии",
+    "специалист по физиотерапии", "анестезиолог-реаниматолог", "эндоскопист", "просвиров -прием",
+}
+
+
+# Шаблон «Не совсем понял…» перечисляет примеры вопросов («Запиши к кардиологу», «УЗИ брюшной
+# полости») — это не рекомендация врача; вырезаем до разбора специальностей.
+_CANNED_EXAMPLES_RE = re.compile(r"Не совсем понял ваш запрос\..*?(?:\n\n|$)", re.S)
+
+
+def load_symptom_labels(header: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Разметка «симптом → врач»: синтетика — прямо в файле набора, трафик — в приватных метках."""
+
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for ref in header.get("sets") or []:
+        path = Path(ref).expanduser()
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parent.parent / path
+        if not path.is_file():
+            continue
+        for line in path.open(encoding="utf-8"):
+            if line.strip():
+                row = json.loads(line)
+                if "core" in row:
+                    out[(path.stem, row["id"])] = row
+                elif path.stem.startswith("golden"):
+                    out.setdefault((path.stem, row["id"]), None)  # кандидат: метка — в приватном файле
+    private = PRIVATE_ROOT / "labels" / "symptom_allowed.jsonl"
+    if private.is_file():
+        by_id = {json.loads(line)["id"]: json.loads(line) for line in private.open(encoding="utf-8") if line.strip()}
+        for key in list(out):
+            if out[key] is None and key[1] in by_id:
+                out[key] = by_id[key[1]]
+    return {k: v for k, v in out.items() if v}
+
+
+def score_specialties(header: dict[str, Any], turns: list[dict[str, Any]]) -> None:
+    labels = load_symptom_labels(header)
+    vocab_file = PRIVATE_ROOT / "labels" / f"specialties_{header.get('world', {}).get('date')}.json"
+    if not labels or not vocab_file.is_file():
+        return
+    matcher = SpecialtyMatcher(json.loads(vocab_file.read_text(encoding="utf-8")))
+    for t in turns:
+        label = labels.get((t.get("set"), t["id"]))
+        if label is None:
+            continue
+        named = matcher.named(_CANNED_EXAMPLES_RE.sub(" ", t.get("answer") or ""))
+        t["specialties_named"] = named
+        t["specialty_verdict"] = specialty_verdict(named, label.get("core") or [], label.get("ok") or [])
+        t["specialty_not_for_patients"] = sorted(set(named) & NOT_FOR_PATIENTS)
+
+
 def rescore_prices(header: dict[str, Any], turns: list[dict[str, Any]]) -> None:
     """Пары «услуга — цена» заново по сохранённому ответу: правка детектора не требует перепрогона."""
 
@@ -103,6 +159,7 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
                 verdicts[verdict] += 1
     urgent_cases = [t for t in turns if t.get("expect_urgent") is True]
     twins = [t for t in turns if t.get("expect_urgent") is False]
+    spec = Counter(t["specialty_verdict"] for t in turns if t.get("specialty_verdict"))
     llm = Counter(c["outcome"] for t in turns for c in t.get("llm_calls") or [])
     sites = Counter(c["site"] for t in turns for c in t.get("llm_calls") or [])
     ms = [t["ms"] for t in turns]
@@ -126,6 +183,9 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
         **{f"price_{k}": verdicts.get(k, 0) for k in ("correct", "list_hit", "single_for_ambiguous", "no_price")},
         "urgent_recall": (sum(1 for t in urgent_cases if t["urgent"]), len(urgent_cases)),
         "urgent_false": (sum(1 for t in twins if t["urgent"]), len(twins)),
+        "symptom_n": sum(spec.values()),
+        **{f"symptom_{k}": spec.get(k, 0) for k in ("right", "acceptable", "partial", "wrong", "none")},
+        "symptom_not_for_patients": sum(1 for t in turns if t.get("specialty_not_for_patients")),
         "p50_ms": _pct(ms, 0.5),
         "p95_ms": _pct(ms, 0.95),
         "llm_calls": sum(llm.values()),
@@ -171,6 +231,13 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]]) -> str:
         ("  без цены", "price_no_price"),
         ("Срочное: полнота", "urgent_recall"),
         ("Срочное: ложное на двойниках", "urgent_false"),
+        ("Симптом → врач: размечено", "symptom_n"),
+        ("  верно (первая очередь)", "symptom_right"),
+        ("  допустимо", "symptom_acceptable"),
+        ("  частично (есть лишние)", "symptom_partial"),
+        ("  неверно", "symptom_wrong"),
+        ("  врач не назван", "symptom_none"),
+        ("  назвал роль не для пациента", "symptom_not_for_patients"),
         ("Цена без источника (ходов)", "unsourced_turns"),
         ("Цена без привязки к услуге (ходов)", "unattributed_turns"),
         ("Перевод на оператора", "handoff"),
@@ -234,6 +301,7 @@ def main(argv: list[str] | None = None) -> int:
         header, turns = load_run(ref)
         refresh_expectations(header, turns)
         rescore_prices(header, turns)
+        score_specialties(header, turns)
         loaded.append((header, metrics(turns, labels)))
     print(render(loaded))
     return 0
