@@ -134,6 +134,54 @@ def verify_world(root: Path) -> list[str]:
     return problems
 
 
+# --------------------------------------------------------------------------- срезы «на сегодня»
+
+# Пути к дневным срезам, которые прикрепляются к последнему существующему (гейт и стенд — одно правило).
+TODAY_SNAPSHOT_PATHS = (
+    ("agent_logic_2.nayka_api.api_service_info", "service_info_path"),
+    ("agent_logic_2.nayka_api.api_price", "price_by_region_path"),
+    ("agent_logic_2.nayka_api.api_price", "price_units_path"),
+    ("agent_logic_2.nayka_api.api_price", "doctor_prices_path"),
+)
+
+
+def latest_if_missing(real: Callable[..., Path]) -> Callable[..., Path]:
+    """Путь к срезу «на сегодня», которого нет, — последний непустой не позже; явная дата уважается.
+
+    Утром (Самара) и в копии мира файла «на сегодня» нет — загрузчик пошёл бы качать его у МИС.
+    Дата «передана явно», если аргумент `date` есть в вызове (позиционно или по имени).
+    """
+
+    import inspect
+
+    from agent_logic_2.nayka_api import snapshots
+
+    signature = inspect.signature(real)
+
+    def path(*args: Any, **kwargs: Any) -> Path:
+        target = real(*args, **kwargs)
+        try:
+            explicit = signature.bind_partial(*args, **kwargs).arguments.get("date") is not None
+        except TypeError:
+            explicit = False
+        if explicit or target.exists():
+            return target
+        return snapshots.latest_nonempty(target) or target
+
+    path.__wrapped__ = real  # type: ignore[attr-defined]
+    return path
+
+
+def pin_today_snapshots(set_attr: Callable[[Any, str, Any], None]) -> None:
+    """Прикрепить все `TODAY_SNAPSHOT_PATHS`; `set_attr(obj, name, value)` — с откатом у вызывающего."""
+
+    import importlib
+
+    for module_name, attr in TODAY_SNAPSHOT_PATHS:
+        module = importlib.import_module(module_name)
+        set_attr(module, attr, latest_if_missing(getattr(module, attr)))
+
+
 # --------------------------------------------------------------------------- часы
 
 
@@ -382,7 +430,7 @@ class FrozenWorld:
             raise _Unavailable("стенд: скачивание врачей выключено")
 
         self._set(api_nayka, "get_all_doctors", no_download)
-        self._pin_today_snapshots(api_price, api_service_info, snapshots)
+        pin_today_snapshots(self._set)
 
         # Живые методы МИС (расписание и его «шапка» /doctors) в мире недоступны: отказ как при
         # сбое сети, но без похода в сеть — счётчик отдельный, прогон он не портит.
@@ -432,30 +480,6 @@ class FrozenWorld:
         self._capture_turn_telemetry()
 
         self.net.install()
-
-    def _pin_today_snapshots(self, api_price: Any, api_service_info: Any, snapshots: Any) -> None:
-        """Срез «на сегодня», которого в мире нет, — последний непустой не позже (как гейт, conftest).
-
-        Иначе загрузчик идёт качать его у МИС: на проде в этот день файл был бы, в копии мира — нет.
-        Явно переданная дата уважается.
-        """
-
-        def latest_if_missing(real: Callable[..., Path]) -> Callable[..., Path]:
-            def path(*args: Any, **kwargs: Any) -> Path:
-                target = real(*args, **kwargs)
-                if target.exists():
-                    return target
-                return snapshots.latest_nonempty(target) or target
-
-            return path
-
-        for module, attr in (
-            (api_service_info, "service_info_path"),
-            (api_price, "price_by_region_path"),
-            (api_price, "price_units_path"),
-            (api_price, "doctor_prices_path"),
-        ):
-            self._set(module, attr, latest_if_missing(getattr(module, attr)))
 
     def _capture_turn_telemetry(self) -> None:
         """Строки телеметрии хода (если она есть в этой версии бота) — в память прогона, не в журнал."""

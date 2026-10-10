@@ -372,32 +372,17 @@ def _pin_latest_mis_snapshots() -> None:
     его качать. С закрытой сетью это роняло СБОР тестов (30.09:
     test_biomaterial_and_synonyms читает service_info при импорте). CLAUDE.md
     велит для любого офлайн-замера прикреплять ОБА среза — служебный справочник и
-    прайс. Явно переданная дата уважается: подмена только для «сегодня».
+    прайс; с 10.10 — ещё priceUnits и цены врачей. Правило одно со стендом
+    (`evalbench.world.pin_today_snapshots`, решение 08.10 «один модуль мира»).
+    Явно переданная дата уважается.
     """
-    from agent_logic_2.nayka_api import api_price, api_service_info
+    from evalbench.world import pin_today_snapshots
 
-    def latest_if_missing(real_path_fn, pattern_of):
-        def path(*args, **kwargs):
-            target = real_path_fn(*args, **kwargs)
-            # Подменяем только файл НА СЕГОДНЯ: явная дата (позиционная или
-            # именованная) даёт другое имя файла и уважается как есть.
-            if target.exists() or api_service_info.today_str() not in target.name:
-                return target
-            snapshots = sorted(target.parent.glob(pattern_of(*args)))
-            return snapshots[-1] if snapshots else target
+    def set_attr(module, attr, value):
+        _PINNED_SNAPSHOT_LOADERS.append((module, attr, getattr(module, attr)))
+        setattr(module, attr, value)
 
-        return path
-
-    for module, attr, pattern_of in (
-        (api_service_info, "service_info_path", lambda *a: "service_info_*.jsonl"),
-        (api_price, "price_by_region_path", lambda region_id, *a: f"price_region_{str(region_id).strip()}_*.jsonl"),
-        # 10.10: без среза «на сегодня» путь цены качал priceUnits, а цены врачей — свой срез
-        (api_price, "price_units_path", lambda *a: "price_units_*.jsonl"),
-        (api_price, "doctor_prices_path", lambda *a: "doctor_prices_*.jsonl"),
-    ):
-        real = getattr(module, attr)
-        _PINNED_SNAPSHOT_LOADERS.append((module, attr, real))
-        setattr(module, attr, latest_if_missing(real, pattern_of))
+    pin_today_snapshots(set_attr)
 
 
 def pytest_configure(config):
