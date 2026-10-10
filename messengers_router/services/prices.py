@@ -39,6 +39,7 @@ from ._doctors_helpers import (
     _specialty_label_for_doctor,
 )
 from ._prepare import _is_prepare_requested_in_price_query
+from ._basket_select import basket_mode, choose_basket_rows
 from ._price_select_llm import reconcile_with_proposal, rows_overlap, select_price_rows
 from ._prices_helpers import (
     SAMARA_PRICE_REGION_ID,
@@ -48,7 +49,8 @@ from ._prices_helpers import (
     _annotate_price_rows_with_care_context,
     _apply_service_synonyms,
     _build_compound_price_clarify_payload,
-    _build_multi_price_payload,
+    _multi_price_items,
+    multi_price_payload_from_items,
     _build_price_family_payload,
     _build_synonym_fork_payload,
     _extract_price_service_from_query,
@@ -125,6 +127,23 @@ def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, A
         )
     text = price_not_found_text(phrase) if status == "none_fit" else price_names_without_prices_text(phrase, selection.names)
     return {"service_name": phrase, "prices": [], "retail_prices": [], "doctors": [], "clarify_text": text, "note": note, "entities_used": used}
+
+
+async def _multi_price_payload(
+    query: str, query_text: str, retail_rows: list[dict[str, Any]], entities: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Корзина: позиции режут правила; строки позиций под `choose_basket = on` выбирает LLM одним
+    вызовом (ход (в), L-15a), сбой — корзина правил как раньше."""
+
+    items, unrecognized = _multi_price_items(query_text, retail_rows)
+    if not items:
+        return None
+    llm_allowed = entities.get("__price_question") and str(entities.get("__runtime_llm_mode") or "").strip().lower() != "strict"
+    if basket_mode() == "on" and llm_allowed:
+        refined = await choose_basket_rows(str(query or query_text), items, unrecognized, retail_rows)
+        if refined is not None:
+            return multi_price_payload_from_items(*refined, allow_single=True)
+    return multi_price_payload_from_items(items, unrecognized)
 
 
 def _llm_selection_service_name(query_text: str, rows: list[dict[str, Any]]) -> str:
@@ -290,7 +309,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     # Мульти-услуговый запрос («ВИЧ, гепатит, ОАК»): активируется только если
     # ≥2 фрагментов приземлились на реальные услуги каталога. Иначе — fallback
     # на существующий single-service путь, старые кейсы остаются без изменений.
-    multi_payload = _build_multi_price_payload(query_text, retail_rows_clean)
+    multi_payload = await _multi_price_payload(query, query_text, retail_rows_clean, entities)
     if multi_payload is not None:
         multi_payload["entities_used"] = {
             **entities,

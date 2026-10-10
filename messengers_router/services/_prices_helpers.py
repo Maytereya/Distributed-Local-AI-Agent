@@ -3303,6 +3303,8 @@ def _resolve_multi_price_items(
             {
                 "service_name": service_name,
                 "prices": _annotate_price_rows_with_care_context(top_rows),
+                # Слова пациента для этой позиции — по ним выбор строк корзины (`_basket_select`).
+                "fragment": frag,
             }
         )
 
@@ -3527,6 +3529,20 @@ def _build_multi_price_payload(
     items, unrecognized = _multi_price_items(query_text, retail_rows)
     if not items:
         return None
+    return multi_price_payload_from_items(items, unrecognized)
+
+
+def multi_price_payload_from_items(
+    items: list[dict[str, Any]],
+    unrecognized: list[str],
+    *,
+    allow_single: bool = False,
+) -> dict[str, Any] | None:
+    """Payload корзины из готовых позиций (правил или выбора LLM, `_basket_select`).
+
+    :param allow_single: одна позиция — тоже корзина, если остальные честно перечислены как
+        нераспознанные (выбор LLM отверг позицию: путь одной услуги показал бы её по буквам)
+    """
 
     variants: list[dict[str, Any]] = []
     for item in items:
@@ -3537,7 +3553,7 @@ def _build_multi_price_payload(
             annotated["care_setting_address"] = ""
             variants.append(annotated)
 
-    if len(variants) < 2:
+    if len(variants) < 2 and not (allow_single and variants and unrecognized):
         return None
 
     service_name = ", ".join(str(item["service_name"]) for item in items)

@@ -199,6 +199,7 @@ class MessengerRouterConfig:
     choose_price: str
     choose_symptom: str
     price_match_policy: str
+    choose_basket: str
     debug_final_input: bool
     url: str
 
@@ -443,6 +444,9 @@ settings = Settings(
         # shadow — решение только в телеметрию хода (price_policy); on — сильное совпадение по данным без
         # LLM, «не нашла» — честное «не нашёл», сбой LLM на слабом совпадении — названия без цен.
         price_match_policy=_get_enum("MESSENGER_ROUTER", "price_match_policy", default="shadow", allowed={"off", "shadow", "on"}),
+        # Корзина на модуле choose() (ход (в), L-15a): позиции режут правила, строки каждой позиции
+        # выбирает LLM одним вызовом; сбой — корзина правил. off | on. [MESSENGER_ROUTER] choose_basket
+        choose_basket=_get_enum("MESSENGER_ROUTER", "choose_basket", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -575,6 +579,7 @@ MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
 MR_CHOOSE_PRICE = settings.messenger_router.choose_price
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_PRICE_MATCH_POLICY = settings.messenger_router.price_match_policy
+MR_CHOOSE_BASKET = settings.messenger_router.choose_basket
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 
