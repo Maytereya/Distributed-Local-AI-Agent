@@ -152,7 +152,7 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
     n = len(turns)
     outcomes = Counter(t["outcome"] for t in turns)
     verdicts = Counter()
-    coverage: list[tuple[int, int, int]] = []
+    coverage: list[tuple[int, int, int, int]] = []
     for t in turns:
         if t["id"] in labels:
             pairs = [PricePair(**p) for p in t.get("price_pairs") or []]
@@ -187,8 +187,10 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
         "foreign": verdicts.get("foreign", 0) + verdicts.get("list_miss", 0),
         **{f"price_{k}": verdicts.get(k, 0) for k in ("correct", "list_hit", "single_for_ambiguous", "no_price")},
         "multi_n": len(coverage),
-        "multi_two_plus": sum(1 for named, _, _ in coverage if named >= 2),
-        "multi_core_pct": round(100 * sum(hit / total for _, hit, total in coverage if total) / len(coverage)) if coverage else None,
+        "multi_two_plus": sum(1 for named, _, _, _ in coverage if named >= 2),
+        "multi_core_pct": round(100 * sum(hit / total for _, hit, total, _ in coverage if total) / len(coverage)) if coverage else None,
+        "multi_named": sum(named for named, _, _, _ in coverage),
+        "multi_outside": sum(outside for _, _, _, outside in coverage),
         "urgent_recall": (sum(1 for t in urgent_cases if t["urgent"]), len(urgent_cases)),
         "urgent_false": (sum(1 for t in twins if t["urgent"]), len(twins)),
         "symptom_n": sum(spec.values()),
@@ -245,6 +247,8 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]]) -> str:
         ("Вопрос о нескольких услугах (multi)", "multi_n"),
         ("  названо ≥2 услуг списка", "multi_two_plus"),
         ("  покрытие core, % (среднее)", "multi_core_pct"),
+        ("  допустимых услуг названо (сумма)", "multi_named"),
+        ("  услуг вне разметки показано (сумма)", "multi_outside"),
         ("Срочное: полнота", "urgent_recall"),
         ("Срочное: ложное на двойниках", "urgent_false"),
         ("Симптом → врач: размечено", "symptom_n"),

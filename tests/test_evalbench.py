@@ -213,9 +213,12 @@ def test_multi_coverage_counts_named_list_positions():
 
     catalog = PriceCatalog(_ROWS)
     label = {"kind": "multi", "core": [1, 3], "ok": [2], "ambiguous": False}
-    assert multi_coverage(catalog.pairs("Общий анализ крови — 500 руб."), label) == (1, 1, 2)
+    assert multi_coverage(catalog.pairs("Общий анализ крови — 500 руб."), label) == (1, 1, 2, 0)
     both = catalog.pairs("1. Общий анализ крови — 500 руб.\n2. Глюкоза — 300 руб.")
-    assert multi_coverage(both, label) == (2, 2, 2)
+    assert multi_coverage(both, label) == (2, 2, 2, 0)
+    # Строка вне разметки внутри списка видна отдельно, а не растворяется в «списке с нужной».
+    only_glucose = {"kind": "multi", "core": [3], "ok": [], "ambiguous": False}
+    assert multi_coverage(both, only_glucose) == (1, 1, 1, 1)
     assert multi_coverage(both, {"kind": "single", "core": [1], "ok": []}) is None
 
 

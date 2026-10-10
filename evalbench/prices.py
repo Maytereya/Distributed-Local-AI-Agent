@@ -162,14 +162,15 @@ def price_verdict(pairs: list[PricePair], label: dict | None) -> str | None:
     return "list_hit" if shown & allowed else "list_miss"
 
 
-def multi_coverage(pairs: list[PricePair], label: dict | None) -> tuple[int, int, int] | None:
+def multi_coverage(pairs: list[PricePair], label: dict | None) -> tuple[int, int, int, int] | None:
     """Полнота ответа на вопрос о нескольких услугах (`kind=multi`): сколько позиций названо.
 
-    `price_verdict` для списка отвечает «есть допустимая и нет чужих», и ответ одной услугой из
-    трёх названных выглядит так же, как полный (PRICE-LIST-COLLAPSES-TO-ONE). Здесь — сколько
-    разных допустимых услуг в ответе и какая доля `core` (по строке-варианту на позицию) покрыта.
+    `price_verdict` для списка отвечает «есть допустимая», и ответ одной услугой из трёх
+    названных выглядит так же, как полный (PRICE-LIST-COLLAPSES-TO-ONE), а строка вне разметки
+    внутри списка не видна вовсе. Здесь — сколько разных допустимых услуг в ответе, какая доля
+    `core` покрыта и сколько показано услуг вне разметки (чужая строка или лишний вариант).
 
-    :return: (допустимых услуг названо, из core названо, размер core) или None — не список
+    :return: (допустимых названо, из core названо, размер core, вне разметки) или None — не список
     """
 
     if not label or label.get("kind") != "multi":
@@ -177,5 +178,5 @@ def multi_coverage(pairs: list[PricePair], label: dict | None) -> tuple[int, int
     core = {int(x) for x in (label.get("core") or [])}
     allowed = core | {int(x) for x in (label.get("ok") or [])}
     shown = {p.service_id for p in pairs if p.status == "matched"}
-    return len(shown & allowed), len(shown & core), len(core)
+    return len(shown & allowed), len(shown & core), len(core), len(shown - allowed)
 

@@ -221,9 +221,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Выключатели — на весь прогон, до первого хода; в дереве без такой настройки она ни на что
     # не влияет, поэтому в run.json пишется и то, была ли она в коде.
-    cfg_applied = {name: {"value": value, "known": hasattr(bot_config, name)} for name, value in overrides.items()}
-    for name, value in overrides.items():
-        setattr(bot_config, name, value)
+    cfg_applied = {key: {"value": value, "known": hasattr(bot_config, key)} for key, value in overrides.items()}
+    for key, value in overrides.items():
+        setattr(bot_config, key, value)
 
     live = args.mode in ("real", "cached")
     allow = (host_of(bot_config.ollama_url),) if live else ()
