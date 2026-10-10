@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Sequence
 
-from ..llm_runtime import generate_text
+from ..llm_runtime import DECISION_OPTIONS, generate_text
 from ..prompt_registry import load_prompt_text
 from ..runtime_config import config as _cfg
 from ._regions import _has_explicit_non_samara_regions, _region_matches_samara_tokens
@@ -42,6 +42,14 @@ _MAX_LEN = 600
 _DOCTOR_PREFIX_RE = re.compile(r"^врач[\s\-–]+", re.I)
 _PARENTHESISED_RE = re.compile(r"\([^)]*\)")
 _NUMBER_RE = re.compile(r"\d+")
+# Роли МИС, к которым не приходят на приём с жалобой: диагностика, процедуры, медсестра, и
+# служебные подразделения «<фамилия> -прием». Промпт и раньше просил их не выбирать, но при
+# выборе «1–2 врачей» модель добирала второго из них («набираю вес» → анестезиолог-реаниматолог,
+# «щитовидка» → ультразвуковой диагностики; стенд 10.10, BUG-2026-10-10-SYMPTOM-EXTRA-SPECIALTIES).
+# Это то же правило промпта, исполненное кодом: модель их просто не видит.
+_NOT_RECEPTION_RE = re.compile(
+    r"диагностик|(?<![а-я])узи(?![а-я])|анестезиолог|медицинская сестра|физиотерап|эндоскопист|-\s*при[её]м\b"
+)
 
 
 @dataclass(frozen=True)
@@ -60,6 +68,12 @@ def specialty_display_name(unit_name: str) -> str:
     return " ".join(name.split()).strip(" ,.-").lower()
 
 
+def is_reception_role(name: str) -> bool:
+    """К этому врачу приходят на приём с жалобой (не диагностика, не процедура, не служебная роль)."""
+
+    return bool(name) and not _NOT_RECEPTION_RE.search(str(name).lower())
+
+
 def _is_samara_doctor(doctor: dict[str, Any], samara_tokens: set[str]) -> bool:
     regions = [str(x) for x in (doctor.get("regions") or []) if str(x).strip()]
     if samara_tokens:
@@ -68,7 +82,7 @@ def _is_samara_doctor(doctor: dict[str, Any], samara_tokens: set[str]) -> bool:
 
 
 def samara_specialties(doctors: Sequence[dict[str, Any]], samara_tokens: set[str]) -> list[str]:
-    """Роли приёма самарских врачей — без повторов, в порядке появления.
+    """Роли приёма самарских врачей — без повторов, в порядке появления; только те, к кому идут с жалобой.
 
     :param doctors: карточки врачей из среза МИС
     :param samara_tokens: признаки самарских филиалов (`Services._samara_region_tokens`)
@@ -81,7 +95,7 @@ def samara_specialties(doctors: Sequence[dict[str, Any]], samara_tokens: set[str
             continue
         for link in doctor.get("unit_links") or []:
             name = specialty_display_name(str((link or {}).get("company_unit_name") or ""))
-            if name:
+            if is_reception_role(name):
                 seen.setdefault(name, None)
     return list(seen)
 
@@ -117,7 +131,15 @@ async def pick_specialists(text: str, specialties: Sequence[str]) -> SpecialistA
     numbered = "\n".join(f"{i}. {name}" for i, name in enumerate(specialties, 1))
     try:
         prompt = load_prompt_text("symptom_specialists").replace("<<TEXT>>", raw).replace("<<SPECIALTIES>>", numbered)
-        answer = await generate_text(prompt, timeout_s=_LLM_TIMEOUT_S, queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS, think=False)
+        # Короткое решение — температура 0 (L-03/LLM-2): одинаковая жалоба — одинаковые врачи. При 0,2
+        # выбор «гулял» между прогонами стенда (10.10: «набираю вес» → то терапевт, то уролог).
+        answer = await generate_text(
+            prompt,
+            timeout_s=_LLM_TIMEOUT_S,
+            queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS,
+            think=False,
+            options=DECISION_OPTIONS,
+        )
     except Exception as exc:  # сбой LLM — вызывающий отвечает прежним шаблоном
         logger.warning("symptom_specialists_failed: %s", type(exc).__name__)
         return None

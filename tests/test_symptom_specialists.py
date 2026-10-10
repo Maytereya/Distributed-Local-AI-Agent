@@ -63,6 +63,35 @@ def test_only_samara_doctors_give_specialties():
     assert S.samara_specialties(doctors, tokens) == ["невролог", "ревматолог"]
 
 
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "Врач ультразвуковой диагностики",
+        "УЗИ",
+        "Врач функциональной диагностики",
+        "Врач-анестезиолог-реаниматолог",
+        "Медицинская сестра по физиотерапии",
+        "Специалист по физиотерапии",
+        "Врач-эндоскопист",
+        "Просвиров -прием",
+    ],
+)
+def test_roles_without_complaint_reception_are_never_offered(unit):
+    """Класс: модель не может посоветовать пациенту роль, к которой с жалобой не ходят (10.10)."""
+
+    doctors = [_doctor("пр.Ленина, 5", unit, "Врач-эндокринолог")]
+    tokens = {_normalize_region_text("пр.Ленина, 5")}
+
+    assert S.samara_specialties(doctors, tokens) == ["эндокринолог"]
+
+
+@pytest.mark.parametrize("unit", ["Врач-хирург", "Врач-уролог", "Мануальный терапевт", "Врач-сердечно-сосудистый хирург, флеболог"])
+def test_reception_roles_stay(unit):
+    """Встречная проверка фильтра: врачи приёма из списка не выпадают."""
+
+    assert S.is_reception_role(S.specialty_display_name(unit))
+
+
 def test_without_branch_list_other_cities_are_still_excluded():
     doctors = [_doctor("пр.Ленина, 5", "Врач терапевт"), _doctor("г. Ульяновск, ул. Рябикова, 60", "Врач-нефролог")]
 
