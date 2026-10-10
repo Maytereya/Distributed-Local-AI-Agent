@@ -10,7 +10,8 @@
 - сильное совпадение по данным (дословное название, синоним МИС, код) — без LLM (L-13);
 - остальные позиции — один вызов `choose()`: плоский нумерованный список, строка помечена своей
   позицией («позиция» → название — цена); модель отмечает номера; ничего для позиции — «не нашёл»;
-- сбой LLM — None: корзина правил как раньше (политика корзины при сбое — отдельный шаг L-13).
+- сбой LLM: сильные позиции — по-прежнему их строки по данным, слабые — строки корзины правил, как
+  раньше; сильных нет — None, корзина правил целиком.
 
 Выключатель `[MESSENGER_ROUTER] choose_basket = off | on` (по умолчанию off; тени нет — это вызов LLM).
 """
@@ -87,10 +88,15 @@ async def choose_basket_rows(
                 options.append(Option(id=option_id, text=f"«{fragment}» → {_row_name(row)} — {_row_cost(row)} руб."))
         choice = await choose(BASKET_TASK, question, options)
         if choice.failed:
-            return None
-        for option_id in sorted(choice.ids, key=int):
-            index, row = owners[option_id]
-            chosen.setdefault(index, []).append(row)
+            # Сильные позиции — данные, от LLM не зависят; слабые — как в корзине правил.
+            if not chosen:
+                return None
+            for index, _fragment, _rows in weak:
+                chosen[index] = list(items[index].get("prices") or [])
+        else:
+            for option_id in sorted(choice.ids, key=int):
+                index, row = owners[option_id]
+                chosen.setdefault(index, []).append(row)
     positions: list[dict[str, Any]] = []
     not_found: list[str] = []
     for index, item in enumerate(items):

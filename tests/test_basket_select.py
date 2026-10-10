@@ -8,7 +8,8 @@
 - сильное совпадение по данным (дословное название) — без LLM;
 - слабая позиция — выбор модели одним вызовом на весь список; строки, которые модель не выбрала, не
   показываются; позиция без выбора — честное «Не распознал», а не цена по буквам;
-- сбой LLM — корзина правил как раньше; off — эталон без изменений.
+- сбой LLM: сильные позиции — их строки по данным, слабые — строки корзины правил; сильных нет —
+  корзина правил целиком; off — эталон без изменений.
 """
 
 from __future__ import annotations
@@ -96,6 +97,16 @@ def test_llm_failure_keeps_the_rules_basket(mini_prod_world, monkeypatch):
     before = _ask("сколько стоит ттг и ферритин", "basket-off", mini_prod_world)
     _basket(monkeypatch, "on", _BasketLLM(fail=True))
     assert _ask("сколько стоит ттг и ферритин", "basket-fail", mini_prod_world) == before
+
+
+def test_llm_failure_keeps_strong_positions_by_data(mini_prod_world, monkeypatch):
+    _basket(monkeypatch, "off")
+    before = _ask("сколько стоит ттг и глюкоза", "basket-off2", mini_prod_world)
+    _basket(monkeypatch, "on", _BasketLLM(fail=True))
+    after = _ask("сколько стоит ттг и глюкоза", "basket-fail2", mini_prod_world)
+    assert "Глюкоза в моче" in before
+    assert "Глюкоза — 190" in after and "Глюкоза в моче" not in after
+    assert "ТТГ (TSH) тиреотропный гормон — 400" in after  # слабая позиция — как в корзине правил
 
 
 def test_off_keeps_the_golden_basket(mini_prod_world, monkeypatch):
