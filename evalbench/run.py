@@ -56,10 +56,15 @@ def load_cases(paths: list[Path], *, ids: set[str] | None, split: str | None, li
 
 
 def git_sha(root: Path) -> str:
+    """Короткий sha дерева кода; «-dirty», если в отслеживаемых файлах есть незакоммиченные правки
+    (иначе прогон на правке подписывается коммитом, в котором её нет)."""
+
     try:
-        return subprocess.check_output(["git", "-C", str(root), "rev-parse", "--short", "HEAD"], text=True).strip()
+        sha = subprocess.check_output(["git", "-C", str(root), "rev-parse", "--short", "HEAD"], text=True).strip()
+        dirty = subprocess.check_output(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"], text=True).strip()
     except Exception:
         return "unknown"
+    return f"{sha}-dirty" if dirty else sha
 
 
 def _sha8(text: str) -> str:

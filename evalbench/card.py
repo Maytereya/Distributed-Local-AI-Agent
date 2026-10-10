@@ -295,11 +295,16 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("runs", nargs="+", help="имя прогона или путь к каталогу (1 или 2)")
     ap.add_argument("--labels", type=Path, default=PRIVATE_ROOT / "labels" / "price_allowed.jsonl")
+    ap.add_argument("--common", action="store_true", help="сравнивать только вопросы, которые есть в обоих прогонах")
     args = ap.parse_args(argv)
     labels = load_labels(args.labels)
+    runs = [load_run(ref) for ref in args.runs[:2]]
+    if args.common and len(runs) == 2:
+        keys = [{(t.get("set"), t["id"]) for t in turns} for _, turns in runs]
+        shared = keys[0] & keys[1]
+        runs = [(dict(h, cases=len(shared), done=len(shared)), [t for t in turns if (t.get("set"), t["id"]) in shared]) for h, turns in runs]
     loaded = []
-    for ref in args.runs[:2]:
-        header, turns = load_run(ref)
+    for header, turns in runs:
         refresh_expectations(header, turns)
         rescore_prices(header, turns)
         score_specialties(header, turns)
