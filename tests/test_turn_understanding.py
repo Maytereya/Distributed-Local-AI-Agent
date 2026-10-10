@@ -138,3 +138,24 @@ def test_off_builds_nothing(mini_prod_world, mode):  # noqa: F811
 def test_unknown_switch_value_falls_back_to_shadow(mode):
     mode("да")
     assert tu.mode() == "shadow"
+
+
+@pytest.mark.parametrize(
+    ("raw", "shown"),
+    [
+        ("1-2", "1–2 дня"),  # без единицы — дни (решение владельца 11.10, без «рабочих»)
+        ("11-13", "11–13 дней"),
+        ("1", "1 день"),
+        ("21", "21 день"),
+        ("до 7", "до 7 дней"),
+        ("3-4 часа", "3–4 часа"),  # явная единица — дословно
+        ("До 30 дней", "До 30 дней"),
+        ("1-3 ч", "1–3 ч"),
+        (" ", None),  # пусто — честный перевод
+    ],
+)
+def test_deadline_is_printed_by_code_in_days_unless_unit_given(raw, shown):
+    from messengers_router.services._prices_helpers import format_deadline
+
+    assert format_deadline(raw) == shown
+

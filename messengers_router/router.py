@@ -107,7 +107,7 @@ from .recovery_policy import contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
 from .services._appointment_change_validator import is_own_appointment_change
 from .services._existing_appointment_validator import is_own_existing_appointment
-from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE
+from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE, readiness_from_catalog
 from .services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
 from .services.prepare import anesthesia_reply, prepare_variant_payload
 from .services._patient_name_validator import is_patient_name_reply
@@ -1631,8 +1631,8 @@ def _relabel_test_assist_catalog_hit_as_price(
         return decision
     flags = set(decision.flags or set())
     # Понимание хода (ход (б), шаг 1, `on`): список узнанных каталогом услуг — цена, как одна
-    # узнанная услуга (П1). Вопрос о сроке сюда не доходит как цена: его переводит
-    # `_maybe_readiness_handoff` (READINESS-AS-PRICE).
+    # узнанная услуга (П1). Вопрос о сроке сюда не доходит как цена: ему отвечает
+    # `_maybe_readiness_reply` — срок из МИС или перевод (READINESS-AS-PRICE).
     understanding = turn_understanding.acting()
     if (
         understanding is not None
@@ -1886,36 +1886,41 @@ def _maybe_topic_handoff(
     )
 
 
-def _maybe_readiness_handoff(
+async def _maybe_readiness_reply(
     *,
     decision: RouteDecision,
+    user_text: str,
     state: SessionState,
     memory: MemoryStore,
 ) -> tuple[RouteDecision, Plan, Evidence] | None:
-    """Понимание хода (ход (б), шаг 1, `on`): вопрос о сроке готовности — честный перевод.
+    """Понимание хода (ход (б), шаг 1, `on`): вопрос о сроке готовности — срок из МИС или перевод.
 
-    Срока бот пока не знает (BUG-2026-09-29-NO-TURNAROUND). Переклеенный в цену вопрос получал
-    цену (READINESS-AS-PRICE), а оставленный подбору анализов — свободный текст LLM со сроками
-    («ОАМ готов через 1–2 дня», «13–14 дней» — числа не из данных, принцип 1) или вопрос о цели
-    подбора (стенд 10.10, живая LLM). Текст — тот же, что у справочного вопроса о сроках в пути
-    результатов (прод #675); кнопка «Когда будет готов» по тому же решению переводит сразу.
+    Срок печатает код из поля `deadline` строки прайса (принцип 1; решения владельца 10–11.10:
+    явная единица — дословно, без единицы — дни). Без кода вопрос получал цену
+    (READINESS-AS-PRICE) или свободный текст LLM со сроком, где единицу и строку LLM выбирала сама
+    («креатинин и мочевина — 13–14 дней» — срок чужой строки). Услуга не названа уверенно или срока в
+    МИС нет — честный перевод тем же текстом, что у вопроса о сроках в пути результатов (прод #675).
     """
 
     understanding = turn_understanding.acting()
-    if understanding is None or understanding.facet != "readiness" or decision.label not in {"PRICE", "TEST_ASSIST"}:
+    if (
+        understanding is None
+        or understanding.facet != "readiness"
+        or not turn_understanding.is_price_turn(decision.label, memory.get_pending(state))
+    ):
         return None
-    turn_understanding.note_acted("readiness_to_operator")
     memory.clear_pending(state)
+    deadlines = await asyncio.to_thread(readiness_from_catalog, user_text)
+    if deadlines:
+        turn_understanding.note_acted("readiness_from_mis")
+        flag, items = "understanding_readiness_from_mis", {ek.READINESS_RESPONSE: deadlines}
+    else:
+        turn_understanding.note_acted("readiness_to_operator")
+        flag, items = "understanding_readiness_handoff", {ek.OPERATOR_OFFER_RESPONSE: {"text": RESULT_TIMING_OPERATOR_TEXT, "handoff": True}}
     return (
-        _copy_decision(
-            decision,
-            label="OTHER",
-            entities={},
-            flags=set(decision.flags) | {"understanding_readiness_handoff"},
-            needs_handoff=False,
-        ),
+        _copy_decision(decision, label="OTHER", entities={}, flags=set(decision.flags) | {flag}, needs_handoff=False),
         Plan(label="OTHER"),
-        Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": RESULT_TIMING_OPERATOR_TEXT, "handoff": True}}),
+        Evidence(items=items),
     )
 
 
@@ -2685,9 +2690,9 @@ async def _complete_route_after_doctor_guard(
     if topic_handoff is not None:
         return topic_handoff
 
-    readiness_handoff = _maybe_readiness_handoff(decision=decision, state=state, memory=memory)
-    if readiness_handoff is not None:
-        return readiness_handoff
+    readiness_reply = await _maybe_readiness_reply(decision=decision, user_text=user_text, state=state, memory=memory)
+    if readiness_reply is not None:
+        return readiness_reply
 
     if decision.label == "DOCTOR_SCHEDULE":
         # Очищаем хвосты сценария записи, чтобы расписание не фильтровалось

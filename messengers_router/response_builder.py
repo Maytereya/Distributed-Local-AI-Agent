@@ -104,6 +104,24 @@ def build_operator_offer_response(evidence: Evidence) -> ResponseEnvelope | None
     )
 
 
+def build_readiness_response(evidence: Evidence) -> ResponseEnvelope | None:
+    """Срок готовности, который код взял из справочника МИС (принцип 1: факты печатает код)."""
+
+    items = evidence.get(ek.READINESS_RESPONSE)
+    if not isinstance(items, list) or not items:
+        return None
+    lines = [(str(it.get("name") or "").strip(), str(it.get("deadline") or "").strip()) for it in items if isinstance(it, dict)]
+    lines = [(name, deadline) for name, deadline in lines if name and deadline]
+    if not lines:
+        return None
+    if len(lines) == 1:
+        name, deadline = lines[0]
+        text = f"Срок готовности «{name}» — {deadline}."
+    else:
+        text = "Сроки готовности:\n" + "\n".join(f"— «{name}» — {deadline}" for name, deadline in lines)
+    return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+
 def build_catalog_confirm_response(evidence: Evidence) -> ResponseEnvelope | None:
     payload = evidence.get(ek.CATALOG_CONFIRM_RESPONSE)
     if not isinstance(payload, dict):
@@ -786,6 +804,7 @@ def build_first_structured_response(
         lambda: build_catalog_confirm_response(evidence),
         lambda: build_catalog_health_response(evidence),
         lambda: build_operator_offer_response(evidence),
+        lambda: build_readiness_response(evidence),
         lambda: build_unsupported_catalog_response(evidence, state, memory),
         lambda: build_main_index_info_response(evidence),
         lambda: build_service_bundle_response(flow_label, evidence, state),

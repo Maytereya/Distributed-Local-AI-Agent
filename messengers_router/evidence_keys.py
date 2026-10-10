@@ -41,6 +41,8 @@ UNSUPPORTED_CATALOG = "unsupported_catalog"
 OPERATOR_OFFER_RESPONSE = "operator_offer_response"
 CATALOG_CONFIRM_RESPONSE = "catalog_confirm_response"
 CATALOG_HEALTH_RESPONSE = "catalog_health_response"
+# Срок готовности из справочника МИС (понимание хода, ход (б) шаг 1): [{"name", "deadline"}]
+READINESS_RESPONSE = "readiness_response"
 
 # --- Rendering sidechannel -------------------------------------------------
 ATTACHMENTS = "attachments"
