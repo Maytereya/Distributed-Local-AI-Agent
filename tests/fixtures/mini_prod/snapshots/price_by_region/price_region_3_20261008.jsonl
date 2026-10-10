@@ -1,0 +1,404 @@
+{"serviceId": 6, "priceUnitId": 136, "serviceHomecode": "909", "serviceName": "Преаналитическая подготовка к исследованию (энтеробиоз)", "deadline": " ", "cost": 190.0, "promotion": null}
+{"serviceId": 135, "priceUnitId": 137, "serviceHomecode": "2301", "serviceName": "Кошка - шерсть(е500)", "deadline": "7-9", "cost": 750.0, "promotion": 0}
+{"serviceId": 138, "priceUnitId": 137, "serviceHomecode": "2304", "serviceName": "Собака - шерсть(е2)", "deadline": "7-9", "cost": 750.0, "promotion": null}
+{"serviceId": 267, "priceUnitId": 137, "serviceHomecode": "2623", "serviceName": "Домашняя пыль, смесь (аллергены H1, H2 — общий результат)", "deadline": "7-9", "cost": 1100.0, "promotion": null}
+{"serviceId": 275, "priceUnitId": 137, "serviceHomecode": "2631", "serviceName": "Phadiatop Infant (Pharmacia) специфический IgE к основным ингаляционным и пищевым аллергенам значимым для детей: Береза бородавчатая t3, Тимофеевка луговая g6, Полынь w6, Амброзия высокая w1, Alternaria alternata m6, Кошка, перхоть e1, Собака, перхоть e5, D.pteronyssinus d1, D.farinae d2, Cladosporium herbarium m2, Лошадь перхоть e3, Белок яйца f1, Молоко f2, Рыба f3, Пшеница f4, Арахис f13, Соя f14(общий результат)", "deadline": "11-13", "cost": 2500.0, "promotion": 0}
+{"serviceId": 279, "priceUnitId": 139, "serviceHomecode": "802", "serviceName": "Cito Общий анализ крови (Le, Er,Hb)", "deadline": "1-3 ч", "cost": 580.0, "promotion": null}
+{"serviceId": 280, "priceUnitId": 139, "serviceHomecode": "810", "serviceName": "Cito Общий анализ мочи (в лаборатории)", "deadline": "3-4 часа", "cost": 420.0, "promotion": null}
+{"serviceId": 281, "priceUnitId": 139, "serviceHomecode": "841", "serviceName": "Экспресс-тест для определения гепатита В - HBsAg", "deadline": "1-3 ч", "cost": 580.0, "promotion": null}
+{"serviceId": 282, "priceUnitId": 139, "serviceHomecode": "842", "serviceName": "Экспресс-тест для определения гепатита С - Анти-HCV", "deadline": "1-3 ч", "cost": 680.0, "promotion": null}
+{"serviceId": 283, "priceUnitId": 139, "serviceHomecode": "843", "serviceName": "Экспресс-тест для определения сифилиса (антитела IgG и IgM к Treponema pallidum)", "deadline": "1-3 ч", "cost": 520.0, "promotion": null}
+{"serviceId": 284, "priceUnitId": 139, "serviceHomecode": "844", "serviceName": "Экспресс-тест для определения гепатита В - (HBsAg, HBsAb, HBeAg, HBeAb, HBcAb)", "deadline": "1-3 ч", "cost": 1220.0, "promotion": null}
+{"serviceId": 286, "priceUnitId": 139, "serviceHomecode": "846", "serviceName": "Экспресс-тест для определения ВИЧ", "deadline": "1-3 ч", "cost": 850.0, "promotion": null}
+{"serviceId": 288, "priceUnitId": 139, "serviceHomecode": "872", "serviceName": "Cito ХГЧ (Total b-hCG)  хорионический  гонадотропин", "deadline": "3-4 часа", "cost": 740.0, "promotion": null}
+{"serviceId": 290, "priceUnitId": 139, "serviceHomecode": "899", "serviceName": "Cito Мазок на степень чистоты", "deadline": "3-4 часа", "cost": 380.0, "promotion": null}
+{"serviceId": 294, "priceUnitId": 140, "serviceHomecode": "404", "serviceName": "Посев на грибы рода Candida (чувствительность к антимикотическим препаратам)", "deadline": "до 10 дней", "cost": 710.0, "promotion": 0}
+{"serviceId": 300, "priceUnitId": 140, "serviceHomecode": "410", "serviceName": "Посев мочи с идентификацией культур", "deadline": "6", "cost": 1100.0, "promotion": null}
+{"serviceId": 301, "priceUnitId": 140, "serviceHomecode": "411", "serviceName": "Посев на микрофлору (идентификация агента и чувствительность к а\\б)", "deadline": "6", "cost": 1200.0, "promotion": 86}
+{"serviceId": 304, "priceUnitId": 140, "serviceHomecode": "415", "serviceName": "Кал на яйца глист", "deadline": "1-2", "cost": 360.0, "promotion": 58}
+{"serviceId": 307, "priceUnitId": 140, "serviceHomecode": "422", "serviceName": "Мазок из зева и носа на патогенный стафилококк", "deadline": "4-5 дней", "cost": 510.0, "promotion": null}
+{"serviceId": 315, "priceUnitId": 141, "serviceHomecode": "105", "serviceName": "Chlamydia trachomatis IgA", "deadline": "1-2", "cost": 520.0, "promotion": null}
+{"serviceId": 316, "priceUnitId": 141, "serviceHomecode": "106", "serviceName": "Chlamydia trachomatis IgG", "deadline": "1-2", "cost": 520.0, "promotion": null}
+{"serviceId": 319, "priceUnitId": 141, "serviceHomecode": "109", "serviceName": "Краснуха (Rubella) IgM", "deadline": "1-2", "cost": 550.0, "promotion": null}
+{"serviceId": 320, "priceUnitId": 141, "serviceHomecode": "110", "serviceName": "Краснуха (Rubella) IgG", "deadline": "1-2", "cost": 420.0, "promotion": null}
+{"serviceId": 321, "priceUnitId": 141, "serviceHomecode": "111", "serviceName": "Лямблии IgG", "deadline": "1-2", "cost": 520.0, "promotion": null}
+{"serviceId": 322, "priceUnitId": 141, "serviceHomecode": "112", "serviceName": "АТ к Helicobacter pylori G", "deadline": "1-2", "cost": 450.0, "promotion": null}
+{"serviceId": 338, "priceUnitId": 141, "serviceHomecode": "130", "serviceName": "Тиреоглобулин -ТГ", "deadline": "1-2", "cost": 590.0, "promotion": null}
+{"serviceId": 339, "priceUnitId": 141, "serviceHomecode": "131", "serviceName": "ТТГ (TSH) тиреотропный гормон", "deadline": "1-2", "cost": 400.0, "promotion": 3}
+{"serviceId": 340, "priceUnitId": 141, "serviceHomecode": "132", "serviceName": "сТ3 (FT3) Свободный трийодтиронин", "deadline": "1-2", "cost": 410.0, "promotion": 22}
+{"serviceId": 341, "priceUnitId": 141, "serviceHomecode": "133", "serviceName": "сТ4 (FT4) Свободный тироксин", "deadline": "1-2", "cost": 400.0, "promotion": 6}
+{"serviceId": 342, "priceUnitId": 141, "serviceHomecode": "134", "serviceName": "АТ -ТПО (Anti-TPO) антитела к тиреоидной  пероксидазе", "deadline": "1-2", "cost": 485.0, "promotion": 78}
+{"serviceId": 343, "priceUnitId": 141, "serviceHomecode": "135", "serviceName": "АТ - ТГ (Anti-Tg) антитела к тиреоглобулину", "deadline": "1-2", "cost": 470.0, "promotion": null}
+{"serviceId": 344, "priceUnitId": 141, "serviceHomecode": "136", "serviceName": "Общий трийодтиронин - T3", "deadline": "1-2", "cost": 380.0, "promotion": null}
+{"serviceId": 345, "priceUnitId": 141, "serviceHomecode": "137", "serviceName": "Общий тироксин - T4", "deadline": "1-2", "cost": 380.0, "promotion": null}
+{"serviceId": 346, "priceUnitId": 141, "serviceHomecode": "138", "serviceName": "Кальцитонин", "deadline": "1-3", "cost": 935.0, "promotion": 39}
+{"serviceId": 347, "priceUnitId": 141, "serviceHomecode": "139", "serviceName": "Антитела к рецепторам ТТГ", "deadline": "1-7", "cost": 1460.0, "promotion": null}
+{"serviceId": 348, "priceUnitId": 141, "serviceHomecode": "140", "serviceName": "Паратиреоидный гормон ПТГ(интактный)", "deadline": "1-2", "cost": 720.0, "promotion": 67}
+{"serviceId": 349, "priceUnitId": 141, "serviceHomecode": "143", "serviceName": "Chlamydia trachomatis Ig M", "deadline": "1-2", "cost": 520.0, "promotion": null}
+{"serviceId": 351, "priceUnitId": 141, "serviceHomecode": "151", "serviceName": "Пролактин (PRL)", "deadline": "1-2", "cost": 400.0, "promotion": 32}
+{"serviceId": 352, "priceUnitId": 141, "serviceHomecode": "152", "serviceName": "ЛГ (LH) Лютеинизирующий гормон", "deadline": "1-2", "cost": 410.0, "promotion": 65}
+{"serviceId": 353, "priceUnitId": 141, "serviceHomecode": "153", "serviceName": "ФСГ (FSH) Фолликулостимулирующий гормон", "deadline": "1-2", "cost": 400.0, "promotion": 34}
+{"serviceId": 354, "priceUnitId": 141, "serviceHomecode": "154", "serviceName": "Эстрадиол (E2)", "deadline": "1-2", "cost": 410.0, "promotion": 66}
+{"serviceId": 355, "priceUnitId": 141, "serviceHomecode": "155", "serviceName": "Прогестерон (PROG)", "deadline": "1-2", "cost": 420.0, "promotion": null}
+{"serviceId": 356, "priceUnitId": 141, "serviceHomecode": "156", "serviceName": "17 - ОН прогестерон", "deadline": "1-2", "cost": 580.0, "promotion": null}
+{"serviceId": 361, "priceUnitId": 141, "serviceHomecode": "170", "serviceName": "Хорионический гонадотропин - ХГЧ (свободный)", "deadline": "1-2", "cost": 830.0, "promotion": null}
+{"serviceId": 363, "priceUnitId": 141, "serviceHomecode": "172", "serviceName": "ХГЧ (общий) Хорионический гонадотропин человека (ХГЧ, бета-ХГЧ, б-ХГЧ, Human Chorionic)", "deadline": "1-2", "cost": 420.0, "promotion": null}
+{"serviceId": 372, "priceUnitId": 141, "serviceHomecode": "181", "serviceName": "ГСПГ (секс-гормон) глобулин связывающий половые гормоны", "deadline": "1-2", "cost": 440.0, "promotion": null}
+{"serviceId": 373, "priceUnitId": 141, "serviceHomecode": "182", "serviceName": "Антимюллеров гормон", "deadline": "1-2", "cost": 1460.0, "promotion": null}
+{"serviceId": 375, "priceUnitId": 141, "serviceHomecode": "190", "serviceName": "Свободный тестостерон", "deadline": "1-2", "cost": 890.0, "promotion": 69}
+{"serviceId": 376, "priceUnitId": 141, "serviceHomecode": "191", "serviceName": "Тестостерон (TESTO)", "deadline": "1-2", "cost": 400.0, "promotion": 71}
+{"serviceId": 377, "priceUnitId": 141, "serviceHomecode": "192", "serviceName": "ДГЭА - SO4 (Дигидроэпиандростерон сульфат)", "deadline": "1-2", "cost": 440.0, "promotion": null}
+{"serviceId": 380, "priceUnitId": 141, "serviceHomecode": "201", "serviceName": "Кортизол (Cortisol)", "deadline": "1-2", "cost": 430.0, "promotion": 0}
+{"serviceId": 385, "priceUnitId": 141, "serviceHomecode": "206", "serviceName": "Кортизол суточный  в моче", "deadline": "1-3", "cost": 750.0, "promotion": 0}
+{"serviceId": 388, "priceUnitId": 141, "serviceHomecode": "210", "serviceName": "Инсулин", "deadline": "1-2", "cost": 595.0, "promotion": 82}
+{"serviceId": 399, "priceUnitId": 141, "serviceHomecode": "225", "serviceName": "CA - 125 (яичники)", "deadline": "1-2", "cost": 650.0, "promotion": null}
+{"serviceId": 408, "priceUnitId": 141, "serviceHomecode": "240", "serviceName": "Ферритин", "deadline": "1-2", "cost": 530.0, "promotion": 15}
+{"serviceId": 413, "priceUnitId": 141, "serviceHomecode": "253", "serviceName": "Гепатит В - HBsAg", "deadline": "1-2", "cost": 355.0, "promotion": 27}
+{"serviceId": 414, "priceUnitId": 141, "serviceHomecode": "254", "serviceName": "Гепатит В - HBsAg подтверждающий тест", "deadline": "1-2", "cost": 400.0, "promotion": null}
+{"serviceId": 420, "priceUnitId": 141, "serviceHomecode": "260", "serviceName": "Гепатит С - Анти-HCV суммарные", "deadline": "1-2", "cost": 440.0, "promotion": 16}
+{"serviceId": 460, "priceUnitId": 453, "serviceHomecode": "361", "serviceName": "Антитела к циклическому цитруллированному пептиду, АЦЦП", "deadline": "1-4", "cost": 1490.0, "promotion": null}
+{"serviceId": 461, "priceUnitId": 141, "serviceHomecode": "370", "serviceName": "Витамин D суммарный (25-OH витамин D2 и 25-OH витамин D3, общий)", "deadline": "1-2", "cost": 1450.0, "promotion": 2}
+{"serviceId": 462, "priceUnitId": 142, "serviceHomecode": "501", "serviceName": "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты)", "deadline": "1-2", "cost": 550.0, "promotion": 1}
+{"serviceId": 463, "priceUnitId": 142, "serviceHomecode": "502", "serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "deadline": "1-2", "cost": 390.0, "promotion": 87}
+{"serviceId": 467, "priceUnitId": 142, "serviceHomecode": "506", "serviceName": "Кровь на сифилис (реакция микропреципитации с кардиолипиновым антигеном,антитела IgG и IgM к Treponema pallidum)", "deadline": "1-2", "cost": 480.0, "promotion": 24}
+{"serviceId": 468, "priceUnitId": 142, "serviceHomecode": "507", "serviceName": "Кровь на ВИЧ (для одновременного выявления антител к вирусам иммунодефицита человека 1 и 2 типов (ВИЧ-1 и ВИЧ-2), ВИЧ-1 группы О и антигена р24 ВИЧ-1 методом иммуноферментного анализа, версия 2.0)", "deadline": "1-2", "cost": 430.0, "promotion": 31}
+{"serviceId": 470, "priceUnitId": 142, "serviceHomecode": "510", "serviceName": "Общий анализ мочи", "deadline": "1-2", "cost": 280.0, "promotion": 29}
+{"serviceId": 471, "priceUnitId": 142, "serviceHomecode": "511", "serviceName": "Определение времени свертываемости крови по Сухареву", "deadline": "1", "cost": 250.0, "promotion": null}
+{"serviceId": 472, "priceUnitId": 142, "serviceHomecode": "512", "serviceName": "АЧТВ", "deadline": "1-2", "cost": 230.0, "promotion": 79}
+{"serviceId": 473, "priceUnitId": 142, "serviceHomecode": "513", "serviceName": "Группа крови", "deadline": "1-2", "cost": 290.0, "promotion": 75}
+{"serviceId": 474, "priceUnitId": 142, "serviceHomecode": "514", "serviceName": "Rh- принадлежность", "deadline": "1-2", "cost": 280.0, "promotion": 80}
+{"serviceId": 479, "priceUnitId": 142, "serviceHomecode": "519", "serviceName": "Глюкоза в моче (разовая порция)", "deadline": "1-2", "cost": 170.0, "promotion": null}
+{"serviceId": 480, "priceUnitId": 142, "serviceHomecode": "520", "serviceName": "Глюкоза в моче (суточная порция)", "deadline": "1-2", "cost": 160.0, "promotion": null}
+{"serviceId": 489, "priceUnitId": 142, "serviceHomecode": "529", "serviceName": "Кальций в суточной моче", "deadline": "1-2", "cost": 240.0, "promotion": null}
+{"serviceId": 502, "priceUnitId": 142, "serviceHomecode": "601", "serviceName": "Общий белок", "deadline": "1-2", "cost": 190.0, "promotion": 26}
+{"serviceId": 504, "priceUnitId": 142, "serviceHomecode": "603", "serviceName": "Альбумин", "deadline": "1-2", "cost": 240.0, "promotion": null}
+{"serviceId": 505, "priceUnitId": 142, "serviceHomecode": "605", "serviceName": "Протромбиновый индекс (по Квику), МНО, протромбиновое время", "deadline": "1-2", "cost": 240.0, "promotion": 51}
+{"serviceId": 507, "priceUnitId": 142, "serviceHomecode": "610", "serviceName": "Липидограмма", "deadline": " ", "cost": 860.0, "promotion": 5}
+{"serviceId": 509, "priceUnitId": 142, "serviceHomecode": "612", "serviceName": "Триглицериды", "deadline": "1-2", "cost": 190.0, "promotion": null}
+{"serviceId": 510, "priceUnitId": 142, "serviceHomecode": "613", "serviceName": "Холестерол - ЛПНП", "deadline": "1-2", "cost": 220.0, "promotion": null}
+{"serviceId": 511, "priceUnitId": 142, "serviceHomecode": "615", "serviceName": "Холестерол", "deadline": "1-2", "cost": 225.0, "promotion": 33}
+{"serviceId": 516, "priceUnitId": 142, "serviceHomecode": "624", "serviceName": "CРБ \"С\" реактивный белок (количественный метод)", "deadline": "1-2", "cost": 360.0, "promotion": 23}
+{"serviceId": 518, "priceUnitId": 142, "serviceHomecode": "629", "serviceName": "Кальций ионизированный", "deadline": "1-2", "cost": 470.0, "promotion": 62}
+{"serviceId": 519, "priceUnitId": 142, "serviceHomecode": "630", "serviceName": "Са+ (кальций)", "deadline": "1-2", "cost": 230.0, "promotion": 59}
+{"serviceId": 520, "priceUnitId": 142, "serviceHomecode": "631", "serviceName": "Железо в сыворотке", "deadline": "1-2", "cost": 240.0, "promotion": 56}
+{"serviceId": 521, "priceUnitId": 142, "serviceHomecode": "632", "serviceName": "Mg+ (магний)", "deadline": "1-2", "cost": 190.0, "promotion": 0}
+{"serviceId": 522, "priceUnitId": 142, "serviceHomecode": "633", "serviceName": "K+ (калий)", "deadline": "1-2", "cost": 190.0, "promotion": 0}
+{"serviceId": 528, "priceUnitId": 142, "serviceHomecode": "640", "serviceName": "Глюкоза", "deadline": "1-2", "cost": 190.0, "promotion": 8}
+{"serviceId": 529, "priceUnitId": 142, "serviceHomecode": "641", "serviceName": "Глюкозотолерантный тест (глюкоза до и после нагрузки)", "deadline": " ", "cost": 560.0, "promotion": null}
+{"serviceId": 530, "priceUnitId": 142, "serviceHomecode": "642", "serviceName": "Глюкозотолерантный тест (глюкоза+ C-пептид)", "deadline": "1-2", "cost": 1380.0, "promotion": null}
+{"serviceId": 531, "priceUnitId": 142, "serviceHomecode": "643", "serviceName": "Глюкозотолерантный тест (глюкоза натощак, через 1 час и через 2 часа после нагрузки)", "deadline": " ", "cost": 630.0, "promotion": null}
+{"serviceId": 532, "priceUnitId": 142, "serviceHomecode": "644", "serviceName": "Креатинкиназа", "deadline": "1-2", "cost": 250.0, "promotion": null}
+{"serviceId": 534, "priceUnitId": 142, "serviceHomecode": "646", "serviceName": "Гликированный гемоглобин  (HbA1C, Glycated Hemoglobin)", "deadline": "1-2", "cost": 560.0, "promotion": 17}
+{"serviceId": 535, "priceUnitId": 142, "serviceHomecode": "648", "serviceName": "Билирубин и его фракции (общий, прямой и непрямой)", "deadline": " ", "cost": 400.0, "promotion": 21}
+{"serviceId": 536, "priceUnitId": 142, "serviceHomecode": "649", "serviceName": "Билирубин прямой", "deadline": "1-2", "cost": 170.0, "promotion": null}
+{"serviceId": 537, "priceUnitId": 142, "serviceHomecode": "650", "serviceName": "Билирубин общий", "deadline": "1-2", "cost": 190.0, "promotion": 28}
+{"serviceId": 538, "priceUnitId": 142, "serviceHomecode": "651", "serviceName": "АсАТ", "deadline": "1-2", "cost": 205.0, "promotion": 10}
+{"serviceId": 539, "priceUnitId": 142, "serviceHomecode": "652", "serviceName": "АлАТ", "deadline": "1-2", "cost": 205.0, "promotion": 9}
+{"serviceId": 541, "priceUnitId": 142, "serviceHomecode": "654", "serviceName": "Щелочная фосфатаза", "deadline": "1-2", "cost": 190.0, "promotion": 49}
+{"serviceId": 543, "priceUnitId": 142, "serviceHomecode": "656", "serviceName": "ГГТ гамма-глютамилтрансфераза", "deadline": "1-2", "cost": 210.0, "promotion": 68}
+{"serviceId": 546, "priceUnitId": 142, "serviceHomecode": "659", "serviceName": "ЛДГ  (лактатдегидрогеназа)", "deadline": "1-2", "cost": 190.0, "promotion": null}
+{"serviceId": 547, "priceUnitId": 142, "serviceHomecode": "660", "serviceName": "Мочевая кислота", "deadline": "1-2", "cost": 200.0, "promotion": 40}
+{"serviceId": 548, "priceUnitId": 142, "serviceHomecode": "661", "serviceName": "Мочевина", "deadline": "1-2", "cost": 205.0, "promotion": 20}
+{"serviceId": 549, "priceUnitId": 142, "serviceHomecode": "662", "serviceName": "Креатинин", "deadline": "1-2", "cost": 205.0, "promotion": 11}
+{"serviceId": 553, "priceUnitId": 141, "serviceHomecode": "670", "serviceName": "Гомоцистеин", "deadline": "1-2", "cost": 1350.0, "promotion": 13}
+{"serviceId": 557, "priceUnitId": 142, "serviceHomecode": "676", "serviceName": "Антитромбин III", "deadline": "1-2", "cost": 380.0, "promotion": null}
+{"serviceId": 564, "priceUnitId": 142, "serviceHomecode": "683", "serviceName": "Тромбиновое время", "deadline": "1-2", "cost": 250.0, "promotion": 0}
+{"serviceId": 571, "priceUnitId": 142, "serviceHomecode": "690", "serviceName": "ОЖСС (общая железосвязывающая способность сыворотки)", "deadline": "1-3", "cost": 290.0, "promotion": 0}
+{"serviceId": 572, "priceUnitId": 142, "serviceHomecode": "691", "serviceName": "Трансферрин", "deadline": "1-2", "cost": 470.0, "promotion": 85}
+{"serviceId": 574, "priceUnitId": 143, "serviceHomecode": "701", "serviceName": "Спермограмма", "deadline": "1", "cost": 940.0, "promotion": null}
+{"serviceId": 575, "priceUnitId": 143, "serviceHomecode": "704", "serviceName": "Бактериоскопия мазка", "deadline": "1-2", "cost": 500.0, "promotion": 50}
+{"serviceId": 579, "priceUnitId": 143, "serviceHomecode": "708", "serviceName": "Цитология (мазок на атипичные клетки)", "deadline": "7-8 дней", "cost": 450.0, "promotion": null}
+{"serviceId": 580, "priceUnitId": 143, "serviceHomecode": "709", "serviceName": "Цитология", "deadline": "7-8 дней", "cost": 550.0, "promotion": 46}
+{"serviceId": 581, "priceUnitId": 143, "serviceHomecode": "710", "serviceName": "Мазок на степень чистоты влагалища", "deadline": "1-2", "cost": 290.0, "promotion": null}
+{"serviceId": 585, "priceUnitId": 143, "serviceHomecode": "715", "serviceName": "Исследование на кандиды", "deadline": "1-2", "cost": 250.0, "promotion": null}
+{"serviceId": 590, "priceUnitId": 143, "serviceHomecode": "720", "serviceName": "Копрология", "deadline": "1-2", "cost": 450.0, "promotion": 42}
+{"serviceId": 592, "priceUnitId": 143, "serviceHomecode": "722", "serviceName": "Соскоб на энтеробиоз", "deadline": "1-2", "cost": 285.0, "promotion": 0}
+{"serviceId": 595, "priceUnitId": 144, "serviceHomecode": "1", "serviceName": "Chlamydia trachomatis [кач.]", "deadline": "1-2", "cost": 330.0, "promotion": 0}
+{"serviceId": 604, "priceUnitId": 144, "serviceHomecode": "18", "serviceName": "Candida albicans [кач.]", "deadline": "1-2", "cost": 250.0, "promotion": 0}
+{"serviceId": 605, "priceUnitId": 144, "serviceHomecode": "19", "serviceName": "Candida albicans [п\\кол.]", "deadline": "1-2", "cost": 280.0, "promotion": 0}
+{"serviceId": 606, "priceUnitId": 144, "serviceHomecode": "2", "serviceName": "Chlamydia trachomatis [п/кол.]", "deadline": "1-2", "cost": 450.0, "promotion": 0}
+{"serviceId": 624, "priceUnitId": 144, "serviceHomecode": "40", "serviceName": "Chlamydia trachomatis [колич.]", "deadline": "1-2", "cost": 410.0, "promotion": 0}
+{"serviceId": 628, "priceUnitId": 144, "serviceHomecode": "44", "serviceName": "Папилломавирус 16/18 (колич.)", "deadline": "1-2", "cost": 490.0, "promotion": 0}
+{"serviceId": 629, "priceUnitId": 144, "serviceHomecode": "45", "serviceName": "Папилломавирус генотипирование (16, 18, 31, 33, 35, 39, 45, 51, 52, 56, 58, 59) (колич.)", "deadline": "1-2", "cost": 1100.0, "promotion": 54}
+{"serviceId": 647, "priceUnitId": 144, "serviceHomecode": "64", "serviceName": "Вирус простого герпеса 1,2 типа  [п\\кол.]", "deadline": "1-2", "cost": 360.0, "promotion": 0}
+{"serviceId": 648, "priceUnitId": 144, "serviceHomecode": "65", "serviceName": "Папилломавирус 16/18 [кач.]", "deadline": "1-2", "cost": 490.0, "promotion": null}
+{"serviceId": 649, "priceUnitId": 144, "serviceHomecode": "66", "serviceName": "Папилломавирус 31/33 [кач.]", "deadline": "1-2", "cost": 380.0, "promotion": 0}
+{"serviceId": 650, "priceUnitId": 144, "serviceHomecode": "67", "serviceName": "Генотипирование папилломавирусов (16, 18, 31, 33, 35, 39, 45, 51, 52, 56, 58, 59) (кач.)", "deadline": "1-2", "cost": 980.0, "promotion": 0}
+{"serviceId": 657, "priceUnitId": 144, "serviceHomecode": "73", "serviceName": "Папилломавирус 6/11 [кач.]", "deadline": "1-2", "cost": 340.0, "promotion": 0}
+{"serviceId": 659, "priceUnitId": 144, "serviceHomecode": "80", "serviceName": "Фемофлор 8", "deadline": "1-2", "cost": 1650.0, "promotion": 0}
+{"serviceId": 660, "priceUnitId": 144, "serviceHomecode": "81", "serviceName": "Фемофлор Скрин", "deadline": "1-2", "cost": 2200.0, "promotion": 18}
+{"serviceId": 673, "priceUnitId": 145, "serviceHomecode": "955", "serviceName": "ЗППП (расширенное)(соскоб)", "deadline": "1-2", "cost": 4900.0, "promotion": 44}
+{"serviceId": 680, "priceUnitId": 145, "serviceHomecode": "962", "serviceName": "Обследование печени (скрининг)", "deadline": "1-2", "cost": 930.0, "promotion": null}
+{"serviceId": 682, "priceUnitId": 145, "serviceHomecode": "964", "serviceName": "Обследование на наличие гепатита (первичное)", "deadline": "1-7", "cost": 2195.0, "promotion": null}
+{"serviceId": 684, "priceUnitId": 145, "serviceHomecode": "966", "serviceName": "Ревматологический профиль", "deadline": "1-2", "cost": 1870.0, "promotion": null}
+{"serviceId": 685, "priceUnitId": 145, "serviceHomecode": "967", "serviceName": "Диабетический профиль 1", "deadline": "6-9", "cost": 1630.0, "promotion": null}
+{"serviceId": 687, "priceUnitId": 145, "serviceHomecode": "969", "serviceName": "TORCH-инфекции", "deadline": "1-2", "cost": 3800.0, "promotion": null}
+{"serviceId": 692, "priceUnitId": 145, "serviceHomecode": "974", "serviceName": "Биохимия крови", "deadline": "1-2", "cost": 2835.0, "promotion": 4}
+{"serviceId": 694, "priceUnitId": 145, "serviceHomecode": "976", "serviceName": "Щитовидная железа (сокращенное обследование)", "deadline": "1-2", "cost": 905.0, "promotion": null}
+{"serviceId": 695, "priceUnitId": 145, "serviceHomecode": "977", "serviceName": "Щитовидная железа (развернутое обследование)", "deadline": "1-2", "cost": 2035.0, "promotion": 76}
+{"serviceId": 696, "priceUnitId": 145, "serviceHomecode": "978", "serviceName": "Госпитализация в терапевтический стационар", "deadline": "1-2", "cost": 4475.0, "promotion": null}
+{"serviceId": 698, "priceUnitId": 145, "serviceHomecode": "980", "serviceName": "Ежегодное профилакторное лабораторное обследование", "deadline": "1-3", "cost": 4520.0, "promotion": null}
+{"serviceId": 699, "priceUnitId": 145, "serviceHomecode": "981", "serviceName": "Планирование беременности (скрининг)", "deadline": "3-7", "cost": 7575.0, "promotion": null}
+{"serviceId": 700, "priceUnitId": 145, "serviceHomecode": "982", "serviceName": "Планирование беременности (гормональный)", "deadline": "1-2", "cost": 2710.0, "promotion": null}
+{"serviceId": 701, "priceUnitId": 145, "serviceHomecode": "983", "serviceName": "Планирование беременности (полное)", "deadline": "3-7", "cost": 10245.0, "promotion": null}
+{"serviceId": 705, "priceUnitId": 145, "serviceHomecode": "987", "serviceName": "Планирование беременности", "deadline": "1-2", "cost": 2100.0, "promotion": null}
+{"serviceId": 706, "priceUnitId": 145, "serviceHomecode": "988", "serviceName": "ЗППП: анализ крови", "deadline": "1-7", "cost": 2975.0, "promotion": null}
+{"serviceId": 707, "priceUnitId": 145, "serviceHomecode": "989", "serviceName": "ЗППП: соскоб", "deadline": "1-2", "cost": 2100.0, "promotion": 60}
+{"serviceId": 708, "priceUnitId": 145, "serviceHomecode": "990", "serviceName": "Женские проблемы: гормоны", "deadline": "1-2", "cost": 4300.0, "promotion": null}
+{"serviceId": 710, "priceUnitId": 145, "serviceHomecode": "992", "serviceName": "Мужчины после 40 лет", "deadline": "1-2", "cost": 3300.0, "promotion": null}
+{"serviceId": 712, "priceUnitId": 145, "serviceHomecode": "994", "serviceName": "Программа полного обследования женщин", "deadline": "3-7", "cost": 12410.0, "promotion": null}
+{"serviceId": 713, "priceUnitId": 145, "serviceHomecode": "995", "serviceName": "Программа полного обследования мужчин", "deadline": "3-7", "cost": 12450.0, "promotion": null}
+{"serviceId": 715, "priceUnitId": 145, "serviceHomecode": "997", "serviceName": "Расширенная гемостазиограмма", "deadline": "1-2", "cost": 2880.0, "promotion": null}
+{"serviceId": 716, "priceUnitId": 145, "serviceHomecode": "998", "serviceName": "Ревматологический профиль II", "deadline": "3-7", "cost": 2170.0, "promotion": null}
+{"serviceId": 717, "priceUnitId": 145, "serviceHomecode": "999", "serviceName": "Диагностика анемий II", "deadline": "1-3", "cost": 1990.0, "promotion": null}
+{"serviceId": 719, "priceUnitId": 149, "serviceHomecode": "3.1.1.1", "serviceName": "Прием (осмотр, консультация) врача-акушера-гинеколога", "deadline": " ", "cost": 3000.0, "promotion": 0}
+{"serviceId": 734, "priceUnitId": 149, "serviceHomecode": "3.1.6.1", "serviceName": "Прием (осмотр, консультация) врача-акушера-гинеколога  (с эндокринологическими нарушениями)", "deadline": " ", "cost": 3000.0, "promotion": 0}
+{"serviceId": 847, "priceUnitId": 150, "serviceHomecode": "42.1.1.1", "serviceName": "Прием (осмотр, консультация) врача-терапевта на дому (1 зона)", "deadline": " ", "cost": 5000.0, "promotion": 0}
+{"serviceId": 853, "priceUnitId": 150, "serviceHomecode": "42.1.2.1", "serviceName": "Прием (осмотр, консультация) врача-терапевта на дому (3 зона)", "deadline": " ", "cost": 7000.0, "promotion": 0}
+{"serviceId": 875, "priceUnitId": 153, "serviceHomecode": "5.1.1", "serviceName": "Приём (осмотр, консультация) врача дерматовенеролога", "deadline": " ", "cost": 2700.0, "promotion": 0}
+{"serviceId": 900, "priceUnitId": 155, "serviceHomecode": "9.1.1", "serviceName": "Инъекции внутримышечные (за 1 инъекцию)(без стоимости препаратов)", "deadline": " ", "cost": 250.0, "promotion": 0}
+{"serviceId": 901, "priceUnitId": 155, "serviceHomecode": "9.1.2", "serviceName": "Инъекции внутрикожные (за 1 инъекцию)(без стоимости препаратов)", "deadline": " ", "cost": 250.0, "promotion": 0}
+{"serviceId": 902, "priceUnitId": 155, "serviceHomecode": "9.1.3", "serviceName": "Инъекции подкожные (за 1 инъекцию)(без стоимости препаратов)", "deadline": " ", "cost": 250.0, "promotion": 0}
+{"serviceId": 903, "priceUnitId": 155, "serviceHomecode": "9.1.4", "serviceName": "Инъекции внутривенные (за 1 инъекцию)(без стоимости препаратов)", "deadline": " ", "cost": 350.0, "promotion": 0}
+{"serviceId": 955, "priceUnitId": 156, "serviceHomecode": "10.1.1", "serviceName": "Прием (осмотр, консультация) врача- невролога", "deadline": " ", "cost": 2700.0, "promotion": 0}
+{"serviceId": 975, "priceUnitId": 157, "serviceHomecode": "18.1.1", "serviceName": "Прием (осмотр, консультация) врача-онколога", "deadline": " ", "cost": 4000.0, "promotion": 0}
+{"serviceId": 980, "priceUnitId": 158, "serviceHomecode": "24.1.1", "serviceName": "Прием (осмотр, консультация) врача-оториноларинголога первичный", "deadline": " ", "cost": 2000.0, "promotion": 0}
+{"serviceId": 981, "priceUnitId": 158, "serviceHomecode": "24.1.2", "serviceName": "Прием (осмотр, консультация) врача-оториноларинголога повторный", "deadline": " ", "cost": 1500.0, "promotion": null}
+{"serviceId": 1029, "priceUnitId": 158, "serviceHomecode": "24.4.1.7", "serviceName": "Удаление серной пробки", "deadline": " ", "cost": 1200.0, "promotion": 0}
+{"serviceId": 1260, "priceUnitId": 170, "serviceHomecode": "13.1.1", "serviceName": "Прием (осмотр, консультация) врача-терапевта", "deadline": " ", "cost": 2700.0, "promotion": 0}
+{"serviceId": 1270, "priceUnitId": 175, "serviceHomecode": "2.9.1", "serviceName": "Эхокардиография", "deadline": " ", "cost": 3500.0, "promotion": 0}
+{"serviceId": 1284, "priceUnitId": 176, "serviceHomecode": "2.8.6", "serviceName": "Дуплексное сканирование вен нижних конечностей", "deadline": " ", "cost": 2300.0, "promotion": 0}
+{"serviceId": 1292, "priceUnitId": 177, "serviceHomecode": "2.6.3", "serviceName": "УЗИ беременных до 11 недель при одноплодной беременности", "deadline": " ", "cost": 2700.0, "promotion": null}
+{"serviceId": 1310, "priceUnitId": 178, "serviceHomecode": "2.1.1", "serviceName": "Ультразвуковое исследование органов брюшной полости (комплексное)", "deadline": " ", "cost": 2800.0, "promotion": null}
+{"serviceId": 1334, "priceUnitId": 180, "serviceHomecode": "2.2.5.1", "serviceName": "УЗИ органов мошонки + ЦДК сосудов", "deadline": " ", "cost": 1850.0, "promotion": null}
+{"serviceId": 1345, "priceUnitId": 181, "serviceHomecode": "2.4.1", "serviceName": "Ультразвуковое исследование щитовидной железы и паращитовидных желез", "deadline": " ", "cost": 2100.0, "promotion": null}
+{"serviceId": 1346, "priceUnitId": 181, "serviceHomecode": "2.4.2.2", "serviceName": "Ультразвуковое исследование лимфатических узлов (одна анатомическая зона)", "deadline": " ", "cost": 1200.0, "promotion": null}
+{"serviceId": 1363, "priceUnitId": 182, "serviceHomecode": "4.1.2", "serviceName": "Прием (осмотр, консультация) врача-уролога", "deadline": " ", "cost": 3100.0, "promotion": 0}
+{"serviceId": 1364, "priceUnitId": 182, "serviceHomecode": "4.1.3", "serviceName": "Прием (осмотр, консультация) врача- уролога (андролога)", "deadline": " ", "cost": 3100.0, "promotion": 0}
+{"serviceId": 1455, "priceUnitId": 185, "serviceHomecode": "12.3.1", "serviceName": "ЭКГ", "deadline": " ", "cost": 750.0, "promotion": null}
+{"serviceId": 1510, "priceUnitId": 291, "serviceHomecode": "30.1.1.1", "serviceName": "Эзофагогастродуоденоскопия (ФГДС)", "deadline": " ", "cost": 5100.0, "promotion": 0}
+{"serviceId": 1511, "priceUnitId": 291, "serviceHomecode": "30.1.1.2", "serviceName": "Биопсия при ФГДС (без стоимости исследования)", "deadline": " ", "cost": 1200.0, "promotion": null}
+{"serviceId": 1516, "priceUnitId": 291, "serviceHomecode": "30.1.2.1", "serviceName": "Тотальная фиброколоноскопия (ФКС)", "deadline": " ", "cost": 8100.0, "promotion": 0}
+{"serviceId": 1517, "priceUnitId": 291, "serviceHomecode": "30.1.2.2", "serviceName": "Фиброколоноскопия левых отделов толстой кишки", "deadline": " ", "cost": 4500.0, "promotion": null}
+{"serviceId": 1615, "priceUnitId": 191, "serviceHomecode": "50.1.1.4", "serviceName": "Инъекции внутривенные (за 1 инъекцию)(без стоимости препаратов)", "deadline": " ", "cost": 750.0, "promotion": null}
+{"serviceId": 1656, "priceUnitId": 151, "serviceHomecode": "70.2.1.1", "serviceName": "Внутривенная аналгезия до 1 часа", "deadline": " ", "cost": 6000.0, "promotion": 0}
+{"serviceId": 1658, "priceUnitId": 151, "serviceHomecode": "70.2.1.3", "serviceName": "Тотальная внутривенная анестезия", "deadline": " ", "cost": 7000.0, "promotion": null}
+{"serviceId": 2422, "priceUnitId": 139, "serviceHomecode": "898", "serviceName": "Cito Бактериоскопия мазка", "deadline": "1-3 ч", "cost": 400.0, "promotion": null}
+{"serviceId": 2514, "priceUnitId": 141, "serviceHomecode": "200", "serviceName": "Кортизол в слюне", "deadline": "1-4", "cost": 670.0, "promotion": 0}
+{"serviceId": 2515, "priceUnitId": 141, "serviceHomecode": "209", "serviceName": "Кальпротектин в кале", "deadline": "1-9", "cost": 2730.0, "promotion": 48}
+{"serviceId": 2516, "priceUnitId": 141, "serviceHomecode": "220", "serviceName": "Панкреатическая эластаза I в кале", "deadline": "до 10 дней ", "cost": 2290.0, "promotion": 45}
+{"serviceId": 2519, "priceUnitId": 141, "serviceHomecode": "371", "serviceName": "Витамин B12", "deadline": "1-2", "cost": 760.0, "promotion": 36}
+{"serviceId": 4478, "priceUnitId": 141, "serviceHomecode": "338", "serviceName": "Вирус кори Ig M", "deadline": "до 10 дней", "cost": 930.0, "promotion": null}
+{"serviceId": 4479, "priceUnitId": 141, "serviceHomecode": "339", "serviceName": "Вирус кори Ig G", "deadline": "2-3 дня", "cost": 800.0, "promotion": 70}
+{"serviceId": 4484, "priceUnitId": 141, "serviceHomecode": "372", "serviceName": "Фолиевая кислота (витамин В9)", "deadline": "1-3", "cost": 1000.0, "promotion": 38}
+{"serviceId": 4485, "priceUnitId": 142, "serviceHomecode": "667", "serviceName": "Липаза", "deadline": "1-2", "cost": 310.0, "promotion": null}
+{"serviceId": 4652, "priceUnitId": 179, "serviceHomecode": "2.3.1", "serviceName": "Ультразвуковое исследование органов малого таза (комплексное) женщины", "deadline": " ", "cost": 3200.0, "promotion": null}
+{"serviceId": 4723, "priceUnitId": 143, "serviceHomecode": "727", "serviceName": "Жидкостная цитология. Цитологическое исследование биоматериала шейки матки (технология BD SurePath™)", "deadline": "8-10 дней", "cost": 1300.0, "promotion": 74}
+{"serviceId": 4724, "priceUnitId": 145, "serviceHomecode": "953", "serviceName": "ЗППП (основное)", "deadline": "1-2", "cost": 3425.0, "promotion": null}
+{"serviceId": 4747, "priceUnitId": 140, "serviceHomecode": "728", "serviceName": "Исследование кала на паразиты (лямблии, описторхи, аскариды, острицы, власоглав, карликовый цепень и др.)", "deadline": "1-4", "cost": 710.0, "promotion": 0}
+{"serviceId": 4797, "priceUnitId": 156, "serviceHomecode": "10.1.6", "serviceName": "Прием (осмотр, консультация) врача- невролога, к.м.н.", "deadline": " ", "cost": 3500.0, "promotion": 0}
+{"serviceId": 4820, "priceUnitId": 149, "serviceHomecode": "3.1.1.9", "serviceName": "Прием (осмотр, консультация) врача-акушера-гинеколога  к.м.н.", "deadline": " ", "cost": 4000.0, "promotion": 0}
+{"serviceId": 4831, "priceUnitId": 142, "serviceHomecode": "571", "serviceName": "Медь в крови", "deadline": "4-5", "cost": 850.0, "promotion": 0}
+{"serviceId": 4832, "priceUnitId": 142, "serviceHomecode": "572", "serviceName": "Цинк", "deadline": "1-2 дня", "cost": 790.0, "promotion": 90}
+{"serviceId": 4834, "priceUnitId": 142, "serviceHomecode": "590", "serviceName": "ОАК (без лейкоцитарной формулы и СОЭ)", "deadline": "1-2", "cost": 250.0, "promotion": 0}
+{"serviceId": 4918, "priceUnitId": 141, "serviceHomecode": "213", "serviceName": "Индекс HOMA (индекс инсулинорезистентности)", "deadline": "1-2", "cost": 760.0, "promotion": 61}
+{"serviceId": 5068, "priceUnitId": 153, "serviceHomecode": "5.2.1", "serviceName": "Дерматоскопия", "deadline": " ", "cost": 1000.0, "promotion": 0}
+{"serviceId": 5069, "priceUnitId": 179, "serviceHomecode": "2.3.2.2", "serviceName": "УЗИ гинекологическое комплексное двумя датчиками (трансабдоминальным и полостным) с допплерометрией сосудов матки", "deadline": " ", "cost": 3000.0, "promotion": null}
+{"serviceId": 5101, "priceUnitId": 144, "serviceHomecode": "79", "serviceName": "Определение Rh плода по крови матери", "deadline": "10-11", "cost": 6500.0, "promotion": 0}
+{"serviceId": 5109, "priceUnitId": 140, "serviceHomecode": "418", "serviceName": "Посев на хламидии", "deadline": "7", "cost": 780.0, "promotion": null}
+{"serviceId": 5539, "priceUnitId": 149, "serviceHomecode": "3.22.1", "serviceName": "Комплексная услуга по медикаментозному прерыванию беременности (медикаментозное прерывание беременности,  приемы гинеколога при искусственном прерывании беременности (второе, третье, четвертое посещения))", "deadline": " ", "cost": 18200.0, "promotion": 0}
+{"serviceId": 5696, "priceUnitId": 136, "serviceHomecode": "920", "serviceName": "Взятие крови из пальца", "deadline": " ", "cost": 180.0, "promotion": null}
+{"serviceId": 5697, "priceUnitId": 136, "serviceHomecode": "921", "serviceName": "Взятие крови из вены", "deadline": "", "cost": 195.0, "promotion": null}
+{"serviceId": 5700, "priceUnitId": 149, "serviceHomecode": "3.1.1.13", "serviceName": "Прием (осмотр, консультация) врача-акушера-гинеколога-маммолога", "deadline": " ", "cost": 3000.0, "promotion": 0}
+{"serviceId": 5703, "priceUnitId": 326, "serviceHomecode": "62.2.3.2", "serviceName": "Нижняя блефаропластика (пластика нижних век) 2 категории", "deadline": " ", "cost": 70000.0, "promotion": null}
+{"serviceId": 5711, "priceUnitId": 326, "serviceHomecode": "62.2.2.1", "serviceName": "Верхняя блефаропластика (пластика верхних век) 1 категории", "deadline": " ", "cost": 60000.0, "promotion": null}
+{"serviceId": 5712, "priceUnitId": 326, "serviceHomecode": "62.2.2.2", "serviceName": "Верхняя блефаропластика (пластика верхних век) 2 категории", "deadline": " ", "cost": 70000.0, "promotion": null}
+{"serviceId": 5713, "priceUnitId": 326, "serviceHomecode": "62.2.2.3", "serviceName": "Верхняя блефаропластика (пластика верхних век) 3 категории", "deadline": " ", "cost": 80000.0, "promotion": null}
+{"serviceId": 5717, "priceUnitId": 326, "serviceHomecode": "62.2.3.1", "serviceName": "Нижняя блефаропластика (пластика нижних век) 1 категории", "deadline": " ", "cost": 60000.0, "promotion": null}
+{"serviceId": 5718, "priceUnitId": 326, "serviceHomecode": "62.2.3.3", "serviceName": "Нижняя блефаропластика (пластика нижних век) 3 категории", "deadline": " ", "cost": 80000.0, "promotion": null}
+{"serviceId": 5719, "priceUnitId": 326, "serviceHomecode": "62.2.3.4", "serviceName": "Нижняя блефаропластика трансконьюктивальная 1 категории", "deadline": " ", "cost": 60000.0, "promotion": null}
+{"serviceId": 5720, "priceUnitId": 326, "serviceHomecode": "62.2.3.5", "serviceName": "Нижняя блефаропластика трансконьюктивальная 2 категории", "deadline": " ", "cost": 70000.0, "promotion": null}
+{"serviceId": 5721, "priceUnitId": 326, "serviceHomecode": "62.2.3.6", "serviceName": "Нижняя блефаропластика трансконьюктивальная 3 категории", "deadline": " ", "cost": 80000.0, "promotion": null}
+{"serviceId": 5886, "priceUnitId": 145, "serviceHomecode": "1017", "serviceName": "Диагностический профиль перед проведением эндоскопического исследования (ФКС, ФГДС) под общим наркозом", "deadline": "1-2", "cost": 1130.0, "promotion": null}
+{"serviceId": 5916, "priceUnitId": 136, "serviceHomecode": "919", "serviceName": "Взятие крови без последующего исследования", "deadline": " ", "cost": 190.0, "promotion": null}
+{"serviceId": 5919, "priceUnitId": 291, "serviceHomecode": "30.1.1.7", "serviceName": "Экспресс-тест Helicobacter pylori", "deadline": " ", "cost": 1600.0, "promotion": null}
+{"serviceId": 5920, "priceUnitId": 291, "serviceHomecode": "30.1.1.9", "serviceName": "Экспресс-тест для диагностики лактозной недостаточности", "deadline": " ", "cost": 4150.0, "promotion": null}
+{"serviceId": 5928, "priceUnitId": 441, "serviceHomecode": "3405", "serviceName": "Непереносимость лактозы", "deadline": "7", "cost": 1100.0, "promotion": null}
+{"serviceId": 5939, "priceUnitId": 140, "serviceHomecode": "729", "serviceName": "Исследование кала на простейшие (бластоцисты, амебы, лямблии и др.)", "deadline": "1-2", "cost": 290.0, "promotion": 0}
+{"serviceId": 5976, "priceUnitId": 331, "serviceHomecode": "16.1.1.1", "serviceName": "Прием (осмотр, консультация) врача-невролога первичный - Епифанов А.В.", "deadline": " ", "cost": 20000.0, "promotion": 0}
+{"serviceId": 6000, "priceUnitId": 331, "serviceHomecode": "16.3.1.1", "serviceName": "Непрерывное внутривенное введение лекарственных препаратов (с учетом стоимости препаратов)", "deadline": " ", "cost": 1250.0, "promotion": 0}
+{"serviceId": 6092, "priceUnitId": 142, "serviceHomecode": "630СИН", "serviceName": "Са (кальций) в синовиальной жидкости", "deadline": "1-2", "cost": 250.0, "promotion": null}
+{"serviceId": 6095, "priceUnitId": 142, "serviceHomecode": "640СИН", "serviceName": "Глюкоза в синовиальной жидкости", "deadline": "1-2", "cost": 250.0, "promotion": null}
+{"serviceId": 6277, "priceUnitId": 141, "serviceHomecode": "185", "serviceName": "Ревматоидный фактор, IgA", "deadline": "14", "cost": 1270.0, "promotion": 0}
+{"serviceId": 6278, "priceUnitId": 141, "serviceHomecode": "247", "serviceName": "T-SPOT (диагностика латентной и активной туберкулезной инфекции у детей и взрослых)", "deadline": "до 12", "cost": 7900.0, "promotion": 0}
+{"serviceId": 6315, "priceUnitId": 141, "serviceHomecode": "196", "serviceName": "Индекс свободного тестостерона (ИСТ)", "deadline": "1-2", "cost": 840.0, "promotion": null}
+{"serviceId": 6383, "priceUnitId": 181, "serviceHomecode": "2.4.2.3", "serviceName": "УЗИ периферических лимфоузлов (1 область) с эластографией", "deadline": " ", "cost": 1800.0, "promotion": null}
+{"serviceId": 6422, "priceUnitId": 178, "serviceHomecode": "2.50.1.1", "serviceName": "УЗИ органов брюшной полости (печень, желчный пузырь, поджелудочная железа, селезенка, лимфоузлы брюшной полости) (детское)", "deadline": " ", "cost": 2500.0, "promotion": null}
+{"serviceId": 6436, "priceUnitId": 181, "serviceHomecode": "2.50.4.1", "serviceName": "УЗИ щитовидной, паращитовидной желез с регионарными лимфоузлами (детское)", "deadline": " ", "cost": 2000.0, "promotion": null}
+{"serviceId": 6438, "priceUnitId": 181, "serviceHomecode": "2.50.4.5", "serviceName": "УЗИ забрюшинных, внутрибрюшинных, брыжеечных лимфоузлов (детское)", "deadline": " ", "cost": 1450.0, "promotion": null}
+{"serviceId": 6439, "priceUnitId": 181, "serviceHomecode": "2.50.4.6", "serviceName": "УЗИ периферических лимфоузлов (1 область) (детское)", "deadline": " ", "cost": 1200.0, "promotion": null}
+{"serviceId": 6440, "priceUnitId": 181, "serviceHomecode": "2.50.4.7", "serviceName": "УЗИ периферических лимфоузлов комплексно - все зоны (детское)", "deadline": " ", "cost": 1900.0, "promotion": null}
+{"serviceId": 6549, "priceUnitId": 182, "serviceHomecode": "4.1.2.6", "serviceName": "Прием (осмотр, консультация) врача- уролога, к.м.н.", "deadline": " ", "cost": 3500.0, "promotion": 0}
+{"serviceId": 6874, "priceUnitId": 150, "serviceHomecode": "42.1.4.1", "serviceName": "Прием (осмотр, консультация) врача-терапевта на дому (2 зона)", "deadline": " ", "cost": 6000.0, "promotion": 0}
+{"serviceId": 7042, "priceUnitId": 149, "serviceHomecode": "3.1.1.1.1", "serviceName": "Прием (осмотр, консультация) врача-акушера-гинеколога первичный (первое посещение)", "deadline": " ", "cost": 3000.0, "promotion": null}
+{"serviceId": 7055, "priceUnitId": 149, "serviceHomecode": "3.22.1.4", "serviceName": "Искусственное прерывание беременности (аборт) медикаментозный", "deadline": " ", "cost": 0.0, "promotion": 0}
+{"serviceId": 7160, "priceUnitId": 143, "serviceHomecode": "731", "serviceName": "Жидкостная цитология. Цитологическое исследование биоматериала шейки матки (технология BD SurePath™) с количественным определением ВПЧ типов 16, 18 .", "deadline": "8-10", "cost": 1420.0, "promotion": null}
+{"serviceId": 7161, "priceUnitId": 143, "serviceHomecode": "739", "serviceName": "Жидкостная цитология. Цитологическое исследование биоматериала шейки матки (технология BD SurePath™) с количественным определением ВПЧ типов 16, 18, 31, 33, 35, 39, 45, 51, 52, 56, 58, 59.", "deadline": "8-10", "cost": 1980.0, "promotion": 73}
+{"serviceId": 7343, "priceUnitId": 145, "serviceHomecode": "4001", "serviceName": "Диагностика железодефицитных анемий", "deadline": "2-7", "cost": 1910.0, "promotion": null}
+{"serviceId": 7354, "priceUnitId": 142, "serviceHomecode": "10502", "serviceName": "Коэффициент насыщения трансферрина железом", "deadline": "4-5", "cost": 620.0, "promotion": 0}
+{"serviceId": 7409, "priceUnitId": 145, "serviceHomecode": "1059", "serviceName": "«Витамин D – регулярно!»", "deadline": "1-2", "cost": 1100.0, "promotion": 25}
+{"serviceId": 7410, "priceUnitId": 145, "serviceHomecode": "4002", "serviceName": "«Витамин D – COMBO»", "deadline": "1-2", "cost": 2455.0, "promotion": null}
+{"serviceId": 7598, "priceUnitId": 199, "serviceHomecode": "81.5.1.5.1", "serviceName": "Геморроидэктомия (осложненная), 3-4 стадии", "deadline": " ", "cost": 50000.0, "promotion": null}
+{"serviceId": 7603, "priceUnitId": 336, "serviceHomecode": "16.6.7.1", "serviceName": "Прием (осмотр, консультация) врача-гематолога", "deadline": " ", "cost": 3300.0, "promotion": 0}
+{"serviceId": 7632, "priceUnitId": 141, "serviceHomecode": "373", "serviceName": "Витамин А (ретинол)", "deadline": "12", "cost": 2030.0, "promotion": null}
+{"serviceId": 7740, "priceUnitId": 311, "serviceHomecode": "9.1.1.1", "serviceName": "Инъекции внутримышечные (за 1 инъекцию) (с учетом препаратов)", "deadline": " ", "cost": 600.0, "promotion": null}
+{"serviceId": 7777, "priceUnitId": 144, "serviceHomecode": "87", "serviceName": "Фемофлор 16", "deadline": "1-5", "cost": 2530.0, "promotion": 64}
+{"serviceId": 7910, "priceUnitId": 156, "serviceHomecode": "10.11.1", "serviceName": "ЭМГ (стимуляционная) комплексная с верхних конечностей", "deadline": " ", "cost": 3800.0, "promotion": null}
+{"serviceId": 7911, "priceUnitId": 156, "serviceHomecode": "10.11.1.1", "serviceName": "ЭМГ (стимуляционная) комплексная с нижних конечностей", "deadline": " ", "cost": 3800.0, "promotion": null}
+{"serviceId": 7912, "priceUnitId": 144, "serviceHomecode": "88", "serviceName": "Фемофлор® II", "deadline": "1-5", "cost": 4000.0, "promotion": null}
+{"serviceId": 7930, "priceUnitId": 144, "serviceHomecode": "90", "serviceName": "ФЕМОФЛОР® ДельтаСкрин", "deadline": "1-5", "cost": 2700.0, "promotion": null}
+{"serviceId": 7932, "priceUnitId": 144, "serviceHomecode": "89", "serviceName": "ФЕМОФЛОР® АльфаСкрин", "deadline": "1-5", "cost": 2600.0, "promotion": null}
+{"serviceId": 7934, "priceUnitId": 145, "serviceHomecode": "1068", "serviceName": "\"Госпитализация\"", "deadline": "1-2", "cost": 5525.0, "promotion": 30}
+{"serviceId": 7935, "priceUnitId": 145, "serviceHomecode": "1069", "serviceName": "\"Гемостазиограмма (скрининг)\"", "deadline": "1-2", "cost": 950.0, "promotion": 19}
+{"serviceId": 7936, "priceUnitId": 145, "serviceHomecode": "1070", "serviceName": "«Обязательный комплекс»", "deadline": "1-2", "cost": 1515.0, "promotion": 7}
+{"serviceId": 7938, "priceUnitId": 166, "serviceHomecode": "39.10.1", "serviceName": "Флюорография", "deadline": " ", "cost": 900.0, "promotion": 0}
+{"serviceId": 8151, "priceUnitId": 158, "serviceHomecode": "24.8.1.1", "serviceName": "Первичный прием оториноларинголога", "deadline": " ", "cost": 0.0, "promotion": null}
+{"serviceId": 8259, "priceUnitId": 326, "serviceHomecode": "62.2.3.7", "serviceName": "Нижняя блефаропластика (пластика нижних век) 4 категории", "deadline": " ", "cost": 90000.0, "promotion": null}
+{"serviceId": 8277, "priceUnitId": 326, "serviceHomecode": "62.2.2.7", "serviceName": "Верхняя блефаропластика (пластика верхних век) 4 категории", "deadline": " ", "cost": 100000.0, "promotion": null}
+{"serviceId": 8350, "priceUnitId": 341, "serviceHomecode": "5420", "serviceName": "Расширенный комплексный анализ на витамины (A, бета-каротин, D, E, K, C, B1, B2, B3, B5, B6, B9, B12)", "deadline": "7-10", "cost": 22500.0, "promotion": null}
+{"serviceId": 8355, "priceUnitId": 341, "serviceHomecode": "5425", "serviceName": "Витамин В2 (Рибофлавин)", "deadline": "6-8", "cost": 1950.0, "promotion": null}
+{"serviceId": 8362, "priceUnitId": 341, "serviceHomecode": "5432", "serviceName": "Витамин D, 25-гидрокси (кальциферол), ВЭЖХ-МС/МС - метод масс-спектрометрия", "deadline": "7-8", "cost": 2300.0, "promotion": null}
+{"serviceId": 8364, "priceUnitId": 341, "serviceHomecode": "5434", "serviceName": "Витамин В7 (биотин)", "deadline": "6-8", "cost": 1950.0, "promotion": null}
+{"serviceId": 8365, "priceUnitId": 341, "serviceHomecode": "5435", "serviceName": "Витамин B6 (пиридоксаль-5-фосфат)", "deadline": "6-8", "cost": 2240.0, "promotion": 0}
+{"serviceId": 8367, "priceUnitId": 341, "serviceHomecode": "5437", "serviceName": "Витамин B1(тиаминпирофосфат)", "deadline": "6-8", "cost": 2260.0, "promotion": 0}
+{"serviceId": 8566, "priceUnitId": 344, "serviceHomecode": "5892", "serviceName": "Медь в моче", "deadline": "6-12", "cost": 930.0, "promotion": null}
+{"serviceId": 8590, "priceUnitId": 347, "serviceHomecode": "6200", "serviceName": "Креатинкиназа MB", "deadline": "3-4", "cost": 360.0, "promotion": 0}
+{"serviceId": 8661, "priceUnitId": 144, "serviceHomecode": "7150", "serviceName": "Генотипирование папилломавирусов 14 типов: 16, 18, 31, 33, 35, 39, 45, 51, 52, 56, 58, 59, 66, 68 + КВМ  (кол.)", "deadline": "2-3", "cost": 1100.0, "promotion": null}
+{"serviceId": 8662, "priceUnitId": 144, "serviceHomecode": "7151", "serviceName": "Генотипирование папилломавирусов 14 типов:  16, 18, 31, 33, 35, 39, 45, 51, 52, 56, 58, 59, 66, 68 + КВМ  (кач.)", "deadline": "2-3", "cost": 840.0, "promotion": null}
+{"serviceId": 8665, "priceUnitId": 144, "serviceHomecode": "7154", "serviceName": "Генотипирование папилломавирусов 21 типа: 6, 11, 16, 18, 26, 31, 33, 35, 39, 44, 45, 51, 52, 53, 56, 58, 59, 66, 68, 73, 82 + КВМ  (кол.)", "deadline": "2-3", "cost": 2900.0, "promotion": 14}
+{"serviceId": 8746, "priceUnitId": 401, "serviceHomecode": "9000", "serviceName": "Антитела класса IgG к главному белку наружной мембраны МОМР и антитела класса IgG к Pgp3 (мембраноассоциированный плазмидный белок) Chlamydia trachomatis, IgG", "deadline": "7-8", "cost": 800.0, "promotion": null}
+{"serviceId": 8747, "priceUnitId": 401, "serviceHomecode": "9001", "serviceName": "Антитела класса IgG к белку теплового шока Chlamydia trachomatis (Anti-cHSP60-IgG)", "deadline": "6-7", "cost": 600.0, "promotion": null}
+{"serviceId": 8764, "priceUnitId": 412, "serviceHomecode": "10101", "serviceName": "Пепсиноген II", "deadline": "9-11", "cost": 980.0, "promotion": null}
+{"serviceId": 8765, "priceUnitId": 412, "serviceHomecode": "10102", "serviceName": "Пепсиноген I", "deadline": "9-11", "cost": 920.0, "promotion": null}
+{"serviceId": 8766, "priceUnitId": 412, "serviceHomecode": "10103", "serviceName": "Гастрин-17 стимулированный", "deadline": "до 6 дней", "cost": 1950.0, "promotion": null}
+{"serviceId": 8768, "priceUnitId": 412, "serviceHomecode": "10105", "serviceName": "Гастрин", "deadline": "9-11", "cost": 750.0, "promotion": 0}
+{"serviceId": 8860, "priceUnitId": 141, "serviceHomecode": "12502", "serviceName": "Антитела классов IgA и IgG к бокаловидным клеткам кишечника, суммарно", "deadline": "10-11", "cost": 1180.0, "promotion": null}
+{"serviceId": 8863, "priceUnitId": 429, "serviceHomecode": "12505", "serviceName": "Антитела к ретикулину IgA и IgG (Reticulin Antibody IgA&IgG, ARA)", "deadline": "до 12 дней", "cost": 1350.0, "promotion": null}
+{"serviceId": 9163, "priceUnitId": 137, "serviceHomecode": "15851", "serviceName": "Гистамин в моче", "deadline": "9-11", "cost": 1800.0, "promotion": null}
+{"serviceId": 9164, "priceUnitId": 137, "serviceHomecode": "15852", "serviceName": "Гистамин в крови", "deadline": "10-12", "cost": 2400.0, "promotion": null}
+{"serviceId": 9200, "priceUnitId": 142, "serviceHomecode": "10313", "serviceName": "Оценка риска камнеобразования - литогенные субстанции мочи, разовая порция мочи (кальций, магний, фосфор, оксалаты, мочевая кислота, креатинин разовой порции мочи, с расчетом нормализованных по креатинину показателей)", "deadline": "13-14", "cost": 3100.0, "promotion": 0}
+{"serviceId": 9201, "priceUnitId": 142, "serviceHomecode": "10314", "serviceName": "Оценка риска камнеобразования - литогенные субстанции мочи, суточная моча (кальций, магний, фосфор, оксалаты, мочевая кислота, креатинин суточной мочи с расчетом суточной экскреции)", "deadline": "13-14", "cost": 2600.0, "promotion": 0}
+{"serviceId": 9202, "priceUnitId": 356, "serviceHomecode": "6801", "serviceName": "Андрофлор - развернутая диагностика ЗППП", "deadline": "3-5", "cost": 2740.0, "promotion": null}
+{"serviceId": 9203, "priceUnitId": 356, "serviceHomecode": "6802", "serviceName": "Андрофлор скрин (скрининговая диагностика)", "deadline": "4-7", "cost": 2100.0, "promotion": null}
+{"serviceId": 9259, "priceUnitId": 145, "serviceHomecode": "1079", "serviceName": "Ежегодный Чекап", "deadline": "1-2", "cost": 2055.0, "promotion": null}
+{"serviceId": 9296, "priceUnitId": 149, "serviceHomecode": "3.1.1.6", "serviceName": "Прием (осмотр, консультация) врача-акушера-гинеколога  (прием с ультразвуковым гинекологическим исследованием одним датчиком)", "deadline": " ", "cost": 3500.0, "promotion": 0}
+{"serviceId": 9374, "priceUnitId": 170, "serviceHomecode": "1.1.1", "serviceName": "Прием (осмотр, консультация) врача-терапевта", "deadline": " ", "cost": 3500.0, "promotion": null}
+{"serviceId": 9447, "priceUnitId": 143, "serviceHomecode": "702", "serviceName": "Спермограмма (аппаратная микроскопия)", "deadline": "1", "cost": 1850.0, "promotion": null}
+{"serviceId": 9566, "priceUnitId": 341, "serviceHomecode": "5438", "serviceName": "Витамин В12, активный холотранскобаламин", "deadline": "5-8 дн", "cost": 1350.0, "promotion": null}
+{"serviceId": 9572, "priceUnitId": 412, "serviceHomecode": "10106", "serviceName": "Пепсиногены  I и II с расчетом соотношения", "deadline": "9-11", "cost": 1950.0, "promotion": null}
+{"serviceId": 9613, "priceUnitId": 170, "serviceHomecode": "13.1.1.7", "serviceName": "Прием (осмотр, консультация) врача-терапевта перед оперативным вмешательством", "deadline": " ", "cost": 1500.0, "promotion": null}
+{"serviceId": 9653, "priceUnitId": 142, "serviceHomecode": "614", "serviceName": "Липидограмма расширенная", "deadline": " ", "cost": 1050.0, "promotion": 12}
+{"serviceId": 9773, "priceUnitId": 149, "serviceHomecode": "3.1.1.16", "serviceName": "Прием (осмотр, консультация) врача-акушера-гинеколога перед оперативным лечением", "deadline": " ", "cost": 1100.0, "promotion": null}
+{"serviceId": 9805, "priceUnitId": 145, "serviceHomecode": "2703", "serviceName": "Ионограмма, электролиты", "deadline": "1-2", "cost": 620.0, "promotion": null}
+{"serviceId": 9806, "priceUnitId": 145, "serviceHomecode": "2704", "serviceName": "Ионограмма, электролиты расширенная", "deadline": "1-2", "cost": 1340.0, "promotion": null}
+{"serviceId": 10160, "priceUnitId": 145, "serviceHomecode": "1004", "serviceName": "Диагностика гельминтозов и протозойных инфекций (лямблии IgG, токсокара IgG, описторх IgG, трихинелла IgG, эхинококк IgG, аскариды IgG, ОАК)", "deadline": "1-2", "cost": 3700.0, "promotion": null}
+{"serviceId": 10182, "priceUnitId": 452, "serviceHomecode": "12.1.20", "serviceName": "ПЕРВИЧНЫЙ ПРИЕМ невролог Шубин Д. Н.", "deadline": " ", "cost": 6500.0, "promotion": null}
+{"serviceId": 10282, "priceUnitId": 145, "serviceHomecode": "1209", "serviceName": "Расширенная копрология (с исследованием кала на паразиты)", "deadline": "1-3", "cost": 1020.0, "promotion": null}
+{"serviceId": 10290, "priceUnitId": 331, "serviceHomecode": "16.1.1.18", "serviceName": "Прием (осмотр, консультация) врача-невролога первичный", "deadline": " ", "cost": 3000.0, "promotion": 0}
+{"serviceId": 10404, "priceUnitId": 142, "serviceHomecode": "647", "serviceName": "Билирубин непрямой (свободный)", "deadline": "1-2", "cost": 190.0, "promotion": 0}
+{"serviceId": 10539, "priceUnitId": 326, "serviceHomecode": "62.2.3.8", "serviceName": "Нижняя блефаропластика (пластика нижних век) 5 категории", "deadline": " ", "cost": 100000.0, "promotion": null}
+{"serviceId": 10540, "priceUnitId": 326, "serviceHomecode": "62.2.3.9", "serviceName": "Нижняя блефаропластика (пластика нижних век) 6 категории", "deadline": " ", "cost": 110000.0, "promotion": null}
+{"serviceId": 10564, "priceUnitId": 335, "serviceHomecode": "1112", "serviceName": "PSA скрининг (PSA свободный, PSA общий, соотношение PSA св/PSA общ)", "deadline": "1-2", "cost": 1090.0, "promotion": 53}
+{"serviceId": 10693, "priceUnitId": 145, "serviceHomecode": "1233", "serviceName": "Перед операцией", "deadline": "1-2", "cost": 1595.0, "promotion": 93}
+{"serviceId": 10864, "priceUnitId": 142, "serviceHomecode": "501к", "serviceName": "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) капиллярная кровь", "deadline": "1-2", "cost": 500.0, "promotion": 0}
+{"serviceId": 10865, "priceUnitId": 142, "serviceHomecode": "502к", "serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ) капиллярная кровь", "deadline": "1-2", "cost": 380.0, "promotion": 0}
+{"serviceId": 10867, "priceUnitId": 142, "serviceHomecode": "590к", "serviceName": "ОАК (без лейкоцитарной формулы и СОЭ) капиллярная кровь", "deadline": "1-2", "cost": 250.0, "promotion": 0}
+{"serviceId": 10871, "priceUnitId": 145, "serviceHomecode": "1235", "serviceName": "Женский чекап Базовый", "deadline": "3-5", "cost": 3005.0, "promotion": null}
+{"serviceId": 10872, "priceUnitId": 145, "serviceHomecode": "1239", "serviceName": "Мужской чекап Расширенный", "deadline": "1-2", "cost": 8030.0, "promotion": null}
+{"serviceId": 10873, "priceUnitId": 145, "serviceHomecode": "1236", "serviceName": "Женский чекап Расширенный", "deadline": "3-7", "cost": 10200.0, "promotion": null}
+{"serviceId": 10875, "priceUnitId": 145, "serviceHomecode": "1237", "serviceName": "Мужской чекап Базовый", "deadline": "1-2", "cost": 1260.0, "promotion": null}
+{"serviceId": 10877, "priceUnitId": 145, "serviceHomecode": "1238", "serviceName": "Мужской чекап Стандартный", "deadline": "1-2", "cost": 3325.0, "promotion": null}
+{"serviceId": 11337, "priceUnitId": 144, "serviceHomecode": "7160", "serviceName": "Гельмо-скрин. Скрининговое ПЦР-исследование возбудителей гельминтозов (энтеробиоза, аскаридоза, дифиллоботриоза, описторхоза, тениоза)", "deadline": "до 8 дней", "cost": 2300.0, "promotion": null}
+{"serviceId": 11477, "priceUnitId": 182, "serviceHomecode": "4.1.14", "serviceName": "Послеоперационная консультация уролога", "deadline": " ", "cost": 1300.0, "promotion": null}
+{"serviceId": 11495, "priceUnitId": 187, "serviceHomecode": "2.4.1.3", "serviceName": "Узи щитовидной железы (экспертное)", "deadline": " ", "cost": 2300.0, "promotion": null}
+{"serviceId": 11508, "priceUnitId": 326, "serviceHomecode": "62.2.3.11", "serviceName": "Нижняя блефаропластика трансконъюктивальная 4 категории", "deadline": " ", "cost": 100000.0, "promotion": null}
+{"serviceId": 11511, "priceUnitId": 143, "serviceHomecode": "759", "serviceName": "Гистологическое исследование биопсийного материала: эндоскопические биоптаты пищевода, желудка, кишечника, бронхов, при раздельном диагностическом выскабливании матки и цервикального канала, инцизионная и пункционная биопсия кожи, образований мягких тканей.", "deadline": "до 12 дн", "cost": 6000.0, "promotion": null}
+{"serviceId": 11531, "priceUnitId": 440, "serviceHomecode": "14384", "serviceName": "Цитологическое исследование материала ТАБ щитовидной железы.", "deadline": "12-27", "cost": 4200.0, "promotion": null}
+{"serviceId": 11532, "priceUnitId": 440, "serviceHomecode": "14385", "serviceName": "Стандартизованное комплексное цитологическое диагностическое исследование материала ТАБ щитовидной железы (окраска по МГГ+ РАР; Sure Path).", "deadline": "10-23 дней", "cost": 6472.0, "promotion": null}
+{"serviceId": 11534, "priceUnitId": 440, "serviceHomecode": "14387", "serviceName": "Стандартизованная автоматизированная жидкостная цитология Sure Path, гинекологический материал (в стоимость входит цито-щетка для забора материала из шейки матки, виала с транспортной средой).", "deadline": "10-18 дней", "cost": 4284.0, "promotion": null}
+{"serviceId": 11588, "priceUnitId": 187, "serviceHomecode": "3.3.9.5", "serviceName": "Тонкоигольная аспирационная биопсия щитовидной железы", "deadline": " ", "cost": 4300.0, "promotion": 0}
+{"serviceId": 11702, "priceUnitId": 170, "serviceHomecode": "13.1.3.15", "serviceName": "Прием (осмотр, консультация) врача-терапевта (эндокринологическое отделение)", "deadline": " ", "cost": 3950.0, "promotion": null}
+{"serviceId": 11769, "priceUnitId": 157, "serviceHomecode": "42.1.6.6", "serviceName": "Прием (осмотр, консультация) врача-онколога (с дерматоскопией  аппаратом РДС-2)", "deadline": " ", "cost": 10000.0, "promotion": 0}
+{"serviceId": 11933, "priceUnitId": 389, "serviceHomecode": "332", "serviceName": "Исследование клеща на зараженность инфекциями: клещевой энцефалит (ИФА), боррелиоз (ПЦР), эрлихиоз (ПЦР) и анаплазмоз (ПЦР)", "deadline": "2- 6 дней", "cost": 2980.0, "promotion": 0}
+{"serviceId": 11982, "priceUnitId": 158, "serviceHomecode": "24.1.5", "serviceName": "Первичный приём оториноларинголога 1 категория", "deadline": " ", "cost": 3000.0, "promotion": 0}
+{"serviceId": 11983, "priceUnitId": 158, "serviceHomecode": "24.1.6", "serviceName": "Первичный приём оториноларинголога 2 категория", "deadline": " ", "cost": 3500.0, "promotion": 0}
+{"serviceId": 11984, "priceUnitId": 158, "serviceHomecode": "24.1.7", "serviceName": "Первичный приём оториноларинголога 3 категория", "deadline": " ", "cost": 4000.0, "promotion": 0}
+{"serviceId": 11985, "priceUnitId": 158, "serviceHomecode": "24.1.8", "serviceName": "Первичный приём оториноларинголога 4 категория", "deadline": " ", "cost": 5000.0, "promotion": 0}
+{"serviceId": 11986, "priceUnitId": 158, "serviceHomecode": "24.1.9", "serviceName": "Первичный приём оториноларинголога 5 категория", "deadline": " ", "cost": 7000.0, "promotion": 0}
+{"serviceId": 11987, "priceUnitId": 158, "serviceHomecode": "24.1.11", "serviceName": "Повторный приём оториноларинголога (в течение месяца) 1 категория", "deadline": " ", "cost": 2000.0, "promotion": 0}
+{"serviceId": 11988, "priceUnitId": 158, "serviceHomecode": "24.1.12", "serviceName": "Повторный приём оториноларинголога (в течение месяца) 2 категория", "deadline": " ", "cost": 3000.0, "promotion": 0}
+{"serviceId": 11989, "priceUnitId": 158, "serviceHomecode": "24.1.13", "serviceName": "Повторный приём оториноларинголога (в течение месяца) 3 категория", "deadline": " ", "cost": 5000.0, "promotion": 0}
+{"serviceId": 11990, "priceUnitId": 158, "serviceHomecode": "24.1.14", "serviceName": "Повторный приём оториноларинголога (в течение месяца) 4 категория", "deadline": " ", "cost": 2500.0, "promotion": null}
+{"serviceId": 11991, "priceUnitId": 158, "serviceHomecode": "24.1.15", "serviceName": "Повторный приём оториноларинголога (в течение месяца) 5 категория", "deadline": " ", "cost": 3000.0, "promotion": null}
+{"serviceId": 12009, "priceUnitId": 331, "serviceHomecode": "16.3.2", "serviceName": "Инъекции внутримышечные (за 1 инъекцию) (без стоимости препаратов)", "deadline": " ", "cost": 200.0, "promotion": 0}
+{"serviceId": 12010, "priceUnitId": 331, "serviceHomecode": "16.3.3", "serviceName": "Инъекции внутримышечные (за 1 инъекцию) (с учетом препаратов)", "deadline": " ", "cost": 1000.0, "promotion": 0}
+{"serviceId": 12028, "priceUnitId": 182, "serviceHomecode": "4.1.22", "serviceName": "Прием (осмотр, консультация) врача- уролога (андролога), к.м.н", "deadline": " ", "cost": 3500.0, "promotion": 0}
+{"serviceId": 12132, "priceUnitId": 145, "serviceHomecode": "1287", "serviceName": "Профиль. \"Здоровая щитовидная железа\"", "deadline": "1-2", "cost": 1705.0, "promotion": null}
+{"serviceId": 12133, "priceUnitId": 145, "serviceHomecode": "1288", "serviceName": "Профиль. Диагностика щитовидной железы(полное обследование)", "deadline": "1-2", "cost": 4230.0, "promotion": null}
+{"serviceId": 12134, "priceUnitId": 145, "serviceHomecode": "1285", "serviceName": "Диабетический профиль 2", "deadline": "1-2", "cost": 1305.0, "promotion": null}
+{"serviceId": 12141, "priceUnitId": 142, "serviceHomecode": "669", "serviceName": "Экспресс-тест на глюкозу", "deadline": "1", "cost": 100.0, "promotion": null}
+{"serviceId": 12369, "priceUnitId": 145, "serviceHomecode": "1304", "serviceName": "Биохимия минимум", "deadline": "1-2", "cost": 1500.0, "promotion": null}
+{"serviceId": 12370, "priceUnitId": 145, "serviceHomecode": "1305", "serviceName": "Биохимия база", "deadline": "1-2", "cost": 4055.0, "promotion": null}
+{"serviceId": 12371, "priceUnitId": 145, "serviceHomecode": "1306", "serviceName": "Биохимия максимум", "deadline": "1-2", "cost": 5655.0, "promotion": null}
+{"serviceId": 12388, "priceUnitId": 137, "serviceHomecode": "2637", "serviceName": "Смесь аллергенов плесени mx1 (IgE) : Penicillium chrysogenum, Cladosporium herbarum, Aspergillus fumigatus, Alternaria alternata (ImmunoCAP)", "deadline": "6-7 дней", "cost": 1500.0, "promotion": null}
+{"serviceId": 12434, "priceUnitId": 156, "serviceHomecode": "10.11.1.2", "serviceName": "ЭМГ треморография", "deadline": " ", "cost": 1800.0, "promotion": null}
+{"serviceId": 12436, "priceUnitId": 156, "serviceHomecode": "10.11.1.4", "serviceName": "ЭМГ комплексная при миастении", "deadline": " ", "cost": 3800.0, "promotion": null}
+{"serviceId": 12465, "priceUnitId": 178, "serviceHomecode": "2.1.12", "serviceName": "Ультразвуковое исследование органов брюшной полости (комплексное) скрининг до 1 года", "deadline": " ", "cost": 3000.0, "promotion": null}
+{"serviceId": 12468, "priceUnitId": 175, "serviceHomecode": "2.9.9", "serviceName": "Эхокардиография (скрининг до 1 года)", "deadline": " ", "cost": 3000.0, "promotion": null}
+{"serviceId": 12484, "priceUnitId": 191, "serviceHomecode": "50.10.1.5", "serviceName": "Проведение инфузионной терапии в условиях дневного стационара без учета стоимости лекарственных препаратов (до 1 часа)", "deadline": " ", "cost": 1600.0, "promotion": null}
+{"serviceId": 12485, "priceUnitId": 191, "serviceHomecode": "50.10.1.6", "serviceName": "Проведение инфузионной терапии в условиях дневного стационара без учета стоимости лекарственных препаратов (до 2 часов)", "deadline": " ", "cost": 2700.0, "promotion": null}
+{"serviceId": 12688, "priceUnitId": 137, "serviceHomecode": "2301М", "serviceName": "Кошка,IgE", "deadline": "6-8", "cost": 500.0, "promotion": null}
+{"serviceId": 12690, "priceUnitId": 137, "serviceHomecode": "2304М", "serviceName": "Собака, IgE", "deadline": "6-8", "cost": 500.0, "promotion": 0}
+{"serviceId": 12691, "priceUnitId": 137, "serviceHomecode": "2312И", "serviceName": "Домашняя пыль (Greer Labs.) (h1) IgE, ImmunoCAP", "deadline": "6-8", "cost": 845.0, "promotion": null}
+{"serviceId": 12692, "priceUnitId": 137, "serviceHomecode": "2313И", "serviceName": "Домашняя пыль (Hollister –Stier) (h2) IgE, ImmunoCAP", "deadline": "6-8", "cost": 845.0, "promotion": null}
+{"serviceId": 12696, "priceUnitId": 137, "serviceHomecode": "2341И", "serviceName": "Тимофеевка луговая (g6) IgE, ImmunoCAP", "deadline": "8-11", "cost": 990.0, "promotion": null}
+{"serviceId": 12706, "priceUnitId": 137, "serviceHomecode": "2616М", "serviceName": "Респираторная панель Immulite (20 респираторных аллергенов), IgE", "deadline": "6-8", "cost": 9200.0, "promotion": null}
+{"serviceId": 12707, "priceUnitId": 137, "serviceHomecode": "2617И", "serviceName": "Phadiatop ImmunoCAP, IgE к смеси ингаляционных аллергенов", "deadline": "6-8", "cost": 3200.0, "promotion": 0}
+{"serviceId": 12709, "priceUnitId": 137, "serviceHomecode": "2624И", "serviceName": "Смесь аллергенов пыльцы раннецветущих луговых трав (gx1) (состав смеси: ежа сборная, овсяница, плевел, тимофеевка, мятлик), IgE, ImmunoCAP", "deadline": "8-11", "cost": 1300.0, "promotion": 0}
+{"serviceId": 12711, "priceUnitId": 137, "serviceHomecode": "2627И", "serviceName": "Смесь аллергенов пыльцы деревьев (tx9) – ольха, береза, лещина, дуб, ива, IgE, ImmunoCAP", "deadline": "6-8", "cost": 1100.0, "promotion": null}
+{"serviceId": 12868, "priceUnitId": 441, "serviceHomecode": "13539", "serviceName": "Неинвазивное определение Резус-фактора плода (Геномед)", "deadline": "10-25", "cost": 8900.0, "promotion": null}
+{"serviceId": 12873, "priceUnitId": 177, "serviceHomecode": "2.6.7.12", "serviceName": "Запись видео изображения 4D при проведении акушерского УЗИ (доп. Услуга)", "deadline": " ", "cost": 1000.0, "promotion": null}
+{"serviceId": 13224, "priceUnitId": 137, "serviceHomecode": "2667И", "serviceName": "Аллерген e1 - эпителий и перхоть кошки, IgE (ImmunoCAP)", "deadline": "8-15 дн", "cost": 1100.0, "promotion": null}
+{"serviceId": 13256, "priceUnitId": 441, "serviceHomecode": "13560", "serviceName": "Семейная гиперхолестеринемия (комплексная диагностика - гены LDLR, APOB, PCSK9) (Familial Hypercholesterolemia - Genes LDLR, APOB, PCSK9)", "deadline": "до 17 дней", "cost": 6750.0, "promotion": null}
+{"serviceId": 13257, "priceUnitId": 441, "serviceHomecode": "13561", "serviceName": "Полное исследование генов LDLR, APOB, PCSK9, LDLRAP1 для диагностики семейной гиперхолестеринемии методом NGS (LDLR, APOB, PCSK9, LDLRAP1 genes for the diagnosis of familial hypercholesterolemia by Next-Generation Sequencing (NGS) in blood)", "deadline": "до 40 дней", "cost": 50600.0, "promotion": 0}
+{"serviceId": 13258, "priceUnitId": 441, "serviceHomecode": "13562", "serviceName": "Семейная гиперхолестеринемия, ген APOB (Familial Hypercholesterolemia, Gene APOB100", "deadline": "до 19 дней", "cost": 7450.0, "promotion": 0}
+{"serviceId": 13259, "priceUnitId": 441, "serviceHomecode": "13563", "serviceName": "Семейная гиперхолестеринемия, ген LDLR (Familial Hypercholesterolemia, Gene LDLR)", "deadline": "до 17 дней", "cost": 8990.0, "promotion": null}
+{"serviceId": 13260, "priceUnitId": 441, "serviceHomecode": "13564", "serviceName": "Семейная гиперхолестеринемия, ген PCSK9 (Familial Hypercholesterolemia, Gene PCSK9)", "deadline": "до 35 дней", "cost": 8100.0, "promotion": null}
+{"serviceId": 13267, "priceUnitId": 441, "serviceHomecode": "14598", "serviceName": "Высокочувствительный С-реактивный белок (кардио), (СРБ высокочувствительный, high sensitivity CRP, hs-CRP)", "deadline": "2-4 дня", "cost": 600.0, "promotion": 0}
+{"serviceId": 13318, "priceUnitId": 405, "serviceHomecode": "158", "serviceName": "АТ -ТПО (Anti-TPO) антитела к тиреоидной  пероксидазе с разведением", "deadline": "1-2", "cost": 1010.0, "promotion": null}
+{"serviceId": 13319, "priceUnitId": 158, "serviceHomecode": "24.1.17", "serviceName": "Приём оториноларинголога Лунёва А.В.", "deadline": " ", "cost": 10000.0, "promotion": 0}
+{"serviceId": 13339, "priceUnitId": 143, "serviceHomecode": "787", "serviceName": "Гистологическое исследование биопсийного (операционного) материала кожи 1 фрагмент: папиллома, кондилома, невус врожденный.", "deadline": "11-31", "cost": 1350.0, "promotion": null}
+{"serviceId": 13345, "priceUnitId": 149, "serviceHomecode": "3.20.1.2", "serviceName": "Прием (осмотр, консультация) врача-акушера - гинеколога беременной первичный", "deadline": " ", "cost": 4000.0, "promotion": null}
+{"serviceId": 13346, "priceUnitId": 149, "serviceHomecode": "3.20.1.3", "serviceName": "Прием (осмотр, консультация) врача-акушера -гинеколога беременной повторный", "deadline": " ", "cost": 3700.0, "promotion": null}
+{"serviceId": 13378, "priceUnitId": 331, "serviceHomecode": "16.5.3", "serviceName": "Прием (осмотр, консультация) врача-невролога первичный - Главный врач (Карева Е.Ю)", "deadline": " ", "cost": 4000.0, "promotion": 0}
+{"serviceId": 13410, "priceUnitId": 170, "serviceHomecode": "13.1.1.11", "serviceName": "Прием (осмотр, консультация) врача-терапевта, к.м.н.", "deadline": " ", "cost": 3500.0, "promotion": 0}
+{"serviceId": 13517, "priceUnitId": 441, "serviceHomecode": "135122", "serviceName": "Анализ полиморфизма c.-13910C>T ассоциированного с метаболизмом лактозы (Геномед)", "deadline": "7-20", "cost": 8450.0, "promotion": null}
+{"serviceId": 13793, "priceUnitId": 142, "serviceHomecode": "628", "serviceName": "Глюкозотолерантный тест (глюкоза+ Инсулин)", "deadline": "1-2", "cost": 1700.0, "promotion": null}
+{"serviceId": 13808, "priceUnitId": 182, "serviceHomecode": "4.1.30", "serviceName": "Прием (осмотр, консультация) врача- уролога (онколога), к.м.н.", "deadline": " ", "cost": 3500.0, "promotion": 0}
+{"serviceId": 13885, "priceUnitId": 145, "serviceHomecode": "16089", "serviceName": "ЗППП (качественно-количественное определение ДНК возбудителей)", "deadline": "1-2", "cost": 2850.0, "promotion": null}
+{"serviceId": 13990, "priceUnitId": 157, "serviceHomecode": "18.1.13", "serviceName": "Панч-биопсия кожи", "deadline": " ", "cost": 7000.0, "promotion": null}
+{"serviceId": 13991, "priceUnitId": 187, "serviceHomecode": "17.1.21", "serviceName": "Прием (осмотр, консультация) врача-акушера-гинеколога Центра Решетовой О.Н.", "deadline": " ", "cost": 4500.0, "promotion": null}
+{"serviceId": 13996, "priceUnitId": 143, "serviceHomecode": "788", "serviceName": "Патолого-анатомическое исследование биопсийного материала кожи (при дерматозах и дерматитах)", "deadline": "11-30", "cost": 3300.0, "promotion": null}
+{"serviceId": 14058, "priceUnitId": 177, "serviceHomecode": "2.6.5.12", "serviceName": "Ультразвуковое исследование при сроке беременности 11-14 недели при одноплодной беременности по оценке антенатального развития плодов с целью выявления хромосомных аномалий, пороков развития, рисков задержки роста плода, преждевременных родов, преэклапсии", "deadline": " ", "cost": 3300.0, "promotion": null}
+{"serviceId": 14074, "priceUnitId": 141, "serviceHomecode": "159", "serviceName": "АТ - ТГ (Anti-Tg) антитела к тиреоглобулину с разведением", "deadline": "1-2", "cost": 500.0, "promotion": null}
+{"serviceId": 14075, "priceUnitId": 142, "serviceHomecode": "674", "serviceName": "Глюкозотолерантный тест (глюкоза натощак, и через 2 часа после нагрузки)​​​​​​​", "deadline": "1-2 дня", "cost": 600.0, "promotion": null}
+{"serviceId": 14094, "priceUnitId": 145, "serviceHomecode": "16092", "serviceName": "Витаминный минимум", "deadline": "1-2", "cost": 2140.0, "promotion": null}
+{"serviceId": 14119, "priceUnitId": 145, "serviceHomecode": "16099", "serviceName": "Диагностика анемии", "deadline": "1-2", "cost": 990.0, "promotion": null}
+{"serviceId": 14429, "priceUnitId": 453, "serviceHomecode": "1298", "serviceName": "Комплексное исследование кала – копрограмма, скрытая кровь, яйца глист, простейшие и их цисты (аппаратная микроскопия с использованием нейросетей)", "deadline": "1-3", "cost": 1400.0, "promotion": 0}
+{"serviceId": 14452, "priceUnitId": 142, "serviceHomecode": "608", "serviceName": "Кальций, корректированный по альбумину", "deadline": "1-3 дня", "cost": 300.0, "promotion": 0}
+{"serviceId": 14846, "priceUnitId": 144, "serviceHomecode": "64БИОПТ", "serviceName": "Вирус простого герпеса 1,2 типа  [п\\кол.]", "deadline": "1-2", "cost": 360.0, "promotion": 0}
+{"serviceId": 14922, "priceUnitId": 145, "serviceHomecode": "12100", "serviceName": "Расширенное исследование кала — копрограмма, яйца глист, простейшие и их цисты (аппаратная микроскопия с использованием нейросетей), ранняя диагностика воспалительных и онкологических заболеваний кишечника — скрытая кровь, трансферрин, кальпротектин в кале", "deadline": "1-9", "cost": 4500.0, "promotion": 0}
+{"serviceId": 14953, "priceUnitId": 182, "serviceHomecode": "4.1.34", "serviceName": "Прием (осмотр, консультация) врача-уролога по синдрому хронической тазовой боли (СХТБ)", "deadline": " ", "cost": 4500.0, "promotion": 0}
+{"serviceId": 14973, "priceUnitId": 140, "serviceHomecode": "410СТ", "serviceName": "Посев мочи с идентификацией культур", "deadline": "3-5", "cost": 1050.0, "promotion": 0}
+{"serviceId": 14974, "priceUnitId": 140, "serviceHomecode": "411СТ", "serviceName": "Посев на микрофлору (идентификация агента и чувствительность к а\\б)", "deadline": "3-5", "cost": 1120.0, "promotion": 0}
+{"serviceId": 15036, "priceUnitId": 149, "serviceHomecode": "3.1.1.34", "serviceName": "Прием (осмотр, консультация) врача-акушера-гинеколога с нутрициологическим сопровождением", "deadline": " ", "cost": 5000.0, "promotion": 0}
