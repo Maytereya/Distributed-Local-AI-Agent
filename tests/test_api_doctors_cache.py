@@ -1,3 +1,4 @@
+import pytest
 import json
 import logging
 from datetime import date
@@ -275,6 +276,7 @@ def test_realtime_session_profile_is_fail_fast():
     assert api_nayka.DEFAULT_TIMEOUT[1] == 20.0         # background read timeout unchanged
 
 
+@pytest.mark.real_mis_loader
 def test_session_get_routes_by_realtime_flag(monkeypatch):
     calls = []
     class _Resp: ...
@@ -286,6 +288,7 @@ def test_session_get_routes_by_realtime_flag(monkeypatch):
     assert calls[1][0] == "rt" and calls[1][2] == api_nayka.REALTIME_TIMEOUT
 
 
+@pytest.mark.real_mis_loader
 def test_site_regions_threads_realtime_flag(monkeypatch):
     seen = []
     class _Resp:

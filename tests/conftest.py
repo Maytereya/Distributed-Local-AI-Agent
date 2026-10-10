@@ -218,6 +218,45 @@ def _turn_telemetry_to_tmp(tmp_path, monkeypatch):
     yield
 
 
+class _LLMDown:
+    """Клиент LLM гейта по умолчанию: «LLM недоступна» явно, без похода в сеть.
+
+    До 10.10 тест без своей подделки LLM шёл в настоящий клиент и падал на закрытой сети —
+    тот же мир, но неявный и с записью в «попытки выйти в сеть». Свой клиент теста
+    (monkeypatch после autouse) по-прежнему побеждает.
+    """
+
+    async def generate(self, *_args, **_kwargs):
+        raise ConnectionError("гейт: LLM недоступна (мир тестов по умолчанию)")
+
+
+@pytest.fixture(autouse=True)
+def _offline_world(request, monkeypatch):
+    """Мир гейта по умолчанию (ход (ж), решение 08.10 «мир — параметр»): МИС офлайн, LLM недоступна.
+
+    - `/regions` — пустое дерево (так отвечает `site_regions` при сбое сети): филиалы — из среза/seed;
+    - срез врачей не качается (нет файла «на сегодня» — последний существующий);
+    - живые методы МИС (`api_nayka._session_get`: расписание, «шапка» /doctors) — отказ соединения;
+    - LLM — `_LLMDown`.
+    Тест, которому нужен настоящий загрузчик МИС, помечается `@pytest.mark.real_mis_loader`.
+    """
+    from agent_logic_2.nayka_api import api_nayka
+    from messengers_router import llm_runtime
+
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _LLMDown())
+    if request.node.get_closest_marker("real_mis_loader") is None:
+        import requests
+
+        def _mis_unavailable(*_a, **_kw):
+            raise requests.ConnectionError("гейт: живой метод МИС недоступен (мир тестов по умолчанию)")
+
+        monkeypatch.setattr(api_nayka, "site_regions", lambda *_a, **_kw: [])
+        monkeypatch.setattr(api_nayka, "get_all_doctors", lambda: [])
+        # Живые методы (расписание и его «шапка» /doctors) — отказ без сети, как в мире стенда.
+        monkeypatch.setattr(api_nayka, "_session_get", _mis_unavailable)
+    yield
+
+
 # --- Изоляция сети (29.09) ----------------------------------------------------
 #
 # Гейт обязан быть герметичным. Через локальный `config.ini` тесты ходили в
@@ -352,6 +391,9 @@ def _pin_latest_mis_snapshots() -> None:
     for module, attr, pattern_of in (
         (api_service_info, "service_info_path", lambda *a: "service_info_*.jsonl"),
         (api_price, "price_by_region_path", lambda region_id, *a: f"price_region_{str(region_id).strip()}_*.jsonl"),
+        # 10.10: без среза «на сегодня» путь цены качал priceUnits, а цены врачей — свой срез
+        (api_price, "price_units_path", lambda *a: "price_units_*.jsonl"),
+        (api_price, "doctor_prices_path", lambda *a: "doctor_prices_*.jsonl"),
     ):
         real = getattr(module, attr)
         _PINNED_SNAPSHOT_LOADERS.append((module, attr, real))
@@ -363,6 +405,11 @@ def pytest_configure(config):
         "markers",
         "live: тест ходит в живые системы (прод-LLM, МИС) — в гейт не входит; "
         "запуск вручную: pytest -m live",
+    )
+    config.addinivalue_line(
+        "markers",
+        "real_mis_loader: тест проверяет настоящий загрузчик МИС (site_regions, get_all_doctors) — "
+        "офлайн-подмены мира гейта к нему не применяются; сеть всё равно закрыта",
     )
     socket.socket.connect = _guarded_connect
     socket.socket.connect_ex = _guarded_connect_ex

@@ -31,6 +31,7 @@ def fake_mis(monkeypatch):
     return doctors
 
 
+@pytest.mark.real_mis_loader
 def test_builder_keeps_dms_and_age_fields(fake_mis):
     built = {d["id"]: d for d in api_nayka.get_all_doctors()}
 
@@ -81,6 +82,7 @@ def test_audience_lines_only_from_data(doc, expected):
     assert doctor_audience_lines(doc) == expected
 
 
+@pytest.mark.real_mis_loader
 def test_card_shows_audience_lines(fake_mis):
     doctors = api_nayka.get_all_doctors()
 
