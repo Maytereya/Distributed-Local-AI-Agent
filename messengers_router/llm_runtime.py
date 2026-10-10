@@ -16,7 +16,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path as _Path
 from typing import Any, AsyncGenerator
 
-from ollama import AsyncClient
+import httpx
+from ollama import AsyncClient, RequestError, ResponseError
 
 from agent_logic_2 import ollama_settings
 from agent_logic_2.ollama_settings import LLMName
@@ -77,6 +78,20 @@ def _log_prompt_event(event: str, payload: dict[str, Any]) -> None:
 
 class LLMQueueTimeoutError(RuntimeError):
     pass
+
+
+# Отказ LLM, а не дефект кода: ollama недоступна (`ConnectionError` — так клиент ollama
+# переводит `httpx.ConnectError`), очередь к LLM не дождалась слота, сервер ответил
+# ошибкой, обрыв/тайм-аут чтения потока. Ловящий обязан ответить честно (оператор), а
+# не уронить ход. `TimeoutError` сюда не входит — у бюджета ответа своя ветка, а
+# `CancelledError`/`BaseException` не ловятся никогда (стенд 09.10, RENDER-LLM-ERROR).
+LLM_UNAVAILABLE_ERRORS: tuple[type[Exception], ...] = (
+    ConnectionError,
+    LLMQueueTimeoutError,
+    ResponseError,
+    RequestError,
+    httpx.TransportError,
+)
 
 
 def _caller_site() -> str:

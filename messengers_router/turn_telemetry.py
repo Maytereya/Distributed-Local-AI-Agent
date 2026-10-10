@@ -7,7 +7,8 @@
 Что пишется (`v=1`):
 - `answer_source` — ветка, давшая текст: `precheck:<причина>`, `safety:<метка>`, `clarify`,
   `intro`, `recovery`, `pending`, `prebuilt`, `empty_evidence`, `llm_free`,
-  `render_timeout`, `route_error`; поверх — `operator_offer_on_repeat`;
+  `render_timeout`, `render_error` (LLM упала в свободном ответе, поле `error` — тип),
+  `route_error`; поверх — `operator_offer_on_repeat`;
 - `label`, `decision_source` (как подписал NLU), `nlu_llm` — звалась ли LLM-классификация
   на этом ходе (подпись `llm_primary` у решения правила врёт — DEBT-1, поэтому факт вызова
   пишется отдельно), `rule` — первый флаг `rule_*`;

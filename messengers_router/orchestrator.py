@@ -744,6 +744,9 @@ async def _render_impl(
         if history and isinstance(history[-1], dict) \
                 and history[-1].get("role") == "user" and history[-1].get("text") == ctx.text:
             history = history[:-1]
+        from .llm_runtime import LLM_UNAVAILABLE_ERRORS
+        from .policies import handoff_message
+
         chunks: list[str] = []
         try:
             # Бюджет ответа целиком — очередь к LLM, разбор промпта и генерация
@@ -758,13 +761,22 @@ async def _render_impl(
                 ):
                     chunks.append(chunk)
         except TimeoutError:
-            from .policies import handoff_message
-
             logger.warning(
                 "render_timeout: label=%s budget=%ss chars=%s", ctx.decision.label, renderer.RENDER_TIMEOUT_S, sum(map(len, chunks))
             )
             ctx.response = ResponseEnvelope(text=handoff_message("service_error"), handoff=True)
             turn_telemetry.note(answer_source="render_timeout")
+            return ctx
+        except LLM_UNAVAILABLE_ERRORS as exc:
+            # LLM упала (ollama лежит, очередь, ошибка сервера) — тот же честный ответ, что
+            # при тайм-ауте, а не route_error: ход сохраняет решение, тайминги и телеметрию
+            # (стенд 09.10: 70 ходов из 1118 в режиме «LLM недоступна», RENDER-LLM-ERROR).
+            # Пишем только тип исключения — без текста пациента и ответа сервера.
+            logger.warning(
+                "render_llm_error: label=%s error=%s chars=%s", ctx.decision.label, type(exc).__name__, sum(map(len, chunks))
+            )
+            ctx.response = ResponseEnvelope(text=handoff_message("service_error"), handoff=True)
+            turn_telemetry.note(answer_source="render_error", error=type(exc).__name__)
             return ctx
         # Output-guard применяется ЕДИНОЙ воронкой в render() (обёртка над
         # _render_impl) — на ПОЛНОМ тексте ЛЮБОГО пути (stream/prebuilt/PREPARE/
