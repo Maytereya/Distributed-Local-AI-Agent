@@ -56,7 +56,9 @@ def merge(name: str) -> Path:
         world_problems=[x for h in headers for x in h.get("world_problems") or []],
         llm_outcomes=dict(sum((Counter(h.get("llm_outcomes") or {}) for h in headers), Counter())),
         seconds=max(h.get("seconds", 0) for h in headers),
-        valid=all(h.get("valid") for h in headers),
+        # Части с разными настройками (`--cfg`) — разные прогоны, склеивать нельзя.
+        cfg_mismatch=sorted({json.dumps(h.get("cfg") or {}, sort_keys=True) for h in headers})[1:] or None,
+        valid=all(h.get("valid") for h in headers) and len({json.dumps(h.get("cfg") or {}, sort_keys=True) for h in headers}) == 1,
     )
     (out / "run.json").write_text(json.dumps(head, ensure_ascii=False, indent=1), encoding="utf-8")
     return out

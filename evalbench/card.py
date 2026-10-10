@@ -21,7 +21,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from .prices import PriceCatalog, PricePair, price_verdict
+from .prices import PriceCatalog, PricePair, multi_coverage, price_verdict
 from .specialties import SpecialtyMatcher, specialty_verdict
 from .world import PRIVATE_ROOT
 
@@ -152,12 +152,16 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
     n = len(turns)
     outcomes = Counter(t["outcome"] for t in turns)
     verdicts = Counter()
+    coverage: list[tuple[int, int, int]] = []
     for t in turns:
         if t["id"] in labels:
             pairs = [PricePair(**p) for p in t.get("price_pairs") or []]
             verdict = price_verdict(pairs, labels[t["id"]])
             if verdict is not None:
                 verdicts[verdict] += 1
+            covered = multi_coverage(pairs, labels[t["id"]])
+            if covered is not None:
+                coverage.append(covered)
     urgent_cases = [t for t in turns if t.get("expect_urgent") is True]
     twins = [t for t in turns if t.get("expect_urgent") is False]
     spec = Counter(t["specialty_verdict"] for t in turns if t.get("specialty_verdict"))
@@ -182,6 +186,9 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
         "price_verdicts": dict(verdicts),
         "foreign": verdicts.get("foreign", 0) + verdicts.get("list_miss", 0),
         **{f"price_{k}": verdicts.get(k, 0) for k in ("correct", "list_hit", "single_for_ambiguous", "no_price")},
+        "multi_n": len(coverage),
+        "multi_two_plus": sum(1 for named, _, _ in coverage if named >= 2),
+        "multi_core_pct": round(100 * sum(hit / total for _, hit, total in coverage if total) / len(coverage)) if coverage else None,
         "urgent_recall": (sum(1 for t in urgent_cases if t["urgent"]), len(urgent_cases)),
         "urgent_false": (sum(1 for t in twins if t["urgent"]), len(twins)),
         "symptom_n": sum(spec.values()),
@@ -211,6 +218,11 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]]) -> str:
             f"мир {world.get('date')} {world.get('profile')}, вопросов {header['done']}/{header['cases']}, "
             f"синонимов {header.get('synonyms')}, valid={header.get('valid')}"
             + (f", **остановлен: {header['stopped']}**" if header.get("stopped") else "")
+            + (
+                ", настройки " + ", ".join(f"{k}={v.get('value')}" + ("" if v.get("known") else " (нет в коде)") for k, v in header["cfg"].items())
+                if header.get("cfg")
+                else ""
+            )
         )
         if not header.get("valid"):
             lines.append(
@@ -230,6 +242,9 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]]) -> str:
         ("  список с нужной", "price_list_hit"),
         ("  одна цена вместо списка", "price_single_for_ambiguous"),
         ("  без цены", "price_no_price"),
+        ("Вопрос о нескольких услугах (multi)", "multi_n"),
+        ("  названо ≥2 услуг списка", "multi_two_plus"),
+        ("  покрытие core, % (среднее)", "multi_core_pct"),
         ("Срочное: полнота", "urgent_recall"),
         ("Срочное: ложное на двойниках", "urgent_false"),
         ("Симптом → врач: размечено", "symptom_n"),

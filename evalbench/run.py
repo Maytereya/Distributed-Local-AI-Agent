@@ -83,6 +83,20 @@ def _llm_reachable(url: str, timeout_s: float = 8.0) -> bool:
     return True
 
 
+def _parse_cfg(item: str) -> tuple[str, Any]:
+    """`ИМЯ=ЗНАЧЕНИЕ` → (ИМЯ, значение): true/false — bool, целое — int, иначе строка."""
+
+    name, sep, raw = item.partition("=")
+    if not sep or not name.strip():
+        raise ValueError(f"--cfg ждёт ИМЯ=ЗНАЧЕНИЕ, получено {item!r}")
+    value: Any = raw.strip()
+    if value.lower() in ("true", "false"):
+        value = value.lower() == "true"
+    elif value.lstrip("-").isdigit():
+        value = int(value)
+    return name.strip(), value
+
+
 def _enter_code_root(code_root: Path) -> None:
     """Бот импортируется из `code_root`; относительные пути бота (app_data) — от него же."""
 
@@ -162,7 +176,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--split", choices=("dev", "test"))
     ap.add_argument("--name", help="имя прогона (по умолчанию <sha>_<режим>_<профиль>)")
     ap.add_argument("--shard", help="часть K/N набора (K с 1): N процессов параллельно; склейка — evalbench.merge")
+    ap.add_argument(
+        "--cfg",
+        action="append",
+        default=[],
+        metavar="ИМЯ=ЗНАЧЕНИЕ",
+        help="переопределить настройку бота на прогон (атрибут agent_logic_2.config, например MR_TURN_UNDERSTANDING_PRICE=on); пишется в run.json",
+    )
     args = ap.parse_args(argv)
+    try:
+        overrides = dict(_parse_cfg(item) for item in args.cfg)
+    except ValueError as exc:
+        ap.error(str(exc))
 
     code_root = args.code_root.resolve()
     world_root = PRIVATE_ROOT / "worlds" / args.world
@@ -193,6 +218,12 @@ def main(argv: list[str] | None = None) -> int:
     _enter_code_root(code_root)
     from messengers_router import llm_runtime
     from messengers_router.runtime_config import config as bot_config
+
+    # Выключатели — на весь прогон, до первого хода; в дереве без такой настройки она ни на что
+    # не влияет, поэтому в run.json пишется и то, была ли она в коде.
+    cfg_applied = {name: {"value": value, "known": hasattr(bot_config, name)} for name, value in overrides.items()}
+    for name, value in overrides.items():
+        setattr(bot_config, name, value)
 
     live = args.mode in ("real", "cached")
     allow = (host_of(bot_config.ollama_url),) if live else ()
@@ -251,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
                     "stopped": stats["stopped"],
                     "mode": args.mode,
                     "llm_mode": args.llm_mode,
+                    "cfg": cfg_applied,
                     "model": LLMName.get(),
                     "world": facts.__dict__,
                     "synonyms": synonyms,

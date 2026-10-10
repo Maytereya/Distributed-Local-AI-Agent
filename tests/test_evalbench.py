@@ -22,7 +22,7 @@ import pytest
 from evalbench import llm as ev_llm
 from evalbench import world as ev_world
 from evalbench.detectors import Templates, classify_turn
-from evalbench.prices import PriceCatalog, price_verdict
+from evalbench.prices import PriceCatalog, multi_coverage, price_verdict
 
 ROOT = Path(__file__).resolve().parent.parent
 PROMPTS = ROOT / "messengers_router" / "prompts"
@@ -206,6 +206,27 @@ def test_price_verdicts():
     assert price_verdict([], single) == "no_price"
     assert price_verdict(one_right, None) is None
     assert price_verdict(one_right, {"kind": "context_dependent", "core": [], "ok": []}) is None
+
+
+def test_multi_coverage_counts_named_list_positions():
+    """Ответ одной услугой на вопрос о двух — не «список с нужной», а покрытие 1 из 2."""
+
+    catalog = PriceCatalog(_ROWS)
+    label = {"kind": "multi", "core": [1, 3], "ok": [2], "ambiguous": False}
+    assert multi_coverage(catalog.pairs("Общий анализ крови — 500 руб."), label) == (1, 1, 2)
+    both = catalog.pairs("1. Общий анализ крови — 500 руб.\n2. Глюкоза — 300 руб.")
+    assert multi_coverage(both, label) == (2, 2, 2)
+    assert multi_coverage(both, {"kind": "single", "core": [1], "ok": []}) is None
+
+
+def test_run_cfg_override_parsing():
+    from evalbench.run import _parse_cfg
+
+    assert _parse_cfg("MR_TURN_UNDERSTANDING_PRICE=on") == ("MR_TURN_UNDERSTANDING_PRICE", "on")
+    assert _parse_cfg("MR_TURN_TELEMETRY=false") == ("MR_TURN_TELEMETRY", False)
+    assert _parse_cfg("MR_DOCTORS_TOP_N=5") == ("MR_DOCTORS_TOP_N", 5)
+    with pytest.raises(ValueError):
+        _parse_cfg("без_знака")
 
 
 def _body(text, *, handoff=False, label=None, flags=(), error=None):

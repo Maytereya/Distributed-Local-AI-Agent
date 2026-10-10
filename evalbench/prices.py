@@ -160,3 +160,22 @@ def price_verdict(pairs: list[PricePair], label: dict | None) -> str | None:
             return "foreign"
         return "single_for_ambiguous" if label.get("ambiguous") else "correct"
     return "list_hit" if shown & allowed else "list_miss"
+
+
+def multi_coverage(pairs: list[PricePair], label: dict | None) -> tuple[int, int, int] | None:
+    """Полнота ответа на вопрос о нескольких услугах (`kind=multi`): сколько позиций названо.
+
+    `price_verdict` для списка отвечает «есть допустимая и нет чужих», и ответ одной услугой из
+    трёх названных выглядит так же, как полный (PRICE-LIST-COLLAPSES-TO-ONE). Здесь — сколько
+    разных допустимых услуг в ответе и какая доля `core` (по строке-варианту на позицию) покрыта.
+
+    :return: (допустимых услуг названо, из core названо, размер core) или None — не список
+    """
+
+    if not label or label.get("kind") != "multi":
+        return None
+    core = {int(x) for x in (label.get("core") or [])}
+    allowed = core | {int(x) for x in (label.get("ok") or [])}
+    shown = {p.service_id for p in pairs if p.status == "matched"}
+    return len(shown & allowed), len(shown & core), len(core)
+
