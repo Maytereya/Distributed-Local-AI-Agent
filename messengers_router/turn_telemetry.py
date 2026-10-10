@@ -16,6 +16,8 @@
 - `money_cut` — сколько предложений с денежными суммами снято со свободного текста LLM
   (`money_guard`, только при `llm_free` и только если снято);
 - `llm` — вызовы: место (модуль), исход, мс, ожидание очереди, токены;
+- `choose` — решения модуля выбора (ход (в)): задача, статус, сколько вариантов, мс, из кэша ли,
+  код причины или исход — без текста реплики и вариантов;
 - `world` — модель и срезы (имена файлов) — раз в 5 минут, иначе тот же `world_id`.
 
 Чего НЕ пишется: текст пациента и ответа, значения сущностей, сырой session_id (только
@@ -58,6 +60,7 @@ class Turn:
     started: float = field(default_factory=time.monotonic)
     fields: dict[str, Any] = field(default_factory=dict)
     llm: list[dict[str, Any]] = field(default_factory=list)
+    choices: list[dict[str, Any]] = field(default_factory=list)
 
 
 def begin(endpoint: str, *, session_id: str, llm_mode: str = "", button_id: str = "") -> contextvars.Token | None:
@@ -102,6 +105,31 @@ def note_llm(site: str, outcome: str, ms: int, *, queue_ms: int = 0, usage: dict
         if "eval_count" in usage:
             entry["out_tok"] = usage["eval_count"]
     turn.llm.append(entry)
+
+
+def note_choice(
+    task: str,
+    status: str,
+    *,
+    options: int,
+    ms: int,
+    cached: bool = False,
+    reason: str = "",
+    outcome: str = "",
+) -> None:
+    """Решение модуля выбора (`choose()`): задача, статус, число вариантов, мс — без текста."""
+
+    turn = _TURN.get()
+    if turn is None:
+        return
+    entry: dict[str, Any] = {"task": task, "status": status, "options": options, "ms": ms}
+    if cached:
+        entry["cached"] = True
+    if reason:
+        entry["reason"] = reason
+    if outcome:
+        entry["outcome"] = outcome
+    turn.choices.append(entry)
 
 
 def set_world_provider(provider: Callable[[], dict[str, Any]]) -> None:
@@ -152,6 +180,8 @@ def finish(token: contextvars.Token | None, *, handoff: bool, chars: int, stage_
         "llm": turn.llm,
         "world_id": world_id,
     }
+    if turn.choices:
+        row["choose"] = turn.choices
     if stage_ms:
         row["stage_ms"] = {k: int(v) for k, v in stage_ms.items()}
     if world is not None:

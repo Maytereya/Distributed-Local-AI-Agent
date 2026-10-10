@@ -119,6 +119,21 @@ def _last_number(block: str) -> int | None:
     return nums[-1] if nums else None
 
 
+def _adversary_choice(prompt: str) -> str:
+    """Модуль выбора (`choose_*`): последний вариант списка — номер или название; исход — никогда.
+
+    Варианты стоят в конце данных хода (`<<OPTIONS>>` — последняя подстановка промпта задачи):
+    берётся последняя строка, если это вариант «N. …» или «- …». Особый исход (срочно) adversary
+    не выбирает — срочность он только понижает.
+    """
+
+    lines = prompt.strip().splitlines()
+    last = lines[-1] if lines else ""
+    numbered = _NUMBERED_RE.match(last)
+    picks: list[Any] = [int(numbered.group(1))] if numbered else ([last[2:].strip()] if last.startswith("- ") else [])
+    return json.dumps({"picks": picks, "outcome": "none", "reason": "none", "search_terms": []}, ensure_ascii=False)
+
+
 def adversary_answer(site: str, prompt: str) -> str | None:
     """Худший правдоподобный ответ места: формат верный, решение — неверное.
 
@@ -128,6 +143,8 @@ def adversary_answer(site: str, prompt: str) -> str | None:
     :return: текст ответа модели или None для неизвестного места
     """
 
+    if site.startswith("choose_"):
+        return _adversary_choice(prompt)
     if site in ("classifier_patient", "classifier_refine_patient"):
         payload = {"label": _pick(_ADVERSARY_LABELS, prompt), "confidence": 0.95, "context_action": "new_topic", "entities": {}}
         return json.dumps(payload, ensure_ascii=False)

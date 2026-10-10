@@ -188,15 +188,18 @@ def _hermetic_mis_synonyms(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _fresh_llm_decision_state(monkeypatch):
-    """Предохранитель LLM-решений (L-11) — состояние процесса: тест не наследует его от соседа.
+    """Предохранитель LLM-решений (L-11) и кэш выбора — состояние процесса: тест не наследует их.
 
     Мир гейта по умолчанию — «LLM недоступна» (`_LLMDown`): три теста подряд, дошедшие до выбора,
     разомкнули бы предохранитель, и следующий тест со своей подделкой LLM получил бы «недоступна»
     вместо её ответа — падение, зависящее от порядка тестов.
     """
-    from messengers_router import llm_runtime
+    from collections import OrderedDict
+
+    from messengers_router import choice, llm_runtime
 
     monkeypatch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
+    monkeypatch.setattr(choice, "_CACHE", OrderedDict())
     yield
 
 

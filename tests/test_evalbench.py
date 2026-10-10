@@ -60,7 +60,7 @@ def test_adversary_has_parsable_answer_for_every_live_site(key):
     answer = ev_llm.adversary_answer(key, text)
     assert answer, key
     if key in {"classifier_patient", "classifier_refine_patient", "price_service_select", "prepare_document_select",
-               "prepare_same_memo", "price_kind_ambiguous", "renderer_critic_patient_alignment"}:
+               "prepare_same_memo", "price_kind_ambiguous", "renderer_critic_patient_alignment"} or key.startswith("choose_"):
         json.loads(answer)
 
 
@@ -70,6 +70,17 @@ def test_adversary_never_raises_urgency():
     for prompt in ("задыхаюсь", "боль в груди", "не хочу жить"):
         assert json.loads(ev_llm.adversary_answer("classifier_patient", prompt))["label"] != "URGENT"
     assert ev_llm.adversary_answer("symptom_specialists", "задыхаюсь") == "НЕТ"
+
+
+def test_adversary_choice_picks_the_last_option_and_never_an_outcome():
+    # Модуль выбора (ход (в)): худший правдоподобный ответ — последний вариант; срочность не поднимает.
+    numbered = "Инструкция.\n- правило в инструкции\n\nСообщение пациента: «оак»\n\nВарианты:\n1. ОАК — 500 руб.\n2. ОАМ — 300 руб."
+    named = "Инструкция.\n\nСообщение пациента: «болит сердце»\n\nВрачи:\n- терапевт\n- кардиолог"
+    empty = "Инструкция.\n\nСообщение пациента: «оак»\n\nВарианты:\n(вариантов нет)"
+    assert json.loads(ev_llm.adversary_answer("choose_demo", numbered))["picks"] == [2]
+    assert json.loads(ev_llm.adversary_answer("choose_demo", named))["picks"] == ["кардиолог"]
+    assert json.loads(ev_llm.adversary_answer("choose_demo", empty))["picks"] == []
+    assert {json.loads(ev_llm.adversary_answer("choose_demo", p))["outcome"] for p in (numbered, named, empty)} == {"none"}
 
 
 def test_adversary_price_select_picks_last_pool_row():
