@@ -60,6 +60,7 @@ tests/test_prepare_biomaterial.py
 tests/test_prepare_kb_memo_variants.py
 tests/test_prepare_single_document.py
 tests/test_price_consult_doctor_links.py
+tests/test_price_list_class.py
 tests/test_price_llm_select.py
 tests/test_price_no_doctor_prices_handoff.py
 tests/test_price_turns_golden.py
