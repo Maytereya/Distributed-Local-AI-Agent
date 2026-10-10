@@ -187,6 +187,20 @@ def _hermetic_mis_synonyms(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_llm_decision_state(monkeypatch):
+    """Предохранитель LLM-решений (L-11) — состояние процесса: тест не наследует его от соседа.
+
+    Мир гейта по умолчанию — «LLM недоступна» (`_LLMDown`): три теста подряд, дошедшие до выбора,
+    разомкнули бы предохранитель, и следующий тест со своей подделкой LLM получил бы «недоступна»
+    вместо её ответа — падение, зависящее от порядка тестов.
+    """
+    from messengers_router import llm_runtime
+
+    monkeypatch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_background_jobs(monkeypatch):
     """Фоновые обновления справочников и прогрев в тестах не запускаются.
 

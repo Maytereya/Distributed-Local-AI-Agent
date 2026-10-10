@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json as _json
 import os as _os
 import sys as _sys
 import time as _time
 import uuid as _uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path as _Path
 from typing import Any, AsyncGenerator
 
@@ -80,6 +82,14 @@ class LLMQueueTimeoutError(RuntimeError):
     pass
 
 
+class LLMBudgetExhaustedError(RuntimeError):
+    """Бюджет LLM-решений хода исчерпан (L-11) — вызова не было."""
+
+
+class LLMCircuitOpenError(RuntimeError):
+    """Предохранитель LLM-решений разомкнут: модель подряд не отвечала (L-11) — вызова не было."""
+
+
 # Отказ LLM, а не дефект кода: ollama недоступна (`ConnectionError` — так клиент ollama
 # переводит `httpx.ConnectError`), очередь к LLM не дождалась слота, сервер ответил
 # ошибкой, обрыв/тайм-аут чтения потока. Ловящий обязан ответить честно (оператор), а
@@ -88,6 +98,17 @@ class LLMQueueTimeoutError(RuntimeError):
 LLM_UNAVAILABLE_ERRORS: tuple[type[Exception], ...] = (
     ConnectionError,
     LLMQueueTimeoutError,
+    LLMBudgetExhaustedError,
+    LLMCircuitOpenError,
+    ResponseError,
+    RequestError,
+    httpx.TransportError,
+)
+
+# Сбой самой генерации — то, что считает предохранитель. Таймаут очереди (семафор) сюда не входит.
+_GENERATION_FAILURES: tuple[type[BaseException], ...] = (
+    asyncio.TimeoutError,
+    ConnectionError,
     ResponseError,
     RequestError,
     httpx.TransportError,
@@ -248,6 +269,85 @@ async def generate_text_with_usage(
     return text, usage
 
 
+# --- Бюджет хода и предохранитель LLM-решений (ход (в), L-11) --------------------------------
+#
+# Касаются только структурных решений (`generate_structured`, модуль `choose()`): текст ответа,
+# классификатор и прежние слои идут как раньше. Что ответить пациенту, когда решения нет, решает
+# вызывающий (его политика сбоя), поэтому оба механизма значат «вызова не было», а не ответ.
+
+
+@dataclass
+class _TurnBudget:
+    """Сколько решений и секунд выбора потрачено в этом ходе."""
+
+    calls: int = 0
+    spent_s: float = 0.0
+
+
+_TURN_BUDGET: contextvars.ContextVar[_TurnBudget | None] = contextvars.ContextVar("mr_llm_turn_budget", default=None)
+
+
+def begin_turn_budget() -> contextvars.Token:
+    """Открыть бюджет решений хода — в эндпоинте рядом с телеметрией; токен — в `end_turn_budget`.
+
+    Вне хода (скрипты, тесты сервисов) бюджета нет: ограничение — свойство хода пациента.
+    """
+
+    return _TURN_BUDGET.set(_TurnBudget())
+
+
+def end_turn_budget(token: contextvars.Token) -> None:
+    try:
+        _TURN_BUDGET.reset(token)
+    except ValueError:  # закрыт в другом контексте (поток ответа оборван) — бюджет уйдёт вместе с ним
+        pass
+
+
+def _decision_limits() -> tuple[int, float, int, float]:
+    """(решений на ход, секунд на ход, сбоев до размыкания, пауза предохранителя); 0 — без ограничения."""
+
+    try:
+        return (
+            int(getattr(c, "MR_LLM_DECISION_TURN_CALLS", 2) or 0),
+            float(getattr(c, "MR_LLM_DECISION_TURN_SECONDS", 10) or 0),
+            int(getattr(c, "MR_LLM_DECISION_BREAKER_FAILURES", 3) or 0),
+            float(getattr(c, "MR_LLM_DECISION_BREAKER_OPEN_S", 30) or 0),
+        )
+    except (TypeError, ValueError):
+        return 2, 10.0, 3, 30.0
+
+
+@dataclass
+class _Breaker:
+    """N сбоев генерации подряд → пауза без вызовов; после паузы — одна проба.
+
+    Таймаут очереди к LLM (семафор) не считается: занятость общей LLM соседями (колл-центр,
+    FreeTalk) — сигнал в телеметрию, а не признак, что модель лежит. Поэтому честному
+    предохранителю нужен семафор, равный числу слотов сервера: иначе ожидание в очереди самой
+    ollama выглядит как долгая генерация.
+    """
+
+    failures: int = 0
+    open_until: float = 0.0
+
+    def allows(self, now: float) -> bool:
+        return now >= self.open_until
+
+    def success(self) -> None:
+        self.failures = 0
+
+    def failure(self, now: float, threshold: int, open_s: float) -> None:
+        if threshold <= 0:
+            return
+        self.failures += 1
+        if self.failures >= threshold:
+            self.open_until = now + open_s
+            self.failures = threshold - 1  # проба после паузы: её сбой снова размыкает, успех — замыкает
+
+
+_BREAKER = _Breaker()
+
+
 async def generate_structured(
     *,
     site: str,
@@ -279,9 +379,23 @@ async def generate_structured(
     :param options: параметры генерации места вызова — целиком
     :param inherit_options: поверх общих настроек, как было до переноса (только прежний промпт)
     :return: (сырой текст ответа модели, счётчики токенов)
-    :raises: `LLM_UNAVAILABLE_ERRORS` и `asyncio.TimeoutError` — их ловит вызывающий
+    :raises: `LLM_UNAVAILABLE_ERRORS` и `asyncio.TimeoutError` — их ловит вызывающий; бюджет хода
+        и предохранитель (L-11) — без вызова модели
     """
 
+    max_calls, max_turn_s, breaker_failures, breaker_open_s = _decision_limits()
+    if not _BREAKER.allows(_time.monotonic()):
+        turn_telemetry.note_llm(site, "circuit_open", 0)
+        raise LLMCircuitOpenError(site)
+    timeout = max(1.0, float(timeout_s))
+    budget = _TURN_BUDGET.get()
+    if budget is not None:
+        left_s = max_turn_s - budget.spent_s if max_turn_s else timeout
+        if (max_calls and budget.calls >= max_calls) or left_s < 1.0:
+            turn_telemetry.note_llm(site, "budget", 0)
+            raise LLMBudgetExhaustedError(site)
+        budget.calls += 1
+        timeout = min(timeout, left_s)
     request: dict[str, Any] = {
         "model": llm or LLMName.get(),
         "prompt": user,
@@ -299,12 +413,18 @@ async def generate_structured(
     try:
         async with llm_slot(queue_timeout_ms):
             queue_ms = int((_time.monotonic() - started_at) * 1000)
-            res = await asyncio.wait_for(_OLLAMA_CLIENT.generate(**request), timeout=max(1.0, float(timeout_s)))
+            res = await asyncio.wait_for(_OLLAMA_CLIENT.generate(**request), timeout=timeout)
     except BaseException as exc:
         turn_telemetry.note_llm(site, _outcome(exc), int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms)
+        if isinstance(exc, _GENERATION_FAILURES):
+            _BREAKER.failure(_time.monotonic(), breaker_failures, breaker_open_s)
         if isinstance(exc, Exception) and _prompt_log_enabled():
             _log_prompt_event("prompt_error", {"site": site, "error_type": type(exc).__name__})
         raise
+    finally:
+        if budget is not None:
+            budget.spent_s += _time.monotonic() - started_at
+    _BREAKER.success()
     text = _extract_response_text(res)
     usage = _extract_usage(res)
     turn_telemetry.note_llm(site, "ok", int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, usage=usage)

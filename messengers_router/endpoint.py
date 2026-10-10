@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import turn_telemetry
+from . import llm_runtime, turn_telemetry
 from .llm_mode_policy import normalize_runtime_options
 from .memory import MemoryStore
 from .router import patient_routing_stream
@@ -230,6 +230,7 @@ async def messenger_generate(
         handoff = False
         # Ход открывается внутри генератора: потоковый ответ читается в другой задаче.
         turn = turn_telemetry.begin("stream", session_id=session_id, llm_mode=runtime_options.llm_mode, button_id=payload.button_id)
+        budget = llm_runtime.begin_turn_budget()
         try:
             async for env in patient_routing_stream(
                 text,
@@ -269,6 +270,7 @@ async def messenger_generate(
             yield (json.dumps(fallback, ensure_ascii=False) + "\n").encode("utf-8")
         finally:
             assistant_text = "".join(assistant_parts).strip()
+            llm_runtime.end_turn_budget(budget)
             turn_telemetry.finish(turn, handoff=handoff, chars=len(assistant_text))
             if assistant_text:
                 memory.append_turn(state, "assistant", assistant_text)
@@ -315,6 +317,8 @@ async def messenger_generate_once(
 
     state = await memory.aget(session_id)
     turn = turn_telemetry.begin("once", session_id=session_id, llm_mode=runtime_options.llm_mode, button_id=payload.button_id)
+    # Бюджет LLM-решений хода (L-11): у каждого хода свой, после хода закрыт.
+    budget = llm_runtime.begin_turn_budget()
     out_text, out_handoff = "", False
     try:
         memory.append_turn(state, "user", text)
@@ -375,5 +379,6 @@ async def messenger_generate_once(
         # JSONResponse чтобы Swagger красиво показал тело
         return JSONResponse(content=out.model_dump())
     finally:
+        llm_runtime.end_turn_budget(budget)
         turn_telemetry.finish(turn, handoff=out_handoff, chars=len(out_text))
         await memory.aset(state)

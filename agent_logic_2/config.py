@@ -191,6 +191,10 @@ class MessengerRouterConfig:
     llm_symptom_specialists: bool
     turn_telemetry: bool
     turn_understanding_price: str
+    llm_decision_turn_calls: int
+    llm_decision_turn_seconds: int
+    llm_decision_breaker_failures: int
+    llm_decision_breaker_open_s: int
     debug_final_input: bool
     url: str
 
@@ -411,6 +415,15 @@ settings = Settings(
             default="shadow",
             allowed={"off", "shadow", "on"},
         ),
+        # Бюджет LLM-решений на ход (ход (в), L-11): не больше N выборов и S секунд выбора на ход;
+        # сверх бюджета — «LLM недоступна» без вызова, что ответить, решает вызывающий. Только для
+        # структурных решений (модуль choose()), не для текста и классификатора. 0 — без ограничения.
+        llm_decision_turn_calls=_get_int("MESSENGER_ROUTER", "llm_decision_turn_calls", 2, min_value=0, max_value=20),
+        llm_decision_turn_seconds=_get_int("MESSENGER_ROUTER", "llm_decision_turn_seconds", 10, min_value=0, max_value=120),
+        # Предохранитель LLM-решений (L-11): N сбоев генерации подряд → S секунд без вызовов; таймаут
+        # очереди не считается (иначе качество бота зависит от нагрузки соседей). 0 сбоев — выключен.
+        llm_decision_breaker_failures=_get_int("MESSENGER_ROUTER", "llm_decision_breaker_failures", 3, min_value=0, max_value=100),
+        llm_decision_breaker_open_s=_get_int("MESSENGER_ROUTER", "llm_decision_breaker_open_s", 30, min_value=1, max_value=600),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -535,6 +548,10 @@ MR_PREPARE_RELEVANCE_LLM_ENABLED = settings.messenger_router.prepare_relevance_l
 MR_LLM_SYMPTOM_SPECIALISTS = settings.messenger_router.llm_symptom_specialists
 MR_TURN_TELEMETRY = settings.messenger_router.turn_telemetry
 MR_TURN_UNDERSTANDING_PRICE = settings.messenger_router.turn_understanding_price
+MR_LLM_DECISION_TURN_CALLS = settings.messenger_router.llm_decision_turn_calls
+MR_LLM_DECISION_TURN_SECONDS = settings.messenger_router.llm_decision_turn_seconds
+MR_LLM_DECISION_BREAKER_FAILURES = settings.messenger_router.llm_decision_breaker_failures
+MR_LLM_DECISION_BREAKER_OPEN_S = settings.messenger_router.llm_decision_breaker_open_s
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 
