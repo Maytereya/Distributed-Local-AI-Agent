@@ -218,6 +218,23 @@ def _turn_telemetry_to_tmp(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _operator_hours_day(monkeypatch):
+    """Мир гейта по умолчанию — рабочие часы операторов.
+
+    Эндпоинт дописывает к переводу на оператора часы их работы по настоящим часам машины
+    (`endpoint.operator_after_hours_note()`). 10.10 гейт покраснел при неизменном коде после
+    19:00 по Самаре в субботу: 10 тестов `test_render_llm_error.py` сравнивают текст перевода.
+    Мир стенда (`evalbench.world`) часы замораживает сам; приписку как таковую держит
+    `tests/test_operator_hours.py` (функция с явным `now`).
+    """
+
+    from messengers_router import endpoint
+
+    monkeypatch.setattr(endpoint, "operator_after_hours_note", lambda *_a, **_kw: "")
+    yield
+
+
 class _LLMDown:
     """Клиент LLM гейта по умолчанию: «LLM недоступна» явно, без похода в сеть.
 
