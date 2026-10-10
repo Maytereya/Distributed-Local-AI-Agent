@@ -16,7 +16,9 @@ BUG-2026-10-05-READINESS-AS-PRICE: «когда будет готов анали
 - вопрос о сроке готовности не получает цену.
 
 Ход (б), шаг 1 (L-14): `услуги[]` + `свойство` на метке «цена», под выключателем
-`turn_understanding_price`. Тесты включают его явно (`on`): по умолчанию шаг в тени.
+`turn_understanding_price`. Тесты включают его явно (`on`): по умолчанию шаг в тени, и тогда
+поведение прежнее — его держит эталон `test_price_turns_golden.py` (режимы off и shadow).
+До шага 14 из 16 мест списка и 2 из 5 формулировок срока были красными.
 """
 
 from __future__ import annotations
@@ -42,9 +44,6 @@ PATHS = {
     "over_context": (("сколько стоит ТТГ",), "а {}?"),
 }
 
-# Сегодня на этих местах класс проходит и без шага (б) — xfail(strict) их не держит.
-_PASSING_TODAY = {("text", "ферритин и глюкоза"), ("button", "ферритин и глюкоза")}
-
 READINESS = [
     "когда будет готов анализ на ферритин",
     "через сколько будет готов ферритин",
@@ -52,7 +51,6 @@ READINESS = [
     "сколько готовится ферритин",
     "сколько готовятся анализы",
 ]
-_READINESS_PRICED_TODAY = {"когда будет готов анализ на ферритин", "сколько делается анализ на ферритин"}
 
 
 @pytest.fixture
@@ -62,14 +60,8 @@ def understanding_on(monkeypatch):
     monkeypatch.setattr(cfg, "MR_TURN_UNDERSTANDING_PRICE", "on", raising=False)
 
 
-def _cases():
-    for path in sorted(PATHS):
-        for items in LISTS:
-            marks = () if (path, items) in _PASSING_TODAY else (pytest.mark.xfail(strict=True, reason="PRICE-LIST-COLLAPSES-TO-ONE: до шага (б)-1"),)
-            yield pytest.param(path, items, id=f"{path}-{items}", marks=marks)
-
-
-@pytest.mark.parametrize(("path", "items"), list(_cases()))
+@pytest.mark.parametrize("items", list(LISTS))
+@pytest.mark.parametrize("path", sorted(PATHS))
 def test_every_listed_service_gets_its_price(path, items, mini_prod_world, understanding_on):  # noqa: F811
     before, template = PATHS[path]
     with ev_world.FrozenWorld(mini_prod_world, "day"):
@@ -80,13 +72,7 @@ def test_every_listed_service_gets_its_price(path, items, mini_prod_world, under
     assert "руб" in answer, record[-1]["text"]
 
 
-@pytest.mark.parametrize(
-    "question",
-    [
-        pytest.param(q, marks=(pytest.mark.xfail(strict=True, reason="READINESS-AS-PRICE: до шага (б)-1"),) if q in _READINESS_PRICED_TODAY else ())
-        for q in READINESS
-    ],
-)
+@pytest.mark.parametrize("question", READINESS)
 def test_readiness_question_gets_no_price(question, mini_prod_world, understanding_on):  # noqa: F811
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         (turn,) = run_dialog([question], f"ready-{abs(hash(question))}")

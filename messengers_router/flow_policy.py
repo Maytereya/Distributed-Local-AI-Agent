@@ -11,6 +11,7 @@ import logging
 import re
 from typing import Any
 
+from . import turn_understanding
 from .memory import MemoryStore
 from .mess_types import AppointmentPhase, DialogState, RouteDecision, SessionState
 from .city import match_city
@@ -1034,14 +1035,16 @@ def quick_fill_entities_from_text(
     t = text.strip()
     out: dict[str, Any] = quick_fill_core_entities(t, state_entities, missing_rules)
 
-    if (
-        any("service_name" in str(rule or "") for rule in missing_rules)
-        and (
-            detect_price_intent(t)
-            or str(state_entities.get("_last_label") or "") == "PRICE"
-            or pending_label == "PRICE"
-        )
-    ):
+    price_service_slot = any("service_name" in str(rule or "") for rule in missing_rules) and (
+        detect_price_intent(t)
+        or str(state_entities.get("_last_label") or "") == "PRICE"
+        or pending_label == "PRICE"
+    )
+    if price_service_slot and turn_understanding.acting_list():
+        # Понимание хода (ход (б), шаг 1, `on`): ответ на вопрос цены — список услуг; одна
+        # услуга из всей реплики свела бы его к одной строке. Список разберёт корзина цены.
+        turn_understanding.note_acted("quick_fill_single_skipped")
+    elif price_service_slot:
         current_service_name = str(state_entities.get("service_name") or state_entities.get("test_name") or "")
         resolved_service_name = resolve_price_service_name_from_catalog(
             t,

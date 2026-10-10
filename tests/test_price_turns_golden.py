@@ -46,7 +46,16 @@ UPDATE = os.environ.get("GOLDEN_UPDATE") == "1"
 # Выключатель понимания хода (`turn_understanding_price`): off и shadow обязаны давать эталон
 # до шага (б)-1; on — его же, кроме диалогов ON_PLANNED (их ответы — в `price_turns_on.json`).
 MODES = ("off", "shadow", "on")
-ON_PLANNED: dict[str, str] = {}
+ON_PLANNED: dict[str, str] = {
+    "list_text_three": "список текстом — корзина, а не одна «Липидограмма»",
+    "list_text_oak_oam": "список текстом — корзина, а не один ОАК",
+    "list_text_no_commas": "сплошной список без разделителей — корзина",
+    "list_bare_two": "список без слова о цене — цена каждой позиции (П1), а не воронка подбора",
+    "list_button_three": "ответ на кнопку цены списком — корзина",
+    "list_button_oak_oam": "ответ на кнопку цены списком — корзина",
+    "list_over_stale_context": "список поверх прошлой услуги — корзина; подготовка — про список, не про ТТГ",
+    "readiness_when": "вопрос о сроке — не цена (READINESS-AS-PRICE)",
+}
 
 
 def _button(button_id: str) -> tuple[str, str]:

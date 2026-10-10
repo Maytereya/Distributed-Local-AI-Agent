@@ -110,6 +110,14 @@ def test_shadow_writes_numbers_and_keys_and_does_not_act(mini_prod_world, mode):
     assert "Ферритин" not in json.dumps(row, ensure_ascii=False)
 
 
+def test_on_records_which_readers_acted(mini_prod_world, mode):  # noqa: F811
+    mode("on")
+    with ev_world.FrozenWorld(mini_prod_world, "day") as world:
+        ((dbg, row),) = _turns(["сколько стоит ферритин, глюкоза, холестерин"], world)
+    assert "planner_list_to_cart" in row["tu_acted"]
+    assert dbg["understanding"]["acted"] == row["tu_acted"]
+
+
 def test_understanding_does_not_outlive_its_turn(mini_prod_world, mode):  # noqa: F811
     mode("on")
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:

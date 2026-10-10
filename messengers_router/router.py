@@ -1486,6 +1486,14 @@ async def _inject_catalog_candidates(
             should_try_service = False
             flags.add("test_assist_category_kept_broad")
             updated = True
+        # Понимание хода (ход (б), шаг 1, `on`): реплика — список услуг. Сопоставление всей
+        # реплики с каталогом свело бы его к одной строке («холестерин» → «Липидограмма»),
+        # список разберёт корзина цены (PRICE-LIST-COLLAPSES-TO-ONE).
+        if should_try_service and decision.label in {"PRICE", "TEST_ASSIST"} and turn_understanding.acting_list():
+            should_try_service = False
+            flags.add("understanding_list_kept")
+            updated = True
+            turn_understanding.note_acted("catalog_inject_skipped")
 
     # Part IV Stage 15 (OPTION B, partial): doctor + service catalog lookups
     # are independent — both read post-verify entities and don't depend on
@@ -1621,6 +1629,24 @@ def _relabel_test_assist_catalog_hit_as_price(
     if decision.label != "TEST_ASSIST":
         return decision
     flags = set(decision.flags or set())
+    # Понимание хода (ход (б), шаг 1, `on`) решает по свойству, о котором спросили, а не по
+    # флагу доставки: вопрос о сроке — не цена (READINESS-AS-PRICE); список узнанных каталогом
+    # услуг — цена, как одна узнанная услуга (П1).
+    understanding = turn_understanding.acting()
+    if understanding is not None and understanding.facet == "readiness":
+        if "catalog_service_exact" not in flags:
+            return decision
+        turn_understanding.note_acted("readiness_not_price")
+        return _copy_decision(decision, flags=flags | {"understanding_readiness_kept"})
+    if (
+        understanding is not None
+        and understanding.is_list
+        and understanding.facet in (None, "price")
+        and "result_delivery_info" not in flags
+        and not detect_test_assist_goal_phrasing(user_text)
+    ):
+        turn_understanding.note_acted("list_is_price")
+        return _copy_decision(decision, label="PRICE", flags=flags | {"understanding_list_is_price"})
     if "catalog_service_exact" not in flags:
         return decision
     if not str((decision.entities or {}).get("service_name") or "").strip():

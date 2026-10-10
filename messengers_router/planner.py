@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import turn_understanding
 from .flow_policy import apply_pending_override
 from .llm_mode_policy import RuntimeOptions
 from .memory import MemoryStore
@@ -221,6 +222,8 @@ def build_plan(
     # прозвучало. Инструмент цены отдаёт реплику LLM-выбору строки прайса — он найдёт
     # строку или честно ответит «уточните название». Город здесь не довод
     # переспрашивать: цены — только по Самаре. См. BUG-2026-10-02-PRICE-ASKS-NAMED-SERVICE.
+    # Понимание хода (ход (б), шаг 1, `on`): реплика — список услуг, их разберёт корзина цены.
+    price_list = turn_understanding.acting_list() if effective_label == "PRICE" else None
     if (
         effective_label == "PRICE"
         and "service_name" in missing
@@ -228,7 +231,10 @@ def build_plan(
     ):
         from .services._prices_helpers import price_question_names_service
 
-        if price_question_names_service(user_text):
+        if price_list is not None:
+            missing = []
+            turn_understanding.note_acted("planner_list_named")
+        elif price_question_names_service(user_text):
             missing = []
 
     if missing:
@@ -345,6 +351,16 @@ def build_plan(
         # Пациент спросил цену — строку прайса выбирает LLM (`_price_select_llm`). Цена
         # попутно, в шагах записи и карточки врача, идёт по правилам: там LLM лишь
         # добавила бы секунду каждому ходу.
+        if price_list is not None and not doctor_known:
+            # Список — в `price_info` с корзиной (у `service_bundle_info` её нет). Одна услуга
+            # прошлых ходов — не услуга этого хода: следующий вопрос («а подготовка?») иначе
+            # ушёл бы к ней, а не к списку.
+            for key in ("service_name", "test_name"):
+                state.last_entities.pop(key, None)
+            entities = {k: v for k, v in entities.items() if k not in ("service_name", "test_name")}
+            steps.append(PlanStep(tool="price_info", input={"query": user_text, "entities": {**entities, "__price_question": True}}))
+            turn_understanding.note_acted("planner_list_to_cart")
+            return Plan(label=label, steps=steps)
         price_entities = {**entities, "__price_question": True}
         if service_known and not doctor_known:
             steps.append(PlanStep(tool="service_bundle_info", input={"query": user_text, "entities": price_entities}))

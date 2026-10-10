@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import turn_understanding
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
@@ -488,6 +489,12 @@ async def ground_decision_entities(
             continue
 
         if key == "service_name":
+            # Понимание хода (ход (б), шаг 1, `on`): реплика — список услуг; вывод одной услуги
+            # из всей реплики свёл бы его к одной строке. Список разберёт корзина цены.
+            if label in {"PRICE", "TEST_ASSIST"} and turn_understanding.acting_list():
+                flags.add("entity_dropped_service_name_list")
+                turn_understanding.note_acted("grounder_single_dropped")
+                continue
             raw_value = str(value or "").strip()
             if _should_keep_nonbookable_service_name_as_is(
                 raw_value=raw_value,
