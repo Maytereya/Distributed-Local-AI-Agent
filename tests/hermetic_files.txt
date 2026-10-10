@@ -62,6 +62,7 @@ tests/test_prepare_single_document.py
 tests/test_price_consult_doctor_links.py
 tests/test_price_llm_select.py
 tests/test_price_no_doctor_prices_handoff.py
+tests/test_price_turns_golden.py
 tests/test_procedure_queries.py
 tests/test_promotions_flow.py
 tests/test_refine_once_per_turn.py
