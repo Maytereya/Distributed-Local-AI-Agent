@@ -340,6 +340,11 @@ async def early_guards(
         ctx.text,
         ctx.state.last_entities,
         runtime_options=runtime_options,
+        # LLM-3: refine уточняет только DOCTOR_SCHEDULE/DOCTOR_INFO/APPOINTMENT в
+        # несрочные метки — на «срочное или нет» он не влияет, а решение гарда для
+        # несрочного выбрасывается. Refine за ход делает один NLU-пайплайн; здесь он
+        # был вторым вызовом LLM с тем же промптом (стенд 09.10).
+        allow_refine=False,
     )
     if decision and decision.label in _SAFETY_LABELS:
         ctx.decision = decision
