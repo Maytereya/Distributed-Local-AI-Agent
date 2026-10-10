@@ -393,6 +393,12 @@ class FrozenWorld:
             raise requests.ConnectionError("стенд: живой метод МИС недоступен")
 
         self._set(api_nayka, "_session_get", mis_unavailable)
+        # Скачивание срезов (прайс, priceUnits, цены врачей, service_info) идёт своими сессиями
+        # requests мимо _session_get: в мире его нет — отказ сразу, без сети и без пауз повторов.
+        for module in (api_price, api_service_info):
+            session = getattr(module, "SESSION", None)
+            if session is not None:
+                self._set(session, "get", mis_unavailable)
 
         # Живые источники: запись мира или «недоступно».
         regions = self.captured.get("regions")
