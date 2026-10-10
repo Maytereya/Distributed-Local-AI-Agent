@@ -20,7 +20,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import turn_telemetry
+from . import turn_telemetry, turn_understanding
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -2602,6 +2602,9 @@ async def _complete_route_after_doctor_guard(
     :return: финальный routing triple
     """
 
+    # Понимание хода (ход (б), шаг 1): услуги и свойство ценовой реплики — один раз, до
+    # подстановки каталога, которая иначе сводит список к одной услуге. В тени только пишется.
+    await turn_understanding.observe_price_turn(decision.label, user_text=user_text, pending=memory.get_pending(state))
     decision = await _inject_catalog_candidates(
         decision,
         user_text=user_text,
@@ -2888,6 +2891,7 @@ async def route_patient_message(
     memory: MemoryStore,
     runtime_options: RuntimeOptions | None = None,
 ) -> tuple[RouteDecision, Plan, Evidence]:
+    turn_understanding.begin_turn()
     operator_offer_result = _handle_operator_offer_pending(user_text, state, memory)
     if operator_offer_result is not None:
         return operator_offer_result
@@ -3006,6 +3010,7 @@ def _debug_meta(
         "last_entities": state.last_entities,
         "summary": state.summary,
         "nlu_trace": nlu_trace,
+        "understanding": understanding.as_debug() if (understanding := turn_understanding.current()) else None,
     }
 
 

@@ -14,7 +14,7 @@ from time import perf_counter
 from typing import Any, AsyncIterator
 
 from . import evidence_keys as ek
-from . import turn_telemetry
+from . import turn_telemetry, turn_understanding
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 
 logger = logging.getLogger(__name__)
@@ -858,6 +858,7 @@ async def run_pipeline(
     :return: финальный контекст после прохождения стадий
     """
 
+    turn_understanding.begin_turn()
     ctx = OrchestratorContext(text=text, state=state, button_id=button_id)
     async with _timed_stage(ctx, "early_guards"):
         ctx = await early_guards(ctx, runtime_options=runtime_options)

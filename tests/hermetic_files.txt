@@ -96,6 +96,7 @@ tests/test_stoplist_operator_offer.py
 tests/test_symptom_specialists.py
 tests/test_test_assist_multi.py
 tests/test_turn_telemetry.py
+tests/test_turn_understanding.py
 tests/test_unbookable_target_wording.py
 tests/test_unit_canonicalisation.py
 tests/test_urgent_before_appointment_and_city.py

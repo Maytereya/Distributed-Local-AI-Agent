@@ -190,6 +190,7 @@ class MessengerRouterConfig:
     prepare_relevance_llm_enabled: bool
     llm_symptom_specialists: bool
     turn_telemetry: bool
+    turn_understanding_price: str
     debug_final_input: bool
     url: str
 
@@ -401,6 +402,15 @@ settings = Settings(
         # решение владельца 08.10). По умолчанию ВКЛ; kill-switch:
         # [MESSENGER_ROUTER] turn_telemetry = false
         turn_telemetry=_get_bool("MESSENGER_ROUTER", "turn_telemetry", default=True),
+        # Понимание хода на метке «цена» (ход (б), шаг 1, L-14): off — не строится; shadow — в
+        # debug и телеметрию, поведение прежнее; on — список не сводится к одной услуге, вопрос
+        # о сроке не становится ценой. По умолчанию shadow: [MESSENGER_ROUTER] turn_understanding_price
+        turn_understanding_price=_get_enum(
+            "MESSENGER_ROUTER",
+            "turn_understanding_price",
+            default="shadow",
+            allowed={"off", "shadow", "on"},
+        ),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -524,6 +534,7 @@ MR_LLM_RESULT_TIMING_VALIDATION = settings.messenger_router.llm_result_timing_va
 MR_PREPARE_RELEVANCE_LLM_ENABLED = settings.messenger_router.prepare_relevance_llm_enabled
 MR_LLM_SYMPTOM_SPECIALISTS = settings.messenger_router.llm_symptom_specialists
 MR_TURN_TELEMETRY = settings.messenger_router.turn_telemetry
+MR_TURN_UNDERSTANDING_PRICE = settings.messenger_router.turn_understanding_price
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

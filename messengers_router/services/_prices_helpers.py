@@ -563,6 +563,22 @@ def strip_readiness_phrasing(text: str) -> tuple[str, bool]:
     return " ".join(tokens).strip(" " + _EDGE), True
 
 
+# Слово срока внутри совпадения `_READINESS_TIME_RE`. Регулярка снимает и голое «за сколько»
+# (у неё все хвосты необязательны), а «за сколько можно сдать ферритин» — вопрос о цене.
+_READINESS_WORD_RE = re.compile(r"готов|дела|дн|врем|срок|долго|быстро|скоро|ждать", re.I)
+
+
+def is_readiness_question(text: str) -> bool:
+    """Спрашивают ли о сроке готовности («когда будет готов», «сколько делается ферритин»).
+
+    Строже `strip_readiness_phrasing`: снимать фразу из запроса можно и по голому «за
+    сколько», а решать по ней, о каком свойстве услуги вопрос, — нет.
+    """
+
+    match = _READINESS_TIME_RE.search(str(text or ""))
+    return bool(match and _READINESS_WORD_RE.search(match.group(0)))
+
+
 def price_question_names_service(text: str) -> bool:
     """Есть ли в реплике слова об услуге, кроме самого вопроса о цене.
 
@@ -3029,6 +3045,59 @@ def _split_price_query_items(query_text: str) -> list[str]:
     return unique
 
 
+def _is_multi_price_noise(tok: str) -> bool:
+    low = tok.lower()
+    return low in _MULTI_PRICE_NOISE_WORDS or len(low) < 2
+
+def _tokens_covered_by_name(window_tokens: list[str], canonical: str) -> bool:
+    """Каждый содержательный токен есть в каноне (префикс-4), и хотя бы один —
+    в его НАЗВАНИИ, а не только в скобках.
+
+    Канон режется на слова, а не по пробелам: «(полный)(соэ,le» и
+    «врача-хирурга» — это «полный», «соэ», «врача», «хирурга». Резка по
+    пробелам не находила в них слов пациента, гард анти-шинковки отвечал
+    «это список», и одна услуга резалась на корзину: «общий анализ крови
+    полный» → ОАК + «Полный съемный протез» (82 из 234 названий прайса,
+    набранных словами). Якорь вне скобок нужен обратной стороне той же
+    проверки: составная услуга перечисляет в скобках компоненты, и окно
+    «креатинин мочевина» иначе «покрыто» строкой «Оценка риска
+    камнеобразования (… креатинин, мочевина …)».
+    См. BUG-2026-10-01-BASKET-SPLITS-ONE-SERVICE.
+    """
+    canon = _normalise_input(canonical)
+    canon_words = _PRICE_TOKEN_RE.findall(canon)
+    name_words = _PRICE_TOKEN_RE.findall(re.sub(r"\([^)]*\)", " ", canon))
+
+    def _found_in(norm: str, words: list[str]) -> bool:
+        # Правило НАМЕРЕННО шире общего `tokens_share_stem`: здесь
+        # трёхсимвольный токен вправе войти в более длинное слово каталога
+        # («оак» ↔ «оакбб»), потому что сплошной CAPS-ран режется вслепую и
+        # запас нужен. Сверка со `tokens_share_stem(length=4)` дала 725
+        # расхождений ровно на этих коротких парах — поэтому не мигрируем.
+        # Обратный префикс — только от слов канона из трёх букв и длиннее:
+        # обрывки вроде «l» (из «l-формула») или «с» совпали бы с любым
+        # токеном на эту букву. «узи» ↔ «ультразвуковое» — как в ранжировании.
+        pref = norm[:4]
+        price_norm = _normalise_price_token(norm)
+        return any(
+            w.startswith(pref)
+            or (len(w) >= 3 and norm.startswith(w[:4]))
+            or _normalise_price_token(w) == price_norm
+            for w in words
+        )
+
+    checked = anchored = False
+    for tok in window_tokens:
+        norm = _normalise_input(tok)
+        if len(norm) < 3:
+            continue
+        if not _found_in(norm, canon_words):
+            return False
+        checked = True
+        anchored = anchored or _found_in(norm, name_words)
+    return anchored or not checked
+
+
 def _segment_items_by_catalog(
     query_text: str,
     retail_rows: list[dict[str, Any]],
@@ -3057,77 +3126,25 @@ def _segment_items_by_catalog(
     if len(tokens) < 4:
         return [], []
 
-    def _is_noise(tok: str) -> bool:
-        low = tok.lower()
-        return low in _MULTI_PRICE_NOISE_WORDS or len(low) < 2
-
-    def _tokens_covered(window_tokens: list[str], canonical: str) -> bool:
-        """Каждый содержательный токен есть в каноне (префикс-4), и хотя бы один —
-        в его НАЗВАНИИ, а не только в скобках.
-
-        Канон режется на слова, а не по пробелам: «(полный)(соэ,le» и
-        «врача-хирурга» — это «полный», «соэ», «врача», «хирурга». Резка по
-        пробелам не находила в них слов пациента, гард анти-шинковки отвечал
-        «это список», и одна услуга резалась на корзину: «общий анализ крови
-        полный» → ОАК + «Полный съемный протез» (82 из 234 названий прайса,
-        набранных словами). Якорь вне скобок нужен обратной стороне той же
-        проверки: составная услуга перечисляет в скобках компоненты, и окно
-        «креатинин мочевина» иначе «покрыто» строкой «Оценка риска
-        камнеобразования (… креатинин, мочевина …)».
-        См. BUG-2026-10-01-BASKET-SPLITS-ONE-SERVICE.
-        """
-        canon = _normalise_input(canonical)
-        canon_words = _PRICE_TOKEN_RE.findall(canon)
-        name_words = _PRICE_TOKEN_RE.findall(re.sub(r"\([^)]*\)", " ", canon))
-
-        def _found_in(norm: str, words: list[str]) -> bool:
-            # Правило НАМЕРЕННО шире общего `tokens_share_stem`: здесь
-            # трёхсимвольный токен вправе войти в более длинное слово каталога
-            # («оак» ↔ «оакбб»), потому что сплошной CAPS-ран режется вслепую и
-            # запас нужен. Сверка со `tokens_share_stem(length=4)` дала 725
-            # расхождений ровно на этих коротких парах — поэтому не мигрируем.
-            # Обратный префикс — только от слов канона из трёх букв и длиннее:
-            # обрывки вроде «l» (из «l-формула») или «с» совпали бы с любым
-            # токеном на эту букву. «узи» ↔ «ультразвуковое» — как в ранжировании.
-            pref = norm[:4]
-            price_norm = _normalise_price_token(norm)
-            return any(
-                w.startswith(pref)
-                or (len(w) >= 3 and norm.startswith(w[:4]))
-                or _normalise_price_token(w) == price_norm
-                for w in words
-            )
-
-        checked = anchored = False
-        for tok in window_tokens:
-            norm = _normalise_input(tok)
-            if len(norm) < 3:
-                continue
-            if not _found_in(norm, canon_words):
-                return False
-            checked = True
-            anchored = anchored or _found_in(norm, name_words)
-        return anchored or not checked
-
     # Анти-шинковка одиночной многословной услуги («cito общий анализ крови»,
     # «узи брюшной полости»): если ВЕСЬ контент-ран резолвится как ОДНА услуга
     # И каждый его токен покрыт каноном — это не список (single-путь разберётся).
     # Покрытие обязательно: мега-список тоже фаззи-резолвится «во что-то одно»
     # по сильному токену, но канон не покрывает остальные позиции.
-    content_tokens = [t for t in tokens if not _is_noise(t)]
+    content_tokens = [t for t in tokens if not _is_multi_price_noise(t)]
     if len(content_tokens) < 4:
         return [], []
     whole_canonical = resolve_price_service_name_from_catalog(
         " ".join(content_tokens), rows=retail_rows
     )
-    if whole_canonical and _tokens_covered(content_tokens, whole_canonical):
+    if whole_canonical and _tokens_covered_by_name(content_tokens, whole_canonical):
         return [], []
 
     recognized: list[str] = []
     unrecognized: list[str] = []
     i = 0
     while i < len(tokens):
-        if _is_noise(tokens[i]):
+        if _is_multi_price_noise(tokens[i]):
             i += 1
             continue
         matched = False
@@ -3136,7 +3153,7 @@ def _segment_items_by_catalog(
                 continue
             window_tokens = tokens[i : i + window]
             # Услуга не может содержать шум-слово внутри — окно разрывается.
-            if window > 1 and any(_is_noise(t) for t in window_tokens):
+            if window > 1 and any(_is_multi_price_noise(t) for t in window_tokens):
                 continue
             candidate = " ".join(window_tokens)
             canonical = resolve_price_service_name_from_catalog(candidate, rows=retail_rows)
@@ -3152,7 +3169,7 @@ def _segment_items_by_catalog(
                     continue
                 # Анти-глотание соседей: у многословного окна КАЖДЫЙ токен обязан
                 # быть в каноне («ОАК ОАМ ОБЩИЙ» → одна услуга — запрещено).
-                if window > 1 and not _tokens_covered(window_tokens, canonical):
+                if window > 1 and not _tokens_covered_by_name(window_tokens, canonical):
                     continue
             recognized.append(candidate)
             i += window
@@ -3284,24 +3301,24 @@ def _build_synonym_fork_payload(
     }
 
 
-def _build_multi_price_payload(
+def _multi_price_items(
     query_text: str,
     retail_rows: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    """Формирует payload для мульти-услугового price-запроса.
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Позиции, которые покажет корзина: ≥2 услуг каталога, и остаток её не гасит.
 
-    Каждая услуга отрисовывается как отдельная family-подгруппа через
-    `care_setting_label`, чтобы рендер умел группировать список без
-    дополнительного рендер-кейса.
+    Одна функция для сборщика корзины и для понимания хода (`price_list_services`):
+    «реплика — список» решается там же, где строится ответ, иначе понимание и ответ
+    разошлись бы.
 
     :param query_text: исходный запрос пользователя
     :param retail_rows: строки retail-прайса региона
-    :return: family-query-совместимый payload либо None
+    :return: (услуги с top-рядами цен, нераспознанные позиции); пусто — не корзина
     """
 
     items, unrecognized = _resolve_multi_price_items(query_text, retail_rows)
     if not items:
-        return None
+        return [], []
 
     # Гард неудовлетворимого уточнения — ТРЕТИЙ стык. Мульти-путь режет реплику
     # на фрагменты, и уточнение теряется между ними: «приём терапевта по ОМС»
@@ -3336,6 +3353,107 @@ def _build_multi_price_payload(
     # по-прежнему гасит платный приём на вопрос про полис.
     residue = " ".join(str(part) for part in unrecognized)
     if residue and _match_drops_unsatisfiable_qualifier(residue, offered_names, retail_rows):
+        return [], []
+    return items, unrecognized
+
+
+def _price_query_content_tokens(query_text: str) -> list[str]:
+    # Слова — тем же разбором, что и слова названия в `_tokens_covered_by_name`: «C-пептид»
+    # запроса иначе не находился в «… (глюкоза+ C-пептид)», где он — «c» и «пептид».
+    return [t for t in _PRICE_TOKEN_RE.findall(_normalise_input(query_text)) if not _is_multi_price_noise(t)]
+
+
+_CATALOG_NAMES_CACHE: dict[tuple[int, str, str], tuple[tuple[str, str], ...]] = {}
+
+
+def _catalog_names_normalised(rows: list[dict[str, Any]]) -> tuple[tuple[str, str], ...]:
+    """(нормализованное, исходное) название каждой строки; кэш по отпечатку среза, как у словаря."""
+
+    if not rows:
+        return ()
+    key = (
+        len(rows),
+        str(rows[0].get("serviceName") or rows[0].get("name") or "")[:48],
+        str(rows[-1].get("serviceName") or rows[-1].get("name") or "")[:48],
+    )
+    cached = _CATALOG_NAMES_CACHE.get(key)
+    if cached is None:
+        names = dict.fromkeys(str(row.get("serviceName") or row.get("name") or "").strip() for row in rows)
+        cached = tuple((_normalise_input(name), name) for name in names if name)
+        if len(_CATALOG_NAMES_CACHE) >= 4:
+            _CATALOG_NAMES_CACHE.clear()
+        _CATALOG_NAMES_CACHE[key] = cached
+    return cached
+
+
+def _catalog_name_covering(tokens: list[str], rows: list[dict[str, Any]]) -> str | None:
+    """Название прайса, которое одно покрывает все слова реплики, — тогда это одна услуга.
+
+    Сверка только с названием, которое выбрал резолвер, пропускала полные названия: он часто
+    находит соседнее («Первичный приём оториноларинголога 1 категория» → «Приём … первичный»),
+    и название с запятой или «и» внутри резалось на корзину (19 из 404 названий мини-прод).
+    """
+
+    prefixes = [token[:4] for token in tokens if len(token) >= 4]
+    for norm, name in _catalog_names_normalised(rows):
+        if all(prefix in norm for prefix in prefixes) and _tokens_covered_by_name(tokens, name):
+            return name
+    return None
+
+
+def price_list_services(
+    query_text: str,
+    *,
+    rows: list[dict[str, Any]] | None = None,
+) -> tuple[tuple[str, ...], str]:
+    """Услуги, которые пациент перечислил в ценовой реплике, и правило, решившее это.
+
+    Список — ровно то, что покажет корзина (`_multi_price_items`), плюс две защиты, которых у
+    корзины нет, — понимание хода направляет в неё реплики, которые раньше до неё не доходили:
+    - реплика, все слова которой покрывает одно название прайса, — одна услуга, даже с запятой,
+      «и» или «+» внутри («Глюкозотолерантный тест (глюкоза+ C-пептид)» иначе резалась на две);
+    - сплошной список без разделителей (S2) — только распознанный целиком: иначе вопрос с
+      лишними словами («когда будет готов анализ на ферритин») становился корзиной из
+      «Вакцинации … готов ли ваш организм?» и ферритина.
+
+    :param query_text: реплика пациента
+    :param rows: строки прайса (по умолчанию — срез региона)
+    :return: (названия услуг каталога — пусто, если не список; правило)
+    """
+
+    tokens = _price_query_content_tokens(query_text)
+    separated = len(_split_price_query_items(query_text)) >= 2
+    # Без разделителей корзина режет только сплошной список от четырёх слов (S2).
+    if len(tokens) < 2 or (not separated and len(tokens) < 4):
+        return (), "not_list"
+    catalog = _catalog_rows(rows)
+    if _catalog_name_covering(tokens, catalog):
+        return (), "one_catalog_name"
+    items, unrecognized = _multi_price_items(query_text, catalog)
+    if not items:
+        return (), "not_list"
+    if not separated and unrecognized:
+        return (), "segment_unrecognized"
+    return tuple(str(item["service_name"]) for item in items), "list_split" if separated else "list_segment"
+
+
+def _build_multi_price_payload(
+    query_text: str,
+    retail_rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Формирует payload для мульти-услугового price-запроса.
+
+    Каждая услуга отрисовывается как отдельная family-подгруппа через
+    `care_setting_label`, чтобы рендер умел группировать список без
+    дополнительного рендер-кейса.
+
+    :param query_text: исходный запрос пользователя
+    :param retail_rows: строки retail-прайса региона
+    :return: family-query-совместимый payload либо None
+    """
+
+    items, unrecognized = _multi_price_items(query_text, retail_rows)
+    if not items:
         return None
 
     variants: list[dict[str, Any]] = []

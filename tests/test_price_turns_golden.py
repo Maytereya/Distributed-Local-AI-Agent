@@ -18,7 +18,11 @@ master ловит ЛЮБОЕ изменение, а намеренное мен�
 живая LLM — это стенд (`evalbench`, режим `cached`).
 
 Перезапись эталона после НАМЕРЕННОЙ правки: `GOLDEN_UPDATE=1 pytest tests/test_price_turns_golden.py`,
-затем дифф `tests/golden/price_turns.json` — в коммит вместе с правкой и с объяснением.
+затем дифф `tests/golden/price_turns*.json` — в коммит вместе с правкой и с объяснением.
+
+Режимы выключателя понимания хода (ход (б), шаг 1): `off` и `shadow` дают эталон до шага
+(`price_turns.json`) — тень не меняет ни одного ответа; `on` — тот же эталон, кроме диалогов
+`ON_PLANNED`, их ответы — в `price_turns_on.json`.
 """
 
 from __future__ import annotations
@@ -36,7 +40,13 @@ from tests.test_button_actions import GATEWAY_V1_TITLES
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "mini_prod" / "snapshots"
 GOLDEN = Path(__file__).resolve().parent / "golden" / "price_turns.json"
+GOLDEN_ON = Path(__file__).resolve().parent / "golden" / "price_turns_on.json"
 UPDATE = os.environ.get("GOLDEN_UPDATE") == "1"
+
+# Выключатель понимания хода (`turn_understanding_price`): off и shadow обязаны давать эталон
+# до шага (б)-1; on — его же, кроме диалогов ON_PLANNED (их ответы — в `price_turns_on.json`).
+MODES = ("off", "shadow", "on")
+ON_PLANNED: dict[str, str] = {}
 
 
 def _button(button_id: str) -> tuple[str, str]:
@@ -165,15 +175,22 @@ def run_dialog(turns: list[str | tuple[str, str]], session_id: str) -> list[dict
     return asyncio.run(run())
 
 
+def _load(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
 def _golden() -> dict[str, Any]:
-    return json.loads(GOLDEN.read_text(encoding="utf-8")) if GOLDEN.exists() else {}
+    return _load(GOLDEN)
 
 
-def _write_golden(case: str, record: list[dict[str, Any]]) -> None:
-    data = _golden()
-    data[case] = record
-    GOLDEN.parent.mkdir(exist_ok=True)
-    GOLDEN.write_text(json.dumps(dict(sorted(data.items())), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+def _store(path: Path, case: str, record: list[dict[str, Any]] | None) -> None:
+    data = _load(path)
+    if record is None:
+        data.pop(case, None)
+    else:
+        data[case] = record
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(dict(sorted(data.items())), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
 
 @pytest.fixture
@@ -191,21 +208,29 @@ def synonym_fork(monkeypatch):
     monkeypatch.setattr(_bio, "_vocabularies", _with_fork)
 
 
+@pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("case", sorted(DIALOGS))
-def test_price_path_matches_golden(case, mini_prod_world, request):
+def test_price_path_matches_golden(case, mode, mini_prod_world, request, monkeypatch):
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_TURN_UNDERSTANDING_PRICE", mode, raising=False)
     if case.startswith("synonym_fork"):
         request.getfixturevalue("synonym_fork")
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
-        record = run_dialog(DIALOGS[case], f"golden-{case}")
+        record = run_dialog(DIALOGS[case], f"golden-{case}-{mode}")
         attempts = list(world.net.attempts)
     assert attempts == []
     for turn in record:
         assert turn["text"].strip(), (case, turn)
-    if UPDATE:
-        _write_golden(case, record)
+    base = _golden().get(case)
+    if UPDATE and mode == "off":
+        _store(GOLDEN, case, record)
         return
-    expected = _golden().get(case)
-    assert expected is not None, f"нет эталона для {case}: GOLDEN_UPDATE=1"
+    if UPDATE and mode == "on":
+        _store(GOLDEN_ON, case, None if record == base else record)
+        return
+    assert base is not None, f"нет эталона для {case}: GOLDEN_UPDATE=1"
+    expected = _load(GOLDEN_ON).get(case, base) if mode == "on" else base
     assert record == expected
 
 
@@ -213,3 +238,9 @@ def test_golden_has_no_orphans():
     """Эталон не держит диалогов, которых больше нет в наборе (переименование не теряет кейс молча)."""
 
     assert set(_golden()) == set(DIALOGS)
+
+
+def test_on_changes_only_planned_dialogs():
+    """`on` меняет ответы только там, где это цель шага; всё прочее — как до него."""
+
+    assert set(_load(GOLDEN_ON)) == set(ON_PLANNED)
