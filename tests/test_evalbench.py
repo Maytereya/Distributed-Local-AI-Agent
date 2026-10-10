@@ -291,6 +291,9 @@ def test_specialty_verdicts():
     assert specialty_verdict(["невролог", "уролог"], core, ok) == "partial"
     assert specialty_verdict(["уролог"], core, ok) == "wrong"
     assert specialty_verdict([], core, ok) == "none"
+    combined = ["сердечно-сосудистый хирург, флеболог, лимфолог"]
+    assert specialty_verdict(["флеболог", "лимфолог"], ["флеболог"], [], combined) == "right"
+    assert specialty_verdict(["флеболог", "лимфолог"], ["флеболог"], []) == "partial"
 
 
 def test_cancelled_live_call_is_recorded():
@@ -310,3 +313,19 @@ def test_cancelled_live_call_is_recorded():
 
     asyncio.run(call())
     assert [c.outcome for c in client.take_turn_calls()] == ["cancelled"]
+
+
+def test_cache_keeps_first_answer_and_separates_generation_options(tmp_path):
+    """Дубли ключа — первая запись (её видел бейслайн); температура 0 — отдельный ключ, умолчание — прежний."""
+
+    path = tmp_path / "cache.jsonl"
+    first = ev_llm.ResponseCache(path)
+    key = ev_llm.ResponseCache.key("m", "p", None, False)
+    first.put(key, "первый", "s")
+    ev_llm.ResponseCache(path).put(key, "второй", "s")
+    assert ev_llm.ResponseCache(path).get(key) == "первый"
+
+    client = ev_llm.HarnessClient(mode="adversary", sites=ev_llm.SiteIndex.from_templates({}), default_options={"temperature": 0.2})
+    assert client._options_fingerprint({"temperature": 0.2}) == ""
+    assert client._options_fingerprint({"temperature": 0, "num_predict": 24}) != ""
+    assert ev_llm.ResponseCache.key("m", "p", None, False, "") == key

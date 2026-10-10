@@ -205,6 +205,8 @@ def main(argv: list[str] | None = None) -> int:
                 from agent_logic_2.ollama_settings import LLMName
                 from messengers_router.services import _biomaterial
 
+                from agent_logic_2 import ollama_settings
+
                 sites = SiteIndex.from_code_root(code_root)
                 client = HarnessClient(
                     mode=args.mode,
@@ -213,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
                     cache=ResponseCache(args.cache) if args.mode in ("real", "cached", "replay") else None,
                     live_pause_s=args.live_pause,
                     max_live_calls=args.max_live_calls,
+                    default_options=ollama_settings.options_set().model_dump(exclude_none=True),
                 )
                 real_client = llm_runtime._OLLAMA_CLIENT
                 llm_runtime._OLLAMA_CLIENT = client

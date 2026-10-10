@@ -123,14 +123,15 @@ def score_specialties(header: dict[str, Any], turns: list[dict[str, Any]]) -> No
     vocab_file = PRIVATE_ROOT / "labels" / f"specialties_{header.get('world', {}).get('date')}.json"
     if not labels or not vocab_file.is_file():
         return
-    matcher = SpecialtyMatcher(json.loads(vocab_file.read_text(encoding="utf-8")))
+    roles = json.loads(vocab_file.read_text(encoding="utf-8"))
+    matcher = SpecialtyMatcher(roles)
     for t in turns:
         label = labels.get((t.get("set"), t["id"]))
         if label is None:
             continue
         named = matcher.named(_CANNED_EXAMPLES_RE.sub(" ", t.get("answer") or ""))
         t["specialties_named"] = named
-        t["specialty_verdict"] = specialty_verdict(named, label.get("core") or [], label.get("ok") or [])
+        t["specialty_verdict"] = specialty_verdict(named, label.get("core") or [], label.get("ok") or [], roles)
         t["specialty_not_for_patients"] = sorted(set(named) & NOT_FOR_PATIENTS)
 
 

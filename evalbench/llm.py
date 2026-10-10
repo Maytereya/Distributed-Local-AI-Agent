@@ -179,18 +179,23 @@ class ResponseCache:
             for line in path.open(encoding="utf-8"):
                 if line.strip():
                     row = json.loads(line)
-                    self._data[row["key"]] = row["response"]
+                    # Дубли ключа бывают (параллельные части, повторные живые прогоны): побеждает ПЕРВАЯ
+                    # запись — её видел прогон, против которого сравнивают.
+                    self._data.setdefault(row["key"], row["response"])
 
     @staticmethod
-    def key(model: str, prompt: str, fmt: Any, stream: bool) -> str:
-        raw = json.dumps([model, fmt, bool(stream), prompt], ensure_ascii=False)
+    def key(model: str, prompt: str, fmt: Any, stream: bool, options: str = "") -> str:
+        """Ключ записи; `options` — отпечаток параметров генерации, пусто — параметры по умолчанию
+        (так ключи записей до 10.10 остаются в силе)."""
+
+        raw = json.dumps([model, fmt, bool(stream), prompt] + ([options] if options else []), ensure_ascii=False)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def get(self, key: str) -> str | None:
         return self._data.get(key)
 
     def put(self, key: str, response: str, site: str) -> None:
-        self._data[key] = response
+        self._data.setdefault(key, response)
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             line = (json.dumps({"key": key, "site": site, "response": response}, ensure_ascii=False) + "\n").encode("utf-8")
@@ -233,6 +238,7 @@ class HarnessClient:
     max_live_calls: int | None = None
     calls: list[CallRecord] = field(default_factory=list)
     live_calls: int = 0
+    default_options: dict[str, Any] | None = None
     _last_live: float = 0.0
 
     def __post_init__(self) -> None:
@@ -240,6 +246,16 @@ class HarnessClient:
             raise ValueError(f"режим LLM: {self.mode!r}, ожидался один из {MODES}")
         if self.mode in _LIVE_MODES and self.real is None:
             raise ValueError("режиму с настоящей LLM нужен настоящий клиент")
+
+    def _options_fingerprint(self, options: Any) -> str:
+        """Отпечаток параметров генерации, если они не по умолчанию (температура 0 у коротких решений)."""
+
+        if options is None:
+            return ""
+        dumped = options.model_dump(exclude_none=True) if hasattr(options, "model_dump") else dict(options)
+        if self.default_options is not None and dumped == self.default_options:
+            return ""
+        return json.dumps(dumped, sort_keys=True, ensure_ascii=False)
 
     def take_turn_calls(self) -> list[CallRecord]:
         """Вызовы с прошлого запроса — их пишет прогон в строку хода."""
@@ -275,7 +291,7 @@ class HarnessClient:
             record("adversary")
             return _response(model, text, stream)
 
-        key = ResponseCache.key(model, prompt, format, stream)
+        key = ResponseCache.key(model, prompt, format, stream, self._options_fingerprint(kwargs.get("options")))
         cached = self.cache.get(key) if self.cache is not None and self.mode in ("cached", "replay") else None
         if cached is not None:
             record("cache_hit")

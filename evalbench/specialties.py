@@ -88,10 +88,16 @@ class SpecialtyMatcher:
         return out
 
 
-def specialty_verdict(named: list[str], core: Iterable[str], ok: Iterable[str]) -> str:
+def specialty_verdict(named: list[str], core: Iterable[str], ok: Iterable[str], roles: Iterable[str] = ()) -> str:
     core_set, ok_set = set(core), set(ok)
     allowed = core_set | ok_set
     shown = set(named)
+    # Составная роль МИС («сердечно-сосудистый хирург, флеболог, лимфолог») — один врач: если допустима
+    # одна её часть, остальные части лишними не считаются.
+    for role in roles:
+        parts = set(atoms([role]))
+        if len(parts) > 1 and parts & shown & allowed:
+            shown -= parts - allowed
     if not shown:
         return "none"
     if not shown & allowed:
