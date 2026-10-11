@@ -200,6 +200,7 @@ class MessengerRouterConfig:
     choose_symptom: str
     price_match_policy: str
     choose_basket: str
+    choose_readiness: str
     debug_final_input: bool
     url: str
 
@@ -447,6 +448,9 @@ settings = Settings(
         # Корзина на модуле choose() (ход (в), L-15a): позиции режут правила, строки каждой позиции
         # выбирает LLM одним вызовом; сбой — корзина правил. off | on. [MESSENGER_ROUTER] choose_basket
         choose_basket=_get_enum("MESSENGER_ROUTER", "choose_basket", default="off", allowed={"off", "on"}),
+        # Срок готовности при слабом совпадении — услугу выбирает LLM, срок печатает код из МИС (ход (в)).
+        # off | on; действует под пониманием хода on. [MESSENGER_ROUTER] choose_readiness
+        choose_readiness=_get_enum("MESSENGER_ROUTER", "choose_readiness", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -580,6 +584,7 @@ MR_CHOOSE_PRICE = settings.messenger_router.choose_price
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_PRICE_MATCH_POLICY = settings.messenger_router.price_match_policy
 MR_CHOOSE_BASKET = settings.messenger_router.choose_basket
+MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

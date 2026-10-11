@@ -108,6 +108,7 @@ from .services import Services, match_compound_price_service_option, resolve_pri
 from .services._appointment_change_validator import is_own_appointment_change
 from .services._existing_appointment_validator import is_own_existing_appointment
 from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE, readiness_from_catalog
+from .services._readiness_select import readiness_by_choice, readiness_mode
 from .services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
 from .services.prepare import anesthesia_reply, prepare_variant_payload
 from .services._patient_name_validator import is_patient_name_reply
@@ -1911,6 +1912,9 @@ async def _maybe_readiness_reply(
         return None
     memory.clear_pending(state)
     deadlines = await asyncio.to_thread(readiness_from_catalog, user_text)
+    if not deadlines and readiness_mode() == "on":
+        # Слабое совпадение: услугу выбирает LLM из кандидатов, срок печатает код (ход (в)).
+        deadlines = await readiness_by_choice(user_text)
     if deadlines:
         turn_understanding.note_acted("readiness_from_mis")
         flag, items = "understanding_readiness_from_mis", {ek.READINESS_RESPONSE: deadlines}

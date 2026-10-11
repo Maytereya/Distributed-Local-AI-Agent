@@ -110,3 +110,4 @@ tests/test_choice.py
 tests/test_choose_price.py
 tests/test_price_match_policy.py
 tests/test_basket_select.py
+tests/test_readiness_select.py
