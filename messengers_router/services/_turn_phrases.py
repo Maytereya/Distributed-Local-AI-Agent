@@ -17,7 +17,11 @@
 - **обход без LLM:** W пуста — `empty`; W сильная по данным (`strong_rows`) — `strong_whole`; разрез по
   разделителям (б) из ≥2 фраз, все сильные, остаток — обвязка, и одного названия прайса на всё нет —
   `strong_all`; кандидат один — `single`. Сильные окна без разделителей (в)/(г) LLM не обходят: и
-  «ФЕРРИТИН ГЛЮКОЗА ХОЛЕСТЕРОЛ» решает выбор (решение владельца 13.10, Q2).
+  «ФЕРРИТИН ГЛЮКОЗА ХОЛЕСТЕРОЛ» решает выбор (решение владельца 13.10, Q2);
+- **выбор LLM** (`parse_turn_phrases`): `choose()` с задачей `turn_phrases` — фразы не пересекаются
+  (`Task.disjoint`), подсказки строк прайса в v1 нет (подталкивала бы решать «одна или несколько» по
+  похожести букв); промпт `choose_turn_phrases`. Сбой и мусор — статусы `unavailable` / `invalid` без
+  фраз: что ответить пациенту, решают читатели разбора (шаг 5).
 
 Новых регулярок и словарей нет: токены — `_PRICE_TOKEN_RE`, обвязка — `_PRICE_QUERY_STOPWORDS`,
 `_MULTI_PRICE_NOISE_WORDS`, `_PRICE_GENERIC_SERVICE_TOKENS`; разрезы — функции разбора корзины.
@@ -25,10 +29,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import asyncio
+import time
+from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
-from ..choice import Strength
+from ..choice import Choice, Option, Status, Strength, Task, choose
 from ..turn_parse import ParsedPhrase, PhraseParse, ParseStatus
 from ._common import _normalise_catalog_text
 from ._prices_helpers import (
@@ -359,3 +365,56 @@ def decide_without_llm(cands: Candidates, catalog: list[dict[str, Any]]) -> Phra
     if len(cands.options) <= 1:
         return result(cands, ParseStatus.SINGLE, "data", [parsed(whole, ())])
     return None
+
+
+# --------------------------------------------------------------------------- выбор фраз LLM (choose)
+
+# Решение — одно из двух на ход (лимит хода не меняется, решение владельца 13.10, Q4). Тень ждёт
+# очередь к LLM не дольше 1 с (`llm_slot` округляет 300 мс до своего минимума — 1 с; Q1).
+PHRASES_TASK = Task(name="turn_phrases", max_picks=0, disjoint=True, num_predict=48, timeout_s=5.0, queue_timeout_ms=1500)
+_SHADOW_QUEUE_MS = 300
+
+
+def _prepare(reply: str, facet: str | None, catalog: list[dict[str, Any]]) -> tuple[Candidates, PhraseParse | None, tuple[tuple[dict[str, Any], ...], ...]]:
+    """Кандидаты, разбор без LLM (если он есть) и строки сильных совпадений каждого варианта."""
+
+    cands = phrase_candidates(reply, facet=facet, catalog=catalog)
+    decided = decide_without_llm(cands, catalog)
+    if decided is not None:
+        return cands, decided, ()
+    return cands, None, tuple(tuple(strong_rows(p.raw, catalog)) for p in cands.options)
+
+
+def _from_choice(cands: Candidates, choice: Choice, rows: Sequence[Sequence[dict[str, Any]]]) -> PhraseParse:
+    if choice.status is Status.PICKED:
+        picked = sorted((int(i) for i in choice.ids), key=lambda k: (cands.options[k].start, cands.options[k].end))
+        return result(cands, ParseStatus.PICKED, "llm", [parsed(cands.options[k], rows[k]) for k in picked])
+    if choice.status is Status.NONE_FIT:
+        return result(cands, ParseStatus.NONE_FIT, "llm")  # ни одна фраза не услуга — путь одной услуги
+    if choice.status is Status.UNAVAILABLE:
+        return result(cands, ParseStatus.UNAVAILABLE, "llm")
+    return result(cands, ParseStatus.INVALID, "llm")  # мусор, пересечение фраз; исходов у задачи нет
+
+
+async def parse_turn_phrases(reply: str, *, facet: str | None, catalog: list[dict[str, Any]], shadow: bool) -> PhraseParse:
+    """Разбор ценовой реплики на фразы-услуги: без LLM, если выбор не нужен, иначе — `choose()`.
+
+    Генератор и обход — в потоке (CPU); вызов LLM — место `choose_turn_phrases`. Что делать при
+    сбое (`unavailable`, `invalid`), решают читатели разбора (шаг 5); здесь — только разбор.
+
+    :param reply: реплика пациента
+    :param facet: свойство из понимания хода (`readiness` — W без фразы о сроке)
+    :param catalog: строки прайса региона
+    :param shadow: тень — решение вне бюджета хода и предохранителя, очередь к LLM ≤1 с
+    """
+
+    started = time.monotonic()
+    cands, decided, rows = await asyncio.to_thread(_prepare, reply, facet, catalog)
+    if decided is None:
+        options = [
+            Option(id=str(k), text=f"«{p.text}»", strength=Strength.STRONG if rows[k] else Strength.WEAK, span=(p.start, p.end))
+            for k, p in enumerate(cands.options)
+        ]
+        task = replace(PHRASES_TASK, queue_timeout_ms=_SHADOW_QUEUE_MS) if shadow else PHRASES_TASK
+        decided = _from_choice(cands, await choose(task, reply, options, shadow=shadow), rows)
+    return replace(decided, ms=int((time.monotonic() - started) * 1000))
