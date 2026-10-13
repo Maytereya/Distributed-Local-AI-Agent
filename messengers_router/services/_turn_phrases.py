@@ -401,6 +401,19 @@ def decide_without_llm(cands: Candidates, catalog: list[dict[str, Any]]) -> Phra
 # очередь к LLM не дольше 1 с (`llm_slot` округляет 300 мс до своего минимума — 1 с; Q1).
 PHRASES_TASK = Task(name="turn_phrases", max_picks=0, disjoint=True, num_predict=48, timeout_s=5.0, queue_timeout_ms=1500)
 _SHADOW_QUEUE_MS = 300
+# Ответ — номера фраз: ≈3,3 токена на номер плюс постоянная часть. 48 токенов обрезали ответ на 15–16
+# номерах (все 3 INVALID замера шага 6, по 3,4–4,0 с впустую) — бюджет растёт с числом вариантов, у
+# коротких списков (≤8 вариантов) он прежний.
+_TOKENS_PER_OPTION = 4
+_TOKENS_FIXED = 16
+
+
+def phrases_task(n_options: int, *, shadow: bool = False) -> Task:
+    """Задача выбора фраз под `n_options` вариантов: бюджет ответа не меньше прежних 48 токенов."""
+
+    budget = max(PHRASES_TASK.num_predict, _TOKENS_FIXED + _TOKENS_PER_OPTION * n_options)
+    task = replace(PHRASES_TASK, num_predict=budget)
+    return replace(task, queue_timeout_ms=_SHADOW_QUEUE_MS) if shadow else task
 
 
 def _prepare(
@@ -428,11 +441,30 @@ def fallback_split(cands: Candidates, catalog: list[dict[str, Any]]) -> tuple[Pa
     return tuple(parsed(p, phrase_rows(p.raw, catalog)) for p in cut)
 
 
+def _merged_list(cands: Candidates, picked: Sequence[int], rows: Sequence[Sequence[dict[str, Any]]], split: Sequence[ParsedPhrase]) -> bool:
+    """LLM выбрала одну фразу — всю реплику W, она слабая, а разрез по разделителям есть (`split` —
+    ≥2 фразы и одно название прайса не покрывает реплику: см. `fallback_split`)."""
+
+    return (
+        len(picked) == 1
+        and cands.whole is not None
+        and cands.options[picked[0]] is cands.whole
+        and not rows[picked[0]]
+        and len(split) >= 2
+    )
+
+
 def _from_choice(
     cands: Candidates, choice: Choice, rows: Sequence[Sequence[dict[str, Any]]], split: tuple[ParsedPhrase, ...] = ()
 ) -> PhraseParse:
     if choice.status is Status.PICKED:
         picked = sorted((int(i) for i in choice.ids), key=lambda k: (cands.options[k].start, cands.options[k].end))
+        if _merged_list(cands, picked, rows, split):
+            # LLM слила список в одну (слабую) фразу — вся реплика, хотя разделители режут её на ≥2 позиции
+            # и одного названия прайса на неё нет (разбор 95 ответов шага 6, G4: 6 «хуже» из 8 — путь одной
+            # услуги отвечал на список одной ценой). Не решение, а сбой: читатели берут разрез по
+            # разделителям (политика сбоя шага 5).
+            return replace(result(cands, ParseStatus.MERGED, "llm"), split=split)
         return result(cands, ParseStatus.PICKED, "llm", [parsed(cands.options[k], rows[k]) for k in picked])
     if choice.status is Status.NONE_FIT:
         return result(cands, ParseStatus.NONE_FIT, "llm")  # ни одна фраза не услуга — путь одной услуги
@@ -460,6 +492,6 @@ async def parse_turn_phrases(reply: str, *, facet: str | None, catalog: list[dic
             Option(id=str(k), text=f"«{p.text}»", strength=Strength.STRONG if rows[k] else Strength.WEAK, span=(p.start, p.end))
             for k, p in enumerate(cands.options)
         ]
-        task = replace(PHRASES_TASK, queue_timeout_ms=_SHADOW_QUEUE_MS) if shadow else PHRASES_TASK
+        task = phrases_task(len(options), shadow=shadow)
         decided = _from_choice(cands, await choose(task, reply, options, shadow=shadow), rows, split)
     return replace(decided, ms=int((time.monotonic() - started) * 1000))

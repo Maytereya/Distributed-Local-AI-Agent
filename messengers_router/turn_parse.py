@@ -158,13 +158,14 @@ class ParseStatus(StrEnum):
     PICKED = "picked"  # фразы выбрала LLM
     NONE_FIT = "none_fit"  # LLM: ни одна фраза не услуга — не список
     INVALID = "invalid"  # ответ LLM нарушил контракт (в т. ч. пересекающиеся фразы)
+    MERGED = "merged"  # LLM взяла всю реплику (слабую) одной услугой, а разрез по разделителям есть — сбой
     UNAVAILABLE = "unavailable"  # LLM не ответила
     LATE = "late"  # тень не успела к концу хода
     ERROR = "error"  # сбой кода разбора
 
 
 _DECIDED = frozenset({ParseStatus.STRONG_WHOLE, ParseStatus.STRONG_ALL, ParseStatus.SINGLE, ParseStatus.PICKED, ParseStatus.NONE_FIT})
-_FAILED = frozenset({ParseStatus.UNAVAILABLE, ParseStatus.INVALID})
+_FAILED = frozenset({ParseStatus.UNAVAILABLE, ParseStatus.INVALID, ParseStatus.MERGED})
 
 
 @dataclass(frozen=True)
@@ -184,7 +185,7 @@ class PhraseParse:
     """Разбор ценовой реплики на фразы-услуги: статус, откуда решение (`data` | `llm` | `none`),
     фразы в порядке реплики и фрагменты по разделителям, не покрытые выбором (`leftover`).
 
-    `split` — только у сбоя LLM (`unavailable`, `invalid`): разрез по разделителям (б) со силой фраз по
+    `split` — только у сбоя LLM (`unavailable`, `invalid`, `merged`): разрез по разделителям (б) со силой фраз по
     данным, если он есть и одно название прайса не покрывает всю реплику, — им действуют читатели по
     политике сбоя (шаг 5); иначе пусто — прежний путь правил."""
 
