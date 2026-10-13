@@ -26,7 +26,6 @@ from ._prices_helpers import (
     _rank_price_rows,
     _resolve_multi_price_items,
     phrase_price_items,
-    single_weak_phrase,
     strip_readiness_phrasing,
 )
 
@@ -154,12 +153,6 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
     :return: payload со списком анализов или уточняющим сообщением
     """
 
-    # Под `turn_parse = on` (L-15b) разбор хода; разбор «одна услуга» подбор анализов читает только при вопросе
-    # о цене: иначе («есть ли полный чекап», «что входит в комплекс») это не мнение о списке, и сегментация
-    # правил остаётся, как под off (G8 разбора 95 ответов, STEP-2026-10-14-L15B-6-T3, п. 2).
-    parse = turn_parse.acting_for(str(query or ""))
-    if parse is not None and not parse.is_list and not _turn_asks_price(str(query or "")):
-        parse = None
     test_name = _get_first_present(entities, ["test_name", "service_name"]) or query
     # BUG-D: снять turnaround-шум («срок готовности ОАК» → «ОАК»), иначе шумовые
     # токены ломают лексический матч по каталогу и анализ (с его deadline) не
@@ -184,6 +177,12 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
     # рендерятся (test_assist-путь), их честный показ — price_info/multi payload.
     # Под `turn_parse = on` (L-15b, шаг 5) список — фразы разбора хода (сильная — строки по данным МИС,
     # слабая — догадка правил по фразе); разбор решил одну услугу — не список, путь одной услуги ниже.
+    # Разбор «одна услуга» (не список) подбор анализов читает, только если в реплике вопрос о цене: иначе
+    # («есть ли полный чекап», «что входит в комплекс») это не мнение о списке, и сегментация правил
+    # остаётся, как под off (G8 разбора 95 ответов, STEP-2026-10-14-L15B-6-T3, п. 2).
+    parse = turn_parse.acting_for(str(query or ""))
+    if parse is not None and not parse.is_list and not _turn_asks_price(str(query or "")):
+        parse = None
     if parse is not None:
         multi_items = phrase_price_items(parse.items, rows) if parse.is_list else []
     else:
@@ -210,10 +209,6 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
                 "entities_used": entities,
             }
 
-    # Одна слабая услуга, выбранная LLM разбора, а по запросу строк нет — поиск по её фразе (п. 4).
-    phrase = single_weak_phrase(parse)
-    if phrase and not _rank_price_rows(rows, test_name, limit=1):
-        test_name, needle = phrase, _normalise_input(phrase)
     matches = _rank_price_rows(rows, test_name, limit=10)
 
     # Алиас одиночного запроса (BUG-2026-06-02-09): _rank_price_rows ранжирует по

@@ -8,8 +8,8 @@
   уточнением, которого в прайсе нет («приём терапевта по ОМС»), — по-прежнему «Не распознал»;
 - п. 2 — подбор анализов не о цене («есть ли полный чекап», «что входит в комплекс»): разбор «одна услуга»
   не выключает сегментацию правил — выдача подбора та же, что под off; при вопросе о цене разбор читается;
-- п. 4 — путь одной услуги (`price_info`, `service_bundle_info`, `test_assist`): разбор решил одну слабую
-  услугу выбором LLM — строки ищутся по её фразе, а не по всей реплике;
+- п. 4 — путь одной услуги по фразе разбора: сделан и отменён (короткая фраза LLM уводила к чужим строкам);
+  держится граница — фраза не заменяет то, что находит реплика; класс g0609 — `xfail(strict=True)`;
 - п. 7 — корзина из фраз: бюджет вариантов слабых позиций — поровну с передачей недобора (позиции без
   кандидатов не съедают долю); строка прайса — один раз в ответе (повтор у второй позиции сливается);
 - п. 8 — «Не распознал» корзины из фраз не печатает фрагмент только из обвязки и родовых слов («анализов»).
@@ -198,19 +198,14 @@ def test_follow_up_after_test_assist_stays_on_what_was_shown(follow_up, mini_pro
     _assert_follow_up_stays_on_what_was_shown(first, second)
 
 
-# --------------------------------------------------------------------------- п. 4: путь одной услуги — по фразе разбора
+# --------------------------------------------------------------------------- п. 4: путь одной услуги и фраза разбора (отменено)
+#
+# Поиск по выбранной LLM слабой фразе сделан и отменён (журнал, п. 4): фраза LLM бывает короче услуги
+# («удаление» из «удаление паховой грыжи», g0512) — по ней правила дают чужие строки, и выбор строки LLM
+# может подать одну из них ценой. Путь одной услуги ищет по реплике, как раньше; класс g0609 открыт.
 
 _SINGLE = "Сколько стоит и когда готов результат посева мочи с идентификацией культур"
 _URINE = "Посев мочи с идентификацией культур — 1 050"
-
-
-def test_one_weak_phrase_is_searched_by_the_phrase_not_the_reply(mini_prod_world, monkeypatch):  # noqa: F811
-    """LLM разбора выбрала одну слабую фразу («посева мочи») — путь одной услуги ищет по ней: слова вопроса
-    («когда готов результат … с идентификацией культур») не топят её до «Уточните название» (g0609, r0141)."""
-
-    [turn], [row] = _dialog([_SINGLE], mini_prod_world, monkeypatch, "t3-single-phrase", _Oracle(("посева мочи",)))
-    assert (row["tu_parse_status"], row["tu_parse_n"]) == ("picked", 1)
-    assert _URINE in turn["text"] and "Уточните" not in turn["text"], turn["text"]
 
 
 def _slot(parse, call, monkeypatch):
@@ -229,30 +224,17 @@ def _picked_one(reply: str, text: str):
     return turn_parse.PhraseParse(reply=reply, status="picked", source="llm", items=(phrase,))
 
 
-_READER_REPLY = {
-    "service_bundle_info": _SINGLE,
-    "test_assist": "Подскажите цену посева мочи для ребенка 3 лет в субботу",  # по всей реплике — «нет совпадений»
-}
-
-
-@pytest.mark.parametrize("reader", sorted(_READER_REPLY))
-def test_other_one_service_readers_search_by_the_phrase(reader, mini_prod_world, monkeypatch):  # noqa: F811
-    from messengers_router.services import Services
-
-    reply = _READER_REPLY[reader]
-    entities = {"__price_question": True, "__runtime_llm_mode": "hybrid"}
-    with ev_world.FrozenWorld(mini_prod_world, "day"):
-        services = Services()
-        out = _slot(_picked_one(reply, "посева мочи"), lambda: getattr(services, reader)(reply, dict(entities)), monkeypatch)
-    rows = out.get("tests") if reader == "test_assist" else (out.get("retail_prices") or out.get("family_variants"))
-    assert [row["serviceName"] for row in rows or []][:1] == ["Посев мочи с идентификацией культур"], out
+@pytest.mark.xfail(strict=True, reason="T3 п. 4 отменён: путь одной услуги ищет по реплике; слова вопроса топят фразу («Уточните название») — класс g0609 открыт")
+def test_one_weak_phrase_in_a_question_is_found(mini_prod_world, monkeypatch):  # noqa: F811
+    [turn], _rows = _dialog([_SINGLE], mini_prod_world, monkeypatch, "t3-single-phrase", _Oracle(("посева мочи",)))
+    assert _URINE in turn["text"], turn["text"]
 
 
 @pytest.mark.parametrize("reader", ["price_info", "service_bundle_info"])
 def test_a_too_short_phrase_does_not_replace_what_the_reply_finds(reader, mini_prod_world, monkeypatch):  # noqa: F811
-    """Граница класса: реплика целиком строки находит — по фразе не ищем, даже если LLM выбрала фразу короче
-    («посев» из «посев мочи с идентификацией культур»; g0512 — «удаление» из «удаление паховой грыжи»): иначе
-    короткая фраза увела бы к чужим строкам (посев на хламидии, удаление зуба)."""
+    """Инвариант, ради которого п. 4 отменён: выбранная LLM фраза короче услуги («посев» из «посев мочи с
+    идентификацией культур»; g0512 — «удаление» из «удаление паховой грыжи») не уводит путь одной услуги к
+    чужим строкам (посев на хламидии, удаление зуба)."""
 
     from messengers_router.services import Services
 
@@ -269,7 +251,6 @@ def test_a_too_short_phrase_does_not_replace_what_the_reply_finds(reader, mini_p
 @pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
 def test_follow_up_after_the_one_phrase_answer_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
     first, second = _dialog([_SINGLE, follow_up], mini_prod_world, monkeypatch, f"t3-single-two-{follow_up}", _Oracle(("посева мочи",)))[0]
-    assert _URINE in first["text"]
     _assert_follow_up_stays_on_what_was_shown(first, second)
 
 

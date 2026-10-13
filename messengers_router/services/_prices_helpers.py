@@ -3295,25 +3295,6 @@ def _resolve_fragment_service(fragment: str, retail_rows: list[dict[str, Any]]) 
     return service_name
 
 
-def single_weak_phrase(parse: Any) -> str:
-    """Фраза, по которой путь одной услуги ищет строки под `turn_parse = on`: разбор хода решил одну услугу
-    выбором LLM (`picked`), и она слабая — строк по данным МИС нет. Пусто — разбора нет, это список, сильная
-    фраза (её строки берёт `_parse_strong_selection`) или решение без выбора LLM — поиск по реплике, как раньше.
-
-    Корзина ищет позицию по её фразе (`phrase_price_items`), путь одной услуги искал по всей реплике: слова
-    вопроса («Какой срок получения результатов …») топили фразу («посева мочи») — «Уточните название»
-    (STEP-2026-10-14-L15B-6-T3, п. 4).
-
-    :param parse: разбор хода для входа читателя (`turn_parse.acting_for`) или None
-    :return: фраза пациента (срез реплики) или пусто
-    """
-
-    if parse is None or parse.is_list or parse.status != turn_parse.ParseStatus.PICKED or len(parse.items) != 1:
-        return ""
-    item = parse.items[0]
-    return "" if item.rows else str(item.text or "").strip()
-
-
 def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Позиции списка из фраз разбора хода (L-15b, шаг 5; `turn_parse.ParsedPhrase`), в их порядке.
 
