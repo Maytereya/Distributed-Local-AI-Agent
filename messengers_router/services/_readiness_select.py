@@ -19,18 +19,25 @@
 прежнее определение срока (название целиком или до скобок, словарь кода `_PRICE_SERVICE_ALIASES`, синоним
 МИС, код) по услуге, которую угадал резолвер; `data` — одно определение с ценой и корзиной, только
 данные МИС (`_strong_match.strong_rows`): «ттг» и «оак» по словарю кода — уже выбор LLM.
+
+Под `turn_parse = on` (L-15b, шаг 5) услугу вопроса называет разбор хода (`turn_parse.acting_for`): фраза
+одна и сильная по данным МИС — срок её строк кодом, без LLM; одна слабая — её выбирает LLM по кандидатам
+этой фразы; несколько фраз (список) или ни одной — честный перевод, как у списка раньше. Разбора нет или
+он не решён — как раньше.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from .. import turn_parse
 from ..choice import Option, Status, Task, choose
 from ..runtime_config import config as _cfg
 from ._biomaterial import mis_synonym_candidates
 from ._common import _normalise_catalog_text
 from ._prices_helpers import (
     _PRICE_SERVICE_ALIASES,
+    _apply_service_synonyms,
     _catalog_rows,
     _extract_price_service_from_query,
     _normalise_input,
@@ -79,6 +86,27 @@ def _legacy_strong_service_match(fragment: str, service_name: str, retail_rows: 
     )
 
 
+def _single_phrase(parse: turn_parse.PhraseParse) -> turn_parse.ParsedPhrase | None:
+    """Фраза вопроса о сроке по разбору хода: одна — она; список или ни одной услуги — None (перевод)."""
+
+    return parse.items[0] if len(parse.items) == 1 else None
+
+
+def _deadline_of_parsed(parse: turn_parse.PhraseParse) -> list[dict[str, str]] | None:
+    """Срок по разбору хода: одна фраза, сильная по данным МИС, и у неё одна услуга — срок её строк кодом.
+    Слабая фраза — None (её услугу выберет LLM, `readiness_by_choice`), список и синоним на несколько
+    услуг — тоже None."""
+
+    phrase = _single_phrase(parse)
+    if phrase is None or not phrase.rows:
+        return None
+    names = list(dict.fromkeys(str(row.get("serviceName") or "").strip() for row in phrase.rows))
+    if len({_normalise_catalog_text(name) for name in names}) != 1:
+        return None
+    deadline = _one_deadline(list(phrase.rows))
+    return [{"name": names[0], "deadline": deadline}] if deadline else None
+
+
 def readiness_from_catalog(question: str, *, rows: list[dict[str, Any]] | None = None) -> list[dict[str, str]] | None:
     """Сроки готовности услуги, названной в вопросе о сроке, — из справочника МИС (поле `deadline`).
 
@@ -92,6 +120,9 @@ def readiness_from_catalog(question: str, *, rows: list[dict[str, Any]] | None =
     """
 
     catalog = _catalog_rows(rows)
+    parse = turn_parse.acting_for(question)
+    if parse is not None:
+        return _deadline_of_parsed(parse)
     core, _ = strip_readiness_phrasing(question)
     if not core.strip():
         return None
@@ -121,12 +152,25 @@ async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | Non
     """
 
     catalog = _catalog_rows(rows)
-    core, _ = strip_readiness_phrasing(question)
-    if not core.strip() or price_list_services(core, rows=catalog)[0]:
-        return None
+    first: list[str] = []
+    parse = turn_parse.acting_for(question)
+    if parse is not None:
+        phrase = _single_phrase(parse)
+        if phrase is None:
+            return None
+        first = list(dict.fromkeys(str(row.get("serviceName") or "").strip() for row in phrase.rows))
+        if len({_normalise_catalog_text(name) for name in first}) == 1:
+            return None  # одна услуга по данным, а срока у неё нет — соседняя строка не годится: перевод
+        # Синоним МИС на несколько услуг — выбор только из его услуг; слабая фраза — кандидаты правил по ней.
+        core = _apply_service_synonyms(phrase.text)
+    else:
+        core, _ = strip_readiness_phrasing(question)
+        if not core.strip() or price_list_services(core, rows=catalog)[0]:
+            return None
     names: list[str] = []
-    guess = resolve_price_service_name_from_catalog(core, rows=catalog)
-    for name in [guess or "", *(str(row.get("serviceName") or "") for row in _rank_price_rows(catalog, core, limit=_CANDIDATES))]:
+    guess = "" if first else resolve_price_service_name_from_catalog(core, rows=catalog)
+    ranked = [] if first else [str(row.get("serviceName") or "") for row in _rank_price_rows(catalog, core, limit=_CANDIDATES)]
+    for name in [*first, guess or "", *ranked]:
         name = name.strip()
         if name and name not in names:
             names.append(name)

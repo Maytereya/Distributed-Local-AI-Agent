@@ -13,6 +13,7 @@ from urllib.parse import quote_from_bytes
 
 from agent_logic_2.nayka_api import api_price
 
+from .. import turn_parse
 from ._common import (
     _as_int,
     _get_first_present,
@@ -24,6 +25,7 @@ from ._prices_helpers import (
     SAMARA_PRICE_REGION_ID,
     _rank_price_rows,
     _resolve_multi_price_items,
+    phrase_price_items,
     strip_readiness_phrasing,
 )
 
@@ -162,7 +164,13 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
     # промпта). Однопредметные запросы идут стандартным single-bag путём ниже.
     # П6: функция возвращает (items, unrecognized); нераспознанные здесь не
     # рендерятся (test_assist-путь), их честный показ — price_info/multi payload.
-    multi_items, _multi_unrecognized = _resolve_multi_price_items(str(query or ""), rows)
+    # Под `turn_parse = on` (L-15b, шаг 5) список — фразы разбора хода (сильная — строки по данным МИС,
+    # слабая — догадка правил по фразе); разбор решил одну услугу — не список, путь одной услуги ниже.
+    parse = turn_parse.acting_for(str(query or ""))
+    if parse is not None:
+        multi_items = phrase_price_items(parse.items, rows) if parse.is_list else []
+    else:
+        multi_items, _multi_unrecognized = _resolve_multi_price_items(str(query or ""), rows)
     if multi_items:
         merged: list[dict[str, Any]] = []
         seen: set[str] = set()

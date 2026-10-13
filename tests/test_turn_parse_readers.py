@@ -8,6 +8,9 @@
   LLM; слабые — один выбор строк корзины (`choose()`); фрагменты вне выбора — «Не распознал»; разбор
   решил одну услугу — путь одной услуги;
 - путь одной услуги: одна сильная фраза — её строки без LLM, а не ответ правил по буквам;
+- срок готовности (`_readiness_select`): одна фраза, сильная по данным, — срок её строк кодом без LLM; одна
+  слабая — выбор LLM по кандидатам этой фразы; список или ни одной услуги — честный перевод;
+- подбор анализов (`lab_tests.test_assist`): список — фразы разбора; одна услуга — путь одной услуги;
 - разбор читают, только если вход читателя — реплика хода (`for_text`), и только решённый; иначе —
   прежний путь правил.
 
@@ -180,7 +183,9 @@ def test_one_strong_phrase_is_priced_by_data_without_llm(mini_prod_world, monkey
 # --------------------------------------------------------------------------- вход читателя и решённость
 
 
-def _slot(monkeypatch, mode: str, parse: turn_parse.PhraseParse, probe: str):
+def _run_with(monkeypatch, parse: turn_parse.PhraseParse, call, *, mode: str = "on"):
+    """`await call()` в ходе, где слот разбора уже держит `parse` (выключатель — `mode`)."""
+
     from messengers_router.runtime_config import config as cfg
 
     monkeypatch.setattr(cfg, "MR_TURN_PARSE", mode, raising=False)
@@ -193,9 +198,16 @@ def _slot(monkeypatch, mode: str, parse: turn_parse.PhraseParse, probe: str):
 
         turn_parse.start_phrases(factory, reply=parse.reply)
         await turn_parse.phrases()
-        return turn_parse.acting_for(probe)
+        return await call()
 
     return asyncio.run(run())
+
+
+def _slot(monkeypatch, mode: str, parse: turn_parse.PhraseParse, probe: str):
+    async def read():
+        return turn_parse.acting_for(probe)
+
+    return _run_with(monkeypatch, parse, read, mode=mode)
 
 
 @pytest.mark.parametrize(
@@ -212,3 +224,95 @@ def test_parse_is_read_only_for_its_reply_decided_and_under_on(mode, status, pro
     parse = turn_parse.PhraseParse(reply="сколько стоит ферритин и глюкоза", status=status, source="llm")
     assert (_slot(monkeypatch, mode, parse, probe) is parse) is acts
 
+
+# --------------------------------------------------------------------------- срок и подбор анализов читают разбор
+
+
+@pytest.fixture(scope="module")
+def catalog(mini_prod_world):  # noqa: F811
+    from messengers_router.services._prices_helpers import _catalog_rows
+
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        return _catalog_rows(None)
+
+
+def _phrase(text: str, reply: str, catalog: list[dict] | None = None, name: str = "") -> turn_parse.ParsedPhrase:
+    from messengers_router.choice import Strength
+
+    rows = tuple(row for row in catalog or () if row["serviceName"] == name)
+    start = reply.index(text)
+    return turn_parse.ParsedPhrase(text=text, start=start, end=start + len(text), strength=Strength.STRONG if rows else Strength.WEAK, rows=rows)
+
+
+def _parsed(reply: str, *phrases: turn_parse.ParsedPhrase, status: str = "picked") -> turn_parse.PhraseParse:
+    return turn_parse.PhraseParse(reply=reply, status=status, source="llm", items=phrases)
+
+
+_REPLY_DAYS = "когда будет готов анализ на ферритин"
+
+
+def test_readiness_takes_the_deadline_of_the_one_strong_phrase(catalog, mini_prod_world, monkeypatch):  # noqa: F811
+    from messengers_router.services._readiness_select import readiness_from_catalog
+
+    one = _parsed(_REPLY_DAYS, _phrase("ферритин", _REPLY_DAYS, catalog, "Ферритин"))
+    two = _parsed(_REPLY_DAYS, _phrase("анализ", _REPLY_DAYS), _phrase("ферритин", _REPLY_DAYS, catalog, "Ферритин"))
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        by_rules = readiness_from_catalog(_REPLY_DAYS, rows=catalog)
+        by_one = _run_with(monkeypatch, one, lambda: asyncio.to_thread(readiness_from_catalog, _REPLY_DAYS, rows=catalog))
+        by_list = _run_with(monkeypatch, two, lambda: asyncio.to_thread(readiness_from_catalog, _REPLY_DAYS, rows=catalog))
+    assert by_one == by_rules and [item["name"] for item in by_one] == ["Ферритин"]
+    assert by_list is None  # разбор — список: срок не одной услуги, перевод
+
+
+def test_readiness_choice_reads_the_phrase_and_skips_what_data_decided(catalog, mini_prod_world, monkeypatch):  # noqa: F811
+    from messengers_router.choice import Choice, Status
+    from messengers_router.services import _readiness_select as RS
+
+    asked: list[list[str]] = []
+
+    async def fake_choose(_task, _question, options):
+        asked.append([option.id for option in options])
+        return Choice(Status.PICKED, ids=("Ферритин",))
+
+    monkeypatch.setattr(RS, "choose", fake_choose)
+    weak = _parsed(_REPLY_DAYS, _phrase("анализ на ферритин", _REPLY_DAYS))
+    glucose = "сколько готовится глюкоза"
+    by_data = _parsed(glucose, _phrase("глюкоза", glucose, catalog, "Глюкоза"))  # одна услуга по данным — срок решает код
+    listed = _parsed(_REPLY_DAYS, _phrase("анализ", _REPLY_DAYS), _phrase("ферритин", _REPLY_DAYS, catalog, "Ферритин"))
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        found = _run_with(monkeypatch, weak, lambda: RS.readiness_by_choice(_REPLY_DAYS, rows=catalog))
+        assert [item["name"] for item in found] == ["Ферритин"] and "Ферритин" in asked[-1]
+        calls = len(asked)
+        assert _run_with(monkeypatch, by_data, lambda: RS.readiness_by_choice(glucose, rows=catalog)) is None
+        assert _run_with(monkeypatch, listed, lambda: RS.readiness_by_choice(_REPLY_DAYS, rows=catalog)) is None
+    assert len(asked) == calls  # одна услуга по данным и список — без выбора LLM (соседняя строка срока не даст)
+
+
+def test_readiness_of_a_run_on_list_is_a_handoff_not_one_deadline(mini_prod_world, monkeypatch):  # noqa: F811
+    """«сколько дней делается ФЕРРИТИН ГЛЮКОЗА» правила списком не видят; разбор — две фразы: срок не одной
+    услуги — честный перевод, без выбора срока (один срок на две услуги был бы сроком одной из них)."""
+
+    from messengers_router.services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
+
+    _deploy(monkeypatch)
+    _parse_on(monkeypatch)
+    llm = _Recorder("list_caps_run_on_priced", cut=("ФЕРРИТИН", "ГЛЮКОЗА"))
+    turn, row = _turn("сколько дней делается ФЕРРИТИН ГЛЮКОЗА", llm, mini_prod_world, monkeypatch, "readers-days-list")
+    assert (row["tu_parse_status"], row["tu_parse_n"]) == ("picked", 2)
+    assert turn["text"] == RESULT_TIMING_OPERATOR_TEXT
+    assert [entry["task"] for entry in row["choose"]] == ["turn_phrases"]
+
+
+def test_test_assist_list_is_the_parse(catalog, mini_prod_world, monkeypatch):  # noqa: F811
+    from messengers_router.services import lab_tests
+
+    run_on = "ферритин глюкоза"  # правилам не список: слов меньше четырёх и нет разделителей
+    split = "ферритин, глюкоза"  # правилам — список
+    as_list = _parsed(run_on, _phrase("ферритин", run_on, catalog, "Ферритин"), _phrase("глюкоза", run_on, catalog, "Глюкоза"))
+    as_one = _parsed(split, _phrase(split, split), status="single")
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        listed = _run_with(monkeypatch, as_list, lambda: lab_tests.test_assist(None, run_on, {}))
+        one = _run_with(monkeypatch, as_one, lambda: lab_tests.test_assist(None, split, {}))
+        rules = asyncio.run(lab_tests.test_assist(None, split, {}))  # вне хода — разрез правил
+    assert "multi-item" in listed["note"] and [row["serviceName"] for row in listed["tests"]] == ["Ферритин", "Глюкоза"]
+    assert "multi-item" not in one["note"] and "multi-item" in rules["note"]
