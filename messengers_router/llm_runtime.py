@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import errno as _errno
 import json as _json
 import os as _os
 import sys as _sys
@@ -38,7 +39,18 @@ _SEMAPHORE = asyncio.Semaphore(max(1, _MAX_CONCURRENCY))
 # вызова, а не из общих настроек Gradio: одинаковый вопрос — одинаковое решение, ответ не
 # растекается (ревью DLA, L-03/LLM-2, 08.10).
 DECISION_OPTIONS: dict[str, Any] = {"temperature": 0, "num_predict": 24}
-_OLLAMA_CLIENT = AsyncClient(c.ollama_url)
+
+# Сколько ждать установки соединения с LLM: сеть или VPN не отвечает — честный сбой за 2 с, а не
+# весь бюджет хода (DEBT-2026-10-13-LLM-CONNECT-DIAG). Чтение не ограничено: длину генерации держит
+# `asyncio.wait_for` места вызова. Не настройка: это свойство сети до LLM, а не политика ответа.
+_CONNECT_TIMEOUT_S = 2.0
+
+
+def _new_client() -> AsyncClient:
+    return AsyncClient(c.ollama_url, timeout=httpx.Timeout(None, connect=_CONNECT_TIMEOUT_S))
+
+
+_OLLAMA_CLIENT = _new_client()
 
 
 # --- DEBUG: файловый лог промптов и ответов ---
@@ -91,10 +103,11 @@ class LLMCircuitOpenError(RuntimeError):
 
 
 # Отказ LLM, а не дефект кода: ollama недоступна (`ConnectionError` — так клиент ollama
-# переводит `httpx.ConnectError`), очередь к LLM не дождалась слота, сервер ответил
-# ошибкой, обрыв/тайм-аут чтения потока. Ловящий обязан ответить честно (оператор), а
-# не уронить ход. `TimeoutError` сюда не входит — у бюджета ответа своя ветка, а
-# `CancelledError`/`BaseException` не ловятся никогда (стенд 09.10, RENDER-LLM-ERROR).
+# переводит `httpx.ConnectError`; тайм-аут соединения — `httpx.ConnectTimeout`, его ollama не
+# переводит), очередь к LLM не дождалась слота, сервер ответил ошибкой, обрыв/тайм-аут чтения
+# потока. Ловящий обязан ответить честно (оператор), а не уронить ход. `TimeoutError` сюда не
+# входит — у бюджета ответа своя ветка, а `CancelledError`/`BaseException` не ловятся никогда
+# (стенд 09.10, RENDER-LLM-ERROR).
 LLM_UNAVAILABLE_ERRORS: tuple[type[Exception], ...] = (
     ConnectionError,
     LLMQueueTimeoutError,
@@ -134,6 +147,31 @@ def _outcome(exc: BaseException) -> str:
     if isinstance(exc, asyncio.CancelledError):
         return "cancelled"
     return f"error:{type(exc).__name__}"
+
+
+def error_detail(exc: BaseException) -> str | None:
+    """Корневая причина сбоя LLM для телеметрии и лога: errno сокета (`EHOSTDOWN`, `ECONNREFUSED`…)
+    или имя класса корня цепочки.
+
+    ollama 0.5.3 переводит `httpx.ConnectError` в `ConnectionError(...) from None`: тип один на любую
+    причину (VPN, хост, порт), а errno остаётся только в цепочке `__cause__` / `__context__` — под
+    `OSError` без errno («All connection attempts failed»). None — у сбоя нет цепочки или исход
+    объясняет сам (таймаут, очередь, отмена).
+    """
+
+    if isinstance(exc, (asyncio.TimeoutError, asyncio.CancelledError, LLMQueueTimeoutError, GeneratorExit)):
+        return None
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    root: BaseException | None = None
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        code = current.errno if isinstance(current, OSError) else None
+        if isinstance(code, int):
+            return _errno.errorcode.get(code, str(code))
+        root = current
+        current = current.__cause__ or current.__context__
+    return type(root).__name__ if root is not None and root is not exc else None
 
 
 def _extract_response_text(res: Any) -> str:
@@ -234,7 +272,8 @@ async def generate_text_with_usage(
                 timeout=max(5, int(timeout_s)),
             )
     except BaseException as exc:
-        turn_telemetry.note_llm(site, _outcome(exc), int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms)
+        err = error_detail(exc)
+        turn_telemetry.note_llm(site, _outcome(exc), int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, err=err)
         if isinstance(exc, asyncio.TimeoutError):
             if _prompt_log_enabled():
                 _log_prompt_event(
@@ -248,6 +287,7 @@ async def generate_text_with_usage(
                     "id": request_id,
                     "duration_s": round(_time.monotonic() - started_at, 3),
                     "error_type": type(exc).__name__,
+                    "err": err,
                     "error": str(exc)[:300],
                 },
             )
@@ -415,11 +455,12 @@ async def generate_structured(
             queue_ms = int((_time.monotonic() - started_at) * 1000)
             res = await asyncio.wait_for(_OLLAMA_CLIENT.generate(**request), timeout=timeout)
     except BaseException as exc:
-        turn_telemetry.note_llm(site, _outcome(exc), int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms)
+        err = error_detail(exc)
+        turn_telemetry.note_llm(site, _outcome(exc), int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, err=err)
         if isinstance(exc, _GENERATION_FAILURES):
             _BREAKER.failure(_time.monotonic(), breaker_failures, breaker_open_s)
         if isinstance(exc, Exception) and _prompt_log_enabled():
-            _log_prompt_event("prompt_error", {"site": site, "error_type": type(exc).__name__})
+            _log_prompt_event("prompt_error", {"site": site, "error_type": type(exc).__name__, "err": err})
         raise
     finally:
         if budget is not None:
@@ -505,6 +546,6 @@ async def generate_stream_text(
     except BaseException as exc:
         # GeneratorExit — потребитель закрыл поток (бюджет рендера): это не сбой модели.
         outcome = "closed" if isinstance(exc, GeneratorExit) else _outcome(exc)
-        turn_telemetry.note_llm(site, outcome, int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms)
+        turn_telemetry.note_llm(site, outcome, int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, err=error_detail(exc))
         raise
     turn_telemetry.note_llm(site, "ok", int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, usage=usage)

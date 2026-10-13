@@ -350,7 +350,7 @@ async def choose(task: Task, question: str, options: Sequence[Option], *, legacy
             inherit_options=legacy is not None,
         )
     except Exception as exc:  # сбой LLM — UNAVAILABLE; что ответить пациенту, решает вызывающий
-        logger.warning("choose_unavailable: %s %s", task.name, type(exc).__name__)
+        logger.warning("choose_unavailable: %s %s %s", task.name, type(exc).__name__, llm_runtime.error_detail(exc) or "-")
         return _noted(task, Choice(Status.UNAVAILABLE, latency_ms=_ms(started)), len(options))
     if legacy is None:
         try:

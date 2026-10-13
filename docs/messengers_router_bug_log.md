@@ -11,6 +11,31 @@
 
 ---
 
+## DEBT-2026-10-13-LLM-CONNECT-DIAG — сбой соединения с LLM без причины, соединение без таймаута — ЗАКРЫТ
+
+- **Симптом.** В живых прогонах 11.10 — 8 и 4 мгновенных `ConnectionError` к LLM. По логу и телеметрии
+  видно только `error:ConnectionError`: сеть, VPN, хост или порт — не различить. Разбор показал сеть / VPN,
+  не пул httpx, но доказать это по записям нельзя.
+- **Корень.** ollama 0.5.3 переводит `httpx.ConnectError` в `ConnectionError(...) from None`: errno сокета
+  (`EHOSTDOWN`, `ECONNREFUSED`) остаётся только в цепочке `__context__` / `__cause__`, а её никто не читал
+  (`choice.py` и prompt-лог писали `type(exc).__name__`). Клиент LLM создавался без таймаутов httpx:
+  повисшее соединение ждало весь бюджет хода (`asyncio.wait_for`).
+- **Фикс.** `llm_runtime.error_detail(exc)` — errno из цепочки (`errno.errorcode`) или класс корня; None —
+  у таймаута, очереди, отмены (исход объясняет сам). Пишется отдельным необязательным полем `err` записи
+  `llm[]` (`turn_telemetry.note_llm(..., err=)`) из всех трёх веток сбоя (текст, поток, структурное
+  решение), в prompt-лог и в лог `choose_unavailable`. Строка `outcome` прежняя — по ней точным совпадением
+  считают `evalbench/card.py` и `HarnessClient`. Клиент: `httpx.Timeout(None, connect=2.0)`
+  (`_CONNECT_TIMEOUT_S`); чтение не ограничено — длину держит `wait_for`. Тайм-аут соединения ollama не
+  переводит: это `httpx.ConnectTimeout` (`error:ConnectTimeout`), он уже в `LLM_UNAVAILABLE_ERRORS` и
+  считается предохранителем. Пул, предохранитель и ретраи не менялись.
+- **Инвариант класса.** Сбой LLM объясним по телеметрии хода (errno или класс корня); повисшее соединение
+  с LLM занимает не больше 2 с бюджета хода.
+- **Покрытие.** `tests/test_llm_connect_diag.py`: `ConnectionError` с цепочкой `httpx.ConnectError` →
+  `OSError(EHOSTDOWN)` даёт `err == "EHOSTDOWN"` и прежний `outcome` у текста, потока и структурного
+  решения; разбор цепочки (errno глубже OSError без errno, класс корня, без цепочки, таймаут); лог
+  `choose_unavailable`; таймаут клиента (connect 2.0, read None) — без сети.
+
+
 ## BUG-2026-10-13-L13-SHOWN-SHADOWED — политика L-13 решала «список или одна строка» по кандидатам, а не по показанному пациенту — ЗАКРЫТ
 
 - **Симптом.** Аудит кода 13.10: в `select_price_rows` параметр `shown` (строки, которые увидит пациент,

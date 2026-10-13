@@ -15,7 +15,9 @@
 - `evidence_empty`, `handoff`, `chars`, `ms`, `stage_ms`;
 - `money_cut` — сколько предложений с денежными суммами снято со свободного текста LLM
   (`money_guard`, только при `llm_free` и только если снято);
-- `llm` — вызовы: место (модуль), исход, мс, ожидание очереди, токены;
+- `llm` — вызовы: место (модуль), исход, мс, ожидание очереди, токены; у сбоя — `err`, корневая
+  причина (errno сокета или класс корня, `llm_runtime.error_detail`): строка `outcome` прежняя, по
+  ней считают карточка стенда и `HarnessClient`;
 - `choose` — решения модуля выбора (ход (в)): задача, статус, сколько вариантов, мс, из кэша ли,
   код причины или исход — без текста реплики и вариантов;
 - `world` — модель и срезы (имена файлов) — раз в 5 минут, иначе тот же `world_id`.
@@ -92,13 +94,25 @@ def override(**values: Any) -> None:
         turn.fields.update(values)
 
 
-def note_llm(site: str, outcome: str, ms: int, *, queue_ms: int = 0, usage: dict[str, int] | None = None) -> None:
+def note_llm(
+    site: str,
+    outcome: str,
+    ms: int,
+    *,
+    queue_ms: int = 0,
+    usage: dict[str, int] | None = None,
+    err: str | None = None,
+) -> None:
+    """Вызов LLM в ходе; `err` — корневая причина сбоя (`EHOSTDOWN`…), отдельно от `outcome`."""
+
     turn = _TURN.get()
     if turn is None:
         return
     entry: dict[str, Any] = {"site": site, "outcome": outcome, "ms": ms}
     if queue_ms:
         entry["queue_ms"] = queue_ms
+    if err:
+        entry["err"] = err
     if usage:
         if "prompt_eval_count" in usage:
             entry["in_tok"] = usage["prompt_eval_count"]
