@@ -113,6 +113,17 @@ _RESULTS_PORTAL_HINT = (
 )
 
 
+def _turn_asks_price(query: str) -> bool:
+    """В реплике хода вопрос о цене: свойство хода из понимания (`turn_understanding`), без понимания — теми
+    же детекторами (`price_turn_facet`, без LLM). Нужен подбору анализов под `turn_parse = on`."""
+
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+
+    understanding = turn_understanding.current()
+    facet = understanding.facet if understanding is not None else turn_understanding.price_turn_facet(query)[0]
+    return facet == "price"
+
+
 def _test_assist_clarify_response(entities: dict[str, Any], *, note: str) -> dict[str, Any]:
     """Возвращает безопасный fallback для подбора анализов.
 
@@ -166,7 +177,12 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
     # рендерятся (test_assist-путь), их честный показ — price_info/multi payload.
     # Под `turn_parse = on` (L-15b, шаг 5) список — фразы разбора хода (сильная — строки по данным МИС,
     # слабая — догадка правил по фразе); разбор решил одну услугу — не список, путь одной услуги ниже.
+    # Разбор «одна услуга» (не список) подбор анализов читает, только если в реплике вопрос о цене: иначе
+    # («есть ли полный чекап», «что входит в комплекс») это не мнение о списке, и сегментация правил
+    # остаётся, как под off (G8 разбора 95 ответов, STEP-2026-10-14-L15B-6-T3, п. 2).
     parse = turn_parse.acting_for(str(query or ""))
+    if parse is not None and not parse.is_list and not _turn_asks_price(str(query or "")):
+        parse = None
     if parse is not None:
         multi_items = phrase_price_items(parse.items, rows) if parse.is_list else []
     else:

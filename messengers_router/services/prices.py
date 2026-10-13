@@ -41,6 +41,8 @@ from ._doctors_helpers import (
 )
 from ._prepare import _is_prepare_requested_in_price_query
 from ._basket_select import basket_from_phrases, basket_mode, choose_basket_rows
+from ._turn_phrases import _FILLER
+from ._turn_phrases import _tokens as _phrase_tokens
 from ._price_select_llm import PriceSelection, reconcile_with_proposal, rows_overlap, select_price_rows
 from ._prices_helpers import (
     SAMARA_PRICE_REGION_ID,
@@ -156,7 +158,7 @@ async def _multi_price_payload(
             llm_allowed=choosing,
             journal=parse.status == turn_parse.ParseStatus.PICKED,
         )
-        return multi_price_payload_from_items(positions, unrecognized, allow_single=True)
+        return multi_price_payload_from_items(positions, _names_a_service(unrecognized), allow_single=True)
     items, unrecognized = _multi_price_items(query_text, retail_rows)
     if not items:
         return None
@@ -170,6 +172,15 @@ async def _multi_price_payload(
         if refined is not None:
             return multi_price_payload_from_items(*refined, allow_single=True)
     return multi_price_payload_from_items(items, unrecognized)
+
+
+def _names_a_service(fragments: list[str]) -> list[str]:
+    """«Не распознал» корзины из фраз (под `turn_parse = on`): фрагмент только из обвязки и родовых слов
+    («анализов» из «Стоимость анализов: …») услугу не называет — не печатаем. Мерило — то же, что у
+    генератора фраз для промежутков между позициями (`_turn_phrases._FILLER`), без новых словарей
+    (STEP-2026-10-14-L15B-6-T3, п. 8)."""
+
+    return [fragment for fragment in fragments if any(token.key not in _FILLER for token in _phrase_tokens(str(fragment or "")))]
 
 
 def _parse_strong_selection(query: str) -> PriceSelection | None:
