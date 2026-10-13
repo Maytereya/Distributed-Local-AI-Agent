@@ -248,6 +248,24 @@ def test_other_one_service_readers_search_by_the_phrase(reader, mini_prod_world,
     assert [row["serviceName"] for row in rows or []][:1] == ["Посев мочи с идентификацией культур"], out
 
 
+@pytest.mark.parametrize("reader", ["price_info", "service_bundle_info"])
+def test_a_too_short_phrase_does_not_replace_what_the_reply_finds(reader, mini_prod_world, monkeypatch):  # noqa: F811
+    """Граница класса: реплика целиком строки находит — по фразе не ищем, даже если LLM выбрала фразу короче
+    («посев» из «посев мочи с идентификацией культур»; g0512 — «удаление» из «удаление паховой грыжи»): иначе
+    короткая фраза увела бы к чужим строкам (посев на хламидии, удаление зуба)."""
+
+    from messengers_router.services import Services
+
+    reply = "Сколько стоит у вас посев мочи с идентификацией культур"
+    entities = {"__price_question": True, "__runtime_llm_mode": "hybrid"}
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        services = Services()
+        out = _slot(_picked_one(reply, "посев"), lambda: getattr(services, reader)(reply, dict(entities)), monkeypatch)
+    rows = out.get("prices") or out.get("retail_prices") or out.get("family_variants") or []
+    names = {row["serviceName"] for row in rows}
+    assert "Посев мочи с идентификацией культур" in names and "Посев на хламидии" not in names, out
+
+
 @pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
 def test_follow_up_after_the_one_phrase_answer_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
     first, second = _dialog([_SINGLE, follow_up], mini_prod_world, monkeypatch, f"t3-single-two-{follow_up}", _Oracle(("посева мочи",)))[0]

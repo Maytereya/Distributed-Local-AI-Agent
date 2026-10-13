@@ -175,6 +175,27 @@ async def _multi_price_payload(
     return multi_price_payload_from_items(items, unrecognized)
 
 
+def _phrase_if_reply_finds_nothing(query: str, query_text: str, rows: list[dict[str, Any]]) -> str:
+    """Фраза разбора для пути одной услуги (под `turn_parse = on`): разбор решил одну слабую услугу выбором LLM
+    (`single_weak_phrase`), а реплика целиком строк не находит — ни семьи, ни строк догадки резолвера или
+    вырезателя фразы. Тогда ищем по фразе: слова вопроса («Какой срок получения результатов …») топили её до
+    «Уточните название». Реплика строки находит — как раньше: короткая фраза, выбранная LLM («удаление» из
+    «удаление паховой грыжи»), не уводит к чужим строкам (STEP-2026-10-14-L15B-6-T3, п. 4).
+
+    :return: фраза (с синонимами кода) или пусто — искать по реплике
+    """
+
+    phrase = single_weak_phrase(turn_parse.acting_for(str(query or "")))
+    if not phrase or not rows:
+        return ""
+    if _build_price_family_payload(query_text, rows, show_all=False, visible_limit=10):
+        return ""
+    for probe in (resolve_price_service_name_from_catalog(query_text, rows=rows), _extract_price_service_from_query(query_text)):
+        if probe and _select_patient_price_rows(rows, probe, limit=1):
+            return ""
+    return _apply_service_synonyms(phrase)
+
+
 def _names_a_service(fragments: list[str]) -> list[str]:
     """«Не распознал» корзины из фраз (под `turn_parse = on`): фрагмент только из обвязки и родовых слов
     («анализов» из «Стоимость анализов: …») услугу не называет — не печатаем. Мерило — то же, что у
@@ -259,12 +280,6 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             "entities_used": entities,
         }
     doctor_query_specialty = _extract_specialty_from_text(query_text) if (doctor_id and has_price_request) else ""
-    if not doctor_id:
-        # Под `turn_parse = on` разбор решил одну слабую услугу выбором LLM — строки ищем по её фразе, а не по
-        # всей реплике (как корзина ищет позицию по фрагменту); выбор LLM по-прежнему видит реплику целиком.
-        phrase = single_weak_phrase(turn_parse.acting_for(str(query or "")))
-        if phrase:
-            query_text = _apply_service_synonyms(phrase)
 
     if doctor_id:
         # Для doctor-specific PRICE не приземляемся в городский retail-catalog:
@@ -361,6 +376,16 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             extra={"prices": []},
         )
     retail_rows_clean = [p for p in price_rows if isinstance(p, dict)]
+    phrase = _phrase_if_reply_finds_nothing(query, query_text, retail_rows_clean)
+    if phrase:
+        # Под `turn_parse = on`: реплика целиком строк не находит, а разбор выбрал одну слабую фразу — ищем по
+        # ней (как корзина ищет позицию по фрагменту); выбор LLM по-прежнему видит реплику целиком.
+        query_text = phrase
+        query_service_name = resolve_price_service_name_from_catalog(query_text, current_service_name=entity_service_name)
+        if not query_service_name and not query_has_unsatisfiable_qualifier(query_text):
+            query_service_name = _extract_price_service_from_query(query_text)
+        service_name = _select_effective_price_service_name(entity_service_name, query_service_name)
+        needle = _normalise_input(service_name)
     # Мульти-услуговый запрос («ВИЧ, гепатит, ОАК»): активируется только если
     # ≥2 фрагментов приземлились на реальные услуги каталога. Иначе — fallback
     # на существующий single-service путь, старые кейсы остаются без изменений.
@@ -536,15 +561,13 @@ async def service_bundle_info(
             "note": "service_bundle_info: generic_uzi_clarify",
             "entities_used": entities,
         }
-    # Под `turn_parse = on` одна слабая услуга, выбранная LLM разбора, — поиск по её фразе (как в `price_info`).
-    phrase = single_weak_phrase(turn_parse.acting_for(str(query or "")))
-    if phrase:
-        query_text = _apply_service_synonyms(phrase)
     try:
         retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
     except Exception:
         retail_rows = []
     retail_rows = [p for p in retail_rows if isinstance(p, dict)]
+    # Под `turn_parse = on` реплика целиком строк не находит — поиск по выбранной LLM слабой фразе (как в `price_info`).
+    query_text = _phrase_if_reply_finds_nothing(query, query_text, retail_rows) or query_text
 
     # Что спросил пациент, решает LLM (класс «цена не той услуги», решение владельца
     # 30.09): «приём эндокринолога» → не «приём хирурга (эндокринологическое
