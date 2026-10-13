@@ -148,7 +148,14 @@ async def _multi_price_payload(
     if parse is not None:
         if not parse.is_list:
             return None
-        positions, unrecognized = await basket_from_phrases(str(query or ""), parse.items, parse.leftover, retail_rows, llm_allowed=choosing)
+        positions, unrecognized = await basket_from_phrases(
+            str(query or ""),
+            parse.items,
+            parse.leftover,
+            retail_rows,
+            llm_allowed=choosing,
+            journal=parse.status == turn_parse.ParseStatus.PICKED,
+        )
         return multi_price_payload_from_items(positions, unrecognized, allow_single=True)
     items, unrecognized = _multi_price_items(query_text, retail_rows)
     if not items:

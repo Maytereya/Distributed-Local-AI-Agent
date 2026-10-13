@@ -51,7 +51,7 @@ from typing import Any, Sequence
 
 from agent_logic_2.persist import DATA_DIR, ensure_dir
 
-from .. import turn_telemetry
+from .. import turn_parse, turn_telemetry
 from ..choice import LegacyWire, Option, Task, choose
 from ..llm_runtime import generate_text
 from ..prompt_registry import load_prompt_text
@@ -373,13 +373,17 @@ def _journal_path() -> Path:
     return ensure_dir(DATA_DIR / "journals", "journals") / _JOURNAL_NAME
 
 
-def _record_synonym_suggestion(phrase: str, terms: list[str], rows: list[dict[str, Any]]) -> None:
+def _record_synonym_suggestion(phrase: str, terms: list[str], rows: list[dict[str, Any]], *, source: str = "") -> None:
     """Пациент назвал услугу словом, которого в прайсе нет.
 
     Это кандидат в синонимы МИС: клиника проверит и заведёт сама (поле синонимов МИС
     бот уже читает — синоним работает без правки кода). `found` — нашла ли услугу LLM
     по термину; промахи («спирометрия», а в прайсе «Спирография») клинике нужнее всего:
     без синонима их не найдёт никто. Пишем только фразу услуги — не всю реплику.
+
+    `source` (под `turn_parse = on`, L-15b шаг 5) — откуда запись: `price` (выбор строки одной услуги),
+    `basket` (слабая позиция корзины), `readiness` (слабая фраза вопроса о сроке). Поле новое и только
+    под `on`: строки журнала без него читаются по-прежнему.
     """
 
     entry = {
@@ -392,11 +396,29 @@ def _record_synonym_suggestion(phrase: str, terms: list[str], rows: list[dict[st
             for row in rows
         ],
     }
+    if source:
+        entry["source"] = source
     try:
         with _journal_path().open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except OSError as exc:  # журнал — подсказка клинике, не повод ломать ответ
         logger.warning("price_synonym_journal_failed: %s", exc)
+
+
+def _journal_phrase(question: str, rules_phrase: str) -> tuple[str, str]:
+    """Что писать в журнал синонимов: (фраза, источник). Под `turn_parse = on` (L-15b, шаг 5) — фраза,
+    которую выбрала LLM разбора хода (`ParsedPhrase.text`, срез реплики), а не вырезатель правил; разбор
+    «ни одна фраза не услуга» (`none_fit`) — ничего: клинике не синоним. Разбор без выбора LLM (одна
+    фраза-кандидат, данные, сбой) и прочие режимы — прежняя фраза правил, источник пустой."""
+
+    parse = turn_parse.acting_for(question)
+    if parse is None:
+        return rules_phrase, ""
+    if parse.status == turn_parse.ParseStatus.NONE_FIT:
+        return "", "price"
+    if parse.status == turn_parse.ParseStatus.PICKED and len(parse.items) == 1:
+        return parse.items[0].text, "price"
+    return rules_phrase, "price"
 
 
 async def select_price_rows(
@@ -442,6 +464,7 @@ async def select_price_rows(
 
     phrase = str(_extract_price_service_from_query(question) or "").strip()
     phrase_norm = _normalise_catalog_text(phrase)
+    journal_phrase, journal_source = _journal_phrase(question, phrase or question)
     synonymized = _apply_service_synonyms(question)
     texts = [question, synonymized, phrase, str(context or ""), *[str(h or "") for h in hints]]
     # По отдельным словам — если кандидатов мало: поиск правил требует всех слов сразу,
@@ -497,8 +520,8 @@ async def select_price_rows(
         # признала в реплике название услуги: «слишком общее» и «не услуга» в любом из кругов —
         # не синоним (BUG-2026-10-13-SYNONYM-JOURNAL-IGNORES-REASON). Причину даёт только промпт
         # модуля (`choose_price = on`); прежний промпт её не знает — там пишем, как раньше.
-        if not candidates and not _NOT_A_SERVICE_NAME.intersection(reasons):
-            _record_synonym_suggestion(phrase or question, found_terms, [])
+        if not candidates and not _NOT_A_SERVICE_NAME.intersection(reasons) and journal_phrase:
+            _record_synonym_suggestion(journal_phrase, found_terms, [], source=journal_source)
 
     # Дословное название позиции («ферритин» = «Ферритин»): правила не ошибаются.
     if phrase_norm and any(_normalise_catalog_text(_row_name(row)) == phrase_norm for row in pool):
@@ -523,7 +546,8 @@ async def select_price_rows(
         journal_miss(terms, reason, second[2])
         return settle(None, none_fit(second[2]))
     chosen = _prefer_base_variants(second[0], question)
-    _record_synonym_suggestion(phrase or question, terms, chosen)
+    if journal_phrase:
+        _record_synonym_suggestion(journal_phrase, terms, chosen, source=journal_source)
     picked = PriceSelection(rows=tuple(chosen), search_terms=tuple(terms))
     return settle(picked, picked)
 

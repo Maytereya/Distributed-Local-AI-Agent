@@ -23,7 +23,8 @@
 Под `turn_parse = on` (L-15b, шаг 5) услугу вопроса называет разбор хода (`turn_parse.acting_for`): фраза
 одна и сильная по данным МИС — срок её строк кодом, без LLM; одна слабая — её выбирает LLM по кандидатам
 этой фразы; несколько фраз (список) или ни одной — честный перевод, как у списка раньше. Разбора нет или
-он не решён — как раньше.
+он не решён — как раньше. Слабая фраза и решение LLM по ней (выбранные услуги или «не нашла») — в журнал
+синонимов для клиники (`source: readiness`).
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from ..choice import Option, Status, Task, choose
 from ..runtime_config import config as _cfg
 from ._biomaterial import mis_synonym_candidates
 from ._common import _normalise_catalog_text
+from ._price_select_llm import _record_synonym_suggestion
 from ._prices_helpers import (
     _PRICE_SERVICE_ALIASES,
     _apply_service_synonyms,
@@ -153,11 +155,13 @@ async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | Non
 
     catalog = _catalog_rows(rows)
     first: list[str] = []
+    weak_phrase = ""  # слабая фраза разбора — в журнал синонимов с выбором LLM (L-15b, шаг 5)
     parse = turn_parse.acting_for(question)
     if parse is not None:
         phrase = _single_phrase(parse)
         if phrase is None:
             return None
+        weak_phrase = "" if phrase.rows else phrase.text
         first = list(dict.fromkeys(str(row.get("serviceName") or "").strip() for row in phrase.rows))
         if len({_normalise_catalog_text(name) for name in first}) == 1:
             return None  # одна услуга по данным, а срока у неё нет — соседняя строка не годится: перевод
@@ -177,6 +181,9 @@ async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | Non
     if not names:
         return None
     choice = await choose(READINESS_TASK, question, [Option(id=name, text=name) for name in names])
+    if weak_phrase and choice.status in (Status.PICKED, Status.NONE_FIT):
+        picked = [next((row for row in catalog if str(row.get("serviceName") or "").strip() == name), {"serviceName": name}) for name in choice.ids]
+        _record_synonym_suggestion(weak_phrase, [], picked, source="readiness")
     if choice.status is not Status.PICKED:
         return None
     found = [{"name": name, "deadline": deadline} for name in choice.ids if (deadline := _deadline(name, catalog))]

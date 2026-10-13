@@ -31,7 +31,7 @@ from typing import Any, Sequence
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from ._common import _normalise_catalog_text
-from ._price_select_llm import _prefer_base_variants, _row_cost, _row_key, _row_name
+from ._price_select_llm import _prefer_base_variants, _record_synonym_suggestion, _row_cost, _row_key, _row_name
 from ._prices_helpers import _annotate_price_rows_with_care_context, _rank_price_rows, phrase_price_items
 from ._strong_match import strong_rows
 
@@ -203,6 +203,7 @@ async def basket_from_phrases(
     retail_rows: list[dict[str, Any]],
     *,
     llm_allowed: bool = True,
+    journal: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Корзина из фраз разбора хода (`turn_parse = on`, L-15b, шаг 5): позиции — фразы в порядке реплики.
 
@@ -216,11 +217,17 @@ async def basket_from_phrases(
     :param leftover: фрагменты реплики вне выбранных фраз
     :param retail_rows: строки прайса региона
     :param llm_allowed: можно ли звать LLM (режим `strict` — нельзя)
+    :param journal: фразы выбрала LLM разбора — слабые позиции и решение LLM по ним (выбранные строки или
+        «не нашла», в том числе когда кандидатов нет вовсе) пишутся в журнал синонимов (`source: basket`);
+        без решения LLM по строкам (сбой) — не пишутся
     :return: (позиции с выбранными строками, нераспознанное)
     """
 
     items = phrase_price_items(phrases, retail_rows)
     chosen, weak, failed = await _pick(question, items, retail_rows, llm_allowed=llm_allowed)
+    if journal and not failed:
+        for index, fragment, _candidates in weak:
+            _record_synonym_suggestion(fragment, [], list(chosen.get(index) or []), source="basket")
     unpriced = _settle_weak_as_variants(weak, chosen) if failed else {}
     positions, not_found = _positions(items, chosen, unpriced)
     return positions, [*leftover, *not_found]

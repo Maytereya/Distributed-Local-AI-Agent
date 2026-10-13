@@ -16,7 +16,10 @@
 - политика сбоя (поправка владельца 13.10): LLM не разобрала реплику — разрез по разделителям (б), если он
   есть и одно название прайса не покрывает реплику; сплошной текст без LLM не режется (Q2) — прежний путь
   правил. LLM не выбрала строки корзины — сильные позиции с ценой по данным, слабая — несколько вариантов
-  кода (до 5) с полными названиями и ценами; одна найденная строка — её название без цены (вариант B L-13).
+  кода (до 5) с полными названиями и ценами; одна найденная строка — её название без цены (вариант B L-13);
+- журнал синонимов для клиники: фраза — выбранная LLM разбора, а не вырезатель правил; разбор «ни одна фраза
+  не услуга» — ничего; слабые позиции корзины и срока — с выбором LLM или «не нашла», поле `source`
+  (`price | basket | readiness`) — только под `on`.
 
 Под `off` и `shadow` поведение прежнее: эталоны `test_price_turns_golden.py`, `test_turn_parse_shadow.py`.
 Под `on` при недоступной LLM эталон пути цены — прежний, кроме диалогов `PARSE_ON_PLANNED` (их ответы — в
@@ -26,9 +29,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
+from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import llm_runtime, turn_parse
@@ -412,3 +417,122 @@ def test_one_found_row_without_llm_is_named_without_its_price():
     reply = "сколько стоит спирография и сахар"
     payload = answer(reply, _phrase("спирография", reply), _phrase("сахар", reply))
     assert (payload["prices"], payload["clarify_text"]) == ([], f"{note}\n\nНе распознал: сахар. Уточните эти названия — помогу по ним отдельно.")
+
+
+# --------------------------------------------------------------------------- журнал синонимов под on
+
+
+def _journal_rows(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+class _JournalLLM:
+    """Выбор фраз — ровно эти фразы; строки корзины — те, чьё название начинается с `rows_prefix`; прочие
+    места — «недоступна»."""
+
+    def __init__(self, phrases: tuple[str, ...], rows_prefix: str) -> None:
+        from messengers_router.services._common import _normalise_catalog_text
+
+        self.norm = _normalise_catalog_text
+        self.phrases = {_normalise_catalog_text(text) for text in phrases}
+        self.rows_prefix = rows_prefix
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
+        seen = f"{system}\n\n{prompt}" if system else prompt
+        options = [(int(head), rest) for head, dot, rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]
+        if _PHRASES_MARK in seen:
+            picks = [n for n, text in options if self.norm(text.strip("«»")) in self.phrases]
+        elif _BASKET_MARK in seen:
+            picks = [n for n, text in options if text.split(" → ", 1)[-1].startswith(self.rows_prefix)]
+        else:
+            raise ConnectionError("тест: LLM недоступна для этого места")
+        return GenerateResponse(model="m", response=json.dumps({"picks": picks}), done=True)
+
+
+_LH_AND_GGT = "сколько стоит лютеинизирующий гормон и ггтп"
+
+
+@pytest.mark.parametrize("mode", ["off", "on"])
+def test_basket_journals_weak_phrases_with_what_the_llm_picked(mode, mini_prod_world, monkeypatch):  # noqa: F811
+    """Под `on` слабые позиции корзины — фразы, которые выбрала LLM разбора, — в журнал синонимов с выбором
+    строк LLM («не нашла» — `found: false`), `source: basket`. Под `off` корзина журнал не пишет, как раньше."""
+
+    _deploy(monkeypatch)
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_TURN_PARSE", mode, raising=False)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _JournalLLM(("лютеинизирующий гормон", "ггтп"), "ЛГ (LH)"))
+    with ev_world.FrozenWorld(mini_prod_world, "day") as world:
+        [turn] = run_dialog([_LH_AND_GGT], f"journal-basket-{mode}")
+        entries = _journal_rows(world._journal)
+    if mode == "off":
+        assert entries == []
+        return
+    assert [(e["phrase"], e["found"], e["source"], [s["name"] for s in e["services"]]) for e in entries] == [
+        ("лютеинизирующий гормон", True, "basket", ["ЛГ (LH) Лютеинизирующий гормон"]),
+        ("ггтп", False, "basket", []),
+    ]
+    assert "ЛГ (LH) Лютеинизирующий гормон —" in turn["text"] and "Не распознал: ггтп" in turn["text"]
+
+
+def _price_miss(monkeypatch, catalog, question: str, parse: turn_parse.PhraseParse | None, journal: Path) -> list[dict]:
+    """`select_price_rows`, где правила кандидатов не дали, а LLM (прежний промпт) не нашла ничего."""
+
+    from messengers_router.services import _price_select_llm as PS
+
+    monkeypatch.setattr(PS, "_ENABLED", True)
+    monkeypatch.setattr(PS, "_journal_path", lambda: journal)
+
+    async def nothing(_question, _pool):
+        return [], [], ""
+
+    monkeypatch.setattr(PS, "_ask", nothing)
+
+    async def select():
+        return await PS.select_price_rows(question, catalog)
+
+    if parse is None:
+        asyncio.run(select())
+    else:
+        _run_with(monkeypatch, parse, select)
+    return _journal_rows(journal)
+
+
+def test_price_journal_takes_the_phrase_of_the_llm_parse(catalog, tmp_path, monkeypatch):
+    """Под `on` фраза в журнал — выбранная LLM разбора (срез реплики), `source: price`; разбор «ни одна фраза не
+    услуга» (`none_fit`) — в журнал ничего: «Цена анализа» клинике не синоним. Вне разбора — как раньше."""
+
+    question = "Цена анализа"
+    assert [e["phrase"] for e in _price_miss(monkeypatch, catalog, question, None, tmp_path / "off.jsonl")] == ["Цена анализа"]
+    none_fit = turn_parse.PhraseParse(reply=question, status="none_fit", source="llm")
+    assert _price_miss(monkeypatch, catalog, question, none_fit, tmp_path / "none_fit.jsonl") == []
+
+    question = "а подскажите спирометрия почем"
+    picked = _parsed(question, _phrase("спирометрия", question))
+    [entry] = _price_miss(monkeypatch, catalog, question, picked, tmp_path / "picked.jsonl")
+    assert (entry["phrase"], entry["found"], entry["source"]) == ("спирометрия", False, "price")
+    [legacy] = _price_miss(monkeypatch, catalog, question, None, tmp_path / "legacy.jsonl")
+    assert "source" not in legacy  # вне `on` строка журнала прежняя
+
+
+def test_readiness_journals_the_weak_phrase_with_the_llm_choice(catalog, mini_prod_world, monkeypatch):  # noqa: F811
+    from messengers_router.choice import Choice, Status
+    from messengers_router.services import _readiness_select as RS
+
+    answers = iter([Choice(Status.PICKED, ids=("Ферритин",)), Choice(Status.NONE_FIT), Choice(Status.UNAVAILABLE)])
+
+    async def fake_choose(_task, _question, _options):
+        return next(answers)
+
+    monkeypatch.setattr(RS, "choose", fake_choose)
+    weak = _parsed(_REPLY_DAYS, _phrase("анализ на ферритин", _REPLY_DAYS))
+    with ev_world.FrozenWorld(mini_prod_world, "day") as world:  # журнал синонимов мира — во временном каталоге
+        for _ in range(3):
+            _run_with(monkeypatch, weak, lambda: RS.readiness_by_choice(_REPLY_DAYS, rows=catalog))
+        entries = _journal_rows(world._journal)
+    assert [(e["phrase"], e["found"], e["source"], [s["name"] for s in e["services"]]) for e in entries] == [
+        ("анализ на ферритин", True, "readiness", ["Ферритин"]),
+        ("анализ на ферритин", False, "readiness", []),
+    ]  # сбой LLM — решения нет, записи нет
