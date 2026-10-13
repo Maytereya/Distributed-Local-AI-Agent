@@ -3622,7 +3622,8 @@ def multi_price_payload_from_items(
             "clarify_text": "\n\n".join([*names_notes, *([unrecognized_note] if unrecognized_note else [])]),
             "note": "price_multi_service: names_without_prices",
         }
-    if len(variants) < 2 and not (allow_single and variants and (unrecognized or names_notes)):
+    merged = any(item.get("merged") for item in items)  # корзина из фраз слила повторы в одну позицию
+    if len(variants) < 2 and not (allow_single and variants and (unrecognized or names_notes or merged)):
         return None
 
     visible_limit = len(variants)

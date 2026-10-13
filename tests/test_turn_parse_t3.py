@@ -10,6 +10,8 @@
   не выключает сегментацию правил — выдача подбора та же, что под off; при вопросе о цене разбор читается;
 - п. 4 — путь одной услуги (`price_info`, `service_bundle_info`, `test_assist`): разбор решил одну слабую
   услугу выбором LLM — строки ищутся по её фразе, а не по всей реплике;
+- п. 7 — корзина из фраз: бюджет вариантов слабых позиций — поровну с передачей недобора (позиции без
+  кандидатов не съедают долю); строка прайса — один раз в ответе (повтор у второй позиции сливается);
 - п. 8 — «Не распознал» корзины из фраз не печатает фрагмент только из обвязки и родовых слов («анализов»).
 
 Две LLM, как в классе «одна или несколько»: «недоступна» (гейт) и оракул — на выборе фраз отмечает ровно
@@ -52,6 +54,7 @@ class _Oracle:
         self.phrases = {_normalise_catalog_text(text) for text in phrases}
         self.rows = rows
         self.asked: list[str] = []
+        self.rows_prompts: list[str] = []
 
     async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
         seen = f"{system}\n\n{prompt}" if system else prompt
@@ -62,6 +65,7 @@ class _Oracle:
             return GenerateResponse(model="m", response=json.dumps({"picks": picks}), done=True)
         if self.rows and any(mark in seen for mark in _ROWS_MARKS):
             self.asked.append("rows")
+            self.rows_prompts.append(prompt)
             picks = [n for n, text in options if text.split(" → ", 1)[-1].startswith(self.rows)]
             answer = {"match": picks, "search_terms": []} if system is None else {"picks": picks}
             return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
@@ -278,4 +282,56 @@ def test_unrecognized_still_names_a_service_the_price_lacks(mini_prod_world, mon
 @pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
 def test_follow_up_after_the_trimmed_basket_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
     first, second = _dialog([_WRAPPED, follow_up], mini_prod_world, monkeypatch, f"t3-wrapper-two-{follow_up}", _Oracle(*_WRAPPED_ORACLE))[0]
+    _assert_follow_up_stays_on_what_was_shown(first, second)
+
+
+# --------------------------------------------------------------------------- п. 7: корзина из фраз — бюджет и повторы
+
+_REPEAT = "сколько стоит посев на грибы Candida и грибы рода Candida с чувствительностью"
+_REPEAT_ORACLE = (("посев на грибы Candida", "грибы рода Candida с чувствительностью"), ("Посев на грибы рода Candida",))
+_CANDIDA = "Посев на грибы рода Candida (чувствительность к антимикотическим препаратам) — 710"
+
+
+def test_one_price_row_is_shown_once_in_the_basket(mini_prod_world, monkeypatch):  # noqa: F811
+    """Две фразы, LLM выбрала для обеих одну строку — строка один раз, вторая позиция слита с первой (не «Не
+    распознал» и не уход в путь одной услуги по всей реплике) (g0167)."""
+
+    [turn], [row] = _dialog([_REPEAT], mini_prod_world, monkeypatch, "t3-repeat", _Oracle(*_REPEAT_ORACLE))
+    assert row["tu_parse_n"] == 2 and "planner_list_to_cart" in row["tu_acted"]
+    assert turn["text"].count(_CANDIDA) == 1 and "Не распознал" not in turn["text"], turn["text"]
+
+
+_MANY_WEAK = "сколько стоит: витамин д, посев, папилломавирус, чекап, мазок, спирометрия, ггтп, квантовый анализ"
+
+
+def test_weak_positions_without_candidates_do_not_eat_the_budget(mini_prod_world, monkeypatch):  # noqa: F811
+    """Восемь слабых позиций, у трёх кандидатов нет: прежняя доля `30 // 8 = 3` резала варианты остальных
+    (g0561 — ПЦР кол./п-кол. не дошли до LLM); теперь недобор переходит к позициям с кандидатами."""
+
+    from messengers_router.services import _basket_select as BS
+    from messengers_router.services._prices_helpers import _catalog_rows
+
+    phrases = tuple(part.strip() for part in _MANY_WEAK.split(":", 1)[1].split(","))
+    oracle = _Oracle(phrases, ("Посев мочи",))
+    [turn], [row] = _dialog([_MANY_WEAK], mini_prod_world, monkeypatch, "t3-budget", oracle)
+    assert row["tu_parse_n"] == len(phrases)
+    [prompt] = oracle.rows_prompts
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        catalog = _catalog_rows(None)
+        from messengers_router.services._prices_helpers import phrase_price_items
+        from tests.test_turn_parse_readers import _phrase
+
+        items = phrase_price_items([_phrase(text, _MANY_WEAK) for text in phrases], catalog)
+        sizes = {item["fragment"]: len(BS._candidates(item, catalog)) for item in items}
+    shown = {fragment: prompt.count(f"«{fragment}» →") for fragment in phrases}
+    assert sum(shown.values()) <= max(BS._MAX_OPTIONS, 2 * len(phrases))
+    rich = [fragment for fragment, size in sizes.items() if size > 3]
+    assert rich and all(shown[fragment] > 3 for fragment in rich), (shown, sizes)
+    assert "Посев мочи с идентификацией культур" in turn["text"]
+
+
+@pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
+def test_follow_up_after_the_merged_basket_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
+    first, second = _dialog([_REPEAT, follow_up], mini_prod_world, monkeypatch, f"t3-repeat-two-{follow_up}", _Oracle(*_REPEAT_ORACLE))[0]
+    assert _CANDIDA in first["text"]
     _assert_follow_up_stays_on_what_was_shown(first, second)

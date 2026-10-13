@@ -85,14 +85,41 @@ def _variants(fragment: str, candidates: list[dict[str, Any]]) -> tuple[list[dic
     return [], _row_name(rows[0]) if rows else ""
 
 
+def _fair_shares(sizes: list[int], total: int = _MAX_OPTIONS) -> list[int]:
+    """Сколько кандидатов каждой слабой позиции показать LLM: бюджет поровну, а недобор позиций, у которых
+    кандидатов меньше доли, — тем, у кого их больше (не меньше прежних двух на позицию). Прежняя доля
+    `max(2, 30 // N)` при восьми слабых — три строки, хотя половина бюджета пустовала у позиций без кандидатов
+    (STEP-2026-10-14-L15B-6-T3, п. 7)."""
+
+    total = max(total, 2 * sum(1 for size in sizes if size))
+    shares = [0] * len(sizes)
+    left = total
+    open_ = [i for i, size in enumerate(sizes) if size]
+    while left > 0 and open_:
+        each = max(1, left // len(open_))
+        for i in list(open_):
+            take = min(each, sizes[i] - shares[i], left)
+            shares[i] += take
+            left -= take
+            if shares[i] >= sizes[i]:
+                open_.remove(i)
+            if left <= 0:
+                break
+    return shares
+
+
 async def _pick(
     question: str,
     items: list[dict[str, Any]],
     retail_rows: list[dict[str, Any]],
     *,
     llm_allowed: bool = True,
+    fair_share: bool = False,
 ) -> tuple[dict[int, list[dict[str, Any]]], list[tuple[int, str, list[dict[str, Any]]]], bool]:
     """Строки позиций: сильные — по данным, слабые — выбор LLM одним вызовом.
+
+    `fair_share` (корзина из фраз, `turn_parse = on`) — бюджет вариантов по `_fair_shares`; иначе прежняя
+    доля `max(2, 30 // N)` (корзина правил под off не меняется).
 
     :return: (выбранные строки по номеру позиции, слабые позиции с кандидатами, сбой LLM)
     """
@@ -111,10 +138,11 @@ async def _pick(
     if not weak:
         return chosen, weak, False
     per_item = max(2, _MAX_OPTIONS // len(weak))
+    limits = _fair_shares([len(candidates) for _index, _fragment, candidates in weak]) if fair_share else [per_item] * len(weak)
     options: list[Option] = []
     owners: dict[str, tuple[int, dict[str, Any]]] = {}
-    for index, fragment, candidates in weak:
-        for row in candidates[:per_item]:
+    for (index, fragment, candidates), limit in zip(weak, limits):
+        for row in candidates[:limit]:
             option_id = str(len(options))
             owners[option_id] = (index, row)
             options.append(Option(id=option_id, text=f"«{fragment}» → {_row_name(row)} — {_row_cost(row)} руб."))
@@ -147,6 +175,29 @@ def _positions(
         else:
             not_found.append(fragment)
     return positions, not_found
+
+
+def _without_repeats(positions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Строка прайса — один раз в ответе (корзина из фраз): строки, уже показанные у позиции выше, у
+    следующей не повторяются; позиция, все строки которой уже показаны, сливается с той — её фраза названа
+    той же услугой (не «Не распознал»). Слитые позиции помечены `merged` — одна оставшаяся позиция всё равно
+    ответ корзины, а не повод уйти в путь одной услуги. Как дедуп услуг у корзины правил
+    (`_resolve_multi_price_items`); STEP-2026-10-14-L15B-6-T3, п. 7."""
+
+    seen: set[tuple[str, str, str]] = set()
+    out: list[dict[str, Any]] = []
+    merged = False
+    for position in positions:
+        rows: list[dict[str, Any]] = []
+        for row in position.get("prices") or []:
+            if _row_key(row) not in seen:
+                seen.add(_row_key(row))
+                rows.append(row)
+        if position.get("prices") and not rows:
+            merged = True
+            continue
+        out.append({**position, "prices": rows} if position.get("prices") else position)
+    return [{**position, "merged": True} for position in out] if merged else out
 
 
 def _settle_weak_as_variants(
@@ -226,10 +277,10 @@ async def basket_from_phrases(
     """
 
     items = phrase_price_items(phrases, retail_rows)
-    chosen, weak, failed = await _pick(question, items, retail_rows, llm_allowed=llm_allowed)
+    chosen, weak, failed = await _pick(question, items, retail_rows, llm_allowed=llm_allowed, fair_share=True)
     if journal and not failed:
         for index, fragment, _candidates in weak:
             _record_synonym_suggestion(fragment, [], list(chosen.get(index) or []), source="basket")
     unpriced = _settle_weak_as_variants(weak, chosen) if failed else {}
     positions, not_found = _positions(items, chosen, unpriced)
-    return positions, [*leftover, *not_found]
+    return _without_repeats(positions), [*leftover, *not_found]
