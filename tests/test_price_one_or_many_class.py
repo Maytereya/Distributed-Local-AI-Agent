@@ -14,8 +14,12 @@ C (L-15b, шаг 4) отдаёт этот выбор LLM: фразы-подст�
   из прайса тоже не режется, а при живой LLM в ответе нет чужой цены;
 - (б) список — каждая позиция своя строка: строки одного раздела корзины — одной позиции, чужой цены
   нет, при живой LLM у каждой позиции с услугой в прайсе есть цена;
-- (в) при недоступной LLM в списке — только сильные по данным позиции с ценой (точное название,
-  синоним МИС, код — решение владельца 13.10, политика сбоя (ii)), остальные — без цены;
+- (в) каждая цена в ответе подписана полным названием строки прайса; одиночная цена без списка —
+  только при сильном совпадении по данным (точное название, синоним МИС, код — решение владельца 13.10)
+  или при выборе LLM. У сильной позиции — только её строки. Слабая позиция при недоступной LLM —
+  несколько вариантов кода (до 5) с полными названиями и ценами или без цены, но не одна строка как «та
+  самая» (поправка владельца 13.10 к политике сбоя (ii): слабые не скрываются; форму решит замер шага
+  6); при живой LLM все выбранные ею строки — с ценой;
 - вопрос о сроке одной услуги — не цена и не список: срок кодом из МИС или честный перевод.
 
 Мир: мини-прод, день, сеть закрыта, синонимы МИС пусты (`_hermetic_mis_synonyms`). Две LLM: гейтовая
@@ -29,6 +33,7 @@ C (L-15b, шаг 4) отдаёт этот выбор LLM: фразы-подст�
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 from dataclasses import dataclass, field
@@ -59,6 +64,7 @@ _SELECT_MARKS = {
 }
 _BASKET_SECTION = "Формат: По услуге «"
 _UNRECOGNIZED = "Не распознал"
+_VARIANTS_MAX = 5  # слабая позиция без LLM — несколько вариантов кода (до 3–5), форму решит замер шага 6
 _PRICED = re.compile(r"^\s*\d+[.)]\s*(?:Розничная цена:\s*)?(?P<name>.+) — \d[\d\s]* руб", re.M)
 
 _OAK = ("Общий анализ крови (Le, Er, Hb, СОЭ)", "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты)", "ОАК (без лейкоцитарной формулы и СОЭ)")
@@ -138,7 +144,16 @@ CASES: dict[str, Case] = {
         "list",
         {"ферритин": ("Ферритин",), "ттг": ("ТТГ (TSH) тиреотропный гормон",), "витамин д": _VITAMIN_D},
         strong=frozenset({"ферритин"}),
-        xfail={(c, "down"): "сбой LLM — слабые позиции («ттг», «витамин д») с ценой строк правил; политика (ii) — шаг 5" for c in CONFIGS},
+        xfail={
+            **{
+                (c, "down"): (
+                    "сбой LLM — у слабых позиций («ттг», «витамин д») по одной строке правил с ценой, как «та самая»; "
+                    "по поправке 13.10 — несколько вариантов кода с полными названиями (форма — замер шага 6), шаг 5"
+                )
+                for c in CONFIGS
+            },
+            ("default", "oracle"): "корзина правил (choose_basket off): у слабой позиции одна строка с ценой, выбранная буквами, а не LLM",
+        },
     ),
     "list_one_unrecognized": Case(
         "сколько стоит ферритин, глюкоза и спирометрия",
@@ -165,10 +180,7 @@ CASES: dict[str, Case] = {
         "list",
         {"оак": _OAK, "оам": ("Общий анализ мочи",), "ферритин": ("Ферритин",), "глюкоза": ("Глюкоза",)},
         strong=frozenset({"ферритин", "глюкоза"}),
-        xfail={
-            **{("default", m): "понимание хода в тени: список сведён к одной услуге (ОАК)" for m in LLMS},
-            ("deploy", "down"): "сбой LLM — корзина правил: к «ОАМ» строка ОАК (чужая цена), слабые «ОАК»/«ОАМ» с ценой; политика (ii) — шаг 5",
-        },
+        xfail={("default", m): "понимание хода в тени: список сведён к одной услуге (ОАК), ферритин и глюкоза без цены" for m in LLMS},
     ),
 }
 
@@ -185,6 +197,7 @@ class _OracleLLM:
         self.by_fragment = {fragment.lower(): set(names) for fragment, names in case.positions.items()}
         self.names = {name for names in case.positions.values() for name in names}
         self.calls: list[str] = []
+        self.picked: set[str] = set()
 
     async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
         seen = f"{system}\n\n{prompt}" if system else prompt
@@ -201,14 +214,22 @@ class _OracleLLM:
             if task == "basket":
                 fragment, _, rest = rest.partition(" → ")
                 wanted = self.by_fragment.get(fragment.strip("«»").lower(), set())
-            if _norm(rest.rsplit(" — ", 1)[0]) in {_norm(name) for name in wanted}:
+            name = _norm(rest.rsplit(" — ", 1)[0])
+            if name in {_norm(row) for row in wanted}:
                 picks.append(int(head))
+                self.picked.add(name)
         answer = {"match": picks, "search_terms": []} if system is None else {"picks": picks}
         return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
 
 
 def _norm(name: str) -> str:
     return " ".join(str(name).split())
+
+
+@functools.cache
+def _catalog_names() -> frozenset[str]:
+    path = FIXTURE / "price_by_region" / "price_region_3_20261008.jsonl"
+    return frozenset(_norm(json.loads(line)["serviceName"]) for line in path.open(encoding="utf-8") if line.strip())
 
 
 def _priced_sections(text: str) -> list[list[str]]:
@@ -224,12 +245,18 @@ def _priced_sections(text: str) -> list[list[str]]:
     return [section for section in sections if section]
 
 
-def _violations(case: Case, text: str, llm: str) -> list[str]:
+def _violations(case: Case, text: str, llm: str, picked: frozenset[str] | set[str] = frozenset()) -> list[str]:
+    """Нарушения инвариантов класса в ответе; `picked` — строки, которые выбрала LLM (оракул)."""
+
     sections = _priced_sections(text)
     priced = [name for section in sections for name in section]
     truth = {fragment: {_norm(n) for n in names} for fragment, names in case.positions.items()}
     every = set().union(*truth.values())
+    strong = [truth[fragment] for fragment in sorted(case.strong)]
     out: list[str] = []
+    unnamed = sorted(set(priced) - _catalog_names())
+    if unnamed:
+        out.append(f"(в) цена подписана не полным названием строки прайса: {unnamed}")
     if case.kind in ("one", "readiness"):
         if _BASKET_SECTION in text or _UNRECOGNIZED in text:
             out.append("(а) одна услуга разрезана на позиции корзины")
@@ -239,6 +266,8 @@ def _violations(case: Case, text: str, llm: str) -> list[str]:
             out.append(f"(а) цена чужих строк при дословном названии: {sorted(set(priced) - every)}")
         if case.kind == "one" and llm == "oracle" and set(priced) - every:
             out.append(f"(а) чужая цена при живой LLM: {sorted(set(priced) - every)}")
+        if not case.exact and len(priced) == 1 and priced[0] not in picked:
+            out.append(f"(в) одиночная цена без сильного совпадения и без выбора LLM: {priced}")
     if case.kind == "readiness":
         if priced or re.search(r"\d\s*руб", text):
             out.append("вопрос о сроке получил цену")
@@ -246,22 +275,28 @@ def _violations(case: Case, text: str, llm: str) -> list[str]:
         if text not in allowed:
             out.append(f"вопрос о сроке: не срок из МИС и не честный перевод: {text[:120]!r}")
     if case.kind == "list":
-        if set(priced) - every:
-            out.append(f"(б) чужая цена: {sorted(set(priced) - every)}")
         for section in sections:
-            if not any(set(section) <= names for names in truth.values() if names):
-                out.append(f"(б) в разделе строки разных позиций: {section}")
+            own = next((names for names in strong if names & set(section)), None)
+            if own is not None and not set(section) <= own:
+                out.append(f"(в) у сильной позиции чужая строка: {sorted(set(section) - own)}")
+            if own is None and len(section) == 1 and section[0] not in picked:
+                out.append(f"(в) одиночная цена без сильного совпадения и без выбора LLM: {section}")
+            if own is None and llm == "down" and len(section) > _VARIANTS_MAX:
+                out.append(f"(в) у слабой позиции больше {_VARIANTS_MAX} вариантов: {len(section)}")
+        missing = [fragment for fragment in sorted(case.strong) if not truth[fragment] & set(priced)]
+        if missing:
+            out.append(f"(в) сильная позиция без цены: {missing}")
         if llm == "oracle":
+            if set(priced) - every:
+                out.append(f"(б) чужая цена при живой LLM: {sorted(set(priced) - every)}")
+            for section in sections:
+                if not any(set(section) <= names for names in truth.values() if names):
+                    out.append(f"(б) в разделе строки разных позиций: {section}")
             missing = [fragment for fragment, names in truth.items() if names and not names & set(priced)]
             if missing:
                 out.append(f"(б) позиции без своей цены при живой LLM: {missing}")
-        else:
-            strong = set().union(*(truth[fragment] for fragment in case.strong)) if case.strong else set()
-            if set(priced) - strong:
-                out.append(f"(в) сбой LLM — цена не сильной позиции: {sorted(set(priced) - strong)}")
-            missing = [fragment for fragment in sorted(case.strong) if not truth[fragment] & set(priced)]
-            if missing:
-                out.append(f"(в) сильная позиция без цены: {missing}")
+            if picked - set(priced):
+                out.append(f"(б) выбранные LLM строки без цены: {sorted(picked - set(priced))}")
     return out
 
 
@@ -287,13 +322,14 @@ def test_one_service_or_several(name, config, llm, mini_prod_world, monkeypatch)
     if config == "deploy":
         for key, value in _DEPLOY.items():
             monkeypatch.setattr(cfg, key, value, raising=False)
+    oracle = _OracleLLM(case)
     if llm == "oracle":
-        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _OracleLLM(case))
+        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         [turn] = run_dialog([case.text], f"one-or-many-{name}-{config}-{llm}")
         attempts = list(world.net.attempts)
     assert attempts == []
-    violations = _violations(case, turn["text"], llm)
+    violations = _violations(case, turn["text"], llm, oracle.picked)
     assert not violations, "\n".join([*violations, "--- ответ:", turn["text"]])
 
 
@@ -334,3 +370,13 @@ def test_violations_catch_a_cut_name_and_a_foreign_row():
     oak = CASES["list_caps_run_on_bare"]
     foreign = "Формат: По услуге «ОАМ»:\n1. Общий анализ мочи — 280 руб..\n2. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.."
     assert any(v.startswith("(б) в разделе") for v in _violations(oak, foreign, "oracle"))
+
+
+def test_lone_weak_price_needs_strong_data_or_the_model_choice():
+    case = CASES["list_true_three"]
+    lone = "Формат: По услуге «Ферритин»:\n1. Ферритин — 530 руб..\n\nФормат: По услуге «ТТГ (TSH) тиреотропный гормон»:\n1. ТТГ (TSH) тиреотропный гормон — 400 руб.."
+    variants = lone + "\n2. Антитела к рецепторам ТТГ — 1 460 руб.."
+    assert any("одиночная цена" in v for v in _violations(case, lone, "down"))
+    assert not any("одиночная цена" in v for v in _violations(case, lone, "oracle", {"ТТГ (TSH) тиреотропный гормон"}))
+    assert not any("одиночная цена" in v for v in _violations(case, variants, "down"))
+    assert any("не полным названием" in v for v in _violations(case, "1. ТТГ — 400 руб..", "down"))
