@@ -10,7 +10,10 @@ STEP-2026-10-13-L15B-1-PARSE-CACHE. Память хода (`turn_parse`) сни�
 - память не переживает ход: новый ход считает заново, другой срез — другой ключ;
 - повторный вызов в ходе не пересчитывает (резолвер не зовётся), вне хода — считается как раньше;
 - работает из `asyncio.to_thread` и дочерних задач (копия контекста держит тот же объект);
-- в ходе-списке через эндпоинт корзина берёт разбор понимания, а не считает его заново.
+- в ходе-списке через эндпоинт корзина берёт разбор понимания, а не считает его заново;
+- слот разбора на фразы (L-15b, шаг 4): одна задача на ход, вне хода и под `off` слота нет; результат
+  виден без ожидания только готовым; опоздавшую тень конец хода отменяет (`late`); тень память хода
+  читает, но не пополняет.
 
 Эталон 45 диалогов off / shadow / on (`test_price_turns_golden.py`) и политика L-13
 (`test_price_match_policy.py`) с памятью не меняются — это главное покрытие равенства поведения.
@@ -19,6 +22,7 @@ STEP-2026-10-13-L15B-1-PARSE-CACHE. Память хода (`turn_parse`) сни�
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 import pytest
@@ -242,3 +246,173 @@ def test_list_turn_through_the_endpoint_parses_the_reply_once(mode, mini_prod_wo
     if mode == "on":
         assert all(memo.reused >= 1 for memo in computing)
         assert all("руб" in turn["text"] for turn in record)
+
+
+# --------------------------------------------------------------------------- слот разбора на фразы (L-15b, шаг 4)
+#
+# Разбор реплики на фразы — одна задача на ход в держателе хода (`start_phrases`); под `shadow` —
+# фоном, конец хода ждёт её не дольше секунды (`drain`), опоздавшую отменяет (`late`). Вне хода и под
+# `off` слота нет — читатели получают None, ход не меняется ни на такт.
+
+
+def _parsed(status: str = "picked") -> turn_parse.PhraseParse:
+    return turn_parse.PhraseParse(reply="ферритин, глюкоза", status=status, source="llm")
+
+
+@pytest.fixture
+def parse_mode(monkeypatch):
+    from messengers_router.runtime_config import config as cfg
+
+    def set_mode(value: str) -> None:
+        monkeypatch.setattr(cfg, "MR_TURN_PARSE", value, raising=False)
+
+    set_mode("shadow")
+    return set_mode
+
+
+def test_phrase_slot_once_per_turn(parse_mode):
+    calls: list[int] = []
+
+    async def factory() -> turn_parse.PhraseParse:
+        calls.append(1)
+        return _parsed()
+
+    async def two_turns():
+        turn_understanding.begin_turn()
+        first, again = turn_parse.start_phrases(factory), turn_parse.start_phrases(factory)
+        result = await turn_parse.phrases()
+        turn_understanding.begin_turn()
+        next_turn = turn_parse.start_phrases(factory)
+        await turn_parse.phrases()
+        return first, again, next_turn, result
+
+    first, again, next_turn, result = asyncio.run(two_turns())
+    assert first is again and next_turn is not first
+    assert len(calls) == 2 and result.status == "picked"
+
+
+@pytest.mark.parametrize("mode", ["off", "garbage"])
+def test_no_slot_outside_a_turn_or_under_off(mode, parse_mode):
+    async def factory() -> turn_parse.PhraseParse:
+        raise AssertionError("разбор не должен запускаться")
+
+    async def readers():
+        return (turn_parse.start_phrases(factory), turn_parse.phrases_now(), await turn_parse.phrases(), turn_parse.acting_phrases(), turn_parse.debug())
+
+    async def outside():
+        turn_parse._CURRENT.set(None)
+        return await readers()
+
+    async def in_turn():
+        turn_understanding.begin_turn()
+        await turn_parse.drain(1.0)  # слота нет — возврат без ожидания
+        return await readers()
+
+    assert asyncio.run(outside()) == (None,) * 5  # под shadow, но вне хода
+    parse_mode(mode)
+    assert turn_parse.mode() == "off"
+    assert asyncio.run(in_turn()) == (None,) * 5
+
+
+def test_phrases_now_is_none_until_done(parse_mode):
+    async def turn(status: str):
+        turn_understanding.begin_turn()
+        gate = asyncio.Event()
+
+        async def factory() -> turn_parse.PhraseParse:
+            await gate.wait()
+            return _parsed(status)
+
+        turn_parse.start_phrases(factory)
+        await asyncio.sleep(0)
+        before = (turn_parse.phrases_now(), turn_parse.debug())
+        gate.set()
+        result = await turn_parse.phrases()
+        return before, result, turn_parse.phrases_now(), turn_parse.acting_phrases(), turn_parse.debug()
+
+    before, result, now, acting, debug = asyncio.run(turn("picked"))
+    assert before == (None, {"status": "pending"})
+    assert result is now and result.status == "picked" and debug["status"] == "picked"
+    assert acting is None  # тень: действовать по разбору нельзя
+    parse_mode("on")
+    assert asyncio.run(turn("picked"))[3].status == "picked"
+    assert asyncio.run(turn("unavailable"))[3] is None  # нерешённый разбор читателю не отдаётся
+
+
+def test_drain_cancels_a_late_shadow(parse_mode, monkeypatch):
+    from messengers_router import turn_telemetry
+
+    rows: list[dict] = []
+    monkeypatch.setattr(turn_telemetry, "_emit", rows.append)
+    cancelled: list[bool] = []
+
+    async def slow() -> turn_parse.PhraseParse:
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+        return _parsed()
+
+    async def turn():
+        token = turn_telemetry.begin("once", session_id="s")
+        turn_understanding.begin_turn()
+        task = turn_parse.start_phrases(slow, reply="ферритин, глюкоза")
+        started = time.monotonic()
+        await turn_parse.drain(0.05)
+        waited = time.monotonic() - started
+        turn_telemetry.finish(token, handoff=False, chars=0)
+        return task, waited, turn_parse.phrases_now()
+
+    task, waited, late = asyncio.run(turn())
+    assert task.cancelled() and cancelled == [True] and waited < 1.0
+    assert (late.status, late.reply, late.items, late.decided) == ("late", "ферритин, глюкоза", (), False)
+    assert rows[0]["tu_parse_status"] == "late"
+
+
+def test_slot_is_shared_with_threads_and_child_tasks(parse_mode):
+    calls: list[int] = []
+
+    async def factory() -> turn_parse.PhraseParse:
+        calls.append(1)
+        return _parsed()
+
+    async def child():
+        return turn_parse.start_phrases(factory)
+
+    async def turn():
+        turn_understanding.begin_turn()
+        first, second = await asyncio.gather(child(), child())
+        result = await turn_parse.phrases()
+        in_thread = await asyncio.to_thread(turn_parse.phrases_now)
+        return first, second, result, in_thread
+
+    first, second, result, in_thread = asyncio.run(turn())
+    assert first is second and len(calls) == 1 and in_thread is result
+
+
+def test_shadow_reads_turn_memory_but_does_not_fill_it(mini_prod_world, resolver_calls):  # noqa: F811
+    """Тень берёт посчитанное ходом из памяти, а своё в память не кладёт: память хода — только хода."""
+
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        helpers = _helpers()
+        rows = helpers._catalog_rows(None)
+
+        async def shadow() -> list[dict]:
+            turn_parse.read_only_memory()
+            return await asyncio.to_thread(helpers._multi_price_items, LIST, rows)
+
+        async def turn():
+            turn_understanding.begin_turn()
+            memo = turn_parse.current()
+            from_shadow = await asyncio.create_task(shadow())
+            stored_by_shadow = memo.computed
+            here = helpers._multi_price_items(LIST, rows)
+            before = len(resolver_calls)
+            again = await asyncio.create_task(shadow())
+            return from_shadow, stored_by_shadow, here, again, len(resolver_calls) - before, memo
+
+        from_shadow, stored_by_shadow, here, again, recomputed, memo = asyncio.run(turn())
+    assert from_shadow == here == again
+    assert stored_by_shadow == 0 and memo.computed == 2  # своё тень не сохранила; ход посчитал сам
+    assert recomputed == 0  # посчитанное ходом тень взяла из памяти

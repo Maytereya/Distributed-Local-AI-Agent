@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import llm_runtime, turn_telemetry
+from . import llm_runtime, turn_parse, turn_telemetry
 from .llm_mode_policy import normalize_runtime_options
 from .memory import MemoryStore
 from .router import patient_routing_stream
@@ -26,6 +26,10 @@ from .warm_up import schedule_warm_up
 
 router = APIRouter()
 log = logging.getLogger(__name__)
+
+# Сколько конец хода ждёт тень разбора реплики (L-15b, шаг 4; решение владельца 13.10, Q1), потом —
+# отмена (статус `late`). Под `turn_parse = off` тени нет и ход не ждёт ни такта.
+_SHADOW_GRACE_S = 1.0
 
 
 def _button_kwargs(button_id: str) -> dict[str, str]:
@@ -270,11 +274,14 @@ async def messenger_generate(
             yield (json.dumps(fallback, ensure_ascii=False) + "\n").encode("utf-8")
         finally:
             assistant_text = "".join(assistant_parts).strip()
-            llm_runtime.end_turn_budget(budget)
-            turn_telemetry.finish(turn, handoff=handoff, chars=len(assistant_text))
-            if assistant_text:
-                memory.append_turn(state, "assistant", assistant_text)
-            await memory.aset(state)
+            try:
+                await turn_parse.drain(_SHADOW_GRACE_S)
+            finally:
+                llm_runtime.end_turn_budget(budget)
+                turn_telemetry.finish(turn, handoff=handoff, chars=len(assistant_text))
+                if assistant_text:
+                    memory.append_turn(state, "assistant", assistant_text)
+                await memory.aset(state)
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
@@ -379,6 +386,9 @@ async def messenger_generate_once(
         # JSONResponse чтобы Swagger красиво показал тело
         return JSONResponse(content=out.model_dump())
     finally:
-        llm_runtime.end_turn_budget(budget)
-        turn_telemetry.finish(turn, handoff=out_handoff, chars=len(out_text))
-        await memory.aset(state)
+        try:
+            await turn_parse.drain(_SHADOW_GRACE_S)
+        finally:
+            llm_runtime.end_turn_budget(budget)
+            turn_telemetry.finish(turn, handoff=out_handoff, chars=len(out_text))
+            await memory.aset(state)

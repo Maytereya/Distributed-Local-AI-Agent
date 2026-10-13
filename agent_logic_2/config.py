@@ -202,6 +202,7 @@ class MessengerRouterConfig:
     choose_basket: str
     choose_readiness: str
     strong_match: str
+    turn_parse: str
     debug_final_input: bool
     url: str
 
@@ -456,6 +457,10 @@ settings = Settings(
         # срока (название целиком или до скобок, словарь кода, синоним МИС, код); data — одно определение с
         # ценой и корзиной, только данные МИС (название, синоним МИС, код). [MESSENGER_ROUTER] strong_match
         strong_match=_get_enum("MESSENGER_ROUTER", "strong_match", default="legacy", allowed={"legacy", "data"}),
+        # Разбор ценовой реплики на фразы-услуги (L-15b, шаг 4, контракт C): off — не строится; shadow —
+        # во время хода, вне его бюджета, только телеметрия (tu_parse_*) и debug; on — разбор ждут в ходе
+        # (решение — из бюджета хода), читатели — шаг 5. [MESSENGER_ROUTER] turn_parse
+        turn_parse=_get_enum("MESSENGER_ROUTER", "turn_parse", default="off", allowed={"off", "shadow", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -591,6 +596,7 @@ MR_PRICE_MATCH_POLICY = settings.messenger_router.price_match_policy
 MR_CHOOSE_BASKET = settings.messenger_router.choose_basket
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_STRONG_MATCH = settings.messenger_router.strong_match
+MR_TURN_PARSE = settings.messenger_router.turn_parse
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

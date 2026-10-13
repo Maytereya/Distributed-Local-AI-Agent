@@ -20,7 +20,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import turn_telemetry, turn_understanding
+from . import turn_parse, turn_telemetry, turn_understanding
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -3079,6 +3079,8 @@ def _debug_meta(
         "summary": state.summary,
         "nlu_trace": nlu_trace,
         "understanding": understanding.as_debug() if (understanding := turn_understanding.current()) else None,
+        # Разбор реплики на фразы (L-15b, шаг 4) — только при turn_parse shadow | on: под off ключа нет.
+        **({"turn_parse": parse_debug} if (parse_debug := turn_parse.debug()) else {}),
     }
 
 

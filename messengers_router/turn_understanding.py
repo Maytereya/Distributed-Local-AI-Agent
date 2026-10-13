@@ -22,6 +22,12 @@
   анализов из списка — цена (П1), вопрос о сроке — честный перевод на оператора (срока бот не
   знает: ни цены, ни сроков свободным текстом LLM). Какие читатели сработали — `tu_acted` в
   телеметрии и в debug.
+
+Разбор реплики на фразы (L-15b, шаг 4, `[MESSENGER_ROUTER] turn_parse = off | shadow | on`, по
+умолчанию off) запускается здесь же, после понимания, и от его режима не зависит: под `shadow` —
+фоновой задачей во время хода, только телеметрия (`tu_parse_status`, `tu_parse_src`, `tu_parse_n`,
+`tu_parse_cands`, `tu_parse_ms`, `tu_parse_agree` — согласие с разрезом правил) и `debug.turn_parse`;
+под `on` — ждём здесь, читатели (шаг 5) возьмут его через `turn_parse.acting_phrases()`.
 """
 
 from __future__ import annotations
@@ -29,13 +35,21 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from . import turn_parse, turn_telemetry
 from .policies import detect_address_intent, detect_nonbookable_walkin_intent, detect_prepare_intent, detect_price_intent
 from .runtime_config import config as _cfg
-from .services._prices_helpers import is_readiness_question, price_list_services, strip_readiness_phrasing
+from .services import _turn_phrases
+from .services._prices_helpers import (
+    _catalog_rows,
+    _multi_price_items,
+    is_readiness_question,
+    price_list_services,
+    strip_readiness_phrasing,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,16 +173,83 @@ def is_price_turn(label: str, pending: dict[str, Any] | None) -> bool:
 
 
 async def observe_price_turn(label: str, *, user_text: str, pending: dict[str, Any] | None) -> TurnUnderstanding | None:
-    """Построить понимание ценового хода (кроме `off`) и записать его в ход."""
+    """Построить понимание ценового хода (кроме `off`) и записать его в ход; затем — разбор реплики на
+    фразы (`turn_parse`, L-15b шаг 4), независимо от режима понимания."""
 
-    if mode() == "off" or not is_price_turn(label, pending) or not str(user_text or "").strip():
+    if not is_price_turn(label, pending) or not str(user_text or "").strip():
         return None
-    try:
-        tu = await asyncio.to_thread(understand_price_turn, user_text)
-    except Exception:  # понимание — новый слой; его сбой не ломает ход, старый путь остаётся
-        logger.warning("turn_understanding_failed", exc_info=True)
-        turn_telemetry.note(tu_rule="error")
-        return None
-    _CURRENT.set(tu)
-    turn_telemetry.note(tu_list=len(tu.services), tu_facet=tu.facet, tu_rule=tu.services_rule)
+    tu: TurnUnderstanding | None = None
+    if mode() != "off":
+        try:
+            tu = await asyncio.to_thread(understand_price_turn, user_text)
+        except Exception:  # понимание — новый слой; его сбой не ломает ход, старый путь остаётся
+            logger.warning("turn_understanding_failed", exc_info=True)
+            turn_telemetry.note(tu_rule="error")
+        else:
+            _CURRENT.set(tu)
+            turn_telemetry.note(tu_list=len(tu.services), tu_facet=tu.facet, tu_rule=tu.services_rule)
+    await _observe_phrases(user_text, tu)
     return tu
+
+
+async def _observe_phrases(user_text: str, tu: TurnUnderstanding | None) -> None:
+    """Разбор реплики на фразы — после понимания (сегментацию сплошного списка генератор берёт из памяти
+    хода, а не считает второй раз). Тень — фоновой задачей во время хода (её дождётся `drain` в конце
+    хода); `on` — ждём здесь же: решение тратит бюджет хода."""
+
+    parse_mode = turn_parse.mode()
+    if parse_mode == "off":
+        return
+    shadow = parse_mode == "shadow"
+    facet = tu.facet if tu is not None else price_turn_facet(user_text)[0]
+    started = turn_parse.start_phrases(lambda: _parse_phrases(user_text, facet=facet, tu=tu, shadow=shadow), reply=user_text)
+    if started is not None and not shadow:
+        await turn_parse.phrases()
+
+
+async def _parse_phrases(text: str, *, facet: str | None, tu: TurnUnderstanding | None, shadow: bool) -> turn_parse.PhraseParse:
+    """Разбор и его след в телеметрии хода (`tu_parse_*` — без текста пациента). Тень память разбора
+    хода только читает."""
+
+    if shadow:
+        turn_parse.read_only_memory()
+    started = time.monotonic()
+    agree: str | None = None
+    try:
+        catalog = await asyncio.to_thread(_catalog_rows, None)
+        parse = await _turn_phrases.parse_turn_phrases(text, facet=facet, catalog=catalog, shadow=shadow)
+        agree = await asyncio.to_thread(_agreement, parse, text, facet, tu, catalog)
+    except Exception:  # разбор — новый слой: сбой не ломает ход
+        logger.warning("turn_parse_failed", exc_info=True)
+        parse = turn_parse.PhraseParse(reply=text, status=turn_parse.ParseStatus.ERROR.value, source="none", ms=int((time.monotonic() - started) * 1000))
+    fields: dict[str, Any] = {
+        "tu_parse_status": parse.status,
+        "tu_parse_src": parse.source,
+        "tu_parse_n": len(parse.items),
+        "tu_parse_cands": parse.candidates,
+        "tu_parse_ms": parse.ms,
+    }
+    if agree:
+        fields["tu_parse_agree"] = agree
+    turn_telemetry.note(**fields)
+    return parse
+
+
+def _agreement(parse: turn_parse.PhraseParse, text: str, facet: str | None, tu: TurnUnderstanding | None, catalog: list[dict[str, Any]]) -> str | None:
+    """Разрез LLM против разреза правил: `same`; `split` — LLM видит несколько услуг, правила — одну;
+    `merge` — наоборот; `other` — оба список, состав разный. Разбор не решён — None.
+
+    Разрез правил — понимание хода (`services_rule`), его фрагменты — из памяти хода; понимание
+    выключено — `price_list_services` той же реплики."""
+
+    if not parse.decided:
+        return None
+    probe = strip_readiness_phrasing(text)[0] if facet == "readiness" else text
+    rule = tu.services_rule if tu is not None else price_list_services(probe, rows=catalog)[1]
+    if not rule.startswith("list_"):
+        return "split" if parse.is_list else "same"
+    if not parse.is_list:
+        return "merge"
+    items, _unrecognized = _multi_price_items(probe, catalog)
+    rules = {_turn_phrases.bare(str(item.get("fragment") or item.get("service_name") or "")) for item in items}
+    return "same" if rules == {_turn_phrases.bare(item.text) for item in parse.items} else "other"

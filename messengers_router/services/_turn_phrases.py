@@ -125,6 +125,17 @@ def _locate(text: str, toks: Sequence[_Token], *, cursor: int = 0, taken: set[in
     return None
 
 
+def bare(text: str) -> str:
+    """Фраза без обвязки с краёв, словами без регистра — сравнивать разрезы (согласие с правилами)."""
+
+    keys = [t.key for t in _tokens(text)]
+    while keys and keys[0] in _WRAPPER:
+        keys.pop(0)
+    while keys and keys[-1] in _WRAPPER:
+        keys.pop()
+    return " ".join(keys)
+
+
 def _depth(reply: str, start: int, end: int) -> int:
     return reply.count("(", start, end) - reply.count(")", start, end)
 
