@@ -18,6 +18,10 @@
 `asyncio.to_thread` получают КОПИЮ контекста — с тем же объектом держателя; поэтому `set()` — только
 в `begin()`, дальше объект лишь пополняется, под `threading.Lock`. Результат из памяти отдаётся
 глубокой копией: потребители вправе менять свои строки (корзина, подбор анализов).
+
+Разбор реплики на фразы (L-15b, шаг 4 — контракт C): одна услуга или несколько решает выбор LLM из
+фраз, нарезанных кодом (`services/_turn_phrases.py`). Его результат — `PhraseParse` (фразы-срезы
+реплики в её порядке, сила каждой по данным МИС, статус и источник решения).
 """
 
 from __future__ import annotations
@@ -26,7 +30,12 @@ import contextvars
 import copy
 import functools
 import threading
-from typing import Any, Callable, Hashable, TypeVar
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, Callable, Hashable, TypeVar
+
+if TYPE_CHECKING:
+    from .choice import Strength
 
 _R = TypeVar("_R")
 
@@ -94,3 +103,77 @@ def per_turn(fingerprint: Callable[[Any], Hashable]) -> Callable[[Callable[[str,
         return wrapper
 
     return decorate
+
+
+# --------------------------------------------------------------------------- разбор реплики на фразы (контракт C)
+
+
+class ParseStatus(StrEnum):
+    """Чем кончился разбор реплики на фразы (L-15b, шаг 4)."""
+
+    EMPTY = "empty"  # в реплике нет слов, кроме обвязки
+    STRONG_WHOLE = "strong_whole"  # вся реплика — сильное совпадение по данным МИС
+    STRONG_ALL = "strong_all"  # разрез по разделителям, все фразы сильные
+    SINGLE = "single"  # кандидат один — реплика целиком
+    TOO_MANY = "too_many"  # 16 фрагментов и больше — разрез правил, без LLM
+    PICKED = "picked"  # фразы выбрала LLM
+    NONE_FIT = "none_fit"  # LLM: ни одна фраза не услуга — не список
+    INVALID = "invalid"  # ответ LLM нарушил контракт (в т. ч. пересекающиеся фразы)
+    UNAVAILABLE = "unavailable"  # LLM не ответила
+    LATE = "late"  # тень не успела к концу хода
+    ERROR = "error"  # сбой кода разбора
+
+
+_DECIDED = frozenset({ParseStatus.STRONG_WHOLE, ParseStatus.STRONG_ALL, ParseStatus.SINGLE, ParseStatus.PICKED, ParseStatus.NONE_FIT})
+
+
+@dataclass(frozen=True)
+class ParsedPhrase:
+    """Фраза реплики `reply[start:end]` — одна услуга; `rows` — строки прайса сильной фразы (читатель
+    копирует, прежде чем менять)."""
+
+    text: str
+    start: int
+    end: int
+    strength: Strength
+    rows: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class PhraseParse:
+    """Разбор ценовой реплики на фразы-услуги: статус, откуда решение (`data` | `llm` | `none`),
+    фразы в порядке реплики и фрагменты по разделителям, не покрытые выбором (`leftover`)."""
+
+    reply: str
+    status: str
+    source: str
+    items: tuple[ParsedPhrase, ...] = ()
+    leftover: tuple[str, ...] = ()
+    candidates: int = 0
+    ms: int = 0
+
+    @property
+    def is_list(self) -> bool:
+        return len(self.items) >= 2
+
+    @property
+    def decided(self) -> bool:
+        """Разбором можно действовать: данные или внятный ответ LLM (не сбой, не опоздание)."""
+
+        return self.status in _DECIDED
+
+    def for_text(self, text: str) -> bool:
+        """Читатель берёт разбор, только если его вход — эта реплика."""
+
+        return str(text or "") == self.reply
+
+    def as_debug(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "source": self.source,
+            "phrases": [item.text for item in self.items],
+            "strong": [item.strength == "strong" for item in self.items],
+            "leftover": list(self.leftover),
+            "candidates": self.candidates,
+            "ms": self.ms,
+        }
