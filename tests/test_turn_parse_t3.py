@@ -9,7 +9,8 @@
 - п. 2 — подбор анализов не о цене («есть ли полный чекап», «что входит в комплекс»): разбор «одна услуга»
   не выключает сегментацию правил — выдача подбора та же, что под off; при вопросе о цене разбор читается;
 - п. 4 — путь одной услуги (`price_info`, `service_bundle_info`, `test_assist`): разбор решил одну слабую
-  услугу выбором LLM — строки ищутся по её фразе, а не по всей реплике.
+  услугу выбором LLM — строки ищутся по её фразе, а не по всей реплике;
+- п. 8 — «Не распознал» корзины из фраз не печатает фрагмент только из обвязки и родовых слов («анализов»).
 
 Две LLM, как в классе «одна или несколько»: «недоступна» (гейт) и оракул — на выборе фраз отмечает ровно
 фразы разреза случая, на выборе строк — строки с заданным началом названия, прочие места — «недоступна».
@@ -247,4 +248,34 @@ def test_other_one_service_readers_search_by_the_phrase(reader, mini_prod_world,
 def test_follow_up_after_the_one_phrase_answer_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
     first, second = _dialog([_SINGLE, follow_up], mini_prod_world, monkeypatch, f"t3-single-two-{follow_up}", _Oracle(("посева мочи",)))[0]
     assert _URINE in first["text"]
+    _assert_follow_up_stays_on_what_was_shown(first, second)
+
+
+# --------------------------------------------------------------------------- п. 8: «Не распознал» без обвязки
+
+_WRAPPED = "Стоимость анализов: ферритин, кальпротектин, лактозная непереносимость"
+_WRAPPED_ORACLE = (("ферритин", "кальпротектин", "лактозная непереносимость"), ("Непереносимость лактозы", "Кальпротектин"))
+
+
+def test_unrecognized_does_not_print_wrapper_words(mini_prod_world, monkeypatch):  # noqa: F811
+    """«анализов» из «Стоимость анализов: …» — фрагмент по разделителям вне выбранных фраз, но услугу он не
+    называет: в «Не распознал» его нет (G9: g0074, g0127, g0187, g0375, g0425, g0561)."""
+
+    [turn], _rows = _dialog([_WRAPPED], mini_prod_world, monkeypatch, "t3-wrapper", _Oracle(*_WRAPPED_ORACLE))
+    assert "Кальпротектин в кале — 2 730" in turn["text"] and "Непереносимость лактозы — 1 100" in turn["text"]
+    assert "Не распознал" not in turn["text"], turn["text"]
+
+
+def test_unrecognized_still_names_a_service_the_price_lacks(mini_prod_world, monkeypatch):  # noqa: F811
+    """Граница класса: позиция, которую LLM разбора не выбрала, но слова которой не обвязка, — по-прежнему в
+    «Не распознал» (S3: не замалчиваем)."""
+
+    reply = "Стоимость анализов: ферритин, глюкоза, спирометрия"
+    [turn], _rows = _dialog([reply], mini_prod_world, monkeypatch, "t3-wrapper-kept", _Oracle(("ферритин", "глюкоза")))
+    assert "Ферритин — 530" in turn["text"] and "Не распознал: спирометрия." in turn["text"], turn["text"]
+
+
+@pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
+def test_follow_up_after_the_trimmed_basket_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
+    first, second = _dialog([_WRAPPED, follow_up], mini_prod_world, monkeypatch, f"t3-wrapper-two-{follow_up}", _Oracle(*_WRAPPED_ORACLE))[0]
     _assert_follow_up_stays_on_what_was_shown(first, second)
