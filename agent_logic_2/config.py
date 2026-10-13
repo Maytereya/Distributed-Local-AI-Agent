@@ -203,6 +203,7 @@ class MessengerRouterConfig:
     choose_readiness: str
     strong_match: str
     turn_parse: str
+    parse_fail_variants: int
     debug_final_input: bool
     url: str
 
@@ -461,6 +462,10 @@ settings = Settings(
         # во время хода, вне его бюджета, только телеметрия (tu_parse_*) и debug; on — разбор ждут в ходе
         # (решение — из бюджета хода), читатели — шаг 5. [MESSENGER_ROUTER] turn_parse
         turn_parse=_get_enum("MESSENGER_ROUTER", "turn_parse", default="off", allowed={"off", "shadow", "on"}),
+        # Политика сбоя под turn_parse = on (L-15b, шаг 6, T5): сколько вариантов кода с ценами показывать у
+        # слабой позиции, когда LLM не выбрала строки (2–5; по умолчанию 5 — поправка владельца 13.10).
+        # [MESSENGER_ROUTER] parse_fail_variants
+        parse_fail_variants=_get_int("MESSENGER_ROUTER", "parse_fail_variants", default=5, min_value=2, max_value=5),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -597,6 +602,7 @@ MR_CHOOSE_BASKET = settings.messenger_router.choose_basket
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_STRONG_MATCH = settings.messenger_router.strong_match
 MR_TURN_PARSE = settings.messenger_router.turn_parse
+MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

@@ -43,6 +43,17 @@ _MAX_OPTIONS = 30
 _VARIANTS = 5  # слабая позиция без выбора LLM — до 5 вариантов кода (поправка владельца 13.10)
 
 
+def variants_max() -> int:
+    """Сколько вариантов кода у слабой позиции при сбое LLM (`[MESSENGER_ROUTER] parse_fail_variants`, 2–5;
+    иное — 5): замер шага 6 решает, 5 или 3 (T5)."""
+
+    try:
+        value = int(getattr(_cfg, "MR_PARSE_FAIL_VARIANTS", _VARIANTS))
+    except (TypeError, ValueError):
+        return _VARIANTS
+    return value if 2 <= value <= _VARIANTS else _VARIANTS
+
+
 def basket_mode() -> str:
     raw = str(getattr(_cfg, "MR_CHOOSE_BASKET", "off") or "").strip().lower()
     return raw if raw in ("off", "on") else "off"
@@ -68,16 +79,17 @@ def _position(fragment: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
 def _variants(fragment: str, candidates: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
     """Слабая позиция без выбора LLM (политика сбоя под `turn_parse = on`): (строки с ценой, название без цены).
 
-    Кандидаты кода без непрошеных cito/капиллярной/на дому — по одной строке на название, до `_VARIANTS`:
+    Кандидаты кода без непрошеных cito/капиллярной/на дому — по одной строке на название, до `variants_max()`:
     два названия и больше — варианты с полными названиями и ценами; одно — его название без цены (вариант
     B L-13: одна найденная строка — не «та самая цена»); ни одного — («», «») — «Не распознал».
     """
 
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
+    limit = variants_max()
     for row in _prefer_base_variants(list(candidates), fragment):
         key = _normalise_catalog_text(_row_name(row))
-        if key and key not in seen and len(rows) < _VARIANTS:
+        if key and key not in seen and len(rows) < limit:
             seen.add(key)
             rows.append(row)
     if len(rows) >= 2:
