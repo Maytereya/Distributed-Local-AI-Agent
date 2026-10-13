@@ -102,6 +102,9 @@ PRICE_TASK = Task(
 _CHOOSE_MODES = ("off", "legacy", "on")
 _POLICY_MODES = ("off", "shadow", "on")
 _VARIANT_B_LIMIT = 5
+# Причины пустого выбора, при которых LLM не признала в реплике названия услуги: «Цена анализа»
+# (слишком общее), «сможете посчитать» (не услуга). Ни «не нашёл» пациенту, ни синоним клинике.
+_NOT_A_SERVICE_NAME = frozenset({"too_general", "not_a_service"})
 
 
 def match_policy() -> str:
@@ -484,9 +487,18 @@ async def select_price_rows(
 
     def none_fit(reason: str) -> PriceSelection | None:
         # Названо слишком общее или не услуга — уточнение правил честнее, чем «не нашёл».
-        if not candidates or reason in ("too_general", "not_a_service"):
+        if not candidates or reason in _NOT_A_SERVICE_NAME:
             return None
         return PriceSelection(rows=(), status="none_fit")
+
+    def journal_miss(found_terms: list[str], *reasons: str) -> None:
+        # Промах — услугу не нашли ни правила (`candidates` пуст), ни LLM: такое слово пациента —
+        # кандидат в синонимы для клиники (см. `_record_synonym_suggestion`). Но только если LLM
+        # признала в реплике название услуги: «слишком общее» и «не услуга» в любом из кругов —
+        # не синоним (BUG-2026-10-13-SYNONYM-JOURNAL-IGNORES-REASON). Причину даёт только промпт
+        # модуля (`choose_price = on`); прежний промпт её не знает — там пишем, как раньше.
+        if not candidates and not _NOT_A_SERVICE_NAME.intersection(reasons):
+            _record_synonym_suggestion(phrase or question, found_terms, [])
 
     # Дословное название позиции («ферритин» = «Ферритин»): правила не ошибаются.
     if phrase_norm and any(_normalise_catalog_text(_row_name(row)) == phrase_norm for row in pool):
@@ -499,11 +511,8 @@ async def select_price_rows(
     if chosen:
         picked = PriceSelection(rows=tuple(_prefer_base_variants(chosen, question)))
         return settle(picked, picked)
-    # Промах — когда услугу не нашли ни правила (`candidates` пуст), ни LLM: такое
-    # слово пациента — кандидат в синонимы для клиники (см. `_record_synonym_suggestion`).
     if not terms:
-        if not candidates:
-            _record_synonym_suggestion(phrase or question, [], [])
+        journal_miss([], reason)
         return settle(None, none_fit(reason))
 
     pool_by_terms = await asyncio.to_thread(_build_pool, terms, rows, per_text=_PER_TERM_LIMIT)
@@ -511,8 +520,7 @@ async def select_price_rows(
     if second is None:
         return settle(None, *unavailable())
     if not second[0]:
-        if not candidates:
-            _record_synonym_suggestion(phrase or question, terms, [])
+        journal_miss(terms, reason, second[2])
         return settle(None, none_fit(second[2]))
     chosen = _prefer_base_variants(second[0], question)
     _record_synonym_suggestion(phrase or question, terms, chosen)

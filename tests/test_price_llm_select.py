@@ -70,7 +70,8 @@ def _fake_llm(monkeypatch, decide, calls: list | None = None):
 
     Подменяет оба пути выбора (`choose_price`): прежний вызов (`generate_text`) и клиент ollama
     модуля `choose()`. В форме модуля (роль system, JSON Schema) ответ переводится в `picks` /
-    `reason` / `search_terms`; мусор уходит как есть.
+    `reason` / `search_terms`; мусор уходит как есть. Ключ `reason` в ответе — код причины пустого
+    выбора для промпта модуля (прежний промпт его не знает и пропускает).
     """
 
     async def fake_generate_text(prompt: str, **kwargs):
@@ -87,7 +88,8 @@ def _fake_llm(monkeypatch, decide, calls: list | None = None):
             reply = decide(seen, _rows_in_prompt(seen))
             if system is not None and not isinstance(reply, str):
                 match = reply.get("match", [])
-                reply = {"picks": match, "reason": "none" if match else "other_service", "search_terms": reply.get("search_terms", [])}
+                reason = reply.get("reason") or ("none" if match else "other_service")
+                reply = {"picks": match, "reason": reason, "search_terms": reply.get("search_terms", [])}
             text = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
             return GenerateResponse(model="m", response=text, done=True)
 
@@ -590,3 +592,34 @@ def test_rules_answer_is_not_a_miss(monkeypatch, tmp_path):
     _fake_llm(monkeypatch, lambda prompt, rows: {"match": [], "search_terms": []})
     run(PS.select_price_rows("сколько стоит массаж", RETAIL, candidates=[_THERAPIST]))
     assert _journal(tmp_path) == []
+
+
+# --- В журнал клинике — только то, что LLM признала названием услуги (13.10) ----------
+#
+# BUG-2026-10-13-SYNONYM-JOURNAL-IGNORES-REASON: на проде 2 из 9 записей журнала — «Цена анализа»
+# и «сможете посчитать»: LLM ответила «слишком общее» / «не услуга», а условие записи смотрело
+# только на пустой выбор. Класс — любая реплика, в которой LLM не увидела названия услуги, в любом
+# из двух кругов (до терминов поиска и после). Причину даёт только промпт модуля (`choose_price = on`).
+
+
+# Причину пустого выбора возвращает только промпт модуля — режим `on`, а не все три.
+@pytest.mark.parametrize("choose_mode", ["on"], indirect=True)
+@pytest.mark.parametrize("reason", ["too_general", "not_a_service"])
+@pytest.mark.parametrize("terms", [[], ["общий анализ крови"]], ids=["first_round", "second_round"])
+@pytest.mark.parametrize("question", ["Цена анализа", "сможете посчитать?"])
+def test_reply_the_llm_found_no_service_name_in_is_not_journaled(monkeypatch, tmp_path, choose_mode, reason, terms, question):
+    _fake_llm(monkeypatch, lambda prompt, rows: {"match": [], "reason": reason, "search_terms": terms})
+
+    # Ответ пациенту не меняется: правила ничего не предложили — их прежний ответ.
+    assert run(PS.select_price_rows(question, RETAIL + _FULL_SIZE)) is None
+    assert _journal(tmp_path) == []
+
+
+@pytest.mark.parametrize("terms", [[], ["функция внешнего дыхания"]], ids=["first_round", "second_round"])
+def test_real_miss_is_still_journaled(monkeypatch, tmp_path, terms):
+    # Встречный: LLM признала услугу, но в прайсе её нет («спирометрия», а там «Спирография») — запись есть.
+    _fake_llm(monkeypatch, lambda prompt, rows: {"match": [], "reason": "other_service", "search_terms": terms})
+    assert run(PS.select_price_rows("сколько стоит спирометрия", RETAIL + _FULL_SIZE)) is None
+
+    entries = _journal(tmp_path)
+    assert [(e["phrase"], e["found"], e["terms"]) for e in entries] == [("спирометрия", False, terms)]
