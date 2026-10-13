@@ -116,3 +116,4 @@ tests/test_price_one_or_many_class.py
 tests/test_strong_match.py
 tests/test_turn_phrases.py
 tests/test_turn_parse_shadow.py
+tests/test_turn_parse_readers.py

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Sequence
 
 from agent_logic_2.nayka_api import api_price
 
@@ -3256,11 +3256,7 @@ def _resolve_multi_price_items(
     resolved: list[dict[str, Any]] = []
     seen_names: set[str] = set()
     for frag in fragments:
-        service_name = resolve_price_service_name_from_catalog(frag, rows=retail_rows)
-        if not service_name:
-            extracted = _extract_price_service_from_query(frag) or frag
-            alias_variants = _PRICE_SERVICE_ALIASES.get(_normalise_input(extracted), ())
-            service_name = str(alias_variants[0] or "").strip() if alias_variants else ""
+        service_name = _resolve_fragment_service(frag, retail_rows)
         if not service_name:
             unrecognized.append(frag)
             continue
@@ -3284,6 +3280,51 @@ def _resolve_multi_price_items(
     if len(resolved) < 2:
         return [], []
     return resolved, unrecognized
+
+
+def _resolve_fragment_service(fragment: str, retail_rows: list[dict[str, Any]]) -> str:
+    """Услуга каталога, которую правила угадали бы по одной позиции списка (резолвер, затем словарь кода);
+    пусто — не угадали. Догадка правил — только кандидат: строку позиции выбирает LLM (`_basket_select`)."""
+
+    service_name = resolve_price_service_name_from_catalog(fragment, rows=retail_rows)
+    if not service_name:
+        extracted = _extract_price_service_from_query(fragment) or fragment
+        alias_variants = _PRICE_SERVICE_ALIASES.get(_normalise_input(extracted), ())
+        service_name = str(alias_variants[0] or "").strip() if alias_variants else ""
+    return service_name
+
+
+def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Позиции списка из фраз разбора хода (L-15b, шаг 5; `turn_parse.ParsedPhrase`), в их порядке.
+
+    Сильная фраза — её строки по данным МИС (`strong`), без резолвера. Слабая — кандидаты правил: синонимы
+    кода к фразе (`_apply_service_synonyms`), затем догадка резолвера и две её верхние строки, как у
+    позиции корзины правил; не угадали — строк нет (`prices` пусто). Какие строки — та услуга, решает
+    выбор LLM корзины; здесь только кандидаты.
+
+    :param phrases: фразы разбора (`text`, `rows`)
+    :param retail_rows: строки прайса региона
+    :return: [{"service_name", "prices", "fragment", "strong"}]; `fragment` — слова пациента
+    """
+
+    items: list[dict[str, Any]] = []
+    for phrase in phrases:
+        fragment = str(phrase.text)
+        strong = [dict(row) for row in phrase.rows]
+        if strong:
+            items.append({"service_name": fragment, "prices": strong, "fragment": fragment, "strong": strong})
+            continue
+        service_name = _resolve_fragment_service(_apply_service_synonyms(fragment), retail_rows)
+        top_rows = _select_patient_price_rows(retail_rows, service_name, limit=2) if service_name else []
+        items.append(
+            {
+                "service_name": service_name or fragment,
+                "prices": _annotate_price_rows_with_care_context(top_rows),
+                "fragment": fragment,
+                "strong": [],
+            }
+        )
+    return items
 
 
 def _build_synonym_fork_payload(

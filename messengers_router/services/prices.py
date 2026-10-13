@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from agent_logic_2.nayka_api import api_price
 
+from .. import turn_parse
 from ..policies import handoff_message
 from ..text_templates import price_names_without_prices_text, price_not_found_text
 from ._addresses_helpers import _extract_homecode_query
@@ -39,8 +40,8 @@ from ._doctors_helpers import (
     _specialty_label_for_doctor,
 )
 from ._prepare import _is_prepare_requested_in_price_query
-from ._basket_select import basket_mode, choose_basket_rows
-from ._price_select_llm import reconcile_with_proposal, rows_overlap, select_price_rows
+from ._basket_select import basket_from_phrases, basket_mode, choose_basket_rows
+from ._price_select_llm import PriceSelection, reconcile_with_proposal, rows_overlap, select_price_rows
 from ._prices_helpers import (
     SAMARA_PRICE_REGION_ID,
     _DOCTOR_PRICE_HINT_RE,
@@ -133,17 +134,40 @@ async def _multi_price_payload(
     query: str, query_text: str, retail_rows: list[dict[str, Any]], entities: dict[str, Any]
 ) -> dict[str, Any] | None:
     """Корзина: позиции режут правила; строки позиций под `choose_basket = on` выбирает LLM одним
-    вызовом (ход (в), L-15a), сбой — корзина правил как раньше."""
+    вызовом (ход (в), L-15a), сбой — корзина правил как раньше.
 
+    Под `turn_parse = on` (L-15b, шаг 5) позиции — фразы разбора хода этой реплики: разбор решил одну
+    услугу (`strong_whole`, `single`, `none_fit`, одна выбранная фраза) — не корзина, путь одной услуги;
+    несколько фраз — корзина из них (`basket_from_phrases`). Разбора нет или он не решён — как раньше."""
+
+    llm_allowed = bool(entities.get("__price_question")) and str(entities.get("__runtime_llm_mode") or "").strip().lower() != "strict"
+    parse = turn_parse.acting_for(str(query or ""))
+    if parse is not None:
+        if not parse.is_list:
+            return None
+        positions, unrecognized = await basket_from_phrases(
+            str(query or ""), parse.items, parse.leftover, retail_rows, llm_allowed=llm_allowed and basket_mode() == "on"
+        )
+        return multi_price_payload_from_items(positions, unrecognized, allow_single=True)
     items, unrecognized = _multi_price_items(query_text, retail_rows)
     if not items:
         return None
-    llm_allowed = entities.get("__price_question") and str(entities.get("__runtime_llm_mode") or "").strip().lower() != "strict"
     if basket_mode() == "on" and llm_allowed:
         refined = await choose_basket_rows(str(query or query_text), items, unrecognized, retail_rows)
         if refined is not None:
             return multi_price_payload_from_items(*refined, allow_single=True)
     return multi_price_payload_from_items(items, unrecognized)
+
+
+def _parse_strong_selection(query: str) -> PriceSelection | None:
+    """Под `turn_parse = on` (L-15b, шаг 5): разбор этой реплики решил одну услугу, сильную по данным МИС
+    (дословное название, синоним МИС, код), — её строки без выбора LLM, вместо ответа правил по буквам
+    (решение владельца 13.10: STRONG — только данные МИС). Иначе None — выбор строки как раньше."""
+
+    parse = turn_parse.acting_for(query)
+    if parse is None or parse.is_list or len(parse.items) != 1 or not parse.items[0].rows:
+        return None
+    return PriceSelection(rows=tuple(dict(row) for row in parse.items[0].rows), status="strong")
 
 
 def _llm_selection_service_name(query_text: str, rows: list[dict[str, Any]]) -> str:
@@ -333,6 +357,9 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     async def _llm_select(proposal: list[dict[str, Any]], shown: list[dict[str, Any]]) -> Any:
         if not entities.get("__price_question"):
             return None  # цена попутно (запись, карточка врача) — по правилам, без LLM
+        strong = _parse_strong_selection(str(query or ""))
+        if strong is not None:
+            return strong
         return await select_price_rows(
             str(query or ""),
             retail_rows_clean,
@@ -491,6 +518,9 @@ async def service_bundle_info(
     async def _llm_select(proposal: list[dict[str, Any]], shown: list[dict[str, Any]], rules_guess: str = "") -> Any:
         if not entities.get("__price_question"):
             return None  # цена попутно (запись, карточка врача) — по правилам, без LLM
+        strong = _parse_strong_selection(str(query or ""))
+        if strong is not None:
+            return strong
         return await select_price_rows(
             str(query or ""),
             retail_rows,

@@ -13,18 +13,22 @@
 - сбой LLM: сильные позиции — по-прежнему их строки по данным, слабые — строки корзины правил, как
   раньше; сильных нет — None, корзина правил целиком.
 
+Под `turn_parse = on` (L-15b, шаг 5) позиции — фразы разбора хода (`basket_from_phrases`): одна услуга
+или несколько уже решили данные МИС или выбор LLM, сила фразы — из разбора; выбор строк слабых позиций —
+тот же вызов.
+
 Выключатель `[MESSENGER_ROUTER] choose_basket = off | on` (по умолчанию off; тени нет — это вызов LLM).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Sequence
 
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from ._price_select_llm import _prefer_base_variants, _row_cost, _row_key, _row_name
-from ._prices_helpers import _annotate_price_rows_with_care_context, _rank_price_rows
+from ._prices_helpers import _annotate_price_rows_with_care_context, _rank_price_rows, phrase_price_items
 from ._strong_match import strong_rows
 
 logger = logging.getLogger(__name__)
@@ -54,6 +58,65 @@ def _position(fragment: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {"service_name": name, "prices": _annotate_price_rows_with_care_context(list(rows)), "fragment": fragment}
 
 
+async def _pick(
+    question: str,
+    items: list[dict[str, Any]],
+    retail_rows: list[dict[str, Any]],
+    *,
+    llm_allowed: bool = True,
+) -> tuple[dict[int, list[dict[str, Any]]], list[tuple[int, str, list[dict[str, Any]]]], bool]:
+    """Строки позиций: сильные — по данным, слабые — выбор LLM одним вызовом.
+
+    :return: (выбранные строки по номеру позиции, слабые позиции с кандидатами, сбой LLM)
+    """
+
+    chosen: dict[int, list[dict[str, Any]]] = {}
+    weak: list[tuple[int, str, list[dict[str, Any]]]] = []
+    for index, item in enumerate(items):
+        fragment = str(item.get("fragment") or item["service_name"])
+        candidates = _candidates(item, retail_rows)
+        # Сила позиции из разбора хода (`strong`, весь срез) — не пересчитывается по кандидатам.
+        strong = list(item["strong"]) if "strong" in item else strong_rows(fragment, retail_rows, pool=candidates)
+        if strong:
+            chosen[index] = strong
+        else:
+            weak.append((index, fragment, candidates))
+    if not weak:
+        return chosen, weak, False
+    per_item = max(2, _MAX_OPTIONS // len(weak))
+    options: list[Option] = []
+    owners: dict[str, tuple[int, dict[str, Any]]] = {}
+    for index, fragment, candidates in weak:
+        for row in candidates[:per_item]:
+            option_id = str(len(options))
+            owners[option_id] = (index, row)
+            options.append(Option(id=option_id, text=f"«{fragment}» → {_row_name(row)} — {_row_cost(row)} руб."))
+    if not options:
+        return chosen, weak, False  # у слабых позиций нет ни одного кандидата — выбирать не из чего
+    if not llm_allowed:
+        return chosen, weak, True
+    choice = await choose(BASKET_TASK, question, options)
+    if choice.failed:
+        return chosen, weak, True
+    for option_id in sorted(choice.ids, key=int):
+        index, row = owners[option_id]
+        chosen.setdefault(index, []).append(row)
+    return chosen, weak, False
+
+
+def _positions(items: list[dict[str, Any]], chosen: dict[int, list[dict[str, Any]]]) -> tuple[list[dict[str, Any]], list[str]]:
+    positions: list[dict[str, Any]] = []
+    not_found: list[str] = []
+    for index, item in enumerate(items):
+        fragment = str(item.get("fragment") or item["service_name"])
+        rows = chosen.get(index)
+        if rows:
+            positions.append(_position(fragment, _prefer_base_variants(rows, fragment)))
+        else:
+            not_found.append(fragment)
+    return positions, not_found
+
+
 async def choose_basket_rows(
     question: str,
     items: list[dict[str, Any]],
@@ -68,43 +131,43 @@ async def choose_basket_rows(
     :param retail_rows: строки прайса региона
     """
 
-    chosen: dict[int, list[dict[str, Any]]] = {}
-    weak: list[tuple[int, str, list[dict[str, Any]]]] = []
-    for index, item in enumerate(items):
-        fragment = str(item.get("fragment") or item["service_name"])
-        candidates = _candidates(item, retail_rows)
-        strong = strong_rows(fragment, retail_rows, pool=candidates)
-        if strong:
-            chosen[index] = strong
-        else:
-            weak.append((index, fragment, candidates))
-    if weak:
-        per_item = max(2, _MAX_OPTIONS // len(weak))
-        options: list[Option] = []
-        owners: dict[str, tuple[int, dict[str, Any]]] = {}
-        for index, fragment, candidates in weak:
-            for row in candidates[:per_item]:
-                option_id = str(len(options))
-                owners[option_id] = (index, row)
-                options.append(Option(id=option_id, text=f"«{fragment}» → {_row_name(row)} — {_row_cost(row)} руб."))
-        choice = await choose(BASKET_TASK, question, options)
-        if choice.failed:
-            # Сильные позиции — данные, от LLM не зависят; слабые — как в корзине правил.
-            if not chosen:
-                return None
-            for index, _fragment, _rows in weak:
-                chosen[index] = list(items[index].get("prices") or [])
-        else:
-            for option_id in sorted(choice.ids, key=int):
-                index, row = owners[option_id]
-                chosen.setdefault(index, []).append(row)
-    positions: list[dict[str, Any]] = []
-    not_found: list[str] = []
-    for index, item in enumerate(items):
-        fragment = str(item.get("fragment") or item["service_name"])
-        rows = chosen.get(index)
-        if rows:
-            positions.append(_position(fragment, _prefer_base_variants(rows, fragment)))
-        else:
-            not_found.append(fragment)
+    chosen, weak, failed = await _pick(question, items, retail_rows)
+    if failed:
+        # Сильные позиции — данные, от LLM не зависят; слабые — как в корзине правил.
+        if not chosen:
+            return None
+        for index, _fragment, _rows in weak:
+            chosen[index] = list(items[index].get("prices") or [])
+    positions, not_found = _positions(items, chosen)
     return positions, [*unrecognized, *not_found]
+
+
+async def basket_from_phrases(
+    question: str,
+    phrases: Sequence[Any],
+    leftover: Sequence[str],
+    retail_rows: list[dict[str, Any]],
+    *,
+    llm_allowed: bool = True,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Корзина из фраз разбора хода (`turn_parse = on`, L-15b, шаг 5): позиции — фразы в порядке реплики.
+
+    Сильная фраза — её строки по данным МИС без LLM; слабые — один вызов `choose()` по кандидатам правил
+    (`phrase_price_items`); сбой LLM — у слабой позиции строки догадки правил, как в корзине правил.
+    Фрагменты по разделителям, не покрытые разбором (`leftover`), и позиции без строк — «Не распознал».
+
+    :param question: реплика пациента (как написал он сам)
+    :param phrases: фразы разбора (`turn_parse.ParsedPhrase`)
+    :param leftover: фрагменты реплики вне выбранных фраз
+    :param retail_rows: строки прайса региона
+    :param llm_allowed: можно ли звать LLM (режим `strict` — нельзя)
+    :return: (позиции с выбранными строками, нераспознанное)
+    """
+
+    items = phrase_price_items(phrases, retail_rows)
+    chosen, weak, failed = await _pick(question, items, retail_rows, llm_allowed=llm_allowed)
+    if failed:
+        for index, _fragment, _rows in weak:
+            chosen[index] = list(items[index].get("prices") or [])
+    positions, not_found = _positions(items, chosen)
+    return positions, [*leftover, *not_found]

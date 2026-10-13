@@ -27,7 +27,9 @@
 умолчанию off) запускается здесь же, после понимания, и от его режима не зависит: под `shadow` —
 фоновой задачей во время хода, только телеметрия (`tu_parse_status`, `tu_parse_src`, `tu_parse_n`,
 `tu_parse_cands`, `tu_parse_ms`, `tu_parse_agree` — согласие с разрезом правил) и `debug.turn_parse`;
-под `on` — ждём здесь, читатели (шаг 5) возьмут его через `turn_parse.acting_phrases()`.
+под `on` — ждём здесь, и понимание читает его (шаг 5): услуги хода — фразы разбора (`_from_phrases`), его
+читатели (`acting_list()`) идут за разбором, а не за разрезом правил; телеметрия `tu_rule = parse_<статус>`.
+Разбор не решён — понимание правил, как раньше.
 """
 
 from __future__ import annotations
@@ -61,11 +63,13 @@ _PRICE_TURN_LABELS = frozenset({"PRICE", "TEST_ASSIST"})
 
 @dataclass(frozen=True)
 class ServiceMention:
-    """Упоминание услуги. Шаг 1: кандидат один — строка прайса, которую покажет корзина."""
+    """Упоминание услуги. Шаг 1: кандидат один — строка прайса, которую покажет корзина. Под `turn_parse =
+    on` (L-15b, шаг 5) — фраза разбора: кандидаты — строки сильного совпадения по данным МИС (у слабой —
+    нет), строку слабой выбирает корзина."""
 
     phrase: str
     candidates: tuple[str, ...]
-    strength: str  # list_split | list_segment (как найдено); позже — exact | synonym_fork | fuzzy
+    strength: str  # list_split | list_segment (как найдено); фраза разбора — strong | weak
     chosen: str | None
 
 
@@ -189,7 +193,33 @@ async def observe_price_turn(label: str, *, user_text: str, pending: dict[str, A
             _CURRENT.set(tu)
             turn_telemetry.note(tu_list=len(tu.services), tu_facet=tu.facet, tu_rule=tu.services_rule)
     await _observe_phrases(user_text, tu)
+    read = _from_phrases(tu, user_text) if tu is not None else None
+    if read is not None:
+        tu = read
+        _CURRENT.set(tu)
+        turn_telemetry.note(tu_list=len(tu.services), tu_rule=tu.services_rule)
     return tu
+
+
+def _from_phrases(tu: TurnUnderstanding, text: str) -> TurnUnderstanding | None:
+    """Под `turn_parse = on` (L-15b, шаг 5) услуги хода — фразы разбора, а не разрез правил: одна услуга
+    или список решили данные МИС или выбор LLM. Читатели понимания (`acting_list()` — планировщик,
+    подстановка каталога, грундер, дозаполнение) берут его без правок. Разбора нет или он не решён —
+    None, понимание правил остаётся."""
+
+    parse = turn_parse.acting_for(text)
+    if parse is None:
+        return None
+    services = tuple(
+        ServiceMention(
+            phrase=item.text,
+            candidates=tuple(dict.fromkeys(str(row.get("serviceName") or "").strip() for row in item.rows)),
+            strength=str(item.strength.value),
+            chosen=item.text,
+        )
+        for item in parse.items
+    ) if parse.is_list else ()
+    return TurnUnderstanding(services=services, services_rule=f"parse_{parse.status}", facet=tu.facet, facet_rule=tu.facet_rule)
 
 
 async def _observe_phrases(user_text: str, tu: TurnUnderstanding | None) -> None:

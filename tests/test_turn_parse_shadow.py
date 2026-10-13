@@ -10,8 +10,8 @@
   случаев класса «одна или несколько» в наборе деплоя с LLM-оракулом, который отвечает и на выбор фраз
   (ровно разрез случая), — ответы, исходы и вызовы прочих мест LLM те же, что под off;
 - тень пишет `tu_parse_*` в телеметрию хода без текста пациента; фразы — только в `debug.turn_parse`;
-- под `on` решений хода не больше двух (выбор фраз — одно из них);
-- под `on` сбой разбора (LLM недоступна) не меняет ни одного ответа: читателей разбора до шага 5 нет.
+- под `on` решений хода не больше двух (выбор фраз — одно из них). Что под `on` меняется в ответах
+  (читатели разбора, шаг 5), — `test_turn_parse_readers.py`.
 """
 
 from __future__ import annotations
@@ -185,14 +185,3 @@ def test_on_spends_at_most_two_decisions(name, mini_prod_world, monkeypatch):  #
         assert acting[0] == ("turn_phrases", "picked")  # выбор фраз — первое решение хода, из его бюджета
     assert not any(entry.get("shadow") for entry in row.get("choose") or [])
 
-
-@pytest.mark.parametrize("case", sorted(DIALOGS))
-def test_parse_unavailable_under_on_changes_no_answer(case, mini_prod_world, request, monkeypatch):  # noqa: F811
-    _turn_parse(monkeypatch, "on")
-    if case.startswith("synonym_fork"):
-        request.getfixturevalue("synonym_fork")
-    with ev_world.FrozenWorld(mini_prod_world, "day") as world:
-        record = run_dialog(DIALOGS[case], f"on-down-{case}")
-        rows = list(world.telemetry)
-    assert record == _golden()[case]
-    assert "late" not in {row.get("tu_parse_status") for row in rows}

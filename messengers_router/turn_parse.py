@@ -214,7 +214,8 @@ class PhraseParse:
 # во время хода (решение владельца 13.10, Q1): решение LLM вне бюджета хода и предохранителя, память
 # разбора и сессию задача не трогает, пишет только `tu_parse_*`; конец хода — `drain` (ждём не дольше
 # секунды, потом отмена — статус `late`). Под `on` разбор ждут сразу — его решение из бюджета хода;
-# читатели под `on` (шаг 5) возьмут его через `acting_phrases()`. Вне хода и под `off` слота нет.
+# читатели под `on` (шаг 5: понимание, корзина, путь одной услуги) берут его через `acting_for(вход)` —
+# только решённый и только для своей реплики. Вне хода и под `off` слота нет.
 
 MODES = ("off", "shadow", "on")
 
@@ -278,6 +279,15 @@ def acting_phrases() -> PhraseParse | None:
         return None
     parse = phrases_now()
     return parse if parse is not None and parse.decided else None
+
+
+def acting_for(text: str) -> PhraseParse | None:
+    """Разбор, по которому действует читатель с входом `text` (L-15b, шаг 5): под `on`, решённый и этой
+    реплики (`for_text`). None — прежний путь правил: разбора нет, он не решён или вход читателя — не
+    реплика хода (дозаполнение, контекст прошлого хода)."""
+
+    parse = acting_phrases()
+    return parse if parse is not None and parse.for_text(text) else None
 
 
 async def drain(grace_s: float) -> None:

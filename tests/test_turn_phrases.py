@@ -210,8 +210,22 @@ def test_one_catalog_name_is_not_split_by_strong_pieces(world):
     assert TP.decide_without_llm(TP.phrase_candidates("сколько стоит ферритин и глюкоза", facet="price", catalog=plain), plain).status == "strong_all"
 
 
+def test_verbatim_catalog_name_is_strong_as_written(catalog, world):
+    """Название прайса, набранное целиком, — сильное по данным как написано (L-15b, шаг 5): вырезатель
+    фразы правил теряет в нём дефис и предлоги, и фраза разбора с ним была бы слабой. Цена и корзина
+    правил зовут `strong_rows` без этого — их поведение не меняется."""
+
+    from messengers_router.services._strong_match import strong_rows
+
+    for name in ("Глюкозотолерантный тест (глюкоза+ C-пептид)", "Прием (осмотр, консультация) врача-терапевта", "Экспресс-тест для определения сифилиса (антитела IgG и IgM к Treponema pallidum)"):
+        _cands, parse = _decide(f"сколько стоит {name}", catalog)
+        assert (parse.status, parse.source) == ("strong_whole", "data"), name
+        assert {row["serviceName"] for row in parse.items[0].rows} == {name}
+        assert strong_rows(name, catalog) == []  # прежнее определение у цены и корзины — без изменений
+
+
 def test_single_candidate_skips_llm(catalog, world):
-    for reply in ("сколько стоит Прием (осмотр, консультация) врача-терапевта", "сколько стоит приём терапевта по ОМС"):
+    for reply in ("сколько стоит приём терапевта", "сколько стоит приём терапевта по ОМС"):
         cands, parse = _decide(reply, catalog)
         assert len(cands.options) == 1 and parse.status == "single" and parse.decided and not parse.is_list
         assert [item.text for item in parse.items] == [cands.whole.raw]

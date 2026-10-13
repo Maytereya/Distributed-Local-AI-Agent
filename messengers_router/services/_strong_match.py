@@ -54,23 +54,30 @@ def strong_rows(
     catalog: Sequence[dict[str, Any]],
     *,
     pool: Sequence[dict[str, Any]] | None = None,
+    verbatim: bool = False,
 ) -> list[dict[str, Any]]:
     """Строки прайса, сильно совпавшие с фразой пациента по данным МИС; пусто — совпадение слабое.
 
     :param phrase: реплика или фраза позиции, как написал пациент (слова вопроса о цене снимаются)
     :param catalog: строки прайса региона — по ним ищется код услуги
     :param pool: где искать название и синоним — кандидаты правил (цена, корзина); None — весь `catalog`
+    :param verbatim: дословное название сравнивается и с фразой как написана — у фразы разбора хода
+        (L-15b): она уже без обвязки, а вырезатель фразы правил теряет в названии дефис и предлоги
+        («Глюкозотолерантный тест (глюкоза+ C-пептид)» → «… c пептид»). Цена и корзина правил зовут
+        без него — их поведение не меняется
     :return: строки в порядке `pool` (затем строки кода), без повторов
     """
 
     key = _normalise_catalog_text(_extract_price_service_from_query(phrase) or phrase)
-    if not key:
+    names = {key, _normalise_catalog_text(phrase)} if verbatim else {key}
+    names.discard("")
+    if not names:
         return []
     synonyms = set(mis_synonym_candidates(phrase))
     by_code = [row for row in catalog if key.isdigit() and str(row.get("serviceHomecode") or "").strip() == key]
     out: list[dict[str, Any]] = []
     for row in [*(catalog if pool is None else pool), *by_code]:
         name = _name(row)
-        if (key == _normalise_catalog_text(name) or name in synonyms or row in by_code) and row not in out:
+        if (_normalise_catalog_text(name) in names or name in synonyms or row in by_code) and row not in out:
             out.append(row)
     return out

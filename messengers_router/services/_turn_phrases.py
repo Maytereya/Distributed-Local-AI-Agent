@@ -14,7 +14,8 @@
   между ними — разрез «ФЕРРИТИН ГЛЮКОЗА ХОЛЕСТЕРОЛ», которого сегментация не даёт (слов меньше 4);
 - **потолок** — 16 фраз (решение владельца 13.10, Q3): приоритет W, (б), (в), (г); фрагментов (б) 16 и
   больше — `too_many`, LLM не зовём;
-- **обход без LLM:** W пуста — `empty`; W сильная по данным (`strong_rows`) — `strong_whole`; разрез по
+- **обход без LLM:** W пуста — `empty`; W сильная по данным (`phrase_rows` — `strong_rows`, дословное
+  название сравнивается и как написано) — `strong_whole`; разрез по
   разделителям (б) из ≥2 фраз, все сильные, остаток — обвязка, и одного названия прайса на всё нет —
   `strong_all`; кандидат один — `single`. Сильные окна без разделителей (в)/(г) LLM не обходят: и
   «ФЕРРИТИН ГЛЮКОЗА ХОЛЕСТЕРОЛ» решает выбор (решение владельца 13.10, Q2);
@@ -101,6 +102,17 @@ class Candidates:
 
 def _display(raw: str) -> str:
     return " ".join(str(raw).replace("«", '"').replace("»", '"').split())
+
+
+def phrase_rows(raw: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Строки сильного совпадения фразы разбора по данным МИС (одно определение — `strong_rows`).
+
+    Фраза разбора — срез реплики уже без обвязки, поэтому дословное название сравнивается и как
+    написано: вырезатель фразы правил теряет дефис и предлоги («C-пептид» → «c пептид»), и название
+    прайса, набранное целиком, иначе считалось бы слабым (L-15b, шаг 5).
+    """
+
+    return strong_rows(raw, catalog, verbatim=True)
 
 
 def _key(word: str) -> str:
@@ -265,7 +277,7 @@ def _strong_window_pieces(reply: str, toks: Sequence[_Token], span: tuple[int, i
                 if len(window) < size or any(_is_multi_price_noise(t.key) for t in window):
                     continue
                 phrase = _phrase(reply, toks, i, i + size - 1, SOURCE_STRONG)
-                if phrase is not None and strong_rows(phrase.raw, catalog):
+                if phrase is not None and phrase_rows(phrase.raw, catalog):
                     found, width = phrase, size
                     break
         if found is None:
@@ -359,14 +371,14 @@ def decide_without_llm(cands: Candidates, catalog: list[dict[str, Any]]) -> Phra
     whole = cands.whole
     if whole is None:
         return result(cands, ParseStatus.EMPTY, "none")
-    rows = strong_rows(whole.raw, catalog)
+    rows = phrase_rows(whole.raw, catalog)
     if rows:
         return result(cands, ParseStatus.STRONG_WHOLE, "data", [parsed(whole, rows)])
     if cands.too_many:
         return result(cands, ParseStatus.TOO_MANY, "none")
     cut = cands.partitions.get(SOURCE_SPLIT, ())
     if cut:
-        cut_rows = [strong_rows(p.raw, catalog) for p in cut]
+        cut_rows = [phrase_rows(p.raw, catalog) for p in cut]
         if (
             all(cut_rows)
             and _only_wrapper_outside(cands, cut)
@@ -393,7 +405,7 @@ def _prepare(reply: str, facet: str | None, catalog: list[dict[str, Any]]) -> tu
     decided = decide_without_llm(cands, catalog)
     if decided is not None:
         return cands, decided, ()
-    return cands, None, tuple(tuple(strong_rows(p.raw, catalog)) for p in cands.options)
+    return cands, None, tuple(tuple(phrase_rows(p.raw, catalog)) for p in cands.options)
 
 
 def _from_choice(cands: Candidates, choice: Choice, rows: Sequence[Sequence[dict[str, Any]]]) -> PhraseParse:
