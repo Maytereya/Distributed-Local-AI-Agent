@@ -171,6 +171,32 @@ def _sync_price_family_context(state: SessionState, payload: dict[str, Any]) -> 
     state.last_entities.pop("_price_family_context", None)
 
 
+def _sync_policy_context(state: SessionState, payload: dict[str, Any]) -> None:
+    """
+    Ответ политики силы совпадения (L-13: «не нашёл», названия без цен) — в контексте слова пациента.
+
+    Цены пациент не увидел и услугу не выбрал, а в состоянии оставалась строка, которую до политики
+    подставило заземление сущностей («гастроскопия» → «Гастрин»): контекст сессии не равнялся
+    показанному (BUG-2026-10-13-L13-CONTEXT-LEAK). Теперь в нём — фраза пациента, как её назвал
+    ответ. Только для ответов политики (под `price_match_policy = on`); прочие ценовые ходы — как
+    раньше.
+
+    :param state: состояние сессии
+    :param payload: payload `price` или `service_bundle`
+    :return: None
+    """
+
+    if not str(payload.get("note") or "").startswith("price_match_policy"):
+        return
+    used = payload.get("entities_used")
+    phrase = str(used.get("service_name_effective") or "").strip() if isinstance(used, dict) else ""
+    if phrase:
+        state.last_entities["service_name"] = phrase
+    else:
+        state.last_entities.pop("service_name", None)
+    state.last_entities.pop("test_name", None)
+
+
 def _sync_compound_price_pending(state: SessionState, payload: dict[str, Any]) -> None:
     """
     Сохраняет короткий pending-контекст для compound PRICE-уточнения.
@@ -203,6 +229,7 @@ def build_price_response(flow_label: str, evidence: Evidence, state: SessionStat
     if not isinstance(price_payload, dict):
         return None
     _sync_price_family_context(state, price_payload)
+    _sync_policy_context(state, price_payload)
     _sync_compound_price_pending(state, price_payload)
     render_entities = dict(state.last_entities or {})
     used = price_payload.get("entities_used")
@@ -228,6 +255,7 @@ def build_service_bundle_response(flow_label: str, evidence: Evidence, state: Se
     if not isinstance(payload, dict):
         return None
     _sync_price_family_context(state, payload)
+    _sync_policy_context(state, payload)
     _sync_compound_price_pending(state, payload)
     text = format_service_bundle_for_patient(payload, state.last_entities)
     # Defensive fallback: если рендер вернул пустой текст, показываем

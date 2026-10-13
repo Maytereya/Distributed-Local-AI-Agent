@@ -23,7 +23,7 @@
     "service_bundle_info"
    ],
    "service_name_effective": "экспресс тест определения сифилиса антитела igg igm к",
-   "service_name": "Экспресс-тест для определения сифилиса (антитела IgG и IgM к Treponema pallidum)",
+   "service_name": "экспресс тест определения сифилиса антитела igg igm к",
    "pending": null
   }
  ],
@@ -51,7 +51,7 @@
     "service_bundle_info"
    ],
    "service_name_effective": "прием невролог",
-   "service_name": "Прием (осмотр, консультация) врача- невролога",
+   "service_name": "прием невролог",
    "pending": null
   }
  ],

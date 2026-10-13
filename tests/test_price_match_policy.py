@@ -15,7 +15,10 @@
 - off и shadow не меняют ни одного ответа; on меняет только объявленные диалоги (`POLICY_PLANNED`) —
   эталон пути цены при недоступной LLM, ответы под on — `tests/golden/price_turns_policy_on.json`
   (перезапись: `GOLDEN_UPDATE=1`, дифф — в коммит с разбором);
-- тень пишет решение в телеметрию хода (`price_policy`), ответ прежний.
+- тень пишет решение в телеметрию хода (`price_policy`), ответ прежний;
+- контекст = показанное: после ответа политики без цены в состоянии — слова пациента, а не строка,
+  которую он не видел или не выбирал; следующий короткий вопрос («сколько стоит?») цены не называет
+  (BUG-2026-10-13-L13-CONTEXT-LEAK; остаток — xfail strict, см. `_STILL_PRICED`).
 """
 
 from __future__ import annotations
@@ -40,8 +43,8 @@ POLICY_PLANNED: dict[str, str] = {
     "family_glucose": "дословное название «Глюкоза» — только эта строка, без мочи и синовиальной жидкости",
     "name_with_commas": "дословное название с уточнением в скобках — ровно эта строка",
     "synonym_fork_oak": "синоним МИС «оак» — ровно его услуги из справочника клиники, без хвоста семейства",
-    "name_with_and": "одна слабая строка без LLM — её название без цены, выбирает пациент",
-    "one_neurologist": "приём: пациент увидел бы одну слабую строку из пяти кандидатов — названия без цены (13.10)",
+    "name_with_and": "одна слабая строка без LLM — её название без цены, выбирает пациент; в контексте — его слова (13.10)",
+    "one_neurologist": "приём: пациент увидел бы одну слабую строку из пяти кандидатов — названия без цены (13.10); в контексте — его слова",
 }
 
 
@@ -253,3 +256,85 @@ def test_too_general_or_empty_rules_proposal_keeps_the_rules_answer(monkeypatch,
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _Down())
     assert asyncio.run(PS.select_price_rows("сколько стоит гастроскопия", rows)) is None
     assert _Down.calls == 1
+
+
+# --- Контекст = показанное: два хода (BUG-2026-10-13-L13-CONTEXT-LEAK) ----------------------------
+#
+# Обязательный класс плана с 13.10 («Слепое пятно плана», мастер-хэндофф §4 (б)): после ответа без
+# цены следующий короткий вопрос не берёт услугу, которую пациент не видел и не выбирал. Первый ход —
+# ответ политики под on: «не нашёл» (LLM выбора цены отвечает «не та услуга» в обоих кругах, остальные
+# места LLM недоступны) и названия без цен (вариант B, LLM недоступна). Мини-прод: правила находят на
+# «гастроскопию» анализы «Гастрин» (750 / 1 950 руб.), на «анализ ттг» — две строки ТТГ.
+
+_ANSWER_WITHOUT_PRICE = {
+    "not_found": ("сколько стоит гастроскопия", ("Гастрин", "Гастрин-17 стимулированный")),
+    "names_without_prices": ("сколько стоит анализ ттг", ("ТТГ (TSH) тиреотропный гормон", "Антитела к рецепторам ТТГ")),
+}
+_SHORT_FOLLOWUPS = ("сколько стоит?", "а цена?", "и сколько?")
+_PRICE_MARK = " руб."  # цена в ответе — «750 руб.»; без пробела ловилось бы «Трубина» из подсказки
+
+# Остаток класса — второй ход всё ещё называет цену, хотя в контексте уже слова пациента: на следующем
+# ходу роутер заземляет фразу контекста заново по буквам (`match_catalog_service`, флаг
+# `catalog_service_exact`: «гастроскопия» → «Гастрин», «анализ ттг» → «ТТГ (TSH)…»), а выбор LLM
+# реплику без своих слов об услуге пропускает (`price_question_names_service`). «а цена?» после «не
+# нашёл» — ещё и «услуга «а»» с чужими строками. Снимается переводом потребителей контекста на
+# `ServiceMention` (шаг 4 L-15b / ход (б)); до тех пор — xfail strict.
+_STILL_PRICED = {
+    ("not_found", "сколько стоит?"),
+    ("not_found", "а цена?"),
+    ("names_without_prices", "сколько стоит?"),
+    ("names_without_prices", "а цена?"),
+}
+
+
+def _two_turns(scenario: str, followup: str, mini_prod_world, monkeypatch, tmp_path) -> list[dict]:
+    from messengers_router.runtime_config import config as cfg
+    from messengers_router.services import _price_select_llm as PS
+
+    _policy(monkeypatch, "on")
+    monkeypatch.setattr(PS, "_journal_path", lambda: tmp_path / "journal.jsonl")
+    if scenario == "not_found":
+        monkeypatch.setattr(cfg, "MR_CHOOSE_PRICE", "on", raising=False)
+        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _PriceLLM([[]] * 4, terms=["ФГДС"]))
+    question, _unseen = _ANSWER_WITHOUT_PRICE[scenario]
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        return run_dialog([question, followup], f"policy-two-turns-{scenario}-{followup}")
+
+
+@pytest.mark.parametrize("followup", _SHORT_FOLLOWUPS)
+@pytest.mark.parametrize("scenario", sorted(_ANSWER_WITHOUT_PRICE))
+def test_context_after_an_answer_without_price_is_what_the_patient_was_shown(scenario, followup, mini_prod_world, monkeypatch, tmp_path):
+    first, second = _two_turns(scenario, followup, mini_prod_world, monkeypatch, tmp_path)
+    _question, unseen = _ANSWER_WITHOUT_PRICE[scenario]
+
+    assert _PRICE_MARK not in first["text"], first["text"]  # первый ход — ответ политики без цены
+    # Контекст = показанное: в состоянии — слова пациента, как их назвал ответ, а не строка прайса,
+    # которую он не видел («Гастрин») или не выбирал (одна из названных без цен).
+    assert first["service_name"] == first["service_name_effective"]
+    assert first["service_name"] not in unseen
+    # Второй ход не переносит в контекст чужую строку словами пациента без услуги.
+    if (scenario, followup) not in _STILL_PRICED:
+        assert second["service_name"] not in unseen
+
+
+@pytest.mark.parametrize(
+    ("scenario", "followup"),
+    [
+        pytest.param(
+            scenario,
+            followup,
+            marks=[pytest.mark.xfail(strict=True, reason="следующий ход заземляет фразу контекста по буквам — шаг 4 L-15b")]
+            if (scenario, followup) in _STILL_PRICED
+            else [],
+        )
+        for scenario in sorted(_ANSWER_WITHOUT_PRICE)
+        for followup in _SHORT_FOLLOWUPS
+    ],
+)
+def test_short_question_after_an_answer_without_price_names_no_price(scenario, followup, mini_prod_world, monkeypatch, tmp_path):
+    _first, second = _two_turns(scenario, followup, mini_prod_world, monkeypatch, tmp_path)
+    _question, unseen = _ANSWER_WITHOUT_PRICE[scenario]
+
+    # Пациент не видел цены и не выбрал услугу: цена во втором ответе — чужая или выбранная за него.
+    assert _PRICE_MARK not in second["text"], second["text"]
+    assert not any(name in second["text"] for name in unseen if scenario == "not_found"), second["text"]
