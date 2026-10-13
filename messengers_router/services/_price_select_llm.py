@@ -423,7 +423,7 @@ async def select_price_rows(
     retail_rows: list[dict[str, Any]],
     *,
     candidates: Sequence[dict[str, Any]] = (),
-    shown: Sequence[dict[str, Any]] = (),
+    shown: Sequence[dict[str, Any]] | None = None,
     hints: Sequence[str] = (),
     context: str = "",
     runtime_llm_mode: str = "",
@@ -435,7 +435,7 @@ async def select_price_rows(
     :param candidates: ответ правил — всегда в списке для LLM первым, чтобы его можно
         было подтвердить («оак» → «Общий анализ крови», а не только строки со словом «ОАК»)
     :param shown: строки, которые правила покажут пациенту (политика L-13: список из ≥2 строк при
-        недоступной LLM остаётся списком правил)
+        недоступной LLM остаётся списком правил); None — правила покажут всех кандидатов
     :param hints: подсказки только для поиска кандидатов — выбор правил
     :param context: сущность NLU / услуга из диалога — тоже только для поиска
         кандидатов; в подсказку LLM не идёт
@@ -470,10 +470,13 @@ async def select_price_rows(
     # занимал весь список LLM, и лучшая находка поиска по словам в него не попадала
     # («панель женские наследственные» → чужие панели Геномеда, свип 01.10).
     candidates = [row for row in candidates if isinstance(row, dict)]
-    shown, rest = candidates[:_PROPOSAL_FIRST], candidates[_PROPOSAL_FIRST:]
+    shown = candidates if shown is None else [row for row in shown if isinstance(row, dict)]
+    # Не `shown`: это первые кандидаты для LLM, а политика решает по строкам, которые увидит
+    # пациент, — параметру `shown` (BUG-2026-10-13-L13-SHOWN-SHADOWED).
+    proposal_first, rest = candidates[:_PROPOSAL_FIRST], candidates[_PROPOSAL_FIRST:]
     # Поиск по прайсу — CPU на сотни миллисекунд: не держим им цикл событий.
     pool = await asyncio.to_thread(
-        _build_pool, texts, rows, per_text=_PER_QUERY_LIMIT, first=shown, fallback_texts=words
+        _build_pool, texts, rows, per_text=_PER_QUERY_LIMIT, first=proposal_first, fallback_texts=words
     )
     pool += [row for row in rest if _row_key(row) not in {_row_key(r) for r in pool}][: max(0, _POOL_LIMIT - len(pool))]
     policy = match_policy()

@@ -7,7 +7,9 @@
 - слабое совпадение, а LLM не ответила внятно: ОДНА слабая строка не показывается с ценой — до 5
   названий с самым различающим словом пациента, без цен; таких нет — честный перевод; СПИСОК правил
   (≥2 строк) остаётся списком (решение владельца 11.10 по замеру: строгий вариант B прятал и списки
-  с нужной строкой — форму 22.07);
+  с нужной строкой — форму 22.07); «одна» и «список» — по строкам, которые увидит пациент (`shown`),
+  а не по числу кандидатов правил: у приёма рендер пакета показывает одну строку из нескольких
+  кандидатов — она без цены (BUG-2026-10-13-L13-SHOWN-SHADOWED);
 - LLM не нашла услугу и во втором круге — «не нашёл», без чужой цены;
 - политика заменяет только слабое предложение правил: правила ничего не предложили — их ответ;
 - off и shadow не меняют ни одного ответа; on меняет только объявленные диалоги (`POLICY_PLANNED`) —
@@ -39,6 +41,7 @@ POLICY_PLANNED: dict[str, str] = {
     "name_with_commas": "дословное название с уточнением в скобках — ровно эта строка",
     "synonym_fork_oak": "синоним МИС «оак» — ровно его услуги из справочника клиники, без хвоста семейства",
     "name_with_and": "одна слабая строка без LLM — её название без цены, выбирает пациент",
+    "one_neurologist": "приём: пациент увидел бы одну слабую строку из пяти кандидатов — названия без цены (13.10)",
 }
 
 
@@ -127,6 +130,59 @@ def test_weak_list_without_llm_stays_the_rules_list(mini_prod_world, monkeypatch
     turn = _turn("сколько стоит гастроскопия", "policy-gastro", mini_prod_world)
     assert turn["text"] == _golden()["one_gastroscopy"][0]["text"]
     assert turn["telemetry"]["price_policy"] == "rules_list"
+
+
+def test_one_shown_row_of_several_candidates_is_named_without_its_price(mini_prod_world, monkeypatch):
+    # Приём: правила собрали пять строк невролога, рендер пакета покажет одну — её цена без LLM не
+    # звучит, хотя кандидатов больше одного (BUG-2026-10-13-L13-SHOWN-SHADOWED).
+    _policy(monkeypatch, "on")
+    turn = _turn("сколько стоит прием невролога", "policy-one-of-many", mini_prod_world)
+    assert turn["plan"] == ["PRICE", "service_bundle_info"]
+    assert "руб" not in turn["text"] and "2 700" not in turn["text"]
+    assert "— Прием (осмотр, консультация) врача- невролога\n" in turn["text"]
+    assert turn["telemetry"]["price_policy"] == "names"
+    assert not turn["handoff"]
+
+
+def _weak_rows(count: int) -> list[dict]:
+    return [
+        {"serviceName": f"Прием (осмотр, консультация) врача-невролога, программа {chr(1040 + i)}", "serviceHomecode": f"77{i:02d}", "cost": 2000 + i}
+        for i in range(count)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mode", "shown_count", "decision", "label"),
+    [
+        ("on", 1, "unavailable", "names"),  # пациент увидел бы одну строку из двенадцати — её цена не звучит
+        ("shadow", 1, None, "names"),  # тень: ответ прежний, решение — в телеметрии
+        ("on", 3, None, "rules_list"),  # список — остаётся списком правил
+        ("on", None, None, "rules_list"),  # `shown` не передан — правила покажут всех кандидатов
+    ],
+)
+def test_policy_decides_by_rows_the_patient_sees_not_by_candidate_count(mode, shown_count, decision, label, monkeypatch, tmp_path):
+    import asyncio
+
+    from messengers_router import turn_telemetry
+    from messengers_router.services import _price_select_llm as PS
+
+    _policy(monkeypatch, mode)
+    monkeypatch.setattr(PS, "_journal_path", lambda: tmp_path / "journal.jsonl")
+    rows = _weak_rows(12)  # кандидатов правил больше, чем первых в списке для LLM (`_PROPOSAL_FIRST`)
+    extra = {} if shown_count is None else {"shown": rows[:shown_count]}
+
+    async def run():
+        token = turn_telemetry.begin("test", session_id="policy-shown")
+        selection = await PS.select_price_rows("сколько стоит прием невролога", rows, candidates=rows, **extra)
+        return selection, turn_telemetry.finish(token, handoff=False, chars=0)
+
+    selection, row = asyncio.run(run())
+    assert row["price_policy"] == label
+    if decision is None:
+        assert selection is None
+    else:
+        assert selection.status == decision and selection.rows == ()
+        assert selection.names
 
 
 @pytest.mark.parametrize("choose_mode", ["off", "on"])
