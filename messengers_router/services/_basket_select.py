@@ -101,6 +101,11 @@ async def _pick(
     weak: list[tuple[int, str, list[dict[str, Any]]]] = []
     for index, item in enumerate(items):
         fragment = str(item.get("fragment") or item["service_name"])
+        if item.get("strong"):
+            # Сильная по разбору хода: строки — её данные, кандидаты не нужны (шаг 6, O5 — ранжирование
+            # прайса для неё считалось и не читалось).
+            chosen[index] = list(item["strong"])
+            continue
         candidates = _candidates(item, retail_rows)
         # Сила позиции из разбора хода (`strong`, весь срез) — не пересчитывается по кандидатам.
         strong = list(item["strong"]) if "strong" in item else strong_rows(fragment, retail_rows, pool=candidates)

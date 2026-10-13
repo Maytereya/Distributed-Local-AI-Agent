@@ -2097,6 +2097,26 @@ def _select_patient_price_rows(
     *,
     limit: int = 10,
 ) -> list[dict[str, Any]]:
+    """Строки цены для пациента (`_select_patient_price_rows_uncached`) — в памяти хода.
+
+    Шаг 6 L-15b (O4): корзина из фраз и подбор анализов спрашивают те же названия, что правила
+    понимания в этом же ходе (151 повтор из 157); ключ — текст, `limit` и отпечаток среза.
+    """
+
+    if not isinstance(query_text, str):
+        return _select_patient_price_rows_uncached(rows, query_text, limit=limit)
+    return turn_parse.remember(
+        ("_select_patient_price_rows", query_text, limit, _catalog_fingerprint(rows)),
+        lambda: _select_patient_price_rows_uncached(rows, query_text, limit=limit),
+    )
+
+
+def _select_patient_price_rows_uncached(
+    rows: list[dict[str, Any]],
+    query_text: str,
+    *,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
     """
     Возвращает patient-facing список цен с мягкой развилкой для лабораторных tie-case.
 
@@ -3283,9 +3303,13 @@ def _resolve_multi_price_items(
     return resolved, unrecognized
 
 
+@turn_parse.per_turn(_catalog_fingerprint)
 def _resolve_fragment_service(fragment: str, retail_rows: list[dict[str, Any]]) -> str:
     """Услуга каталога, которую правила угадали бы по одной позиции списка (резолвер, затем словарь кода);
-    пусто — не угадали. Догадка правил — только кандидат: строку позиции выбирает LLM (`_basket_select`)."""
+    пусто — не угадали. Догадка правил — только кандидат: строку позиции выбирает LLM (`_basket_select`).
+
+    В памяти хода (шаг 6, O4): корзина из фраз резолвит позиции, которые правила понимания уже
+    разрешили в этом ходе (166 повторов из 198)."""
 
     service_name = resolve_price_service_name_from_catalog(fragment, rows=retail_rows)
     if not service_name:

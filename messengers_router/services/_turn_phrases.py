@@ -36,13 +36,14 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
 from ..choice import Choice, Option, Status, Strength, Task, choose
-from ..turn_parse import ParsedPhrase, PhraseParse, ParseStatus
+from ..turn_parse import ParsedPhrase, PhraseParse, ParseStatus, per_turn
 from ._common import _normalise_catalog_text
 from ._prices_helpers import (
     _MULTI_PRICE_NOISE_WORDS,
     _PRICE_GENERIC_SERVICE_TOKENS,
     _PRICE_QUERY_STOPWORDS,
     _PRICE_TOKEN_RE,
+    _catalog_fingerprint,
     _catalog_name_covering,
     _is_multi_price_noise,
     _price_query_content_tokens,
@@ -104,12 +105,16 @@ def _display(raw: str) -> str:
     return " ".join(str(raw).replace("«", '"').replace("»", '"').split())
 
 
+@per_turn(_catalog_fingerprint)
 def phrase_rows(raw: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Строки сильного совпадения фразы разбора по данным МИС (одно определение — `strong_rows`).
 
     Фраза разбора — срез реплики уже без обвязки, поэтому дословное название сравнивается и как
     написано: вырезатель фразы правил теряет дефис и предлоги («C-пептид» → «c пептид»), и название
     прайса, набранное целиком, иначе считалось бы слабым (L-15b, шаг 5).
+
+    В памяти хода (шаг 6, O2): генератор спрашивает одну фразу до трёх раз (решение без LLM, строки
+    вариантов, запасной разрез) — половина вызовов `strong_rows` была повтором в том же ходе.
     """
 
     return strong_rows(raw, catalog, verbatim=True)

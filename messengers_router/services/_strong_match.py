@@ -28,12 +28,13 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Sequence
 
 from ..runtime_config import config as _cfg
 from ._biomaterial import mis_synonym_candidates
 from ._common import _normalise_catalog_text
-from ._prices_helpers import _extract_price_service_from_query
+from ._prices_helpers import _catalog_fingerprint, _extract_price_service_from_query
 
 _MODES = ("legacy", "data")
 
@@ -47,6 +48,34 @@ def strong_match_mode() -> str:
 
 def _name(row: dict[str, Any]) -> str:
     return str(row.get("serviceName") or row.get("name") or "").strip()
+
+
+# Индекс среза для `strong_rows` без `pool` (L-15b, шаг 6, O1): нормализованное название → позиции строк и
+# название как есть → позиции (для синонимов МИС). Без него каждый вызов нормализовал все 3 671 название
+# (16–22 мс; генератор фраз зовёт `strong_rows` до 47 раз за ход). Ключ — сам срез (держим ссылку: `id`
+# освобождённого списка мог бы достаться другому) и его отпечаток (срез, дописанный на месте).
+_INDEX_LIMIT = 4
+_INDEX: list[tuple[Sequence[dict[str, Any]], tuple[int, str, str], dict[str, list[int]], dict[str, list[int]]]] = []
+_INDEX_LOCK = threading.Lock()
+
+
+def _catalog_index(catalog: Sequence[dict[str, Any]]) -> tuple[dict[str, list[int]], dict[str, list[int]]]:
+    rows = catalog if isinstance(catalog, list) else list(catalog)
+    stamp = _catalog_fingerprint(rows)
+    with _INDEX_LOCK:
+        for known, known_stamp, by_norm, by_name in _INDEX:
+            if known is catalog and known_stamp == stamp:
+                return by_norm, by_name
+    by_norm: dict[str, list[int]] = {}
+    by_name: dict[str, list[int]] = {}
+    for pos, row in enumerate(rows):
+        name = _name(row)
+        by_norm.setdefault(_normalise_catalog_text(name), []).append(pos)
+        by_name.setdefault(name, []).append(pos)
+    with _INDEX_LOCK:
+        _INDEX[:] = [entry for entry in _INDEX if entry[0] is not catalog][-(_INDEX_LIMIT - 1) :]
+        _INDEX.append((catalog, stamp, by_norm, by_name))
+    return by_norm, by_name
 
 
 def strong_rows(
@@ -76,7 +105,20 @@ def strong_rows(
     synonyms = set(mis_synonym_candidates(phrase))
     by_code = [row for row in catalog if key.isdigit() and str(row.get("serviceHomecode") or "").strip() == key]
     out: list[dict[str, Any]] = []
-    for row in [*(catalog if pool is None else pool), *by_code]:
+    if pool is None:
+        # Те же строки в том же порядке, что и проход по всему срезу: позиции совпадений по индексу.
+        by_norm, by_name = _catalog_index(catalog)
+        positions = {pos for pos, row in enumerate(catalog) if row in by_code} if by_code else set()
+        for name in names:
+            positions.update(by_norm.get(name, ()))
+        for name in synonyms:
+            positions.update(by_name.get(name, ()))
+        source = [catalog[pos] for pos in sorted(positions)]
+        for row in [*source, *by_code]:
+            if row not in out:
+                out.append(row)
+        return out
+    for row in [*pool, *by_code]:
         name = _name(row)
         if (_normalise_catalog_text(name) in names or name in synonyms or row in by_code) and row not in out:
             out.append(row)

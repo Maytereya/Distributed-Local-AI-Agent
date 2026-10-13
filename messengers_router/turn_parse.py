@@ -109,6 +109,21 @@ def current() -> _TurnParse | None:
     return _CURRENT.get()
 
 
+def remember(key: Hashable, compute: Callable[[], _R]) -> _R:
+    """`compute()` в памяти хода по `key` (копией); вне хода — прежний вызов без памяти.
+
+    Для функций, чья сигнатура не `(текст, срез)` (`per_turn`); ключ включает имя функции, текст и
+    отпечаток среза. Тень (`read_only_memory`) только читает память.
+    """
+
+    memo = _CURRENT.get()
+    if memo is None:
+        return compute()
+    if _READ_ONLY.get():
+        return memo.peek(key, compute)
+    return memo.remember(key, compute)
+
+
 def per_turn(fingerprint: Callable[[Any], Hashable]) -> Callable[[Callable[[str, Any], _R]], Callable[[str, Any], _R]]:
     """Помнить `fn(текст, срез прайса)` до конца хода; ключ — функция, текст и `fingerprint(срез)`.
 
@@ -120,13 +135,9 @@ def per_turn(fingerprint: Callable[[Any], Hashable]) -> Callable[[Callable[[str,
 
         @functools.wraps(fn)
         def wrapper(query_text: str, retail_rows: Any) -> _R:
-            memo = _CURRENT.get()
-            if memo is None or not isinstance(query_text, str):
+            if _CURRENT.get() is None or not isinstance(query_text, str):
                 return fn(query_text, retail_rows)
-            key = (name, query_text, fingerprint(retail_rows))
-            if _READ_ONLY.get():
-                return memo.peek(key, lambda: fn(query_text, retail_rows))
-            return memo.remember(key, lambda: fn(query_text, retail_rows))
+            return remember((name, query_text, fingerprint(retail_rows)), lambda: fn(query_text, retail_rows))
 
         return wrapper
 

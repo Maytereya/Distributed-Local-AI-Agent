@@ -93,6 +93,7 @@ class _MisVocabularies:
         # одну из четырёх значило бы вернуть класс «дезинформация ценой».
         self.synonym_candidates: dict[str, tuple[str, ...]] = {}
         self.biomat_by_service: dict[str, tuple[frozenset[str], ...]] = {}
+        self._synonym_index_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = None
 
 
 _VOCAB_CACHE: dict[tuple[str, float], _MisVocabularies] = {}
@@ -228,14 +229,34 @@ def _significant_tokens(text: str) -> list[str]:
 
 
 def _synonym_index(vocab: _MisVocabularies) -> dict[str, tuple[tuple[str, ...], str]]:
-    """Индекс «первый значащий токен синонима → (токены, ключ)» для вхождения."""
+    """Индекс «первый значащий токен синонима → (токены, ключ)» для вхождения.
 
+    Строится один раз на словарь (L-15b, шаг 6, O6): раньше — на каждый вызов, 854 синонима заново
+    (≈2 мс; резолвер и `strong_rows` зовут поиск синонима тысячи раз за прогон). Отпечаток — сами
+    словари и их размер: подменённый или дописанный словарь (так делают тесты) строит индекс заново.
+    """
+
+    stamp = (
+        vocab.synonym_candidates,
+        len(vocab.synonym_candidates),
+        vocab.synonym_to_service,
+        len(vocab.synonym_to_service),
+    )
+    cached = getattr(vocab, "_synonym_index_cache", None)
+    if (
+        cached is not None
+        and cached[0][0] is stamp[0]
+        and cached[0][2] is stamp[2]
+        and cached[0][1::2] == stamp[1::2]
+    ):
+        return cached[1]
     source = vocab.synonym_candidates or {k: (v,) for k, v in vocab.synonym_to_service.items()}
     index: dict[str, list[tuple[tuple[str, ...], str]]] = {}
     for key in source:
         toks = tuple(_significant_tokens(key))
         if toks:
             index.setdefault(toks[0], []).append((toks, key))
+    vocab._synonym_index_cache = (stamp, index)
     return index
 
 

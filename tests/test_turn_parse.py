@@ -151,7 +151,10 @@ def test_repeated_parse_in_a_turn_does_not_recompute(mini_prod_world, resolver_c
         first, after, memo = asyncio.run(turn())
     assert first > 0
     assert after == first
-    assert (memo.computed, memo.reused) == (2, 3)
+    # Разбор списка посчитан по разу на функцию; внутри первого расчёта в памяти хода оседают и позиции
+    # (`_resolve_fragment_service`, `_select_patient_price_rows` — шаг 6, O4), их повторов здесь нет.
+    parses = [key for key in memo._results if str(key[0]).endswith("_multi_price_items")]
+    assert (len(parses), memo.reused) == (2, 3)
 
 
 def test_outside_a_turn_every_call_computes(mini_prod_world, resolver_calls):  # noqa: F811
@@ -414,5 +417,7 @@ def test_shadow_reads_turn_memory_but_does_not_fill_it(mini_prod_world, resolver
 
         from_shadow, stored_by_shadow, here, again, recomputed, memo = asyncio.run(turn())
     assert from_shadow == here == again
-    assert stored_by_shadow == 0 and memo.computed == 2  # своё тень не сохранила; ход посчитал сам
+    parses = [key for key in memo._results if str(key[0]).endswith("_multi_price_items")]
+    # своё тень не сохранила; ход посчитал сам — разбор списка (позиции внутри него — тоже в памяти, шаг 6 O4)
+    assert stored_by_shadow == 0 and len(parses) == 2
     assert recomputed == 0  # посчитанное ходом тень взяла из памяти
