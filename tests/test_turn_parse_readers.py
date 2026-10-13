@@ -324,15 +324,20 @@ def test_test_assist_list_is_the_parse(catalog, mini_prod_world, monkeypatch):  
     from messengers_router.services import lab_tests
 
     run_on = "ферритин глюкоза"  # правилам не список: слов меньше четырёх и нет разделителей
-    split = "ферритин, глюкоза"  # правилам — список
+    split = "сколько стоит ферритин, глюкоза"  # правилам — список; вопрос о цене
+    bare = "ферритин, глюкоза"  # правилам — список; вопроса о цене нет
     as_list = _parsed(run_on, _phrase("ферритин", run_on, catalog, "Ферритин"), _phrase("глюкоза", run_on, catalog, "Глюкоза"))
-    as_one = _parsed(split, _phrase(split, split), status="single")
+    as_one = _parsed(split, _phrase("ферритин, глюкоза", split), status="single")
+    bare_one = _parsed(bare, _phrase(bare, bare), status="single")
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         listed = _run_with(monkeypatch, as_list, lambda: lab_tests.test_assist(None, run_on, {}))
         one = _run_with(monkeypatch, as_one, lambda: lab_tests.test_assist(None, split, {}))
+        not_price = _run_with(monkeypatch, bare_one, lambda: lab_tests.test_assist(None, bare, {}))
         rules = asyncio.run(lab_tests.test_assist(None, split, {}))  # вне хода — разрез правил
     assert "multi-item" in listed["note"] and [row["serviceName"] for row in listed["tests"]] == ["Ферритин", "Глюкоза"]
     assert "multi-item" not in one["note"] and "multi-item" in rules["note"]
+    # Разбор «одна услуга» без вопроса о цене — не мнение о списке: сегментация правил, как под off (T3, п. 2).
+    assert "multi-item" in not_price["note"]
 
 
 # --------------------------------------------------------------------------- политика сбоя под on

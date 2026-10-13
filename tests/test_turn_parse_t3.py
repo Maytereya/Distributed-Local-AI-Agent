@@ -5,7 +5,9 @@
 Классы (журнал STEP-2026-10-14-L15B-6-T3):
 - п. 1 — гард П2 в корзине из фраз судит остаток после резолвера, а не всю слабую фразу: фраза, которую
   резолвер разрешает («лактозная непереносимость», «сывороточное железо»), получает кандидатов; фраза с
-  уточнением, которого в прайсе нет («приём терапевта по ОМС»), — по-прежнему «Не распознал».
+  уточнением, которого в прайсе нет («приём терапевта по ОМС»), — по-прежнему «Не распознал»;
+- п. 2 — подбор анализов не о цене («есть ли полный чекап», «что входит в комплекс»): разбор «одна услуга»
+  не выключает сегментацию правил — выдача подбора та же, что под off; при вопросе о цене разбор читается.
 
 Две LLM, как в классе «одна или несколько»: «недоступна» (гейт) и оракул — на выборе фраз отмечает ровно
 фразы разреза случая, на выборе строк — строки с заданным началом названия, прочие места — «недоступна».
@@ -15,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -32,10 +35,10 @@ _ROWS_MARKS = ("ответить на вопрос о ценах несколь�
 _FOLLOW_UPS = ("а сколько?", "да", "2")
 
 
-def _parse_on(monkeypatch) -> None:
+def _parse_on(monkeypatch, mode: str = "on") -> None:
     from messengers_router.runtime_config import config as cfg
 
-    monkeypatch.setattr(cfg, "MR_TURN_PARSE", "on", raising=False)
+    monkeypatch.setattr(cfg, "MR_TURN_PARSE", mode, raising=False)
 
 
 class _Oracle:
@@ -128,4 +131,61 @@ def test_phrase_with_a_qualifier_the_price_lacks_stays_unrecognized(llm, mini_pr
 def test_follow_up_after_the_resolved_basket_stays_on_what_was_shown(llm, follow_up, mini_prod_world, monkeypatch):  # noqa: F811
     oracle = _Oracle(*_RESOLVED_ORACLE) if llm == "oracle" else None
     first, second = _dialog([_RESOLVED, follow_up], mini_prod_world, monkeypatch, f"t3-p2-two-{llm}-{follow_up}", oracle)[0]
+    _assert_follow_up_stays_on_what_was_shown(first, second)
+
+
+# --------------------------------------------------------------------------- п. 2: подбор анализов не о цене
+
+_NOT_PRICE = {
+    "Подскажите, есть ли у вас полный чекап здоровья?": (),  # LLM: ни одна фраза не услуга (none_fit)
+    "Мне нужно сдать ВПЧ скрининг количественным методом": ("ВПЧ скрининг количественным методом",),
+    "Что входит в анализ «Обязательный комплекс»?": ("Обязательный комплекс",),
+}
+
+
+def _assist_turns(turns: list[str], world_dir, monkeypatch, session: str, mode: str, llm: _Oracle):
+    """Ходы через эндпоинт; на ход — запись эталона и выдача подбора анализов (`test_assist`: note, строки)."""
+
+    from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
+    from messengers_router.memory import MemoryStore
+    from messengers_router.services import Services
+    from tests.test_price_turns_golden import _turn_record
+
+    _deploy(monkeypatch)
+    _parse_on(monkeypatch, mode)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+
+    async def run():
+        memory, services, out = MemoryStore(), Services(), []
+        for text in turns:
+            req = MessengerGenerateRequest(session_id=session, text=text, debug=True)
+            body = json.loads((await messenger_generate_once(req, memory=memory, services=services)).body)
+            items = ((body.get("state_update") or {}).get("debug") or {}).get("evidence", {}).get("items") or {}
+            assist = items.get("test_assist") or {}
+            picked = (assist.get("note"), [row.get("serviceName") for row in assist.get("tests") or []])
+            out.append((_turn_record(body, dict(memory.get(session).last_entities or {})), picked))
+        return out
+
+    with ev_world.FrozenWorld(world_dir, "day") as world:
+        result = asyncio.run(run())
+        rows = list(world.telemetry)
+    return result, rows
+
+
+@pytest.mark.parametrize("reply", sorted(_NOT_PRICE), ids=["hpv", "checkup", "complex"])
+def test_test_assist_without_a_price_question_keeps_the_rules_segmentation(reply, mini_prod_world, monkeypatch):  # noqa: F811
+    """Разбор «одна услуга» на подборе анализов без вопроса о цене — не мнение о списке: выдача подбора та же,
+    что под off (G8: g0162, g0282, g0313, g0359, g0416, g0604, g0693 — шаблон «уточните симптомы» вместо
+    данных), а не пустая."""
+
+    [(_, off)], _rows = _assist_turns([reply], mini_prod_world, monkeypatch, "t3-g8-off", "off", _Oracle(_NOT_PRICE[reply]))
+    [(_, on)], rows = _assist_turns([reply], mini_prod_world, monkeypatch, "t3-g8-on", "on", _Oracle(_NOT_PRICE[reply]))
+    assert rows[0]["tu_parse_status"] in ("picked", "none_fit") and rows[0]["label"] == "TEST_ASSIST"
+    assert on == off and "multi-item" in str(on[0]) and on[1], on
+
+
+@pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
+def test_follow_up_after_test_assist_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
+    reply = "Мне нужно сдать ВПЧ скрининг количественным методом"
+    [(first, _), (second, _)], _rows = _assist_turns([reply, follow_up], mini_prod_world, monkeypatch, f"t3-g8-two-{follow_up}", "on", _Oracle(_NOT_PRICE[reply]))
     _assert_follow_up_stays_on_what_was_shown(first, second)
