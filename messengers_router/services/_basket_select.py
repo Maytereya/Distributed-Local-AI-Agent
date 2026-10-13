@@ -178,25 +178,40 @@ def _positions(
 
 
 def _without_repeats(positions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Строка прайса — один раз в ответе (корзина из фраз): строки, уже показанные у позиции выше, у
-    следующей не повторяются; позиция, все строки которой уже показаны, сливается с той — её фраза названа
-    той же услугой (не «Не распознал»). Слитые позиции помечены `merged` — одна оставшаяся позиция всё равно
-    ответ корзины, а не повод уйти в путь одной услуги. Как дедуп услуг у корзины правил
+    """Строка прайса — один раз в ответе (корзина из фраз). Строка, которую выбрали у нескольких позиций,
+    остаётся у той, где строк меньше — у позиции, которую она называет точнее («Общий анализ мочи» — у «общий
+    анализ мочи», а не вариантом у «общий анализ крови»; «Триглицериды» — у «триглицериды», а не у
+    «холестерин»); при равенстве — у первой. Позиция, у которой строк не осталось, сливается с той — её фраза
+    названа той же услугой (не «Не распознал»); слитые позиции помечены `merged` — одна оставшаяся позиция всё
+    равно ответ корзины, а не повод уйти в путь одной услуги. Как дедуп услуг у корзины правил
     (`_resolve_multi_price_items`); STEP-2026-10-14-L15B-6-T3, п. 7."""
 
-    seen: set[tuple[str, str, str]] = set()
+    owner: dict[tuple[str, str, str], int] = {}
+    for index, position in enumerate(positions):
+        rows = position.get("prices") or []
+        for row in rows:
+            key = _row_key(row)
+            held = owner.get(key)
+            if held is None or len(rows) < len(positions[held].get("prices") or []):
+                owner[key] = index
     out: list[dict[str, Any]] = []
     merged = False
-    for position in positions:
-        rows: list[dict[str, Any]] = []
-        for row in position.get("prices") or []:
-            if _row_key(row) not in seen:
-                seen.add(_row_key(row))
-                rows.append(row)
-        if position.get("prices") and not rows:
+    for index, position in enumerate(positions):
+        prices = position.get("prices") or []
+        if not prices:
+            out.append(position)  # название без цены (политика сбоя) — как было
+            continue
+        kept: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for row in prices:
+            key = _row_key(row)
+            if owner.get(key) == index and key not in seen:
+                seen.add(key)
+                kept.append(row)
+        if not kept:
             merged = True
             continue
-        out.append({**position, "prices": rows} if position.get("prices") else position)
+        out.append(position if len(kept) == len(prices) else {**position, "prices": kept})
     return [{**position, "merged": True} for position in out] if merged else out
 
 

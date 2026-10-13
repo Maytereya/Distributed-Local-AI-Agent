@@ -329,6 +329,40 @@ def test_weak_positions_without_candidates_do_not_eat_the_budget(mini_prod_world
     assert "Посев мочи с идентификацией культур" in turn["text"]
 
 
+def test_a_repeated_row_stays_with_the_position_it_names(monkeypatch):
+    """Строку выбрали у двух позиций: она остаётся у той, где строк меньше (её она называет точнее), а не
+    вариантом у общей позиции — «Общий анализ мочи» у «общий анализ мочи», «Триглицериды» у «триглицериды»,
+    а не у «общий анализ крови» и «холестерин» (g0530: иначе позиции пропадали из ответа)."""
+
+    from messengers_router.choice import Choice, Status
+    from messengers_router.services import _basket_select as BS
+    from tests.test_turn_parse_readers import _phrase
+
+    catalog = [
+        {"serviceName": "Общий анализ крови (Le, Er, Hb, СОЭ)", "serviceHomecode": "1", "cost": 390},
+        {"serviceName": "Общий анализ мочи", "serviceHomecode": "2", "cost": 280},
+        {"serviceName": "Холестерол", "serviceHomecode": "3", "cost": 225},
+        {"serviceName": "Триглицериды", "serviceHomecode": "4", "cost": 190},
+    ]
+    wanted = {"общий анализ крови": {"1", "2"}, "общий анализ мочи": {"2"}, "холестерин": {"3", "4"}, "триглицериды": {"4"}}
+
+    async def fake_choose(_task, _question, options):
+        picks = []
+        for option in options:
+            fragment, _, rest = option.text.partition(" → ")
+            code = next(row["serviceHomecode"] for row in catalog if rest.startswith(row["serviceName"] + " —"))
+            if code in wanted[fragment.strip("«»")]:
+                picks.append(option.id)
+        return Choice(Status.PICKED, ids=tuple(picks))
+
+    monkeypatch.setattr(BS, "choose", fake_choose)
+    reply = "сколько стоит общий анализ крови, общий анализ мочи, холестерин, триглицериды"
+    phrases = [_phrase(text, reply) for text in wanted]
+    positions, rest = asyncio.run(BS.basket_from_phrases(reply, phrases, (), catalog))
+    shown = {position["fragment"]: [row["serviceHomecode"] for row in position["prices"]] for position in positions}
+    assert rest == [] and shown == {"общий анализ крови": ["1"], "общий анализ мочи": ["2"], "холестерин": ["3"], "триглицериды": ["4"]}, shown
+
+
 @pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
 def test_follow_up_after_the_merged_basket_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
     first, second = _dialog([_REPEAT, follow_up], mini_prod_world, monkeypatch, f"t3-repeat-two-{follow_up}", _Oracle(*_REPEAT_ORACLE))[0]
