@@ -39,6 +39,7 @@ import contextvars
 import logging
 import time
 from dataclasses import dataclass
+from collections.abc import Awaitable
 from typing import Any
 
 from . import turn_parse, turn_telemetry
@@ -182,6 +183,8 @@ async def observe_price_turn(label: str, *, user_text: str, pending: dict[str, A
 
     if not is_price_turn(label, pending) or not str(user_text or "").strip():
         return None
+    if turn_parse.mode() == "on" and mode() != "off":
+        return await _observe_parse_on(user_text)
     tu: TurnUnderstanding | None = None
     if mode() != "off":
         try:
@@ -193,6 +196,56 @@ async def observe_price_turn(label: str, *, user_text: str, pending: dict[str, A
             _CURRENT.set(tu)
             turn_telemetry.note(tu_list=len(tu.services), tu_facet=tu.facet, tu_rule=tu.services_rule)
     await _observe_phrases(user_text, tu)
+    read = _from_phrases(tu, user_text) if tu is not None else None
+    if read is not None:
+        tu = read
+        _CURRENT.set(tu)
+        turn_telemetry.note(tu_list=len(tu.services), tu_rule=tu.services_rule)
+    return tu
+
+
+async def _observe_parse_on(user_text: str) -> TurnUnderstanding | None:
+    """Под `turn_parse = on` (шаг 6, O3b): правила понимания считаются, пока LLM выбирает фразы.
+
+    Порядок: генератор фраз (CPU, в потоке) → одновременно выбор фраз LLM и правила понимания (CPU, в
+    потоке) → читатели. Правила стартуют после генератора: сегментацию сплошного списка (в) генератор
+    кладёт в память хода, правила берут её оттуда — один ключ не считается дважды. Бюджет хода прежний:
+    правила — не вызов LLM. Ответ хода тот же, что при правилах до разбора: свойство (`facet`) правила
+    считают той же `price_turn_facet`, а читатели стартуют после обоих.
+    """
+
+    facet = price_turn_facet(user_text)[0]
+    prepared = asyncio.Event()
+    rules: asyncio.Future[TurnUnderstanding | None] = asyncio.get_running_loop().create_future()
+    created = False
+
+    def factory() -> Awaitable[turn_parse.PhraseParse]:
+        nonlocal created
+        created = True
+        return _parse_phrases(user_text, facet=facet, tu=None, shadow=False, prepared=prepared, rules=rules)
+
+    # Разбор уже запущен в этом ходе (повторный вызов) — его правила ждёт его же вызов; здесь не ждём.
+    started = turn_parse.start_phrases(factory, reply=user_text)
+    if started is not None and created:
+        waiter = asyncio.ensure_future(prepared.wait())
+        try:
+            await asyncio.wait({started, waiter}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            waiter.cancel()
+    tu: TurnUnderstanding | None = None
+    try:
+        tu = await asyncio.to_thread(understand_price_turn, user_text)
+    except Exception:  # понимание — новый слой; его сбой не ломает ход, старый путь остаётся
+        logger.warning("turn_understanding_failed", exc_info=True)
+        turn_telemetry.note(tu_rule="error")
+    else:
+        _CURRENT.set(tu)
+        turn_telemetry.note(tu_list=len(tu.services), tu_facet=tu.facet, tu_rule=tu.services_rule)
+    finally:
+        if not rules.done():
+            rules.set_result(tu)
+    if started is not None:
+        await turn_parse.phrases()
     read = _from_phrases(tu, user_text) if tu is not None else None
     if read is not None:
         tu = read
@@ -237,9 +290,18 @@ async def _observe_phrases(user_text: str, tu: TurnUnderstanding | None) -> None
         await turn_parse.phrases()
 
 
-async def _parse_phrases(text: str, *, facet: str | None, tu: TurnUnderstanding | None, shadow: bool) -> turn_parse.PhraseParse:
+async def _parse_phrases(
+    text: str,
+    *,
+    facet: str | None,
+    tu: TurnUnderstanding | None,
+    shadow: bool,
+    prepared: asyncio.Event | None = None,
+    rules: asyncio.Future[TurnUnderstanding | None] | None = None,
+) -> turn_parse.PhraseParse:
     """Разбор и его след в телеметрии хода (`tu_parse_*` — без текста пациента). Тень память разбора
-    хода только читает."""
+    хода только читает. Под `on` (O3b) понимание правил считается параллельно: `prepared` — генератор
+    готов, правилам можно стартовать; `rules` — их результат для согласия разрезов."""
 
     if shadow:
         turn_parse.read_only_memory()
@@ -247,11 +309,22 @@ async def _parse_phrases(text: str, *, facet: str | None, tu: TurnUnderstanding 
     agree: str | None = None
     try:
         catalog = await asyncio.to_thread(_catalog_rows, None)
-        parse = await _turn_phrases.parse_turn_phrases(text, facet=facet, catalog=catalog, shadow=shadow)
+        parse = await _turn_phrases.parse_turn_phrases(text, facet=facet, catalog=catalog, shadow=shadow, prepared=prepared)
+        if rules is not None:
+            tu = await rules
+            if tu is None:
+                return _noted(parse, None)  # правила упали — согласия не считаем (без LLM-разреза правил)
         agree = await asyncio.to_thread(_agreement, parse, text, facet, tu, catalog)
     except Exception:  # разбор — новый слой: сбой не ломает ход
         logger.warning("turn_parse_failed", exc_info=True)
         parse = turn_parse.PhraseParse(reply=text, status=turn_parse.ParseStatus.ERROR.value, source="none", ms=int((time.monotonic() - started) * 1000))
+    finally:
+        if prepared is not None:
+            prepared.set()  # сбой до генератора — правилам не ждать
+    return _noted(parse, agree)
+
+
+def _noted(parse: turn_parse.PhraseParse, agree: str | None) -> turn_parse.PhraseParse:
     fields: dict[str, Any] = {
         "tu_parse_status": parse.status,
         "tu_parse_src": parse.source,

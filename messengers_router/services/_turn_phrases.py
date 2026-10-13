@@ -473,7 +473,9 @@ def _from_choice(
     return replace(result(cands, status, "llm"), split=split)
 
 
-async def parse_turn_phrases(reply: str, *, facet: str | None, catalog: list[dict[str, Any]], shadow: bool) -> PhraseParse:
+async def parse_turn_phrases(
+    reply: str, *, facet: str | None, catalog: list[dict[str, Any]], shadow: bool, prepared: asyncio.Event | None = None
+) -> PhraseParse:
     """Разбор ценовой реплики на фразы-услуги: без LLM, если выбор не нужен, иначе — `choose()`.
 
     Генератор и обход — в потоке (CPU); вызов LLM — место `choose_turn_phrases`. При сбое (`unavailable`,
@@ -483,10 +485,15 @@ async def parse_turn_phrases(reply: str, *, facet: str | None, catalog: list[dic
     :param facet: свойство из понимания хода (`readiness` — W без фразы о сроке)
     :param catalog: строки прайса региона
     :param shadow: тень — решение вне бюджета хода и предохранителя, очередь к LLM ≤1 с
+    :param prepared: событие «генератор готов» — под `on` по нему стартуют правила понимания (шаг 6, O3b)
     """
 
     started = time.monotonic()
-    cands, decided, rows, split = await asyncio.to_thread(_prepare, reply, facet, catalog)
+    try:
+        cands, decided, rows, split = await asyncio.to_thread(_prepare, reply, facet, catalog)
+    finally:
+        if prepared is not None:
+            prepared.set()
     if decided is None:
         options = [
             Option(id=str(k), text=f"«{p.text}»", strength=Strength.STRONG if rows[k] else Strength.WEAK, span=(p.start, p.end))
