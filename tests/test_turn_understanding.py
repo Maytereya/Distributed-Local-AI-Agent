@@ -4,6 +4,8 @@
 off / shadow / on — `test_price_turns_golden.py`. Здесь — то, чего сквозной тест не видит:
 - встречный свип: полное название прайса как запрос — не список. Сплиттер режет по `,` `;` `и`
   `+` `/`, а они живут и внутри названий (110 из 404 строк мини-прод с запятой);
+- разрез понимания = разрез корзины: понимание режет сырую реплику, корзина — после подстановок
+  синонимов кода (L-15b, шаг 1);
 - свойство решают существующие детекторы, и «за сколько» без слова о сроке — цена;
 - тень не действует, понимание не переживает ход, телеметрия — только числа и ключи.
 """
@@ -80,6 +82,87 @@ def test_list_is_understood_once_with_catalog_names(mini_prod_world):  # noqa: F
     assert got.is_list and got.services_rule == "list_split"
     assert got.service_names == ("Ферритин", "Глюкоза", "Липидограмма")
     assert got.facet == "price"
+
+
+# --- Разрез понимания = разрез корзины (L-15b, шаг 1; STEP-2026-10-13-L15B-1-PARSE-CACHE) ---------
+#
+# Понимание решает «реплика — список» по сырому тексту (`price_list_services(user_text)`), корзина
+# режет тот же текст после подстановок синонимов кода (`_multi_price_items(_apply_service_synonyms
+# (query))`, `price_info`). Защиты понимания только сужают (список → не список), поэтому на списке
+# разрезы обязаны совпасть по составу: иначе понимание шлёт в корзину список, который она соберёт
+# иначе или не соберёт, и выбор LLM получает одну строку на всю реплику («маршрут ≠ корзина», совет
+# сессии 13.10). На стенде совпали все 83 хода-списка; расхождение возможно только через
+# `_SERVICE_SYNONYM_SUBS` — поэтому каждая подстановка проверяется внутри позиции списка.
+
+# Как пациенты пишут слова, которые подстановки кода меняют («забор» → «взятие», «электромиография»
+# → «ЭМГ»). Новая подстановка без фразы здесь — красный `test_every_code_synonym_has_a_phrase_here`.
+_SUBSTITUTED_PHRASES = (
+    "забор крови из вены",
+    "Забор крови",
+    "заборы крови из пальца",
+    "электромиография",
+    "электромиографию нижних конечностей",
+    "ЭЛЕКТРОМИОГРАФИЯ",
+)
+_LIST_AROUND = ("сколько стоит ферритин, {}, глюкоза", "{} и ферритин", "оак, оам, {}", "цена: глюкоза; {}")
+_LISTS = (
+    "сколько стоит ферритин, глюкоза, холестерин",
+    "оак, оам",
+    "ферритин и глюкоза",
+    "ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА",
+    "сколько стоит ттг, т4 свободный",
+    "Нужны цены на список анализов: ТТГ, ферритин, витамин D, глюкоза",
+)
+
+
+def _sub_patterns() -> list:
+    from messengers_router.services._prices_helpers import _SERVICE_SYNONYM_SUBS
+
+    return [pattern for pattern, _ in _SERVICE_SYNONYM_SUBS]
+
+
+def _cuts(text: str) -> tuple[list[str], list[str]]:
+    """(разрез понимания, разрез корзины) — названия позиций каталога; понимание: пусто — не список."""
+
+    from messengers_router.services import _prices_helpers as helpers
+
+    names, _ = helpers.price_list_services(text)
+    items, _ = helpers._multi_price_items(helpers._apply_service_synonyms(text), helpers._catalog_rows(None))
+    return list(names), [str(item["service_name"]) for item in items]
+
+
+def _catalog_lists() -> list[str]:
+    """Списки из коротких названий мини-прод (детерминированно): по три через запятую и через «и»."""
+
+    plain = [name for name in _names() if len(name) < 30 and not any(mark in name for mark in (",", "(", " и ", "+", "/"))]
+    step = max(1, len(plain) // 18)
+    picked = plain[::step][:18]
+    triples = [picked[i : i + 3] for i in range(0, len(picked) - 2, 3)]
+    return [f"сколько стоит {', '.join(t)}" for t in triples] + [" и ".join(t[:2]) for t in triples]
+
+
+def test_every_code_synonym_has_a_phrase_here():
+    uncovered = [p.pattern for p in _sub_patterns() if not any(p.search(phrase) for phrase in _SUBSTITUTED_PHRASES)]
+    assert uncovered == []
+
+
+@pytest.mark.parametrize("pattern", _sub_patterns(), ids=lambda p: p.pattern)
+def test_code_synonym_inside_a_list_does_not_change_the_cut(pattern, mini_prod_world):  # noqa: F811
+    replies = [around.format(phrase) for phrase in _SUBSTITUTED_PHRASES if pattern.search(phrase) for around in _LIST_AROUND]
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        cuts = {text: _cuts(text) for text in replies}
+    assert all(understood for understood, _ in cuts.values()), "реплика перестала быть списком — тест пуст"
+    diverged = {text: cut for text, cut in cuts.items() if sorted(cut[0]) != sorted(cut[1])}
+    assert diverged == {}
+
+
+def test_list_cut_of_understanding_is_the_cut_of_the_basket(mini_prod_world):  # noqa: F811
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        cuts = {text: _cuts(text) for text in (*_LISTS, *_catalog_lists())}
+    lists = {text: cut for text, cut in cuts.items() if cut[0]}
+    assert len(lists) >= len(cuts) * 3 // 4, "мало реплик-списков — тест пуст"
+    diverged = {text: cut for text, cut in lists.items() if sorted(cut[0]) != sorted(cut[1])}
+    assert diverged == {}
 
 
 def _turns(texts: list[str], world: ev_world.FrozenWorld) -> list[tuple[dict, dict | None]]:
