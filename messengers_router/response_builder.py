@@ -173,13 +173,17 @@ def _sync_price_family_context(state: SessionState, payload: dict[str, Any]) -> 
 
 def _sync_policy_context(state: SessionState, payload: dict[str, Any]) -> None:
     """
-    Ответ политики силы совпадения (L-13: «не нашёл», названия без цен) — в контексте слова пациента.
+    После ответа политики силы совпадения (L-13: «не нашёл», названия без цен) услуги в контексте нет.
 
     Цены пациент не увидел и услугу не выбрал, а в состоянии оставалась строка, которую до политики
-    подставило заземление сущностей («гастроскопия» → «Гастрин»): контекст сессии не равнялся
-    показанному (BUG-2026-10-13-L13-CONTEXT-LEAK). Теперь в нём — фраза пациента, как её назвал
-    ответ. Только для ответов политики (под `price_match_policy = on`); прочие ценовые ходы — как
-    раньше.
+    подставило заземление сущностей («гастроскопия» → «Гастрин»), и «сколько стоит?» следующим ходом
+    называл её цену (BUG-2026-10-13-L13-CONTEXT-LEAK). Фраза пациента вместо строки не спасает:
+    следующий ход заземляет её заново по буквам (каталожная инъекция роутера) в ту же чужую строку.
+    Решение владельца 13.10, вариант (а): услугу из контекста снимать — короткий вопрос следующим
+    ходом получит уточнение («Скажите название услуги»), а не чужую цену: дезинформация ценой строго
+    хуже уточнения. Третья форма ответа политики — перевод на оператора — до `build_*` не доходит:
+    там контекст целиком снимает `clear_on_handoff` (`patient_routing_stream`). Только для ответов
+    политики (под `price_match_policy = on`); прочие ценовые ходы — как раньше.
 
     :param state: состояние сессии
     :param payload: payload `price` или `service_bundle`
@@ -188,12 +192,7 @@ def _sync_policy_context(state: SessionState, payload: dict[str, Any]) -> None:
 
     if not str(payload.get("note") or "").startswith("price_match_policy"):
         return
-    used = payload.get("entities_used")
-    phrase = str(used.get("service_name_effective") or "").strip() if isinstance(used, dict) else ""
-    if phrase:
-        state.last_entities["service_name"] = phrase
-    else:
-        state.last_entities.pop("service_name", None)
+    state.last_entities.pop("service_name", None)
     state.last_entities.pop("test_name", None)
 
 
