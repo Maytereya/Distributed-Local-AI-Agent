@@ -112,3 +112,4 @@ tests/test_price_match_policy.py
 tests/test_basket_select.py
 tests/test_readiness_select.py
 tests/test_turn_parse.py
+tests/test_price_one_or_many_class.py
