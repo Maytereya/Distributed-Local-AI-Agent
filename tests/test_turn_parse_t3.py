@@ -7,7 +7,9 @@
   резолвер разрешает («лактозная непереносимость», «сывороточное железо»), получает кандидатов; фраза с
   уточнением, которого в прайсе нет («приём терапевта по ОМС»), — по-прежнему «Не распознал»;
 - п. 2 — подбор анализов не о цене («есть ли полный чекап», «что входит в комплекс»): разбор «одна услуга»
-  не выключает сегментацию правил — выдача подбора та же, что под off; при вопросе о цене разбор читается.
+  не выключает сегментацию правил — выдача подбора та же, что под off; при вопросе о цене разбор читается;
+- п. 4 — путь одной услуги (`price_info`, `service_bundle_info`, `test_assist`): разбор решил одну слабую
+  услугу выбором LLM — строки ищутся по её фразе, а не по всей реплике.
 
 Две LLM, как в классе «одна или несколько»: «недоступна» (гейт) и оракул — на выборе фраз отмечает ровно
 фразы разреза случая, на выборе строк — строки с заданным началом названия, прочие места — «недоступна».
@@ -188,4 +190,61 @@ def test_test_assist_without_a_price_question_keeps_the_rules_segmentation(reply
 def test_follow_up_after_test_assist_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
     reply = "Мне нужно сдать ВПЧ скрининг количественным методом"
     [(first, _), (second, _)], _rows = _assist_turns([reply, follow_up], mini_prod_world, monkeypatch, f"t3-g8-two-{follow_up}", "on", _Oracle(_NOT_PRICE[reply]))
+    _assert_follow_up_stays_on_what_was_shown(first, second)
+
+
+# --------------------------------------------------------------------------- п. 4: путь одной услуги — по фразе разбора
+
+_SINGLE = "Сколько стоит и когда готов результат посева мочи с идентификацией культур"
+_URINE = "Посев мочи с идентификацией культур — 1 050"
+
+
+def test_one_weak_phrase_is_searched_by_the_phrase_not_the_reply(mini_prod_world, monkeypatch):  # noqa: F811
+    """LLM разбора выбрала одну слабую фразу («посева мочи») — путь одной услуги ищет по ней: слова вопроса
+    («когда готов результат … с идентификацией культур») не топят её до «Уточните название» (g0609, r0141)."""
+
+    [turn], [row] = _dialog([_SINGLE], mini_prod_world, monkeypatch, "t3-single-phrase", _Oracle(("посева мочи",)))
+    assert (row["tu_parse_status"], row["tu_parse_n"]) == ("picked", 1)
+    assert _URINE in turn["text"] and "Уточните" not in turn["text"], turn["text"]
+
+
+def _slot(parse, call, monkeypatch):
+    from tests.test_turn_parse_readers import _run_with
+
+    _deploy(monkeypatch)
+    return _run_with(monkeypatch, parse, call)
+
+
+def _picked_one(reply: str, text: str):
+    from messengers_router import turn_parse
+    from messengers_router.choice import Strength
+
+    start = reply.index(text)
+    phrase = turn_parse.ParsedPhrase(text=text, start=start, end=start + len(text), strength=Strength.WEAK)
+    return turn_parse.PhraseParse(reply=reply, status="picked", source="llm", items=(phrase,))
+
+
+_READER_REPLY = {
+    "service_bundle_info": _SINGLE,
+    "test_assist": "Подскажите цену посева мочи для ребенка 3 лет в субботу",  # по всей реплике — «нет совпадений»
+}
+
+
+@pytest.mark.parametrize("reader", sorted(_READER_REPLY))
+def test_other_one_service_readers_search_by_the_phrase(reader, mini_prod_world, monkeypatch):  # noqa: F811
+    from messengers_router.services import Services
+
+    reply = _READER_REPLY[reader]
+    entities = {"__price_question": True, "__runtime_llm_mode": "hybrid"}
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        services = Services()
+        out = _slot(_picked_one(reply, "посева мочи"), lambda: getattr(services, reader)(reply, dict(entities)), monkeypatch)
+    rows = out.get("tests") if reader == "test_assist" else (out.get("retail_prices") or out.get("family_variants"))
+    assert [row["serviceName"] for row in rows or []][:1] == ["Посев мочи с идентификацией культур"], out
+
+
+@pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
+def test_follow_up_after_the_one_phrase_answer_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
+    first, second = _dialog([_SINGLE, follow_up], mini_prod_world, monkeypatch, f"t3-single-two-{follow_up}", _Oracle(("посева мочи",)))[0]
+    assert _URINE in first["text"]
     _assert_follow_up_stays_on_what_was_shown(first, second)

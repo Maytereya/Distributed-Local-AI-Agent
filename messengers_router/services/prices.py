@@ -68,6 +68,7 @@ from ._prices_helpers import (
     query_has_unsatisfiable_qualifier,
     resolve_price_service_name_from_catalog,
     restrict_rows_to_family_letter,
+    single_weak_phrase,
 )
 from ._regions import (
     _has_explicit_non_samara_regions,
@@ -247,6 +248,12 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             "entities_used": entities,
         }
     doctor_query_specialty = _extract_specialty_from_text(query_text) if (doctor_id and has_price_request) else ""
+    if not doctor_id:
+        # Под `turn_parse = on` разбор решил одну слабую услугу выбором LLM — строки ищем по её фразе, а не по
+        # всей реплике (как корзина ищет позицию по фрагменту); выбор LLM по-прежнему видит реплику целиком.
+        phrase = single_weak_phrase(turn_parse.acting_for(str(query or "")))
+        if phrase:
+            query_text = _apply_service_synonyms(phrase)
 
     if doctor_id:
         # Для doctor-specific PRICE не приземляемся в городский retail-catalog:
@@ -518,6 +525,10 @@ async def service_bundle_info(
             "note": "service_bundle_info: generic_uzi_clarify",
             "entities_used": entities,
         }
+    # Под `turn_parse = on` одна слабая услуга, выбранная LLM разбора, — поиск по её фразе (как в `price_info`).
+    phrase = single_weak_phrase(turn_parse.acting_for(str(query or "")))
+    if phrase:
+        query_text = _apply_service_synonyms(phrase)
     try:
         retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
     except Exception:
