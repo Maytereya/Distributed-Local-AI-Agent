@@ -3301,9 +3301,14 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
     Сильная фраза — её строки по данным МИС (`strong`), без резолвера. Слабая — кандидаты правил: синонимы
     кода к фразе (`_apply_service_synonyms`), затем догадка резолвера и две её верхние строки, как у
     позиции корзины правил; не угадали — строк нет (`prices` пусто). Какие строки — та услуга, решает
-    выбор LLM корзины; здесь только кандидаты. Слабая фраза с уточнением, которого в прайсе нет вовсе
-    («приём терапевта по ОМС»), кандидатов не получает (`unsatisfiable`): честное «Не распознал», а не
-    платные приёмы «почти того» — решение владельца П2, как у пути одной услуги (`select_price_rows`).
+    выбор LLM корзины; здесь только кандидаты. Слабая фраза, которую резолвер не разрешил и в которой есть
+    уточнение, которого в прайсе нет вовсе («приём терапевта по ОМС»), кандидатов не получает
+    (`unsatisfiable`): честное «Не распознал», а не платные приёмы «почти того» — решение владельца П2, как
+    у пути одной услуги (`select_price_rows`). Гард судит только остаток после резолвера, как корзина
+    правил (`_multi_price_items`, BUG-2026-09-07-GUARD-OVER-BLOCK): фразу, которую резолвер разрешил
+    («лактозная непереносимость» → «Непереносимость лактозы»), его собственный гард уже проверил против
+    найденной услуги — слово пациента, которого нет в названиях прайса, тут не уточнение
+    (STEP-2026-10-14-L15B-6-T3, п. 1).
 
     :param phrases: фразы разбора (`text`, `rows`)
     :param retail_rows: строки прайса региона
@@ -3317,10 +3322,15 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
         if strong:
             items.append({"service_name": fragment, "prices": strong, "fragment": fragment, "strong": strong})
             continue
-        if query_has_unsatisfiable_qualifier(fragment, retail_rows) and not query_names_service_in_other_words(fragment, retail_rows):
+        service_name = _resolve_fragment_service(_apply_service_synonyms(fragment), retail_rows)
+        if (
+            not service_name
+            and query_has_unsatisfiable_qualifier(fragment, retail_rows)
+            and not query_names_service_in_other_words(fragment, retail_rows)
+        ):
+            # Остаток после резолвера — вся фраза: уточнение без услуги в прайсе — «Не распознал» (П2).
             items.append({"service_name": fragment, "prices": [], "fragment": fragment, "strong": [], "unsatisfiable": True})
             continue
-        service_name = _resolve_fragment_service(_apply_service_synonyms(fragment), retail_rows)
         top_rows = _select_patient_price_rows(retail_rows, service_name, limit=2) if service_name else []
         items.append(
             {
