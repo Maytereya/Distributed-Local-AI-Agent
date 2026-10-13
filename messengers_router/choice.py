@@ -16,7 +16,12 @@ LLM-слоёв делали это каждый по-своему: три спо
   политику задаёт клиент;
 - кэшируются только внятные ответы (PICKED, NONE_FIT, OUTCOME), коротко (`choose_cache_ttl_s`);
   сбой не кэшируется;
-- текст пациента — данные, а не инструкция (SEC-3): он в роли user, без «ёлочек» и переносов строк.
+- текст пациента — данные, а не инструкция (SEC-3): он в роли user, без «ёлочек» и переносов строк;
+- непересекающийся выбор (`Task.disjoint`, L-15b шаг 4): у вариантов — спаны в реплике, два выбранных
+  пересекаются → INVALID (схема пересечение не выразит — проверяет код), такой ответ не кэшируется;
+- тень (`shadow=True`, решение владельца 13.10, Q1): решение считается параллельно ходу, но вне его
+  бюджета и предохранителя — бюджет не тратится, предохранитель только читается; в телеметрии хода
+  записи `llm[]` и `choose[]` тени помечены `shadow: true`.
 
 Промпт задачи — `prompts/choose_<задача>.txt` и `app_data/prompts/mr_choose_<задача>.txt`: над
 строкой `<<DATA>>` — инструкция (роль system), под ней — данные хода с `<<QUESTION>>` и
@@ -69,11 +74,13 @@ class Status(str, Enum):
 
 @dataclass(frozen=True)
 class Option:
-    """Вариант выбора: `id` — для кода (LLM его не видит), `text` — что видит LLM."""
+    """Вариант выбора: `id` — для кода (LLM его не видит), `text` — что видит LLM; `span` — где вариант
+    стоит в реплике (`[start, end)`), если задача выбирает её непересекающиеся куски."""
 
     id: str
     text: str
     strength: Strength = Strength.WEAK
+    span: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +110,8 @@ class Task:
     :param outcomes: особые исходы задачи («urgent») — кроме выбора
     :param reasons: коды причин пустого выбора
     :param max_terms: сколько терминов второго круга поиска просить (не больше 3)
+    :param disjoint: выбранные варианты не пересекаются по `Option.span` (куски одной реплики);
+        пересечение — INVALID
     """
 
     name: str
@@ -111,6 +120,7 @@ class Task:
     outcomes: tuple[str, ...] = ()
     reasons: tuple[str, ...] = ()
     max_terms: int = 0
+    disjoint: bool = False
     num_predict: int = 128
     timeout_s: float = 8.0
     queue_timeout_ms: int = 2000
@@ -230,6 +240,8 @@ def _judge(task: Task, options: Sequence[Option], data: Any) -> _Verdict:
             indices.append(index)
     if len(indices) > (task.max_picks or len(options)):
         return _Verdict(Status.INVALID)
+    if task.disjoint and _overlapping(options, indices):
+        return _Verdict(Status.INVALID)
     outcome = data.get("outcome", _NONE) if task.outcomes else _NONE
     reason = data.get("reason", _NONE) if task.reasons else _NONE
     if outcome not in (_NONE, *task.outcomes) or reason not in (_NONE, *task.reasons):
@@ -248,6 +260,13 @@ def _judge(task: Task, options: Sequence[Option], data: Any) -> _Verdict:
     if indices:
         return _Verdict(Status.PICKED, indices=tuple(indices), **common)
     return _Verdict(Status.NONE_FIT, **common)
+
+
+def _overlapping(options: Sequence[Option], indices: Sequence[int]) -> bool:
+    """Пересекаются ли спаны выбранных вариантов (варианты без спана не сравниваются)."""
+
+    spans = [span for span in (options[i].span for i in indices) if span is not None]
+    return any(a0 < b1 and b0 < a1 for k, (a0, a1) in enumerate(spans) for b0, b1 in spans[k + 1 :])
 
 
 def parse_answer(task: Task, options: Sequence[Option], raw: str) -> Choice:
@@ -311,13 +330,21 @@ def _cache_put(key: str, verdict: _Verdict) -> None:
 # --------------------------------------------------------------------------- выбор
 
 
-async def choose(task: Task, question: str, options: Sequence[Option], *, legacy: LegacyWire | None = None) -> Choice:
+async def choose(
+    task: Task,
+    question: str,
+    options: Sequence[Option],
+    *,
+    legacy: LegacyWire | None = None,
+    shadow: bool = False,
+) -> Choice:
     """Какие варианты подходят к реплике пациента — решает LLM, разбирает и проверяет код.
 
     :param task: задача выбора
     :param question: реплика пациента (как написал он сам)
     :param options: кандидаты, найденные правилами и поиском по данным
     :param legacy: прежний промпт клиента — перенос без смены промпта
+    :param shadow: решение тени — вне бюджета хода и предохранителя, в телеметрии `shadow: true`
     :return: выбор; при сбое — UNAVAILABLE / INVALID, политику выбирает вызывающий
     """
 
@@ -332,11 +359,11 @@ async def choose(task: Task, question: str, options: Sequence[Option], *, legacy
             schema, gen_options = legacy.fmt, dict(legacy.options)
     except (OSError, ValueError) as exc:  # промпт задачи сломан или пропал на хосте — ход не роняем
         logger.error("choose_prompt_broken: %s %s", task.name, exc)
-        return _noted(task, Choice(Status.UNAVAILABLE), len(options))
+        return _noted(task, Choice(Status.UNAVAILABLE), len(options), shadow=shadow)
     key = _cache_key(task.site, system, user, schema)
     hit = _cache_get(key)
     if hit is not None:
-        return _noted(task, _choice(hit, options, cached=True), len(options))
+        return _noted(task, _choice(hit, options, cached=True), len(options), shadow=shadow)
     started = time.monotonic()
     try:
         raw, _usage = await llm_runtime.generate_structured(
@@ -348,10 +375,11 @@ async def choose(task: Task, question: str, options: Sequence[Option], *, legacy
             timeout_s=task.timeout_s,
             queue_timeout_ms=task.queue_timeout_ms,
             inherit_options=legacy is not None,
+            shadow=shadow,
         )
     except Exception as exc:  # сбой LLM — UNAVAILABLE; что ответить пациенту, решает вызывающий
         logger.warning("choose_unavailable: %s %s %s", task.name, type(exc).__name__, llm_runtime.error_detail(exc) or "-")
-        return _noted(task, Choice(Status.UNAVAILABLE, latency_ms=_ms(started)), len(options))
+        return _noted(task, Choice(Status.UNAVAILABLE, latency_ms=_ms(started)), len(options), shadow=shadow)
     if legacy is None:
         try:
             data = json.loads(str(raw or "").strip())
@@ -363,14 +391,14 @@ async def choose(task: Task, question: str, options: Sequence[Option], *, legacy
     if verdict.status is Status.INVALID:
         logger.warning("choose_invalid: %s %r", task.name, str(raw or "")[:200])
     _cache_put(key, verdict)
-    return _noted(task, _choice(verdict, options, latency_ms=_ms(started)), len(options))
+    return _noted(task, _choice(verdict, options, latency_ms=_ms(started)), len(options), shadow=shadow)
 
 
 def _ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
 
 
-def _noted(task: Task, choice: Choice, count: int) -> Choice:
+def _noted(task: Task, choice: Choice, count: int, *, shadow: bool = False) -> Choice:
     turn_telemetry.note_choice(
         task.name,
         choice.status.value,
@@ -379,5 +407,6 @@ def _noted(task: Task, choice: Choice, count: int) -> Choice:
         cached=choice.cached,
         reason=choice.reason,
         outcome=choice.outcome,
+        shadow=shadow,
     )
     return choice

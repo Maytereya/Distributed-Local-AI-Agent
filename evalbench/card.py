@@ -166,7 +166,8 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
     twins = [t for t in turns if t.get("expect_urgent") is False]
     spec = Counter(t["specialty_verdict"] for t in turns if t.get("specialty_verdict"))
     # Решения модуля выбора (ход (в)) — из телеметрии хода; SLO: UNAVAILABLE <2%, p95 выбора <4 с.
-    choices = [c for t in turns for c in (t.get("telemetry") or {}).get("choose") or []]
+    # Решения тени (`shadow: true`, L-15b шаг 4) на ответ не влияли — в решения хода не входят.
+    choices = [c for t in turns for c in (t.get("telemetry") or {}).get("choose") or [] if not c.get("shadow")]
     choose_status = Counter(c["status"] for c in choices)
     llm = Counter(c["outcome"] for t in turns for c in t.get("llm_calls") or [])
     sites = Counter(c["site"] for t in turns for c in t.get("llm_calls") or [])

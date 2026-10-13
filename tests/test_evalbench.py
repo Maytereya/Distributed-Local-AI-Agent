@@ -440,3 +440,8 @@ def test_card_counts_differing_answers_and_choice_slo():
     ]
     m = card.metrics(turns, {})
     assert (m["choose_n"], m["choose_unavailable"], m["choose_invalid"], m["choose_p95_ms"]) == (3, 1, 0, 3000)
+    # Решение тени (L-15b, шаг 4) на ответ не влияло — в решения хода не входит.
+    shadow = {"task": "turn_phrases", "status": "unavailable", "ms": 5000, "shadow": True}
+    turns[0]["telemetry"]["choose"].append(shadow)
+    m = card.metrics(turns, {})
+    assert (m["choose_n"], m["choose_unavailable"], m["choose_p95_ms"]) == (3, 1, 3000)

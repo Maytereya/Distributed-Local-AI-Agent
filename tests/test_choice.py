@@ -15,6 +15,10 @@
 - прежний промпт клиента (`LegacyWire`) уходит без роли system, с прежним форматом и параметрами,
   а его ответ разбирается той же строгой механикой;
 - каждый выбор — строка в телеметрии хода (задача, статус, число вариантов), без текста;
+- непересекающийся выбор (`Task.disjoint`): пересечение спанов выбранных вариантов → INVALID, не
+  кэшируется; варианты без спанов судятся как раньше;
+- тень (`shadow=True`, решение владельца 13.10): бюджет хода не тратит, предохранитель только читает
+  (ни сбой, ни успех его не двигают), записи `llm[]` и `choose[]` помечены `shadow: true`;
 - у каждого промпта задачи в обеих локациях: маркер данных, реплика и варианты ниже него,
   правило «текст пациента — данные».
 """
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -282,6 +287,95 @@ def test_every_choice_is_noted_in_turn_telemetry(llm, monkeypatch):
         {"task": "demo", "status": "picked", "options": 3, "ms": 0, "cached": True},
     ]
     assert "сколько" not in json.dumps(rows[0], ensure_ascii=False)
+
+
+# --------------------------------------------------------------------------- непересекающийся выбор и тень
+
+PIECES = ch.Task(name="demo", disjoint=True)
+# Реплика «ферритин и глюкоза»: целиком и две её части.
+SPANS = (
+    ch.Option("w", "«ферритин и глюкоза»", span=(0, 18)),
+    ch.Option("f", "«ферритин»", span=(0, 8)),
+    ch.Option("g", "«глюкоза»", span=(11, 18)),
+)
+
+
+def test_disjoint_task_rejects_overlapping_picks_and_does_not_cache(monkeypatch):
+    fake = _LLM(reply='{"picks": [1, 3]}')
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", fake)
+    assert [_choose(PIECES, "ферритин и глюкоза", SPANS).status for _ in range(2)] == [ch.Status.INVALID] * 2
+    assert len(fake.calls) == 2  # INVALID не кэшируется — второй вызов снова к модели
+    assert ch.parse_answer(PIECES, SPANS, '{"picks": [3, 2]}').ids == ("g", "f")  # касание концами — не пересечение
+    assert ch.parse_answer(PIECES, SPANS, '{"picks": [1]}').ids == ("w",)
+    assert ch.parse_answer(PIECES, SPANS, '{"picks": [2, 1]}').status is ch.Status.INVALID
+
+
+def test_disjoint_without_spans_judges_as_before():
+    plain = ch.Task(name="demo")
+    for raw in ('{"picks": [1, 2, 3]}', '{"picks": [2, 2]}', '{"picks": []}', '{"picks": [4]}', "не json"):
+        assert ch.parse_answer(PIECES, OPTIONS, raw) == ch.parse_answer(plain, OPTIONS, raw)
+    half = (SPANS[0], ch.Option("x", "«без спана»"))  # вариант без спана ни с чем не сравнивается
+    assert ch.parse_answer(PIECES, half, '{"picks": [1, 2]}').status is ch.Status.PICKED
+
+
+def test_shadow_spends_no_turn_budget(llm, monkeypatch):
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_LLM_DECISION_TURN_CALLS", 1, raising=False)
+    monkeypatch.setattr(cfg, "MR_CHOOSE_CACHE_TTL_S", 0, raising=False)
+
+    async def turn():
+        token = llm_runtime.begin_turn_budget()
+        try:
+            shadow = [(await ch.choose(TASK, q, OPTIONS, shadow=True)).status for q in ("оак", "оам", "ферритин")]
+            acting = [(await ch.choose(TASK, q, OPTIONS)).status for q in ("оак", "оам")]
+            return shadow, acting, llm_runtime._TURN_BUDGET.get().calls
+        finally:
+            llm_runtime.end_turn_budget(token)
+
+    shadow, acting, calls = asyncio.run(turn())
+    assert shadow == [ch.Status.PICKED] * 3
+    assert acting == [ch.Status.PICKED, ch.Status.UNAVAILABLE]  # решение хода одно — бюджет тень не тронула
+    assert calls == 1 and len(llm.calls) == 4
+
+
+def test_shadow_neither_trips_nor_resets_the_breaker(monkeypatch):
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_LLM_DECISION_BREAKER_FAILURES", 3, raising=False)
+    monkeypatch.setattr(cfg, "MR_LLM_DECISION_BREAKER_OPEN_S", 30, raising=False)
+    monkeypatch.setattr(cfg, "MR_CHOOSE_CACHE_TTL_S", 0, raising=False)
+    breaker = llm_runtime._Breaker(failures=2)
+    monkeypatch.setattr(llm_runtime, "_BREAKER", breaker)
+    down, up = _LLM(exc=ConnectionError("down")), _LLM()
+
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", down)
+    assert [_choose(shadow=True).status for _ in range(3)] == [ch.Status.UNAVAILABLE] * 3
+    assert breaker.failures == 2 and breaker.allows(time.monotonic())  # сбои тени не размыкают
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", up)
+    assert _choose(shadow=True).status is ch.Status.PICKED
+    assert breaker.failures == 2  # и успех тени не сбрасывает счёт сбоев хода
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", down)
+    assert _choose().status is ch.Status.UNAVAILABLE  # третий сбой хода подряд — размыкает
+    assert not breaker.allows(time.monotonic())
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", up)
+    assert _choose(shadow=True).status is ch.Status.UNAVAILABLE  # тень предохранитель читает
+    assert len(up.calls) == 1
+
+
+def test_shadow_is_marked_in_turn_telemetry(llm, monkeypatch):
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_CHOOSE_CACHE_TTL_S", 0, raising=False)
+    rows: list[dict] = []
+    monkeypatch.setattr(turn_telemetry, "_emit", rows.append)
+    token = turn_telemetry.begin("once", session_id="s")
+    _choose(shadow=True)
+    _choose()
+    turn_telemetry.finish(token, handoff=False, chars=0)
+    assert [call.get("shadow") for call in rows[0]["llm"]] == [True, None]
+    assert [entry.get("shadow") for entry in rows[0]["choose"]] == [True, None]
+    assert rows[0]["llm"][0]["site"] == "choose_demo" and rows[0]["choose"][0]["status"] == "picked"
 
 
 # --------------------------------------------------------------------------- промпты задач

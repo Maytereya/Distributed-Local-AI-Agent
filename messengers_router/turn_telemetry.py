@@ -20,6 +20,8 @@
   ней считают карточка стенда и `HarnessClient`;
 - `choose` — решения модуля выбора (ход (в)): задача, статус, сколько вариантов, мс, из кэша ли,
   код причины или исход — без текста реплики и вариантов;
+- `shadow: true` у записей `llm` и `choose` — решение тени (L-15b, шаг 4): считалось параллельно ходу
+  вне его бюджета и на ответ не влияло; карточки и сводки считают решения хода без них;
 - `world` — модель и срезы (имена файлов) — раз в 5 минут, иначе тот же `world_id`.
 
 Чего НЕ пишется: текст пациента и ответа, значения сущностей, сырой session_id (только
@@ -102,8 +104,10 @@ def note_llm(
     queue_ms: int = 0,
     usage: dict[str, int] | None = None,
     err: str | None = None,
+    shadow: bool = False,
 ) -> None:
-    """Вызов LLM в ходе; `err` — корневая причина сбоя (`EHOSTDOWN`…), отдельно от `outcome`."""
+    """Вызов LLM в ходе; `err` — корневая причина сбоя (`EHOSTDOWN`…), отдельно от `outcome`;
+    `shadow` — вызов тени (на ответ хода не влиял)."""
 
     turn = _TURN.get()
     if turn is None:
@@ -118,6 +122,8 @@ def note_llm(
             entry["in_tok"] = usage["prompt_eval_count"]
         if "eval_count" in usage:
             entry["out_tok"] = usage["eval_count"]
+    if shadow:
+        entry["shadow"] = True
     turn.llm.append(entry)
 
 
@@ -130,8 +136,10 @@ def note_choice(
     cached: bool = False,
     reason: str = "",
     outcome: str = "",
+    shadow: bool = False,
 ) -> None:
-    """Решение модуля выбора (`choose()`): задача, статус, число вариантов, мс — без текста."""
+    """Решение модуля выбора (`choose()`): задача, статус, число вариантов, мс — без текста; `shadow` —
+    решение тени."""
 
     turn = _TURN.get()
     if turn is None:
@@ -143,6 +151,8 @@ def note_choice(
         entry["reason"] = reason
     if outcome:
         entry["outcome"] = outcome
+    if shadow:
+        entry["shadow"] = True
     turn.choices.append(entry)
 
 

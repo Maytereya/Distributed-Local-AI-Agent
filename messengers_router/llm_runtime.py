@@ -399,6 +399,7 @@ async def generate_structured(
     queue_timeout_ms: int,
     inherit_options: bool = False,
     llm: str | None = None,
+    shadow: bool = False,
 ) -> tuple[str, dict[str, int]]:
     """Короткое решение по закрытому списку (ход (в) рефакторинга, `choose()`).
 
@@ -418,6 +419,10 @@ async def generate_structured(
     :param schema: JSON Schema ответа (dict); "json" или None — у прежнего промпта
     :param options: параметры генерации места вызова — целиком
     :param inherit_options: поверх общих настроек, как было до переноса (только прежний промпт)
+    :param shadow: решение тени (L-15b, шаг 4; решение владельца 13.10, Q1) — параллельно ходу, но вне
+        его бюджета и предохранителя: бюджет не проверяется и не тратится, предохранитель только
+        читается (разомкнут — вызова нет), ни сбой, ни успех тени его не двигают; в телеметрии хода —
+        `shadow: true`. Так тень не меняет ни одного ответа хода
     :return: (сырой текст ответа модели, счётчики токенов)
     :raises: `LLM_UNAVAILABLE_ERRORS` и `asyncio.TimeoutError` — их ловит вызывающий; бюджет хода
         и предохранитель (L-11) — без вызова модели
@@ -425,10 +430,10 @@ async def generate_structured(
 
     max_calls, max_turn_s, breaker_failures, breaker_open_s = _decision_limits()
     if not _BREAKER.allows(_time.monotonic()):
-        turn_telemetry.note_llm(site, "circuit_open", 0)
+        turn_telemetry.note_llm(site, "circuit_open", 0, shadow=shadow)
         raise LLMCircuitOpenError(site)
     timeout = max(1.0, float(timeout_s))
-    budget = _TURN_BUDGET.get()
+    budget = None if shadow else _TURN_BUDGET.get()
     if budget is not None:
         left_s = max_turn_s - budget.spent_s if max_turn_s else timeout
         if (max_calls and budget.calls >= max_calls) or left_s < 1.0:
@@ -456,8 +461,8 @@ async def generate_structured(
             res = await asyncio.wait_for(_OLLAMA_CLIENT.generate(**request), timeout=timeout)
     except BaseException as exc:
         err = error_detail(exc)
-        turn_telemetry.note_llm(site, _outcome(exc), int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, err=err)
-        if isinstance(exc, _GENERATION_FAILURES):
+        turn_telemetry.note_llm(site, _outcome(exc), int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, err=err, shadow=shadow)
+        if isinstance(exc, _GENERATION_FAILURES) and not shadow:
             _BREAKER.failure(_time.monotonic(), breaker_failures, breaker_open_s)
         if isinstance(exc, Exception) and _prompt_log_enabled():
             _log_prompt_event("prompt_error", {"site": site, "error_type": type(exc).__name__, "err": err})
@@ -465,10 +470,11 @@ async def generate_structured(
     finally:
         if budget is not None:
             budget.spent_s += _time.monotonic() - started_at
-    _BREAKER.success()
+    if not shadow:
+        _BREAKER.success()
     text = _extract_response_text(res)
     usage = _extract_usage(res)
-    turn_telemetry.note_llm(site, "ok", int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, usage=usage)
+    turn_telemetry.note_llm(site, "ok", int((_time.monotonic() - started_at) * 1000), queue_ms=queue_ms, usage=usage, shadow=shadow)
     if _prompt_log_enabled():
         _log_prompt_event("prompt_response", {"site": site, "response": text, "usage": usage})
     return text, usage
