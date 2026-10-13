@@ -606,35 +606,6 @@ def format_deadline(raw: str) -> str | None:
     return f"{text} {unit}"
 
 
-def readiness_from_catalog(question: str, *, rows: list[dict[str, Any]] | None = None) -> list[dict[str, str]] | None:
-    """Сроки готовности услуг, названных в вопросе о сроке, — из справочника МИС (поле `deadline`).
-
-    Только одна услуга и только при сильном совпадении по данным (`_strong_service_match`). None —
-    список или слабое совпадение (их выберет `choose()`, ход (в)), у услуги нет срока или у её строк
-    сроки разные: тогда честный перевод, а не догадка.
-
-    :param question: реплика пациента с вопросом о сроке
-    :param rows: строки прайса (по умолчанию — срез региона)
-    :return: [{"name", "deadline"}] или None
-    """
-
-    catalog = _catalog_rows(rows)
-    core, _ = strip_readiness_phrasing(question)
-    if not core.strip():
-        return None
-    if price_list_services(core, rows=catalog)[0]:
-        return None  # список: строку каждой позиции выбирает choose() (ход (в)), до него — перевод
-    name = resolve_price_service_name_from_catalog(core, rows=catalog)
-    if not name or not _strong_service_match(core, name, catalog):
-        return None
-    key = _normalise_input(name)
-    raw = {str(row.get("deadline") or "").strip() for row in catalog if _normalise_input(str(row.get("serviceName") or "")) == key}
-    formatted = {format_deadline(value) for value in raw}
-    if len(formatted) != 1 or None in formatted:
-        return None
-    return [{"name": name, "deadline": formatted.pop()}]
-
-
 def price_question_names_service(text: str) -> bool:
     """Есть ли в реплике слова об услуге, кроме самого вопроса о цене.
 
@@ -3249,23 +3220,6 @@ def _segment_items_by_catalog(
             unrecognized.append(tokens[i])
             i += 1
     return recognized, unrecognized
-
-
-def _strong_service_match(fragment: str, service_name: str, retail_rows: list[dict[str, Any]]) -> bool:
-    """Сильное совпадение по данным (STRONG хода (в)): фраза — это название услуги целиком или до
-    скобок, курируемая аббревиатура, синоним МИС или код услуги. Слабое (резолвер угадал по буквам)
-    сюда не входит: его выбирает `choose()` (ход (в)), а до него — честный перевод."""
-
-    key = _normalise_input(_extract_price_service_from_query(fragment) or fragment)
-    name = _normalise_input(service_name)
-    if key in (name, _normalise_input(service_name.split("(")[0].split("[")[0])):
-        return True
-    if key in _PRICE_SERVICE_ALIASES or service_name in mis_synonym_candidates(fragment):
-        return True
-    return key.isdigit() and any(
-        str(row.get("serviceHomecode") or "").strip() == key and _normalise_input(str(row.get("serviceName") or "")) == name
-        for row in retail_rows
-    )
 
 
 @turn_parse.per_turn(_catalog_fingerprint)

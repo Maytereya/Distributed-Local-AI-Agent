@@ -201,6 +201,7 @@ class MessengerRouterConfig:
     price_match_policy: str
     choose_basket: str
     choose_readiness: str
+    strong_match: str
     debug_final_input: bool
     url: str
 
@@ -451,6 +452,10 @@ settings = Settings(
         # Срок готовности при слабом совпадении — услугу выбирает LLM, срок печатает код из МИС (ход (в)).
         # off | on; действует под пониманием хода on. [MESSENGER_ROUTER] choose_readiness
         choose_readiness=_get_enum("MESSENGER_ROUTER", "choose_readiness", default="off", allowed={"off", "on"}),
+        # Что считать сильным совпадением у срока готовности (L-15b, шаг 3): legacy — прежнее определение
+        # срока (название целиком или до скобок, словарь кода, синоним МИС, код); data — одно определение с
+        # ценой и корзиной, только данные МИС (название, синоним МИС, код). [MESSENGER_ROUTER] strong_match
+        strong_match=_get_enum("MESSENGER_ROUTER", "strong_match", default="legacy", allowed={"legacy", "data"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -585,6 +590,7 @@ MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_PRICE_MATCH_POLICY = settings.messenger_router.price_match_policy
 MR_CHOOSE_BASKET = settings.messenger_router.choose_basket
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
+MR_STRONG_MATCH = settings.messenger_router.strong_match
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

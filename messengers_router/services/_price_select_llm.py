@@ -29,9 +29,9 @@
 
 Политика силы совпадения (L-13, решение владельца 07.10 — вариант B), выключатель
 `[MESSENGER_ROUTER] price_match_policy` (по умолчанию `shadow` — решение только в телеметрию хода):
-под `on` сильное совпадение по данным (дословное название, синоним МИС, код) — только эти строки, без
-LLM; LLM не нашла услугу и во втором круге — честное «не нашёл»; LLM не ответила внятно, а правила
-показали бы ОДНУ слабую строку — до 5 названий без цен (выбирает пациент), а нет таких — оператор;
+под `on` сильное совпадение по данным (дословное название, синоним МИС, код — `_strong_match`) — только
+эти строки, без LLM; LLM не нашла услугу и во втором круге — честное «не нашёл»; LLM не ответила
+внятно, а правила показали бы ОДНУ слабую строку — до 5 названий без цен (выбирает пациент), а нет таких — оператор;
 показали бы СПИСОК (≥2 строк) — список правил остаётся (решение владельца 11.10 по замеру: строгий
 вариант B прятал и списки с нужной строкой — форму 22.07 «при неоднозначности — список»). Политика
 заменяет только слабое предложение правил: правила ничего не предложили или названо слишком общее —
@@ -56,7 +56,6 @@ from ..choice import LegacyWire, Option, Task, choose
 from ..llm_runtime import generate_text
 from ..prompt_registry import load_prompt_text
 from ..runtime_config import config as _cfg
-from ._biomaterial import mis_synonym_candidates
 from ._common import _normalise_catalog_text
 from ._prices_helpers import (
     _apply_service_synonyms,
@@ -69,6 +68,7 @@ from ._prices_helpers import (
     query_has_unsatisfiable_qualifier,
     query_names_service_in_other_words,
 )
+from ._strong_match import strong_rows
 
 logger = logging.getLogger(__name__)
 
@@ -250,28 +250,6 @@ def _parse_reply(raw: str, pool_size: int) -> tuple[list[int], list[str]] | None
         if text and len(text) <= _MAX_TERM_LEN and text not in clean_terms:
             clean_terms.append(text)
     return match, clean_terms[:_MAX_TERMS]
-
-
-def _strong_rows(question: str, pool: list[dict[str, Any]], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Сильное совпадение по данным (L-13, решение владельца 07.10): дословное название, синоним МИС,
-    код услуги — без LLM.
-
-    «Название до скобок» сюда не входит: скобка бывает значимым уточнением («ОАК (без лейкоцитарной
-    формулы и СОЭ)» на «оак» — урезанный вариант, а не общий анализ). Курируемые аббревиатуры кода
-    (`_PRICE_SERVICE_ALIASES`) тоже не входят — их строку выбирает LLM.
-    """
-
-    key = _normalise_catalog_text(_extract_price_service_from_query(question) or question)
-    if not key:
-        return []
-    synonyms = set(mis_synonym_candidates(question))
-    by_code = [row for row in retail_rows if key.isdigit() and str(row.get("serviceHomecode") or "").strip() == key]
-    out: list[dict[str, Any]] = []
-    for row in [*pool, *by_code]:
-        name = _row_name(row)
-        if (key == _normalise_catalog_text(name) or name in synonyms or row in by_code) and row not in out:
-            out.append(row)
-    return out
 
 
 _TOKEN_DF_CACHE: dict[tuple[int, str], dict[str, int]] = {}
@@ -480,7 +458,7 @@ async def select_price_rows(
     )
     pool += [row for row in rest if _row_key(row) not in {_row_key(r) for r in pool}][: max(0, _POOL_LIMIT - len(pool))]
     policy = match_policy()
-    strong = _strong_rows(question, pool, rows)
+    strong = strong_rows(question, rows, pool=pool)
     if strong and policy != "off":
         turn_telemetry.note(price_policy="strong")
         if policy == "on":

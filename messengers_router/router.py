@@ -107,8 +107,8 @@ from .recovery_policy import contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
 from .services._appointment_change_validator import is_own_appointment_change
 from .services._existing_appointment_validator import is_own_existing_appointment
-from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE, readiness_from_catalog
-from .services._readiness_select import readiness_by_choice, readiness_mode
+from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE
+from .services._readiness_select import readiness_by_choice, readiness_from_catalog, readiness_mode
 from .services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
 from .services.prepare import anesthesia_reply, prepare_variant_payload
 from .services._patient_name_validator import is_patient_name_reply

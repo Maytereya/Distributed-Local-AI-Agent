@@ -7,7 +7,7 @@
 услуга, решает модель:
 
 - для каждой позиции — её кандидаты (строки корзины правил и поиск по словам позиции);
-- сильное совпадение по данным (дословное название, синоним МИС, код) — без LLM (L-13);
+- сильное совпадение по данным (дословное название, синоним МИС, код — `_strong_match`) — без LLM (L-13);
 - остальные позиции — один вызов `choose()`: плоский нумерованный список, строка помечена своей
   позицией («позиция» → название — цена); модель отмечает номера; ничего для позиции — «не нашёл»;
 - сбой LLM: сильные позиции — по-прежнему их строки по данным, слабые — строки корзины правил, как
@@ -23,8 +23,9 @@ from typing import Any
 
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
-from ._price_select_llm import _prefer_base_variants, _row_cost, _row_key, _row_name, _strong_rows
+from ._price_select_llm import _prefer_base_variants, _row_cost, _row_key, _row_name
 from ._prices_helpers import _annotate_price_rows_with_care_context, _rank_price_rows
+from ._strong_match import strong_rows
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ async def choose_basket_rows(
     for index, item in enumerate(items):
         fragment = str(item.get("fragment") or item["service_name"])
         candidates = _candidates(item, retail_rows)
-        strong = _strong_rows(fragment, candidates, retail_rows)
+        strong = strong_rows(fragment, retail_rows, pool=candidates)
         if strong:
             chosen[index] = strong
         else:
