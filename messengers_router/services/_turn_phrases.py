@@ -12,6 +12,10 @@
   (в) окна сегментации сплошного списка (`_resolve_multi_price_items` — из памяти хода, если понимание
   его уже посчитало); (г) сильные окна (1–3 слова с сильным совпадением по данным МИС) и промежутки
   между ними — разрез «ФЕРРИТИН ГЛЮКОЗА ХОЛЕСТЕРОЛ», которого сегментация не даёт (слов меньше 4);
+  (д) варианты только для выбора LLM (шаг 6): фрагменты по разделителям без фильтра правил (короткие
+  обозначения «лг»), части фразы между знаками препинания (перечисление в скобках, хвост вопроса), фраза
+  без родовых слов с краёв («анализов на ттг» → «ттг»); разрезом они не служат и одну фразу без
+  разделителей не превращают в выбор;
 - **потолок** — 16 фраз (решение владельца 13.10, Q3): приоритет W, (б), (в), (г); фрагментов (б) 16 и
   больше — `too_many`, LLM не зовём;
 - **обход без LLM:** W пуста — `empty`; W сильная по данным (`phrase_rows` — `strong_rows`, дословное
@@ -40,6 +44,7 @@ from ..turn_parse import ParsedPhrase, PhraseParse, ParseStatus, per_turn
 from ._common import _normalise_catalog_text
 from ._prices_helpers import (
     _MULTI_PRICE_NOISE_WORDS,
+    _MULTI_PRICE_SPLIT_RE,
     _PRICE_GENERIC_SERVICE_TOKENS,
     _PRICE_QUERY_STOPWORDS,
     _PRICE_TOKEN_RE,
@@ -64,6 +69,7 @@ _WRAPPER = frozenset(_PRICE_QUERY_STOPWORDS) | _MULTI_PRICE_NOISE_WORDS
 _FILLER = _WRAPPER | frozenset(_PRICE_GENERIC_SERVICE_TOKENS)
 
 SOURCE_WHOLE, SOURCE_SPLIT, SOURCE_SEGMENT, SOURCE_STRONG = "whole", "split", "segment", "strong"
+SOURCE_VARIANT = "variant"  # (д) дополнительные варианты: только для выбора LLM, разрезом не служат
 
 
 @dataclass(frozen=True)
@@ -297,6 +303,81 @@ def _strong_window_pieces(reply: str, toks: Sequence[_Token], span: tuple[int, i
     return out if strong_found and len(out) >= 2 else []
 
 
+def _span_of(toks: Sequence[_Token], phrase: Phrase) -> tuple[int, int] | None:
+    inside = [k for k, t in enumerate(toks) if phrase.start <= t.start and t.end <= phrase.end]
+    return (inside[0], inside[-1]) if inside else None
+
+
+def _clause_break(reply: str, left: _Token, right: _Token) -> bool:
+    """Между словами — знак препинания (не дефис внутри слова): граница перечисления или предложения."""
+
+    return any(not ch.isspace() and ch != "-" for ch in reply[left.end : right.start])
+
+
+def _variant(reply: str, toks: Sequence[_Token], i: int, j: int, *, filler: bool = False) -> Phrase | None:
+    """Вариант из токенов `i..j`: без обвязки (и, если `filler`, без родовых слов — «анализов на ттг» →
+    «ттг») с краёв; из одних родовых слов или чисел — None."""
+
+    edge = _FILLER if filler else _WRAPPER
+    while i <= j and toks[i].key in edge:
+        i += 1
+    while j >= i and toks[j].key in edge:
+        j -= 1
+    if i > j or all(t.key in _FILLER or t.key.isdigit() for t in toks[i : j + 1]):
+        return None
+    return _phrase(reply, toks, i, j, SOURCE_VARIANT)
+
+
+def _names_several(raw: str) -> bool:
+    """Часть по-прежнему содержит разделитель списка («ТТГ и TORCH») — это не одна позиция."""
+
+    return len([chunk for chunk in _MULTI_PRICE_SPLIT_RE.split(raw) if chunk.strip()]) > 1
+
+
+def _variant_pieces(
+    reply: str, toks: Sequence[_Token], probe: str, phrases: Sequence[Phrase]
+) -> tuple[list[Phrase], list[Phrase]]:
+    """(д) Дополнительные варианты для выбора LLM (шаг 6; разбор 95 ответов, G5, и короткие обозначения):
+
+    - фрагменты по тем же разделителям, что у (б), но без фильтра правил «может ли фрагмент называть
+      услугу» — он отбрасывает короткие обозначения («лг», «щф»), которых нет в словарях кода;
+    - части фразы между знаками препинания: перечисление в скобках («TORCH (токсоплазмоз, краснуха, …)»,
+      «(RW, ВИЧ, HBsAg, HCV)») и хвост вопроса у последней позиции («витамин D — какая цена анализов»);
+    - фраза без родовых слов с краёв («анализов на ттг» → «ттг»).
+
+    :return: (фрагменты по разделителям, части и фразы без родовых слов)
+
+    Ни один не режет реплику сам: разрезы (б)/(в)/(г), обход без LLM и политика сбоя — прежние; выбирает LLM.
+    Новых регулярок и словарей нет: разделители — `_MULTI_PRICE_SPLIT_RE`, обвязка — `_WRAPPER`/`_FILLER`.
+    """
+
+    pieces: list[Phrase] = []
+    cursor = 0
+    for chunk in _MULTI_PRICE_SPLIT_RE.split(probe):
+        hit = _locate(chunk, toks, cursor=cursor)
+        if hit is None:
+            continue
+        cursor = hit[1] + 1
+        piece = _variant(reply, toks, *hit)
+        if piece is not None:
+            pieces.append(piece)
+    out: list[Phrase] = []
+    for phrase in [*phrases, *pieces]:
+        span = _span_of(toks, phrase)
+        if span is None:
+            continue
+        lo, hi = span
+        if phrase.source != SOURCE_WHOLE:
+            out.append(_variant(reply, toks, lo, hi, filler=True))
+        start = lo
+        for k in range(lo, hi + 1):
+            if k == hi or _clause_break(reply, toks[k], toks[k + 1]):
+                if (start, k) != (lo, hi):
+                    out.extend((_variant(reply, toks, start, k), _variant(reply, toks, start, k, filler=True)))
+                start = k + 1
+    return pieces, [p for p in out if p is not None and not _names_several(p.raw)]
+
+
 def phrase_candidates(reply: str, *, facet: str | None, catalog: list[dict[str, Any]]) -> Candidates:
     """Фразы-кандидаты реплики. Чистая функция: без LLM и без состояния (память хода — только кэш).
 
@@ -321,14 +402,25 @@ def phrase_candidates(reply: str, *, facet: str | None, catalog: list[dict[str, 
     chosen: list[Phrase] = []
     spans: set[tuple[int, int]] = set()
     texts: set[str] = set()
-    for phrase in [whole, *split, *segment, *strong]:
-        norm = _normalise_catalog_text(phrase.text)
-        if (phrase.start, phrase.end) in spans or norm in texts or not norm:
-            continue
-        spans.add((phrase.start, phrase.end))
-        texts.add(norm)
-        if len(phrase.text) <= _MAX_TEXT and len(chosen) < _MAX_PHRASES:
-            chosen.append(phrase)
+
+    def take(phrases: Sequence[Phrase]) -> None:
+        for phrase in phrases:
+            norm = _normalise_catalog_text(phrase.text)
+            if (phrase.start, phrase.end) in spans or norm in texts or not norm:
+                continue
+            spans.add((phrase.start, phrase.end))
+            texts.add(norm)
+            if len(phrase.text) <= _MAX_TEXT and len(chosen) < _MAX_PHRASES:
+                chosen.append(phrase)
+
+    primary = [whole, *split, *segment, *strong]
+    take(primary)
+    if len(split) < _MAX_PHRASES:
+        pieces, parts = _variant_pieces(reply, toks, probe, primary)
+        # Варианты — только там, где выбор LLM и так нужен или реплика режется разделителями: одна
+        # фраза без разделителей остаётся `single` (путь одной услуги, без нового вызова LLM).
+        if len(chosen) >= 2 or len(pieces) >= 2:
+            take([*pieces, *parts])
     head = [p for p in chosen if p is whole]
     options = (*head, *sorted((p for p in chosen if p is not whole), key=lambda p: (p.start, p.end)))
     return Candidates(reply=reply, probe=probe, whole=whole, options=options, partitions=partitions, too_many=len(split) >= _MAX_PHRASES)
