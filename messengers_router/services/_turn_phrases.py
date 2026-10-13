@@ -398,32 +398,49 @@ PHRASES_TASK = Task(name="turn_phrases", max_picks=0, disjoint=True, num_predict
 _SHADOW_QUEUE_MS = 300
 
 
-def _prepare(reply: str, facet: str | None, catalog: list[dict[str, Any]]) -> tuple[Candidates, PhraseParse | None, tuple[tuple[dict[str, Any], ...], ...]]:
-    """Кандидаты, разбор без LLM (если он есть) и строки сильных совпадений каждого варианта."""
+def _prepare(
+    reply: str, facet: str | None, catalog: list[dict[str, Any]]
+) -> tuple[Candidates, PhraseParse | None, tuple[tuple[dict[str, Any], ...], ...], tuple[ParsedPhrase, ...]]:
+    """Кандидаты, разбор без LLM (если он есть), строки сильных совпадений каждого варианта и разрез по
+    разделителям для политики сбоя (`fallback_split`)."""
 
     cands = phrase_candidates(reply, facet=facet, catalog=catalog)
     decided = decide_without_llm(cands, catalog)
     if decided is not None:
-        return cands, decided, ()
-    return cands, None, tuple(tuple(phrase_rows(p.raw, catalog)) for p in cands.options)
+        return cands, decided, (), ()
+    return cands, None, tuple(tuple(phrase_rows(p.raw, catalog)) for p in cands.options), fallback_split(cands, catalog)
 
 
-def _from_choice(cands: Candidates, choice: Choice, rows: Sequence[Sequence[dict[str, Any]]]) -> PhraseParse:
+def fallback_split(cands: Candidates, catalog: list[dict[str, Any]]) -> tuple[ParsedPhrase, ...]:
+    """Разрез, которым читатели действуют, если LLM не ответила (политика сбоя, L-15b шаг 5): фрагменты по
+    разделителям (б) со силой по данным, когда их ≥2 и одно название прайса не покрывает всю реплику
+    («Билирубин и его фракции» не режется). Окна сплошного текста (в)/(г) без LLM не режут (решение
+    владельца 13.10, Q2) — тогда пусто, и читатели идут прежним путём правил."""
+
+    cut = cands.partitions.get(SOURCE_SPLIT, ())
+    if len(cut) < 2 or _catalog_name_covering(_price_query_content_tokens(cands.probe), catalog):
+        return ()
+    return tuple(parsed(p, phrase_rows(p.raw, catalog)) for p in cut)
+
+
+def _from_choice(
+    cands: Candidates, choice: Choice, rows: Sequence[Sequence[dict[str, Any]]], split: tuple[ParsedPhrase, ...] = ()
+) -> PhraseParse:
     if choice.status is Status.PICKED:
         picked = sorted((int(i) for i in choice.ids), key=lambda k: (cands.options[k].start, cands.options[k].end))
         return result(cands, ParseStatus.PICKED, "llm", [parsed(cands.options[k], rows[k]) for k in picked])
     if choice.status is Status.NONE_FIT:
         return result(cands, ParseStatus.NONE_FIT, "llm")  # ни одна фраза не услуга — путь одной услуги
-    if choice.status is Status.UNAVAILABLE:
-        return result(cands, ParseStatus.UNAVAILABLE, "llm")
-    return result(cands, ParseStatus.INVALID, "llm")  # мусор, пересечение фраз; исходов у задачи нет
+    # Сбой и мусор (пересечение фраз; исходов у задачи нет): фраз нет, читателям — разрез по разделителям.
+    status = ParseStatus.UNAVAILABLE if choice.status is Status.UNAVAILABLE else ParseStatus.INVALID
+    return replace(result(cands, status, "llm"), split=split)
 
 
 async def parse_turn_phrases(reply: str, *, facet: str | None, catalog: list[dict[str, Any]], shadow: bool) -> PhraseParse:
     """Разбор ценовой реплики на фразы-услуги: без LLM, если выбор не нужен, иначе — `choose()`.
 
-    Генератор и обход — в потоке (CPU); вызов LLM — место `choose_turn_phrases`. Что делать при
-    сбое (`unavailable`, `invalid`), решают читатели разбора (шаг 5); здесь — только разбор.
+    Генератор и обход — в потоке (CPU); вызов LLM — место `choose_turn_phrases`. При сбое (`unavailable`,
+    `invalid`) фраз нет, а разрез по разделителям — в `split` (политика сбоя читателей, шаг 5).
 
     :param reply: реплика пациента
     :param facet: свойство из понимания хода (`readiness` — W без фразы о сроке)
@@ -432,12 +449,12 @@ async def parse_turn_phrases(reply: str, *, facet: str | None, catalog: list[dic
     """
 
     started = time.monotonic()
-    cands, decided, rows = await asyncio.to_thread(_prepare, reply, facet, catalog)
+    cands, decided, rows, split = await asyncio.to_thread(_prepare, reply, facet, catalog)
     if decided is None:
         options = [
             Option(id=str(k), text=f"«{p.text}»", strength=Strength.STRONG if rows[k] else Strength.WEAK, span=(p.start, p.end))
             for k, p in enumerate(cands.options)
         ]
         task = replace(PHRASES_TASK, queue_timeout_ms=_SHADOW_QUEUE_MS) if shadow else PHRASES_TASK
-        decided = _from_choice(cands, await choose(task, reply, options, shadow=shadow), rows)
+        decided = _from_choice(cands, await choose(task, reply, options, shadow=shadow), rows, split)
     return replace(decided, ms=int((time.monotonic() - started) * 1000))

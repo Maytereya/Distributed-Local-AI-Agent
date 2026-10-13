@@ -15,7 +15,10 @@
 
 Под `turn_parse = on` (L-15b, шаг 5) позиции — фразы разбора хода (`basket_from_phrases`): одна услуга
 или несколько уже решили данные МИС или выбор LLM, сила фразы — из разбора; выбор строк слабых позиций —
-тот же вызов.
+тот же вызов. Политика сбоя под `on` (поправка владельца 13.10 к (ii)): LLM строки не выбрала (сбой,
+мусор, вызов запрещён) — сильные позиции с ценой по данным, слабая — несколько вариантов кода (до 5) с
+полными названиями и ценами; одна-единственная найденная строка ценой «той самой» не подаётся — её
+название без цены (вариант B L-13, `price_names_without_prices_text`); форму решит замер шага 6.
 
 Выключатель `[MESSENGER_ROUTER] choose_basket = off | on` (по умолчанию off; тени нет — это вызов LLM).
 """
@@ -27,6 +30,7 @@ from typing import Any, Sequence
 
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
+from ._common import _normalise_catalog_text
 from ._price_select_llm import _prefer_base_variants, _row_cost, _row_key, _row_name
 from ._prices_helpers import _annotate_price_rows_with_care_context, _rank_price_rows, phrase_price_items
 from ._strong_match import strong_rows
@@ -36,6 +40,7 @@ logger = logging.getLogger(__name__)
 BASKET_TASK = Task(name="price_basket", num_predict=192, timeout_s=12, queue_timeout_ms=3000)
 _PER_ITEM = 6
 _MAX_OPTIONS = 30
+_VARIANTS = 5  # слабая позиция без выбора LLM — до 5 вариантов кода (поправка владельца 13.10)
 
 
 def basket_mode() -> str:
@@ -56,6 +61,26 @@ def _candidates(item: dict[str, Any], retail_rows: list[dict[str, Any]]) -> list
 def _position(fragment: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     name = _row_name(rows[0]) if len(rows) == 1 else fragment
     return {"service_name": name, "prices": _annotate_price_rows_with_care_context(list(rows)), "fragment": fragment}
+
+
+def _variants(fragment: str, candidates: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    """Слабая позиция без выбора LLM (политика сбоя под `turn_parse = on`): (строки с ценой, название без цены).
+
+    Кандидаты кода без непрошеных cito/капиллярной/на дому — по одной строке на название, до `_VARIANTS`:
+    два названия и больше — варианты с полными названиями и ценами; одно — его название без цены (вариант
+    B L-13: одна найденная строка — не «та самая цена»); ни одного — («», «») — «Не распознал».
+    """
+
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in _prefer_base_variants(list(candidates), fragment):
+        key = _normalise_catalog_text(_row_name(row))
+        if key and key not in seen and len(rows) < _VARIANTS:
+            seen.add(key)
+            rows.append(row)
+    if len(rows) >= 2:
+        return rows, ""
+    return [], _row_name(rows[0]) if rows else ""
 
 
 async def _pick(
@@ -104,7 +129,9 @@ async def _pick(
     return chosen, weak, False
 
 
-def _positions(items: list[dict[str, Any]], chosen: dict[int, list[dict[str, Any]]]) -> tuple[list[dict[str, Any]], list[str]]:
+def _positions(
+    items: list[dict[str, Any]], chosen: dict[int, list[dict[str, Any]]], unpriced: dict[int, str] | None = None
+) -> tuple[list[dict[str, Any]], list[str]]:
     positions: list[dict[str, Any]] = []
     not_found: list[str] = []
     for index, item in enumerate(items):
@@ -112,9 +139,27 @@ def _positions(items: list[dict[str, Any]], chosen: dict[int, list[dict[str, Any
         rows = chosen.get(index)
         if rows:
             positions.append(_position(fragment, _prefer_base_variants(rows, fragment)))
+        elif unpriced and unpriced.get(index):
+            # Одна найденная строка без выбора LLM — название без цены (`multi_price_payload_from_items`).
+            positions.append({"service_name": fragment, "prices": [], "fragment": fragment, "unpriced": unpriced[index]})
         else:
             not_found.append(fragment)
     return positions, not_found
+
+
+def _settle_weak_as_variants(
+    weak: list[tuple[int, str, list[dict[str, Any]]]], chosen: dict[int, list[dict[str, Any]]]
+) -> dict[int, str]:
+    """Политика сбоя под `on`: слабые позиции — варианты кода (`_variants`); названия без цены — по номеру позиции."""
+
+    unpriced: dict[int, str] = {}
+    for index, fragment, candidates in weak:
+        rows, name = _variants(fragment, candidates)
+        if rows:
+            chosen[index] = rows
+        elif name:
+            unpriced[index] = name
+    return unpriced
 
 
 async def choose_basket_rows(
@@ -122,6 +167,9 @@ async def choose_basket_rows(
     items: list[dict[str, Any]],
     unrecognized: list[str],
     retail_rows: list[dict[str, Any]],
+    *,
+    llm_allowed: bool = True,
+    failure_variants: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str]] | None:
     """Позиции корзины с выбранными строками и нераспознанное; None — оставить корзину правил.
 
@@ -129,16 +177,22 @@ async def choose_basket_rows(
     :param items: позиции корзины правил (`fragment`, `service_name`, `prices`)
     :param unrecognized: позиции, которые правила не распознали
     :param retail_rows: строки прайса региона
+    :param llm_allowed: можно ли звать LLM; нельзя — как сбой
+    :param failure_variants: политика сбоя под `turn_parse = on` — слабые позиции без выбора LLM —
+        варианты кода (`_variants`), а не строки корзины правил; None тогда не возвращается
     """
 
-    chosen, weak, failed = await _pick(question, items, retail_rows)
-    if failed:
+    chosen, weak, failed = await _pick(question, items, retail_rows, llm_allowed=llm_allowed)
+    unpriced: dict[int, str] = {}
+    if failed and failure_variants:
+        unpriced = _settle_weak_as_variants(weak, chosen)
+    elif failed:
         # Сильные позиции — данные, от LLM не зависят; слабые — как в корзине правил.
         if not chosen:
             return None
         for index, _fragment, _rows in weak:
             chosen[index] = list(items[index].get("prices") or [])
-    positions, not_found = _positions(items, chosen)
+    positions, not_found = _positions(items, chosen, unpriced)
     return positions, [*unrecognized, *not_found]
 
 
@@ -153,8 +207,9 @@ async def basket_from_phrases(
     """Корзина из фраз разбора хода (`turn_parse = on`, L-15b, шаг 5): позиции — фразы в порядке реплики.
 
     Сильная фраза — её строки по данным МИС без LLM; слабые — один вызов `choose()` по кандидатам правил
-    (`phrase_price_items`); сбой LLM — у слабой позиции строки догадки правил, как в корзине правил.
-    Фрагменты по разделителям, не покрытые разбором (`leftover`), и позиции без строк — «Не распознал».
+    (`phrase_price_items`); LLM строки не выбрала (сбой, мусор, вызов запрещён) — политика сбоя: варианты
+    кода или название без цены (`_variants`). Фрагменты по разделителям, не покрытые разбором
+    (`leftover`), и позиции без строк — «Не распознал».
 
     :param question: реплика пациента (как написал он сам)
     :param phrases: фразы разбора (`turn_parse.ParsedPhrase`)
@@ -166,8 +221,6 @@ async def basket_from_phrases(
 
     items = phrase_price_items(phrases, retail_rows)
     chosen, weak, failed = await _pick(question, items, retail_rows, llm_allowed=llm_allowed)
-    if failed:
-        for index, _fragment, _rows in weak:
-            chosen[index] = list(items[index].get("prices") or [])
-    positions, not_found = _positions(items, chosen)
+    unpriced = _settle_weak_as_variants(weak, chosen) if failed else {}
+    positions, not_found = _positions(items, chosen, unpriced)
     return positions, [*leftover, *not_found]

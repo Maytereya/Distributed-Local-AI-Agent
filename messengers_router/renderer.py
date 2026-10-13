@@ -490,6 +490,12 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
     if hint:
         lines.append("")
         lines.append(hint)
+    # Позиция корзины, у которой без выбора LLM нашлась одна строка (политика сбоя под
+    # `turn_parse = on`, L-15b шаг 5): её название без цены — текстом варианта B L-13.
+    names_note = str(payload.get("names_note") or "").strip()
+    if names_note:
+        lines.append("")
+        lines.append(names_note)
     # П6 «корзина» (BUG-B, S3): честно показываем позиции списка, которые не
     # удалось распознать по каталогу, — не замалчиваем неполноту ответа.
     unrecognized_note = str(payload.get("unrecognized_note") or "").strip()

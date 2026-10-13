@@ -31,7 +31,7 @@ import contextvars
 import copy
 import functools
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Hashable, TypeVar
 
@@ -153,6 +153,7 @@ class ParseStatus(StrEnum):
 
 
 _DECIDED = frozenset({ParseStatus.STRONG_WHOLE, ParseStatus.STRONG_ALL, ParseStatus.SINGLE, ParseStatus.PICKED, ParseStatus.NONE_FIT})
+_FAILED = frozenset({ParseStatus.UNAVAILABLE, ParseStatus.INVALID})
 
 
 @dataclass(frozen=True)
@@ -170,7 +171,11 @@ class ParsedPhrase:
 @dataclass(frozen=True)
 class PhraseParse:
     """Разбор ценовой реплики на фразы-услуги: статус, откуда решение (`data` | `llm` | `none`),
-    фразы в порядке реплики и фрагменты по разделителям, не покрытые выбором (`leftover`)."""
+    фразы в порядке реплики и фрагменты по разделителям, не покрытые выбором (`leftover`).
+
+    `split` — только у сбоя LLM (`unavailable`, `invalid`): разрез по разделителям (б) со силой фраз по
+    данным, если он есть и одно название прайса не покрывает всю реплику, — им действуют читатели по
+    политике сбоя (шаг 5); иначе пусто — прежний путь правил."""
 
     reply: str
     status: str
@@ -179,6 +184,7 @@ class PhraseParse:
     leftover: tuple[str, ...] = ()
     candidates: int = 0
     ms: int = 0
+    split: tuple[ParsedPhrase, ...] = ()
 
     @property
     def is_list(self) -> bool:
@@ -282,12 +288,22 @@ def acting_phrases() -> PhraseParse | None:
 
 
 def acting_for(text: str) -> PhraseParse | None:
-    """Разбор, по которому действует читатель с входом `text` (L-15b, шаг 5): под `on`, решённый и этой
-    реплики (`for_text`). None — прежний путь правил: разбора нет, он не решён или вход читателя — не
-    реплика хода (дозаполнение, контекст прошлого хода)."""
+    """Разбор, по которому действует читатель с входом `text` (L-15b, шаг 5): под `on` и этой реплики
+    (`for_text`) — решённый; или сбой LLM (политика сбоя): фразы — разрез по разделителям (б), если он есть,
+    сильная — с её строками по данным, слабые решит выбор строк или варианты кода. None — прежний путь
+    правил: разбора нет, сбой без разделителей (сплошной текст без LLM не режем: решение владельца 13.10,
+    Q2), прочие статусы, или вход читателя — не реплика хода (дозаполнение, контекст прошлого хода)."""
 
-    parse = acting_phrases()
-    return parse if parse is not None and parse.for_text(text) else None
+    if mode() != "on":
+        return None
+    parse = phrases_now()
+    if parse is None or not parse.for_text(text):
+        return None
+    if parse.decided:
+        return parse
+    if parse.status in _FAILED and len(parse.split) >= 2:
+        return replace(parse, items=parse.split, leftover=())
+    return None
 
 
 async def drain(grace_s: float) -> None:

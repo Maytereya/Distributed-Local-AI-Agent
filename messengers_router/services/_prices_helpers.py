@@ -16,6 +16,7 @@ from agent_logic_2.nayka_api import api_price
 from ..prompt_registry import load_prompt_text
 from ..russian_nlu import common_prefix_len, normalize_ru, tokens_share_stem
 from ..service_phrase import extract_service_phrase
+from ..text_templates import price_names_without_prices_text
 from ._addresses_helpers import _extract_homecode_query
 from ._biomaterial import (
     is_biomaterial_phrase,
@@ -3551,6 +3552,10 @@ def multi_price_payload_from_items(
 ) -> dict[str, Any] | None:
     """Payload корзины из готовых позиций (правил или выбора LLM, `_basket_select`).
 
+    Позиция с `unpriced` (политика сбоя под `turn_parse = on`: без выбора LLM нашлась одна строка) — её
+    название без цены текстом варианта B L-13 (`names_note`); строк с ценой нет вовсе — только эти
+    названия и «Не распознал» (`clarify_text`).
+
     :param allow_single: одна позиция — тоже корзина, если остальные честно перечислены как
         нераспознанные (выбор LLM отверг позицию: путь одной услуги показал бы её по буквам)
     """
@@ -3563,11 +3568,29 @@ def multi_price_payload_from_items(
             annotated["care_setting_label"] = label
             annotated["care_setting_address"] = ""
             variants.append(annotated)
-
-    if len(variants) < 2 and not (allow_single and variants and unrecognized):
-        return None
+    names_notes = [
+        price_names_without_prices_text(str(item.get("fragment") or item["service_name"]), [str(item["unpriced"])])
+        for item in items
+        if item.get("unpriced")
+    ]
+    unrecognized_note = ""
+    shown_unrecognized = ", ".join(dict.fromkeys(str(u).strip() for u in unrecognized if str(u).strip()))
+    if shown_unrecognized:
+        # S3 «корзины» (BUG-B): нераспознанные позиции честно перечисляем —
+        # молчание о них дезинформировало бы полнотой ответа.
+        unrecognized_note = f"Не распознал: {shown_unrecognized}. Уточните эти названия — помогу по ним отдельно."
 
     service_name = ", ".join(str(item["service_name"]) for item in items)
+    if not variants and names_notes:
+        return {
+            "service_name": service_name,
+            "prices": [],
+            "clarify_text": "\n\n".join([*names_notes, *([unrecognized_note] if unrecognized_note else [])]),
+            "note": "price_multi_service: names_without_prices",
+        }
+    if len(variants) < 2 and not (allow_single and variants and (unrecognized or names_notes)):
+        return None
+
     visible_limit = len(variants)
     payload: dict[str, Any] = {
         "service_name": service_name,
@@ -3579,14 +3602,10 @@ def multi_price_payload_from_items(
         "show_all_hint": "",
         "note": "price_multi_service",
     }
-    if unrecognized:
-        # S3 «корзины» (BUG-B): нераспознанные позиции честно перечисляем —
-        # молчание о них дезинформировало бы полнотой ответа.
-        shown = ", ".join(dict.fromkeys(str(u).strip() for u in unrecognized if str(u).strip()))
-        if shown:
-            payload["unrecognized_note"] = (
-                f"Не распознал: {shown}. Уточните эти названия — помогу по ним отдельно."
-            )
+    if names_notes:
+        payload["names_note"] = "\n\n".join(names_notes)
+    if unrecognized_note:
+        payload["unrecognized_note"] = unrecognized_note
     return payload
 
 

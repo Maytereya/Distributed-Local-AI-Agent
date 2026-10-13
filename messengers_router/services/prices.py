@@ -138,20 +138,26 @@ async def _multi_price_payload(
 
     Под `turn_parse = on` (L-15b, шаг 5) позиции — фразы разбора хода этой реплики: разбор решил одну
     услугу (`strong_whole`, `single`, `none_fit`, одна выбранная фраза) — не корзина, путь одной услуги;
-    несколько фраз — корзина из них (`basket_from_phrases`). Разбора нет или он не решён — как раньше."""
+    несколько фраз — корзина из них (`basket_from_phrases`); LLM не ответила — разрез по разделителям
+    (`turn_parse.acting_for`). Иначе позиции режут правила, как раньше. Политика сбоя под `on`: слабая
+    позиция без выбора LLM — варианты кода или название без цены, не одна строка правил с ценой."""
 
     llm_allowed = bool(entities.get("__price_question")) and str(entities.get("__runtime_llm_mode") or "").strip().lower() != "strict"
+    choosing = llm_allowed and basket_mode() == "on"
     parse = turn_parse.acting_for(str(query or ""))
     if parse is not None:
         if not parse.is_list:
             return None
-        positions, unrecognized = await basket_from_phrases(
-            str(query or ""), parse.items, parse.leftover, retail_rows, llm_allowed=llm_allowed and basket_mode() == "on"
-        )
+        positions, unrecognized = await basket_from_phrases(str(query or ""), parse.items, parse.leftover, retail_rows, llm_allowed=choosing)
         return multi_price_payload_from_items(positions, unrecognized, allow_single=True)
     items, unrecognized = _multi_price_items(query_text, retail_rows)
     if not items:
         return None
+    if turn_parse.mode() == "on":
+        refined = await choose_basket_rows(
+            str(query or query_text), items, unrecognized, retail_rows, llm_allowed=choosing, failure_variants=True
+        )
+        return multi_price_payload_from_items(*refined, allow_single=True) if refined is not None else None
     if basket_mode() == "on" and llm_allowed:
         refined = await choose_basket_rows(str(query or query_text), items, unrecognized, retail_rows)
         if refined is not None:

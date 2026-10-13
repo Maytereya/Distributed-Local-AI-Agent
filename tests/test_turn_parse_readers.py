@@ -12,7 +12,11 @@
   слабая — выбор LLM по кандидатам этой фразы; список или ни одной услуги — честный перевод;
 - подбор анализов (`lab_tests.test_assist`): список — фразы разбора; одна услуга — путь одной услуги;
 - разбор читают, только если вход читателя — реплика хода (`for_text`), и только решённый; иначе —
-  прежний путь правил.
+  прежний путь правил;
+- политика сбоя (поправка владельца 13.10): LLM не разобрала реплику — разрез по разделителям (б), если он
+  есть и одно название прайса не покрывает реплику; сплошной текст без LLM не режется (Q2) — прежний путь
+  правил. LLM не выбрала строки корзины — сильные позиции с ценой по данным, слабая — несколько вариантов
+  кода (до 5) с полными названиями и ценами; одна найденная строка — её название без цены (вариант B L-13).
 
 Под `off` и `shadow` поведение прежнее: эталоны `test_price_turns_golden.py`, `test_turn_parse_shadow.py`.
 Под `on` при недоступной LLM эталон пути цены — прежний, кроме диалогов `PARSE_ON_PLANNED` (их ответы — в
@@ -53,6 +57,14 @@ PARSE_ON_PLANNED: dict[str, str] = {
     "name_with_commas": "дословное название с запятыми в скобках — одна строка, а не семья ОАК с ценой второй услуги",
     "name_with_plus": "дословное название с «+» и дефисом — одна строка, а не 10 экспресс-тестов и ГТТ с инсулином",
     "synonym_fork_oak": "синоним МИС «оак» на три услуги — ровно эти три строки, а не семья ОАК из восьми",
+    # Политика сбоя (LLM недоступна — разрез по разделителям): слабая позиция — варианты кода с полными
+    # названиями и ценами, не найденная — «Не распознал»; форму решит замер шага 6.
+    "list_text_ttg_t4": "«ттг, т4 свободный»: у «ттг» два варианта кода с ценами, «т4 свободный» — «Не распознал», а не «не нашёл» на всю реплику",
+    "list_button_ttg_t4": "второй ход — как «list_text_ttg_t4»",
+    "uzi_compound": (
+        "«узи почек и щитовидной железы»: «узи почек» — «Не распознал» (в мини-проде нет), «щитовидной железы» — "
+        "варианты кода с ценами (общее «узи» разрез по разделителям теряет), а не «Уточните название»"
+    ),
 }
 
 _PHRASES_MARK = "понять, какие услуги назвал пациент"
@@ -316,3 +328,87 @@ def test_test_assist_list_is_the_parse(catalog, mini_prod_world, monkeypatch):  
         rules = asyncio.run(lab_tests.test_assist(None, split, {}))  # вне хода — разрез правил
     assert "multi-item" in listed["note"] and [row["serviceName"] for row in listed["tests"]] == ["Ферритин", "Глюкоза"]
     assert "multi-item" not in one["note"] and "multi-item" in rules["note"]
+
+
+# --------------------------------------------------------------------------- политика сбоя под on
+
+
+def test_failed_parse_keeps_only_the_separator_cut(catalog, mini_prod_world):  # noqa: F811
+    """LLM не ответила: у разбора нет фраз, а для читателей — разрез по разделителям (б) со силой по данным.
+    Сплошной текст без LLM не режется (решение владельца 13.10, Q2), одно название прайса на всю реплику —
+    тоже."""
+
+    from messengers_router.services import _turn_phrases as TP
+
+    async def parse(reply: str) -> turn_parse.PhraseParse:
+        return await TP.parse_turn_phrases(reply, facet="price", catalog=catalog, shadow=False)
+
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        listed = asyncio.run(parse("сколько стоит ферритин, ттг и витамин д"))
+        run_on = asyncio.run(parse("сколько стоит ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА"))
+        one_name = asyncio.run(parse("сколько стоит билирубин и фракции"))
+    assert (listed.status, listed.items) == ("unavailable", ())
+    assert [(p.text, p.strength.value, bool(p.rows)) for p in listed.split] == [
+        ("ферритин", "strong", True),
+        ("ттг", "weak", False),
+        ("витамин д", "weak", False),
+    ]
+    assert (run_on.status, run_on.split) == ("unavailable", ())
+    assert (one_name.status, one_name.split) == ("unavailable", ())
+
+
+def test_failed_parse_is_read_as_its_separator_cut(monkeypatch):
+    reply = "сколько стоит ферритин и глюкоза"
+    split = (_phrase("ферритин", reply), _phrase("глюкоза", reply))
+    failed = turn_parse.PhraseParse(reply=reply, status="unavailable", source="llm", leftover=("ферритин", "глюкоза"), split=split)
+    view = _slot(monkeypatch, "on", failed, reply)
+    assert (view.status, view.items, view.leftover, view.is_list) == ("unavailable", split, (), True)
+    assert not view.decided  # статус сбоя виден читателю
+    assert _slot(monkeypatch, "on", turn_parse.PhraseParse(reply=reply, status="invalid", source="llm", split=split[:1]), reply) is None
+    assert _slot(monkeypatch, "shadow", failed, reply) is None
+
+
+def test_weak_positions_without_llm_are_variants_not_one_price(mini_prod_world, monkeypatch):  # noqa: F811
+    """LLM недоступна: сильная позиция — её строка по данным; слабые («ттг», «витамин д») — несколько вариантов
+    кода с полными названиями и ценами, а не одна строка правил как «та самая» (поправка владельца 13.10)."""
+
+    from tests.test_price_one_or_many_class import _priced_sections, _violations
+
+    _deploy(monkeypatch)
+    _parse_on(monkeypatch)
+    with ev_world.FrozenWorld(mini_prod_world, "day") as world:
+        [turn] = run_dialog([CASES["list_true_three"].text], "readers-down-variants")
+        row = world.take_telemetry()
+    assert row["tu_parse_status"] == "unavailable" and row["tu_rule"] == "parse_unavailable"
+    assert _violations(CASES["list_true_three"], turn["text"], "down") == []
+    sections = _priced_sections(turn["text"])
+    assert sections[0] == ["Ферритин"] and all(2 <= len(section) <= 5 for section in sections[1:]), sections
+
+
+def test_one_found_row_without_llm_is_named_without_its_price():
+    """Без выбора LLM у слабой позиции нашлась одна строка — название без цены (вариант B L-13), ни одной
+    позиции с ценой — только названия."""
+
+    from messengers_router.renderer import format_price_for_patient
+    from messengers_router.services._basket_select import basket_from_phrases
+    from messengers_router.services._prices_helpers import multi_price_payload_from_items
+    from messengers_router.text_templates import price_names_without_prices_text
+
+    catalog = [
+        {"serviceName": "Ферритин", "serviceHomecode": "1", "cost": 530},
+        {"serviceName": "Спирография компьютерная", "serviceHomecode": "2", "cost": 900},
+        {"serviceName": "Глюкоза", "serviceHomecode": "3", "cost": 190},
+    ]
+    note = price_names_without_prices_text("спирография", ["Спирография компьютерная"])
+
+    def answer(reply: str, *phrases: turn_parse.ParsedPhrase) -> dict:
+        positions, rest = asyncio.run(basket_from_phrases(reply, phrases, (), catalog, llm_allowed=False))
+        return multi_price_payload_from_items(positions, rest, allow_single=True)
+
+    reply = "сколько стоит ферритин и спирография"
+    payload = answer(reply, _phrase("ферритин", reply, catalog, "Ферритин"), _phrase("спирография", reply))
+    text = format_price_for_patient(payload, {})
+    assert "Ферритин — 530" in text and note in text and "900" not in text
+    reply = "сколько стоит спирография и сахар"
+    payload = answer(reply, _phrase("спирография", reply), _phrase("сахар", reply))
+    assert (payload["prices"], payload["clarify_text"]) == ([], f"{note}\n\nНе распознал: сахар. Уточните эти названия — помогу по ним отдельно.")
