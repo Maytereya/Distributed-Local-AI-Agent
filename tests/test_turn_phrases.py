@@ -30,28 +30,9 @@ from messengers_router import llm_runtime, turn_parse, turn_understanding
 from messengers_router.services import _prices_helpers as H
 from messengers_router.services import _turn_phrases as TP
 from messengers_router.services._common import _normalise_catalog_text
-from tests.test_price_one_or_many_class import CASES
+from tests.test_price_one_or_many_class import CASES, TRUE_CUT
 from tests.test_price_turns_golden import DIALOGS, FIXTURE, mini_prod_world  # noqa: F401 — фикстура модуля
 
-# Разрез, который должен быть достижим, — словами реплики (сравнение без регистра и пунктуации).
-TRUE_CUT: dict[str, tuple[str, ...]] = {
-    "name_parens_commas": ("Прием (осмотр, консультация) врача-терапевта",),
-    "name_commas_in_parens": ("Общий анализ крови (Le, Er, Hb, СОЭ)",),
-    "name_plus_in_parens": ("Глюкозотолерантный тест (глюкоза+ C-пептид)",),
-    "name_plus_outside": ("УЗИ органов мошонки + ЦДК сосудов",),
-    "name_and_outside_parens": ("Билирубин и его фракции (общий, прямой и непрямой)",),
-    "name_and_in_parens": ("Экспресс-тест для определения сифилиса (антитела IgG и IgM к Treponema pallidum)",),
-    "name_and_between_numerals": ("Пепсиногены  I и II с расчетом соотношения",),
-    "name_many_commas": ("Исследование кала на паразиты (лямблии, описторхи, аскариды, острицы, власоглав, карликовый цепень и др.)",),
-    "phrase_smear_throat": ("мазок на микрофлору с поверхности задней стенки глотки",),
-    "phrase_smear_pharynx": ("мазок на микрофлору из зева",),
-    "phrase_oms": ("приём терапевта по ОМС",),
-    "readiness_extra_words": ("анализ на ферритин",),
-    "list_true_three": ("ферритин", "ттг", "витамин д"),
-    "list_one_unrecognized": ("ферритин", "глюкоза", "спирометрия"),
-    "list_caps_run_on_priced": ("ФЕРРИТИН", "ГЛЮКОЗА", "ХОЛЕСТЕРОЛ"),
-    "list_caps_run_on_bare": ("ОАК", "ОАМ", "ФЕРРИТИН", "ГЛЮКОЗА"),
-}
 
 # Шумные варианты: переносы строк, «ёлочки», заголовок списка, лишние слова, ё, незакрытая скобка.
 NOISY = (

@@ -24,11 +24,13 @@ C (L-15b, шаг 4) отдаёт этот выбор LLM: фразы-подст�
 
 Мир: мини-прод, день, сеть закрыта, синонимы МИС пусты (`_hermetic_mis_synonyms`). Две LLM: гейтовая
 «недоступна» (`_LLMDown`) и поддельная LLM-оракул — идеальный выбор модели: на выборе строки прайса,
-корзины и срока она отмечает ровно строки разметки случая, остальные места (классификатор,
-нормализатор, рендер) — «недоступна». Два набора выключателей: по умолчанию и набор деплоя
-(понимание хода, корзина, срок, симптом — on; цена через модуль — off; L-13 — тень). Где текущий код
-инвариант не держит — `xfail(strict=True)` с причиной: позеленевший случай краснеет, и его отметку
-снимают в том же коммите.
+корзины и срока она отмечает ровно строки разметки случая, на выборе фраз реплики (L-15b) — ровно фразы
+разреза случая (`TRUE_CUT`), остальные места (классификатор, нормализатор, рендер) — «недоступна». Три
+набора выключателей: по умолчанию; набор деплоя (понимание хода, корзина, срок, симптом — on; цена через
+модуль — off; L-13 — тень); набор деплоя с разбором реплики на фразы (`turn_parse = on`, L-15b шаг 5 —
+понимание, корзина, срок и путь одной услуги читают разбор). Где код инвариант не держит —
+`xfail(strict=True)` с причиной: позеленевший случай краснеет, и его отметку снимают в том же коммите.
+Отметки наборов без разбора описывают поведение под `off` и не меняются шагом 5.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
+from messengers_router.services._common import _normalise_catalog_text
 from messengers_router.services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
 from tests.test_price_turns_golden import FIXTURE, run_dialog
 
@@ -54,7 +57,10 @@ _DEPLOY = {
     "MR_CHOOSE_PRICE": "off",
     "MR_PRICE_MATCH_POLICY": "shadow",
 }
-CONFIGS = ("default", "deploy")
+# Набор выключателей → значения поверх конфига гейта.
+_SETS = {"default": {}, "deploy": _DEPLOY, "deploy_parse": {**_DEPLOY, "MR_TURN_PARSE": "on"}}
+CONFIGS = tuple(_SETS)
+_OFF_CONFIGS = ("default", "deploy")  # без разбора реплики на фразы — поведение под `turn_parse = off`
 LLMS = ("down", "oracle")
 
 _SELECT_MARKS = {
@@ -62,6 +68,7 @@ _SELECT_MARKS = {
     "price": "ответить пациенту на вопрос о цене",
     "readiness": "сколько готовится анализ или исследование",
 }
+_PHRASES_MARK = "понять, какие услуги назвал пациент"
 _BASKET_SECTION = "Формат: По услуге «"
 _UNRECOGNIZED = "Не распознал"
 _VARIANTS_MAX = 5  # слабая позиция без LLM — несколько вариантов кода (до 3–5), форму решит замер шага 6
@@ -101,14 +108,20 @@ _FAMILY_SHORTCUT = (
     "дословное название среди кандидатов — выбор LLM пропущен («правила не ошибаются»), а ответ правил — "
     "семья ОАК с ценой второй услуги"
 )
-_DOWN = {(c, "down"): _FAMILY_DOWN for c in CONFIGS}
+_DOWN = {(c, "down"): _FAMILY_DOWN for c in _OFF_CONFIGS}
+# Под `turn_parse = on` при недоступной LLM сплошной текст без разделителей не режется (решение владельца
+# 13.10, Q2) — прежний путь правил; честно без LLM это не починить в шаге 5.
+_RUN_ON_DOWN = (
+    "LLM недоступна, разделителей нет: разбор не решён — прежний путь правил (сплошной текст без LLM не режем, "
+    "Q2); "
+)
 
 CASES: dict[str, Case] = {
     # --- названия прайса с «,», «и», «+», скобками с запятыми — одна услуга (g0315)
     "name_parens_commas": _one("Прием (осмотр, консультация) врача-терапевта"),
     "name_commas_in_parens": _one(
         "Общий анализ крови (Le, Er, Hb, СОЭ)",
-        xfail={**_DOWN, **{(c, "oracle"): _FAMILY_SHORTCUT for c in CONFIGS}},
+        xfail={**_DOWN, **{(c, "oracle"): _FAMILY_SHORTCUT for c in _OFF_CONFIGS}},
     ),
     "name_plus_in_parens": _one("Глюкозотолерантный тест (глюкоза+ C-пептид)", xfail=_DOWN),
     "name_plus_outside": _one("УЗИ органов мошонки + ЦДК сосудов"),
@@ -127,6 +140,8 @@ CASES: dict[str, Case] = {
                 "фраза одной услуги разрезана сегментацией каталога на «мазок на» / «микрофлору из» / «зева»; сбой "
                 "LLM — корзина правил с чужими строками («Мазок на степень чистоты влагалища»); разрез — контракт C"
             ),
+            ("deploy_parse", "down"): _RUN_ON_DOWN
+            + "сегментация правил режет фразу одной услуги, у обрывков — варианты кода; S2 без LLM — замер шага 6",
         },
     ),
     "phrase_oms": Case("сколько стоит приём терапевта по ОМС", "one", {"приём терапевта по омс": ()}),
@@ -150,7 +165,7 @@ CASES: dict[str, Case] = {
                     "сбой LLM — у слабых позиций («ттг», «витамин д») по одной строке правил с ценой, как «та самая»; "
                     "по поправке 13.10 — несколько вариантов кода с полными названиями (форма — замер шага 6), шаг 5"
                 )
-                for c in CONFIGS
+                for c in _OFF_CONFIGS
             },
             ("default", "oracle"): "корзина правил (choose_basket off): у слабой позиции одна строка с ценой, выбранная буквами, а не LLM",
         },
@@ -168,11 +183,13 @@ CASES: dict[str, Case] = {
         {"ферритин": ("Ферритин",), "глюкоза": ("Глюкоза",), "холестерол": ("Холестерол",)},
         strong=frozenset({"ферритин", "глюкоза", "холестерол"}),
         xfail={
-            **{(c, "down"): "сплошной список из трёх дословных названий не распознан как список — «не нашёл»" for c in CONFIGS},
+            **{(c, "down"): "сплошной список из трёх дословных названий не распознан как список — «не нашёл»" for c in _OFF_CONFIGS},
             **{
                 (c, "oracle"): "сплошной список не распознан как список: три услуги — одним ответом «одной услуги» (выбор строки прайса отметил все три)"
-                for c in CONFIGS
+                for c in _OFF_CONFIGS
             },
+            ("deploy_parse", "down"): _RUN_ON_DOWN
+            + "«не нашёл» без чужой цены; показать ли при сбое LLM сильные окна (г) с ценой — вопрос владельцу (шаг 6)",
         },
     ),
     "list_caps_run_on_bare": Case(
@@ -185,22 +202,51 @@ CASES: dict[str, Case] = {
 }
 
 
+# Разрез случая — словами реплики (сравнение без регистра и пунктуации): фразы, которые оракул отмечает на
+# выборе фраз реплики (L-15b), и разрез, который генератор фраз обязан предложить (`test_turn_phrases.py`).
+TRUE_CUT: dict[str, tuple[str, ...]] = {
+    "name_parens_commas": ("Прием (осмотр, консультация) врача-терапевта",),
+    "name_commas_in_parens": ("Общий анализ крови (Le, Er, Hb, СОЭ)",),
+    "name_plus_in_parens": ("Глюкозотолерантный тест (глюкоза+ C-пептид)",),
+    "name_plus_outside": ("УЗИ органов мошонки + ЦДК сосудов",),
+    "name_and_outside_parens": ("Билирубин и его фракции (общий, прямой и непрямой)",),
+    "name_and_in_parens": ("Экспресс-тест для определения сифилиса (антитела IgG и IgM к Treponema pallidum)",),
+    "name_and_between_numerals": ("Пепсиногены  I и II с расчетом соотношения",),
+    "name_many_commas": ("Исследование кала на паразиты (лямблии, описторхи, аскариды, острицы, власоглав, карликовый цепень и др.)",),
+    "phrase_smear_throat": ("мазок на микрофлору с поверхности задней стенки глотки",),
+    "phrase_smear_pharynx": ("мазок на микрофлору из зева",),
+    "phrase_oms": ("приём терапевта по ОМС",),
+    "readiness_extra_words": ("анализ на ферритин",),
+    "list_true_three": ("ферритин", "ттг", "витамин д"),
+    "list_one_unrecognized": ("ферритин", "глюкоза", "спирометрия"),
+    "list_caps_run_on_priced": ("ФЕРРИТИН", "ГЛЮКОЗА", "ХОЛЕСТЕРОЛ"),
+    "list_caps_run_on_bare": ("ОАК", "ОАМ", "ФЕРРИТИН", "ГЛЮКОЗА"),
+}
+
+
 class _OracleLLM:
     """LLM-оракул: на выборе строки прайса, корзины и срока отмечает ровно строки разметки случая.
 
     Корзина — по позиции: строка выбирается, только если «позиция» — услуга из разметки и строка — её;
-    обрывок фразы («мазок на») — не услуга, для него ничего. Цена и срок — любая строка разметки.
-    Прочие места — «недоступна», как в мире гейта.
+    обрывок фразы («мазок на») — не услуга, для него ничего. Цена и срок — любая строка разметки. Выбор
+    фраз реплики (L-15b) — ровно фразы разреза случая (`cut`; не задан — «недоступна»). Прочие места —
+    «недоступна», как в мире гейта.
     """
 
-    def __init__(self, case: Case) -> None:
+    def __init__(self, case: Case, cut: tuple[str, ...] = ()) -> None:
         self.by_fragment = {fragment.lower(): set(names) for fragment, names in case.positions.items()}
         self.names = {name for names in case.positions.values() for name in names}
+        self.cut = {_normalise_catalog_text(text) for text in cut}
         self.calls: list[str] = []
         self.picked: set[str] = set()
 
     async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
         seen = f"{system}\n\n{prompt}" if system else prompt
+        if self.cut and _PHRASES_MARK in seen:
+            self.calls.append("phrases")
+            lines = (line.partition(". ") for line in prompt.splitlines())
+            picks = [int(head) for head, dot, rest in lines if dot and head.isdigit() and _normalise_catalog_text(rest.strip("«»")) in self.cut]
+            return GenerateResponse(model="m", response=json.dumps({"picks": picks}), done=True)
         task = next((task for task, mark in _SELECT_MARKS.items() if mark in seen), None)
         if task is None:
             raise ConnectionError("тест: LLM недоступна для этого места")
@@ -314,33 +360,62 @@ def _params():
                 yield pytest.param(name, config, llm, marks=marks, id=f"{name}-{config}-{llm}")
 
 
-@pytest.mark.parametrize(("name", "config", "llm"), list(_params()))
-def test_one_service_or_several(name, config, llm, mini_prod_world, monkeypatch):
+def _configure(monkeypatch, config: str) -> None:
     from messengers_router.runtime_config import config as cfg
 
+    for key, value in _SETS[config].items():
+        monkeypatch.setattr(cfg, key, value, raising=False)
+
+
+def _class_turn(name: str, config: str, llm: str, world_dir, monkeypatch) -> tuple[dict, dict | None, _OracleLLM]:
     case = CASES[name]
-    if config == "deploy":
-        for key, value in _DEPLOY.items():
-            monkeypatch.setattr(cfg, key, value, raising=False)
-    oracle = _OracleLLM(case)
+    _configure(monkeypatch, config)
+    oracle = _OracleLLM(case, TRUE_CUT[name])
     if llm == "oracle":
         monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
-    with ev_world.FrozenWorld(mini_prod_world, "day") as world:
+    with ev_world.FrozenWorld(world_dir, "day") as world:
         [turn] = run_dialog([case.text], f"one-or-many-{name}-{config}-{llm}")
-        attempts = list(world.net.attempts)
+        attempts, row = list(world.net.attempts), world.take_telemetry()
     assert attempts == []
-    violations = _violations(case, turn["text"], llm, oracle.picked)
+    return turn, row, oracle
+
+
+@pytest.mark.parametrize(("name", "config", "llm"), list(_params()))
+def test_one_service_or_several(name, config, llm, mini_prod_world, monkeypatch):
+    turn, _row, oracle = _class_turn(name, config, llm, mini_prod_world, monkeypatch)
+    violations = _violations(CASES[name], turn["text"], llm, oracle.picked)
     assert not violations, "\n".join([*violations, "--- ответ:", turn["text"]])
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_parse_on_spends_at_most_two_decisions(name, mini_prod_world, monkeypatch):
+    """Под `turn_parse = on` (живая LLM) решений хода не больше двух — лимит не меняли (решение владельца 13.10,
+    Q4): выбор фраз — первое, выбор строк корзины, строки цены или срока — второе; бюджет хода не исчерпан."""
+
+    _turn, row, oracle = _class_turn(name, "deploy_parse", "oracle", mini_prod_world, monkeypatch)
+    decisions = [(entry["task"], entry["status"]) for entry in row.get("choose") or [] if not entry.get("shadow")]
+    assert len(decisions) <= 2, decisions
+    assert "phrases" not in oracle.calls or decisions[0] == ("turn_phrases", "picked"), decisions
+    assert not [call for call in row.get("llm") or [] if call.get("outcome") == "budget"], row.get("llm")
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_parse_on_with_llm_down_names_no_lone_weak_price(name, mini_prod_world, monkeypatch):
+    """Под `turn_parse = on` при недоступной LLM одиночная цена — только у сильного по данным (дословное
+    название, синоним МИС, код): ни одна слабая позиция и ни одна фраза одной услуги не получает одну строку
+    как «ту самую», при дословном названии нет цен соседей. Держится во всех 16 случаях, в том числе в двух
+    xfail основного теста (там нарушено другое: разрез фразы одной услуги и «не нашёл» сплошного списка)."""
+
+    turn, _row, _oracle = _class_turn(name, "deploy_parse", "down", mini_prod_world, monkeypatch)
+    lone = [v for v in _violations(CASES[name], turn["text"], "down") if "одиночная цена" in v or "чужих строк" in v or "вариантов" in v]
+    assert lone == [], "\n".join([*lone, "--- ответ:", turn["text"]])
 
 
 def test_oracle_answers_the_selection_it_was_asked(mini_prod_world, monkeypatch):
     """Оракул действительно выбирает: на живом наборе деплоя слабые позиции списка получают ровно свои
     строки, а строки другой услуги рядом («Антитела к рецепторам ТТГ», акции витамина D) — нет."""
 
-    from messengers_router.runtime_config import config as cfg
-
-    for key, value in _DEPLOY.items():
-        monkeypatch.setattr(cfg, key, value, raising=False)
+    _configure(monkeypatch, "deploy")
     case = CASES["list_true_three"]
     oracle = _OracleLLM(case)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
