@@ -39,6 +39,7 @@ from ._doctors_helpers import (
     _service_name_matches_specialty,
 )
 from .. import llm_runtime as llm_runtime_mod
+from .. import turn_parse
 from ._regions import _extract_city_token
 
 
@@ -1527,6 +1528,20 @@ def _catalog_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
         except Exception:
             return []
     return [row for row in rows if isinstance(row, dict)]
+
+
+def _catalog_fingerprint(rows: list[dict[str, Any]]) -> tuple[int, str, str]:
+    """Отпечаток среза прайса: число строк и названия первой и последней (срез меняется целиком)."""
+
+    if not rows:
+        return (0, "", "")
+    first = rows[0] if isinstance(rows[0], dict) else {}
+    last = rows[-1] if isinstance(rows[-1], dict) else {}
+    return (
+        len(rows),
+        str(first.get("serviceName") or first.get("name") or "")[:48],
+        str(last.get("serviceName") or last.get("name") or "")[:48],
+    )
 
 
 def _catalog_has_service_name(service_name: str, rows: list[dict[str, Any]] | None) -> bool:
@@ -3253,6 +3268,7 @@ def _strong_service_match(fragment: str, service_name: str, retail_rows: list[di
     )
 
 
+@turn_parse.per_turn(_catalog_fingerprint)
 def _resolve_multi_price_items(
     query_text: str,
     retail_rows: list[dict[str, Any]],
@@ -3263,6 +3279,9 @@ def _resolve_multi_price_items(
     только если ≥2 фрагментов приземлились на каталог (иначе пусто — fallback на
     single-service путь); unrecognized — позиции списка, которые каталогом не
     распознались (S3: честно перечисляются пациенту, не замалчиваются).
+
+    В ходе тот же текст на том же срезе считается один раз (`turn_parse`, L-15b шаг 1): его
+    зовут корзина, понимание хода и подбор анализов, а резолвер на фрагмент — ~170 мс.
 
     :param query_text: исходный запрос пользователя
     :param retail_rows: строки retail-прайса региона
@@ -3375,6 +3394,7 @@ def _build_synonym_fork_payload(
     }
 
 
+@turn_parse.per_turn(_catalog_fingerprint)
 def _multi_price_items(
     query_text: str,
     retail_rows: list[dict[str, Any]],
@@ -3383,7 +3403,7 @@ def _multi_price_items(
 
     Одна функция для сборщика корзины и для понимания хода (`price_list_services`):
     «реплика — список» решается там же, где строится ответ, иначе понимание и ответ
-    разошлись бы.
+    разошлись бы. В ходе тот же текст на том же срезе считается один раз (`turn_parse`).
 
     :param query_text: исходный запрос пользователя
     :param retail_rows: строки retail-прайса региона
@@ -3445,11 +3465,7 @@ def _catalog_names_normalised(rows: list[dict[str, Any]]) -> tuple[tuple[str, st
 
     if not rows:
         return ()
-    key = (
-        len(rows),
-        str(rows[0].get("serviceName") or rows[0].get("name") or "")[:48],
-        str(rows[-1].get("serviceName") or rows[-1].get("name") or "")[:48],
-    )
+    key = _catalog_fingerprint(rows)
     cached = _CATALOG_NAMES_CACHE.get(key)
     if cached is None:
         names = dict.fromkeys(str(row.get("serviceName") or row.get("name") or "").strip() for row in rows)

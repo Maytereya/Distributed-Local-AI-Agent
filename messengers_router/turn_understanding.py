@@ -32,7 +32,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from . import turn_telemetry
+from . import turn_parse, turn_telemetry
 from .policies import detect_address_intent, detect_nonbookable_walkin_intent, detect_prepare_intent, detect_price_intent
 from .runtime_config import config as _cfg
 from .services._prices_helpers import is_readiness_question, price_list_services, strip_readiness_phrasing
@@ -90,10 +90,12 @@ def mode() -> str:
 
 
 def begin_turn() -> None:
-    """Новый ход: понимание прошлого хода не читается (тесты и стенд гоняют ходы в одном цикле)."""
+    """Новый ход: понимание прошлого хода не читается (тесты и стенд гоняют ходы в одном цикле);
+    память разбора реплики — новая, на этот ход (`turn_parse`, во всех режимах выключателя)."""
 
     _CURRENT.set(None)
     _ACTED.set(())
+    turn_parse.begin()
 
 
 def current() -> TurnUnderstanding | None:
