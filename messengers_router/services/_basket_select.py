@@ -49,6 +49,8 @@ def basket_mode() -> str:
 
 
 def _candidates(item: dict[str, Any], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if item.get("unsatisfiable"):
+        return []  # уточнение, которого в прайсе нет («по ОМС»): не «почти то» — «Не распознал» (П2)
     seen: set[tuple[str, str, str]] = set()
     out: list[dict[str, Any]] = []
     for row in [*(item.get("prices") or []), *_rank_price_rows(retail_rows, str(item.get("fragment") or item["service_name"]), limit=_PER_ITEM)]:

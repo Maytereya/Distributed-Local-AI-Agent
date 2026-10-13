@@ -536,3 +536,19 @@ def test_readiness_journals_the_weak_phrase_with_the_llm_choice(catalog, mini_pr
         ("анализ на ферритин", True, "readiness", ["Ферритин"]),
         ("анализ на ферритин", False, "readiness", []),
     ]  # сбой LLM — решения нет, записи нет
+
+
+@pytest.mark.parametrize("llm", ["down", "live"])
+def test_phrase_with_a_qualifier_the_price_lacks_is_not_priced_by_neighbours(llm, mini_prod_world, monkeypatch):  # noqa: F811
+    """Решение владельца П2 («по ОМС» — честное «не нашёл», не платный приём) держится и у позиции корзины из
+    разбора: ни варианты кода при сбое LLM, ни выбор строк при живой LLM не показывают платные приёмы."""
+
+    _deploy(monkeypatch)
+    _parse_on(monkeypatch)
+    if llm == "live":
+        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _JournalLLM(("ферритин", "приём терапевта по ОМС"), "Прием"))
+    with ev_world.FrozenWorld(mini_prod_world, "day") as world:
+        [turn] = run_dialog(["сколько стоит ферритин и приём терапевта по ОМС"], f"readers-oms-{llm}")
+        row = world.take_telemetry()
+    assert "Ферритин — 530" in turn["text"] and "Не распознал: приём терапевта по ОМС" in turn["text"]
+    assert "врача-терапевта —" not in turn["text"] and "price_basket" not in [entry["task"] for entry in row["choose"]]
