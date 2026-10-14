@@ -2917,6 +2917,8 @@ def _is_price_show_all_request(query_text: str) -> bool:
     """
     Проверяет короткий follow-up пациента с просьбой показать все варианты.
 
+    Одно определение «показать все»: его же зовёт классификатор (`classifier._is_price_family_show_all_followup`).
+
     :param query_text: текст реплики
     :return: True для `все` / `покажи все` / `все варианты`
     """

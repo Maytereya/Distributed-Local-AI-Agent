@@ -479,6 +479,9 @@ def _is_price_family_show_all_followup(text: str, last_entities: dict[str, Any])
     """
     Определяет короткий follow-up `все` для активной family price-выдачи.
 
+    Здесь — только контекст (показан список семейства). Саму реплику узнаёт одно определение —
+    инструмента цены, рядом с подсказкой «напишите: "все"» (`_is_price_show_all_request`).
+
     :param text: текущая реплика пользователя
     :param last_entities: сессионный контекст
     :return: True, если нужно продолжить PRICE и показать все варианты
@@ -489,13 +492,10 @@ def _is_price_family_show_all_followup(text: str, last_entities: dict[str, Any])
         return False
     if str(last_entities.get("_last_label") or "").strip().upper() != "PRICE":
         return False
-    return bool(
-        re.fullmatch(
-            r"\s*(?:все|всё|покажи\s+все|показать\s+все|все\s+варианты|все\s+услуги|все\s+анализы)\s*[!.,?]*\s*",
-            str(text or ""),
-            flags=re.I,
-        )
-    )
+    # Импорт в функции: классификатор не тянет сервисный слой при своём импорте (как `planner`).
+    from .services._prices_helpers import _is_price_show_all_request
+
+    return _is_price_show_all_request(text)
 
 
 _PROMO_FOLLOWUP_TEXT_RE = re.compile(

@@ -30,7 +30,7 @@ _CORE = Path(__file__).resolve().parents[1] / "messengers_router"
 # STEP-2026-10-10-B1-TURN-UNDERSTANDING.
 _CEILINGS = {
     "re.compile": 261,
-    "регулярка-литерал в вызове re.*": 162,
+    "регулярка-литерал в вызове re.*": 161,
     "список слов на уровне модуля (≥5 строк)": 103,
 }
 
