@@ -96,6 +96,41 @@ def _word_candidates(fragment: str, retail_rows: list[dict[str, Any]]) -> list[d
     return out[: _PER_ITEM * 2]
 
 
+def _context_candidates(index: int, items: list[dict[str, Any]], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Кандидаты позиции списка с общей частью соседей — когда по самой позиции код не нашёл ничего.
+
+    Перечисление часто держит общее слово один раз: голову в начале («витамин б9 и б12», «Витамины В1, В2,
+    …, В12» — «б12», «В2» без «витамин») или хвост в конце («т3 и т4 свободные» — «т3» без «свободные»).
+    Фраза позиции остаётся срезом реплики (контракт C), а поиск идёт по «голова ближайшей предыдущей
+    позиции из ≥2 слов + позиция» и «позиция + хвост ближайшей следующей позиции из ≥2 слов» (голова — все
+    слова, кроме последнего; хвост — все, кроме первого). Только варианты выбора LLM, как кандидаты по
+    словам; новых регулярок и словарей нет.
+    """
+
+    from ._turn_phrases import _FILLER, _tokens
+
+    def words(i: int) -> list[str]:
+        text = str(items[i].get("fragment") or items[i]["service_name"])
+        return [text[t.start : t.end] for t in _tokens(text) if t.key not in _FILLER]
+
+    fragment = " ".join(words(index))
+    queries: list[str] = []
+    before = next((words(i) for i in range(index - 1, -1, -1) if len(words(i)) >= 2), None)
+    if before:
+        queries.append(" ".join([*before[:-1], fragment]))
+    after = next((words(i) for i in range(index + 1, len(items)) if len(words(i)) >= 2), None)
+    if after:
+        queries.append(" ".join([fragment, *after[1:]]))
+    seen: set[tuple[str, str, str]] = set()
+    out: list[dict[str, Any]] = []
+    for query in queries:
+        for row in [*strong_rows(query, retail_rows), *_rank_price_rows(retail_rows, query, limit=_PER_ITEM)]:
+            if isinstance(row, dict) and _row_key(row) not in seen:
+                seen.add(_row_key(row))
+                out.append(row)
+    return out[:_PER_ITEM]
+
+
 def _position(fragment: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     name = _row_name(rows[0]) if len(rows) == 1 else fragment
     return {"service_name": name, "prices": _annotate_price_rows_with_care_context(list(rows)), "fragment": fragment}
@@ -180,12 +215,13 @@ async def _pick(
     if not weak:
         return chosen, weak, False
     # Корзина из фраз (`fair_share`): позиции, у которой по фразе целиком кандидатов нет, LLM получает
-    # кандидатов по словам; при сбое LLM варианты строятся из прежних (пустых) — «Не распознал». Уточнение,
+    # кандидатов по общей части соседей по списку, затем по словам; при сбое LLM варианты строятся из прежних
+    # (пустых) — «Не распознал». Уточнение,
     # которого в прайсе нет («по ОМС», П2), — без кандидатов и по словам.
     offered = [
         candidates
         or (
-            _word_candidates(fragment, retail_rows)
+            _context_candidates(index, items, retail_rows) or _word_candidates(fragment, retail_rows)
             if fair_share and llm_allowed and not items[index].get("unsatisfiable")
             else []
         )
