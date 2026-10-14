@@ -222,7 +222,7 @@ def test_price_renderer_groups_family_variants_by_care_setting():
     assert "2. Медицинский массаж 60 мин — 4 000 руб." in text
     assert "1. Переливание эритроцитарной массы — 6 000 руб." in text
     assert "1. Хромато масс-спектрометрия микробных маркеров — 4 950 руб." in text
-    assert "Медицинский массаж 30 мин — 2 500 руб.. Формат: поликлиника." not in text
+    assert "Медицинский массаж 30 мин — 2 500 руб. Формат: поликлиника." not in text
 
 
 def test_doctor_info_renderer_single_selected_doctor_compact_followup():

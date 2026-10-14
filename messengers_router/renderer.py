@@ -454,7 +454,7 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
 
     lines = [f"По запросу «{service_name}» нашёл варианты стоимости:"]
     grouped = _group_family_variants_by_care_context(shown)
-    has_care_groups = any(group["label"] or group["address"] for group in grouped)
+    has_care_groups = any(group["label"] or group["address"] or group["heading"] for group in grouped)
 
     if has_care_groups:
         for group in grouped:
@@ -465,6 +465,7 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
             heading = _format_family_care_group_heading(
                 str(group["label"] or ""),
                 str(group["address"] or ""),
+                group_heading=str(group["heading"] or ""),
             )
             if heading:
                 lines.append(heading)
@@ -473,7 +474,7 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
                     continue
                 name = str(row.get("serviceName") or row.get("name") or service_name).strip()
                 amount = _format_rub(_extract_price_amount(row))
-                lines.append(f"{i}. {name} — {amount}.")
+                lines.append(_close_sentence(f"{i}. {name} — {amount}"))
     else:
         for i, row in enumerate(shown, 1):
             if not isinstance(row, dict):
@@ -481,7 +482,7 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
             name = str(row.get("serviceName") or row.get("name") or service_name).strip()
             amount = _format_rub(_extract_price_amount(row))
             care_suffix = _format_care_setting_suffix(row)
-            line = f"{i}. {name} — {amount}."
+            line = _close_sentence(f"{i}. {name} — {amount}")
             if care_suffix:
                 line = f"{line} {care_suffix}"
             lines.append(line)
@@ -556,7 +557,7 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
                 amount = _format_rub(_extract_price_amount(price_row))
                 price_name = str(price_row.get("serviceName") or price_row.get("name") or service_name).strip()
                 care_suffix = _format_care_setting_suffix(price_row)
-                line = f"- {price_name} — {amount}."
+                line = _close_sentence(f"- {price_name} — {amount}")
                 if care_suffix:
                     line = f"{line} {care_suffix}"
                 lines.append(line)
@@ -565,7 +566,7 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
             amount = _format_rub(_extract_price_amount(top_price))
             price_name = str(top_price.get("serviceName") or top_price.get("name") or service_name).strip()
             care_suffix = _format_care_setting_suffix(top_price)
-            line = f"1) Розничная цена: {price_name} — {amount}."
+            line = _close_sentence(f"1) Розничная цена: {price_name} — {amount}")
             if care_suffix:
                 line = f"{line} {care_suffix}"
             lines.append(line)
@@ -639,6 +640,12 @@ def _format_rub(amount: int | None) -> str:
     return f"{amount:,}".replace(",", " ") + " руб."
 
 
+def _close_sentence(text: str) -> str:
+    """Точка в конце строки — одна: сумма уже кончается на «руб.», и шаблон строки её не удваивает."""
+
+    return text if text.endswith(".") else f"{text}."
+
+
 def _format_care_setting_suffix(row: dict[str, Any]) -> str:
     label = str(row.get("care_setting_label") or "").strip()
     addresses: list[str] = []
@@ -680,31 +687,37 @@ def _group_family_variants_by_care_context(rows: list[dict[str, Any]]) -> list[d
     """
 
     groups: list[dict[str, Any]] = []
-    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
         label = str(row.get("care_setting_label") or "").strip()
         address = str(row.get("care_setting_address") or "").strip()
-        key = (label, address)
+        # Заголовок группы корзины («По услуге «X»») — своё поле, а не «формат оказания»:
+        # иначе рендер печатал пациенту «Формат: По услуге «X»:».
+        heading = str(row.get("price_group_heading") or "").strip()
+        key = (label, address, heading)
         group = by_key.get(key)
         if group is None:
-            group = {"label": label, "address": address, "rows": []}
+            group = {"label": label, "address": address, "heading": heading, "rows": []}
             by_key[key] = group
             groups.append(group)
         group["rows"].append(row)
     return groups
 
 
-def _format_family_care_group_heading(label: str, address: str) -> str:
+def _format_family_care_group_heading(label: str, address: str, *, group_heading: str = "") -> str:
     """
     Формирует заголовок блока family-вариантов по формату оказания услуги.
 
     :param label: формат оказания услуги
     :param address: адрес оказания услуги
+    :param group_heading: готовый заголовок группы корзины («По услуге «X»») — печатается как есть
     :return: текст заголовка блока
     """
 
+    if group_heading:
+        return f"{group_heading}:"
     norm_label = str(label or "").strip().lower()
     heading_by_label = {
         "поликлиника": "В поликлинике",
@@ -849,9 +862,9 @@ def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) 
             amount = one.get("amount")
             amount_txt = _format_rub(amount if isinstance(amount, int) else None)
             if doctor_display:
-                base = f"У врача {doctor_display} услуга «{name}» стоит {amount_txt}."
+                base = _close_sentence(f"У врача {doctor_display} услуга «{name}» стоит {amount_txt}")
             else:
-                base = f"Услуга «{name}» стоит {amount_txt}."
+                base = _close_sentence(f"Услуга «{name}» стоит {amount_txt}")
             if branch:
                 base = f"{base} ({branch})"
             care_suffix = _format_care_setting_suffix(one)

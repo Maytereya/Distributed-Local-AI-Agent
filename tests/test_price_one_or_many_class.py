@@ -69,7 +69,13 @@ _SELECT_MARKS = {
     "readiness": "сколько готовится анализ или исследование",
 }
 _PHRASES_MARK = "понять, какие услуги назвал пациент"
-_BASKET_SECTION = "Формат: По услуге «"
+def _is_basket_section(line: str) -> bool:
+    """Заголовок раздела корзины — «По услуге «X»:» (отдельной строкой). Ответ одной услуги начинается
+    «По услуге «X» нашёл следующее:» — это не раздел корзины."""
+
+    return line.startswith("По услуге «") and line.endswith("»:")
+
+
 _UNRECOGNIZED = "Не распознал"
 _VARIANTS_MAX = 5  # слабая позиция без LLM — несколько вариантов кода (до 3–5), форму решит замер шага 6
 _PRICED = re.compile(r"^\s*\d+[.)]\s*(?:Розничная цена:\s*)?(?P<name>.+) — \d[\d\s]* руб", re.M)
@@ -283,7 +289,7 @@ def _priced_sections(text: str) -> list[list[str]]:
 
     sections: list[list[str]] = [[]]
     for line in text.splitlines():
-        if line.startswith(_BASKET_SECTION):
+        if _is_basket_section(line):
             sections.append([])
         match = _PRICED.match(line)
         if match:
@@ -304,7 +310,7 @@ def _violations(case: Case, text: str, llm: str, picked: frozenset[str] | set[st
     if unnamed:
         out.append(f"(в) цена подписана не полным названием строки прайса: {unnamed}")
     if case.kind in ("one", "readiness"):
-        if _BASKET_SECTION in text or _UNRECOGNIZED in text:
+        if any(_is_basket_section(line) for line in text.splitlines()) or _UNRECOGNIZED in text:
             out.append("(а) одна услуга разрезана на позиции корзины")
         if case.exact and not priced:
             out.append("(а) дословное название без цены")
@@ -429,8 +435,8 @@ def test_oracle_answers_the_selection_it_was_asked(mini_prod_world, monkeypatch)
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("1. Ферритин — 530 руб..\n2) Розничная цена: Глюкоза — 1 190 руб.. Формат: поликлиника.", [["Ферритин", "Глюкоза"]]),
-        ("По запросу:\n\nФормат: По услуге «ОАК»:\n1. А — 1 руб..\n\nФормат: По услуге «ОАМ»:\n1. Б — 2 руб..", [["А"], ["Б"]]),
+        ("1. Ферритин — 530 руб.\n2) Розничная цена: Глюкоза — 1 190 руб. Формат: поликлиника.", [["Ферритин", "Глюкоза"]]),
+        ("По запросу:\n\nПо услуге «ОАК»:\n1. А — 1 руб.\n\nПо услуге «ОАМ»:\n1. Б — 2 руб.", [["А"], ["Б"]]),
         ("Срок готовности «Ферритин» — 1–2 дня.", []),
     ],
 )
@@ -440,18 +446,18 @@ def test_answer_parser_reads_priced_rows_by_section(text, expected):
 
 def test_violations_catch_a_cut_name_and_a_foreign_row():
     case = CASES["name_parens_commas"]
-    cut = "Формат: По услуге «Прием»:\n1. Прием (осмотр, консультация) врача-терапевта — 2 700 руб..\nНе распознал: консультация"
+    cut = "По услуге «Прием»:\n1. Прием (осмотр, консультация) врача-терапевта — 2 700 руб.\nНе распознал: консультация"
     assert _violations(case, cut, "down")
     oak = CASES["list_caps_run_on_bare"]
-    foreign = "Формат: По услуге «ОАМ»:\n1. Общий анализ мочи — 280 руб..\n2. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.."
+    foreign = "По услуге «ОАМ»:\n1. Общий анализ мочи — 280 руб.\n2. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб."
     assert any(v.startswith("(б) в разделе") for v in _violations(oak, foreign, "oracle"))
 
 
 def test_lone_weak_price_needs_strong_data_or_the_model_choice():
     case = CASES["list_true_three"]
-    lone = "Формат: По услуге «Ферритин»:\n1. Ферритин — 530 руб..\n\nФормат: По услуге «ТТГ (TSH) тиреотропный гормон»:\n1. ТТГ (TSH) тиреотропный гормон — 400 руб.."
-    variants = lone + "\n2. Антитела к рецепторам ТТГ — 1 460 руб.."
+    lone = "По услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «ТТГ (TSH) тиреотропный гормон»:\n1. ТТГ (TSH) тиреотропный гормон — 400 руб."
+    variants = lone + "\n2. Антитела к рецепторам ТТГ — 1 460 руб."
     assert any("одиночная цена" in v for v in _violations(case, lone, "down"))
     assert not any("одиночная цена" in v for v in _violations(case, lone, "oracle", {"ТТГ (TSH) тиреотропный гормон"}))
     assert not any("одиночная цена" in v for v in _violations(case, variants, "down"))
-    assert any("не полным названием" in v for v in _violations(case, "1. ТТГ — 400 руб..", "down"))
+    assert any("не полным названием" in v for v in _violations(case, "1. ТТГ — 400 руб.", "down"))

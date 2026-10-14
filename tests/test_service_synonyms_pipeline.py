@@ -292,7 +292,10 @@ def test_ambiguous_synonym_builds_a_fork_with_every_candidate(monkeypatch):
     assert payload["service_kind"] == "family_query"
     shown = {str(v.get("serviceName")) for v in payload["family_variants"]}
     assert set(names) <= shown, sorted(shown)
-    assert all(str(v.get("care_setting_label") or "") for v in payload["family_variants"])
+    # Каждый вариант развилки — своя группа с заголовком «По услуге «X»» (своё поле, не формат оказания:
+    # иначе рендер печатал «Формат: По услуге…», BUG-2026-10-14-RENDER-FORMAT-LABEL).
+    assert all(str(v.get("price_group_heading") or "") for v in payload["family_variants"])
+    assert not any(str(v.get("care_setting_label") or "") for v in payload["family_variants"])
 
 
 def test_unambiguous_synonym_does_not_build_a_fork(monkeypatch):

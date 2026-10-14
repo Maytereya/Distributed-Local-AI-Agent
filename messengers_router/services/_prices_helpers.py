@@ -3370,7 +3370,8 @@ def _build_synonym_fork_payload(
         label = f"По услуге «{name}»"
         for row in rows:
             annotated = dict(row)
-            annotated["care_setting_label"] = label
+            annotated["price_group_heading"] = label
+            annotated["care_setting_label"] = ""
             annotated["care_setting_address"] = ""
             variants.append(annotated)
 
@@ -3535,8 +3536,9 @@ def _build_multi_price_payload(
     """Формирует payload для мульти-услугового price-запроса.
 
     Каждая услуга отрисовывается как отдельная family-подгруппа через
-    `care_setting_label`, чтобы рендер умел группировать список без
-    дополнительного рендер-кейса.
+    `price_group_heading` («По услуге «X»»), чтобы рендер умел группировать список без
+    дополнительного рендер-кейса. Не `care_setting_label`: это формат оказания, рендер
+    печатал бы пациенту «Формат: По услуге «X»:».
 
     :param query_text: исходный запрос пользователя
     :param retail_rows: строки retail-прайса региона
@@ -3570,7 +3572,8 @@ def multi_price_payload_from_items(
         label = f"По услуге «{item['service_name']}»"
         for row in item["prices"]:
             annotated = dict(row)
-            annotated["care_setting_label"] = label
+            annotated["price_group_heading"] = label
+            annotated["care_setting_label"] = ""
             annotated["care_setting_address"] = ""
             variants.append(annotated)
     names_notes = [

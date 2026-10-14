@@ -37,7 +37,7 @@ from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import llm_runtime, turn_parse
-from tests.test_price_one_or_many_class import CASES
+from tests.test_price_one_or_many_class import CASES, _is_basket_section
 from tests.test_price_turns_golden import (  # noqa: F401 — mini_prod_world, synonym_fork — фикстуры
     DIALOGS,
     UPDATE,
@@ -147,7 +147,7 @@ def test_run_on_list_the_rules_missed_is_a_basket_by_the_parse(mini_prod_world, 
     assert (row["tu_rule"], row["tu_list"], row["tu_parse_status"]) == ("parse_picked", 3, "picked")
     assert "planner_list_to_cart" in row["tu_acted"]
     for name, cost in (("Ферритин", "530"), ("Глюкоза", "190"), ("Холестерол", "225")):
-        assert f"Формат: По услуге «{name}»:\n1. {name} — {cost} руб." in turn["text"]
+        assert f"По услуге «{name}»:\n1. {name} — {cost} руб." in turn["text"]
     assert llm.asked(_BASKET_MARK) == [] and [entry["task"] for entry in row["choose"]] == ["turn_phrases"]
 
 
@@ -160,7 +160,7 @@ def test_one_service_phrase_the_rules_cut_is_not_a_basket(mini_prod_world, monke
     llm = _Recorder("phrase_smear_pharynx")
     turn, row = _turn(CASES["phrase_smear_pharynx"].text, llm, mini_prod_world, monkeypatch, "readers-smear")
     assert (row["tu_rule"], row["tu_list"]) == ("parse_picked", 0)
-    assert "Формат: По услуге" not in turn["text"] and llm.asked(_BASKET_MARK) == []
+    assert not any(_is_basket_section(line) for line in turn["text"].splitlines()) and llm.asked(_BASKET_MARK) == []
     assert "Посев на микрофлору (идентификация агента и чувствительность к а\\б) — 1 120" in turn["text"]
 
 
