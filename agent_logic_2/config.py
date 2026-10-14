@@ -207,6 +207,8 @@ class MessengerRouterConfig:
     journal_phrase: str
     context_shown: str
     pending_reply: str
+    # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
+    reask_limit: str
     debug_final_input: bool
     url: str
 
@@ -482,6 +484,10 @@ settings = Settings(
         # прежний; on — пока как shadow (исполнение — следующий шаг, после живого замера и встречного свипа).
         # [MESSENGER_ROUTER] pending_reply
         pending_reply=_get_enum("MESSENGER_ROUTER", "pending_reply", default="off", allowed={"off", "shadow", "on"}),
+        # Предел переспросов (D2.4; пункт 5 принципов, инвариант 3bacf58): off — как было (обработчик висящего
+        # вопроса переспрашивает без счёта); on — один вопрос звучит не больше двух раз подряд, третьего нет:
+        # бот называет нужный ответ и предлагает оператора. [MESSENGER_ROUTER] reask_limit
+        reask_limit=_get_enum("MESSENGER_ROUTER", "reask_limit", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -622,6 +628,7 @@ MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_JOURNAL_PHRASE = settings.messenger_router.journal_phrase
 MR_CONTEXT_SHOWN = settings.messenger_router.context_shown
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
+MR_REASK_LIMIT = settings.messenger_router.reask_limit
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

@@ -567,6 +567,42 @@ def _maybe_offer_operator_on_repeat(
     return response
 
 
+def _maybe_offer_operator_on_reask_limit(
+    response: ResponseEnvelope, state: SessionState, memory: MemoryStore
+) -> ResponseEnvelope:
+    """Предел переспросов (D2.4): третьего раза одного вопроса нет — нужный ответ и оффер оператора.
+
+    Под `[MESSENGER_ROUTER] reask_limit = on` (по умолчанию off — ответ тот же). Обработчик висящего вопроса не
+    разобрал ответ и спрашивает то же снова (`expects.ask(..., reask=True)`); без счётчика это петля (аудит 14.10,
+    пп. 2–3): «Подтвердите запись» → «нет, другое время», «Отменить текущий процесс записи?» → «да, отмените».
+    Инвариант `3bacf58`, пункт 5 принципов: шаг дважды без продвижения → назвать недостающее или оператор. Второй
+    раз вопрос звучит, как раньше (сразу оператор на первом переспросе — лавина переводов); третьего нет.
+
+    Прежний вопрос снимается вместе с состоянием записи — как у анти-залипа (`_maybe_offer_operator_on_repeat`):
+    иначе предпроверка записи раньше обработчика оффера разобрала бы «да» как ответ на снятый вопрос (подтверждение
+    заявки), и оператор получил бы заявку, которую пациент не подтверждал (BUG-2026-10-07-CONFIRM-REFUSAL-AS-YES).
+    Анти-залип ответ с оффером не трогает (в тексте «оператор»).
+
+    :param response: ответ хода — переспрос обработчика
+    :param state: состояние сессии
+    :param memory: хранилище pending-слотов
+    :return: тот же ответ или оффер оператора вместо третьего вопроса
+    """
+
+    limited = expects.over_limit()
+    if limited is None or response.handoff:
+        return response
+    from .response_builder import PREPARE_VARIANT_PENDING_KEY
+
+    reset_appointment_runtime_state(state)
+    _clear_catalog_confirm_pending(state, memory)
+    state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
+    state.last_entities.pop(PREPARE_VARIANT_PENDING_KEY, None)
+    mark_operator_offer_pending(state, memory)
+    turn_telemetry.override(answer_source="reask_limit")
+    return ResponseEnvelope(text=expects.reask_limit_text(limited), handoff=False, state_update=response.state_update)
+
+
 def _get_catalog_confirm_pending(state: SessionState) -> dict[str, Any] | None:
     payload = state.last_entities.get(_CATALOG_CONFIRM_STATE_KEY)
     if not isinstance(payload, dict):
@@ -3303,6 +3339,7 @@ async def patient_routing_stream(
     if precheck is not None:
         if precheck.handoff:
             clear_on_handoff(state, memory)
+        precheck = _maybe_offer_operator_on_reask_limit(precheck, state, memory)
         expects.finish_turn(state, precheck)
         yield precheck
         return
@@ -3351,6 +3388,8 @@ async def patient_routing_stream(
         )
 
     _note_decision(decision, evidence, ctx.stage_timings)
+    # Предел переспросов (D2.4, под `reask_limit = on`) — раньше анти-залипа: тот не трогает ответ с оффером.
+    response = _maybe_offer_operator_on_reask_limit(response, state, memory)
     offered = _maybe_offer_operator_on_repeat(response, state, memory, user_text)
     if offered is not response:
         turn_telemetry.override(answer_source="operator_offer_on_repeat")

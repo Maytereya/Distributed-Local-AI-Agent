@@ -1,4 +1,4 @@
-"""Поле ожидания `_expects`: какой ответ бот ждёт на свой вопрос — D2.1, наблюдатель (ответы не меняются).
+"""Поле ожидания `_expects`: какой ответ бот ждёт на свой вопрос — D2.1 (наблюдатель) и D2.4 (предел переспросов).
 
 Пункт 5 принципов (`docs/ARCHITECTURE_PRINCIPLES.md`): бот всегда знает, чего ждёт, и не ходит по кругу. Висящий
 вопрос бота жил флагами в разных местах состояния (`_operator_offer_pending`, `_catalog_confirm_pending`,
@@ -29,6 +29,13 @@
 `entities_used` — в промпт свободного ответа LLM) поле не идёт (`without`, планировщик), в NLU и в сводку диалога — тоже
 (белые списки `classifier._seed_entities_from_memory`, `context_summary._CRITICAL_KEYS`). Телеметрия хода —
 `tu_expects_kind`, `tu_expects_type`, `tu_expects_asks`: ключи и число, без текста пациента и бота.
+
+Предел переспросов (D2.4) — `[MESSENGER_ROUTER] reask_limit = off | on`, по умолчанию off: как было. Петли без
+счётчика (аудит 14.10, пп. 2–3): «Подтвердите запись» → «нет, другое время» → тот же вопрос, «Отменить текущий
+процесс записи?» → «да, отмените» → тот же вопрос — сколько угодно раз. Инвариант `3bacf58` (шаг дважды без
+продвижения → назвать недостающее или оператор): под `on` переспрос звучит, но один вопрос — не больше двух раз
+подряд (`MAX_ASKS`); третьего нет — бот называет, какой ответ был нужен, и предлагает оператора одним вопросом
+(`router._maybe_offer_operator_on_reask_limit`). Не «сразу оператор» на первом переспросе: лавина переводов.
 """
 
 from __future__ import annotations
@@ -41,11 +48,16 @@ from typing import Any, Iterable
 
 from . import turn_telemetry
 from .mess_types import AppointmentPhase, ResponseEnvelope, SessionState
+from .recovery_policy import UNCLEAR_OPERATOR_OFFER_TEXT
+from .runtime_config import config as _cfg
 
 EXPECTS_KEY = "_expects"
 YES_NO = "yes_no"
 PICK = "pick"
 QUESTION_MAX_CHARS = 500
+# Под `reask_limit = on`: сколько раз подряд звучит один вопрос; переспрос сверх — оффер оператора (D2.4).
+MAX_ASKS = 2
+REASK_LIMIT_MODES = ("off", "on")
 LINK_MASK = "[ссылка]"
 NAME_MASK = "[ФИО]"  # та же маска, что у клиента `pending_reply`
 # Персональные поля состояния, которые бот может напечатать в ответе (сводка записи, данные результата).
@@ -276,3 +288,32 @@ def without(entities: dict[str, Any]) -> dict[str, Any]:
     if EXPECTS_KEY not in entities:
         return entities
     return {key: value for key, value in entities.items() if key != EXPECTS_KEY}
+
+
+def reask_limit_mode() -> str:
+    """`[MESSENGER_ROUTER] reask_limit`: `off` (по умолчанию, как было) | `on`; нет ключа или мусор — `off`."""
+
+    raw = str(getattr(_cfg, "MR_REASK_LIMIT", "off") or "").strip().lower()
+    return raw if raw in REASK_LIMIT_MODES else "off"
+
+
+def over_limit() -> Asked | None:
+    """Переспрос этого хода, который под `reask_limit = on` прозвучал бы третий раз подряд (D2.4), или None."""
+
+    if reask_limit_mode() != "on":
+        return None
+    return next((item for item in _ASKED.get() if item.reask and item.asks > MAX_ASKS), None)
+
+
+def reask_limit_text(current: Asked) -> str:
+    """Третьего раза нет: какой ответ был нужен — и оффер оператора одним вопросом.
+
+    Вопрос «да/нет» с припиской «Перевести на оператора?» был бы ловушкой: «да» неясно к какому из двух. Поэтому
+    прежний вопрос снимается, а текст называет, чего бот ждал.
+    """
+
+    if current.kind == PICK and current.options:
+        need = "нужно было выбрать: " + " или ".join(f"«{option}»" for option in current.options)
+    else:
+        need = "нужен был ответ «да» или «нет»"
+    return f"Не понял ответ — {need}. {UNCLEAR_OPERATOR_OFFER_TEXT}"
