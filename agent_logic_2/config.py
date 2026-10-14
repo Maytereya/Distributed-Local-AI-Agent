@@ -206,6 +206,7 @@ class MessengerRouterConfig:
     parse_fail_variants: int
     journal_phrase: str
     context_shown: str
+    pending_reply: str
     debug_final_input: bool
     url: str
 
@@ -476,6 +477,11 @@ settings = Settings(
         # on — ответ с ценами пишет показанные строки (_shown_services) и одну показанную услугу (service_name),
         # срок из МИС — тоже; сводка диалога не называет снятую услугу. [MESSENGER_ROUTER] context_shown
         context_shown=_get_enum("MESSENGER_ROUTER", "context_shown", default="off", allowed={"off", "on"}),
+        # Ответ на висящий вопрос бота силами LLM (D2.3, `messengers_router/pending_reply.py`): off — как было;
+        # shadow — тень: решение LLM вне бюджета хода и предохранителя, только телеметрия (tu_pending_*), ответ
+        # прежний; on — пока как shadow (исполнение — следующий шаг, после живого замера и встречного свипа).
+        # [MESSENGER_ROUTER] pending_reply
+        pending_reply=_get_enum("MESSENGER_ROUTER", "pending_reply", default="off", allowed={"off", "shadow", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -615,6 +621,7 @@ MR_TURN_PARSE = settings.messenger_router.turn_parse
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_JOURNAL_PHRASE = settings.messenger_router.journal_phrase
 MR_CONTEXT_SHOWN = settings.messenger_router.context_shown
+MR_PENDING_REPLY = settings.messenger_router.pending_reply
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

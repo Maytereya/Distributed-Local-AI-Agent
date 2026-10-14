@@ -20,7 +20,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import shown_context, turn_parse, turn_telemetry, turn_understanding
+from . import pending_reply, shown_context, turn_parse, turn_telemetry, turn_understanding
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -3278,6 +3278,11 @@ async def patient_routing_stream(
                 ),
             )
             return
+
+    # Ответ на висящий вопрос бота силами LLM (D2.3, `pending_reply`) — тень, одна точка хода: после срочного, явного
+    # запроса оператора и охраны города, до разбора висящего вопроса (предпроверка записи, обработчики в оркестраторе).
+    # Под off и на кнопке — ничего; ответ хода и состояние сессии тень не меняет.
+    pending_reply.observe(user_text, state.last_entities, button_id=button_id)
 
     precheck = run_appointment_precheck(
         user_text=user_text,

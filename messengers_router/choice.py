@@ -206,14 +206,23 @@ def _options_block(task: Task, options: Sequence[Option]) -> str:
     return "\n".join(f"{i}. {o.text}" for i, o in enumerate(options, 1))
 
 
-def render(task: Task, question: str, options: Sequence[Option]) -> tuple[str, str]:
-    """(инструкция для роли system, данные хода для роли user)."""
+def render(task: Task, question: str, options: Sequence[Option], *, asked: str = "") -> tuple[str, str]:
+    """(инструкция для роли system, данные хода для роли user).
+
+    `asked` — вопрос бота, на который отвечает реплика (`<<ASKED>>`, клиент `pending_reply`): данные хода, как и
+    реплика (в вопросе бывают слова пациента), та же чистка. Промпт без `<<ASKED>>` — прежний запрос байт в байт.
+    """
 
     system, mark, data = load_prompt_text(task.site).partition(_DATA_MARK)
     if not mark:
         raise ValueError(f"в промпте {task.site} нет строки {_DATA_MARK}")
     # Реплика подставляется последней: её текст уже ничем не заменяется.
-    user = data.strip().replace("<<OPTIONS>>", _options_block(task, options)).replace("<<QUESTION>>", _clean_question(question))
+    user = (
+        data.strip()
+        .replace("<<ASKED>>", _clean_question(asked))
+        .replace("<<OPTIONS>>", _options_block(task, options))
+        .replace("<<QUESTION>>", _clean_question(question))
+    )
     return system.strip(), user
 
 
@@ -342,6 +351,7 @@ async def choose(
     *,
     legacy: LegacyWire | None = None,
     shadow: bool = False,
+    asked: str = "",
 ) -> Choice:
     """Какие варианты подходят к реплике пациента — решает LLM, разбирает и проверяет код.
 
@@ -350,13 +360,14 @@ async def choose(
     :param options: кандидаты, найденные правилами и поиском по данным
     :param legacy: прежний промпт клиента — перенос без смены промпта
     :param shadow: решение тени — вне бюджета хода и предохранителя, в телеметрии `shadow: true`
+    :param asked: вопрос бота, на который отвечает реплика (данные хода, `render`)
     :return: выбор; при сбое — UNAVAILABLE / INVALID, политику выбирает вызывающий
     """
 
     options = tuple(options)
     try:
         if legacy is None:
-            system, user = render(task, question, options)
+            system, user = render(task, question, options, asked=asked)
             schema: Any = answer_schema(task, options)
             gen_options: dict[str, Any] = {"temperature": 0, "num_predict": task.num_predict}
         else:

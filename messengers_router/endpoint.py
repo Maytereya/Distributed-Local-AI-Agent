@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import llm_runtime, turn_parse, turn_telemetry
+from . import llm_runtime, pending_reply, turn_parse, turn_telemetry
 from .llm_mode_policy import normalize_runtime_options
 from .memory import MemoryStore
 from .router import patient_routing_stream
@@ -27,8 +27,9 @@ from .warm_up import schedule_warm_up
 router = APIRouter()
 log = logging.getLogger(__name__)
 
-# Сколько конец хода ждёт тень разбора реплики (L-15b, шаг 4; решение владельца 13.10, Q1), потом —
-# отмена (статус `late`). Под `turn_parse = off` тени нет и ход не ждёт ни такта.
+# Сколько конец хода ждёт тень разбора реплики (L-15b, шаг 4; решение владельца 13.10, Q1) и тень ответа на висящий
+# вопрос бота (D2.3, `pending_reply`), потом — отмена (статус `late`). Под `turn_parse = off` и `pending_reply = off`
+# теней нет и ход не ждёт ни такта.
 _SHADOW_GRACE_S = 1.0
 
 
@@ -276,6 +277,7 @@ async def messenger_generate(
             assistant_text = "".join(assistant_parts).strip()
             try:
                 await turn_parse.drain(_SHADOW_GRACE_S)
+                await pending_reply.drain(_SHADOW_GRACE_S)
             finally:
                 llm_runtime.end_turn_budget(budget)
                 turn_telemetry.finish(turn, handoff=handoff, chars=len(assistant_text))
@@ -388,6 +390,7 @@ async def messenger_generate_once(
     finally:
         try:
             await turn_parse.drain(_SHADOW_GRACE_S)
+            await pending_reply.drain(_SHADOW_GRACE_S)
         finally:
             llm_runtime.end_turn_budget(budget)
             turn_telemetry.finish(turn, handoff=out_handoff, chars=len(out_text))
