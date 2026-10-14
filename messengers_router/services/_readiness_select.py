@@ -36,7 +36,7 @@ from ..choice import Option, Status, Task, choose
 from ..runtime_config import config as _cfg
 from ._biomaterial import mis_synonym_candidates
 from ._common import _normalise_catalog_text
-from ._price_select_llm import _record_synonym_suggestion
+from ._price_select_llm import _mention_phrase, _record_synonym_suggestion, journal_phrase_mode
 from ._prices_helpers import (
     _PRICE_SERVICE_ALIASES,
     _apply_service_synonyms,
@@ -162,6 +162,9 @@ async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | Non
         if phrase is None:
             return None
         weak_phrase = "" if phrase.rows else phrase.text
+        if weak_phrase and journal_phrase_mode() == "mention":  # фраза журнала — упоминание хода (L-14, шаг 2)
+            mentioned = _mention_phrase(question)
+            weak_phrase = weak_phrase if mentioned is None else mentioned
         first = list(dict.fromkeys(str(row.get("serviceName") or "").strip() for row in phrase.rows))
         if len({_normalise_catalog_text(name) for name in first}) == 1:
             return None  # одна услуга по данным, а срока у неё нет — соседняя строка не годится: перевод

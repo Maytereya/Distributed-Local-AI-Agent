@@ -204,6 +204,7 @@ class MessengerRouterConfig:
     strong_match: str
     turn_parse: str
     parse_fail_variants: int
+    journal_phrase: str
     debug_final_input: bool
     url: str
 
@@ -466,6 +467,10 @@ settings = Settings(
         # слабой позиции, когда LLM не выбрала строки (2–5; по умолчанию 5 — поправка владельца 13.10).
         # [MESSENGER_ROUTER] parse_fail_variants
         parse_fail_variants=_get_int("MESSENGER_ROUTER", "parse_fail_variants", default=5, min_value=2, max_value=5),
+        # Фраза журнала синонимов у одиночной услуги (L-14, шаг 2): rules — прежняя (вырезатель правил, под
+        # turn_parse = on — выбор LLM разбора); mention — упоминание хода (`ServiceMention`): фраза без речевой
+        # обвязки, реплика без названия услуги — ничего. [MESSENGER_ROUTER] journal_phrase
+        journal_phrase=_get_enum("MESSENGER_ROUTER", "journal_phrase", default="rules", allowed={"rules", "mention"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -603,6 +608,7 @@ MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_STRONG_MATCH = settings.messenger_router.strong_match
 MR_TURN_PARSE = settings.messenger_router.turn_parse
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
+MR_JOURNAL_PHRASE = settings.messenger_router.journal_phrase
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

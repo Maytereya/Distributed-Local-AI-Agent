@@ -41,7 +41,7 @@ import asyncio
 import contextvars
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections.abc import Awaitable
 from typing import Any, Sequence
 
@@ -49,6 +49,7 @@ from . import turn_parse, turn_telemetry
 from .policies import detect_address_intent, detect_nonbookable_walkin_intent, detect_prepare_intent, detect_price_intent
 from .runtime_config import config as _cfg
 from .services import _turn_phrases
+from .services._biomaterial import _SPEECH_WRAPPER
 from .services._strong_match import strong_rows
 from .services._prices_helpers import (
     _catalog_rows,
@@ -65,6 +66,11 @@ MODES = ("off", "shadow", "on")
 
 # Метки, на которых шаг 1 строит понимание: цена и подбор анализов (П1 переклеивает его в цену).
 _PRICE_TURN_LABELS = frozenset({"PRICE", "TEST_ASSIST"})
+
+# Речевая обвязка с краёв фразы одиночной услуги (L-14, шаг 2): слова вопроса о цене и вежливость
+# (`_turn_phrases._WRAPPER`) и речевая обвязка слоя синонимов МИС (`_SPEECH_WRAPPER`: «а», «сдать», «тест»).
+# Новых слов нет — оба списка лингвистические и уже служат тем же: отделить название от оформления просьбы.
+_MENTION_EDGE = _turn_phrases._WRAPPER | _SPEECH_WRAPPER
 
 
 @dataclass(frozen=True)
@@ -87,6 +93,13 @@ class TurnUnderstanding:
     services_rule: str = ""
     facet: str | None = None  # readiness | prepare | booking | where | price | None
     facet_rule: str = ""
+    reply: str = ""  # реплика хода, по которой построено понимание
+
+    def for_text(self, text: str) -> bool:
+        """Читатель берёт понимание, только если его вход — реплика хода (как `PhraseParse.for_text`):
+        дозаполнение и контекст прошлого хода — не она."""
+
+        return bool(self.reply) and str(text or "") == self.reply
 
     @property
     def is_list(self) -> bool:
@@ -190,7 +203,22 @@ def understand_price_turn(text: str) -> TurnUnderstanding:
     mentions = tuple(ServiceMention(phrase=name, candidates=(name,), strength=rule, chosen=name) for name in names)
     if not mentions:
         mentions = _single_mention(probe)
-    return TurnUnderstanding(services=mentions, services_rule=rule, facet=facet, facet_rule=facet_rule)
+    return TurnUnderstanding(services=mentions, services_rule=rule, facet=facet, facet_rule=facet_rule, reply=text)
+
+
+def _bare_phrase(raw: str) -> str:
+    """Фраза одиночной услуги без речевой обвязки с краёв (`_MENTION_EDGE`), срезом исходной строки:
+    «а ггтп» → «ггтп», «а подскажите пожалуйста сколько стоит ггтп» → «ггтп». Внутри фразы ничего не
+    трогаем; от фразы осталась одна обвязка — пусто."""
+
+    raw = str(raw or "")
+    toks = _turn_phrases._tokens(raw)
+    i, j = 0, len(toks) - 1
+    while i <= j and toks[i].key in _MENTION_EDGE:
+        i += 1
+    while j >= i and toks[j].key in _MENTION_EDGE:
+        j -= 1
+    return raw[toks[i].start : toks[j].end] if i <= j else ""
 
 
 def _mention(phrase: str, rows: Sequence[dict[str, Any]], source: str) -> ServiceMention:
@@ -206,12 +234,13 @@ def _mention(phrase: str, rows: Sequence[dict[str, Any]], source: str) -> Servic
 
 def _single_mention(probe: str) -> tuple[ServiceMention, ...]:
     """Упоминание одиночной услуги по правилам (L-14, шаг 0): фраза — то, что вырезатель правил оставил от
-    реплики; сила и кандидаты — сильное совпадение по данным МИС (`strong_rows`: название, синоним, код).
-    Слабая — без кандидатов и без выбора (строку выбирает путь цены, как раньше). Фразы нет — ничего."""
+    реплики, без речевой обвязки с краёв (шаг 2: «а ггтп» → «ггтп»); сила и кандидаты — сильное совпадение по
+    данным МИС (`strong_rows`: название, синоним, код). Слабая — без кандидатов и без выбора (строку выбирает
+    путь цены, как раньше). Фразы нет — ничего."""
 
-    phrase = _extract_price_service_from_query(probe) or ""
+    phrase = _bare_phrase(_extract_price_service_from_query(probe) or "")
     if all(t.key in _turn_phrases._FILLER for t in _turn_phrases._tokens(phrase)):
-        return ()  # от реплики осталась только обвязка («сколько стоит?») — услуги нет
+        return ()  # от реплики осталась только обвязка («сколько стоит?», «а цена?») — услуги нет
     return (_mention(phrase, strong_rows(probe, _catalog_rows(None)), "rules"),)
 
 
@@ -315,6 +344,11 @@ def _from_phrases(tu: TurnUnderstanding, text: str) -> TurnUnderstanding | None:
     parse = turn_parse.acting_for(text)
     if parse is None:
         return None
+    if parse.status == turn_parse.ParseStatus.SINGLE and not tu.is_list:
+        # Кандидат один — реплика целиком, LLM не звали, по данным фраза слабая: разбор знает об услуге не
+        # больше правил, упоминание — правил (L-14, шаг 2: «Цена анализа» — услуги не названо, «а … ггтп сдать» —
+        # «ггтп», а не W с обвязкой внутри). Список или одна услуга — как у разбора: не список.
+        return replace(tu, services_rule=f"parse_{parse.status}")
     services = tuple(
         ServiceMention(
             phrase=item.text,
@@ -324,8 +358,10 @@ def _from_phrases(tu: TurnUnderstanding, text: str) -> TurnUnderstanding | None:
             source="parse",
         )
         for item in parse.items
-    ) if parse.is_list else tuple(_mention(item.text, item.rows, "parse") for item in parse.items[:1])
-    return TurnUnderstanding(services=services, services_rule=f"parse_{parse.status}", facet=tu.facet, facet_rule=tu.facet_rule)
+    ) if parse.is_list else tuple(_mention(_bare_phrase(item.text) or item.text, item.rows, "parse") for item in parse.items[:1])
+    return TurnUnderstanding(
+        services=services, services_rule=f"parse_{parse.status}", facet=tu.facet, facet_rule=tu.facet_rule, reply=tu.reply
+    )
 
 
 async def _observe_phrases(user_text: str, tu: TurnUnderstanding | None) -> None:

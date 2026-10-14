@@ -119,6 +119,13 @@ def _choose_mode() -> str:
     return raw if raw in _CHOOSE_MODES else "off"
 
 
+def journal_phrase_mode() -> str:
+    """Откуда фраза журнала синонимов у одиночной услуги (L-14, шаг 2): rules | mention."""
+
+    raw = str(getattr(_cfg, "MR_JOURNAL_PHRASE", "rules") or "").strip().lower()
+    return raw if raw in ("rules", "mention") else "rules"
+
+
 @dataclass(frozen=True)
 class PriceSelection:
     """Строки прайса, которые LLM признала той услугой (уже без непрошеных вариантов).
@@ -405,12 +412,32 @@ def _record_synonym_suggestion(phrase: str, terms: list[str], rows: list[dict[st
         logger.warning("price_synonym_journal_failed: %s", exc)
 
 
-def _journal_phrase(question: str, rules_phrase: str) -> tuple[str, str]:
-    """Что писать в журнал синонимов: (фраза, источник). Под `turn_parse = on` (L-15b, шаг 5) — фраза,
-    которую выбрала LLM разбора хода (`ParsedPhrase.text`, срез реплики), а не вырезатель правил; разбор
-    «ни одна фраза не услуга» (`none_fit`) — ничего: клинике не синоним. Разбор без выбора LLM (одна
-    фраза-кандидат, данные, сбой) и прочие режимы — прежняя фраза правил, источник пустой."""
+def _mention_phrase(question: str) -> str | None:
+    """Фраза одиночной услуги из понимания хода (`journal_phrase = mention`, L-14 шаг 2): упоминание этой
+    реплики — его фраза (пациента или выбор LLM разбора, без речевой обвязки); понимание этой реплики без
+    упоминаний — пусто: услуги пациент не назвал («Цена анализа»), клинике не синоним. None — понимания
+    этой реплики нет (выключено, не ценовой ход, вход — не реплика хода) или в нём список: прежний путь."""
 
+    from .. import turn_understanding  # понимание хода импортирует сервисы цены — не на уровне модуля
+
+    tu = turn_understanding.current()
+    if tu is None or not tu.for_text(question) or tu.is_list:
+        return None
+    single = tu.single
+    return single.phrase if single is not None else ""
+
+
+def _journal_phrase(question: str, rules_phrase: str) -> tuple[str, str]:
+    """Что писать в журнал синонимов: (фраза, источник). Под `journal_phrase = mention` (L-14, шаг 2) —
+    фраза упоминания хода (`_mention_phrase`), если понимание этой реплики есть. Иначе под `turn_parse = on`
+    (L-15b, шаг 5) — фраза, которую выбрала LLM разбора хода (`ParsedPhrase.text`, срез реплики), а не
+    вырезатель правил; разбор «ни одна фраза не услуга» (`none_fit`) — ничего: клинике не синоним. Разбор без
+    выбора LLM (одна фраза-кандидат, данные, сбой) и прочие режимы — прежняя фраза правил, источник пустой."""
+
+    if journal_phrase_mode() == "mention":
+        mentioned = _mention_phrase(question)
+        if mentioned is not None:
+            return mentioned, "price"
     parse = turn_parse.acting_for(question)
     if parse is None:
         return rules_phrase, ""
