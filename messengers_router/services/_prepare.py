@@ -15,7 +15,6 @@ from typing import Any
 
 from converters import html_cleaner
 
-from ..prompt_registry import load_prompt_text
 from . import _common as _common_mod
 from ._common import (
     _doc_tokens,
@@ -54,8 +53,6 @@ _PREPARE_ENTITY_RE = re.compile(
     re.I,
 )
 
-_PREPARE_CODE_FENCE_START_RE = re.compile(r"^\s*```(?:\w+)?\s*", re.I)
-_PREPARE_CODE_FENCE_END_RE = re.compile(r"\s*```\s*$", re.I)
 
 # ---------------------------------------------------------------------------
 # Set / dict constants
@@ -173,20 +170,6 @@ _PREPARE_STRONG_HINTS = (
 # ---------------------------------------------------------------------------
 # String constants
 # ---------------------------------------------------------------------------
-
-_PREPARE_LLM_WRAP_NO_RELEVANT = "NO_RELEVANT_CONTENT"
-
-_PREPARE_LLM_WRAP_FALLBACK_PROMPT = (
-    "Ты ассистент клиники. Сократи ответ по подготовке к исследованию.\n"
-    "Используй только факты из блока ИСТОЧНИК, ничего не выдумывай.\n"
-    "Оставь только то, что релевантно запросу пациента.\n"
-    "Формат ответа:\n"
-    "- краткая вводная (1 предложение);\n"
-    "- 2-6 пунктов с конкретными шагами.\n"
-    "Если релевантной информации нет, верни строго: NO_RELEVANT_CONTENT.\n\n"
-    "ЗАПРОС ПАЦИЕНТА:\n<<USER_QUERY>>\n\n"
-    "ИСТОЧНИК:\n<<SOURCE_TEXT>>\n"
-)
 
 # ---------------------------------------------------------------------------
 # Functions
@@ -607,114 +590,6 @@ def _prepare_no_memo_response(query: str, entities: dict[str, Any], *, note: str
         "note": note,
         "entities_used": entities,
     }
-
-
-def _is_prepare_relevant(query: str, content: str) -> bool:
-    content_norm = _normalise_input(content)
-    if not content_norm:
-        return False
-    if not any(x in content_norm for x in ("подготов", "натощак", "перед", "за ")):
-        return False
-
-    score = _prepare_fast_relevance_score(query, content)
-    low = _prepare_relevance_low_threshold()
-    dynamic_cutoff = max(0.20, low * 0.85)
-    if score < dynamic_cutoff:
-        return False
-
-    query_roots = _prepare_term_roots(query)
-    if query_roots:
-        content_roots = _prepare_term_roots(content)
-        if _prepare_roots_coverage(query_roots, content_roots) <= 0.0:
-            return False
-    if not _is_prepare_content_actionable(content):
-        return False
-    return True
-
-
-def _prepare_wrap_prompt(query: str, source_text: str) -> str:
-    """
-    Формирует prompt для LLM-компактора ответа PREPARE.
-
-    :param query: исходный запрос пользователя
-    :param source_text: сырой текст подготовки из источника
-    :return: итоговый prompt
-    """
-
-    try:
-        tmpl = load_prompt_text("messenger_final_answer")
-    except Exception:
-        tmpl = ""
-    if not str(tmpl or "").strip():
-        tmpl = _PREPARE_LLM_WRAP_FALLBACK_PROMPT
-    return (
-        str(tmpl or "")
-        .replace("<<USER_QUERY>>", str(query or "").strip())
-        .replace("<<SOURCE_TEXT>>", str(source_text or "").strip())
-        .strip()
-    )
-
-
-def _prepare_wrap_clean(text: str) -> str:
-    """
-    Нормализует ответ LLM после компактирования.
-
-    :param text: raw-ответ модели
-    :return: очищенный текст
-    """
-
-    out = str(text or "").strip()
-    if not out:
-        return ""
-    out = _PREPARE_CODE_FENCE_START_RE.sub("", out, count=1)
-    out = _PREPARE_CODE_FENCE_END_RE.sub("", out, count=1)
-    out = html_cleaner.strip_html(out).strip()
-    out = re.sub(r"^\s*(?:ответ|краткий ответ|результат)\s*:\s*", "", out, flags=re.I)
-    out = re.sub(r"\n{3,}", "\n\n", out)
-    return out.strip()
-
-
-def _prepare_query_has_specific_target(query: str) -> bool:
-    """
-    Проверяет, есть ли в запросе пациента конкретный объект подготовки.
-
-    :param query: текст запроса
-    :return: True при наличии таргета (например, ФГДС/биопсия/холестерин)
-    """
-
-    return bool(_prepare_term_roots(query))
-
-
-def _is_prepare_wrap_output_usable(query: str, source_text: str, wrapped: str) -> bool:
-    """
-    Валидация ответа LLM-компактора, чтобы не ухудшить качество PREPARE.
-
-    :param query: исходный запрос пользователя
-    :param source_text: исходный текст подготовки
-    :param wrapped: компактный ответ LLM
-    :return: True, если результат можно отдавать пациенту
-    """
-
-    wrapped_text = str(wrapped or "").strip()
-    if not wrapped_text:
-        return False
-    if _PREPARE_LLM_WRAP_NO_RELEVANT.lower() in wrapped_text.lower():
-        return False
-    if len(wrapped_text) > max(2200, len(source_text) + 250):
-        return False
-    if not _is_prepare_content_actionable(wrapped_text):
-        return False
-    if _prepare_query_has_specific_target(query) and not _is_prepare_relevant(query, wrapped_text):
-        return False
-
-    source_tokens = _doc_tokens(source_text)
-    wrapped_tokens = _doc_tokens(wrapped_text)
-    if source_tokens and wrapped_tokens and not (source_tokens & wrapped_tokens):
-        return False
-
-    if len(source_text) >= 900 and len(wrapped_text) >= int(len(source_text) * 0.95):
-        return False
-    return True
 
 
 def _is_generic_prepare_heading(text: str) -> bool:

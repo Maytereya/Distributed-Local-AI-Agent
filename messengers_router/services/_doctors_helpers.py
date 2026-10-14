@@ -43,11 +43,6 @@ from ._unit_canonicalisation import (
 
 _FIO_TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё\-]{2,}")
 _UZI_LINE_RE = re.compile(r"\b(узи|ультразвук\w*|ультразвуков\w*)\b", re.I)
-_UZI_FALSE_POSITIVE_RE = re.compile(
-    r"\b(под\s+контролем\s+узи|во\s+время\s+консультативн\w*\s+при(е|ё)м\w*|"
-    r"в\s+рамках\s+при(е|ё)м\w*|интерпретац\w*|разъяснен\w*)\b",
-    re.I,
-)
 _UZI_ROLE_HINT_RE = re.compile(
     r"\b(узист\w*|врач\w*\s+узи|врач\w*\s+ультразвуков\w*\s+диагностик\w*|"
     r"каки\w*\s+узист\w*|каки\w*\s+врач\w*\s+узи)\b",

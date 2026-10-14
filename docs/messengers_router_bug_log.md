@@ -11,6 +11,23 @@
 
 ---
 
+## STEP-2026-10-14-T7-DEAD-CODE — снят мёртвый код с правилами; храповик 264/165/103 → 261/162/103
+
+- **Зачем.** T7 автономной сессии 14.10 (кандидаты на снятие эвристик; разбор —
+  `~/Dev/handoffs/dla/12_t7_heuristics_removal.md`, вне репо). Из списка шага 5 (защиты `price_list_services`, S2 как
+  решение, гард третьего стыка, `limit=2`, «дословное название — правила не ошибаются», `_legacy_strong_service_match`,
+  фраза журнала) мёртвого в обоих режимах нет: под `turn_parse = on` правила — запасной путь (сбой LLM без
+  разделителей, Q2; статусы `empty`/`too_many`/`late`/`error`). Снимать их — после решения владельца по Q2 и
+  выключателям `strong_match = data`, `price_match_policy = on`.
+- **Снято (нет вызовов ни под off, ни под on; граф ссылок + `git grep -w`):** `_UZI_FALSE_POSITIVE_RE`
+  (`_doctors_helpers.py`, −1 `re.compile`); LLM-компактор памятки PREPARE — `_prepare_wrap_prompt`,
+  `_prepare_wrap_clean`, `_is_prepare_wrap_output_usable` и только им нужные `_PREPARE_CODE_FENCE_*_RE`,
+  `_PREPARE_LLM_WRAP_*`, `_is_prepare_relevant`, `_prepare_query_has_specific_target` (`_prepare.py`, −2 `re.compile`,
+  −2 литерала; вызов снят раньше — «памятки подготовки как есть»); `_derive_trubin_lenina_slot` (eval-скрипт, −1
+  литерал). `_build_multi_price_payload` оставлен: его зовут тесты и `scripts/audit_cart_misses.py` (храповику 0).
+- **Инвариант.** Храповик опускается в том же коммите, где снято правило: потолки 261 / 162 / 103.
+- **Покрытие.** `tests/test_rules_ratchet.py` (новые потолки); полный гейт — поведение не изменилось.
+
 ## STEP-2026-10-14-L15B-6-WORD-CANDIDATES — L-15b, шаг 6: слабая позиция корзины без кандидатов по фразе — кандидаты по словам для LLM — СДЕЛАНО (под `turn_parse = on`)
 
 - **Симптом (живой прогон `on`, dev 867, 14.10).** Бот выделяет позицию списка, но не находит строку:
