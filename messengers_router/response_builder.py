@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import evidence_keys as ek
+from . import shown_context
 from .flow_policy import (
     hydrate_appointment_context_from_schedule,
     reset_appointment_runtime_state,
@@ -243,6 +244,7 @@ def build_price_response(flow_label: str, evidence: Evidence, state: SessionStat
         if service_name_effective:
             render_entities["service_name"] = service_name_effective
             render_entities.pop("test_name", None)
+    shown_context.sync_price(state, price_payload, render_entities)
     text = format_price_for_patient(price_payload, render_entities)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
@@ -256,6 +258,7 @@ def build_service_bundle_response(flow_label: str, evidence: Evidence, state: Se
     _sync_price_family_context(state, payload)
     _sync_policy_context(state, payload)
     _sync_compound_price_pending(state, payload)
+    shown_context.sync_bundle(state, payload)
     text = format_service_bundle_for_patient(payload, state.last_entities)
     # Defensive fallback: если рендер вернул пустой текст, показываем
     # пациенту инструкцию о том, как сформулировать запрос правильно.

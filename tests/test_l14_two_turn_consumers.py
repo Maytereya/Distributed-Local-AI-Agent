@@ -70,6 +70,11 @@ _SETS: dict[str, dict[str, str]] = {
     "deploy_parse": {**_DEPLOY, "MR_TURN_PARSE": "on"},
     "next": {**_DEPLOY, "MR_TURN_PARSE": "on", "MR_CHOOSE_PRICE": "on", "MR_PRICE_MATCH_POLICY": "on"},
 }
+BASE_CONFIGS = tuple(_SETS)
+# L-14, шаг 3 (14.10): «контекст = показанное» (`context_shown = on`) поверх деплоя и кандидата следующего деплоя.
+_SETS["deploy_shown"] = {**_DEPLOY, "MR_CONTEXT_SHOWN": "on"}
+_SETS["next_shown"] = {**_SETS["next"], "MR_CONTEXT_SHOWN": "on"}
+SHOWN_CONFIGS = ("deploy_shown", "next_shown")
 CONFIGS = tuple(_SETS)
 
 _PHRASES_MARK = "понять, какие услуги назвал пациент"
@@ -155,6 +160,7 @@ class _Turn:
     summary: str = ""  # сводка диалога (уходит в NLU как `_summary`)
     telemetry: list[dict[str, Any]] = field(default_factory=list)
     journal: list[dict[str, Any]] = field(default_factory=list)  # строки журнала синонимов, добавленные ходом
+    shown: list[str] | None = None  # `_shown_services` состояния (L-14, шаг 3, `context_shown = on`)
 
 
 _SYNONYM_FORK = {
@@ -235,6 +241,7 @@ def _play(
                         summary=str(memory.get(session).summary or ""),
                         telemetry=list(world.telemetry[tel_before:]),
                         journal=journal()[journal_before:],
+                        shown=state.get("_shown_services"),
                     )
                 )
             return out
@@ -389,11 +396,13 @@ _WHERE_PRICE_PHRASE = (
 
 # (сценарии, вопрос, наборы, {код: причина}) → построчно в KNOWN_FOLLOWUP.
 _FOLLOWUP_RED: tuple[tuple[tuple[str, ...], str, tuple[str, ...], dict[str, str]], ...] = (
-    (("family_glucose", "family_oak", "fork_oak"), "a_price", CONFIGS, {"rows": _A_PRICE_ROWS, "phrase": _A_PRICE_PHRASE}),
+    (("family_glucose", "family_oak", "fork_oak"), "a_price", BASE_CONFIGS, {"rows": _A_PRICE_ROWS, "phrase": _A_PRICE_PHRASE}),
     (("not_found_gastro",), "a_price", ("default", "deploy", "deploy_parse"), {"rows": _A_PRICE_ROWS, "phrase": _A_PRICE_PHRASE}),
-    (("family_glucose",), "price", ("deploy_parse", "next"), {"rows": _REPEAT_FAMILY}),
+    (("family_glucose",), "price", ("deploy_parse", "next", "next_shown"), {"rows": _REPEAT_FAMILY}),
+    # под `context_shown = on` «а цена?» без названия услуги берёт контекст (не «а»), как «сколько стоит?», — та же семья
+    (("family_glucose",), "a_price", ("next_shown",), {"rows": _REPEAT_FAMILY}),
     (("one_ferritin", "family_glucose"), "prep", CONFIGS, {"phrase": _PREP_PHRASE}),
-    (("one_ferritin",), "where_price", CONFIGS, {"phrase": _WHERE_PRICE_PHRASE}),
+    (("one_ferritin",), "where_price", BASE_CONFIGS, {"phrase": _WHERE_PRICE_PHRASE}),
 )
 # (сценарий, вопрос, набор) → {код: причина}. Пусто — зелёный. Вопрос — метка из FOLLOWUPS.
 KNOWN_FOLLOWUP: dict[tuple[str, str, str], dict[str, str]] = {
@@ -473,6 +482,7 @@ _JOURNAL_SENTENCE = {
     "deploy_parse": "разбор вернул `single` (кандидат один — вся реплика): LLM выбора фраз не зовётся, и `_journal_phrase` возвращает фразу вырезателя «а ггтп»",
     "next": "разбор вернул `single` (кандидат один — вся реплика): LLM выбора фраз не зовётся, и `_journal_phrase` возвращает фразу вырезателя «а ггтп»",
 }
+_JOURNAL_SENTENCE["deploy_shown"], _JOURNAL_SENTENCE["next_shown"] = _JOURNAL_SENTENCE["deploy"], _JOURNAL_SENTENCE["next"]
 _JOURNAL_NO_SERVICE = (
     "прежний промпт выбора цены (`choose_price = off`) не знает причины «слишком общее» (её даёт только промпт модуля), `journal_miss` "
     "пишет реплику как синоним; под разбором `single` (LLM фраз не звали) не отличает «нет услуги» от «слова без синонима»; "
@@ -490,9 +500,12 @@ KNOWN_JOURNAL: dict[tuple[str, str, str], dict[str, str]] = {
     **{
         (case, config, "rules"): {"journal": _JOURNAL_NO_SERVICE}
         for case in ("no_service_named_1", "no_service_named_2", "no_service_named_3")
-        for config in ("default", "deploy", "deploy_parse")
+        for config in ("default", "deploy", "deploy_parse", "deploy_shown")
     },
-    **{("no_service_named_2", config, "mention"): {"journal": _JOURNAL_NO_SERVICE_WORDS} for config in ("default", "deploy", "deploy_parse")},
+    **{
+        ("no_service_named_2", config, "mention"): {"journal": _JOURNAL_NO_SERVICE_WORDS}
+        for config in ("default", "deploy", "deploy_parse", "deploy_shown")
+    },
 }
 JOURNAL_SOURCES = ("rules", "mention")
 
@@ -596,10 +609,25 @@ def test_single_mention_is_an_observer_and_tu_list_keeps_its_meaning(config, min
 # Обратное направление «контекст = показанное»: услуга, которую ответ назвал пациенту и которую выбрала не
 # заземляющая правила, а LLM (строка цены) или код (срок из МИС), в состояние не попадает — следующее «сколько
 # стоит?» не знает, о чём шла речь (безопасно, но контекст ≠ показанное). (сценарий, наборы, показанная услуга)
+_SHOWN_RED = (
+    "L-14: показанную услугу выбрали LLM или код МИС (`service_name_effective`, срок), а в состояние сессии пишет "
+    "только заземление правил по буквам (`merge_entities` в роутере; ранний возврат `_maybe_readiness_reply` идёт мимо него)"
+)
+_READINESS_NOT_HELD = (
+    "L-14, шаг 3: под `context_shown = on` срок пишет только `_shown_services`: ответ без цен — по решению владельца 13.10 "
+    "(BUG-2026-10-13-L13-CONTEXT-LEAK) услуги в контексте нет, и `test_context_is_what_was_shown` это держит; держать ли "
+    "услугу срока в `service_name` — вопрос владельцу"
+)
 _SHOWN_BUT_NOT_HELD = (
     ("llm_pick_ggt", CONFIGS, "ГГТ гамма-глютамилтрансфераза"),  # строку выбрала LLM по термину «ГГТ»
-    ("readiness_ferritin", ("deploy", "deploy_parse", "next"), "Ферритин"),  # срок «Ферритин» напечатал код из МИС
+    ("readiness_ferritin", ("deploy", "deploy_parse", "next", *SHOWN_CONFIGS), "Ферритин"),  # срок «Ферритин» напечатал код из МИС
 )
+# Красное: (сценарий, набор) → причина. Под `context_shown = on` выбор LLM доходит до контекста (шаг 3).
+_SHOWN_KNOWN = {
+    **{("llm_pick_ggt", config): _SHOWN_RED for config in BASE_CONFIGS},
+    **{("readiness_ferritin", config): _SHOWN_RED for config in ("deploy", "deploy_parse", "next")},
+    **{("readiness_ferritin", config): _READINESS_NOT_HELD for config in SHOWN_CONFIGS},
+}
 
 
 def _shown_params():
@@ -609,12 +637,7 @@ def _shown_params():
                 name,
                 config,
                 service,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=AssertionError,
-                    reason="L-14: показанную услугу выбрали LLM или код МИС (`service_name_effective`, срок), а в состояние сессии пишет "
-                    "только заземление правил по буквам (`merge_entities` в роутере; ранний возврат `_maybe_readiness_reply` идёт мимо него)",
-                ),
+                marks=[pytest.mark.xfail(strict=True, raises=AssertionError, reason=_SHOWN_KNOWN[(name, config)])] if (name, config) in _SHOWN_KNOWN else [],
                 id=f"{name}-{config}",
             )
 
@@ -693,14 +716,16 @@ def test_readiness_answer_leaves_no_service_pending_or_label_in_state(config, mi
     assert (turn.state["service_name"], turn.state["pending"], turn.state["last_label"]) == (None, None, None)
 
 
-@pytest.mark.parametrize("config", CONFIGS)
-@pytest.mark.xfail(
+_SUMMARY_RED = pytest.mark.xfail(
     strict=True,
     raises=AssertionError,
     reason="L-14: сводка диалога (`context_summary.update_summary`, раз в 4 хода) пишет `service_name=…` из состояния и переживает его "
     "изменение и снятие: после ответа пятого хода состояние уже другое (или пусто), а `_summary`, который уходит в промпт классификатора, "
-    "ещё называет прежнюю услугу",
+    "ещё называет прежнюю услугу (под `context_shown = on` сводка обновляется при расхождении — шаг 3)",
 )
+
+
+@pytest.mark.parametrize("config", [pytest.param(c, marks=_SUMMARY_RED if c in BASE_CONFIGS else [], id=c) for c in CONFIGS])
 def test_summary_does_not_outlive_the_context_it_copied(config, mini_prod_world, monkeypatch):  # noqa: F811
     """Сводка диалога копирует `service_name` из состояния на четвёртом ходу. Пятый ход — ответ политики «не нашёл»
     (L-13): услуга из состояния снята, а сводка ещё держит «Ферритин» до следующего обновления — потребитель

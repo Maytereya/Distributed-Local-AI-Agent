@@ -205,6 +205,7 @@ class MessengerRouterConfig:
     turn_parse: str
     parse_fail_variants: int
     journal_phrase: str
+    context_shown: str
     debug_final_input: bool
     url: str
 
@@ -471,6 +472,10 @@ settings = Settings(
         # turn_parse = on — выбор LLM разбора); mention — упоминание хода (`ServiceMention`): фраза без речевой
         # обвязки, реплика без названия услуги — ничего. [MESSENGER_ROUTER] journal_phrase
         journal_phrase=_get_enum("MESSENGER_ROUTER", "journal_phrase", default="rules", allowed={"rules", "mention"}),
+        # Контекст сессии = показанное (L-14, шаг 3): off — услугу в состояние пишет только заземление правил;
+        # on — ответ с ценами пишет показанные строки (_shown_services) и одну показанную услугу (service_name),
+        # срок из МИС — тоже; сводка диалога не называет снятую услугу. [MESSENGER_ROUTER] context_shown
+        context_shown=_get_enum("MESSENGER_ROUTER", "context_shown", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -609,6 +614,7 @@ MR_STRONG_MATCH = settings.messenger_router.strong_match
 MR_TURN_PARSE = settings.messenger_router.turn_parse
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_JOURNAL_PHRASE = settings.messenger_router.journal_phrase
+MR_CONTEXT_SHOWN = settings.messenger_router.context_shown
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

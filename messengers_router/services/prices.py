@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from agent_logic_2.nayka_api import api_price
 
-from .. import turn_parse
+from .. import shown_context, turn_parse
 from ..policies import handoff_message
 from ..text_templates import price_names_without_prices_text, price_not_found_text
 from ._addresses_helpers import _extract_homecode_query
@@ -194,6 +194,19 @@ def _parse_strong_selection(query: str) -> PriceSelection | None:
     return PriceSelection(rows=tuple(dict(row) for row in parse.items[0].rows), status="strong")
 
 
+def _names_no_service(query: str) -> bool:
+    """Под `context_shown = on` (L-14, шаг 3): понимание этой реплики есть, а услуги в ней не названо («а цена?»,
+    «сколько стоит?» — упоминания нет). Тогда фраза вырезателя («а») не перебивает показанную услугу контекста
+    и не ищется в прайсе: вопрос — о том, что пациент уже видел (находка 1 STEP-…-L14-PREP-CONSUMERS)."""
+
+    if shown_context.mode() != "on":
+        return False
+    from .. import turn_understanding  # понимание хода импортирует сервисы цены — не на уровне модуля
+
+    tu = turn_understanding.current()
+    return tu is not None and tu.for_text(str(query or "")) and not tu.services
+
+
 def _llm_selection_service_name(query_text: str, rows: list[dict[str, Any]]) -> str:
     """Подпись к ответу из выбора LLM: одна строка — её название, несколько — фраза пациента."""
 
@@ -287,7 +300,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             # обходился этим fallback'ом: «приём терапевта по ОМС» → сырая фраза
             # «прием терапевт» → ранжирование → платная цена. Если каталог такого
             # свойства не знает вовсе — честное «не нашёл», а не цена без него.
-            if not query_service_name and not query_has_unsatisfiable_qualifier(query_text):
+            if not query_service_name and not query_has_unsatisfiable_qualifier(query_text) and not _names_no_service(query):
                 query_service_name = _extract_price_service_from_query(query_text)
         service_name = _select_effective_price_service_name(
             entity_service_name,
@@ -444,7 +457,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             return _llm_answer(llm_rows)
         return {"prices": [], "note": "no service query", "entities_used": entities}
     retail_query = service_name
-    if query_text and not _is_city_only_reply(query_text):
+    if query_text and not _is_city_only_reply(query_text) and not _names_no_service(query):
         query_candidate = _extract_price_service_from_query(query_text)
         if _should_prefer_retail_query_candidate(query_candidate or "", service_name):
             retail_query = query_candidate or service_name
@@ -594,7 +607,7 @@ async def service_bundle_info(
         )
         # Тот же гард, что в `price_info` (см. комментарий там): fallback на сырую
         # фразу не имеет права обходить отказ по неудовлетворимому уточнению.
-        if not query_service_name and not query_has_unsatisfiable_qualifier(query_text, retail_rows):
+        if not query_service_name and not query_has_unsatisfiable_qualifier(query_text, retail_rows) and not _names_no_service(query):
             query_service_name = _extract_price_service_from_query(query_text)
     service_name = (
         query_service_name
@@ -634,7 +647,7 @@ async def service_bundle_info(
     # 1) Retail price by city-level regionId (Самара = 3).
     retail_query = service_name
     retail_prefers_query_candidate = False
-    if query_text and not _is_city_only_reply(query_text):
+    if query_text and not _is_city_only_reply(query_text) and not _names_no_service(query):
         query_candidate = _extract_price_service_from_query(query_text)
         retail_prefers_query_candidate = _should_prefer_retail_query_candidate(
             query_candidate or "",

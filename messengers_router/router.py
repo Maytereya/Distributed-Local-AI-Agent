@@ -20,7 +20,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import turn_parse, turn_telemetry, turn_understanding
+from . import shown_context, turn_parse, turn_telemetry, turn_understanding
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -1916,6 +1916,9 @@ async def _maybe_readiness_reply(
         # Слабое совпадение: услугу выбирает LLM из кандидатов, срок печатает код (ход (в)).
         deadlines = await readiness_by_choice(user_text)
     if deadlines:
+        if shown_context.mode() == "on":  # срок показан — его услуга и есть контекст (L-14, шаг 3)
+            names = list(dict.fromkeys(str(item.get("name") or "").strip() for item in deadlines if item.get("name")))
+            shown_context.remember(state, names, priced=False)
         turn_understanding.note_acted("readiness_from_mis")
         flag, items = "understanding_readiness_from_mis", {ek.READINESS_RESPONSE: deadlines}
     else:

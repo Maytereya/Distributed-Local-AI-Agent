@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import shown_context
 from .mess_types import SessionState
 
 _SUMMARY_MAX_CHARS = 1600
@@ -44,10 +45,25 @@ def _compact_text(s: str, max_len: int = 220) -> str:
     return txt[: max_len - 3].rstrip() + "..."
 
 
+_CONTEXT_KEYS = ("service_name", "test_name")
+
+
+def _names_stale_context(summary: str, ents: dict[str, Any]) -> bool:
+    """Сводка называет услугу, которой в состоянии уже нет или там другая (L-14, шаг 3): её `state:` писалась
+    до смены или снятия контекста. Сводка, где услуги нет вовсе, ничего не называет — не устарела."""
+
+    for key in _CONTEXT_KEYS:
+        value = ents.get(key)
+        if f"{key}=" in summary and (value in (None, "") or f"{key}={value}" not in summary):
+            return True
+    return False
+
+
 def update_summary(state: SessionState, *, reason: str = "", every_n_user_turns: int = 4) -> str:
     """
     Обновляет bounded summary в SessionState.
-    Обновление выполняется периодически и при явной смене темы.
+    Обновление выполняется периодически и при явной смене темы; под `context_shown = on` — ещё и когда
+    сводка называет услугу, которой в состоянии уже нет (контекст сменился или снят).
     """
     user_turns = [h for h in (state.history or []) if isinstance(h, dict) and h.get("role") == "user"]
     if not user_turns:
@@ -55,6 +71,8 @@ def update_summary(state: SessionState, *, reason: str = "", every_n_user_turns:
         return state.summary
 
     must_refresh = bool(reason in {"topic_switch", "handoff"})
+    if not must_refresh and shown_context.mode() == "on" and state.summary:
+        must_refresh = _names_stale_context(state.summary, state.last_entities or {})
     if not must_refresh and (len(user_turns) % max(1, every_n_user_turns) != 0):
         return state.summary or ""
 

@@ -19,10 +19,10 @@ import pytest
 
 from evalbench import world as ev_world
 from messengers_router.services._common import _normalise_catalog_text
-from tests.test_l14_two_turn_consumers import _FOUND_GGT, _SETS, _Scripted, _play
+from tests.test_l14_two_turn_consumers import _FOUND_GGT, BASE_CONFIGS, _Scripted, _play
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
-CONFIGS = tuple(_SETS)
+CONFIGS = BASE_CONFIGS
 
 
 def _source(monkeypatch, value: str = "mention") -> None:
