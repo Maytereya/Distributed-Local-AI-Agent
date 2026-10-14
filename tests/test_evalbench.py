@@ -486,6 +486,65 @@ def test_card_counts_differing_answers_and_choice_slo():
     assert (m["choose_n"], m["choose_unavailable"], m["choose_p95_ms"]) == (3, 1, 3000)
 
 
+# --------------------------------------------------------------------------- служебный текст в ответе
+
+_LEAKED = {
+    "field_label": "По запросу нашёл варианты:\nФормат: По услуге «ТТГ (TSH) тиреотропный гормон»:\n1. ТТГ (TSH) тиреотропный гормон — 400 руб.",
+    "double_dot": "1. ТТГ (TSH) тиреотропный гормон — 400 руб..",
+    "placeholder": "Стоимость услуги — <<PRICE>>. Записаться можно {branch_name}.",
+    "null_value": "Срок готовности «Ферритин» — None.",
+    "empty_name": "По услуге «» нашёл следующее:",
+    "prompt": 'АЛГОРИТМ: шаг 1. {"label": "PRICE"}',
+}
+_CLEAN = (
+    "Операционная гистероскопия — 20 000 руб. Формат: дневной стационар. Адрес: г. Самара, пр. Ленина, 5.",
+    "Памятка клиники «Ферритин»:\nКровь сдается натощак.. Пациент должен находиться в покое.",  # опечатка МИС после слова
+    "Срок готовности «Ферритин» — 1–2 дня. Подробнее: https://example.org/nan-none-null/soglasie",
+    "2. Иванов Иван Иванович (Невролог) — 2 700 руб.; расписание временно недоступно…",
+    "Сдавать натощак, т.е. после 8–12 часов голода... Nonetheless — по назначению врача.",
+)
+
+
+@pytest.mark.parametrize("kind", sorted(_LEAKED))
+def test_service_text_detector_names_the_kind_that_leaked(kind):
+    from evalbench.detectors import service_text
+
+    assert kind in service_text(_LEAKED[kind])
+
+
+def test_service_text_detector_is_silent_on_clean_answers_and_bot_templates():
+    """Встречный свип: настоящие тексты бота (шаблон «не понял», часы операторов, формат оказания) и данные МИС с их
+    опечатками — не служебный текст; утечка промпта (`leak`) — те же определения, что у детектора."""
+
+    from evalbench.detectors import _LEAK_RE, service_text
+    from messengers_router import policies
+    from messengers_router.text_templates import LOW_CONF_CLARIFY_TEXT, price_names_without_prices_text
+
+    for text in (*_CLEAN, LOW_CONF_CLARIFY_TEXT, policies.OPERATOR_HOURS_NOTE, price_names_without_prices_text("оак", ["ОАК", "ОАМ"])):
+        assert service_text(text) == [], text
+    fixture = ROOT / "tests" / "fixtures" / "mini_prod" / "snapshots" / "price_by_region" / "price_region_3_20261008.jsonl"
+    names = [json.loads(line)["serviceName"] for line in fixture.open(encoding="utf-8") if line.strip()]
+    assert len(names) > 300 and [name for name in names if service_text(f"{name} — 500 руб.")] == []
+    for leak in ("АЛГОРИТМ", "<<QUESTION>>", "context_action", '"label": "PRICE"', "Label: PRICE"):
+        kinds = service_text(leak)
+        assert _LEAK_RE.search(leak) and kinds and set(kinds) <= {"prompt", "placeholder"}, leak
+
+
+def test_card_counts_service_text_turns_by_kind():
+    from evalbench import card
+
+    turn = {"outcome": "price", "handoff": False, "urgent": False, "ms": 10}
+    turns = [
+        {**turn, "id": "1", "answer": _LEAKED["field_label"]},
+        {**turn, "id": "2", "answer": _LEAKED["double_dot"]},
+        {**turn, "id": "3", "answer": _CLEAN[0]},
+    ]
+    m = card.metrics(turns, {})
+    assert (m["service_text"], m["service_text_kinds"]) == (2, {"field_label": 1, "double_dot": 1})
+    text = card.render([({"name": "r", "code_sha": "x", "mode": "down", "cases": 3, "done": 3, "valid": True}, m)])
+    assert "| Служебный текст в ответе | 2 |" in text and "double_dot 1, field_label 1" in text
+
+
 # --------------------------------------------------------------------------- диалоги из нескольких ходов
 
 
@@ -527,12 +586,18 @@ def test_dialogs_run_turns_in_one_session_and_record_shown_context(tmp_path, mon
     assert isinstance(first["journal"], list) and isinstance(second["journal"], list)
 
 
+_DIALOG_SETS = ("two_turn_l14.jsonl", "two_turn_synthetic.jsonl")
+
+
 def test_dialog_sets_are_well_formed(tmp_path):
     from evalbench import dialogs as ev_dialogs
 
-    dialogs = ev_dialogs.load_dialogs([ROOT / "evalbench" / "sets" / "two_turn_l14.jsonl"])
-    assert len({d["id"] for d in dialogs}) == len(dialogs)
-    assert all(len(d["turns"]) >= 2 and d.get("expect") for d in dialogs)
+    dialogs = ev_dialogs.load_dialogs([ROOT / "evalbench" / "sets" / name for name in _DIALOG_SETS])
+    assert len({d["id"] for d in dialogs}) == len(dialogs)  # наборы гоняют вместе: id не повторяются и между ними
+    assert all(len(d["turns"]) >= 2 and d.get("expect") and d.get("tags") for d in dialogs)
+    assert all(set(d.get("about_shown") or ()) <= set(range(2, len(d["turns"]) + 1)) for d in dialogs)
+    texts = [ev_dialogs._turn(turn)[0] for d in dialogs for turn in d["turns"]]
+    assert not [t for t in texts if re.search(r"\d{5,}|@|\+7", t)]  # синтетика: ни телефонов, ни почты, ни номеров
     assert [d["id"] for d in ev_dialogs.load_dialogs([ROOT / "evalbench" / "sets" / "two_turn_l14.jsonl"], ids={"oak_prepare"})] == ["oak_prepare"]
     broken = tmp_path / "broken.jsonl"
     broken.write_text(json.dumps({"id": "x", "turns": []}) + "\n", encoding="utf-8")
@@ -561,3 +626,110 @@ def test_dialogs_show_puts_turns_side_by_side_and_marks_differences():
     assert text.count("**ответы различаются**") == 1 and "**Ходов с разным ответом:** 1" in text
     single = ev_dialogs.render_dialogs([run("on", "Глюкоза — 300 руб.", ["Глюкоза"])])
     assert "[A]" not in single and "различаются" not in single
+
+
+# --------------------------------------------------------------------------- метрики диалогов
+
+
+def _dturn(text, answer, outcome="price", **extra):
+    return {"text": text, "answer": answer, "outcome": outcome, "ms": 10, "handoff": False, "urgent": False, "llm_calls": [], "journal": [], **extra}
+
+
+_GLUCOSE = "По услуге «Глюкоза» нашёл следующее:\n1) Розничная цена: Глюкоза — 300 руб."
+
+
+def test_dialog_marks_context_shown_class():
+    """Ход без своей услуги: цены и названия — только показанные раньше (с ценой или без: срок, варианты без цен);
+    слова вопроса — не название услуги. Ход со своей услугой и первый ход не проверяются."""
+
+    from evalbench.dialogs import mark_dialog
+
+    catalog = PriceCatalog(_ROWS)
+    clean = mark_dialog([_dturn("сколько стоит глюкоза", _GLUCOSE), _dturn("а цена?", _GLUCOSE)], [2], catalog)
+    assert [m.problems() for m in clean] == [[], []] and clean[1].about_shown
+    letter = mark_dialog([_dturn("сколько стоит глюкоза", _GLUCOSE), _dturn("а цена?", "По услуге «а» нашёл:\n1. Общий анализ крови — 500 руб.")], [2], catalog)
+    assert (letter[1].unseen_prices, letter[1].echo) == (["Общий анализ крови — 500"], ["а"])
+    prep = mark_dialog([_dturn("сколько стоит глюкоза", _GLUCOSE), _dturn("а как подготовиться?", "Памятки по подготовке к «а как подготовиться» у меня нет.", "no_info")], [2], catalog)
+    assert prep[1].echo == ["а как подготовиться"] and not prep[1].unseen_prices
+    other = mark_dialog([_dturn("сколько стоит глюкоза", _GLUCOSE), _dturn("а натощак?", "Подходят памятки: «Общий анализ крови».", "memo")], [2], catalog)
+    assert other[1].unseen_names == ["общий анализ крови"] and not other[1].echo
+    named = mark_dialog([_dturn("сколько готовится глюкоза", "Срок готовности «Глюкоза» — 1 день.", "answer"), _dturn("сколько стоит?", _GLUCOSE)], [2], catalog)
+    assert named[1].problems() == []  # название показано без цены — его цена не «непоказанное»
+    unshown = mark_dialog([_dturn("сколько стоит гастроскопия", "Не нашёл стоимость для «гастроскопия».", "no_info"), _dturn("сколько стоит?", _GLUCOSE)], [2], catalog)
+    assert unshown[1].unseen_prices == ["Глюкоза — 300"]  # утечка L-13: ничего не показано, а цена есть
+    own = mark_dialog([_dturn("сколько стоит глюкоза", _GLUCOSE), _dturn("а оак?", "Общий анализ крови — 500 руб.")], [], catalog)
+    assert own[1].problems() == [] and not own[1].about_shown
+    free = mark_dialog([_dturn("сколько стоит глюкоза", _GLUCOSE), _dturn("а цена?", "Стоимость — 300 руб., а со скидкой 250 руб.", "answer")], [2], catalog)
+    assert free[1].unseen_prices == ["250"]  # сумма без строки прайса: показанная — не нарушение, новая — нарушение
+    ask = "Отменить текущий процесс записи? Ответьте «да» или «нет»."
+    options = mark_dialog([_dturn("хочу записаться", "Какой филиал удобен?", "clarify"), _dturn("ладно", ask, "answer"), _dturn("да, отмените", ask, "answer")], [2, 3], catalog)
+    assert [m.echo for m in options] == [[], [], []] and options[2].loop == "question"  # варианты ответа бота — не эхо
+    first = mark_dialog([_dturn("хочу отменить или перенести запись", "Хотите отменить или перенести запись?", "clarify"), _dturn("да, отмените", ask, "answer")], [2], catalog)
+    assert first[1].echo == []  # и когда бот предлагает варианты впервые
+    names = mark_dialog([_dturn("сколько стоит глюкоза", _GLUCOSE), _dturn("а цена?", "По запросу «а» нашёл похожую услугу: «Глюкоза».", "answer")], [2], catalog)
+    assert names[1].echo == ["а"] and not names[1].unseen_names
+
+
+def test_dialog_marks_loops_but_not_a_repeated_answer_to_a_repeated_question():
+    from evalbench.dialogs import bot_questions, loop_kind
+
+    offer = "Не нашёл такую услугу. Перевести на оператора?"
+    assert loop_kind(_dturn("сколько стоит х", offer, "operator_offer"), _dturn("конечно, переведите", "Хорошо. " + offer, "operator_offer")) == "question"
+    ask = "Скажите, пожалуйста, название услуги/анализа — я уточню стоимость."
+    assert loop_kind(_dturn("сколько стоит?", ask, "clarify"), _dturn("а цена?", ask, "clarify")) == "repeat"
+    assert loop_kind(_dturn("сколько стоит глюкоза", _GLUCOSE), _dturn("сколько стоит?", _GLUCOSE)) is None
+    assert loop_kind(_dturn("сколько стоит?", ask, "clarify"), _dturn("а цена?", ask + " Перевести на оператора?", "operator_offer")) is None
+    from messengers_router.text_templates import LOW_CONF_CLARIFY_TEXT
+
+    assert bot_questions(LOW_CONF_CLARIFY_TEXT) == set()  # примеры вопросов в кавычках — не вопрос бота
+    assert bot_questions("Подтвердите запись: терапевт, 15:00. Верно? Если нет — напишите время.") == {"верно?"}
+
+
+def _dialog_run(name, second, *, sets=()):
+    header = {"name": name, "code_sha": "abc", "mode": "down", "done": 2, "dialogs": 2, "live_calls": 0, "valid": True, "cfg": {}, "sets": list(sets),
+              "world": {"date": "19000101", "profile": "day"}}
+    rows = {
+        "glucose_a": {"id": "glucose_a", "set": "t", "expect": "только «Глюкоза»", "tags": ["context_shown", "price_repeat"], "about_shown": [2],
+                      "turns": [_dturn("сколько стоит глюкоза", _GLUCOSE), _dturn("а цена?", second)]},
+        "offer_yes": {"id": "offer_yes", "set": "t", "expect": "перевод", "tags": ["yes_no", "operator_offer"], "about_shown": [2],
+                      "turns": [_dturn("сколько стоит х", "Не нашёл. Перевести на оператора?", "operator_offer"),
+                                _dturn("конечно, переведите", "Перевести на оператора?", "operator_offer", journal=[{"phrase": "х"}])]},
+    }
+    return header, rows
+
+
+def test_dialogs_card_counts_two_runs_without_utterances():
+    from evalbench import dialogs as ev_dialogs
+
+    catalog = PriceCatalog(_ROWS)
+    runs = [_dialog_run("off", "По услуге «а» нашёл:\n1. Общий анализ крови — 500 руб.."), _dialog_run("on", _GLUCOSE)]
+    loaded = [(header, ev_dialogs.dialog_metrics(rows, ev_dialogs.run_marks(rows, catalog))) for header, rows in runs]
+    off, on = (m for _h, m in loaded)
+    assert (off["unseen_price"], off["echo"], off["service_text"], off["loop_question"], off["about_shown"]) == (1, 1, 1, 1, 2)
+    assert (on["unseen_price"], on["echo"], on["service_text"], on["loop_question"], on["journal"]) == (0, 0, 0, 1, 1)
+    assert off["by_tag"]["price_repeat"] == {"dialogs": 1, "service_text": 1, "unseen_price": 1, "unseen_name": 0, "echo": 1, "loop": 0}
+    assert off["ids"] == {"service_text": ["glucose_a"], "unseen_price": ["glucose_a"], "echo": ["glucose_a"], "loop": ["offer_yes"]}
+    text = ev_dialogs.render_card(loaded, ev_dialogs._answers_differ(runs))
+    assert "| Метрика | off | on | Δ |" in text and "|   цена непоказанного (ходов) | 1 | 0 | -1 |" in text
+    assert "| price_repeat | 1 / 1 | 1 / 0 | 1 / 0 | 0 / 0 | 1 / 0 | 0 / 0 |" in text
+    assert "**Ходов с разным ответом:** 1 из 4 общих (диалоги: glucose_a)" in text
+    assert "- цена непоказанного: A: glucose_a; B: —" in text and "double_dot 1" in text
+    for said in ("сколько стоит глюкоза", "а цена?", "конечно, переведите"):  # карточка — без реплик пациентов
+        assert said not in text
+
+
+def test_dialogs_show_has_summary_and_marks_turns(tmp_path):
+    """`show` — сводка прогона и отметки нарушений у ходов; разметка набора — из текущего файла (без перепрогона)."""
+
+    from evalbench import dialogs as ev_dialogs
+
+    header, rows = _dialog_run("off", "По услуге «а» нашёл:\n1. Общий анализ крови — 500 руб.")
+    current = tmp_path / "t.jsonl"
+    current.write_text(json.dumps({"id": "glucose_a", "turns": ["x", "y"], "expect": "e", "tags": ["new_class"], "about_shown": []}) + "\n", encoding="utf-8")
+    text = ev_dialogs.render_dialogs([(header, rows)], catalogs=[PriceCatalog(_ROWS)])
+    assert "- служебный текст 0; ходов без своей услуги 2: цена непоказанного 1, название непоказанного 0, слова вопроса 1; петли 1" in text
+    assert "  - **нарушение:** цена непоказанного: Общий анализ крови — 500" in text and "  - **нарушение:** слова вопроса названием услуги: «а»" in text
+    assert "  - **нарушение:** петля: тот же вопрос бота, что ходом раньше" in text and "классы: context_shown, price_repeat; без своей услуги — ходы 2" in text
+    ev_dialogs.refresh_annotations({**header, "sets": [str(current)]}, rows)
+    assert (rows["glucose_a"]["tags"], rows["glucose_a"]["about_shown"]) == (["new_class"], [])
+    assert rows["offer_yes"]["tags"] == ["yes_no", "operator_offer"]  # диалога нет в файле — разметка прогона

@@ -21,6 +21,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .detectors import service_text
 from .prices import PriceCatalog, PricePair, multi_coverage, price_verdict
 from .specialties import SpecialtyMatcher, specialty_verdict
 from .world import PRIVATE_ROOT
@@ -172,6 +173,8 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
     llm = Counter(c["outcome"] for t in turns for c in t.get("llm_calls") or [])
     sites = Counter(c["site"] for t in turns for c in t.get("llm_calls") or [])
     ms = [t["ms"] for t in turns]
+    # Служебный текст — по сохранённому ответу (как цены): правка детектора не требует перепрогона.
+    leaked = [service_text(t.get("answer") or "") for t in turns]
     return {
         "n": n,
         "outcomes": dict(outcomes),
@@ -185,6 +188,8 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
             1 for t in turns if any(p["status"] == "unattributed" for p in t.get("price_pairs") or [])
         ),
         "leak": sum(1 for t in turns if t.get("leak")),
+        "service_text": sum(1 for kinds in leaked if kinds),
+        "service_text_kinds": dict(Counter(kind for kinds in leaked for kind in kinds)),
         "long_1500": sum(1 for t in turns if t.get("chars", 0) > 1500),
         "price_labeled": sum(verdicts.values()),
         "price_verdicts": dict(verdicts),
@@ -290,6 +295,7 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]], diff: tuple[int, i
         ("Оффер оператора", "operator_offer"),
         ("Уточнение / не понял", "clarify"),
         ("Нет данных без перевода (класс 4)", "no_info"),
+        ("Служебный текст в ответе", "service_text"),
         ("Утечка внутренностей", "leak"),
         ("Длиннее 1500 знаков", "long_1500"),
         ("p50, мс", "p50_ms"),
@@ -304,6 +310,12 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]], diff: tuple[int, i
         elif len(runs) == 2:
             delta = " |"
         lines.append(f"| {title} | " + " | ".join(_fmt(v) for v in vals) + (" |" + delta if delta else " |"))
+    if any(m["service_text"] for _, m in runs):
+        lines.append("")
+        lines.append(
+            "**Служебный текст по видам** (ходов): "
+            + "; ".join(f"{h['name']}: " + (", ".join(f"{k} {v}" for k, v in sorted(m["service_text_kinds"].items())) or "—") for h, m in runs)
+        )
     if diff is not None:
         lines.append("")
         lines.append(f"**Ответ отличается:** {diff[0]} из {diff[1]} общих вопросов" + (f" (например: {', '.join(diff[2])})" if diff[2] else ""))
