@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import turn_understanding
+from . import expects, turn_understanding
 from .flow_policy import apply_pending_override
 from .llm_mode_policy import RuntimeOptions
 from .memory import MemoryStore
@@ -109,7 +109,9 @@ def build_plan(
     pending = memory.get_pending(state)
     effective_label = apply_pending_override(decision, pending, user_text=user_text)
 
-    entities = state.last_entities
+    # Поле ожидания (вопрос бота, D2.1) — состояние диалога, не сущность: инструментам не отдаём, иначе через их
+    # `entities_used` текст вопроса попал бы в промпт свободного ответа LLM и поменял бы ответ.
+    entities = expects.without(state.last_entities)
     if runtime_options is not None:
         entities = {**entities, "__runtime_llm_mode": runtime_options.llm_mode}
     missing = missing_slots(effective_label, entities)

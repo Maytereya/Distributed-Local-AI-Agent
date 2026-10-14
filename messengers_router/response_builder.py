@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import evidence_keys as ek
-from . import shown_context
+from . import expects, shown_context
 from .flow_policy import (
     hydrate_appointment_context_from_schedule,
     reset_appointment_runtime_state,
@@ -218,6 +218,8 @@ def _sync_compound_price_pending(state: SessionState, payload: dict[str, Any]) -
             "services": services[:4],
             "default_service": default_service,
         }
+        # Бот показал услуги нумерованным списком и ждёт выбора («да» — первая) — поле ожидания (D2.1).
+        expects.ask(expects.Question.COMPOUND_PRICE, kind=expects.PICK, options=services[:4])
         return
     state.last_entities.pop(_COMPOUND_PRICE_PENDING_KEY, None)
 
@@ -388,6 +390,7 @@ def mark_operator_offer_pending(state: SessionState, memory: MemoryStore) -> Non
 
     state.last_entities["_operator_offer_pending"] = True
     memory.set_pending(state, label="OTHER", missing_slots=["operator_offer_confirm"])
+    expects.ask(expects.Question.OPERATOR_OFFER)  # все офферы вопросом идут здесь — поле ожидания (D2.1)
 
 
 def build_prepare_response(
@@ -406,6 +409,7 @@ def build_prepare_response(
     if isinstance(payload.get("prepare_variants"), dict):
         # Вопрос «с наркозом или без?» — ответ разберёт `_handle_prepare_variant_pending`.
         state.last_entities[PREPARE_VARIANT_PENDING_KEY] = {"titles": dict(payload["prepare_variants"])}
+        expects.ask(expects.Question.ANESTHESIA, kind=expects.PICK, options=expects.ANESTHESIA_OPTIONS)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 

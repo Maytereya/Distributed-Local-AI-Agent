@@ -14,7 +14,7 @@ from time import perf_counter
 from typing import Any, AsyncIterator
 
 from . import evidence_keys as ek
-from . import shown_context, turn_telemetry, turn_understanding
+from . import expects, shown_context, turn_telemetry, turn_understanding
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 
 logger = logging.getLogger(__name__)
@@ -157,6 +157,9 @@ def _mark_secondary_offer_pending(ctx: OrchestratorContext) -> None:
         and plan.label not in {"APPOINTMENT", "URGENT", "COMPLAINT", "MEDICAL_ADVICE", "TEST_RESULT"}
     ):
         ctx.state.last_entities["_secondary_offer_pending"] = True
+        # Ожидание «да» на вторую тему — поле ожидания (D2.1). Текста оффера в ответе нет с fec9770 (16.04):
+        # вопрос в поле — ответ, каким его увидел пациент.
+        expects.ask(expects.Question.SECONDARY_OFFER)
 
 
 def _extract_recovery_response(
@@ -298,6 +301,9 @@ def _extract_pending_response(
         f"pending:{plan.label}",
         missing if isinstance(missing, list) else [],
     )
+    if plan.label == "APPOINTMENT" and isinstance(missing, list) and "appointment_action" in missing:
+        # «Хотите отменить или перенести запись?» — ответ разберёт `router._handle_appointment_action_pending`.
+        expects.ask(expects.Question.APPOINTMENT_ACTION, kind=expects.PICK, options=expects.APPOINTMENT_ACTION_OPTIONS)
     return ResponseEnvelope(
         text=_button_hint(decision)
         or clarification_question(plan.label, missing if isinstance(missing, list) else [], ctx.state.last_entities),

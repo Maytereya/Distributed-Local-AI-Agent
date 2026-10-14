@@ -9,6 +9,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from . import expects
 from .city import match_city
 from .flow_policy import clear_on_appointment_end, looks_like_patient_fio
 from .memory import MemoryStore
@@ -207,6 +208,8 @@ def _appointment_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
         missing = missing_slots("APPOINTMENT", state.last_entities)
     if missing:
         memory.set_pending(state, label="APPOINTMENT", missing_slots=missing)
+        if "appointment_action" in missing:  # «Хотите отменить или перенести запись?» — поле ожидания (D2.1)
+            expects.ask(expects.Question.APPOINTMENT_ACTION, kind=expects.PICK, options=expects.APPOINTMENT_ACTION_OPTIONS)
         return clarification_question("APPOINTMENT", missing, state.last_entities)
 
     if state.dialog.phase == AppointmentPhase.CONFIRM:
@@ -261,6 +264,7 @@ def run_appointment_precheck(
             if state.last_entities.get("appointment_topic_switch_pending")
             else appointment_text_cancel_confirm()
         )
+        expects.ask(expects.Question.APPOINTMENT_ABORT, reask=True)  # ответ не разобран — тот же вопрос снова
         return ResponseEnvelope(
             text=prompt,
             handoff=False,
@@ -291,6 +295,7 @@ def run_appointment_precheck(
             return None
         if is_appointment_cancel_or_restart_request(user_text) or is_appointment_soft_pause_request(user_text):
             mark_appointment_cancel_pending(state)
+            expects.ask(expects.Question.APPOINTMENT_ABORT)
             return ResponseEnvelope(
                 text=appointment_text_cancel_confirm(),
                 handoff=False,
@@ -305,6 +310,7 @@ def run_appointment_precheck(
             )
         if is_likely_topic_switch_from_appointment(user_text):
             mark_appointment_topic_switch_pending(state)
+            expects.ask(expects.Question.APPOINTMENT_ABORT)
             return ResponseEnvelope(
                 text=appointment_text_topic_switch_confirm(),
                 handoff=False,
@@ -352,6 +358,7 @@ def run_appointment_precheck(
             )
         if is_appointment_cancel_or_restart_request(user_text) or is_appointment_soft_pause_request(user_text):
             mark_appointment_cancel_pending(state)
+            expects.ask(expects.Question.APPOINTMENT_ABORT)
             return ResponseEnvelope(
                 text=appointment_text_cancel_confirm(),
                 handoff=False,
@@ -366,6 +373,7 @@ def run_appointment_precheck(
             )
         if is_new_topic_while_confirm_pending(user_text):
             mark_appointment_topic_switch_pending(state)
+            expects.ask(expects.Question.APPOINTMENT_ABORT)
             return ResponseEnvelope(
                 text=appointment_text_topic_switch_confirm(),
                 handoff=False,
@@ -379,6 +387,7 @@ def run_appointment_precheck(
                 ),
             )
 
+        expects.ask(expects.Question.APPOINTMENT_CONFIRM, reask=True)  # ответ не разобран — тот же вопрос снова
         return ResponseEnvelope(
             text=appointment_text_reask_confirm(),
             handoff=False,

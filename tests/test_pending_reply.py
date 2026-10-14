@@ -484,9 +484,10 @@ def test_on_is_the_shadow_until_it_is_implemented(mini_prod_world, monkeypatch):
 
 
 def test_no_question_no_shadow(mini_prod_world, monkeypatch):  # noqa: F811
-    """Без висящего вопроса тень молчит: ни вызова, ни полей."""
+    """Без висящего вопроса тень молчит: ни вызова, ни полей. Первый ход — ответ без вопроса бота: оффер оператора
+    (`_STOPLIST_OFFER`) с D2.1 честно пишет `_expects`, и тень на нём срабатывает."""
 
-    _records, rows, oracle = _same_as_off("none", [_STOPLIST_OFFER, "нет, спасибо"], mini_prod_world, monkeypatch, before=None)
+    _records, rows, oracle = _same_as_off("none", ["Какие у вас адреса в Самаре?", "нет, спасибо"], mini_prod_world, monkeypatch, before=None)
     assert oracle.calls == [] and not any(_pending_fields(row) for row in rows)
 
 

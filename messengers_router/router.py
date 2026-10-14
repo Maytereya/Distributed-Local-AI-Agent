@@ -20,7 +20,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import pending_reply, shown_context, turn_parse, turn_telemetry, turn_understanding
+from . import expects, pending_reply, shown_context, turn_parse, turn_telemetry, turn_understanding
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -726,6 +726,7 @@ async def _handle_appointment_action_pending(
             ),
         )
 
+    expects.ask(expects.Question.APPOINTMENT_ACTION, kind=expects.PICK, options=expects.APPOINTMENT_ACTION_OPTIONS, reask=True)
     return (
         RouteDecision(
             label="APPOINTMENT",
@@ -773,6 +774,7 @@ async def _handle_prepare_variant_pending(
     if choice is None and contextual_reply_kind(user_text) in {"yes", "no"}:
         if not pending.get("asked_again"):
             pending["asked_again"] = True
+            expects.ask(expects.Question.ANESTHESIA, kind=expects.PICK, options=expects.ANESTHESIA_OPTIONS, reask=True)
             text = "Напишите, пожалуйста: «с наркозом» или «без наркоза»."
             return (
                 RouteDecision(label="PREPARE", confidence=0.9, flags={"prepare_variant_reask"}, source="prepare_variant"),
@@ -1044,6 +1046,7 @@ async def _handle_catalog_confirm_pending(
             ),
         )
 
+    expects.ask(expects.Question.CATALOG_CONFIRM, reask=True)
     return (
         RouteDecision(
             label="OTHER",
@@ -1969,6 +1972,7 @@ def _maybe_start_catalog_confirm(
     }
     memory.clear_pending(state)
     memory.set_pending(state, label="OTHER", missing_slots=["catalog_confirm"])
+    expects.ask(expects.Question.CATALOG_CONFIRM)
 
     return (
         _copy_decision(
@@ -3197,6 +3201,8 @@ async def patient_routing_stream(
         # подтверждение услуги. Поэтому сбрасываем тему ДО всех ранних проверок,
         # включая предпроверку активной записи.
         clear_on_topic_switch(state, memory)
+    # Вопрос, на который отвечает реплика, — после сброса кнопкой (поле ожидания, D2.1; пишет его конец хода).
+    expects.begin_turn(state)
 
     # Неотложное состояние — первым: раньше явного запроса оператора, охраны города и
     # предпроверки записи. Срочность проверялась только внутри пайплайна, и «задыхаюсь»
@@ -3297,6 +3303,7 @@ async def patient_routing_stream(
     if precheck is not None:
         if precheck.handoff:
             clear_on_handoff(state, memory)
+        expects.finish_turn(state, precheck)
         yield precheck
         return
 
@@ -3348,6 +3355,8 @@ async def patient_routing_stream(
     if offered is not response:
         turn_telemetry.override(answer_source="operator_offer_on_repeat")
     response = offered
+    # Поле ожидания — по тексту, который увидит пациент (после анти-залипа: он дописывает свой оффер).
+    expects.finish_turn(state, response)
 
     memory.append_turn(state, role="user", text=user_text)
     memory.append_turn(state, role="assistant", text=response.text)

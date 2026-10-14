@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from . import turn_understanding
+from .expects import EXPECTS_KEY
 from .memory import MemoryStore
 from .mess_types import AppointmentPhase, DialogState, RouteDecision, SessionState
 from .city import match_city
@@ -590,6 +591,7 @@ _TOPIC_SWITCH_EXTRA_KEYS: tuple[str, ...] = (
     "_secondary_offer_pending",
     "_catalog_confirm_pending",
     "_catalog_confirm_rejects",
+    EXPECTS_KEY,  # смена темы и кнопка снимают висящий вопрос бота (поле ожидания, D2.1)
 )
 
 
@@ -708,6 +710,7 @@ def clear_on_topic_switch(state: SessionState, memory: MemoryStore | None = None
     - appointment runtime: очищается
     - appointment full context: очищается
     - secondary/catalog/doc-request topic state: очищается
+    - поле ожидания (`_expects`, висящий вопрос бота): очищается
     - city и другие устойчивые поля: сохраняются
     - dialog: очищается полностью
 
@@ -731,6 +734,7 @@ def clear_on_appointment_end(state: SessionState, memory: MemoryStore | None = N
     - pending: очищается всегда
     - appointment runtime: очищается
     - doctor/service/test context записи: очищается
+    - поле ожидания (`_expects`): очищается — вопрос записи снят вместе с ней
     - city и несвязанные topic-ключи: сохраняются
     - dialog: очищается через appointment runtime reset
 
@@ -743,7 +747,7 @@ def clear_on_appointment_end(state: SessionState, memory: MemoryStore | None = N
     _clear_state_core(
         state,
         memory,
-        keys_to_clear=_APPOINTMENT_FULL_CONTEXT_KEYS,
+        keys_to_clear=_APPOINTMENT_FULL_CONTEXT_KEYS + (EXPECTS_KEY,),
     )
 
 
