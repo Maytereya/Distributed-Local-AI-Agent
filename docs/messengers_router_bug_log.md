@@ -11,24 +11,29 @@
 
 ---
 
-## BUG-2026-10-14-CANCEL-EXISTING-LOST — «отменить» на вопрос «Хотите отменить или перенести запись?» прерывает оформление, отмена существующей записи теряется без оператора — ОТКРЫТ
+## BUG-2026-10-14-CANCEL-EXISTING-LOST — «отменить» на вопрос «Хотите отменить или перенести запись?» прерывал оформление, отмена существующей записи терялась без оператора — ИСПРАВЛЕНО
 
 - **Симптом.** «отменить или перенести запись к терапевту» → «Хотите отменить или перенести запись?» → «отменить» (так
   же «Отменить запись», «хочу отменить») → «Отменить текущий процесс записи? Ответьте «да» или «нет».» → «да» →
   «Процесс записи отменён. Можете задать новый вопрос, и я помогу дальше.». handoff=false на всех ходах, оператора нет
   (наборы default и deploy). Найдено агентом D2.4 автономного дня 14.10.
 - **Корень (подтверждён).** `appointment_flow_guard.run_appointment_precheck`: пока висит `_pending` с
-  `appointment_action`, к `router._handle_appointment_action_pending` пропускаются только «да/нет». «отмен…» узнаёт
-  `_APPOINTMENT_CANCEL_OR_RESTART_RE` → `mark_appointment_cancel_pending` → «Отменить текущий процесс записи?»
-  (`appointment_flow_cancel_requested`, `_expects.type = appointment_abort`); «да» → `clear_on_appointment_end`
-  (`appointment_flow_cancelled`). Предпроверка идёт до пайплайна, обработчик выбора действия не вызывается.
-- **Направление (решения владельца 25.09, 04.10/08.10).** Отмена существующей записи → оператор (перевод
-  `existing_appointment_change` или оффер оператора); процесс записи этим не «отменяется». На шаге выбора действия
-  предпроверка не перехватывает выбор, а отдаёт его обработчику. Классом, без новых регэкспов и слов (храповик);
-  приоритет — решение владельца.
-- **Покрытие.** `tests/test_open_bugs_2026_10_14.py`: `test_cancel_existing_goes_to_operator` — xfail strict, 12 (2 фразы
-  × 3 формы × default/deploy), три хода через эндпоинт; симптом — `test_cancel_existing_is_lost_as_now`, 12 зелёных;
-  предусловие — `test_cancel_existing_reaches_the_action_question`, 4. При починке: снять xfail, «как сейчас» заменить.
+  `appointment_action`, к `router._handle_appointment_action_pending` пропускались только «да/нет»; «отмен…» узнавал
+  `_APPOINTMENT_CANCEL_OR_RESTART_RE` → `mark_appointment_cancel_pending` → «Отменить текущий процесс записи?».
+- **Фикс (решение владельца 14.10 по 04.10/08.10 «отмена — сразу оператор»; по умолчанию, без выключателя).**
+  Предпроверка на шаге выбора действия отдаёт выбор «cancel» (`normalize_appointment_action(detect_appointment_action)`,
+  те же детекторы, что у обработчика) обработчику выбора действия. Обработчик на «cancel» идёт общим путём отмены
+  существующей записи `router._existing_appointment_cancel_handoff` (тот же, что у детектора/LLM в
+  `_maybe_offer_operator_for_existing_appointment`): очистка оформления и висящего вопроса, перевод handoff=True текстом
+  `existing_appointment_change`, флаги `existing_appointment_operator_handoff`/`existing_appointment_cancel`. Бот не
+  ходит в МИС — запись оператор видит сам. Новых регэкспов, слов и текстов нет. «перенести», «нет», срочное — без
+  изменений.
+- **Инвариант.** Выбор «отменить» на вопрос «Хотите отменить или перенести запись?» — отмена СУЩЕСТВУЮЩЕЙ записи →
+  сразу оператор; вопроса «Отменить текущий процесс записи?» и «Процесс записи отменён» на этом шаге не бывает.
+- **Покрытие.** `tests/test_open_bugs_2026_10_14.py`: `test_cancel_existing_goes_to_operator` — xfail снят, 12 зелёных
+  (2 фразы × 3 формы × default/deploy), три хода через эндпоинт; `test_cancel_existing_is_not_lost_anymore` (вместо
+  «как сейчас») — 12: перевод `existing_appointment_change` на втором ходе, нет `appointment_abort`/«процесс записи
+  отменён»; предусловие `test_cancel_existing_reaches_the_action_question` — 4.
 
 ## BUG-2026-10-14-SHOW-ALL-AS-CATALOG-SERVICE — «все» после списка семейства становится услугой каталога «УЗИ … все зоны (детское)», подготовка отвечает про неё — ОТКРЫТ
 

@@ -4,7 +4,8 @@
 сейчас» этого бага заменить проверкой нового поведения (он закрепляет симптом точно, поэтому покраснеет вместе с
 починкой).
 
-1. BUG-2026-10-14-CANCEL-EXISTING-LOST. «Хотите отменить или перенести запись?» → «отменить» → «Отменить текущий
+1. BUG-2026-10-14-CANCEL-EXISTING-LOST (ИСПРАВЛЕНО 14.10: xfail снят, «как сейчас» заменён на «так больше не
+   бывает»). «Хотите отменить или перенести запись?» → «отменить» → «Отменить текущий
    процесс записи?» → «да» → «Процесс записи отменён». Отмена СУЩЕСТВУЮЩЕЙ записи теряется без оператора. Решение
    владельца (25.09, 04.10/08.10): отмена существующей записи → оператор (перевод или оффер оператора), процесс записи
    этим не «отменяется». Корень: предпроверка записи (`appointment_flow_guard.run_appointment_precheck`) пропускает
@@ -106,23 +107,22 @@ def test_cancel_existing_reaches_the_action_question(phrase, config, mini_prod_w
 @pytest.mark.parametrize("config", sorted(_SETS))
 @pytest.mark.parametrize("pick", _CANCEL_PICKS)
 @pytest.mark.parametrize("phrase", _AMBIGUOUS_ACTION)
-def test_cancel_existing_is_lost_as_now(phrase, pick, config, mini_prod_world, monkeypatch):  # noqa: F811
-    """Как сейчас (симптом): выбор «отменить» прерывает оформление — «да» и всё, оператора нет."""
+def test_cancel_existing_is_not_lost_anymore(phrase, pick, config, mini_prod_world, monkeypatch):  # noqa: F811
+    """Так больше не бывает (исправлено 14.10): выбор «отменить» — сразу перевод тем же путём, что у отмены
+    существующей записи (`existing_appointment_change`); вопроса «прервать оформление?» и «Процесс записи отменён» нет,
+    оформление записи очищено."""
+
+    from messengers_router.policies import handoff_message
 
     first, second, third = _cancel_dialog(phrase, pick, config, monkeypatch, mini_prod_world)
     assert first["text"] == _ACTION_QUESTION
-    assert second["text"].startswith(_ABORT_QUESTION) and "appointment_flow_cancel_requested" in second["flags"]
-    assert second["expects"]["type"] == "appointment_abort"  # ждёт «прервать оформление?», не выбор действия
-    assert third["text"].startswith(_ABORTED) and "appointment_flow_cancelled" in third["flags"]
-    assert not any(turn["handoff"] for turn in (first, second, third))
-    assert "оператор" not in (second["text"] + third["text"]).lower()
+    assert second["handoff"] is True and second["text"] == handoff_message("existing_appointment_change")
+    assert {"existing_appointment_operator_handoff", "existing_appointment_cancel"} <= second["flags"]
+    assert "appointment_flow_cancel_requested" not in second["flags"]
+    assert (second["expects"] or {}).get("type") not in {"appointment_abort", "appointment_action"}
+    assert "appointment_flow_cancelled" not in third["flags"] and _ABORTED not in third["text"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG-2026-10-14-CANCEL-EXISTING-LOST: предпроверка записи узнаёт «отмен…» раньше обработчика выбора "
-    "действия и спрашивает «Отменить текущий процесс записи?»; «да» — «Процесс записи отменён», оператора нет",
-)
 @pytest.mark.parametrize("config", sorted(_SETS))
 @pytest.mark.parametrize("pick", _CANCEL_PICKS)
 @pytest.mark.parametrize("phrase", _AMBIGUOUS_ACTION)

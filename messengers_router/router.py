@@ -726,7 +726,18 @@ async def _handle_appointment_action_pending(
         )
 
     normalized_action = normalize_appointment_action(detect_appointment_action(user_text), user_text)
-    if normalized_action in {"cancel", "reschedule"}:
+    if normalized_action == "cancel":
+        # BUG-2026-10-14-CANCEL-EXISTING-LOST: выбор отмены существующей записи — сразу оператор.
+        decision = RouteDecision(
+            label="APPOINTMENT",
+            confidence=0.95,
+            entities={},
+            flags={"appointment_action_selected"},
+            needs_handoff=False,
+            source="appointment_action_pending",
+        )
+        return _existing_appointment_cancel_handoff(decision, state, memory)
+    if normalized_action == "reschedule":
         memory.merge_entities(state, {"appointment_action": normalized_action}, label="APPOINTMENT")
         decision = RouteDecision(
             label="APPOINTMENT",
@@ -1788,6 +1799,43 @@ async def _confirm_existing_appointment_question(
     )
 
 
+def _existing_appointment_cancel_handoff(
+    decision: RouteDecision,
+    state: SessionState,
+    memory: MemoryStore,
+) -> tuple[RouteDecision, Plan, Evidence]:
+    """Отмена СУЩЕСТВУЮЩЕЙ записи — сразу оператор (решения владельца 25.09, 04.10/08.10).
+
+    Бот в МИС не ходит: запись видит оператор. Состояние оформления записи очищается, висящий
+    вопрос снимается. Один путь для детектора/LLM (`_maybe_offer_operator_for_existing_appointment`)
+    и для выбора «отменить» на вопрос «Хотите отменить или перенести запись?»
+    (`_handle_appointment_action_pending`).
+    """
+
+    reset_appointment_runtime_state(state)
+    memory.clear_pending(state)
+    return (
+        _copy_decision(
+            decision,
+            label="OTHER",
+            entities={},
+            flags=set(decision.flags) | {"existing_appointment_operator_handoff", "existing_appointment_cancel"},
+            source="existing_appointment",
+            confidence=max(decision.confidence, 0.9),
+            needs_handoff=False,
+        ),
+        Plan(label="OTHER"),
+        Evidence(
+            items={
+                ek.OPERATOR_OFFER_RESPONSE: {
+                    "text": handoff_message("existing_appointment_change"),
+                    "handoff": True,
+                }
+            }
+        ),
+    )
+
+
 def _maybe_offer_operator_for_existing_appointment(
     *,
     decision: RouteDecision,
@@ -1833,32 +1881,13 @@ def _maybe_offer_operator_for_existing_appointment(
     if kind is None:
         return None
 
-    reset_appointment_runtime_state(state)
-    memory.clear_pending(state)
     if kind == "cancel":
         # Решение владельца 25.09 (заменяет 14.08 для отмены): сразу оператор, без
         # вопроса. Кнопка «Перенести или отменить» с 07.10 — подсказка, и её «отменить
         # запись» приходит сюда.
-        return (
-            _copy_decision(
-                decision,
-                label="OTHER",
-                entities={},
-                flags=set(decision.flags) | {"existing_appointment_operator_handoff", "existing_appointment_cancel"},
-                source="existing_appointment",
-                confidence=max(decision.confidence, 0.9),
-                needs_handoff=False,
-            ),
-            Plan(label="OTHER"),
-            Evidence(
-                items={
-                    ek.OPERATOR_OFFER_RESPONSE: {
-                        "text": handoff_message("existing_appointment_change"),
-                        "handoff": True,
-                    }
-                }
-            ),
-        )
+        return _existing_appointment_cancel_handoff(decision, state, memory)
+    reset_appointment_runtime_state(state)
+    memory.clear_pending(state)
     mark_operator_offer_pending(state, memory)
     return (
         _copy_decision(

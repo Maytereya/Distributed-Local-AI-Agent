@@ -35,6 +35,7 @@ from .policies import (
     appointment_text_wish_prompt,
     clarification_question,
     detect_address_intent,
+    detect_appointment_action,
     detect_doc_request_intent,
     detect_doctor_info_intent,
     detect_news_intent,
@@ -47,6 +48,7 @@ from .policies import (
     has_datetime_signal,
     looks_like_branch_hint,
     missing_slots,
+    normalize_appointment_action,
 )
 from .russian_nlu import normalize_ru
 from .recovery_policy import contextual_reply_kind
@@ -292,6 +294,11 @@ def run_appointment_precheck(
         # Когда ждем именно выбор действия (отмена/перенос), короткие "да/нет"
         # не считаем soft-pause/cancel, чтобы обработка шла в pending-ветке роутера.
         if waiting_action_choice and reply_kind in {"yes", "no"}:
+            return None
+        # BUG-2026-10-14-CANCEL-EXISTING-LOST: на вопрос «Хотите отменить или перенести запись?» «отменить» — выбор
+        # отмены СУЩЕСТВУЮЩЕЙ записи, а не «прервать оформление»: его разбирает обработчик выбора действия
+        # (`router._handle_appointment_action_pending` → сразу оператор, решение владельца 04.10/08.10).
+        if waiting_action_choice and normalize_appointment_action(detect_appointment_action(user_text), user_text) == "cancel":
             return None
         if is_appointment_cancel_or_restart_request(user_text) or is_appointment_soft_pause_request(user_text):
             mark_appointment_cancel_pending(state)
