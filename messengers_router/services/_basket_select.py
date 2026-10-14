@@ -31,7 +31,7 @@ from typing import Any, Sequence
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from ._common import _normalise_catalog_text
-from ._price_select_llm import _prefer_base_variants, _record_synonym_suggestion, _row_cost, _row_key, _row_name
+from ._price_select_llm import _prefer_base_variants, _record_synonym_suggestion, _row_cost, _row_key, _row_name, journal_phrase_mode
 from ._prices_helpers import _annotate_price_rows_with_care_context, _rank_price_rows, phrase_price_items
 from ._strong_match import strong_rows
 
@@ -354,6 +354,19 @@ async def choose_basket_rows(
     return positions, [*unrecognized, *not_found]
 
 
+def _journal_fragment(fragment: str) -> str:
+    """Фраза слабой позиции для журнала синонимов. Под `journal_phrase = mention` (L-14, шаг 2) — как фраза
+    одиночной услуги: без речевой обвязки с краёв (`turn_understanding._bare_phrase`, те же списки): «а ггтп» →
+    «ггтп»; позиция из одной обвязки — пусто, в журнал не пишется. Фразы разбора режут края только по
+    `_turn_phrases._WRAPPER`, «а» в нём нет. Под `rules` — фраза разбора как есть (как было)."""
+
+    if journal_phrase_mode() != "mention":
+        return fragment
+    from ..turn_understanding import _bare_phrase  # понимание хода импортирует сервисы цены — не на уровне модуля
+
+    return _bare_phrase(fragment)
+
+
 async def basket_from_phrases(
     question: str,
     phrases: Sequence[Any],
@@ -385,7 +398,9 @@ async def basket_from_phrases(
     chosen, weak, failed = await _pick(question, items, retail_rows, llm_allowed=llm_allowed, fair_share=True)
     if journal and not failed:
         for index, fragment, _candidates in weak:
-            _record_synonym_suggestion(fragment, [], list(chosen.get(index) or []), source="basket")
+            phrase = _journal_fragment(fragment)
+            if phrase:
+                _record_synonym_suggestion(phrase, [], list(chosen.get(index) or []), source="basket")
     unpriced = _settle_weak_as_variants(weak, chosen) if failed else {}
     positions, not_found = _positions(items, chosen, unpriced)
     return _without_repeats(positions), [*leftover, *not_found]

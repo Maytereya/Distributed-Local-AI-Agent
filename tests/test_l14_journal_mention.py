@@ -141,3 +141,48 @@ def test_two_turns_short_question_writes_nothing(followup, config, mini_prod_wor
     first, second = _play(["а подскажите пожалуйста сколько стоит ггтп сдать", followup], f"journal-two-{followup}", mini_prod_world, monkeypatch, config, llm=_FOUND_GGT())
     assert _phrases(first) == ["ггтп"], first.journal
     assert second.journal == [], second.journal
+
+
+_WRAPPED_BASKET = "сколько стоит лютеинизирующий гормон и а ггтп"
+_WRAPPED_QUESTION = "Здравствуйте, а делаете ли вы лютеинизирующий гормон и ггтп?"
+
+
+@pytest.mark.parametrize(
+    ("said", "picked", "mention", "rules"),
+    [
+        (_WRAPPED_BASKET, ("лютеинизирующий гормон", "а ггтп"), ["лютеинизирующий гормон", "ггтп"], ["лютеинизирующий гормон", "а ггтп"]),
+        (  # «делаете ли вы» нет в списках обвязки — остаётся: новых слов нет (как у одиночной услуги)
+            _WRAPPED_QUESTION,
+            ("а делаете ли вы лютеинизирующий гормон", "ггтп"),
+            ["делаете ли вы лютеинизирующий гормон", "ггтп"],
+            ["а делаете ли вы лютеинизирующий гормон", "ггтп"],
+        ),
+    ],
+    ids=["edge_a", "edge_question"],
+)
+def test_basket_positions_are_journaled_like_a_single_mention(said, picked, mention, rules, mini_prod_world, monkeypatch):  # noqa: F811
+    """Третий писатель журнала — слабые позиции корзины под `turn_parse = on` (L-15b, шаг 5): под `mention` их фраза —
+    без речевой обвязки с краёв, как у одиночной услуги («а ггтп» → «ггтп»; находка вечернего dev 14.10: «а делаете ли
+    вы оам» в журнале). Под `rules` — как было; ответ пациенту в обоих режимах один."""
+
+    from messengers_router import llm_runtime
+    from messengers_router.runtime_config import config as cfg
+    from tests.test_price_turns_golden import run_dialog
+    from tests.test_turn_parse_readers import _journal_rows, _JournalLLM
+    from tests.test_turn_parse_shadow import _deploy
+
+    _deploy(monkeypatch)
+    monkeypatch.setattr(cfg, "MR_TURN_PARSE", "on", raising=False)
+    seen = {}
+    for mode in ("mention", "rules"):
+        _source(monkeypatch, mode)
+        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _JournalLLM(picked, "ЛГ (LH)"))
+        with ev_world.FrozenWorld(mini_prod_world, "day") as world:
+            [turn] = run_dialog([said], f"journal-basket-edge-{mode}-{said[:12]}")
+            entries = _journal_rows(world._journal)
+        assert all(e["source"] == "basket" for e in entries), entries
+        seen[mode] = ([e["phrase"] for e in entries], [(e["found"], e["services"]) for e in entries], turn["text"])
+    assert seen["mention"][0] == mention
+    assert seen["rules"][0] == rules
+    assert seen["mention"][1] == seen["rules"][1]  # решение LLM по строкам — то же, меняется только фраза
+    assert seen["mention"][2] == seen["rules"][2]  # журнал — подсказка клинике, ответ не меняется
