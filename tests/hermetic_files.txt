@@ -118,3 +118,4 @@ tests/test_strong_match.py
 tests/test_turn_phrases.py
 tests/test_turn_parse_shadow.py
 tests/test_turn_parse_readers.py
+tests/test_render_patient_text.py
