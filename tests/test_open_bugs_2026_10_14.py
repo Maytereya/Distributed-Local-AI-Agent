@@ -16,9 +16,16 @@
    «напишите: "все"» → «все» → список раскрывается верно, но поиск по каталогу (`router.py`, `catalog_service_exact`)
    берёт реплику «все» запросом услуги и кладёт в `service_name` «УЗИ периферических лимфоузлов комплексно - все зоны
    (детское)»; следующее «а как подготовиться?» отвечает про это УЗИ, которого пациент не видел.
+   ИСПРАВЛЕНО под `[MESSENGER_ROUTER] context_shown = on` (L-14, «контекст = показанное»): на ходе раскрытия
+   семейства роутер каталог по реплике не ищет (`shown_context.expands_shown`, флаг `show_all_context_kept`), а ответ,
+   раскрывший список из контекста, оставляет в `service_name` услугу контекста до хода, если она среди показанных
+   (`shown_context._keep_service_on_expand`). Под `off` — как было: симптом и `xfail(strict=True)` остаются для
+   наборов `default`/`deploy`; те же проверки под наборами `*_shown` — зелёные.
 
 Ходы — через обработчик эндпоинта (`messenger_generate_once`) в мире стенда на мини-проде (`FrozenWorld`: день, сеть
-закрыта, LLM гейта недоступна), диалоги из трёх ходов; наборы выключателей `default` и `deploy`.
+закрыта, LLM гейта недоступна), диалоги из двух-трёх ходов; наборы выключателей `default` и `deploy`, для бага 2 —
+ещё `default_shown`, `deploy_shown`, `next_shown` (`context_shown = on` поверх набора, как в
+`test_l14_two_turn_consumers.py`).
 """
 
 from __future__ import annotations
@@ -34,10 +41,20 @@ import pytest
 
 from evalbench import world as ev_world
 from messengers_router import expects
+from messengers_router import shown_context
+from tests.test_l14_two_turn_consumers import _SETS as _L14_SETS
 from tests.test_price_one_or_many_class import _DEPLOY
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
 _SETS = {"default": {}, "deploy": _DEPLOY}
+# Баг 2 исправлен под `context_shown = on`: его проверки — ещё и под наборами с выключателем поверх набора (как
+# `*_shown` в `test_l14_two_turn_consumers.py`). Баг 1 выключатель не трогает — его тесты только под `_SETS`.
+_SHOWN_SETS = {
+    "default_shown": {"MR_CONTEXT_SHOWN": "on"},
+    "deploy_shown": _L14_SETS["deploy_shown"],
+    "next_shown": _L14_SETS["next_shown"],
+}
+_ALL_SETS = {**_SETS, **_SHOWN_SETS}
 
 
 def _play(turns: list[str], config: str, monkeypatch, world_dir: Path, session: str) -> list[dict[str, Any]]:
@@ -48,7 +65,7 @@ def _play(turns: list[str], config: str, monkeypatch, world_dir: Path, session: 
     from messengers_router.runtime_config import config as cfg
     from messengers_router.services import Services
 
-    for key, value in _SETS[config].items():
+    for key, value in _ALL_SETS[config].items():
         monkeypatch.setattr(cfg, key, value, raising=False)
 
     with ev_world.FrozenWorld(world_dir, "day") as world:
@@ -68,6 +85,7 @@ def _play(turns: list[str], config: str, monkeypatch, world_dir: Path, session: 
                         "label": decision.get("label"),
                         "flags": set(decision.get("flags") or []),
                         "service_name": entities.get("service_name"),
+                        "shown": copy.deepcopy(entities.get(shown_context.SHOWN_KEY)),
                         "expects": copy.deepcopy(entities.get(expects.EXPECTS_KEY)),
                     }
                 )
@@ -149,15 +167,17 @@ _HINT = re.compile(r"Чтобы показать их, напишите: \"(?P<w
 _LEAKED = "УЗИ периферических лимфоузлов комплексно - все зоны (детское)"
 
 
-def _show_all_dialog(reply: str, config: str, monkeypatch, world_dir: Path) -> tuple[list[dict[str, Any]], set[str], str]:
-    """Три хода: семейство с подсказкой «напишите: "все"» → «показать все» → подготовка.
+def _show_all_dialog(
+    reply: str, config: str, monkeypatch, world_dir: Path, last: tuple[str, ...] = (_PREPARE,)
+) -> tuple[list[dict[str, Any]], set[str], str]:
+    """Семейство с подсказкой «напишите: "все"» → «показать все» → `last` (по умолчанию — подготовка; пусто — два хода).
 
     :return: ходы, названия из показанных списков (обоих ходов) и запрос семейства из ответа бота
     """
 
-    turns = [_FAMILY_QUESTION, reply, _PREPARE]
+    turns = [_FAMILY_QUESTION, reply, *last]
     record = _play(turns, config, monkeypatch, world_dir, f"show-all-{config}-{abs(hash(tuple(turns)))}")
-    first, second, _third = record
+    first, second = record[:2]
     hint = _HINT.search(first["text"])
     assert hint and hint.group("word") == "все", first["text"]
     shown = {m.group("name") for m in _NUMBERED.finditer(first["text"])} | {m.group("name") for m in _NUMBERED.finditer(second["text"])}
@@ -204,21 +224,26 @@ def test_show_all_puts_unseen_service_in_context_as_now(reply, config, mini_prod
     assert "узи периферических лимфоузлов" in third["text"].lower()
 
 
-@pytest.mark.parametrize("config", sorted(_SETS))
+@pytest.mark.parametrize("config", sorted(_ALL_SETS))
 @pytest.mark.parametrize("reply", _NOT_LEAKING)
 def test_show_all_with_verb_keeps_context_on_what_was_shown(reply, config, mini_prod_world, monkeypatch):  # noqa: F811
-    """Граница класса как сейчас: эти формы уже ведут себя правильно — та же проверка, что у xfail ниже, зелёная."""
+    """Граница класса: под `off` эти формы ведут себя правильно случайно (поиск по реплике вернул текущую услугу), под
+    `context_shown = on` — потому что каталог по реплике не ищут; та же проверка, что у теста класса ниже, зелёная."""
 
     record, shown, query = _show_all_dialog(reply, config, monkeypatch, mini_prod_world)
     _assert_context_is_what_was_shown(record, shown, query)
 
 
-@pytest.mark.xfail(
+# Под `off` баг открыт: правильное поведение — xfail strict. Под `context_shown = on` — исправлено, тот же тест зелёный.
+_OPEN_UNDER_OFF = pytest.mark.xfail(
     strict=True,
-    reason="BUG-2026-10-14-SHOW-ALL-AS-CATALOG-SERVICE: поиск по каталогу берёт реплику «все» запросом услуги "
+    reason="BUG-2026-10-14-SHOW-ALL-AS-CATALOG-SERVICE (под off): поиск по каталогу берёт реплику «все» запросом услуги "
     "(`catalog_service_exact`) — в `service_name` «УЗИ … все зоны (детское)», подготовка отвечает про это УЗИ",
 )
-@pytest.mark.parametrize("config", sorted(_SETS))
+_FIXED_UNDER_SHOWN = [*(pytest.param(config, marks=_OPEN_UNDER_OFF) for config in sorted(_SETS)), *sorted(_SHOWN_SETS)]
+
+
+@pytest.mark.parametrize("config", _FIXED_UNDER_SHOWN)
 @pytest.mark.parametrize("reply", _LEAKING)
 def test_show_all_keeps_context_on_what_was_shown(reply, config, mini_prod_world, monkeypatch):  # noqa: F811
     """Класс: «показать все» после списка семейства — не название услуги. Контекст после раскрытия — то, что пациент
@@ -226,3 +251,61 @@ def test_show_all_keeps_context_on_what_was_shown(reply, config, mini_prod_world
 
     record, shown, query = _show_all_dialog(reply, config, monkeypatch, mini_prod_world)
     _assert_context_is_what_was_shown(record, shown, query)
+
+
+# --------------------------------------------------------------------------- 2. под `context_shown = on`: как исправлено
+
+_OFF_OF = {"default_shown": "default", "deploy_shown": "deploy"}  # набор под `on` → тот же набор под `off`
+
+
+@pytest.mark.parametrize("config", sorted(_OFF_OF))
+@pytest.mark.parametrize("reply", _LEAKING + _NOT_LEAKING)
+def test_show_all_under_shown_answers_the_same_and_holds_what_was_shown(reply, config, mini_prod_world, monkeypatch):  # noqa: F811
+    """Два хода через эндпоинт, все формы «показать все». Ответ раскрытия под `on` тот же, что под `off`; меняется
+    только контекст: каталог по реплике не искали (флаг `show_all_context_kept`, без `catalog_service_exact`),
+    `_shown_services` — весь раскрытый список, `service_name` — прежняя показанная услуга (та же, что после первого
+    хода), а не находка поиска по реплике."""
+
+    before = _show_all_dialog(reply, _OFF_OF[config], monkeypatch, mini_prod_world, last=())[0]
+    (first, second), shown, _query = _show_all_dialog(reply, config, monkeypatch, mini_prod_world, last=())
+    assert [(t["text"], t["label"], t["handoff"]) for t in (first, second)] == [(t["text"], t["label"], t["handoff"]) for t in before]
+    assert shown_context.SHOW_ALL_KEPT_FLAG in second["flags"] and "catalog_service_exact" not in second["flags"]
+    assert second["shown"] == _NUMBERED.findall(second["text"])  # показанное — ровно строки ответа
+    assert first["service_name"] in first["shown"] and second["service_name"] == first["service_name"]
+    assert shown_context.SHOW_ALL_KEPT_FLAG not in before[1]["flags"]  # под `off` флага нет — ход как был
+
+
+@pytest.mark.parametrize("config", sorted(_SHOWN_SETS))
+@pytest.mark.parametrize("reply", _LEAKING)
+def test_show_all_under_shown_then_price_shows_only_what_was_shown(reply, config, mini_prod_world, monkeypatch):  # noqa: F811
+    """Три хода: … → «показать все» → «сколько стоит?». Цена — строками, которые пациент видел, под названием
+    показанной услуги; УЗИ «все зоны» (было: «По запросу «УЗИ периферических лимфоузлов…»») нет ни в ответе, ни в
+    контексте."""
+
+    record, shown, query = _show_all_dialog(reply, config, monkeypatch, mini_prod_world, last=("сколько стоит?",))
+    _first, second, third = record
+    assert third["label"] == "PRICE" and not third["handoff"]
+    priced = _NUMBERED.findall(third["text"])
+    assert priced and set(priced) <= shown, third["text"]
+    assert "узи" not in third["text"].lower() and _seen(third["service_name"], shown, query)
+    assert _seen(second["service_name"], shown, query)
+
+
+@pytest.mark.parametrize(("mode", "before", "after"), [("on", "B", "B"), ("on", "Z", None), ("on", "", None), ("off", "B", _LEAKED)])
+def test_expand_answer_restores_the_service_before_the_turn(mode, before, after, monkeypatch):
+    """Флаг раскрытия у ответа (`_price_family_payload_from_context`), а не у решения классификатора: что бы ни
+    подставили по реплике (здесь — УЗИ «все зоны»), после раскрытия в `service_name` — услуга контекста до хода, если
+    она среди показанных, иначе услуги нет; `_shown_services` — весь список. Под `off` — не трогаем."""
+
+    from messengers_router.mess_types import SessionState
+    from messengers_router.runtime_config import config as cfg
+    from messengers_router.services._prices_helpers import _price_family_payload_from_context
+
+    monkeypatch.setattr(cfg, "MR_CONTEXT_SHOWN", mode, raising=False)
+    family = {"service_name": "запрос", "family_variants": [{"serviceName": n, "cost": 100} for n in "ABC"], "visible_limit": 2}
+    state = SessionState(session_id="expand", last_entities={"service_name": before, "_price_family_context": family})
+    shown_context.begin_turn(state)
+    state.last_entities["service_name"] = _LEAKED  # подстановка по реплике «все»
+    shown_context.sync_price(state, _price_family_payload_from_context(state.last_entities, show_all=True), {})
+    assert state.last_entities.get("service_name") == after
+    assert state.last_entities.get(shown_context.SHOWN_KEY) == (["A", "B", "C"] if mode == "on" else None)

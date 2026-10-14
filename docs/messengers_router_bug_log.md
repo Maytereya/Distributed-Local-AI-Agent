@@ -35,7 +35,7 @@
   «как сейчас») — 12: перевод `existing_appointment_change` на втором ходе, нет `appointment_abort`/«процесс записи
   отменён»; предусловие `test_cancel_existing_reaches_the_action_question` — 4.
 
-## BUG-2026-10-14-SHOW-ALL-AS-CATALOG-SERVICE — «все» после списка семейства становится услугой каталога «УЗИ … все зоны (детское)», подготовка отвечает про неё — ОТКРЫТ
+## BUG-2026-10-14-SHOW-ALL-AS-CATALOG-SERVICE — «все» после списка семейства становится услугой каталога «УЗИ … все зоны (детское)», подготовка отвечает про неё — ИСПРАВЛЕНО под `context_shown = on`; под off — ОТКРЫТ
 
 - **Симптом.** «сколько стоит общий анализ крови» → 2 строки и «найдено еще 6 вариантов… напишите: "все"» → «все» →
   список из 8 строк верный, но `service_name` = «УЗИ периферических лимфоузлов комплексно - все зоны (детское)»
@@ -43,17 +43,29 @@
   комплексно - все зоны детское» у меня нет — подскажет оператор. Перевести на оператора?». Наборы default и deploy. Так
   же «Всё!», «все услуги?», «ВСЕ АНАЛИЗЫ»; у «покажи все», «показать все.», «все варианты» контекст остаётся строкой
   списка. Найдено агентом D5 автономного дня 14.10.
-- **Корень (подтверждён шпионом).** `router.py` ~1520–1580: у решения `rule_price_family_show_all` нет
+- **Корень (подтверждён шпионом).** `router.py` `_inject_catalog_candidates`: у решения `rule_price_family_show_all` нет
   `service_name`/`test_name`, поэтому запрос к каталогу — сама реплика; `match_catalog_service("все", context_text="все")`
   → exact «УЗИ … все зоны (детское)» → `entities["service_name"]`. Ответ цены строит инструмент по
   `_price_family_context`, поэтому список верный, а контекст — нет. Формы с глаголом тоже идут в каталог, поиск
   случайно возвращает текущую услугу — граница держится на ответе поиска, а не на понимании реплики.
-- **Направление.** Ответ на подсказку бота («все») — не название услуги: на ходе раскрытия семейства каталог по реплике
-  не искать, контекст = показанное (принцип L-14; подсказка «напишите: "все"» — висящий вопрос бота, кандидат в тип
-  `_expects`). Под выключателем, по умолчанию как было, без новых регэкспов. Решение — владельца.
-- **Покрытие.** `tests/test_open_bugs_2026_10_14.py`: `test_show_all_keeps_context_on_what_was_shown` — xfail strict, 8
-  (4 формы × default/deploy), три хода; симптом — `test_show_all_puts_unseen_service_in_context_as_now`, 8 зелёных;
-  граница класса — `test_show_all_with_verb_keeps_context_on_what_was_shown`, 6 зелёных.
+- **Фикс (под `[MESSENGER_ROUTER] context_shown = on`, L-14 «контекст = показанное»).** Классом — все формы
+  `_is_price_show_all_request`, без новых регэкспов и слов. (1) Решение `rule_price_family_show_all` — ответ на подсказку
+  бота, не название услуги: роутер каталог по реплике не ищет (`shown_context.expands_shown` в
+  `_inject_catalog_candidates` и `_plan_service_catalog_prefetch`, флаг решения `show_all_context_kept`). (2) Ответ,
+  раскрывший список семейства из контекста (`note = price_family_context`, `showing_all`), оставляет в `service_name`
+  услугу контекста до хода, если она среди показанных, иначе услуги нет; `_shown_services` — весь список
+  (`shown_context._keep_service_on_expand` в `sync_price`/`sync_bundle`) — так же, когда «все» понял не классификатор
+  правил. Ответ раскрытия не меняется; «а как подготовиться?» следом — вопрос «к какому из анализов» по показанным,
+  «сколько стоит?» — цена показанными строками под названием показанной услуги.
+- **Под off — открыт:** поведение и эталоны как были; включение `context_shown` — решение владельца.
+- **Инвариант.** Ответ на подсказку бота («все») — не упоминание услуги: в контексте после хода — только показанное.
+- **Покрытие.** `tests/test_open_bugs_2026_10_14.py`: `test_show_all_keeps_context_on_what_was_shown` — xfail strict под
+  default/deploy (8), зелёный под default_shown/deploy_shown/next_shown (12); симптом под off —
+  `test_show_all_puts_unseen_service_in_context_as_now` (8); граница класса —
+  `test_show_all_with_verb_keeps_context_on_what_was_shown` под всеми наборами (15); два хода через эндпоинт —
+  `test_show_all_under_shown_answers_the_same_and_holds_what_was_shown` (14: ответ = off, контекст = показанное);
+  три хода с «сколько стоит?» — `test_show_all_under_shown_then_price_shows_only_what_was_shown` (12); модульный —
+  `test_expand_answer_restores_the_service_before_the_turn` (4).
 
 ## BUG-2026-10-14-REASK-LOOP — переспрос висящего вопроса без предела — СДЕЛАНО под `reask_limit = on` (по умолчанию off)
 

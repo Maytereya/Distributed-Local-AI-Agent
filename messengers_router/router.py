@@ -1351,6 +1351,8 @@ def _plan_service_catalog_prefetch(
         entities.get("specialty") or last.get("specialty")
     ):
         return None
+    if shown_context.expands_shown(decision):
+        return None  # ход раскрытия семейства: каталог по реплике не ищут (гейт ниже закрыт так же)
 
     query = str(entities.get("test_name") or user_text or "")
     if not query or is_specialty_word(query):
@@ -1546,6 +1548,13 @@ async def _inject_catalog_candidates(
             flags.add("understanding_list_kept")
             updated = True
             turn_understanding.note_acted("catalog_inject_skipped")
+        # Контекст = показанное (L-14, `context_shown = on`): ход раскрытия семейства — ответ на подсказку бота
+        # «напишите: "все"», а не название услуги; каталог по реплике свёл бы «все» к «УЗИ … все зоны (детское)»
+        # (BUG-2026-10-14-SHOW-ALL-AS-CATALOG-SERVICE). Список раскроет инструмент цены из контекста семейства.
+        if should_try_service and shown_context.expands_shown(decision):
+            should_try_service = False
+            flags.add(shown_context.SHOW_ALL_KEPT_FLAG)
+            updated = True
 
     # Part IV Stage 15 (OPTION B, partial): doctor + service catalog lookups
     # are independent — both read post-verify entities and don't depend on

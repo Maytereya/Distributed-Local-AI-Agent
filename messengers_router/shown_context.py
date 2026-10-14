@@ -16,7 +16,10 @@
 короткий вопрос о цене без названия услуги отвечает ровно показанными строками (`prices._rows_shown_before`),
 вопрос о подготовке без своего предмета — о показанной услуге (`prepare._context_subject`), вопрос walk-in без
 своей услуги («а где сдать?», «нужна ли запись?») — тоже о ней: класс «анализы» нужен только ответу об адресах,
-контекст после ответа — показанное (`sync_address`, находка 3). Под `off` — как было.
+контекст после ответа — показанное (`sync_address`, находка 3). Ход раскрытия семейства («все» на подсказку
+«напишите: "все"») — не название услуги: роутер не ищет каталог по реплике (`expands_shown`), после раскрытия в
+`service_name` — услуга контекста до хода, если она среди показанных (`_keep_service_on_expand`;
+BUG-2026-10-14-SHOW-ALL-AS-CATALOG-SERVICE). Под `off` — как было.
 """
 
 from __future__ import annotations
@@ -31,6 +34,13 @@ MODES = ("off", "on")
 SHOWN_KEY = "_shown_services"
 # Флаг решения walk-in: вопрос без своей услуги — о показанной прошлым ответом (ставит гард walk-in под `on`).
 WALKIN_SHOWN_FLAG = "walkin_shown_service"
+# Ход раскрытия семейства: решение классификатора на «показать все» после списка семейства с подсказкой
+# «напишите: "все"» (`classifier._is_price_family_show_all_followup`), флаг роутера «каталог по реплике не
+# искали» (под `on`) и пометка ответа цены, раскрывшего список из контекста
+# (`_prices_helpers._price_family_payload_from_context`).
+SHOW_ALL_FLAG = "rule_price_family_show_all"
+SHOW_ALL_KEPT_FLAG = "show_all_context_kept"
+_EXPANDED_NOTE = "price_family_context"
 _RENDERED_PRICE_ROWS = 5  # рендер цены печатает не больше пяти строк (`renderer.format_price_for_patient`)
 
 # Что показал прошлый ответ — на весь ход (читатели: цена, подготовка, адрес). Инструменты состояния не видят,
@@ -116,19 +126,49 @@ def remember(state: SessionState, names: list[str]) -> None:
         state.last_entities.pop("test_name", None)
 
 
+def expands_shown(decision: RouteDecision) -> bool:
+    """Под `on`: ход раскрытия показанного семейства. Реплика («все», «Всё!», «ВСЕ АНАЛИЗЫ») — ответ на подсказку
+    бота «напишите: "все"», а не название услуги: роутер не ищет по ней каталог (BUG-2026-10-14-SHOW-ALL-AS-CATALOG-
+    SERVICE: «все» находило «УЗИ периферических лимфоузлов комплексно - все зоны (детское)», и подготовка следующим
+    ходом отвечала про это УЗИ, которого пациент не видел). Под `off` — False, как было."""
+
+    return mode() == "on" and SHOW_ALL_FLAG in decision.flags
+
+
+def _keep_service_on_expand(state: SessionState, payload: dict[str, Any], names: list[str]) -> None:
+    """Ответ раскрыл список семейства из контекста (флаг раскрытия у ответа, а не у решения: так же и когда реплику
+    понял не классификатор правил). Раскрытие услугу не выбирает — показал весь список, о котором уже шла речь:
+    в `service_name` — услуга контекста до хода, если она среди показанных (принцип L-14: контекст = показанное);
+    иначе услуги нет. Что подставили по самой реплике, в контекст не попадает — догадка, которой пациент не видел.
+    Одна показанная строка — её запишет `remember` (раскрытие с одной строкой не бывает, но правило общее)."""
+
+    if str(payload.get("note") or "") != _EXPANDED_NOTE or not payload.get("showing_all") or len(names) < 2:
+        return
+    keep = _BEFORE.get()
+    if keep and _norm(keep) in {_norm(name) for name in names}:
+        state.last_entities["service_name"] = keep
+        state.last_entities.pop("test_name", None)
+    else:
+        state.last_entities.pop("service_name", None)
+
+
 def sync_price(state: SessionState, payload: dict[str, Any], render_entities: dict[str, Any]) -> None:
     """Ответ цены (`build_price_response`). Цена у врача — услуга врача, а не контекст анализа: не трогаем."""
 
     if mode() != "on" or render_entities.get("doctor_id") or render_entities.get("doctor_name"):
         return
-    remember(state, shown_price_names(payload))
+    names = shown_price_names(payload)
+    remember(state, names)
+    _keep_service_on_expand(state, payload, names)
 
 
 def sync_bundle(state: SessionState, payload: dict[str, Any]) -> None:
     """Ответ `build_service_bundle_response` (одна услуга — «По услуге «X» нашёл следующее», корзина)."""
 
     if mode() == "on":
-        remember(state, shown_bundle_names(payload))
+        names = shown_bundle_names(payload)
+        remember(state, names)
+        _keep_service_on_expand(state, payload, names)
 
 
 def walkin_about_shown() -> frozenset[str]:
