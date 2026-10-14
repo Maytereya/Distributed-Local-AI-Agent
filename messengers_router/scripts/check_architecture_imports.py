@@ -40,6 +40,16 @@ LAYER_BY_MODULE: dict[str, str] = {
     "context_summary": "policy",
     "self_check": "policy",
     "topic_registry": "policy",
+    # 2026-10 актуализация (рефакторинг 07–14.10: понимание хода, выбор LLM, контекст = показанное, висящий
+    # вопрос; карта отстала, чек краснел): решатели и наблюдатели хода — политика; импортируют политику,
+    # домен, инфраструктуру (`choice`, `turn_telemetry`) и порт конфигурации.
+    "button_menu": "policy",
+    "turn_parse": "policy",
+    "turn_understanding": "policy",
+    "shown_context": "policy",
+    "expects": "policy",
+    "pending_reply": "policy",
+    "money_guard": "policy",  # проверка текста бота на цены без источника (импортирует policies)
     # Orchestration (2026-06: оркестратор — активный прод-путь, зовётся из router)
     "orchestrator": "orchestration",
     # Domain primitives
@@ -65,6 +75,12 @@ LAYER_BY_MODULE: dict[str, str] = {
     "memory": "infrastructure",
     "llm_runtime": "infrastructure",
     "prompt_registry": "infrastructure",
+    # 2026-10: модуль выбора LLM (`choose()`, поверх `llm_runtime`), телеметрия хода, прогрев LLM.
+    # Прямые импорты хоста у `turn_telemetry` (agent_logic_2.persist) и `warm_up` (agent_logic_2.nayka_api) —
+    # отдельный долг: чек о них сообщает, порт для них не заведён.
+    "choice": "infrastructure",
+    "turn_telemetry": "infrastructure",
+    "warm_up": "infrastructure",
     # Ports to host project
     "runtime_config": "port",
     "doctor_name_port": "port",
