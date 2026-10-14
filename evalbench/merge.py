@@ -34,6 +34,10 @@ def merge(name: str) -> Path:
     with (out / "turns.jsonl").open("w", encoding="utf-8") as fh:
         for row in ordered:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    # Журнал синонимов — строки всех частей (у частей до 14.10 файла нет — тогда и склейки нет).
+    journals = [p / "synonym_journal.jsonl" for p in parts if (p / "synonym_journal.jsonl").exists()]
+    if journals:
+        (out / "synonym_journal.jsonl").write_bytes(b"".join(j.read_bytes() for j in journals))
 
     def summed(key: str) -> list:
         c: Counter = Counter()
@@ -55,6 +59,7 @@ def merge(name: str) -> Path:
         cleanup_calls=[c for h in headers for c in h.get("cleanup_calls") or []],
         world_problems=[x for h in headers for x in h.get("world_problems") or []],
         llm_outcomes=dict(sum((Counter(h.get("llm_outcomes") or {}) for h in headers), Counter())),
+        synonym_journal_lines=sum(h.get("synonym_journal_lines", 0) for h in headers),
         seconds=max(h.get("seconds", 0) for h in headers),
         # Части с разными настройками (`--cfg`) — разные прогоны, склеивать нельзя.
         cfg_mismatch=sorted({json.dumps(h.get("cfg") or {}, sort_keys=True) for h in headers})[1:] or None,

@@ -352,6 +352,45 @@ def test_world_pins_missing_today_snapshot_and_keeps_live_mis_offline(tmp_path):
         assert world.unavailable_calls == ["v1/site/doctors"] and world.net.attempts == []
 
 
+def test_world_saves_synonym_journal_before_its_temp_dir_is_gone(tmp_path):
+    """Журнал синонимов прогона — копией в каталог прогона: временный каталог мира удаляется на выходе,
+    а журнал смотрят глазами (13.10: «Цена анализа» в журнале не видела ни одна метрика стенда)."""
+
+    from messengers_router.services import _price_select_llm
+
+    root = ev_world.build_world(_apidata(tmp_path), "20261008", tmp_path / "world")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    with ev_world.FrozenWorld(root, "day") as world:
+        assert world.save_journal(run_dir / "empty.jsonl") == 0 and world.journal_tail(0) == []
+        journal = _price_select_llm._journal_path()
+        journal.write_text('{"phrase": "ферритин"}\n{"phrase": "ггтп"}\n', encoding="utf-8")
+        assert world.journal_tail(1) == ['{"phrase": "ггтп"}'] and world.journal_tail(2) == []
+        assert world.save_journal(run_dir / "synonym_journal.jsonl") == 2
+    assert not journal.exists()
+    assert (run_dir / "empty.jsonl").read_text(encoding="utf-8") == ""
+    assert (run_dir / "synonym_journal.jsonl").read_text(encoding="utf-8").splitlines() == ['{"phrase": "ферритин"}', '{"phrase": "ггтп"}']
+
+
+def test_merge_joins_synonym_journals_and_sums_their_lines(tmp_path, monkeypatch):
+    """Склейка частей: журнал — строки всех частей, счётчик строк — сумма, а не первая часть."""
+
+    from evalbench import merge as ev_merge
+
+    monkeypatch.setattr(ev_merge, "PRIVATE_ROOT", tmp_path)
+    for k, phrase in ((1, "ферритин"), (2, "ггтп")):
+        part = tmp_path / "runs" / f"r.part{k}of2"
+        part.mkdir(parents=True)
+        header = {"name": part.name, "sets": ["g.jsonl"], "cases": 1, "done": 1, "cfg": {}, "valid": True, "synonym_journal_lines": 1}
+        (part / "run.json").write_text(json.dumps(header), encoding="utf-8")
+        (part / "turns.jsonl").write_text(json.dumps({"set": "g", "id": str(k)}) + "\n", encoding="utf-8")
+        (part / "synonym_journal.jsonl").write_text(json.dumps({"phrase": phrase}, ensure_ascii=False) + "\n", encoding="utf-8")
+    out = ev_merge.merge("r")
+    head = json.loads((out / "run.json").read_text(encoding="utf-8"))
+    assert head["synonym_journal_lines"] == 2 and head["valid"] is True
+    assert [json.loads(line)["phrase"] for line in (out / "synonym_journal.jsonl").open(encoding="utf-8")] == ["ферритин", "ггтп"]
+
+
 # --------------------------------------------------------------------------- симптом → врач
 
 from evalbench.specialties import SpecialtyMatcher, specialty_verdict  # noqa: E402
@@ -445,3 +484,80 @@ def test_card_counts_differing_answers_and_choice_slo():
     turns[0]["telemetry"]["choose"].append(shadow)
     m = card.metrics(turns, {})
     assert (m["choose_n"], m["choose_unavailable"], m["choose_p95_ms"]) == (3, 1, 3000)
+
+
+# --------------------------------------------------------------------------- диалоги из нескольких ходов
+
+
+def test_dialogs_run_turns_in_one_session_and_record_shown_context(tmp_path, monkeypatch):
+    """Второй ход видит первый (одна сессия), на ход — контекст после него и строки журнала (решение 13.10:
+    эффект `context_shown` и утечки контекста виден только во втором ходе)."""
+
+    import io
+
+    from evalbench import dialogs as ev_dialogs
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_CONTEXT_SHOWN", "on", raising=False)
+    fixture = ROOT / "tests" / "fixtures" / "mini_prod" / "snapshots"
+    root = ev_world.build_world(fixture, "20261008", tmp_path / "world")
+
+    class _NoCalls:
+        def take_turn_calls(self):
+            return []
+
+    out, seen = io.StringIO(), []
+    dialog = {"id": "d1", "set": "t", "expect": "подготовка к ферритину", "turns": ["сколько стоит ферритин", "а как подготовиться?"]}
+    with ev_world.FrozenWorld(root, "day") as world:
+        stats = asyncio.run(
+            ev_dialogs._run_dialogs(
+                [dialog], client=_NoCalls(), world=world, tpl=Templates.from_bot(), catalog=PriceCatalog.from_world(root / "apidata"),
+                llm_mode="hybrid", run_name="t", out=out, progress=seen.append,
+            )
+        )
+        attempts = list(world.net.attempts)
+    assert attempts == [] and (stats["done"], stats["turns"], stats["stopped"]) == (1, 2, None)
+    row = json.loads(out.getvalue())
+    assert (row["id"], row["expect"]) == ("d1", "подготовка к ферритину") and len(seen) == 1
+    first, second = row["turns"]
+    assert first["outcome"] == "price" and "Ферритин" in first["answer"]
+    assert first["state"][ev_dialogs.SHOWN_KEY] == ["Ферритин"] and first["state"]["service_name"] == "Ферритин"
+    assert second["text"] == "а как подготовиться?" and second["answer"].strip()
+    assert second["state"].get("service_name") == "Ферритин"  # контекст пришёл из первого хода той же сессии
+    assert isinstance(first["journal"], list) and isinstance(second["journal"], list)
+
+
+def test_dialog_sets_are_well_formed(tmp_path):
+    from evalbench import dialogs as ev_dialogs
+
+    dialogs = ev_dialogs.load_dialogs([ROOT / "evalbench" / "sets" / "two_turn_l14.jsonl"])
+    assert len({d["id"] for d in dialogs}) == len(dialogs)
+    assert all(len(d["turns"]) >= 2 and d.get("expect") for d in dialogs)
+    assert [d["id"] for d in ev_dialogs.load_dialogs([ROOT / "evalbench" / "sets" / "two_turn_l14.jsonl"], ids={"oak_prepare"})] == ["oak_prepare"]
+    broken = tmp_path / "broken.jsonl"
+    broken.write_text(json.dumps({"id": "x", "turns": []}) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        ev_dialogs.load_dialogs([broken])
+    assert ev_dialogs._turn({"text": "ферритин", "button": "menu.price.test"}) == ("ферритин", "menu.price.test")
+    assert ev_dialogs._turn("ферритин") == ("ферритин", "")
+
+
+def test_dialogs_show_puts_turns_side_by_side_and_marks_differences():
+    from evalbench import dialogs as ev_dialogs
+
+    def run(name, second_answer, shown):
+        header = {"name": name, "code_sha": "abc", "mode": "real", "done": 1, "dialogs": 1, "live_calls": 3, "valid": True, "cfg": {}}
+        turns = [
+            {"text": "сколько стоит глюкоза", "answer": "Глюкоза — 300 руб.", "outcome": "price", "ms": 10, "state": {"_shown_services": shown}, "llm_calls": [], "journal": []},
+            {"text": "а цена?", "answer": second_answer, "outcome": "price", "ms": 20, "state": {}, "llm_calls": [{"site": "price_service_select", "outcome": "ok", "ms": 1500}],
+             "journal": [{"phrase": "а", "found": False, "services": []}]},
+        ]
+        return header, {"g": {"id": "g", "expect": "только «Глюкоза»", "turns": turns}}
+
+    text = ev_dialogs.render_dialogs([run("off", "Аллерген а1 — 900 руб.", []), run("on", "Глюкоза — 300 руб.", ["Глюкоза"])])
+    assert "## g — ждём: только «Глюкоза»" in text and "**2. «а цена?»**" in text
+    assert "[A] price" in text and "[B] price" in text and "показано: «Глюкоза»" in text
+    assert "журнал: «а» found=False" in text and "price_service_select ok 1.5 с" in text
+    assert text.count("**ответы различаются**") == 1 and "**Ходов с разным ответом:** 1" in text
+    single = ev_dialogs.render_dialogs([run("on", "Глюкоза — 300 руб.", ["Глюкоза"])])
+    assert "[A]" not in single and "различаются" not in single

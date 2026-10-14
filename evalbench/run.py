@@ -11,7 +11,8 @@
 - `turns.jsonl` — строка на вопрос: вопрос, ответ, исход, признаки, вызовы LLM, задержка;
 - `run.json` — шапка: код, мир, модель, режим, отпечатки промптов, словарь синонимов,
   попытки сети, очистки, промахи; `valid=false`, если прогон нельзя принимать;
-- `bot.log` — вывод бота (в нём бывают адреса МИС — поэтому тоже вне репо).
+- `bot.log` — вывод бота (в нём бывают адреса МИС — поэтому тоже вне репо);
+- `synonym_journal.jsonl` — что прогон записал бы в журнал синонимов (в нём реплики пациентов).
 """
 
 from __future__ import annotations
@@ -271,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 finally:
                     llm_runtime._OLLAMA_CLIENT = real_client
+                world.save_journal(run_dir / "synonym_journal.jsonl")
                 facts = world.facts()
                 header = {
                     "name": name,

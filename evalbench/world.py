@@ -545,3 +545,24 @@ class FrozenWorld:
         if path is None or not path.exists():
             return 0
         return sum(1 for _ in path.open(encoding="utf-8"))
+
+    def journal_tail(self, start: int) -> list[str]:
+        """Строки журнала синонимов с номера `start` — что дописал один ход диалога (`evalbench.dialogs`)."""
+
+        path = getattr(self, "_journal", None)
+        if path is None or not path.exists():
+            return []
+        return path.read_text(encoding="utf-8").splitlines()[start:]
+
+    def save_journal(self, dest: Path) -> int:
+        """Копия журнала синонимов прогона в `dest` (пустой файл, если строк нет); число строк.
+
+        Временный каталог мира удаляется на выходе, а журнал — побочный выход, который смотрят
+        глазами: 13.10 «Цена анализа» в журнале не видела ни одна метрика стенда («слепое пятно
+        плана», мастер-хэндофф §4 (б)). Вызывать до выхода из мира.
+        """
+
+        path = getattr(self, "_journal", None)
+        data = path.read_bytes() if path is not None and path.exists() else b""
+        dest.write_bytes(data)
+        return self.journal_lines()
