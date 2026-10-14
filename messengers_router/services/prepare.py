@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 
 from agent_logic_2.nayka_api import api_service_info
 
+from .. import shown_context
 from ..llm_doesnt_work_fallback import build_prepare_fallback_answer, join_wrapped_lines
 from . import _common as _common_mod
 from ._biomaterial import mis_synonym_candidates
@@ -21,18 +22,24 @@ from ._common import (
     _normalise_catalog_text,
 )
 from ._prepare_select_llm import SOURCE_MIS, PrepareMemo, kb_patient_memos, select_prepare_memos
+from ._prices_helpers import _catalog_rows
+from ._strong_match import strong_rows
 from ._prepare import (
+    _PREPARE_ENTITY_RE,
     _PrepareCandidate,
     _dedupe_prepare_candidates,
     _is_generic_prepare_heading,
     _is_prepare_content_actionable,
     _is_prepare_service_info_usable,
     _memo_plain_text,
+    _normalise_prepare_text,
     _prepare_clarify_response,
     _prepare_no_memo_response,
     _prepare_fast_relevance_score,
+    _prepare_keyword_query,
     _prepare_names_subject,
     _prepare_service_info_queries,
+    _prepare_subject_hint,
     _prepare_subject_phrase,
     _prepare_term_roots,
 )
@@ -431,6 +438,58 @@ def prepare_variant_payload(titles: dict[str, str], choice: str) -> dict[str, An
     }
 
 
+def _context_subject(raw_query: str) -> tuple[str, bool]:
+    """Услуга контекста для вопроса о подготовке (L-14, `context_shown = on`) и уверенность, что вопрос о ней.
+
+    Прошлый ответ назвал пациенту одну услугу, а предмета в вопросе явно нет — ни «подготовка к X» / «как сдать
+    X», ни услуги по данным МИС. Своих слов, кроме обвязки вопроса о подготовке, нет («а как подготовиться?»,
+    «а подготовка?») — вопрос точно о показанной услуге (`True`). Свои слова есть («а натощак?», «что с
+    подготовкой?», «а ттг?») — предмет решает LLM по смыслу: она видит и реплику, и показанную услугу (`False`).
+    Иначе — ("", False): прежний путь. В ответ пациенту слова вопроса не попадают («Памятки по подготовке к «а
+    как подготовиться»» — находка 2 STEP-…-L14-PREP-CONSUMERS)."""
+
+    shown = shown_context.previous()
+    if len(shown) != 1 or _names_own_subject(raw_query):
+        return "", False
+    return shown[0], not _prepare_keyword_query(raw_query)
+
+
+def _names_own_subject(raw_query: str) -> bool:
+    """В вопросе свой предмет: «подготовка к X» / «как сдать X» или услуга по данным МИС."""
+
+    return bool(_PREPARE_ENTITY_RE.search(_normalise_prepare_text(raw_query)) or strong_rows(raw_query, _catalog_rows(None)))
+
+
+def _which_of_shown_response(raw_query: str, entities: dict[str, Any]) -> dict[str, Any] | None:
+    """Прошлый ответ показал несколько услуг (семейство, корзина), а вопрос о подготовке своих слов не несёт
+    («а как подготовиться?»): спросить, к какой из показанных (принцип 5), а не печатать слова вопроса."""
+
+    shown = shown_context.previous()
+    if len(shown) < 2 or _names_own_subject(raw_query) or _prepare_keyword_query(raw_query):
+        return None
+    names = ", ".join(f"«{name}»" for name in shown[:5])
+    return {
+        "prepare": f"К какому из анализов нужна подготовка: {names}? Напишите название.",
+        "note": "prepare: which of shown",
+        "entities_used": entities,
+    }
+
+
+def _merge_candidates(first: Sequence[Any], second: Sequence[Any]) -> list[Any]:
+    seen = {str(getattr(c, "service_title", "")) for c in first}
+    return [*first, *(c for c in second if str(getattr(c, "service_title", "")) not in seen)]
+
+
+def _context_clarify_response(subject: str, entities: dict[str, Any]) -> dict[str, Any]:
+    """Предмет вопроса неясен (свои слова есть, а памятку по смыслу никто не выбрал) — спросить, а не гадать."""
+
+    return {
+        "prepare": f"Уточните, пожалуйста, к чему нужна подготовка: к «{subject}» или к другому анализу или процедуре?",
+        "note": "prepare: context subject unclear",
+        "entities_used": entities,
+    }
+
+
 async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
     raw_query = str(query or "").strip()
     # «Во сколько/когда прийти сдать кровь» — вопрос про время/место сдачи,
@@ -454,6 +513,14 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
     if entity_query and raw_material and stale_material and raw_material != stale_material:
         entities = {k: v for k, v in entities.items() if k not in ("test_name", "service_name")}
         entity_query = ""
+    # Вопрос без своего предмета после ответа, который назвал одну услугу, — о ней (контекст = показанное).
+    which = _which_of_shown_response(raw_query, entities)
+    if which is not None:
+        return which
+    context, context_sure = _context_subject(raw_query)
+    if context:
+        entities = {**entities, "service_name": context}
+        entity_query = context
     # Для нового вопроса берем текст пользователя, чтобы не залипала старая услуга из контекста.
     q = raw_query or entity_query
     if not q:
@@ -467,7 +534,7 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
     # ТТГ запрос «правила подготовки» возвращал инструкцию по
     # отбору эпителия из мочеиспускательного канала. Теперь —
     # явный clarify, чтобы пациент сам назвал предмет подготовки.
-    if _is_generic_prepare_query(raw_query) and not _has_specific_subject_in_query(raw_query):
+    if not context and _is_generic_prepare_query(raw_query) and not _has_specific_subject_in_query(raw_query):
         return _prepare_clarify_response(
             raw_query,
             entities,
@@ -478,21 +545,28 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
     # упомянуто (BUG-2026-10-01-PREPARE-MENTION-AS-SUBJECT). Кандидаты — памятки МИС и,
     # в переходный период, памятки пациенту из базы знаний; скрипты администраторов в
     # подготовку не попадают (решения владельца 02.10).
-    mis_candidates = await self._prepare_candidates_from_analysis_api_cache(q, entities)
+    mis_candidates = await self._prepare_candidates_from_analysis_api_cache(context or q, entities)
+    by_reply: set[str] | None = None  # неясный предмет: названными без LLM считаются только памятки по реплике
+    if context and not context_sure:  # предмет решит LLM: кандидаты и по реплике
+        reply_candidates = await self._prepare_candidates_from_analysis_api_cache(q, {k: v for k, v in entities.items() if k not in ("test_name", "service_name")})
+        by_reply = {str(c.service_title) for c in reply_candidates if c.named}
+        mis_candidates = _merge_candidates(mis_candidates, reply_candidates)
     memos = [
         PrepareMemo(
             source=SOURCE_MIS,
             title=cand.service_title,
             text=_memo_plain_text(cand.text),
             score=cand.score,
-            named=cand.named,
+            named=cand.named if by_reply is None else str(cand.service_title) in by_reply,
         )
         for cand in mis_candidates[:_PREPARE_MIS_CANDIDATES]
     ]
     memos.extend(await asyncio.to_thread(kb_patient_memos))
     chosen = await select_prepare_memos(
-        q, memos, runtime_llm_mode=str(entities.get("__runtime_llm_mode") or "")
+        q, memos, runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""), context=context
     )
+    if context and not context_sure and not chosen:
+        return _context_clarify_response(context, entities)
     if len(chosen) == 1 and chosen[0].source == SOURCE_MIS:
         memo = chosen[0]
         return {
@@ -552,4 +626,9 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
         }
 
     note = "prepare: no memo about the subject" if memos else "prepare: no matches"
+    if shown_context.mode() == "on" and (context or _names_own_subject(raw_query)):
+        # Предмет — услуга контекста как её назвал ответ, иначе — свой предмет реплики: подсказка правил выбирает
+        # самую длинную из фраз реплики и контекста, и «а как подготовиться к ттг?» после ферритина печатала «ферритин».
+        subject = context or _prepare_subject_hint(q, {})
+        return _prepare_no_memo_response(q, entities, note=note, subject=subject)
     return _prepare_no_memo_response(q, entities, note=note)

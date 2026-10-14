@@ -106,11 +106,17 @@ def _excerpt(text: str) -> str:
     return flat if len(flat) <= _EXCERPT_CHARS else flat[:_EXCERPT_CHARS].rstrip() + "…"
 
 
-def _build_prompt(question: str, memos: Sequence[PrepareMemo]) -> str:
+def _build_prompt(question: str, memos: Sequence[PrepareMemo], context: str = "") -> str:
+    """Промпт выбора памятки. `context` — услуга, которую показал прошлый ответ бота (L-14, `context_shown = on`):
+    без неё вопрос «а как подготовиться?» LLM понять не может — предмета в нём нет. Без контекста промпт прежний."""
+
     rows = "\n".join(f"{i}. {memo.title} — {_excerpt(memo.text)}" for i, memo in enumerate(memos, 1))
+    service = str(context or "").strip()
+    head, _, rest = load_prompt_text("prepare_document_select").partition("<<CONTEXT_START>>")
+    block, _, tail = rest.partition("<<CONTEXT_END>>")
+    template = head + (block.replace("<<SERVICE>>", service) if service else "") + tail
     return (
-        load_prompt_text("prepare_document_select")
-        .replace("<<QUESTION>>", str(question or "").strip())
+        template.replace("<<QUESTION>>", str(question or "").strip())
         .replace("<<DOCUMENTS>>", rows)
     ).strip()
 
@@ -224,6 +230,7 @@ async def select_prepare_memos(
     memos: Sequence[PrepareMemo],
     *,
     runtime_llm_mode: str = "",
+    context: str = "",
 ) -> tuple[PrepareMemo, ...]:
     """Памятки, предмет которых — анализ или процедура из вопроса; пусто — таких нет.
 
@@ -234,6 +241,7 @@ async def select_prepare_memos(
     :param question: вопрос пациента
     :param memos: кандидаты (`PrepareMemo`)
     :param runtime_llm_mode: strict|hybrid|rich; в strict LLM не зовём
+    :param context: услуга, которую показал прошлый ответ бота (вопрос без своего предмета — о ней)
     :return: выбранные памятки
     """
 
@@ -245,7 +253,7 @@ async def select_prepare_memos(
         return _choose_without_llm(memos)
     try:
         raw = await generate_text(
-            _build_prompt(question, memos),
+            _build_prompt(question, memos, context),
             timeout_s=_LLM_TIMEOUT_S,
             queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS,
             fmt="json",

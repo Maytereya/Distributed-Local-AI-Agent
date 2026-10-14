@@ -567,7 +567,7 @@ def _prepare_clarify_response(query: str, entities: dict[str, Any], *, note: str
     }
 
 
-def _prepare_no_memo_response(query: str, entities: dict[str, Any], *, note: str) -> dict[str, Any]:
+def _prepare_no_memo_response(query: str, entities: dict[str, Any], *, note: str, subject: str = "") -> dict[str, Any]:
     """Памятки о предмете вопроса нет — оффер оператора вопросом, а не «уточните название».
 
     Пациент назвал процедуру, памятки к ней у клиники нет (в МИС их заводят постепенно,
@@ -577,10 +577,11 @@ def _prepare_no_memo_response(query: str, entities: dict[str, Any], *, note: str
     :param query: текст запроса пользователя
     :param entities: текущие сущности роутера
     :param note: диагностическая пометка источника
+    :param subject: предмет, если он известен (услуга контекста — как её назвал ответ); пусто — подсказка правил
     :return: payload PREPARE с флагом `operator_offer`
     """
 
-    subject = _prepare_subject_hint(query, entities)
+    subject = subject or _prepare_subject_hint(query, entities)
     return {
         "prepare": (
             f"Памятки по подготовке к «{subject}» у меня нет — подскажет оператор. "

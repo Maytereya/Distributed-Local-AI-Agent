@@ -252,6 +252,12 @@ def _play(
 
 
 @functools.cache
+def _catalog_names_raw() -> frozenset[str]:
+    path = FIXTURE / "price_by_region" / "price_region_3_20261008.jsonl"
+    return frozenset(json.loads(line)["serviceName"] for line in path.open(encoding="utf-8") if line.strip())
+
+
+@functools.cache
 def _catalog_names() -> tuple[str, ...]:
     path = FIXTURE / "price_by_region" / "price_region_3_20261008.jsonl"
     names = {_normalise_catalog_text(json.loads(line)["serviceName"]) for line in path.open(encoding="utf-8") if line.strip()}
@@ -279,16 +285,22 @@ _CODES = {
 }
 
 
-def _context_violations(first: _Turn) -> dict[str, str]:
+def _context_violations(first: _Turn, *, named_one: bool = False) -> dict[str, str]:
     """Состояние после ответа X. Ответ с ценами: `service_name` / `test_name` — только показанное (название
     строки прайса из ответа или слова пациента, которые ответ повторил). Ответ без цен («не нашёл», названия
     без цен, уточнение, перевод на оператора, срок, подбор анализов): пациент ничего не выбрал — в состоянии
-    услуги нет (решение владельца 13.10, BUG-2026-10-13-L13-CONTEXT-LEAK)."""
+    услуги нет (решение владельца 13.10, BUG-2026-10-13-L13-CONTEXT-LEAK).
+
+    :param named_one: правило владельца 14.10 (под `context_shown = on`): в контексте — услуга, которую ответ
+        назвал пациенту одной строкой («Срок готовности «Ферритин» — 1–2 дня»); догадка — никогда."""
 
     held = [str(value) for value in (first.service_name, first.test_name) if value]
     if not held:
         return {}
     if not _priced(first.text):
+        quoted = {_normalise_catalog_text(q) for q in _QUOTED.findall(first.text)}
+        if named_one and len(held) == 1 and quoted == {_normalise_catalog_text(held[0])} and held[0] in _catalog_names_raw():
+            return {}
         return {"ctx": f"{_CODES['ctx']}: ответ без цен, пациент ничего не выбрал, а в состоянии {held}"}
     shown, norm_text = _shown(first.text), _normalise_catalog_text(first.text)
     unseen = [value for value in held if _normalise_catalog_text(value) not in shown and _normalise_catalog_text(value) not in norm_text]
@@ -398,10 +410,8 @@ _WHERE_PRICE_PHRASE = (
 _FOLLOWUP_RED: tuple[tuple[tuple[str, ...], str, tuple[str, ...], dict[str, str]], ...] = (
     (("family_glucose", "family_oak", "fork_oak"), "a_price", BASE_CONFIGS, {"rows": _A_PRICE_ROWS, "phrase": _A_PRICE_PHRASE}),
     (("not_found_gastro",), "a_price", ("default", "deploy", "deploy_parse"), {"rows": _A_PRICE_ROWS, "phrase": _A_PRICE_PHRASE}),
-    (("family_glucose",), "price", ("deploy_parse", "next", "next_shown"), {"rows": _REPEAT_FAMILY}),
-    # под `context_shown = on` «а цена?» без названия услуги берёт контекст (не «а»), как «сколько стоит?», — та же семья
-    (("family_glucose",), "a_price", ("next_shown",), {"rows": _REPEAT_FAMILY}),
-    (("one_ferritin", "family_glucose"), "prep", CONFIGS, {"phrase": _PREP_PHRASE}),
+    (("family_glucose",), "price", ("deploy_parse", "next"), {"rows": _REPEAT_FAMILY}),
+    (("one_ferritin", "family_glucose"), "prep", BASE_CONFIGS, {"phrase": _PREP_PHRASE}),
     (("one_ferritin",), "where_price", BASE_CONFIGS, {"phrase": _WHERE_PRICE_PHRASE}),
 )
 # (сценарий, вопрос, набор) → {код: причина}. Пусто — зелёный. Вопрос — метка из FOLLOWUPS.
@@ -433,7 +443,8 @@ def test_context_is_what_was_shown(name, config, mini_prod_world, monkeypatch): 
 
     scenario = SCENARIOS[name]
     played = _play([scenario.first], name, mini_prod_world, monkeypatch, config, llm=scenario.llm() if scenario.llm else None, render=scenario.render)
-    _settle(_context_violations(played[0]), KNOWN_CONTEXT.get((name, config), {}), _dialog_text([scenario.first], played))
+    found = _context_violations(played[0], named_one=config in SHOWN_CONFIGS)
+    _settle(found, KNOWN_CONTEXT.get((name, config), {}), _dialog_text([scenario.first], played))
 
 
 @pytest.mark.parametrize(("name", "followup", "config"), list(_followup_params()))
@@ -613,11 +624,6 @@ _SHOWN_RED = (
     "L-14: показанную услугу выбрали LLM или код МИС (`service_name_effective`, срок), а в состояние сессии пишет "
     "только заземление правил по буквам (`merge_entities` в роутере; ранний возврат `_maybe_readiness_reply` идёт мимо него)"
 )
-_READINESS_NOT_HELD = (
-    "L-14, шаг 3: под `context_shown = on` срок пишет только `_shown_services`: ответ без цен — по решению владельца 13.10 "
-    "(BUG-2026-10-13-L13-CONTEXT-LEAK) услуги в контексте нет, и `test_context_is_what_was_shown` это держит; держать ли "
-    "услугу срока в `service_name` — вопрос владельцу"
-)
 _SHOWN_BUT_NOT_HELD = (
     ("llm_pick_ggt", CONFIGS, "ГГТ гамма-глютамилтрансфераза"),  # строку выбрала LLM по термину «ГГТ»
     ("readiness_ferritin", ("deploy", "deploy_parse", "next", *SHOWN_CONFIGS), "Ферритин"),  # срок «Ферритин» напечатал код из МИС
@@ -626,7 +632,6 @@ _SHOWN_BUT_NOT_HELD = (
 _SHOWN_KNOWN = {
     **{("llm_pick_ggt", config): _SHOWN_RED for config in BASE_CONFIGS},
     **{("readiness_ferritin", config): _SHOWN_RED for config in ("deploy", "deploy_parse", "next")},
-    **{("readiness_ferritin", config): _READINESS_NOT_HELD for config in SHOWN_CONFIGS},
 }
 
 
@@ -713,7 +718,9 @@ def test_readiness_answer_leaves_no_service_pending_or_label_in_state(config, mi
         assert turn.handoff
     else:
         assert turn.text == "Срок готовности «Ферритин» — 1–2 дня." and not turn.handoff
-    assert (turn.state["service_name"], turn.state["pending"], turn.state["last_label"]) == (None, None, None)
+    # Под `context_shown = on` (правило владельца 14.10) срок назвал одну услугу — она в контексте.
+    held = "Ферритин" if config in SHOWN_CONFIGS else None
+    assert (turn.state["service_name"], turn.state["pending"], turn.state["last_label"]) == (held, None, None)
 
 
 _SUMMARY_RED = pytest.mark.xfail(

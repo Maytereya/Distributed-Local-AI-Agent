@@ -1918,7 +1918,7 @@ async def _maybe_readiness_reply(
     if deadlines:
         if shown_context.mode() == "on":  # срок показан — его услуга и есть контекст (L-14, шаг 3)
             names = list(dict.fromkeys(str(item.get("name") or "").strip() for item in deadlines if item.get("name")))
-            shown_context.remember(state, names, priced=False)
+            shown_context.remember(state, names)
         turn_understanding.note_acted("readiness_from_mis")
         flag, items = "understanding_readiness_from_mis", {ek.READINESS_RESPONSE: deadlines}
     else:
@@ -2963,6 +2963,7 @@ async def route_patient_message(
     runtime_options: RuntimeOptions | None = None,
 ) -> tuple[RouteDecision, Plan, Evidence]:
     turn_understanding.begin_turn()
+    shown_context.begin_turn(state)
     operator_offer_result = _handle_operator_offer_pending(user_text, state, memory)
     if operator_offer_result is not None:
         return operator_offer_result

@@ -207,6 +207,23 @@ def _names_no_service(query: str) -> bool:
     return tu is not None and tu.for_text(str(query or "")) and not tu.services
 
 
+def _rows_shown_before(query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+    """Строки прайса, которые показал прошлый ответ, — если реплика услуги не называет («сколько стоит?», «а
+    цена?»; `_names_no_service`, под `context_shown = on`). Вопрос — о том, что пациент уже видел: отвечаем ровно
+    этими строками, а не семейством по названию из контекста (находка 4: после одной строки «Глюкоза» повтор
+    показывал «Глюкозу в моче» и «в синовиальной жидкости»). None — прежний путь."""
+
+    shown = shown_context.previous()
+    if not shown or not _names_no_service(query):
+        return None
+    by_name: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        name = str(row.get("serviceName") or row.get("name") or "").strip() if isinstance(row, dict) else ""
+        by_name.setdefault(name, row)
+    found = [by_name[name] for name in shown if name in by_name]
+    return found or None
+
+
 def _llm_selection_service_name(query_text: str, rows: list[dict[str, Any]]) -> str:
     """Подпись к ответу из выбора LLM: одна строка — её название, несколько — фраза пациента."""
 
@@ -426,6 +443,15 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         payload["entities_used"] = {**entities, "service_name_effective": name}
         return payload
 
+    shown_before = None if doctor_id else _rows_shown_before(str(query or ""), retail_rows_clean)
+    if shown_before:
+        if len(shown_before) == 1:
+            payload = _llm_answer(shown_before)
+        else:  # подпись — услуга контекста, а не слова вопроса («По запросу «сколько стоит»»)
+            payload = _llm_family_payload(entity_service_name or str(shown_before[0].get("serviceName") or ""), shown_before)
+            payload["entities_used"] = {**entities, "service_name_effective": entity_service_name}
+        payload["note"] = "price_info: shown_before"
+        return payload
     family_payload = _build_price_family_payload(
         query_text,
         retail_rows_clean,
@@ -574,8 +600,12 @@ async def service_bundle_info(
         llm_payload["entities_used"] = entities
         return llm_payload
 
-    llm_rows: list[dict[str, Any]] | None = None
-    family_payload = _build_price_family_payload(
+    llm_rows: list[dict[str, Any]] | None = _rows_shown_before(str(query or ""), retail_rows)
+    if llm_rows is not None and len(llm_rows) > 1:  # показанные варианты — те же, что видел пациент
+        shown_payload = _llm_family_payload(entity_service_name or str(llm_rows[0].get("serviceName") or ""), llm_rows)
+        shown_payload.update(top_n_applied=top_limit, entities_used=entities, note="service_bundle_info: shown_before")
+        return shown_payload
+    family_payload = None if llm_rows else _build_price_family_payload(
         query_text,
         retail_rows,
         show_all=False,

@@ -8,15 +8,18 @@
 (STEP-2026-10-14-L14-PREP-CONSUMERS, находка 6).
 
 Стало (под `on`): ответ с ценами пишет в состояние `_shown_services` — названия строк, которые увидел пациент
-(как их печатает рендер), а `service_name` — показанную услугу, если она одна; срок из МИС — только
-`_shown_services` (ответ без цен: по решению владельца 13.10 услуги в контексте нет — вопрос владельцу). У
+(как их печатает рендер), а `service_name` — показанную услугу, если она одна; срок из МИС — так же (правило
+владельца 14.10: в контексте — услуга, которую ответ назвал пациенту одной строкой; догадка — никогда). У
 корзины `_shown_services` — все её строки, `service_name` не пишется (услуг несколько). Реплика, в понимании
 которой услуга не названа («а цена?»), не перебивает контекст фразой вырезателя (`prices._names_no_service`).
-Сводка обновляется, как только называет не ту услугу. Под `off` — как было.
+Сводка обновляется, как только называет не ту услугу. Читатели показанного прошлым ответом (`previous()`):
+короткий вопрос о цене без названия услуги отвечает ровно показанными строками (`prices._rows_shown_before`),
+вопрос о подготовке без своего предмета — о показанной услуге (`prepare._context_subject`). Под `off` — как было.
 """
 
 from __future__ import annotations
 
+import contextvars
 from typing import Any, Iterable
 
 from .mess_types import SessionState
@@ -25,6 +28,10 @@ from .runtime_config import config as _cfg
 MODES = ("off", "on")
 SHOWN_KEY = "_shown_services"
 _RENDERED_PRICE_ROWS = 5  # рендер цены печатает не больше пяти строк (`renderer.format_price_for_patient`)
+
+# Что показал прошлый ответ — на весь ход (читатели: цена, подготовка). Инструменты состояния не видят,
+# их сущности собирает планировщик; поэтому показанное кладём в ход, как понимание хода.
+_PREVIOUS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar("mr_shown_previous", default=())
 
 
 def mode() -> str:
@@ -74,15 +81,29 @@ def shown_bundle_names(payload: dict[str, Any]) -> list[str]:
     return [name] if name else []
 
 
-def remember(state: SessionState, names: list[str], *, priced: bool = True) -> None:
-    """Показанное — в состояние: `_shown_services` всегда, `service_name` — если показана одна услуга с ценой.
+def begin_turn(state: SessionState) -> None:
+    """Новый ход: показанное прошлым ответом — из состояния (под `off` — ничего)."""
 
-    :param priced: ответ показал цены. Ответ без цен (срок) — только `_shown_services`: по решению владельца
-        13.10 (BUG-2026-10-13-L13-CONTEXT-LEAK) после ответа без цен услуги в контексте нет — пациент не выбирал
+    shown = state.last_entities.get(SHOWN_KEY) if mode() == "on" else None
+    _PREVIOUS.set(tuple(str(name) for name in shown if str(name or "").strip()) if isinstance(shown, list) else ())
+
+
+def previous() -> tuple[str, ...]:
+    """Названия, которые показал пациенту прошлый ответ (под `on`); пусто — не показывал или выключено."""
+
+    return _PREVIOUS.get() if mode() == "on" else ()
+
+
+def remember(state: SessionState, names: list[str]) -> None:
+    """Показанное — в состояние: `_shown_services` всегда, `service_name` — если ответ назвал одну услугу.
+
+    Правило владельца 14.10 (уточнение решения 13.10): в контексте — только услуга, которую ответ назвал
+    пациенту одной строкой (цена или срок); догадка, которой пациент не видел, — никогда. Ответ политики
+    без цен (`clarify_text`) показанного не имеет — услуги нет.
     """
 
     state.last_entities[SHOWN_KEY] = list(names)
-    if priced and len(names) == 1:
+    if len(names) == 1:
         state.last_entities["service_name"] = names[0]
         state.last_entities.pop("test_name", None)
 

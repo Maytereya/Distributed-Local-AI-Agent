@@ -16,10 +16,12 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from messengers_router.services._common import _normalise_catalog_text
-from tests.test_l14_two_turn_consumers import _FOUND_GGT, _QUOTED, _play, _priced, _shown
+from tests.test_l14_two_turn_consumers import _FOUND_GGT, _QUOTED, _Scripted, _play, _priced, _shown
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
 SHOWN = ("deploy_shown", "next_shown")
@@ -106,19 +108,122 @@ def test_a_price_after_an_answer_does_not_search_the_letter(first, config, mini_
 
 
 @pytest.mark.parametrize("config", SHOWN)
-def test_readiness_shows_but_does_not_hold_the_service(config, mini_prod_world, monkeypatch):  # noqa: F811
-    """Срок из МИС: показанное записано, а услуги в контексте нет — ответ без цен (решение владельца 13.10)."""
+def test_readiness_names_one_service_and_holds_it(config, mini_prod_world, monkeypatch):  # noqa: F811
+    """Срок из МИС назвал одну услугу — она в контексте (правило владельца 14.10, уточнение решения 13.10: в
+    контексте — услуга, которую ответ назвал пациенту одной строкой; догадка — никогда). Два хода: «сколько стоит?» —
+    её цена, ничего другого."""
 
-    [turn] = _play(["сколько готовится ферритин"], "shown-readiness", mini_prod_world, monkeypatch, config)
-    assert turn.text == "Срок готовности «Ферритин» — 1–2 дня."
-    assert (turn.service_name, turn.shown) == (None, ["Ферритин"])
+    first, second = _play(["сколько готовится ферритин", "сколько стоит?"], "shown-readiness", mini_prod_world, monkeypatch, config)
+    assert first.text == "Срок готовности «Ферритин» — 1–2 дня."
+    assert (first.service_name, first.shown) == ("Ферритин", ["Ферритин"])
+    assert _priced(second.text) == ["ферритин"], second.text
 
 
 @pytest.mark.parametrize("config", SHOWN)
-def test_cart_shows_all_its_rows_and_holds_no_single_service(config, mini_prod_world, monkeypatch):  # noqa: F811
-    """Корзина: показанное — все её строки с ценой, одной услуги в контексте нет (позиций несколько)."""
+def test_policy_answer_without_prices_still_holds_nothing(config, mini_prod_world, monkeypatch):  # noqa: F811
+    """Граница правила 14.10: ответ политики без цен («не нашёл») ничего не назвал — услуги в контексте нет."""
 
-    first, cart = _play(["сколько стоит ферритин", "сколько стоит ферритин, ттг и витамин д"], "shown-cart", mini_prod_world, monkeypatch, config)
-    assert first.shown == ["Ферритин"] and first.service_name == "Ферритин"
-    assert cart.service_name is None and len(cart.shown or []) >= 2
-    assert {_normalise_catalog_text(name) for name in cart.shown} == set(_priced(cart.text)), (cart.shown, cart.text)
+    first, second = _play(["сколько стоит гастроскопия", "сколько стоит?"], "shown-policy", mini_prod_world, monkeypatch, config, llm=_Scripted(terms=("ФГДС",)))
+    if not _priced(first.text):
+        assert first.service_name is None and not first.shown
+        assert not _priced(second.text), second.text
+
+
+@pytest.mark.parametrize(("config", "first"), [("next_shown", "сколько стоит глюкоза"), ("deploy_shown", "сколько стоит оак")])
+@pytest.mark.parametrize("again", ["сколько стоит?", "а цена?"])
+def test_repeat_shows_exactly_what_was_shown(again, config, first, mini_prod_world, monkeypatch):  # noqa: F811
+    """Находка 4: повтор вопроса без названия услуги — ровно показанные строки (одна строка «Глюкоза» — не семья
+    «Глюкозы в моче» и «в синовиальной жидкости»; два варианта ОАК — эти два, не «ещё 6»), без слов вопроса."""
+
+    played = _play([first, again], f"shown-repeat-{first}-{again}", mini_prod_world, monkeypatch, config)
+    assert _priced(played[1].text) == _priced(played[0].text), played[1].text
+    assert not [q for q in _QUOTED.findall(played[1].text) if _normalise_catalog_text(q) in {"а", "сколько стоит", "а цена"}]
+
+
+# --------------------------------------------------------------------------- подготовка (находка 2)
+
+_MEMO_TEXT = "Сдавать натощак, после 8–12 часов голода; за сутки исключить алкоголь."
+_PREPARE_MARK = "как подготовиться к анализу или процедуре"
+_CONTEXT_MARK = "Перед этим вопросом бот показал пациенту услугу"
+
+
+class _PrepareLLM:
+    """LLM выбора памятки: выбирает памятку «Ферритин», только если промпт называет показанную услугу и в вопросе
+    нет своего предмета (как решила бы модель по смыслу); прочие места — недоступна."""
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
+        from ollama import GenerateResponse
+
+        if _PREPARE_MARK not in prompt:
+            raise ConnectionError("тест: LLM недоступна для этого места")
+        self.prompts.append(prompt)
+        lines = [line for line in prompt.splitlines() if line[:1].isdigit() and ". " in line]
+        own = "ттг" in prompt.split("Вопрос пациента:", 1)[1].split("\n", 1)[0].lower()
+        match = None if own or _CONTEXT_MARK not in prompt else next((int(line.split(".", 1)[0]) for line in lines if "Ферритин" in line), None)
+        return GenerateResponse(model="m", response=json.dumps({"match": match}), done=True)
+
+
+def _with_memo(monkeypatch) -> None:
+    from messengers_router.services import prepare as prep
+    from messengers_router.services._prepare_select_llm import SOURCE_KB, PrepareMemo
+
+    memo = PrepareMemo(source=SOURCE_KB, title="Ферритин", text=_MEMO_TEXT)
+    monkeypatch.setattr(prep, "kb_patient_memos", lambda: (memo,))
+
+
+@pytest.mark.parametrize("config", SHOWN)
+@pytest.mark.parametrize("first", ["сколько стоит ферритин", "сколько готовится ферритин"])
+@pytest.mark.parametrize("ask", ["а как подготовиться?", "подскажите пожалуйста как подготовиться", "а натощак?"])
+def test_prepare_without_own_subject_is_about_the_shown_service(ask, first, config, mini_prod_world, monkeypatch):  # noqa: F811
+    """LLM видит показанную услугу и по смыслу выбирает её памятку; в ответе нет слов вопроса."""
+
+    _with_memo(monkeypatch)
+    llm = _PrepareLLM()
+    played = _play([first, ask], f"shown-prep-{first}-{ask}", mini_prod_world, monkeypatch, config, llm=llm)
+    assert _MEMO_TEXT[:20] in played[1].text, played[1].text
+    assert llm.prompts and _CONTEXT_MARK in llm.prompts[-1] and "«Ферритин»" in llm.prompts[-1]
+
+
+@pytest.mark.parametrize("config", SHOWN)
+@pytest.mark.parametrize(
+    ("ask", "expected"),
+    [
+        ("а как подготовиться?", "Памятки по подготовке к «Ферритин» у меня нет"),  # памяток нет: предмет — показанная услуга
+        ("а натощак?", "к «Ферритин» или к другому"),  # свои слова, LLM нет: спросить, а не гадать
+        ("а как подготовиться к ттг?", "«ттг»"),  # свой предмет: не «ферритин» по длине
+    ],
+)
+def test_prepare_without_llm_never_prints_question_words(ask, expected, config, mini_prod_world, monkeypatch):  # noqa: F811
+    played = _play(["сколько стоит ферритин", ask], f"shown-prep-nollm-{ask}", mini_prod_world, monkeypatch, config)
+    assert expected in played[1].text, played[1].text
+    assert not [q for q in _QUOTED.findall(played[1].text) if _normalise_catalog_text(q) in {_normalise_catalog_text(ask.strip("?")), "а натощак"}]
+
+
+@pytest.mark.parametrize("config", SHOWN)
+def test_prepare_after_several_shown_asks_which(config, mini_prod_world, monkeypatch):  # noqa: F811
+    """Показаны два варианта ОАК — «а как подготовиться?» спрашивает, к какому из них (принцип 5)."""
+
+    played = _play(["сколько стоит оак", "а как подготовиться?"], "shown-prep-family", mini_prod_world, monkeypatch, config)
+    assert played[1].text.startswith("К какому из анализов нужна подготовка: «Общий анализ крови (Le, Er, Hb, СОЭ)»"), played[1].text
+
+
+def test_prepare_prompt_without_context_is_unchanged():
+    """Без показанной услуги промпт выбора памятки — байт в байт прежний (под `off` ничего не меняется)."""
+
+    from messengers_router.prompt_registry import load_prompt_text
+    from messengers_router.services._prepare_select_llm import PrepareMemo, _build_prompt, _excerpt
+
+    memos = [PrepareMemo(source="x", title="Ферритин", text=_MEMO_TEXT)]
+    template = load_prompt_text("prepare_document_select")
+    head, _, rest = template.partition("<<CONTEXT_START>>")
+    assert "<<CONTEXT_END>>" in rest
+    before = (
+        (head + rest.partition("<<CONTEXT_END>>")[2])
+        .replace("<<QUESTION>>", "как подготовиться к ферритину")
+        .replace("<<DOCUMENTS>>", f"1. Ферритин — {_excerpt(_MEMO_TEXT)}")
+    ).strip()
+    assert _build_prompt("как подготовиться к ферритину", memos) == before
+    assert _CONTEXT_MARK in _build_prompt("а натощак?", memos, "Ферритин")
