@@ -535,7 +535,9 @@ def fallback_split(cands: Candidates, catalog: list[dict[str, Any]]) -> tuple[Pa
 
 def _merged_list(cands: Candidates, picked: Sequence[int], rows: Sequence[Sequence[dict[str, Any]]], split: Sequence[ParsedPhrase]) -> bool:
     """LLM выбрала одну фразу — всю реплику W, она слабая, а разрез по разделителям есть (`split` —
-    ≥2 фразы и одно название прайса не покрывает реплику: см. `fallback_split`)."""
+    ≥2 фразы и одно название прайса не покрывает реплику: см. `fallback_split`) и данные МИС за список:
+    хотя бы одна часть разреза — сильное совпадение (название, синоним, код). Без сильной части выбор LLM
+    «одна услуга» остаётся решением: «ЭКГ в покое и с нагрузкой» (g0270) — обе части слабые, это ЭКГ."""
 
     return (
         len(picked) == 1
@@ -543,6 +545,7 @@ def _merged_list(cands: Candidates, picked: Sequence[int], rows: Sequence[Sequen
         and cands.options[picked[0]] is cands.whole
         and not rows[picked[0]]
         and len(split) >= 2
+        and any(item.rows for item in split)
     )
 
 
