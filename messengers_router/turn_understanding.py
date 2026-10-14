@@ -11,7 +11,10 @@
 Станет: одна функция строит объект один раз за ход, места, решавшие заново, его читают. Шаг 1 —
 только метка «цена»: ход с меткой цены или подбора анализов и ответ на висящий вопрос цены.
 Объект живёт один ход (contextvar), в состояние сессии не пишется. Одиночную услугу шаг 1 не
-разбирает — её по-прежнему находит старый путь; `services` непусто только у списка.
+разбирал — её находит старый путь. С L-14 шаг 0 (14.10) у одиночной услуги тоже есть упоминание
+(`services` из одного `ServiceMention`, `source`/`strength` по данным МИС) — только наблюдатель: читатели
+действуют по `acting_list()`/`is_list` (список — ≥2), ответы не меняются; телеметрия `tu_list` — по-прежнему
+размер списка (0 у одиночной), упоминание — `tu_mention_src`, `tu_mention_strength`.
 
 Выключатель `[MESSENGER_ROUTER] turn_understanding_price = off | shadow | on`:
 - `off` — объект не строится;
@@ -40,14 +43,16 @@ import logging
 import time
 from dataclasses import dataclass
 from collections.abc import Awaitable
-from typing import Any
+from typing import Any, Sequence
 
 from . import turn_parse, turn_telemetry
 from .policies import detect_address_intent, detect_nonbookable_walkin_intent, detect_prepare_intent, detect_price_intent
 from .runtime_config import config as _cfg
 from .services import _turn_phrases
+from .services._strong_match import strong_rows
 from .services._prices_helpers import (
     _catalog_rows,
+    _extract_price_service_from_query,
     _multi_price_items,
     is_readiness_question,
     price_list_services,
@@ -66,12 +71,14 @@ _PRICE_TURN_LABELS = frozenset({"PRICE", "TEST_ASSIST"})
 class ServiceMention:
     """Упоминание услуги. Шаг 1: кандидат один — строка прайса, которую покажет корзина. Под `turn_parse =
     on` (L-15b, шаг 5) — фраза разбора: кандидаты — строки сильного совпадения по данным МИС (у слабой —
-    нет), строку слабой выбирает корзина."""
+    нет), строку слабой выбирает корзина. Одиночная услуга (L-14, шаг 0) — фраза пациента, кандидаты —
+    строки сильного совпадения по данным МИС, `chosen` — название, если оно одно (иначе выбора нет)."""
 
     phrase: str
     candidates: tuple[str, ...]
-    strength: str  # list_split | list_segment (как найдено); фраза разбора — strong | weak
+    strength: str  # list_split | list_segment (как найдено); фраза разбора и одиночная — strong | weak
     chosen: str | None
+    source: str = "rules"  # rules — правила понимания; parse — разбор реплики (turn_parse)
 
 
 @dataclass(frozen=True)
@@ -88,6 +95,18 @@ class TurnUnderstanding:
     @property
     def service_names(self) -> tuple[str, ...]:
         return tuple(m.chosen for m in self.services if m.chosen)
+
+    @property
+    def single(self) -> ServiceMention | None:
+        """Упоминание одиночной услуги (L-14, шаг 0) — наблюдатель; у списка — None."""
+
+        return self.services[0] if len(self.services) == 1 else None
+
+    @property
+    def list_size(self) -> int:
+        """Размер списка для телеметрии `tu_list`: 0 у одиночной услуги, как до шага 0."""
+
+        return len(self.services) if self.is_list else 0
 
     def as_debug(self) -> dict[str, Any]:
         return {
@@ -169,7 +188,40 @@ def understand_price_turn(text: str) -> TurnUnderstanding:
     probe = strip_readiness_phrasing(text)[0] if facet == "readiness" else text
     names, rule = price_list_services(probe)
     mentions = tuple(ServiceMention(phrase=name, candidates=(name,), strength=rule, chosen=name) for name in names)
+    if not mentions:
+        mentions = _single_mention(probe)
     return TurnUnderstanding(services=mentions, services_rule=rule, facet=facet, facet_rule=facet_rule)
+
+
+def _mention(phrase: str, rows: Sequence[dict[str, Any]], source: str) -> ServiceMention:
+    names = tuple(dict.fromkeys(str(row.get("serviceName") or row.get("name") or "").strip() for row in rows))
+    return ServiceMention(
+        phrase=phrase,
+        candidates=names,
+        strength="strong" if names else "weak",
+        chosen=names[0] if len(names) == 1 else None,
+        source=source,
+    )
+
+
+def _single_mention(probe: str) -> tuple[ServiceMention, ...]:
+    """Упоминание одиночной услуги по правилам (L-14, шаг 0): фраза — то, что вырезатель правил оставил от
+    реплики; сила и кандидаты — сильное совпадение по данным МИС (`strong_rows`: название, синоним, код).
+    Слабая — без кандидатов и без выбора (строку выбирает путь цены, как раньше). Фразы нет — ничего."""
+
+    phrase = _extract_price_service_from_query(probe) or ""
+    if all(t.key in _turn_phrases._FILLER for t in _turn_phrases._tokens(phrase)):
+        return ()  # от реплики осталась только обвязка («сколько стоит?») — услуги нет
+    return (_mention(phrase, strong_rows(probe, _catalog_rows(None)), "rules"),)
+
+
+def _mention_fields(tu: TurnUnderstanding) -> dict[str, Any]:
+    """Телеметрия упоминания одиночной услуги (L-14, шаг 1): откуда и какой силы — без текста пациента."""
+
+    single = tu.single
+    if single is None:
+        return {"tu_mention_src": None, "tu_mention_strength": None}
+    return {"tu_mention_src": single.source, "tu_mention_strength": single.strength}
 
 
 def is_price_turn(label: str, pending: dict[str, Any] | None) -> bool:
@@ -194,13 +246,13 @@ async def observe_price_turn(label: str, *, user_text: str, pending: dict[str, A
             turn_telemetry.note(tu_rule="error")
         else:
             _CURRENT.set(tu)
-            turn_telemetry.note(tu_list=len(tu.services), tu_facet=tu.facet, tu_rule=tu.services_rule)
+            turn_telemetry.note(tu_list=tu.list_size, tu_facet=tu.facet, tu_rule=tu.services_rule, **_mention_fields(tu))
     await _observe_phrases(user_text, tu)
     read = _from_phrases(tu, user_text) if tu is not None else None
     if read is not None:
         tu = read
         _CURRENT.set(tu)
-        turn_telemetry.note(tu_list=len(tu.services), tu_rule=tu.services_rule)
+        turn_telemetry.note(tu_list=tu.list_size, tu_rule=tu.services_rule, **_mention_fields(tu))
     return tu
 
 
@@ -240,7 +292,7 @@ async def _observe_parse_on(user_text: str) -> TurnUnderstanding | None:
         turn_telemetry.note(tu_rule="error")
     else:
         _CURRENT.set(tu)
-        turn_telemetry.note(tu_list=len(tu.services), tu_facet=tu.facet, tu_rule=tu.services_rule)
+        turn_telemetry.note(tu_list=tu.list_size, tu_facet=tu.facet, tu_rule=tu.services_rule, **_mention_fields(tu))
     finally:
         if not rules.done():
             rules.set_result(tu)
@@ -250,7 +302,7 @@ async def _observe_parse_on(user_text: str) -> TurnUnderstanding | None:
     if read is not None:
         tu = read
         _CURRENT.set(tu)
-        turn_telemetry.note(tu_list=len(tu.services), tu_rule=tu.services_rule)
+        turn_telemetry.note(tu_list=tu.list_size, tu_rule=tu.services_rule, **_mention_fields(tu))
     return tu
 
 
@@ -269,9 +321,10 @@ def _from_phrases(tu: TurnUnderstanding, text: str) -> TurnUnderstanding | None:
             candidates=tuple(dict.fromkeys(str(row.get("serviceName") or "").strip() for row in item.rows)),
             strength=str(item.strength.value),
             chosen=item.text,
+            source="parse",
         )
         for item in parse.items
-    ) if parse.is_list else ()
+    ) if parse.is_list else tuple(_mention(item.text, item.rows, "parse") for item in parse.items[:1])
     return TurnUnderstanding(services=services, services_rule=f"parse_{parse.status}", facet=tu.facet, facet_rule=tu.facet_rule)
 
 

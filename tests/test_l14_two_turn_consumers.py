@@ -535,15 +535,48 @@ def test_list_mentions_chosen_is_catalog_name_by_rules_and_phrase_by_parse(confi
 
 
 @pytest.mark.parametrize("config", CONFIGS)
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="L-14: ServiceMention строится только для списка (turn_understanding.understand_price_turn: «одиночную услугу шаг 1 не разбирает»); "
-    "у одной услуги объекта хода нет, и журнал, состояние и инструмент цены решают «какая услуга» каждый по-своему",
-)
 def test_single_service_is_a_mention(config, mini_prod_world, monkeypatch):  # noqa: F811
+    """L-14, шаг 0 (14.10): у одиночной услуги — упоминание хода (сильное по данным МИС — с выбором)."""
+
     [turn] = _play(["сколько стоит ферритин"], "mentions-single", mini_prod_world, monkeypatch, config)
     assert turn.understanding is not None and turn.understanding["services"] == ["Ферритин"]
+
+
+def test_single_mention_by_rules_strength_and_choice(mini_prod_world):  # noqa: F811
+    """Сила и выбор — по данным МИС: дословное название — сильное, выбор — оно; слово без названия и синонима —
+    слабое, без кандидатов и без выбора (строку выбирает путь цены, как раньше); без фразы услуги — ничего."""
+
+    from messengers_router import turn_understanding as tu
+
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        strong = tu.understand_price_turn("сколько стоит ферритин").single
+        weak = tu.understand_price_turn("сколько стоит ттг").single
+        empty = tu.understand_price_turn("сколько стоит?")
+        listed = tu.understand_price_turn(_LIST_REPLY)
+    assert (strong.source, strong.strength, strong.candidates, strong.chosen) == ("rules", "strong", ("Ферритин",), "Ферритин")
+    assert (weak.source, weak.strength, weak.candidates, weak.chosen) == ("rules", "weak", (), None)
+    assert empty.services == () and empty.single is None
+    assert listed.single is None and listed.list_size == len(listed.services) >= 2
+
+
+@pytest.mark.parametrize("config", CONFIGS)
+def test_single_mention_is_an_observer_and_tu_list_keeps_its_meaning(config, mini_prod_world, monkeypatch):  # noqa: F811
+    """Упоминание одиночной услуги — наблюдатель: `tu_list` по-прежнему размер списка (0), а источник и сила —
+    отдельными полями, без текста пациента."""
+
+    from messengers_router.runtime_config import config as cfg
+    from tests.test_price_turns_golden import run_dialog
+
+    for key, value in _SETS[config].items():
+        monkeypatch.setattr(cfg, key, value, raising=False)
+    with ev_world.FrozenWorld(mini_prod_world, "day") as world:
+        run_dialog(["сколько стоит ферритин"], f"mention-telemetry-{config}")
+        row = world.take_telemetry()
+    if _SETS[config].get("MR_TURN_UNDERSTANDING_PRICE", "shadow") == "off":
+        return
+    assert row.get("tu_list") == 0
+    assert row.get("tu_mention_strength") == "strong"
+    assert row.get("tu_mention_src") in ("rules", "parse")
 
 
 # Обратное направление «контекст = показанное»: услуга, которую ответ назвал пациенту и которую выбрала не
