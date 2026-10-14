@@ -71,6 +71,31 @@ def _candidates(item: dict[str, Any], retail_rows: list[dict[str, Any]]) -> list
     return out
 
 
+def _word_candidates(fragment: str, retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Кандидаты слабой позиции по её отдельным значимым словам — когда по фразе целиком код не нашёл
+    ничего (шаг 6: «т4 свободный» → «сТ4 (FT4) Свободный тироксин», «кальций общий» → строки кальция).
+
+    Только варианты для выбора LLM корзины: строку выбирает LLM, при её сбое позиция остаётся «Не распознал»
+    (кандидаты по словам — не та услуга с ценой). Слово — токен фразы вне обвязки и родовых слов
+    (`_turn_phrases._FILLER`); строки слова — сильное совпадение по данным МИС (название, синоним, код) и
+    ранжирование прайса. Новых регулярок и словарей нет.
+    """
+
+    from ._turn_phrases import _FILLER, _tokens
+
+    seen: set[tuple[str, str, str]] = set()
+    out: list[dict[str, Any]] = []
+    for token in _tokens(fragment):
+        if token.key in _FILLER:
+            continue
+        word = fragment[token.start : token.end]
+        for row in [*strong_rows(word, retail_rows), *_rank_price_rows(retail_rows, word, limit=_PER_ITEM)]:
+            if isinstance(row, dict) and _row_key(row) not in seen:
+                seen.add(_row_key(row))
+                out.append(row)
+    return out[: _PER_ITEM * 2]
+
+
 def _position(fragment: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     name = _row_name(rows[0]) if len(rows) == 1 else fragment
     return {"service_name": name, "prices": _annotate_price_rows_with_care_context(list(rows)), "fragment": fragment}
@@ -154,12 +179,24 @@ async def _pick(
             weak.append((index, fragment, candidates))
     if not weak:
         return chosen, weak, False
+    # Корзина из фраз (`fair_share`): позиции, у которой по фразе целиком кандидатов нет, LLM получает
+    # кандидатов по словам; при сбое LLM варианты строятся из прежних (пустых) — «Не распознал». Уточнение,
+    # которого в прайсе нет («по ОМС», П2), — без кандидатов и по словам.
+    offered = [
+        candidates
+        or (
+            _word_candidates(fragment, retail_rows)
+            if fair_share and llm_allowed and not items[index].get("unsatisfiable")
+            else []
+        )
+        for index, fragment, candidates in weak
+    ]
     per_item = max(2, _MAX_OPTIONS // len(weak))
-    limits = _fair_shares([len(candidates) for _index, _fragment, candidates in weak]) if fair_share else [per_item] * len(weak)
+    limits = _fair_shares([len(rows) for rows in offered]) if fair_share else [per_item] * len(weak)
     options: list[Option] = []
     owners: dict[str, tuple[int, dict[str, Any]]] = {}
-    for (index, fragment, candidates), limit in zip(weak, limits):
-        for row in candidates[:limit]:
+    for (index, fragment, _whole_cands), rows, limit in zip(weak, offered, limits):
+        for row in rows[:limit]:
             option_id = str(len(options))
             owners[option_id] = (index, row)
             options.append(Option(id=option_id, text=f"«{fragment}» → {_row_name(row)} — {_row_cost(row)} руб."))
