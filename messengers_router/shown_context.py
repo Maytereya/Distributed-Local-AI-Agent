@@ -14,7 +14,9 @@
 которой услуга не названа («а цена?»), не перебивает контекст фразой вырезателя (`prices._names_no_service`).
 Сводка обновляется, как только называет не ту услугу. Читатели показанного прошлым ответом (`previous()`):
 короткий вопрос о цене без названия услуги отвечает ровно показанными строками (`prices._rows_shown_before`),
-вопрос о подготовке без своего предмета — о показанной услуге (`prepare._context_subject`). Под `off` — как было.
+вопрос о подготовке без своего предмета — о показанной услуге (`prepare._context_subject`), вопрос walk-in без
+своей услуги («а где сдать?», «нужна ли запись?») — тоже о ней: класс «анализы» нужен только ответу об адресах,
+контекст после ответа — показанное (`sync_address`, находка 3). Под `off` — как было.
 """
 
 from __future__ import annotations
@@ -22,16 +24,20 @@ from __future__ import annotations
 import contextvars
 from typing import Any, Iterable
 
-from .mess_types import SessionState
+from .mess_types import RouteDecision, SessionState
 from .runtime_config import config as _cfg
 
 MODES = ("off", "on")
 SHOWN_KEY = "_shown_services"
+# Флаг решения walk-in: вопрос без своей услуги — о показанной прошлым ответом (ставит гард walk-in под `on`).
+WALKIN_SHOWN_FLAG = "walkin_shown_service"
 _RENDERED_PRICE_ROWS = 5  # рендер цены печатает не больше пяти строк (`renderer.format_price_for_patient`)
 
-# Что показал прошлый ответ — на весь ход (читатели: цена, подготовка). Инструменты состояния не видят,
+# Что показал прошлый ответ — на весь ход (читатели: цена, подготовка, адрес). Инструменты состояния не видят,
 # их сущности собирает планировщик; поэтому показанное кладём в ход, как понимание хода.
 _PREVIOUS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar("mr_shown_previous", default=())
+# Услуга контекста до хода (`service_name`): ответ walk-in возвращает её, когда показано несколько строк.
+_BEFORE: contextvars.ContextVar[str] = contextvars.ContextVar("mr_shown_service_before", default="")
 
 
 def mode() -> str:
@@ -82,10 +88,12 @@ def shown_bundle_names(payload: dict[str, Any]) -> list[str]:
 
 
 def begin_turn(state: SessionState) -> None:
-    """Новый ход: показанное прошлым ответом — из состояния (под `off` — ничего)."""
+    """Новый ход: показанное прошлым ответом и услуга контекста до хода — из состояния (под `off` — ничего)."""
 
-    shown = state.last_entities.get(SHOWN_KEY) if mode() == "on" else None
+    on = mode() == "on"
+    shown = state.last_entities.get(SHOWN_KEY) if on else None
     _PREVIOUS.set(tuple(str(name) for name in shown if str(name or "").strip()) if isinstance(shown, list) else ())
+    _BEFORE.set(str(state.last_entities.get("service_name") or "").strip() if on else "")
 
 
 def previous() -> tuple[str, ...]:
@@ -121,3 +129,55 @@ def sync_bundle(state: SessionState, payload: dict[str, Any]) -> None:
 
     if mode() == "on":
         remember(state, shown_bundle_names(payload))
+
+
+def walkin_about_shown() -> frozenset[str]:
+    """Флаг для решения walk-in, в реплике которого своей услуги нет (гард `_guard_walkin_named_service`):
+    под `on` и если прошлый ответ что-то показал — вопрос о показанном; иначе пусто, решение как было."""
+
+    return frozenset({WALKIN_SHOWN_FLAG}) if previous() else frozenset()
+
+
+def sync_address(state: SessionState, decision: RouteDecision, *, walkin: bool = False) -> None:
+    """Ответ адреса (`build_address_response`) — после того, как текст построен (под `on`).
+
+    Находка 3 (STEP-…-L14-PREP-CONSUMERS): вопрос walk-in без своей услуги («а где сдать?», «нужна ли запись?»)
+    заменял в контексте показанную услугу классом «анализы», и следующее «сколько стоит?» искало «анализы».
+    Класс нужен ответу — инструмент адресов выбирает по нему пункты сдачи анализов, поэтому ход идёт как
+    раньше, — а после ответа (флаг гарда) в контексте снова показанное: одна услуга — она (`service_name`),
+    несколько — услуга контекста до хода, если она среди показанных (класс не подставляется, догадку
+    заземления, которой пациент не видел, не возвращаем — тогда услуги нет); `_shown_services` не меняется.
+    Трогаем только то, что записал сам walk-in (`service_name` решения).
+
+    Обратный случай — своя услуга реплики («а где сделать экг?», «а на ттг нужна запись?»): ход записал в
+    контекст услугу, которой среди показанных нет, — показанное прошлым ответом больше не предмет разговора,
+    `_shown_services` снимается, и следующий короткий вопрос — о своей услуге, как под `off` (было: устаревшее
+    показанное перебивало её — «сколько стоит?» после «а где сделать экг?» отвечало ценой ферритина). Класс
+    walk-in (`walkin`: «анализы», «ЭКГ» правила, кнопка меню) — вид услуги, а не своя услуга: показанное не снимает.
+    """
+
+    shown = previous()
+    if not shown:
+        return
+    held = str(state.last_entities.get("service_name") or "")
+    if WALKIN_SHOWN_FLAG in decision.flags:
+        if held != str(decision.entities.get("service_name") or ""):
+            return
+        keep = shown[0] if len(shown) == 1 else _BEFORE.get()
+        if keep and _norm(keep) in {_norm(name) for name in shown}:
+            state.last_entities["service_name"] = keep
+        else:
+            state.last_entities.pop("service_name", None)
+        return
+    if not held or _norm(held) == _norm(_BEFORE.get()) or _norm(held) in {_norm(name) for name in shown}:
+        return  # контекст ход не менял или он — показанное
+    # Классы walk-in. Импорт здесь: заземление импортирует сервисы цены, а они — этот модуль (цикл).
+    from .entity_grounder import _NONBOOKABLE_GENERIC_HINTS
+
+    if walkin and held.casefold() in _NONBOOKABLE_GENERIC_HINTS:
+        return
+    state.last_entities.pop(SHOWN_KEY, None)
+
+
+def _norm(name: str) -> str:
+    return " ".join(str(name or "").replace("ё", "е").casefold().split())

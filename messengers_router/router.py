@@ -2092,7 +2092,9 @@ async def _guard_walkin_named_service(
 
     - Своя лаб-улика в реплике («сдать кровь», «анализ», «ЭКГ») — решение правила остаётся.
     - Своей услуги в реплике нет — ответ про класс из контекста («анализы»), а не про
-      строку каталога, найденную по словам вопроса.
+      строку каталога, найденную по словам вопроса. Под `context_shown = on` вопрос — о
+      показанной прошлым ответом услуге: класс нужен только ответу об адресах, контекст
+      после ответа — показанное (флаг `walkin_shown_service`, `shown_context.sync_address`).
     - Услуга названа — вид решает каталог МИС: анализ (есть срок готовности) — без записи;
       иначе или неизвестно — запись, «без записи» не утверждаем. Как и
       `_classify_catalog_service_kind`, анализом не считаем то, что сам пациент назвал
@@ -2126,12 +2128,13 @@ async def _guard_walkin_named_service(
     phrase = extract_service_phrase(asked_about)
     if not phrase:
         hint = nonbookable_service_hint(user_text, state.last_entities) or "анализы"
+        about_shown = shown_context.walkin_about_shown()  # под `off` пусто — решение как было
         if decision.entities.get("service_name") == hint:
-            return decision
+            return _copy_decision(decision, flags=set(decision.flags) | about_shown) if about_shown else decision
         return _copy_decision(
             decision,
             entities={**decision.entities, "service_name": hint},
-            flags=set(decision.flags) | {"walkin_context_class"},
+            flags=set(decision.flags) | {"walkin_context_class"} | about_shown,
         )
     match = await services.match_catalog_service(phrase, context_text=user_text)
     canonical = str(match.get("canonical") or "").strip() if match.get("status") in {"exact", "fuzzy"} else ""

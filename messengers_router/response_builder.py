@@ -541,7 +541,8 @@ def build_address_response(
         memory.set_pending(state, label="ADDRESS", missing_slots=["_any_of:city,branch_name,branch_id"])
 
     walkin_hint: str | None = None
-    if any("nonbookable" in str(f) for f in decision.flags):
+    walkin = any("nonbookable" in str(f) for f in decision.flags)
+    if walkin:
         walkin_hint = nonbookable_service_hint(user_text, state.last_entities) or str(state.last_entities.get("service_name") or "").strip()
         if walkin_hint == "":
             walkin_hint = None
@@ -550,6 +551,8 @@ def build_address_response(
         state.last_entities,
         nonbookable_service=walkin_hint,
     )
+    # Ответ построен; контекст после него — показанное или своя услуга реплики (под `context_shown = on`, L-14).
+    shown_context.sync_address(state, decision, walkin=walkin)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 

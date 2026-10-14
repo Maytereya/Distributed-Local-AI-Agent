@@ -91,7 +91,7 @@ FOLLOWUPS: dict[str, tuple[str, ...]] = {
     "where": ("а где сдать?",),
     "yes": ("да",),
     "one": ("1",),
-    "where_price": ("а где сдать?", "сколько стоит?"),  # «где сдать» заменяет услугу в состоянии классом «анализы»
+    "where_price": ("а где сдать?", "сколько стоит?"),  # «где сдать» заменяет услугу в состоянии классом «анализы» (под `off`)
 }
 
 # --------------------------------------------------------------------------- мир, ходы, LLM
@@ -282,7 +282,9 @@ _CODES = {
     "ctx": "контекст сессии держит услугу, которой нет в показанном ответе",
     "rows": "короткий вопрос показал цены строк, которых пациент не видел",
     "phrase": "слова самого вопроса напечатаны как название услуги",
+    "class": "класс walk-in («анализы») напечатан как название услуги",
 }
+_WALKIN_CLASS = _normalise_catalog_text("анализы")  # класс, который гард walk-in ставит вместо услуги контекста
 
 
 def _context_violations(first: _Turn, *, named_one: bool = False) -> dict[str, str]:
@@ -321,6 +323,8 @@ def _followup_violations(earlier: list[_Turn], last: _Turn, said: str) -> dict[s
     quoted = [frag for frag in _QUOTED.findall(last.text) if _normalise_catalog_text(frag) in {own, "а", "и"}]
     if quoted:
         out["phrase"] = f"{_CODES['phrase']}: {quoted}"
+    if [frag for frag in _QUOTED.findall(last.text) if _normalise_catalog_text(frag) == _WALKIN_CLASS]:
+        out["class"] = _CODES["class"]
     return out
 
 
@@ -357,7 +361,7 @@ SCENARIOS: dict[str, Scenario] = {
     "one_ferritin": Scenario("сколько стоит ферритин", ("price", "a_price", "prep", "where", "where_price")),
     # семейство: правила показывают соседние строки; под разбором (STRONG) — только дословное название
     "family_glucose": Scenario("сколько стоит глюкоза", ("price", "a_price", "prep")),
-    "family_oak": Scenario("сколько стоит оак", ("price", "a_price", "prep", "where", "one")),
+    "family_oak": Scenario("сколько стоит оак", ("price", "a_price", "prep", "where", "one", "where_price")),
     # синоним МИС на несколько услуг: показаны ровно они
     "fork_oak": Scenario("сколько стоит оак", ("price", "a_price", "prep"), fork=True),
     # «не нашёл» (под L-13 — честное «не нашёл», иначе ответ правил: семья «Гастрин»)
@@ -412,7 +416,8 @@ _FOLLOWUP_RED: tuple[tuple[tuple[str, ...], str, tuple[str, ...], dict[str, str]
     (("not_found_gastro",), "a_price", ("default", "deploy", "deploy_parse"), {"rows": _A_PRICE_ROWS, "phrase": _A_PRICE_PHRASE}),
     (("family_glucose",), "price", ("deploy_parse", "next"), {"rows": _REPEAT_FAMILY}),
     (("one_ferritin", "family_glucose"), "prep", BASE_CONFIGS, {"phrase": _PREP_PHRASE}),
-    (("one_ferritin",), "where_price", BASE_CONFIGS, {"phrase": _WHERE_PRICE_PHRASE}),
+    # Под `context_shown = on` закрыто (L-14, находка 3): после ответа адреса в контексте снова показанное.
+    (("one_ferritin", "family_oak"), "where_price", BASE_CONFIGS, {"phrase": _WHERE_PRICE_PHRASE}),
 )
 # (сценарий, вопрос, набор) → {код: причина}. Пусто — зелёный. Вопрос — метка из FOLLOWUPS.
 KNOWN_FOLLOWUP: dict[tuple[str, str, str], dict[str, str]] = {
