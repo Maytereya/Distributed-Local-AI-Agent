@@ -6,8 +6,11 @@
 - текст пациента — данные (SEC-3): только в роли user, без «ёлочек» и переносов; подстановка
   `<<OPTIONS>>` внутри реплики не раскрывается;
 - ответ модели — недоверенный ввод: не JSON, номер вне списка, лишние номера, bool или строка
-  вместо числа, неизвестный исход или код причины → INVALID целиком; пусто → NONE_FIT; исход →
-  OUTCOME (исход побеждает выбор: срочность только поднимается);
+  вместо числа, неизвестный исход или код причины → INVALID целиком (и при исходе); пусто → NONE_FIT;
+  исход → OUTCOME (исход побеждает выбор: срочность только поднимается);
+- исход несёт ровно те номера, что тот же ответ без исхода дал бы как PICKED («да, второй» на
+  вопрос-список); номера не меняют ни статус, ни исход; кэш возвращает их с id вариантов вызова;
+  номера при исходе получает только клиент, который смотрит статус прежде номеров;
 - сбой, тайм-аут, бюджет хода, предохранитель, сломанный промпт задачи → UNAVAILABLE; политика —
   у вызывающего, ход не падает;
 - кэшируются только внятные ответы; сбой и мусор не кэшируются; кэш хранит номера, а id берёт из
@@ -28,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -176,6 +180,109 @@ def test_outcome_wins_over_picks_and_unknown_outcome_is_invalid(raw, status, out
 def test_by_text_answer_must_name_an_option_exactly(raw, status, ids):
     choice = ch.parse_answer(BY_TEXT, ROLES, raw)
     assert (choice.status, choice.ids) == (status, ids)
+
+
+# --------------------------------------------------------------------------- исход и номера
+
+# Вопрос-список бота «вы имели в виду: 1… 2… 3…?» и ответ «да, второй» (клиент pending_reply).
+REPLY = ch.Task(name="demo", max_picks=1, outcomes=("yes", "no"))
+
+
+@pytest.mark.parametrize(
+    ("task", "options", "picks"),
+    [
+        (SAFETY, OPTIONS, []),
+        (SAFETY, OPTIONS, [2]),
+        (SAFETY, OPTIONS, [3, 1, 3]),
+        (SAFETY, OPTIONS, [4]),
+        (SAFETY, OPTIONS, [0]),
+        (SAFETY, OPTIONS, [True]),
+        (SAFETY, OPTIONS, ["2"]),
+        (SAFETY, OPTIONS, [2.0]),
+        (REPLY, OPTIONS, [2]),
+        (REPLY, OPTIONS, [2, 2]),
+        (REPLY, OPTIONS, [1, 2]),
+        (BY_TEXT, ROLES, ["кардиолог"]),
+        (BY_TEXT, ROLES, ["невролог", "терапевт", "невролог"]),
+        (BY_TEXT, ROLES, ["Кардиолог"]),
+        (BY_TEXT, ROLES, [2]),
+        (BY_TEXT, ROLES, ["терапевт", "кардиолог", "невролог"]),
+    ],
+)
+def test_outcome_carries_exactly_the_picks_the_same_answer_would_pick(task, options, picks):
+    # Исход меняет только статус и код исхода: номера (и id) — те же, что у того же ответа без исхода;
+    # нарушение контракта в номерах — INVALID целиком при любом исходе (номера проверяются до исхода).
+    plain = ch.parse_answer(task, options, json.dumps({"picks": picks, "outcome": "none"}))
+    for outcome in task.outcomes:
+        choice = ch.parse_answer(task, options, json.dumps({"picks": picks, "outcome": outcome}))
+        if plain.status is ch.Status.INVALID:
+            assert choice == plain
+        else:
+            assert choice == replace(plain, status=ch.Status.OUTCOME, outcome=outcome)
+
+
+@pytest.mark.parametrize(
+    ("raw", "status", "outcome", "ids"),
+    [
+        ('{"picks": [2], "outcome": "yes"}', ch.Status.OUTCOME, "yes", ("b",)),  # «да, второй»
+        ('{"picks": [], "outcome": "yes"}', ch.Status.OUTCOME, "yes", ()),  # «да» без номера — как было
+        ('{"picks": [], "outcome": "no"}', ch.Status.OUTCOME, "no", ()),
+        ('{"picks": [2], "outcome": "none"}', ch.Status.PICKED, "", ("b",)),  # «второй» без «да»
+        ('{"picks": [9], "outcome": "yes"}', ch.Status.INVALID, "", ()),  # номер вне списка
+        ('{"picks": [1, 2], "outcome": "yes"}', ch.Status.INVALID, "", ()),  # номеров больше, чем можно
+    ],
+)
+def test_yes_with_a_number_keeps_the_number(raw, status, outcome, ids):
+    choice = ch.parse_answer(REPLY, OPTIONS, raw)
+    assert (choice.status, choice.outcome, choice.ids) == (status, outcome, ids)
+
+
+@pytest.mark.parametrize("picks", [[2], [3, 1], [1, 2, 3], [2, 2]])
+def test_urgent_with_picks_is_the_same_urgent_outcome(picks):
+    # Срочность номера не трогают: статус и исход те же, что у «срочно» без номеров; не сбой и не PICKED —
+    # клиент, который смотрит срочность первым, видит её как раньше.
+    bare = ch.parse_answer(SAFETY, OPTIONS, '{"picks": [], "outcome": "urgent"}')
+    choice = ch.parse_answer(SAFETY, OPTIONS, json.dumps({"picks": picks, "outcome": "urgent"}))
+    assert (choice.status, choice.outcome, choice.failed) == (bare.status, bare.outcome, bare.failed)
+    assert (choice.status, choice.outcome, choice.failed) == (ch.Status.OUTCOME, "urgent", False)
+
+
+@pytest.mark.parametrize("picks", [[4], [0], [True], ["2"], [2.0]])
+def test_urgent_with_broken_picks_is_invalid_as_before(picks):
+    # Политика D2.2 (на проверку владельцем): ответ с нарушением контракта в номерах не принимается и при
+    # «срочно» — INVALID целиком, как до правки; что ответить, решает клиент (симптом — прежний шаблон
+    # медвопроса с оператором). Под JSON Schema (перечень номеров) модель такой ответ дать почти не может.
+    choice = ch.parse_answer(SAFETY, OPTIONS, json.dumps({"picks": picks, "outcome": "urgent"}))
+    assert (choice.status, choice.outcome, choice.ids) == (ch.Status.INVALID, "", ())
+
+
+def test_cached_outcome_keeps_its_picks_with_ids_of_the_call(monkeypatch):
+    fake = _LLM(reply='{"picks": [2], "outcome": "urgent"}')
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", fake)
+    rows: list[dict] = []
+    monkeypatch.setattr(turn_telemetry, "_emit", rows.append)
+    token = turn_telemetry.begin("once", session_id="s")
+    first = _choose(SAFETY)
+    second = _choose(SAFETY, options=tuple(ch.Option(f"new-{o.id}", o.text) for o in OPTIONS))
+    turn_telemetry.finish(token, handoff=False, chars=0)
+    assert (first.status, first.outcome, first.ids, first.cached) == (ch.Status.OUTCOME, "urgent", ("b",), False)
+    assert (second.status, second.outcome, second.ids, second.cached) == (ch.Status.OUTCOME, "urgent", ("new-b",), True)
+    assert len(fake.calls) == 1
+    # Телеметрия выбора — без номеров и текста, как у исхода без номеров.
+    assert rows[0]["choose"] == [
+        {"task": "demo", "status": "outcome", "options": 3, "ms": rows[0]["choose"][0]["ms"], "outcome": "urgent"},
+        {"task": "demo", "status": "outcome", "options": 3, "ms": 0, "cached": True, "outcome": "urgent"},
+    ]
+
+
+def test_outcome_reaches_only_clients_that_look_at_the_status_first():
+    # Цена и корзина берут `ids` при любом внятном статусе (`not choice.failed`): OUTCOME к ним не приходит,
+    # пока у их задач нет исходов, — поле `outcome` в ответе задачи без исходов не читается. Симптом (задача
+    # с исходами) читает `ids` только у PICKED. Исход задаче цены или корзины — сначала проверка статуса.
+    from messengers_router.services import _basket_select, _price_select_llm
+
+    assert not _price_select_llm.PRICE_TASK.outcomes and not _basket_select.BASKET_TASK.outcomes
+    assert ch.parse_answer(TASK, OPTIONS, '{"picks": [1], "outcome": "urgent"}') == ch.parse_answer(TASK, OPTIONS, '{"picks": [1]}')
 
 
 # --------------------------------------------------------------------------- вызов

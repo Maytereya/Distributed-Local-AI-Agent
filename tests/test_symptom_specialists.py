@@ -195,6 +195,10 @@ def test_legacy_mode_sends_the_old_request_and_judges_strictly(monkeypatch, answ
         ('{"picks": [], "outcome": "urgent"}', S.SpecialistAdvice(urgent=True)),
         ('{"picks": ["кардиолог"], "outcome": "urgent"}', S.SpecialistAdvice(urgent=True)),
         ('{"picks": [], "outcome": "not_complaint"}', None),
+        # Номера при исходе (choice._judge, D2.2) симптом не читает: «не жалоба» с врачами — прежний шаблон;
+        # «срочно» с врачом не из перечня — ответу не верим целиком (INVALID), как до правки.
+        ('{"picks": ["кардиолог", "невролог"], "outcome": "not_complaint"}', None),
+        ('{"picks": ["хирург"], "outcome": "urgent"}', None),
         ('{"picks": [], "outcome": "none"}', None),
         ('{"picks": ["хирург"], "outcome": "none"}', None),
         ('{"picks": ["невролог", "кардиолог", "терапевт"], "outcome": "none"}', None),
@@ -202,7 +206,7 @@ def test_legacy_mode_sends_the_old_request_and_judges_strictly(monkeypatch, answ
         ("2, 1", None),
         (ConnectionError("ollama down"), None),
     ],
-    ids=["two", "urgent", "urgent_wins", "not_complaint", "none_fit", "not_in_list", "three", "number", "old_format", "failure"],
+    ids=["two", "urgent", "urgent_wins", "not_complaint", "not_complaint_with_picks", "urgent_not_in_list", "none_fit", "not_in_list", "three", "number", "old_format", "failure"],
 )
 def test_on_mode_names_doctors_from_the_clinic_list_only(monkeypatch, reply, expected):
     client = _choose_mode(monkeypatch, "on", reply)

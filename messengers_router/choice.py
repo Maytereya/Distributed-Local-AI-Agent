@@ -10,8 +10,9 @@ LLM-слоёв делали это каждый по-своему: три спо
   ограничен JSON Schema — перечень допустимых номеров (названий), `maxItems`, исходы, коды причин,
   `search_terms` (до 3). Пустой выбор разрешён: иначе схема «втиснет» модель в номер;
 - ответ LLM — недоверенный ввод: не JSON, номер вне списка, лишние номера, bool или строка вместо
-  числа, неизвестный код → INVALID (такому ответу не верим целиком); пусто → NONE_FIT; исход →
-  OUTCOME; сбой, тайм-аут, бюджет хода, предохранитель → UNAVAILABLE;
+  числа, неизвестный код → INVALID (такому ответу не верим целиком, и при исходе); пусто → NONE_FIT;
+  исход → OUTCOME: исход побеждает выбор, а номера, названные вместе с ним, остаются — те же `ids`, что
+  у PICKED («да, второй» на вопрос-список); сбой, тайм-аут, бюджет хода, предохранитель → UNAVAILABLE;
 - что делать при UNAVAILABLE / INVALID / NONE_FIT, решает вызывающий: модуль даёт механику,
   политику задаёт клиент;
 - кэшируются только внятные ответы (PICKED, NONE_FIT, OUTCOME), коротко (`choose_cache_ttl_s`);
@@ -85,6 +86,9 @@ class Option:
 
 @dataclass(frozen=True)
 class Choice:
+    """Решение модуля. `ids` — выбранные варианты: у PICKED; у OUTCOME — названные вместе с исходом (бывает
+    пусто). Клиент задачи с исходами смотрит статус прежде номеров."""
+
     status: Status
     ids: tuple[str, ...] = ()
     outcome: str = ""
@@ -227,7 +231,8 @@ def _index_of(task: Task, options: Sequence[Option], item: Any) -> int | None:
 
 
 def _judge(task: Task, options: Sequence[Option], data: Any) -> _Verdict:
-    """Ответ в форме модуля → вердикт. Любое нарушение контракта — INVALID."""
+    """Ответ в форме модуля → вердикт. Любое нарушение контракта — INVALID, и при исходе тоже: номера
+    проверяются до исхода. Исход побеждает выбор и несёт проверенные номера (повторы слиты, как у PICKED)."""
 
     if not isinstance(data, dict) or not isinstance(data.get("picks"), list):
         return _Verdict(Status.INVALID)
@@ -256,7 +261,7 @@ def _judge(task: Task, options: Sequence[Option], data: Any) -> _Verdict:
             terms.append(text)
     common = {"reason": "" if reason == _NONE else reason, "terms": tuple(terms[: min(task.max_terms, _MAX_TERMS)])}
     if outcome != _NONE:
-        return _Verdict(Status.OUTCOME, outcome=outcome, **common)
+        return _Verdict(Status.OUTCOME, indices=tuple(indices), outcome=outcome, **common)
     if indices:
         return _Verdict(Status.PICKED, indices=tuple(indices), **common)
     return _Verdict(Status.NONE_FIT, **common)
