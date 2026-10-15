@@ -50,3 +50,6 @@ exclude = [
 # Тесты с @pytest.mark.live ходят в живые системы и в гейт не входят
 # (см. «Изоляция сети» в tests/conftest.py). Запуск вручную: pytest -m live.
 addopts = "-m 'not live'"
+# Корень репо — в пути импорта и при запуске `pytest` (CI), а не только `python -m pytest`: conftest импортирует
+# стенд `evalbench` (прикрепление срезов, 10.10); без этого CI «Lint & Hermetic Tests» падал ModuleNotFoundError.
+pythonpath = ["."]
