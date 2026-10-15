@@ -97,15 +97,49 @@ def test_an_unpicked_position_without_a_separator_is_not_lost_silently(mini_prod
     assert "забор" in turn["text"] or "Взятие крови" in turn["text"], turn["text"]
 
 
-@pytest.mark.xfail(strict=True, reason="открыт: форма слова обвязки вне списка («стоят») склеивается с первой позицией — кандидата «ферритин» нет")
-def test_a_wrapper_word_form_does_not_glue_to_the_first_position(mini_prod_world):  # noqa: F811
+def _options(world_dir, monkeypatch, mode: str, reply: str) -> list[str]:
     from agent_logic_2.nayka_api import api_price
 
     from evalbench import world as ev_world
+    from messengers_router.runtime_config import config as cfg
     from messengers_router.services import _prices_helpers as H
     from messengers_router.services import _turn_phrases as TP
 
-    with ev_world.FrozenWorld(mini_prod_world, "day"):
+    monkeypatch.setattr(cfg, "MR_PARSE_FRAGMENT_WINDOWS", mode, raising=False)
+    with ev_world.FrozenWorld(world_dir, "day"):
         rows = [row for row in api_price.load_price_by_region(H.SAMARA_PRICE_REGION_ID) if isinstance(row, dict)]
-        cands = TP.phrase_candidates("сколько стоят ферритин, ттг и витамин д", facet="price", catalog=rows)
-    assert "ферритин" in [option.raw.lower() for option in cands.options], [option.raw for option in cands.options]
+        return [option.raw.lower() for option in TP.phrase_candidates(reply, facet="price", catalog=rows).options]
+
+
+_GLUED = "сколько стоят ферритин, ттг и витамин д"
+
+
+def test_fragment_windows_off_keeps_the_glued_fragment(mini_prod_world, monkeypatch):  # noqa: F811
+    """Как было (`parse_fragment_windows = off`): форма «стоят» вне обвязки — кандидат «стоят ферритин», «ферритин» нет."""
+
+    options = _options(mini_prod_world, monkeypatch, "off", _GLUED)
+    assert "стоят ферритин" in options and "ферритин" not in options, options
+
+
+def test_fragment_windows_on_offers_the_strong_window(mini_prod_world, monkeypatch):  # noqa: F811
+    """`on`: сильное по данным МИС окно внутри слабого фрагмента — вариант для LLM; слов в обвязку не дописано."""
+
+    options = _options(mini_prod_world, monkeypatch, "on", _GLUED)
+    assert "ферритин" in options and "стоят ферритин" in options, options
+    assert "стоят" not in options  # промежуток между окнами — не вариант
+
+
+@pytest.mark.parametrize("reply", ["ферритин, ттг, витамин д", "Стоимость анализов: ферритин, кальпротектин, лактозная непереносимость"])
+def test_fragment_windows_change_nothing_when_fragments_are_strong_or_unknown(reply, mini_prod_world, monkeypatch):  # noqa: F811
+    assert _options(mini_prod_world, monkeypatch, "on", reply) == _options(mini_prod_world, monkeypatch, "off", reply)
+
+
+@pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
+def test_follow_up_after_the_window_answer_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_PARSE_FRAGMENT_WINDOWS", "on", raising=False)
+    oracle = _Oracle(("ферритин", "ттг", "витамин д"), ("Ферритин", "ТТГ", "Витамин D"))
+    first, second = _dialog([_GLUED, follow_up], mini_prod_world, monkeypatch, f"windows-two-{follow_up}", oracle)[0]
+    assert "Ферритин — 530" in first["text"], first["text"]
+    _assert_follow_up_stays_on_what_was_shown(first, second)

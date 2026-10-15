@@ -210,6 +210,7 @@ class MessengerRouterConfig:
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
     reask_limit: str
     parse_price_guard: str
+    parse_fragment_windows: str
     debug_final_input: bool
     url: str
 
@@ -495,6 +496,11 @@ settings = Settings(
         # (`select_price_rows`, правило 3 промпта отсекает «по ОМС»), гард — страховка при сбое LLM.
         # [MESSENGER_ROUTER] parse_price_guard
         parse_price_guard=_get_enum("MESSENGER_ROUTER", "parse_price_guard", default="rules", allowed={"rules", "llm"}),
+        # Сильные окна внутри слабого фрагмента по разделителям — дополнительные кандидаты выбора LLM разбора
+        # (15.10, смоук прода: «сколько стоят ферритин, …» → фрагмент «стоят ферритин», ферритин терялся): off — как
+        # было; on — окно 1–3 слова, сильное по данным МИС («ферритин»), предлагается LLM; разрезом не служит.
+        # [MESSENGER_ROUTER] parse_fragment_windows
+        parse_fragment_windows=_get_enum("MESSENGER_ROUTER", "parse_fragment_windows", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -637,6 +643,7 @@ MR_CONTEXT_SHOWN = settings.messenger_router.context_shown
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
 MR_PARSE_PRICE_GUARD = settings.messenger_router.parse_price_guard
+MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

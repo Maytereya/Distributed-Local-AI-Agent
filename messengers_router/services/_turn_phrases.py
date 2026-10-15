@@ -40,6 +40,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
 from ..choice import Choice, Option, Status, Strength, Task, choose
+from ..runtime_config import config as _cfg
 from ..turn_parse import ParsedPhrase, PhraseParse, ParseStatus, per_turn
 from ._common import _normalise_catalog_text
 from ._prices_helpers import (
@@ -303,6 +304,31 @@ def _strong_window_pieces(reply: str, toks: Sequence[_Token], span: tuple[int, i
     return out if strong_found and len(out) >= 2 else []
 
 
+def _fragment_windows_mode() -> str:
+    raw = str(getattr(_cfg, "MR_PARSE_FRAGMENT_WINDOWS", "off") or "").strip().lower()
+    return raw if raw in ("off", "on") else "off"
+
+
+def _fragment_windows(reply: str, toks: Sequence[_Token], split: Sequence[Phrase], catalog: list[dict[str, Any]]) -> list[Phrase]:
+    """Под `parse_fragment_windows = on` (15.10): сильные окна (г) внутри СЛАБОГО фрагмента по разделителям — варианты
+    для выбора LLM. «сколько стоят ферритин, ттг и витамин д»: формы «стоят» нет в обвязке, фрагмент «стоят ферритин»
+    слабый, а «ферритин» — сильный по данным МИС; без окна LLM видела только склейку и позицию теряла. Слов в обвязку
+    не дописываем: окно находят данные МИС (`phrase_rows`), промежутки между окнами — не варианты. Разрезом окна не
+    служат: выбирает LLM (фразы не пересекаются — `Task.disjoint`)."""
+
+    if _fragment_windows_mode() != "on":
+        return []
+    out: list[Phrase] = []
+    for piece in split:
+        span = _span_of(toks, piece)
+        if span is None or phrase_rows(piece.raw, catalog):
+            continue
+        for window in _strong_window_pieces(reply, toks, span, catalog):
+            if phrase_rows(window.raw, catalog):
+                out.append(replace(window, source=SOURCE_VARIANT))
+    return out
+
+
 def _span_of(toks: Sequence[_Token], phrase: Phrase) -> tuple[int, int] | None:
     inside = [k for k, t in enumerate(toks) if phrase.start <= t.start and t.end <= phrase.end]
     return (inside[0], inside[-1]) if inside else None
@@ -420,7 +446,7 @@ def phrase_candidates(reply: str, *, facet: str | None, catalog: list[dict[str, 
         # Варианты — только там, где выбор LLM и так нужен или реплика режется разделителями: одна
         # фраза без разделителей остаётся `single` (путь одной услуги, без нового вызова LLM).
         if len(chosen) >= 2 or len(pieces) >= 2:
-            take([*pieces, *parts])
+            take([*pieces, *_fragment_windows(reply, toks, split, catalog), *parts])
     head = [p for p in chosen if p is whole]
     options = (*head, *sorted((p for p in chosen if p is not whole), key=lambda p: (p.start, p.end)))
     return Candidates(reply=reply, probe=probe, whole=whole, options=options, partitions=partitions, too_many=len(split) >= _MAX_PHRASES)
