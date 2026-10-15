@@ -213,6 +213,7 @@ class MessengerRouterConfig:
     parse_price_guard: str
     parse_fragment_windows: str
     parse_complete_windows: str
+    parse_agree_telemetry: str
     debug_final_input: bool
     url: str
 
@@ -514,6 +515,12 @@ settings = Settings(
         # предлагается LLM вариантом; разрезом не служит.
         # [MESSENGER_ROUTER] parse_complete_windows
         parse_complete_windows=_get_enum("MESSENGER_ROUTER", "parse_complete_windows", default="off", allowed={"off", "on"}),
+        # Телеметрия согласия разрезов `tu_parse_agree` под turn_parse = on (T7, шаг 4): on — как было (правила понимания
+        # хода считаются на каждом ценовом ходе параллельно выбору фраз LLM, O3b, — согласию нужен их разрез); off —
+        # согласия под on нет, правила считаются лениво: только когда разбор не годится для действия (`acting_for` —
+        # None: empty, too_many, сбой LLM без разделителей) или решён одной слабой фразой (`single`). Ответы те же,
+        # экономия — CPU хода. Под turn_parse = off и shadow не действует. [MESSENGER_ROUTER] parse_agree_telemetry
+        parse_agree_telemetry=_get_enum("MESSENGER_ROUTER", "parse_agree_telemetry", default="on", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -659,6 +666,7 @@ MR_REASK_LIMIT = settings.messenger_router.reask_limit
 MR_PARSE_PRICE_GUARD = settings.messenger_router.parse_price_guard
 MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows
 MR_PARSE_COMPLETE_WINDOWS = settings.messenger_router.parse_complete_windows
+MR_PARSE_AGREE_TELEMETRY = settings.messenger_router.parse_agree_telemetry
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 
