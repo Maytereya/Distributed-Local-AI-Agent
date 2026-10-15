@@ -114,6 +114,7 @@ class QuestionType(StrEnum):
     SECONDARY_OFFER = "secondary_offer"
     ANESTHESIA = "anesthesia"
     COMPOUND_PRICE = "compound_price"
+    SHOW_ALL = "show_all"
 
 
 class Outcome(StrEnum):

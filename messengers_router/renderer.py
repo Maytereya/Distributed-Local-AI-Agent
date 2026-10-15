@@ -16,6 +16,7 @@ import re
 from datetime import datetime, date, time
 from typing import Any, AsyncGenerator
 
+from . import expects
 from .llm_mode_policy import RuntimeOptions
 from .llm_runtime import generate_stream_text, generate_text
 from .mess_types import Evidence, RouteDecision, ResponseEnvelope
@@ -491,6 +492,8 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
     if hint:
         lines.append("")
         lines.append(hint)
+        # Подсказка «напишите: "все"» — висящий вопрос бота (наблюдатель `_expects`, решение владельца 15.10).
+        expects.ask(expects.Question.SHOW_ALL, kind=expects.PICK, options=expects.SHOW_ALL_OPTIONS)
     # Позиция корзины, у которой без выбора LLM нашлась одна строка (политика сбоя под
     # `turn_parse = on`, L-15b шаг 5): её название без цены — текстом варианта B L-13.
     names_note = str(payload.get("names_note") or "").strip()

@@ -66,6 +66,8 @@ _PERSONAL_KEYS = ("patient_name", "surname")
 # Варианты вопросов-выборов — слова самого вопроса, в его порядке (тест сверяет их с текстом, который увидел пациент).
 # «Хотите отменить или перенести запись?» — `policies.clarification_question`, переспрос — `router`.
 APPOINTMENT_ACTION_OPTIONS = ("отменить", "перенести")
+# «Чтобы показать их, напишите: "все"» — `renderer`.
+SHOW_ALL_OPTIONS = ("все",)
 # «…с наркозом (во сне) или без наркоза? Напишите «с наркозом» или «без наркоза».» — `services.prepare`; порядок —
 # `with`, `without` (ключи `prepare_variants`).
 ANESTHESIA_OPTIONS = ("с наркозом", "без наркоза")
@@ -82,6 +84,10 @@ class Question(str, Enum):
     SECONDARY_OFFER = "secondary_offer"  # вторая тема реплики — `orchestrator._mark_secondary_offer_pending`
     ANESTHESIA = "anesthesia"  # «с наркозом или без?» — `response_builder.build_prepare_response`
     COMPOUND_PRICE = "compound_price"  # «Вижу в запросе две услуги: 1. … 2. …» — `response_builder`
+    # «…найдено ещё N вариантов. Чтобы показать их, напишите: "все"» — `renderer` (семейный список с подсказкой);
+    # ответ читает путь цены по контексту семейства (`_price_family_payload_from_context`). Решения владельца 15.10:
+    # подсказка — висящий вопрос; ответ «все» и ответ городом разбирать через `pending_reply`, а не регулярками.
+    SHOW_ALL = "show_all"
 
 
 # Порядок, в котором следующий ход разбирает висящие вопросы: предпроверка записи (`run_appointment_precheck`), затем
@@ -95,6 +101,9 @@ _READING_ORDER = (
     Question.APPOINTMENT_ACTION,
     Question.ANESTHESIA,
     Question.COMPOUND_PRICE,
+    # Подсказка «напишите: "все"» — раньше вторичного оффера: его текст пациенту не показывается (с `fec9770`), а
+    # обработчик пропускает ответ не «да» дальше — «все» читает путь цены. В поле — вопрос, который пациент видел.
+    Question.SHOW_ALL,
     Question.SECONDARY_OFFER,
 )
 
@@ -235,6 +244,9 @@ def _armed(state: SessionState, question: Question) -> bool:
         return bool(entities.get("_secondary_offer_pending"))
     if question is Question.ANESTHESIA:
         return isinstance(entities.get("_prepare_variant_pending"), dict)
+    if question is Question.SHOW_ALL:
+        family = entities.get("_price_family_context")
+        return isinstance(family, dict) and bool(str(family.get("service_name") or "").strip())
     return isinstance(entities.get("_compound_price_pending"), dict)
 
 
