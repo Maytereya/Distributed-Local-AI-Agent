@@ -76,6 +76,11 @@ def _store(case: str, record) -> None:
 @pytest.mark.parametrize("mode", ["off", "on"])
 @pytest.mark.parametrize("case", sorted(DIALOGS))
 def test_price_path_without_llm_changes_only_planned_dialogs(case, mode, mini_prod_world, request, monkeypatch):
+    from messengers_router.runtime_config import config as cfg
+
+    # Эталон пути цены снят при понимании хода off/shadow (тень ответов не меняет): режим явно, а не умолчанием
+    # кода (STEP-2026-10-15-DEFAULTS-A).
+    monkeypatch.setattr(cfg, "MR_TURN_UNDERSTANDING_PRICE", "shadow", raising=False)
     _policy(monkeypatch, mode)
     if case.startswith("synonym_fork"):
         request.getfixturevalue("synonym_fork")

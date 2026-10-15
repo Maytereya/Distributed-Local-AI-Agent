@@ -43,14 +43,14 @@ from evalbench import world as ev_world
 from messengers_router import expects
 from messengers_router import shown_context
 from tests.test_l14_two_turn_consumers import _SETS as _L14_SETS
-from tests.test_price_one_or_many_class import _DEPLOY
+from tests.test_price_one_or_many_class import _DEFAULT, _DEPLOY
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
-_SETS = {"default": {}, "deploy": _DEPLOY}
+_SETS = {"default": _DEFAULT, "deploy": _DEPLOY}
 # Баг 2 исправлен под `context_shown = on`: его проверки — ещё и под наборами с выключателем поверх набора (как
 # `*_shown` в `test_l14_two_turn_consumers.py`). Баг 1 выключатель не трогает — его тесты только под `_SETS`.
 _SHOWN_SETS = {
-    "default_shown": {"MR_CONTEXT_SHOWN": "on"},
+    "default_shown": {**_DEFAULT, "MR_CONTEXT_SHOWN": "on"},
     "deploy_shown": _L14_SETS["deploy_shown"],
     "next_shown": _L14_SETS["next_shown"],
 }

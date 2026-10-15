@@ -102,6 +102,9 @@ def test_without_branch_list_other_cities_are_still_excluded():
 
 
 def _llm_answers(monkeypatch, answer) -> list[str]:
+    # Прежний вызов (`generate_text`) — путь `choose_symptom = off`; режим явно, а не умолчанием кода
+    # (STEP-2026-10-15-DEFAULTS-A): под `on` подделка не вызывается, и проверки молча теряют смысл.
+    monkeypatch.setattr(S._cfg, "MR_CHOOSE_SYMPTOM", "off", raising=False)
     prompts: list[str] = []
 
     async def fake_generate_text(prompt, **_kwargs):

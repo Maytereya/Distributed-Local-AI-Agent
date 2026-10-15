@@ -279,6 +279,9 @@ def _wire(monkeypatch, *, llm_label: str, advice_answer) -> list[str]:
         "_env_flag",
         lambda name, default: True if name == "MR_ROUTER_V2_ENABLE" else (False if name == "MR_ROUTER_V2_SHADOW" else default),
     )
+    # LLM совета подделана на прежнем вызове (`generate_text`) — путь `choose_symptom = off`; режим явно, а не
+    # умолчанием кода (STEP-2026-10-15-DEFAULTS-A): под `on` подделка не вызывается.
+    monkeypatch.setattr(S._cfg, "MR_CHOOSE_SYMPTOM", "off", raising=False)
     monkeypatch.setattr(S, "generate_text", fake_generate_text)
     monkeypatch.setattr(S, "advise", real_advice_on_fake_catalog)
     monkeypatch.setattr(renderer, "render_stream", free_stream)

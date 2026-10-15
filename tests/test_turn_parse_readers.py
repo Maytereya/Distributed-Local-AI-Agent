@@ -87,7 +87,12 @@ def _parse_on(monkeypatch) -> None:
 
 @pytest.mark.parametrize("case", sorted(DIALOGS))
 def test_parse_on_with_llm_down_changes_only_planned_dialogs(case, mini_prod_world, request, monkeypatch):  # noqa: F811
+    from messengers_router.runtime_config import config as cfg
+
     _parse_on(monkeypatch)
+    # Эталон `turn_parse = on` — при понимании хода в тени: режим явно, а не умолчанием кода
+    # (STEP-2026-10-15-DEFAULTS-A).
+    monkeypatch.setattr(cfg, "MR_TURN_UNDERSTANDING_PRICE", "shadow", raising=False)
     if case.startswith("synonym_fork"):
         request.getfixturevalue("synonym_fork")
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:

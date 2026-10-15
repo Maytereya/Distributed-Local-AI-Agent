@@ -11,6 +11,26 @@
 
 ---
 
+## STEP-2026-10-15-DEFAULTS-A — тесты задают режим выключателей явно (подготовка «умолчания кода = прод») — СДЕЛАНО (поведение не меняется)
+
+- **Симптом:** при перевороте умолчаний под прод (`turn_understanding_price = on`, `choose_basket/readiness/symptom = on`,
+  `parse_fail_variants = 3`) падало 127 тестов, часть проходила впустую (8 strict-xfail молча зеленели, тесты срочности
+  и kill-switch симптома не вызывали свою подделку).
+- **Корень:** тесты не задавали режим: набор `default = {}` в `test_price_one_or_many_class.py` (им пользуются
+  `test_l14_two_turn_consumers`, `test_open_bugs_2026_10_14`, `test_price_show_all_one_definition`), подделка прежнего
+  вызова LLM без `choose_symptom = off`, сравнение с `price_turns.json` без понимания хода `shadow`.
+- **Фикс:** режимы заданы явно (`_DEFAULT` — старые значения; `choose_symptom = off` в `test_symptom_specialists`,
+  `test_urgent_self_harm`; `turn_understanding_price = shadow` у 4 тестов против `price_turns.json`). Эталоны и код не
+  менялись. (Работа агента, коммиты 4ca346a, f587e51, 36658c3; влито ведущим.)
+- **Инвариант класса:** тест, смысл которого зависит от выключателя, задаёт его сам; неявно от умолчаний зависит только
+  семейство `price_turns*.json`, которое переснимается в шаге (б).
+- **Шаг (б) (решение владельца):** переворот умолчаний в `config.py` + запасного `_DEFAULT_MAX_CONCURRENCY` в
+  `llm_runtime.py`; пересъёмка `price_turns.json` (3 диалога: after_list_prepare, after_list_where, list_text_and),
+  `price_turns_on.json`, `price_turns_parse_on.json` (те же 3 — убрать из `PARSE_ON_PLANNED`); `test_config_default_is_five`
+  → 3. Эксперимент «переворот + пересъёмка» — падают только эти два теста. Опись — `~/Dev/handoffs/2026-10-15_defaults_eq_prod.md`.
+
+---
+
 ## STEP-2026-10-15-T7-3-FALLBACK-PINNED — запасной путь правил под `turn_parse = on` закреплён эталоном — СДЕЛАНО (только тесты)
 
 - **Симптом:** разбор 14.10 (K1, §3а): ни один тест под `on` не зависел от защит K1 — корпус не покрывал запасной путь при

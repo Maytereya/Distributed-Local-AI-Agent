@@ -95,6 +95,9 @@ def test_lazy_rules_keep_the_parse_on_golden(case, mini_prod_world, request, mon
     from messengers_router.runtime_config import config as cfg
 
     monkeypatch.setattr(cfg, "MR_TURN_PARSE", "on", raising=False)
+    # Эталон `turn_parse = on` — при понимании хода в тени: режим явно, а не умолчанием кода
+    # (STEP-2026-10-15-DEFAULTS-A).
+    monkeypatch.setattr(cfg, "MR_TURN_UNDERSTANDING_PRICE", "shadow", raising=False)
     _agree(monkeypatch, "off")
     if case.startswith("synonym_fork"):
         request.getfixturevalue("synonym_fork")

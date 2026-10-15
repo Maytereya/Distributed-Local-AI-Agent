@@ -29,7 +29,8 @@
    анти-повтор (читает текст ответа, не услугу), телеметрия (числа и статусы, без фраз).
 
 Мир и наборы выключателей — как в `test_price_one_or_many_class.py`: мини-прод, день, сеть закрыта, синонимы МИС
-пусты; LLM гейта недоступна, где нужна живая — `_Scripted`. Наборы: `default` (по умолчанию), `deploy`
+пусты; LLM гейта недоступна, где нужна живая — `_Scripted`. Наборы: `default` (умолчания кода до переворота
+«умолчания = прод», заданы явно), `deploy`
 (прод сегодня: понимание хода, корзина, срок, симптом — on; цена через модуль off; L-13 — тень),
 `deploy_parse` (набор деплоя с `turn_parse = on`, L-15b шаг 5), `next` (кандидат следующего деплоя: набор
 деплоя с разбором, ценой через модуль и политикой L-13 — on; включать ли его — решение владельца, не здесь).
@@ -61,11 +62,11 @@ from ollama import GenerateResponse
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
-from tests.test_price_one_or_many_class import _DEPLOY
+from tests.test_price_one_or_many_class import _DEFAULT, _DEPLOY
 from tests.test_price_turns_golden import FIXTURE, mini_prod_world  # noqa: F401 — фикстура модуля
 
 _SETS: dict[str, dict[str, str]] = {
-    "default": {},
+    "default": _DEFAULT,
     "deploy": _DEPLOY,
     "deploy_parse": {**_DEPLOY, "MR_TURN_PARSE": "on"},
     "next": {**_DEPLOY, "MR_TURN_PARSE": "on", "MR_CHOOSE_PRICE": "on", "MR_PRICE_MATCH_POLICY": "on"},
@@ -615,7 +616,7 @@ def test_single_mention_is_an_observer_and_tu_list_keeps_its_meaning(config, min
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         run_dialog(["сколько стоит ферритин"], f"mention-telemetry-{config}")
         row = world.take_telemetry()
-    if _SETS[config].get("MR_TURN_UNDERSTANDING_PRICE", "shadow") == "off":
+    if _SETS[config]["MR_TURN_UNDERSTANDING_PRICE"] == "off":
         return
     assert row.get("tu_list") == 0
     assert row.get("tu_mention_strength") == "strong"

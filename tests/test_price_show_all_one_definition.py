@@ -28,7 +28,7 @@ import pytest
 from evalbench import world as ev_world
 from messengers_router import classifier
 from messengers_router.services import _prices_helpers
-from tests.test_price_one_or_many_class import _DEPLOY
+from tests.test_price_one_or_many_class import _DEFAULT, _DEPLOY
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
 # --------------------------------------------------------------------------- старые определения (c55c02c), не править
@@ -200,7 +200,7 @@ def test_classifier_has_no_copy_of_the_rule(monkeypatch):
 
 # --------------------------------------------------------------------------- через эндпоинт, два хода
 
-_SETS = {"default": {}, "deploy": _DEPLOY}
+_SETS = {"default": _DEFAULT, "deploy": _DEPLOY}
 _FAMILY_QUESTION = "сколько стоит общий анализ крови"
 _NUMBERED = re.compile(r"^\d+\. (?P<name>.+?) — \d[\d\s]* руб", re.M)
 _HINT = re.compile(r"найдено еще (?P<rest>\d+) вариантов\. Чтобы показать их, напишите: \"(?P<word>[^\"]+)\"")
