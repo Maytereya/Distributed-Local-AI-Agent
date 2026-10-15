@@ -34,7 +34,7 @@ from . import card as _card  # noqa: F401 — модули стенда груз
 from .detectors import Templates, classify_turn
 from .llm import MODES, HarnessClient, LiveBudgetExhausted, ResponseCache, SiteIndex
 from .prices import PriceCatalog
-from .world import PRIVATE_ROOT, PROFILES, FrozenWorld, build_world, host_of, verify_world
+from .world import PRIVATE_ROOT, PROFILES, FrozenWorld, build_world, host_of, settle_shadows, verify_world
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TURN_TIMEOUT_S = 240
@@ -130,6 +130,7 @@ async def _run_cases(cases, *, client: HarnessClient, world: FrozenWorld, tpl: T
             body = {"text": "", "handoff": False, "state_update": {"debug": {"endpoint_error": f"{type(exc).__name__}: {exc}"}}}
             error = type(exc).__name__
         ms = int((time.monotonic() - started) * 1000)
+        await settle_shadows()  # тени, которые ход не ждёт, — после замера, до вызовов и телеметрии
         state = memory.get(sid)
         calls = client.take_turn_calls()
         if any(c.outcome == "budget" for c in calls):

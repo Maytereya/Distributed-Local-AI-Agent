@@ -22,7 +22,13 @@
   код причины или исход — без текста реплики и вариантов;
 - `shadow: true` у записей `llm` и `choose` — решение тени (L-15b, шаг 4): считалось параллельно ходу
   вне его бюджета и на ответ не влияло; карточки и сводки считают решения хода без них;
-- `world` — модель и срезы (имена файлов) — раз в 5 минут, иначе тот же `world_id`.
+- `world` — модель и срезы (имена файлов) — раз в 5 минут, иначе тот же `world_id`;
+- `tid` — случайный id хода (8 hex): по нему к ходу привязывается строка решения, дописанная после ответа.
+
+Строки после ответа (`side_begin` / `side_finish`, 15.10): решение, которое считается фоном и ход не ждёт (тень
+`pending_reply`), пишется отдельной строкой `{"kind": <вид>, "sess", "tid", …}` в свой журнал
+`<APP_DATA_DIR>/journals/<вид>_<ГГГГММДД>.jsonl` — журнал ходов и сводки по нему не меняются. `merge_side` сливает
+такие строки со строками их ходов (стенд, тесты).
 
 Чего НЕ пишется: текст пациента и ответа, значения сущностей, сырой session_id (только
 sha8). Пишется в логгер `mr.turn` и в `<APP_DATA_DIR>/journals/turns_<ГГГГММДД>.jsonl` (volume
@@ -35,6 +41,7 @@ import contextvars
 import hashlib
 import json
 import logging
+import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -62,6 +69,7 @@ class Turn:
     button: str
     session: str
     started: float = field(default_factory=time.monotonic)
+    tid: str = field(default_factory=lambda: secrets.token_hex(4))
     fields: dict[str, Any] = field(default_factory=dict)
     llm: list[dict[str, Any]] = field(default_factory=list)
     choices: list[dict[str, Any]] = field(default_factory=list)
@@ -74,6 +82,13 @@ def begin(endpoint: str, *, session_id: str, llm_mode: str = "", button_id: str 
         return None
     sess = hashlib.sha256(str(session_id or "").encode("utf-8")).hexdigest()[:8]
     return _TURN.set(Turn(endpoint=endpoint, llm_mode=str(llm_mode or ""), button=str(button_id or ""), session=sess))
+
+
+def current_ref() -> tuple[str, str] | None:
+    """(`sess`, `tid`) открытого хода — привязка строки, которую допишут после ответа; хода нет — None."""
+
+    turn = _TURN.get()
+    return (turn.session, turn.tid) if turn is not None else None
 
 
 def note(**values: Any) -> None:
@@ -194,6 +209,7 @@ def finish(token: contextvars.Token | None, *, handoff: bool, chars: int, stage_
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "endpoint": turn.endpoint,
         "sess": turn.session,
+        "tid": turn.tid,
         "llm_mode": turn.llm_mode,
         "button": turn.button or None,
         **turn.fields,
@@ -214,6 +230,55 @@ def finish(token: contextvars.Token | None, *, handoff: bool, chars: int, stage_
     return row
 
 
+def side_begin(ref: tuple[str, str]) -> contextvars.Token:
+    """Открыть сбор строки после ответа (в фоновой задаче): вызовы LLM и решения выбора, которые она сделает, пишутся
+    в эту строку, а не в строку хода, — ход к этому времени уже записан."""
+
+    session, tid = ref
+    return _TURN.set(Turn(endpoint="side", llm_mode="", button="", session=session, tid=tid))
+
+
+def side_finish(token: contextvars.Token, kind: str, **fields: Any) -> dict[str, Any] | None:
+    """Закрыть строку после ответа и записать её в журнал вида `kind`. Возвращает строку."""
+
+    turn = _TURN.get()
+    _TURN.reset(token)
+    if turn is None:
+        return None
+    row: dict[str, Any] = {
+        "v": 1,
+        "kind": kind,
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "sess": turn.session,
+        "tid": turn.tid,
+        **fields,
+        "ms": int((time.monotonic() - turn.started) * 1000),
+        "llm": turn.llm,
+    }
+    if turn.choices:
+        row["choose"] = turn.choices
+    _emit(row)
+    return row
+
+
+def merge_side(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Строки ходов с дописанными после ответа решениями: поля строки решения (кроме служебных) — в строку её хода
+    (`sess` + `tid`), её `llm` и `choose` — в конец списков хода. Строка без хода отбрасывается."""
+
+    turns = [dict(row) for row in rows if "kind" not in row]
+    by_ref = {(row.get("sess"), row.get("tid")): row for row in turns if row.get("tid")}
+    for side in rows:
+        target = by_ref.get((side.get("sess"), side.get("tid"))) if "kind" in side else None
+        if target is None:
+            continue
+        for key, value in side.items():
+            if key in ("llm", "choose"):
+                target[key] = [*(target.get(key) or []), *value]
+            elif key not in ("v", "kind", "ts", "sess", "tid", "ms"):
+                target[key] = value
+    return turns
+
+
 def _journal_path() -> Path:
     from .host_data_port import journals_dir
 
@@ -221,11 +286,19 @@ def _journal_path() -> Path:
     return journals_dir() / f"turns_{stamp}.jsonl"
 
 
+def _side_journal_path(kind: str) -> Path:
+    """Журнал строк после ответа — рядом с журналом ходов (`<вид>_<ГГГГММДД>.jsonl`)."""
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return _journal_path().parent / f"{kind}_{stamp}.jsonl"
+
+
 def _emit(row: dict[str, Any]) -> None:
     line = json.dumps(row, ensure_ascii=False, default=str)
     logger.info(line)
     try:
-        with _journal_path().open("a", encoding="utf-8") as fh:
+        path = _side_journal_path(str(row["kind"])) if "kind" in row else _journal_path()
+        with path.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except OSError as exc:  # телеметрия не ломает ответ пациенту
         logger.warning("turn_telemetry_write_failed: %s", exc)

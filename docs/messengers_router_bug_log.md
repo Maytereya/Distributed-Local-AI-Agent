@@ -11,6 +11,30 @@
 
 ---
 
+## STEP-2026-10-15-PENDING-SHADOW-AFTER-REPLY — тень `pending_reply` пишет решение после ответа, ход её не ждёт — СДЕЛАНО (поведение бота не меняется)
+
+- **Симптом:** замер тени 14.10 (стенд, диалоги): 26 из 58 решений — `late`. Конец хода ждал тень секунду
+  (`drain`, `_SHADOW_GRACE_S = 1.0`) и отменял опоздавшую, а генерация «да/нет/пункт» на живой модели — дольше
+  секунды. Замер терял почти половину решений, и как раз медленных; ожидание добавляло ходу до 1 с.
+- **Корень:** решение тени писалось в поля строки хода, а строка хода пишется в конце хода — тень обязана была успеть
+  до неё.
+- **Фикс:** конец хода отцепляет тень (`pending_reply.detach`); решение пишется отдельной строкой
+  `{"kind": "pending_shadow", "sess", "tid", tu_pending_outcome, tu_pending_agree, llm, choose, ms}` в журнал
+  `pending_shadow_<ГГГГММДД>.jsonl` (`turn_telemetry.side_begin` / `side_finish`); у строки хода — новый ключ `tid`.
+  `late` — только сверх потолка `_SHADOW_CAP_S = 15` с. Стенд после замера хода ждёт тени (`evalbench.world.settle_shadows`
+  → `pending_reply.settle`) и сливает строки (`turn_telemetry.merge_side` в `take_telemetry`): вызов LLM тени — в своём
+  ходе, `ms` хода — без тени. Журнал ходов на проде прежний: сводка §8 runbook и `load_check_choose` его читают как раньше.
+- **Инвариант:** решение тени не теряется из-за длительности генерации (только сверх потолка) и не удлиняет ход;
+  строка тени привязана к своему ходу (`sess` + `tid`), журнал ходов содержит только ходы.
+- **Покрытие:** `tests/test_pending_reply.py::test_the_turn_does_not_wait_for_the_shadow_and_its_decision_is_written_after_the_reply`
+  (оракул отвечает через 0,3 с: ответ хода ушёл раньше решения, строка `pending_shadow` того же `tid`),
+  `::test_a_shadow_over_the_cap_is_late`; `tests/test_turn_telemetry.py::test_a_side_row_goes_to_its_own_journal_and_merges_into_its_turn`;
+  остальные классы `test_pending_reply.py` — через слитые строки, без изменений.
+- **Дальше:** стенд (диалоги, `cached` с промахами = живая модель — тихое окно) — доля `late` и согласие с правилами;
+  встречный свип (32 из 40 ответов `69d257b`); `on` — по типам вопроса (`_expects.type`, решение 15.10).
+
+---
+
 ## DEBT-2026-10-15-ARCH-HOST-IMPORTS — архитектурный чек CI красный из-за прямых импортов хоста в `turn_telemetry` и `warm_up` — ЗАКРЫТ
 
 - **Симптом:** джоб `Architecture Fitness Checks` (`messengers_router_arch_guardrails.yml`) красный на каждом пуше:

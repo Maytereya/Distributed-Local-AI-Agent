@@ -334,6 +334,23 @@ class WorldFacts:
     unavailable: list[str]
 
 
+# Сколько стенд ждёт тень ответа на висящий вопрос после хода: потолок тени (`pending_reply._SHADOW_CAP_S`) с запасом.
+SHADOW_SETTLE_S = 20.0
+
+
+async def settle_shadows(timeout_s: float = SHADOW_SETTLE_S) -> None:
+    """После замера хода, до чтения его вызовов LLM и телеметрии: дождаться теней, которые ход не ждёт (15.10,
+    `pending_reply.settle`), — их решение и вызов LLM попадают в этот ход, а время хода — честное."""
+
+    try:
+        from messengers_router import pending_reply
+    except ImportError:  # версия бота до клиента `pending_reply`
+        return
+    settle = getattr(pending_reply, "settle", None)
+    if settle is not None:
+        await settle(timeout_s)
+
+
 class FrozenWorld:
     """Контекст-менеджер: на время прогона бот живёт в мире `root` с часами `profile`.
 
@@ -491,9 +508,16 @@ class FrozenWorld:
         self._set(turn_telemetry, "_emit", self.telemetry.append)
 
     def take_telemetry(self) -> dict[str, Any] | None:
-        """Строка телеметрии последнего хода (или None, если её нет в этой версии)."""
+        """Строка телеметрии последнего хода (или None, если её нет в этой версии) — с решениями, дописанными после
+        ответа (`pending_shadow`: `turn_telemetry.merge_side`; звать после `settle_shadows`)."""
 
         rows, self.telemetry[:] = list(self.telemetry), []
+        try:
+            from messengers_router.turn_telemetry import merge_side
+        except ImportError:  # версия до строк после ответа: строки — только ходы
+            merge_side = None
+        if merge_side is not None:
+            rows = merge_side(rows)
         return rows[-1] if rows else None
 
     def _install_kb(self, meili: Any) -> None:

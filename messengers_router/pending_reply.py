@@ -22,7 +22,13 @@
 Место — одно: `router.patient_routing_stream` после срочного, явного запроса оператора и охраны города, до разбора
 висящего вопроса (предпроверка записи, обработчики висящих вопросов в оркестраторе). Срочное — раньше тени: «нет,
 мне плохо, задыхаюсь» получает шаблон скорой, тень не зовётся. Нажатие кнопки снимает висящий вопрос — тень не
-зовётся. Конец хода ждёт тень не дольше секунды (`drain` в обоих эндпоинтах), опоздавшую отменяет — исход `late`.
+зовётся.
+
+Ход тень не ждёт (15.10): конец хода отцепляет её (`detach` в обоих эндпоинтах), решение дописывается после ответа
+отдельной строкой `pending_shadow` (`turn_telemetry.side_finish`, журнал `pending_shadow_<ГГГГММДД>.jsonl`, привязка к
+ходу — `sess` + `tid`). Раньше конец хода ждал тень секунду и отменял опоздавшую: 26 из 58 решений замера 14.10
+терялись как `late` — генерация дольше секунды. Теперь `late` — только сверх потолка `_SHADOW_CAP_S`. Стенд и тесты
+дожидаются тени после замера хода (`settle`) и сливают строки (`turn_telemetry.merge_side`).
 
 Быстрый путь без LLM: вся реплика — одна целая формула согласия или отказа из правил («да», «нет», «ок», «не
 надо»: множества `policies._CONFIRM_YES_EXACT` / `_CONFIRM_NO_EXACT`, новых слов нет) — решают правила, исход
@@ -39,7 +45,8 @@
   `appointment_confirmation_transition`, остальные — `contextual_reply_kind`. Мягкое «да» вторичного оффера и
   составной цены (`_SECONDARY_SOFT_YES_RE`, `_COMPOUND_PRICE_SOFT_YES_RE`) здесь — `other`;
 - `tu_pending_outcome` — исход тени: `yes` / `no` / `pause` / `new_topic` / `pick` / `none`; сбой — `unavailable`,
-  `invalid`, `late`, `error`; без LLM — `fast_rules`; `_expects` не по контракту — `malformed`;
+  `invalid`, `late` (сверх потолка), `error`; без LLM — `fast_rules`; `_expects` не по контракту — `malformed`.
+  Исход решения LLM (и `tu_pending_agree`) — в строке `pending_shadow`, `fast_rules` и `malformed` — в строке хода;
 - `tu_pending_agree` — согласие с правилами, только когда LLM решила: `same` — тот же yes/no; `other` — правила
   решили yes/no, LLM — иначе; `rules_none` — правила не решили (`other`), LLM решила; `both_none` — не решили ни те,
   ни другая.
@@ -77,6 +84,9 @@ PENDING_TASK = Task(
 # Тень ждёт очередь к LLM не дольше секунды (`llm_slot` округляет 300 мс до своего минимума — 1 с; Q1 13.10).
 _SHADOW_QUEUE_MS = 300
 _SHADOW_TASK = replace(PENDING_TASK, queue_timeout_ms=_SHADOW_QUEUE_MS)
+# Потолок жизни тени после ответа: очередь (≤1 с) + генерация (`timeout_s` = 8 с) с запасом; сверх — `late`.
+_SHADOW_CAP_S = 15.0
+_SIDE_KIND = "pending_shadow"
 _MAX_QUESTION_LEN = 500  # контракт `_expects.question`
 _MAX_OPTIONS = 20
 _MAX_OPTION_LEN = 200
@@ -114,7 +124,7 @@ class Outcome(StrEnum):
     NONE = "none"  # LLM: ничего из этого — обычный путь
     UNAVAILABLE = "unavailable"
     INVALID = "invalid"
-    LATE = "late"  # конец хода не дождался тени
+    LATE = "late"  # тень не уложилась в потолок `_SHADOW_CAP_S`
     ERROR = "error"  # сбой кода тени
     FAST_RULES = "fast_rules"  # голый якорь — решают правила, LLM не звали
     MALFORMED = "malformed"  # `_expects` не по контракту
@@ -123,8 +133,10 @@ class Outcome(StrEnum):
 # Исходы, когда LLM решила (согласие с правилами считается только для них).
 _DECIDED = frozenset({Outcome.YES, Outcome.NO, Outcome.PAUSE, Outcome.NEW_TOPIC, Outcome.PICK, Outcome.NONE})
 
-# Задача тени этого хода: ставит `observe`, ждёт и отменяет `drain` (конец хода в эндпоинте).
+# Задача тени этого хода: ставит `observe`, отцепляет `detach` (конец хода в эндпоинте).
 _SHADOW: contextvars.ContextVar[asyncio.Future[None] | None] = contextvars.ContextVar("mr_pending_reply_shadow", default=None)
+# Отцеплённые тени: сильные ссылки, пока задача жива (иначе цикл событий может её собрать), — их ждёт `settle`.
+_DETACHED: set[asyncio.Future[None]] = set()
 
 
 def mode() -> str:
@@ -250,9 +262,7 @@ def observe(user_text: str, entities: Mapping[str, Any] | None, *, button_id: st
         return
     if current == "on":
         _warn_on_is_shadow()
-    stale = _SHADOW.get()
-    if stale is not None and not stale.done():
-        stale.cancel()  # тень прошлого хода, которую никто не дождался (ход шёл мимо эндпоинта)
+    _keep(_SHADOW.get())  # тень прошлого хода, которую не отцепил эндпоинт (ход шёл мимо него), — дописывается сама
     _SHADOW.set(None)
     text = str(user_text or "").strip()
     if not text or not isinstance(entities, Mapping) or EXPECTS_KEY not in entities:
@@ -268,15 +278,25 @@ def observe(user_text: str, entities: Mapping[str, Any] | None, *, button_id: st
         return
     turn_telemetry.note(**fields)
     asked = _without_patient_name(expected.question, entities)
-    _SHADOW.set(asyncio.ensure_future(_decide(text, asked, expected.options, rules)))
+    _SHADOW.set(asyncio.ensure_future(_decide(text, asked, expected.options, rules, turn_telemetry.current_ref())))
 
 
-async def _decide(text: str, asked: str, options: tuple[str, ...], rules: str) -> None:
-    """Решение тени и его след в телеметрии хода (`tu_pending_outcome`, `tu_pending_agree`)."""
+async def _decide(text: str, asked: str, options: tuple[str, ...], rules: str, ref: tuple[str, str] | None) -> None:
+    """Решение тени — строкой `pending_shadow` после ответа (`tu_pending_outcome`, `tu_pending_agree`, вызов LLM и
+    решение выбора); хода нет (телеметрия выключена, ход мимо эндпоинта) — в поля текущего хода, как раньше."""
 
+    token = turn_telemetry.side_begin(ref) if ref is not None else None
+    cancelled = False
     try:
-        choice = await choose(_SHADOW_TASK, text, [Option(id=str(i), text=o) for i, o in enumerate(options, 1)], shadow=True, asked=asked)
+        choice = await asyncio.wait_for(
+            choose(_SHADOW_TASK, text, [Option(id=str(i), text=o) for i, o in enumerate(options, 1)], shadow=True, asked=asked),
+            _SHADOW_CAP_S,
+        )
         outcome = outcome_of(choice)
+    except asyncio.TimeoutError:
+        outcome = Outcome.LATE
+    except asyncio.CancelledError:  # остановка сервиса: решение не получено, строку всё равно пишем
+        outcome, cancelled = Outcome.LATE, True
     except Exception:  # тень — новый слой: её сбой не ломает ход
         logger.warning("pending_reply_shadow_failed", exc_info=True)
         outcome = Outcome.ERROR
@@ -284,25 +304,33 @@ async def _decide(text: str, asked: str, options: tuple[str, ...], rules: str) -
     agree = agreement(outcome, rules)
     if agree:
         fields["tu_pending_agree"] = agree
-    turn_telemetry.note(**fields)
+    if token is not None:
+        turn_telemetry.side_finish(token, _SIDE_KIND, **fields)
+    else:
+        turn_telemetry.note(**fields)
+    if cancelled:
+        raise asyncio.CancelledError
 
 
-async def drain(grace_s: float) -> None:
-    """Конец хода: ждём тень не дольше `grace_s`, затем отменяем — исход `late`. Тени нет или она готова —
-    возврат без ожидания (под `off` ход не меняется ни на такт)."""
+def _keep(task: asyncio.Future[None] | None) -> None:
+    if task is not None and not task.done():
+        _DETACHED.add(task)
+        task.add_done_callback(_DETACHED.discard)
+
+
+def detach() -> None:
+    """Конец хода: тень этого хода больше не его забота — ход её не ждёт, решение она допишет сама. Тени нет —
+    ничего (под `off` ход не меняется ни на такт)."""
 
     task = _SHADOW.get()
-    if task is None:
-        return
     _SHADOW.set(None)
-    if task.done():
-        return
-    try:
-        await asyncio.wait({task}, timeout=grace_s)
-    finally:
-        if not task.done():
-            task.cancel()
-    if not task.done():
-        await asyncio.wait({task}, timeout=grace_s)  # отмена доходит до задачи — её записи раньше строки хода
-    if task.cancelled():
-        turn_telemetry.note(tu_pending_outcome=Outcome.LATE.value)
+    _keep(task)
+
+
+async def settle(timeout_s: float) -> None:
+    """Дождаться отцеплённых теней не дольше `timeout_s` — для стенда и тестов: после замера хода, до чтения его
+    телеметрии. На проде не зовётся."""
+
+    pending = {task for task in _DETACHED if not task.done()}
+    if pending:
+        await asyncio.wait(pending, timeout=timeout_s)

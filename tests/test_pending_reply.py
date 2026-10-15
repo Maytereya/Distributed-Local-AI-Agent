@@ -13,6 +13,8 @@
 - срочное — раньше тени («нет, мне плохо, задыхаюсь»); кнопка — без тени;
 - вопрос бота и реплика — данные в роли user; ответ модели разбирается строго (инъекция — не команда); сбой и
   опоздание LLM — ответ прежний;
+- ход тень не ждёт: решение дописывается после ответа строкой `pending_shadow` (привязка `sess` + `tid`), `late` —
+  только сверх потолка; харнесс, как стенд, дожидается тени после хода (`settle`) и сливает строки (`merge_side`);
 - ФИО пациента из состояния в промпт не уходит; телеметрия `tu_pending_*` — без текста пациента и бота.
 """
 
@@ -27,7 +29,7 @@ import pytest
 from ollama import GenerateResponse
 
 from evalbench import world as ev_world
-from messengers_router import choice, llm_runtime, pending_reply
+from messengers_router import choice, llm_runtime, pending_reply, turn_telemetry
 from messengers_router.mess_types import AppointmentPhase, DialogState, SessionState
 from tests.test_price_turns_golden import (  # noqa: F401 — mini_prod_world, synonym_fork — фикстуры
     DIALOGS,
@@ -69,6 +71,7 @@ class _PendingOracle:
         self.default = _answer() if default is None else default
         self.exc, self.delay_s = exc, delay_s
         self.calls: list[dict[str, str]] = []
+        self.answered = 0  # сколько ответов оракул успел отдать
 
     async def generate(self, *_args, prompt: str = "", system: str | None = None, **_kwargs):
         if _PENDING_MARK not in (system or ""):
@@ -80,6 +83,7 @@ class _PendingOracle:
             raise self.exc
         answer = self.answers.get(_framed(prompt, _REPLY_FRAME), self.default)
         text = answer if isinstance(answer, str) else json.dumps(answer, ensure_ascii=False)
+        self.answered += 1
         return GenerateResponse(model="m", response=text, done=True)
 
 
@@ -98,9 +102,12 @@ def _switch(monkeypatch, value: str) -> None:
 Hook = Callable[[int, SessionState, list[dict[str, Any]]], None]
 
 
-def _dialog(turns: list[str | tuple[str, str]], session_id: str, before: Hook | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _dialog(
+    turns: list[str | tuple[str, str]], session_id: str, before: Hook | None, *, after: Callable[[int], None] | None = None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Диалог через обработчик эндпоинта; `before(i, state, records)` готовит состояние сессии перед ходом i (так
-    висящий вопрос запишет D2.1). Возвращает записи ходов и `last_entities` после каждого хода."""
+    висящий вопрос запишет D2.1), `after(i)` — сразу после ответа хода, до тени. После хода, как стенд, ждёт тени,
+    которые ход не ждёт (`settle`). Возвращает записи ходов и `last_entities` после каждого хода."""
 
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
@@ -116,6 +123,9 @@ def _dialog(turns: list[str | tuple[str, str]], session_id: str, before: Hook | 
                 before(i, memory.get(session_id), records)
             req = MessengerGenerateRequest(session_id=session_id, text=text, debug=True, button_id=button_id)
             body = json.loads((await messenger_generate_once(req, memory=memory, services=services)).body)
+            if after is not None:
+                after(i)
+            await pending_reply.settle(10.0)
             entities = dict(memory.get(session_id).last_entities or {})
             records.append(_turn_record(body, entities))
             states.append(_stable(entities))
@@ -133,16 +143,19 @@ def _stable(entities: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
-def _play(turns, name: str, mode: str, world_dir, monkeypatch, *, before: Hook | None = None, oracle: _PendingOracle | None = None):
-    """Диалог под режимом выключателя: (записи ходов, состояния, строки телеметрии, оракул)."""
+def _play(turns, name: str, mode: str, world_dir, monkeypatch, *, before: Hook | None = None, oracle: _PendingOracle | None = None, after=None, raw: list | None = None):
+    """Диалог под режимом выключателя: (записи ходов, состояния, строки телеметрии ходов с решениями тени, оракул);
+    `raw` — сюда кладутся строки журнала как есть (ходы и строки после ответа)."""
 
     _switch(monkeypatch, mode)
     oracle = oracle if oracle is not None else _PendingOracle()
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
     with ev_world.FrozenWorld(world_dir, "day") as world:
-        records, states = _dialog(turns, f"pending-{name}-{mode}", before)
+        records, states = _dialog(turns, f"pending-{name}-{mode}", before, after=after)
         rows = list(world.telemetry)
-    return records, states, rows, oracle
+    if raw is not None:
+        raw.extend(rows)
+    return records, states, turn_telemetry.merge_side(rows), oracle
 
 
 def _pending_fields(row: dict[str, Any]) -> dict[str, Any]:
@@ -427,15 +440,39 @@ def test_llm_failure_in_the_shadow_keeps_the_answer_and_the_breaker(exc, status,
     assert len(oracle.calls) == 1 and rows[1]["tu_pending_outcome"] == status and "tu_pending_agree" not in rows[1]
 
 
-def test_a_late_shadow_is_cancelled_at_the_end_of_the_turn(mini_prod_world, monkeypatch):  # noqa: F811
-    from messengers_router import endpoint
+def test_the_turn_does_not_wait_for_the_shadow_and_its_decision_is_written_after_the_reply(mini_prod_world, monkeypatch):  # noqa: F811
+    """Замер 14.10: конец хода ждал тень секунду и отменял опоздавшую — 26 из 58 решений терялись как `late`. Теперь
+    ход отвечает, не дожидаясь тени; решение тени — отдельной строкой `pending_shadow` того же хода (`sess` + `tid`)
+    после ответа; строка хода решения тени не несёт."""
 
-    monkeypatch.setattr(endpoint, "_SHADOW_GRACE_S", 0.05)
+    reply = "нет, спасибо"
+    before = _offer_after_first_turn()
+    off, *_ = _play([_STOPLIST_OFFER, reply], "slow", "off", mini_prod_world, monkeypatch, before=before)
+    oracle = _PendingOracle({reply: _answer("no")}, delay_s=0.3)
+    answered_at_reply: list[int] = []
+    raw: list[dict[str, Any]] = []
+    shadow, _states, rows, oracle = _play(
+        [_STOPLIST_OFFER, reply], "slow", "shadow", mini_prod_world, monkeypatch, before=before, oracle=oracle,
+        after=lambda i: answered_at_reply.append(oracle.answered), raw=raw,
+    )
+    assert shadow == off
+    assert answered_at_reply == [0, 0] and oracle.answered == 1  # ответ хода ушёл раньше решения тени
+    turns = [row for row in raw if "kind" not in row]
+    [side] = [row for row in raw if row.get("kind") == "pending_shadow"]
+    assert (side["sess"], side["tid"]) == (turns[1]["sess"], turns[1]["tid"])
+    assert "tu_pending_outcome" not in turns[1] and turns[1]["tu_pending_type"] == "operator_offer"
+    assert (side["tu_pending_outcome"], side["tu_pending_agree"]) == ("no", "rules_none")
+    assert [entry["task"] for entry in side["choose"]] == ["pending_reply"] and all(call.get("shadow") for call in side["llm"])
+    assert rows[1]["tu_pending_outcome"] == "no"  # слитая строка хода — как раньше
+
+
+def test_a_shadow_over_the_cap_is_late(mini_prod_world, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(pending_reply, "_SHADOW_CAP_S", 0.05)
     before = _offer_after_first_turn()
     off, *_ = _play([_STOPLIST_OFFER, "нет, спасибо"], "late", "off", mini_prod_world, monkeypatch, before=before)
     shadow, _states, rows, oracle = _play([_STOPLIST_OFFER, "нет, спасибо"], "late", "shadow", mini_prod_world, monkeypatch, before=before, oracle=_PendingOracle(delay_s=5.0))
     assert shadow == off
-    assert len(oracle.calls) == 1 and rows[1]["tu_pending_outcome"] == "late"
+    assert len(oracle.calls) == 1 and rows[1]["tu_pending_outcome"] == "late" and "tu_pending_agree" not in rows[1]
 
 
 def test_patient_name_does_not_reach_the_llm(mini_prod_world, monkeypatch):  # noqa: F811

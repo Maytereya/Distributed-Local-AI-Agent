@@ -131,3 +131,36 @@ def test_switch_off_writes_nothing(rows, monkeypatch):
     monkeypatch.setattr(turn_telemetry._cfg, "MR_TURN_TELEMETRY", False, raising=False)
     _client().post("/api/messenger-generate-once", json={"session_id": "s", "text": "задыхаюсь"})
     assert rows == []
+
+
+def test_a_side_row_goes_to_its_own_journal_and_merges_into_its_turn(monkeypatch, tmp_path):
+    """Строка после ответа (тень `pending_reply`, 15.10): свой журнал `<вид>_<дата>.jsonl` рядом с журналом ходов —
+    журнал ходов и сводки по нему не меняются; `merge_side` возвращает её поля, вызовы LLM и решения выбора в строку
+    её хода по `sess` + `tid`, чужой ход не трогает."""
+
+    monkeypatch.setattr(turn_telemetry, "_journal_path", lambda: tmp_path / "turns.jsonl")
+
+    async def turn_with_side(session_id: str):
+        token = turn_telemetry.begin("once", session_id=session_id)
+        turn_telemetry.note(tu_pending_type="operator_offer")
+        ref = turn_telemetry.current_ref()
+        row = turn_telemetry.finish(token, handoff=False, chars=3)
+        side = turn_telemetry.side_begin(ref)
+        turn_telemetry.note_llm("choose_pending_reply", "ok", 1200, shadow=True)
+        turn_telemetry.note_choice("pending_reply", "outcome", options=0, ms=1200, outcome="no", shadow=True)
+        side_row = turn_telemetry.side_finish(side, "pending_shadow", tu_pending_outcome="no")
+        return row, side_row
+
+    (first, side), (other, _other_side) = asyncio.run(turn_with_side("s1")), asyncio.run(turn_with_side("s2"))
+    assert (side["sess"], side["tid"]) == (first["sess"], first["tid"]) and first["tid"] != other["tid"]
+    turns = [json.loads(line) for line in (tmp_path / "turns.jsonl").read_text(encoding="utf-8").splitlines()]
+    [side_file] = list(tmp_path.glob("pending_shadow_*.jsonl"))
+    sides = [json.loads(line) for line in side_file.read_text(encoding="utf-8").splitlines()]
+    assert [row["tid"] for row in turns] == [first["tid"], other["tid"]] and all("kind" not in row for row in turns)
+    assert [row["kind"] for row in sides] == ["pending_shadow", "pending_shadow"]
+    assert first["llm"] == [] and "tu_pending_outcome" not in first  # строка хода записана до решения тени
+    merged = turn_telemetry.merge_side([*turns, *sides])
+    assert len(merged) == 2
+    assert merged[0]["tu_pending_outcome"] == "no" and merged[0]["ms"] == first["ms"]
+    assert [call["site"] for call in merged[0]["llm"]] == ["choose_pending_reply"]
+    assert [entry["task"] for entry in merged[0]["choose"]] == ["pending_reply"]

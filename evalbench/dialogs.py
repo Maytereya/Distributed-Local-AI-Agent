@@ -50,7 +50,7 @@ from .llm import MODES, HarnessClient, LiveBudgetExhausted, ResponseCache, SiteI
 from .prices import PriceCatalog, PricePair
 from .prices import _norm as _norm_text
 from .run import TURN_TIMEOUT_S, _enter_code_root, _llm_reachable, _parse_cfg, _sha8, git_sha
-from .world import PRIVATE_ROOT, PROFILES, FrozenWorld, host_of, verify_world
+from .world import PRIVATE_ROOT, PROFILES, FrozenWorld, host_of, settle_shadows, verify_world
 
 SHOWN_KEY = "_shown_services"  # `messengers_router.shown_context.SHOWN_KEY` (L-14, шаг 3); в коде до 14.10 его нет
 
@@ -142,6 +142,7 @@ async def _run_dialogs(dialogs, *, client, world, tpl: Templates, catalog: Price
                 body = {"text": "", "handoff": False, "state_update": {"debug": {"endpoint_error": f"{type(exc).__name__}: {exc}"}}}
                 error = type(exc).__name__
             ms = int((time.monotonic() - started) * 1000)
+            await settle_shadows()  # тени, которые ход не ждёт, — после замера, до вызовов и телеметрии
             entities = dict(memory.get(sid).last_entities or {})
             calls = client.take_turn_calls()
             if any(c.outcome == "budget" for c in calls):
