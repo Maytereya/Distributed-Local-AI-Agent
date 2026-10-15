@@ -60,7 +60,7 @@ from ._prices_helpers import (
     _extract_price_service_from_query,
     _is_city_only_reply,
     _is_generic_uzi_price_request,
-    _is_price_show_all_request,
+    _price_show_all_requested,
     _is_strong_doctor_price_match,
     _price_family_payload_from_context,
     _price_query_tokens,
@@ -287,7 +287,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     entity_service_name = _apply_service_synonyms(_get_first_present(entities, ["service_name", "test_name"]) or "")
     query_text = _apply_service_synonyms(str(query or "").strip())
     has_price_request = bool(query_text and _PRICE_REQUEST_RE.search(query_text))
-    if _is_price_show_all_request(query_text):
+    if _price_show_all_requested(query_text, query):
         family_payload = _price_family_payload_from_context(entities, show_all=True)
         if family_payload:
             family_payload["entities_used"] = entities
@@ -565,7 +565,7 @@ async def service_bundle_info(
     # «забор крови»→«взятие крови», «электромиография»→«ЭМГ») до матчинга услуги.
     entity_service_name = _apply_service_synonyms(_get_first_present(entities, ["service_name", "test_name"]) or "")
     query_text = _apply_service_synonyms(str(query or "").strip())
-    if _is_price_show_all_request(query_text):
+    if _price_show_all_requested(query_text, query):
         family_payload = _price_family_payload_from_context(entities, show_all=True)
         if family_payload:
             family_payload["entities_used"] = entities

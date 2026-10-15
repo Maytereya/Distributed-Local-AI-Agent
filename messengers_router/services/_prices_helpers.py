@@ -2926,6 +2926,24 @@ def _is_price_show_all_request(query_text: str) -> bool:
     return bool(_PRICE_SHOW_ALL_RE.fullmatch(str(query_text or "").strip()))
 
 
+def _price_show_all_requested(query_text: str, user_text: str) -> bool:
+    """
+    Просит ли реплика показать все варианты: правила (`_is_price_show_all_request`) или — под `pending_reply = on`
+    и типе `show_all` в `pending_reply_types` — решение LLM этого хода на подсказку «напишите: "все"» (D2.3). Иначе —
+    правила, как было. Одно место, где путь цены и классификатор читают «показать все».
+
+    :param query_text: текст реплики для правил (после синонимов каталога)
+    :param user_text: реплика пациента как есть — привязка решения LLM к ходу
+    :return: True, если показать полный список
+    """
+
+    # Импорт в функции: сервисный слой не тянет модуль хода при своём импорте.
+    from .. import pending_reply
+
+    rules = "yes" if _is_price_show_all_request(query_text) else "other"
+    return pending_reply.reply_kind_for(pending_reply.QuestionType.SHOW_ALL, rules, user_text) == "yes"
+
+
 def _build_price_kind_ambiguous_prompt(
     query_text: str,
     retail_rows: list[dict[str, Any]],

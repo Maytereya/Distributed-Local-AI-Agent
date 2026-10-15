@@ -17,9 +17,11 @@
   сессии тень не трогает, пишет только телеметрию хода `tu_pending_*`;
 - `on` — тип вопроса из `[MESSENGER_ROUTER] pending_reply_types` (через запятую; по умолчанию пусто) решает LLM в
   ходе, из его бюджета, и решение исполняется — с асимметрией безопасности по типу (дизайн, таблица «Асимметрия»;
-  решение владельца 15.10). Прочие типы — тень, как под `shadow`. Исполняется пока один тип:
+  решение владельца 15.10). Прочие типы — тень, как под `shadow`. Исполняются два типа:
   `operator_offer` — LLM может только ПОДНЯТЬ ответ до «да» (перевод на оператора: безопасное направление); её
-  «нет», «пауза», «другая тема» и сбой ничего не меняют — решают правила, как было (ложное «нет» опасно).
+  «нет», «пауза», «другая тема» и сбой ничего не меняют — решают правила, как было (ложное «нет» опасно);
+  `show_all` (подсказка «…напишите: "все"») — выбор пункта «все» или «да» от LLM поднимает ответ до «показать все»
+  (полный список того же семейства: та же цена, только больше строк); прочие исходы и сбой — ответ правил.
   Решение хода читает обработчик вопроса (`reply_kind_for`).
 
 Место — одно: `router.patient_routing_stream` после срочного, явного запроса оператора и охраны города, до разбора
@@ -67,6 +69,7 @@ from typing import Any, Mapping
 
 from . import turn_telemetry
 from .choice import Choice, Option, Status, Task, choose
+from .expects import SHOW_ALL_OPTIONS
 from .policies import _CONFIRM_NO_EXACT, _CONFIRM_YES_EXACT, _normalize_confirmation_text, appointment_confirmation_transition
 from .recovery_policy import contextual_reply_kind
 from .runtime_config import config as _cfg
@@ -154,7 +157,7 @@ def mode() -> str:
 
 
 # Типы, решение LLM на которые умеет исполнять обработчик (асимметрия задана в нём, `reply_kind_for`).
-_ACTABLE = frozenset({"operator_offer"})
+_ACTABLE = frozenset({"operator_offer", "show_all"})
 
 
 def acting_types() -> frozenset[str]:
@@ -236,10 +239,18 @@ def is_bare_reply(text: str) -> bool:
 
 def rules_kind(question_type: str, text: str) -> str:
     """Что решают правила сейчас: yes / no / other — подтверждение записи своей проверкой (только однозначное
-    согласие), остальные вопросы — `contextual_reply_kind`."""
+    согласие), подсказка «напишите: "все"» — определением пути цены (`yes` — правила покажут все; «да» здесь не
+    «все»: его читает обработчик вторичного оффера), остальные вопросы — `contextual_reply_kind`."""
 
     if question_type == QuestionType.APPOINTMENT_CONFIRM:
         return appointment_confirmation_transition(text)
+    if question_type == QuestionType.SHOW_ALL:
+        # Импорт в функции: модуль хода не тянет сервисный слой при своём импорте (как `classifier`).
+        from .services._prices_helpers import _is_price_show_all_request
+
+        if _is_price_show_all_request(text):
+            return "yes"
+        return "no" if contextual_reply_kind(text) == "no" else "other"
     return contextual_reply_kind(text)
 
 
@@ -362,22 +373,34 @@ async def observe_or_act(user_text: str, entities: Mapping[str, Any] | None, *, 
     fields["tu_pending_outcome"] = outcome.value
     if agree := agreement(outcome, rules):
         fields["tu_pending_agree"] = agree
-    if outcome is Outcome.YES:
+    if _lifts(expected, outcome, choice if outcome is Outcome.PICK else None):
         _ACTED.set({"text": text, expected.type: Outcome.YES.value})
-        fields["tu_pending_acted"] = Outcome.YES.value
+        fields["tu_pending_acted"] = outcome.value
     turn_telemetry.note(**fields)
+
+
+def _lifts(expected: Expectation, outcome: Outcome, picked: Choice | None) -> bool:
+    """Поднимает ли решение LLM ответ правил (асимметрия по типу): оффер оператора — только «да»; подсказка «все» —
+    «да» или выбранный пункт «все» (единственный пункт поля; иной пункт — нет)."""
+
+    if outcome is Outcome.YES:
+        return True
+    if expected.type != QuestionType.SHOW_ALL or picked is None:
+        return False
+    shown = dict(enumerate(expected.options, 1))
+    return any(shown.get(int(i)) in SHOW_ALL_OPTIONS for i in picked.ids if str(i).isdigit())
 
 
 def reply_kind_for(question_type: str, rules: str, user_text: str) -> str:
     """Что исполняет обработчик вопроса `question_type`: решение правил, поднятое решением LLM этого хода.
 
     Асимметрия (дизайн, «Асимметрия безопасности по типу вопроса»): оффер оператора — LLM поднимает до «да»
-    (перевод), «нет» и прочее от LLM ответ правил не меняют."""
+    (перевод), подсказка «все» — до «показать все»; «нет» и прочее от LLM ответ правил не меняют."""
 
     acted = _ACTED.get() or {}
     if acted.get("text") != str(user_text or "").strip():
         return rules
-    if question_type == "operator_offer" and acted.get(question_type) == Outcome.YES.value:
+    if question_type in _ACTABLE and acted.get(question_type) == Outcome.YES.value:
         return "yes"
     return rules
 

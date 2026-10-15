@@ -480,7 +480,8 @@ def _is_price_family_show_all_followup(text: str, last_entities: dict[str, Any])
     Определяет короткий follow-up `все` для активной family price-выдачи.
 
     Здесь — только контекст (показан список семейства). Саму реплику узнаёт одно определение —
-    инструмента цены, рядом с подсказкой «напишите: "все"» (`_is_price_show_all_request`).
+    инструмента цены, рядом с подсказкой «напишите: "все"» (`_price_show_all_requested`: правила или, под
+    `pending_reply = on`, решение LLM этого хода на подсказку).
 
     :param text: текущая реплика пользователя
     :param last_entities: сессионный контекст
@@ -493,9 +494,9 @@ def _is_price_family_show_all_followup(text: str, last_entities: dict[str, Any])
     if str(last_entities.get("_last_label") or "").strip().upper() != "PRICE":
         return False
     # Импорт в функции: классификатор не тянет сервисный слой при своём импорте (как `planner`).
-    from .services._prices_helpers import _is_price_show_all_request
+    from .services._prices_helpers import _price_show_all_requested
 
-    return _is_price_show_all_request(text)
+    return _price_show_all_requested(text, text)
 
 
 _PROMO_FOLLOWUP_TEXT_RE = re.compile(

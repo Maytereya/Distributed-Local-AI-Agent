@@ -2499,6 +2499,12 @@ async def _handle_secondary_queue_pending(
     ):
         return None
 
+    if pending_reply.reply_kind_for(pending_reply.QuestionType.SHOW_ALL, "other", user_text) == "yes":
+        # Под pending_reply = on (тип show_all): ответ на подсказку «напишите: "все"» («да, давайте все») LLM решила как
+        # «показать все» — вторичный оффер снимается, как на «все», ответ читает путь цены (`_price_show_all_requested`).
+        state.last_entities["_secondary_offer_pending"] = False
+        return None
+
     reply_kind = contextual_reply_kind(user_text)
     if reply_kind == "other" and _is_secondary_soft_yes(user_text):
         reply_kind = "yes"
