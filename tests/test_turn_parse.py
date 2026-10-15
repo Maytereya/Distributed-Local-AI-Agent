@@ -300,7 +300,7 @@ def test_no_slot_outside_a_turn_or_under_off(mode, parse_mode):
         raise AssertionError("разбор не должен запускаться")
 
     async def readers():
-        return (turn_parse.start_phrases(factory), turn_parse.phrases_now(), await turn_parse.phrases(), turn_parse.acting_phrases(), turn_parse.debug())
+        return (turn_parse.start_phrases(factory), turn_parse.phrases_now(), await turn_parse.phrases(), turn_parse.acting_for("ферритин, глюкоза"), turn_parse.debug())
 
     async def outside():
         turn_parse._CURRENT.set(None)
@@ -331,7 +331,7 @@ def test_phrases_now_is_none_until_done(parse_mode):
         before = (turn_parse.phrases_now(), turn_parse.debug())
         gate.set()
         result = await turn_parse.phrases()
-        return before, result, turn_parse.phrases_now(), turn_parse.acting_phrases(), turn_parse.debug()
+        return before, result, turn_parse.phrases_now(), turn_parse.acting_for(result.reply), turn_parse.debug()
 
     before, result, now, acting, debug = asyncio.run(turn("picked"))
     assert before == (None, {"status": "pending"})

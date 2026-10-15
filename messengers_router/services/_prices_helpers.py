@@ -3565,28 +3565,6 @@ def price_list_services(
     return tuple(str(item["service_name"]) for item in items), "list_split" if separated else "list_segment"
 
 
-def _build_multi_price_payload(
-    query_text: str,
-    retail_rows: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    """Формирует payload для мульти-услугового price-запроса.
-
-    Каждая услуга отрисовывается как отдельная family-подгруппа через
-    `price_group_heading` («По услуге «X»»), чтобы рендер умел группировать список без
-    дополнительного рендер-кейса. Не `care_setting_label`: это формат оказания, рендер
-    печатал бы пациенту «Формат: По услуге «X»:».
-
-    :param query_text: исходный запрос пользователя
-    :param retail_rows: строки retail-прайса региона
-    :return: family-query-совместимый payload либо None
-    """
-
-    items, unrecognized = _multi_price_items(query_text, retail_rows)
-    if not items:
-        return None
-    return multi_price_payload_from_items(items, unrecognized)
-
-
 def multi_price_payload_from_items(
     items: list[dict[str, Any]],
     unrecognized: list[str],

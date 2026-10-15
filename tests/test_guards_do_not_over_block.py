@@ -54,9 +54,15 @@ from messengers_router.services._doctors_helpers import (
 )
 from messengers_router.services._prices_helpers import (
     SAMARA_PRICE_REGION_ID,
-    _build_multi_price_payload,
     _resolve_multi_price_items,
 )
+
+from messengers_router.services._prices_helpers import _multi_price_items, multi_price_payload_from_items
+
+def _basket_payload(query_text, rows):
+    """Корзина правил целиком, как её собирает `prices._multi_price_payload` без LLM (бывший `_build_multi_price_payload`)."""
+
+    return multi_price_payload_from_items(*_multi_price_items(query_text, rows))
 
 ROWS = [r for r in api_price.load_price_by_region(SAMARA_PRICE_REGION_ID) if isinstance(r, dict)]
 
@@ -172,7 +178,7 @@ def test_multi_price_survives_when_cart_fully_resolved(cart: str) -> None:
     """И-Б: полностью распознанная корзина отдаёт расчёт."""
     items, unrecognized = _resolve_multi_price_items(cart, ROWS)
     assert len(items) >= 2 and not unrecognized, f"предусловие не выполнено: {cart!r}"
-    assert _build_multi_price_payload(cart, ROWS) is not None
+    assert _basket_payload(cart, ROWS) is not None
 
 
 @pytest.mark.parametrize(
@@ -195,4 +201,4 @@ def test_multi_price_survives_patient_synonyms(cart: str) -> None:
     """
     items, unrecognized = _resolve_multi_price_items(cart, ROWS)
     assert len(items) >= 2 and not unrecognized, f"предусловие не выполнено: {cart!r}"
-    assert _build_multi_price_payload(cart, ROWS) is not None
+    assert _basket_payload(cart, ROWS) is not None

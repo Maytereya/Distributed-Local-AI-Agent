@@ -290,15 +290,6 @@ async def phrases() -> PhraseParse | None:
     return phrases_now()
 
 
-def acting_phrases() -> PhraseParse | None:
-    """Разбор, по которому разрешено действовать (шаг 5): только под `on` и только решённый."""
-
-    if mode() != "on":
-        return None
-    parse = phrases_now()
-    return parse if parse is not None and parse.decided else None
-
-
 def acting_for(text: str) -> PhraseParse | None:
     """Разбор, по которому действует читатель с входом `text` (L-15b, шаг 5): под `on` и этой реплики
     (`for_text`) — решённый; или сбой LLM (политика сбоя): фразы — разрез по разделителям (б), если он есть,

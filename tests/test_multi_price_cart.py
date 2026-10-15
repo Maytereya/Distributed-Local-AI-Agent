@@ -17,10 +17,16 @@ from __future__ import annotations
 from agent_logic_2.nayka_api import api_price
 from messengers_router.renderer import format_price_for_patient
 from messengers_router.services._prices_helpers import (
-    _build_multi_price_payload,
     _resolve_multi_price_items,
     _split_price_query_items,
 )
+
+from messengers_router.services._prices_helpers import _multi_price_items, multi_price_payload_from_items
+
+def _basket_payload(query_text, rows):
+    """Корзина правил целиком, как её собирает `prices._multi_price_payload` без LLM (бывший `_build_multi_price_payload`)."""
+
+    return multi_price_payload_from_items(*_multi_price_items(query_text, rows))
 
 
 def _rows():
@@ -89,7 +95,7 @@ def test_unrecognized_items_surface_honestly():
     assert len(items) >= 3
     assert any("аур" in str(u).lower() for u in unrecognized), unrecognized
 
-    payload = _build_multi_price_payload(q, _rows())
+    payload = _basket_payload(q, _rows())
     assert payload is not None
     note = str(payload.get("unrecognized_note") or "")
     assert "не распознал" in note.lower() and "аур" in note.lower(), payload.get("unrecognized_note")
@@ -99,7 +105,7 @@ def test_unrecognized_items_surface_honestly():
 
 
 def test_multi_payload_without_unrecognized_has_no_note():
-    payload = _build_multi_price_payload("ОАК, ферритин", _rows())
+    payload = _basket_payload("ОАК, ферритин", _rows())
     assert payload is not None
     assert not payload.get("unrecognized_note")
     rendered = format_price_for_patient(payload, {})
@@ -137,7 +143,7 @@ def test_cart_assembly_does_not_reparse_query_per_price_row():
     assert len(rows) > 1000, "нужен живой каталог, иначе порог ничего не значит"
 
     extract_specialty_from_text.cache_clear()
-    payload = _build_multi_price_payload("ферритин, глюкоза, холестерин", rows)
+    payload = _basket_payload("ферритин, глюкоза, холестерин", rows)
     misses = extract_specialty_from_text.cache_info().misses
 
     assert payload is not None

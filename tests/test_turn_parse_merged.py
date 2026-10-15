@@ -90,10 +90,10 @@ def test_merge_failure_acts_by_the_delimiter_cut(catalog, world, monkeypatch):
         turn_parse.begin()
         memo = turn_parse.current()
         memo.phrases_result = parse
-        return turn_parse.acting_for(_LIST), turn_parse.acting_phrases()
+        return turn_parse.acting_for(_LIST), memo.phrases_result.decided
 
     acting, decided = asyncio.run(turn())
-    assert decided is None  # не решение
+    assert decided is False  # не решение
     assert acting is not None and [item.text for item in acting.items] == ["ферритин", "ттг", "витамин д"]
 
 

@@ -11,6 +11,18 @@
 
 ---
 
+## STEP-2026-10-15-T7-0 — T7 шаг 0': снят мёртвый код разбора цены (`_build_multi_price_payload`, `turn_parse.acting_phrases`) — СДЕЛАНО (поведение не меняется)
+
+- **Что:** два узла без вызывающих в `messengers_router` (только тесты; граф ссылок разбора T7 14.10, K0, и сверка
+  15.10): корзина правил целиком `_build_multi_price_payload` (прод собирает ту же композицию в
+  `prices._multi_price_payload`) и `turn_parse.acting_phrases` (читатели берут `acting_for`).
+- **Тесты:** вызовы заменены на `multi_price_payload_from_items(*_multi_price_items(...))` (`_basket_payload` в
+  четырёх файлах) и на `acting_for` / `parse.decided`; ожидания не менялись. Храповик 0.
+- **Дальше по T7** — `~/Dev/handoffs/2026-10-15_t7_prep.md`: K6 (`strong_match = data` — решение владельца), K5
+  (L-13 `price_match_policy = on` — карточка), пакет K1–K3/S2 (решение Q2), ленивые правила под `on`.
+
+---
+
 ## STEP-2026-10-15-PENDING-REPLY-ACT — ответ на оффер оператора решает LLM в ходе (тип operator_offer) — СДЕЛАНО под `pending_reply = on` + `pending_reply_types` (по умолчанию пусто)
 
 - **Симптом (аудит 14.10, п. 5):** «Перевести на оператора?» → «конечно, переведите» — правила (`contextual_reply_kind`)

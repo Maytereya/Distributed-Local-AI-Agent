@@ -41,6 +41,13 @@ from messengers_router.services._prices_helpers import (
     resolve_price_service_name_from_catalog,
 )
 
+from messengers_router.services._prices_helpers import _multi_price_items, multi_price_payload_from_items
+
+def _basket_payload(query_text, rows):
+    """Корзина правил целиком, как её собирает `prices._multi_price_payload` без LLM (бывший `_build_multi_price_payload`)."""
+
+    return multi_price_payload_from_items(*_multi_price_items(query_text, rows))
+
 ROWS = [r for r in api_price.load_price_by_region(SAMARA_PRICE_REGION_ID) if isinstance(r, dict)]
 
 
@@ -114,13 +121,12 @@ def test_cart_keeps_honest_unrecognized_item():
     САМОСТОЯТЕЛЬНЫЙ пункт списка, S3 честно называет её пациенту. Гард такой
     список глушить не имеет права; глушит только уточнение, поглощённое ВНУТРИ
     фразы («приём терапевта по ОМС» — один пункт, а не список)."""
-    from messengers_router.services._prices_helpers import _build_multi_price_payload
 
-    payload = _build_multi_price_payload("ОАК\nферритин\nКВАНТОВЫЙ АНАЛИЗ АУРЫ\nглюкоза", ROWS)
+    payload = _basket_payload("ОАК\nферритин\nКВАНТОВЫЙ АНАЛИЗ АУРЫ\nглюкоза", ROWS)
     assert payload is not None
     assert "аур" in str(payload.get("unrecognized_note") or "").lower()
 
-    assert _build_multi_price_payload("приём терапевта по ОМС", ROWS) is None
+    assert _basket_payload("приём терапевта по ОМС", ROWS) is None
 
 
 def test_guard_silent_on_service_code_lookup():

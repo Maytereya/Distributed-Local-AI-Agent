@@ -44,10 +44,16 @@ from agent_logic_2.nayka_api import api_price
 from messengers_router.services._common import _normalise_input
 from messengers_router.services._prices_helpers import (
     SAMARA_PRICE_REGION_ID,
-    _build_multi_price_payload,
     _resolve_multi_price_items,
     resolve_price_service_name_from_catalog,
 )
+
+from messengers_router.services._prices_helpers import _multi_price_items, multi_price_payload_from_items
+
+def _basket_payload(query_text, rows):
+    """Корзина правил целиком, как её собирает `prices._multi_price_payload` без LLM (бывший `_build_multi_price_payload`)."""
+
+    return multi_price_payload_from_items(*_multi_price_items(query_text, rows))
 
 # Свип по названиям прайса; выборка по всему каталогу, а не его начало.
 _SWEEP_SIZE = 50
@@ -113,7 +119,7 @@ def test_phrase_named_by_one_catalog_row_is_not_a_basket():
     ],
 )
 def test_reported_single_services_are_not_baskets(question: str):
-    assert _build_multi_price_payload(question, _rows()) is None
+    assert _basket_payload(question, _rows()) is None
 
 
 def test_list_item_is_the_service_it_names_not_a_panel_listing_it():
