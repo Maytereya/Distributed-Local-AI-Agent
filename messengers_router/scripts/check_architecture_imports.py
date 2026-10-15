@@ -76,14 +76,14 @@ LAYER_BY_MODULE: dict[str, str] = {
     "llm_runtime": "infrastructure",
     "prompt_registry": "infrastructure",
     # 2026-10: модуль выбора LLM (`choose()`, поверх `llm_runtime`), телеметрия хода, прогрев LLM.
-    # Прямые импорты хоста у `turn_telemetry` (agent_logic_2.persist) и `warm_up` (agent_logic_2.nayka_api) —
-    # отдельный долг: чек о них сообщает, порт для них не заведён.
+    # Данные хоста (папка журналов, загрузчики МИС) они берут через порт `host_data_port` (15.10).
     "choice": "infrastructure",
     "turn_telemetry": "infrastructure",
     "warm_up": "infrastructure",
     # Ports to host project
     "runtime_config": "port",
     "doctor_name_port": "port",
+    "host_data_port": "port",
 }
 
 
@@ -100,9 +100,9 @@ ALLOWED_LAYER_IMPORTS: dict[str, set[str]] = {
 }
 
 
-ALLOWED_DIRECT_AGENT_LOGIC_IMPORTS = {
-    "runtime_config",
-    "doctor_name_port",
+# Импорт хоста разрешён портам (слой `port` карты) и двум инфраструктурным модулям рантайма LLM: клиент ollama и
+# реестр промптов читают конфиг и файлы хоста напрямую. Новый порт — строка в карте слоёв, не здесь.
+ALLOWED_DIRECT_AGENT_LOGIC_IMPORTS = {module for module, layer in LAYER_BY_MODULE.items() if layer == "port"} | {
     "llm_runtime",
     "prompt_registry",
 }

@@ -215,10 +215,10 @@ def finish(token: contextvars.Token | None, *, handoff: bool, chars: int, stage_
 
 
 def _journal_path() -> Path:
-    from agent_logic_2.persist import DATA_DIR, ensure_dir
+    from .host_data_port import journals_dir
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
-    return ensure_dir(DATA_DIR / "journals", "journals") / f"turns_{stamp}.jsonl"
+    return journals_dir() / f"turns_{stamp}.jsonl"
 
 
 def _emit(row: dict[str, Any]) -> None:

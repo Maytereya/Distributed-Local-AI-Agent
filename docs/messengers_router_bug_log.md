@@ -11,6 +11,24 @@
 
 ---
 
+## DEBT-2026-10-15-ARCH-HOST-IMPORTS — архитектурный чек CI красный из-за прямых импортов хоста в `turn_telemetry` и `warm_up` — ЗАКРЫТ
+
+- **Симптом:** джоб `Architecture Fitness Checks` (`messengers_router_arch_guardrails.yml`) красный на каждом пуше:
+  `turn_telemetry.py:218 imports agent_logic_2.persist`, `warm_up.py:24 imports agent_logic_2.nayka_api`. Красный чек
+  перестают читать — новый запрещённый импорт прошёл бы незамеченным.
+- **Корень:** модули хода (а) и прогрева (03.10–08.10) брали папку журналов и загрузчики МИС напрямую у хоста; порт для
+  них не завели (в карте слоёв было помечено как отдельный долг).
+- **Фикс:** порт `messengers_router/host_data_port.py` (`journals_dir()`, `mis_warm_up_steps()`), импорты хоста — внутри
+  функций, как было; `turn_telemetry._journal_path` и `warm_up._steps` берут данные через порт; порядок шагов прогрева
+  прежний. Поведение бота не меняется. Разрешённые импорты хоста в чекере — выводятся из карты слоёв (слой `port`
+  + `llm_runtime`, `prompt_registry`), а не перечисляются: новый порт — одна строка карты.
+- **Инвариант:** модули `messengers_router` (кроме портов из `ALLOWED_DIRECT_AGENT_LOGIC_IMPORTS`) не импортируют
+  `agent_logic_2.*`; новая зависимость от хоста — новая функция порта.
+- **Покрытие:** `python3 messengers_router/scripts/check_architecture_imports.py` (CI) — PASSED; `tests/test_warm_up.py`,
+  телеметрия хода — через подмену `turn_telemetry._journal_path` (`tests/conftest.py`), как раньше.
+
+---
+
 ## BUG-2026-10-14-CANCEL-EXISTING-LOST — «отменить» на вопрос «Хотите отменить или перенести запись?» прерывал оформление, отмена существующей записи терялась без оператора — ИСПРАВЛЕНО
 
 - **Симптом.** «отменить или перенести запись к терапевту» → «Хотите отменить или перенести запись?» → «отменить» (так

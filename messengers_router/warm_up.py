@@ -21,17 +21,18 @@ _tasks: set[asyncio.Task[Any]] = set()
 
 
 def _steps() -> tuple[tuple[str, Callable[[], Any]], ...]:
-    from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info
-
+    from .host_data_port import mis_warm_up_steps
     from .services import _biomaterial
     from .services._prepare_select_llm import kb_patient_memos
 
+    # Порядок прежний: прайс, справочник, словари (строятся из справочника), цены врачей, врачи, памятки.
+    price, service_info, doctor_prices, doctors = mis_warm_up_steps()
     return (
-        ("прайс Самары", lambda: api_price.load_price_by_region(api_price.BOT_PRICE_REGION_ID)),
-        ("справочник услуг МИС", api_service_info.load_service_info),
+        price,
+        service_info,
         ("словари синонимов и биоматериалов", _biomaterial._vocabularies),
-        ("цены врачей", api_price.load_doctor_prices),
-        ("врачи", api_nayka.get_cached_doctors_data),
+        doctor_prices,
+        doctors,
         ("памятки базы знаний", kb_patient_memos),
     )
 
