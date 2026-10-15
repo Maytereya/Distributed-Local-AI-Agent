@@ -63,6 +63,7 @@ _MAX_PHRASES = 16  # решение владельца 13.10 (Q3)
 _MAX_TEXT = 160  # p95 названия в мини-прод — 134 знака
 _MAX_WINDOW_CONTENT = 12  # сильные окна — только у короткой реплики
 _WINDOWS = (3, 2, 1)
+_COMPLETE_REACH = 2  # дополнение окна (`parse_complete_windows`): слов вправо — «из вены»
 
 # Обвязка с краёв фразы: слова вопроса о цене и вежливость. Внутри промежутка между сильными окнами
 # обвязка ещё и родовые слова («анализ на») — сами по себе услугу они не называют.
@@ -329,6 +330,41 @@ def _fragment_windows(reply: str, toks: Sequence[_Token], split: Sequence[Phrase
     return out
 
 
+def _complete_windows_mode() -> str:
+    raw = str(getattr(_cfg, "MR_PARSE_COMPLETE_WINDOWS", "off") or "").strip().lower()
+    return raw if raw in ("off", "on") else "off"
+
+
+def _completed_windows(reply: str, toks: Sequence[_Token], phrases: Sequence[Phrase], catalog: list[dict[str, Any]]) -> list[Phrase]:
+    """Под `parse_complete_windows = on` (15.10, g0724): слабое окно, оборванное перед словами реплики, с которыми оно
+    даёт сильное совпадение по данным МИС, — дополненное до сильного, вариант для выбора LLM.
+
+    «нужно ли дополнительно платить за взятие крови из вены»: окна сегментации — не длиннее трёх слов (предлог занимает
+    место), «взятие крови из» правила приземляют на «Взятие крови из вены», а «вены» отдельно — на ту же услугу, и
+    повтор выбрасывается; сильные окна (г) тоже не длиннее трёх. LLM видела обрывок и W с обвязкой «дополнительно
+    платить за» — ни одного названия, `none_fit`. Окно дополняется следующими словами (не дальше `_COMPLETE_REACH` и не
+    через знак препинания), ближайшее сильное — вариант; слов в обвязку не дописываем, решают данные (`phrase_rows`).
+    Только вправо: влево свип dev (15.10) полезных дополнений не дал, а «с» → «гепатит в с» (g0702) склеивал две
+    позиции в одну строку. Разрезом не служит: выбирает LLM (фразы не пересекаются — `Task.disjoint`)."""
+
+    if _complete_windows_mode() != "on":
+        return []
+    out: list[Phrase] = []
+    for phrase in phrases:
+        span = _span_of(toks, phrase)
+        if span is None or phrase.source == SOURCE_WHOLE or phrase_rows(phrase.raw, catalog):
+            continue
+        lo, hi = span
+        for reach in range(1, _COMPLETE_REACH + 1):
+            if hi + reach >= len(toks) or _clause_break(reply, toks[hi + reach - 1], toks[hi + reach]):
+                break
+            wider = _phrase(reply, toks, lo, hi + reach, SOURCE_VARIANT)
+            if wider is not None and (wider.start, wider.end) != (phrase.start, phrase.end) and phrase_rows(wider.raw, catalog):
+                out.append(wider)
+                break
+    return out
+
+
 def _span_of(toks: Sequence[_Token], phrase: Phrase) -> tuple[int, int] | None:
     inside = [k for k, t in enumerate(toks) if phrase.start <= t.start and t.end <= phrase.end]
     return (inside[0], inside[-1]) if inside else None
@@ -446,7 +482,9 @@ def phrase_candidates(reply: str, *, facet: str | None, catalog: list[dict[str, 
         # Варианты — только там, где выбор LLM и так нужен или реплика режется разделителями: одна
         # фраза без разделителей остаётся `single` (путь одной услуги, без нового вызова LLM).
         if len(chosen) >= 2 or len(pieces) >= 2:
-            take([*pieces, *_fragment_windows(reply, toks, split, catalog), *parts])
+            windows = _fragment_windows(reply, toks, split, catalog)
+            completed = _completed_windows(reply, toks, [*primary, *pieces, *windows, *parts], catalog)
+            take([*pieces, *windows, *completed, *parts])
     head = [p for p in chosen if p is whole]
     options = (*head, *sorted((p for p in chosen if p is not whole), key=lambda p: (p.start, p.end)))
     return Candidates(reply=reply, probe=probe, whole=whole, options=options, partitions=partitions, too_many=len(split) >= _MAX_PHRASES)

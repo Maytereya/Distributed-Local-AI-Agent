@@ -212,6 +212,7 @@ class MessengerRouterConfig:
     reask_limit: str
     parse_price_guard: str
     parse_fragment_windows: str
+    parse_complete_windows: str
     debug_final_input: bool
     url: str
 
@@ -507,6 +508,12 @@ settings = Settings(
         # было; on — окно 1–3 слова, сильное по данным МИС («ферритин»), предлагается LLM; разрезом не служит.
         # [MESSENGER_ROUTER] parse_fragment_windows
         parse_fragment_windows=_get_enum("MESSENGER_ROUTER", "parse_fragment_windows", default="off", allowed={"off", "on"}),
+        # Окно-кандидат разбора, оборванное перед словом реплики, с которым оно даёт сильное совпадение по данным МИС
+        # (15.10, g0724: окно сегментации «взятие крови из» без «вены» — LLM разбора не видела названия целиком): off —
+        # как было; on — окно, дополненное до сильного следующими словами (не дальше 2 и не через знак препинания),
+        # предлагается LLM вариантом; разрезом не служит.
+        # [MESSENGER_ROUTER] parse_complete_windows
+        parse_complete_windows=_get_enum("MESSENGER_ROUTER", "parse_complete_windows", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -651,6 +658,7 @@ MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
 MR_PARSE_PRICE_GUARD = settings.messenger_router.parse_price_guard
 MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows
+MR_PARSE_COMPLETE_WINDOWS = settings.messenger_router.parse_complete_windows
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 
