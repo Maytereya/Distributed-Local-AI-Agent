@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from agent_logic_2.nayka_api import api_price
 
-from .. import shown_context, turn_parse
+from .. import shown_context, turn_parse, turn_telemetry
 from ..runtime_config import config as _cfg
 from ..policies import handoff_message
 from ..text_templates import price_names_without_prices_text, price_not_found_text
@@ -198,6 +198,60 @@ def _parse_phrase_judged_by_llm(query: str) -> str:
     return "" if item.rows else str(item.text or "")
 
 
+def _p2_llm_judge_on() -> bool:
+    return str(getattr(_cfg, "MR_P2_LLM_JUDGE", "off") or "").strip().lower() == "on"
+
+
+def _p2_name_from_entity(entity_service_name: str, query_service_name: str | None, service_name: str, query_text: str) -> bool:
+    """Под `p2_llm_judge = on`: резолвер по реплике названия не дал, и путь цены ведёт название из сущности NLU /
+    контекста (без него — путь одной услуги или «Уточните»). Уточнение П2 проверяет вызывающий по строкам прайса."""
+
+    return (
+        _p2_llm_judge_on()
+        and bool(str(entity_service_name or "").strip())
+        and not query_service_name
+        and bool(str(service_name or "").strip())
+        and not _is_city_only_reply(query_text)
+    )
+
+
+async def _p2_llm_verdict(
+    query: str,
+    retail_rows: list[dict[str, Any]],
+    *,
+    candidates: list[dict[str, Any]],
+    shown: list[dict[str, Any]],
+    hints: list[str],
+    context: str,
+    runtime_llm_mode: str,
+) -> PriceSelection | None:
+    """«Та ли это услуга с этим свойством» (BUG-2026-10-15-P2-ENTITY-BYPASS, `p2_llm_judge = on`): резолвер отказал
+    из-за уточнения, которого в прайсе нет (П2, `query_has_unsatisfiable_qualifier`), а название пришло из сущности
+    NLU / контекста. Гард по буквам здесь не годен (встречный свип 15.10: «первый приём невролога», «для иностранного
+    гражданина» — разговорное слово, не уточнение) — судит выбор строки (`judge_qualifier`, правило 3 промпта отсекает
+    «по ОМС»), кандидаты — строки названия.
+
+    Выбор LLM (строки) — они; LLM ответила «не та» (`none_fit`) — честное «не нашёл» (`_match_policy_payload`);
+    сбой LLM, ответ не по делу («слишком общее», «не услуга»), `unavailable` — None: ответ как без выключателя."""
+
+    selection = await select_price_rows(
+        query,
+        retail_rows,
+        candidates=candidates,
+        shown=shown,
+        hints=hints,
+        context=context,
+        runtime_llm_mode=runtime_llm_mode,
+        judge_qualifier=True,
+        decide=True,
+    )
+    if selection is None or (not selection.rows and selection.status != "none_fit"):
+        turn_telemetry.note(p2_llm_judge="fallback")
+        return None
+    turn_telemetry.note(p2_llm_judge="rows" if selection.rows else "not_found")
+    return selection
+
+
 def _parse_strong_selection(query: str) -> PriceSelection | None:
     """Под `turn_parse = on` (L-15b, шаг 5): разбор этой реплики решил одну услугу, сильную по данным МИС
     (дословное название, синоним МИС, код), — её строки без выбора LLM, вместо ответа правил по буквам
@@ -303,6 +357,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             "entities_used": entities,
         }
     doctor_query_specialty = _extract_specialty_from_text(query_text) if (doctor_id and has_price_request) else ""
+    p2_from_entity = False
 
     if doctor_id:
         # Для doctor-specific PRICE не приземляемся в городский retail-catalog:
@@ -338,6 +393,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             entity_service_name,
             query_service_name,
         )
+        p2_from_entity = _p2_name_from_entity(entity_service_name, query_service_name, service_name, query_text)
     needle = _normalise_input(service_name)
 
     if doctor_id:
@@ -399,6 +455,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             extra={"prices": []},
         )
     retail_rows_clean = [p for p in price_rows if isinstance(p, dict)]
+    p2_judged = p2_from_entity and query_has_unsatisfiable_qualifier(query_text, retail_rows_clean)
     # Мульти-услуговый запрос («ВИЧ, гепатит, ОАК»): активируется только если
     # ≥2 фрагментов приземлились на реальные услуги каталога. Иначе — fallback
     # на существующий single-service путь, старые кейсы остаются без изменений.
@@ -423,12 +480,22 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     # Что спросил пациент, решает LLM (класс «цена не той услуги», решение владельца
     # 30.09); правила собирают кандидатов, их ответ — первый кандидат и ответ по
     # умолчанию, если LLM молчит. LLM зовётся не больше одного раза за вызов.
-    async def _llm_select(proposal: list[dict[str, Any]], shown: list[dict[str, Any]]) -> Any:
+    async def _llm_select(proposal: list[dict[str, Any]], shown: list[dict[str, Any]], *, entity_name: bool = False) -> Any:
         if not entities.get("__price_question"):
             return None  # цена попутно (запись, карточка врача) — по правилам, без LLM
         strong = _parse_strong_selection(str(query or ""))
         if strong is not None:
             return strong
+        if entity_name and p2_judged:
+            return await _p2_llm_verdict(
+                str(query or ""),
+                retail_rows_clean,
+                candidates=proposal,
+                shown=shown,
+                hints=[service_name],
+                context=entity_service_name,
+                runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
+            )
         judged = _parse_phrase_judged_by_llm(str(query or ""))
         return await select_price_rows(
             str(query or ""),
@@ -528,7 +595,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             limit=10,
         )
     # Рендер показывает пациенту до пяти строк — их и сверяем.
-    selection = await _llm_select(matches, matches[:5])
+    selection = await _llm_select(matches, matches[:5], entity_name=True)
     stop = _match_policy_payload(selection, str(query or ""), entities)
     if stop is not None:
         return stop
@@ -595,12 +662,24 @@ async def service_bundle_info(
     # 30.09): «приём эндокринолога» → не «приём хирурга (эндокринологическое
     # отделение)». Правила собирают кандидатов, их ответ — первый кандидат и ответ по
     # умолчанию, если LLM молчит. LLM зовётся не больше одного раза за вызов.
-    async def _llm_select(proposal: list[dict[str, Any]], shown: list[dict[str, Any]], rules_guess: str = "") -> Any:
+    async def _llm_select(
+        proposal: list[dict[str, Any]], shown: list[dict[str, Any]], rules_guess: str = "", *, p2_judged: bool = False
+    ) -> Any:
         if not entities.get("__price_question"):
             return None  # цена попутно (запись, карточка врача) — по правилам, без LLM
         strong = _parse_strong_selection(str(query or ""))
         if strong is not None:
             return strong
+        if p2_judged:
+            return await _p2_llm_verdict(
+                str(query or ""),
+                retail_rows,
+                candidates=proposal,
+                shown=shown,
+                hints=[rules_guess],
+                context=entity_service_name,
+                runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
+            )
         return await select_price_rows(
             str(query or ""),
             retail_rows,
@@ -660,6 +739,11 @@ async def service_bundle_info(
         query_service_name
         if llm_rows
         else _select_effective_price_service_name(entity_service_name, query_service_name)
+    )
+    p2_judged = (
+        not llm_rows
+        and _p2_name_from_entity(entity_service_name, query_service_name, service_name, query_text)
+        and query_has_unsatisfiable_qualifier(query_text, retail_rows)
     )
     needle = _normalise_input(service_name)
 
@@ -733,7 +817,7 @@ async def service_bundle_info(
             is_consult_query=_is_consultation_service_query(service_name),
         )
         shown = out["retail_prices"] if shown_kind == "lab" else out["retail_prices"][:1]
-        selection = await _llm_select(out["retail_prices"], shown, service_name)
+        selection = await _llm_select(out["retail_prices"], shown, service_name, p2_judged=p2_judged)
         stop = _match_policy_payload(selection, str(query or ""), entities)
         if stop is not None:
             return stop

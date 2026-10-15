@@ -458,6 +458,7 @@ async def select_price_rows(
     context: str = "",
     runtime_llm_mode: str = "",
     judge_qualifier: bool = False,
+    decide: bool = False,
 ) -> PriceSelection | None:
     """Строки прайса, которые являются той услугой, о которой спросил пациент.
 
@@ -475,6 +476,9 @@ async def select_price_rows(
         (правило 3 промпта отсекает «по ОМС»). Только для фразы, которую LLM разбора выбрала одной услугой
         (`parse_price_guard = llm`, класс A 15.10: гард по словарю каталога считал «карбамазепина» уточнением).
         Сбой LLM — ответ правил, а у них гард прежний: чужой цены нет.
+    :param decide: вернуть решение политики силы совпадения (`none_fit`, `unavailable`, выбор) так, как под
+        `price_match_policy = on`, при любом значении выключателя (телеметрия политики — прежняя). Для вызывающего,
+        которому нужен ответ LLM «не та услуга» отдельно от сбоя (`p2_llm_judge`, BUG-2026-10-15-P2-ENTITY-BYPASS).
     :return: выбор LLM; None — оставить ответ правил
     """
 
@@ -531,7 +535,7 @@ async def select_price_rows(
 
         if record:
             turn_telemetry.note(price_policy=label or _policy_label(decided))
-        return decided if policy == "on" else legacy
+        return decided if policy == "on" or decide else legacy
 
     def unavailable() -> tuple[PriceSelection | None, str]:
         # Правила ничего не предложили — чужой цены не было, их честный ответ остаётся.

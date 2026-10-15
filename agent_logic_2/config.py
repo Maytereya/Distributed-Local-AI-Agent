@@ -213,6 +213,7 @@ class MessengerRouterConfig:
     parse_price_guard: str
     parse_fragment_windows: str
     parse_complete_windows: str
+    p2_llm_judge: str
     parse_agree_telemetry: str
     debug_final_input: bool
     url: str
@@ -515,6 +516,13 @@ settings = Settings(
         # предлагается LLM вариантом; разрезом не служит.
         # [MESSENGER_ROUTER] parse_complete_windows
         parse_complete_windows=_get_enum("MESSENGER_ROUTER", "parse_complete_windows", default="off", allowed={"off", "on"}),
+        # Гард П2 («уточнения нет в прайсе») у названия услуги из сущности NLU / контекста судит LLM (15.10,
+        # BUG-2026-10-15-P2-ENTITY-BYPASS: «узи щитовидной железы по омс» — резолвер отказал, а сущность вела к платной
+        # цене; гард по буквам глушил «первый приём невролога»): off — как было; on — «та ли это услуга с этим
+        # свойством» решает выбор строки (`select_price_rows(..., judge_qualifier=True)`, правило 3 промпта отсекает
+        # «по ОМС»): строки LLM — цена, «не та» — честное «не нашёл», сбой LLM — как было (цена по сущности).
+        # [MESSENGER_ROUTER] p2_llm_judge
+        p2_llm_judge=_get_enum("MESSENGER_ROUTER", "p2_llm_judge", default="off", allowed={"off", "on"}),
         # Телеметрия согласия разрезов `tu_parse_agree` под turn_parse = on (T7, шаг 4): on — как было (правила понимания
         # хода считаются на каждом ценовом ходе параллельно выбору фраз LLM, O3b, — согласию нужен их разрез); off —
         # согласия под on нет, правила считаются лениво: только когда разбор не годится для действия (`acting_for` —
@@ -666,6 +674,7 @@ MR_REASK_LIMIT = settings.messenger_router.reask_limit
 MR_PARSE_PRICE_GUARD = settings.messenger_router.parse_price_guard
 MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows
 MR_PARSE_COMPLETE_WINDOWS = settings.messenger_router.parse_complete_windows
+MR_P2_LLM_JUDGE = settings.messenger_router.p2_llm_judge
 MR_PARSE_AGREE_TELEMETRY = settings.messenger_router.parse_agree_telemetry
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
