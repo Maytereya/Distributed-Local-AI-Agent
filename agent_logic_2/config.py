@@ -209,6 +209,7 @@ class MessengerRouterConfig:
     pending_reply: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
     reask_limit: str
+    parse_price_guard: str
     debug_final_input: bool
     url: str
 
@@ -488,6 +489,12 @@ settings = Settings(
         # вопроса переспрашивает без счёта); on — один вопрос звучит не больше двух раз подряд, третьего нет:
         # бот называет нужный ответ и предлагает оператора. [MESSENGER_ROUTER] reask_limit
         reask_limit=_get_enum("MESSENGER_ROUTER", "reask_limit", default="off", allowed={"off", "on"}),
+        # Гард П2 («уточнения нет в прайсе») у фразы разбора (класс A, решение владельца 15.10): rules — как было
+        # (гард судит реплику; «карбамазепина» в родительном падеже он считает уточнением, которого нет в прайсе,
+        # и цена не ищется); llm — под turn_parse = on одну выбранную LLM разбора фразу судит выбор строки
+        # (`select_price_rows`, правило 3 промпта отсекает «по ОМС»), гард — страховка при сбое LLM.
+        # [MESSENGER_ROUTER] parse_price_guard
+        parse_price_guard=_get_enum("MESSENGER_ROUTER", "parse_price_guard", default="rules", allowed={"rules", "llm"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -629,6 +636,7 @@ MR_JOURNAL_PHRASE = settings.messenger_router.journal_phrase
 MR_CONTEXT_SHOWN = settings.messenger_router.context_shown
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
+MR_PARSE_PRICE_GUARD = settings.messenger_router.parse_price_guard
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

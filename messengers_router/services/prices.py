@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from agent_logic_2.nayka_api import api_price
 
 from .. import shown_context, turn_parse
+from ..runtime_config import config as _cfg
 from ..policies import handoff_message
 from ..text_templates import price_names_without_prices_text, price_not_found_text
 from ._addresses_helpers import _extract_homecode_query
@@ -181,6 +182,20 @@ def _names_a_service(fragments: list[str]) -> list[str]:
     (STEP-2026-10-14-L15B-6-T3, п. 8)."""
 
     return [fragment for fragment in fragments if any(token.key not in _FILLER for token in _phrase_tokens(str(fragment or "")))]
+
+
+def _parse_phrase_judged_by_llm(query: str) -> str:
+    """Под `parse_price_guard = llm` и `turn_parse = on` (класс A, решение владельца 15.10): фраза, которую LLM
+    разбора выбрала одной слабой услугой, — её «есть ли такое в прайсе» решает выбор строки, а не гард П2 по
+    словарю каталога. Иначе пусто — гард как раньше."""
+
+    if str(getattr(_cfg, "MR_PARSE_PRICE_GUARD", "rules") or "").strip().lower() != "llm":
+        return ""
+    parse = turn_parse.acting_for(query)
+    if parse is None or parse.is_list or len(parse.items) != 1 or parse.status != turn_parse.ParseStatus.PICKED:
+        return ""
+    item = parse.items[0]
+    return "" if item.rows else str(item.text or "")
 
 
 def _parse_strong_selection(query: str) -> PriceSelection | None:
@@ -414,14 +429,16 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         strong = _parse_strong_selection(str(query or ""))
         if strong is not None:
             return strong
+        judged = _parse_phrase_judged_by_llm(str(query or ""))
         return await select_price_rows(
             str(query or ""),
             retail_rows_clean,
             candidates=proposal,
             shown=shown,
-            hints=[service_name],
+            hints=[service_name, judged],
             context=entity_service_name,
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
+            judge_qualifier=bool(judged),
         )
 
     def _llm_answer(rows: list[dict[str, Any]]) -> dict[str, Any]:

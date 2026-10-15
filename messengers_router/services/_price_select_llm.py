@@ -457,6 +457,7 @@ async def select_price_rows(
     hints: Sequence[str] = (),
     context: str = "",
     runtime_llm_mode: str = "",
+    judge_qualifier: bool = False,
 ) -> PriceSelection | None:
     """Строки прайса, которые являются той услугой, о которой спросил пациент.
 
@@ -470,6 +471,10 @@ async def select_price_rows(
     :param context: сущность NLU / услуга из диалога — тоже только для поиска
         кандидатов; в подсказку LLM не идёт
     :param runtime_llm_mode: strict|hybrid|rich; в strict LLM не зовём
+    :param judge_qualifier: гард П2 («уточнения нет в прайсе») не отсекает реплику до LLM — её судит выбор строки
+        (правило 3 промпта отсекает «по ОМС»). Только для фразы, которую LLM разбора выбрала одной услугой
+        (`parse_price_guard = llm`, класс A 15.10: гард по словарю каталога считал «карбамазепина» уточнением).
+        Сбой LLM — ответ правил, а у них гард прежний: чужой цены нет.
     :return: выбор LLM; None — оставить ответ правил
     """
 
@@ -486,7 +491,9 @@ async def select_price_rows(
     # «не нашёл» (решение владельца, П2) — не даём LLM найти «почти то». Но если
     # незнакомы ВСЕ слова об услуге («гастроскопия»), это не уточнение, а услуга
     # другим словом — её и ищет LLM (правило 3 промпта само отсекает «по ОМС»).
-    if query_has_unsatisfiable_qualifier(question, rows) and not query_names_service_in_other_words(question, rows):
+    if judge_qualifier:
+        turn_telemetry.note(price_guard="llm")
+    elif query_has_unsatisfiable_qualifier(question, rows) and not query_names_service_in_other_words(question, rows):
         return None
 
     phrase = str(_extract_price_service_from_query(question) or "").strip()
