@@ -17,7 +17,7 @@
   `tests/golden/price_turns_parse_fallback.json` (побайтно). Эталон держит поведение как есть, вместе с известными
   дефектами запасного пути (сегментатор режет фразу одной услуги, вопрос о сроке получает цену): намеренная правка
   меняет его только перезаписью с разбором диффа;
-- два набора выключателей: `deploy_parse` (набор деплоя классовых тестов + `turn_parse = on`) и `prod` (прод 15.10:
+- два набора выключателей: `deploy_parse` (набор деплоя классовых тестов + `turn_parse = on`, `parse_fail_variants = 5`) и `prod` (прод 15.10:
   ещё `parse_fail_variants = 3`, `journal_phrase = mention`, `context_shown = on`, `strong_match = data`); ленивые
   правила (`parse_agree_telemetry = off`, T7 шаг 4) дают эталон `prod` без изменений;
 - два хода: короткий вопрос после ответа запасного пути не получает цены, которой пациент не видел.
@@ -51,9 +51,10 @@ from tests.test_turn_parse_t3 import _FOLLOW_UPS, _assert_follow_up_stays_on_wha
 GOLDEN = Path(__file__).resolve().parent / "golden" / "price_turns_parse_fallback.json"
 UPDATE = os.environ.get("GOLDEN_UPDATE") == "1"
 
-# Наборы выключателей поверх набора деплоя (`_deploy`); `prod_lazy` сверяется с эталоном `prod`.
+# Наборы выключателей поверх набора деплоя (`_deploy`); `prod_lazy` сверяется с эталоном `prod`. У `deploy_parse` пять
+# вариантов при сбое — явно: эталон снят при прежнем умолчании, `prod` держит три (STEP-2026-10-15-DEFAULTS-B).
 _SETS: dict[str, dict[str, Any]] = {
-    "deploy_parse": {"MR_TURN_PARSE": "on"},
+    "deploy_parse": {"MR_TURN_PARSE": "on", "MR_PARSE_FAIL_VARIANTS": 5},
     "prod": {
         "MR_TURN_PARSE": "on",
         "MR_PARSE_FAIL_VARIANTS": 3,

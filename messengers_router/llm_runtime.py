@@ -28,7 +28,8 @@ from agent_logic_2.ollama_settings import LLMName
 from . import turn_telemetry
 from .runtime_config import config as c
 
-_DEFAULT_MAX_CONCURRENCY = 5
+# Запасное, если настройка не читается; = умолчанию `[OLLAMA] llm_max_concurrency` (2 — как на проде).
+_DEFAULT_MAX_CONCURRENCY = 2
 try:
     _MAX_CONCURRENCY = int(str(c.MR_LLM_MAX_CONCURRENCY).strip() or _DEFAULT_MAX_CONCURRENCY)
 except Exception:

@@ -20,7 +20,8 @@
 полными названиями и ценами; одна-единственная найденная строка ценой «той самой» не подаётся — её
 название без цены (вариант B L-13, `price_names_without_prices_text`); форму решит замер шага 6.
 
-Выключатель `[MESSENGER_ROUTER] choose_basket = off | on` (по умолчанию off; тени нет — это вызов LLM).
+Выключатель `[MESSENGER_ROUTER] choose_basket = off | on` (по умолчанию on — как на проде; тени нет —
+это вызов LLM).
 """
 
 from __future__ import annotations

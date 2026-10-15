@@ -428,11 +428,12 @@ settings = Settings(
         turn_telemetry=_get_bool("MESSENGER_ROUTER", "turn_telemetry", default=True),
         # Понимание хода на метке «цена» (ход (б), шаг 1, L-14): off — не строится; shadow — в
         # debug и телеметрию, поведение прежнее; on — список не сводится к одной услуге, вопрос
-        # о сроке не становится ценой. По умолчанию shadow: [MESSENGER_ROUTER] turn_understanding_price
+        # о сроке не становится ценой. По умолчанию on — как на проде с 14.10 (STEP-2026-10-15-DEFAULTS-B):
+        # [MESSENGER_ROUTER] turn_understanding_price
         turn_understanding_price=_get_enum(
             "MESSENGER_ROUTER",
             "turn_understanding_price",
-            default="shadow",
+            default="on",
             allowed={"off", "shadow", "on"},
         ),
         # Бюджет LLM-решений на ход (ход (в), L-11): не больше N выборов и S секунд выбора на ход;
@@ -453,18 +454,21 @@ settings = Settings(
         choose_price=_get_enum("MESSENGER_ROUTER", "choose_price", default="off", allowed={"off", "legacy", "on"}),
         # Симптом → врач на модуле choose() (ход (в), клиент 2): off — прежний вызов и разбор; legacy —
         # прежний промпт через модуль; on — врач названием из перечня ролей МИС (не больше двух), исходы
-        # «срочно» и «не жалоба». Политика сбоя прежняя. [MESSENGER_ROUTER] choose_symptom
-        choose_symptom=_get_enum("MESSENGER_ROUTER", "choose_symptom", default="off", allowed={"off", "legacy", "on"}),
+        # «срочно» и «не жалоба». Политика сбоя прежняя. По умолчанию on — как на проде с 14.10
+        # (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] choose_symptom
+        choose_symptom=_get_enum("MESSENGER_ROUTER", "choose_symptom", default="on", allowed={"off", "legacy", "on"}),
         # Политика силы совпадения для цены (L-13, решение владельца 07.10 — вариант B): off — прежняя;
         # shadow — решение только в телеметрию хода (price_policy); on — сильное совпадение по данным без
         # LLM, «не нашла» — честное «не нашёл», сбой LLM на слабом совпадении — названия без цен.
         price_match_policy=_get_enum("MESSENGER_ROUTER", "price_match_policy", default="shadow", allowed={"off", "shadow", "on"}),
         # Корзина на модуле choose() (ход (в), L-15a): позиции режут правила, строки каждой позиции
-        # выбирает LLM одним вызовом; сбой — корзина правил. off | on. [MESSENGER_ROUTER] choose_basket
-        choose_basket=_get_enum("MESSENGER_ROUTER", "choose_basket", default="off", allowed={"off", "on"}),
+        # выбирает LLM одним вызовом; сбой — корзина правил. off | on, по умолчанию on — как на проде с 14.10
+        # (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] choose_basket
+        choose_basket=_get_enum("MESSENGER_ROUTER", "choose_basket", default="on", allowed={"off", "on"}),
         # Срок готовности при слабом совпадении — услугу выбирает LLM, срок печатает код из МИС (ход (в)).
-        # off | on; действует под пониманием хода on. [MESSENGER_ROUTER] choose_readiness
-        choose_readiness=_get_enum("MESSENGER_ROUTER", "choose_readiness", default="off", allowed={"off", "on"}),
+        # off | on, по умолчанию on — как на проде с 14.10 (STEP-2026-10-15-DEFAULTS-B); действует под пониманием
+        # хода on. [MESSENGER_ROUTER] choose_readiness
+        choose_readiness=_get_enum("MESSENGER_ROUTER", "choose_readiness", default="on", allowed={"off", "on"}),
         # Что считать сильным совпадением у срока готовности (L-15b, шаг 3): legacy — прежнее определение
         # срока (название целиком или до скобок, словарь кода, синоним МИС, код); data — одно определение с
         # ценой и корзиной, только данные МИС (название, синоним МИС, код). [MESSENGER_ROUTER] strong_match
@@ -474,9 +478,9 @@ settings = Settings(
         # (решение — из бюджета хода), читатели — шаг 5. [MESSENGER_ROUTER] turn_parse
         turn_parse=_get_enum("MESSENGER_ROUTER", "turn_parse", default="off", allowed={"off", "shadow", "on"}),
         # Политика сбоя под turn_parse = on (L-15b, шаг 6, T5): сколько вариантов кода с ценами показывать у
-        # слабой позиции, когда LLM не выбрала строки (2–5; по умолчанию 5 — поправка владельца 13.10).
-        # [MESSENGER_ROUTER] parse_fail_variants
-        parse_fail_variants=_get_int("MESSENGER_ROUTER", "parse_fail_variants", default=5, min_value=2, max_value=5),
+        # слабой позиции, когда LLM не выбрала строки (2–5; поправка владельца 13.10). По умолчанию 3 — как на
+        # проде (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] parse_fail_variants
+        parse_fail_variants=_get_int("MESSENGER_ROUTER", "parse_fail_variants", default=3, min_value=2, max_value=5),
         # Фраза журнала синонимов у одиночной услуги (L-14, шаг 2): rules — прежняя (вырезатель правил, под
         # turn_parse = on — выбор LLM разбора); mention — упоминание хода (`ServiceMention`): фраза без речевой
         # обвязки, реплика без названия услуги — ничего. [MESSENGER_ROUTER] journal_phrase
@@ -575,10 +579,12 @@ settings = Settings(
         model_big=_get_str("OLLAMA", "ll_model_big", default="", legacy_key="ll_model_big"),
         model_small=_get_str("OLLAMA", "ll_model_small", default="", legacy_key="ll_model_small"),
         think=_get_bool("OLLAMA", "think", default=False, legacy_key="think"),
+        # Сколько вызовов LLM роутера идут одновременно (семафор `messengers_router/llm_runtime.py`). По умолчанию
+        # 2 — как на проде, = OLLAMA_NUM_PARALLEL сервера (STEP-2026-10-15-DEFAULTS-B). [OLLAMA] llm_max_concurrency
         llm_max_concurrency=_get_int(
             "OLLAMA",
             "llm_max_concurrency",
-            default=5,
+            default=2,
             legacy_key="MR_LLM_MAX_CONCURRENCY",
             min_value=1,
             max_value=100,

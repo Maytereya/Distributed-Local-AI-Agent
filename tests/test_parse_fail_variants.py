@@ -2,9 +2,10 @@
 
 Поправка владельца 13.10: при недоступной LLM слабая позиция — несколько вариантов кода (до 3–5) с полными
 названиями и ценами, форму решит замер шага 6. Замер `down` (dev 867): при 5 вариантах «вне разметки» 102 → 296.
-Число — настройка `[MESSENGER_ROUTER] parse_fail_variants` (2–5, по умолчанию 5 — как было), чтобы замерить
-5 против 3 одним деревом (`evalbench.run --cfg MR_PARSE_FAIL_VARIANTS=3`). Инварианты: по умолчанию поведение
-прежнее; у слабой позиции вариантов не больше настройки и не меньше двух (одна строка — не «та самая цена»).
+Число — настройка `[MESSENGER_ROUTER] parse_fail_variants` (2–5), чтобы замерить 5 против 3 одним деревом
+(`evalbench.run --cfg MR_PARSE_FAIL_VARIANTS=3`); по умолчанию 3 — как на проде (STEP-2026-10-15-DEFAULTS-B), запасное
+при нечитаемом значении — 5. Инвариант: у слабой позиции вариантов не больше настройки и не меньше двух (одна строка —
+не «та самая цена»).
 """
 
 from __future__ import annotations
@@ -28,10 +29,12 @@ def test_setting_is_read_with_a_safe_default(raw, expected, monkeypatch):
     assert bs.variants_max() == expected
 
 
-def test_config_default_is_five():
+def test_config_default_is_three():
+    """Умолчание кода = прод (STEP-2026-10-15-DEFAULTS-B)."""
+
     from agent_logic_2 import config
 
-    assert config.MR_PARSE_FAIL_VARIANTS == 5
+    assert config.MR_PARSE_FAIL_VARIANTS == 3
 
 
 @pytest.mark.parametrize("limit", [3, 5])

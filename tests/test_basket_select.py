@@ -1,6 +1,6 @@
 """Корзина на модуле выбора (ход (в), L-15a) — через обработчик эндпоинта, мини-прод.
 
-Выключатель `[MESSENGER_ROUTER] choose_basket = off | on` (по умолчанию off).
+Выключатель `[MESSENGER_ROUTER] choose_basket = off | on` (по умолчанию on — как на проде, STEP-2026-10-15-DEFAULTS-B).
 
 Инварианты класса:
 - у позиции корзины — только строки той услуги: вторая строка «на всякий случай» (чужая — «Глюкоза в
@@ -9,7 +9,7 @@
 - слабая позиция — выбор модели одним вызовом на весь список; строки, которые модель не выбрала, не
   показываются; позиция без выбора — честное «Не распознал», а не цена по буквам;
 - сбой LLM: сильные позиции — их строки по данным, слабые — строки корзины правил; сильных нет —
-  корзина правил целиком; off — эталон без изменений.
+  корзина правил целиком; off — прежняя корзина правил.
 """
 
 from __future__ import annotations
@@ -109,6 +109,22 @@ def test_llm_failure_keeps_strong_positions_by_data(mini_prod_world, monkeypatch
     assert "ТТГ (TSH) тиреотропный гормон — 400" in after  # слабая позиция — как в корзине правил
 
 
-def test_off_keeps_the_golden_basket(mini_prod_world, monkeypatch):
+# Корзина правил «ферритин и глюкоза» — эталон `list_text_and` до STEP-2026-10-15-DEFAULTS-B (тогда умолчание было off).
+_RULES_BASKET_TEXT = (
+    "По запросу «Ферритин, Глюкоза» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\n"
+    "По услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\n2. Глюкоза в моче (разовая порция) — 170 руб.\n"
+    "Если нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._"
+)
+
+
+def test_off_keeps_the_rules_basket(mini_prod_world, monkeypatch):
     _basket(monkeypatch, "off")
-    assert _ask("сколько стоит ферритин и глюкоза", "basket-golden", mini_prod_world) == _golden()["list_text_and"][0]["text"]
+    assert _ask("сколько стоит ферритин и глюкоза", "basket-golden", mini_prod_world) == _RULES_BASKET_TEXT
+
+
+def test_default_is_the_golden_basket(mini_prod_world):
+    """Умолчание = прод (`on`), LLM недоступна: эталон `list_text_and` — сильные позиции по данным."""
+
+    text = _ask("сколько стоит ферритин и глюкоза", "basket-default", mini_prod_world)
+    assert text == _golden()["list_text_and"][0]["text"]
+    assert "в моче" not in text
