@@ -2551,6 +2551,9 @@ def _handle_operator_offer_pending(
     reply_kind = contextual_reply_kind(user_text)
     if explicit_operator_requested(user_text):
         reply_kind = "yes"
+    # Под pending_reply = on (тип operator_offer): ответ, который правила не поняли («конечно, переведите»), LLM может
+    # поднять до «да» — только в сторону перевода (D2.3, асимметрия по типу вопроса).
+    reply_kind = pending_reply.reply_kind_for("operator_offer", reply_kind, user_text)
     if reply_kind == "yes":
         _clear_operator_offer_pending(state, memory)
         return (
@@ -3362,10 +3365,11 @@ async def patient_routing_stream(
             )
             return
 
-    # Ответ на висящий вопрос бота силами LLM (D2.3, `pending_reply`) — тень, одна точка хода: после срочного, явного
-    # запроса оператора и охраны города, до разбора висящего вопроса (предпроверка записи, обработчики в оркестраторе).
-    # Под off и на кнопке — ничего; ответ хода и состояние сессии тень не меняет.
-    pending_reply.observe(user_text, state.last_entities, button_id=button_id)
+    # Ответ на висящий вопрос бота силами LLM (D2.3, `pending_reply`) — одна точка хода: после срочного, явного запроса
+    # оператора и охраны города, до разбора висящего вопроса (предпроверка записи, обработчики в оркестраторе). Под off
+    # и на кнопке — ничего; под shadow — тень; под on — типы `pending_reply_types` решает LLM в ходе, исполняет
+    # обработчик вопроса (`pending_reply.reply_kind_for`). Состояние сессии здесь не меняется.
+    await pending_reply.observe_or_act(user_text, state.last_entities, button_id=button_id)
 
     precheck = run_appointment_precheck(
         user_text=user_text,

@@ -10,14 +10,17 @@
 спрашивает), а ответ на него понимает LLM закрытым выбором `choose()`: да / нет / пауза / другая тема / пункт
 показанного списка; «ничего из этого» — обычный путь.
 
-Этот шаг — только тень. Выключатель `[MESSENGER_ROUTER] pending_reply = off | shadow | on` (по умолчанию off):
+Выключатель `[MESSENGER_ROUTER] pending_reply = off | shadow | on` (по умолчанию off):
 - `off` — как было: модуль не делает ничего;
 - `shadow` — один вызов `choose(..., shadow=True)` за ход: вне бюджета хода и предохранителя, очередь к LLM не
   дольше секунды (решение владельца 13.10, Q1 — как у тени разбора реплики); ответ пациенту прежний, состояние
   сессии тень не трогает, пишет только телеметрию хода `tu_pending_*`;
-- `on` — пока то же, что `shadow`: исполнение решения LLM (асимметрия по типам вопросов, выключатель на каждый тип,
-  предел переспросов, остаток составного ответа — в NLU) — следующий шаг, после живого замера тени и встречного
-  свипа. Тень не меняет ни одного ответа, поэтому `on` до реализации безопасен и не теряет замер.
+- `on` — тип вопроса из `[MESSENGER_ROUTER] pending_reply_types` (через запятую; по умолчанию пусто) решает LLM в
+  ходе, из его бюджета, и решение исполняется — с асимметрией безопасности по типу (дизайн, таблица «Асимметрия»;
+  решение владельца 15.10). Прочие типы — тень, как под `shadow`. Исполняется пока один тип:
+  `operator_offer` — LLM может только ПОДНЯТЬ ответ до «да» (перевод на оператора: безопасное направление); её
+  «нет», «пауза», «другая тема» и сбой ничего не меняют — решают правила, как было (ложное «нет» опасно).
+  Решение хода читает обработчик вопроса (`reply_kind_for`).
 
 Место — одно: `router.patient_routing_stream` после срочного, явного запроса оператора и охраны города, до разбора
 висящего вопроса (предпроверка записи, обработчики висящих вопросов в оркестраторе). Срочное — раньше тени: «нет,
@@ -135,6 +138,9 @@ _DECIDED = frozenset({Outcome.YES, Outcome.NO, Outcome.PAUSE, Outcome.NEW_TOPIC,
 
 # Задача тени этого хода: ставит `observe`, отцепляет `detach` (конец хода в эндпоинте).
 _SHADOW: contextvars.ContextVar[asyncio.Future[None] | None] = contextvars.ContextVar("mr_pending_reply_shadow", default=None)
+# Решение хода, которое исполняет обработчик вопроса: {"text": реплика, тип вопроса: исход} (под `on`, типы
+# `acting_types`); реплика — привязка к ходу: обработчик, вызванный мимо точки решения, его не увидит.
+_ACTED: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar("mr_pending_reply_acted", default=None)
 # Отцеплённые тени: сильные ссылки, пока задача жива (иначе цикл событий может её собрать), — их ждёт `settle`.
 _DETACHED: set[asyncio.Future[None]] = set()
 
@@ -146,9 +152,22 @@ def mode() -> str:
     return raw if raw in MODES else "off"
 
 
+# Типы, решение LLM на которые умеет исполнять обработчик (асимметрия задана в нём, `reply_kind_for`).
+_ACTABLE = frozenset({"operator_offer"})
+
+
+def acting_types() -> frozenset[str]:
+    """Типы вопросов, на которые под `on` решение LLM исполняется в ходе (`pending_reply_types` ∩ исполнимые)."""
+
+    if mode() != "on":
+        return frozenset()
+    raw = str(getattr(_cfg, "MR_PENDING_REPLY_TYPES", "") or "")
+    return frozenset(part.strip() for part in raw.split(",") if part.strip()) & _ACTABLE
+
+
 @functools.cache
-def _warn_on_is_shadow() -> None:
-    logger.warning("pending_reply = on не реализован: работает как shadow (ответ прежний, только телеметрия)")
+def _warn_unknown_types(raw: str) -> None:
+    logger.warning("pending_reply_types: исполняется только %s, прочее — тень: %s", sorted(_ACTABLE), raw)
 
 
 # --------------------------------------------------------------------------- ожидание (контракт `_expects`)
@@ -260,8 +279,6 @@ def observe(user_text: str, entities: Mapping[str, Any] | None, *, button_id: st
     current = mode()
     if current == "off" or str(button_id or "").strip():
         return
-    if current == "on":
-        _warn_on_is_shadow()
     _keep(_SHADOW.get())  # тень прошлого хода, которую не отцепил эндпоинт (ход шёл мимо него), — дописывается сама
     _SHADOW.set(None)
     text = str(user_text or "").strip()
@@ -310,6 +327,58 @@ async def _decide(text: str, asked: str, options: tuple[str, ...], rules: str, r
         turn_telemetry.note(**fields)
     if cancelled:
         raise asyncio.CancelledError
+
+
+async def observe_or_act(user_text: str, entities: Mapping[str, Any] | None, *, button_id: str = "") -> None:
+    """Точка хода (`patient_routing_stream`): тип висящего вопроса из `acting_types()` — решение LLM в ходе и его
+    исход для обработчика (`reply_kind_for`); иначе — тень (`observe`), как было. Состояние сессии не меняет."""
+
+    _ACTED.set(None)
+    text = str(user_text or "").strip()
+    acting = acting_types()
+    if raw := str(getattr(_cfg, "MR_PENDING_REPLY_TYPES", "") or "").strip():
+        if mode() == "on" and {part.strip() for part in raw.split(",") if part.strip()} - _ACTABLE:
+            _warn_unknown_types(raw)
+    expected = expectation(entities) if acting and text and not str(button_id or "").strip() else None
+    if expected is None or expected.type not in acting:
+        observe(user_text, entities, button_id=button_id)
+        return
+    _keep(_SHADOW.get())
+    _SHADOW.set(None)
+    rules = rules_kind(expected.type, text)
+    fields: dict[str, Any] = {"tu_pending_type": expected.type, "tu_pending_asks": expected.asks, "tu_pending_rules": rules}
+    if is_bare_reply(text) or rules == "yes":
+        # Голый якорь или правила уже говорят «да» (перевод) — LLM не нужна: поднимать нечего.
+        turn_telemetry.note(**fields, tu_pending_outcome=Outcome.FAST_RULES.value)
+        return
+    asked = _without_patient_name(expected.question, entities or {})
+    try:
+        choice = await choose(PENDING_TASK, text, [Option(id=str(i), text=o) for i, o in enumerate(expected.options, 1)], asked=asked)
+        outcome = outcome_of(choice)
+    except Exception:  # новый слой: его сбой — правила, как было
+        logger.warning("pending_reply_act_failed", exc_info=True)
+        outcome = Outcome.ERROR
+    fields["tu_pending_outcome"] = outcome.value
+    if agree := agreement(outcome, rules):
+        fields["tu_pending_agree"] = agree
+    if outcome is Outcome.YES:
+        _ACTED.set({"text": text, expected.type: Outcome.YES.value})
+        fields["tu_pending_acted"] = Outcome.YES.value
+    turn_telemetry.note(**fields)
+
+
+def reply_kind_for(question_type: str, rules: str, user_text: str) -> str:
+    """Что исполняет обработчик вопроса `question_type`: решение правил, поднятое решением LLM этого хода.
+
+    Асимметрия (дизайн, «Асимметрия безопасности по типу вопроса»): оффер оператора — LLM поднимает до «да»
+    (перевод), «нет» и прочее от LLM ответ правил не меняют."""
+
+    acted = _ACTED.get() or {}
+    if acted.get("text") != str(user_text or "").strip():
+        return rules
+    if question_type == "operator_offer" and acted.get(question_type) == Outcome.YES.value:
+        return "yes"
+    return rules
 
 
 def _keep(task: asyncio.Future[None] | None) -> None:
