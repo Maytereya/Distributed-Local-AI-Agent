@@ -35,7 +35,8 @@ def _phrases(turn) -> list[str]:
     return [_normalise_catalog_text(str(row["phrase"])) for row in turn.journal]
 
 
-@pytest.mark.parametrize(("raw", "expected"), [(None, "rules"), ("rules", "rules"), ("mention", "mention"), ("MENTION", "mention"), ("x", "rules")])
+# Нет атрибута — умолчание кода (mention с 16.10, деплой 5); мусор в значении — прежний путь (rules).
+@pytest.mark.parametrize(("raw", "expected"), [(None, "mention"), ("rules", "rules"), ("mention", "mention"), ("MENTION", "mention"), ("x", "rules")])
 def test_setting_is_read_with_a_safe_default(raw, expected, monkeypatch):
     from messengers_router.runtime_config import config as cfg
     from messengers_router.services._price_select_llm import journal_phrase_mode
@@ -47,10 +48,12 @@ def test_setting_is_read_with_a_safe_default(raw, expected, monkeypatch):
     assert journal_phrase_mode() == expected
 
 
-def test_config_default_is_rules():
+def test_config_default_is_mention():
+    """Умолчание кода = прод (`journal_phrase = mention` с 15.10; решение владельца 16.10, деплой 5)."""
+
     from agent_logic_2 import config
 
-    assert config.MR_JOURNAL_PHRASE == "rules"
+    assert config.MR_JOURNAL_PHRASE == "mention"
 
 
 @pytest.mark.parametrize(

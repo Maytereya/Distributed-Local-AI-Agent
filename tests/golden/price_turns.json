@@ -68,7 +68,7 @@
    "pending": null
   },
   {
-   "text": "Памятки по подготовке к «а как подготовиться» у меня нет — подскажет оператор. Перевести на оператора?",
+   "text": "Памятки по подготовке к «Ферритин» у меня нет — подскажет оператор. Перевести на оператора?",
    "handoff": false,
    "label": "PREPARE",
    "plan": [
@@ -107,7 +107,7 @@
     "address_info"
    ],
    "service_name_effective": null,
-   "service_name": "анализы",
+   "service_name": "Ферритин",
    "pending": {
     "label": "ADDRESS",
     "missing": [

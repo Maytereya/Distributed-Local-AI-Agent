@@ -115,7 +115,7 @@ def _choose_mode() -> str:
 def journal_phrase_mode() -> str:
     """Откуда фраза журнала синонимов у одиночной услуги (L-14, шаг 2): rules | mention."""
 
-    raw = str(getattr(_cfg, "MR_JOURNAL_PHRASE", "rules") or "").strip().lower()
+    raw = str(getattr(_cfg, "MR_JOURNAL_PHRASE", "mention") or "").strip().lower()
     return raw if raw in ("rules", "mention") else "rules"
 
 

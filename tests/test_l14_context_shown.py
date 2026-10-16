@@ -28,7 +28,8 @@ SHOWN = ("deploy_shown", "next_shown")
 _GGT = "ГГТ гамма-глютамилтрансфераза"
 
 
-@pytest.mark.parametrize(("raw", "expected"), [(None, "off"), ("off", "off"), ("on", "on"), ("ON", "on"), ("x", "off")])
+# Нет атрибута — умолчание кода (on с 16.10, деплой 5); мусор в значении — прежний путь (off).
+@pytest.mark.parametrize(("raw", "expected"), [(None, "on"), ("off", "off"), ("on", "on"), ("ON", "on"), ("x", "off")])
 def test_setting_is_read_with_a_safe_default(raw, expected, monkeypatch):
     from messengers_router import shown_context
     from messengers_router.runtime_config import config as cfg
@@ -40,10 +41,12 @@ def test_setting_is_read_with_a_safe_default(raw, expected, monkeypatch):
     assert shown_context.mode() == expected
 
 
-def test_config_default_is_off():
+def test_config_default_is_on():
+    """Умолчание кода = прод (`context_shown = on` с 15.10; решение владельца 16.10, деплой 5)."""
+
     from agent_logic_2 import config
 
-    assert config.MR_CONTEXT_SHOWN == "off"
+    assert config.MR_CONTEXT_SHOWN == "on"
 
 
 def _row(name: str, price: int = 100) -> dict:

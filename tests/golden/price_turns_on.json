@@ -125,22 +125,23 @@
     "price_info"
    ],
    "service_name_effective": "а ферритин, Глюкоза",
-   "service_name": null,
+   "service_name": "Глюкоза",
    "pending": null
   },
   {
-   "text": "К какому анализу или исследованию нужна подготовка? Напишите название.",
+   "text": "Памятки по подготовке к «Глюкоза» у меня нет — подскажет оператор. Перевести на оператора?",
    "handoff": false,
    "label": "PREPARE",
    "plan": [
-    "PREPARE"
+    "PREPARE",
+    "test_prepare"
    ],
    "service_name_effective": null,
-   "service_name": null,
+   "service_name": "Глюкоза",
    "pending": {
-    "label": "PREPARE",
+    "label": "OTHER",
     "missing": [
-     "_any_of:test_name,service_name"
+     "operator_offer_confirm"
     ]
    }
   }
@@ -195,7 +196,7 @@
     "OTHER"
    ],
    "service_name_effective": null,
-   "service_name": null,
+   "service_name": "Ферритин",
    "pending": null
   }
  ],
@@ -208,7 +209,7 @@
     "OTHER"
    ],
    "service_name_effective": null,
-   "service_name": null,
+   "service_name": "Ферритин",
    "pending": null
   }
  ]

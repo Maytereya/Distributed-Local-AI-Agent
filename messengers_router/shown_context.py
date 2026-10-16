@@ -51,7 +51,7 @@ _BEFORE: contextvars.ContextVar[str] = contextvars.ContextVar("mr_shown_service_
 
 
 def mode() -> str:
-    raw = str(getattr(_cfg, "MR_CONTEXT_SHOWN", "off") or "").strip().lower()
+    raw = str(getattr(_cfg, "MR_CONTEXT_SHOWN", "on") or "").strip().lower()
     return raw if raw in MODES else "off"
 
 

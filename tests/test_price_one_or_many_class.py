@@ -49,11 +49,15 @@ from messengers_router.services._common import _normalise_catalog_text
 from messengers_router.services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
 from tests.test_price_turns_golden import FIXTURE, run_dialog
 
+# Наборы деплоя 14.10 и `default` — исторические: «контекст = показанное» на них выключен явно (умолчание кода = прод с
+# 16.10, деплой 5: `context_shown = on`); прод-наборы и `*_shown` включают его сами. Фраза журнала на ответы не влияет —
+# тесты журнала задают её сами.
 _DEPLOY = {
     "MR_TURN_UNDERSTANDING_PRICE": "on",
     "MR_CHOOSE_READINESS": "on",
     "MR_CHOOSE_SYMPTOM": "on",
     "MR_CHOOSE_PRICE": "off",
+    "MR_CONTEXT_SHOWN": "off",
 }
 # Набор `default` — умолчания кода ДО переворота «умолчания = прод» (STEP-2026-10-15-DEFAULTS-A), заданные явно:
 # переворот умолчаний в `agent_logic_2/config.py` не меняет смысла отметок этого набора.
@@ -62,6 +66,7 @@ _DEFAULT = {
     "MR_CHOOSE_READINESS": "off",
     "MR_CHOOSE_SYMPTOM": "off",
     "MR_PARSE_FAIL_VARIANTS": 5,
+    "MR_CONTEXT_SHOWN": "off",
 }
 # Набор выключателей → значения поверх конфига гейта. Разбор реплики (`turn_parse = on`) — единственный режим
 # (T7 шаг 3б, 16.10): `deploy` — прод; `deploy_parse` — прежнее имя того же набора для файлов, которые его зовут.

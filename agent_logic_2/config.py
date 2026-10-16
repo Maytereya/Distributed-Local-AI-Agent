@@ -467,12 +467,14 @@ settings = Settings(
         parse_fail_variants=_get_int("MESSENGER_ROUTER", "parse_fail_variants", default=3, min_value=2, max_value=5),
         # Фраза журнала синонимов у одиночной услуги (L-14, шаг 2): rules — прежняя (вырезатель правил, под
         # turn_parse = on — выбор LLM разбора); mention — упоминание хода (`ServiceMention`): фраза без речевой
-        # обвязки, реплика без названия услуги — ничего. [MESSENGER_ROUTER] journal_phrase
-        journal_phrase=_get_enum("MESSENGER_ROUTER", "journal_phrase", default="rules", allowed={"rules", "mention"}),
+        # обвязки, реплика без названия услуги — ничего. По умолчанию mention — как на проде с 15.10 (решение владельца
+        # 16.10, деплой 5). [MESSENGER_ROUTER] journal_phrase
+        journal_phrase=_get_enum("MESSENGER_ROUTER", "journal_phrase", default="mention", allowed={"rules", "mention"}),
         # Контекст сессии = показанное (L-14, шаг 3): off — услугу в состояние пишет только заземление правил;
         # on — ответ с ценами пишет показанные строки (_shown_services) и одну показанную услугу (service_name),
-        # срок из МИС — тоже; сводка диалога не называет снятую услугу. [MESSENGER_ROUTER] context_shown
-        context_shown=_get_enum("MESSENGER_ROUTER", "context_shown", default="off", allowed={"off", "on"}),
+        # срок из МИС — тоже; сводка диалога не называет снятую услугу. По умолчанию on — как на проде с 15.10 (решение
+        # владельца 16.10, деплой 5). [MESSENGER_ROUTER] context_shown
+        context_shown=_get_enum("MESSENGER_ROUTER", "context_shown", default="on", allowed={"off", "on"}),
         # Ответ на висящий вопрос бота силами LLM (D2.3, `messengers_router/pending_reply.py`): off — как было;
         # shadow — тень: решение LLM вне бюджета хода и предохранителя, только телеметрия (tu_pending_*), ответ
         # прежний; on — пока как shadow (исполнение — следующий шаг, после живого замера и встречного свипа).
