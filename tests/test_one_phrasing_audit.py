@@ -418,6 +418,15 @@ def test_no_rule_casefold_differs_from_lower_only_on_archaic_glyphs():
     assert fold_only <= _FOLD_ONLY_GLYPHS
 
 
+def test_policies_has_no_regex_copy_of_no():
+    """Одно определение «нет»: регулярки-копии множества нет; архаичный глиф («неᲄ») больше не «нет» — единственное
+    известное расхождение со старым кодом (пациент такого не набирает)."""
+
+    assert not hasattr(policies, "_NO_RE")
+    assert _old_is_negative_text("неᲄ") and not policies._is_negative_text("неᲄ")
+    assert all(policies._is_negative_text(phrase) for phrase in policies._CONFIRM_NO_EXACT)
+
+
 NO_AUDIT: dict[str, tuple[str, str]] = {
     # реплика: (contextual_reply_kind, appointment_confirmation_transition)
     "нет": ("no", "no"),

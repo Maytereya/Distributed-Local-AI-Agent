@@ -2507,11 +2507,6 @@ _YES_RE = re.compile(
     r"^\s*(да|ага|угу|подтверждаю|подтверждаем|верно|ок|окей|конечно|давайте|наверное|хорошо|ладно)\s*[!.,?;:]?\s*$",
     re.I,
 )
-_NO_RE = re.compile(
-    r"^\s*(нет|неа|не\s+подтверждаю|не\s+подтверждаем|неверно|не\s+верно|не\s+надо|не\s+нужно|"
-    r"неправильно|не\s+правильно)\s*[!.,?;:]?\s*$",
-    re.I,
-)
 _CONFIRM_STRIP_QUOTES_RE = re.compile(r"[\"'`«»]+")
 _CONFIRM_PUNCT_RE = re.compile(r"[!.,?;:()]+")  # «да)» — тоже «да»
 _CONFIRM_SPACE_RE = re.compile(r"\s+")
@@ -2592,10 +2587,9 @@ def _is_affirmative_text(text: str) -> bool:
 
 
 def _is_negative_text(text: str) -> bool:
-    raw = str(text or "")
-    if _NO_RE.match(raw):
-        return True
-    norm = _normalize_confirmation_text(raw)
+    # «Нет» — одно определение: множество `_CONFIRM_NO_EXACT` после нормализации (его же читает `pending_reply`).
+    # Регулярка `_NO_RE` с теми же десятью фразами снята как копия (STEP-2026-10-16-ONE-PHRASING).
+    norm = _normalize_confirmation_text(str(text or ""))
     if not norm:
         return False
     if norm in _CONFIRM_NO_EXACT:
