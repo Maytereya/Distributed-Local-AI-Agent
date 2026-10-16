@@ -111,3 +111,89 @@ def test_through_the_endpoint_with_the_llm_down_two_turns(value, mini_prod_world
         assert first["text"].index(_RIGHT) < first["text"].index(_WRONG), first["text"]
     else:
         assert _WRONG in first["text"] and _RIGHT not in first["text"], first["text"]
+
+
+# --------------------------------------------------------------------------- общее слово (BUG-2026-10-17-VARIANT-B-COMMON-WORD)
+#
+# Живой прайс 16.10 (dev 867, LLM недоступна): «стоимость консультации врача» — под off перевод, под on — «нашёл похожие
+# услуги» и пять приёмов хирургов (против решения 25.09: цену приёма без специальности не называть). «консультации»
+# дословно есть в одном названии (и потому — самое редкое слово), а со словоформой «консультация» — в 163: редкость —
+# артефакт формы, слово общее. Словоформы добавляют строки, только если слово вместе с ними различает — есть не больше
+# чем в `_VARIANT_B_LIMIT` названиях прайса (список покажет их все); механика по данным прайса, без слов в коде.
+# В мини-прайсе «консультации» дословно нет — добавлена одна такая строка, как на живом прайсе.
+
+_COMMON = "стоимость консультации врача"
+_RARE_FORM_ROW = {
+    "serviceId": 990001,
+    "priceUnitId": 137,
+    "serviceHomecode": "99.9.1",
+    "serviceName": "Консультации психолога групповые",
+    "deadline": " ",
+    "cost": 1500.0,
+    "promotion": None,
+}
+
+
+@pytest.fixture(scope="module")
+def rare_form_world(tmp_path_factory):
+    import shutil
+
+    from tests.test_price_turns_golden import FIXTURE as SNAPSHOTS
+
+    root = tmp_path_factory.mktemp("rare_form")
+    shutil.copytree(SNAPSHOTS, root / "snapshots")
+    with (root / "snapshots" / "price_by_region" / "price_region_3_20261008.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(_RARE_FORM_ROW, ensure_ascii=False) + "\n")
+    return ev_world.build_world(root / "snapshots", "20261008", root / "world")
+
+
+def _common_names(rows: list[dict]) -> tuple[str, ...]:
+    from messengers_router.services import _price_select_llm as PS
+    from messengers_router.services._prices_helpers import _price_query_tokens
+
+    phrase = str(PS._extract_price_service_from_query(_COMMON) or "")
+    words = [t for t in _price_query_tokens(_COMMON) if len(t) >= 3]
+    pool = PS._build_pool([_COMMON, PS._apply_service_synonyms(_COMMON), phrase], rows, per_text=PS._PER_QUERY_LIMIT, fallback_texts=words)
+    return PS._whole_word_names(_COMMON, pool, rows)
+
+
+def test_a_word_rare_only_as_a_word_form_names_nothing(rare_form_world, monkeypatch):
+    """Ключ варианта B — «консультации» (дословно одно название вне кандидатов), со словоформой — общее слово: строк
+    нет ни под off, ни под on; без условия «различает» под on были бы приёмы (что и было 16.10)."""
+
+    from messengers_router.services import _price_select_llm as PS
+
+    rows = [*_rows(), _RARE_FORM_ROW]
+    with ev_world.FrozenWorld(rare_form_world, "day"):
+        assert PS._token_df(rows).get("консультации") == 1
+        assert PS._wordform_family_size("консультации", rows) > PS._VARIANT_B_LIMIT
+        _switch(monkeypatch, "off")
+        assert _common_names(rows) == ()
+        _switch(monkeypatch, "on")
+        assert _common_names(rows) == ()
+        monkeypatch.setattr(PS, "_wordform_family_size", lambda *_args: 0)  # как до 17.10: словоформы без условия
+        assert _common_names(rows) and all(name.startswith("Прием") for name in _common_names(rows))
+
+
+def test_the_distinguishing_word_form_still_comes_first(mini_prod_world, monkeypatch):  # noqa: F811
+    """Встречный: «сифилис» со словоформой — в двух названиях (различает) — верная строка первой, как раньше."""
+
+    from messengers_router.services import _price_select_llm as PS
+
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        assert PS._wordform_family_size("сифилис", _rows()) <= PS._VARIANT_B_LIMIT
+        _switch(monkeypatch, "on")
+        assert _names(_SYPHILIS)[0] == _RIGHT
+
+
+@pytest.mark.parametrize("value", ["off", "on"])
+def test_common_word_through_the_endpoint_two_turns(value, rare_form_world, monkeypatch):
+    """Через эндпоинт, набор прода, LLM недоступна: «стоимость консультации врача» — не список приёмов и без цены;
+    второй ход «а сколько?» — без цены строки, которой пациент не видел."""
+
+    _configure(monkeypatch, "deploy")
+    _switch(monkeypatch, value)
+    with ev_world.FrozenWorld(rare_form_world, "day"):
+        first, second = run_dialog([_COMMON, "а сколько?"], f"variant-b-common-{value}")
+    assert "хирург" not in first["text"].lower() and "похожие услуги" not in first["text"], first["text"]
+    assert not re.search(r"\d\s*руб", first["text"] + second["text"]), (first["text"], second["text"])

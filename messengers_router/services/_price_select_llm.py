@@ -205,6 +205,35 @@ def _token_df(retail_rows: list[dict[str, Any]]) -> dict[str, int]:
     return cached
 
 
+_TOKEN_NAMES_CACHE: dict[tuple[int, str], dict[str, frozenset[str]]] = {}
+
+
+def _token_names(retail_rows: list[dict[str, Any]]) -> dict[str, frozenset[str]]:
+    """В каких названиях прайса встречается слово (кэш по отпечатку среза, как у `_token_df`)."""
+
+    key = (len(retail_rows), _row_name(retail_rows[0])[:48] if retail_rows else "")
+    cached = _TOKEN_NAMES_CACHE.get(key)
+    if cached is None:
+        index: dict[str, set[str]] = {}
+        for name in {_row_name(row) for row in retail_rows}:
+            for token in set(_price_query_tokens(name)):
+                index.setdefault(token, set()).add(name)
+        cached = {token: frozenset(names) for token, names in index.items()}
+        _TOKEN_NAMES_CACHE.clear()
+        _TOKEN_NAMES_CACHE[key] = cached
+    return cached
+
+
+def _wordform_family_size(word: str, retail_rows: list[dict[str, Any]]) -> int:
+    """Во скольких названиях прайса есть слово вместе со словоформами (`_same_word`)."""
+
+    names: set[str] = set()
+    for token, owners in _token_names(retail_rows).items():
+        if _same_word(word, token):
+            names |= owners
+    return len(names)
+
+
 def _variant_b_wordforms_on() -> bool:
     """`[MESSENGER_ROUTER] variant_b_wordforms = off | on` (по умолчанию off — как было; облако 16.10)."""
 
@@ -232,7 +261,8 @@ def _whole_word_names(question: str, pool: list[dict[str, Any]], retail_rows: li
     в чужой строке («Кровь на сифилис (…)»), а в верной — «сифилиса» («Экспресс-тест для определения сифилиса (антитела
     IgG и IgM …)»). Строка со словоформой различающего слова добавляется, только если покрывает слов пациента строго
     больше любой строки с ним целиком; порядок — по числу слов пациента в названии (словоформы — одно слово), при
-    равенстве — как у кандидатов. Ключевое слово и «слова нет в прайсе — названий нет» прежние.
+    равенстве — как у кандидатов. Ключевое слово и «слова нет в прайсе — названий нет» прежние. Словоформы добавляют
+    строки, только если слово вместе с ними различает (`_wordform_names`).
     """
 
     wanted = set(_price_query_tokens(question))
@@ -243,12 +273,18 @@ def _whole_word_names(question: str, pool: list[dict[str, Any]], retail_rows: li
     if not df.get(key):
         return ()
     if _variant_b_wordforms_on():
-        return _wordform_names(wanted, key, pool)
+        return _wordform_names(wanted, key, pool, retail_rows)
     names = [_row_name(row) for row in pool if key in set(_price_query_tokens(_row_name(row)))]
     return tuple(dict.fromkeys(name for name in names if name))[:_VARIANT_B_LIMIT]
 
 
-def _wordform_names(wanted: set[str], key: str, pool: list[dict[str, Any]]) -> tuple[str, ...]:
+def _wordform_names(wanted: set[str], key: str, pool: list[dict[str, Any]], retail_rows: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Строки варианта B под `variant_b_wordforms = on`. Словоформы ключевого слова — только когда слово вместе с ними
+    различает: есть не больше чем в `_VARIANT_B_LIMIT` названиях прайса (список покажет их все). Иначе редкость слова —
+    артефакт словоформы, а само слово общее (BUG-2026-10-17-VARIANT-B-COMMON-WORD: «стоимость консультации врача» —
+    «консультации» дословно в одном названии, со словоформой «консультация» — в 163 приёмах; первые пять кандидатов —
+    приёмы хирургов): строк по словоформе нет, как без словоформ. Порядок по числу слов пациента — всегда."""
+
     tokens = {name: set(_price_query_tokens(name)) for name in dict.fromkeys(_row_name(row) for row in pool) if name}
 
     def cover(name: str) -> int:
@@ -256,7 +292,8 @@ def _wordform_names(wanted: set[str], key: str, pool: list[dict[str, Any]]) -> t
 
     exact = [name for name in tokens if key in tokens[name]]
     best = max((cover(name) for name in exact), default=0)
-    forms = [name for name in tokens if name not in exact and any(_same_word(key, t) for t in tokens[name]) and cover(name) > best]
+    distinguishes = _wordform_family_size(key, retail_rows) <= _VARIANT_B_LIMIT
+    forms = [name for name in tokens if distinguishes and name not in exact and any(_same_word(key, t) for t in tokens[name]) and cover(name) > best]
     ranked = sorted([*forms, *exact], key=cover, reverse=True)  # устойчиво: при равенстве — порядок кандидатов
     return tuple(ranked[:_VARIANT_B_LIMIT])
 
