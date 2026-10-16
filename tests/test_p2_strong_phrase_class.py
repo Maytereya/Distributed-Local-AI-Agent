@@ -276,3 +276,22 @@ def test_not_a_service_name_answers_as_turn_parse_off(reason, mini_prod_world, m
     [on], [row], _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=_Reason(reason), session=_sid("ng", reason))
     assert on["text"] == off["text"] and not _priced(on["text"]), on["text"]
     assert row["strong_phrase_guard"] == "fallback"
+
+
+def test_the_judge_keeps_the_mis_rows_and_takes_only_other_rows(mini_prod_world, monkeypatch):  # noqa: F811
+    """Выбор LLM, пересекающийся со строками сильной фразы, — ответ строками фразы (соседи, добавленные LLM, — её мнение
+    о самой услуге: живой свип 16.10 «глюкоза» → + «Экспресс-тест на глюкозу»); выбор только других строк — он (LLM
+    нашла строку, у которой это условие есть, или чужую: «ФГДС под седацией» → профиль анализов «под наркозом») — список
+    из строк фразы и выбора LLM (решение 22.07)."""
+
+    reply = "Сколько стоит глюкоза? делается у вас?"
+    [before], _rows, _ = _run([reply], mini_prod_world, monkeypatch, guard="off", llm="not_it", session=_sid("mis-off"))
+    assert _priced(before["text"]) and "Экспресс" not in before["text"], before["text"]
+    wider = _Oracle(_PHRASES, ("Глюкоза — 190", "Экспресс-тест на глюкозу"))
+    [kept], [row], client = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=wider, session=_sid("mis-wide"))
+    assert "rows" in client.asked and row["strong_phrase_guard"] == "rows"
+    assert kept["text"] == before["text"], kept["text"]
+    other = _Oracle(_PHRASES, ("Экспресс-тест на глюкозу",))
+    [moved], [row], _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=other, session=_sid("mis-other"))
+    assert "Экспресс-тест на глюкозу" in moved["text"] and "Глюкоза — 190" in moved["text"], moved["text"]
+    assert row["strong_phrase_guard"] == "rows"

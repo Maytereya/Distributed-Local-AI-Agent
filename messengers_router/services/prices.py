@@ -297,7 +297,10 @@ async def _parse_strong_answer(
     словарь бы заглушил: урок BUG-2026-10-15-P2-ENTITY-BYPASS), кандидаты — строки фразы. LLM судит условие, а не
     личность услуги — её решают данные МИС (решение владельца 13.10):
 
-    - выбор строк — они (цена; LLM могла найти и строку с этим условием);
+    - выбор строк, пересекающийся со строками фразы, — строки фразы (условие им не мешает; соседи, которых LLM
+      добавила к синониму МИС, — её мнение о самой услуге, а не об условии); выбор только других строк — список: строки
+      фразы и выбор LLM (неоднозначность — список, решение 22.07: «ОАК срочный» → + Cito верно, «ФГДС под седацией» →
+      профиль анализов «под наркозом» — чужое, живой свип 16.10);
     - «условия нет» (`qualifier_absent`, пустой код прежнего промпта) — `none_fit`: «не нашёл» (`_match_policy_payload`);
     - «другая услуга» (`other_service`) — строки сильной фразы: спор LLM с синонимом МИС не довод против данных;
     - «слишком общее», «не услуга», сбой LLM — None: сильная фраза ход не решает, дальше путь правил с гардом — как под
@@ -327,7 +330,9 @@ async def _parse_strong_answer(
     )
     if selection is not None and selection.rows:
         turn_telemetry.note(strong_phrase_guard="rows")
-        return selection
+        if rows_overlap(selection.rows, strong.rows):
+            return strong
+        return PriceSelection(rows=(*strong.rows, *selection.rows), status="picked")
     reason = selection.reason if selection is not None and selection.status == "none_fit" else None
     if reason in _CONDITION_ABSENT:
         turn_telemetry.note(strong_phrase_guard="not_found")
