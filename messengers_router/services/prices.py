@@ -241,7 +241,6 @@ async def _p2_llm_verdict(
         context=context,
         runtime_llm_mode=runtime_llm_mode,
         judge_qualifier=True,
-        decide=True,
     )
     if selection is None or (not selection.rows and selection.status != "none_fit"):
         turn_telemetry.note(p2_llm_judge="fallback")
@@ -318,7 +317,6 @@ async def _parse_strong_answer(
         context=context,
         runtime_llm_mode=runtime_llm_mode,
         judge_qualifier=True,
-        decide=True,
         one_round=True,
     )
     if selection is not None and selection.rows:

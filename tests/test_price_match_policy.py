@@ -291,3 +291,7 @@ def test_one_policy_without_a_switch():
 
     assert not hasattr(config, "MR_PRICE_MATCH_POLICY") and not hasattr(config.settings.messenger_router, "price_match_policy")
     assert not hasattr(PS, "match_policy") and not hasattr(PS, "_POLICY_MODES")
+    # Чистка после шага 2 (16.10): «решение политики при любом режиме» (`decide`) больше нечему отличать — параметра нет.
+    import inspect
+
+    assert "decide" not in inspect.signature(PS.select_price_rows).parameters

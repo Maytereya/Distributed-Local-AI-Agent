@@ -451,7 +451,6 @@ async def select_price_rows(
     context: str = "",
     runtime_llm_mode: str = "",
     judge_qualifier: bool = False,
-    decide: bool = False,
     one_round: bool = False,
 ) -> PriceSelection | None:
     """Строки прайса, которые являются той услугой, о которой спросил пациент.
@@ -471,8 +470,6 @@ async def select_price_rows(
         (`parse_price_guard = llm`, класс A 15.10: гард по словарю каталога считал «карбамазепина» уточнением).
         Сбой LLM — ответ правил, а у них гард прежний: чужой цены нет. Пустой первый круг с кодом `qualifier_absent`
         («условия нет») — `none_fit` сразу, без второго круга (BUG-2026-10-16-QUALIFIER-ROUND-TWO-BUDGET).
-    :param decide: не действует с 16.10 (T7 шаг 2: политика одна — решение возвращается всегда); остаётся до
-        чистки вызывающих (`p2_llm_judge`, суд сильной фразы).
     :param one_round: только первый круг (без поиска по терминам LLM): пустой выбор — `none_fit` с кодом причины
         (`reason`) при любых кандидатах и любом коде; None — только сбой. Для суда условия у сильной фразы разбора
         (BUG-2026-10-16-P2-STRONG-PHRASE-BYPASS): второй круг искал бы «почти то», а под `turn_parse = on` упирался
@@ -523,9 +520,8 @@ async def select_price_rows(
         turn_telemetry.note(price_policy="strong")
         return PriceSelection(rows=tuple(strong), status="strong")
 
-    def settle(_legacy: PriceSelection | None, decided: PriceSelection | None, label: str = "") -> PriceSelection | None:
-        """Решение политики (None — прежний ответ правил) и его метка в телеметрию хода. Первый аргумент —
-        прежний ответ режимов off/shadow (сняты 16.10, T7 шаг 2); остаётся до чистки сигнатуры."""
+    def settle(decided: PriceSelection | None, label: str = "") -> PriceSelection | None:
+        """Решение политики L-13 (None — прежний ответ правил) и его метка в телеметрию хода."""
 
         turn_telemetry.note(price_policy=label or _policy_label(decided))
         return decided
@@ -556,33 +552,33 @@ async def select_price_rows(
 
     first = await _ask(question, pool)
     if first is None:
-        return settle(None, *unavailable())
+        return settle(*unavailable())
     chosen, terms, reason = first
     if chosen:
         picked = PriceSelection(rows=tuple(_prefer_base_variants(chosen, question)))
-        return settle(picked, picked)
+        return settle(picked)
     # Суд условия (`judge_qualifier`): «условия нет» (`qualifier_absent`, правило 3 промпта) — вердикт окончательный.
     # Второй круг искал бы «почти то» (это и запрещает П2), а у класса A под `turn_parse = on` упирался в лимит
     # решений хода (`budget`) и превращал «не нашёл» в ответ правил (BUG-2026-10-16-QUALIFIER-ROUND-TWO-BUDGET).
     # Прочие коды — второй круг, как раньше: он может найти услугу другим словом.
     if one_round or (judge_qualifier and reason == "qualifier_absent"):
-        return settle(None, PriceSelection(rows=(), status="none_fit", reason=reason))
+        return settle(PriceSelection(rows=(), status="none_fit", reason=reason))
     if not terms:
         journal_miss([], reason)
-        return settle(None, none_fit(reason))
+        return settle(none_fit(reason))
 
     pool_by_terms = await asyncio.to_thread(_build_pool, terms, rows, per_text=_PER_TERM_LIMIT)
     second = await _ask(question, pool_by_terms)
     if second is None:
-        return settle(None, *unavailable())
+        return settle(*unavailable())
     if not second[0]:
         journal_miss(terms, reason, second[2])
-        return settle(None, none_fit(second[2]))
+        return settle(none_fit(second[2]))
     chosen = _prefer_base_variants(second[0], question)
     if journal_phrase:
         _record_synonym_suggestion(journal_phrase, terms, chosen, source=journal_source)
     picked = PriceSelection(rows=tuple(chosen), search_terms=tuple(terms))
-    return settle(picked, picked)
+    return settle(picked)
 
 
 def rows_overlap(left: Sequence[dict[str, Any]], right: Sequence[dict[str, Any]]) -> bool:
