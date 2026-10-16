@@ -36,7 +36,6 @@ _PROD_1016 = {
     "MR_PRICE_MATCH_POLICY": "on",
     "MR_STRONG_MATCH": "data",
     "MR_STRONG_PHRASE_GUARD": "llm",
-    "MR_P2_LLM_JUDGE": "on",
 }
 _SITE = "choose_price_service"
 
@@ -175,7 +174,7 @@ def test_class_a_without_a_condition_does_not_change(mini_prod_world, monkeypatc
     assert _calls(row) == 1 and row.get("price_guard") == "llm"
 
 
-# --------------------------------------------------------------------------- судья П2 (`p2_llm_judge = on`)
+# --------------------------------------------------------------------------- судья П2 (единственный путь с 17.10)
 
 
 def test_p2_judge_condition_absent_is_not_found_in_one_round(mini_prod_world, monkeypatch):  # noqa: F811
@@ -196,12 +195,15 @@ def test_p2_judge_other_reason_keeps_the_second_round(mini_prod_world, monkeypat
 
 
 def test_p2_judge_rows_down_answers_as_off(mini_prod_world, monkeypatch):  # noqa: F811
-    """Сбой LLM выбора строки — как раньше: ответ без судьи (`p2_llm_judge = off`), телеметрия `fallback`."""
+    """Сбой LLM выбора строки — как раньше: ответ без судьи (название из сущности судье не отдаётся), телеметрия
+    `fallback`."""
+
+    from messengers_router.services import prices
 
     [on], [row] = _run([_P2], mini_prod_world, monkeypatch, llm=_Judge(rows_down=True), session=_sid("p2-d", "on"))
-    [off], _rows = _run(
-        [_P2], mini_prod_world, monkeypatch, llm=_Judge(rows_down=True), session=_sid("p2-doff", "on"), MR_P2_LLM_JUDGE="off"
-    )
+    with monkeypatch.context() as mp:
+        mp.setattr(prices, "_p2_name_from_entity", lambda *_args, **_kwargs: False)
+        [off], _rows = _run([_P2], mini_prod_world, monkeypatch, llm=_Judge(rows_down=True), session=_sid("p2-doff", "on"))
     assert on["text"] == off["text"], (on["text"], off["text"])
     assert row["p2_llm_judge"] == "fallback"
 

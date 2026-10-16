@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 from agent_logic_2.nayka_api import api_price
 
 from .. import shown_context, turn_parse, turn_telemetry
-from ..runtime_config import config as _cfg
 from ..policies import handoff_message
 from ..text_templates import price_names_without_prices_text, price_not_found_text
 from ._addresses_helpers import _extract_homecode_query
@@ -192,17 +191,13 @@ def _parse_phrase_judged_by_llm(query: str) -> str:
     return "" if item.rows else str(item.text or "")
 
 
-def _p2_llm_judge_on() -> bool:
-    return str(getattr(_cfg, "MR_P2_LLM_JUDGE", "on") or "").strip().lower() == "on"
-
-
 def _p2_name_from_entity(entity_service_name: str, query_service_name: str | None, service_name: str, query_text: str) -> bool:
-    """Под `p2_llm_judge = on`: резолвер по реплике названия не дал, и путь цены ведёт название из сущности NLU /
-    контекста (без него — путь одной услуги или «Уточните»). Уточнение П2 проверяет вызывающий по строкам прайса."""
+    """Судья П2 (единственный путь с 17.10 — выключатель `p2_llm_judge` снят): резолвер по реплике названия не дал, и
+    путь цены ведёт название из сущности NLU / контекста (без него — путь одной услуги или «Уточните»). Уточнение П2
+    проверяет вызывающий по строкам прайса."""
 
     return (
-        _p2_llm_judge_on()
-        and bool(str(entity_service_name or "").strip())
+        bool(str(entity_service_name or "").strip())
         and not query_service_name
         and bool(str(service_name or "").strip())
         and not _is_city_only_reply(query_text)
@@ -219,7 +214,7 @@ async def _p2_llm_verdict(
     context: str,
     runtime_llm_mode: str,
 ) -> PriceSelection | None:
-    """«Та ли это услуга с этим свойством» (BUG-2026-10-15-P2-ENTITY-BYPASS, `p2_llm_judge = on`): резолвер отказал
+    """«Та ли это услуга с этим свойством» (BUG-2026-10-15-P2-ENTITY-BYPASS): резолвер отказал
     из-за уточнения, которого в прайсе нет (П2, `query_has_unsatisfiable_qualifier`), а название пришло из сущности
     NLU / контекста. Гард по буквам здесь не годен (встречный свип 15.10: «первый приём невролога», «для иностранного
     гражданина» — разговорное слово, не уточнение) — судит выбор строки (`judge_qualifier`, правило 3 промпта отсекает

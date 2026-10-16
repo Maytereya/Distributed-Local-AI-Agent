@@ -206,7 +206,6 @@ class MessengerRouterConfig:
     reask_limit: str
     parse_fragment_windows: str
     parse_complete_windows: str
-    p2_llm_judge: str
     strong_phrase_guard: str
     parse_agree_telemetry: str
     debug_final_input: bool
@@ -492,13 +491,9 @@ settings = Settings(
         # предлагается LLM вариантом; разрезом не служит.
         # [MESSENGER_ROUTER] parse_complete_windows
         parse_complete_windows=_get_enum("MESSENGER_ROUTER", "parse_complete_windows", default="off", allowed={"off", "on"}),
-        # Гард П2 («уточнения нет в прайсе») у названия услуги из сущности NLU / контекста судит LLM (15.10,
-        # BUG-2026-10-15-P2-ENTITY-BYPASS: «узи щитовидной железы по омс» — резолвер отказал, а сущность вела к платной
-        # цене; гард по буквам глушил «первый приём невролога»): off — как было; on — «та ли это услуга с этим
-        # свойством» решает выбор строки (`select_price_rows(..., judge_qualifier=True)`, правило 3 промпта отсекает
-        # «по ОМС»): строки LLM — цена, «не та» — честное «не нашёл», сбой LLM — как было (цена по сущности). По
-        # умолчанию on — как на проде с 16.10 (решение владельца 16.10, деплой 5). [MESSENGER_ROUTER] p2_llm_judge
-        p2_llm_judge=_get_enum("MESSENGER_ROUTER", "p2_llm_judge", default="on", allowed={"off", "on"}),
+        # Гард П2 у названия услуги из сущности NLU / контекста судит LLM (BUG-2026-10-15-P2-ENTITY-BYPASS) — единственный
+        # путь с 17.10: ключ [MESSENGER_ROUTER] p2_llm_judge (off — цена по сущности без суда) снят и больше не читается
+        # (в config.ini прода безвреден; STEP-2026-10-17-ONE-PATH-P2-LLM-JUDGE).
         # Гард П2 у СИЛЬНОЙ фразы разбора (16.10, BUG-2026-10-16-P2-STRONG-PHRASE-BYPASS: «приём терапевта по ОМС» → LLM
         # разбора выбрала «приём терапевта», её строки шли в ответ мимо гарда — платная цена): llm — фраза отдаёт свои
         # строки напрямую, только если вне неё в реплике нет слова, которого нет в прайсе; иначе «та ли услуга с этим
@@ -657,7 +652,6 @@ MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
 MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows
 MR_PARSE_COMPLETE_WINDOWS = settings.messenger_router.parse_complete_windows
-MR_P2_LLM_JUDGE = settings.messenger_router.p2_llm_judge
 MR_STRONG_PHRASE_GUARD = settings.messenger_router.strong_phrase_guard
 MR_PARSE_AGREE_TELEMETRY = settings.messenger_router.parse_agree_telemetry
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input

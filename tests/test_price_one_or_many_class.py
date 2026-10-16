@@ -49,11 +49,9 @@ from messengers_router.services._common import _normalise_catalog_text
 from messengers_router.services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
 from tests.test_price_turns_golden import FIXTURE, run_dialog
 
-# Наборы деплоя 14.10 и `default` — исторические. «Контекст = показанное», фраза журнала из упоминания хода и выбор
-# строки модулем — во всех наборах: выключатели `context_shown`, `journal_phrase`, `choose_price` сняты 17.10
-# (STEP-2026-10-17-ONE-PATH-*). В `default` так же явно — выбор строки прежним вызовом и гарды П2 правил (умолчания кода
-# = прод с 17.10, STEP-2026-10-17-DEFAULTS-D: `p2_llm_judge = on`; `choose_price` и `parse_price_guard` сняты); набор
-# деплоя гарды П2 не задаёт — тесты класса A и судьи П2 ставят их сами до `_deploy`.
+# Наборы деплоя 14.10 и `default` — исторические. «Контекст = показанное», фраза журнала из упоминания хода, выбор
+# строки модулем, суд слабой фразы разбора и судья П2 — во всех наборах: выключатели `context_shown`, `journal_phrase`,
+# `choose_price`, `parse_price_guard`, `p2_llm_judge` сняты 17.10 (STEP-2026-10-17-ONE-PATH-*).
 _DEPLOY = {
     "MR_TURN_UNDERSTANDING_PRICE": "on",
     "MR_CHOOSE_READINESS": "on",
@@ -66,7 +64,6 @@ _DEFAULT = {
     "MR_CHOOSE_READINESS": "off",
     "MR_CHOOSE_SYMPTOM": "off",
     "MR_PARSE_FAIL_VARIANTS": 5,
-    "MR_P2_LLM_JUDGE": "off",
 }
 # Набор выключателей → значения поверх конфига гейта. Разбор реплики (`turn_parse = on`) — единственный режим
 # (T7 шаг 3б, 16.10): `deploy` — прод; `deploy_parse` — прежнее имя того же набора для файлов, которые его зовут.
