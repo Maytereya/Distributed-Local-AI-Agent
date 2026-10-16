@@ -36,7 +36,7 @@
 
 Под `on` правила понимания считаются на каждом ценовом ходе параллельно выбору фраз (O3b) — их разрез нужен
 согласию `tu_parse_agree`. Выключатель `[MESSENGER_ROUTER] parse_agree_telemetry = on | off` (T7, шаг 4; по
-умолчанию on — как было): `off` — согласия под `on` нет, правила считаются лениво (`_observe_parse_on_lazy`) —
+умолчанию off с 16.10, решение владельца): `off` — согласия под `on` нет, правила считаются лениво (`_observe_parse_on_lazy`) —
 только когда разбор не годится для действия или решён одной слабой фразой; ответы те же, экономия — CPU хода.
 """
 
@@ -146,9 +146,9 @@ def mode() -> str:
 
 
 def agree_telemetry() -> bool:
-    """`parse_agree_telemetry` (T7, шаг 4): согласие разрезов под `turn_parse = on` — on (по умолчанию) | off."""
+    """`parse_agree_telemetry` (T7, шаг 4): согласие разрезов под `turn_parse = on` — on | off (по умолчанию с 16.10)."""
 
-    return str(getattr(_cfg, "MR_PARSE_AGREE_TELEMETRY", "on") or "").strip().lower() != "off"
+    return str(getattr(_cfg, "MR_PARSE_AGREE_TELEMETRY", "off") or "").strip().lower() == "on"
 
 
 def begin_turn() -> None:

@@ -529,8 +529,9 @@ settings = Settings(
         # хода считаются на каждом ценовом ходе параллельно выбору фраз LLM, O3b, — согласию нужен их разрез); off —
         # согласия под on нет, правила считаются лениво: только когда разбор не годится для действия (`acting_for` —
         # None: empty, too_many, сбой LLM без разделителей) или решён одной слабой фразой (`single`). Ответы те же,
-        # экономия — CPU хода. Под turn_parse = off и shadow не действует. [MESSENGER_ROUTER] parse_agree_telemetry
-        parse_agree_telemetry=_get_enum("MESSENGER_ROUTER", "parse_agree_telemetry", default="on", allowed={"off", "on"}),
+        # экономия — CPU хода. Под turn_parse = off и shadow не действует. По умолчанию off с 16.10 (решение владельца,
+        # T7 шаг 4). [MESSENGER_ROUTER] parse_agree_telemetry
+        parse_agree_telemetry=_get_enum("MESSENGER_ROUTER", "parse_agree_telemetry", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",

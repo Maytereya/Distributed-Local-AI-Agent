@@ -56,6 +56,10 @@ class _WaitingOracle(_OracleLLM):
 
 
 def _instrument(monkeypatch, probe: _Probe, *, fail_rules: bool = False) -> None:
+    from messengers_router.runtime_config import config as cfg
+
+    # Параллель правил и разбора (O3b) — режим телеметрии согласия; умолчание с 16.10 — ленивые правила (T7 шаг 4).
+    monkeypatch.setattr(cfg, "MR_PARSE_AGREE_TELEMETRY", "on", raising=False)
     real_prepare, real_rules = TP._prepare, turn_understanding.understand_price_turn
 
     def prepare(*args, **kwargs):
@@ -100,6 +104,9 @@ def test_rules_run_while_the_model_picks_phrases(mini_prod_world, monkeypatch): 
 def test_turn_telemetry_is_unchanged(mini_prod_world, monkeypatch):  # noqa: F811
     case = CASES["list_true_three"]
     _configure(monkeypatch, "deploy_parse")
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_PARSE_AGREE_TELEMETRY", "on", raising=False)  # согласие — только в нетерпеливом режиме
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _OracleLLM(case, TRUE_CUT["list_true_three"]))
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         run_dialog([case.text], "parse-on-telemetry")
