@@ -50,3 +50,19 @@ def test_every_broken_threshold_is_named(tmp_path, capsys):
 
 def test_no_turns_in_the_window(tmp_path, capsys):
     assert S.main(["--since", "2026-10-16T00:00:00", "--journals", _write(tmp_path, [_turn("2026-10-15T09:00:00")])]) == 2
+
+
+def test_price_turns_show_who_judged_the_qualifier(tmp_path, capsys):
+    """Ценовые ходы: решения L-13 и судей уточнения П2 — счётчиками по значениям; без ценовых полей строки нет."""
+
+    rows = [_turn("2026-10-16T01:00:00", ms=3000) for _ in range(3)]
+    rows[0].update(price_policy="strong")
+    rows[1].update(price_policy="not_found", strong_phrase_guard="not_found")
+    rows[2].update(price_guard="llm", strong_phrase_guard="fallback")
+    assert S.main(["--since", "2026-10-16T00:30:00", "--journals", _write(tmp_path, rows)]) == 0
+    out = capsys.readouterr().out
+    assert "цена (3 ходов, p95 мс 3000)" in out, out
+    assert "strong_phrase_guard {'not_found': 1, 'fallback': 1}" in out and "price_policy {'strong': 1, 'not_found': 1}" in out
+    assert "p2_llm_judge" not in out
+    S.main(["--since", "2026-10-16T00:30:00", "--journals", _write(tmp_path, [_turn("2026-10-16T01:00:00")])])
+    assert "цена (" not in capsys.readouterr().out

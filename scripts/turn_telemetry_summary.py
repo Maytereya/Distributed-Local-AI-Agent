@@ -9,7 +9,8 @@
 Читает `<APP_DATA_DIR>/journals/turns_*.jsonl` (последние два дня; `--journals` — другая папка), берёт ходы с `ts` не
 раньше `--since` (UTC, Самара −4 ч) и печатает: ходы и p95 хода; решения выбора (`choose`) по задаче и статусу; p95
 выбора не из кэша; UNAVAILABLE+INVALID; исходы и корневые причины вызовов LLM; p95 ожидания очереди; разбор реплики
-(`tu_parse_status`) и долю запасного пути правил (T7). Решения тени (`shadow`) в счёт не идут. Последняя строка —
+(`tu_parse_status`) и долю запасного пути правил (T7); ценовые ходы — решения политики силы совпадения (L-13,
+`price_policy`), кто судил уточнение П2 (`price_guard`, `strong_phrase_guard`, `p2_llm_judge`) и p95 ценового хода. Решения тени (`shadow`) в счёт не идут. Последняя строка —
 вердикт по порогам «годен» 14.10: UNAVAILABLE+INVALID среди некэшированных < 2%, p95 выбора < 4 с, p95 `queue_ms` < 1 с,
 нет `circuit_open`, пустой `err`, исход `budget` ≤ 2%.
 
@@ -26,6 +27,9 @@ import os
 import sys
 from collections import Counter
 from typing import Any, Iterable
+
+# Поля телеметрии ценового хода: решение политики L-13 и судьи уточнения П2 (класс A, сильная фраза, сущность NLU).
+_PRICE_FIELDS = ("price_policy", "price_guard", "strong_phrase_guard", "p2_llm_judge")
 
 # Статусы разбора, при которых читатели идут путём правил (`turn_parse.acting_for` → None или сбой).
 _FALLBACK = frozenset({"empty", "too_many", "merged", "unavailable", "invalid", "late", "error"})
@@ -75,6 +79,12 @@ def summarize(rows: list[dict[str, Any]]) -> tuple[list[str], bool]:
         f"llm исходы: {dict(outcomes)} | err: {dict(errors)} | queue_ms p95 {queue_p95}",
         f"разбор: {dict(parse)} | запасной путь правил {share(fallback, sum(parse.values()))}",
     ]
+    priced = [r for r in rows if any(r.get(field) for field in _PRICE_FIELDS)]
+    if priced:
+        fields = " | ".join(
+            f"{field} {dict(Counter(str(r[field]) for r in priced if r.get(field)))}" for field in _PRICE_FIELDS if any(r.get(field) for r in priced)
+        )
+        lines.append(f"цена ({len(priced)} ходов, p95 мс {p95(r.get('ms', 0) for r in priced)}): {fields}")
     reasons = []
     if live and failed / len(live) >= 0.02:
         reasons.append("UNAVAILABLE+INVALID ≥ 2%")
