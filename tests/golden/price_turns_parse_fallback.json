@@ -643,14 +643,14 @@
  ],
  "run_on_ten_four-deploy_parse": [
   {
-   "text": "По запросу «Ферритин» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nНе распознал: ттг т4 свободный. Уточните эти названия — помогу по ним отдельно.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
-   "handoff": false,
-   "label": "PRICE",
+   "text": "Сейчас не удалось получить данные автоматически. Соединяю с оператором.",
+   "handoff": true,
+   "label": "TEST_ASSIST",
    "plan": [
-    "PRICE",
-    "price_info"
+    "TEST_ASSIST",
+    "test_assist"
    ],
-   "service_name_effective": "Ферритин",
+   "service_name_effective": null,
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
@@ -660,15 +660,15 @@
  ],
  "run_on_ten_four-prod": [
   {
-   "text": "По запросу «Ферритин» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nНе распознал: ттг т4 свободный. Уточните эти названия — помогу по ним отдельно.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
-   "handoff": false,
-   "label": "PRICE",
+   "text": "Сейчас не удалось получить данные автоматически. Соединяю с оператором.",
+   "handoff": true,
+   "label": "TEST_ASSIST",
    "plan": [
-    "PRICE",
-    "price_info"
+    "TEST_ASSIST",
+    "test_assist"
    ],
-   "service_name_effective": "Ферритин",
-   "service_name": "Ферритин",
+   "service_name_effective": null,
+   "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
    "tu_rule": "parse_unavailable",
