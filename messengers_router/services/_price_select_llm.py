@@ -21,11 +21,10 @@
 отвечает как раньше. «Не нашла» тоже None: LLM заменяет ответ правил только тем, что
 положительно выбрала (`reconcile_with_proposal`).
 
-Выбор — на модуле `choose()` (ход (в), L-12), выключатель `[MESSENGER_ROUTER] choose_price`:
-`off` (по умолчанию) — прежний вызов и разбор; `legacy` — прежний промпт и форма ответа через
-модуль (перенос доказывается на записанных ответах прод-LLM: на стенде `replay` ответы обязаны
-совпасть с `off`); `on` — роли system/user, JSON Schema, коды причин (промпт
-`choose_price_service`). Политика сбоя во всех режимах прежняя; её меняет L-13 отдельным шагом.
+Выбор — на модуле `choose()` (ход (в), L-12): роли system/user, JSON Schema, коды причин (промпт
+`choose_price_service`). Единственный путь с 17.10: выключатель `[MESSENGER_ROUTER] choose_price` (режимы `off` —
+прежний вызов и разбор, `legacy` — прежний промпт `price_service_select` через модуль) и прежний промпт сняты
+(STEP-2026-10-17-ONE-PATH-CHOOSE-PRICE; на проде `on` с 16.10).
 
 Политика силы совпадения (L-13, решение владельца 07.10 — вариант B; единственный режим с 16.10 — T7 шаг 2,
 выключатель `price_match_policy` и режимы off/shadow сняты, решение владельца):
@@ -52,9 +51,7 @@ from typing import Any, Sequence
 from agent_logic_2.persist import DATA_DIR, ensure_dir
 
 from .. import turn_parse, turn_telemetry
-from ..choice import LegacyWire, Option, Task, choose
-from ..llm_runtime import generate_text
-from ..prompt_registry import load_prompt_text
+from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from ..russian_nlu import tokens_share_stem
 from ._common import _normalise_catalog_text
@@ -100,16 +97,10 @@ PRICE_TASK = Task(
     timeout_s=_LLM_TIMEOUT_S,
     queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS,
 )
-_CHOOSE_MODES = ("off", "legacy", "on")
 _VARIANT_B_LIMIT = 5
 # Причины пустого выбора, при которых LLM не признала в реплике названия услуги: «Цена анализа»
 # (слишком общее), «сможете посчитать» (не услуга). Ни «не нашёл» пациенту, ни синоним клинике.
 _NOT_A_SERVICE_NAME = frozenset({"too_general", "not_a_service"})
-
-
-def _choose_mode() -> str:
-    raw = str(getattr(_cfg, "MR_CHOOSE_PRICE", "on") or "").strip().lower()
-    return raw if raw in _CHOOSE_MODES else "off"
 
 
 @dataclass(frozen=True)
@@ -126,7 +117,7 @@ class PriceSelection:
     search_terms: tuple[str, ...] = ()
     status: str = "picked"
     names: tuple[str, ...] = ()
-    reason: str = ""  # код причины пустого выбора (`none_fit`; только у промпта модуля, `choose_price = on`)
+    reason: str = ""  # код причины пустого выбора (`none_fit`)
 
 
 def _row_key(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -194,59 +185,6 @@ def _build_pool(
     if len(pool) < _FEW_CANDIDATES and fallback_texts:
         return _build_pool(fallback_texts, retail_rows, per_text=per_text, first=pool)
     return pool
-
-
-def _build_prompt(question: str, pool: list[dict[str, Any]]) -> str:
-    # Только реплика пациента. Сущность NLU и выбор правил в подсказку не идут: это
-    # догадка по этой же реплике («биопсия» → «Биопсия вульвы»), и LLM послушно её
-    # повторяла — общий вопрос сжимался до одной позиции (свип 01.10).
-    rows_text = "\n".join(f"{i}. {_row_name(row)} — {_row_cost(row)} руб." for i, row in enumerate(pool, 1))
-    return (
-        load_prompt_text("price_service_select")
-        .replace("<<QUESTION>>", question.strip())
-        .replace("<<ROWS>>", rows_text or "(подходящих позиций не найдено)")
-    ).strip()
-
-
-def _parse_ids(items: Any, pool_size: int) -> list[int] | None:
-    if not isinstance(items, list):
-        return None
-    ids: list[int] = []
-    for item in items:
-        try:
-            num = int(item)
-        except (TypeError, ValueError):
-            return None
-        if not 1 <= num <= pool_size:
-            return None
-        if num not in ids:
-            ids.append(num)
-    return ids
-
-
-def _parse_reply(raw: str, pool_size: int) -> tuple[list[int], list[str]] | None:
-    """(номера строк «та услуга», термины поиска) или None, если ответ не годится.
-
-    Номер вне списка — признак, что LLM не держит список в голове; такому ответу не
-    верим целиком, а не только этому номеру.
-    """
-
-    try:
-        data = json.loads(str(raw or "").strip())
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    match = _parse_ids(data.get("match", []), pool_size)
-    terms = data.get("search_terms", [])
-    if match is None or not isinstance(terms, list):
-        return None
-    clean_terms: list[str] = []
-    for term in terms:
-        text = str(term or "").strip()
-        if text and len(text) <= _MAX_TERM_LEN and text not in clean_terms:
-            clean_terms.append(text)
-    return match, clean_terms[:_MAX_TERMS]
 
 
 _TOKEN_DF_CACHE: dict[tuple[int, str], dict[str, int]] = {}
@@ -331,59 +269,15 @@ def _policy_label(selection: PriceSelection | None) -> str:
     return {"none_fit": "not_found"}.get(selection.status, selection.status)
 
 
-def _legacy_answer(raw: str, _options: Sequence[Option]) -> dict[str, Any] | None:
-    """Прежняя форма ответа ({"match", "search_terms"}) → форма модуля; строгость разбора — модуля."""
-
-    try:
-        data = json.loads(str(raw or "").strip())
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    return {"picks": data.get("match", []), "search_terms": data.get("search_terms", [])}
-
-
 async def _ask(question: str, pool: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str], str] | None:
     """Выбор LLM по пулу кандидатов: (строки «та услуга» в порядке пула, термины, код причины пустого
-    выбора) или None — сбой; код причины есть только у промпта модуля (`on`)."""
+    выбора) или None — сбой."""
 
-    mode = _choose_mode()
-    if mode == "off":
-        return await _ask_directly(question, pool)
     options = [Option(id=str(index), text=f"{_row_name(row)} — {_row_cost(row)} руб.") for index, row in enumerate(pool)]
-    legacy = (
-        LegacyWire(prompt=lambda q, _opts: _build_prompt(q, pool), answer=_legacy_answer, fmt="json", options={"temperature": 0})
-        if mode == "legacy"
-        else None
-    )
-    choice = await choose(PRICE_TASK, question, options, legacy=legacy)
+    choice = await choose(PRICE_TASK, question, options)
     if choice.failed:  # сбой и мусор — решение политики (L-13) или прежний ответ правил
         return None
     return [pool[index] for index in sorted(int(i) for i in choice.ids)], list(choice.terms), choice.reason
-
-
-async def _ask_directly(question: str, pool: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str], str] | None:
-    """Прежний вызов и разбор (`choose_price = off`); уходит, когда модуль принят на стенде."""
-
-    try:
-        raw = await generate_text(
-            _build_prompt(question, pool),
-            timeout_s=_LLM_TIMEOUT_S,
-            queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS,
-            fmt="json",
-            think=False,
-            # Выбор, а не сочинение: одинаковый вопрос — одинаковые строки.
-            options={"temperature": 0},
-        )
-    except Exception as exc:  # fail-open: любой сбой — ответ правил
-        logger.warning("price_llm_select_failed: %s", type(exc).__name__)
-        return None
-    parsed = _parse_reply(raw, len(pool))
-    if parsed is None:
-        logger.warning("price_llm_select_bad_reply: %r", str(raw or "")[:200])
-        return None
-    match, terms = parsed
-    return [pool[i - 1] for i in sorted(match)], terms, ""
 
 
 # Условия, которые меняют саму услугу для пациента. «Комплекс/программа» сюда не входят:
@@ -576,8 +470,7 @@ async def select_price_rows(
         # Промах — услугу не нашли ни правила (`candidates` пуст), ни LLM: такое слово пациента —
         # кандидат в синонимы для клиники (см. `_record_synonym_suggestion`). Но только если LLM
         # признала в реплике название услуги: «слишком общее» и «не услуга» в любом из кругов —
-        # не синоним (BUG-2026-10-13-SYNONYM-JOURNAL-IGNORES-REASON). Причину даёт только промпт
-        # модуля (`choose_price = on`); прежний промпт её не знает — там пишем, как раньше.
+        # не синоним (BUG-2026-10-13-SYNONYM-JOURNAL-IGNORES-REASON).
         if not candidates and not _NOT_A_SERVICE_NAME.intersection(reasons) and journal_phrase:
             _record_synonym_suggestion(journal_phrase, found_terms, [], source=journal_source)
 

@@ -147,29 +147,16 @@ def test_policy_decides_by_rows_the_patient_sees_not_by_candidate_count(shown_co
         assert selection.names
 
 
-@pytest.mark.parametrize("choose_mode", ["off", "on"])
-def test_model_found_nothing_twice_is_not_found_without_a_foreign_price(choose_mode, mini_prod_world, monkeypatch):
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_CHOOSE_PRICE", choose_mode, raising=False)
+def test_model_found_nothing_twice_is_not_found_without_a_foreign_price(mini_prod_world, monkeypatch):
     llm = _PriceLLM([[], []], terms=["ФГДС"])
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
-    if choose_mode == "off":
-        from messengers_router.services import _price_select_llm as PS
-
-        async def old_wire(prompt, **_kwargs):
-            return json.dumps({"match": [], "search_terms": ["ФГДС"]})
-
-        monkeypatch.setattr(PS, "generate_text", old_wire)
-    turn = _turn("сколько стоит гастроскопия", f"policy-nf-{choose_mode}", mini_prod_world)
+    turn = _turn("сколько стоит гастроскопия", "policy-nf", mini_prod_world)
     assert turn["text"].startswith("Не нашёл актуальную стоимость для «гастроскопия»")
     assert "750" not in turn["text"]
 
 
 def test_strong_match_is_shown_without_llm(mini_prod_world, monkeypatch):
-    from messengers_router.runtime_config import config as cfg
 
-    monkeypatch.setattr(cfg, "MR_CHOOSE_PRICE", "on", raising=False)
     llm = _PriceLLM([[1]])
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
     turn = _turn("сколько стоит глюкоза", "policy-strong", mini_prod_world)
@@ -180,10 +167,8 @@ def test_strong_match_is_shown_without_llm(mini_prod_world, monkeypatch):
 def test_too_general_or_empty_rules_proposal_keeps_the_rules_answer(monkeypatch, tmp_path):
     import asyncio
 
-    from messengers_router.runtime_config import config as cfg
     from messengers_router.services import _price_select_llm as PS
 
-    monkeypatch.setattr(cfg, "MR_CHOOSE_PRICE", "on", raising=False)
     monkeypatch.setattr(PS, "_journal_path", lambda: tmp_path / "journal.jsonl")
     gastrin = {"serviceName": "Гастрин", "serviceHomecode": "1001", "cost": 750}
     rows = [gastrin, {"serviceName": "Гастрин-17 стимулированный", "serviceHomecode": "1002", "cost": 1950}]
@@ -229,13 +214,11 @@ _PRICE_MARK = " руб."  # цена в ответе — «750 руб.»; без
 
 
 def _two_turns(scenario: str, followup: str, mini_prod_world, monkeypatch, tmp_path) -> list[dict]:
-    from messengers_router.runtime_config import config as cfg
     from messengers_router.services import _price_select_llm as PS
 
     monkeypatch.setattr(PS, "_journal_path", lambda: tmp_path / "journal.jsonl")
     if scenario == "not_found":
-        monkeypatch.setattr(cfg, "MR_CHOOSE_PRICE", "on", raising=False)
-        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _PriceLLM([[]] * 4, terms=["ФГДС"]))
+            monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _PriceLLM([[]] * 4, terms=["ФГДС"]))
     question, _unseen = _ANSWER_WITHOUT_PRICE[scenario]
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         return run_dialog([question, followup], f"policy-two-turns-{scenario}-{followup}")

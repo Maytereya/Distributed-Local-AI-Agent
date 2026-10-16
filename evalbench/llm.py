@@ -148,7 +148,7 @@ def adversary_answer(site: str, prompt: str) -> str | None:
     if site in ("classifier_patient", "classifier_refine_patient"):
         payload = {"label": _pick(_ADVERSARY_LABELS, prompt), "confidence": 0.95, "context_action": "new_topic", "entities": {}}
         return json.dumps(payload, ensure_ascii=False)
-    if site == "price_service_select":
+    if site == "price_service_select":  # прежний промпт выбора строки — снят 17.10; место нужно прогонам кода до 17.10
         last = _last_number(prompt.split("Ответь только JSON")[0])
         if last is None:
             return json.dumps({"match": [], "search_terms": ["Общий анализ крови"]}, ensure_ascii=False)

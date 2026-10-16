@@ -196,7 +196,6 @@ class MessengerRouterConfig:
     llm_decision_breaker_failures: int
     llm_decision_breaker_open_s: int
     choose_cache_ttl_s: int
-    choose_price: str
     choose_symptom: str
     choose_readiness: str
     parse_fail_variants: int
@@ -444,11 +443,9 @@ settings = Settings(
         # Кэш внятных ответов модуля выбора (ход (в), L-12): секунд жизни; сбой и мусор не кэшируются.
         # Коротко — ошибка модели не становится ответом всем на часы; 0 — без кэша (стенд меряет без него).
         choose_cache_ttl_s=_get_int("MESSENGER_ROUTER", "choose_cache_ttl_s", 1800, min_value=0, max_value=86400),
-        # Выбор строки прайса на модуле choose() (ход (в), клиент 1): off — прежний вызов и разбор;
-        # legacy — прежний промпт через модуль (доказательство переноса на записанных ответах);
-        # on — роли, JSON Schema, коды причин. Политика сбоя прежняя. По умолчанию on — как на проде с 16.10 (решение
-        # владельца 16.10, деплой 5). [MESSENGER_ROUTER] choose_price
-        choose_price=_get_enum("MESSENGER_ROUTER", "choose_price", default="on", allowed={"off", "legacy", "on"}),
+        # Выбор строки прайса на модуле choose() (ход (в), клиент 1) — единственный путь с 17.10: ключ [MESSENGER_ROUTER]
+        # choose_price (off — прежний вызов, legacy — прежний промпт через модуль) снят и больше не читается (в config.ini
+        # прода безвреден; STEP-2026-10-17-ONE-PATH-CHOOSE-PRICE).
         # Симптом → врач на модуле choose() (ход (в), клиент 2): off — прежний вызов и разбор; legacy —
         # прежний промпт через модуль; on — врач названием из перечня ролей МИС (не больше двух), исходы
         # «срочно» и «не жалоба». Политика сбоя прежняя. По умолчанию on — как на проде с 14.10
@@ -655,7 +652,6 @@ MR_LLM_DECISION_TURN_SECONDS = settings.messenger_router.llm_decision_turn_secon
 MR_LLM_DECISION_BREAKER_FAILURES = settings.messenger_router.llm_decision_breaker_failures
 MR_LLM_DECISION_BREAKER_OPEN_S = settings.messenger_router.llm_decision_breaker_open_s
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
-MR_CHOOSE_PRICE = settings.messenger_router.choose_price
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants

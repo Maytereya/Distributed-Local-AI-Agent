@@ -1,6 +1,7 @@
 """Умолчания кода = прод для выключателей пути цены (STEP-2026-10-17-DEFAULTS-D, решение владельца 16.10, деплой 5).
 
-На проде с 16.10: `choose_price = on`, `parse_price_guard = llm`, `p2_llm_judge = on`. Умолчания кода отставали — потеря
+На проде с 16.10: `choose_price = on`, `parse_price_guard = llm`, `p2_llm_judge = on` (`choose_price` снят 17.10 —
+STEP-2026-10-17-ONE-PATH-CHOOSE-PRICE, `test_price_llm_select.py::test_one_path_without_a_switch`). Умолчания кода отставали — потеря
 или опечатка ключа в `config.ini` молча вернула бы прежний вызов выбора строки и гарды П2 по словарю (инвариант
 STEP-2026-10-15-DEFAULTS-B: умолчание = значение прода, проверенное деплоем).
 
@@ -19,14 +20,6 @@ def _set(monkeypatch, key: str, raw: str | None) -> None:
         monkeypatch.delattr(cfg, key, raising=False)
     else:
         monkeypatch.setattr(cfg, key, raw, raising=False)
-
-
-@pytest.mark.parametrize(("raw", "expected"), [(None, "on"), ("off", "off"), ("legacy", "legacy"), ("ON", "on"), ("x", "off")])
-def test_choose_price_is_read_with_a_safe_default(raw, expected, monkeypatch):
-    from messengers_router.services._price_select_llm import _choose_mode
-
-    _set(monkeypatch, "MR_CHOOSE_PRICE", raw)
-    assert _choose_mode() == expected
 
 
 @pytest.mark.parametrize(("raw", "expected"), [(None, True), ("off", False), ("on", True), ("ON", True), ("x", False)])
@@ -56,4 +49,4 @@ def test_parse_price_guard_is_read_with_a_safe_default(raw, judged, monkeypatch)
 def test_config_defaults_are_the_prod_values():
     from agent_logic_2 import config
 
-    assert (config.MR_CHOOSE_PRICE, config.MR_PARSE_PRICE_GUARD, config.MR_P2_LLM_JUDGE) == ("on", "llm", "on")
+    assert (config.MR_PARSE_PRICE_GUARD, config.MR_P2_LLM_JUDGE) == ("llm", "on")

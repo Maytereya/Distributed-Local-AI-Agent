@@ -11,6 +11,34 @@
 
 ---
 
+## STEP-2026-10-17-ONE-PATH-CHOOSE-PRICE — снят выключатель `choose_price` и прежний промпт `price_service_select`: выбор строки — модулем `choose()` — СДЕЛАНО (решение владельца 16.10, деплой 6)
+
+- **Зачем:** на проде `on` с 16.10 04:30 (деплой 3), умолчание кода с 17.10 (STEP-2026-10-17-DEFAULTS-D); `off` (прежний
+  вызов `generate_text` + разбор `{"match"}`) и `legacy` (прежний промпт через модуль — доказательство переноса, сделано
+  11.10) жили только в тестах. Прежний промпт не знает кодов причин — с ним журнал синонимов писал «Цена анализа».
+- **Снято:** ключ `[MESSENGER_ROUTER] choose_price` (`config.py`, `MR_CHOOSE_PRICE`; в `config.ini` прода безвреден),
+  `_price_select_llm._choose_mode` / `_CHOOSE_MODES`, `_ask_directly`, `_build_prompt`, `_parse_reply`, `_parse_ids`,
+  `_legacy_answer`; промпт `price_service_select` в ОБЕИХ локациях (`messengers_router/prompts/`, `app_data/prompts/mr_*`).
+  `LegacyWire` модуля выбора остался — им пользуется симптом (`choose_symptom = legacy`). Пустой код причины у суда
+  условия (`prices._CONDITION_ABSENT`) остался: модуль отдаёт его, когда модель ответила «none» без выбора.
+- **Стенд:** место `price_service_select` в `evalbench.llm.adversary_answer` оставлено — прогоны кода до 17.10 (копии
+  `~/Dev/dla-private/bench/code_*`) его зовут; отпечатки мест строятся из промптов дерева кода прогона
+  (`SiteIndex.from_code_root`), у нового кода места просто нет. `test_evalbench` — без изменений.
+- **Тесты (шаг (а)):** `test_price_llm_select` — фикстура «каждый инвариант во всех режимах» (off / legacy / on) снята,
+  подделка LLM — только модуль; `test_choose_price` — эталон и ФГДС без режимов (ФГДС — ещё и при прежнем значении ключа
+  `off` / `legacy` в конфиге); `test_price_match_policy` — «не нашёл» без ветки прежнего вызова; наборы
+  (`test_price_one_or_many_class` `default` / `deploy`, `test_strong_match`, классовые) больше не задают
+  `MR_CHOOSE_PRICE`; `test_l14_two_turn_consumers` — набор `next` равен `deploy`, объявленный дефект журнала «сможете
+  посчитать» синонимом (прежний промпт без причины «не услуга») снят (XPASS). Тест копий промпта — на
+  `choose_price_service`, плюс прежнего промпта нет ни в одной локации.
+- **Эталоны:** не изменились (LLM в них недоступна — путь сбоя одинаков). Храповик 260/160/103 — без изменений.
+- **Инвариант класса:** у выбора строки прайса один вызов LLM — модуль `choose()` с кодами причин; ключ
+  `choose_price` в конфиге ничего не меняет.
+- **Покрытие:** `test_price_llm_select.py::test_one_path_without_a_switch`, `::test_prompt_bundle_and_host_copies_match`,
+  `test_choose_price.py::test_gastroscopy_is_fgds_by_model_term_not_gastrin_by_letters[off|legacy]` (через эндпоинт).
+
+---
+
 ## STEP-2026-10-17-ONE-PATH-JOURNAL-PHRASE — снят выключатель `journal_phrase`: фраза журнала синонимов — упоминание хода — СДЕЛАНО (решение владельца 16.10, деплой 6)
 
 - **Зачем:** на проде `mention` с 15.10 07:45, умолчание кода с 16.10; `rules` (фраза вырезателя правил: «а ггтп», «Цена

@@ -33,7 +33,6 @@ from tests.test_turn_parse_t3 import _ROWS_MARKS, _Oracle
 
 # Прод 16.10 поверх набора деплоя: разбор хода, выбор строки промптом модуля (коды причин), L-13, класс A, судья П2.
 _PROD_1016 = {
-    "MR_CHOOSE_PRICE": "on",
     "MR_PRICE_MATCH_POLICY": "on",
     "MR_PARSE_PRICE_GUARD": "llm",
     "MR_STRONG_MATCH": "data",

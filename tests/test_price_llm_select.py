@@ -18,8 +18,9 @@
      синонимы заносит клиника, не мы.
 LLM в тестах замокана; живое поведение — свип по прайсу и remote eval.
 
-Каждый инвариант — во всех режимах выключателя `choose_price` (ход (в), клиент 1): прежний вызов
-(`off`), прежний промпт через модуль `choose()` (`legacy`) и роли + JSON Schema (`on`).
+Выбор — на модуле `choose()` (роли + JSON Schema, промпт `choose_price_service`): единственный путь с 17.10 —
+выключатель `choose_price` (прежний вызов `off`, прежний промпт через модуль `legacy`) и прежний промпт
+`price_service_select` сняты (STEP-2026-10-17-ONE-PATH-CHOOSE-PRICE).
 """
 
 from __future__ import annotations
@@ -66,19 +67,11 @@ def _rows_in_prompt(prompt: str) -> dict[str, int]:
 
 
 def _fake_llm(monkeypatch, decide, calls: list | None = None):
-    """decide(prompt, rows_by_name) -> ответ LLM в прежней форме ({"match", "search_terms"}) или строка-мусор.
+    """decide(prompt, rows_by_name) -> ответ LLM в краткой форме ({"match", "search_terms", "reason"}) или строка-мусор.
 
-    Подменяет оба пути выбора (`choose_price`): прежний вызов (`generate_text`) и клиент ollama
-    модуля `choose()`. В форме модуля (роль system, JSON Schema) ответ переводится в `picks` /
-    `reason` / `search_terms`; мусор уходит как есть. Ключ `reason` в ответе — код причины пустого
-    выбора для промпта модуля (прежний промпт его не знает и пропускает).
+    Подменяет клиент ollama модуля `choose()`: ответ переводится в форму модуля (`picks` / `reason` / `search_terms`);
+    мусор уходит как есть. Ключ `reason` — код причины пустого выбора (по умолчанию «другая услуга»).
     """
-
-    async def fake_generate_text(prompt: str, **kwargs):
-        if calls is not None:
-            calls.append(prompt)
-        reply = decide(prompt, _rows_in_prompt(prompt))
-        return reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
 
     class _Client:
         async def generate(self, *, prompt: str = "", system: str | None = None, **_kwargs):
@@ -93,7 +86,6 @@ def _fake_llm(monkeypatch, decide, calls: list | None = None):
             text = reply if isinstance(reply, str) else json.dumps(reply, ensure_ascii=False)
             return GenerateResponse(model="m", response=text, done=True)
 
-    monkeypatch.setattr(PS, "generate_text", fake_generate_text)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _Client())
 
 
@@ -104,18 +96,7 @@ def _failing_llm(monkeypatch):
     class _Busy:
         generate = staticmethod(boom)
 
-    monkeypatch.setattr(PS, "generate_text", boom)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _Busy())
-
-
-@pytest.fixture(autouse=True, params=("off", "legacy", "on"))
-def choose_mode(request, monkeypatch):
-    """Каждый инвариант — во всех режимах выключателя `choose_price` (ход (в), клиент 1)."""
-
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_CHOOSE_PRICE", request.param, raising=False)
-    return request.param
 
 
 def _pick(*names: str):
@@ -387,10 +368,11 @@ def test_tools_do_not_price_a_weak_row_when_llm_is_down(monkeypatch):
     """LLM недоступна на слабом совпадении — политика L-13 (единственная с 16.10, T7 шаг 2): ответ правил как есть
     (их список, решение 11.10) или названия без цен / оператор (вариант B) — но не другая цена."""
 
-    async def boom(prompt: str, **kwargs):
-        raise ConnectionError("llm down")
+    class _Down:
+        async def generate(self, **_kwargs):
+            raise ConnectionError("llm down")
 
-    monkeypatch.setattr(PS, "generate_text", boom)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _Down())
     svc = _services(monkeypatch, RETAIL)
     for call in (
         lambda: svc.price_info("сколько стоит приём эндокринолога", dict(_HYBRID)),
@@ -410,14 +392,26 @@ def test_tools_do_not_price_a_weak_row_when_llm_is_down(monkeypatch):
 
 
 def test_prompt_bundle_and_host_copies_match():
-    # Промпты в ДВУХ местах (CLAUDE.md): прод читает app_data/prompts/mr_*, и копия
-    # без правки молча оставила бы старую версию.
+    # Промпты в ДВУХ местах (CLAUDE.md): прод читает app_data/prompts/mr_*, и копия без правки молча оставила бы старую
+    # версию. Прежний промпт `price_service_select` снят в обеих (17.10): хост без пакетной копии читал бы его вечно.
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    bundle = (root / "messengers_router" / "prompts" / "price_service_select.txt").read_text(encoding="utf-8")
-    host = (root / "app_data" / "prompts" / "mr_price_service_select.txt").read_text(encoding="utf-8")
+    bundle = (root / "messengers_router" / "prompts" / "choose_price_service.txt").read_text(encoding="utf-8")
+    host = (root / "app_data" / "prompts" / "mr_choose_price_service.txt").read_text(encoding="utf-8")
     assert bundle == host
+    assert not (root / "messengers_router" / "prompts" / "price_service_select.txt").exists()
+    assert not (root / "app_data" / "prompts" / "mr_price_service_select.txt").exists()
+
+
+def test_one_path_without_a_switch():
+    """Выключателя `choose_price` нет: ни ключа, ни режимов, ни прежнего вызова (решение владельца 16.10)."""
+
+    from agent_logic_2 import config
+
+    assert not hasattr(config, "MR_CHOOSE_PRICE") and not hasattr(config.settings.messenger_router, "choose_price")
+    for name in ("_choose_mode", "_CHOOSE_MODES", "_ask_directly", "_build_prompt", "_legacy_answer", "generate_text"):
+        assert not hasattr(PS, name), name
 
 
 def test_rules_answer_is_always_among_the_candidates(monkeypatch):
@@ -612,15 +606,13 @@ def test_rules_answer_is_not_a_miss(monkeypatch, tmp_path):
 # BUG-2026-10-13-SYNONYM-JOURNAL-IGNORES-REASON: на проде 2 из 9 записей журнала — «Цена анализа»
 # и «сможете посчитать»: LLM ответила «слишком общее» / «не услуга», а условие записи смотрело
 # только на пустой выбор. Класс — любая реплика, в которой LLM не увидела названия услуги, в любом
-# из двух кругов (до терминов поиска и после). Причину даёт только промпт модуля (`choose_price = on`).
+# из двух кругов (до терминов поиска и после).
 
 
-# Причину пустого выбора возвращает только промпт модуля — режим `on`, а не все три.
-@pytest.mark.parametrize("choose_mode", ["on"], indirect=True)
 @pytest.mark.parametrize("reason", ["too_general", "not_a_service"])
 @pytest.mark.parametrize("terms", [[], ["общий анализ крови"]], ids=["first_round", "second_round"])
 @pytest.mark.parametrize("question", ["Цена анализа", "сможете посчитать?"])
-def test_reply_the_llm_found_no_service_name_in_is_not_journaled(monkeypatch, tmp_path, choose_mode, reason, terms, question):
+def test_reply_the_llm_found_no_service_name_in_is_not_journaled(monkeypatch, tmp_path, reason, terms, question):
     _fake_llm(monkeypatch, lambda prompt, rows: {"match": [], "reason": reason, "search_terms": terms})
 
     # Ответ пациенту не меняется: правила ничего не предложили — их прежний ответ.
