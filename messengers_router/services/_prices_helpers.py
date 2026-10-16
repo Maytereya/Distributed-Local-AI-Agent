@@ -3339,6 +3339,15 @@ def _resolve_fragment_service(fragment: str, retail_rows: list[dict[str, Any]]) 
     return service_name
 
 
+def _strong_phrase_guard_on() -> bool:
+    """`[MESSENGER_ROUTER] strong_phrase_guard`: llm — условие рядом с сильной фразой разбора судит LLM (путь одной
+    услуги — `prices._parse_strong_answer`, корзина — `phrase_price_items`); off — как было с 15.10."""
+
+    from ..runtime_config import config as cfg
+
+    return str(getattr(cfg, "MR_STRONG_PHRASE_GUARD", "llm") or "").strip().lower() == "llm"
+
+
 def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Позиции списка из фраз разбора хода (L-15b, шаг 5; `turn_parse.ParsedPhrase`), в их порядке.
 
@@ -3354,15 +3363,29 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
     найденной услуги — слово пациента, которого нет в названиях прайса, тут не уточнение
     (STEP-2026-10-14-L15B-6-T3, п. 1).
 
-    :param phrases: фразы разбора (`text`, `rows`)
+    Сильная фраза, рядом с которой в её фрагменте стоит слово, которого в прайсе нет (`ParsedPhrase.beside`:
+    «ферритин» + «по омс»), под `strong_phrase_guard = llm` идёт на суд LLM корзины (`judge` — её строки,
+    `condition` — эти слова): разговорное слово («делается») LLM пропустит, условие («по ОМС») — нет.
+
+    :param phrases: фразы разбора (`text`, `rows`, `beside`)
     :param retail_rows: строки прайса региона
-    :return: [{"service_name", "prices", "fragment", "strong"[, "unsatisfiable"]}]; `fragment` — слова пациента
+    :return: [{"service_name", "prices", "fragment", "strong"[, "unsatisfiable" | "judge", "condition"]}]; `fragment` —
+        слова пациента
     """
 
     items: list[dict[str, Any]] = []
     for phrase in phrases:
         fragment = str(phrase.text)
         strong = [dict(row) for row in phrase.rows]
+        beside = str(getattr(phrase, "beside", "") or "")
+        if strong and beside and _strong_phrase_guard_on() and _match_drops_unsatisfiable_qualifier(
+            beside, " ".join([fragment, *(str(row.get("serviceName") or row.get("name") or "") for row in strong)]), retail_rows
+        ):
+            # Рядом с сильной фразой — слово, которого в прайсе нет («ферритин» + «по омс»): повод спросить LLM
+            # корзины, не вердикт (BUG-2026-10-16-P2-STRONG-PHRASE-BYPASS). Кандидаты — строки фразы, условие
+            # LLM видит в варианте; сбой LLM — «Не распознал», не цена «почти той» услуги (П2).
+            items.append({"service_name": fragment, "prices": [], "fragment": fragment, "strong": [], "judge": strong, "condition": beside})
+            continue
         if strong:
             items.append({"service_name": fragment, "prices": strong, "fragment": fragment, "strong": strong})
             continue

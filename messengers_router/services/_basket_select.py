@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Sequence
 
+from .. import turn_telemetry
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from ._common import _normalise_catalog_text
@@ -63,6 +64,8 @@ def basket_mode() -> str:
 def _candidates(item: dict[str, Any], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if item.get("unsatisfiable"):
         return []  # уточнение, которого в прайсе нет («по ОМС»): не «почти то» — «Не распознал» (П2)
+    if item.get("judge"):
+        return list(item["judge"])  # сильная фраза на суде условия: LLM решает о её строках, не ищет «почти то»
     seen: set[tuple[str, str, str]] = set()
     out: list[dict[str, Any]] = []
     for row in [*(item.get("prices") or []), *_rank_price_rows(retail_rows, str(item.get("fragment") or item["service_name"]), limit=_PER_ITEM)]:
@@ -233,10 +236,11 @@ async def _pick(
     options: list[Option] = []
     owners: dict[str, tuple[int, dict[str, Any]]] = {}
     for (index, fragment, _whole_cands), rows, limit in zip(weak, offered, limits):
+        label = _option_label(items[index], fragment)
         for row in rows[:limit]:
             option_id = str(len(options))
             owners[option_id] = (index, row)
-            options.append(Option(id=option_id, text=f"«{fragment}» → {_row_name(row)} — {_row_cost(row)} руб."))
+            options.append(Option(id=option_id, text=f"{label} → {_row_name(row)} — {_row_cost(row)} руб."))
     if not options:
         return chosen, weak, False  # у слабых позиций нет ни одного кандидата — выбирать не из чего
     if not llm_allowed:
@@ -248,6 +252,22 @@ async def _pick(
         index, row = owners[option_id]
         chosen.setdefault(index, []).append(row)
     return chosen, weak, False
+
+
+def _option_label(item: dict[str, Any], fragment: str) -> str:
+    """Позиция в варианте для LLM: «фраза»; у сильной фразы на суде условия — и слова, которые пациент добавил
+    к ней в своём фрагменте (правило 5 промпта корзины: условие, которого нет в строке, — строку не выбирать)."""
+
+    condition = str(item.get("condition") or "")
+    return f"«{fragment}» [добавлено: «{condition}»]" if condition else f"«{fragment}»"
+
+
+def _not_found_label(item: dict[str, Any], fragment: str) -> str:
+    """«Не распознал» сильной фразы, которую суд условия не подтвердил, — со словами пациента («ферритин омс»),
+    а не «ферритин»: ферритин в прайсе есть, нет его с этим условием."""
+
+    condition = str(item.get("condition") or "")
+    return f"{fragment} {condition}" if condition else fragment
 
 
 def _positions(
@@ -264,7 +284,7 @@ def _positions(
             # Одна найденная строка без выбора LLM — название без цены (`multi_price_payload_from_items`).
             positions.append({"service_name": fragment, "prices": [], "fragment": fragment, "unpriced": unpriced[index]})
         else:
-            not_found.append(fragment)
+            not_found.append(_not_found_label(item, fragment))
     return positions, not_found
 
 
@@ -397,11 +417,16 @@ async def basket_from_phrases(
 
     items = phrase_price_items(phrases, retail_rows)
     chosen, weak, failed = await _pick(question, items, retail_rows, llm_allowed=llm_allowed, fair_share=True)
+    # Сильная фраза на суде условия (`judge`) — не слабая позиция: синонима клинике она не даёт, а при сбое LLM —
+    # «Не распознал», не варианты с ценой (П2: дезинформация ценой хуже уточнения).
+    judged = {index for index, item in enumerate(items) if item.get("judge")}
+    if judged:
+        turn_telemetry.note(strong_phrase_guard="basket_fallback" if failed else ("basket_rows" if any(chosen.get(i) for i in judged) else "basket_not_found"))
     if journal and not failed:
         for index, fragment, _candidates in weak:
             phrase = _journal_fragment(fragment)
-            if phrase:
+            if phrase and index not in judged:
                 _record_synonym_suggestion(phrase, [], list(chosen.get(index) or []), source="basket")
-    unpriced = _settle_weak_as_variants(weak, chosen) if failed else {}
+    unpriced = _settle_weak_as_variants([entry for entry in weak if entry[0] not in judged], chosen) if failed else {}
     positions, not_found = _positions(items, chosen, unpriced)
     return _without_repeats(positions), [*leftover, *not_found]

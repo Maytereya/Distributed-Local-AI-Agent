@@ -505,12 +505,48 @@ def leftover(cands: Candidates, items: Sequence[ParsedPhrase]) -> tuple[str, ...
     )
 
 
+def _with_beside(cands: Candidates, items: Sequence[ParsedPhrase]) -> tuple[ParsedPhrase, ...]:
+    """Фразы списка со словами своего фрагмента, которых не покрыл выбор (`ParsedPhrase.beside`).
+
+    LLM разбора может выбрать сильную фразу, оторвав от неё условие («ферритин» из фрагмента «ферритин по омс»,
+    BUG-2026-10-16-P2-STRONG-PHRASE-BYPASS, корзина) — `leftover` этого не видит: фрагмент выбором задет. Фрагмент
+    фразы — кусок разреза по разделителям, в котором она стоит; без разделителей — промежуток до соседних фраз
+    (слова между двумя фразами — у левой: условие пациент пишет после услуги). Обвязка и родовые слова
+    (`_FILLER`) не в счёт. Что это за слова — условие или разговор, — решает читатель цены (LLM), здесь только
+    механика. Одна фраза — без поля: путь одной услуги смотрит всю реплику сам."""
+
+    if len(items) < 2 or cands.whole is None:
+        return tuple(items)
+    toks = _tokens(cands.reply)
+    pieces = cands.partitions.get(SOURCE_SPLIT, ())
+    ordered = sorted(items, key=lambda item: (item.start, item.end))
+    out: list[ParsedPhrase] = []
+    for item in items:
+        piece = next((p for p in pieces if p.start <= item.start and item.end <= p.end), None)
+        if piece is not None:
+            lo, hi = piece.start, piece.end
+        else:
+            at = ordered.index(item)
+            lo = ordered[at - 1].end if at else cands.whole.start
+            hi = ordered[at + 1].start if at + 1 < len(ordered) else cands.whole.end
+        words = [
+            cands.reply[t.start : t.end]
+            for t in toks
+            if lo <= t.start
+            and t.end <= hi
+            and t.key not in _FILLER
+            and not any(other.start <= t.start and t.end <= other.end for other in items)
+        ]
+        out.append(replace(item, beside=" ".join(words)) if words else item)
+    return tuple(out)
+
+
 def result(cands: Candidates, status: ParseStatus, source: str, items: Sequence[ParsedPhrase] = ()) -> PhraseParse:
     return PhraseParse(
         reply=cands.reply,
         status=status.value,
         source=source,
-        items=tuple(items),
+        items=_with_beside(cands, items),
         leftover=leftover(cands, items),
         candidates=len(cands.options),
     )

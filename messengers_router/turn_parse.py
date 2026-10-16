@@ -171,13 +171,15 @@ _FAILED = frozenset({ParseStatus.UNAVAILABLE, ParseStatus.INVALID, ParseStatus.M
 @dataclass(frozen=True)
 class ParsedPhrase:
     """Фраза реплики `reply[start:end]` — одна услуга; `rows` — строки прайса сильной фразы (читатель
-    копирует, прежде чем менять)."""
+    копирует, прежде чем менять); `beside` — слова её фрагмента, которых не покрыл выбор (у списка, см.
+    `_turn_phrases.result`): «омс» у «ферритин» из «ферритин по омс, глюкоза» (обвязка «по» не в счёт)."""
 
     text: str
     start: int
     end: int
     strength: Strength
     rows: tuple[dict[str, Any], ...] = ()
+    beside: str = ""
 
 
 @dataclass(frozen=True)

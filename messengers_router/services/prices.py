@@ -63,6 +63,7 @@ from ._prices_helpers import (
     _price_show_all_requested,
     _is_strong_doctor_price_match,
     _match_drops_unsatisfiable_qualifier,
+    _strong_phrase_guard_on,
     _price_family_payload_from_context,
     _price_query_tokens,
     _price_row_score,
@@ -262,10 +263,6 @@ def _parse_strong_selection(query: str) -> PriceSelection | None:
     if parse is None or parse.is_list or len(parse.items) != 1 or not parse.items[0].rows:
         return None
     return PriceSelection(rows=tuple(dict(row) for row in parse.items[0].rows), status="strong")
-
-
-def _strong_phrase_guard_on() -> bool:
-    return str(getattr(_cfg, "MR_STRONG_PHRASE_GUARD", "llm") or "").strip().lower() == "llm"
 
 
 def _qualifier_outside_strong_phrase(query: str, strong: PriceSelection, retail_rows: list[dict[str, Any]]) -> bool:
