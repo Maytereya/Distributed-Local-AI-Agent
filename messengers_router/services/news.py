@@ -68,6 +68,16 @@ _ORDINAL_WORDS = {
 
 _PROMO_LIST_LIMIT = 8
 
+# Выбор акции из показанного списка: «2», «про 3», «расскажи номер 5», «вторую». Одно определение
+# (STEP-2026-10-16-ONE-PHRASING): по нему классификатор продолжает NEWS (`classifier._promo_followup_entities`),
+# а здесь номер из цифр — группа 1 (`_resolve_pick_index`). Порядковые слова номер берут из `_ORDINAL_WORDS`.
+_PROMO_PICK_TEXT_RE = re.compile(
+    r"^\s*(?:расскажи(?:те)?\s+)?(?:про\s+|номер\s+)?"
+    r"(?:(\d{1,2})|перв\w+|втор\w+|трет\w+|четв[её]рт\w+|пят\w+|шест\w+|седьм\w+|восьм\w+)"
+    r"\s*[!.,?]*\s*$",
+    re.I,
+)
+
 
 def _norm(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "").lower().replace("ё", "е")).strip()
@@ -228,12 +238,8 @@ def _resolve_pick_index(query: str, entities: dict[str, Any]) -> int | None:
     pick = entities.get("promo_pick_index")
     if isinstance(pick, int) and pick > 0:
         return pick
-    m = re.fullmatch(
-        r"\s*(?:расскажи(?:те)?\s+)?(?:про\s+|номер\s+)?(\d{1,2})\s*[!.,?]*\s*",
-        str(query or ""),
-        flags=re.I,
-    )
-    if m:
+    m = _PROMO_PICK_TEXT_RE.fullmatch(str(query or ""))
+    if m and m.group(1):
         return int(m.group(1))
     for word, idx in _ORDINAL_WORDS.items():
         if re.search(rf"\b{word}\b", _norm(query)):

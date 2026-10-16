@@ -504,12 +504,6 @@ _PROMO_FOLLOWUP_TEXT_RE = re.compile(
     r"|(?:покажи(?:те)?\s+)?вс[её](?:\s+акции)?)\s*[!.,?]*\s*$",
     re.I,
 )
-_PROMO_PICK_TEXT_RE = re.compile(
-    r"^\s*(?:расскажи(?:те)?\s+)?(?:про\s+|номер\s+)?"
-    r"(?:\d{1,2}|перв\w+|втор\w+|трет\w+|четв[её]рт\w+|пят\w+|шест\w+|седьм\w+|восьм\w+)"
-    r"\s*[!.,?]*\s*$",
-    re.I,
-)
 # Вопрос ПРО показанную карточку акции («а до какого числа она действует?»,
 # «какие условия?», «кому подходит?») — прод-диалог 10.07: уходил в LLM→OTHER
 # «Не совсем понял ваш запрос». Детерминированный ответ = повторная карточка
@@ -556,6 +550,10 @@ def _promo_followup_entities(text: str, last_entities: dict[str, Any]) -> dict[s
         "promo_query_for": raw,
         "_promo_context": {"titles": [str(t) for t in titles]},
     }
+    # Выбор акции по номеру узнаёт одно определение — сервиса акций, который номер и берёт (STEP-2026-10-16-ONE-PHRASING).
+    # Импорт в функции: классификатор не тянет сервисный слой при своём импорте (как `planner`).
+    from .services.news import _PROMO_PICK_TEXT_RE
+
     if _PROMO_FOLLOWUP_TEXT_RE.fullmatch(raw) or _PROMO_PICK_TEXT_RE.fullmatch(raw):
         return passthrough
     if ctx_mode == "detail" and len(titles) == 1 and _PROMO_QUESTION_TEXT_RE.search(raw):

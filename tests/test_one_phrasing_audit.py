@@ -231,6 +231,18 @@ def test_promo_pick_on_unicode_spaces_as_before():
             assert classifier._promo_followup_entities(reply, entities) == _old_promo_followup_entities(reply, entities), repr(reply)
 
 
+def test_classifier_has_no_copy_of_the_promo_pick_rule(monkeypatch):
+    """Одно определение: классификатор спрашивает сервис акций, своей регулярки выбора у него нет."""
+
+    entities = PROMO_CONTEXTS["list_after_news"]
+    assert not hasattr(classifier, "_PROMO_PICK_TEXT_RE")
+    assert classifier._promo_followup_entities("абракадабра", entities) is None
+    monkeypatch.setattr(news, "_PROMO_PICK_TEXT_RE", re.compile("абракадабра|(7)"))
+    assert classifier._promo_followup_entities("абракадабра", entities) is not None
+    assert classifier._promo_followup_entities("2", entities) is None
+    assert news._resolve_pick_index("7", {}) == 7 and news._resolve_pick_index("2", {}) is None
+
+
 def test_promo_audit_cases_are_pinned_as_is():
     entities = PROMO_CONTEXTS["list_after_news"]
     got = {r: (classifier._promo_followup_entities(r, entities) is not None, news._resolve_pick_index(r, {})) for r in PICK_AUDIT}
