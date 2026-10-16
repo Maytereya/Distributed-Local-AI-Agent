@@ -202,7 +202,6 @@ class MessengerRouterConfig:
     parse_fail_variants: int
     journal_phrase: str
     variant_b_wordforms: str
-    context_shown: str
     pending_reply: str
     pending_reply_types: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
@@ -471,11 +470,8 @@ settings = Settings(
         # обвязки, реплика без названия услуги — ничего. По умолчанию mention — как на проде с 15.10 (решение владельца
         # 16.10, деплой 5). [MESSENGER_ROUTER] journal_phrase
         journal_phrase=_get_enum("MESSENGER_ROUTER", "journal_phrase", default="mention", allowed={"rules", "mention"}),
-        # Контекст сессии = показанное (L-14, шаг 3): off — услугу в состояние пишет только заземление правил;
-        # on — ответ с ценами пишет показанные строки (_shown_services) и одну показанную услугу (service_name),
-        # срок из МИС — тоже; сводка диалога не называет снятую услугу. По умолчанию on — как на проде с 15.10 (решение
-        # владельца 16.10, деплой 5). [MESSENGER_ROUTER] context_shown
-        context_shown=_get_enum("MESSENGER_ROUTER", "context_shown", default="on", allowed={"off", "on"}),
+        # Контекст сессии = показанное (L-14, шаг 3) — единственный путь с 17.10: ключ [MESSENGER_ROUTER] context_shown
+        # снят и больше не читается (в config.ini прода безвреден; STEP-2026-10-17-ONE-PATH-CONTEXT-SHOWN).
         # Ответ на висящий вопрос бота силами LLM (D2.3, `messengers_router/pending_reply.py`): off — как было;
         # shadow — тень: решение LLM вне бюджета хода и предохранителя, только телеметрия (tu_pending_*), ответ
         # прежний; on — пока как shadow (исполнение — следующий шаг, после живого замера и встречного свипа).
@@ -669,7 +665,6 @@ MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_JOURNAL_PHRASE = settings.messenger_router.journal_phrase
 MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
-MR_CONTEXT_SHOWN = settings.messenger_router.context_shown
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_REASK_LIMIT = settings.messenger_router.reask_limit

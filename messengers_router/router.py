@@ -1548,7 +1548,7 @@ async def _inject_catalog_candidates(
             flags.add("understanding_list_kept")
             updated = True
             turn_understanding.note_acted("catalog_inject_skipped")
-        # Контекст = показанное (L-14, `context_shown = on`): ход раскрытия семейства — ответ на подсказку бота
+        # Контекст = показанное (L-14): ход раскрытия семейства — ответ на подсказку бота
         # «напишите: "все"», а не название услуги; каталог по реплике свёл бы «все» к «УЗИ … все зоны (детское)»
         # (BUG-2026-10-14-SHOW-ALL-AS-CATALOG-SERVICE). Список раскроет инструмент цены из контекста семейства.
         if should_try_service and shown_context.expands_shown(decision):
@@ -1993,9 +1993,9 @@ async def _maybe_readiness_reply(
         # Слабое совпадение: услугу выбирает LLM из кандидатов, срок печатает код (ход (в)).
         deadlines = await readiness_by_choice(user_text)
     if deadlines:
-        if shown_context.mode() == "on":  # срок показан — его услуга и есть контекст (L-14, шаг 3)
-            names = list(dict.fromkeys(str(item.get("name") or "").strip() for item in deadlines if item.get("name")))
-            shown_context.remember(state, names)
+        # срок показан — его услуга и есть контекст (L-14, шаг 3)
+        names = list(dict.fromkeys(str(item.get("name") or "").strip() for item in deadlines if item.get("name")))
+        shown_context.remember(state, names)
         turn_understanding.note_acted("readiness_from_mis")
         flag, items = "understanding_readiness_from_mis", {ek.READINESS_RESPONSE: deadlines}
     else:
@@ -2170,7 +2170,7 @@ async def _guard_walkin_named_service(
 
     - Своя лаб-улика в реплике («сдать кровь», «анализ», «ЭКГ») — решение правила остаётся.
     - Своей услуги в реплике нет — ответ про класс из контекста («анализы»), а не про
-      строку каталога, найденную по словам вопроса. Под `context_shown = on` вопрос — о
+      строку каталога, найденную по словам вопроса. Вопрос — о
       показанной прошлым ответом услуге: класс нужен только ответу об адресах, контекст
       после ответа — показанное (флаг `walkin_shown_service`, `shown_context.sync_address`).
     - Услуга названа — вид решает каталог МИС: анализ (есть срок готовности) — без записи;
@@ -2206,7 +2206,7 @@ async def _guard_walkin_named_service(
     phrase = extract_service_phrase(asked_about)
     if not phrase:
         hint = nonbookable_service_hint(user_text, state.last_entities) or "анализы"
-        about_shown = shown_context.walkin_about_shown()  # под `off` пусто — решение как было
+        about_shown = shown_context.walkin_about_shown()  # прошлый ответ ничего не показал — пусто, решение как было
         if decision.entities.get("service_name") == hint:
             return _copy_decision(decision, flags=set(decision.flags) | about_shown) if about_shown else decision
         return _copy_decision(

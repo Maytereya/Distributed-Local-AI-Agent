@@ -204,6 +204,20 @@ def _fresh_llm_decision_state(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_shown_context():
+    """«Показанное прошлым ответом» (`shown_context._PREVIOUS` / `_BEFORE`) — переменные хода: тест, который зовёт
+    `begin_turn` напрямую, а не через эндпоинт, не оставляет их следующему (17.10: `test_sync_address_boundaries`
+    оставлял «Ферритин», и прямой вызов `test_prepare` другого теста спрашивал «к «Ферритин» или к другому анализу?»).
+    """
+    from messengers_router import shown_context
+
+    previous, before = shown_context._PREVIOUS.set(()), shown_context._BEFORE.set("")
+    yield
+    shown_context._PREVIOUS.reset(previous)
+    shown_context._BEFORE.reset(before)
+
+
+@pytest.fixture(autouse=True)
 def _no_background_jobs(monkeypatch):
     """Фоновые обновления справочников и прогрев в тестах не запускаются.
 

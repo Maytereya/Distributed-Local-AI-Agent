@@ -439,7 +439,7 @@ def prepare_variant_payload(titles: dict[str, str], choice: str) -> dict[str, An
 
 
 def _context_subject(raw_query: str) -> tuple[str, bool]:
-    """Услуга контекста для вопроса о подготовке (L-14, `context_shown = on`) и уверенность, что вопрос о ней.
+    """Услуга контекста для вопроса о подготовке (L-14, «контекст = показанное») и уверенность, что вопрос о ней.
 
     Прошлый ответ назвал пациенту одну услугу, а предмета в вопросе явно нет — ни «подготовка к X» / «как сдать
     X», ни услуги по данным МИС. Своих слов, кроме обвязки вопроса о подготовке, нет («а как подготовиться?»,
@@ -626,7 +626,7 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
         }
 
     note = "prepare: no memo about the subject" if memos else "prepare: no matches"
-    if shown_context.mode() == "on" and (context or _names_own_subject(raw_query)):
+    if context or _names_own_subject(raw_query):
         # Предмет — услуга контекста как её назвал ответ, иначе — свой предмет реплики: подсказка правил выбирает
         # самую длинную из фраз реплики и контекста, и «а как подготовиться к ттг?» после ферритина печатала «ферритин».
         subject = context or _prepare_subject_hint(q, {})

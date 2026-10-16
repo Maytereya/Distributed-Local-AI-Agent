@@ -107,7 +107,7 @@ def _excerpt(text: str) -> str:
 
 
 def _build_prompt(question: str, memos: Sequence[PrepareMemo], context: str = "") -> str:
-    """Промпт выбора памятки. `context` — услуга, которую показал прошлый ответ бота (L-14, `context_shown = on`):
+    """Промпт выбора памятки. `context` — услуга, которую показал прошлый ответ бота (L-14, «контекст = показанное»):
     без неё вопрос «а как подготовиться?» LLM понять не может — предмета в нём нет. Без контекста промпт прежний."""
 
     rows = "\n".join(f"{i}. {memo.title} — {_excerpt(memo.text)}" for i, memo in enumerate(memos, 1))

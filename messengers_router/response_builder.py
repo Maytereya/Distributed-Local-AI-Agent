@@ -555,7 +555,7 @@ def build_address_response(
         state.last_entities,
         nonbookable_service=walkin_hint,
     )
-    # Ответ построен; контекст после него — показанное или своя услуга реплики (под `context_shown = on`, L-14).
+    # Ответ построен; контекст после него — показанное или своя услуга реплики (L-14).
     shown_context.sync_address(state, decision, walkin=walkin)
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 

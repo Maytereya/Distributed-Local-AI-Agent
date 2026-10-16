@@ -550,14 +550,12 @@ def test_card_counts_service_text_turns_by_kind():
 
 def test_dialogs_run_turns_in_one_session_and_record_shown_context(tmp_path, monkeypatch):
     """Второй ход видит первый (одна сессия), на ход — контекст после него и строки журнала (решение 13.10:
-    эффект `context_shown` и утечки контекста виден только во втором ходе)."""
+    эффект «контекста = показанного» и утечки контекста виден только во втором ходе)."""
 
     import io
 
     from evalbench import dialogs as ev_dialogs
-    from messengers_router.runtime_config import config as cfg
 
-    monkeypatch.setattr(cfg, "MR_CONTEXT_SHOWN", "on", raising=False)
     fixture = ROOT / "tests" / "fixtures" / "mini_prod" / "snapshots"
     root = ev_world.build_world(fixture, "20261008", tmp_path / "world")
 

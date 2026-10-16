@@ -38,7 +38,6 @@ from tests.test_turn_parse_t3 import _FOLLOW_UPS, _PHRASES_MARK, _ROWS_MARKS, _a
 _PROD_1016 = {
     "MR_CHOOSE_PRICE": "on",
     "MR_PARSE_PRICE_GUARD": "llm",
-    "MR_CONTEXT_SHOWN": "on",
     "MR_JOURNAL_PHRASE": "mention",
     "MR_P2_LLM_JUDGE": "on",
 }

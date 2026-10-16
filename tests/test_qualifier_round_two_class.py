@@ -37,7 +37,6 @@ _PROD_1016 = {
     "MR_PRICE_MATCH_POLICY": "on",
     "MR_PARSE_PRICE_GUARD": "llm",
     "MR_STRONG_MATCH": "data",
-    "MR_CONTEXT_SHOWN": "on",
     "MR_JOURNAL_PHRASE": "mention",
     "MR_STRONG_PHRASE_GUARD": "llm",
     "MR_P2_LLM_JUDGE": "on",

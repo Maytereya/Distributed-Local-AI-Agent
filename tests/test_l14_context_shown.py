@@ -1,17 +1,18 @@
-"""Контекст сессии = показанное — L-14, шаг 3 (`[MESSENGER_ROUTER] context_shown = on`, по умолчанию off).
+"""Контекст сессии = показанное — L-14, шаг 3. Единственный путь с 17.10: выключатель `[MESSENGER_ROUTER] context_shown`
+снят (STEP-2026-10-17-ONE-PATH-CONTEXT-SHOWN; на проде `on` с 15.10).
 
 Было: услугу в состояние писало только заземление правил по буквам. Строку, которую показал выбор LLM («ггтп» →
 «ГГТ гамма-глютамилтрансфераза»), состояние не получало — следующее «сколько стоит?» не знало, о чём речь; «а
 цена?» после ответа с услугой в контексте искала в прайсе букву «а» («По услуге «а»…» — цены аллергенов и шерсти);
 сводка диалога называла услугу, которую состояние уже сменило или сняло.
 
-Стало (под `on`): ответ с ценами пишет `_shown_services` — строки, которые увидел пациент, — и `service_name`, если
+Стало: ответ с ценами пишет `_shown_services` — строки, которые увидел пациент, — и `service_name`, если
 показана одна услуга; срок из МИС — только `_shown_services` (ответ без цен: по решению владельца 13.10 услуги в
 контексте нет); корзина снимает `_shown_services`; реплика, в понимании которой услуга не названа, не перебивает
 контекст фразой вырезателя; сводка обновляется, как только называет не ту услугу.
 
 Инвариант класса: контекст — то, что пациент видел; короткий вопрос не показывает цен строк, которых пациент не видел,
-и не печатает слова вопроса названием услуги. Под `off` — как было.
+и не печатает слова вопроса названием услуги; ключ `context_shown` в конфиге ни на что не влияет.
 """
 
 from __future__ import annotations
@@ -24,29 +25,18 @@ from messengers_router.services._common import _normalise_catalog_text
 from tests.test_l14_two_turn_consumers import _FOUND_GGT, _QUOTED, _Scripted, _play, _priced, _shown
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
-SHOWN = ("deploy_shown", "next_shown")
+SHOWN = ("deploy", "next")
 _GGT = "ГГТ гамма-глютамилтрансфераза"
 
 
-# Нет атрибута — умолчание кода (on с 16.10, деплой 5); мусор в значении — прежний путь (off).
-@pytest.mark.parametrize(("raw", "expected"), [(None, "on"), ("off", "off"), ("on", "on"), ("ON", "on"), ("x", "off")])
-def test_setting_is_read_with_a_safe_default(raw, expected, monkeypatch):
-    from messengers_router import shown_context
-    from messengers_router.runtime_config import config as cfg
-
-    if raw is None:
-        monkeypatch.delattr(cfg, "MR_CONTEXT_SHOWN", raising=False)
-    else:
-        monkeypatch.setattr(cfg, "MR_CONTEXT_SHOWN", raw, raising=False)
-    assert shown_context.mode() == expected
-
-
-def test_config_default_is_on():
-    """Умолчание кода = прод (`context_shown = on` с 15.10; решение владельца 16.10, деплой 5)."""
+def test_one_path_without_a_switch():
+    """Выключателя нет: ни ключа в настройках, ни режима у модуля (решение владельца 16.10, один путь)."""
 
     from agent_logic_2 import config
+    from messengers_router import shown_context
 
-    assert config.MR_CONTEXT_SHOWN == "on"
+    assert not hasattr(config, "MR_CONTEXT_SHOWN") and not hasattr(config.settings.messenger_router, "context_shown")
+    assert not hasattr(shown_context, "mode") and not hasattr(shown_context, "MODES")
 
 
 def _row(name: str, price: int = 100) -> dict:
@@ -92,10 +82,16 @@ def test_llm_picked_row_is_the_context_and_the_next_question_shows_it(config, mi
     assert set(_priced(second.text)) <= _shown(first.text) and _priced(second.text), second.text
 
 
-def test_off_keeps_the_old_context(mini_prod_world, monkeypatch):  # noqa: F811
-    first, second = _play(["сколько стоит ггтп", "сколько стоит?"], "shown-ggt-off", mini_prod_world, monkeypatch, "deploy", llm=_FOUND_GGT())
-    assert first.service_name is None and first.shown is None
-    assert not _priced(second.text)
+def test_old_off_value_in_the_config_changes_nothing(mini_prod_world, monkeypatch):  # noqa: F811
+    """Прежнее значение `context_shown = off` в `config.ini` (прод до деплоя 6 держит ключ) не читается: два хода —
+    как без него."""
+
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_CONTEXT_SHOWN", "off", raising=False)
+    first, second = _play(["сколько стоит ггтп", "сколько стоит?"], "shown-ggt-old-off", mini_prod_world, monkeypatch, "deploy", llm=_FOUND_GGT())
+    assert (first.service_name, first.shown) == (_GGT, [_GGT])
+    assert set(_priced(second.text)) <= _shown(first.text) and _priced(second.text), second.text
 
 
 @pytest.mark.parametrize("config", SHOWN)
@@ -132,7 +128,7 @@ def test_policy_answer_without_prices_still_holds_nothing(config, mini_prod_worl
         assert not _priced(second.text), second.text
 
 
-@pytest.mark.parametrize(("config", "first"), [("next_shown", "сколько стоит глюкоза"), ("deploy_shown", "сколько стоит оак")])
+@pytest.mark.parametrize(("config", "first"), [("next", "сколько стоит глюкоза"), ("deploy", "сколько стоит оак")])
 @pytest.mark.parametrize("again", ["сколько стоит?", "а цена?"])
 def test_repeat_shows_exactly_what_was_shown(again, config, first, mini_prod_world, monkeypatch):  # noqa: F811
     """Находка 4: повтор вопроса без названия услуги — ровно показанные строки (одна строка «Глюкоза» — не семья
@@ -214,7 +210,7 @@ def test_prepare_after_several_shown_asks_which(config, mini_prod_world, monkeyp
 
 
 def test_prepare_prompt_without_context_is_unchanged():
-    """Без показанной услуги промпт выбора памятки — байт в байт прежний (под `off` ничего не меняется)."""
+    """Без показанной услуги промпт выбора памятки — байт в байт прежний."""
 
     from messengers_router.prompt_registry import load_prompt_text
     from messengers_router.services._prepare_select_llm import PrepareMemo, _build_prompt, _excerpt

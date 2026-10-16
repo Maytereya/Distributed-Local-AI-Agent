@@ -18,7 +18,8 @@
   дефектами запасного пути (сегментатор режет фразу одной услуги, вопрос о сроке получает цену): намеренная правка
   меняет его только перезаписью с разбором диффа;
 - два набора выключателей: `deploy_parse` (набор деплоя классовых тестов + `turn_parse = on`, `parse_fail_variants = 5`) и `prod` (прод 15.10:
-  ещё `parse_fail_variants = 3`, `journal_phrase = mention`, `context_shown = on`, `strong_match = data`); ленивые
+  ещё `parse_fail_variants = 3`, `journal_phrase = mention`, `strong_match = data`; «контекст = показанное» — во
+  всех наборах, выключатель снят 17.10); ленивые
   правила (`parse_agree_telemetry = off`, T7 шаг 4) дают эталон `prod` без изменений;
 - два хода: короткий вопрос после ответа запасного пути не получает цены, которой пациент не видел.
 
@@ -58,7 +59,6 @@ _SETS: dict[str, dict[str, Any]] = {
     "prod": {
         "MR_PARSE_FAIL_VARIANTS": 3,
         "MR_JOURNAL_PHRASE": "mention",
-        "MR_CONTEXT_SHOWN": "on",
         },
 }
 _SETS["prod_lazy"] = {**_SETS["prod"], "MR_PARSE_AGREE_TELEMETRY": "off"}

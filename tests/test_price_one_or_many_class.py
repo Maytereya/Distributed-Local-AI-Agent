@@ -49,9 +49,8 @@ from messengers_router.services._common import _normalise_catalog_text
 from messengers_router.services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
 from tests.test_price_turns_golden import FIXTURE, run_dialog
 
-# Наборы деплоя 14.10 и `default` — исторические: «контекст = показанное» на них выключен явно (умолчание кода = прод с
-# 16.10, деплой 5: `context_shown = on`); прод-наборы и `*_shown` включают его сами. Фраза журнала на ответы не влияет —
-# тесты журнала задают её сами. В `default` так же явно — выбор строки прежним вызовом и гарды П2 правил (умолчания кода
+# Наборы деплоя 14.10 и `default` — исторические. «Контекст = показанное» — во всех наборах: выключатель `context_shown`
+# снят 17.10 (STEP-2026-10-17-ONE-PATH-CONTEXT-SHOWN). Фраза журнала на ответы не влияет — тесты журнала задают её сами. В `default` так же явно — выбор строки прежним вызовом и гарды П2 правил (умолчания кода
 # = прод с 17.10, STEP-2026-10-17-DEFAULTS-D: `choose_price = on`, `parse_price_guard = llm`, `p2_llm_judge = on`); набор
 # деплоя гарды П2 не задаёт — тесты класса A и судьи П2 ставят их сами до `_deploy`.
 _DEPLOY = {
@@ -59,7 +58,6 @@ _DEPLOY = {
     "MR_CHOOSE_READINESS": "on",
     "MR_CHOOSE_SYMPTOM": "on",
     "MR_CHOOSE_PRICE": "off",
-    "MR_CONTEXT_SHOWN": "off",
 }
 # Набор `default` — умолчания кода ДО переворота «умолчания = прод» (STEP-2026-10-15-DEFAULTS-A), заданные явно:
 # переворот умолчаний в `agent_logic_2/config.py` не меняет смысла отметок этого набора.
@@ -68,7 +66,6 @@ _DEFAULT = {
     "MR_CHOOSE_READINESS": "off",
     "MR_CHOOSE_SYMPTOM": "off",
     "MR_PARSE_FAIL_VARIANTS": 5,
-    "MR_CONTEXT_SHOWN": "off",
     "MR_CHOOSE_PRICE": "off",
     "MR_PARSE_PRICE_GUARD": "rules",
     "MR_P2_LLM_JUDGE": "off",

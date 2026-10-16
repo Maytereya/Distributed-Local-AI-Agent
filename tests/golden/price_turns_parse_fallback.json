@@ -9,7 +9,7 @@
     "price_info"
    ],
    "service_name_effective": "Ферритин",
-   "service_name": null,
+   "service_name": "Ферритин",
    "pending": null,
    "tu_parse_status": "merged",
    "tu_rule": "parse_merged",

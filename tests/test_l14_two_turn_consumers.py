@@ -17,9 +17,10 @@
    (утечку L-13 закрыл `_sync_policy_context`) — тест держит её от возврата при переносе записи в состояние.
    `test_short_question_after_answer`: следующий короткий вопрос («сколько стоит?», «а цена?», «а как
    подготовиться?», «а где сдать?», «да», «1», «где сдать» → «сколько стоит?») не показывает цен строк, которых
-   пациент не видел, и не печатает слова самого вопроса как название услуги — здесь красное.
+   пациент не видел, и не печатает слова самого вопроса как название услуги.
    `test_shown_service_reaches_the_context`: обратное направление — услугу, которую показал выбор LLM или срок
-   из МИС, состояние не получает (безопасно, но контекст ≠ показанное) — красное.
+   из МИС, состояние получает. Красное обоих тестов закрыл L-14 шаг 3 — «контекст = показанное», единственный путь
+   с 17.10 (выключатель `context_shown` снят).
 2. Журнал синонимов (`test_synonym_journal_phrase`): фраза — то, что назвал пациент и выбрала LLM, а не обрывок
    вырезателя правил; реплика без названия услуги — ничего. Шаг 2 (14.10): под `journal_phrase = mention` фраза —
    упоминание хода (`tests/test_l14_journal_mention.py`); под `rules` (по умолчанию) красное остаётся характеризацией.
@@ -72,10 +73,10 @@ _SETS: dict[str, dict[str, str]] = {
     "next": {**_DEPLOY, "MR_CHOOSE_PRICE": "on"},
 }
 BASE_CONFIGS = tuple(_SETS)
-# L-14, шаг 3 (14.10): «контекст = показанное» (`context_shown = on`) поверх деплоя и кандидата следующего деплоя.
-_SETS["deploy_shown"] = {**_DEPLOY, "MR_CONTEXT_SHOWN": "on"}
-_SETS["next_shown"] = {**_SETS["next"], "MR_CONTEXT_SHOWN": "on"}
-SHOWN_CONFIGS = ("deploy_shown", "next_shown")
+# L-14, шаг 3: «контекст = показанное» — единственный путь с 17.10 (выключатель `context_shown` снят,
+# STEP-2026-10-17-ONE-PATH-CONTEXT-SHOWN). Наборы `deploy_shown` / `next_shown` (он поверх деплоя и кандидата) совпали с
+# базовыми и сняты; `SHOWN_CONFIGS` — имя для соседних файлов: наборы деплоя и кандидата.
+SHOWN_CONFIGS = ("deploy", "next")
 CONFIGS = tuple(_SETS)
 
 _PHRASES_MARK = "понять, какие услуги назвал пациент"
@@ -92,7 +93,7 @@ FOLLOWUPS: dict[str, tuple[str, ...]] = {
     "where": ("а где сдать?",),
     "yes": ("да",),
     "one": ("1",),
-    "where_price": ("а где сдать?", "сколько стоит?"),  # «где сдать» заменяет услугу в состоянии классом «анализы» (под `off`)
+    "where_price": ("а где сдать?", "сколько стоит?"),  # «где сдать» заменяло услугу в состоянии классом «анализы» (до L-14)
 }
 
 # --------------------------------------------------------------------------- мир, ходы, LLM
@@ -288,21 +289,21 @@ _CODES = {
 _WALKIN_CLASS = _normalise_catalog_text("анализы")  # класс, который гард walk-in ставит вместо услуги контекста
 
 
-def _context_violations(first: _Turn, *, named_one: bool = False) -> dict[str, str]:
+def _context_violations(first: _Turn) -> dict[str, str]:
     """Состояние после ответа X. Ответ с ценами: `service_name` / `test_name` — только показанное (название
     строки прайса из ответа или слова пациента, которые ответ повторил). Ответ без цен («не нашёл», названия
     без цен, уточнение, перевод на оператора, срок, подбор анализов): пациент ничего не выбрал — в состоянии
     услуги нет (решение владельца 13.10, BUG-2026-10-13-L13-CONTEXT-LEAK).
 
-    :param named_one: правило владельца 14.10 (под `context_shown = on`): в контексте — услуга, которую ответ
-        назвал пациенту одной строкой («Срок готовности «Ферритин» — 1–2 дня»); догадка — никогда."""
+    Правило владельца 14.10 («контекст = показанное»): в контексте — услуга, которую ответ назвал пациенту одной
+    строкой («Срок готовности «Ферритин» — 1–2 дня»); догадка — никогда."""
 
     held = [str(value) for value in (first.service_name, first.test_name) if value]
     if not held:
         return {}
     if not _priced(first.text):
         quoted = {_normalise_catalog_text(q) for q in _QUOTED.findall(first.text)}
-        if named_one and len(held) == 1 and quoted == {_normalise_catalog_text(held[0])} and held[0] in _catalog_names_raw():
+        if len(held) == 1 and quoted == {_normalise_catalog_text(held[0])} and held[0] in _catalog_names_raw():
             return {}
         return {"ctx": f"{_CODES['ctx']}: ответ без цен, пациент ничего не выбрал, а в состоянии {held}"}
     shown, norm_text = _shown(first.text), _normalise_catalog_text(first.text)
@@ -390,38 +391,11 @@ SCENARIOS: dict[str, Scenario] = {
 # утечку L-13 закрыл `_sync_policy_context`; тест держит её от возврата при переносе).
 KNOWN_CONTEXT: dict[tuple[str, str], dict[str, str]] = {}
 
-_A_PRICE_ROWS = (
-    "«а цена?»: вырезатель правил (`_extract_price_service_from_query`) отдаёт «а», а `_should_prefer_retail_query_candidate` "
-    "ставит его выше услуги контекста (подстрока: «а» есть в «Глюкоза», «Гастрин», «Общий анализ крови»), ранжирование по "
-    "букве «а» показывает цены аллергенов и шерсти"
-)
-_A_PRICE_PHRASE = "заголовок ответа «По услуге «а»»: слова вопроса напечатаны как название услуги"
-_REPEAT_FAMILY = (
-    "под разбором ответ X — одна строка «Глюкоза» (дословное название, STRONG), а повтор вопроса идёт правилами по "
-    "`service_name` контекста и показывает семью с ценами «Глюкозы в моче» и «в синовиальной жидкости», которых пациент не видел"
-)
-_PREP_PHRASE = (
-    "`_prepare_subject_hint` берёт самую длинную из фраз вопроса и контекста: «а как подготовиться» длиннее «Ферритин» и "
-    "«Глюкоза» и печатается как предмет памятки («Памятки по подготовке к «а как подготовиться» у меня нет»); у длинных "
-    "названий (ОАК, ТТГ) побеждает контекст — по длине, а не по смыслу"
-)
-_WHERE_PRICE_PHRASE = (
-    "после «а где сдать?» walk-in заменяет `service_name` классом «анализы» (ходы 11 и 22 карты гардов), и «сколько стоит?» "
-    "ищет по вырезанной фразе: «По услуге «сколько стоит»… цену определить не удалось… соединяю» — показанная услуга потеряна, "
-    "слова вопроса напечатаны как название"
-)
-
+# Красное продолжений после ответа X, объявленное до 17.10 под `context_shown = off` («а цена?» искала букву «а», повтор
+# после одной строки «Глюкоза» показывал семью, «а как подготовиться» печаталось предметом памятки, после «а где сдать?»
+# класс «анализы» затирал показанную услугу), закрыто «контекстом = показанным» — единственный путь с 17.10.
 # (сценарии, вопрос, наборы, {код: причина}) → построчно в KNOWN_FOLLOWUP.
-_FOLLOWUP_RED: tuple[tuple[tuple[str, ...], str, tuple[str, ...], dict[str, str]], ...] = (
-    (("family_glucose", "family_oak", "fork_oak"), "a_price", BASE_CONFIGS, {"rows": _A_PRICE_ROWS, "phrase": _A_PRICE_PHRASE}),
-    # «а цена?» после «не нашёл» — уточнение во всех наборах с 16.10: политика L-13 единственная (T7 шаг 2).
-    # Повтор после одной строки «Глюкоза» (STRONG) — семья по `service_name`: под политикой во всех базовых наборах
-    # (до 16.10 — только где она была on); закрывает `context_shown = on` (SHOWN_CONFIGS, прод).
-    (("family_glucose",), "price", BASE_CONFIGS, {"rows": _REPEAT_FAMILY}),
-    (("one_ferritin", "family_glucose"), "prep", BASE_CONFIGS, {"phrase": _PREP_PHRASE}),
-    # Под `context_shown = on` закрыто (L-14, находка 3): после ответа адреса в контексте снова показанное.
-    (("one_ferritin", "family_oak"), "where_price", BASE_CONFIGS, {"phrase": _WHERE_PRICE_PHRASE}),
-)
+_FOLLOWUP_RED: tuple[tuple[tuple[str, ...], str, tuple[str, ...], dict[str, str]], ...] = ()
 # (сценарий, вопрос, набор) → {код: причина}. Пусто — зелёный. Вопрос — метка из FOLLOWUPS.
 KNOWN_FOLLOWUP: dict[tuple[str, str, str], dict[str, str]] = {
     (scenario, question, config): codes for scenarios, question, configs, codes in _FOLLOWUP_RED for scenario in scenarios for config in configs
@@ -451,7 +425,7 @@ def test_context_is_what_was_shown(name, config, mini_prod_world, monkeypatch): 
 
     scenario = SCENARIOS[name]
     played = _play([scenario.first], name, mini_prod_world, monkeypatch, config, llm=scenario.llm() if scenario.llm else None, render=scenario.render)
-    found = _context_violations(played[0], named_one=config in SHOWN_CONFIGS)
+    found = _context_violations(played[0])
     _settle(found, KNOWN_CONTEXT.get((name, config), {}), _dialog_text([scenario.first], played))
 
 
@@ -501,7 +475,6 @@ _JOURNAL_SENTENCE = {
     "deploy_parse": "разбор вернул `single` (кандидат один — вся реплика): LLM выбора фраз не зовётся, и `_journal_phrase` возвращает фразу вырезателя «а ггтп»",
     "next": "разбор вернул `single` (кандидат один — вся реплика): LLM выбора фраз не зовётся, и `_journal_phrase` возвращает фразу вырезателя «а ггтп»",
 }
-_JOURNAL_SENTENCE["deploy_shown"], _JOURNAL_SENTENCE["next_shown"] = _JOURNAL_SENTENCE["deploy"], _JOURNAL_SENTENCE["next"]
 _JOURNAL_NO_SERVICE = (
     "прежний промпт выбора цены (`choose_price = off`) не знает причины «слишком общее» (её даёт только промпт модуля), `journal_miss` "
     "пишет реплику как синоним; под разбором `single` (LLM фраз не звали) не отличает «нет услуги» от «слова без синонима»; "
@@ -519,11 +492,11 @@ KNOWN_JOURNAL: dict[tuple[str, str, str], dict[str, str]] = {
     **{
         (case, config, "rules"): {"journal": _JOURNAL_NO_SERVICE}
         for case in ("no_service_named_1", "no_service_named_2", "no_service_named_3")
-        for config in ("default", "deploy", "deploy_parse", "deploy_shown")
+        for config in ("default", "deploy", "deploy_parse")
     },
     **{
         ("no_service_named_2", config, "mention"): {"journal": _JOURNAL_NO_SERVICE_WORDS}
-        for config in ("default", "deploy", "deploy_parse", "deploy_shown")
+        for config in ("default", "deploy", "deploy_parse")
     },
 }
 JOURNAL_SOURCES = ("rules", "mention")
@@ -618,21 +591,14 @@ def test_single_mention_is_an_observer_and_tu_list_keeps_its_meaning(config, min
 
 
 # Обратное направление «контекст = показанное»: услуга, которую ответ назвал пациенту и которую выбрала не
-# заземляющая правила, а LLM (строка цены) или код (срок из МИС), в состояние не попадает — следующее «сколько
-# стоит?» не знает, о чём шла речь (безопасно, но контекст ≠ показанное). (сценарий, наборы, показанная услуга)
-_SHOWN_RED = (
-    "L-14: показанную услугу выбрали LLM или код МИС (`service_name_effective`, срок), а в состояние сессии пишет "
-    "только заземление правил по буквам (`merge_entities` в роутере; ранний возврат `_maybe_readiness_reply` идёт мимо него)"
-)
+# заземляющая правила, а LLM (строка цены) или код (срок из МИС), доходит до состояния — следующее «сколько стоит?»
+# знает, о чём шла речь. До 17.10 под `context_shown = off` не доходила (красное, объявленное здесь); выключатель снят.
+# (сценарий, наборы, показанная услуга)
 _SHOWN_BUT_NOT_HELD = (
     ("llm_pick_ggt", CONFIGS, "ГГТ гамма-глютамилтрансфераза"),  # строку выбрала LLM по термину «ГГТ»
-    ("readiness_ferritin", ("deploy", "deploy_parse", "next", *SHOWN_CONFIGS), "Ферритин"),  # срок «Ферритин» напечатал код из МИС
+    ("readiness_ferritin", ("deploy", "deploy_parse", "next"), "Ферритин"),  # срок «Ферритин» напечатал код из МИС
 )
-# Красное: (сценарий, набор) → причина. Под `context_shown = on` выбор LLM доходит до контекста (шаг 3).
-_SHOWN_KNOWN = {
-    **{("llm_pick_ggt", config): _SHOWN_RED for config in BASE_CONFIGS},
-    **{("readiness_ferritin", config): _SHOWN_RED for config in ("deploy", "deploy_parse", "next")},
-}
+_SHOWN_KNOWN: dict[tuple[str, str], str] = {}
 
 
 def _shown_params():
@@ -708,8 +674,7 @@ def test_strong_single_service_is_the_context(config, mini_prod_world, monkeypat
 @pytest.mark.parametrize("config", CONFIGS)
 def test_readiness_answer_leaves_no_service_pending_or_label_in_state(config, mini_prod_world, monkeypatch):  # noqa: F811
     """Срок из МИС кодом (ответ о «Ферритин»): ход уходит ранним возвратом (`_maybe_readiness_reply`) мимо
-    слияния сущностей — в состоянии нет ни услуги, ни ожидания, ни метки хода. Следующее «сколько стоит?» не
-    знает, о чём речь, и просит название (безопасно; но показанная услуга — «Ферритин» — контексту не досталась).
+    слияния сущностей — ни ожидания, ни метки хода; срок назвал одну услугу — она в контексте (правило владельца 14.10).
 
     Набор `default`: понимание хода в тени — вопрос о сроке не обрабатывается, ответ — перевод на оператора."""
 
@@ -718,21 +683,12 @@ def test_readiness_answer_leaves_no_service_pending_or_label_in_state(config, mi
         assert turn.handoff
     else:
         assert turn.text == "Срок готовности «Ферритин» — 1–2 дня." and not turn.handoff
-    # Под `context_shown = on` (правило владельца 14.10) срок назвал одну услугу — она в контексте.
-    held = "Ферритин" if config in SHOWN_CONFIGS else None
+    held = None if config == "default" else "Ферритин"
     assert (turn.state["service_name"], turn.state["pending"], turn.state["last_label"]) == (held, None, None)
 
 
-_SUMMARY_RED = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="L-14: сводка диалога (`context_summary.update_summary`, раз в 4 хода) пишет `service_name=…` из состояния и переживает его "
-    "изменение и снятие: после ответа пятого хода состояние уже другое (или пусто), а `_summary`, который уходит в промпт классификатора, "
-    "ещё называет прежнюю услугу (под `context_shown = on` сводка обновляется при расхождении — шаг 3)",
-)
-
-
-@pytest.mark.parametrize("config", [pytest.param(c, marks=_SUMMARY_RED if c in BASE_CONFIGS else [], id=c) for c in CONFIGS])
+# До 17.10 под `context_shown = off` сводка переживала снятие услуги (красное); теперь сводка обновляется при расхождении.
+@pytest.mark.parametrize("config", CONFIGS)
 def test_summary_does_not_outlive_the_context_it_copied(config, mini_prod_world, monkeypatch):  # noqa: F811
     """Сводка диалога копирует `service_name` из состояния на четвёртом ходу. Пятый ход — ответ политики «не нашёл»
     (L-13): услуга из состояния снята, а сводка ещё держит «Ферритин» до следующего обновления — потребитель

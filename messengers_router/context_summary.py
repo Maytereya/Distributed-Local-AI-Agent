@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import shown_context
 from .mess_types import SessionState
 
 _SUMMARY_MAX_CHARS = 1600
@@ -62,7 +61,7 @@ def _names_stale_context(summary: str, ents: dict[str, Any]) -> bool:
 def update_summary(state: SessionState, *, reason: str = "", every_n_user_turns: int = 4) -> str:
     """
     Обновляет bounded summary в SessionState.
-    Обновление выполняется периодически и при явной смене темы; под `context_shown = on` — ещё и когда
+    Обновление выполняется периодически и при явной смене темы, а также когда
     сводка называет услугу, которой в состоянии уже нет (контекст сменился или снят).
     """
     user_turns = [h for h in (state.history or []) if isinstance(h, dict) and h.get("role") == "user"]
@@ -71,7 +70,7 @@ def update_summary(state: SessionState, *, reason: str = "", every_n_user_turns:
         return state.summary
 
     must_refresh = bool(reason in {"topic_switch", "handoff"})
-    if not must_refresh and shown_context.mode() == "on" and state.summary:
+    if not must_refresh and state.summary:
         must_refresh = _names_stale_context(state.summary, state.last_entities or {})
     if not must_refresh and (len(user_turns) % max(1, every_n_user_turns) != 0):
         return state.summary or ""
