@@ -62,6 +62,19 @@ class _Down:
         raise ConnectionError("тест: LLM недоступна")
 
 
+class _NotItOnP2(_Oracle):
+    """Выбирает строки `_PICK` на репликах без «омс»; на реплике с «омс» — «подходящих нет» (судья П2 отвечает «не та»).
+    Под политикой L-13 (единственная с 16.10) первый ход двух — выбор LLM, а не ответ правил."""
+
+    def __init__(self) -> None:
+        super().__init__((), _PICK)
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
+        question = re.search(r"пациента: «(.*?)»", prompt, re.S)
+        self.rows = ("—",) if question and "омс" in question.group(1).lower() else _PICK
+        return await super().generate(prompt=prompt, system=system, **kwargs)
+
+
 class _PickOnP2(_Oracle):
     """Выбирает строки `_PICK` только на реплике с «омс»; на прочих — «подходящих нет» (первый ход двух — список
     правил, как под `not_it`)."""
@@ -83,6 +96,7 @@ def _llm(kind: str):
         "not_it": lambda: _Oracle((), ("—",)),
         "pick": lambda: _Oracle((), _PICK),
         "pick_p2": _PickOnP2,
+        "not_it_p2": _NotItOnP2,
         "down": _Down,
     }[kind]()
 
@@ -190,18 +204,25 @@ def test_on_does_not_touch_replies_outside_the_class(reply, parse, mini_prod_wor
 _TWO_TURNS = ("сколько стоит узи щитовидной железы", "а сколько стоит по омс?")
 
 
-@pytest.mark.parametrize("llm", ["not_it", "pick_p2", "down"])
+@pytest.mark.parametrize("llm", ["not_it_p2", "pick", "down"])
 @pytest.mark.parametrize("judge", ["off", "on"])
 @pytest.mark.parametrize("parse", ["off", "on"])
 def test_two_turns_the_p2_follow_up_on_the_context_service(parse, judge, llm, mini_prod_world, monkeypatch):  # noqa: F811
-    """Второй ход с уточнением П2 без названия — услуга из контекста диалога. off — как было (цена услуги
-    контекста); on — решает LLM: «не та» — без цены, выбрала строку или сбой — цена. Первый ответ не меняется."""
+    """Второй ход с уточнением П2 без названия после цены услуги — «а сколько стоит по омс?» не получает цену ни при
+    каком положении судьи (П2). С 16.10 (L-13 — единственная политика): цена, выбранная LLM, услугой контекста не
+    становится — второй ход «Уточните» (П2 соблюдён раньше судьи); LLM недоступна — первый ответ — список правил, а
+    второй — как без судьи (сбой судьи не обходит политику L-13)."""
 
     (first, second), _rows, _ = _run(
         _TWO_TURNS, mini_prod_world, monkeypatch, judge=judge, parse=parse, llm=llm, session=f"p2llm-two-{parse}-{judge}-{llm}"
     )
     assert _priced(first["text"]), first["text"]
-    assert _priced(second["text"]) == (judge == "off" or llm != "not_it"), second["text"]
+    assert not _priced(second["text"]), second["text"]
+    if llm == "down" and judge == "on":
+        (_first_off, second_off), _rows, _ = _run(
+            _TWO_TURNS, mini_prod_world, monkeypatch, judge="off", parse=parse, llm=llm, session=f"p2llm-two-{parse}-cmp-{llm}"
+        )
+        assert second["text"] == second_off["text"], (second["text"], second_off["text"])
 
 
 @pytest.mark.parametrize("follow_up", _FOLLOW_UPS)

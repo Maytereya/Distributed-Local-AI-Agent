@@ -31,20 +31,9 @@ from __future__ import annotations
 import threading
 from typing import Any, Sequence
 
-from ..runtime_config import config as _cfg
 from ._biomaterial import mis_synonym_candidates
 from ._common import _normalise_catalog_text
 from ._prices_helpers import _catalog_fingerprint, _extract_price_service_from_query
-
-_MODES = ("legacy", "data")
-
-
-def strong_match_mode() -> str:
-    """Определение сильного у срока: `legacy` (прежнее) | `data` (это); иное — `legacy`."""
-
-    raw = str(getattr(_cfg, "MR_STRONG_MATCH", "legacy") or "").strip().lower()
-    return raw if raw in _MODES else "legacy"
-
 
 def _name(row: dict[str, Any]) -> str:
     return str(row.get("serviceName") or row.get("name") or "").strip()

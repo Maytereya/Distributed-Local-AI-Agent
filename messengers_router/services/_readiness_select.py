@@ -34,14 +34,11 @@ from typing import Any
 from .. import turn_parse
 from ..choice import Option, Status, Task, choose
 from ..runtime_config import config as _cfg
-from ._biomaterial import mis_synonym_candidates
 from ._common import _normalise_catalog_text
 from ._price_select_llm import _mention_phrase, _record_synonym_suggestion, journal_phrase_mode
 from ._prices_helpers import (
-    _PRICE_SERVICE_ALIASES,
     _apply_service_synonyms,
     _catalog_rows,
-    _extract_price_service_from_query,
     _normalise_input,
     _rank_price_rows,
     format_deadline,
@@ -49,7 +46,7 @@ from ._prices_helpers import (
     resolve_price_service_name_from_catalog,
     strip_readiness_phrasing,
 )
-from ._strong_match import strong_match_mode, strong_rows
+from ._strong_match import strong_rows
 
 READINESS_TASK = Task(name="readiness_service", max_picks=3, num_predict=64, timeout_s=12, queue_timeout_ms=3000)
 _CANDIDATES = 10
@@ -70,22 +67,6 @@ def _one_deadline(rows: list[dict[str, Any]]) -> str | None:
 def _deadline(name: str, catalog: list[dict[str, Any]]) -> str | None:
     key = _normalise_input(name)
     return _one_deadline([row for row in catalog if _normalise_input(str(row.get("serviceName") or "")) == key])
-
-
-def _legacy_strong_service_match(fragment: str, service_name: str, retail_rows: list[dict[str, Any]]) -> bool:
-    """Прежнее определение сильного у срока (`strong_match = legacy`, 4df0745): фраза — название услуги
-    целиком или до скобок, курируемая аббревиатура, синоним МИС или код. Уходит, когда `data` принят."""
-
-    key = _normalise_input(_extract_price_service_from_query(fragment) or fragment)
-    name = _normalise_input(service_name)
-    if key in (name, _normalise_input(service_name.split("(")[0].split("[")[0])):
-        return True
-    if key in _PRICE_SERVICE_ALIASES or service_name in mis_synonym_candidates(fragment):
-        return True
-    return key.isdigit() and any(
-        str(row.get("serviceHomecode") or "").strip() == key and _normalise_input(str(row.get("serviceName") or "")) == name
-        for row in retail_rows
-    )
 
 
 def _single_phrase(parse: turn_parse.PhraseParse) -> turn_parse.ParsedPhrase | None:
@@ -130,18 +111,12 @@ def readiness_from_catalog(question: str, *, rows: list[dict[str, Any]] | None =
         return None
     if price_list_services(core, rows=catalog)[0]:
         return None  # список: строку каждой позиции выбирает choose() (ход (в)), до него — перевод
-    if strong_match_mode() == "data":
-        strong = strong_rows(core, catalog)
-        names = list(dict.fromkeys(str(row.get("serviceName") or "").strip() for row in strong))
-        # Одна услуга по данным: синоним на несколько услуг — не одна, её выбирает LLM.
-        if len({_normalise_catalog_text(name) for name in names}) != 1:
-            return None
-        name, deadline = names[0], _one_deadline(strong)
-    else:
-        name = resolve_price_service_name_from_catalog(core, rows=catalog)
-        if not name or not _legacy_strong_service_match(core, name, catalog):
-            return None
-        deadline = _deadline(name, catalog)
+    strong = strong_rows(core, catalog)
+    names = list(dict.fromkeys(str(row.get("serviceName") or "").strip() for row in strong))
+    # Одна услуга по данным: синоним на несколько услуг — не одна, её выбирает LLM.
+    if len({_normalise_catalog_text(name) for name in names}) != 1:
+        return None
+    name, deadline = names[0], _one_deadline(strong)
     return [{"name": name, "deadline": deadline}] if deadline else None
 
 

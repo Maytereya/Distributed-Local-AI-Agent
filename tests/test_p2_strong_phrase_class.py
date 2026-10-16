@@ -37,9 +37,7 @@ from ollama import GenerateResponse
 _PROD_1016 = {
     "MR_TURN_PARSE": "on",
     "MR_CHOOSE_PRICE": "on",
-    "MR_PRICE_MATCH_POLICY": "on",
     "MR_PARSE_PRICE_GUARD": "llm",
-    "MR_STRONG_MATCH": "data",
     "MR_CONTEXT_SHOWN": "on",
     "MR_JOURNAL_PHRASE": "mention",
 }

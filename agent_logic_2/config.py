@@ -198,10 +198,8 @@ class MessengerRouterConfig:
     choose_cache_ttl_s: int
     choose_price: str
     choose_symptom: str
-    price_match_policy: str
     choose_basket: str
     choose_readiness: str
-    strong_match: str
     turn_parse: str
     parse_fail_variants: int
     journal_phrase: str
@@ -458,10 +456,6 @@ settings = Settings(
         # «срочно» и «не жалоба». Политика сбоя прежняя. По умолчанию on — как на проде с 14.10
         # (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] choose_symptom
         choose_symptom=_get_enum("MESSENGER_ROUTER", "choose_symptom", default="on", allowed={"off", "legacy", "on"}),
-        # Политика силы совпадения для цены (L-13, решение владельца 07.10 — вариант B): off — прежняя;
-        # shadow — решение только в телеметрию хода (price_policy); on — сильное совпадение по данным без
-        # LLM, «не нашла» — честное «не нашёл», сбой LLM на слабом совпадении — названия без цен.
-        price_match_policy=_get_enum("MESSENGER_ROUTER", "price_match_policy", default="shadow", allowed={"off", "shadow", "on"}),
         # Корзина на модуле choose() (ход (в), L-15a): позиции режут правила, строки каждой позиции
         # выбирает LLM одним вызовом; сбой — корзина правил. off | on, по умолчанию on — как на проде с 14.10
         # (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] choose_basket
@@ -470,10 +464,6 @@ settings = Settings(
         # off | on, по умолчанию on — как на проде с 14.10 (STEP-2026-10-15-DEFAULTS-B); действует под пониманием
         # хода on. [MESSENGER_ROUTER] choose_readiness
         choose_readiness=_get_enum("MESSENGER_ROUTER", "choose_readiness", default="on", allowed={"off", "on"}),
-        # Что считать сильным совпадением у срока готовности (L-15b, шаг 3): legacy — прежнее определение
-        # срока (название целиком или до скобок, словарь кода, синоним МИС, код); data — одно определение с
-        # ценой и корзиной, только данные МИС (название, синоним МИС, код). [MESSENGER_ROUTER] strong_match
-        strong_match=_get_enum("MESSENGER_ROUTER", "strong_match", default="legacy", allowed={"legacy", "data"}),
         # Разбор ценовой реплики на фразы-услуги (L-15b, шаг 4, контракт C): off — не строится; shadow —
         # во время хода, вне его бюджета, только телеметрия (tu_parse_*) и debug; on — разбор ждут в ходе
         # (решение — из бюджета хода), читатели — шаг 5. [MESSENGER_ROUTER] turn_parse
@@ -674,10 +664,8 @@ MR_LLM_DECISION_BREAKER_OPEN_S = settings.messenger_router.llm_decision_breaker_
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
 MR_CHOOSE_PRICE = settings.messenger_router.choose_price
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
-MR_PRICE_MATCH_POLICY = settings.messenger_router.price_match_policy
 MR_CHOOSE_BASKET = settings.messenger_router.choose_basket
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
-MR_STRONG_MATCH = settings.messenger_router.strong_match
 MR_TURN_PARSE = settings.messenger_router.turn_parse
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_JOURNAL_PHRASE = settings.messenger_router.journal_phrase

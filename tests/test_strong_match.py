@@ -11,9 +11,9 @@
   не сильное;
 - цена и корзина считают сильное тем же определением, что и до шага: их эталоны
   (`test_price_turns_golden.py`, `test_price_match_policy.py`, `test_basket_select.py`) не правились;
-- срок: под `[MESSENGER_ROUTER] strong_match = legacy` (по умолчанию) — прежний; под `data` без выбора
-  LLM срок печатается только по сильному совпадению по данным МИС (одна услуга), иначе — услугу выбирает
-  LLM и срок печатает код, а LLM недоступна — честный перевод.
+- срок без выбора LLM печатается только по сильному совпадению по данным МИС (одна услуга), иначе — услугу
+  выбирает LLM и срок печатает код, а LLM недоступна — честный перевод. Прежнее определение срока
+  (`strong_match = legacy`: название до скобок, словарь кода) снято 16.10 (T7 шаг 1, решение владельца).
 """
 
 from __future__ import annotations
@@ -48,7 +48,6 @@ _DEPLOY = {
     "MR_CHOOSE_READINESS": "on",
     "MR_CHOOSE_SYMPTOM": "on",
     "MR_CHOOSE_PRICE": "off",
-    "MR_PRICE_MATCH_POLICY": "shadow",
 }
 
 
@@ -75,12 +74,6 @@ def mis_synonyms(monkeypatch):
         return vocab
 
     monkeypatch.setattr(_bio, "_vocabularies", _with_synonyms)
-
-
-def _strong_match(monkeypatch, mode: str) -> None:
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_STRONG_MATCH", mode, raising=False)
 
 
 def _names(found) -> list[str]:
@@ -144,43 +137,36 @@ def test_price_and_basket_use_the_one_definition():
     assert not hasattr(_price_select_llm, "_strong_rows") and not hasattr(_prices_helpers, "_strong_service_match")
 
 
-@pytest.mark.parametrize(("raw", "mode"), [("data", "data"), (" DATA ", "data"), ("legacy", "legacy"), ("strong", "legacy"), ("", "legacy"), (None, "legacy")])
-def test_unknown_switch_value_is_legacy(raw, mode, monkeypatch):
-    from messengers_router.services._strong_match import strong_match_mode
+def test_one_definition_without_a_switch():
+    """T7 шаг 1 (16.10): выключателя `strong_match` и прежнего определения срока нет — одно определение."""
 
-    _strong_match(monkeypatch, raw)
-    assert strong_match_mode() == mode
-
-
-def test_switch_is_read_from_config():
     from agent_logic_2 import config
+    from messengers_router.services import _readiness_select, _strong_match
 
-    assert config.MR_STRONG_MATCH == config.settings.messenger_router.strong_match
-    assert config.MR_STRONG_MATCH in ("legacy", "data")
+    assert not hasattr(_strong_match, "strong_match_mode") and not hasattr(_readiness_select, "_legacy_strong_service_match")
+    assert not hasattr(config, "MR_STRONG_MATCH") and not hasattr(config.settings.messenger_router, "strong_match")
 
 
-# --- (в) срок: legacy — прежний, data — только данные МИС
+# --- (в) срок: только данные МИС
 
 
 @pytest.mark.parametrize(
-    ("question", "legacy", "data"),
+    ("question", "expected"),
     [
-        ("сколько готовится ферритин", "Ферритин", "Ферритин"),  # дословное название — сильное в обоих
-        ("сколько готовится сахар", "Глюкоза", "Глюкоза"),  # синоним МИС на одну услугу — сильное в обоих
-        ("сколько готовится ттг", _TSH, None),  # до скобок — только legacy
-        ("сколько готовится общий анализ крови", _OAK_LE, None),  # словарь кода — только legacy
-        ("сколько готовится оак", _OAK_LE, None),  # словарь кода; синоним МИС — три услуги, не одна
-        ("сколько готовится холестерин", None, None),  # синоним на четыре анализа — не одна услуга
+        ("сколько готовится ферритин", "Ферритин"),  # дословное название
+        ("сколько готовится сахар", "Глюкоза"),  # синоним МИС на одну услугу
+        ("сколько готовится ттг", None),  # название до скобок — не сильное
+        ("сколько готовится общий анализ крови", None),  # словарь кода — не сильное
+        ("сколько готовится оак", None),  # синоним МИС — три услуги, не одна
+        ("сколько готовится холестерин", None),  # синоним на четыре анализа — не одна услуга
     ],
 )
-def test_readiness_strong_by_definition(question, legacy, data, rows, mis_synonyms, monkeypatch):
+def test_readiness_strong_by_definition(question, expected, rows, mis_synonyms):
     from messengers_router.services._readiness_select import readiness_from_catalog
 
-    for mode, expected in (("legacy", legacy), ("data", data)):
-        _strong_match(monkeypatch, mode)
-        found = readiness_from_catalog(question, rows=rows)
-        assert (found[0]["name"] if found else None) == expected, mode
-        assert found is None or found[0]["deadline"] == "1–2 дня"
+    found = readiness_from_catalog(question, rows=rows)
+    assert (found[0]["name"] if found else None) == expected
+    assert found is None or found[0]["deadline"] == "1–2 дня"
 
 
 def _ask(question: str, session: str, world_root) -> dict:
@@ -189,25 +175,21 @@ def _ask(question: str, session: str, world_root) -> dict:
     return turn
 
 
-def _deploy(monkeypatch, mode: str, llm: _ReadinessLLM) -> None:
+def _deploy(monkeypatch, llm: _ReadinessLLM) -> None:
     from messengers_router.runtime_config import config as cfg
 
     for key, value in _DEPLOY.items():
         monkeypatch.setattr(cfg, key, value, raising=False)
-    _strong_match(monkeypatch, mode)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
 
 
 @pytest.mark.parametrize("question", ["сколько готовится ттг", "сколько готовится оак", "сколько готовится общий анализ крови"])
 def test_data_prints_no_deadline_by_letters_without_the_model(question, mini_prod_world, monkeypatch):
-    """Под data слабое совпадение без LLM — честный перевод, а не срок строки, которую угадали буквы;
-    под legacy тот же вопрос получал срок без LLM («до скобок», словарь кода)."""
+    """Слабое совпадение без LLM — честный перевод, а не срок строки, которую угадали буквы (снятое определение
+    `legacy` печатало срок без LLM: «до скобок», словарь кода)."""
 
-    _deploy(monkeypatch, "legacy", _ReadinessLLM(fail=True))
-    legacy = _ask(question, f"strong-legacy-{question}", mini_prod_world)
-    assert legacy["text"].startswith("Срок готовности «") and legacy["handoff"] is False
     llm = _ReadinessLLM(fail=True)
-    _deploy(monkeypatch, "data", llm)
+    _deploy(monkeypatch, llm)
     turn = _ask(question, f"strong-data-{question}", mini_prod_world)
     assert (turn["text"], turn["handoff"]) == (RESULT_TIMING_OPERATOR_TEXT, True)
     assert len(llm.prompts) == 1  # спросили модель; она недоступна
@@ -215,7 +197,7 @@ def test_data_prints_no_deadline_by_letters_without_the_model(question, mini_pro
 
 def test_data_weak_match_prints_the_deadline_of_the_row_the_model_picked(mini_prod_world, monkeypatch):
     llm = _ReadinessLLM(wanted=(_TSH,))
-    _deploy(monkeypatch, "data", llm)
+    _deploy(monkeypatch, llm)
     turn = _ask("сколько готовится ттг", "strong-data-pick", mini_prod_world)
     assert turn["text"] == f"Срок готовности «{_TSH}» — 1–2 дня."
     assert len(llm.prompts) == 1 and "1-2" not in llm.prompts[0]  # срок модели не показывается
@@ -226,12 +208,12 @@ def test_data_weak_match_prints_the_deadline_of_the_row_the_model_picked(mini_pr
     [
         ("сколько готовится ферритин", "Ферритин"),  # дословное название
         ("сколько готовится анализ на сахар", "Глюкоза"),  # синоним МИС на одну услугу
-        ("сколько готовится анализ 640", "Глюкоза"),  # код услуги (под legacy резолвер его не находил — перевод)
+        ("сколько готовится анализ 640", "Глюкоза"),  # код услуги
     ],
 )
 def test_data_strong_match_prints_the_deadline_without_the_model(question, name, mini_prod_world, mis_synonyms, monkeypatch):
     llm = _ReadinessLLM(fail=True)
-    _deploy(monkeypatch, "data", llm)
+    _deploy(monkeypatch, llm)
     turn = _ask(question, f"strong-data-strong-{question}", mini_prod_world)
     assert turn["text"] == f"Срок готовности «{name}» — 1–2 дня."
     assert llm.prompts == []
@@ -241,7 +223,7 @@ def test_data_ambiguous_mis_synonym_is_not_one_deadline(mini_prod_world, mis_syn
     """Синоним МИС на четыре анализа — не одна услуга: срок одного из них без выбора не печатается."""
 
     llm = _ReadinessLLM(fail=True)
-    _deploy(monkeypatch, "data", llm)
+    _deploy(monkeypatch, llm)
     turn = _ask("сколько готовится анализ на холестерин", "strong-data-cholesterol", mini_prod_world)
     assert (turn["text"], turn["handoff"]) == (RESULT_TIMING_OPERATOR_TEXT, True)
     assert len(llm.prompts) == 1  # не одна услуга — выбор модели, а она недоступна

@@ -234,7 +234,8 @@ async def _p2_llm_verdict(
     «по ОМС»), кандидаты — строки названия.
 
     Выбор LLM (строки) — они; LLM ответила «не та» (`none_fit`) — честное «не нашёл» (`_match_policy_payload`);
-    сбой LLM, ответ не по делу («слишком общее», «не услуга»), `unavailable` — None: ответ как без выключателя."""
+    сбой LLM, ответ не по делу («слишком общее», «не услуга»), `unavailable` — None: вызывающий продолжает ход как без
+    выключателя (прежний выбор строки и политика L-13 — с 16.10 единственная, T7 шаг 2)."""
 
     selection = await select_price_rows(
         query,
@@ -570,7 +571,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         if strong is not None:
             return strong
         if entity_name and p2_judged:
-            return await _p2_llm_verdict(
+            verdict = await _p2_llm_verdict(
                 str(query or ""),
                 retail_rows_clean,
                 candidates=proposal,
@@ -579,6 +580,9 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
                 context=entity_service_name,
                 runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
             )
+            if verdict is not None:
+                return verdict
+            # Сбой судьи — ход как без судьи: прежний выбор строки и его политика (L-13), а не ответ правил мимо неё.
         judged = _parse_phrase_judged_by_llm(str(query or ""))
         return await select_price_rows(
             str(query or ""),
@@ -759,7 +763,7 @@ async def service_bundle_info(
         if strong is not None:
             return strong
         if p2_judged:
-            return await _p2_llm_verdict(
+            verdict = await _p2_llm_verdict(
                 str(query or ""),
                 retail_rows,
                 candidates=proposal,
@@ -768,6 +772,9 @@ async def service_bundle_info(
                 context=entity_service_name,
                 runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
             )
+            if verdict is not None:
+                return verdict
+            # Сбой судьи — ход как без судьи (прежний выбор строки и политика L-13).
         return await select_price_rows(
             str(query or ""),
             retail_rows,

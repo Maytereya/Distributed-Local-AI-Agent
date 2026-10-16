@@ -11,6 +11,37 @@
 
 ---
 
+## STEP-2026-10-16-T7-1-2 — один путь силы совпадения: сняты `strong_match = legacy` и режимы off/shadow L-13 — СДЕЛАНО (решение владельца 16.10)
+
+- **Зачем:** T7 — один путь решения вместо двух (`~/Dev/handoffs/dla/12_t7_heuristics_removal.md` K5, K6). Прод: `strong_match =
+  data` с 15.10, `price_match_policy = on` с 16.10 04:30; владелец 16.10 — снять сейчас, не ждать недели (рефакторинг пути цены
+  — за 3 дня).
+- **Шаг 1 (K6):** сняты `_readiness_select._legacy_strong_service_match`, ветка `legacy` срока готовности,
+  `_strong_match.strong_match_mode` / `_MODES`, ключ `[MESSENGER_ROUTER] strong_match` (`config.py`, `MR_STRONG_MATCH`).
+  Срок без выбора LLM — только по сильному совпадению по данным МИС. Ключ в `config.ini` прода теперь не читается (безвреден).
+- **Шаг 2 (K5):** сняты `match_policy()`, `_POLICY_MODES`, ключ `price_match_policy`, тень и ветка «дословное название —
+  правила не ошибаются» (`select_price_rows`); политика L-13 — единственная. Параметр `decide` и первый аргумент `settle`
+  остались без действия — до чистки вызывающих.
+- **Эталоны:** `price_turns.json` переснят (`GOLDEN_UPDATE=1`): изменились ровно 5 диалогов, объявленных L-13 (`family_glucose`,
+  `name_with_and`, `name_with_commas`, `one_neurologist`, `synonym_fork_oak`), их ответы побайтно равны разобранным
+  записям `price_turns_policy_on.json` (разбор 11.10) — файл слит и удалён; `price_turns_on.json` не изменился.
+  Тесты: `test_price_match_policy.py` без режимов; `test_price_llm_select.py` — дословное название: строки по данным без
+  LLM (было «оставить правила»), сбой LLM: ответ правил или решение политики без цены, но не другая цена;
+  `test_price_one_or_many_class.py` — `name_commas_in_parens` (сбой и оракул) **починен** (был xfail «семья ОАК с ценой
+  чужой услуги»), 4 названия с предлогами под `turn_parse = off` + сбой LLM — xfail strict (вариант B без цены: вырезатель
+  правил режет «на», «и»; под `on` — разбор по данным); `test_l14_two_turn_consumers.py` — «а цена?» после «не нашёл
+  гастроскопию» **починен** во всех наборах, «повтор после одной строки Глюкоза → семья» объявлен для всех базовых наборов
+  (закрывает `context_shown = on`, прод).
+- **Найдено и исправлено попутно:** сбой судьи П2 (`p2_llm_judge`) возвращал `None` в обход выбора строки и политики L-13 —
+  при недоступной LLM «а сколько стоит по омс?» после списка получал цену услуги контекста (без судьи — оператор). Теперь сбой
+  судьи — ход продолжает обычный выбор строки (`prices.price_info` / `service_bundle_info`). Инвариант: сбой судьи = ответ
+  без судьи. Покрытие — `test_p2_llm_judge_class.py::test_two_turns_the_p2_follow_up_on_the_context_service`.
+- **Инвариант класса:** у сильного совпадения одно определение (данные МИС) и у силы совпадения одна политика; режимов-
+  дублёров в коде нет (`test_strong_match.py::test_one_definition_without_a_switch`,
+  `test_price_match_policy.py::test_one_policy_without_a_switch`).
+
+---
+
 ## BUG-2026-10-16-P2-STRONG-PHRASE-BYPASS — под `turn_parse = on` сильная фраза разбора обходит гард П2 — ИСПРАВЛЕНО (`strong_phrase_guard = llm`, по умолчанию; регресс с 15.10 11:42 Самара)
 
 - **Симптом (смоук прода после деплоя 3, 16.10 ~04:35 Самара):** «сколько стоит приём терапевта по ОМС» → «Прием (осмотр,

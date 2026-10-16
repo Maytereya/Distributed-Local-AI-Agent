@@ -198,10 +198,13 @@ def test_turn_without_own_service_words_does_not_call_llm(monkeypatch, turn):
 
 
 def test_exact_price_name_does_not_call_llm(monkeypatch):
-    # «ферритин» = «Ферритин» дословно — правила не ошибаются, LLM не нужна (и не тратит секунду).
+    # «ферритин» = «Ферритин» дословно — сильное совпадение по данным МИС (L-13): его строки без LLM (не тратит
+    # секунду). С 16.10 политика одна (T7 шаг 2) — ответ «сильное», а не «оставить правила».
     calls: list = []
     _fake_llm(monkeypatch, _pick("Ферритин"), calls)
-    assert run(PS.select_price_rows("сколько стоит ферритин", RETAIL)) is None
+    selection = run(PS.select_price_rows("сколько стоит ферритин", RETAIL))
+    assert selection is not None and selection.status == "strong"
+    assert [row["serviceName"] for row in selection.rows] == ["Ферритин"]
     assert calls == []
 
 
@@ -380,7 +383,10 @@ def test_price_info_keeps_rules_answer_the_llm_confirmed(monkeypatch):
     assert run(svc.price_info("сколько стоит анализ на гастрин", dict(_HYBRID))) == rules_only
 
 
-def test_tools_answer_as_before_when_llm_is_down(monkeypatch):
+def test_tools_do_not_price_a_weak_row_when_llm_is_down(monkeypatch):
+    """LLM недоступна на слабом совпадении — политика L-13 (единственная с 16.10, T7 шаг 2): ответ правил как есть
+    (их список, решение 11.10) или названия без цен / оператор (вариант B) — но не другая цена."""
+
     async def boom(prompt: str, **kwargs):
         raise ConnectionError("llm down")
 
@@ -393,7 +399,14 @@ def test_tools_answer_as_before_when_llm_is_down(monkeypatch):
         monkeypatch.setattr(PS, "_ENABLED", False)
         rules_only = run(call())
         monkeypatch.setattr(PS, "_ENABLED", True)
-        assert run(call()) == rules_only
+        decided = run(call())
+        assert rules_only.get("prices") or rules_only.get("retail_prices")  # правила дали цену
+        # Ответ правил как есть (их список) или решение политики без цен — но не другая цена.
+        assert decided == rules_only or (
+            not decided.get("prices")
+            and not decided.get("retail_prices")
+            and str(decided.get("note") or "").startswith("price_match_policy")
+        ), decided
 
 
 def test_prompt_bundle_and_host_copies_match():

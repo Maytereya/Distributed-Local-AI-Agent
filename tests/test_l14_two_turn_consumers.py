@@ -69,7 +69,7 @@ _SETS: dict[str, dict[str, str]] = {
     "default": _DEFAULT,
     "deploy": _DEPLOY,
     "deploy_parse": {**_DEPLOY, "MR_TURN_PARSE": "on"},
-    "next": {**_DEPLOY, "MR_TURN_PARSE": "on", "MR_CHOOSE_PRICE": "on", "MR_PRICE_MATCH_POLICY": "on"},
+    "next": {**_DEPLOY, "MR_TURN_PARSE": "on", "MR_CHOOSE_PRICE": "on"},
 }
 BASE_CONFIGS = tuple(_SETS)
 # L-14, шаг 3 (14.10): «контекст = показанное» (`context_shown = on`) поверх деплоя и кандидата следующего деплоя.
@@ -414,8 +414,10 @@ _WHERE_PRICE_PHRASE = (
 # (сценарии, вопрос, наборы, {код: причина}) → построчно в KNOWN_FOLLOWUP.
 _FOLLOWUP_RED: tuple[tuple[tuple[str, ...], str, tuple[str, ...], dict[str, str]], ...] = (
     (("family_glucose", "family_oak", "fork_oak"), "a_price", BASE_CONFIGS, {"rows": _A_PRICE_ROWS, "phrase": _A_PRICE_PHRASE}),
-    (("not_found_gastro",), "a_price", ("default", "deploy", "deploy_parse"), {"rows": _A_PRICE_ROWS, "phrase": _A_PRICE_PHRASE}),
-    (("family_glucose",), "price", ("deploy_parse", "next"), {"rows": _REPEAT_FAMILY}),
+    # «а цена?» после «не нашёл» — уточнение во всех наборах с 16.10: политика L-13 единственная (T7 шаг 2).
+    # Повтор после одной строки «Глюкоза» (STRONG) — семья по `service_name`: под политикой во всех базовых наборах
+    # (до 16.10 — только где она была on); закрывает `context_shown = on` (SHOWN_CONFIGS, прод).
+    (("family_glucose",), "price", BASE_CONFIGS, {"rows": _REPEAT_FAMILY}),
     (("one_ferritin", "family_glucose"), "prep", BASE_CONFIGS, {"phrase": _PREP_PHRASE}),
     # Под `context_shown = on` закрыто (L-14, находка 3): после ответа адреса в контексте снова показанное.
     (("one_ferritin", "family_oak"), "where_price", BASE_CONFIGS, {"phrase": _WHERE_PRICE_PHRASE}),

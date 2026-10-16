@@ -27,9 +27,9 @@
 совпасть с `off`); `on` — роли system/user, JSON Schema, коды причин (промпт
 `choose_price_service`). Политика сбоя во всех режимах прежняя; её меняет L-13 отдельным шагом.
 
-Политика силы совпадения (L-13, решение владельца 07.10 — вариант B), выключатель
-`[MESSENGER_ROUTER] price_match_policy` (по умолчанию `shadow` — решение только в телеметрию хода):
-под `on` сильное совпадение по данным (дословное название, синоним МИС, код — `_strong_match`) — только
+Политика силы совпадения (L-13, решение владельца 07.10 — вариант B; единственный режим с 16.10 — T7 шаг 2,
+выключатель `price_match_policy` и режимы off/shadow сняты, решение владельца):
+сильное совпадение по данным (дословное название, синоним МИС, код — `_strong_match`) — только
 эти строки, без LLM; LLM не нашла услугу и во втором круге — честное «не нашёл»; LLM не ответила
 внятно, а правила показали бы ОДНУ слабую строку — до 5 названий без цен (выбирает пациент), а нет таких — оператор;
 показали бы СПИСОК (≥2 строк) — список правил остаётся (решение владельца 11.10 по замеру: строгий
@@ -100,18 +100,10 @@ PRICE_TASK = Task(
     queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS,
 )
 _CHOOSE_MODES = ("off", "legacy", "on")
-_POLICY_MODES = ("off", "shadow", "on")
 _VARIANT_B_LIMIT = 5
 # Причины пустого выбора, при которых LLM не признала в реплике названия услуги: «Цена анализа»
 # (слишком общее), «сможете посчитать» (не услуга). Ни «не нашёл» пациенту, ни синоним клинике.
 _NOT_A_SERVICE_NAME = frozenset({"too_general", "not_a_service"})
-
-
-def match_policy() -> str:
-    """Политика силы совпадения (L-13): off | shadow | on."""
-
-    raw = str(getattr(_cfg, "MR_PRICE_MATCH_POLICY", "shadow") or "").strip().lower()
-    return raw if raw in _POLICY_MODES else "shadow"
 
 
 def _choose_mode() -> str:
@@ -478,9 +470,8 @@ async def select_price_rows(
         (правило 3 промпта отсекает «по ОМС»). Только для фразы, которую LLM разбора выбрала одной услугой
         (`parse_price_guard = llm`, класс A 15.10: гард по словарю каталога считал «карбамазепина» уточнением).
         Сбой LLM — ответ правил, а у них гард прежний: чужой цены нет.
-    :param decide: вернуть решение политики силы совпадения (`none_fit`, `unavailable`, выбор) так, как под
-        `price_match_policy = on`, при любом значении выключателя (телеметрия политики — прежняя). Для вызывающего,
-        которому нужен ответ LLM «не та услуга» отдельно от сбоя (`p2_llm_judge`, BUG-2026-10-15-P2-ENTITY-BYPASS).
+    :param decide: не действует с 16.10 (T7 шаг 2: политика одна — решение возвращается всегда); остаётся до
+        чистки вызывающих (`p2_llm_judge`, суд сильной фразы).
     :param one_round: только первый круг (без поиска по терминам LLM): пустой выбор — `none_fit` с кодом причины
         (`reason`) при любых кандидатах и любом коде; None — только сбой. Для суда условия у сильной фразы разбора
         (BUG-2026-10-16-P2-STRONG-PHRASE-BYPASS): второй круг искал бы «почти то», а под `turn_parse = on` упирался
@@ -507,7 +498,6 @@ async def select_price_rows(
         return None
 
     phrase = str(_extract_price_service_from_query(question) or "").strip()
-    phrase_norm = _normalise_catalog_text(phrase)
     journal_phrase, journal_source = _journal_phrase(question, phrase or question)
     synonymized = _apply_service_synonyms(question)
     texts = [question, synonymized, phrase, str(context or ""), *[str(h or "") for h in hints]]
@@ -527,21 +517,17 @@ async def select_price_rows(
         _build_pool, texts, rows, per_text=_PER_QUERY_LIMIT, first=proposal_first, fallback_texts=words
     )
     pool += [row for row in rest if _row_key(row) not in {_row_key(r) for r in pool}][: max(0, _POOL_LIMIT - len(pool))]
-    policy = match_policy()
     strong = strong_rows(question, rows, pool=pool)
-    if strong and policy != "off":
+    if strong:
         turn_telemetry.note(price_policy="strong")
-        if policy == "on":
-            return PriceSelection(rows=tuple(strong), status="strong")
-    record = policy != "off" and not strong  # решение политики ещё не записано в телеметрию
+        return PriceSelection(rows=tuple(strong), status="strong")
 
-    def settle(legacy: PriceSelection | None, decided: PriceSelection | None, label: str = "") -> PriceSelection | None:
-        """Под on — решение политики (None — прежний ответ правил); под off / shadow — прежний
-        результат, тень пишет решение в телеметрию."""
+    def settle(_legacy: PriceSelection | None, decided: PriceSelection | None, label: str = "") -> PriceSelection | None:
+        """Решение политики (None — прежний ответ правил) и его метка в телеметрию хода. Первый аргумент —
+        прежний ответ режимов off/shadow (сняты 16.10, T7 шаг 2); остаётся до чистки сигнатуры."""
 
-        if record:
-            turn_telemetry.note(price_policy=label or _policy_label(decided))
-        return decided if policy == "on" or decide else legacy
+        turn_telemetry.note(price_policy=label or _policy_label(decided))
+        return decided
 
     def unavailable() -> tuple[PriceSelection | None, str]:
         # Правила ничего не предложили — чужой цены не было, их честный ответ остаётся.
@@ -566,10 +552,6 @@ async def select_price_rows(
         # модуля (`choose_price = on`); прежний промпт её не знает — там пишем, как раньше.
         if not candidates and not _NOT_A_SERVICE_NAME.intersection(reasons) and journal_phrase:
             _record_synonym_suggestion(journal_phrase, found_terms, [], source=journal_source)
-
-    # Дословное название позиции («ферритин» = «Ферритин»): правила не ошибаются.
-    if phrase_norm and any(_normalise_catalog_text(_row_name(row)) == phrase_norm for row in pool):
-        return None
 
     first = await _ask(question, pool)
     if first is None:

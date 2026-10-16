@@ -60,8 +60,7 @@ _SETS: dict[str, dict[str, Any]] = {
         "MR_PARSE_FAIL_VARIANTS": 3,
         "MR_JOURNAL_PHRASE": "mention",
         "MR_CONTEXT_SHOWN": "on",
-        "MR_STRONG_MATCH": "data",
-    },
+        },
 }
 _SETS["prod_lazy"] = {**_SETS["prod"], "MR_PARSE_AGREE_TELEMETRY": "off"}
 _GOLDEN_SETS = ("deploy_parse", "prod")
