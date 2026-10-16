@@ -172,7 +172,9 @@ def test_prebuilt_price_answer_keeps_sums(monkeypatch, world):
 
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _FakeOllama("Приём стоит 1515 рублей."))
 
-    answer = _ask("сколько стоит общий анализ крови")["text"]
+    # Дословное название — сильное совпадение по данным МИС: строку печатает код без выбора LLM (L-13 — единственная
+    # политика с 16.10; «общий анализ крови» — слабое, у подделки LLM выбора строки нет).
+    answer = _ask("сколько стоит ферритин")["text"]
 
     assert world[0]["answer_source"] == "prebuilt", world[0]
     assert re.search(r"\d+\s*руб", answer), answer
