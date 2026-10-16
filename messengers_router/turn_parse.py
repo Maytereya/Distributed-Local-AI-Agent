@@ -229,7 +229,7 @@ class PhraseParse:
 
 # --------------------------------------------------------------------------- слот разбора на фразы (контракт C)
 #
-# Выключатель `[MESSENGER_ROUTER] turn_parse = off | shadow | on` (по умолчанию off). Разбор запускает
+# Выключатель `[MESSENGER_ROUTER] turn_parse = off | shadow | on` (по умолчанию on с 16.10, T7 шаг 3б (а)). Разбор запускает
 # `turn_understanding.observe_price_turn` — раз за ход, после понимания. Под `shadow` — фоновой задачей
 # во время хода (решение владельца 13.10, Q1): решение LLM вне бюджета хода и предохранителя, память
 # разбора и сессию задача не трогает, пишет только `tu_parse_*`; конец хода — `drain` (ждём не дольше
@@ -243,9 +243,9 @@ _READ_ONLY: contextvars.ContextVar[bool] = contextvars.ContextVar("mr_turn_parse
 
 
 def mode() -> str:
-    """`turn_parse`: off | shadow | on; иное — off."""
+    """`turn_parse`: off | shadow | on; без ключа — on (как прод), иное — off."""
 
-    raw = str(getattr(_cfg, "MR_TURN_PARSE", "off") or "").strip().lower()
+    raw = str(getattr(_cfg, "MR_TURN_PARSE", "on") or "").strip().lower()
     return raw if raw in MODES else "off"
 
 

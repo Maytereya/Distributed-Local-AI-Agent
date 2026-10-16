@@ -557,11 +557,6 @@ def test_synonym_journal_phrase(name, config, source, mini_prod_world, monkeypat
 # --------------------------------------------------------------------------- объект хода: упоминания услуг
 
 _LIST_REPLY = "сколько стоит ферритин, ттг и витамин д"
-_LIST_RULE_NAMES = [
-    "Ферритин",
-    "ТТГ (TSH) тиреотропный гормон",
-    "Витамин D суммарный (25-OH витамин D2 и 25-OH витамин D3, общий)",
-]
 
 
 @pytest.mark.parametrize("config", CONFIGS)
@@ -572,12 +567,9 @@ def test_list_mentions_chosen_is_catalog_name_by_rules_and_phrase_by_parse(confi
 
     [turn] = _play([_LIST_REPLY], "mentions-list", mini_prod_world, monkeypatch, config)
     assert turn.understanding is not None and turn.understanding["facet"] == "price"
-    if _SETS[config].get("MR_TURN_PARSE") == "on":
-        assert turn.understanding["services"] == ["ферритин", "ттг", "витамин д"]
-        assert turn.understanding["services_rule"] == "parse_unavailable"
-    else:
-        assert turn.understanding["services"] == _LIST_RULE_NAMES
-        assert turn.understanding["services_rule"] == "list_split"
+    # Разбор реплики — единственный режим (T7 шаг 3б): во всех наборах — фразы разбора, не названия каталога.
+    assert turn.understanding["services"] == ["ферритин", "ттг", "витамин д"]
+    assert turn.understanding["services_rule"] == "parse_unavailable"
 
 
 @pytest.mark.parametrize("config", CONFIGS)

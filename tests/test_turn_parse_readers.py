@@ -21,9 +21,8 @@
   не услуга» — ничего; слабые позиции корзины и срока — с выбором LLM или «не нашла», поле `source`
   (`price | basket | readiness`) — только под `on`.
 
-Под `off` и `shadow` поведение прежнее: эталоны `test_price_turns_golden.py`, `test_turn_parse_shadow.py`.
-Под `on` при недоступной LLM эталон пути цены — прежний, кроме диалогов `PARSE_ON_PLANNED` (их ответы — в
-`golden/price_turns_parse_on.json`; перезапись — `GOLDEN_UPDATE=1`, дифф — в коммит с объяснением).
+Разбор реплики — единственный режим (T7 шаг 3б, 16.10): при недоступной LLM путь цены отвечает по базовому
+эталону `test_price_turns_golden.py` (прежние отличия разбора, `price_turns_parse_on.json`, вошли в него).
 """
 
 from __future__ import annotations
@@ -40,39 +39,12 @@ from messengers_router import llm_runtime, turn_parse
 from tests.test_price_one_or_many_class import CASES, _is_basket_section
 from tests.test_price_turns_golden import (  # noqa: F401 — mini_prod_world, synonym_fork — фикстуры
     DIALOGS,
-    UPDATE,
     _golden,
-    _load,
-    _store,
     mini_prod_world,
     run_dialog,
     synonym_fork,
 )
 from tests.test_turn_parse_shadow import _deploy, _PhrasesOracle
-
-GOLDEN_PARSE_ON = Path(__file__).resolve().parent / "golden" / "price_turns_parse_on.json"
-
-# Диалоги эталона, ответ которых под `turn_parse = on` (LLM недоступна, понимание хода в тени) другой — по
-# решению владельца (STRONG — только данные МИС; одна услуга или несколько — разбор). «ферритин и глюкоза»
-# (list_text_and, after_list_prepare, after_list_where) отсюда ушли: с корзиной выбором LLM по умолчанию
-# (STEP-2026-10-15-DEFAULTS-B) сильная позиция без «Глюкозы в моче» — уже в базовом эталоне.
-PARSE_ON_PLANNED: dict[str, str] = {
-    # С 16.10 (L-13 — единственная политика, T7 шаг 2) «family_glucose», «name_with_commas», «synonym_fork_oak» под off
-    # отвечают так же — из списка ушли.
-    "name_with_plus": "дословное название с «+» и дефисом — одна строка, а не 10 экспресс-тестов и ГТТ с инсулином",
-    "name_with_and": (
-        "дословное название с «и» в скобках — сильное у разбора (реплика целиком, как написана): строка с ценой; под off "
-        "вырезатель правил теряет «и», «к» — вариант B L-13 без цены"
-    ),
-    # Политика сбоя (LLM недоступна — разрез по разделителям): слабая позиция — варианты кода с полными
-    # названиями и ценами, не найденная — «Не распознал»; форму решит замер шага 6.
-    "list_text_ttg_t4": "«ттг, т4 свободный»: у «ттг» два варианта кода с ценами, «т4 свободный» — «Не распознал», а не «не нашёл» на всю реплику",
-    "list_button_ttg_t4": "второй ход — как «list_text_ttg_t4»",
-    "uzi_compound": (
-        "«узи почек и щитовидной железы»: «узи почек» — «Не распознал» (в мини-проде нет), «щитовидной железы» — "
-        "варианты кода с ценами (общее «узи» разрез по разделителям теряет), а не «Уточните название»"
-    ),
-}
 
 _PHRASES_MARK = "понять, какие услуги назвал пациент"
 _BASKET_MARK = "ответить на вопрос о ценах нескольких услуг"
@@ -88,12 +60,12 @@ def _parse_on(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("case", sorted(DIALOGS))
-def test_parse_on_with_llm_down_changes_only_planned_dialogs(case, mini_prod_world, request, monkeypatch):  # noqa: F811
+def test_parse_with_llm_down_is_the_golden(case, mini_prod_world, request, monkeypatch):  # noqa: F811
+    """Разбор реплики — единственный режим (T7 шаг 3б): при недоступной LLM и понимании в тени — базовый эталон пути
+    цены (прежние отличия разбора, `price_turns_parse_on.json`, вошли в него), разбор не опаздывает (`late`)."""
+
     from messengers_router.runtime_config import config as cfg
 
-    _parse_on(monkeypatch)
-    # Эталон `turn_parse = on` — при понимании хода в тени: режим явно, а не умолчанием кода
-    # (STEP-2026-10-15-DEFAULTS-A).
     monkeypatch.setattr(cfg, "MR_TURN_UNDERSTANDING_PRICE", "shadow", raising=False)
     if case.startswith("synonym_fork"):
         request.getfixturevalue("synonym_fork")
@@ -102,15 +74,7 @@ def test_parse_on_with_llm_down_changes_only_planned_dialogs(case, mini_prod_wor
         rows, attempts = list(world.telemetry), list(world.net.attempts)
     assert attempts == []
     assert "late" not in {row.get("tu_parse_status") for row in rows}
-    base = _golden()[case]
-    if UPDATE:
-        _store(GOLDEN_PARSE_ON, case, None if record == base else record)
-        return
-    assert record == _load(GOLDEN_PARSE_ON).get(case, base)
-
-
-def test_parse_on_golden_holds_only_planned_dialogs():
-    assert set(_load(GOLDEN_PARSE_ON)) == set(PARSE_ON_PLANNED)
+    assert record == _golden()[case]
 
 
 # --------------------------------------------------------------------------- понимание и корзина читают разбор

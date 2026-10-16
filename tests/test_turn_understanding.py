@@ -185,9 +185,11 @@ def test_shadow_writes_numbers_and_keys_and_does_not_act(mini_prod_world, mode):
     mode("shadow")
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         ((dbg, row),) = _turns(["сколько стоит ферритин, глюкоза, холестерин"], world)
-    assert dbg["understanding"]["services"] == ["Ферритин", "Глюкоза", "Липидограмма"]
+    # Разбор реплики — единственный режим (T7 шаг 3б): услуги хода — фразы разбора (LLM недоступна — разрез по
+    # разделителям), а не названия каталога, подставленные разрезом правил.
+    assert dbg["understanding"]["services"] == ["ферритин", "глюкоза", "холестерин"]
     assert dbg["understanding"]["acted"] == []
-    assert (row["tu_list"], row["tu_facet"], row["tu_rule"]) == (3, "price", "list_split")
+    assert (row["tu_list"], row["tu_facet"], row["tu_rule"]) == (3, "price", "parse_unavailable")
     assert "tu_acted" not in row
     # В телеметрии — ни одного значения сущности (решение 08.10).
     assert "Ферритин" not in json.dumps(row, ensure_ascii=False)

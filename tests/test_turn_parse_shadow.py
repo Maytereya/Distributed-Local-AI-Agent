@@ -84,15 +84,18 @@ def test_shadow_equals_off_on_the_golden(case, understanding, mini_prod_world, r
     from messengers_router.runtime_config import config as cfg
 
     monkeypatch.setattr(cfg, "MR_TURN_UNDERSTANDING_PRICE", understanding, raising=False)
-    _turn_parse(monkeypatch, "shadow")
     if case.startswith("synonym_fork"):
         request.getfixturevalue("synonym_fork")
+    # Эталон пути цены снят при разборе (T7 шаг 3б (а)): тень сверяется с off в том же прогоне, а не с эталоном.
+    _turn_parse(monkeypatch, "off")
+    with ev_world.FrozenWorld(mini_prod_world, "day"):
+        base = run_dialog(DIALOGS[case], f"off-{case}-{understanding}")
+    _turn_parse(monkeypatch, "shadow")
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         record = run_dialog(DIALOGS[case], f"shadow-{case}-{understanding}")
         rows, attempts = list(world.telemetry), list(world.net.attempts)
-    base = _golden()[case]
     assert attempts == []
-    assert record == (_load(GOLDEN_ON).get(case, base) if understanding == "on" else base)
+    assert record == base
     for row in rows:  # тень не тратит решений хода и не пишет ничего, кроме своих полей
         assert all(entry.get("shadow") for entry in row.get("choose") or [] if entry["task"] == "turn_phrases")
 

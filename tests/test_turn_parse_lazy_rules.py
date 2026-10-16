@@ -8,7 +8,7 @@
 
 Инварианты класса: (а) ответ хода, состояние сессии и понимание хода (`tu_list`, `tu_facet`, `tu_rule`,
 `tu_mention_*`) — те же, что при правилах параллельно разбору, при живой LLM (оракул) и при недоступной
-(эталон `price_turns_parse_on.json` без изменений); (б) разбор решён не одной слабой фразой — правила не
+(базовый эталон пути цены без изменений); (б) разбор решён не одной слабой фразой — правила не
 считаются вовсе; (в) запасной путь (`empty`, сбой LLM без разделителей) и `single` — считаются, ответ прежний;
 (г) по умолчанию (`on`) — как было: правила на каждом ходе, согласие пишется; (д) два хода — короткий вопрос
 после корзины не получает цену услуги, которой пациент не видел.
@@ -21,8 +21,7 @@ import pytest
 from evalbench import world as ev_world
 from messengers_router import llm_runtime, turn_understanding
 from tests.test_price_one_or_many_class import CASES, TRUE_CUT, _configure, _OracleLLM, _priced_sections
-from tests.test_price_turns_golden import DIALOGS, _golden, _load, mini_prod_world, run_dialog, synonym_fork  # noqa: F401 — фикстуры
-from tests.test_turn_parse_readers import GOLDEN_PARSE_ON
+from tests.test_price_turns_golden import DIALOGS, _golden, mini_prod_world, run_dialog, synonym_fork  # noqa: F401 — фикстуры
 
 _TU_FIELDS = ("tu_list", "tu_facet", "tu_rule", "tu_mention_src", "tu_mention_strength", "tu_parse_status", "tu_parse_src", "tu_parse_n")
 
@@ -105,7 +104,7 @@ def test_lazy_rules_keep_the_parse_on_golden(case, mini_prod_world, request, mon
         record = run_dialog(DIALOGS[case], f"lazy-golden-{case}")
         attempts = list(world.net.attempts)
     assert attempts == []
-    assert record == _load(GOLDEN_PARSE_ON).get(case, _golden()[case])
+    assert record == _golden()[case]
 
 
 # --------------------------------------------------------------------------- (б), (в), (г) когда правила считаются

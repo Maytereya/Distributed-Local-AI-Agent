@@ -100,26 +100,25 @@ def test_llm_failure_keeps_the_rules_basket(mini_prod_world, monkeypatch):
 
 
 def test_llm_failure_keeps_strong_positions_by_data(mini_prod_world, monkeypatch):
+    # Разбор реплики — единственный режим (T7 шаг 3б): сильная позиция — её строки по данным и без выбора строк LLM
+    # (`choose_basket = off`); прежней корзины правил со второй строкой «на всякий случай» («Глюкоза в моче») нет.
     _basket(monkeypatch, "off")
     before = _ask("сколько стоит ттг и глюкоза", "basket-off2", mini_prod_world)
     _basket(monkeypatch, "on", _BasketLLM(fail=True))
     after = _ask("сколько стоит ттг и глюкоза", "basket-fail2", mini_prod_world)
-    assert "Глюкоза в моче" in before
+    assert "Глюкоза — 190" in before and "Глюкоза в моче" not in before
     assert "Глюкоза — 190" in after and "Глюкоза в моче" not in after
-    assert "ТТГ (TSH) тиреотропный гормон — 400" in after  # слабая позиция — как в корзине правил
+    assert "ТТГ (TSH) тиреотропный гормон — 400" in after  # слабая позиция — варианты кода
 
 
-# Корзина правил «ферритин и глюкоза» — эталон `list_text_and` до STEP-2026-10-15-DEFAULTS-B (тогда умолчание было off).
-_RULES_BASKET_TEXT = (
-    "По запросу «Ферритин, Глюкоза» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\n"
-    "По услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\n2. Глюкоза в моче (разовая порция) — 170 руб.\n"
-    "Если нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._"
-)
+def test_off_keeps_strong_positions_by_data(mini_prod_world, monkeypatch):
+    """`choose_basket = off` при разборе реплики (единственный режим, T7 шаг 3б): сильные позиции — по данным, как
+    при умолчании; выключатель решает только, зовут ли LLM для строк слабых позиций."""
 
-
-def test_off_keeps_the_rules_basket(mini_prod_world, monkeypatch):
     _basket(monkeypatch, "off")
-    assert _ask("сколько стоит ферритин и глюкоза", "basket-golden", mini_prod_world) == _RULES_BASKET_TEXT
+    text = _ask("сколько стоит ферритин и глюкоза", "basket-golden", mini_prod_world)
+    assert text == _golden()["list_text_and"][0]["text"]
+    assert "в моче" not in text
 
 
 def test_default_is_the_golden_basket(mini_prod_world):

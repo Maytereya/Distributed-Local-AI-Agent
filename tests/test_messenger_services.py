@@ -2767,12 +2767,13 @@ def test_price_info_multi_service_returns_grouped_prices(monkeypatch):
 
     res = run(svc.price_info("стоимость гепатита в, общего анализа крови, вич", {}))
 
-    assert str(res.get("note") or "") == "price_multi_service"
-    assert res.get("service_kind") == "family_query"
-    names = [str(row.get("serviceName") or "").lower() for row in res.get("family_variants") or []]
-    assert any("вич" in name for name in names)
-    assert any("гепатит" in name for name in names)
-    assert any("общий анализ крови" in name for name in names)
+    # Разбор реплики — единственный режим (T7 шаг 3б): вне хода разбора нет — корзина правил с политикой сбоя
+    # (`failure_variants`): без LLM у слабой позиции одна найденная строка — название без цены (вариант B L-13).
+    assert str(res.get("note") or "").startswith("price_multi_service")
+    text = str(res.get("clarify_text") or "") + " ".join(str(row.get("serviceName") or "") for row in res.get("family_variants") or [])
+    assert "Кровь на ВИЧ" in text
+    assert "Гепатит B (HBsAg, качественный)" in text
+    assert "Общий анализ крови (Le, Er, Hb, СОЭ)" in text
 
 
 def test_price_info_single_service_query_bypasses_multi_splitter(monkeypatch):

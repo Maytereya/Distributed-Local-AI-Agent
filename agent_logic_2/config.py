@@ -466,8 +466,9 @@ settings = Settings(
         choose_readiness=_get_enum("MESSENGER_ROUTER", "choose_readiness", default="on", allowed={"off", "on"}),
         # Разбор ценовой реплики на фразы-услуги (L-15b, шаг 4, контракт C): off — не строится; shadow —
         # во время хода, вне его бюджета, только телеметрия (tu_parse_*) и debug; on — разбор ждут в ходе
-        # (решение — из бюджета хода), читатели — шаг 5. [MESSENGER_ROUTER] turn_parse
-        turn_parse=_get_enum("MESSENGER_ROUTER", "turn_parse", default="off", allowed={"off", "shadow", "on"}),
+        # (решение — из бюджета хода), читатели — шаг 5. По умолчанию on — как на проде с 15.10 (T7 шаг 3б (а),
+        # 16.10; режимы off/shadow снимаются следующим шагом). [MESSENGER_ROUTER] turn_parse
+        turn_parse=_get_enum("MESSENGER_ROUTER", "turn_parse", default="on", allowed={"off", "shadow", "on"}),
         # Политика сбоя под turn_parse = on (L-15b, шаг 6, T5): сколько вариантов кода с ценами показывать у
         # слабой позиции, когда LLM не выбрала строки (2–5; поправка владельца 13.10). По умолчанию 3 — как на
         # проде (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] parse_fail_variants

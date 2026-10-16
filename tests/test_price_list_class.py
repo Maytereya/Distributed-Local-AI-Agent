@@ -17,8 +17,8 @@ BUG-2026-10-05-READINESS-AS-PRICE: «когда будет готов анали
   справочника МИС, а нет срока или услуга не названа — честный перевод на оператора.
 
 Ход (б), шаг 1 (L-14): `услуги[]` + `свойство` на метке «цена», под выключателем
-`turn_understanding_price`. Тесты включают его явно (`on`): по умолчанию шаг в тени, и тогда
-поведение прежнее — его держит эталон `test_price_turns_golden.py` (режимы off и shadow).
+`turn_understanding_price`. Тесты включают его явно (`on`). Разбор реплики на фразы (`turn_parse`) — единственный
+режим (T7 шаг 3б, 16.10).
 До шага 14 из 16 мест списка и 2 из 5 формулировок срока были красными.
 """
 
@@ -66,7 +66,24 @@ def understanding_on(monkeypatch):
     monkeypatch.setattr(cfg, "MR_TURN_UNDERSTANDING_PRICE", "on", raising=False)
 
 
-@pytest.mark.parametrize("items", list(LISTS))
+# Разбор реплики — единственный режим (T7 шаг 3б). Сплошной текст без разделителей при недоступной LLM режут только
+# данные МИС (T7 шаг 3а): в мини-проде у «ОАК ОАМ» нет синонимов МИС — слова вне прайса в промежутке, без LLM
+# неотличимые от условия П2, — реплика целиком (на проде — синонимы, разрез данными). Тот же случай —
+# `test_price_one_or_many_class.py::list_caps_run_on_bare`.
+_RUN_ON_BARE = "ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА"
+_RUN_ON_REASON = (
+    "LLM недоступна, сплошной текст: «ОАК ОАМ» без синонимов МИС в мини-проде — слова вне прайса в промежутке, реплика "
+    "целиком одной услугой (T7 шаг 3а, П2 строже покрытия); с синонимами МИС (прод) — разрез данными"
+)
+
+
+def _list_params():
+    for items in LISTS:
+        marks = [pytest.mark.xfail(strict=True, reason=_RUN_ON_REASON)] if items == _RUN_ON_BARE else []
+        yield pytest.param(items, marks=marks, id=items)
+
+
+@pytest.mark.parametrize("items", list(_list_params()))
 @pytest.mark.parametrize("path", sorted(PATHS))
 def test_every_listed_service_gets_its_price(path, items, mini_prod_world, understanding_on):  # noqa: F811
     before, template = PATHS[path]
