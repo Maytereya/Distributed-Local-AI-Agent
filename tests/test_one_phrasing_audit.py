@@ -501,7 +501,7 @@ def test_soft_pause_and_yes_no_differ_as_is(reply, soft_pause, kind):
 @pytest.mark.parametrize(
     ("reply", "price_tool", "flow"),
     [("Самара", True, True), ("г. Самара", True, True), ("в Самаре", False, True), ("Самара пожалуйста", False, True),
-     ("в Тольятти", False, True), ("я из Самары", False, False)],
+     ("в Тольятти", False, True), ("я из Самары", False, False), ("ферритин", True, False)],
 )
 def test_city_only_copies_differ_as_is(reply, price_tool, flow):
     """«Только город» — решение владельца 15.10: не объединять. Две копии расходятся (закреплено как есть)."""
