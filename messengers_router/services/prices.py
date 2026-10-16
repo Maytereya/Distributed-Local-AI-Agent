@@ -185,7 +185,7 @@ def _parse_phrase_judged_by_llm(query: str) -> str:
     разбора выбрала одной слабой услугой, — её «есть ли такое в прайсе» решает выбор строки, а не гард П2 по
     словарю каталога. Иначе пусто — гард как раньше."""
 
-    if str(getattr(_cfg, "MR_PARSE_PRICE_GUARD", "rules") or "").strip().lower() != "llm":
+    if str(getattr(_cfg, "MR_PARSE_PRICE_GUARD", "llm") or "").strip().lower() != "llm":
         return ""
     parse = turn_parse.acting_for(query)
     if parse is None or parse.is_list or len(parse.items) != 1 or parse.status != turn_parse.ParseStatus.PICKED:
@@ -195,7 +195,7 @@ def _parse_phrase_judged_by_llm(query: str) -> str:
 
 
 def _p2_llm_judge_on() -> bool:
-    return str(getattr(_cfg, "MR_P2_LLM_JUDGE", "off") or "").strip().lower() == "on"
+    return str(getattr(_cfg, "MR_P2_LLM_JUDGE", "on") or "").strip().lower() == "on"
 
 
 def _p2_name_from_entity(entity_service_name: str, query_service_name: str | None, service_name: str, query_text: str) -> bool:

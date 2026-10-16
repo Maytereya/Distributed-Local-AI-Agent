@@ -546,6 +546,10 @@ def test_shadow_equals_off_on_the_price_golden(case, mini_prod_world, request, m
     from messengers_router.runtime_config import config as cfg
 
     monkeypatch.setattr(cfg, "MR_TURN_UNDERSTANDING_PRICE", "shadow", raising=False)
+    # Предохранитель LLM (L-11) — не предмет теста: в мире гейта недоступно всё, кроме тени, и под `choose_price = on`
+    # (умолчание с 17.10) сбои выбора строки идут через модуль выбора и размыкают его после трёх подряд — тень дальше
+    # верно не зовётся. Тест сравнивает тень с off при замкнутом предохранителе.
+    monkeypatch.setattr(cfg, "MR_LLM_DECISION_BREAKER_FAILURES", 0, raising=False)
     if case.startswith("synonym_fork"):
         request.getfixturevalue("synonym_fork")
     base = _golden()[case]

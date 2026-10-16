@@ -51,7 +51,9 @@ from tests.test_price_turns_golden import FIXTURE, run_dialog
 
 # Наборы деплоя 14.10 и `default` — исторические: «контекст = показанное» на них выключен явно (умолчание кода = прод с
 # 16.10, деплой 5: `context_shown = on`); прод-наборы и `*_shown` включают его сами. Фраза журнала на ответы не влияет —
-# тесты журнала задают её сами.
+# тесты журнала задают её сами. В `default` так же явно — выбор строки прежним вызовом и гарды П2 правил (умолчания кода
+# = прод с 17.10, STEP-2026-10-17-DEFAULTS-D: `choose_price = on`, `parse_price_guard = llm`, `p2_llm_judge = on`); набор
+# деплоя гарды П2 не задаёт — тесты класса A и судьи П2 ставят их сами до `_deploy`.
 _DEPLOY = {
     "MR_TURN_UNDERSTANDING_PRICE": "on",
     "MR_CHOOSE_READINESS": "on",
@@ -67,6 +69,9 @@ _DEFAULT = {
     "MR_CHOOSE_SYMPTOM": "off",
     "MR_PARSE_FAIL_VARIANTS": 5,
     "MR_CONTEXT_SHOWN": "off",
+    "MR_CHOOSE_PRICE": "off",
+    "MR_PARSE_PRICE_GUARD": "rules",
+    "MR_P2_LLM_JUDGE": "off",
 }
 # Набор выключателей → значения поверх конфига гейта. Разбор реплики (`turn_parse = on`) — единственный режим
 # (T7 шаг 3б, 16.10): `deploy` — прод; `deploy_parse` — прежнее имя того же набора для файлов, которые его зовут.

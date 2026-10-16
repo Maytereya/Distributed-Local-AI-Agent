@@ -108,7 +108,7 @@ _NOT_A_SERVICE_NAME = frozenset({"too_general", "not_a_service"})
 
 
 def _choose_mode() -> str:
-    raw = str(getattr(_cfg, "MR_CHOOSE_PRICE", "off") or "").strip().lower()
+    raw = str(getattr(_cfg, "MR_CHOOSE_PRICE", "on") or "").strip().lower()
     return raw if raw in _CHOOSE_MODES else "off"
 
 

@@ -448,8 +448,9 @@ settings = Settings(
         choose_cache_ttl_s=_get_int("MESSENGER_ROUTER", "choose_cache_ttl_s", 1800, min_value=0, max_value=86400),
         # Выбор строки прайса на модуле choose() (ход (в), клиент 1): off — прежний вызов и разбор;
         # legacy — прежний промпт через модуль (доказательство переноса на записанных ответах);
-        # on — роли, JSON Schema, коды причин. Политика сбоя прежняя. [MESSENGER_ROUTER] choose_price
-        choose_price=_get_enum("MESSENGER_ROUTER", "choose_price", default="off", allowed={"off", "legacy", "on"}),
+        # on — роли, JSON Schema, коды причин. Политика сбоя прежняя. По умолчанию on — как на проде с 16.10 (решение
+        # владельца 16.10, деплой 5). [MESSENGER_ROUTER] choose_price
+        choose_price=_get_enum("MESSENGER_ROUTER", "choose_price", default="on", allowed={"off", "legacy", "on"}),
         # Симптом → врач на модуле choose() (ход (в), клиент 2): off — прежний вызов и разбор; legacy —
         # прежний промпт через модуль; on — врач названием из перечня ролей МИС (не больше двух), исходы
         # «срочно» и «не жалоба». Политика сбоя прежняя. По умолчанию on — как на проде с 14.10
@@ -492,9 +493,9 @@ settings = Settings(
         # Гард П2 («уточнения нет в прайсе») у фразы разбора (класс A, решение владельца 15.10): rules — как было
         # (гард судит реплику; «карбамазепина» в родительном падеже он считает уточнением, которого нет в прайсе,
         # и цена не ищется); llm — под turn_parse = on одну выбранную LLM разбора фразу судит выбор строки
-        # (`select_price_rows`, правило 3 промпта отсекает «по ОМС»), гард — страховка при сбое LLM.
-        # [MESSENGER_ROUTER] parse_price_guard
-        parse_price_guard=_get_enum("MESSENGER_ROUTER", "parse_price_guard", default="rules", allowed={"rules", "llm"}),
+        # (`select_price_rows`, правило 3 промпта отсекает «по ОМС»), гард — страховка при сбое LLM. По умолчанию llm —
+        # как на проде с 16.10 (решение владельца 16.10, деплой 5). [MESSENGER_ROUTER] parse_price_guard
+        parse_price_guard=_get_enum("MESSENGER_ROUTER", "parse_price_guard", default="llm", allowed={"rules", "llm"}),
         # Сильные окна внутри слабого фрагмента по разделителям — дополнительные кандидаты выбора LLM разбора
         # (15.10, смоук прода: «сколько стоят ферритин, …» → фрагмент «стоят ферритин», ферритин терялся): off — как
         # было; on — окно 1–3 слова, сильное по данным МИС («ферритин»), предлагается LLM; разрезом не служит.
@@ -510,9 +511,9 @@ settings = Settings(
         # BUG-2026-10-15-P2-ENTITY-BYPASS: «узи щитовидной железы по омс» — резолвер отказал, а сущность вела к платной
         # цене; гард по буквам глушил «первый приём невролога»): off — как было; on — «та ли это услуга с этим
         # свойством» решает выбор строки (`select_price_rows(..., judge_qualifier=True)`, правило 3 промпта отсекает
-        # «по ОМС»): строки LLM — цена, «не та» — честное «не нашёл», сбой LLM — как было (цена по сущности).
-        # [MESSENGER_ROUTER] p2_llm_judge
-        p2_llm_judge=_get_enum("MESSENGER_ROUTER", "p2_llm_judge", default="off", allowed={"off", "on"}),
+        # «по ОМС»): строки LLM — цена, «не та» — честное «не нашёл», сбой LLM — как было (цена по сущности). По
+        # умолчанию on — как на проде с 16.10 (решение владельца 16.10, деплой 5). [MESSENGER_ROUTER] p2_llm_judge
+        p2_llm_judge=_get_enum("MESSENGER_ROUTER", "p2_llm_judge", default="on", allowed={"off", "on"}),
         # Гард П2 у СИЛЬНОЙ фразы разбора (16.10, BUG-2026-10-16-P2-STRONG-PHRASE-BYPASS: «приём терапевта по ОМС» → LLM
         # разбора выбрала «приём терапевта», её строки шли в ответ мимо гарда — платная цена): llm — фраза отдаёт свои
         # строки напрямую, только если вне неё в реплике нет слова, которого нет в прайсе; иначе «та ли услуга с этим
