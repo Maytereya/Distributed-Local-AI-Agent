@@ -62,6 +62,7 @@ from ._prices_helpers import (
     _is_generic_uzi_price_request,
     _price_show_all_requested,
     _is_strong_doctor_price_match,
+    _match_drops_unsatisfiable_qualifier,
     _price_family_payload_from_context,
     _price_query_tokens,
     _price_row_score,
@@ -261,6 +262,63 @@ def _parse_strong_selection(query: str) -> PriceSelection | None:
     if parse is None or parse.is_list or len(parse.items) != 1 or not parse.items[0].rows:
         return None
     return PriceSelection(rows=tuple(dict(row) for row in parse.items[0].rows), status="strong")
+
+
+def _strong_phrase_guard_on() -> bool:
+    return str(getattr(_cfg, "MR_STRONG_PHRASE_GUARD", "llm") or "").strip().lower() == "llm"
+
+
+def _qualifier_outside_strong_phrase(query: str, strong: PriceSelection, retail_rows: list[dict[str, Any]]) -> bool:
+    """В реплике ВНЕ сильной фразы разбора есть слово, которого нет в прайсе вовсе («по ОМС» рядом с «приёмом
+    терапевта»). Мерило — гард П2 пути одной услуги (`_match_drops_unsatisfiable_qualifier`), «найденная услуга» —
+    фраза и названия её строк: слово фразы и словоформы названий уточнением не считаются. Срабатывает только там,
+    где тот же гард по всей реплике отказал бы и под turn_parse = off, — это повод спросить LLM, а не вердикт."""
+
+    parse = turn_parse.acting_for(query)
+    phrase = str(parse.items[0].text or "") if parse is not None and parse.items else ""
+    names = [str(row.get("serviceName") or row.get("name") or "") for row in strong.rows]
+    return _match_drops_unsatisfiable_qualifier(query, " ".join([phrase, *names]), retail_rows)
+
+
+async def _parse_strong_answer(
+    query: str, retail_rows: list[dict[str, Any]], *, context: str, runtime_llm_mode: str
+) -> PriceSelection | None:
+    """Ответ сильной фразы разбора (`turn_parse = on`) с гардом П2 (BUG-2026-10-16-P2-STRONG-PHRASE-BYPASS).
+
+    LLM разбора может выбрать сильную фразу, оторвав от неё условие («приём терапевта» из «приём терапевта по ОМС»),
+    — тогда её строки по данным МИС — платная цена без того, о чём спрашивал пациент. Под `strong_phrase_guard = llm`
+    фраза без слов вне прайса отдаёт строки, как раньше; со словом вне прайса «та ли это услуга с этим условием»
+    решает выбор строки (`judge_qualifier`, правило 3 промпта отсекает «по ОМС»; разговорное слово — «первый приём» —
+    LLM пропускает, словарь бы заглушил: урок BUG-2026-10-15-P2-ENTITY-BYPASS), кандидаты — строки фразы:
+    выбор — цена, `none_fit` — «не нашёл» (`_match_policy_payload`); сбой LLM, «не услуга», `unavailable` — None:
+    сильная фраза ход не решает, дальше путь правил с гардом — как под turn_parse = off.
+
+    :return: выбор строк (или решение «не нашёл»); None — разбора сильной фразы нет или ход ведут правила
+    """
+
+    strong = _parse_strong_selection(query)
+    if strong is None:
+        return None
+    if not _strong_phrase_guard_on() or not _qualifier_outside_strong_phrase(query, strong, retail_rows):
+        return strong
+    parse = turn_parse.acting_for(query)
+    phrase = str(parse.items[0].text or "") if parse is not None and parse.items else ""
+    selection = await select_price_rows(
+        query,
+        retail_rows,
+        candidates=list(strong.rows),
+        shown=list(strong.rows),
+        hints=[phrase],
+        context=context,
+        runtime_llm_mode=runtime_llm_mode,
+        judge_qualifier=True,
+        decide=True,
+    )
+    if selection is None or (not selection.rows and selection.status != "none_fit"):
+        turn_telemetry.note(strong_phrase_guard="fallback")
+        return None
+    turn_telemetry.note(strong_phrase_guard="rows" if selection.rows else "not_found")
+    return selection
 
 
 def _names_no_service(query: str) -> bool:
@@ -483,7 +541,12 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     async def _llm_select(proposal: list[dict[str, Any]], shown: list[dict[str, Any]], *, entity_name: bool = False) -> Any:
         if not entities.get("__price_question"):
             return None  # цена попутно (запись, карточка врача) — по правилам, без LLM
-        strong = _parse_strong_selection(str(query or ""))
+        strong = await _parse_strong_answer(
+            str(query or ""),
+            retail_rows_clean,
+            context=entity_service_name,
+            runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
+        )
         if strong is not None:
             return strong
         if entity_name and p2_judged:
@@ -667,7 +730,12 @@ async def service_bundle_info(
     ) -> Any:
         if not entities.get("__price_question"):
             return None  # цена попутно (запись, карточка врача) — по правилам, без LLM
-        strong = _parse_strong_selection(str(query or ""))
+        strong = await _parse_strong_answer(
+            str(query or ""),
+            retail_rows,
+            context=entity_service_name,
+            runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
+        )
         if strong is not None:
             return strong
         if p2_judged:
