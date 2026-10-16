@@ -44,7 +44,6 @@ _TSH = "ТТГ (TSH) тиреотропный гормон"
 _OAK_LE = "Общий анализ крови (Le, Er, Hb, СОЭ)"
 _DEPLOY = {
     "MR_TURN_UNDERSTANDING_PRICE": "on",
-    "MR_CHOOSE_BASKET": "on",
     "MR_CHOOSE_READINESS": "on",
     "MR_CHOOSE_SYMPTOM": "on",
     "MR_CHOOSE_PRICE": "off",

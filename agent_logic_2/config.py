@@ -198,7 +198,6 @@ class MessengerRouterConfig:
     choose_cache_ttl_s: int
     choose_price: str
     choose_symptom: str
-    choose_basket: str
     choose_readiness: str
     parse_fail_variants: int
     journal_phrase: str
@@ -456,10 +455,6 @@ settings = Settings(
         # «срочно» и «не жалоба». Политика сбоя прежняя. По умолчанию on — как на проде с 14.10
         # (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] choose_symptom
         choose_symptom=_get_enum("MESSENGER_ROUTER", "choose_symptom", default="on", allowed={"off", "legacy", "on"}),
-        # Корзина на модуле choose() (ход (в), L-15a): позиции режут правила, строки каждой позиции
-        # выбирает LLM одним вызовом; сбой — корзина правил. off | on, по умолчанию on — как на проде с 14.10
-        # (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] choose_basket
-        choose_basket=_get_enum("MESSENGER_ROUTER", "choose_basket", default="on", allowed={"off", "on"}),
         # Срок готовности при слабом совпадении — услугу выбирает LLM, срок печатает код из МИС (ход (в)).
         # off | on, по умолчанию on — как на проде с 14.10 (STEP-2026-10-15-DEFAULTS-B); действует под пониманием
         # хода on. [MESSENGER_ROUTER] choose_readiness
@@ -667,7 +662,6 @@ MR_LLM_DECISION_BREAKER_OPEN_S = settings.messenger_router.llm_decision_breaker_
 MR_CHOOSE_CACHE_TTL_S = settings.messenger_router.choose_cache_ttl_s
 MR_CHOOSE_PRICE = settings.messenger_router.choose_price
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
-MR_CHOOSE_BASKET = settings.messenger_router.choose_basket
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_JOURNAL_PHRASE = settings.messenger_router.journal_phrase

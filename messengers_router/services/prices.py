@@ -41,7 +41,7 @@ from ._doctors_helpers import (
     _specialty_label_for_doctor,
 )
 from ._prepare import _is_prepare_requested_in_price_query
-from ._basket_select import basket_from_phrases, basket_mode, choose_basket_rows
+from ._basket_select import basket_from_phrases, choose_basket_rows
 from ._turn_phrases import _FILLER
 from ._turn_phrases import _tokens as _phrase_tokens
 from ._price_select_llm import PriceSelection, reconcile_with_proposal, rows_overlap, select_price_rows
@@ -138,8 +138,7 @@ def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, A
 async def _multi_price_payload(
     query: str, query_text: str, retail_rows: list[dict[str, Any]], entities: dict[str, Any]
 ) -> dict[str, Any] | None:
-    """Корзина: позиции режут правила; строки позиций под `choose_basket = on` выбирает LLM одним
-    вызовом (ход (в), L-15a), сбой — корзина правил как раньше.
+    """Корзина: строки позиций выбирает LLM одним вызовом (ход (в), L-15a); сбой — политика сбоя корзины.
 
     Под `turn_parse = on` (L-15b, шаг 5) позиции — фразы разбора хода этой реплики: разбор решил одну
     услугу (`strong_whole`, `single`, `none_fit`, одна выбранная фраза) — не корзина, путь одной услуги;
@@ -148,7 +147,7 @@ async def _multi_price_payload(
     позиция без выбора LLM — варианты кода или название без цены, не одна строка правил с ценой."""
 
     llm_allowed = bool(entities.get("__price_question")) and str(entities.get("__runtime_llm_mode") or "").strip().lower() != "strict"
-    choosing = llm_allowed and basket_mode() == "on"
+    choosing = llm_allowed
     parse = turn_parse.acting_for(str(query or ""))
     if parse is not None:
         if not parse.is_list:

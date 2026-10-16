@@ -51,7 +51,6 @@ from tests.test_price_turns_golden import FIXTURE, run_dialog
 
 _DEPLOY = {
     "MR_TURN_UNDERSTANDING_PRICE": "on",
-    "MR_CHOOSE_BASKET": "on",
     "MR_CHOOSE_READINESS": "on",
     "MR_CHOOSE_SYMPTOM": "on",
     "MR_CHOOSE_PRICE": "off",
@@ -60,7 +59,6 @@ _DEPLOY = {
 # переворот умолчаний в `agent_logic_2/config.py` не меняет смысла отметок этого набора.
 _DEFAULT = {
     "MR_TURN_UNDERSTANDING_PRICE": "shadow",
-    "MR_CHOOSE_BASKET": "off",
     "MR_CHOOSE_READINESS": "off",
     "MR_CHOOSE_SYMPTOM": "off",
     "MR_PARSE_FAIL_VARIANTS": 5,
@@ -151,9 +149,7 @@ CASES: dict[str, Case] = {
         "list",
         {"ферритин": ("Ферритин",), "ттг": ("ТТГ (TSH) тиреотропный гормон",), "витамин д": _VITAMIN_D},
         strong=frozenset({"ферритин"}),
-        xfail={
-            ("default", "oracle"): "корзина правил (choose_basket off): у слабой позиции одна строка с ценой, выбранная буквами, а не LLM",
-        },
+        # «корзина правил (choose_basket off): одна строка, выбранная буквами» — выключателя нет с 16.10, LLM выбирает всегда.
     ),
     "list_one_unrecognized": Case(
         "сколько стоит ферритин, глюкоза и спирометрия",

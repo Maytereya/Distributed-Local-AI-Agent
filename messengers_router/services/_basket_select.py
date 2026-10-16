@@ -20,8 +20,8 @@
 полными названиями и ценами; одна-единственная найденная строка ценой «той самой» не подаётся — её
 название без цены (вариант B L-13, `price_names_without_prices_text`); форму решит замер шага 6.
 
-Выключатель `[MESSENGER_ROUTER] choose_basket = off | on` (по умолчанию on — как на проде; тени нет —
-это вызов LLM).
+Выключателя нет с 16.10 (решение владельца, §5 итога облака): разбор хода — единственный режим, и `choose_basket = off`
+решал только, звать ли LLM для строк слабых позиций; LLM не зовётся лишь в режиме `strict` и при сбое.
 """
 
 from __future__ import annotations
@@ -54,11 +54,6 @@ def variants_max() -> int:
     except (TypeError, ValueError):
         return _VARIANTS
     return value if 2 <= value <= _VARIANTS else _VARIANTS
-
-
-def basket_mode() -> str:
-    raw = str(getattr(_cfg, "MR_CHOOSE_BASKET", "off") or "").strip().lower()
-    return raw if raw in ("off", "on") else "off"
 
 
 def _candidates(item: dict[str, Any], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
