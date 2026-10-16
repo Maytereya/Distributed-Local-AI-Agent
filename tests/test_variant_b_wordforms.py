@@ -5,7 +5,7 @@
 pallidum)». Корень: `_price_select_llm._whole_word_names` берёт самое редкое слово пациента и строки, где оно есть ЦЕЛИКОМ;
 «сифилис» целиком есть только в чужой строке (в верной — «сифилиса»), поэтому оно и редкое, и верная строка отпадает.
 
-Фикс под `[MESSENGER_ROUTER] variant_b_wordforms = on` (по умолчанию off — как было): словоформа различающего слова —
+Фикс под `[MESSENGER_ROUTER] variant_b_wordforms = on` (по умолчанию on с 17.10): словоформа различающего слова —
 одно слово (`russian_nlu.tokens_share_stem`, порог 6, только слова из одних букв); строка со словоформой добавляется, если
 покрывает слов пациента строго больше любой строки со словом целиком; порядок — по числу слов пациента. Встречный свип
 по 398 названиям мини-прайса («сколько стоит» + название без скобок): изменилось 6, ни одно попадание и ни одна первая
@@ -56,7 +56,8 @@ def _names(question: str) -> tuple[str, ...]:
     return PS._whole_word_names(question, pool, rows)
 
 
-@pytest.mark.parametrize(("raw", "expected"), [(None, False), ("off", False), ("on", True), ("x", False)])
+# Нет атрибута — умолчание кода (on с 17.10); мусор в значении — как было (off).
+@pytest.mark.parametrize(("raw", "expected"), [(None, True), ("off", False), ("on", True), ("x", False)])
 def test_setting_is_read_with_a_safe_default(raw, expected, monkeypatch):
     from messengers_router.runtime_config import config as cfg
     from messengers_router.services._price_select_llm import _variant_b_wordforms_on
@@ -68,10 +69,12 @@ def test_setting_is_read_with_a_safe_default(raw, expected, monkeypatch):
     assert _variant_b_wordforms_on() is expected
 
 
-def test_config_default_is_off():
+def test_config_default_is_on():
+    """Умолчание on с 17.10: офлайн-замер dev 867 при недоступной LLM — 0 хуже (STEP-2026-10-17-VBW-ON)."""
+
     from agent_logic_2 import config
 
-    assert config.MR_VARIANT_B_WORDFORMS == "off"
+    assert config.MR_VARIANT_B_WORDFORMS == "on"
 
 
 def test_the_row_covering_the_patient_words_comes_first(mini_prod_world, monkeypatch):  # noqa: F811

@@ -510,8 +510,10 @@ settings = Settings(
         parse_agree_telemetry=_get_enum("MESSENGER_ROUTER", "parse_agree_telemetry", default="off", allowed={"off", "on"}),
         # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
         # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
-        # было (только слово целиком); on — словоформы (облако 16.10, решение владельца). [MESSENGER_ROUTER] variant_b_wordforms
-        variant_b_wordforms=_get_enum("MESSENGER_ROUTER", "variant_b_wordforms", default="off", allowed={"off", "on"}),
+        # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —
+        # BUG-2026-10-17-VARIANT-B-COMMON-WORD). По умолчанию on с 17.10: офлайн-замер dev — 0 хуже (решение владельца 16.10:
+        # включать только при 0 хуже). [MESSENGER_ROUTER] variant_b_wordforms
+        variant_b_wordforms=_get_enum("MESSENGER_ROUTER", "variant_b_wordforms", default="on", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",

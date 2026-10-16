@@ -235,9 +235,10 @@ def _wordform_family_size(word: str, retail_rows: list[dict[str, Any]]) -> int:
 
 
 def _variant_b_wordforms_on() -> bool:
-    """`[MESSENGER_ROUTER] variant_b_wordforms = off | on` (по умолчанию off — как было; облако 16.10)."""
+    """`[MESSENGER_ROUTER] variant_b_wordforms = off | on` (облако 16.10; по умолчанию on с 17.10 — STEP-2026-10-17-VBW-ON);
+    мусор в значении — как было (off)."""
 
-    return str(getattr(_cfg, "MR_VARIANT_B_WORDFORMS", "off") or "").strip().lower() == "on"
+    return str(getattr(_cfg, "MR_VARIANT_B_WORDFORMS", "on") or "").strip().lower() == "on"
 
 
 # Словоформа — одно слово (`russian_nlu.tokens_share_stem`, одно определение «одно ли это слово»): порог 6 — как у гарда
