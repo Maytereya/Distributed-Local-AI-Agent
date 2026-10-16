@@ -186,7 +186,11 @@ def _store(key: str, record: list[dict[str, Any]]) -> None:
 
 def _assert_path(case: Case, turn: dict[str, Any]) -> None:
     status, rule, acted = turn["tu_parse_status"], str(turn["tu_rule"] or ""), turn["parse_acted"]
-    if case.path == "fallback":
+    if case.path == "fallback" and status == "unavailable":
+        # Q2 отменено (решение владельца 16.10, T7 шаг 3): сбой LLM без разделителей — реплика целиком одной фразой
+        # разбора (путь одной услуги с политикой L-13), а не резка правилами.
+        assert acted and rule == "parse_unavailable", (status, rule, acted)
+    elif case.path == "fallback":
         assert status in _FALLBACK_STATUSES and not acted and not rule.startswith("parse_"), (status, rule, acted)
     elif case.path == "policy":
         assert status in _POLICY_STATUSES and acted and rule == f"parse_{status}", (status, rule, acted)
@@ -218,14 +222,15 @@ def test_golden_has_no_orphans():
 
 
 def test_the_corpus_reaches_each_guard_on_the_fallback():
-    """Встречная проверка набора: запасной путь здесь идёт через каждое правило, которое снимает T7 шаг 3 —
-    защиты K1 (`one_catalog_name`, `segment_unrecognized`), S2 (`list_segment`) и оба статуса без LLM."""
+    """Встречная проверка набора: с 16.10 (Q2 отменено, T7 шаг 3) сбой LLM разбора ведёт разбор (`parse_unavailable`),
+    а путём правил идут только `empty` и `too_many`; статусы корпуса — все три."""
 
     golden = _load()
-    rules = {golden[f"{name}-prod"][0]["tu_rule"] for name, case in CASES.items() if case.path == "fallback"}
-    statuses = {golden[f"{name}-prod"][0]["tu_parse_status"] for name, case in CASES.items() if case.path == "fallback"}
-    assert {"one_catalog_name", "segment_unrecognized", "list_segment", "not_list", "list_split"} <= rules, rules
+    fallback = [golden[f"{name}-prod"][0] for name, case in CASES.items() if case.path == "fallback"]
+    statuses = {turn["tu_parse_status"] for turn in fallback}
     assert _FALLBACK_STATUSES <= statuses, statuses
+    assert {turn["tu_rule"] for turn in fallback if turn["tu_parse_status"] == "unavailable"} == {"parse_unavailable"}
+    assert all(not str(turn["tu_rule"] or "").startswith("parse_") for turn in fallback if turn["tu_parse_status"] != "unavailable")
 
 
 _TWO_TURNS = ("run_on_bare", "run_on_extra_words", "one_name_covers_igg", "phrase_smear_pharynx")

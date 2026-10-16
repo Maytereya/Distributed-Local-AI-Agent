@@ -351,9 +351,9 @@ def test_test_assist_list_is_the_parse(catalog, mini_prod_world, monkeypatch):  
 
 
 def test_failed_parse_keeps_only_the_separator_cut(catalog, mini_prod_world):  # noqa: F811
-    """LLM не ответила: у разбора нет фраз, а для читателей — разрез по разделителям (б) со силой по данным.
-    Сплошной текст без LLM не режется (решение владельца 13.10, Q2), одно название прайса на всю реплику —
-    тоже."""
+    """LLM не ответила: у разбора нет фраз, а для читателей — разрез по разделителям (б) со силой по данным. Без
+    разделителей (решение владельца 16.10, Q2 отменено) — разрез данными МИС (сильные окна), если в промежутках нет слова
+    вне прайса; иначе — реплика целиком одной фразой; одно название прайса на всю реплику — тоже целиком."""
 
     from messengers_router.services import _turn_phrases as TP
 
@@ -363,6 +363,7 @@ def test_failed_parse_keeps_only_the_separator_cut(catalog, mini_prod_world):  #
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         listed = asyncio.run(parse("сколько стоит ферритин, ттг и витамин д"))
         run_on = asyncio.run(parse("сколько стоит ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА"))
+        caps = asyncio.run(parse("сколько стоит ФЕРРИТИН ГЛЮКОЗА ХОЛЕСТЕРОЛ"))
         one_name = asyncio.run(parse("сколько стоит билирубин и фракции"))
     assert (listed.status, listed.items) == ("unavailable", ())
     assert [(p.text, p.strength.value, bool(p.rows)) for p in listed.split] == [
@@ -370,8 +371,14 @@ def test_failed_parse_keeps_only_the_separator_cut(catalog, mini_prod_world):  #
         ("ттг", "weak", False),
         ("витамин д", "weak", False),
     ]
-    assert (run_on.status, run_on.split) == ("unavailable", ())
-    assert (one_name.status, one_name.split) == ("unavailable", ())
+    # «ОАК ОАМ» без синонимов МИС в мини-проде — слова вне прайса в промежутке: без LLM не отличить от условия П2.
+    assert run_on.status == "unavailable" and [p.text for p in run_on.split] == ["ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА"]
+    assert caps.status == "unavailable" and [(p.text, bool(p.rows)) for p in caps.split] == [
+        ("ФЕРРИТИН", True),
+        ("ГЛЮКОЗА", True),
+        ("ХОЛЕСТЕРОЛ", True),
+    ]
+    assert one_name.status == "unavailable" and [p.text for p in one_name.split] == ["билирубин и фракции"]
 
 
 def test_failed_parse_is_read_as_its_separator_cut(monkeypatch):
@@ -381,7 +388,9 @@ def test_failed_parse_is_read_as_its_separator_cut(monkeypatch):
     view = _slot(monkeypatch, "on", failed, reply)
     assert (view.status, view.items, view.leftover, view.is_list) == ("unavailable", split, (), True)
     assert not view.decided  # статус сбоя виден читателю
-    assert _slot(monkeypatch, "on", turn_parse.PhraseParse(reply=reply, status="invalid", source="llm", split=split[:1]), reply) is None
+    # Одна фраза сбоя (реплика целиком, Q2 отменено 16.10) — тоже действует: путь одной услуги, а не правила.
+    single = _slot(monkeypatch, "on", turn_parse.PhraseParse(reply=reply, status="invalid", source="llm", split=split[:1]), reply)
+    assert single is not None and single.items == split[:1] and not single.is_list
     assert _slot(monkeypatch, "shadow", failed, reply) is None
 
 

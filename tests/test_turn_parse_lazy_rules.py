@@ -130,14 +130,20 @@ def test_by_default_the_rules_run_every_price_turn_and_the_agreement_is_written(
     assert row.get("tu_parse_agree") in ("same", "split", "merge", "other")
 
 
-@pytest.mark.parametrize(
-    "text, llm, status",
-    [
-        ("сколько стоит?", "oracle", "empty"),  # пустой разбор — запасной путь
-        (CASES["list_caps_run_on_bare"].text, "down", "unavailable"),  # сбой LLM без разделителей — правила (Q2)
-        (CASES["list_caps_run_on_priced"].text, "down", "unavailable"),
-    ],
-)
+@pytest.mark.parametrize("text", [CASES["list_caps_run_on_bare"].text, CASES["list_caps_run_on_priced"].text])
+def test_failed_parse_without_separators_acts_without_the_rules(text, mini_prod_world, monkeypatch):  # noqa: F811
+    """Сбой LLM без разделителей с 16.10 (Q2 отменено, T7 шаг 3) — разрез данными МИС или реплика целиком: разбор действует
+    сам, ленивые правила не считаются, ответ тот же, что при правилах на каждом ходе (они там — только телеметрия)."""
+
+    name = "list_caps_run_on_bare"
+    eager, [eager_row], _ = _run([text], agree="on", llm="down", case_name=name, world_dir=mini_prod_world, monkeypatch=monkeypatch, session="lazy-q2-on")
+    lazy, [row], calls = _run([text], agree="off", llm="down", case_name=name, world_dir=mini_prod_world, monkeypatch=monkeypatch, session="lazy-q2-off")
+    assert row["tu_parse_status"] == "unavailable" and row["tu_rule"] == "parse_unavailable"
+    assert calls.understand == 0
+    assert lazy == eager
+
+
+@pytest.mark.parametrize("text, llm, status", [("сколько стоит?", "oracle", "empty")])  # пустой разбор — запасной путь
 def test_fallback_runs_the_rules_after_the_parse_and_answers_as_before(text, llm, status, mini_prod_world, monkeypatch):  # noqa: F811
     name = "list_caps_run_on_bare"
     eager, [eager_row], _ = _run([text], agree="on", llm=llm, case_name=name, world_dir=mini_prod_world, monkeypatch=monkeypatch, session=f"lazy-c-{status}-on")

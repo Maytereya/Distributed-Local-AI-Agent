@@ -112,8 +112,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "one_catalog_name",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "one_name_covers_and-prod": [
@@ -129,8 +129,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "one_catalog_name",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "one_name_covers_commas-deploy_parse": [
@@ -146,8 +146,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "one_catalog_name",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "one_name_covers_commas-prod": [
@@ -163,8 +163,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "one_catalog_name",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "one_name_covers_igg-deploy_parse": [
@@ -180,8 +180,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "one_catalog_name",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "one_name_covers_igg-prod": [
@@ -197,8 +197,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "one_catalog_name",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "one_name_covers_plus-deploy_parse": [
@@ -214,8 +214,8 @@
    "service_name": "Глюкозотолерантный тест (глюкоза+ C-пептид)",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "one_catalog_name",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "one_name_covers_plus-prod": [
@@ -231,8 +231,8 @@
    "service_name": "Глюкозотолерантный тест (глюкоза+ C-пептид)",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "one_catalog_name",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "one_name_covers_run_on-deploy_parse": [
@@ -248,8 +248,8 @@
    "service_name": "Билирубин и его фракции (общий, прямой и непрямой)",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "one_catalog_name",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "one_name_covers_run_on-prod": [
@@ -265,8 +265,8 @@
    "service_name": "Билирубин и его фракции (общий, прямой и непрямой)",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "one_catalog_name",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "phrase_qualifier_throat-deploy_parse": [
@@ -282,8 +282,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "not_list",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "phrase_qualifier_throat-prod": [
@@ -299,76 +299,76 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "not_list",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "phrase_scraping_worms-deploy_parse": [
   {
-   "text": "По запросу «соскоб на, яйца глистов» нашёл варианты стоимости:\n\nПо услуге «соскоб на»:\n1. Соскоб на энтеробиоз — 285 руб.\n2. ЗППП: соскоб — 2 100 руб.\n3. ЗППП (расширенное)(соскоб) — 4 900 руб.\n\nПо услуге «яйца глистов»:\n1. Кал на яйца глист — 360 руб.\n2. Расширенное исследование кала — копрограмма, яйца глист, простейшие и их цисты (аппаратная микроскопия с использованием нейросетей), ранняя диагностика воспалительных и онкологических заболеваний кишечника — скрытая кровь, трансферрин, кальпротектин в кале — 4 500 руб.\n3. Комплексное исследование кала – копрограмма, скрытая кровь, яйца глист, простейшие и их цисты (аппаратная микроскопия с использованием нейросетей) — 1 400 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+   "text": "По запросу «соскоб яйца глистов» нашёл варианты стоимости:\n1. Кал на яйца глист — 360 руб.\n2. Расширенное исследование кала — копрограмма, яйца глист, простейшие и их цисты (аппаратная микроскопия с использованием нейросетей), ранняя диагностика воспалительных и онкологических заболеваний кишечника — скрытая кровь, трансферрин, кальпротектин в кале — 4 500 руб.\n3. Соскоб на энтеробиоз — 285 руб.\n4. ЗППП: соскоб — 2 100 руб.\n5. ЗППП (расширенное)(соскоб) — 4 900 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
    "handoff": false,
    "label": "PRICE",
    "plan": [
     "PRICE",
-    "price_info"
+    "service_bundle_info"
    ],
-   "service_name_effective": "соскоб на, яйца глистов",
-   "service_name": null,
+   "service_name_effective": null,
+   "service_name": "Кал на яйца глист",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "list_segment",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "phrase_scraping_worms-prod": [
   {
-   "text": "По запросу «соскоб на, яйца глистов» нашёл варианты стоимости:\n\nПо услуге «соскоб на»:\n1. Соскоб на энтеробиоз — 285 руб.\n2. ЗППП: соскоб — 2 100 руб.\n3. ЗППП (расширенное)(соскоб) — 4 900 руб.\n\nПо услуге «яйца глистов»:\n1. Кал на яйца глист — 360 руб.\n2. Расширенное исследование кала — копрограмма, яйца глист, простейшие и их цисты (аппаратная микроскопия с использованием нейросетей), ранняя диагностика воспалительных и онкологических заболеваний кишечника — скрытая кровь, трансферрин, кальпротектин в кале — 4 500 руб.\n3. Комплексное исследование кала – копрограмма, скрытая кровь, яйца глист, простейшие и их цисты (аппаратная микроскопия с использованием нейросетей) — 1 400 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+   "text": "По запросу «соскоб яйца глистов» нашёл варианты стоимости:\n1. Кал на яйца глист — 360 руб.\n2. Расширенное исследование кала — копрограмма, яйца глист, простейшие и их цисты (аппаратная микроскопия с использованием нейросетей), ранняя диагностика воспалительных и онкологических заболеваний кишечника — скрытая кровь, трансферрин, кальпротектин в кале — 4 500 руб.\n3. Соскоб на энтеробиоз — 285 руб.\n4. ЗППП: соскоб — 2 100 руб.\n5. ЗППП (расширенное)(соскоб) — 4 900 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
    "handoff": false,
    "label": "PRICE",
    "plan": [
     "PRICE",
-    "price_info"
+    "service_bundle_info"
    ],
-   "service_name_effective": "соскоб на, яйца глистов",
-   "service_name": null,
+   "service_name_effective": null,
+   "service_name": "Кал на яйца глист",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "list_segment",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "phrase_smear_pharynx-deploy_parse": [
   {
-   "text": "По запросу «мазок на, микрофлору из, зева» нашёл варианты стоимости:\n\nПо услуге «мазок на»:\n1. Мазок на степень чистоты влагалища — 290 руб.\n2. Мазок из зева и носа на патогенный стафилококк — 510 руб.\n3. Цитология (мазок на атипичные клетки) — 450 руб.\n\nПо запросу «микрофлору из» нашёл похожую услугу: «Посев на микрофлору (идентификация агента и чувствительность к а\\б)». Если нужна она, напишите её название — подскажу цену.\n\nПо запросу «зева» нашёл похожую услугу: «Мазок из зева и носа на патогенный стафилококк». Если нужна она, напишите её название — подскажу цену.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+   "text": "По запросу «мазок микрофлору из зева» нашёл варианты стоимости:\n1. Мазок из зева и носа на патогенный стафилококк — 510 руб.\n2. Мазок на степень чистоты влагалища — 290 руб.\n3. Цитология (мазок на атипичные клетки) — 450 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
    "handoff": false,
    "label": "PRICE",
    "plan": [
     "PRICE",
-    "price_info"
+    "service_bundle_info"
    ],
-   "service_name_effective": "мазок на, микрофлору из, зева",
-   "service_name": null,
+   "service_name_effective": null,
+   "service_name": "Посев на микрофлору (идентификация агента и чувствительность к а\\б)",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "list_segment",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "phrase_smear_pharynx-prod": [
   {
-   "text": "По запросу «мазок на, микрофлору из, зева» нашёл варианты стоимости:\n\nПо услуге «мазок на»:\n1. Мазок на степень чистоты влагалища — 290 руб.\n2. Мазок из зева и носа на патогенный стафилококк — 510 руб.\n3. Цитология (мазок на атипичные клетки) — 450 руб.\n\nПо запросу «микрофлору из» нашёл похожую услугу: «Посев на микрофлору (идентификация агента и чувствительность к а\\б)». Если нужна она, напишите её название — подскажу цену.\n\nПо запросу «зева» нашёл похожую услугу: «Мазок из зева и носа на патогенный стафилококк». Если нужна она, напишите её название — подскажу цену.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+   "text": "По запросу «мазок микрофлору из зева» нашёл варианты стоимости:\n1. Мазок из зева и носа на патогенный стафилококк — 510 руб.\n2. Мазок на степень чистоты влагалища — 290 руб.\n3. Цитология (мазок на атипичные клетки) — 450 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
    "handoff": false,
    "label": "PRICE",
    "plan": [
     "PRICE",
-    "price_info"
+    "service_bundle_info"
    ],
-   "service_name_effective": "мазок на, микрофлору из, зева",
-   "service_name": null,
+   "service_name_effective": null,
+   "service_name": "Посев на микрофлору (идентификация агента и чувствительность к а\\б)",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "list_segment",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "qualifier_oms-deploy_parse": [
@@ -418,8 +418,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "not_list",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "qualifier_oms_run_on-prod": [
@@ -435,8 +435,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "not_list",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "readiness_run_on-deploy_parse": [
@@ -451,8 +451,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "list_segment",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "readiness_run_on-prod": [
@@ -467,8 +467,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "list_segment",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "readiness_run_on_priced-deploy_parse": [
@@ -484,8 +484,8 @@
    "service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "not_list",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "readiness_run_on_priced-prod": [
@@ -501,76 +501,76 @@
    "service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "not_list",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_bare-deploy_parse": [
   {
-   "text": "По запросу «ОАК, ОАМ, Ферритин, Глюкоза» нашёл варианты стоимости:\n\nПо услуге «ОАК»:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n3. ОАК (без лейкоцитарной формулы и СОЭ) — 250 руб.\n4. Диагностика гельминтозов и протозойных инфекций (лямблии IgG, токсокара IgG, описторх IgG, трихинелла IgG, эхинококк IgG, аскариды IgG, ОАК) — 3 700 руб.\n\nПо услуге «ОАМ»:\n1. Общий анализ мочи — 280 руб.\n2. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+   "text": "По запросу «общий анализ крови» нашёл варианты стоимости:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n\nПо вашему запросу найдено еще 6 вариантов. Чтобы показать их, напишите: \"все\".\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
    "handoff": false,
    "label": "PRICE",
    "plan": [
     "PRICE",
-    "price_info"
+    "service_bundle_info"
    ],
-   "service_name_effective": "ОАК, ОАМ, Ферритин, Глюкоза",
-   "service_name": null,
+   "service_name_effective": null,
+   "service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "list_segment",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_bare-prod": [
   {
-   "text": "По запросу «ОАК, ОАМ, Ферритин, Глюкоза» нашёл варианты стоимости:\n\nПо услуге «ОАК»:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n3. ОАК (без лейкоцитарной формулы и СОЭ) — 250 руб.\n\nПо услуге «ОАМ»:\n1. Общий анализ мочи — 280 руб.\n2. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+   "text": "По запросу «общий анализ крови» нашёл варианты стоимости:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n\nПо вашему запросу найдено еще 6 вариантов. Чтобы показать их, напишите: \"все\".\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
    "handoff": false,
    "label": "PRICE",
    "plan": [
     "PRICE",
-    "price_info"
+    "service_bundle_info"
    ],
-   "service_name_effective": "ОАК, ОАМ, Ферритин, Глюкоза",
-   "service_name": null,
+   "service_name_effective": null,
+   "service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "list_segment",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_caps_priced-deploy_parse": [
   {
-   "text": "Не нашёл актуальную стоимость для «ферритин глюкоза холестерол». Уточните название услуги или ФИО врача, и я проверю снова.\nИсточник цены: розничный прайс Самары.",
+   "text": "По запросу «Ферритин, Глюкоза, Холестерол» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\n\nПо услуге «Холестерол»:\n1. Холестерол — 225 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
    "handoff": false,
    "label": "PRICE",
    "plan": [
     "PRICE",
     "price_info"
    ],
-   "service_name_effective": "ферритин глюкоза холестерол",
+   "service_name_effective": "Ферритин, Глюкоза, Холестерол",
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "not_list",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_caps_priced-prod": [
   {
-   "text": "Не нашёл актуальную стоимость для «ферритин глюкоза холестерол». Уточните название услуги или ФИО врача, и я проверю снова.\nИсточник цены: розничный прайс Самары.",
+   "text": "По запросу «Ферритин, Глюкоза, Холестерол» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\n\nПо услуге «Холестерол»:\n1. Холестерол — 225 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
    "handoff": false,
    "label": "PRICE",
    "plan": [
     "PRICE",
     "price_info"
    ],
-   "service_name_effective": "ферритин глюкоза холестерол",
+   "service_name_effective": "Ферритин, Глюкоза, Холестерол",
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "not_list",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_extra_service-deploy_parse": [
@@ -586,8 +586,8 @@
    "service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "segment_unrecognized",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_extra_service-prod": [
@@ -603,76 +603,76 @@
    "service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "segment_unrecognized",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_extra_words-deploy_parse": [
   {
-   "text": "По запросу «общий анализ крови, Ферритин, глюкоза натощак» нашёл варианты стоимости:\n\nПо услуге «общий анализ крови»:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n3. Общий анализ мочи — 280 руб.\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «глюкоза натощак»:\n1. Глюкозотолерантный тест (глюкоза натощак, и через 2 часа после нагрузки)​​​​​​​ — 600 руб.\n2. Глюкозотолерантный тест (глюкоза натощак, через 1 час и через 2 часа после нагрузки) — 630 руб.\n\nНе распознал: сдать. Уточните эти названия — помогу по ним отдельно.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+   "text": "По запросу «общий анализ крови, Ферритин, Глюкоза, натощак» нашёл варианты стоимости:\n\nПо услуге «общий анализ крови»:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n3. Общий анализ мочи — 280 руб.\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\n\nПо услуге «натощак»:\n1. Глюкозотолерантный тест (глюкоза натощак, и через 2 часа после нагрузки)​​​​​​​ — 600 руб.\n2. Глюкозотолерантный тест (глюкоза натощак, через 1 час и через 2 часа после нагрузки) — 630 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
    "handoff": false,
    "label": "PRICE",
    "plan": [
     "PRICE",
     "price_info"
    ],
-   "service_name_effective": "общий анализ крови, Ферритин, глюкоза натощак",
+   "service_name_effective": "общий анализ крови, Ферритин, Глюкоза, натощак",
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "segment_unrecognized",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_extra_words-prod": [
   {
-   "text": "По запросу «общий анализ крови, Ферритин, глюкоза натощак» нашёл варианты стоимости:\n\nПо услуге «общий анализ крови»:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n3. Общий анализ мочи — 280 руб.\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «глюкоза натощак»:\n1. Глюкозотолерантный тест (глюкоза натощак, и через 2 часа после нагрузки)​​​​​​​ — 600 руб.\n2. Глюкозотолерантный тест (глюкоза натощак, через 1 час и через 2 часа после нагрузки) — 630 руб.\n\nНе распознал: сдать. Уточните эти названия — помогу по ним отдельно.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+   "text": "По запросу «общий анализ крови, Ферритин, Глюкоза, натощак» нашёл варианты стоимости:\n\nПо услуге «общий анализ крови»:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n3. Общий анализ мочи — 280 руб.\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\n\nПо услуге «натощак»:\n1. Глюкозотолерантный тест (глюкоза натощак, и через 2 часа после нагрузки)​​​​​​​ — 600 руб.\n2. Глюкозотолерантный тест (глюкоза натощак, через 1 час и через 2 часа после нагрузки) — 630 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
    "handoff": false,
    "label": "PRICE",
    "plan": [
     "PRICE",
     "price_info"
    ],
-   "service_name_effective": "общий анализ крови, Ферритин, глюкоза натощак",
+   "service_name_effective": "общий анализ крови, Ферритин, Глюкоза, натощак",
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "segment_unrecognized",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_ten_four-deploy_parse": [
   {
-   "text": "Сейчас не удалось получить данные автоматически. Соединяю с оператором.",
-   "handoff": true,
-   "label": "TEST_ASSIST",
+   "text": "По запросу «Ферритин» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nНе распознал: ттг т4 свободный. Уточните эти названия — помогу по ним отдельно.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+   "handoff": false,
+   "label": "PRICE",
    "plan": [
-    "TEST_ASSIST",
-    "test_assist"
+    "PRICE",
+    "price_info"
    ],
-   "service_name_effective": null,
+   "service_name_effective": "Ферритин",
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "segment_unrecognized",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_ten_four-prod": [
   {
-   "text": "Сейчас не удалось получить данные автоматически. Соединяю с оператором.",
-   "handoff": true,
-   "label": "TEST_ASSIST",
+   "text": "По запросу «Ферритин» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nНе распознал: ттг т4 свободный. Уточните эти названия — помогу по ним отдельно.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+   "handoff": false,
+   "label": "PRICE",
    "plan": [
-    "TEST_ASSIST",
-    "test_assist"
+    "PRICE",
+    "price_info"
    ],
-   "service_name_effective": null,
-   "service_name": null,
+   "service_name_effective": "Ферритин",
+   "service_name": "Ферритин",
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "segment_unrecognized",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_unknown_word-deploy_parse": [
@@ -688,8 +688,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "not_list",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_unknown_word-prod": [
@@ -705,8 +705,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "not_list",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_words-deploy_parse": [
@@ -722,8 +722,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "list_segment",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "run_on_words-prod": [
@@ -739,8 +739,8 @@
    "service_name": null,
    "pending": null,
    "tu_parse_status": "unavailable",
-   "tu_rule": "list_segment",
-   "parse_acted": false
+   "tu_rule": "parse_unavailable",
+   "parse_acted": true
   }
  ],
  "status_empty-deploy_parse": [

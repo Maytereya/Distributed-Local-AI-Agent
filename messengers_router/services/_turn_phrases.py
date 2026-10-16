@@ -55,6 +55,7 @@ from ._prices_helpers import (
     _price_query_content_tokens,
     _resolve_multi_price_items,
     _split_price_query_items,
+    query_has_unsatisfiable_qualifier,
     strip_readiness_phrasing,
 )
 from ._strong_match import strong_rows
@@ -624,13 +625,27 @@ def _prepare(
 def fallback_split(cands: Candidates, catalog: list[dict[str, Any]]) -> tuple[ParsedPhrase, ...]:
     """Разрез, которым читатели действуют, если LLM не ответила (политика сбоя, L-15b шаг 5): фрагменты по
     разделителям (б) со силой по данным, когда их ≥2 и одно название прайса не покрывает всю реплику
-    («Билирубин и его фракции» не режется). Окна сплошного текста (в)/(г) без LLM не режут (решение
-    владельца 13.10, Q2) — тогда пусто, и читатели идут прежним путём правил."""
+    («Билирубин и его фракции» не режется). Без разделителей — разрез данными МИС (г): сильные окна (название,
+    синоним, код) и промежутки между ними, когда окно есть и кусков ≥2, — как политика сбоя корзины: сильные
+    позиции с ценой, остальное — варианты кода или «Не распознал». Иначе — реплика целиком одной фразой (W): путь
+    одной услуги с политикой L-13. Сегментацией правил (в) без LLM не режем (решение владельца 16.10, Q2 отменено:
+    «варианты/уточнение» вместо резки правилами). Пусто — только когда W нет (реплика из одной обвязки)."""
 
+    covering = _catalog_name_covering(_price_query_content_tokens(cands.probe), catalog)
     cut = cands.partitions.get(SOURCE_SPLIT, ())
-    if len(cut) < 2 or _catalog_name_covering(_price_query_content_tokens(cands.probe), catalog):
-        return ()
-    return tuple(parsed(p, phrase_rows(p.raw, catalog)) for p in cut)
+    if len(cut) >= 2 and not covering:
+        return tuple(parsed(p, phrase_rows(p.raw, catalog)) for p in cut)
+    # Сильные окна — только если в промежутках между ними нет слова вне прайса: «ферритин глюкоза по омс» без LLM не
+    # отличить от «ферритин глюкоза спирометрия» (условие или услуга другим словом — решает LLM), а цена рядом с
+    # условием П2 — дезинформация; такая реплика — целиком, путь одной услуги с гардом П2. Сами окна — данные МИС
+    # (синоним «ОАМ» в названиях прайса не встречается — это не «слово вне прайса»).
+    cut = cands.partitions.get(SOURCE_STRONG, ())
+    if len(cut) >= 2 and not covering:
+        pieces = [(p, phrase_rows(p.raw, catalog)) for p in cut]
+        if not any(not rows and query_has_unsatisfiable_qualifier(p.raw, catalog) for p, rows in pieces):
+            return tuple(parsed(p, rows) for p, rows in pieces)
+    whole = cands.whole
+    return (parsed(whole, phrase_rows(whole.raw, catalog)),) if whole is not None else ()
 
 
 def _merged_list(cands: Candidates, picked: Sequence[int], rows: Sequence[Sequence[dict[str, Any]]], split: Sequence[ParsedPhrase]) -> bool:
