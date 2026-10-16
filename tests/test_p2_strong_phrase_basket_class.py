@@ -32,11 +32,10 @@ from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
-from tests.test_turn_parse_shadow import _deploy
+from tests.test_turn_parse_slot import _deploy
 from tests.test_turn_parse_t3 import _FOLLOW_UPS, _PHRASES_MARK, _ROWS_MARKS, _assert_follow_up_stays_on_what_was_shown
 
 _PROD_1016 = {
-    "MR_TURN_PARSE": "on",
     "MR_CHOOSE_PRICE": "on",
     "MR_PARSE_PRICE_GUARD": "llm",
     "MR_CONTEXT_SHOWN": "on",

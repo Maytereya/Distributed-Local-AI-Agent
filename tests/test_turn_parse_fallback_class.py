@@ -45,7 +45,7 @@ import pytest
 from evalbench import world as ev_world
 from messengers_router import llm_runtime, turn_parse
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
-from tests.test_turn_parse_shadow import _deploy
+from tests.test_turn_parse_slot import _deploy
 from tests.test_turn_parse_t3 import _FOLLOW_UPS, _assert_follow_up_stays_on_what_was_shown, _Oracle
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "price_turns_parse_fallback.json"
@@ -54,9 +54,8 @@ UPDATE = os.environ.get("GOLDEN_UPDATE") == "1"
 # Наборы выключателей поверх набора деплоя (`_deploy`); `prod_lazy` сверяется с эталоном `prod`. У `deploy_parse` пять
 # вариантов при сбое — явно: эталон снят при прежнем умолчании, `prod` держит три (STEP-2026-10-15-DEFAULTS-B).
 _SETS: dict[str, dict[str, Any]] = {
-    "deploy_parse": {"MR_TURN_PARSE": "on", "MR_PARSE_FAIL_VARIANTS": 5},
+    "deploy_parse": {"MR_PARSE_FAIL_VARIANTS": 5},
     "prod": {
-        "MR_TURN_PARSE": "on",
         "MR_PARSE_FAIL_VARIANTS": 3,
         "MR_JOURNAL_PHRASE": "mention",
         "MR_CONTEXT_SHOWN": "on",

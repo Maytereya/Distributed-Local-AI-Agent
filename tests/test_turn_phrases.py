@@ -259,9 +259,9 @@ class _PhrasesLLM:
         return GenerateResponse(model="m", response=json.dumps({"picks": picks}), done=True)
 
 
-def _llm_parse(reply: str, catalog: list[dict[str, Any]], llm: _PhrasesLLM, monkeypatch, *, shadow: bool = False):
+def _llm_parse(reply: str, catalog: list[dict[str, Any]], llm: _PhrasesLLM, monkeypatch):
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
-    return asyncio.run(TP.parse_turn_phrases(reply, facet=_facet(reply), catalog=catalog, shadow=shadow))
+    return asyncio.run(TP.parse_turn_phrases(reply, facet=_facet(reply), catalog=catalog))
 
 
 def test_picks_in_reply_order_with_strength_by_strong_rows(catalog, world, monkeypatch):
@@ -301,9 +301,8 @@ def test_none_fit_is_not_a_list(catalog, world, monkeypatch):
     assert (parse.status, parse.source, parse.items, parse.decided, parse.is_list) == ("none_fit", "llm", (), True, False)
 
 
-@pytest.mark.parametrize("shadow", [False, True])
-def test_unavailable_gives_no_items(shadow, catalog, world, monkeypatch):
-    parse = _llm_parse("сколько стоит ферритин, ттг и витамин д", catalog, _PhrasesLLM(exc=ConnectionError("down")), monkeypatch, shadow=shadow)
+def test_unavailable_gives_no_items(catalog, world, monkeypatch):
+    parse = _llm_parse("сколько стоит ферритин, ттг и витамин д", catalog, _PhrasesLLM(exc=ConnectionError("down")), monkeypatch)
     assert (parse.status, parse.items, parse.decided, parse.leftover) == ("unavailable", (), False, ("ферритин", "ттг", "витамин д"))
 
 

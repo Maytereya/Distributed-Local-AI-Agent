@@ -35,8 +35,6 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Hashable, TypeVar
 
-from . import turn_telemetry
-from .runtime_config import config as _cfg
 
 if TYPE_CHECKING:
     from .choice import Strength
@@ -77,16 +75,6 @@ class _TurnParse:
             self.computed += 1
         return result
 
-    def peek(self, key: Hashable, compute: Callable[[], _R]) -> _R:
-        """Как `remember`, но без записи: тень читает память хода и не пополняет её."""
-
-        with self._lock:
-            found = key in self._results
-            if found:
-                self.reused += 1
-                stored = self._results[key]
-        return copy.deepcopy(stored) if found else compute()
-
     def keep_phrases(self, task: asyncio.Future[PhraseParse]) -> None:
         """Результат задачи разбора — под замок (читают и потоки); отмена и сбой — без результата."""
 
@@ -113,14 +101,12 @@ def remember(key: Hashable, compute: Callable[[], _R]) -> _R:
     """`compute()` в памяти хода по `key` (копией); вне хода — прежний вызов без памяти.
 
     Для функций, чья сигнатура не `(текст, срез)` (`per_turn`); ключ включает имя функции, текст и
-    отпечаток среза. Тень (`read_only_memory`) только читает память.
+    отпечаток среза.
     """
 
     memo = _CURRENT.get()
     if memo is None:
         return compute()
-    if _READ_ONLY.get():
-        return memo.peek(key, compute)
     return memo.remember(key, compute)
 
 
@@ -160,7 +146,6 @@ class ParseStatus(StrEnum):
     INVALID = "invalid"  # ответ LLM нарушил контракт (в т. ч. пересекающиеся фразы)
     MERGED = "merged"  # LLM взяла всю реплику (слабую) одной услугой, а разрез по разделителям есть — сбой
     UNAVAILABLE = "unavailable"  # LLM не ответила
-    LATE = "late"  # тень не успела к концу хода
     ERROR = "error"  # сбой кода разбора
 
 
@@ -229,38 +214,17 @@ class PhraseParse:
 
 # --------------------------------------------------------------------------- слот разбора на фразы (контракт C)
 #
-# Выключатель `[MESSENGER_ROUTER] turn_parse = off | shadow | on` (по умолчанию on с 16.10, T7 шаг 3б (а)). Разбор запускает
-# `turn_understanding.observe_price_turn` — раз за ход, после понимания. Под `shadow` — фоновой задачей
-# во время хода (решение владельца 13.10, Q1): решение LLM вне бюджета хода и предохранителя, память
-# разбора и сессию задача не трогает, пишет только `tu_parse_*`; конец хода — `drain` (ждём не дольше
-# секунды, потом отмена — статус `late`). Под `on` разбор ждут сразу — его решение из бюджета хода;
-# читатели под `on` (шаг 5: понимание, корзина, путь одной услуги) берут его через `acting_for(вход)` —
-# только решённый и только для своей реплики. Вне хода и под `off` слота нет.
-
-MODES = ("off", "shadow", "on")
-
-_READ_ONLY: contextvars.ContextVar[bool] = contextvars.ContextVar("mr_turn_parse_read_only", default=False)
-
-
-def mode() -> str:
-    """`turn_parse`: off | shadow | on; без ключа — on (как прод), иное — off."""
-
-    raw = str(getattr(_cfg, "MR_TURN_PARSE", "on") or "").strip().lower()
-    return raw if raw in MODES else "off"
-
-
-def read_only_memory() -> None:
-    """Задача (тень) читает память разбора хода, но не пополняет её — копия контекста задачи, а не хода."""
-
-    _READ_ONLY.set(True)
+# Разбор реплики на фразы — единственный режим (T7 шаг 3б, 16.10; был выключатель `turn_parse = off | shadow | on`).
+# Запускает `turn_understanding.observe_price_turn` — раз за ход, после понимания; ход ждёт его сразу — решение из
+# бюджета хода. Читатели (понимание, корзина, путь одной услуги, срок) берут его через `acting_for(вход)` — только
+# решённый (или сбой LLM с разрезом) и только для своей реплики. Вне хода слота нет.
 
 
 def start_phrases(factory: Callable[[], Awaitable[PhraseParse]], *, reply: str = "") -> asyncio.Future[PhraseParse] | None:
-    """Запустить разбор реплики раз за ход (из корутины хода); повтор — та же задача. Вне хода и под
-    `off` — None."""
+    """Запустить разбор реплики раз за ход (из корутины хода); повтор — та же задача. Вне хода — None."""
 
     memo = _CURRENT.get()
-    if memo is None or mode() == "off":
+    if memo is None:
         return None
     with memo._lock:
         if memo.phrases_task is None:
@@ -293,15 +257,13 @@ async def phrases() -> PhraseParse | None:
 
 
 def acting_for(text: str) -> PhraseParse | None:
-    """Разбор, по которому действует читатель с входом `text` (L-15b, шаг 5): под `on` и этой реплики
-    (`for_text`) — решённый; или сбой LLM (политика сбоя): фразы — разрез по разделителям (б), если он есть,
+    """Разбор, по которому действует читатель с входом `text` (L-15b, шаг 5): этой реплики (`for_text`) —
+    решённый; или сбой LLM (политика сбоя): фразы — разрез по разделителям (б), если он есть,
     иначе реплика целиком одной фразой (решение владельца 16.10, Q2 отменено: сплошной текст без LLM не режем
     и правилами — путь одной услуги с политикой L-13); сильная — с её строками по данным, слабые решит выбор
-    строк или варианты кода. None — прежний путь правил: разбора нет, статусы `empty`/`too_many`/`late`/`error`,
-    или вход читателя — не реплика хода (дозаполнение, контекст прошлого хода)."""
+    строк или варианты кода. None — путь правил: разбора нет, статусы `empty`/`too_many`/`error`, или вход
+    читателя — не реплика хода (дозаполнение, контекст прошлого хода, цена попутно в записи)."""
 
-    if mode() != "on":
-        return None
     parse = phrases_now()
     if parse is None or not parse.for_text(text):
         return None
@@ -312,26 +274,14 @@ def acting_for(text: str) -> PhraseParse | None:
     return None
 
 
-async def drain(grace_s: float) -> None:
-    """Конец хода: ждём разбор не дольше `grace_s`, затем отменяем — статус `late` (в телеметрию хода).
-    Разбора нет или он готов — возврат без ожидания (под `off` ход не меняется ни на такт)."""
+def cancel_unfinished() -> None:
+    """Конец хода: разбор, который ход так и не дождался (сбой или отмена хода между запуском и ожиданием), — отменить,
+    чтобы он не тратил LLM после ответа. Ход ждёт разбор сразу после запуска, поэтому обычно задачи уже нет."""
 
     memo = _CURRENT.get()
     task = memo.phrases_task if memo is not None else None
-    if task is None or task.done():
-        return
-    try:
-        await asyncio.wait({task}, timeout=grace_s)
-    finally:
-        if not task.done():
-            task.cancel()
-    if not task.done():
-        await asyncio.wait({task}, timeout=grace_s)  # отмена доходит до задачи — её записи раньше строки хода
-    if task.cancelled():
-        late = PhraseParse(reply=memo.phrases_reply, status=ParseStatus.LATE.value, source="none")
-        with memo._lock:
-            memo.phrases_result = late
-        turn_telemetry.note(tu_parse_status=late.status, tu_parse_src=late.source)
+    if task is not None and not task.done():
+        task.cancel()
 
 
 def debug() -> dict[str, Any] | None:

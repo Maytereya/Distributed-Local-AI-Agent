@@ -590,10 +590,8 @@ def decide_without_llm(cands: Candidates, catalog: list[dict[str, Any]]) -> Phra
 
 # --------------------------------------------------------------------------- выбор фраз LLM (choose)
 
-# Решение — одно из двух на ход (лимит хода не меняется, решение владельца 13.10, Q4). Тень ждёт
-# очередь к LLM не дольше 1 с (`llm_slot` округляет 300 мс до своего минимума — 1 с; Q1).
+# Решение — одно из двух на ход (лимит хода не меняется, решение владельца 13.10, Q4).
 PHRASES_TASK = Task(name="turn_phrases", max_picks=0, disjoint=True, num_predict=48, timeout_s=5.0, queue_timeout_ms=1500)
-_SHADOW_QUEUE_MS = 300
 # Ответ — номера фраз: ≈3,3 токена на номер плюс постоянная часть. 48 токенов обрезали ответ на 15–16
 # номерах (все 3 INVALID замера шага 6, по 3,4–4,0 с впустую) — бюджет растёт с числом вариантов, у
 # коротких списков (≤8 вариантов) он прежний.
@@ -601,12 +599,11 @@ _TOKENS_PER_OPTION = 4
 _TOKENS_FIXED = 16
 
 
-def phrases_task(n_options: int, *, shadow: bool = False) -> Task:
+def phrases_task(n_options: int) -> Task:
     """Задача выбора фраз под `n_options` вариантов: бюджет ответа не меньше прежних 48 токенов."""
 
     budget = max(PHRASES_TASK.num_predict, _TOKENS_FIXED + _TOKENS_PER_OPTION * n_options)
-    task = replace(PHRASES_TASK, num_predict=budget)
-    return replace(task, queue_timeout_ms=_SHADOW_QUEUE_MS) if shadow else task
+    return replace(PHRASES_TASK, num_predict=budget)
 
 
 def _prepare(
@@ -684,7 +681,7 @@ def _from_choice(
 
 
 async def parse_turn_phrases(
-    reply: str, *, facet: str | None, catalog: list[dict[str, Any]], shadow: bool, prepared: asyncio.Event | None = None
+    reply: str, *, facet: str | None, catalog: list[dict[str, Any]], prepared: asyncio.Event | None = None
 ) -> PhraseParse:
     """Разбор ценовой реплики на фразы-услуги: без LLM, если выбор не нужен, иначе — `choose()`.
 
@@ -694,8 +691,7 @@ async def parse_turn_phrases(
     :param reply: реплика пациента
     :param facet: свойство из понимания хода (`readiness` — W без фразы о сроке)
     :param catalog: строки прайса региона
-    :param shadow: тень — решение вне бюджета хода и предохранителя, очередь к LLM ≤1 с
-    :param prepared: событие «генератор готов» — под `on` по нему стартуют правила понимания (шаг 6, O3b)
+    :param prepared: событие «генератор готов» — по нему стартуют нетерпеливые правила понимания (шаг 6, O3b)
     """
 
     started = time.monotonic()
@@ -709,6 +705,6 @@ async def parse_turn_phrases(
             Option(id=str(k), text=f"«{p.text}»", strength=Strength.STRONG if rows[k] else Strength.WEAK, span=(p.start, p.end))
             for k, p in enumerate(cands.options)
         ]
-        task = phrases_task(len(options), shadow=shadow)
-        decided = _from_choice(cands, await choose(task, reply, options, shadow=shadow), rows, split)
+        task = phrases_task(len(options))
+        decided = _from_choice(cands, await choose(task, reply, options), rows, split)
     return replace(decided, ms=int((time.monotonic() - started) * 1000))

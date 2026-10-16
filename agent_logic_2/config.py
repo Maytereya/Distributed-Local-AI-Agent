@@ -200,7 +200,6 @@ class MessengerRouterConfig:
     choose_symptom: str
     choose_basket: str
     choose_readiness: str
-    turn_parse: str
     parse_fail_variants: int
     journal_phrase: str
     context_shown: str
@@ -464,11 +463,8 @@ settings = Settings(
         # off | on, по умолчанию on — как на проде с 14.10 (STEP-2026-10-15-DEFAULTS-B); действует под пониманием
         # хода on. [MESSENGER_ROUTER] choose_readiness
         choose_readiness=_get_enum("MESSENGER_ROUTER", "choose_readiness", default="on", allowed={"off", "on"}),
-        # Разбор ценовой реплики на фразы-услуги (L-15b, шаг 4, контракт C): off — не строится; shadow —
-        # во время хода, вне его бюджета, только телеметрия (tu_parse_*) и debug; on — разбор ждут в ходе
-        # (решение — из бюджета хода), читатели — шаг 5. По умолчанию on — как на проде с 15.10 (T7 шаг 3б (а),
-        # 16.10; режимы off/shadow снимаются следующим шагом). [MESSENGER_ROUTER] turn_parse
-        turn_parse=_get_enum("MESSENGER_ROUTER", "turn_parse", default="on", allowed={"off", "shadow", "on"}),
+        # Разбор ценовой реплики на фразы-услуги (L-15b, контракт C) — единственный режим с T7 шага 3б (16.10): ключ
+        # [MESSENGER_ROUTER] turn_parse снят и больше не читается (в config.ini прода безвреден).
         # Политика сбоя под turn_parse = on (L-15b, шаг 6, T5): сколько вариантов кода с ценами показывать у
         # слабой позиции, когда LLM не выбрала строки (2–5; поправка владельца 13.10). По умолчанию 3 — как на
         # проде (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] parse_fail_variants
@@ -530,7 +526,7 @@ settings = Settings(
         # хода считаются на каждом ценовом ходе параллельно выбору фраз LLM, O3b, — согласию нужен их разрез); off —
         # согласия под on нет, правила считаются лениво: только когда разбор не годится для действия (`acting_for` —
         # None: empty, too_many, сбой LLM без разделителей) или решён одной слабой фразой (`single`). Ответы те же,
-        # экономия — CPU хода. Под turn_parse = off и shadow не действует. По умолчанию off с 16.10 (решение владельца,
+        # экономия — CPU хода. По умолчанию off с 16.10 (решение владельца,
         # T7 шаг 4). [MESSENGER_ROUTER] parse_agree_telemetry
         parse_agree_telemetry=_get_enum("MESSENGER_ROUTER", "parse_agree_telemetry", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
@@ -668,7 +664,6 @@ MR_CHOOSE_PRICE = settings.messenger_router.choose_price
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_CHOOSE_BASKET = settings.messenger_router.choose_basket
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
-MR_TURN_PARSE = settings.messenger_router.turn_parse
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_JOURNAL_PHRASE = settings.messenger_router.journal_phrase
 MR_CONTEXT_SHOWN = settings.messenger_router.context_shown

@@ -166,13 +166,11 @@ def test_basket_positions_are_journaled_like_a_single_mention(said, picked, ment
     вы оам» в журнале). Под `rules` — как было; ответ пациенту в обоих режимах один."""
 
     from messengers_router import llm_runtime
-    from messengers_router.runtime_config import config as cfg
     from tests.test_price_turns_golden import run_dialog
     from tests.test_turn_parse_readers import _journal_rows, _JournalLLM
-    from tests.test_turn_parse_shadow import _deploy
+    from tests.test_turn_parse_slot import _deploy
 
     _deploy(monkeypatch)
-    monkeypatch.setattr(cfg, "MR_TURN_PARSE", "on", raising=False)
     seen = {}
     for mode in ("mention", "rules"):
         _source(monkeypatch, mode)

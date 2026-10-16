@@ -8,7 +8,7 @@
 `guard_over_blocks_silently`). Путь — LLM-first, как класс A (`parse_price_guard`): «та ли это услуга с этим
 свойством» решает выбор строки (`select_price_rows(..., judge_qualifier=True)`, правило 3 промпта отсекает «по ОМС»).
 
-Инварианты класса (через обработчик эндпоинта, мини-прод, `turn_parse` off и on, оракул LLM):
+Инварианты класса (через обработчик эндпоинта, мини-прод, разбор хода — единственный режим, оракул LLM):
 - `off` — как было: цена по сущности, LLM о строке не спрашивается;
 - `on` + LLM «не та» — без цены («не нашёл»); `on` + LLM выбрала строку — цена;
 - `on` + LLM недоступна — ответ тот же, что под `off` (не делаем хуже при сбое);
@@ -27,7 +27,7 @@ import pytest
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
-from tests.test_turn_parse_shadow import _deploy
+from tests.test_turn_parse_slot import _deploy
 from tests.test_turn_parse_t3 import _FOLLOW_UPS, _Oracle, _assert_follow_up_stays_on_what_was_shown
 
 _P2 = "сколько стоит узи щитовидной железы по омс"
@@ -101,11 +101,10 @@ def _llm(kind: str):
     }[kind]()
 
 
-def _run(turns, world, monkeypatch, *, judge: str, parse: str, llm: str, session: str) -> tuple[list[dict], list[dict], object]:
+def _run(turns, world, monkeypatch, *, judge: str, llm: str, session: str) -> tuple[list[dict], list[dict], object]:
     from messengers_router.runtime_config import config as cfg
 
     _deploy(monkeypatch)
-    monkeypatch.setattr(cfg, "MR_TURN_PARSE", parse, raising=False)
     monkeypatch.setattr(cfg, "MR_P2_LLM_JUDGE", judge, raising=False)
     client = _llm(llm)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", client)
@@ -140,63 +139,57 @@ def test_precondition_the_resolver_refuses_and_the_entity_names_the_service(mini
 
 
 @pytest.mark.parametrize("llm", ["not_it", "pick", "down"])
-@pytest.mark.parametrize("parse", ["off", "on"])
-def test_off_keeps_the_old_answer(parse, llm, mini_prod_world, monkeypatch):  # noqa: F811
+def test_off_keeps_the_old_answer(llm, mini_prod_world, monkeypatch):  # noqa: F811
     """Как было: цена УЗИ по сущности, выбор строки LLM не спрашивается (гард отсекает реплику до LLM)."""
 
-    [turn], [row], client = _run([_P2], mini_prod_world, monkeypatch, judge="off", parse=parse, llm=llm, session=f"p2llm-off-{parse}-{llm}")
+    [turn], [row], client = _run([_P2], mini_prod_world, monkeypatch, judge="off", llm=llm, session=f"p2llm-off-{llm}")
     assert _USG in turn["text"], turn["text"]
     assert "rows" not in getattr(client, "asked", [])
     assert "p2_llm_judge" not in row
 
 
-@pytest.mark.parametrize("parse", ["off", "on"])
-def test_on_the_llm_says_not_it_and_there_is_no_price(parse, mini_prod_world, monkeypatch):  # noqa: F811
-    [turn], [row], client = _run([_P2], mini_prod_world, monkeypatch, judge="on", parse=parse, llm="not_it", session=f"p2llm-not-{parse}")
+def test_on_the_llm_says_not_it_and_there_is_no_price(mini_prod_world, monkeypatch):  # noqa: F811
+    [turn], [row], client = _run([_P2], mini_prod_world, monkeypatch, judge="on", llm="not_it", session="p2llm-not")
     assert not _priced(turn["text"]) and "Не нашёл" in turn["text"], turn["text"]
     assert "rows" in client.asked and row["p2_llm_judge"] == "not_found"
 
 
-@pytest.mark.parametrize("parse", ["off", "on"])
-def test_on_the_llm_picks_the_row_and_it_is_priced(parse, mini_prod_world, monkeypatch):  # noqa: F811
-    [turn], [row], _client = _run([_P2], mini_prod_world, monkeypatch, judge="on", parse=parse, llm="pick", session=f"p2llm-pick-{parse}")
+def test_on_the_llm_picks_the_row_and_it_is_priced(mini_prod_world, monkeypatch):  # noqa: F811
+    [turn], [row], _client = _run([_P2], mini_prod_world, monkeypatch, judge="on", llm="pick", session="p2llm-pick")
     assert _USG in turn["text"], turn["text"]
     assert row["p2_llm_judge"] == "rows"
 
 
-@pytest.mark.parametrize("parse", ["off", "on"])
 @pytest.mark.parametrize("reply", (_P2, *_CONVERSATIONAL))
-def test_on_with_the_llm_down_answers_as_off(reply, parse, mini_prod_world, monkeypatch):  # noqa: F811
+def test_on_with_the_llm_down_answers_as_off(reply, mini_prod_world, monkeypatch):  # noqa: F811
     """Сбой LLM — ответ как без выключателя (цена по сущности): не делаем хуже при сбое."""
 
-    [off], _rows, _ = _run([reply], mini_prod_world, monkeypatch, judge="off", parse=parse, llm="down", session=f"p2llm-d-off-{parse}-{reply[-9:]}")
-    [on], [row], _ = _run([reply], mini_prod_world, monkeypatch, judge="on", parse=parse, llm="down", session=f"p2llm-d-on-{parse}-{reply[-9:]}")
+    [off], _rows, _ = _run([reply], mini_prod_world, monkeypatch, judge="off", llm="down", session=f"p2llm-d-off-{reply[-9:]}")
+    [on], [row], _ = _run([reply], mini_prod_world, monkeypatch, judge="on", llm="down", session=f"p2llm-d-on-{reply[-9:]}")
     assert on["text"] == off["text"] and _priced(on["text"]), on["text"]
     assert row["p2_llm_judge"] == "fallback"
 
 
-@pytest.mark.parametrize("parse", ["off", "on"])
 @pytest.mark.parametrize("reply", _CONVERSATIONAL)
-def test_a_conversational_word_is_judged_by_the_llm_not_by_the_dictionary(reply, parse, mini_prod_world, monkeypatch):  # noqa: F811
+def test_a_conversational_word_is_judged_by_the_llm_not_by_the_dictionary(reply, mini_prod_world, monkeypatch):  # noqa: F811
     """Встречный инвариант (класс `guard_over_blocks_silently`): «первый», «для иностранного гражданина» гард по
     буквам считал уточнением П2. Под `on` их судит LLM: выбрала строку приёма — цена, как под `off`; решение —
     за LLM (тот же ход с ответом «не та» — без цены), а не за словарём каталога."""
 
-    [off], _rows, _ = _run([reply], mini_prod_world, monkeypatch, judge="off", parse=parse, llm="pick", session=f"p2llm-c-off-{parse}-{reply[-9:]}")
-    [on], [row], _ = _run([reply], mini_prod_world, monkeypatch, judge="on", parse=parse, llm="pick", session=f"p2llm-c-on-{parse}-{reply[-9:]}")
+    [off], _rows, _ = _run([reply], mini_prod_world, monkeypatch, judge="off", llm="pick", session=f"p2llm-c-off-{reply[-9:]}")
+    [on], [row], _ = _run([reply], mini_prod_world, monkeypatch, judge="on", llm="pick", session=f"p2llm-c-on-{reply[-9:]}")
     assert _priced(off["text"]) and _priced(on["text"]), on["text"]
     assert row["p2_llm_judge"] == "rows"
-    [not_it], [row], _ = _run([reply], mini_prod_world, monkeypatch, judge="on", parse=parse, llm="not_it", session=f"p2llm-c-not-{parse}-{reply[-9:]}")
+    [not_it], [row], _ = _run([reply], mini_prod_world, monkeypatch, judge="on", llm="not_it", session=f"p2llm-c-not-{reply[-9:]}")
     assert not _priced(not_it["text"]) and row["p2_llm_judge"] == "not_found", not_it["text"]
 
 
-@pytest.mark.parametrize("parse", ["off", "on"])
 @pytest.mark.parametrize("reply", _OUTSIDE_THE_CLASS)
-def test_on_does_not_touch_replies_outside_the_class(reply, parse, mini_prod_world, monkeypatch):  # noqa: F811
+def test_on_does_not_touch_replies_outside_the_class(reply, mini_prod_world, monkeypatch):  # noqa: F811
     """Без уточнения П2 или без названия из сущности — ответ под `on` тот же, что под `off`, судья не зовётся."""
 
-    [off], _rows, _ = _run([reply], mini_prod_world, monkeypatch, judge="off", parse=parse, llm="not_it", session=f"p2llm-o-off-{parse}-{reply[-9:]}")
-    [on], [row], _ = _run([reply], mini_prod_world, monkeypatch, judge="on", parse=parse, llm="not_it", session=f"p2llm-o-on-{parse}-{reply[-9:]}")
+    [off], _rows, _ = _run([reply], mini_prod_world, monkeypatch, judge="off", llm="not_it", session=f"p2llm-o-off-{reply[-9:]}")
+    [on], [row], _ = _run([reply], mini_prod_world, monkeypatch, judge="on", llm="not_it", session=f"p2llm-o-on-{reply[-9:]}")
     assert on["text"] == off["text"], on["text"]
     assert "p2_llm_judge" not in row
 
@@ -206,32 +199,30 @@ _TWO_TURNS = ("сколько стоит узи щитовидной желез�
 
 @pytest.mark.parametrize("llm", ["not_it_p2", "pick", "down"])
 @pytest.mark.parametrize("judge", ["off", "on"])
-@pytest.mark.parametrize("parse", ["off", "on"])
-def test_two_turns_the_p2_follow_up_on_the_context_service(parse, judge, llm, mini_prod_world, monkeypatch):  # noqa: F811
+def test_two_turns_the_p2_follow_up_on_the_context_service(judge, llm, mini_prod_world, monkeypatch):  # noqa: F811
     """Второй ход с уточнением П2 без названия после цены услуги — «а сколько стоит по омс?» не получает цену ни при
     каком положении судьи (П2). С 16.10 (L-13 — единственная политика): цена, выбранная LLM, услугой контекста не
     становится — второй ход «Уточните» (П2 соблюдён раньше судьи); LLM недоступна — первый ответ — список правил, а
     второй — как без судьи (сбой судьи не обходит политику L-13)."""
 
     (first, second), _rows, _ = _run(
-        _TWO_TURNS, mini_prod_world, monkeypatch, judge=judge, parse=parse, llm=llm, session=f"p2llm-two-{parse}-{judge}-{llm}"
+        _TWO_TURNS, mini_prod_world, monkeypatch, judge=judge, llm=llm, session=f"p2llm-two-{judge}-{llm}"
     )
     assert _priced(first["text"]), first["text"]
     assert not _priced(second["text"]), second["text"]
     if llm == "down" and judge == "on":
         (_first_off, second_off), _rows, _ = _run(
-            _TWO_TURNS, mini_prod_world, monkeypatch, judge="off", parse=parse, llm=llm, session=f"p2llm-two-{parse}-cmp-{llm}"
+            _TWO_TURNS, mini_prod_world, monkeypatch, judge="off", llm=llm, session=f"p2llm-two-cmp-{llm}"
         )
         assert second["text"] == second_off["text"], (second["text"], second_off["text"])
 
 
 @pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
-@pytest.mark.parametrize("parse", ["off", "on"])
-def test_follow_up_after_not_found_stays_on_what_was_shown(parse, follow_up, mini_prod_world, monkeypatch):  # noqa: F811
+def test_follow_up_after_not_found_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
     """После «не нашёл» короткий вопрос («а сколько?», «да», цифра) не получает цену услуги из сущности."""
 
     (first, second), _rows, _ = _run(
-        [_P2, follow_up], mini_prod_world, monkeypatch, judge="on", parse=parse, llm="not_it", session=f"p2llm-fu-{parse}-{follow_up}"
+        [_P2, follow_up], mini_prod_world, monkeypatch, judge="on", llm="not_it", session=f"p2llm-fu-{follow_up}"
     )
     assert not _priced(first["text"]), first["text"]
     _assert_follow_up_stays_on_what_was_shown(first, second)

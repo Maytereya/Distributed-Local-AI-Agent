@@ -348,29 +348,21 @@ async def choose_basket_rows(
     retail_rows: list[dict[str, Any]],
     *,
     llm_allowed: bool = True,
-    failure_variants: bool = False,
-) -> tuple[list[dict[str, Any]], list[str]] | None:
-    """Позиции корзины с выбранными строками и нераспознанное; None — оставить корзину правил.
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Позиции корзины правил с выбранными строками и нераспознанное (корзина, когда разбор не годится для действия).
+
+    Политика сбоя — как у корзины из фраз: слабые позиции без выбора LLM — варианты кода (`_variants`), а не строки
+    корзины правил (T7 шаг 3б: прежняя ветка «слабые — строки правил» жила только под `turn_parse = off`, снята).
 
     :param question: реплика пациента (как написал он сам)
     :param items: позиции корзины правил (`fragment`, `service_name`, `prices`)
     :param unrecognized: позиции, которые правила не распознали
     :param retail_rows: строки прайса региона
     :param llm_allowed: можно ли звать LLM; нельзя — как сбой
-    :param failure_variants: политика сбоя под `turn_parse = on` — слабые позиции без выбора LLM —
-        варианты кода (`_variants`), а не строки корзины правил; None тогда не возвращается
     """
 
     chosen, weak, failed = await _pick(question, items, retail_rows, llm_allowed=llm_allowed)
-    unpriced: dict[int, str] = {}
-    if failed and failure_variants:
-        unpriced = _settle_weak_as_variants(weak, chosen)
-    elif failed:
-        # Сильные позиции — данные, от LLM не зависят; слабые — как в корзине правил.
-        if not chosen:
-            return None
-        for index, _fragment, _rows in weak:
-            chosen[index] = list(items[index].get("prices") or [])
+    unpriced = _settle_weak_as_variants(weak, chosen) if failed else {}
     positions, not_found = _positions(items, chosen, unpriced)
     return positions, [*unrecognized, *not_found]
 

@@ -10,7 +10,7 @@
 
 Инварианты класса (через обработчик эндпоинта, мини-прод, прод-набор 16.10, оракул LLM):
 - `qualifier_absent` с терминами — «Не нашёл» за ОДИН вызов выбора строки, без `budget` (класс A; судья П2 под
-  `turn_parse` on и off; второй ход «а сколько стоит по омс?» после цены);
+  разбор хода — единственный режим; второй ход «а сколько стоит по омс?» после цены);
 - прочие коды (`other_service`) — второй круг как раньше (у судьи П2 — второй вызов; у класса A под `turn_parse = on`
   он упирается в лимит хода — наблюдение, без правки);
 - сбой LLM выбора строки — ответ как раньше;
@@ -28,12 +28,11 @@ from ollama import GenerateResponse
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
-from tests.test_turn_parse_shadow import _deploy
+from tests.test_turn_parse_slot import _deploy
 from tests.test_turn_parse_t3 import _ROWS_MARKS, _Oracle
 
 # Прод 16.10 поверх набора деплоя: разбор хода, выбор строки промптом модуля (коды причин), L-13, класс A, судья П2.
 _PROD_1016 = {
-    "MR_TURN_PARSE": "on",
     "MR_CHOOSE_PRICE": "on",
     "MR_PRICE_MATCH_POLICY": "on",
     "MR_PARSE_PRICE_GUARD": "llm",
@@ -85,11 +84,11 @@ class _Judge(_Oracle):
         return await super().generate(prompt=prompt, system=system, **kwargs)
 
 
-def _run(turns, world, monkeypatch, *, llm: _Oracle, parse: str = "on", session: str, **switches) -> tuple[list[dict], list[dict]]:
+def _run(turns, world, monkeypatch, *, llm: _Oracle, session: str, **switches) -> tuple[list[dict], list[dict]]:
     from messengers_router.runtime_config import config as cfg
 
     _deploy(monkeypatch)
-    for key, value in {**_PROD_1016, "MR_TURN_PARSE": parse, **switches}.items():
+    for key, value in {**_PROD_1016, **switches}.items():
         monkeypatch.setattr(cfg, key, value, raising=False)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
     with ev_world.FrozenWorld(world, "day") as frozen:
@@ -185,44 +184,40 @@ def test_class_a_without_a_condition_does_not_change(mini_prod_world, monkeypatc
 # --------------------------------------------------------------------------- судья П2 (`p2_llm_judge = on`)
 
 
-@pytest.mark.parametrize("parse", ["off", "on"])
-def test_p2_judge_condition_absent_is_not_found_in_one_round(parse, mini_prod_world, monkeypatch):  # noqa: F811
+def test_p2_judge_condition_absent_is_not_found_in_one_round(mini_prod_world, monkeypatch):  # noqa: F811
     """«Условия нет» — «Не нашёл» одним вызовом (до фикса — второй круг по терминам: лишний вызов LLM, поиск «почти того»)."""
 
-    [turn], [row] = _run([_P2], mini_prod_world, monkeypatch, llm=_Judge(), parse=parse, session=_sid("p2-qa", parse))
+    [turn], [row] = _run([_P2], mini_prod_world, monkeypatch, llm=_Judge(), session=_sid("p2-qa", "on"))
     assert not _priced(turn["text"]) and "Не нашёл" in turn["text"], turn["text"]
     assert _calls(row) == 1 and _calls(row, "budget") == 0, row.get("llm")
     assert row["p2_llm_judge"] == "not_found"
 
 
-@pytest.mark.parametrize("parse", ["off", "on"])
-def test_p2_judge_other_reason_keeps_the_second_round(parse, mini_prod_world, monkeypatch):  # noqa: F811
+def test_p2_judge_other_reason_keeps_the_second_round(mini_prod_world, monkeypatch):  # noqa: F811
     """`other_service` с терминами — второй круг как раньше; пусто и в нём — «не нашёл» (`none_fit` с кандидатами)."""
 
-    [turn], [row] = _run([_P2], mini_prod_world, monkeypatch, llm=_Judge(reason="other_service"), parse=parse, session=_sid("p2-os", parse))
+    [turn], [row] = _run([_P2], mini_prod_world, monkeypatch, llm=_Judge(reason="other_service"), session=_sid("p2-os", "on"))
     assert _calls(row) == 2 and _calls(row, "budget") == 0, row.get("llm")
     assert not _priced(turn["text"]) and row["p2_llm_judge"] == "not_found", turn["text"]
 
 
-@pytest.mark.parametrize("parse", ["off", "on"])
-def test_p2_judge_rows_down_answers_as_off(parse, mini_prod_world, monkeypatch):  # noqa: F811
+def test_p2_judge_rows_down_answers_as_off(mini_prod_world, monkeypatch):  # noqa: F811
     """Сбой LLM выбора строки — как раньше: ответ без судьи (`p2_llm_judge = off`), телеметрия `fallback`."""
 
-    [on], [row] = _run([_P2], mini_prod_world, monkeypatch, llm=_Judge(rows_down=True), parse=parse, session=_sid("p2-d", parse))
+    [on], [row] = _run([_P2], mini_prod_world, monkeypatch, llm=_Judge(rows_down=True), session=_sid("p2-d", "on"))
     [off], _rows = _run(
-        [_P2], mini_prod_world, monkeypatch, llm=_Judge(rows_down=True), parse=parse, session=_sid("p2-doff", parse), MR_P2_LLM_JUDGE="off"
+        [_P2], mini_prod_world, monkeypatch, llm=_Judge(rows_down=True), session=_sid("p2-doff", "on"), MR_P2_LLM_JUDGE="off"
     )
     assert on["text"] == off["text"], (on["text"], off["text"])
     assert row["p2_llm_judge"] == "fallback"
 
 
-@pytest.mark.parametrize("parse", ["off", "on"])
-def test_two_turns_condition_after_a_price(parse, mini_prod_world, monkeypatch):  # noqa: F811
+def test_two_turns_condition_after_a_price(mini_prod_world, monkeypatch):  # noqa: F811
     """Два хода: цена ферритина → «а сколько стоит по омс?» (услуга из контекста, судья П2): «Не нашёл» одним вызовом,
     без `budget`; первый ответ — цена."""
 
     oracle = _Judge(rows=("Ферритин",))
-    (first, second), rows = _run(_TWO_TURNS, mini_prod_world, monkeypatch, llm=oracle, parse=parse, session=_sid("two", parse))
+    (first, second), rows = _run(_TWO_TURNS, mini_prod_world, monkeypatch, llm=oracle, session=_sid("two", "on"))
     assert "Ферритин — 530" in first["text"], first["text"]
     assert not _priced(second["text"]) and "Не нашёл" in second["text"], second["text"]
     assert rows[-1]["p2_llm_judge"] == "not_found"

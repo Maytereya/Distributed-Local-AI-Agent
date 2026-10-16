@@ -68,8 +68,8 @@ from tests.test_price_turns_golden import FIXTURE, mini_prod_world  # noqa: F401
 _SETS: dict[str, dict[str, str]] = {
     "default": _DEFAULT,
     "deploy": _DEPLOY,
-    "deploy_parse": {**_DEPLOY, "MR_TURN_PARSE": "on"},
-    "next": {**_DEPLOY, "MR_TURN_PARSE": "on", "MR_CHOOSE_PRICE": "on"},
+    "deploy_parse": dict(_DEPLOY),  # разбор хода — единственный режим (T7 шаг 3б): набор равен деплою
+    "next": {**_DEPLOY, "MR_CHOOSE_PRICE": "on"},
 }
 BASE_CONFIGS = tuple(_SETS)
 # L-14, шаг 3 (14.10): «контекст = показанное» (`context_shown = on`) поверх деплоя и кандидата следующего деплоя.

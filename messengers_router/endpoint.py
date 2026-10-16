@@ -27,10 +27,9 @@ from .warm_up import schedule_warm_up
 router = APIRouter()
 log = logging.getLogger(__name__)
 
-# Сколько конец хода ждёт тень разбора реплики (L-15b, шаг 4; решение владельца 13.10, Q1), потом — отмена (статус
-# `late`). Тень ответа на висящий вопрос бота (D2.3, `pending_reply`) ход не ждёт: `detach` отцепляет её, решение
-# дописывается после ответа (15.10). Под `turn_parse = off` и `pending_reply = off` теней нет и ход не ждёт ни такта.
-_SHADOW_GRACE_S = 1.0
+# Конец хода: разбор реплики, который ход не дождался (сбой между запуском и ожиданием), отменяется
+# (`turn_parse.cancel_unfinished`; тени разбора нет с T7 шага 3б). Тень ответа на висящий вопрос бота (D2.3,
+# `pending_reply`) ход не ждёт: `detach` отцепляет её, решение дописывается после ответа (15.10).
 
 
 def _button_kwargs(button_id: str) -> dict[str, str]:
@@ -276,7 +275,7 @@ async def messenger_generate(
         finally:
             assistant_text = "".join(assistant_parts).strip()
             try:
-                await turn_parse.drain(_SHADOW_GRACE_S)
+                turn_parse.cancel_unfinished()
                 pending_reply.detach()
             finally:
                 llm_runtime.end_turn_budget(budget)
@@ -389,7 +388,7 @@ async def messenger_generate_once(
         return JSONResponse(content=out.model_dump())
     finally:
         try:
-            await turn_parse.drain(_SHADOW_GRACE_S)
+            turn_parse.cancel_unfinished()
             pending_reply.detach()
         finally:
             llm_runtime.end_turn_budget(budget)

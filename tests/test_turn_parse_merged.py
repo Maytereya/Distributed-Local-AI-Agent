@@ -55,7 +55,6 @@ def test_answer_budget_grows_with_the_number_of_options(n):
     assert task.num_predict >= 16 + 4 * n
     if n <= 8:
         assert task.num_predict == TP.PHRASES_TASK.num_predict  # короткие списки — как раньше
-    assert TP.phrases_task(n, shadow=True).queue_timeout_ms == TP._SHADOW_QUEUE_MS
     assert TP.phrases_task(n).queue_timeout_ms == TP.PHRASES_TASK.queue_timeout_ms
 
 
@@ -81,9 +80,6 @@ def test_whole_weak_reply_picked_over_delimiters_is_a_merge_failure(catalog, wor
 
 
 def test_merge_failure_acts_by_the_delimiter_cut(catalog, world, monkeypatch):
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_TURN_PARSE", "on", raising=False)
     parse = _llm_parse(_LIST, catalog, _PhrasesLLM(("ферритин, ттг и витамин д",)), monkeypatch)
 
     async def turn():

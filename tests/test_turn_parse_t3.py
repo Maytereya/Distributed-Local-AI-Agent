@@ -1,6 +1,6 @@
 """Правки по разбору 95 изменившихся ответов `turn_parse` off → on (L-15b, шаг 6, T3) — через обработчик
-эндпоинта, мини-прод. Каждая правка действует только под `turn_parse = on`; под `off` и `shadow` поведение
-прежнее (эталоны `test_price_turns_golden.py`, `test_turn_parse_shadow.py`).
+эндпоинта, мини-прод. Разбор хода — единственный режим с T7 шага 3б (прежде правки действовали только под `on`,
+режимы `off`/`shadow` сняты).
 
 Классы (журнал STEP-2026-10-14-L15B-6-T3):
 - п. 1 — гард П2 в корзине из фраз судит остаток после резолвера, а не всю слабую фразу: фраза, которую
@@ -33,17 +33,11 @@ from messengers_router import llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
 from tests.test_price_one_or_many_class import _priced_sections
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
-from tests.test_turn_parse_shadow import _deploy
+from tests.test_turn_parse_slot import _deploy
 
 _PHRASES_MARK = "понять, какие услуги назвал пациент"
 _ROWS_MARKS = ("ответить на вопрос о ценах нескольких услуг", "ответить пациенту на вопрос о цене")
 _FOLLOW_UPS = ("а сколько?", "да", "2")
-
-
-def _parse_on(monkeypatch, mode: str = "on") -> None:
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_TURN_PARSE", mode, raising=False)
 
 
 class _Oracle:
@@ -74,7 +68,6 @@ class _Oracle:
 
 def _dialog(turns: list[str], world_dir, monkeypatch, session: str, llm: _Oracle | None = None):
     _deploy(monkeypatch)
-    _parse_on(monkeypatch)
     if llm is not None:
         monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
     with ev_world.FrozenWorld(world_dir, "day") as world:
@@ -150,7 +143,7 @@ _NOT_PRICE = {
 }
 
 
-def _assist_turns(turns: list[str], world_dir, monkeypatch, session: str, mode: str, llm: _Oracle):
+def _assist_turns(turns: list[str], world_dir, monkeypatch, session: str, llm: _Oracle):
     """Ходы через эндпоинт; на ход — запись эталона и выдача подбора анализов (`test_assist`: note, строки)."""
 
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
@@ -159,7 +152,6 @@ def _assist_turns(turns: list[str], world_dir, monkeypatch, session: str, mode: 
     from tests.test_price_turns_golden import _turn_record
 
     _deploy(monkeypatch)
-    _parse_on(monkeypatch, mode)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
 
     async def run():
@@ -181,20 +173,19 @@ def _assist_turns(turns: list[str], world_dir, monkeypatch, session: str, mode: 
 
 @pytest.mark.parametrize("reply", sorted(_NOT_PRICE), ids=["hpv", "checkup", "complex"])
 def test_test_assist_without_a_price_question_keeps_the_rules_segmentation(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    """Разбор «одна услуга» на подборе анализов без вопроса о цене — не мнение о списке: выдача подбора та же,
-    что под off (G8: g0162, g0282, g0313, g0359, g0416, g0604, g0693 — шаблон «уточните симптомы» вместо
-    данных), а не пустая."""
+    """Разбор «одна услуга» на подборе анализов без вопроса о цене — не мнение о списке: выдача подбора — сегментация
+    правил с данными прайса (G8: g0162, g0282, g0313, g0359, g0416, g0604, g0693 — шаблон «уточните симптомы» вместо
+    данных), а не пустая. Прежний эталон — выдача под `turn_parse = off` (режим снят, T7 шаг 3б) — была той же."""
 
-    [(_, off)], _rows = _assist_turns([reply], mini_prod_world, monkeypatch, "t3-g8-off", "off", _Oracle(_NOT_PRICE[reply]))
-    [(_, on)], rows = _assist_turns([reply], mini_prod_world, monkeypatch, "t3-g8-on", "on", _Oracle(_NOT_PRICE[reply]))
+    [(_, on)], rows = _assist_turns([reply], mini_prod_world, monkeypatch, "t3-g8-on", _Oracle(_NOT_PRICE[reply]))
     assert rows[0]["tu_parse_status"] in ("picked", "none_fit") and rows[0]["label"] == "TEST_ASSIST"
-    assert on == off and "multi-item" in str(on[0]) and on[1], on
+    assert "multi-item" in str(on[0]) and on[1], on
 
 
 @pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
 def test_follow_up_after_test_assist_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
     reply = "Мне нужно сдать ВПЧ скрининг количественным методом"
-    [(first, _), (second, _)], _rows = _assist_turns([reply, follow_up], mini_prod_world, monkeypatch, f"t3-g8-two-{follow_up}", "on", _Oracle(_NOT_PRICE[reply]))
+    [(first, _), (second, _)], _rows = _assist_turns([reply, follow_up], mini_prod_world, monkeypatch, f"t3-g8-two-{follow_up}", _Oracle(_NOT_PRICE[reply]))
     _assert_follow_up_stays_on_what_was_shown(first, second)
 
 

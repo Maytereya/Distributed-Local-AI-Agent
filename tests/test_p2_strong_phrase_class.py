@@ -4,7 +4,7 @@
 платная цена «почти той» услуги. Под `turn_parse = on` LLM разбора выбирает фразу из перечня кода и может оторвать от
 услуги условие (прод 16.10: «приём терапевта» из «сколько стоит приём терапевта по ОМС» — вопреки правилу 3 своего
 промпта): фраза сильная по данным МИС, читатель цены отдавал её строки напрямую, гард П2 не спрашивался — платная цена.
-Под `turn_parse = off` тот же ход — «Уточните».
+Без разбора (режим `turn_parse = off`, снят T7 шагом 3б) тот же ход давал «Уточните».
 
 Фикс — LLM-first, как класс A (`parse_price_guard`) и `p2_llm_judge`: слово вне сильной фразы, которого нет в прайсе, —
 повод спросить выбор строки (`judge_qualifier`, правило 3 промпта отсекает «по ОМС»), а не вердикт словаря: словарь
@@ -13,7 +13,7 @@
 Инварианты класса (через обработчик эндпоинта, мини-прод, прод-набор 16.10, оракул LLM):
 - `off` — как было с 15.10 (откат): строки сильной фразы, выбор строки LLM не спрашивается;
 - `llm` + LLM «не та» — без цены («не нашёл»); `llm` + LLM выбрала строку — цена;
-- `llm` + сбой LLM выбора строки — ответ тот же, что под `turn_parse = off` (гард правил): цены нет;
+- `llm` + сбой LLM выбора строки — путь правил с гардом: цены нет;
 - разговорное слово вне сильной фразы судит LLM, не словарь: выбрала строку — цена, «не та» — без цены;
 - реплики без слова вне прайса — ответ под `llm` тот же, что под `off`, выбор строки не зовётся;
 - два хода: короткий вопрос после «не нашёл» не получает цену того, чего пациент не видел.
@@ -29,13 +29,12 @@ import pytest
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
-from tests.test_turn_parse_shadow import _deploy
+from tests.test_turn_parse_slot import _deploy
 from tests.test_turn_parse_t3 import _FOLLOW_UPS, _ROWS_MARKS, _Oracle, _assert_follow_up_stays_on_what_was_shown
 from ollama import GenerateResponse
 
 # Прод 16.10 поверх набора деплоя (`_deploy`): разбор хода, выбор строки промптом модуля, L-13, класс A.
 _PROD_1016 = {
-    "MR_TURN_PARSE": "on",
     "MR_CHOOSE_PRICE": "on",
     "MR_PARSE_PRICE_GUARD": "llm",
     "MR_CONTEXT_SHOWN": "on",
@@ -99,13 +98,12 @@ def _llm(kind: str) -> _Oracle:
     }[kind]()
 
 
-def _run(turns, world, monkeypatch, *, guard: str, llm, parse: str = "on", session: str) -> tuple[list[dict], list[dict], object]:
+def _run(turns, world, monkeypatch, *, guard: str, llm, session: str) -> tuple[list[dict], list[dict], object]:
     from messengers_router.runtime_config import config as cfg
 
     _deploy(monkeypatch)
     for key, value in _PROD_1016.items():
         monkeypatch.setattr(cfg, key, value, raising=False)
-    monkeypatch.setattr(cfg, "MR_TURN_PARSE", parse, raising=False)
     monkeypatch.setattr(cfg, "MR_STRONG_PHRASE_GUARD", guard, raising=False)
     client = _llm(llm) if isinstance(llm, str) else llm
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", client)
@@ -128,7 +126,7 @@ def _sid(*parts: str) -> str:
 def test_precondition_the_strong_phrase_leaves_the_qualifier_outside(mini_prod_world):  # noqa: F811
     """Предусловие класса на мини-прайсе: фраза без условия — сильная по данным МИС (её строки и есть ответ без
     гарда), в перечне кода есть и фраза с условием (правило 3 промпта разбора предлагает её LLM), а гард П2 по
-    всей реплике отказывает — под `turn_parse = off` цены нет. Разговорные слова гард по буквам тоже считает
+    всей реплике отказывает — путём правил цены нет. Разговорные слова гард по буквам тоже считает
     уточнением — поэтому судит LLM."""
 
     from agent_logic_2.nayka_api import api_price
@@ -146,14 +144,6 @@ def test_precondition_the_strong_phrase_leaves_the_qualifier_outside(mini_prod_w
             assert H.query_has_unsatisfiable_qualifier(reply, rows), reply
         for reply in _OUTSIDE_THE_CLASS:
             assert not H.query_has_unsatisfiable_qualifier(reply, rows), reply
-
-
-@pytest.mark.parametrize("reply", _STRONG_P2)
-def test_turn_parse_off_has_no_price(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    """Эталон класса — ход под `turn_parse = off`: гард П2 отказывает, цены нет."""
-
-    [turn], _rows, _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm="pick", parse="off", session=_sid("poff", reply))
-    assert not _priced(turn["text"]), turn["text"]
 
 
 @pytest.mark.parametrize("reply", _STRONG_P2)
@@ -184,13 +174,13 @@ def test_the_llm_picks_the_row_and_it_is_priced(reply, mini_prod_world, monkeypa
 
 
 @pytest.mark.parametrize("reply", (*_STRONG_P2, *_CONVERSATIONAL))
-def test_a_failed_row_choice_answers_as_turn_parse_off(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    """Сбой LLM выбора строки (разбор ответил) — сильная фраза ход не решает: ответ пути правил с гардом, тот же,
-    что под `turn_parse = off` (дезинформация ценой хуже уточнения: при сбое — не цена «почти той» услуги)."""
+def test_a_failed_row_choice_has_no_price(reply, mini_prod_world, monkeypatch):  # noqa: F811
+    """Сбой LLM выбора строки (разбор ответил) — сильная фраза ход не решает: путь правил с гардом, цены нет
+    (дезинформация ценой хуже уточнения: при сбое — не цена «почти той» услуги). Прежний эталон — ответ под
+    `turn_parse = off` (режим снят, T7 шаг 3б) — был тем же: гард П2 отказывает, цены нет."""
 
-    [off], _rows, _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm="rows_down", parse="off", session=_sid("doff", reply))
     [on], [row], _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm="rows_down", session=_sid("don", reply))
-    assert on["text"] == off["text"], (on["text"], off["text"])
+    assert not _priced(on["text"]), on["text"]
     assert row["strong_phrase_guard"] == "fallback"
 
 
@@ -266,13 +256,14 @@ def test_other_service_keeps_the_mis_rows(reply, mini_prod_world, monkeypatch): 
 
 
 @pytest.mark.parametrize("reason", ["too_general", "not_a_service"])
-def test_not_a_service_name_answers_as_turn_parse_off(reason, mini_prod_world, monkeypatch):  # noqa: F811
-    """«Слишком общее» / «не услуга» — сильная фраза ход не решает: путь правил с гардом, как под `turn_parse = off`."""
+def test_not_a_service_name_has_no_price(reason, mini_prod_world, monkeypatch):  # noqa: F811
+    """«Слишком общее» / «не услуга» — сильная фраза ход не решает: путь правил с гардом, цены нет, тот же ответ, что
+    при сбое выбора строки."""
 
     reply = _STRONG_P2[0]
-    [off], _rows, _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm="rows_down", parse="off", session=_sid("ng-off", reason))
+    [down], _rows, _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm="rows_down", session=_sid("ng-down", reason))
     [on], [row], _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=_Reason(reason), session=_sid("ng", reason))
-    assert on["text"] == off["text"] and not _priced(on["text"]), on["text"]
+    assert on["text"] == down["text"] and not _priced(on["text"]), on["text"]
     assert row["strong_phrase_guard"] == "fallback"
 
 

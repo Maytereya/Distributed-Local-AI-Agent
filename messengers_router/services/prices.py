@@ -162,19 +162,14 @@ async def _multi_price_payload(
             journal=parse.status == turn_parse.ParseStatus.PICKED,
         )
         return multi_price_payload_from_items(positions, _names_a_service(unrecognized), allow_single=True)
+    # Разбора нет или он не годится для действия (`empty`, `too_many`, `error`, вход — не реплика хода): корзина правил
+    # с политикой сбоя разбора — строки слабых позиций выбирает LLM, при сбое — варианты кода (T7 шаг 3б: прежняя
+    # корзина правил без выбора, путь `turn_parse = off`, снята).
     items, unrecognized = _multi_price_items(query_text, retail_rows)
     if not items:
         return None
-    if turn_parse.mode() == "on":
-        refined = await choose_basket_rows(
-            str(query or query_text), items, unrecognized, retail_rows, llm_allowed=choosing, failure_variants=True
-        )
-        return multi_price_payload_from_items(*refined, allow_single=True) if refined is not None else None
-    if basket_mode() == "on" and llm_allowed:
-        refined = await choose_basket_rows(str(query or query_text), items, unrecognized, retail_rows)
-        if refined is not None:
-            return multi_price_payload_from_items(*refined, allow_single=True)
-    return multi_price_payload_from_items(items, unrecognized)
+    refined = await choose_basket_rows(str(query or query_text), items, unrecognized, retail_rows, llm_allowed=choosing)
+    return multi_price_payload_from_items(*refined, allow_single=True)
 
 
 def _names_a_service(fragments: list[str]) -> list[str]:

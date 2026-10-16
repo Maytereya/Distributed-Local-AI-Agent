@@ -44,16 +44,12 @@ from tests.test_price_turns_golden import (  # noqa: F401 — mini_prod_world, s
     run_dialog,
     synonym_fork,
 )
-from tests.test_turn_parse_shadow import _deploy, _PhrasesOracle
+from tests.test_turn_parse_slot import _deploy, _PhrasesOracle
 
 _PHRASES_MARK = "понять, какие услуги назвал пациент"
 _BASKET_MARK = "ответить на вопрос о ценах нескольких услуг"
 
 
-def _parse_on(monkeypatch) -> None:
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_TURN_PARSE", "on", raising=False)
 
 
 # --------------------------------------------------------------------------- эталон под on, LLM недоступна
@@ -112,7 +108,6 @@ def test_run_on_list_the_rules_missed_is_a_basket_by_the_parse(mini_prod_world, 
     — список фраз, планировщик отдаёт его корзине, позиции сильные — строки по данным без выбора строк."""
 
     _deploy(monkeypatch)
-    _parse_on(monkeypatch)
     llm = _Recorder("list_caps_run_on_priced")
     turn, row = _turn(CASES["list_caps_run_on_priced"].text, llm, mini_prod_world, monkeypatch, "readers-run-on")
     assert (row["tu_rule"], row["tu_list"], row["tu_parse_status"]) == ("parse_picked", 3, "picked")
@@ -127,7 +122,6 @@ def test_one_service_phrase_the_rules_cut_is_not_a_basket(mini_prod_world, monke
     корзина, строку выбирает выбор цены (второе решение хода)."""
 
     _deploy(monkeypatch)
-    _parse_on(monkeypatch)
     llm = _Recorder("phrase_smear_pharynx")
     turn, row = _turn(CASES["phrase_smear_pharynx"].text, llm, mini_prod_world, monkeypatch, "readers-smear")
     assert (row["tu_rule"], row["tu_list"]) == ("parse_picked", 0)
@@ -137,7 +131,6 @@ def test_one_service_phrase_the_rules_cut_is_not_a_basket(mini_prod_world, monke
 
 def test_basket_asks_rows_only_for_weak_phrases(mini_prod_world, monkeypatch):  # noqa: F811
     _deploy(monkeypatch)
-    _parse_on(monkeypatch)
     llm = _Recorder("list_true_three")
     turn, row = _turn(CASES["list_true_three"].text, llm, mini_prod_world, monkeypatch, "readers-weak")
     [basket] = llm.asked(_BASKET_MARK)
@@ -148,7 +141,6 @@ def test_basket_asks_rows_only_for_weak_phrases(mini_prod_world, monkeypatch):  
 
 def test_fragment_outside_the_picked_phrases_is_named_unrecognized(mini_prod_world, monkeypatch):  # noqa: F811
     _deploy(monkeypatch)
-    _parse_on(monkeypatch)
     llm = _Recorder("list_one_unrecognized", cut=("ферритин", "глюкоза"))  # «спирометрия» LLM услугой не сочла
     turn, row = _turn(CASES["list_one_unrecognized"].text, llm, mini_prod_world, monkeypatch, "readers-leftover")
     assert row["tu_parse_n"] == 2 and llm.asked(_BASKET_MARK) == []
@@ -161,7 +153,6 @@ def test_one_strong_phrase_is_priced_by_data_without_llm(mini_prod_world, monkey
     вторая услуга семьи с ценой)."""
 
     _deploy(monkeypatch)
-    _parse_on(monkeypatch)
     llm = _Recorder("name_commas_in_parens")
     turn, row = _turn(CASES["name_commas_in_parens"].text, llm, mini_prod_world, monkeypatch, "readers-strong")
     assert row["tu_parse_status"] == "strong_whole" and llm.prompts == []
@@ -171,12 +162,8 @@ def test_one_strong_phrase_is_priced_by_data_without_llm(mini_prod_world, monkey
 # --------------------------------------------------------------------------- вход читателя и решённость
 
 
-def _run_with(monkeypatch, parse: turn_parse.PhraseParse, call, *, mode: str = "on"):
-    """`await call()` в ходе, где слот разбора уже держит `parse` (выключатель — `mode`)."""
-
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_TURN_PARSE", mode, raising=False)
+def _run_with(monkeypatch, parse: turn_parse.PhraseParse, call):
+    """`await call()` в ходе, где слот разбора уже держит `parse`."""
 
     async def run():
         turn_parse.begin()
@@ -191,26 +178,24 @@ def _run_with(monkeypatch, parse: turn_parse.PhraseParse, call, *, mode: str = "
     return asyncio.run(run())
 
 
-def _slot(monkeypatch, mode: str, parse: turn_parse.PhraseParse, probe: str):
+def _slot(monkeypatch, parse: turn_parse.PhraseParse, probe: str):
     async def read():
         return turn_parse.acting_for(probe)
 
-    return _run_with(monkeypatch, parse, read, mode=mode)
+    return _run_with(monkeypatch, parse, read)
 
 
 @pytest.mark.parametrize(
-    ("mode", "status", "probe", "acts"),
+    ("status", "probe", "acts"),
     [
-        ("on", "picked", "сколько стоит ферритин и глюкоза", True),
-        ("on", "picked", "ферритин и глюкоза", False),  # вход читателя — не реплика хода
-        ("on", "unavailable", "сколько стоит ферритин и глюкоза", False),  # не решён — прежний путь
-        ("shadow", "picked", "сколько стоит ферритин и глюкоза", False),
-        ("off", "picked", "сколько стоит ферритин и глюкоза", False),
+        ("picked", "сколько стоит ферритин и глюкоза", True),
+        ("picked", "ферритин и глюкоза", False),  # вход читателя — не реплика хода
+        ("unavailable", "сколько стоит ферритин и глюкоза", False),  # не решён и без разреза — путь правил
     ],
 )
-def test_parse_is_read_only_for_its_reply_decided_and_under_on(mode, status, probe, acts, monkeypatch):
+def test_parse_is_read_only_for_its_reply_and_decided(status, probe, acts, monkeypatch):
     parse = turn_parse.PhraseParse(reply="сколько стоит ферритин и глюкоза", status=status, source="llm")
-    assert (_slot(monkeypatch, mode, parse, probe) is parse) is acts
+    assert (_slot(monkeypatch, parse, probe) is parse) is acts
 
 
 # --------------------------------------------------------------------------- срок и подбор анализов читают разбор
@@ -283,7 +268,6 @@ def test_readiness_of_a_run_on_list_is_a_handoff_not_one_deadline(mini_prod_worl
     from messengers_router.services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
 
     _deploy(monkeypatch)
-    _parse_on(monkeypatch)
     llm = _Recorder("list_caps_run_on_priced", cut=("ФЕРРИТИН", "ГЛЮКОЗА"))
     turn, row = _turn("сколько дней делается ФЕРРИТИН ГЛЮКОЗА", llm, mini_prod_world, monkeypatch, "readers-days-list")
     assert (row["tu_parse_status"], row["tu_parse_n"]) == ("picked", 2)
@@ -322,7 +306,7 @@ def test_failed_parse_keeps_only_the_separator_cut(catalog, mini_prod_world):  #
     from messengers_router.services import _turn_phrases as TP
 
     async def parse(reply: str) -> turn_parse.PhraseParse:
-        return await TP.parse_turn_phrases(reply, facet="price", catalog=catalog, shadow=False)
+        return await TP.parse_turn_phrases(reply, facet="price", catalog=catalog)
 
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         listed = asyncio.run(parse("сколько стоит ферритин, ттг и витамин д"))
@@ -349,13 +333,12 @@ def test_failed_parse_is_read_as_its_separator_cut(monkeypatch):
     reply = "сколько стоит ферритин и глюкоза"
     split = (_phrase("ферритин", reply), _phrase("глюкоза", reply))
     failed = turn_parse.PhraseParse(reply=reply, status="unavailable", source="llm", leftover=("ферритин", "глюкоза"), split=split)
-    view = _slot(monkeypatch, "on", failed, reply)
+    view = _slot(monkeypatch, failed, reply)
     assert (view.status, view.items, view.leftover, view.is_list) == ("unavailable", split, (), True)
     assert not view.decided  # статус сбоя виден читателю
     # Одна фраза сбоя (реплика целиком, Q2 отменено 16.10) — тоже действует: путь одной услуги, а не правила.
-    single = _slot(monkeypatch, "on", turn_parse.PhraseParse(reply=reply, status="invalid", source="llm", split=split[:1]), reply)
+    single = _slot(monkeypatch, turn_parse.PhraseParse(reply=reply, status="invalid", source="llm", split=split[:1]), reply)
     assert single is not None and single.items == split[:1] and not single.is_list
-    assert _slot(monkeypatch, "shadow", failed, reply) is None
 
 
 def test_weak_positions_without_llm_are_variants_not_one_price(mini_prod_world, monkeypatch):  # noqa: F811
@@ -365,7 +348,6 @@ def test_weak_positions_without_llm_are_variants_not_one_price(mini_prod_world, 
     from tests.test_price_one_or_many_class import _priced_sections, _violations
 
     _deploy(monkeypatch)
-    _parse_on(monkeypatch)
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         [turn] = run_dialog([CASES["list_true_three"].text], "readers-down-variants")
         row = world.take_telemetry()
@@ -439,22 +421,15 @@ class _JournalLLM:
 _LH_AND_GGT = "сколько стоит лютеинизирующий гормон и ггтп"
 
 
-@pytest.mark.parametrize("mode", ["off", "on"])
-def test_basket_journals_weak_phrases_with_what_the_llm_picked(mode, mini_prod_world, monkeypatch):  # noqa: F811
-    """Под `on` слабые позиции корзины — фразы, которые выбрала LLM разбора, — в журнал синонимов с выбором
-    строк LLM («не нашла» — `found: false`), `source: basket`. Под `off` корзина журнал не пишет, как раньше."""
+def test_basket_journals_weak_phrases_with_what_the_llm_picked(mini_prod_world, monkeypatch):  # noqa: F811
+    """Слабые позиции корзины — фразы, которые выбрала LLM разбора, — в журнал синонимов с выбором строк LLM («не
+    нашла» — `found: false`), `source: basket`."""
 
     _deploy(monkeypatch)
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_TURN_PARSE", mode, raising=False)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _JournalLLM(("лютеинизирующий гормон", "ггтп"), "ЛГ (LH)"))
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
-        [turn] = run_dialog([_LH_AND_GGT], f"journal-basket-{mode}")
+        [turn] = run_dialog([_LH_AND_GGT], "journal-basket")
         entries = _journal_rows(world._journal)
-    if mode == "off":
-        assert entries == []
-        return
     assert [(e["phrase"], e["found"], e["source"], [s["name"] for s in e["services"]]) for e in entries] == [
         ("лютеинизирующий гормон", True, "basket", ["ЛГ (LH) Лютеинизирующий гормон"]),
         ("ггтп", False, "basket", []),
@@ -529,7 +504,6 @@ def test_phrase_with_a_qualifier_the_price_lacks_is_not_priced_by_neighbours(llm
     разбора: ни варианты кода при сбое LLM, ни выбор строк при живой LLM не показывают платные приёмы."""
 
     _deploy(monkeypatch)
-    _parse_on(monkeypatch)
     if llm == "live":
         monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _JournalLLM(("ферритин", "приём терапевта по ОМС"), "Прием"))
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:

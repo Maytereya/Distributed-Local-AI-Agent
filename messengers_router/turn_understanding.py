@@ -26,17 +26,16 @@
   о сроке — честный перевод на оператора (срока бот не знает: ни цены, ни сроков свободным текстом
   LLM). Какие читатели сработали — `tu_acted` в телеметрии и в debug.
 
-Разбор реплики на фразы (L-15b, шаг 4, `[MESSENGER_ROUTER] turn_parse = off | shadow | on`, по
-умолчанию off) запускается здесь же, после понимания, и от его режима не зависит: под `shadow` —
-фоновой задачей во время хода, только телеметрия (`tu_parse_status`, `tu_parse_src`, `tu_parse_n`,
-`tu_parse_cands`, `tu_parse_ms`, `tu_parse_agree` — согласие с разрезом правил) и `debug.turn_parse`;
-под `on` — ждём здесь, и понимание читает его (шаг 5): услуги хода — фразы разбора (`_from_phrases`), его
-читатели (`acting_list()`) идут за разбором, а не за разрезом правил; телеметрия `tu_rule = parse_<статус>`.
-Разбор не решён — понимание правил, как раньше.
+Разбор реплики на фразы (L-15b, `turn_parse`) — единственный режим с T7 шага 3б (16.10; режимы off/shadow сняты):
+запускается здесь же и ход его ждёт; понимание читает его (шаг 5): услуги хода — фразы разбора (`_from_phrases`), его
+читатели (`acting_list()`) идут за разбором, а не за разрезом правил; телеметрия `tu_parse_status`, `tu_parse_src`,
+`tu_parse_n`, `tu_parse_cands`, `tu_parse_ms`, `tu_rule = parse_<статус>`; фразы — только в `debug.turn_parse`.
+Разбор не годится для действия (`empty`, `too_many`, `error`) — понимание правил, как раньше.
 
-Под `on` правила понимания считаются на каждом ценовом ходе параллельно выбору фраз (O3b) — их разрез нужен
-согласию `tu_parse_agree`. Выключатель `[MESSENGER_ROUTER] parse_agree_telemetry = on | off` (T7, шаг 4; по
-умолчанию off с 16.10, решение владельца): `off` — согласия под `on` нет, правила считаются лениво (`_observe_parse_on_lazy`) —
+При нетерпеливых правилах (`parse_agree_telemetry = on`) правила понимания считаются на каждом ценовом ходе
+параллельно выбору фраз (O3b) — их разрез нужен согласию `tu_parse_agree`. Выключатель
+`[MESSENGER_ROUTER] parse_agree_telemetry = on | off` (T7, шаг 4; по умолчанию off с 16.10, решение владельца): `off` —
+согласия нет, правила считаются лениво (`_observe_parse_on_lazy`) —
 только когда разбор не годится для действия или решён одной слабой фразой; ответы те же, экономия — CPU хода.
 """
 
@@ -270,32 +269,18 @@ def is_price_turn(label: str, pending: dict[str, Any] | None) -> bool:
 
 
 async def observe_price_turn(label: str, *, user_text: str, pending: dict[str, Any] | None) -> TurnUnderstanding | None:
-    """Построить понимание ценового хода (кроме `off`) и записать его в ход; затем — разбор реплики на
-    фразы (`turn_parse`, L-15b шаг 4), независимо от режима понимания."""
+    """Построить понимание ценового хода (кроме `off`) и записать его в ход вместе с разбором реплики на фразы
+    (`turn_parse`, L-15b — единственный режим с T7 шага 3б). Понимание выключено — разбор всё равно идёт: его читают
+    корзина, путь одной услуги и срок."""
 
     if not is_price_turn(label, pending) or not str(user_text or "").strip():
         return None
-    if turn_parse.mode() == "on" and mode() != "off":
+    if mode() != "off":
         if not agree_telemetry():
             return await _observe_parse_on_lazy(user_text)
         return await _observe_parse_on(user_text)
-    tu: TurnUnderstanding | None = None
-    if mode() != "off":
-        try:
-            tu = await asyncio.to_thread(understand_price_turn, user_text)
-        except Exception:  # понимание — новый слой; его сбой не ломает ход, старый путь остаётся
-            logger.warning("turn_understanding_failed", exc_info=True)
-            turn_telemetry.note(tu_rule="error")
-        else:
-            _CURRENT.set(tu)
-            turn_telemetry.note(tu_list=tu.list_size, tu_facet=tu.facet, tu_rule=tu.services_rule, **_mention_fields(tu))
-    await _observe_phrases(user_text, tu)
-    read = _from_phrases(tu, user_text) if tu is not None else None
-    if read is not None:
-        tu = read
-        _CURRENT.set(tu)
-        turn_telemetry.note(tu_list=tu.list_size, tu_rule=tu.services_rule, **_mention_fields(tu))
-    return tu
+    await _observe_phrases(user_text)
+    return None
 
 
 async def _observe_parse_on(user_text: str) -> TurnUnderstanding | None:
@@ -316,7 +301,7 @@ async def _observe_parse_on(user_text: str) -> TurnUnderstanding | None:
     def factory() -> Awaitable[turn_parse.PhraseParse]:
         nonlocal created
         created = True
-        return _parse_phrases(user_text, facet=facet, tu=None, shadow=False, prepared=prepared, rules=rules)
+        return _parse_phrases(user_text, facet=facet, tu=None, prepared=prepared, rules=rules)
 
     # Разбор уже запущен в этом ходе (повторный вызов) — его правила ждёт его же вызов; здесь не ждём.
     started = turn_parse.start_phrases(factory, reply=user_text)
@@ -362,7 +347,7 @@ async def _observe_parse_on_lazy(user_text: str) -> TurnUnderstanding | None:
     """
 
     facet, facet_rule = price_turn_facet(user_text)
-    if turn_parse.start_phrases(lambda: _parse_phrases(user_text, facet=facet, tu=None, shadow=False, agree=False), reply=user_text) is not None:
+    if turn_parse.start_phrases(lambda: _parse_phrases(user_text, facet=facet, tu=None, agree=False), reply=user_text) is not None:
         await turn_parse.phrases()
     parse = turn_parse.acting_for(user_text)
     if parse is not None and parse.status != turn_parse.ParseStatus.SINGLE:
@@ -418,18 +403,12 @@ def _from_phrases(tu: TurnUnderstanding, text: str) -> TurnUnderstanding | None:
     )
 
 
-async def _observe_phrases(user_text: str, tu: TurnUnderstanding | None) -> None:
-    """Разбор реплики на фразы — после понимания (сегментацию сплошного списка генератор берёт из памяти
-    хода, а не считает второй раз). Тень — фоновой задачей во время хода (её дождётся `drain` в конце
-    хода); `on` — ждём здесь же: решение тратит бюджет хода."""
+async def _observe_phrases(user_text: str) -> None:
+    """Разбор реплики на фразы без понимания хода (`turn_understanding_price = off`): ход ждёт его здесь же —
+    решение тратит бюджет хода; согласие разрезов — с разрезом правил той же реплики."""
 
-    parse_mode = turn_parse.mode()
-    if parse_mode == "off":
-        return
-    shadow = parse_mode == "shadow"
-    facet = tu.facet if tu is not None else price_turn_facet(user_text)[0]
-    started = turn_parse.start_phrases(lambda: _parse_phrases(user_text, facet=facet, tu=tu, shadow=shadow), reply=user_text)
-    if started is not None and not shadow:
+    facet = price_turn_facet(user_text)[0]
+    if turn_parse.start_phrases(lambda: _parse_phrases(user_text, facet=facet, tu=None), reply=user_text) is not None:
         await turn_parse.phrases()
 
 
@@ -438,23 +417,20 @@ async def _parse_phrases(
     *,
     facet: str | None,
     tu: TurnUnderstanding | None,
-    shadow: bool,
     prepared: asyncio.Event | None = None,
     rules: asyncio.Future[TurnUnderstanding | None] | None = None,
     agree: bool = True,
 ) -> turn_parse.PhraseParse:
-    """Разбор и его след в телеметрии хода (`tu_parse_*` — без текста пациента). Тень память разбора
-    хода только читает. Под `on` (O3b) понимание правил считается параллельно: `prepared` — генератор
+    """Разбор и его след в телеметрии хода (`tu_parse_*` — без текста пациента). При нетерпеливых правилах
+    (O3b) понимание правил считается параллельно: `prepared` — генератор
     готов, правилам можно стартовать; `rules` — их результат для согласия разрезов. `agree=False` — без
     согласия разрезов (`parse_agree_telemetry = off`: правила не считаются ради телеметрии)."""
 
-    if shadow:
-        turn_parse.read_only_memory()
     started = time.monotonic()
     agreed: str | None = None
     try:
         catalog = await asyncio.to_thread(_catalog_rows, None)
-        parse = await _turn_phrases.parse_turn_phrases(text, facet=facet, catalog=catalog, shadow=shadow, prepared=prepared)
+        parse = await _turn_phrases.parse_turn_phrases(text, facet=facet, catalog=catalog, prepared=prepared)
         if not agree:
             return _noted(parse, None)
         if rules is not None:

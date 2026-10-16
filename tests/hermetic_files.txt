@@ -116,7 +116,8 @@ tests/test_turn_parse_t3.py
 tests/test_price_one_or_many_class.py
 tests/test_strong_match.py
 tests/test_turn_phrases.py
-tests/test_turn_parse_shadow.py
+tests/test_turn_parse_slot.py
 tests/test_pending_reply.py
 tests/test_turn_parse_readers.py
 tests/test_render_patient_text.py
+tests/test_t7_single_parse_mode.py

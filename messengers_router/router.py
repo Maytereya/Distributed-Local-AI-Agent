@@ -3173,7 +3173,7 @@ def _debug_meta(
         "summary": state.summary,
         "nlu_trace": nlu_trace,
         "understanding": understanding.as_debug() if (understanding := turn_understanding.current()) else None,
-        # Разбор реплики на фразы (L-15b, шаг 4) — только при turn_parse shadow | on: под off ключа нет.
+        # Разбор реплики на фразы (L-15b) — на ценовых ходах (единственный режим с T7 шага 3б); на прочих ключа нет.
         **({"turn_parse": parse_debug} if (parse_debug := turn_parse.debug()) else {}),
     }
 
