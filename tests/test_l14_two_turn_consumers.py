@@ -22,8 +22,8 @@
    из МИС, состояние получает. Красное обоих тестов закрыл L-14 шаг 3 — «контекст = показанное», единственный путь
    с 17.10 (выключатель `context_shown` снят).
 2. Журнал синонимов (`test_synonym_journal_phrase`): фраза — то, что назвал пациент и выбрала LLM, а не обрывок
-   вырезателя правил; реплика без названия услуги — ничего. Шаг 2 (14.10): под `journal_phrase = mention` фраза —
-   упоминание хода (`tests/test_l14_journal_mention.py`); под `rules` (по умолчанию) красное остаётся характеризацией.
+   вырезателя правил; реплика без названия услуги — ничего. Шаг 2 (14.10): фраза — упоминание хода
+   (`tests/test_l14_journal_mention.py`); единственный путь с 17.10 (выключатель `journal_phrase` снят).
 3. Объект хода: `test_single_service_is_a_mention` (красное — объект строится только для списка) и
    `test_list_mentions_chosen_…` (у правил `chosen` — название строки прайса, у разбора — фраза пациента).
 4. Остальные потребители, закреплённые как есть: состояние после списка / семейства / одной услуги / срока,
@@ -468,63 +468,38 @@ JOURNAL_CASES: dict[str, JournalCase] = {
     "no_service_named_3": JournalCase("подскажите стоимость анализов", _TOO_GENERAL, ()),
 }
 
-_JOURNAL_RED = "журнал берёт фразу вырезателя правил (`_extract_price_service_from_query`), а не фразу пациента/выбор LLM"
-_JOURNAL_SENTENCE = {
-    "default": "вырезатель оставляет «а» перед термином («а ггтп»); фразы LLM нет (`turn_parse = off`)",
-    "deploy": "вырезатель оставляет «а» перед термином («а ггтп»); фразы LLM нет (`turn_parse = off`)",
-    "deploy_parse": "разбор вернул `single` (кандидат один — вся реплика): LLM выбора фраз не зовётся, и `_journal_phrase` возвращает фразу вырезателя «а ггтп»",
-    "next": "разбор вернул `single` (кандидат один — вся реплика): LLM выбора фраз не зовётся, и `_journal_phrase` возвращает фразу вырезателя «а ггтп»",
-}
-_JOURNAL_NO_SERVICE = (
-    "прежний промпт выбора цены (`choose_price = off`) не знает причины «слишком общее» (её даёт только промпт модуля), `journal_miss` "
-    "пишет реплику как синоним; под разбором `single` (LLM фраз не звали) не отличает «нет услуги» от «слова без синонима»; "
-    "закрыто только при `choose_price = on` (набор `next`)"
-)
+_JOURNAL_RED = "журнал берёт не фразу пациента / выбор LLM, а обрывок вырезателя правил или реплику без названия услуги"
 _JOURNAL_NO_SERVICE_WORDS = (
     "«сможете посчитать» — слова, которых нет ни в обвязке, ни в родовых словах: упоминание есть (слабое), и без причины "
     "«не услуга» от LLM (её знает только промпт модуля, `choose_price = on`) журнал не отличает его от слова без синонима; "
     "добавить слова в списки обвязки — решение владельца (правило под буквы)"
 )
-# (случай, набор, источник фразы журнала) → {код: причина}. Пусто — зелёный. Источник — `[MESSENGER_ROUTER]
-# journal_phrase`: `rules` — прежний (по умолчанию), `mention` — упоминание хода (L-14, шаг 2).
-KNOWN_JOURNAL: dict[tuple[str, str, str], dict[str, str]] = {
-    **{("term_in_a_sentence", config, "rules"): {"journal": _JOURNAL_SENTENCE[config]} for config in CONFIGS},
-    **{
-        (case, config, "rules"): {"journal": _JOURNAL_NO_SERVICE}
-        for case in ("no_service_named_1", "no_service_named_2", "no_service_named_3")
-        for config in ("default", "deploy", "deploy_parse")
-    },
-    **{
-        ("no_service_named_2", config, "mention"): {"journal": _JOURNAL_NO_SERVICE_WORDS}
-        for config in ("default", "deploy", "deploy_parse")
-    },
+# (случай, набор) → {код: причина}. Пусто — зелёный. Фраза журнала — упоминание хода (L-14, шаг 2): единственный путь с
+# 17.10 (выключатель `journal_phrase` снят, STEP-2026-10-17-ONE-PATH-JOURNAL-PHRASE); красное прежнего источника `rules`
+# («а ггтп» вырезателя, «Цена анализа» синонимом) снято вместе с ним.
+KNOWN_JOURNAL: dict[tuple[str, str], dict[str, str]] = {
+    ("no_service_named_2", config): {"journal": _JOURNAL_NO_SERVICE_WORDS} for config in ("default", "deploy", "deploy_parse")
 }
-JOURNAL_SOURCES = ("rules", "mention")
 
 
 def _journal_params():
     for name in JOURNAL_CASES:
         for config in CONFIGS:
-            for source in JOURNAL_SOURCES:
-                marks = _marks(KNOWN_JOURNAL.get((name, config, source), {}))
-                yield pytest.param(name, config, source, marks=marks, id=f"{name}-{config}-{source}")
+            yield pytest.param(name, config, marks=_marks(KNOWN_JOURNAL.get((name, config), {})), id=f"{name}-{config}")
 
 
-@pytest.mark.parametrize(("name", "config", "source"), list(_journal_params()))
-def test_synonym_journal_phrase(name, config, source, mini_prod_world, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize(("name", "config"), list(_journal_params()))
+def test_synonym_journal_phrase(name, config, mini_prod_world, monkeypatch):  # noqa: F811
     """Журнал синонимов (подсказка клинике) пишет фразу, которую назвал пациент и выбрала LLM; реплика без
-    названия услуги — ничего. Под `journal_phrase = mention` фраза — упоминание хода (L-14, шаг 2)."""
+    названия услуги — ничего. Фраза — упоминание хода (L-14, шаг 2)."""
 
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_JOURNAL_PHRASE", source, raising=False)
     case = JOURNAL_CASES[name]
-    [turn] = _play([case.said], f"{name}-{source}", mini_prod_world, monkeypatch, config, llm=case.llm())
+    [turn] = _play([case.said], name, mini_prod_world, monkeypatch, config, llm=case.llm())
     phrases = tuple(_normalise_catalog_text(str(row["phrase"])) for row in turn.journal)
     found: dict[str, str] = {}
     if phrases != case.expected:
         found["journal"] = f"{_JOURNAL_RED}: в журнале {list(phrases)}, ожидалось {list(case.expected)}"
-    _settle(found, KNOWN_JOURNAL.get((name, config, source), {}), f"> {case.said}\n{turn.text[:400]}\nжурнал: {turn.journal}")
+    _settle(found, KNOWN_JOURNAL.get((name, config), {}), f"> {case.said}\n{turn.text[:400]}\nжурнал: {turn.journal}")
 
 
 # --------------------------------------------------------------------------- объект хода: упоминания услуг

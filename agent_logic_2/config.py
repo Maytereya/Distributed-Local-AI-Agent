@@ -200,7 +200,6 @@ class MessengerRouterConfig:
     choose_symptom: str
     choose_readiness: str
     parse_fail_variants: int
-    journal_phrase: str
     variant_b_wordforms: str
     pending_reply: str
     pending_reply_types: str
@@ -465,11 +464,8 @@ settings = Settings(
         # слабой позиции, когда LLM не выбрала строки (2–5; поправка владельца 13.10). По умолчанию 3 — как на
         # проде (STEP-2026-10-15-DEFAULTS-B). [MESSENGER_ROUTER] parse_fail_variants
         parse_fail_variants=_get_int("MESSENGER_ROUTER", "parse_fail_variants", default=3, min_value=2, max_value=5),
-        # Фраза журнала синонимов у одиночной услуги (L-14, шаг 2): rules — прежняя (вырезатель правил, под
-        # turn_parse = on — выбор LLM разбора); mention — упоминание хода (`ServiceMention`): фраза без речевой
-        # обвязки, реплика без названия услуги — ничего. По умолчанию mention — как на проде с 15.10 (решение владельца
-        # 16.10, деплой 5). [MESSENGER_ROUTER] journal_phrase
-        journal_phrase=_get_enum("MESSENGER_ROUTER", "journal_phrase", default="mention", allowed={"rules", "mention"}),
+        # Фраза журнала синонимов — упоминание хода (L-14, шаг 2) — единственный путь с 17.10: ключ [MESSENGER_ROUTER]
+        # journal_phrase снят и больше не читается (в config.ini прода безвреден; STEP-2026-10-17-ONE-PATH-JOURNAL-PHRASE).
         # Контекст сессии = показанное (L-14, шаг 3) — единственный путь с 17.10: ключ [MESSENGER_ROUTER] context_shown
         # снят и больше не читается (в config.ini прода безвреден; STEP-2026-10-17-ONE-PATH-CONTEXT-SHOWN).
         # Ответ на висящий вопрос бота силами LLM (D2.3, `messengers_router/pending_reply.py`): off — как было;
@@ -663,7 +659,6 @@ MR_CHOOSE_PRICE = settings.messenger_router.choose_price
 MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
-MR_JOURNAL_PHRASE = settings.messenger_router.journal_phrase
 MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types

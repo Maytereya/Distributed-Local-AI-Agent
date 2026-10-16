@@ -33,7 +33,7 @@ from .. import turn_telemetry
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from ._common import _normalise_catalog_text
-from ._price_select_llm import _prefer_base_variants, _record_synonym_suggestion, _row_cost, _row_key, _row_name, journal_phrase_mode
+from ._price_select_llm import _prefer_base_variants, _record_synonym_suggestion, _row_cost, _row_key, _row_name
 from ._prices_helpers import _annotate_price_rows_with_care_context, _rank_price_rows, phrase_price_items
 from ._strong_match import strong_rows
 
@@ -363,13 +363,10 @@ async def choose_basket_rows(
 
 
 def _journal_fragment(fragment: str) -> str:
-    """Фраза слабой позиции для журнала синонимов. Под `journal_phrase = mention` (L-14, шаг 2) — как фраза
-    одиночной услуги: без речевой обвязки с краёв (`turn_understanding._bare_phrase`, те же списки): «а ггтп» →
-    «ггтп»; позиция из одной обвязки — пусто, в журнал не пишется. Фразы разбора режут края только по
-    `_turn_phrases._WRAPPER`, «а» в нём нет. Под `rules` — фраза разбора как есть (как было)."""
+    """Фраза слабой позиции для журнала синонимов (L-14, шаг 2) — как фраза одиночной услуги: без речевой обвязки с
+    краёв (`turn_understanding._bare_phrase`, те же списки): «а ггтп» → «ггтп»; позиция из одной обвязки — пусто, в
+    журнал не пишется. Фразы разбора режут края только по `_turn_phrases._WRAPPER`, «а» в нём нет."""
 
-    if journal_phrase_mode() != "mention":
-        return fragment
     from ..turn_understanding import _bare_phrase  # понимание хода импортирует сервисы цены — не на уровне модуля
 
     return _bare_phrase(fragment)

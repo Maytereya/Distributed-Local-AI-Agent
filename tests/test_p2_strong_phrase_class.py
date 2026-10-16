@@ -37,7 +37,6 @@ from ollama import GenerateResponse
 _PROD_1016 = {
     "MR_CHOOSE_PRICE": "on",
     "MR_PARSE_PRICE_GUARD": "llm",
-    "MR_JOURNAL_PHRASE": "mention",
 }
 # Фразы, которые «выбирает» LLM разбора: сильная фраза без условия (как прод выбрал «приём терапевта»).
 _PHRASES = ("ферритин", "глюкоза")

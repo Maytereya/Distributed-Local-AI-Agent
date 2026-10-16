@@ -1,10 +1,11 @@
-"""Журнал синонимов берёт фразу из упоминания хода — L-14, шаг 2 (`[MESSENGER_ROUTER] journal_phrase = mention`).
+"""Журнал синонимов берёт фразу из упоминания хода — L-14, шаг 2. Единственный путь с 17.10: выключатель
+`[MESSENGER_ROUTER] journal_phrase` снят (STEP-2026-10-17-ONE-PATH-JOURNAL-PHRASE; на проде `mention` с 15.10).
 
 Было: фразу журнала резал вырезатель правил (`_extract_price_service_from_query`) — «а подскажите пожалуйста
 сколько стоит ггтп сдать» → «а ггтп»; реплика без названия услуги («Цена анализа») уходила в журнал целиком
 (вырезатель ничего не оставил — бралась реплика). Под `turn_parse = on` без выбора LLM (`single`) — то же.
 
-Стало (под выключателем, по умолчанию `rules` — как было): фраза — упоминание одиночной услуги хода
+Стало: фраза — упоминание одиночной услуги хода
 (`TurnUnderstanding.single`): срез реплики без речевой обвязки с краёв; понимание реплики без упоминания —
 ничего. Обвязка — существующие лингвистические списки (`_turn_phrases._WRAPPER`, `_biomaterial._SPEECH_WRAPPER`),
 новых слов и регулярок нет. Разбор без выбора LLM (`single`) знает об услуге не больше правил — упоминание правил.
@@ -25,35 +26,18 @@ from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фи
 CONFIGS = BASE_CONFIGS
 
 
-def _source(monkeypatch, value: str = "mention") -> None:
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_JOURNAL_PHRASE", value, raising=False)
-
-
 def _phrases(turn) -> list[str]:
     return [_normalise_catalog_text(str(row["phrase"])) for row in turn.journal]
 
 
-# Нет атрибута — умолчание кода (mention с 16.10, деплой 5); мусор в значении — прежний путь (rules).
-@pytest.mark.parametrize(("raw", "expected"), [(None, "mention"), ("rules", "rules"), ("mention", "mention"), ("MENTION", "mention"), ("x", "rules")])
-def test_setting_is_read_with_a_safe_default(raw, expected, monkeypatch):
-    from messengers_router.runtime_config import config as cfg
-    from messengers_router.services._price_select_llm import journal_phrase_mode
-
-    if raw is None:
-        monkeypatch.delattr(cfg, "MR_JOURNAL_PHRASE", raising=False)
-    else:
-        monkeypatch.setattr(cfg, "MR_JOURNAL_PHRASE", raw, raising=False)
-    assert journal_phrase_mode() == expected
-
-
-def test_config_default_is_mention():
-    """Умолчание кода = прод (`journal_phrase = mention` с 15.10; решение владельца 16.10, деплой 5)."""
+def test_one_path_without_a_switch():
+    """Выключателя нет: ни ключа в настройках, ни режима у модуля выбора строки (решение владельца 16.10)."""
 
     from agent_logic_2 import config
+    from messengers_router.services import _price_select_llm
 
-    assert config.MR_JOURNAL_PHRASE == "mention"
+    assert not hasattr(config, "MR_JOURNAL_PHRASE") and not hasattr(config.settings.messenger_router, "journal_phrase")
+    assert not hasattr(_price_select_llm, "journal_phrase_mode")
 
 
 @pytest.mark.parametrize(
@@ -124,14 +108,16 @@ _UNKNOWN = lambda: _Scripted(cut=("спирометрия",), terms=("спиро
 )
 def test_journal_writes_the_mention_phrase_through_the_endpoint(said, llm, expected, config, mini_prod_world, monkeypatch):  # noqa: F811
     """Класс через обработчик эндпоинта: фраза журнала — то, что пациент назвал услугой, без слов вопроса; реплика
-    без названия услуги — ничего. Ответ пациенту тот же, что под `rules`."""
+    без названия услуги — ничего. Прежнее значение `journal_phrase = rules` в конфиге (прод держит ключ до деплоя 6)
+    ничего не меняет."""
 
-    _source(monkeypatch)
+    from messengers_router.runtime_config import config as cfg
+
     [turn] = _play([said], f"journal-mention-{said[:20]}", mini_prod_world, monkeypatch, config, llm=llm())
     assert _phrases(turn) == expected, turn.journal
-    _source(monkeypatch, "rules")
-    [before] = _play([said], f"journal-rules-{said[:20]}", mini_prod_world, monkeypatch, config, llm=llm())
-    assert turn.text == before.text and turn.handoff == before.handoff
+    monkeypatch.setattr(cfg, "MR_JOURNAL_PHRASE", "rules", raising=False)
+    [old_key] = _play([said], f"journal-old-key-{said[:20]}", mini_prod_world, monkeypatch, config, llm=llm())
+    assert (_phrases(old_key), old_key.text, old_key.handoff) == (expected, turn.text, turn.handoff)
 
 
 @pytest.mark.parametrize("config", CONFIGS)
@@ -140,7 +126,6 @@ def test_two_turns_short_question_writes_nothing(followup, config, mini_prod_wor
     """Два хода: после ответа о ГГТ (LLM по термину) короткий вопрос без названия услуги в журнал не попадает,
     первый ход пишет только «ггтп»."""
 
-    _source(monkeypatch)
     first, second = _play(["а подскажите пожалуйста сколько стоит ггтп сдать", followup], f"journal-two-{followup}", mini_prod_world, monkeypatch, config, llm=_FOUND_GGT())
     assert _phrases(first) == ["ггтп"], first.journal
     assert second.journal == [], second.journal
@@ -151,22 +136,20 @@ _WRAPPED_QUESTION = "Здравствуйте, а делаете ли вы лю�
 
 
 @pytest.mark.parametrize(
-    ("said", "picked", "mention", "rules"),
+    ("said", "picked", "mention"),
     [
-        (_WRAPPED_BASKET, ("лютеинизирующий гормон", "а ггтп"), ["лютеинизирующий гормон", "ггтп"], ["лютеинизирующий гормон", "а ггтп"]),
+        (_WRAPPED_BASKET, ("лютеинизирующий гормон", "а ггтп"), ["лютеинизирующий гормон", "ггтп"]),
         (  # «делаете ли вы» нет в списках обвязки — остаётся: новых слов нет (как у одиночной услуги)
             _WRAPPED_QUESTION,
             ("а делаете ли вы лютеинизирующий гормон", "ггтп"),
             ["делаете ли вы лютеинизирующий гормон", "ггтп"],
-            ["а делаете ли вы лютеинизирующий гормон", "ггтп"],
         ),
     ],
     ids=["edge_a", "edge_question"],
 )
-def test_basket_positions_are_journaled_like_a_single_mention(said, picked, mention, rules, mini_prod_world, monkeypatch):  # noqa: F811
-    """Третий писатель журнала — слабые позиции корзины под `turn_parse = on` (L-15b, шаг 5): под `mention` их фраза —
-    без речевой обвязки с краёв, как у одиночной услуги («а ггтп» → «ггтп»; находка вечернего dev 14.10: «а делаете ли
-    вы оам» в журнале). Под `rules` — как было; ответ пациенту в обоих режимах один."""
+def test_basket_positions_are_journaled_like_a_single_mention(said, picked, mention, mini_prod_world, monkeypatch):  # noqa: F811
+    """Третий писатель журнала — слабые позиции корзины (L-15b, шаг 5): их фраза — без речевой обвязки с краёв, как у
+    одиночной услуги («а ггтп» → «ггтп»; находка вечернего dev 14.10: «а делаете ли вы оам» в журнале)."""
 
     from messengers_router import llm_runtime
     from tests.test_price_turns_golden import run_dialog
@@ -174,16 +157,9 @@ def test_basket_positions_are_journaled_like_a_single_mention(said, picked, ment
     from tests.test_turn_parse_slot import _deploy
 
     _deploy(monkeypatch)
-    seen = {}
-    for mode in ("mention", "rules"):
-        _source(monkeypatch, mode)
-        monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _JournalLLM(picked, "ЛГ (LH)"))
-        with ev_world.FrozenWorld(mini_prod_world, "day") as world:
-            [turn] = run_dialog([said], f"journal-basket-edge-{mode}-{said[:12]}")
-            entries = _journal_rows(world._journal)
-        assert all(e["source"] == "basket" for e in entries), entries
-        seen[mode] = ([e["phrase"] for e in entries], [(e["found"], e["services"]) for e in entries], turn["text"])
-    assert seen["mention"][0] == mention
-    assert seen["rules"][0] == rules
-    assert seen["mention"][1] == seen["rules"][1]  # решение LLM по строкам — то же, меняется только фраза
-    assert seen["mention"][2] == seen["rules"][2]  # журнал — подсказка клинике, ответ не меняется
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _JournalLLM(picked, "ЛГ (LH)"))
+    with ev_world.FrozenWorld(mini_prod_world, "day") as world:
+        run_dialog([said], f"journal-basket-edge-{said[:12]}")
+        entries = _journal_rows(world._journal)
+    assert all(e["source"] == "basket" for e in entries), entries
+    assert [e["phrase"] for e in entries] == mention
