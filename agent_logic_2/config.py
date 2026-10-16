@@ -202,6 +202,7 @@ class MessengerRouterConfig:
     choose_readiness: str
     parse_fail_variants: int
     journal_phrase: str
+    variant_b_wordforms: str
     context_shown: str
     pending_reply: str
     pending_reply_types: str
@@ -529,6 +530,10 @@ settings = Settings(
         # экономия — CPU хода. По умолчанию off с 16.10 (решение владельца,
         # T7 шаг 4). [MESSENGER_ROUTER] parse_agree_telemetry
         parse_agree_telemetry=_get_enum("MESSENGER_ROUTER", "parse_agree_telemetry", default="off", allowed={"off", "on"}),
+        # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
+        # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
+        # было (только слово целиком); on — словоформы (облако 16.10, решение владельца). [MESSENGER_ROUTER] variant_b_wordforms
+        variant_b_wordforms=_get_enum("MESSENGER_ROUTER", "variant_b_wordforms", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -666,6 +671,7 @@ MR_CHOOSE_BASKET = settings.messenger_router.choose_basket
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_JOURNAL_PHRASE = settings.messenger_router.journal_phrase
+MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_CONTEXT_SHOWN = settings.messenger_router.context_shown
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types

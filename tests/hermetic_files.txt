@@ -121,3 +121,4 @@ tests/test_pending_reply.py
 tests/test_turn_parse_readers.py
 tests/test_render_patient_text.py
 tests/test_t7_single_parse_mode.py
+tests/test_variant_b_wordforms.py

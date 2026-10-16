@@ -56,6 +56,7 @@ from ..choice import LegacyWire, Option, Task, choose
 from ..llm_runtime import generate_text
 from ..prompt_registry import load_prompt_text
 from ..runtime_config import config as _cfg
+from ..russian_nlu import tokens_share_stem
 from ._common import _normalise_catalog_text
 from ._prices_helpers import (
     _apply_service_synonyms,
@@ -273,12 +274,34 @@ def _token_df(retail_rows: list[dict[str, Any]]) -> dict[str, int]:
     return cached
 
 
+def _variant_b_wordforms_on() -> bool:
+    """`[MESSENGER_ROUTER] variant_b_wordforms = off | on` (по умолчанию off — как было; облако 16.10)."""
+
+    return str(getattr(_cfg, "MR_VARIANT_B_WORDFORMS", "off") or "").strip().lower() == "on"
+
+
+# Словоформа — одно слово (`russian_nlu.tokens_share_stem`, одно определение «одно ли это слово»): порог 6 — как у гарда
+# отображения цены; «сифилис» = «сифилиса», но «гастроскопию» ≠ «гастрин» («гастро» / «гастри»). Только слова из одних
+# букв: служебные токены кода («витамин_a», «витамин_b12») и коды с цифрами сравниваются целиком.
+_WORDFORM_PREFIX = 6
+
+
+def _same_word(a: str, b: str) -> bool:
+    return a == b or (a.isalpha() and b.isalpha() and tokens_share_stem(a, b, length=_WORDFORM_PREFIX))
+
+
 def _whole_word_names(question: str, pool: list[dict[str, Any]], retail_rows: list[dict[str, Any]]) -> tuple[str, ...]:
     """Вариант B (L-13): названия строк, в которых есть самое различающее слово пациента целиком.
 
     Различающее — самое редкое в названиях прайса: родовые слова («анализ», «тест», «приём») часты и
     отпадают сами, без списка слов. По началу слова нельзя: на «гастроскопию» первым оказался бы
     «Гастрин»; слова нет в прайсе вовсе — названий нет (честный перевод). Порядок — как у кандидатов.
+
+    Под `variant_b_wordforms = on`: различающее слово могло стать редким из-за словоформы — «сифилис» целиком есть только
+    в чужой строке («Кровь на сифилис (…)»), а в верной — «сифилиса» («Экспресс-тест для определения сифилиса (антитела
+    IgG и IgM …)»). Строка со словоформой различающего слова добавляется, только если покрывает слов пациента строго
+    больше любой строки с ним целиком; порядок — по числу слов пациента в названии (словоформы — одно слово), при
+    равенстве — как у кандидатов. Ключевое слово и «слова нет в прайсе — названий нет» прежние.
     """
 
     wanted = set(_price_query_tokens(question))
@@ -288,8 +311,23 @@ def _whole_word_names(question: str, pool: list[dict[str, Any]], retail_rows: li
     key = min(wanted, key=lambda token: (df.get(token, 0), token))
     if not df.get(key):
         return ()
+    if _variant_b_wordforms_on():
+        return _wordform_names(wanted, key, pool)
     names = [_row_name(row) for row in pool if key in set(_price_query_tokens(_row_name(row)))]
     return tuple(dict.fromkeys(name for name in names if name))[:_VARIANT_B_LIMIT]
+
+
+def _wordform_names(wanted: set[str], key: str, pool: list[dict[str, Any]]) -> tuple[str, ...]:
+    tokens = {name: set(_price_query_tokens(name)) for name in dict.fromkeys(_row_name(row) for row in pool) if name}
+
+    def cover(name: str) -> int:
+        return sum(1 for word in wanted if any(_same_word(word, token) for token in tokens[name]))
+
+    exact = [name for name in tokens if key in tokens[name]]
+    best = max((cover(name) for name in exact), default=0)
+    forms = [name for name in tokens if name not in exact and any(_same_word(key, t) for t in tokens[name]) and cover(name) > best]
+    ranked = sorted([*forms, *exact], key=cover, reverse=True)  # устойчиво: при равенстве — порядок кандидатов
+    return tuple(ranked[:_VARIANT_B_LIMIT])
 
 
 def _policy_label(selection: PriceSelection | None) -> str:
