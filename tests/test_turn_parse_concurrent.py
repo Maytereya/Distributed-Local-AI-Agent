@@ -4,7 +4,7 @@
 текста — до секунд) шли друг за другом. Инварианты: (а) порядок — генератор фраз → одновременно выбор LLM и
 правила → читатели: правила стартуют после генератора (сегментацию берут из памяти хода) и до ответа LLM;
 (б) ответ хода и понимание те же, что при правилах до разбора (класс «одна или несколько» под
-`deploy_parse` — `tests/test_price_one_or_many_class.py`); (в) телеметрия прежняя: `tu_list`, `tu_rule`,
+`deploy` — `tests/test_price_one_or_many_class.py`); (в) телеметрия прежняя: `tu_list`, `tu_rule`,
 `tu_parse_agree`; (г) сбой правил не вешает разбор и ход; (д) два хода — второй короткий вопрос не берёт
 услугу, которой пациент не видел.
 """
@@ -84,7 +84,7 @@ def _priced(text: str) -> set[str]:
 
 def test_rules_run_while_the_model_picks_phrases(mini_prod_world, monkeypatch):  # noqa: F811
     case = CASES["list_true_three"]
-    _configure(monkeypatch, "deploy_parse")
+    _configure(monkeypatch, "deploy")
     probe = _Probe()
     _instrument(monkeypatch, probe)
     oracle = _WaitingOracle(case, TRUE_CUT["list_true_three"], probe)
@@ -103,7 +103,7 @@ def test_rules_run_while_the_model_picks_phrases(mini_prod_world, monkeypatch): 
 
 def test_turn_telemetry_is_unchanged(mini_prod_world, monkeypatch):  # noqa: F811
     case = CASES["list_true_three"]
-    _configure(monkeypatch, "deploy_parse")
+    _configure(monkeypatch, "deploy")
     from messengers_router.runtime_config import config as cfg
 
     monkeypatch.setattr(cfg, "MR_PARSE_AGREE_TELEMETRY", "on", raising=False)  # согласие — только в нетерпеливом режиме
@@ -118,7 +118,7 @@ def test_turn_telemetry_is_unchanged(mini_prod_world, monkeypatch):  # noqa: F81
 
 def test_rules_failure_does_not_hang_the_turn(mini_prod_world, monkeypatch):  # noqa: F811
     case = CASES["list_true_three"]
-    _configure(monkeypatch, "deploy_parse")
+    _configure(monkeypatch, "deploy")
     probe = _Probe()
     _instrument(monkeypatch, probe, fail_rules=True)
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _OracleLLM(case, TRUE_CUT["list_true_three"]))

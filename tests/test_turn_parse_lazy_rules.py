@@ -53,11 +53,11 @@ class _Calls:
 
 
 def _run(turns, *, agree: str, llm: str, case_name: str, world_dir, monkeypatch, session: str):
-    """Диалог под набором деплоя с разбором (`deploy_parse`); `llm` — oracle | down. Возврат: ходы, строки
+    """Диалог под набором деплоя (`deploy`, разбор хода — единственный режим); `llm` — oracle | down. Возврат: ходы, строки
     телеметрии, счётчик правил."""
 
     with monkeypatch.context() as patch:
-        _configure(patch, "deploy_parse")
+        _configure(patch, "deploy")
         _agree(patch, agree)
         if llm == "oracle":
             patch.setattr(llm_runtime, "_OLLAMA_CLIENT", _OracleLLM(CASES[case_name], TRUE_CUT[case_name]))
@@ -167,7 +167,7 @@ def test_rules_failure_on_the_fallback_does_not_break_the_turn(mini_prod_world, 
         raise RuntimeError("тест: правила упали")
 
     with monkeypatch.context() as patch:
-        _configure(patch, "deploy_parse")
+        _configure(patch, "deploy")
         _agree(patch, "off")
         patch.setattr(turn_understanding, "understand_price_turn", broken)
         with ev_world.FrozenWorld(mini_prod_world, "day") as world:

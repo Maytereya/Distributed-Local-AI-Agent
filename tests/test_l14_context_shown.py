@@ -25,7 +25,7 @@ from messengers_router.services._common import _normalise_catalog_text
 from tests.test_l14_two_turn_consumers import _FOUND_GGT, _QUOTED, _Scripted, _play, _priced, _shown
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
-SHOWN = ("deploy", "next")
+SHOWN = ("deploy",)
 _GGT = "ГГТ гамма-глютамилтрансфераза"
 
 
@@ -128,7 +128,7 @@ def test_policy_answer_without_prices_still_holds_nothing(config, mini_prod_worl
         assert not _priced(second.text), second.text
 
 
-@pytest.mark.parametrize(("config", "first"), [("next", "сколько стоит глюкоза"), ("deploy", "сколько стоит оак")])
+@pytest.mark.parametrize(("config", "first"), [("deploy", "сколько стоит глюкоза"), ("deploy", "сколько стоит оак")])
 @pytest.mark.parametrize("again", ["сколько стоит?", "а цена?"])
 def test_repeat_shows_exactly_what_was_shown(again, config, first, mini_prod_world, monkeypatch):  # noqa: F811
     """Находка 4: повтор вопроса без названия услуги — ровно показанные строки (одна строка «Глюкоза» — не семья

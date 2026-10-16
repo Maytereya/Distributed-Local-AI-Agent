@@ -26,7 +26,7 @@ import asyncio
 import pytest
 
 from messengers_router.services._common import _normalise_catalog_text
-from tests.test_l14_two_turn_consumers import SHOWN_CONFIGS, _QUOTED, _SETS, _play, _priced
+from tests.test_l14_two_turn_consumers import _QUOTED, _SETS, _play, _priced
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
 _HBA1C = "Гликированный гемоглобин  (HbA1C, Glycated Hemoglobin)"
@@ -47,8 +47,8 @@ def _no_class_or_question_words(text: str) -> bool:
 # выбором LLM (политика L-13 и одно определение сильного — единственные с 16.10, T7 шаги 1–2), а LLM гейта недоступна:
 # ответ X услуги не показывает, и вопросу walk-in не о чем быть — пары строятся на сильных по данным МИС услугах.
 _ONE_SHOWN = (
-    ("сколько стоит ферритин", "Ферритин", SHOWN_CONFIGS),  # цена: одна строка
-    ("сколько готовится ферритин", "Ферритин", SHOWN_CONFIGS),  # срок из МИС называет одну услугу
+    ("сколько стоит ферритин", "Ферритин", ("deploy",)),  # цена: одна строка
+    ("сколько готовится ферритин", "Ферритин", ("deploy",)),  # срок из МИС называет одну услугу
 )
 
 
@@ -79,7 +79,7 @@ def test_walkin_question_keeps_the_one_shown_service(first, service, ask, config
     ("first", "config"),
     [
         # «витамин b12» с 16.10 — сильное по данным (одна строка «Витамин B12»), не семейный список правил (T7 шаг 2).
-        *((first, config) for first in ("сколько стоит оак", "сколько стоит ТТГ") for config in SHOWN_CONFIGS),
+        *((first, "deploy") for first in ("сколько стоит оак", "сколько стоит ТТГ")),
     ],
 )
 def test_walkin_question_after_several_shown_rows_keeps_them(first, config, mini_prod_world, monkeypatch):  # noqa: F811
@@ -158,7 +158,7 @@ def test_menu_button_class_is_left_as_is(mini_prod_world, monkeypatch):  # noqa:
 _UZI = "Ультразвуковое исследование органов брюшной полости (комплексное)"
 
 
-@pytest.mark.parametrize("config", SHOWN_CONFIGS)
+@pytest.mark.parametrize("config", ["deploy"])
 @pytest.mark.parametrize(
     ("ask", "own"),
     [
@@ -177,7 +177,7 @@ def test_address_with_its_own_service_ends_the_shown_context(ask, own, config, m
     assert "ферритин" not in _priced(after[2].text), after[2].text
 
 
-@pytest.mark.parametrize("config", SHOWN_CONFIGS)
+@pytest.mark.parametrize("config", ["deploy"])
 @pytest.mark.parametrize("ask", ["где вы находитесь?", "в каком филиале можно сдать?", "где сдать анализы?"])
 def test_address_without_its_own_service_keeps_the_shown(ask, config, mini_prod_world, monkeypatch):  # noqa: F811
     """Адрес без своей услуги (или со словом-классом «анализы») показанное не снимает: «сколько стоит?» — ферритин."""

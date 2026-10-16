@@ -125,7 +125,7 @@ def _priced(text: str) -> set[str]:
 )
 def test_short_designations_get_their_own_prices_through_the_endpoint(reply, positions, mini_prod_world, monkeypatch):  # noqa: F811
     case = Case(reply, "list", positions)
-    _configure(monkeypatch, "deploy_parse")
+    _configure(monkeypatch, "deploy")
     oracle = _OracleLLM(case, tuple(positions))
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:

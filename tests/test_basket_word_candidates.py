@@ -58,7 +58,7 @@ def test_generic_words_bring_no_candidates(catalog):
 
 
 def test_with_the_model_the_position_gets_its_own_price(mini_prod_world, monkeypatch):  # noqa: F811
-    _configure(monkeypatch, "deploy_parse")
+    _configure(monkeypatch, "deploy")
     oracle = _OracleLLM(_CASE, tuple(_CASE.positions))
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
@@ -71,7 +71,7 @@ def test_with_the_model_the_position_gets_its_own_price(mini_prod_world, monkeyp
 
 
 def test_without_the_model_the_position_stays_unrecognized(mini_prod_world, monkeypatch):  # noqa: F811
-    _configure(monkeypatch, "deploy_parse")
+    _configure(monkeypatch, "deploy")
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         [turn] = run_dialog([_REPLY], "basket-word-candidates-down")
     assert _FT4 not in _priced(turn["text"])
@@ -81,7 +81,7 @@ def test_without_the_model_the_position_stays_unrecognized(mini_prod_world, monk
 def test_unsatisfiable_qualifier_gets_no_word_candidates(mini_prod_world, monkeypatch):  # noqa: F811
     reply = "сколько стоит ферритин и приём терапевта по ОМС"
     case = Case(reply, "list", {"ферритин": (_FERRITIN,), "приём терапевта по ОМС": ()}, strong=frozenset({"ферритин"}))
-    _configure(monkeypatch, "deploy_parse")
+    _configure(monkeypatch, "deploy")
     oracle = _OracleLLM(case, tuple(case.positions))
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
     with ev_world.FrozenWorld(mini_prod_world, "day"):

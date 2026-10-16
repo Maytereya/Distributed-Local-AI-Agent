@@ -128,7 +128,7 @@ def _priced(text: str) -> set[str]:
 
 def test_merged_list_through_the_endpoint_prices_every_position(mini_prod_world, monkeypatch):  # noqa: F811
     case = CASES["list_true_three"]
-    _configure(monkeypatch, "deploy_parse")
+    _configure(monkeypatch, "deploy")
     oracle = _MergingOracle(case, "ферритин, ттг и витамин д")
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
@@ -145,7 +145,7 @@ def test_merged_list_through_the_endpoint_prices_every_position(mini_prod_world,
 
 def test_merge_is_counted_in_turn_telemetry(mini_prod_world, monkeypatch):  # noqa: F811
     case = CASES["list_true_three"]
-    _configure(monkeypatch, "deploy_parse")
+    _configure(monkeypatch, "deploy")
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _MergingOracle(case, "ферритин, ттг и витамин д"))
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         run_dialog([case.text], "merged-list-telemetry")

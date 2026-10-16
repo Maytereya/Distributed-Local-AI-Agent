@@ -66,8 +66,9 @@ _DEFAULT = {
     "MR_PARSE_FAIL_VARIANTS": 5,
 }
 # Набор выключателей → значения поверх конфига гейта. Разбор реплики (`turn_parse = on`) — единственный режим
-# (T7 шаг 3б, 16.10): `deploy` — прод; `deploy_parse` — прежнее имя того же набора для файлов, которые его зовут.
-_SETS = {"default": _DEFAULT, "deploy": _DEPLOY, "deploy_parse": _DEPLOY}
+# (T7 шаг 3б, 16.10): `deploy` — прод. Прежнее имя `deploy_parse` того же набора снято после деплоя 6
+# (STEP-2026-10-17-DEDUP-SETS).
+_SETS = {"default": _DEFAULT, "deploy": _DEPLOY}
 CONFIGS = ("default", "deploy")
 LLMS = ("down", "oracle")
 
@@ -373,7 +374,7 @@ def test_parse_on_spends_at_most_two_decisions(name, mini_prod_world, monkeypatc
     """Под `turn_parse = on` (живая LLM) решений хода не больше двух — лимит не меняли (решение владельца 13.10,
     Q4): выбор фраз — первое, выбор строк корзины, строки цены или срока — второе; бюджет хода не исчерпан."""
 
-    _turn, row, oracle = _class_turn(name, "deploy_parse", "oracle", mini_prod_world, monkeypatch)
+    _turn, row, oracle = _class_turn(name, "deploy", "oracle", mini_prod_world, monkeypatch)
     decisions = [(entry["task"], entry["status"]) for entry in row.get("choose") or [] if not entry.get("shadow")]
     assert len(decisions) <= 2, decisions
     assert "phrases" not in oracle.calls or decisions[0] == ("turn_phrases", "picked"), decisions
@@ -387,7 +388,7 @@ def test_parse_on_with_llm_down_names_no_lone_weak_price(name, mini_prod_world, 
     как «ту самую», при дословном названии нет цен соседей. Держится во всех 16 случаях, в том числе в двух
     xfail основного теста (там нарушено другое: разрез фразы одной услуги и «не нашёл» сплошного списка)."""
 
-    turn, _row, _oracle = _class_turn(name, "deploy_parse", "down", mini_prod_world, monkeypatch)
+    turn, _row, _oracle = _class_turn(name, "deploy", "down", mini_prod_world, monkeypatch)
     lone = [v for v in _violations(CASES[name], turn["text"], "down") if "одиночная цена" in v or "чужих строк" in v or "вариантов" in v]
     assert lone == [], "\n".join([*lone, "--- ответ:", turn["text"]])
 

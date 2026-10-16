@@ -41,7 +41,7 @@ def test_config_default_is_three():
 def test_weak_position_without_llm_shows_at_most_the_setting(limit, mini_prod_world, monkeypatch):  # noqa: F811
     from messengers_router.runtime_config import config as cfg
 
-    _configure(monkeypatch, "deploy_parse")
+    _configure(monkeypatch, "deploy")
     monkeypatch.setattr(cfg, "MR_PARSE_FAIL_VARIANTS", limit, raising=False)
     case = CASES["list_true_three"]  # «ферритин» сильная, «ттг» и «витамин д» — слабые
     with ev_world.FrozenWorld(mini_prod_world, "day"):

@@ -65,7 +65,7 @@ def test_single_word_neighbours_give_no_context(catalog):
 
 
 def test_with_the_model_the_position_gets_its_own_price(mini_prod_world, monkeypatch):  # noqa: F811
-    _configure(monkeypatch, "deploy_parse")
+    _configure(monkeypatch, "deploy")
     oracle = _OracleLLM(_CASE, tuple(_CASE.positions))
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
@@ -78,7 +78,7 @@ def test_with_the_model_the_position_gets_its_own_price(mini_prod_world, monkeyp
 
 
 def test_without_the_model_the_position_stays_unrecognized(mini_prod_world, monkeypatch):  # noqa: F811
-    _configure(monkeypatch, "deploy_parse")
+    _configure(monkeypatch, "deploy")
     with ev_world.FrozenWorld(mini_prod_world, "day"):
         [turn] = run_dialog([_REPLY], "basket-list-context-down")
     assert _B12 not in _priced(turn["text"]), turn["text"]

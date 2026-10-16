@@ -11,6 +11,30 @@
 
 ---
 
+## STEP-2026-10-17-DEDUP-SETS — сняты наборы-дублёры выключателей в тестах (`deploy_parse`, `next`) — СДЕЛАНО (решение владельца 16.10, после деплоя 6; поведение не меняется)
+
+- **Зачем:** после снятия пяти выключателей (STEP-2026-10-17-ONE-PATH-*) наборы `deploy_parse` и `next` в
+  `test_l14_two_turn_consumers.py` и `deploy_parse` в `test_price_one_or_many_class.py` стали равны `deploy`: гейт гонял те
+  же ходы дважды-трижды (~4% тестов, 207 параметров).
+- **Что:** одно имя набора деплоя — `deploy` (плюс исторический `default`). `_SETS` обоих файлов — `default` и `deploy`;
+  `SHOWN_CONFIGS` снят (`test_l14_walkin_shown.py` — под `deploy`); `test_l14_context_shown.py` — `SHOWN = ("deploy",)`,
+  повтор «глюкоза» (был под `next`) — под `deploy`, случай сохранён; `test_open_bugs_2026_10_14.py` — `_ALL_SETS` снят;
+  восемь файлов, звавших `_configure(…, "deploy_parse")`, зовут `"deploy"`; `test_l14_journal_mention.py` берёт
+  `BASE_CONFIGS` — без правки.
+- **Не дубль — переименован:** `deploy_parse` в `test_turn_parse_fallback_class.py` — свой набор (`parse_fail_variants = 5`
+  поверх деплоя; на проде и в умолчании — 3), эталон отличается от `prod` в трёх случаях (`control_separated`,
+  `run_on_words`, `status_too_many`). Имя вводило в заблуждение — теперь `fail_variants_5`. Эталон
+  `price_turns_parse_fallback.json` переснят `GOLDEN_UPDATE=1`: дифф — только 24 ключа `*-deploy_parse` →
+  `*-fail_variants_5`, содержимое побайтно то же.
+- **Гейт:** ruff 0; pytest exit 0 — 4561 passed / 13 xfailed (было 4768 / 13 на `0aff90d`); собрано 4781 → 4574, снятые
+  параметры поимённо — только наборы-дублёры (`two_turn_consumers` 148, `journal_mention` 18, `context_shown` 16,
+  `walkin_shown` 14, `open_bugs` 11 = 207); переименованы 24 случая эталона и 2 id повтора в `context_shown`.
+- **Инвариант:** набор выключателей в тестах — по значению, а не по истории: совпавший с другим набор снимается, не
+  совпавший называется по тому, чем отличается.
+- **Покрытие:** `test_turn_parse_fallback_class.py::test_golden_has_no_orphans` (ключи эталона = случаи × наборы).
+
+---
+
 ## STEP-2026-10-17-VBW-ON — умолчание `variant_b_wordforms = on` — СДЕЛАНО (решение владельца 16.10: включать только при 0 хуже)
 
 - **Зачем:** решение владельца 16.10 (п. 3 сессии «один путь»): включить словоформы варианта B умолчанием, только если

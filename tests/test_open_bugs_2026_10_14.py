@@ -22,8 +22,8 @@
    показанных (`shown_context._keep_service_on_expand`). Симптом «как сейчас» и `xfail` под `off` сняты вместе с ним.
 
 Ходы — через обработчик эндпоинта (`messenger_generate_once`) в мире стенда на мини-проде (`FrozenWorld`: день, сеть
-закрыта, LLM гейта недоступна), диалоги из двух-трёх ходов; наборы выключателей `default` и `deploy`, для бага 2 —
-ещё `next` (как в `test_l14_two_turn_consumers.py`).
+закрыта, LLM гейта недоступна), диалоги из двух-трёх ходов; наборы выключателей `default` и `deploy` (набор кандидата `next` для бага 2
+совпал с `deploy` и снят после деплоя 6, STEP-2026-10-17-DEDUP-SETS).
 """
 
 from __future__ import annotations
@@ -40,13 +40,10 @@ import pytest
 from evalbench import world as ev_world
 from messengers_router import expects
 from messengers_router import shown_context
-from tests.test_l14_two_turn_consumers import _SETS as _L14_SETS
 from tests.test_price_one_or_many_class import _DEFAULT, _DEPLOY
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
 _SETS = {"default": _DEFAULT, "deploy": _DEPLOY}
-# Баг 2 — ещё и под набором кандидата `next` (цена через модуль выбора), как в `test_l14_two_turn_consumers.py`.
-_ALL_SETS = {**_SETS, "next": _L14_SETS["next"]}
 
 
 def _play(turns: list[str], config: str, monkeypatch, world_dir: Path, session: str) -> list[dict[str, Any]]:
@@ -57,7 +54,7 @@ def _play(turns: list[str], config: str, monkeypatch, world_dir: Path, session: 
     from messengers_router.runtime_config import config as cfg
     from messengers_router.services import Services
 
-    for key, value in _ALL_SETS[config].items():
+    for key, value in _SETS[config].items():
         monkeypatch.setattr(cfg, key, value, raising=False)
 
     with ev_world.FrozenWorld(world_dir, "day") as world:
@@ -203,7 +200,7 @@ _LEAKING = ("все", "Всё!", "все услуги?", "ВСЕ АНАЛИЗЫ"
 _NOT_LEAKING = ("покажи все", "показать все.", "все варианты")
 
 
-@pytest.mark.parametrize("config", sorted(_ALL_SETS))
+@pytest.mark.parametrize("config", sorted(_SETS))
 @pytest.mark.parametrize("reply", _NOT_LEAKING)
 def test_show_all_with_verb_keeps_context_on_what_was_shown(reply, config, mini_prod_world, monkeypatch):  # noqa: F811
     """Граница класса: эти формы и до L-14 вели себя правильно случайно (поиск по реплике вернул текущую услугу), теперь
@@ -213,7 +210,7 @@ def test_show_all_with_verb_keeps_context_on_what_was_shown(reply, config, mini_
     _assert_context_is_what_was_shown(record, shown, query)
 
 
-@pytest.mark.parametrize("config", sorted(_ALL_SETS))
+@pytest.mark.parametrize("config", sorted(_SETS))
 @pytest.mark.parametrize("reply", _LEAKING)
 def test_show_all_keeps_context_on_what_was_shown(reply, config, mini_prod_world, monkeypatch):  # noqa: F811
     """Класс: «показать все» после списка семейства — не название услуги. Контекст после раскрытия — то, что пациент
@@ -239,7 +236,7 @@ def test_show_all_holds_what_was_shown(reply, config, mini_prod_world, monkeypat
     assert first["service_name"] in first["shown"] and second["service_name"] == first["service_name"]
 
 
-@pytest.mark.parametrize("config", sorted(_ALL_SETS))
+@pytest.mark.parametrize("config", sorted(_SETS))
 @pytest.mark.parametrize("reply", _LEAKING)
 def test_show_all_under_shown_then_price_shows_only_what_was_shown(reply, config, mini_prod_world, monkeypatch):  # noqa: F811
     """Три хода: … → «показать все» → «сколько стоит?». Цена — строками, которые пациент видел, под названием
