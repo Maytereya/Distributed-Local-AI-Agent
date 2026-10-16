@@ -1,4 +1,5 @@
-"""Гард П2 у фразы разбора судит LLM (класс A разбора `e99c0eb`, решение владельца 15.10; `parse_price_guard`).
+"""Гард П2 у фразы разбора судит LLM (класс A разбора `e99c0eb`, решение владельца 15.10). Единственный путь с 17.10:
+выключатель `parse_price_guard` (`rules` — гард по словарю каталога) снят (STEP-2026-10-17-ONE-PATH-PARSE-PRICE-GUARD).
 
 g0757 «Сколько стоит анализ крови на концентрацию карбамазепина»: LLM разбора верно выбирает одну услугу, но гард П2
 (`query_has_unsatisfiable_qualifier`) сверяет слова реплики со словарём прайса только дословно и считает
@@ -6,12 +7,11 @@ g0757 «Сколько стоит анализ крови на концентр�
 ответ «Уточните». Инвариант 3 класса `guard_over_blocks_silently`: гард не вправе объявлять пациентское слово
 несуществующим по словарю каталога.
 
-Под `parse_price_guard = llm` и `turn_parse = on` фразу, выбранную LLM разбора одной слабой услугой, судит выбор
-строки (`select_price_rows`, правило 3 промпта отсекает «по ОМС»); гард П2 — страховка при сбое LLM.
+Фразу, выбранную LLM разбора одной слабой услугой, судит выбор строки (`select_price_rows`, правило 3 промпта отсекает «по ОМС»); гард П2 — страховка при сбое LLM.
 
 Инварианты класса (через обработчик эндпоинта, мини-прод):
-- `rules` — как было: «Уточните», LLM цены не зовётся;
-- `llm` — выбор строки находит услугу в другой словоформе; LLM недоступна — ответ правил, без цены;
+- выбор строки находит услугу в другой словоформе; LLM недоступна — ответ правил, без цены; прежнее значение
+  `parse_price_guard = rules` в конфиге ничего не меняет;
 - реплика с уточнением П2, которую разбор не отдаёт LLM («приём терапевта по ОМС» — одна фраза), — как было;
 - два хода: короткий вопрос после ответа не получает цену того, чего пациент не видел.
 """
@@ -28,12 +28,6 @@ _PHRASE = "анализ крови на концентрацию феррити�
 _FERRITIN = "Ферритин — 530"
 
 
-def _guard(monkeypatch, mode: str) -> None:
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_PARSE_PRICE_GUARD", mode, raising=False)
-
-
 def test_the_guard_reads_the_word_form_as_an_absent_qualifier(mini_prod_world):  # noqa: F811
     """Предусловие класса: на мини-прайсе гард П2 считает «ферритина» уточнением (дословно в прайсе — «ферритин»)."""
 
@@ -48,23 +42,19 @@ def test_the_guard_reads_the_word_form_as_an_absent_qualifier(mini_prod_world): 
         assert not H.query_has_unsatisfiable_qualifier("Сколько стоит ферритин", rows)
 
 
-def test_rules_keep_the_old_answer(mini_prod_world, monkeypatch):  # noqa: F811
-    _guard(monkeypatch, "rules")
-    oracle = _Oracle((_PHRASE,), ("Ферритин",))
-    [turn], _rows = _dialog([_REPLY], mini_prod_world, monkeypatch, "guard-rules", oracle)
-    assert _FERRITIN not in turn["text"] and "rows" not in oracle.asked, turn["text"]
+@pytest.mark.parametrize("old_key", [None, "rules"])
+def test_llm_finds_the_service_named_in_another_word_form(old_key, mini_prod_world, monkeypatch):  # noqa: F811
+    from messengers_router.runtime_config import config as cfg
 
-
-def test_llm_finds_the_service_named_in_another_word_form(mini_prod_world, monkeypatch):  # noqa: F811
-    _guard(monkeypatch, "llm")
+    if old_key is not None:  # прод держит ключ до деплоя 6 — он не читается
+        monkeypatch.setattr(cfg, "MR_PARSE_PRICE_GUARD", old_key, raising=False)
     oracle = _Oracle((_PHRASE,), ("Ферритин",))
-    [turn], rows = _dialog([_REPLY], mini_prod_world, monkeypatch, "guard-llm", oracle)
+    [turn], rows = _dialog([_REPLY], mini_prod_world, monkeypatch, f"guard-llm-{old_key}", oracle)
     assert _FERRITIN in turn["text"], turn["text"]
     assert rows[-1].get("price_guard") == "llm"
 
 
 def test_llm_down_keeps_the_rules_answer_without_a_price(mini_prod_world, monkeypatch):  # noqa: F811
-    _guard(monkeypatch, "llm")
     oracle = _Oracle((_PHRASE,))  # выбор строки — «недоступна»
     [turn], _rows = _dialog([_REPLY], mini_prod_world, monkeypatch, "guard-llm-down", oracle)
     assert "руб" not in turn["text"], turn["text"]
@@ -75,7 +65,6 @@ def test_a_qualifier_the_parse_does_not_hand_to_the_llm_stays_unpriced(reply, mi
     """П2 (решение владельца): уточнение, которого клиника не оказывает, — честное «не нашёл», не платная цена.
     Выбор строки, который «нашёл бы» терапевта, здесь не спрашивается: разбор не выбирает фразу LLM."""
 
-    _guard(monkeypatch, "llm")
     oracle = _Oracle(("приём терапевта по ОМС",), ("Прием", "Консультация"))
     [turn], _rows = _dialog([reply], mini_prod_world, monkeypatch, f"guard-p2-{reply[-4:]}", oracle)
     assert "руб" not in turn["text"], turn["text"]
@@ -83,7 +72,6 @@ def test_a_qualifier_the_parse_does_not_hand_to_the_llm_stays_unpriced(reply, mi
 
 @pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
 def test_follow_up_after_the_found_word_form_stays_on_what_was_shown(follow_up, mini_prod_world, monkeypatch):  # noqa: F811
-    _guard(monkeypatch, "llm")
     first, second = _dialog([_REPLY, follow_up], mini_prod_world, monkeypatch, f"guard-two-{follow_up}", _Oracle((_PHRASE,), ("Ферритин",)))[0]
     _assert_follow_up_stays_on_what_was_shown(first, second)
 

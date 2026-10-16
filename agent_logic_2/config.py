@@ -204,7 +204,6 @@ class MessengerRouterConfig:
     pending_reply_types: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
     reask_limit: str
-    parse_price_guard: str
     parse_fragment_windows: str
     parse_complete_windows: str
     p2_llm_judge: str
@@ -479,12 +478,9 @@ settings = Settings(
         # вопроса переспрашивает без счёта); on — один вопрос звучит не больше двух раз подряд, третьего нет:
         # бот называет нужный ответ и предлагает оператора. [MESSENGER_ROUTER] reask_limit
         reask_limit=_get_enum("MESSENGER_ROUTER", "reask_limit", default="off", allowed={"off", "on"}),
-        # Гард П2 («уточнения нет в прайсе») у фразы разбора (класс A, решение владельца 15.10): rules — как было
-        # (гард судит реплику; «карбамазепина» в родительном падеже он считает уточнением, которого нет в прайсе,
-        # и цена не ищется); llm — под turn_parse = on одну выбранную LLM разбора фразу судит выбор строки
-        # (`select_price_rows`, правило 3 промпта отсекает «по ОМС»), гард — страховка при сбое LLM. По умолчанию llm —
-        # как на проде с 16.10 (решение владельца 16.10, деплой 5). [MESSENGER_ROUTER] parse_price_guard
-        parse_price_guard=_get_enum("MESSENGER_ROUTER", "parse_price_guard", default="llm", allowed={"rules", "llm"}),
+        # Гард П2 («уточнения нет в прайсе») у слабой фразы разбора судит выбор строки (класс A, решение владельца 15.10) —
+        # единственный путь с 17.10: ключ [MESSENGER_ROUTER] parse_price_guard (rules — гард по словарю каталога) снят и
+        # больше не читается (в config.ini прода безвреден; STEP-2026-10-17-ONE-PATH-PARSE-PRICE-GUARD).
         # Сильные окна внутри слабого фрагмента по разделителям — дополнительные кандидаты выбора LLM разбора
         # (15.10, смоук прода: «сколько стоят ферритин, …» → фрагмент «стоят ферритин», ферритин терялся): off — как
         # было; on — окно 1–3 слова, сильное по данным МИС («ферритин»), предлагается LLM; разрезом не служит.
@@ -659,7 +655,6 @@ MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
-MR_PARSE_PRICE_GUARD = settings.messenger_router.parse_price_guard
 MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows
 MR_PARSE_COMPLETE_WINDOWS = settings.messenger_router.parse_complete_windows
 MR_P2_LLM_JUDGE = settings.messenger_router.p2_llm_judge

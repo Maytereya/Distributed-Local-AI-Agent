@@ -52,7 +52,7 @@ from tests.test_price_turns_golden import FIXTURE, run_dialog
 # Наборы деплоя 14.10 и `default` — исторические. «Контекст = показанное», фраза журнала из упоминания хода и выбор
 # строки модулем — во всех наборах: выключатели `context_shown`, `journal_phrase`, `choose_price` сняты 17.10
 # (STEP-2026-10-17-ONE-PATH-*). В `default` так же явно — выбор строки прежним вызовом и гарды П2 правил (умолчания кода
-# = прод с 17.10, STEP-2026-10-17-DEFAULTS-D: `choose_price = on`, `parse_price_guard = llm`, `p2_llm_judge = on`); набор
+# = прод с 17.10, STEP-2026-10-17-DEFAULTS-D: `p2_llm_judge = on`; `choose_price` и `parse_price_guard` сняты); набор
 # деплоя гарды П2 не задаёт — тесты класса A и судьи П2 ставят их сами до `_deploy`.
 _DEPLOY = {
     "MR_TURN_UNDERSTANDING_PRICE": "on",
@@ -66,7 +66,6 @@ _DEFAULT = {
     "MR_CHOOSE_READINESS": "off",
     "MR_CHOOSE_SYMPTOM": "off",
     "MR_PARSE_FAIL_VARIANTS": 5,
-    "MR_PARSE_PRICE_GUARD": "rules",
     "MR_P2_LLM_JUDGE": "off",
 }
 # Набор выключателей → значения поверх конфига гейта. Разбор реплики (`turn_parse = on`) — единственный режим

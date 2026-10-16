@@ -181,12 +181,10 @@ def _names_a_service(fragments: list[str]) -> list[str]:
 
 
 def _parse_phrase_judged_by_llm(query: str) -> str:
-    """Под `parse_price_guard = llm` и `turn_parse = on` (класс A, решение владельца 15.10): фраза, которую LLM
-    разбора выбрала одной слабой услугой, — её «есть ли такое в прайсе» решает выбор строки, а не гард П2 по
-    словарю каталога. Иначе пусто — гард как раньше."""
+    """Класс A (решение владельца 15.10; единственный путь с 17.10 — выключатель `parse_price_guard` снят): фраза,
+    которую LLM разбора выбрала одной слабой услугой, — её «есть ли такое в прайсе» решает выбор строки, а не гард П2
+    по словарю каталога. Иначе пусто — гард как раньше (сбой LLM выбора строки — ответ правил, а у них гард)."""
 
-    if str(getattr(_cfg, "MR_PARSE_PRICE_GUARD", "llm") or "").strip().lower() != "llm":
-        return ""
     parse = turn_parse.acting_for(query)
     if parse is None or parse.is_list or len(parse.items) != 1 or parse.status != turn_parse.ParseStatus.PICKED:
         return ""

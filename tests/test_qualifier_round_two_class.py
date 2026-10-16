@@ -34,7 +34,6 @@ from tests.test_turn_parse_t3 import _ROWS_MARKS, _Oracle
 # Прод 16.10 поверх набора деплоя: разбор хода, выбор строки промптом модуля (коды причин), L-13, класс A, судья П2.
 _PROD_1016 = {
     "MR_PRICE_MATCH_POLICY": "on",
-    "MR_PARSE_PRICE_GUARD": "llm",
     "MR_STRONG_MATCH": "data",
     "MR_STRONG_PHRASE_GUARD": "llm",
     "MR_P2_LLM_JUDGE": "on",
@@ -159,14 +158,12 @@ def test_class_a_other_reason_keeps_the_second_round(reply, mini_prod_world, mon
 
 @pytest.mark.parametrize("reply", _CLASS_A)
 def test_class_a_rows_down_answers_as_the_rules_guard(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    """Сбой LLM выбора строки — как раньше: ответ правил с гардом П2 (`parse_price_guard = rules`), цены нет."""
+    """Сбой LLM выбора строки — как раньше: ответ правил с гардом П2, цены нет (до 17.10 — равен ответу под
+    `parse_price_guard = rules`; выключатель снят)."""
 
     phrase = _CLASS_A[reply]
     [down], _rows = _run([reply], mini_prod_world, monkeypatch, llm=_Judge((phrase,), rows_down=True), session=_sid("a-d", reply))
-    [rules], _rows = _run(
-        [reply], mini_prod_world, monkeypatch, llm=_Judge((phrase,), rows_down=True), session=_sid("a-r", reply), MR_PARSE_PRICE_GUARD="rules"
-    )
-    assert down["text"] == rules["text"] and not _priced(down["text"]), down["text"]
+    assert not _priced(down["text"]), down["text"]
 
 
 def test_class_a_without_a_condition_does_not_change(mini_prod_world, monkeypatch):  # noqa: F811

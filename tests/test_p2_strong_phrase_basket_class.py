@@ -36,7 +36,6 @@ from tests.test_turn_parse_slot import _deploy
 from tests.test_turn_parse_t3 import _FOLLOW_UPS, _PHRASES_MARK, _ROWS_MARKS, _assert_follow_up_stays_on_what_was_shown
 
 _PROD_1016 = {
-    "MR_PARSE_PRICE_GUARD": "llm",
     "MR_P2_LLM_JUDGE": "on",
 }
 _WINDOWS = {"MR_PARSE_FRAGMENT_WINDOWS": "on", "MR_PARSE_COMPLETE_WINDOWS": "on"}

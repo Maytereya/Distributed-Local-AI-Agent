@@ -11,6 +11,25 @@
 
 ---
 
+## STEP-2026-10-17-ONE-PATH-PARSE-PRICE-GUARD — снят выключатель `parse_price_guard`: слабую фразу разбора судит выбор строки — СДЕЛАНО (решение владельца 16.10, деплой 6)
+
+- **Зачем:** на проде `llm` с 16.10 04:30 (деплой 3), умолчание кода с 17.10; `rules` (гард П2 по словарю каталога у
+  слабой фразы, выбранной LLM разбора: «карбамазепина» в родительном падеже — «уточнения нет в прайсе», BUG-2026-10-15-
+  PARSE-GUARD-WORDFORM) жил только в тестах.
+- **Снято:** ключ `[MESSENGER_ROUTER] parse_price_guard` (`config.py`, `MR_PARSE_PRICE_GUARD`; в `config.ini` прода
+  безвреден), проверка режима в `prices._parse_phrase_judged_by_llm`. Сбой LLM выбора строки — ответ правил, а у них гард
+  прежний: цены нет (как под `llm`).
+- **Тесты (шаг (а)):** `test_parse_price_guard_class` — «`rules` как было» заменён прежним значением ключа в конфиге
+  (ничего не меняет); `test_qualifier_round_two_class` — сбой выбора строки: цены нет (было «равно ответу под `rules`»);
+  наборы (`default`, классовые) не задают `MR_PARSE_PRICE_GUARD`. Отметки и эталоны не изменились (в `default` при
+  недоступной LLM суд и гард дают одно и то же). Храповик — без изменений.
+- **Инвариант класса:** слабую фразу, выбранную LLM разбора одной услугой, судит выбор строки; ключ `parse_price_guard`
+  ничего не меняет.
+- **Покрытие:** `test_parse_price_guard_class.py::test_llm_finds_the_service_named_in_another_word_form[None|rules]`
+  (через эндпоинт), `test_price_switch_defaults.py::test_parse_price_guard_key_is_not_read`.
+
+---
+
 ## STEP-2026-10-17-ONE-PATH-CHOOSE-PRICE — снят выключатель `choose_price` и прежний промпт `price_service_select`: выбор строки — модулем `choose()` — СДЕЛАНО (решение владельца 16.10, деплой 6)
 
 - **Зачем:** на проде `on` с 16.10 04:30 (деплой 3), умолчание кода с 17.10 (STEP-2026-10-17-DEFAULTS-D); `off` (прежний
