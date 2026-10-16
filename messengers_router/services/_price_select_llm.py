@@ -140,6 +140,7 @@ class PriceSelection:
     search_terms: tuple[str, ...] = ()
     status: str = "picked"
     names: tuple[str, ...] = ()
+    reason: str = ""  # код причины пустого выбора (`none_fit`; только у промпта модуля, `choose_price = on`)
 
 
 def _row_key(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -459,6 +460,7 @@ async def select_price_rows(
     runtime_llm_mode: str = "",
     judge_qualifier: bool = False,
     decide: bool = False,
+    one_round: bool = False,
 ) -> PriceSelection | None:
     """Строки прайса, которые являются той услугой, о которой спросил пациент.
 
@@ -479,6 +481,10 @@ async def select_price_rows(
     :param decide: вернуть решение политики силы совпадения (`none_fit`, `unavailable`, выбор) так, как под
         `price_match_policy = on`, при любом значении выключателя (телеметрия политики — прежняя). Для вызывающего,
         которому нужен ответ LLM «не та услуга» отдельно от сбоя (`p2_llm_judge`, BUG-2026-10-15-P2-ENTITY-BYPASS).
+    :param one_round: только первый круг (без поиска по терминам LLM): пустой выбор — `none_fit` с кодом причины
+        (`reason`) при любых кандидатах и любом коде; None — только сбой. Для суда условия у сильной фразы разбора
+        (BUG-2026-10-16-P2-STRONG-PHRASE-BYPASS): второй круг искал бы «почти то», а под `turn_parse = on` упирался
+        в лимит решений хода (`budget`) и превращал ответ «условия нет» в `unavailable`.
     :return: выбор LLM; None — оставить ответ правил
     """
 
@@ -550,7 +556,7 @@ async def select_price_rows(
         # Названо слишком общее или не услуга — уточнение правил честнее, чем «не нашёл».
         if not candidates or reason in _NOT_A_SERVICE_NAME:
             return None
-        return PriceSelection(rows=(), status="none_fit")
+        return PriceSelection(rows=(), status="none_fit", reason=reason)
 
     def journal_miss(found_terms: list[str], *reasons: str) -> None:
         # Промах — услугу не нашли ни правила (`candidates` пуст), ни LLM: такое слово пациента —
@@ -572,6 +578,8 @@ async def select_price_rows(
     if chosen:
         picked = PriceSelection(rows=tuple(_prefer_base_variants(chosen, question)))
         return settle(picked, picked)
+    if one_round:
+        return settle(None, PriceSelection(rows=(), status="none_fit", reason=reason))
     if not terms:
         journal_miss([], reason)
         return settle(None, none_fit(reason))

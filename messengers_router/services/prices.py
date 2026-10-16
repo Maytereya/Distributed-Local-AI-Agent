@@ -280,6 +280,11 @@ def _qualifier_outside_strong_phrase(query: str, strong: PriceSelection, retail_
     return _match_drops_unsatisfiable_qualifier(query, " ".join([phrase, *names]), retail_rows)
 
 
+# Причины пустого выбора, при которых суд условия у сильной фразы говорит «той услуги с этим условием нет»:
+# правило 3 промпта модуля (`qualifier_absent`) и пустой код прежнего промпта (`choose_price = off` причин не знает).
+_CONDITION_ABSENT = frozenset({"qualifier_absent", ""})
+
+
 async def _parse_strong_answer(
     query: str, retail_rows: list[dict[str, Any]], *, context: str, runtime_llm_mode: str
 ) -> PriceSelection | None:
@@ -287,11 +292,16 @@ async def _parse_strong_answer(
 
     LLM разбора может выбрать сильную фразу, оторвав от неё условие («приём терапевта» из «приём терапевта по ОМС»),
     — тогда её строки по данным МИС — платная цена без того, о чём спрашивал пациент. Под `strong_phrase_guard = llm`
-    фраза без слов вне прайса отдаёт строки, как раньше; со словом вне прайса «та ли это услуга с этим условием»
-    решает выбор строки (`judge_qualifier`, правило 3 промпта отсекает «по ОМС»; разговорное слово — «первый приём» —
-    LLM пропускает, словарь бы заглушил: урок BUG-2026-10-15-P2-ENTITY-BYPASS), кандидаты — строки фразы:
-    выбор — цена, `none_fit` — «не нашёл» (`_match_policy_payload`); сбой LLM, «не услуга», `unavailable` — None:
-    сильная фраза ход не решает, дальше путь правил с гардом — как под turn_parse = off.
+    фраза без слов вне прайса отдаёт строки, как раньше; со словом вне прайса его судит выбор строки, один круг
+    (`judge_qualifier`, правило 3 промпта отсекает «по ОМС»; разговорное слово — «первый приём» — LLM пропускает,
+    словарь бы заглушил: урок BUG-2026-10-15-P2-ENTITY-BYPASS), кандидаты — строки фразы. LLM судит условие, а не
+    личность услуги — её решают данные МИС (решение владельца 13.10):
+
+    - выбор строк — они (цена; LLM могла найти и строку с этим условием);
+    - «условия нет» (`qualifier_absent`, пустой код прежнего промпта) — `none_fit`: «не нашёл» (`_match_policy_payload`);
+    - «другая услуга» (`other_service`) — строки сильной фразы: спор LLM с синонимом МИС не довод против данных;
+    - «слишком общее», «не услуга», сбой LLM — None: сильная фраза ход не решает, дальше путь правил с гардом — как под
+      turn_parse = off (дезинформация ценой хуже уточнения).
 
     :return: выбор строк (или решение «не нашёл»); None — разбора сильной фразы нет или ход ведут правила
     """
@@ -313,12 +323,20 @@ async def _parse_strong_answer(
         runtime_llm_mode=runtime_llm_mode,
         judge_qualifier=True,
         decide=True,
+        one_round=True,
     )
-    if selection is None or (not selection.rows and selection.status != "none_fit"):
-        turn_telemetry.note(strong_phrase_guard="fallback")
-        return None
-    turn_telemetry.note(strong_phrase_guard="rows" if selection.rows else "not_found")
-    return selection
+    if selection is not None and selection.rows:
+        turn_telemetry.note(strong_phrase_guard="rows")
+        return selection
+    reason = selection.reason if selection is not None and selection.status == "none_fit" else None
+    if reason in _CONDITION_ABSENT:
+        turn_telemetry.note(strong_phrase_guard="not_found")
+        return selection
+    if reason == "other_service":
+        turn_telemetry.note(strong_phrase_guard="strong")
+        return strong
+    turn_telemetry.note(strong_phrase_guard="fallback")
+    return None
 
 
 def _names_no_service(query: str) -> bool:

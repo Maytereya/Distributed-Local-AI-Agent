@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -29,7 +30,8 @@ from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 from tests.test_turn_parse_shadow import _deploy
-from tests.test_turn_parse_t3 import _FOLLOW_UPS, _Oracle, _assert_follow_up_stays_on_what_was_shown
+from tests.test_turn_parse_t3 import _FOLLOW_UPS, _ROWS_MARKS, _Oracle, _assert_follow_up_stays_on_what_was_shown
+from ollama import GenerateResponse
 
 # Прод 16.10 поверх набора деплоя (`_deploy`): разбор хода, выбор строки промптом модуля, L-13, класс A.
 _PROD_1016 = {
@@ -69,6 +71,23 @@ class _Down:
 
     async def generate(self, **_kwargs):
         raise ConnectionError("тест: LLM недоступна")
+
+
+class _Reason(_Oracle):
+    """Разбор — сильная фраза без условия; выбор строки (промпт модуля) — пусто с кодом причины и терминами второго
+    круга (их суд условия использовать не должен: один круг)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(_PHRASES, ("—",))
+        self.reason = reason
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
+        seen = f"{system}\n\n{prompt}" if system else prompt
+        if system is not None and any(mark in seen for mark in _ROWS_MARKS):
+            self.asked.append("rows")
+            answer = {"picks": [], "reason": self.reason, "search_terms": ["ферритин сыворотки"]}
+            return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
+        return await super().generate(prompt=prompt, system=system, **kwargs)
 
 
 def _llm(kind: str) -> _Oracle:
@@ -222,3 +241,38 @@ def test_second_turn_with_the_condition_after_a_price(mini_prod_world, monkeypat
     assert _priced(first["text"]), first["text"]
     assert not _priced(second["text"]), second["text"]
     assert rows[-1].get("strong_phrase_guard") == "not_found"
+
+
+def test_the_condition_is_judged_in_one_round(mini_prod_world, monkeypatch):  # noqa: F811
+    """«Условия нет» (`qualifier_absent`, правило 3) — «не нашёл» сразу: второй круг по терминам LLM не идёт (он искал
+    бы «почти то», а под `turn_parse = on` упирался в лимит решений хода и превращал ответ в `unavailable` — живой
+    свип 16.10: 19 из 36 ходов «по омс»)."""
+
+    oracle = _Reason("qualifier_absent")
+    [turn], [row], _ = _run([_STRONG_P2[0]], mini_prod_world, monkeypatch, guard="llm", llm=oracle, session=_sid("qa"))
+    assert not _priced(turn["text"]) and "Не нашёл" in turn["text"], turn["text"]
+    assert oracle.asked.count("rows") == 1 and row["strong_phrase_guard"] == "not_found"
+    assert not any(call.get("outcome") == "budget" for call in row.get("llm") or []), row.get("llm")
+
+
+@pytest.mark.parametrize("reply", (_STRONG_P2[0], *_CONVERSATIONAL))
+def test_other_service_keeps_the_mis_rows(reply, mini_prod_world, monkeypatch):  # noqa: F811
+    """«Другая услуга» (`other_service`) — LLM спорит с данными МИС о самой услуге, а судить ей здесь только условие:
+    строки сильной фразы (решение 13.10 — сильное совпадение решают данные МИС), ответ как с 15.10 (живой свип 16.10:
+    «альфа-липопротеин» → синоним МИС «Аполипопротеин A1» терял цену)."""
+
+    [before], _rows, _ = _run([reply], mini_prod_world, monkeypatch, guard="off", llm="not_it", session=_sid("os-off", reply))
+    [after], [row], _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=_Reason("other_service"), session=_sid("os", reply))
+    assert after["text"] == before["text"] and _priced(after["text"]), after["text"]
+    assert row["strong_phrase_guard"] == "strong"
+
+
+@pytest.mark.parametrize("reason", ["too_general", "not_a_service"])
+def test_not_a_service_name_answers_as_turn_parse_off(reason, mini_prod_world, monkeypatch):  # noqa: F811
+    """«Слишком общее» / «не услуга» — сильная фраза ход не решает: путь правил с гардом, как под `turn_parse = off`."""
+
+    reply = _STRONG_P2[0]
+    [off], _rows, _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm="rows_down", parse="off", session=_sid("ng-off", reason))
+    [on], [row], _ = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=_Reason(reason), session=_sid("ng", reason))
+    assert on["text"] == off["text"] and not _priced(on["text"]), on["text"]
+    assert row["strong_phrase_guard"] == "fallback"
