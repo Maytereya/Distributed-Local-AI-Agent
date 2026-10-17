@@ -270,8 +270,7 @@ def _catalog_health_degraded_text(
     if degradation.honest():
         # Ход (д), принцип 3 («уточните у оператора» — только с настоящим переводом): каталог пуст — перевод, а не
         # «попробуйте через 5 минут или напишите «оператор»» (решение владельца 18.10: сбой МИС → оператор).
-        if need_service_catalog and not need_doctors_catalog:
-            return handoff_message("service_error_prices")
+        # Каталог услуг нужен и цене, и записи — общий текст (не «цены» на вопрос о записи).
         if need_doctors_catalog and not need_service_catalog:
             return handoff_message("service_error_doctors_list")
         return handoff_message("service_error")

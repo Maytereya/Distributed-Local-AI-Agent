@@ -369,6 +369,11 @@ class Services:
                 regions = await asyncio.to_thread(api_nayka.site_regions, realtime=True)
                 if not isinstance(regions, list):
                     regions = []
+                if not regions and degradation.honest() and api_nayka.regions_failed():
+                    # Сбой справочника филиалов (DATA-2): хороший кэш не затираем, сбой видят потребители
+                    # (`_regions_last_failed` → честная ветка `tech_unavailable` в адресах).
+                    self._regions_last_failed = True
+                    return self._regions_cache
                 # Прод-бэкенд /regions не отдаёт поле city — выводим его из иерархии
                 # parent ОДИН раз на загрузке, чтобы вся самарская фильтрация работала
                 # (без этого реальные филиалы роняются — BUG-A).

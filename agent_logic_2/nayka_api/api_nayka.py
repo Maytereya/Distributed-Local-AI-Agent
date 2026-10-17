@@ -914,15 +914,28 @@ def site_doctor_regions():
         return []
 
 
+_REGIONS_FAILED = {"at": 0.0}
+
+
+def regions_failed() -> bool:
+    """Последний запрос справочника филиалов (`/regions`) упал (сеть, таймаут, 5xx, битый JSON) или МИС вернула пустой
+    список. `site_regions` при сбое отдаёт `[]` — по одному списку сбой от пустоты не отличить (DATA-2)."""
+
+    return _REGIONS_FAILED["at"] > 0
+
+
 def site_regions(*, realtime: bool = False):
-    """Получить список регионов."""
+    """Получить список регионов. Сбой — `[]` и отметка `regions_failed()` (до следующего удачного запроса)."""
     try:
         resp = _session_get(f"{base_url}/regions", realtime=realtime)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
     except (requests.RequestException, ValueError) as e:
-        print(f"Ошибка при получении списка регионов: {e}")
+        logger.warning("Ошибка при получении списка регионов: %s", e)
+        _REGIONS_FAILED["at"] = time.monotonic() or 1.0
         return []
+    _REGIONS_FAILED["at"] = 0.0 if data else (time.monotonic() or 1.0)  # клиника без филиалов не бывает: пусто — сбой
+    return data
 
 
 def site_promotions(*, realtime: bool = False) -> list:
@@ -1094,6 +1107,10 @@ def find_doctor_schedule(
     if region_name:
         region_id = next((r["id"] for r in regions if region_name.lower() in r["name"].lower()), None)
         if not region_id:
+            if not regions and regions_failed() and str(getattr(c, "MR_MIS_HONEST_DEGRADATION", "off")).lower() == "on":
+                # Справочник филиалов не получен — это сбой МИС, а не «такого региона нет» (DATA-2): строка с маркером
+                # сбоя → `ScheduleSourceUnavailable` → честный перевод `service_error_schedule`.
+                return "Не удалось получить список регионов: справочник филиалов МИС недоступен."
             return f"Регион '{region_name}' не найден."
 
     # --- Получаем врачей (шапка: TTL-кэш; ошибка не кэшируется) ---

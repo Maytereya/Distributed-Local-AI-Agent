@@ -407,6 +407,9 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
             "handoff_message": _R.tech_unavailable_text("список филиалов"),
             "entities_used": entities,
         }
+        if degradation.honest():
+            # Сбой МИС → оператор (решение владельца 18.10): не «попробуйте позже или напишите «оператор»», а перевод.
+            tech_payload.update(handoff_required=True, handoff_reason="service_error", handoff_message=handoff_message("service_error"))
         return _R.mark_degraded(
             tech_payload, upstream="regions", failure_mode=_R.FM_EXCEPTION, fallback_used=False
         )

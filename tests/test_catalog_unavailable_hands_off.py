@@ -5,8 +5,8 @@
 нужную услугу. Попробуйте повторить запрос через 5 минут или напишите «оператор».» — без перевода: пациент сам
 должен звать оператора (принцип 3 запрещает «уточните у оператора» без перевода).
 
-Стало под `on`: тот же ход — перевод с текстом сбоя по источнику (`service_error_prices` / `service_error_doctors_list`
-/ `service_error`). Под `off` — как было.
+Стало под `on`: тот же ход — перевод (`service_error_doctors_list`, если нужен только каталог врачей, иначе общий
+`service_error`: каталог услуг нужен и цене, и записи). Под `off` — как было.
 
 Инвариант класса: пустой каталог МИС не оставляет пациента без оператора.
 """
@@ -32,7 +32,7 @@ def test_empty_catalog_turn(honest, handoff, mini_prod_world, monkeypatch):  # n
 
     assert first["handoff"] is handoff, first["text"]
     if handoff:
-        assert handoff_message("service_error_prices") in first["text"], first["text"]
+        assert handoff_message("service_error") in first["text"], first["text"]
         assert "напишите «оператор»" not in first["text"]
     else:
         assert "Попробуйте повторить запрос через 5 минут" in first["text"]
