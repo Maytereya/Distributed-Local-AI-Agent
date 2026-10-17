@@ -166,3 +166,37 @@ def test_specialty_booking_does_not_call_the_choice(monkeypatch):
     [turn] = _dialog(("хочу записаться к урологу",), "bsc-specialty")
     assert _BRANCH_QUESTION in turn["text"], turn["text"]
     assert llm.price_calls == 0
+
+
+# --- «Где сделать …» (ADDRESS): та же услуга из реплики судится LLM, а не буквами ---------------------------------
+
+
+def test_address_takes_the_service_chosen_by_llm(monkeypatch):
+    # «лфк» по буквам — «Комплексная операция по эндопротезированию…» и её адреса; LLM называет занятие ЛФК.
+    def lfk(rows: dict[str, int]) -> tuple[list[int], list[str]]:
+        picks = [n for name, n in rows.items() if "лечебной физкультур" in name.lower()][:1]
+        return (picks, []) if picks else ([], ["лечебная физкультура"])
+
+    llm = _PriceOnlyLLM(lfk)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+    [turn] = _dialog(("где можно сделать лфк",), "bsc-address-lfk")
+    service = str(turn["entities"].get("service_name") or "")
+    assert "физкультур" in service.lower() and "эндопротез" not in service.lower(), turn["entities"]
+    assert llm.price_calls >= 1
+
+
+def test_address_drops_a_service_the_llm_did_not_confirm(monkeypatch):
+    # Несколько услуг («узи сердца» — эхо взрослым и плода): адреса не фильтруются по одной чужой строке.
+    def echo(rows: dict[str, int]) -> tuple[list[int], list[str]]:
+        return [n for name, n in rows.items() if "эхокардиограф" in name.lower()][:3], []
+
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _PriceOnlyLLM(echo))
+    [turn] = _dialog(("где сделать узи сердца",), "bsc-address-echo")
+    assert "плода" not in str(turn["entities"].get("service_name") or ""), turn["entities"]
+    assert "entity_dropped_unverified_service_name" in turn["flags"]
+
+
+def test_address_without_llm_is_as_before():
+    # LLM недоступна — как было, по правилам (решение «названия на выбор» — о записи).
+    [turn] = _dialog(("где сделать узи щитовидки",), "bsc-address-down")
+    assert turn["entities"].get("service_name") == "Ультразвуковое исследование щитовидной железы", turn["entities"]

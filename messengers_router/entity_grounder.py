@@ -212,8 +212,48 @@ def _is_doctor_like_service_collision(
 # Названия услуг на выбор пациенту, когда цель записи не решена (`judge_booking_service` → `choose`): служебный ключ
 # решения, ответ задаёт роутер (`router._maybe_ask_booking_service_choice`), в состояние он не попадает.
 BOOKING_SERVICE_OPTIONS_KEY = "_booking_service_options"
+# Метки, где услугу из реплики судит выбор LLM (`judge_booking_service`), а не догадка правил по буквам: запись и «где
+# сделать». Цена судит сама (`_price_select_llm`); TEST_ASSIST догадку по буквам не брал (свип 18.10).
+_LLM_JUDGED_SERVICE_LABELS = frozenset({"APPOINTMENT", "ADDRESS"})
 # Названо слишком общее: названия — примеры, а не полный список (`router._maybe_ask_booking_service_choice`).
 BOOKING_SERVICE_CLARIFY_KEY = "_booking_service_clarify"
+
+
+def _apply_service_verdict(
+    *, label: str, verdict: Any, canonical: str, phrase: str, out: dict[str, Any], flags: set[str]
+) -> str | None:
+    """Исход выбора LLM (`judge_booking_service`) → значение услуги; None — решено иначе (снята, на выбор, на подтверждение).
+
+    Запись: несколько — названия на выбор; одно название без LLM — «Похоже, вы имели в виду …?»; «слишком общее» —
+    уточнить; «не нашла» — честный отказ гарда B′. «Где сделать …» (ADDRESS): всё, кроме одной услуги, снимает услугу —
+    ответ филиалами без фильтра по чужой строке (адреса «Mg+ (магний)» на «магнитотерапию» — дезинформация местом); LLM
+    недоступна — как было, по правилам (решение владельца 18.10 «названия на выбор» — о записи).
+    """
+
+    if verdict.action == "keep":
+        return canonical
+    if verdict.action == "replace":
+        return verdict.name
+    if label == "ADDRESS":
+        if verdict.status == "unavailable":
+            return canonical
+        flags.add("entity_dropped_unverified_service_name")
+        return None
+    if verdict.action == "refuse":
+        flags.add("entity_dropped_unverified_service_name")
+        return None
+    if verdict.action == "clarify":
+        out[BOOKING_SERVICE_OPTIONS_KEY] = list(verdict.names)
+        out[BOOKING_SERVICE_CLARIFY_KEY] = True
+        return None
+    if len(verdict.names) == 1:
+        # Одно название — прежнее подтверждение «Похоже, вы имели в виду …?».
+        out["_catalog_service_candidate"] = verdict.names[0]
+        out["_catalog_service_query"] = phrase
+        flags.add("entity_catalog_service_fuzzy_candidate")
+    else:
+        out[BOOKING_SERVICE_OPTIONS_KEY] = list(verdict.names)
+    return None
 
 
 def _is_verbatim_catalog_name(value: str, user_text: str) -> bool:
@@ -603,14 +643,14 @@ async def ground_decision_entities(
                         canonical = str(match.get("canonical") or "").strip()
                         if (
                             canonical
-                            and label == "APPOINTMENT"
+                            and label in _LLM_JUDGED_SERVICE_LABELS
                             and phrase_in_reply
                             and not nonbookable_keep
                             # Флюорограф/маммограф — запись только через регистратуру (планировщик, прод #668): какая
                             # строка прайса, не важно, выбор не нужен.
                             and not is_fixed_equipment_service(phrase)
                         ):
-                            # Цель записи — услуга, которую назвал пациент: догадку правил судит LLM, как у цены
+                            # Услугу, которую назвал пациент, судит LLM, как у цены, — не буквы
                             # (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS: «гастроскопию» → «Гастрин»).
                             verdict = await judge_booking_service(
                                 phrase,
@@ -621,24 +661,11 @@ async def ground_decision_entities(
                             )
                             if verdict.status:
                                 flags.add(f"booking_service_{verdict.status}")
-                            if verdict.action == "refuse":
-                                flags.add("entity_dropped_unverified_service_name")
+                            canonical = _apply_service_verdict(
+                                label=label, verdict=verdict, canonical=canonical, phrase=phrase, out=out, flags=flags
+                            )
+                            if canonical is None:
                                 continue
-                            if verdict.action == "clarify":
-                                out[BOOKING_SERVICE_OPTIONS_KEY] = list(verdict.names)
-                                out[BOOKING_SERVICE_CLARIFY_KEY] = True
-                                continue
-                            if verdict.action == "choose":
-                                if len(verdict.names) == 1:
-                                    # Одно название — прежнее подтверждение «Похоже, вы имели в виду …?».
-                                    out["_catalog_service_candidate"] = verdict.names[0]
-                                    out["_catalog_service_query"] = phrase
-                                    flags.add("entity_catalog_service_fuzzy_candidate")
-                                else:
-                                    out[BOOKING_SERVICE_OPTIONS_KEY] = list(verdict.names)
-                                continue
-                            if verdict.action == "replace":
-                                canonical = verdict.name
                         if canonical:
                             out[key] = canonical
                             if canonical != phrase:
