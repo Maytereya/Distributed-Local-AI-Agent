@@ -322,11 +322,8 @@ def get_yesterday_str() -> str:
 
 
 def get_active_date_str() -> str:
-    """Дата «активного» кэша по Самаре: до 06:00 — вчера, после — сегодня."""
-    now = _now_samara()
-    if now.hour >= 6:
-        return now.strftime("%Y%m%d")
-    return (now - timedelta(days=1)).strftime("%Y%m%d")
+    """Дата «активного» кэша — «день данных» по Самаре (`snapshots.data_day`): до 07:30 — вчера, после — сегодня."""
+    return snapshots.data_day(_now_samara())
 
 
 def _file_has_doctors(file: Path) -> bool:
@@ -672,9 +669,8 @@ def get_cached_doctors_data() -> list:
     return snapshots.report(existing_file, None).rows
 
 # ==========================
-# Ежедневное обновление кэша в 07:45 (Самара)
+# Обновление врачей — шаг ежедневного цикла `daily_refresh` (07:30 по Самаре)
 # ==========================
-_refresh_task = None
 
 async def _refresh_once():
     # Логгер, а не print: сбой фонового обновления должен быть виден в логе контейнера (DATA-10).
@@ -695,31 +691,12 @@ async def _refresh_once():
     except Exception:
         logger.warning("[DAILY REFRESH] Ошибка обновления кэша врачей", exc_info=True)
 
-async def _daily_refresh_loop():
-    await snapshots.run_daily(7, 45, _refresh_once, _now_samara)
-
 def ensure_daily_refresh_started() -> bool:
-    """Запускает фоновую задачу обновления кэша в 07:45 по Самаре (idempotent).
-    Возвращает True, если задача запущена (или уже была запущена) внутри запущенного event loop.
-    """
-    global _refresh_task
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # нет активного event loop — запустить позже
-        return False
-    if _refresh_task is None or _refresh_task.done():
-        _refresh_task = loop.create_task(_daily_refresh_loop())
-        logger.info("[DAILY REFRESH] Планировщик врачей запущен")
-        # Если активного файла нет (например, приложение запущено после 07:45),
-        # дергаем немедленное обновление в фоне, чтобы не тратить время на первый запрос.
-        try:
-            active_file = DATA_DIR / f"doctors_{get_active_date_str()}.jsonl"
-            if not active_file.exists():
-                loop.create_task(_refresh_once())
-        except Exception:
-            logger.warning("[DAILY REFRESH] Немедленное обновление врачей не запущено", exc_info=True)
-    return True
+    """Ежедневное обновление срезов — один цикл для всех справочников (`daily_refresh`, 07:30 по Самаре, повтор каждые
+    5 минут до успеха). Имя сохранено для вызывающих (`router_preprocessor`)."""
+    from agent_logic_2.nayka_api import daily_refresh
+
+    return daily_refresh.ensure_started()
 
 
 def _units_tree() -> Dict[int, Set[int]]:

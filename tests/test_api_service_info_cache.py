@@ -65,41 +65,6 @@ def test_update_service_info_keeps_rows_with_useful_fields(monkeypatch, tmp_path
     assert rows[1]["extra"] == {"foo": "bar"}
 
 
-def test_ensure_daily_service_info_refresh_started_schedules_loop_and_warmup(monkeypatch, tmp_path: Path):
-    target = tmp_path / "service_info_20260331.jsonl"
-
-    class DummyTask:
-        """Простой объект задачи для проверки запуска планировщика."""
-
-        def __init__(self, coro):
-            self.coro = coro
-
-        def done(self) -> bool:
-            return False
-
-    class DummyLoop:
-        """Фиктивный event loop, который собирает созданные coroutine."""
-
-        def __init__(self):
-            self.created = []
-
-        def create_task(self, coro):
-            self.created.append(coro)
-            return DummyTask(coro)
-
-    loop = DummyLoop()
-    monkeypatch.setattr(api_service_info.asyncio, "get_running_loop", lambda: loop)
-    monkeypatch.setattr(api_service_info, "_SERVICE_INFO_REFRESH_TASK", None)
-    monkeypatch.setattr(api_service_info, "service_info_path", lambda date=None: target)
-
-    started = api_service_info.ensure_daily_service_info_refresh_started()
-
-    assert started is True
-    assert len(loop.created) == 2
-    for coro in loop.created:
-        coro.close()
-
-
 def test_ensure_daily_service_info_refresh_started_without_loop_returns_false(monkeypatch):
     def fail_loop():
         raise RuntimeError("no loop")

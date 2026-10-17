@@ -218,16 +218,12 @@ class Services:
         - price_by_region JSONL — справочник прайса.
         - service_info JSONL — описания услуг для подготовки/PRICE.
         """
-        # Сбой старта планировщика не ломает ход, но виден в логе (DATA-10: раньше `pass` — срез тихо не обновлялся).
-        for start in (
-            api_nayka.ensure_daily_refresh_started,
-            api_price.ensure_daily_price_refresh_started,
-            api_service_info.ensure_daily_service_info_refresh_started,
-        ):
-            try:
-                start()
-            except Exception:
-                logger.warning("планировщик обновления срезов не запущен: %s", getattr(start, "__name__", start), exc_info=True)
+        # Один цикл для всех справочников (`daily_refresh`: 07:30 местного времени, параллельно, повтор каждые 5 минут до
+        # успеха — решение владельца 18.10). Сбой старта не ломает ход, но виден в логе (DATA-10: раньше `pass`).
+        try:
+            api_nayka.ensure_daily_refresh_started()
+        except Exception:
+            logger.warning("цикл обновления срезов не запущен", exc_info=True)
 
     @staticmethod
     def _schedule_cache_key(last_name: str, region_name: str | None = None) -> tuple[str, str]:

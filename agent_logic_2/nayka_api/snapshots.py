@@ -40,8 +40,16 @@ STALE = "stale"
 UNAVAILABLE = "unavailable"
 
 # После неудачной попытки скачать срез «на сегодня» следующая — не раньше чем через
-# столько секунд; в промежутке запросы сразу получают последний непустой срез.
-RETRY_AFTER_S = 600
+# столько секунд; в промежутке запросы сразу получают последний непустой срез. Пять минут — как у
+# ежедневного обновления (`daily_refresh.RETRY_EVERY_S`, решение владельца 18.10).
+RETRY_AFTER_S = 300
+
+# «День данных» начинается в 07:30 по Самаре (решение владельца 18.10): регламентные работы МИС (бэкап,
+# обновление баз) идут с 01:00 до ~07:10 по местному времени; в 07:30 качаются все срезы. До 07:30 «сегодняшний»
+# срез — вчерашний по календарю: ночью бот его не ищет и не качает. В 07:30 по Самаре на сервере (UTC) 03:30 того
+# же числа — имена файлов совпадают в обоих поясах (DATA-8: прайс датировался часами сервера, памятки — Самарой,
+# врачи — Самарой с границей 06:00).
+DATA_DAY_STARTS_AT = (7, 30)
 _failed_at: dict[str, float] = {}
 
 
@@ -103,6 +111,20 @@ def latest_nonempty(path: Path) -> Path | None:
         if candidate.name <= path.name and has_rows(candidate):
             return candidate
     return None
+
+
+def data_day(now_samara: datetime) -> str:
+    """«День данных» (`ГГГГММДД`) — самарская дата, которая переключается в `DATA_DAY_STARTS_AT`.
+
+    :param now_samara: текущее время по Самаре
+    :return: дата среза «на сегодня» для имён файлов всех справочников
+    """
+
+    hour, minute = DATA_DAY_STARTS_AT
+    day = now_samara.date()
+    if (now_samara.hour, now_samara.minute) < (hour, minute):
+        day -= timedelta(days=1)
+    return day.strftime("%Y%m%d")
 
 
 def snapshot_date(path: Path) -> date | None:

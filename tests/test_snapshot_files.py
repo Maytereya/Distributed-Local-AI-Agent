@@ -278,38 +278,3 @@ def test_run_daily_waits_until_the_next_run_time(monkeypatch):
         asyncio.run(snapshots.run_daily(0, 5, job, lambda: next(clock)))
 
     assert waits == [15 * 60, 24 * 3600 - 60]  # 23:50 → 00:05; 00:06 → завтра 00:05
-
-
-def test_service_start_downloads_missing_price_list_in_background(monkeypatch, tmp_path: Path):
-    import asyncio
-
-    today = tmp_path / "price_region_3_20261003.jsonl"
-    monkeypatch.setattr(api_price, "price_by_region_path", lambda region_id, date=None: today)
-    monkeypatch.setattr(api_price, "doctor_prices_path", lambda date=None: _snapshot(tmp_path / "doctor_prices_20261003.jsonl", [_YESTERDAY_ROW]))
-    monkeypatch.setattr(api_price, "price_units_path", lambda date=None: _snapshot(tmp_path / "price_units_20261003.jsonl", [{"id": 1}]))
-    monkeypatch.setattr(api_price, "_PRICE_REFRESH_TASK", None)
-    monkeypatch.setattr(api_price, "_PRICE_LIST_REFRESH_TASK", None)
-    calls: list[str] = []
-
-    async def fake_price_list_refresh():
-        calls.append("прайс")
-
-    async def idle():
-        await asyncio.sleep(3600)
-
-    async def idle_daily(*_args, **_kwargs):
-        await asyncio.sleep(3600)
-
-    monkeypatch.setattr(api_price, "_refresh_price_list_once", fake_price_list_refresh)
-    monkeypatch.setattr(api_price, "_doctor_prices_refresh_loop", idle)
-    monkeypatch.setattr(api_price.snapshots, "run_daily", idle_daily)
-
-    async def service_start():
-        assert api_price.ensure_daily_price_refresh_started()
-        await asyncio.sleep(0)
-        api_price._PRICE_REFRESH_TASK.cancel()
-        api_price._PRICE_LIST_REFRESH_TASK.cancel()
-
-    asyncio.run(service_start())
-
-    assert calls == ["прайс"]

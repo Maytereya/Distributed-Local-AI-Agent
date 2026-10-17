@@ -85,7 +85,6 @@ def _build_session() -> requests.Session:
 
 
 SESSION = _build_session()
-_SERVICE_INFO_REFRESH_TASK: asyncio.Task | None = None
 
 
 def _now_samara() -> datetime:
@@ -102,7 +101,7 @@ def _now_samara() -> datetime:
 def today_str() -> str:
     """Возвращает дату в формате YYYYMMDD для имен файлов кэша."""
 
-    return _now_samara().strftime(DATE_FMT)
+    return snapshots.data_day(_now_samara())  # «день данных»: переключается в 07:30 по Самаре
 
 
 def jsonl_write(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -322,34 +321,13 @@ async def _refresh_service_info_once() -> None:
         log.warning("⚠️ [DAILY REFRESH] добор синонимов не удался: %s", exc)
 
 
-async def _service_info_refresh_loop() -> None:
-    """Поддерживает ежедневное обновление serviceInfoAll в 08:20 по Самаре."""
-
-    await snapshots.run_daily(8, 20, _refresh_service_info_once, _now_samara)
-
-
 def ensure_daily_service_info_refresh_started() -> bool:
-    """
-    Запускает фоновый refresh serviceInfoAll в 08:20 по Самаре.
+    """Ежедневное обновление срезов — один цикл для всех справочников (`daily_refresh`, 07:30 по Самаре). Имя сохранено
+    для вызывающих."""
 
-    :return: True, если планировщик запущен или уже активен
-    """
+    from agent_logic_2.nayka_api import daily_refresh
 
-    global _SERVICE_INFO_REFRESH_TASK
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return False
-
-    if _SERVICE_INFO_REFRESH_TASK is None or _SERVICE_INFO_REFRESH_TASK.done():
-        _SERVICE_INFO_REFRESH_TASK = loop.create_task(_service_info_refresh_loop())
-        log.info("▶️ [DAILY REFRESH] Планировщик serviceInfoAll запущен")
-        try:
-            if not service_info_path().exists():
-                loop.create_task(_refresh_service_info_once())
-        except Exception:
-            pass
-    return True
+    return daily_refresh.ensure_started()
 
 
 if __name__ == "__main__":

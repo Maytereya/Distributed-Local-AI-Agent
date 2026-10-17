@@ -205,7 +205,7 @@ def test_report_statuses(tmp_path):
 
     assert snapshots.report(today, today, rows).rows is rows
     assert (snapshots.report(today, tmp_path / "doctors_20261015.jsonl", rows).status, snapshots.report(today, tmp_path / "doctors_20261015.jsonl", rows).age_days) == ("stale", 2)
-    # Врачи до 06:00 по Самаре: активная дата — вчера, а читается сегодняшний файл — он не устарел.
+    # До 07:30 по Самаре «день данных» — вчера, а читается сегодняшний файл — он не устарел.
     newer = snapshots.report(tmp_path / "doctors_20261016.jsonl", today, rows)
     assert (newer.status, newer.age_days) == ("fresh", 0)
     assert (snapshots.report(today, None).status, snapshots.report(today, None).rows) == ("unavailable", [])

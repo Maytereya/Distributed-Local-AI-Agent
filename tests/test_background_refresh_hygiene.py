@@ -110,21 +110,16 @@ def test_doctors_refresh_failure_is_logged(monkeypatch, caplog):
     assert failures and failures[0].exc_info is not None
 
 
-def test_scheduler_start_failure_is_logged_and_does_not_stop_the_others(monkeypatch, caplog):
-    from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info
+def test_scheduler_start_failure_is_logged(monkeypatch, caplog):
+    from agent_logic_2.nayka_api import api_nayka
     from messengers_router.services import core
-
-    started: list[str] = []
 
     def broken():
         raise RuntimeError("планировщик упал")
 
     monkeypatch.setattr(api_nayka, "ensure_daily_refresh_started", broken)
-    monkeypatch.setattr(api_price, "ensure_daily_price_refresh_started", lambda: started.append("price"))
-    monkeypatch.setattr(api_service_info, "ensure_daily_service_info_refresh_started", lambda: started.append("service_info"))
 
     with caplog.at_level(logging.WARNING, logger=core.logger.name):
-        _REAL_START(Services.__new__(Services))
+        _REAL_START(Services.__new__(Services))  # не бросает
 
-    assert started == ["price", "service_info"]
-    assert any("broken" in r.getMessage() and r.exc_info for r in caplog.records)
+    assert any("обновления срезов" in r.getMessage() and r.exc_info for r in caplog.records)
