@@ -3010,9 +3010,12 @@ def appointment_service_display(entities: dict[str, Any]) -> str:
     # → оператор путался. См. policies._STALE_LAB_SERVICE_RE.
     if service_raw and doctor_name and _service_looks_like_stale_lab_test(service_raw):
         service_raw = ""
+    # Фраза записи пациента вместо услуги («записаться на прием», «перенести прием») — не название. По глаголу записи, не
+    # по слову «приём»: оно есть и в названиях строк каталога («Прием (осмотр, консультация) врача-акушера-гинеколога»),
+    # и такие записи пациент и оператор видели как «запись на услугу» (BUG-2026-10-18-BOOKING-DISPLAY-PRIEM).
     if (
         not service_raw
-        or _QF_APPOINTMENT_WORD_RE.search(service_raw)
+        or detect_appointment_action(service_raw)
         or _QF_TIME_FRAGMENT_RE.search(service_raw)
     ):
         specialty = str(entities.get("specialty") or "").strip()
