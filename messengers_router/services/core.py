@@ -24,7 +24,7 @@ from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info, snap
 from converters import html_cleaner  # noqa: F401 — tests patch svc_mod.html_cleaner
 from schedule_ttl_cache import AsyncListTTLStaleCache
 
-from .. import turn_telemetry
+from .. import degradation, turn_telemetry
 from ._common import (
     _as_int,
     _normalise_catalog_text,
@@ -319,6 +319,7 @@ class Services:
             key,
             lambda: self._fetch_schedule_source(last_name, region_name),
             key_details={"last_name": key[0], "region": key[1]},
+            allow_stale=not degradation.honest(),  # под `mis_honest_degradation` — только живое (решение 08.10)
         )
 
     async def _ensure_doctors_cache_loaded(self) -> list[dict[str, Any]]:

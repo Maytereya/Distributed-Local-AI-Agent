@@ -133,7 +133,10 @@ class AsyncListTTLStaleCache:
         fetcher: Callable[[], Awaitable[Any]],
         *,
         key_details: Mapping[str, Any] | None = None,
+        allow_stale: bool = True,
     ) -> Any:
+        """`allow_stale=False` — при сбое источника устаревший ответ не отдаётся (сбой пробрасывается): расписание
+        «только живое» (ход (д), `mis_honest_degradation`)."""
         now = self._time()
         entry = self._cache.get(key)
         if entry and now <= entry.fresh_until:
@@ -170,7 +173,7 @@ class AsyncListTTLStaleCache:
             try:
                 payload = await fetcher()
             except Exception as exc:
-                if entry and not entry.is_negative and now <= entry.stale_until:
+                if allow_stale and entry and not entry.is_negative and now <= entry.stale_until:
                     self._log(
                         "hit_stale_on_error",
                         key,
@@ -191,7 +194,7 @@ class AsyncListTTLStaleCache:
                 await self._store(key, payload, key_details)
                 return self._clone(payload)
 
-            if entry and not entry.is_negative and now <= entry.stale_until:
+            if allow_stale and entry and not entry.is_negative and now <= entry.stale_until:
                 self._log(
                     "hit_stale_on_non_list",
                     key,
