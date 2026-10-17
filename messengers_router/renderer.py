@@ -23,6 +23,7 @@ from .mess_types import Evidence, RouteDecision, ResponseEnvelope
 from .policies import handoff_message, sanitize_for_patient
 from .prompt_registry import load_prompt_text
 from .russian_nlu import normalize_ru
+from .schedule_parse_watch import unparsed as unparsed_slot
 from .self_check import build_critic_prompt, parse_critic_result, should_regenerate
 from .text_templates import price_not_found_text
 from .runtime_config import config as c
@@ -176,6 +177,7 @@ def _filter_slots(slots: list[str], t_from: time | None, t_to: time | None) -> l
         try:
             t = datetime.strptime(s[:5], "%H:%M").time()
         except Exception:
+            unparsed_slot("time", s)  # DATA-15: пропуск слота — со счётчиком
             continue
         if t_from and t < t_from:
             continue
@@ -238,6 +240,8 @@ def format_doctor_schedule_for_patient(payload: dict[str, Any], entities: dict[s
                     d_obj = _parse_date_iso(str(day_date))
                 except Exception:
                     d_obj = None
+                if d_obj is None:
+                    unparsed_slot("date", day_date)  # DATA-15: фильтр по дате для этого дня не действует
                 if date_from and d_obj and date_to:
                     if d_obj < date_from or d_obj > date_to:
                         continue

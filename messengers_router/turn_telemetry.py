@@ -106,6 +106,14 @@ def note(**values: Any) -> None:
         turn.fields[key] = value
 
 
+def bump(key: str, by: int = 1) -> None:
+    """Прибавить к счётчику хода (`slot_unparsed` — неразобранные слоты расписания)."""
+
+    turn = _TURN.get()
+    if turn is not None:
+        turn.fields[key] = int(turn.fields.get(key) or 0) + by
+
+
 def override(**values: Any) -> None:
     """Записать поля, затирая прежние (оффер после повтора меняет источник ответа)."""
 
