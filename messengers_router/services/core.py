@@ -700,8 +700,22 @@ from .prices import (  # noqa: E402
     price_info as _price_info_impl,
     service_bundle_info as _service_bundle_info_impl,
 )
-Services.price_info = _price_info_impl
-Services.service_bundle_info = _service_bundle_info_impl
+async def _price_info_checked(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
+    """Цена — с правилом давности прайса под `mis_honest_degradation` (ход (д), шаг 3; под off — как есть)."""
+
+    from . import _freshness
+
+    return _freshness.apply(await _price_info_impl(self, query, entities), snapshots.last)
+
+
+async def _service_bundle_info_checked(self: "Services", query: str, entities: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    from . import _freshness
+
+    return _freshness.apply(await _service_bundle_info_impl(self, query, entities, **kwargs), snapshots.last)
+
+
+Services.price_info = _price_info_checked
+Services.service_bundle_info = _service_bundle_info_checked
 
 from .addresses import (  # noqa: E402
     _procedure_branches_from_index as _procedure_branches_from_index_impl,

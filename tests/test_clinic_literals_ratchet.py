@@ -17,7 +17,7 @@ _CORE = Path(__file__).resolve().parents[1] / "messengers_router"
 
 # Потолки на 09.10.2026 (ревью DLA, ход (з): «235 / 44 / 29» — другая методика подсчёта).
 _CEILINGS = {
-    "упоминания Самары (samara / самар)": (re.compile(r"(?i)samara|самар"), 425),
+    "упоминания Самары (samara / самар)": (re.compile(r"(?i)samara|самар"), 424),  # 425 → 424: строка «Цены актуальны…» — одно упоминание (STEP-2026-10-18-PRICE-FRESHNESS)
     "литерал адреса одного филиала (Ленина, 5)": (re.compile(r"Ленина,? 5"), 27),
     "прямые импорты клиента МИС (agent_logic_2.nayka_api)": (
         re.compile(r"^\s*(?:from agent_logic_2\.nayka_api import|import agent_logic_2\.nayka_api)", re.M),

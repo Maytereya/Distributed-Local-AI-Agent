@@ -511,7 +511,7 @@ def _format_price_family_variants(payload: dict[str, Any], fallback_service_name
         lines.append("")
         lines.append(unrecognized_note)
     lines.append("Если нужно, помогу выбрать подходящий вариант или подскажу подготовку.")
-    return _append_samara_disclaimer("\n".join(lines).strip())
+    return _append_samara_disclaimer("\n".join(lines).strip(), str(payload.get("data_as_of") or ""))
 
 
 def service_bundle_needs_operator(payload: dict[str, Any]) -> bool:
@@ -621,7 +621,7 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
     if retail_prices or any(
         isinstance(d, dict) and d.get("service_price") for d in doctors
     ):
-        text = _append_samara_disclaimer(text)
+        text = _append_samara_disclaimer(text, str(payload.get("data_as_of") or ""))
     return text
 
 
@@ -757,7 +757,7 @@ def _price_source_marker(payload: dict[str, Any]) -> str | None:
 _SAMARA_PRICE_DISCLAIMER = "Цены актуальны для г. Самара."
 
 
-def _append_samara_disclaimer(text: str) -> str:
+def _append_samara_disclaimer(text: str, as_of: str = "") -> str:
     """Добавляет disclaimer о Самаре в конец PRICE-ответа.
 
     Запрошено заказчиком 2026-05-05: пациент должен видеть, что
@@ -771,9 +771,12 @@ def _append_samara_disclaimer(text: str) -> str:
     txt = str(text or "").strip()
     if not txt:
         return txt
-    if _SAMARA_PRICE_DISCLAIMER in txt:
+    base = _SAMARA_PRICE_DISCLAIMER.rstrip(".")
+    if base in txt:
         return txt
-    return f"{txt}\n\n_{_SAMARA_PRICE_DISCLAIMER}_"
+    # Устаревший прайс (3–7 дней, `mis_honest_degradation`): дата данных — в той же строке (вариант «Б», 18.10).
+    line = f"{base}, по данным на {as_of}." if as_of else f"{base}."
+    return f"{txt}\n\n_{line}_"
 
 
 def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) -> str:
@@ -793,7 +796,7 @@ def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) 
         # ответе действительно есть цены (нет смысла приклеивать её
         # к clarify-сообщениям и fallback-ам без цен).
         if prices:
-            txt = _append_samara_disclaimer(txt)
+            txt = _append_samara_disclaimer(txt, str(payload.get("data_as_of") or ""))
         return txt
 
     if clarify_text:

@@ -28,7 +28,7 @@ import logging
 import os
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
@@ -158,6 +158,16 @@ class Snapshot:
 
 _observer: Callable[[Snapshot], None] | None = None
 _warned: set[tuple[str, str, date | None]] = set()
+_last: dict[str, Snapshot] = {}
+
+
+def last(prefix: str) -> Snapshot | None:
+    """Последний прочитанный срез справочника (без строк): имя — `prefix` или начинается с `prefix_`."""
+
+    for name in reversed(list(_last)):
+        if name == prefix or name.startswith(prefix + "_"):
+            return _last[name]
+    return None
 
 
 def set_observer(observer: Callable[[Snapshot], None] | None) -> None:
@@ -168,6 +178,8 @@ def set_observer(observer: Callable[[Snapshot], None] | None) -> None:
 
 
 def _observe(snapshot: Snapshot) -> None:
+    _last.pop(snapshot.name, None)
+    _last[snapshot.name] = replace(snapshot, rows=[])  # последний — в конце: `last` ищет с конца
     key = (snapshot.name, snapshot.status, snapshot.date)
     if snapshot.status != FRESH and key not in _warned:
         _warned.add(key)  # один раз на срез и статус: загрузчики зовут по нескольку раз за ход
