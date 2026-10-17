@@ -25,6 +25,7 @@ from converters import html_cleaner  # noqa: F401 — tests patch svc_mod.html_c
 from schedule_ttl_cache import AsyncListTTLStaleCache
 
 from .. import degradation, turn_telemetry
+from ..schedule_parse_watch import normalize_schedule
 from ._common import (
     _as_int,
     _normalise_catalog_text,
@@ -301,7 +302,7 @@ class Services:
                         # except ниже re-raise'ит без лишнего sleep+повтора.
                         raise ScheduleSourceUnavailable(payload_text)
                     return []
-                return payload
+                return normalize_schedule(payload)  # даты дней — к ISO на входе от МИС (DATA-15, решение владельца 18.10)
             except ScheduleSourceUnavailable:
                 raise
             except Exception as exc:

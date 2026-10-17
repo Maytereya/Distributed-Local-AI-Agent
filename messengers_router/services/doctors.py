@@ -20,6 +20,7 @@ from ..doctor_name_port import (
     surname_variants,
 )
 from .. import degradation
+from ..schedule_parse_watch import dates_all_unparsed
 from .. import resilience as _R
 from ..policies import handoff_message
 from ..russian_nlu import normalize_ru
@@ -280,6 +281,9 @@ async def _schedule_by_specialty(
         if _is_schedule_no_slots_text(data):
             return None, True
         if not isinstance(data, list) or not data:
+            return None, False
+        if dates_all_unparsed(data):
+            failed.append(surname)  # МИС прислала даты, которых код не понимает, — это сбой источника, не «нет окон»
             return None, False
         for row in data:
             if not isinstance(row, dict):
@@ -996,6 +1000,18 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
         return _R.mark_degraded(
             payload, upstream="doctor_schedule", failure_mode=_R.FM_EXCEPTION, fallback_used=False
         )
+
+    if degradation.honest() and dates_all_unparsed(data):
+        # Даты расписания не поняты ни одна — показать окна нельзя, «нет расписания» — неправда (DATA-15; решение
+        # владельца 18.10: переводить на оператора).
+        _R.log_degraded(upstream="doctor_schedule", failure_mode=_R.FM_EXCEPTION, fallback_used=False)
+        payload = _service_fallback(
+            note="doctors_schedule_week: schedule dates unparsed",
+            handoff_message=handoff_message("service_error_schedule"),
+            entities=entities,
+            extra={"schedule": []},
+        )
+        return _R.mark_degraded(payload, upstream="doctor_schedule", failure_mode=_R.FM_EXCEPTION, fallback_used=False)
 
     if isinstance(data, list):
         compact_data: list[dict[str, Any]] = []
