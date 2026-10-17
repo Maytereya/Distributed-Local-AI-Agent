@@ -3054,6 +3054,11 @@ async def route_patient_message(
 ) -> tuple[RouteDecision, Plan, Evidence]:
     turn_understanding.begin_turn()
     shown_context.begin_turn(state)
+    # Справочник филиалов — в кэш до синхронных читателей хода (`get_branches`), запрос к МИС — в потоке (DATA-7).
+    try:
+        await services.warm_branches()
+    except Exception:
+        logger.warning("прогрев справочника филиалов не удался", exc_info=True)
     operator_offer_result = _handle_operator_offer_pending(user_text, state, memory)
     if operator_offer_result is not None:
         return operator_offer_result

@@ -49,6 +49,16 @@ from ._regions import (
 logger = logging.getLogger(__name__)
 
 
+def _in_event_loop() -> bool:
+    """Вызов идёт из потока работающего цикла событий."""
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
 class ScheduleSourceUnavailable(RuntimeError):
     """Источник расписания (CRM «Наука») недоступен — сетевой сбой / 5xx.
 
@@ -123,6 +133,7 @@ class Services:
     _regions_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
     _regions_cache_loaded_at: float = field(default=0.0, init=False)
     _regions_last_failed: bool = field(default=False, init=False)
+    _branches_warm_failed_at: float = field(default=0.0, init=False)
     _procedure_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
     _procedure_rows_loaded_at: float = field(default=0.0, init=False)
     _service_catalog_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
@@ -381,6 +392,21 @@ class Services:
                 self._regions_last_failed = True
             return self._regions_cache
 
+    async def warm_branches(self) -> None:
+        """Справочник филиалов — в кэш до синхронных читателей хода (DATA-7).
+
+        `get_branches` зовут синхронные функции хода (дозаполнение слотов, ответ шага записи); раньше при пустом кэше
+        она сама синхронно шла в МИС — в цикле событий, и весь бот ждал. Теперь ход в начале прогревает кэш здесь
+        (запрос — в потоке, `_ensure_regions_loaded`), а `get_branches` в цикле событий только читает. Пустой ответ
+        МИС (сбой — `site_regions` отдаёт `[]`) — следующая попытка не раньше чем через 60 с: ходы во время сбоя
+        не ждут таймаута каждый.
+        """
+
+        if self._regions_cache or time.time() - self._branches_warm_failed_at < 60:
+            return
+        if not await self._ensure_regions_loaded():
+            self._branches_warm_failed_at = time.time()
+
     async def _samara_region_tokens(self) -> set[str]:
         regions = await self._ensure_regions_loaded()
         tokens: set[str] = set()
@@ -598,7 +624,11 @@ class Services:
         Пока заглушка.
         """
         regions = self._regions_cache or []
-        if not regions:
+        if not regions and _in_event_loop():
+            # В ходе пациента кэш прогревает `warm_branches` (в потоке); синхронный запрос к МИС отсюда остановил бы
+            # весь бот (DATA-7). Пусто — значит МИС не отдала филиалы: как и раньше при сбое — пустой список.
+            logger.warning("get_branches: кэш филиалов пуст в цикле событий — синхронный запрос к МИС не делаем")
+        elif not regions:
             try:
                 data = api_nayka.site_regions()
                 if isinstance(data, list):
