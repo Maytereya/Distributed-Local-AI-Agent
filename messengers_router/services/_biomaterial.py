@@ -109,9 +109,12 @@ def _vocab_source() -> Path | None:
     """
 
     try:
-        return snapshots.latest_nonempty(api_service_info.service_info_path())
+        today = api_service_info.service_info_path()
+        source = snapshots.latest_nonempty(today)
     except OSError:
         return None
+    snapshots.report(today, source)  # статус словаря — в телеметрию хода (ход (д), шаг 1б); строки здесь не читаются
+    return source
 
 
 def _cache_key() -> tuple[str, float] | None:

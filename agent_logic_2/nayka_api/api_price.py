@@ -754,20 +754,26 @@ _has_rows = snapshots.has_rows
 
 
 def load_doctor_prices() -> List[Dict[str, Any]]:
+    """Цены врачей: сегодняшний срез, иначе последний непустой; статус — наблюдателю срезов (`snapshots.report`)."""
     fn = doctor_prices_path()
     if _has_rows(fn):
-        return jsonl_read(fn)
+        return snapshots.report(fn, fn, jsonl_read(fn)).rows
     # Сегодняшнего среза нет или он пуст: срез датирован по часам сервера, и с
     # полуночи до обновления в 08:15 по Самаре его нет каждый день. Сборка — сотни
     # запросов к МИС и минуты; внутри запроса пациента её не делаем, берём последний
     # непустой срез. Свежий соберёт фоновое обновление (08:15 или старт сервиса).
     previous = _latest_nonempty_doctor_prices(fn)
     if previous is not None:
-        return jsonl_read(previous)
+        return snapshots.report(fn, previous, jsonl_read(previous)).rows
     if fn.exists():
-        return []  # пустой срез пересоберёт фон, не первый спросивший пациент
-    update_doctor_prices()  # срезов нет совсем — первый запуск
-    return jsonl_read(fn)
+        return snapshots.report(fn, None).rows  # пустой срез пересоберёт фон, не первый спросивший пациент
+    try:
+        update_doctor_prices()  # срезов нет совсем — первый запуск
+    except Exception:
+        snapshots.report(fn, None)  # сборка не удалась — срез недоступен; исключение — вызывающему, как было
+        raise
+    rows = jsonl_read(fn)
+    return snapshots.report(fn, fn if rows else None, rows).rows
 
 
 async def _refresh_doctor_prices_once() -> None:

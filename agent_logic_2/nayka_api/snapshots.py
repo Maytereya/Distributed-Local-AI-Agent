@@ -111,8 +111,10 @@ def snapshot_date(path: Path) -> date | None:
 class Snapshot:
     """Строки среза с датой и статусом.
 
-    :param name: справочник — имя файла без даты (`price_region_3`, `price_units`, `service_info`)
-    :param rows: строки среза; у `unavailable` — пусто
+    :param name: справочник — имя файла без даты (`price_region_3`, `price_units`, `service_info`, `doctors`,
+        `doctor_prices`)
+    :param rows: строки среза; у `unavailable` — пусто; у наблюдения без чтения строк (словарь синонимов строит
+        свой индекс сам) — тоже пусто
     :param date: дата прочитанного среза или None
     :param status: `fresh` | `stale` | `unavailable`
     :param age_days: на сколько дней срез старше «сегодня» загрузчика; у `unavailable` — None
@@ -149,6 +151,37 @@ def _observe(snapshot: Snapshot) -> None:
             _observer(snapshot)
         except Exception:  # наблюдатель не ломает чтение среза
             log.warning("наблюдатель срезов упал", exc_info=True)
+
+
+def report(path: Path, source: Path | None, rows: list[dict[str, Any]] | None = None) -> Snapshot:
+    """Срез, который загрузчик выбрал сам, — со статусом, и сообщить о нём наблюдателю.
+
+    Для загрузчиков со своей логикой выбора файла (врачи, цены врачей, словарь синонимов): `path` — срез «на
+    сегодня» загрузчика, `source` — прочитанный (None — непустых нет). Срез не старше «сегодня» — `fresh`
+    (врачи с 00:00 до 06:00 по Самаре читают сегодняшний файл при активной вчерашней дате).
+
+    :param path: срез «на сегодня»
+    :param source: прочитанный срез или None
+    :param rows: прочитанные строки (None — наблюдение без чтения)
+    :return: срез
+    """
+
+    name = path.stem.rsplit("_", 1)[0]
+    if source is None:
+        snapshot = Snapshot(name=name, rows=[], date=None, status=UNAVAILABLE, age_days=None)
+    else:
+        today, taken = snapshot_date(path), snapshot_date(source)
+        age = (today - taken).days if today is not None and taken is not None else None
+        fresh = source == path or (age is not None and age <= 0)
+        snapshot = Snapshot(
+            name=name,
+            rows=rows if rows is not None else [],  # тот же список, что прочитал загрузчик
+            date=taken,
+            status=FRESH if fresh else STALE,
+            age_days=0 if fresh and age is not None else age,
+        )
+    _observe(snapshot)
+    return snapshot
 
 
 def retry_allowed(key: Path | str) -> bool:
@@ -199,16 +232,7 @@ def load_snapshot(
         if not has_rows(path):
             mark_failed(path)
     source = latest_nonempty(path)
-    name = path.stem.rsplit("_", 1)[0]
-    if source is None:
-        snapshot = Snapshot(name=name, rows=[], date=None, status=UNAVAILABLE, age_days=None)
-    else:
-        today, taken = snapshot_date(path), snapshot_date(source)
-        age = (today - taken).days if today is not None and taken is not None else None
-        status = FRESH if source == path else STALE
-        snapshot = Snapshot(name=name, rows=read(source), date=taken, status=status, age_days=age)
-    _observe(snapshot)
-    return snapshot
+    return report(path, source, read(source) if source is not None else [])
 
 
 async def run_daily(hour: int, minute: int, job: Callable[[], Awaitable[Any]], now: Callable[[], datetime]) -> None:

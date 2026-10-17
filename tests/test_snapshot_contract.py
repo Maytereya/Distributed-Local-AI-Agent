@@ -190,3 +190,145 @@ def test_no_price_snapshot_is_reported_unavailable(mini_prod_world, monkeypatch,
 
     assert _price_src(rows)[0] == {"status": "unavailable", "age_days": None}
     assert list(empty.iterdir()) == []  # мир не пишет срезов
+
+
+# --------------------------------------------------------------------------- шаг 1б: срезы со своим выбором файла
+#
+# Врачи (`api_nayka.get_cached_doctors_data`), цены врачей (`api_price.load_doctor_prices`) и словарь синонимов
+# (`_biomaterial._vocab_source`) выбирают файл сами — статус сообщает `snapshots.report`. Возвращаемые строки — те же
+# (тот же объект), что и до шага.
+
+
+def test_report_statuses(tmp_path):
+    today = tmp_path / "doctors_20261017.jsonl"
+    rows = [{"id": 1}]
+
+    assert snapshots.report(today, today, rows).rows is rows
+    assert (snapshots.report(today, tmp_path / "doctors_20261015.jsonl", rows).status, snapshots.report(today, tmp_path / "doctors_20261015.jsonl", rows).age_days) == ("stale", 2)
+    # Врачи до 06:00 по Самаре: активная дата — вчера, а читается сегодняшний файл — он не устарел.
+    newer = snapshots.report(tmp_path / "doctors_20261016.jsonl", today, rows)
+    assert (newer.status, newer.age_days) == ("fresh", 0)
+    assert (snapshots.report(today, None).status, snapshots.report(today, None).rows) == ("unavailable", [])
+
+
+@pytest.fixture
+def seen(monkeypatch) -> list[snapshots.Snapshot]:
+    out: list[snapshots.Snapshot] = []
+    monkeypatch.setattr(snapshots, "_observer", out.append)
+    return out
+
+
+@pytest.fixture
+def doctor_prices_dir(monkeypatch, tmp_path) -> Path:
+    from agent_logic_2.nayka_api import api_price
+
+    folder = tmp_path / "doctor_prices"
+    folder.mkdir()
+    monkeypatch.setattr(api_price, "PRICES_DIR", folder)
+    monkeypatch.setattr(api_price, "cleanup_old", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_price, "doctor_prices_path", lambda date=None: folder / f"doctor_prices_{date or '20261017'}.jsonl")
+
+    def no_build():
+        raise ConnectionError("МИС недоступна")
+
+    monkeypatch.setattr(api_price, "update_doctor_prices", no_build)
+    return folder
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        ({"20261017": [{"id": 1}]}, ("fresh", 0, [{"id": 1}])),
+        ({"20261009": [{"id": 9}]}, ("stale", 8, [{"id": 9}])),
+        ({"20261017": [], "20261009": [{"id": 9}]}, ("stale", 8, [{"id": 9}])),
+        ({"20261017": []}, ("unavailable", None, [])),
+    ],
+    ids=["today", "older", "empty_today_older", "empty_today_only"],
+)
+def test_doctor_prices_report_their_status(files, expected, doctor_prices_dir, seen):
+    from agent_logic_2.nayka_api import api_price
+
+    for day, rows in files.items():
+        path = doctor_prices_dir / f"doctor_prices_{day}.jsonl"
+        path.write_text("", encoding="utf-8") if not rows else snapshots.write_rows(path, rows)
+
+    rows = api_price.load_doctor_prices()
+
+    status, age, expected_rows = expected
+    assert rows == expected_rows
+    assert [(s.name, s.status, s.age_days) for s in seen] == [("doctor_prices", status, age)]
+
+
+def test_doctor_prices_build_failure_is_unavailable_and_still_raises(doctor_prices_dir, seen):
+    from agent_logic_2.nayka_api import api_price
+
+    with pytest.raises(ConnectionError):
+        api_price.load_doctor_prices()
+    assert [(s.name, s.status) for s in seen] == [("doctor_prices", "unavailable")]
+
+
+@pytest.fixture
+def doctors_dir(monkeypatch, tmp_path) -> Path:
+    from agent_logic_2.nayka_api import api_nayka
+
+    monkeypatch.setattr(api_nayka, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(api_nayka, "get_active_date_str", lambda: "20261017")
+    monkeypatch.setattr(api_nayka, "cleanup_old_doctors_files", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_nayka, "_doctors_schema_outdated", lambda doctors: False)
+
+    def no_download():
+        raise ConnectionError("МИС недоступна")
+
+    monkeypatch.setattr(api_nayka, "get_all_doctors", no_download)
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("days", "expected"),
+    [(["20261017"], ("fresh", 0)), (["20261014"], ("stale", 3)), ([], ("unavailable", None))],
+    ids=["active", "older", "none"],
+)
+def test_doctors_report_their_status(days, expected, doctors_dir, seen):
+    from agent_logic_2.nayka_api import api_nayka
+
+    for day in days:
+        snapshots.write_rows(doctors_dir / f"doctors_{day}.jsonl", [{"id": day}])
+
+    rows = api_nayka.get_cached_doctors_data()
+
+    assert rows == [{"id": day} for day in days]
+    assert [(s.name, s.status, s.age_days) for s in seen] == [("doctors", *expected)]
+
+
+@pytest.mark.parametrize(
+    ("days", "expected"),
+    [(["20261017"], ("fresh", 0)), (["20261016"], ("stale", 1)), ([], ("unavailable", None))],
+    ids=["today", "night_yesterday", "none"],
+)
+def test_vocabulary_source_reports_its_status(days, expected, monkeypatch, tmp_path, seen):
+    from agent_logic_2.nayka_api import api_service_info
+    from messengers_router.services import _biomaterial
+
+    monkeypatch.setattr(api_service_info, "service_info_path", lambda date=None: tmp_path / f"service_info_{date or '20261017'}.jsonl")
+    for day in days:
+        snapshots.write_rows(tmp_path / f"service_info_{day}.jsonl", [{"id": day}])
+
+    source = _biomaterial._vocab_source()
+
+    assert source == (tmp_path / f"service_info_{days[0]}.jsonl" if days else None)
+    assert [(s.name, s.status, s.age_days) for s in seen] == [("service_info", *expected)]
+
+
+def test_turn_reports_each_source_it_read(mini_prod_world, monkeypatch):  # noqa: F811
+    """Health раздельно по источникам (решение 08.10): строка хода называет каждый прочитанный срез. В мире мини-прода
+    прайс и priceUnits есть, а врачей, цен врачей и памяток нет — ход это и пишет."""
+
+    _records, rows = _play(mini_prod_world, monkeypatch, "snapshot-sources")
+
+    assert rows[0]["src"] == {
+        "price_region_3": {"status": "fresh", "age_days": 0},
+        "price_units": {"status": "fresh", "age_days": 0},
+        "service_info": {"status": "unavailable", "age_days": None},
+        "doctors": {"status": "unavailable", "age_days": None},
+        "doctor_prices": {"status": "unavailable", "age_days": None},
+    }

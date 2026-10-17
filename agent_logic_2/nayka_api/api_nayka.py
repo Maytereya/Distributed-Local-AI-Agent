@@ -636,7 +636,7 @@ def get_cached_doctors_data() -> list:
         print(f"✅ Нашли кэш за активную дату {active}: {existing_file.name}")
         cached = load_doctors_data(existing_file)
         if not _doctors_schema_outdated(cached):
-            return cached
+            return snapshots.report(existing_file, existing_file, cached).rows
         print(f"ℹ️ Кэш {existing_file.name} в старом формате — перегенерируем через API")
     elif existing_file.exists():
         print(f"⚠️ Кэш за активную дату {active} пустой/битый: {existing_file.name}")
@@ -658,18 +658,18 @@ def get_cached_doctors_data() -> list:
     if doctors:
         save_doctors_data(doctors)
         print("✅ Новые данные о врачах успешно загружены")
-        return doctors
+        return snapshots.report(existing_file, existing_file, doctors).rows
 
     fallback_file = find_existing_doctors_file()
     if fallback_file is not None:
         print(f"⚠️ Используем последний непустой кэш врачей: {fallback_file.name}")
         cached = load_doctors_data(fallback_file)
         if not _doctors_schema_outdated(cached):
-            return cached
+            return snapshots.report(existing_file, fallback_file, cached).rows
         print(f"ℹ️ Фолбэк-кэш {fallback_file.name} в старом формате — верну как временный запас")
-        return cached
+        return snapshots.report(existing_file, fallback_file, cached).rows
 
-    return []
+    return snapshots.report(existing_file, None).rows
 
 # ==========================
 # Ежедневное обновление кэша в 07:45 (Самара)
