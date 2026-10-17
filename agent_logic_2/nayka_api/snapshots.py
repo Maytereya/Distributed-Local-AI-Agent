@@ -12,6 +12,12 @@
 
 Класс дефектов `empty_snapshot_poisons_day`: пустой или недоступный ответ МИС не
 оставляет бота без данных, пока на диске есть последний непустой срез.
+
+Контракт среза (ход (д), решение владельца 08.10): `load_snapshot` → `Snapshot{rows, date, status}`,
+статус `fresh` (срез «на сегодня»), `stale` (последний непустой, старше; `age_days` — на сколько дней)
+или `unavailable` (непустых срезов нет). Сегодня статус только наблюдается — предупреждение в лог и
+поле телеметрии хода через `set_observer`; ответы пациенту не меняются (DATA-6, DATA-9: вчерашний срез
+и пустота выглядели как свежие данные).
 """
 
 from __future__ import annotations
@@ -21,11 +27,16 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 
 log = logging.getLogger(__name__)
+
+FRESH = "fresh"
+STALE = "stale"
+UNAVAILABLE = "unavailable"
 
 # После неудачной попытки скачать срез «на сегодня» следующая — не раньше чем через
 # столько секунд; в промежутке запросы сразу получают последний непустой срез.
@@ -87,6 +98,59 @@ def latest_nonempty(path: Path) -> Path | None:
     return None
 
 
+def snapshot_date(path: Path) -> date | None:
+    """Дата среза из имени файла (`<имя>_<ГГГГММДД>.jsonl`); имя без даты — None."""
+
+    try:
+        return datetime.strptime(path.stem.rsplit("_", 1)[-1], "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """Строки среза с датой и статусом.
+
+    :param name: справочник — имя файла без даты (`price_region_3`, `price_units`, `service_info`)
+    :param rows: строки среза; у `unavailable` — пусто
+    :param date: дата прочитанного среза или None
+    :param status: `fresh` | `stale` | `unavailable`
+    :param age_days: на сколько дней срез старше «сегодня» загрузчика; у `unavailable` — None
+    """
+
+    name: str
+    rows: list[dict[str, Any]]
+    date: date | None
+    status: str
+    age_days: int | None
+
+
+_observer: Callable[[Snapshot], None] | None = None
+_warned: set[tuple[str, str, date | None]] = set()
+
+
+def set_observer(observer: Callable[[Snapshot], None] | None) -> None:
+    """Кому сообщать о каждом прочитанном срезе (телеметрия хода). Слой МИС не знает о роутере."""
+
+    global _observer
+    _observer = observer
+
+
+def _observe(snapshot: Snapshot) -> None:
+    key = (snapshot.name, snapshot.status, snapshot.date)
+    if snapshot.status != FRESH and key not in _warned:
+        _warned.add(key)  # один раз на срез и статус: загрузчики зовут по нескольку раз за ход
+        if snapshot.status == STALE:
+            log.warning("срез %s устарел: данные на %s (%s дн.)", snapshot.name, snapshot.date, snapshot.age_days)
+        else:
+            log.warning("срез %s недоступен: непустых срезов нет", snapshot.name)
+    if _observer is not None:
+        try:
+            _observer(snapshot)
+        except Exception:  # наблюдатель не ломает чтение среза
+            log.warning("наблюдатель срезов упал", exc_info=True)
+
+
 def retry_allowed(key: Path | str) -> bool:
     """Можно ли снова идти в МИС за срезом: прошлый сбой был давно или не был."""
 
@@ -105,15 +169,26 @@ def load_daily(
     download: Callable[[], Any],
     read: Callable[[Path], list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    """Строки дневного среза.
+    """Строки дневного среза — `load_snapshot(...).rows` (прежний контракт загрузчиков)."""
 
-    Сегодняшний непустой — он. Нет или пуст — скачать (после неудачи — не чаще раза в
-    `RETRY_AFTER_S`); не вышло — последний непустой срез. Срезов нет совсем — пусто.
+    return load_snapshot(path, download, read).rows
+
+
+def load_snapshot(
+    path: Path,
+    download: Callable[[], Any],
+    read: Callable[[Path], list[dict[str, Any]]],
+) -> Snapshot:
+    """Дневной срез с датой и статусом.
+
+    Сегодняшний непустой — он (`fresh`). Нет или пуст — скачать (после неудачи — не чаще раза в
+    `RETRY_AFTER_S`); не вышло — последний непустой срез (`stale`). Срезов нет совсем — пусто
+    (`unavailable`). Давность считается от даты в имени `path` — «сегодня» самого загрузчика.
 
     :param path: срез «на сегодня»
     :param download: скачивает и записывает срез «на сегодня»; пустой ответ — исключение
     :param read: читает файл среза
-    :return: строки среза
+    :return: срез
     """
 
     if not has_rows(path) and retry_allowed(path):
@@ -124,7 +199,16 @@ def load_daily(
         if not has_rows(path):
             mark_failed(path)
     source = latest_nonempty(path)
-    return read(source) if source is not None else []
+    name = path.stem.rsplit("_", 1)[0]
+    if source is None:
+        snapshot = Snapshot(name=name, rows=[], date=None, status=UNAVAILABLE, age_days=None)
+    else:
+        today, taken = snapshot_date(path), snapshot_date(source)
+        age = (today - taken).days if today is not None and taken is not None else None
+        status = FRESH if source == path else STALE
+        snapshot = Snapshot(name=name, rows=read(source), date=taken, status=status, age_days=age)
+    _observe(snapshot)
+    return snapshot
 
 
 async def run_daily(hour: int, minute: int, job: Callable[[], Awaitable[Any]], now: Callable[[], datetime]) -> None:

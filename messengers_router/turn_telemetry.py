@@ -23,6 +23,8 @@
 - `shadow: true` у записей `llm` и `choose` — решение тени (L-15b, шаг 4): считалось параллельно ходу
   вне его бюджета и на ответ не влияло; карточки и сводки считают решения хода без них;
 - `world` — модель и срезы (имена файлов) — раз в 5 минут, иначе тот же `world_id`;
+- `src` — срезы МИС, которые ход прочитал: `{справочник: {"status": fresh | stale | unavailable, "age_days": N}}`
+  (ход (д), контракт среза; `snapshots.set_observer`) — только если ход их читал;
 - `tid` — случайный id хода (8 hex): по нему к ходу привязывается строка решения, дописанная после ответа.
 
 Строки после ответа (`side_begin` / `side_finish`, 15.10): решение, которое считается фоном и ход не ждёт (тень
@@ -73,6 +75,7 @@ class Turn:
     fields: dict[str, Any] = field(default_factory=dict)
     llm: list[dict[str, Any]] = field(default_factory=list)
     choices: list[dict[str, Any]] = field(default_factory=list)
+    sources: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def begin(endpoint: str, *, session_id: str, llm_mode: str = "", button_id: str = "") -> contextvars.Token | None:
@@ -171,6 +174,16 @@ def note_choice(
     turn.choices.append(entry)
 
 
+def note_snapshot(snapshot: Any) -> None:
+    """Срез МИС, прочитанный в ходе (`snapshots.Snapshot`): статус и давность — без строк и дат.
+    Из потока (`asyncio.to_thread`) ход виден: контекст копируется."""
+
+    turn = _TURN.get()
+    if turn is None:
+        return
+    turn.sources[str(snapshot.name)] = {"status": str(snapshot.status), "age_days": snapshot.age_days}
+
+
 def set_world_provider(provider: Callable[[], dict[str, Any]]) -> None:
     """Источник отпечатка мира (срезы, модель) — задаёт сервисный слой, чтобы ядро не
     импортировало клиента МИС напрямую (храповик переносимости)."""
@@ -222,6 +235,8 @@ def finish(token: contextvars.Token | None, *, handoff: bool, chars: int, stage_
     }
     if turn.choices:
         row["choose"] = turn.choices
+    if turn.sources:
+        row["src"] = turn.sources
     if stage_ms:
         row["stage_ms"] = {k: int(v) for k, v in stage_ms.items()}
     if world is not None:

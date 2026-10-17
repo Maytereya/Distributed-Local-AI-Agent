@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from agent_logic_1 import meilisearch_client as meilisearch  # noqa: F401 — tests patch svc_mod.meilisearch
-from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info
+from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info, snapshots
 from converters import html_cleaner  # noqa: F401 — tests patch svc_mod.html_cleaner
 from schedule_ttl_cache import AsyncListTTLStaleCache
 
@@ -100,6 +100,7 @@ def _world_fingerprint() -> dict[str, Any]:
 
 
 turn_telemetry.set_world_provider(_world_fingerprint)
+snapshots.set_observer(turn_telemetry.note_snapshot)
 
 
 @dataclass
