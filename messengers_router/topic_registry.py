@@ -12,12 +12,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 import copy
+import logging
 import re
 import threading
 
 import yaml
 
 from .russian_nlu import normalize_ru
+
+log = logging.getLogger(__name__)
 
 _REGISTRY_PATH = Path(__file__).resolve().parent / "data" / "topic_registry.yaml"
 _CACHE_LOCK = threading.RLock()
@@ -208,13 +211,37 @@ def _write_registry_to_disk(registry: dict[str, Any]) -> None:
     tmp_path.replace(_REGISTRY_PATH)
 
 
-def load_registry(*, force_reload: bool = False) -> dict[str, Any]:
+def load_registry(*, force_reload: bool = False, strict: bool = False) -> dict[str, Any]:
+    """Реестр тем с кэшем по mtime.
+
+    DATA-12: битый YAML (ручная правка на сервере, конфликт `git pull`) не должен ронять ход
+    пациента — раньше `ScannerError` долетал до общего `except` роутера и давал перевод на
+    оператора со сбросом состояния на КАЖДОМ ходу. Теперь чтение отдаёт последний исправный
+    реестр (до первого исправного — пустой: теряются только темы-override) и пишет `log.error`
+    один раз на версию файла. `strict=True` — для правок (CRUD редактора): там ошибка разбора
+    поднимается, чтобы не перезаписать ручную правку устаревшими данными.
+    """
     global _CACHE_DATA, _CACHE_MTIME
     with _CACHE_LOCK:
         current_mtime = _REGISTRY_PATH.stat().st_mtime if _REGISTRY_PATH.exists() else -1.0
-        if not force_reload and _CACHE_DATA is not None and _CACHE_MTIME == current_mtime:
+        if not force_reload and not strict and _CACHE_DATA is not None and _CACHE_MTIME == current_mtime:
             return copy.deepcopy(_CACHE_DATA)
-        data = _load_registry_from_disk()
+        try:
+            data = _load_registry_from_disk()
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+            if strict:
+                raise
+            if _CACHE_MTIME != current_mtime or _CACHE_DATA is None:
+                log.error(
+                    "topic_registry: не удалось разобрать %s (%s: %s) — работаю на последнем исправном реестре",
+                    _REGISTRY_PATH.name,
+                    type(exc).__name__,
+                    exc,
+                )
+            if _CACHE_DATA is None:
+                _CACHE_DATA = _normalize_registry({"registry_version": 1, "topics": []})
+            _CACHE_MTIME = current_mtime
+            return copy.deepcopy(_CACHE_DATA)
         _CACHE_DATA = data
         _CACHE_MTIME = current_mtime
         return copy.deepcopy(data)
@@ -290,7 +317,7 @@ def _upsert_topic_to_registry(data: dict[str, Any], topic_obj: dict[str, Any]) -
 
 
 def upsert_topic(topic_obj: dict[str, Any]) -> dict[str, Any]:
-    data = load_registry()
+    data = load_registry(strict=True)
     saved = _upsert_topic_to_registry(data, topic_obj)
     save_registry(data)
     return saved
@@ -337,7 +364,7 @@ def delete_topic(topic_id: str) -> bool:
     tid = str(topic_id or "").strip()
     if not tid:
         return False
-    data = load_registry()
+    data = load_registry(strict=True)
     topics = data.get("topics")
     if not isinstance(topics, list):
         return False
