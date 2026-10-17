@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import pytest
 
@@ -28,7 +27,6 @@ from messengers_router.services import _symptom_specialists as S
 from messengers_router.services._regions import _normalize_region_text
 
 _REAL_ADVISE = S.advise  # до подмены фикстурой conftest: для тестов самого совета
-_ROOT = Path(__file__).resolve().parents[1]
 _SPECIALTIES = ["терапевт", "невролог", "кардиолог", "оториноларинголог", "педиатр"]
 
 
@@ -265,13 +263,6 @@ def test_advice_offers_only_samara_specialties(monkeypatch):
 def test_advice_failures_fall_back_to_template():
     assert asyncio.run(_REAL_ADVISE("болит голова", None)) is None
     assert asyncio.run(_REAL_ADVISE("болит голова", _FakeServices([], set(), fail=True))) is None
-
-
-def test_prompt_copies_are_identical():
-    for key in ("symptom_specialists", "classifier_patient"):
-        bundle = (_ROOT / "messengers_router" / "prompts" / f"{key}.txt").read_text(encoding="utf-8")
-        host = (_ROOT / "app_data" / "prompts" / f"mr_{key}.txt").read_text(encoding="utf-8")
-        assert bundle == host, key
 
 
 # --- ответ пациенту ----------------------------------------------------------------

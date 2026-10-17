@@ -69,8 +69,7 @@ def test_kill_switch_skips_llm(monkeypatch):
     assert prompts == []
 
 
-def test_prompt_copies_are_identical():
+def test_prompt_has_text_placeholder():
+    # Равенство копий в двух локациях — общий тест `tests/test_prompt_two_locations.py`.
     bundle = (_ROOT / "messengers_router" / "prompts" / "appointment_change_validator.txt").read_text(encoding="utf-8")
-    host = (_ROOT / "app_data" / "prompts" / "mr_appointment_change_validator.txt").read_text(encoding="utf-8")
-    assert bundle == host
     assert "<<TEXT>>" in bundle

@@ -50,14 +50,6 @@ def test_online_consultation_policy_in_both_prompt_locations(key):
         assert "НЕ проводит" in body, path
 
 
-def test_online_policy_prompt_copies_are_identical():
-    """Расхождение копий = прод и локальный прогон ведут себя по-разному."""
-    for key in ("renderer_patient", "renderer_patient_rich"):
-        bundle = (_PROMPTS_DIR / f"{key}.txt").read_text(encoding="utf-8")
-        host = (_RUNTIME_PROMPTS_DIR / f"mr_{key}.txt").read_text(encoding="utf-8")
-        assert bundle == host, f"копии промпта {key} разошлись"
-
-
 # --- П6-2: существующая запись (проверка И отмена) → оператор вопросом ------
 
 @pytest.mark.parametrize(

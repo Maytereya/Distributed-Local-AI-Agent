@@ -127,6 +127,7 @@ from .topic_registry import (
     match_topic,
 )
 from .topic_registry import get_topic as topic_registry_get_topic
+from .runtime_fingerprint import runtime_fingerprint
 from .runtime_config import config as c
 
 _DEFAULT_CITY = "Самара"
@@ -3175,6 +3176,8 @@ def _debug_meta(
         "understanding": understanding.as_debug() if (understanding := turn_understanding.current()) else None,
         # Разбор реплики на фразы (L-15b) — на ценовых ходах (единственный режим с T7 шага 3б); на прочих ключа нет.
         **({"turn_parse": parse_debug} if (parse_debug := turn_parse.debug()) else {}),
+        # Отпечаток рантайма (DATA-13): сборка, модель, хэши промптов и реестра тем, TZ, срезы — без хостов и секретов.
+        "runtime": runtime_fingerprint(),
     }
 
 
