@@ -1,22 +1,37 @@
 """Исполнитель `Plan` для patient-router.
 
 Изолирует вызовы сервисного слоя и единообразную обработку ошибок/деградаций.
+
+Необязательный шаг (`required=False`), который попросил оператора или упал, ход не прерывает — так задумано
+планировщиком; но погашенный handoff и ошибка шага видны: `logger.warning` (с трассировкой у ошибки) и поле
+телеметрии хода `optional_suppressed` — список инструментов (ход (д), шаг 6а, DATA-4: раньше следа не было нигде).
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from . import evidence_keys as ek
+from . import turn_telemetry
 from .mess_types import Evidence, Plan, SessionState
 from .policies import handoff_message, require_auth_for_test_result
 from .services import Services
 
+logger = logging.getLogger(__name__)
+
 
 async def execute_plan(plan: Plan, state: SessionState, services: Services) -> Evidence:
     ev = Evidence()
+    suppressed: list[str] = []
+
+    def _note_suppressed(tool_name: str) -> None:
+        suppressed.append(tool_name)
+        turn_telemetry.note(optional_suppressed=list(suppressed))
 
     def _put_optional_step_fallback(tool_name: str, query: str, payload: dict[str, Any]) -> None:
+        logger.warning("необязательный шаг %s просил оператора (%s) — handoff погашен", tool_name, payload.get("handoff_reason") or "")
+        _note_suppressed(tool_name)
         ev.put(
             f"{tool_name}_optional_suppressed",
             {
@@ -105,6 +120,8 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
                 ev.put(ek.UNKNOWN_TOOL, tool)
         except Exception as e:
             if not step.required:
+                logger.warning("необязательный шаг %s упал — ход продолжается без него", tool, exc_info=True)
+                _note_suppressed(tool)
                 ev.put(
                     f"{tool}_optional_error",
                     {
@@ -114,6 +131,7 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
                     },
                 )
                 continue
+            logger.warning("шаг %s упал — перевод на оператора", tool, exc_info=True)
             ev.put(
                 f"{tool}_error",
                 {
