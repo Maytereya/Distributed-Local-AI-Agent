@@ -202,6 +202,26 @@ def _is_doctor_like_service_collision(
     return True
 
 
+def _is_active_booking_target(*, label: str, value: str, state: SessionState) -> bool:
+    """Значение `service_name` — цель активной записи из состояния (её подтвердил прошлый ход).
+
+    Как у гарда B′ планировщика для врача и специальности: в активной записи известная цель переживает ход-ответ на
+    шаг записи. Новую услугу реплика назвала бы сама — тогда значение берётся из реплики и сюда не доходит; другое
+    значение, чем в состоянии, не совпадёт и проверяется по каталогу, как раньше (A′-2: цель из прошлой темы не
+    подменяет новую — без активной записи правило не действует).
+    """
+
+    if label != "APPOINTMENT" or not value:
+        return False
+    entities = state.last_entities
+    if not entities.get("appointment_flow_active"):
+        return False
+    if str(entities.get("appointment_action") or "book").strip().lower() in {"cancel", "reschedule"}:
+        return False
+    current = str(entities.get("service_name") or "").strip()
+    return bool(current) and current.casefold() == value.casefold()
+
+
 def _should_drop_service_name_in_active_reschedule(
     *,
     label: str,
@@ -600,7 +620,14 @@ async def ground_decision_entities(
                     flags.add("entity_grounded_service_name")
             elif isinstance(value, str):
                 fallback = value.strip()
-                if label in strict_catalog_labels:
+                if _is_active_booking_target(label=label, value=fallback, state=state):
+                    # BUG-2026-10-18-BRANCH-REPLY-TOPIC-SWITCH (подбаг B): реплика услугу не называет (ответ на шаг
+                    # записи — «пр.Ленина, 5»), а значение — цель этой же записи из состояния, уже заземлённая и
+                    # показанная. Каноническое название каталога `extract_service_phrase` не узнаёт, и без этой ветки
+                    # цель ронялась как «неподтверждённая» → гард B′ → «Пока не понял, к какому врачу».
+                    out[key] = fallback
+                    flags.add("entity_kept_booking_target_service_name")
+                elif label in strict_catalog_labels:
                     if "policy_nonbookable_walkin" in set(decision.flags) and fallback and not match_city(fallback):
                         out[key] = fallback
                         flags.add("entity_kept_nonbookable_service_name")

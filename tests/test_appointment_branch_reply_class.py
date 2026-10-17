@@ -1,6 +1,6 @@
 """Класс 5 («бот знает, чего ждёт»): ответ на вопрос бота «Какой филиал вам удобен?» — не смена темы.
 
-BUG-2026-10-18-BRANCH-REPLY-TOPIC-SWITCH (ОТКРЫТО), найден стендом сбоев 17.10: «хочу записаться к урологу» → бот
+BUG-2026-10-18-BRANCH-REPLY-TOPIC-SWITCH (A — ОТКРЫТО, B — исправлен), найден стендом сбоев 17.10: «хочу записаться к урологу» → бот
 перечисляет филиалы и спрашивает «Какой филиал вам удобен? Или написать список врачей?» → «в любой филиал» (или
 «какие адреса?») → «Сейчас идет оформление записи. Отменить этот процесс и перейти к новому вопросу?».
 
@@ -10,14 +10,16 @@ BUG-2026-10-18-BRANCH-REPLY-TOPIC-SWITCH (ОТКРЫТО), найден стен
 (`pending_reply`, до предпроверки) его не видит: баг держится и при живой LLM. Через эндпоинт, мини-прод, день, LLM
 недоступна (мир гейта).
 
-Подбаг B того же класса: в записи на УСЛУГУ («запишите на узи щитовидки») даже дословно названный филиал из списка даёт
-«Пока не понял, к какому врачу или на какую услугу вас записать» — путь `flow_prelock` (NLU и LLM не участвуют): грундер
-переизвлекает «услугу» из реплики-адреса, роняет её как неподтверждённую, а гард B′ планировщика в активной записи
-считает целью только врача или специальность.
+Подбаг B того же класса — ИСПРАВЛЕН 18.10: в записи на УСЛУГУ («запишите на узи щитовидки») даже дословно названный
+филиал из списка давал «Пока не понял, к какому врачу или на какую услугу вас записать» — путь `flow_prelock` (NLU и LLM
+не участвуют): грундер получал услугу записи каноническим названием каталога, `extract_service_phrase` его не узнавал,
+значение падало как «неподтверждённое», гард B′ планировщика отказывал. Инвариант: в активной записи цель-услуга
+переживает ход-ответ на шаг записи так же, как специальность, — ответы записи на услугу и к специальности на одни и те же
+реплики одного рода (`entity_grounder._is_active_booking_target`).
 
 Красное — `xfail(strict=True)`: позеленевший случай краснеет (XPASS), отметку снимает коммит фикса. Зелёное —
-характеризация: названный филиал при записи к специальности ведёт к вопросу о времени (вариант A), явная новая тема —
-к вопросу об отмене. Мир — гейт (локальные срезы врачей и филиалов: в мини-проде филиалов нет).
+названный филиал ведёт к вопросу о времени и заявке оператору (вариант A), явная новая тема — к вопросу об отмене,
+названная новая услуга сменяет цель. Мир — гейт (локальные срезы врачей и филиалов: в мини-проде филиалов нет).
 """
 
 from __future__ import annotations
@@ -95,34 +97,50 @@ def test_branch_reply_is_not_a_topic_switch(opening, reply):
     assert second["entities"].get("appointment_flow_active"), second["entities"]
 
 
-def _named_branch_answers(opening: str) -> dict[str, str]:
-    """Каждый показанный филиал, названный дословно, — ответ второго хода (сессия на филиал)."""
+# Записи на услугу: цель — каноническое название каталога (у специальности — «приём к …»).
+SERVICE_OPENINGS = ("запишите на узи щитовидки", "запишите на узи почек", "хочу записаться на узи брюшной полости")
+# Ответы на шаг записи, которые новую цель не называют.
+SLOT_ANSWERS = ("завтра после 17", "Иванов Иван")
 
-    first = _dialog((OPENINGS[opening],), f"branch-named-probe-{opening}")[0]
+
+def _named_branch_dialogs(opening: str) -> dict[str, list[dict[str, Any]]]:
+    """Каждый показанный филиал, названный дословно, — второй ход; третий — пожелание по времени (сессия на филиал)."""
+
+    first = _dialog((opening,), f"branch-named-probe-{opening}")[0]
     options = first["entities"].get("appointment_branch_options") or []
     assert options, first["text"]
     return {
-        option: _dialog((OPENINGS[opening], option), f"branch-named-{opening}-{i}")[1]["text"]
+        option: _dialog((opening, option, "в субботу утром"), f"branch-named-{opening}-{i}")
         for i, option in enumerate(options)
     }
 
 
-def test_named_branch_moves_to_the_time_wish():
-    answers = _named_branch_answers("specialty")
-    assert all(_WISH_QUESTION in text for text in answers.values()), answers
+@pytest.mark.parametrize("opening", (OPENINGS["specialty"], *SERVICE_OPENINGS))
+def test_named_branch_moves_to_the_time_wish_and_the_operator(opening):
+    for option, (first, second, third) in _named_branch_dialogs(opening).items():
+        assert _WISH_QUESTION in second["text"], (option, second["text"])
+        assert second["entities"].get("service_name") == first["entities"].get("service_name"), (option, second)
+        assert third["handoff"], (option, third["text"])
+        assert option in third["text"] and "«в субботу утром»" in third["text"], (option, third["text"])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG-2026-10-18-BRANCH-REPLY-TOPIC-SWITCH, подбаг B: в записи на услугу ответ адресом переизвлекается "
-        "грундером как «услуга», роняется как неподтверждённая, и гард B′ планировщика (цель — только врач или "
-        "специальность) отвечает «Пока не понял, к какому врачу»"
-    ),
-)
-def test_named_branch_moves_to_the_time_wish_for_a_service():
-    answers = _named_branch_answers("service")
-    assert all(_WISH_QUESTION in text for text in answers.values()), answers
+@pytest.mark.parametrize("answer", SLOT_ANSWERS)
+@pytest.mark.parametrize("opening", SERVICE_OPENINGS)
+def test_slot_answer_keeps_the_service_target(opening, answer):
+    # Паритет со специальностью: ответ без новой цели — запись продолжается с той же услугой, не «не понял, куда».
+    first, second = _dialog((opening, answer), f"branch-slot-{opening}-{answer}")
+    assert _UNKNOWN_TARGET not in second["text"], second["text"]
+    assert not second["handoff"], second["text"]
+    assert second["entities"].get("service_name") == first["entities"].get("service_name"), second["entities"]
+    assert second["entities"].get("appointment_flow_active"), second["entities"]
+
+
+@pytest.mark.parametrize("opening", (OPENINGS["specialty"], *SERVICE_OPENINGS))
+def test_named_new_service_replaces_the_target(opening):
+    # Встречный случай: правило держит только цель, которую реплика не меняет; новая услуга сменяет цель.
+    first, second = _dialog((opening, "лучше на узи сердца"), f"branch-new-service-{opening}")
+    assert second["entities"].get("service_name") != first["entities"].get("service_name"), second["entities"]
+    assert "сердца" in second["text"], second["text"]
 
 
 @pytest.mark.parametrize("opening", sorted(OPENINGS))
