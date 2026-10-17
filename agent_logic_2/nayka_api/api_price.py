@@ -416,6 +416,18 @@ def update_price_units(force: bool = False) -> Path:
     return fn
 
 
+def prefetch_price_today(region_id: Any = None) -> None:
+    """Скачать сегодняшние срезы розничного прайса и priceUnits, если их нет (`snapshots.prefetch`).
+
+    Ценовой ход зовёт её в потоке до синхронных чтений прайса: скачивание (60 с с повторами) не идёт в цикле
+    событий (DATA-7). Строк не читает. Регион по умолчанию — прайс бота (`BOT_PRICE_REGION_ID`): ядро не называет
+    регион клиники само (храповик `test_clinic_literals_ratchet`).
+    """
+    region_id = BOT_PRICE_REGION_ID if region_id is None else region_id
+    snapshots.prefetch(price_by_region_path(region_id), lambda: update_price_by_region(region_id, force=True))
+    snapshots.prefetch(price_units_path(), lambda: update_price_units(force=True))
+
+
 def load_price_units() -> List[Dict[str, Any]]:
     """
     Загружает из локального кэша справочник priceUnits.

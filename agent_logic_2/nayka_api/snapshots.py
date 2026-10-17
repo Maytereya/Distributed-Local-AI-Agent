@@ -204,6 +204,25 @@ def mark_failed(key: Path | str) -> None:
     _failed_at[str(key)] = time.monotonic()
 
 
+def prefetch(path: Path, download: Callable[[], Any]) -> None:
+    """Скачать срез «на сегодня», если его нет или он пуст (после неудачи — не чаще раза в `RETRY_AFTER_S`).
+
+    Первая половина `load_snapshot`. Асинхронный путь пациента зовёт её в потоке (`asyncio.to_thread`) до синхронных
+    чтений хода — тогда они уже не качают в цикле событий (DATA-7).
+
+    :param path: срез «на сегодня»
+    :param download: скачивает и записывает срез «на сегодня»; пустой ответ — исключение
+    """
+
+    if not has_rows(path) and retry_allowed(path):
+        try:
+            download()
+        except Exception as exc:  # МИС недоступна или пуста — вчерашний срез лучше пустого
+            log.warning("срез %s не скачан (%s) — беру последний непустой", path.name, exc)
+        if not has_rows(path):
+            mark_failed(path)
+
+
 def load_daily(
     path: Path,
     download: Callable[[], Any],
@@ -231,13 +250,7 @@ def load_snapshot(
     :return: срез
     """
 
-    if not has_rows(path) and retry_allowed(path):
-        try:
-            download()
-        except Exception as exc:  # МИС недоступна или пуста — вчерашний срез лучше пустого
-            log.warning("срез %s не скачан (%s) — беру последний непустой", path.name, exc)
-        if not has_rows(path):
-            mark_failed(path)
+    prefetch(path, download)
     source = latest_nonempty(path)
     return report(path, source, read(source) if source is not None else [])
 
