@@ -249,6 +249,10 @@ def _extract_pending_response(
         slot in missing and isinstance(evidence.get(key), dict) for slot, key in own_answer.items()
     ):
         return None
+    # Названия услуг на выбор в записи (`router._maybe_ask_booking_service_choice`): ответ — список названий, а не
+    # общий переспрос по пустому слоту услуги (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS).
+    if plan.label == "APPOINTMENT" and "service_name" in missing and isinstance(evidence.get(ek.CATALOG_CONFIRM_RESPONSE), dict):
+        return None
 
     if (
         plan.label == "APPOINTMENT"

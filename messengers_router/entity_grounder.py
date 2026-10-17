@@ -18,9 +18,16 @@ from . import turn_understanding
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
-from .policies import extract_service_phrase, has_datetime_signal, service_name_conflicts_with_doctor
+from .policies import (
+    extract_service_phrase,
+    has_datetime_signal,
+    is_fixed_equipment_service,
+    service_name_conflicts_with_doctor,
+)
 from .russian_nlu import normalize_ru
 from .services import Services, resolve_price_service_name_from_catalog
+from .services._booking_service_select import judge_booking_service
+from .services._common import _normalise_catalog_text
 
 _CONTROL_KEYS = {
     "secondary_intents",
@@ -200,6 +207,21 @@ def _is_doctor_like_service_collision(
     if len((phrase or "").split()) > 1:
         return False
     return True
+
+
+# Названия услуг на выбор пациенту, когда цель записи не решена (`judge_booking_service` → `choose`): служебный ключ
+# решения, ответ задаёт роутер (`router._maybe_ask_booking_service_choice`), в состояние он не попадает.
+BOOKING_SERVICE_OPTIONS_KEY = "_booking_service_options"
+# Названо слишком общее: названия — примеры, а не полный список (`router._maybe_ask_booking_service_choice`).
+BOOKING_SERVICE_CLARIFY_KEY = "_booking_service_clarify"
+
+
+def _is_verbatim_catalog_name(value: str, user_text: str) -> bool:
+    """Значение реплика содержит целиком (вызывающий проверяет, что его подставила каталожная инъекция —
+    `catalog_service_exact`: это название строки каталога, а не слова LLM)."""
+
+    name = _normalise_catalog_text(value)
+    return len(name) >= 5 and name in _normalise_catalog_text(user_text)
 
 
 def _is_active_booking_target(*, label: str, value: str, state: SessionState) -> bool:
@@ -471,6 +493,7 @@ async def ground_decision_entities(
     state: SessionState,
     services: Services,
     pending: dict[str, Any] | None = None,
+    runtime_llm_mode: str = "",
 ) -> GroundingResult:
     raw = dict(decision.entities or {})
     if not raw:
@@ -553,8 +576,11 @@ async def ground_decision_entities(
                     user_text,
                     current_service_name=str(value or ""),
                 )
+            phrase_in_reply = False
             if not phrase:
-                phrase = extract_service_phrase(user_text) or extract_service_phrase(str(value or ""))
+                reply_phrase = extract_service_phrase(user_text)
+                phrase_in_reply = bool(reply_phrase)
+                phrase = reply_phrase or extract_service_phrase(str(value or ""))
             strict_catalog_labels = {"APPOINTMENT", "PRICE", "ADDRESS", "TEST_ASSIST"}
             if phrase:
                 if _is_doctor_like_service_collision(
@@ -575,6 +601,44 @@ async def ground_decision_entities(
                     nonbookable_keep = "policy_nonbookable_walkin" in set(decision.flags)
                     if status == "exact":
                         canonical = str(match.get("canonical") or "").strip()
+                        if (
+                            canonical
+                            and label == "APPOINTMENT"
+                            and phrase_in_reply
+                            and not nonbookable_keep
+                            # Флюорограф/маммограф — запись только через регистратуру (планировщик, прод #668): какая
+                            # строка прайса, не важно, выбор не нужен.
+                            and not is_fixed_equipment_service(phrase)
+                        ):
+                            # Цель записи — услуга, которую назвал пациент: догадку правил судит LLM, как у цены
+                            # (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS: «гастроскопию» → «Гастрин»).
+                            verdict = await judge_booking_service(
+                                phrase,
+                                canonical,
+                                catalog=services._ensure_service_catalog_rows_loaded,
+                                reply=user_text,
+                                runtime_llm_mode=runtime_llm_mode,
+                            )
+                            if verdict.status:
+                                flags.add(f"booking_service_{verdict.status}")
+                            if verdict.action == "refuse":
+                                flags.add("entity_dropped_unverified_service_name")
+                                continue
+                            if verdict.action == "clarify":
+                                out[BOOKING_SERVICE_OPTIONS_KEY] = list(verdict.names)
+                                out[BOOKING_SERVICE_CLARIFY_KEY] = True
+                                continue
+                            if verdict.action == "choose":
+                                if len(verdict.names) == 1:
+                                    # Одно название — прежнее подтверждение «Похоже, вы имели в виду …?».
+                                    out["_catalog_service_candidate"] = verdict.names[0]
+                                    out["_catalog_service_query"] = phrase
+                                    flags.add("entity_catalog_service_fuzzy_candidate")
+                                else:
+                                    out[BOOKING_SERVICE_OPTIONS_KEY] = list(verdict.names)
+                                continue
+                            if verdict.action == "replace":
+                                canonical = verdict.name
                         if canonical:
                             out[key] = canonical
                             if canonical != phrase:
@@ -620,7 +684,17 @@ async def ground_decision_entities(
                     flags.add("entity_grounded_service_name")
             elif isinstance(value, str):
                 fallback = value.strip()
-                if _is_active_booking_target(label=label, value=fallback, state=state):
+                if (
+                    label == "APPOINTMENT"
+                    and "catalog_service_exact" in set(decision.flags)
+                    and _is_verbatim_catalog_name(fallback, user_text)
+                ):
+                    # Пациент написал название строки каталога дословно (ответ на список названий
+                    # `router._maybe_ask_booking_service_choice`) — сильное совпадение по данным; `extract_service_phrase`
+                    # каноническое название не узнаёт (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS).
+                    out[key] = fallback
+                    flags.add("entity_kept_verbatim_catalog_service_name")
+                elif _is_active_booking_target(label=label, value=fallback, state=state):
                     # BUG-2026-10-18-BRANCH-REPLY-TOPIC-SWITCH (подбаг B): реплика услугу не называет (ответ на шаг
                     # записи — «пр.Ленина, 5»), а значение — цель этой же записи из состояния, уже заземлённая и
                     # показанная. Каноническое название каталога `extract_service_phrase` не узнаёт, и без этой ветки

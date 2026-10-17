@@ -28,6 +28,8 @@ from .context_summary import update_summary
 from .dialog_graph import GraphEngine
 from .entity_grounder import (
     _NONBOOKABLE_GENERIC_HINTS,
+    BOOKING_SERVICE_CLARIFY_KEY,
+    BOOKING_SERVICE_OPTIONS_KEY,
     ground_decision_entities,
     sanitize_doctor_entities,
     verify_doctor_entities_in_decision,
@@ -2071,6 +2073,48 @@ def _maybe_start_catalog_confirm(
     )
 
 
+def _maybe_ask_booking_service_choice(
+    *,
+    decision: RouteDecision,
+    state: SessionState,
+    memory: MemoryStore,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Цель записи не решена — названия услуг на выбор пациенту (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS).
+
+    Грундер кладёт названия (`BOOKING_SERVICE_OPTIONS_KEY`), когда выбор LLM назвал несколько услуг или LLM недоступна
+    на слабом совпадении (решение владельца 18.10 — как L-13 у цены). Записи на догадку правил нет; ожидание записи с
+    недостающей услугой — следующий ход с названием из списка продолжает запись.
+    """
+
+    entities = decision.entities or {}
+    names = [str(n).strip() for n in entities.get(BOOKING_SERVICE_OPTIONS_KEY) or () if str(n).strip()]
+    general = bool(entities.get(BOOKING_SERVICE_CLARIFY_KEY))
+    if decision.label != "APPOINTMENT" or not (names or general):
+        return None
+    action = str((decision.entities or {}).get("appointment_action") or "").strip()
+    if action:
+        state.last_entities["appointment_action"] = action
+    state.last_entities.pop("service_name", None)
+    memory.clear_pending(state)
+    memory.set_pending(state, label="APPOINTMENT", missing_slots=["service_name"])
+    expects.ask(expects.Question.BOOKING_SERVICE, kind=expects.PICK, options=tuple(names))
+    # Без номеров: ответ «1» правила не разбирают (ответ на висящий вопрос силами LLM — подбаг A
+    # BUG-2026-10-18-BRANCH-REPLY-TOPIC-SWITCH, решение владельца о `_expects`); название из списка — сильное совпадение.
+    lines = "\n".join(f"— {name}" for name in names)
+    if general:
+        # Названа группа услуг («массаж»): названия — примеры, пациент может назвать и свою.
+        text = "Уточните, пожалуйста, какую именно услугу записать — как в направлении врача"
+        text += f", например:\n{lines}" if names else "."
+    else:
+        text = f"Уточните, пожалуйста, на какую услугу вас записать:\n{lines}\nНапишите название из списка."
+    clean = {k: v for k, v in entities.items() if k not in {BOOKING_SERVICE_OPTIONS_KEY, BOOKING_SERVICE_CLARIFY_KEY}}
+    return (
+        _copy_decision(decision, entities=clean, flags=set(decision.flags) | {"booking_service_choice_requested"}),
+        Plan(label="APPOINTMENT"),
+        Evidence(items={ek.CATALOG_CONFIRM_RESPONSE: {"text": text, "handoff": False}}),
+    )
+
+
 async def _backfill_appointment_doctor_from_text(
     user_text: str,
     state: SessionState,
@@ -2887,6 +2931,7 @@ async def _complete_route_after_doctor_guard(
         state=state,
         services=services,
         pending=pending_before_merge,
+        runtime_llm_mode=runtime_options.llm_mode if runtime_options is not None else "",
     )
     if grounding.entities != decision.entities or grounding.flags:
         decision = _copy_decision(
@@ -2903,6 +2948,9 @@ async def _complete_route_after_doctor_guard(
     )
     if catalog_confirm is not None:
         return catalog_confirm
+    booking_choice = _maybe_ask_booking_service_choice(decision=decision, state=state, memory=memory)
+    if booking_choice is not None:
+        return booking_choice
 
     # Служебные каталожные ключи не должны попадать в долгоживущий state.
     if any(

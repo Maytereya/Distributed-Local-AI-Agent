@@ -415,6 +415,7 @@ async def select_price_rows(
     runtime_llm_mode: str = "",
     judge_qualifier: bool = False,
     one_round: bool = False,
+    general_as_none_fit: bool = False,
 ) -> PriceSelection | None:
     """Строки прайса, которые являются той услугой, о которой спросил пациент.
 
@@ -437,6 +438,9 @@ async def select_price_rows(
         (`reason`) при любых кандидатах и любом коде; None — только сбой. Для суда условия у сильной фразы разбора
         (BUG-2026-10-16-P2-STRONG-PHRASE-BYPASS): второй круг искал бы «почти то», а под `turn_parse = on` упирался
         в лимит решений хода (`budget`) и превращал ответ «условия нет» в `unavailable`.
+    :param general_as_none_fit: «слишком общее» и «не услуга» — тоже `none_fit` с кодом причины и названиями варианта B
+        (`names`), а не None. Для записи (`_booking_service_select`): там «ответ правил» — молчаливая запись на догадку
+        («массаж» → «Массаж век»), а не уточнение, как у цены (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS).
     :return: выбор LLM; None — оставить ответ правил
     """
 
@@ -500,8 +504,12 @@ async def select_price_rows(
 
     def none_fit(reason: str) -> PriceSelection | None:
         # Названо слишком общее или не услуга — уточнение правил честнее, чем «не нашёл».
-        if not candidates or reason in _NOT_A_SERVICE_NAME:
+        if not candidates:
             return None
+        if reason in _NOT_A_SERVICE_NAME:
+            if not general_as_none_fit:
+                return None
+            return PriceSelection(rows=(), status="none_fit", reason=reason, names=_whole_word_names(question, pool, rows))
         return PriceSelection(rows=(), status="none_fit", reason=reason)
 
     def journal_miss(found_terms: list[str], *reasons: str) -> None:
