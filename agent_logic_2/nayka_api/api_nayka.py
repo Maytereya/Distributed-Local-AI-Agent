@@ -677,22 +677,23 @@ def get_cached_doctors_data() -> list:
 _refresh_task = None
 
 async def _refresh_once():
+    # Логгер, а не print: сбой фонового обновления должен быть виден в логе контейнера (DATA-10).
     try:
         # 1) Врачи
         docs = await asyncio.to_thread(get_all_doctors)
         if save_doctors_data(docs):  # старые срезы чистит сама запись — и только после неё
-            print("✅ [DAILY REFRESH] Кэш врачей обновлён")
+            logger.info("[DAILY REFRESH] Кэш врачей обновлён")
         else:
-            print("⚠️ [DAILY REFRESH] МИС не вернула врачей — остаётся прежний срез")
+            logger.warning("[DAILY REFRESH] МИС не вернула врачей — остаётся прежний срез")
         # 2) Заметки call-центра (zametka_button_*.json)
         try:
             from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info as _get_cc
             await asyncio.to_thread(_get_cc, True)  # force=True
-            print("✅ [DAILY REFRESH] Кэш заметок КЦ обновлён")
-        except Exception as cc_e:
-            print(f"⚠️ [DAILY REFRESH] Ошибка обновления заметок КЦ: {cc_e}")
-    except Exception as e:
-        print(f"⚠️ [DAILY REFRESH] Ошибка обновления кэша: {e}")
+            logger.info("[DAILY REFRESH] Кэш заметок КЦ обновлён")
+        except Exception:
+            logger.warning("[DAILY REFRESH] Ошибка обновления заметок КЦ", exc_info=True)
+    except Exception:
+        logger.warning("[DAILY REFRESH] Ошибка обновления кэша врачей", exc_info=True)
 
 async def _daily_refresh_loop():
     await snapshots.run_daily(7, 45, _refresh_once, _now_samara)
@@ -709,7 +710,7 @@ def ensure_daily_refresh_started() -> bool:
         return False
     if _refresh_task is None or _refresh_task.done():
         _refresh_task = loop.create_task(_daily_refresh_loop())
-        print("▶️ [DAILY REFRESH] Планировщик запущен")
+        logger.info("[DAILY REFRESH] Планировщик врачей запущен")
         # Если активного файла нет (например, приложение запущено после 07:45),
         # дергаем немедленное обновление в фоне, чтобы не тратить время на первый запрос.
         try:
@@ -717,7 +718,7 @@ def ensure_daily_refresh_started() -> bool:
             if not active_file.exists():
                 loop.create_task(_refresh_once())
         except Exception:
-            pass
+            logger.warning("[DAILY REFRESH] Немедленное обновление врачей не запущено", exc_info=True)
     return True
 
 

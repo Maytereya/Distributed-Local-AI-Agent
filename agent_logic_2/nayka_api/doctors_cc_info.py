@@ -18,6 +18,8 @@ import urllib3
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+HTTP_TIMEOUT = (10, 60)  # (соединение, чтение), с
+
 # Константы для кэширования
 CACHE_DIR = str(resolve_cache_data_dir())
 CACHE_EXPIRY = timedelta(hours=24)  # Кэш действителен 24 часа
@@ -162,7 +164,8 @@ def get_doctors_cc_info(force: bool = False) -> List[Dict]:
         # Отправляем GET запрос с авторизацией
         # Подавляем предупреждения, если явно используем verify=False
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        response = requests.get(url, auth=auth, verify=False)
+        # Таймаут обязателен: зависшее соединение навсегда останавливало утренний цикл обновления врачей (DATA-10).
+        response = requests.get(url, auth=auth, verify=False, timeout=HTTP_TIMEOUT)
         
         # Проверяем статус ответа
         response.raise_for_status()

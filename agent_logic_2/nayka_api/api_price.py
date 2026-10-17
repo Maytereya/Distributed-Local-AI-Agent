@@ -842,7 +842,7 @@ def ensure_daily_price_refresh_started() -> bool:
             if not _has_rows(doctor_prices_path()) or not price_units_path().exists():
                 loop.create_task(_refresh_doctor_prices_once())
         except Exception:
-            pass
+            log.warning("[DAILY REFRESH] Немедленная сборка doctor_prices не запущена", exc_info=True)
     return True
 
 # -----------------------------------------------------------------------------

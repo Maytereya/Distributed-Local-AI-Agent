@@ -26,6 +26,7 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -71,13 +72,19 @@ def has_rows(path: Path) -> bool:
 
 
 def write_rows(path: Path, rows: Iterable[dict[str, Any]]) -> None:
-    """Пишет JSONL атомарно: читатель видит либо прежний файл, либо новый целиком."""
+    """Пишет JSONL атомарно: читатель видит либо прежний файл, либо новый целиком.
 
-    tmp = path.with_name(path.name + ".tmp")
+    Временный файл — свой у каждого писателя (`mkstemp`): с одним именем `.tmp` параллельные сборки (фон и первый
+    запрос) писали в один файл и могли оставить битый срез на весь день (DATA-10).
+    """
+
+    fd, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    tmp = Path(name)
     try:
-        with tmp.open("w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             for row in rows:
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        os.chmod(tmp, 0o644)  # права как у прежнего open(): mkstemp создаёт 0600
         os.replace(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)  # недописанный временный файл — не мусор на диске
