@@ -201,6 +201,7 @@ class MessengerRouterConfig:
     parse_fail_variants: int
     variant_b_wordforms: str
     mis_honest_degradation: str
+    topic_override_llm: str
     pending_reply: str
     pending_reply_types: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
@@ -520,6 +521,10 @@ settings = Settings(
         # приписка «по данным на ДД.ММ» или оператор. off — как было (правило 13.10: видимое поведение под
         # выключателем, умолчание «как было»). [MESSENGER_ROUTER] mis_honest_degradation
         mis_honest_degradation=_get_enum("MESSENGER_ROUTER", "mis_honest_degradation", default="off", allowed={"off", "on"}),
+        # Тема реестра перебивает метку OTHER только после подтверждения LLM по смыслу (решение владельца 18.10:
+        # «чинить через LLM, уходим от совпадения букв к смыслу»; «Ново-Садовая» ловилась словом «новость»).
+        # LLM недоступна — тема метку не перебивает. off — как было. [MESSENGER_ROUTER] topic_override_llm
+        topic_override_llm=_get_enum("MESSENGER_ROUTER", "topic_override_llm", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -656,6 +661,7 @@ MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
+MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_REASK_LIMIT = settings.messenger_router.reask_limit

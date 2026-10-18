@@ -20,7 +20,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import degradation, expects, pending_reply, shown_context, turn_parse, turn_telemetry, turn_understanding
+from . import degradation, expects, pending_reply, shown_context, topic_confirm, turn_parse, turn_telemetry, turn_understanding
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -370,6 +370,19 @@ def _copy_decision(decision: RouteDecision, **overrides: Any) -> RouteDecision:
     }
     data.update(overrides)
     return RouteDecision(**data)
+
+
+def _topic_would_override(decision: RouteDecision, topic_match: Any) -> bool:
+    """Тема реестра сменила бы метку (из OTHER, по allowlist и счёту) — те же условия, что в
+    `_apply_topic_registry_override`; только здесь слова реестра меняют маршрут."""
+
+    topic_label = str(getattr(topic_match, "label", "") or "").strip().upper()
+    return (
+        bool(topic_label and getattr(topic_match, "topic_id", ""))
+        and decision.label == "OTHER"
+        and topic_label in _TOPIC_OVERRIDE_ALLOW_FROM_OTHER
+        and int(getattr(topic_match, "score", 0) or 0) >= _TOPIC_OVERRIDE_MIN_SCORE
+    )
 
 
 def _apply_topic_registry_override(
@@ -2770,7 +2783,15 @@ async def _resolve_nlu_decision_before_doctor_guard(
 
     topic_match = match_topic(user_text)
     if topic_match is not None:
-        decision = _apply_topic_registry_override(decision, topic_match)
+        if topic_confirm.enabled() and _topic_would_override(decision, topic_match) and not await topic_confirm.confirms(user_text, topic_match):
+            # Слова реестра указали на тему, LLM по смыслу не подтвердила (или недоступна) — метка остаётся,
+            # тема — подсказка (решение владельца 18.10: тему решает смысл, не совпадение букв).
+            decision = _copy_decision(
+                decision,
+                flags=set(decision.flags) | {"topic_registry_match", build_topic_flag(topic_match.topic_id), "topic_registry_hint_only", "topic_registry_llm_rejected"},
+            )
+        else:
+            decision = _apply_topic_registry_override(decision, topic_match)
         nlu_debug["topic_registry"] = {
             "topic_id": topic_match.topic_id,
             "label": topic_match.label,

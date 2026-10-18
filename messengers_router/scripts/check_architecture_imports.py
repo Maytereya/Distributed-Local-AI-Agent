@@ -54,6 +54,7 @@ LAYER_BY_MODULE: dict[str, str] = {
     # (пишет в телеметрию хода) — решения и наблюдатели хода, слой политики.
     "degradation": "policy",
     "schedule_parse_watch": "policy",
+    "topic_confirm": "policy",
     # Orchestration (2026-06: оркестратор — активный прод-путь, зовётся из router)
     "orchestrator": "orchestration",
     # Отпечаток рантайма для debug-ответа роутера (DATA-13, 18.10): читает реестр промптов, телеметрию (инфраструктура) и
