@@ -31,6 +31,7 @@ tests/test_doctor_info_procedure_detail.py
 tests/test_doctor_name_matching.py
 tests/test_doctors_by_service_code.py
 tests/test_doctors_dms_age.py
+tests/test_doctors_excerpt_fallback.py
 tests/test_empty_evidence_reply.py
 tests/test_endpoint_di.py
 tests/test_eval_stage5_corpus.py
@@ -64,6 +65,7 @@ tests/test_lab_visit_timing.py
 tests/test_llama_schedule_cache.py
 tests/test_llm_connect_diag.py
 tests/test_llm_name_cache.py
+tests/test_llm_primary_nlu.py
 tests/test_llm_runtime_hygiene.py
 tests/test_llm_structured.py
 tests/test_memory_dialog_state.py
@@ -149,6 +151,7 @@ tests/test_symptom_specialists.py
 tests/test_t7_single_parse_mode.py
 tests/test_test_assist_multi.py
 tests/test_tool_imports_resolve.py
+tests/test_topic_override_by_meaning.py
 tests/test_topic_registry_broken_yaml.py
 tests/test_turn_parse.py
 tests/test_turn_parse_concurrent.py

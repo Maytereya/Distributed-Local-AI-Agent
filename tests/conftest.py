@@ -17,6 +17,8 @@ S1 (`bd4c5af`) добавил `persist_snapshot()` в `core._ensure_regions_load
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 
@@ -433,6 +435,39 @@ def _pin_latest_mis_snapshots() -> None:
     pin_today_snapshots(set_attr)
 
 
+_DOCTORS_EXCERPT = Path(__file__).resolve().parent / "fixtures" / "doctors_excerpt" / "doctors_20261008.jsonl"
+
+
+def doctors_fallback(real_find, gate_dir: Path, excerpt: Path):
+    """`api_nayka.find_existing_doctors_file`, который при пустой папке срезов гейта отдаёт выдержку из репо.
+
+    Срез врачей (`doctors_*.jsonl`) не в git: без него ~68 тестов записи и врачей красные (ловушка CLAUDE.md, замер
+    18.10), и в CI они не попадают. Выдержка (`tests/fixtures/doctors_excerpt`, решение владельца 18.10: врачи,
+    названные в тестах, + до 4 на специальность, описание — первая строка) — только запасной путь: есть локальный срез —
+    берётся он; тест подменил папку (мир стенда, временная папка) — выдержка не подставляется.
+    """
+    from agent_logic_2.nayka_api import api_nayka
+
+    def find():
+        found = real_find()
+        if found is None and Path(api_nayka.DATA_DIR) == gate_dir:
+            return excerpt
+        return found
+
+    return find
+
+
+def _pin_doctors_excerpt_if_no_local_snapshot() -> None:
+    from agent_logic_2.nayka_api import api_nayka
+
+    gate_dir = Path(api_nayka.DATA_DIR)
+    if any(api_nayka._file_has_doctors(p) for p in gate_dir.glob("doctors_*.jsonl")):
+        return
+    real = api_nayka.find_existing_doctors_file
+    _PINNED_SNAPSHOT_LOADERS.append((api_nayka, "find_existing_doctors_file", real))
+    api_nayka.find_existing_doctors_file = doctors_fallback(real, gate_dir, _DOCTORS_EXCERPT)
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
@@ -450,6 +485,7 @@ def pytest_configure(config):
     if _Urllib3Retry is not None:
         _Urllib3Retry.sleep = _guarded_retry_sleep
     _pin_latest_mis_snapshots()
+    _pin_doctors_excerpt_if_no_local_snapshot()
 
 
 def pytest_unconfigure(config):
