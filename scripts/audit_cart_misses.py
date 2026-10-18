@@ -63,17 +63,27 @@ from messengers_router.services import _biomaterial  # noqa: E402
 from messengers_router.services._prices_helpers import (  # noqa: E402
     _PRICE_SHORT_TOKEN_WHITELIST,
     SAMARA_PRICE_REGION_ID,
-    _build_multi_price_payload,
     _catalog_token_vocabulary,
     _distinctive_service_tokens,
     _normalise_input,
+    _multi_price_items,
     _resolve_multi_price_items,
     _split_price_query_items,
     _token_covered_by,
+    multi_price_payload_from_items,
     resolve_price_service_name_from_catalog,
 )
 from agent_logic_2.nayka_api import api_service_info  # noqa: E402
 from scripts.analyze_daily_dialogs import parse_log  # noqa: E402
+
+
+
+def _build_multi_price_payload(query_text: str, rows: list) -> dict | None:
+    """Корзина правил целиком, как её собирает `prices._multi_price_payload` без LLM (функцию ядра с тем же именем сняли
+    в T7 как мёртвую — 5e78193; скрипт остался с её импортом и падал при запуске)."""
+
+    return multi_price_payload_from_items(*_multi_price_items(query_text, rows))
+
 
 # Корзина — это ДВЕ и более позиции. Одна позиция мульти-расчётом не является.
 _MIN_CART_ITEMS = 2
