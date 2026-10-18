@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from . import expects
+from . import expects, pending_reply
 from .city import match_city
 from .flow_policy import clear_on_appointment_end, looks_like_patient_fio
 from .memory import MemoryStore
@@ -19,6 +19,7 @@ from .state_mutations import (
     mark_appointment_cancel_pending,
     mark_appointment_topic_switch_pending,
     reject_appointment_confirmation,
+    set_appointment_selection_mode,
 )
 from .policies import (
     APPOINTMENT_CONFIRM_NO,
@@ -45,6 +46,7 @@ from .policies import (
     detect_schedule_intent,
     detect_test_assist_intent,
     detect_test_result_intent,
+    extract_branch_hint,
     has_datetime_signal,
     looks_like_branch_hint,
     missing_slots,
@@ -184,6 +186,44 @@ def is_likely_topic_switch_from_appointment(user_text: str) -> bool:
     return ("?" in text) and (len(text.split()) >= 4)
 
 
+def _answers_branch_question(state: SessionState, user_text: str) -> bool:
+    """Ответ на вопрос бота «Какой филиал вам удобен?» — не смена темы (класс 5, решение владельца 18.10).
+
+    Бот знает, чего ждёт (`_expects` прошлого хода — `appointment_branch`). Ответ разбирает LLM (`pending_reply`,
+    решение этого хода): «другая тема» — прежняя проверка смены темы; выбран адрес — это филиал; «любой филиал» —
+    филиал «любой филиал», оператор получает его как есть; «список врачей» — список; иной исход — запись идёт дальше.
+    LLM не решала (выключатель, сбой) — запасной путь, правила только сужают: ответ о филиалах, адресах, врачах или
+    показанный вариант — в домене вопроса. Иначе — прежняя проверка.
+
+    :return: True — ответ на вопрос о филиале (смены темы нет); False — проверять смену темы, как было
+    """
+
+    raw = state.last_entities.get(expects.EXPECTS_KEY)
+    if not isinstance(raw, dict) or raw.get("type") != expects.Question.APPOINTMENT_BRANCH.value:
+        return False
+    decided = pending_reply.branch_reply(user_text)
+    if decided is not None:
+        outcome, picked = decided
+        if outcome == "new_topic":
+            return False
+        if picked == expects.DOCTOR_LIST_OPTION:
+            set_appointment_selection_mode(state, "doctor")
+        elif picked:
+            state.last_entities["branch_name"] = picked
+        return True
+    low = str(user_text or "").lower()
+    shown = state.last_entities.get("appointment_branch_options")
+    hint = extract_branch_hint(user_text, state.last_entities)
+    answers = bool(
+        detect_address_intent(low)
+        or detect_doctor_info_intent(low)
+        or (isinstance(shown, list) and hint in shown)
+    )
+    if answers:
+        pending_reply.note_rules_branch_answer(user_text)
+    return answers
+
+
 def _appointment_wish_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
     """Вариант A (08.10): вернуться к записи — значит снова спросить пожелание по времени."""
 
@@ -315,7 +355,7 @@ def run_appointment_precheck(
                     confidence=1.0,
                 ),
             )
-        if is_likely_topic_switch_from_appointment(user_text):
+        if not _answers_branch_question(state, user_text) and is_likely_topic_switch_from_appointment(user_text):
             mark_appointment_topic_switch_pending(state)
             expects.ask(expects.Question.APPOINTMENT_ABORT)
             return ResponseEnvelope(

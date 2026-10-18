@@ -17,7 +17,8 @@ BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS: в записи услугу реша
   (одно название — подтверждение «Похоже, вы имели в виду …?»; названий целым словом нет — сама догадка правил на
   подтверждение);
 - `clarify` — LLM: названо слишком общее («массаж», «биопсию») — пациента просят назвать услугу, примеры — названия
-  целым словом (вариант B), если есть;
+  целым словом (вариант B), если есть; «в реплике нет услуги» (`not_a_service`) — не уточнение, а `refuse`: услуга
+  снимается, цель — специальность или врач, если есть, иначе честный отказ гарда B′;
 - `refuse` — LLM не нашла услугу и во втором круге: цель не подтверждена — честный отказ гарда B′ с оффером оператора.
 """
 
@@ -31,8 +32,12 @@ from ._price_select_llm import select_price_rows
 
 # Сколько названий показать пациенту на выбор — как вариант B у цены.
 _CHOICE_LIMIT = 5
-# Коды причин пустого выбора, при которых LLM не признала в реплике одной услуги (`PRICE_TASK.reasons`).
-_GENERAL = frozenset({"too_general", "not_a_service"})
+# Код причины пустого выбора «названа группа услуг» (`PRICE_TASK.reasons`): уточнить с примерами.
+_TOO_GENERAL = "too_general"
+# «В реплике нет названия услуги» — услуга снимается без примеров: примеры варианта B по словам «время», «день» — бессмыслица
+# («На какое время запись к неврологу» → «например: Запись фотоизображения на флеш-карту», карточка test 18.10, g0792);
+# цель записи — специальность или врач, если они есть, иначе честный отказ гарда B′.
+_NOT_A_SERVICE = "not_a_service"
 
 
 @dataclass(frozen=True)
@@ -118,9 +123,11 @@ async def judge_booking_service(
         # Названий целым словом нет — на выбор сама догадка правил («Похоже, вы имели в виду …?»): решает пациент.
         names = _distinct_names(selection.names) or (canonical,)
         return BookingServiceVerdict("choose", names=names[:_CHOICE_LIMIT], status=selection.status)
-    if selection.status == "none_fit" and selection.reason in _GENERAL:
+    if selection.status == "none_fit" and selection.reason == _TOO_GENERAL:
         # «Массаж», «биопсию» — названа группа услуг: какую именно, решает пациент (примеры — названия варианта B).
-        return BookingServiceVerdict("clarify", names=_distinct_names(selection.names)[:_CHOICE_LIMIT], status="too_general")
+        return BookingServiceVerdict("clarify", names=_distinct_names(selection.names)[:_CHOICE_LIMIT], status=_TOO_GENERAL)
+    if selection.status == "none_fit" and selection.reason == _NOT_A_SERVICE:
+        return BookingServiceVerdict("refuse", status=_NOT_A_SERVICE)
     if selection.status == "none_fit":
         return BookingServiceVerdict("refuse", status=selection.status)
     return keep

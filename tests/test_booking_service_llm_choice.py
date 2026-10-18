@@ -200,3 +200,21 @@ def test_address_without_llm_is_as_before():
     # LLM недоступна — как было, по правилам (решение «названия на выбор» — о записи).
     [turn] = _dialog(("где сделать узи щитовидки",), "bsc-address-down")
     assert turn["entities"].get("service_name") == "Ультразвуковое исследование щитовидной железы", turn["entities"]
+
+
+def test_llm_not_a_service_drops_the_letter_guess(monkeypatch):
+    # Карточка test 18.10, g0792: «На какое время запись к неврологу» — по буквам «Тромбиновое время», а с примерами
+    # варианта B — «Запись фотоизображения на флеш-карту». LLM: услуги нет — услуга снимается без примеров. (Специальность
+    # из этой реплики в мире гейта без LLM классификатора не извлекается — тогда честный отказ гарда B′.)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _PriceOnlyLLM(lambda rows: ([], []), reason="not_a_service"))
+    [turn] = _dialog(("На какое время запись к неврологу",), "bsc-not-a-service")
+    assert "например" not in turn["text"] and "Тромбиновое" not in turn["text"], turn["text"]
+    assert "Тромбин" not in str(turn["entities"].get("service_name") or ""), turn["entities"]
+
+
+def test_llm_not_a_service_without_target_is_an_honest_refusal(monkeypatch):
+    # g0781 «Записаться на другой день»: по буквам — «Коррекция съемного протеза»; LLM: услуги нет — без записи на догадку.
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _PriceOnlyLLM(lambda rows: ([], []), reason="not_a_service"))
+    [turn] = _dialog(("Записаться на другой день",), "bsc-not-a-service-none")
+    assert "протез" not in turn["text"].lower() and "например" not in turn["text"], turn["text"]
+    assert "Какой филиал вам удобен?" not in turn["text"], turn["text"]

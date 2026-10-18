@@ -118,6 +118,7 @@ class QuestionType(StrEnum):
     ANESTHESIA = "anesthesia"
     COMPOUND_PRICE = "compound_price"
     SHOW_ALL = "show_all"
+    APPOINTMENT_BRANCH = "appointment_branch"
 
 
 class Outcome(StrEnum):
@@ -157,7 +158,7 @@ def mode() -> str:
 
 
 # Типы, решение LLM на которые умеет исполнять обработчик (асимметрия задана в нём, `reply_kind_for`).
-_ACTABLE = frozenset({"operator_offer", "show_all"})
+_ACTABLE = frozenset({"operator_offer", "show_all", "appointment_branch"})
 
 
 def acting_types() -> frozenset[str]:
@@ -373,10 +374,46 @@ async def observe_or_act(user_text: str, entities: Mapping[str, Any] | None, *, 
     fields["tu_pending_outcome"] = outcome.value
     if agree := agreement(outcome, rules):
         fields["tu_pending_agree"] = agree
-    if _lifts(expected, outcome, choice if outcome is Outcome.PICK else None):
+    if expected.type == QuestionType.APPOINTMENT_BRANCH and outcome in _DECIDED:
+        # Вопрос о филиале (класс 5, решение владельца 18.10): решение LLM исполняет предпроверка записи — любой исход,
+        # не только «да»: «другая тема» — вопрос об отмене, прочее — запись продолжается (`branch_reply`).
+        picked = _picked_option(expected, choice) if outcome is Outcome.PICK else ""
+        _ACTED.set({"text": text, expected.type: outcome.value, _BRANCH_PICK: picked})
+        fields["tu_pending_acted"] = outcome.value
+    elif _lifts(expected, outcome, choice if outcome is Outcome.PICK else None):
         _ACTED.set({"text": text, expected.type: Outcome.YES.value})
         fields["tu_pending_acted"] = outcome.value
     turn_telemetry.note(**fields)
+
+
+_BRANCH_PICK = "appointment_branch_pick"
+
+
+def _picked_option(expected: Expectation, picked: Choice) -> str:
+    shown = dict(enumerate(expected.options, 1))
+    return next((shown[int(i)] for i in picked.ids if str(i).isdigit() and int(i) in shown), "")
+
+
+def note_rules_branch_answer(user_text: str) -> None:
+    """Запасной путь предпроверки записи (LLM не решала): правила узнали ответ на вопрос о филиале — тот же признак
+    хода, что у решения LLM (исход `rules`), чтобы prelock и заземление прочли его одинаково."""
+
+    text = str(user_text or "").strip()
+    if branch_reply(text) is None:
+        _ACTED.set({"text": text, QuestionType.APPOINTMENT_BRANCH.value: "rules", _BRANCH_PICK: ""})
+
+
+def branch_reply(user_text: str) -> tuple[str, str] | None:
+    """Ответ этого хода на вопрос «Какой филиал вам удобен?»: (исход, выбранный вариант или ""). Исход — решение LLM
+    или `rules` (запасной путь предпроверки, `note_rules_branch_answer`); не ответ — None."""
+
+    acted = _ACTED.get() or {}
+    if acted.get("text") != str(user_text or "").strip():
+        return None
+    outcome = acted.get(QuestionType.APPOINTMENT_BRANCH.value)
+    if not outcome:
+        return None
+    return outcome, str(acted.get(_BRANCH_PICK) or "")
 
 
 def _lifts(expected: Expectation, outcome: Outcome, picked: Choice | None) -> bool:

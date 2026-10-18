@@ -71,6 +71,11 @@ SHOW_ALL_OPTIONS = ("все",)
 # «…с наркозом (во сне) или без наркоза? Напишите «с наркозом» или «без наркоза».» — `services.prepare`; порядок —
 # `with`, `without` (ключи `prepare_variants`).
 ANESTHESIA_OPTIONS = ("с наркозом", "без наркоза")
+# «Какой филиал вам удобен? Или написать список врачей по этой услуге?» — `response_builder` (шаг филиала записи):
+# варианты — показанные адреса, затем «список врачей» (если бот его предложил) и «любой филиал» — ответ «без разницы»
+# передаётся оператору как есть (решение владельца 18.10, класс 5).
+DOCTOR_LIST_OPTION = "список врачей"
+ANY_BRANCH_OPTION = "любой филиал"
 
 
 class Question(str, Enum):
@@ -91,6 +96,9 @@ class Question(str, Enum):
     # «Уточните, на какую услугу вас записать: 1. … 2. …» — `router._maybe_ask_booking_service_choice` (цель записи не
     # решена: выбор LLM назвал несколько услуг или LLM недоступна на слабом совпадении).
     BOOKING_SERVICE = "booking_service"
+    # «Какой филиал вам удобен?» — `response_builder` (шаг филиала записи); ответ читает предпроверка записи
+    # (`appointment_flow_guard`) — решение владельца 18.10: ответ в домене вопроса — не смена темы, разбирает LLM.
+    APPOINTMENT_BRANCH = "appointment_branch"
 
 
 # Порядок, в котором следующий ход разбирает висящие вопросы: предпроверка записи (`run_appointment_precheck`), затем
@@ -103,6 +111,7 @@ _READING_ORDER = (
     Question.CATALOG_CONFIRM,
     Question.APPOINTMENT_ACTION,
     Question.BOOKING_SERVICE,
+    Question.APPOINTMENT_BRANCH,
     Question.ANESTHESIA,
     Question.COMPOUND_PRICE,
     # Подсказка «напишите: "все"» — раньше вторичного оффера: его текст пациенту не показывается (с `fec9770`), а
@@ -250,6 +259,10 @@ def _armed(state: SessionState, question: Question) -> bool:
         return bool(entities.get("_secondary_offer_pending"))
     if question is Question.ANESTHESIA:
         return isinstance(entities.get("_prepare_variant_pending"), dict)
+    if question is Question.APPOINTMENT_BRANCH:
+        options = entities.get("appointment_branch_options")
+        chosen = entities.get("branch_name") or entities.get("branch_id")
+        return isinstance(options, list) and bool(options) and not chosen
     if question is Question.SHOW_ALL:
         family = entities.get("_price_family_context")
         return isinstance(family, dict) and bool(str(family.get("service_name") or "").strip())

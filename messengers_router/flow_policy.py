@@ -11,7 +11,7 @@ import logging
 import re
 from typing import Any
 
-from . import turn_understanding
+from . import pending_reply, turn_understanding
 from .expects import EXPECTS_KEY
 from .memory import MemoryStore
 from .mess_types import AppointmentPhase, DialogState, RouteDecision, SessionState
@@ -403,6 +403,12 @@ async def prelock_active_appointment_turn(
             slot_updates["__clear_patient_name"] = True
         return slot_updates
 
+    # Ответ на вопрос «Какой филиал вам удобен?» разобрала LLM этого хода (`pending_reply`; предпроверка записи его уже
+    # исполнила — филиал, «любой филиал», список врачей): реплика остаётся в записи, как бы она ни была сказана
+    # («давайте во второй»). «Другая тема» — нет (класс 5, решение владельца 18.10).
+    branch_answer = pending_reply.branch_reply(text)
+    if branch_answer is not None and branch_answer[0] != "new_topic":
+        return {}
     if _is_appointment_waiting_patient_name(pending) and _looks_like_patient_fio(text):
         return {}
     if _is_appointment_waiting_branch_or_city(pending) and (_is_appointment_branch_reply(text) or _is_city_only_reply(text)):
