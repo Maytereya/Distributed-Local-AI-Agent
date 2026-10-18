@@ -1,20 +1,19 @@
-"""Ответ на подсказку «…напишите: "все"» силами LLM: тип `show_all` исполняется (D2.3, `pending_reply = on`,
-`pending_reply_types`; решения владельца 15.10 — подсказка — висящий вопрос, ответ разбирать через `pending_reply`, не
-дописывать слова в регулярки).
+"""Ответ на подсказку «…напишите: "все"» — одна функция ответа на висящий вопрос (класс 5, `pending_reply = on`;
+решения владельца 15.10 — подсказка — висящий вопрос, ответ разбирать через LLM, не дописывать слова в регулярки).
 
 Было: «показать все» узнаёт только `_prices_helpers._is_price_show_all_request` — целая реплика «все», «всё», «покажи
 все», «показать все», «все варианты / услуги / анализы». «покажите все варианты пожалуйста», «покажите все», «полный
 список», «давай все» уходят мимо цены («Не совсем понял…»), «да, давайте все» забирает вторичный оффер (подбор анализов).
 
-Стало: под `on` и типе `show_all` в списке LLM решает ответ в ходе; выбор пункта «все» (или «да») поднимает ответ до
-«показать все» — тот же путь, что у правил (`_price_family_payload_from_context(..., show_all=True)`): полный список того
-же семейства. «нет», «другая тема», ничего, сбой — ответ правил, как было.
+Стало: под `on` ответ решает одна функция (`pending_answer`): пункт «все» или «да» — «показать все» тем же путём, что у
+правил (`_price_family_payload_from_context(..., show_all=True)`): полный список того же семейства. «другая тема»,
+ничего, сбой — как было; реплику из одного определения «все» LLM не решает (сужение без LLM).
 
 Инварианты класса (через обработчик эндпоинта, мини-прод, оракул LLM):
 - ответ «все» другими словами → полный список (строк с ценой больше, подсказки нет); тот же диалог под off — как было;
-- «нет» от LLM, ничего, сбой LLM, тип не в списке — ответы и состояние как под off;
-- реплику, которую правила понимают как «все», LLM не решает (`fast_rules`);
-- решение — в бюджете хода (не тень), телеметрия `tu_pending_acted`;
+- другая тема / ничего / сбой LLM — ответы и состояние как под off; «нет» — не полный список;
+- реплику из одного определения «все» LLM не решает (`src = fast`);
+- решение — в бюджете хода (не тень);
 - два хода: после полного списка короткий вопрос не получает цену невиданной услуги.
 """
 
@@ -46,7 +45,7 @@ def _types(monkeypatch, value: str) -> None:
     monkeypatch.setattr(cfg, "MR_PENDING_REPLY_TYPES", value, raising=False)
 
 
-def _after_hint(reply, mode: str, world, monkeypatch, *, types: str = "show_all", oracle=None, name: str = "sa", more: tuple[str, ...] = ()):
+def _after_hint(reply, mode: str, world, monkeypatch, *, types: str = "", oracle=None, name: str = "sa", more: tuple[str, ...] = ()):
     _types(monkeypatch, types)
     return _play([_FAMILY, reply, *more], f"{name}-{mode}", mode, world, monkeypatch, oracle=oracle)
 
@@ -66,7 +65,7 @@ def test_all_in_other_words_shows_the_full_list_under_on(reply, mini_prod_world,
     assert on[1]["text"] == by_rules[1]["text"]
     assert (states[1].get("_expects") or {}).get("type") != "show_all"
     assert len(oracle.calls) == 1
-    assert rows[1]["tu_pending_outcome"] == "pick" and rows[1]["tu_pending_acted"] == "pick"
+    assert (rows[1]["tu_pending_outcome"], rows[1]["tu_pending_src"]) == ("pick", "llm")
     [entry] = [entry for entry in rows[1]["choose"] if entry["task"] == "pending_reply"]
     assert not entry.get("shadow")  # решение хода, в его бюджете
 
@@ -75,34 +74,39 @@ def test_yes_from_the_llm_also_shows_all(mini_prod_world, monkeypatch):  # noqa:
     reply = "да, давайте все"
     on, _states, rows, _o = _after_hint(reply, "on", mini_prod_world, monkeypatch, oracle=_PendingOracle({reply: _answer("yes")}), name="sa-yes")
     assert _full_list(on[0], on[1]), on[1]["text"]
-    assert rows[1]["tu_pending_acted"] == "yes"
+    assert (rows[1]["tu_pending_outcome"], rows[1]["tu_pending_src"]) == ("yes", "llm")
 
 
 @pytest.mark.parametrize(
     ("reply", "llm"),
     [
-        ("нет, спасибо", _answer("no")),  # «нет» LLM ответ правил не меняет
         ("покажите все варианты пожалуйста", _answer("new_topic")),
         ("покажите все варианты пожалуйста", _answer("none")),
         ("покажите все варианты пожалуйста", ConnectionError("ollama лежит")),  # сбой — правила
         ("покажите все варианты пожалуйста", "не json"),  # мусор — правила
     ],
-    ids=["no", "new_topic", "none", "down", "invalid"],
+    ids=["new_topic", "none", "down", "invalid"],
 )
 def test_anything_but_all_keeps_the_rules_answer(reply, llm, mini_prod_world, monkeypatch):  # noqa: F811
     oracle = _PendingOracle(exc=llm) if isinstance(llm, BaseException) else _PendingOracle({reply: llm})
     off, off_states, *_ = _after_hint(reply, "off", mini_prod_world, monkeypatch, oracle=_PendingOracle(), name="sa-keep")
-    on, on_states, rows, _o = _after_hint(reply, "on", mini_prod_world, monkeypatch, oracle=oracle, name="sa-keep")
+    on, on_states, _rows, _o = _after_hint(reply, "on", mini_prod_world, monkeypatch, oracle=oracle, name="sa-keep")
     assert on == off and on_states == off_states
-    assert "tu_pending_acted" not in rows[1]
+
+
+def test_no_is_not_the_full_list(mini_prod_world, monkeypatch):  # noqa: F811
+    reply = "не надо, спасибо"
+    on, _states, rows, _o = _after_hint(reply, "on", mini_prod_world, monkeypatch, oracle=_PendingOracle({reply: _answer("no")}), name="sa-no")
+    assert not _full_list(on[0], on[1]) and not on[1]["handoff"], on[1]["text"]
 
 
 @pytest.mark.parametrize("types", ["", "operator_offer", "show_all_typo"])
-def test_on_without_the_type_in_the_list_is_the_shadow(types, mini_prod_world, monkeypatch):  # noqa: F811
+def test_on_decides_every_type_whatever_the_list_says(types, mini_prod_world, monkeypatch):  # noqa: F811
+    """Список `pending_reply_types` одна функция не читает: под `on` решаются все типы разом (решение 16.10)."""
+
     reply = "покажите все варианты пожалуйста"
-    off, off_states, *_ = _after_hint(reply, "off", mini_prod_world, monkeypatch, types=types, oracle=_PendingOracle(), name=f"sa-list-{types}")
-    on, on_states, rows, _o = _after_hint(reply, "on", mini_prod_world, monkeypatch, types=types, oracle=_PendingOracle({reply: _PICK_ALL}), name=f"sa-list-{types}")
-    assert on == off and on_states == off_states and "tu_pending_acted" not in rows[1]
+    on, _states, _rows, _o = _after_hint(reply, "on", mini_prod_world, monkeypatch, types=types, oracle=_PendingOracle({reply: _PICK_ALL}), name=f"sa-list-{types}")
+    assert _full_list(on[0], on[1]), on[1]["text"]
 
 
 @pytest.mark.parametrize("reply", ["все", "покажи все", "Все варианты!"])
@@ -111,7 +115,7 @@ def test_what_the_rules_read_as_all_does_not_call_the_llm(reply, mini_prod_world
     on, on_states, rows, oracle = _after_hint(reply, "on", mini_prod_world, monkeypatch, oracle=_PendingOracle({reply: _answer("no")}), name="sa-bare")
     assert oracle.calls == [] and on == off and on_states == off_states
     assert _full_list(on[0], on[1]), on[1]["text"]
-    assert _pending_fields(rows[1]) == {"tu_pending_type": "show_all", "tu_pending_asks": 1, "tu_pending_rules": "yes", "tu_pending_outcome": "fast_rules"}
+    assert (rows[1]["tu_pending_type"], rows[1]["tu_pending_outcome"], rows[1]["tu_pending_src"]) == ("show_all", "pick", "fast")
 
 
 @pytest.mark.parametrize("follow_up", ["а сколько?", "а цена?"])

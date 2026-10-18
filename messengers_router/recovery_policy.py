@@ -143,13 +143,17 @@ def evaluate_recovery(
     state_entities: dict[str, Any],
     summary: str = "",
     max_unclear: int = 3,
+    pending_answered: bool = False,
 ) -> RecoveryAction:
     """
     Мягкая политика:
-    - явный запрос оператора -> handoff сразу
+    - явный запрос оператора -> handoff сразу; не когда реплика — ответ на вопрос бота, решённый одной функцией
+      (`pending_answered`: «не надо оператора» на оффер — отказ, класс 5)
     - low confidence (OTHER/TEST_ASSIST) -> clarify 1/2, handoff на 3-м
     """
-    if explicit_operator_requested(user_text):
+    # «не надо оператора, я сам» на вопрос бота — ответ (решён одной функцией ответа на висящий вопрос), не просьба
+    # о переводе (класс 5).
+    if explicit_operator_requested(user_text) and not pending_answered:
         state_entities["_nlu_unclear_count"] = 0
         return RecoveryAction(
             kind="handoff",

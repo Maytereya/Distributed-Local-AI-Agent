@@ -14,7 +14,7 @@ from time import perf_counter
 from typing import Any, AsyncIterator
 
 from . import evidence_keys as ek
-from . import expects, shown_context, turn_telemetry, turn_understanding
+from . import expects, pending_answer, shown_context, turn_telemetry, turn_understanding
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 
 logger = logging.getLogger(__name__)
@@ -194,6 +194,7 @@ def _extract_recovery_response(
         state_entities=ctx.state.last_entities,
         summary=ctx.state.summary,
         max_unclear=3,
+        pending_answered=pending_answer.answers_question(pending_answer.current()),
     )
     if recovery.kind == "handoff":
         return ResponseEnvelope(text=recovery.text or handoff_message("low_confidence"), handoff=True)
@@ -258,7 +259,8 @@ def _extract_pending_response(
         plan.label == "APPOINTMENT"
         and isinstance(missing, list)
         and "appointment_action" in missing
-        and contextual_reply_kind(ctx.text) == "no"
+        # Решение одной функции ответа на висящий вопрос, без неё — прежнее правило (класс 5).
+        and pending_answer.kind(expects.Question.APPOINTMENT_ACTION, lambda: contextual_reply_kind(ctx.text)) == "no"
     ):
         return ResponseEnvelope(text=handoff_message("manual_operator"), handoff=True)
 

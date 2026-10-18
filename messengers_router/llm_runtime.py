@@ -344,6 +344,17 @@ def end_turn_budget(token: contextvars.Token) -> None:
         pass
 
 
+def refund_turn_decision() -> bool:
+    """Вернуть ходу одно решение (секунды не возвращаются): ответ на висящий вопрос, не закрывший ход, лимит решений не
+    тратит — обычному пути остаются оба (решение владельца Q5 18.10, `pending_answer`). Вне хода или нечего вернуть — False."""
+
+    budget = _TURN_BUDGET.get()
+    if budget is None or budget.calls <= 0:
+        return False
+    budget.calls -= 1
+    return True
+
+
 def _decision_limits() -> tuple[int, float, int, float]:
     """(решений на ход, секунд на ход, сбоев до размыкания, пауза предохранителя); 0 — без ограничения."""
 

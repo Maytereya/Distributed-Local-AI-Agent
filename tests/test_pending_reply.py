@@ -514,10 +514,14 @@ def test_malformed_expectation_is_noted_without_a_call(mini_prod_world, monkeypa
     assert oracle.calls == [] and _pending_fields(rows[0]) == {"tu_pending_outcome": "malformed"}
 
 
-def test_on_is_the_shadow_until_it_is_implemented(mini_prod_world, monkeypatch):  # noqa: F811
-    reply = "конечно, переведите"
-    _records, rows, oracle = _same_as_off("on", [_STOPLIST_OFFER, reply], mini_prod_world, monkeypatch, before=_offer_after_first_turn(), answers={reply: _answer("yes")}, mode="on")
-    assert len(oracle.calls) == 1 and rows[1]["tu_pending_outcome"] == "yes"
+def test_on_is_the_one_function_not_the_shadow(mini_prod_world, monkeypatch):  # noqa: F811
+    """Под `on` тени нет: ответ решает одна функция (`pending_answer`, класс 5) — решение исполняется в ходе."""
+
+    reply = "конечно переведите"
+    records, _states, rows, oracle = _play([_STOPLIST_OFFER, reply], "on-one", "on", mini_prod_world, monkeypatch, before=_offer_after_first_turn(), oracle=_PendingOracle({reply: _answer("yes")}))
+    assert len(oracle.calls) == 1 and records[1]["handoff"]
+    assert (rows[1]["tu_pending_outcome"], rows[1]["tu_pending_src"]) == ("yes", "llm")
+    assert not any(entry.get("shadow") for entry in rows[1].get("choose") or [])
 
 
 def test_no_question_no_shadow(mini_prod_world, monkeypatch):  # noqa: F811

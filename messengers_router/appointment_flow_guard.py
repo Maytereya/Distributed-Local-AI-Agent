@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from . import expects, pending_reply
+from . import expects, pending_answer, pending_reply
 from .city import match_city
 from .flow_policy import clear_on_appointment_end, looks_like_patient_fio
 from .memory import MemoryStore
@@ -201,7 +201,10 @@ def _answers_branch_question(state: SessionState, user_text: str) -> bool:
     raw = state.last_entities.get(expects.EXPECTS_KEY)
     if not isinstance(raw, dict) or raw.get("type") != expects.Question.APPOINTMENT_BRANCH.value:
         return False
-    decided = pending_reply.branch_reply(user_text)
+    # Одна функция ответа на висящий вопрос (без неё — прежний клиент): пункт — филиал / «список врачей» / «любой
+    # филиал» (оператору как есть, решение 18.10); другая тема — прежняя проверка смены темы; «ничего из этого» по
+    # промпту — в том числе уточняющий вопрос о самом вопросе («а какой ближе к …?») — ответ в домене вопроса.
+    decided = pending_answer.branch_answer(user_text)
     if decided is not None:
         outcome, picked = decided
         if outcome == "new_topic":
@@ -261,6 +264,63 @@ def _appointment_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
     return _appointment_wish_resume_prompt(state, memory)
 
 
+_UNDECIDED = object()
+_FLOW_QUESTIONS = (expects.Question.APPOINTMENT_ACTION, expects.Question.APPOINTMENT_BRANCH, expects.Question.BOOKING_SERVICE)
+
+
+def _cancel_confirm(state: SessionState, debug: bool, factory: Callable[..., dict[str, Any]], *, topic_switch: bool) -> ResponseEnvelope:
+    """Вопрос «Отменить текущий процесс записи?» (или «…перейти к новому вопросу?») — собранное пока не трогаем."""
+
+    (mark_appointment_topic_switch_pending if topic_switch else mark_appointment_cancel_pending)(state)
+    expects.ask(expects.Question.APPOINTMENT_ABORT)
+    return ResponseEnvelope(
+        text=appointment_text_topic_switch_confirm() if topic_switch else appointment_text_cancel_confirm(),
+        handoff=False,
+        state_update=factory(
+            debug,
+            label="APPOINTMENT",
+            handoff=False,
+            flags={"appointment_flow_topic_switch_requested" if topic_switch else "appointment_flow_cancel_requested"},
+            context_action="continue",
+            confidence=1.0,
+        ),
+    )
+
+
+def _flow_answer(
+    state: SessionState,
+    memory: MemoryStore,
+    user_text: str,
+    waiting_action_choice: bool,
+    debug: bool,
+    factory: Callable[..., dict[str, Any]],
+) -> ResponseEnvelope | None | object:
+    """Ответ на вопрос шага записи (действие с записью, филиал, услуга), решённый одной функцией (класс 5): решение
+    читает предпроверка, а не свои правила паузы и смены темы (консилиум 18.10, «Рефакторинг Next» А2).
+
+    :return: ответ хода (вопрос «Отменить?»), None — ход идёт дальше (пункт исполнят обработчики и NLU записи), или
+        `_UNDECIDED` — решения нет (выключатель, сбой LLM, «ничего из этого») — прежние правила
+    """
+
+    answered = next((found for q in _FLOW_QUESTIONS if (found := pending_answer.current(q)) is not None), None)
+    if answered is None or not answered.decided:
+        return _UNDECIDED
+    outcome = answered.outcome
+    if answered.type == expects.Question.APPOINTMENT_ACTION.value and waiting_action_choice:
+        # Ответ на «Хотите отменить или перенести запись?» целиком разбирает обработчик выбора действия: распознанная
+        # отмена — всегда оператор (вето правил при любом решении модели), пункт, «нет», пауза, другая тема.
+        return None
+    if outcome in (pending_answer.Outcome.YES, pending_answer.Outcome.PICK):
+        if answered.type == expects.Question.APPOINTMENT_BRANCH.value:
+            _answers_branch_question(state, user_text)
+        return None
+    if outcome in (pending_answer.Outcome.NO, pending_answer.Outcome.PAUSE):
+        return _cancel_confirm(state, debug, factory, topic_switch=False)
+    # «Другая тема» от модели — повод, не вердикт: смену темы подтверждают прежние проверки ниже (правила сужают), иначе
+    # запись идёт дальше («массаж спины» на список услуг — не новая тема).
+    return _UNDECIDED
+
+
 def run_appointment_precheck(
     *,
     user_text: str,
@@ -270,7 +330,13 @@ def run_appointment_precheck(
     debug_state_update_factory: Callable[..., dict[str, Any]],
 ) -> ResponseEnvelope | None:
     if state.last_entities.get("appointment_cancel_pending") or state.last_entities.get("appointment_topic_switch_pending"):
-        reply_kind = contextual_reply_kind(user_text)
+        abort_q = expects.Question.APPOINTMENT_ABORT
+        reply_kind = pending_answer.kind(abort_q, lambda: contextual_reply_kind(user_text))
+        if pending_answer.passes(abort_q) or reply_kind == "pause":
+            # Другая тема, «я подумаю» или хвост («нет, а где филиал?»): собранное цело (стирает только явное «да»),
+            # снят только вопрос, ход идёт обычным путём (консилиум 18.10, МЕГА 1(а)).
+            reject_appointment_confirmation(state, extra_keys=("appointment_cancel_pending", "appointment_topic_switch_pending"))
+            return None
         if reply_kind == "yes":
             clear_on_appointment_end(state, memory)
             return ResponseEnvelope(
@@ -331,6 +397,9 @@ def run_appointment_precheck(
     waiting_action_choice = "appointment_action" in pending_missing
     reply_kind = contextual_reply_kind(user_text)
     if (appointment_flow_active or appointment_pending) and state.dialog.phase != AppointmentPhase.CONFIRM:
+        flow_reply = _flow_answer(state, memory, user_text, waiting_action_choice, debug, debug_state_update_factory)
+        if flow_reply is not _UNDECIDED:
+            return flow_reply
         # Когда ждем именно выбор действия (отмена/перенос), короткие "да/нет"
         # не считаем soft-pause/cancel, чтобы обработка шла в pending-ветке роутера.
         if waiting_action_choice and reply_kind in {"yes", "no"}:

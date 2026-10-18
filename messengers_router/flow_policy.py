@@ -11,7 +11,7 @@ import logging
 import re
 from typing import Any
 
-from . import pending_reply, turn_understanding
+from . import expects, pending_answer, turn_understanding
 from .expects import EXPECTS_KEY
 from .memory import MemoryStore
 from .mess_types import AppointmentPhase, DialogState, RouteDecision, SessionState
@@ -381,6 +381,16 @@ async def prelock_active_appointment_turn(
     if not missing_rules:
         return None
 
+    # Пункт, выбранный одной функцией ответа на висящий вопрос (класс 5): слот берётся из него, а не из букв реплики —
+    # «1», «давайте во второй», «массаж спины» (консилиум 18.10, «Рефакторинг Next» А3). Филиал, «список врачей» и
+    # «любой филиал» уже исполнила предпроверка записи; услуга записи — здесь. Дата, время, ФИО — не вопросы
+    # `_expects`, их по-прежнему извлекают правила ниже.
+    chosen_service = pending_answer.picked(expects.Question.BOOKING_SERVICE)
+    if chosen_service:
+        return {"service_name": chosen_service}
+    if pending_answer.picked(expects.Question.APPOINTMENT_BRANCH):
+        return {}
+
     slot_updates = quick_fill_entities_from_text(text, state_entities, missing_rules, services)
 
     if (
@@ -406,9 +416,9 @@ async def prelock_active_appointment_turn(
     # Ответ на вопрос «Какой филиал вам удобен?» разобрала LLM этого хода (`pending_reply`; предпроверка записи его уже
     # исполнила — филиал, «любой филиал», список врачей): реплика остаётся в записи, как бы она ни была сказана
     # («давайте во второй»). «Другая тема» — нет (класс 5, решение владельца 18.10).
-    branch_answer = pending_reply.branch_reply(text)
+    branch_answer = pending_answer.branch_answer(text)
     if branch_answer is not None and branch_answer[0] != "new_topic":
-        return {}
+        return {}  # ответ в домене вопроса (пункт, «да», уточняющий вопрос о филиалах) — запись идёт дальше
     if _is_appointment_waiting_patient_name(pending) and _looks_like_patient_fio(text):
         return {}
     if _is_appointment_waiting_branch_or_city(pending) and (_is_appointment_branch_reply(text) or _is_city_only_reply(text)):

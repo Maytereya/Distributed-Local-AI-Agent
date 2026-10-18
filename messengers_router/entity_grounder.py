@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import pending_reply, turn_understanding
+from . import turn_understanding
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
@@ -212,6 +212,14 @@ def _is_doctor_like_service_collision(
 # Названия услуг на выбор пациенту, когда цель записи не решена (`judge_booking_service` → `choose`): служебный ключ
 # решения, ответ задаёт роутер (`router._maybe_ask_booking_service_choice`), в состояние он не попадает.
 BOOKING_SERVICE_OPTIONS_KEY = "_booking_service_options"
+
+
+def _booking_service_picked() -> str | None:
+    """Название услуги записи, выбранное одной функцией ответа на висящий вопрос этого хода (класс 5), или None."""
+
+    from . import expects, pending_answer
+
+    return pending_answer.picked(expects.Question.BOOKING_SERVICE)
 # Метки, где услугу из реплики судит выбор LLM (`judge_booking_service`), а не догадка правил по буквам: запись и «где
 # сделать». Цена судит сама (`_price_select_llm`); TEST_ASSIST догадку по буквам не брал (свип 18.10).
 _LLM_JUDGED_SERVICE_LABELS = frozenset({"APPOINTMENT", "ADDRESS"})
@@ -261,7 +269,9 @@ def _branch_answer_keeps_target(*, label: str, user_text: str, state: SessionSta
 
     if label != "APPOINTMENT":
         return False
-    answer = pending_reply.branch_reply(user_text)
+    from . import pending_answer
+
+    answer = pending_answer.branch_answer(user_text)
     if answer is None or answer[0] == "new_topic":
         return False
     entities = state.last_entities
@@ -740,6 +750,11 @@ async def ground_decision_entities(
                     # каноническое название не узнаёт (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS).
                     out[key] = fallback
                     flags.add("entity_kept_verbatim_catalog_service_name")
+                elif label == "APPOINTMENT" and fallback and fallback == _booking_service_picked():
+                    # Пункт списка названий услуги записи, выбранный одной функцией ответа на висящий вопрос («1»,
+                    # «второй вариант», «массаж спины» → название из показанного списка): сильное совпадение по данным.
+                    out[key] = fallback
+                    flags.add("entity_kept_pending_answer_service_name")
                 elif _is_active_booking_target(label=label, value=fallback, state=state):
                     # BUG-2026-10-18-BRANCH-REPLY-TOPIC-SWITCH (подбаг B): реплика услугу не называет (ответ на шаг
                     # записи — «пр.Ленина, 5»), а значение — цель этой же записи из состояния, уже заземлённая и

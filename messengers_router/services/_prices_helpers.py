@@ -2938,8 +2938,13 @@ def _price_show_all_requested(query_text: str, user_text: str) -> bool:
     """
 
     # Импорт в функции: сервисный слой не тянет модуль хода при своём импорте.
-    from .. import pending_reply
+    from .. import pending_answer, pending_reply
 
+    answered = pending_answer.current(pending_answer.Question.SHOW_ALL)
+    if answered is not None and answered.decided and not answered.rest:
+        # Одна функция ответа на висящий вопрос решила, что ответил пациент на подсказку «напишите: "все"»; хвост
+        # реплики («да, покажите все варианты» → «покажите все варианты») читает обычный путь — правила ниже.
+        return pending_answer.shows_all()
     rules = "yes" if _is_price_show_all_request(query_text) else "other"
     return pending_reply.reply_kind_for(pending_reply.QuestionType.SHOW_ALL, rules, user_text) == "yes"
 

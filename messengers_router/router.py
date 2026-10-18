@@ -20,7 +20,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import degradation, expects, pending_reply, shown_context, topic_confirm, turn_parse, turn_telemetry, turn_understanding
+from . import degradation, expects, pending_answer, pending_reply, shown_context, topic_confirm, turn_parse, turn_telemetry, turn_understanding
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -727,7 +727,13 @@ async def _handle_appointment_action_pending(
     if not _is_appointment_action_pending(pending):
         return None
 
-    if explicit_operator_requested(user_text):
+    action_q = expects.Question.APPOINTMENT_ACTION
+    if pending_answer.passes(action_q) and normalize_appointment_action(detect_appointment_action(user_text), user_text) != "cancel":
+        # Другая тема: вопрос снят, ход идёт обычным путём (распознанная отмена — ниже, всегда к оператору).
+        memory.clear_pending(state)
+        return None
+
+    if pending_answer.operator_requested(action_q, user_text):
         return (
             RouteDecision(
                 label="APPOINTMENT",
@@ -749,6 +755,11 @@ async def _handle_appointment_action_pending(
         )
 
     normalized_action = normalize_appointment_action(detect_appointment_action(user_text), user_text)
+    # Распознанная отмена правил — вето в сторону оператора при любом решении модели (CANCEL-ALWAYS-OPERATOR);
+    # иначе — пункт, выбранный одной функцией («лучше перенести на пятницу» → «перенести»).
+    chosen = pending_answer.picked(action_q)
+    if normalized_action != "cancel" and chosen in expects.APPOINTMENT_ACTION_OPTIONS:
+        normalized_action = "cancel" if chosen == expects.APPOINTMENT_ACTION_OPTIONS[0] else "reschedule"
     if normalized_action == "cancel":
         # BUG-2026-10-14-CANCEL-EXISTING-LOST: выбор отмены существующей записи — сразу оператор.
         decision = RouteDecision(
@@ -775,7 +786,7 @@ async def _handle_appointment_action_pending(
         evidence = await execute_plan(plan, state, services)
         return decision, plan, evidence
 
-    if contextual_reply_kind(user_text) == "no":
+    if pending_answer.kind(action_q, lambda: contextual_reply_kind(user_text)) == "no":
         return (
             RouteDecision(
                 label="APPOINTMENT",
@@ -837,11 +848,27 @@ async def _handle_prepare_variant_pending(
     pending = state.last_entities.get(PREPARE_VARIANT_PENDING_KEY)
     if not isinstance(pending, dict):
         return None
-    if explicit_operator_requested(user_text):
+    anesthesia_q = expects.Question.ANESTHESIA
+    if pending_answer.operator_requested(anesthesia_q, user_text) or pending_answer.passes(anesthesia_q):
         state.last_entities.pop(PREPARE_VARIANT_PENDING_KEY, None)
         return None
-    choice = anesthesia_reply(user_text)
-    if choice is None and contextual_reply_kind(user_text) in {"yes", "no"}:
+    answered = pending_answer.current(anesthesia_q)
+    if answered is not None and answered.decided:
+        # Решение одной функции: только явный пункт — своя памятка; «ещё не решил» — обе; «да / нет» — переспрос
+        # один раз, потом обе (решение 07.10); прочее — вопрос снимается, ход идёт обычным путём.
+        chosen = pending_answer.picked(anesthesia_q)
+        verdict = pending_answer.kind(anesthesia_q, lambda: "other")
+        if chosen in expects.ANESTHESIA_OPTIONS:
+            choice = ("with", "without")[expects.ANESTHESIA_OPTIONS.index(chosen)]
+        elif verdict == "pause":
+            choice = "both"
+        else:
+            choice = None
+        reply_is_yes_no = choice is None and verdict in {"yes", "no"}
+    else:
+        choice = anesthesia_reply(user_text)
+        reply_is_yes_no = choice is None and contextual_reply_kind(user_text) in {"yes", "no"}
+    if reply_is_yes_no:
         if not pending.get("asked_again"):
             pending["asked_again"] = True
             expects.ask(expects.Question.ANESTHESIA, kind=expects.PICK, options=expects.ANESTHESIA_OPTIONS, reask=True)
@@ -894,20 +921,29 @@ async def _handle_compound_price_pending(
     if not pending:
         return None
 
-    if explicit_operator_requested(user_text):
+    compound_q = expects.Question.COMPOUND_PRICE
+    if pending_answer.operator_requested(compound_q, user_text) or pending_answer.passes(compound_q):
         _clear_compound_price_pending(state)
         return None
 
     options = list(pending.get("services") or [])
     default_service = str(pending.get("default_service") or options[0]).strip()
-    reply_kind = contextual_reply_kind(user_text)
-    if reply_kind == "other" and (
-        _is_secondary_soft_yes(user_text) or _COMPOUND_PRICE_SOFT_YES_RE.match(str(user_text or ""))
-    ):
-        reply_kind = "yes"
 
+    def _rules() -> str:
+        reply_kind = contextual_reply_kind(user_text)
+        if reply_kind == "other" and (
+            _is_secondary_soft_yes(user_text) or _COMPOUND_PRICE_SOFT_YES_RE.match(str(user_text or ""))
+        ):
+            reply_kind = "yes"
+        return reply_kind
+
+    reply_kind = pending_answer.kind(compound_q, _rules)
+    answered = pending_answer.current(compound_q)
     if reply_kind == "yes":
         selected_service = default_service
+    elif answered is not None and answered.decided:
+        chosen = pending_answer.picked(compound_q)  # только явный пункт показанного списка
+        selected_service = chosen if chosen in options else None
     else:
         selected_service = match_compound_price_service_option(user_text, options)
 
@@ -1024,7 +1060,12 @@ async def _handle_catalog_confirm_pending(
     entity_key = str(pending.get("entity_key") or "").strip()
     canonical = str(pending.get("canonical") or "").strip()
 
-    if explicit_operator_requested(user_text):
+    if pending_answer.passes(expects.Question.CATALOG_CONFIRM):
+        # Другая тема или «нет, мне ферритин»: вопрос снят, хвост идёт обычным путём; во «2-е нет» не считается.
+        _clear_catalog_confirm_pending(state, memory)
+        return None
+
+    if pending_answer.operator_requested(expects.Question.CATALOG_CONFIRM, user_text):
         _clear_catalog_confirm_pending(state, memory)
         state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
         return (
@@ -1047,7 +1088,7 @@ async def _handle_catalog_confirm_pending(
             ),
         )
 
-    reply_kind = contextual_reply_kind(user_text)
+    reply_kind = pending_answer.kind(expects.Question.CATALOG_CONFIRM, lambda: contextual_reply_kind(user_text))
     if reply_kind == "yes":
         _clear_catalog_confirm_pending(state, memory)
         state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
@@ -1220,6 +1261,17 @@ def _apply_appointment_continuity_overrides(
     """
     if state.dialog.phase not in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM):
         return decision
+
+    if decision.label != "APPOINTMENT" and pending_answer.keeps_flow():
+        # Ответ на вопрос шага записи решила одна функция (класс 5): «1», «давайте во второй» — ответ, а не новая тема.
+        return _copy_decision(
+            decision,
+            label="APPOINTMENT",
+            confidence=max(decision.confidence, 0.9),
+            flags=set(decision.flags) | {"flow_pending_answer"},
+            needs_handoff=False,
+            context_action="continue",
+        )
 
     if (
         has_datetime_signal(user_text)
@@ -2564,15 +2616,27 @@ async def _handle_secondary_queue_pending(
     ):
         return None
 
-    if pending_reply.reply_kind_for(pending_reply.QuestionType.SHOW_ALL, "other", user_text) == "yes":
-        # Под pending_reply = on (тип show_all): ответ на подсказку «напишите: "все"» («да, давайте все») LLM решила как
-        # «показать все» — вторичный оффер снимается, как на «все», ответ читает путь цены (`_price_show_all_requested`).
+    show_all_q, secondary_q = expects.Question.SHOW_ALL, expects.Question.SECONDARY_OFFER
+    if pending_answer.shows_all() or (
+        pending_answer.current(show_all_q) is None
+        and pending_reply.reply_kind_for(pending_reply.QuestionType.SHOW_ALL, "other", user_text) == "yes"
+    ):
+        # Ответ на подсказку «напишите: "все"» («да, давайте все») — «показать все»: вторичный оффер снимается, как на
+        # «все», ответ читает путь цены (`_price_show_all_requested`).
+        state.last_entities["_secondary_offer_pending"] = False
+        return None
+    if pending_answer.passes(secondary_q) or pending_answer.passes(show_all_q):
+        # Другая тема или хвост («да, как подготовиться?» → «как подготовиться?») — ход идёт обычным путём.
         state.last_entities["_secondary_offer_pending"] = False
         return None
 
-    reply_kind = contextual_reply_kind(user_text)
-    if reply_kind == "other" and _is_secondary_soft_yes(user_text):
-        reply_kind = "yes"
+    def _rules() -> str:
+        reply_kind = contextual_reply_kind(user_text)
+        if reply_kind == "other" and _is_secondary_soft_yes(user_text):
+            reply_kind = "yes"
+        return reply_kind
+
+    reply_kind = pending_answer.kind(secondary_q, _rules)
     next_label = queue[0]
     secondary_entities = await _resolve_secondary_queue_doctor_reply(user_text, next_label, services)
     if reply_kind == "other" and secondary_entities:
@@ -2619,12 +2683,21 @@ def _handle_operator_offer_pending(
     if not state.last_entities.get("_operator_offer_pending"):
         return None
 
-    reply_kind = contextual_reply_kind(user_text)
-    if explicit_operator_requested(user_text):
-        reply_kind = "yes"
-    # Под pending_reply = on (тип operator_offer): ответ, который правила не поняли («конечно, переведите»), LLM может
-    # поднять до «да» — только в сторону перевода (D2.3, асимметрия по типу вопроса).
-    reply_kind = pending_reply.reply_kind_for("operator_offer", reply_kind, user_text)
+    if pending_answer.passes(expects.Question.OPERATOR_OFFER):
+        # «нет, скажите сколько стоит ферритин» — оффер снят, хвост идёт обычным путём.
+        _clear_operator_offer_pending(state, memory)
+        return None
+
+    def _rules() -> str:
+        reply_kind = contextual_reply_kind(user_text)
+        if explicit_operator_requested(user_text):
+            reply_kind = "yes"
+        # Тень `pending_reply` (под on c типами — прежнее «поднять до да»); запасной путь одной функции.
+        return pending_reply.reply_kind_for("operator_offer", reply_kind, user_text)
+
+    reply_kind = pending_answer.kind(expects.Question.OPERATOR_OFFER, _rules)
+    if reply_kind == "pause":
+        reply_kind = "no"  # «я подумаю» — оффер снят без перевода и без «не понял»
     if reply_kind == "yes":
         _clear_operator_offer_pending(state, memory)
         return (
@@ -2880,7 +2953,8 @@ async def _complete_route_after_doctor_guard(
         # не сбрасываем запись из-за случайной переклассификации.
         pending_now = memory.get_pending(state)
         keep_appointment_flow = (
-            (is_appointment_waiting_patient_name(pending_now) and looks_like_patient_fio(user_text))
+            pending_answer.keeps_flow()
+            or (is_appointment_waiting_patient_name(pending_now) and looks_like_patient_fio(user_text))
             or (
                 state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
                 and should_keep_appointment_flow_override(user_text)
@@ -3399,8 +3473,22 @@ async def patient_routing_stream(
         )
         return
 
-    # Явный запрос оператора — приоритет над всем, кроме срочного (оно выше).
-    if explicit_operator_requested(user_text):
+    # Ответ на висящий вопрос бота — одна функция, одно решение на ход (класс 5, дизайн
+    # `docs/DESIGN_2026-10-18_one_pending_answer.md`; под `pending_reply = on`): после срочного, до явного запроса
+    # оператора — «не надо оператора» на вопрос бота — ответ, не просьба о переводе. Решение читают обработчики
+    # вопросов (`pending_answer.kind / passes / picked`); хвост реплики («нет, мне ферритин») идёт обычным путём.
+    pending_answer.reset()
+    answered = None
+    said = user_text  # реплика как есть — в историю диалога; дальше ход может идти хвостом
+    if pending_answer.on() and not button_id:
+        expected = pending_answer.expected_from(state.last_entities)
+        if expected is not None:
+            answered = await pending_answer.answer(*expected, user_text)
+            if answered is not None and answered.decided and answered.rest:
+                user_text = answered.rest
+
+    # Явный запрос оператора — приоритет над всем, кроме срочного (оно выше) и ответа на вопрос бота.
+    if explicit_operator_requested(user_text) and not pending_answer.answers_question(answered):
         clear_on_handoff(state, memory)
         yield ResponseEnvelope(
             text=handoff_message("manual_operator"),
@@ -3459,7 +3547,8 @@ async def patient_routing_stream(
     # оператора и охраны города, до разбора висящего вопроса (предпроверка записи, обработчики в оркестраторе). Под off
     # и на кнопке — ничего; под shadow — тень; под on — типы `pending_reply_types` решает LLM в ходе, исполняет
     # обработчик вопроса (`pending_reply.reply_kind_for`). Состояние сессии здесь не меняется.
-    await pending_reply.observe_or_act(user_text, state.last_entities, button_id=button_id)
+    if not pending_answer.on():
+        await pending_reply.observe_or_act(user_text, state.last_entities, button_id=button_id)
 
     precheck = run_appointment_precheck(
         user_text=user_text,
@@ -3529,7 +3618,7 @@ async def patient_routing_stream(
     # Поле ожидания — по тексту, который увидит пациент (после анти-залипа: он дописывает свой оффер).
     expects.finish_turn(state, response)
 
-    memory.append_turn(state, role="user", text=user_text)
+    memory.append_turn(state, role="user", text=said)
     memory.append_turn(state, role="assistant", text=response.text)
     update_summary(state, reason="normal")
 
