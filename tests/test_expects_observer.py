@@ -36,7 +36,6 @@ from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фи
 
 _OFFER_CHECK = "Проверить мою запись"
 _ABORT_TEXT = "Отменить текущий процесс записи? Ответьте «да» или «нет»."
-_CONFIRM_REASK = "Подтвердите запись, пожалуйста: ответьте «да» или «нет»."
 
 
 @dataclass
@@ -106,24 +105,6 @@ def _seed_collecting(state: SessionState, memory: Any) -> None:
     )
     state.dialog = DialogState(label="APPOINTMENT", phase=AppointmentPhase.COLLECTING)
     memory.set_pending(state, label="APPOINTMENT", missing_slots=["appointment_wish"])
-
-
-def _seed_confirm(state: SessionState, memory: Any) -> None:
-    """Шаг «Подтвердите запись» (фаза CONFIRM — восстановленная сессия: с варианта A карточку бот не ставит)."""
-
-    state.last_entities.update(
-        {
-            "city": "Самара",
-            "appointment_flow_active": True,
-            "appointment_confirm_pending": True,
-            "specialty": "терапевт",
-            "branch_name": "пр. Ленина, 5",
-            "date_from": "2026-10-20",
-            "time_from": "10:00",
-            "patient_name": "Иванов Иван",
-        }
-    )
-    state.dialog = DialogState(label="APPOINTMENT", phase=AppointmentPhase.CONFIRM)
 
 
 def _seed_action(state: SessionState, memory: Any) -> None:
@@ -266,15 +247,6 @@ def test_topic_switch_question_is_an_abort_question_too(mini_prod_world):  # noq
     assert first.expects == _expected("yes_no", "appointment_abort", first.text, 1)
     assert "Отменить этот процесс и перейти к новому вопросу?" in first.text
     assert second.expects is None
-
-
-def test_appointment_confirm_reask_counts_from_two_and_the_yes_clears_it(mini_prod_world):  # noqa: F811
-    first, second, third = _play(["нет, другое время", "нет, другое время!", "да"], mini_prod_world, seed=_seed_confirm)
-    assert (first.text, second.text) == (_CONFIRM_REASK, _CONFIRM_REASK)
-    assert first.expects == _expected("yes_no", "appointment_confirm", _CONFIRM_REASK, 2)  # карточка — первый раз
-    assert second.expects["asks"] == 3
-    assert "Иванов" not in json.dumps(second.expects, ensure_ascii=False)  # вопрос — шаблон, без сводки с ФИО
-    assert third.handoff is True and third.expects is None
 
 
 def test_offer_after_repeated_result_link_keeps_no_personal_data(mini_prod_world):  # noqa: F811
@@ -478,7 +450,6 @@ _DIALOGS: dict[str, tuple[list[Any], Callable | None]] = {
     "offer_no": ([_OFFER_CHECK, "нет"], None),
     "offer_then_question": ([_OFFER_CHECK, "какие анализы сдать для профилактики"], None),
     "abort_loop": (["нет", "да, отмените", "да, отмените же", "нет"], _seed_collecting),
-    "confirm_loop": (["нет, другое время", "нет, другое время!", "да"], _seed_confirm),
     "action": (["не знаю", "перенести"], _seed_action),
     "price_then_prepare": (["сколько стоит ферритин", "а как подготовиться?", "да"], None),
 }

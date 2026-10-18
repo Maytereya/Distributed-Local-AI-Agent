@@ -427,57 +427,56 @@ def test_policies_has_no_regex_copy_of_no():
     assert all(policies._is_negative_text(phrase) for phrase in policies._CONFIRM_NO_EXACT)
 
 
-NO_AUDIT: dict[str, tuple[str, str]] = {
-    # реплика: (contextual_reply_kind, appointment_confirmation_transition)
-    "нет": ("no", "no"),
-    "Нет!": ("no", "no"),
-    "не надо": ("no", "no"),
-    "НЕ  ВЕРНО.": ("no", "no"),
-    "«нет»": ("no", "no"),
-    "не подтверждаю запись": ("no", "no"),
-    "нет, спасибо": ("other", "other"),
-    "нет, не надо": ("other", "other"),
-    "да нет": ("other", "other"),
-    "наверное": ("yes", "other"),
+NO_AUDIT: dict[str, str] = {
+    # реплика: contextual_reply_kind (проверка «однозначного да» подтверждения записи снята 18.10 вместе с фазой CONFIRM)
+    "нет": "no",
+    "Нет!": "no",
+    "не надо": "no",
+    "НЕ  ВЕРНО.": "no",
+    "«нет»": "no",
+    "не подтверждаю запись": "no",
+    "нет, спасибо": "other",
+    "нет, не надо": "other",
+    "да нет": "other",
+    "наверное": "yes",
 }
 
 
 def test_no_audit_cases_are_pinned_as_is():
-    got = {r: (contextual_reply_kind(r), policies.appointment_confirmation_transition(r)) for r in NO_AUDIT}
+    got = {r: contextual_reply_kind(r) for r in NO_AUDIT}
     assert got == NO_AUDIT
 
 
-def _confirm_step() -> SessionState:
+def _abort_step() -> SessionState:
     return SessionState(
-        session_id="one-phrasing-confirm",
+        session_id="one-phrasing-abort",
         history=[
-            {"role": "user", "text": "запишите к терапевту на 7 октября в 10"},
-            {"role": "assistant", "text": "Подтвердите запись, пожалуйста: ответьте «да» или «нет»."},
+            {"role": "user", "text": "запишите к терапевту"},
+            {"role": "assistant", "text": "Отменить текущий процесс записи? Ответьте «да» или «нет»."},
         ],
         last_entities={
             "city": "Самара",
             "appointment_flow_active": True,
-            "appointment_confirm_pending": True,
+            "appointment_cancel_pending": True,
             "specialty": "терапевт",
             "branch_name": "пр. Ленина, 5",
-            "date_from": "2026-10-07",
-            "time_from": "10:00",
-            "patient_name": "Иванов Иван",
         },
-        dialog=DialogState(label="APPOINTMENT", phase=AppointmentPhase.CONFIRM),
+        dialog=DialogState(label="APPOINTMENT", phase=AppointmentPhase.COLLECTING),
     )
 
 
 @pytest.mark.parametrize("config", sorted(_SETS))
 @pytest.mark.parametrize("reply", ["нет", "Нет!", "не надо", "НЕ  ВЕРНО.", "неправильно", "«нет»"])
-def test_no_on_appointment_confirm_through_endpoint(reply, config, mini_prod_world, monkeypatch):  # noqa: F811
-    """Класс: «нет» в любой узнаваемой форме на «Подтвердите запись» — отказ от времени (переспрос даты), не заявка."""
+def test_no_on_appointment_abort_through_endpoint(reply, config, mini_prod_world, monkeypatch):  # noqa: F811
+    """Класс: «нет» в любой узнаваемой форме на «Отменить текущий процесс записи?» — запись продолжается, собранное цело
+    (до 18.10 тот же класс держала фаза «Подтвердите запись», снятая вместе с обработчиком CONFIRM)."""
 
-    (turn,) = _play([reply], config, monkeypatch, mini_prod_world, _confirm_step())
+    (turn,) = _play([reply], config, monkeypatch, mini_prod_world, _abort_step())
     assert turn["label"] == "APPOINTMENT"
-    assert "appointment_confirm_no" in turn["flags"]
+    assert "appointment_flow_cancel_rejected" in turn["flags"]
     assert turn["handoff"] is False
-    assert "уточните новую дату и время" in turn["text"]
+    assert "отменён" not in turn["text"]
+
 
 
 # ============================================================================ 3. не сводится — закреплено как есть

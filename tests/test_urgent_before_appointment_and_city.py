@@ -98,7 +98,9 @@ def _collecting() -> tuple[SessionState, MemoryStore]:
     return state, memory
 
 
-def _confirm(session_id: str = "urgent-before-guards") -> tuple[SessionState, MemoryStore]:
+def _collected(session_id: str = "urgent-before-guards") -> tuple[SessionState, MemoryStore]:
+    """Запись с собранными целью, филиалом, датой и ФИО (до 18.10 здесь была фаза «Подтвердите запись» — снята)."""
+
     state = SessionState(
         session_id=session_id,
         history=list(_HISTORY),
@@ -106,14 +108,13 @@ def _confirm(session_id: str = "urgent-before-guards") -> tuple[SessionState, Me
         last_entities={
             "city": "Самара",
             "appointment_flow_active": True,
-            "appointment_confirm_pending": True,
             "specialty": "терапевт",
             "branch_name": "пр. Ленина, 5",
             "date_from": "2026-10-07",
             "time_from": "10:00",
             "patient_name": "Иванов Иван",
         },
-        dialog=DialogState(label="APPOINTMENT", phase=AppointmentPhase.CONFIRM),
+        dialog=DialogState(label="APPOINTMENT", phase=AppointmentPhase.COLLECTING),
     )
     return state, MemoryStore()
 
@@ -133,8 +134,8 @@ def _topic_switch_pending() -> tuple[SessionState, MemoryStore]:
 @pytest.mark.parametrize("text", URGENT_PHRASES)
 @pytest.mark.parametrize(
     "phase",
-    [_collecting, _confirm, _cancel_pending, _topic_switch_pending],
-    ids=["collecting", "confirm", "cancel_pending", "topic_switch_pending"],
+    [_collecting, _cancel_pending, _topic_switch_pending],
+    ids=["collecting", "cancel_pending", "topic_switch_pending"],
 )
 def test_urgent_inside_appointment_flow_gets_urgent_template(phase, text):
     state, memory = phase()
@@ -181,7 +182,7 @@ def test_urgent_from_other_city_gets_urgent_template(text):
         "оператор! задыхаюсь",
     ],
 )
-@pytest.mark.parametrize("phase", [_idle, _confirm], ids=["idle", "confirm"])
+@pytest.mark.parametrize("phase", [_idle, _collected], ids=["idle", "collected"])
 def test_urgent_with_explicit_operator_request_gets_urgent_template(phase, text):
     # Обе ветки переводят на оператора, но только шаблон срочной помощи говорит про скорую.
     assert explicit_operator_requested(text)
@@ -196,7 +197,7 @@ def test_urgent_with_explicit_operator_request_gets_urgent_template(phase, text)
 
 @pytest.mark.parametrize("text", ["соедините с оператором", "позовите живого человека"])
 def test_explicit_operator_without_urgency_is_unchanged(text):
-    state, memory = _confirm()
+    state, memory = _collected()
 
     answer, handoff = _say(text, state, memory)
 
@@ -212,21 +213,22 @@ def test_other_city_without_urgency_still_goes_to_operator():
     assert handoff is True
 
 
-def test_ordinary_reply_inside_confirm_keeps_appointment():
-    state, memory = _confirm()
+def test_ordinary_reply_inside_collected_booking_keeps_appointment():
+    state, memory = _collected()
 
-    answer, handoff = _say("а можно попозже, часов в 12?", state, memory)
+    answer, _handoff = _say("а можно попозже, часов в 12?", state, memory)
 
+    # Обычная реплика в записи — не срочное: ответ записи (вариант A — пожелание по времени уходит оператору сводкой),
+    # а не шаблон скорой.
     assert answer != renderer.render_urgent().text
-    assert handoff is False
-    assert "appointment_flow_active" in state.last_entities
+    assert "часов в 12" in answer or "попозже" in answer, answer
 
 
-def test_endpoint_once_debug_urgent_inside_confirm():
+def test_endpoint_once_debug_urgent_inside_collected_booking():
     # Сквозь обработчик /api/messenger-generate-once: отладочный ответ, запись хода в
     # историю и сброс записи в сохранённой сессии.
     memory = MemoryStore()
-    state, _ = _confirm(session_id="tg_urgent_once")
+    state, _ = _collected(session_id="tg_urgent_once")
     memory.set(state)
     services = Services()
     services.ensure_background_refresh_started = lambda: None

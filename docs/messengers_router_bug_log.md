@@ -11,6 +11,32 @@
 
 ---
 
+## STEP-2026-10-18-CONFIRM-REMOVED — снят обработчик фазы «Подтвердите запись» (CONFIRM) — СДЕЛАНО (решение владельца Q2 18.10, класс 5)
+
+- **Симптом:** путь «да = подтверждённая заявка оператору» (самый опасный исход записи) жил без писателей: с варианта A
+  (08.10) `mark_appointment_confirm_pending` никто не звал, фазу ставил только мост `mess_types.SessionState.__post_init__`
+  по флагу `appointment_confirm_pending` (восстановленные сессии и тесты). Одиннадцатый тип висящего вопроса держал свои
+  правила (`appointment_confirmation_transition`, словарь «однозначного да»), которые одной функции пришлось бы переводить.
+- **Корень:** мёртвый путь после смены сценария записи; сессии живут в памяти процесса — после пересборки в фазе никого.
+- **Фикс:** убраны блок CONFIRM в `appointment_flow_guard.run_appointment_precheck` и его ветка в
+  `_appointment_resume_prompt`, `is_new_topic_while_confirm_pending`; ветка `appointment_confirm_pending` в мосте
+  `mess_types`; `state_mutations.mark_appointment_confirm_pending`, `finalize_appointment_confirmation`; тип
+  `appointment_confirm` в `expects` и `pending_reply`; в `policies` — `appointment_confirmation_transition`,
+  `_is_unambiguous_yes`, `_CONFIRM_YES_WORDS`, `_CONFIRM_WORD_RE`, `APPOINTMENT_CONFIRM_*`, тексты «Подтвердите запись»,
+  «Передаю заявку … подтверждения», «уточните новую дату». Храповик: `re.compile` 260 → 259, списки слов 103 → 102.
+  **Оставлено на релиз:** значение `AppointmentPhase.CONFIRM` (10 кортежей `(COLLECTING, CONFIRM)` — недостижимо),
+  `reject_appointment_confirmation` (им пользуется вопрос об отмене оформления), ключ `appointment_confirm_pending` в
+  списках очистки — безвредны (консилиум 18.10, МЕГА п. 2).
+- **Инвариант класса:** необратимое в записи — только стирание собранного на «Отменить текущий процесс записи?», и его
+  исполняет только согласие; отказ и оговорка собранное не трогают.
+- **Покрытие:** тесты фазы перенесены на вопрос об отмене оформления: `tests/test_appointment_abort_refusal.py` (бывший
+  `test_appointment_confirm_refusal.py`: согласие стирает, отказ и оговорка — нет, срочное первым),
+  `test_one_phrasing_audit.py::test_no_on_appointment_abort_through_endpoint`, срочное в записи —
+  `test_urgent_before_appointment_and_city.py` (собранная запись вместо фазы); с моделью и вето —
+  `test_pending_answer_class.py`.
+
+---
+
 ## BUG-2026-10-18-PENDING-ANSWER-CLASS5 — ответ на висящий вопрос бота разбирают 11 обработчиков и 7 решателей по буквам: отказ → перевод, «1» → инструкция о результатах, петли «Отменить?» — СДЕЛАНО под выключателем (`pending_reply = on`, по умолчанию off; класс 5 до конца; дизайн `docs/DESIGN_2026-10-18_one_pending_answer.md`)
 
 - **Симптом (стенд 18.10, прод `0adc535`, `cached`, `evalbench/sets/pending_answer.jsonl`):** из 33 диалогов с

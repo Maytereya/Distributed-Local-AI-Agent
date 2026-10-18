@@ -30,7 +30,7 @@ from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import choice, llm_runtime, pending_reply, turn_telemetry
-from messengers_router.mess_types import AppointmentPhase, DialogState, SessionState
+from messengers_router.mess_types import DialogState, SessionState
 from tests.test_price_turns_golden import (  # noqa: F401 — mini_prod_world, synonym_fork — фикстуры
     DIALOGS,
     _golden,
@@ -246,8 +246,6 @@ def test_anything_else_is_not_a_bare_anchor(text):
     ("qtype", "text", "rules"),
     [
         ("operator_offer", "да, а можно пораньше?", "yes"),  # правила: «да …» без отказа — согласие
-        ("appointment_confirm", "да, а можно пораньше?", "other"),  # подтверждение записи — только однозначное
-        ("appointment_confirm", "да", "yes"),
         ("catalog_confirm", "нет, спасибо", "other"),
     ],
 )
@@ -478,26 +476,24 @@ def test_a_shadow_over_the_cap_is_late(mini_prod_world, monkeypatch):  # noqa: F
 def test_patient_name_does_not_reach_the_llm(mini_prod_world, monkeypatch):  # noqa: F811
     """Сводка записи в вопросе бота печатает ФИО — в промпт оно не уходит."""
 
-    from messengers_router.policies import appointment_summary, appointment_text_confirm_prompt
+    from messengers_router.policies import appointment_summary
 
     entities = {
         "city": "Самара",
         "appointment_flow_active": True,
-        "appointment_confirm_pending": True,
+        "_operator_offer_pending": True,
         "specialty": "терапевт",
         "branch_name": "пр. Ленина, 5",
         "date_from": "2026-10-07",
         "time_from": "10:00",
         "patient_name": "Пробный Пациент",
     }
-    question = appointment_text_confirm_prompt(appointment_summary(entities))
+    question = f"{appointment_summary(entities)}\n{_OFFER_QUESTION}"
     assert "Пробный Пациент" in question
-    dialog = DialogState(label="APPOINTMENT", phase=AppointmentPhase.CONFIRM)
-    before = _prepared(entities, _expects(question, "appointment_confirm"), dialog=dialog)
-    _records, rows, oracle = _same_as_off("name", ["да, а можно пораньше?"], mini_prod_world, monkeypatch, before=before)
+    before = _prepared(entities, _expects(question))
+    _records, _rows, oracle = _same_as_off("name", ["а можно пораньше?"], mini_prod_world, monkeypatch, before=before)
     [call] = oracle.calls
     assert "Пробный" not in call["prompt"] and "Пациент," not in call["prompt"] and "[ФИО]" in call["prompt"]
-    assert (rows[0]["tu_pending_rules"], rows[0]["tu_pending_outcome"], rows[0]["tu_pending_agree"]) == ("other", "none", "both_none")
 
 
 def test_telemetry_has_no_patient_or_bot_text(mini_prod_world, monkeypatch):  # noqa: F811

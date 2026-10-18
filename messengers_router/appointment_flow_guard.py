@@ -1,6 +1,7 @@
 """Guard-политики для активного APPOINTMENT flow.
 
-Выносит из router.py state-machine для confirm/cancel/topic-switch в записи.
+Выносит из router.py state-machine для cancel/topic-switch в записи (шага «Подтвердите запись» нет с 08.10, вариант A;
+обработчик фазы CONFIRM снят 18.10 — решение владельца Q2, класс 5).
 """
 
 from __future__ import annotations
@@ -15,23 +16,15 @@ from .flow_policy import clear_on_appointment_end, looks_like_patient_fio
 from .memory import MemoryStore
 from .mess_types import AppointmentPhase, ResponseEnvelope, SessionState
 from .state_mutations import (
-    finalize_appointment_confirmation,
     mark_appointment_cancel_pending,
     mark_appointment_topic_switch_pending,
     reject_appointment_confirmation,
     set_appointment_selection_mode,
 )
 from .policies import (
-    APPOINTMENT_CONFIRM_NO,
-    APPOINTMENT_CONFIRM_YES,
-    appointment_confirmation_transition,
     appointment_service_display,
-    appointment_summary,
     appointment_text_cancel_confirm,
     appointment_text_cancelled,
-    appointment_text_confirmed_handoff,
-    appointment_text_reask_confirm,
-    appointment_text_reask_datetime,
     appointment_text_topic_switch_confirm,
     appointment_text_wish_prompt,
     clarification_question,
@@ -140,19 +133,6 @@ def should_keep_appointment_flow_override(user_text: str) -> bool:
     return False
 
 
-def is_new_topic_while_confirm_pending(user_text: str) -> bool:
-    text = str(user_text or "").strip()
-    if not text:
-        return False
-    if contextual_reply_kind(text) in {"yes", "no"}:
-        return False
-
-    if _is_topic_switch_intent(text):
-        return True
-
-    return ("?" in text) and (len(text.split()) >= 4)
-
-
 def is_appointment_cancel_or_restart_request(user_text: str) -> bool:
     text = str(user_text or "").strip()
     if not text:
@@ -256,9 +236,6 @@ def _appointment_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
         if "appointment_action" in missing:  # «Хотите отменить или перенести запись?» — поле ожидания (D2.1)
             expects.ask(expects.Question.APPOINTMENT_ACTION, kind=expects.PICK, options=expects.APPOINTMENT_ACTION_OPTIONS)
         return clarification_question("APPOINTMENT", missing, state.last_entities)
-
-    if state.dialog.phase == AppointmentPhase.CONFIRM:
-        return appointment_text_reask_confirm()
 
     # Вариант A: карточки «Подтверждаете?» нет — цель и филиал есть, спрашиваем пожелание.
     return _appointment_wish_resume_prompt(state, memory)
@@ -396,7 +373,7 @@ def run_appointment_precheck(
             pending_missing = [str(x) for x in raw_missing if str(x).strip()]
     waiting_action_choice = "appointment_action" in pending_missing
     reply_kind = contextual_reply_kind(user_text)
-    if (appointment_flow_active or appointment_pending) and state.dialog.phase != AppointmentPhase.CONFIRM:
+    if appointment_flow_active or appointment_pending:
         flow_reply = _flow_answer(state, memory, user_text, waiting_action_choice, debug, debug_state_update_factory)
         if flow_reply is not _UNDECIDED:
             return flow_reply
@@ -439,81 +416,5 @@ def run_appointment_precheck(
                     confidence=1.0,
                 ),
             )
-
-    if state.dialog.phase == AppointmentPhase.CONFIRM:
-        confirm_transition = appointment_confirmation_transition(user_text)
-        if confirm_transition == APPOINTMENT_CONFIRM_YES:
-            summary = appointment_summary(state.last_entities)
-            finalize_appointment_confirmation(state)
-            return ResponseEnvelope(
-                text=appointment_text_confirmed_handoff(summary),
-                handoff=True,
-                state_update=debug_state_update_factory(
-                    debug,
-                    label="APPOINTMENT",
-                    handoff=True,
-                    flags={"appointment_confirm_yes"},
-                    confidence=1.0,
-                ),
-            )
-        if confirm_transition == APPOINTMENT_CONFIRM_NO:
-            reject_appointment_confirmation(
-                state,
-                extra_keys=("date_from", "date_to", "time_from", "time_to", "date_hint"),
-            )
-            return ResponseEnvelope(
-                text=appointment_text_reask_datetime(),
-                handoff=False,
-                state_update=debug_state_update_factory(
-                    debug,
-                    label="APPOINTMENT",
-                    handoff=False,
-                    flags={"appointment_confirm_no"},
-                    confidence=1.0,
-                ),
-            )
-        if is_appointment_cancel_or_restart_request(user_text) or is_appointment_soft_pause_request(user_text):
-            mark_appointment_cancel_pending(state)
-            expects.ask(expects.Question.APPOINTMENT_ABORT)
-            return ResponseEnvelope(
-                text=appointment_text_cancel_confirm(),
-                handoff=False,
-                state_update=debug_state_update_factory(
-                    debug,
-                    label="APPOINTMENT",
-                    handoff=False,
-                    flags={"appointment_flow_cancel_requested"},
-                    context_action="continue",
-                    confidence=1.0,
-                ),
-            )
-        if is_new_topic_while_confirm_pending(user_text):
-            mark_appointment_topic_switch_pending(state)
-            expects.ask(expects.Question.APPOINTMENT_ABORT)
-            return ResponseEnvelope(
-                text=appointment_text_topic_switch_confirm(),
-                handoff=False,
-                state_update=debug_state_update_factory(
-                    debug,
-                    label="APPOINTMENT",
-                    handoff=False,
-                    flags={"appointment_flow_topic_switch_requested"},
-                    context_action="continue",
-                    confidence=1.0,
-                ),
-            )
-
-        expects.ask(expects.Question.APPOINTMENT_CONFIRM, reask=True)  # ответ не разобран — тот же вопрос снова
-        return ResponseEnvelope(
-            text=appointment_text_reask_confirm(),
-            handoff=False,
-            state_update=debug_state_update_factory(
-                debug,
-                label="APPOINTMENT",
-                handoff=False,
-                flags={"appointment_confirm_reask"},
-                confidence=1.0,
-            ),
-        )
 
     return None

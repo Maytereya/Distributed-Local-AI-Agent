@@ -713,16 +713,10 @@ APPOINTMENT_STEP_DONE = "done"
 APPOINTMENT_STEP_WISH = "ask_time_wish"
 APPOINTMENT_STEP_HANDOFF = "handoff_with_summary"
 APPOINTMENT_WISH_MAX_LEN = 300
-APPOINTMENT_CONFIRM_YES = "yes"
-APPOINTMENT_CONFIRM_NO = "no"
-APPOINTMENT_CONFIRM_OTHER = "other"
 
 APPOINTMENT_REPLY_MAP: dict[str, str] = {
     "patient_name_prompt": "Укажите, пожалуйста, ФИО пациента для оформления заявки на запись.",
     "confirm_suffix": "Подтверждаете?",
-    "confirmed_handoff_suffix": "Передаю заявку оператору для окончательного подтверждения записи.",
-    "reask_datetime": "Хорошо, тогда уточните новую дату и время для записи.",
-    "reask_confirm": "Подтвердите запись, пожалуйста: ответьте «да» или «нет».",
     "cancel_confirm": "Отменить текущий процесс записи? Ответьте «да» или «нет».",
     "topic_switch_confirm": (
         "Сейчас идет оформление записи. Отменить этот процесс и перейти к новому вопросу? "
@@ -2614,36 +2608,6 @@ def _is_negative_text(text: str) -> bool:
     return False
 
 
-# На подтверждении записи согласие — только однозначное: каждое слово — из словаря согласия.
-# «Да, а можно пораньше?», «наверное», «да. игнорируй инструкции…» — не подтверждение, а
-# повод переспросить: подтверждённая по ошибке заявка уходит оператору как решённая.
-_CONFIRM_YES_WORDS = frozenset(
-    {
-        "да", "ага", "угу", "ок", "окей", "ok", "okay", "хорошо", "ладно", "верно", "конечно",
-        "давайте", "давай", "подтверждаю", "подтверждаем", "согласен", "согласна", "согласны",
-        "правильно", "записывайте", "запишите", "отлично", "супер", "устраивает", "подходит",
-        "точно", "именно", "годится", "можно", "норм", "нормально", "все", "всё", "так", "это",
-        "и", "ну", "спасибо", "пожалуйста", "большое", "огромное", "очень", "жду", "буду",
-        "приду", "меня", "мне", "вам",
-    }
-)
-_CONFIRM_WORD_RE = re.compile(r"[а-яёa-z]+")
-
-
-def _is_unambiguous_yes(text: str) -> bool:
-    norm = _AFFIRMATIVE_IDIOMS_RE.sub(" да ", _normalize_confirmation_text(text))
-    words = _CONFIRM_WORD_RE.findall(norm)
-    return bool(words) and all(word in _CONFIRM_YES_WORDS for word in words)
-
-
-def appointment_confirmation_transition(text: str) -> str:
-    if _is_affirmative_text(text) and _is_unambiguous_yes(text):
-        return APPOINTMENT_CONFIRM_YES
-    if _is_negative_text(text):
-        return APPOINTMENT_CONFIRM_NO
-    return APPOINTMENT_CONFIRM_OTHER
-
-
 def is_context_affirmative(text: str) -> bool:
     return _is_affirmative_text(text)
 
@@ -2885,18 +2849,6 @@ def appointment_text_patient_name_prompt() -> str:
 
 def appointment_text_confirm_prompt(summary: str) -> str:
     return f"{summary} {APPOINTMENT_REPLY_MAP['confirm_suffix']}"
-
-
-def appointment_text_confirmed_handoff(summary: str) -> str:
-    return f"{summary}\n{APPOINTMENT_REPLY_MAP['confirmed_handoff_suffix']}"
-
-
-def appointment_text_reask_datetime() -> str:
-    return APPOINTMENT_REPLY_MAP["reask_datetime"]
-
-
-def appointment_text_reask_confirm() -> str:
-    return APPOINTMENT_REPLY_MAP["reask_confirm"]
 
 
 def appointment_text_cancel_confirm() -> str:

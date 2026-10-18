@@ -47,7 +47,7 @@ from enum import Enum
 from typing import Any, Iterable
 
 from . import turn_telemetry
-from .mess_types import AppointmentPhase, ResponseEnvelope, SessionState
+from .mess_types import ResponseEnvelope, SessionState
 from .recovery_policy import UNCLEAR_OPERATOR_OFFER_TEXT
 from .runtime_config import config as _cfg
 
@@ -83,7 +83,6 @@ class Question(str, Enum):
 
     OPERATOR_OFFER = "operator_offer"  # «Перевести на оператора?» — `response_builder.mark_operator_offer_pending`
     CATALOG_CONFIRM = "catalog_confirm"  # «Похоже, вы имели в виду …? Это верно?» — `router._maybe_start_catalog_confirm`
-    APPOINTMENT_CONFIRM = "appointment_confirm"  # «Подтвердите запись» — фаза CONFIRM, `appointment_flow_guard`
     APPOINTMENT_ABORT = "appointment_abort"  # «Отменить текущий процесс записи?» / «…перейти к новому вопросу?»
     APPOINTMENT_ACTION = "appointment_action"  # «Хотите отменить или перенести запись?» — `_pending` с `appointment_action`
     SECONDARY_OFFER = "secondary_offer"  # вторая тема реплики — `orchestrator._mark_secondary_offer_pending`
@@ -106,7 +105,6 @@ class Question(str, Enum):
 # вторичного оффера, анти-залип поверх переспроса) — в поле тот, на который придётся ответ.
 _READING_ORDER = (
     Question.APPOINTMENT_ABORT,
-    Question.APPOINTMENT_CONFIRM,
     Question.OPERATOR_OFFER,
     Question.CATALOG_CONFIRM,
     Question.APPOINTMENT_ACTION,
@@ -242,8 +240,6 @@ def _armed(state: SessionState, question: Question) -> bool:
         return bool(entities.get("_operator_offer_pending"))
     if question is Question.CATALOG_CONFIRM:
         return isinstance(entities.get("_catalog_confirm_pending"), dict)
-    if question is Question.APPOINTMENT_CONFIRM:
-        return state.dialog.phase == AppointmentPhase.CONFIRM
     if question is Question.APPOINTMENT_ABORT:
         return bool(entities.get("appointment_cancel_pending") or entities.get("appointment_topic_switch_pending"))
     if question in _PENDING_SLOT:

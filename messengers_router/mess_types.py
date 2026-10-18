@@ -198,8 +198,6 @@ class SessionState:
         if not self.dialog.phase:
             if self.last_entities.get("appointment_confirmed"):
                 self.dialog.phase = AppointmentPhase.CONFIRMED
-            elif self.last_entities.get("appointment_confirm_pending"):
-                self.dialog.phase = AppointmentPhase.CONFIRM
             elif self.last_entities.get("appointment_flow_active"):
                 self.dialog.phase = AppointmentPhase.COLLECTING
 

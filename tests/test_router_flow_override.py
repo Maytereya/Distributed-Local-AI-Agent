@@ -22,7 +22,6 @@ from messengers_router.mess_types import (
 )
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision
-from messengers_router.appointment_flow_guard import is_new_topic_while_confirm_pending
 from messengers_router.flow_policy import reset_appointment_runtime_state
 from messengers_router.orchestrator import OrchestratorContext
 from messengers_router.nlu_pipeline import NLUCandidate, NLUResult
@@ -32,7 +31,6 @@ from messengers_router.policies import (
     appointment_service_display,
     appointment_step_policy,
     appointment_summary,
-    appointment_confirmation_transition,
     clarification_question,
     missing_slots,
     service_name_conflicts_with_doctor,
@@ -97,10 +95,6 @@ def test_appointment_flow_override_blocks_new_topics():
     assert _should_keep_appointment_flow_override("Как можно сдать анализы") is False
     assert _should_keep_appointment_flow_override("результаты анализов") is False
     assert _should_keep_appointment_flow_override("покажи расписание Казакова") is False
-
-
-def test_is_new_topic_while_confirm_pending_detects_news_intent():
-    assert is_new_topic_while_confirm_pending("какие скидки?") is True
 
 
 def test_patient_routing_stream_logs_background_refresh_start_failure(monkeypatch, caplog):
@@ -525,21 +519,6 @@ def test_classifier_does_not_extract_unmatched_question_word_as_doctor_name(monk
     )
 
     assert classifier_mod._extract_doctor_name("подскажите к кому записаться", mode="appointment") is None
-
-
-def test_appointment_confirmation_transition_accepts_common_yes_forms():
-    for text in ("да", "Да", "Да,", "Да?", "подтверждаю", "Подтверждаю"):
-        assert appointment_confirmation_transition(text) == "yes"
-
-
-def test_appointment_confirmation_transition_accepts_soft_yes_forms():
-    for text in ("хорошо", "Ладно", "хорошо, спасибо"):
-        assert appointment_confirmation_transition(text) == "yes"
-
-
-def test_appointment_confirmation_transition_accepts_common_no_forms():
-    for text in ("нет", "Нет", "неа", "не правильно", "неправильно", "не подтверждаю"):
-        assert appointment_confirmation_transition(text) == "no"
 
 
 def test_default_city_is_samara_for_messenger_router():
@@ -3001,62 +2980,6 @@ def test_patient_routing_stream_cancel_rejected_resumes_appointment_flow():
     assert "фио пациента" in out[0].text.lower()
     assert state.last_entities.get("appointment_cancel_pending") is None
     assert state.last_entities.get("appointment_flow_active") is True
-
-
-def test_patient_routing_stream_confirm_pending_no_keeps_confirm_transition():
-    state = SessionState(
-        session_id="appt-confirm-no",
-        last_entities={
-            "appointment_flow_active": True,
-            "appointment_confirm_pending": True,
-            "doctor_name": "Хальметова Алина Алексеевна",
-            "date_from": "2026-03-19",
-            "time_from": "12:00",
-            "patient_name": "Рахманов Владимир",
-        },
-    )
-    services = Services()
-    services.ensure_background_refresh_started = lambda: None
-    memory = MemoryStore()
-
-    out = _run_stream_once("нет", state, services, memory)
-
-    assert len(out) == 1
-    assert "уточните новую дату" in out[0].text.lower()
-    assert state.last_entities.get("appointment_cancel_pending") is None
-    assert state.last_entities.get("appointment_confirm_pending") is None
-    assert state.last_entities.get("appointment_flow_active") is True
-
-
-def test_patient_routing_stream_confirm_pending_yes_handoff_resets_state():
-    state = SessionState(
-        session_id="appt-confirm-yes-reset",
-        last_entities={
-            "appointment_flow_active": True,
-            "appointment_confirm_pending": True,
-            "appointment_action": "book",
-            "doctor_name": "Трубин Алексей Юрьевич",
-            "service_name": "Прием врача-уролога",
-            "specialty": "уролог",
-            "branch_name": "г. Самара, ул. Победы, 83",
-            "date_hint": "next_week",
-            "time_flexible": True,
-            "patient_name": "Игорь Трубник",
-            "city": "Самара",
-        },
-    )
-    services = Services()
-    services.ensure_background_refresh_started = lambda: None
-    memory = MemoryStore()
-    memory.set_pending(state, label="APPOINTMENT", missing_slots=["patient_name"])
-
-    out = _run_stream_once("да", state, services, memory)
-
-    assert len(out) == 1
-    assert out[0].handoff is True
-    assert "передаю заявку оператору" in out[0].text.lower()
-    assert memory.get_pending(state) is None
-    assert state.last_entities == {"city": "Самара"}
 
 
 def test_patient_routing_stream_topic_switch_requests_confirmation():

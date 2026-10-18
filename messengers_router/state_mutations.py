@@ -47,23 +47,7 @@ def activate_appointment_flow(state: SessionState) -> None:
     state.dialog.phase = AppointmentPhase.COLLECTING
 
 
-# --- Confirmation step ---------------------------------------------------
-
-def mark_appointment_confirm_pending(state: SessionState) -> None:
-    """Transition to the CONFIRM phase awaiting user ack."""
-
-    state.last_entities[_CONFIRM_PENDING] = True
-    state.dialog.phase = AppointmentPhase.CONFIRM
-
-
-def finalize_appointment_confirmation(state: SessionState) -> None:
-    """User confirmed — close the flow and mark as confirmed."""
-
-    state.last_entities[_CONFIRMED] = True
-    state.last_entities.pop(_CONFIRM_PENDING, None)
-    state.last_entities.pop(_FLOW_ACTIVE, None)
-    state.dialog.phase = AppointmentPhase.CONFIRMED
-
+# --- Confirmation step (шага «Подтвердите запись» нет с 08.10; фаза CONFIRM не ставится, обработчик снят 18.10) ---
 
 def reject_appointment_confirmation(state: SessionState, extra_keys: tuple[str, ...] = ()) -> None:
     """User rejected confirmation — rewind to COLLECTING and reopen the flow."""

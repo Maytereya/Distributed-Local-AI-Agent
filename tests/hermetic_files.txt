@@ -4,7 +4,7 @@ tests/test_api_price_cache.py
 tests/test_api_service_info_cache.py
 tests/test_appointment_branches_without_doctors.py
 tests/test_appointment_change_validator.py
-tests/test_appointment_confirm_refusal.py
+tests/test_appointment_abort_refusal.py
 tests/test_appointment_grammar.py
 tests/test_background_refresh_hygiene.py
 tests/test_bare_doctor_name.py

@@ -2,7 +2,7 @@
 
 Было: «да / нет» на вопрос бота решают только правила — `recovery_policy.contextual_reply_kind`
 (`policies.is_context_affirmative/negative`: якорные регулярки и целые фразы), подтверждение записи —
-`policies.appointment_confirmation_transition`. «нет, спасибо», «да, отмените», «конечно, переведите», «наркоз не
+`policies.appointment_confirmation_transition` (снято 18.10 вместе с фазой CONFIRM). «нет, спасибо», «да, отмените», «конечно, переведите», «наркоз не
 нужен» правила не понимают (аудит 14.10, `docs/HANDOFF_2026-10-14_cloud_L14.md`, пункты 1–6): оффер оператора
 снимается без перевода, отмена записи переспрашивается по кругу, «наркоз не нужен» получает памятку «с наркозом».
 
@@ -49,8 +49,8 @@
 Телеметрия хода — только ключи и числа:
 - `tu_pending_type` — тип вопроса (`_expects.type`; не из контракта — `unknown`), `tu_pending_asks` — который раз
   бот его задаёт;
-- `tu_pending_rules` — что решают правила сейчас (`yes` / `no` / `other`): подтверждение записи —
-  `appointment_confirmation_transition`, остальные — `contextual_reply_kind`. Мягкое «да» вторичного оффера и
+- `tu_pending_rules` — что решают правила сейчас (`yes` / `no` / `other`): подсказка «все» — определением пути цены,
+  остальные — `contextual_reply_kind`. Мягкое «да» вторичного оффера и
   составной цены (`_SECONDARY_SOFT_YES_RE`, `_COMPOUND_PRICE_SOFT_YES_RE`) здесь — `other`;
 - `tu_pending_outcome` — исход тени: `yes` / `no` / `pause` / `new_topic` / `pick` / `none`; сбой — `unavailable`,
   `invalid`, `late` (сверх потолка), `error`; без LLM — `fast_rules`; `_expects` не по контракту — `malformed`.
@@ -73,7 +73,7 @@ from typing import Any, Mapping
 from . import turn_telemetry
 from .choice import Choice, Option, Status, Task, choose
 from .expects import SHOW_ALL_OPTIONS
-from .policies import _CONFIRM_NO_EXACT, _CONFIRM_YES_EXACT, _normalize_confirmation_text, appointment_confirmation_transition
+from .policies import _CONFIRM_NO_EXACT, _CONFIRM_YES_EXACT, _normalize_confirmation_text
 from .recovery_policy import contextual_reply_kind
 from .runtime_config import config as _cfg
 
@@ -114,7 +114,6 @@ class QuestionType(StrEnum):
 
     OPERATOR_OFFER = "operator_offer"
     CATALOG_CONFIRM = "catalog_confirm"
-    APPOINTMENT_CONFIRM = "appointment_confirm"
     APPOINTMENT_ABORT = "appointment_abort"
     APPOINTMENT_ACTION = "appointment_action"
     SECONDARY_OFFER = "secondary_offer"
@@ -247,8 +246,6 @@ def rules_kind(question_type: str, text: str) -> str:
     согласие), подсказка «напишите: "все"» — определением пути цены (`yes` — правила покажут все; «да» здесь не
     «все»: его читает обработчик вторичного оффера), остальные вопросы — `contextual_reply_kind`."""
 
-    if question_type == QuestionType.APPOINTMENT_CONFIRM:
-        return appointment_confirmation_transition(text)
     if question_type == QuestionType.SHOW_ALL:
         # Импорт в функции: модуль хода не тянет сервисный слой при своём импорте (как `classifier`).
         from .services._prices_helpers import _is_price_show_all_request

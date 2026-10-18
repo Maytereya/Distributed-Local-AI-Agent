@@ -21,18 +21,15 @@ from messengers_router.policies import handoff_message
 from messengers_router.recovery_policy import UNCLEAR_OPERATOR_OFFER_TEXT
 from tests.test_expects_observer import (
     _ABORT_TEXT,
-    _CONFIRM_REASK,
     _catalog_doctor,
     _fake_nlu,
     _play,
     _seed_collecting,
-    _seed_confirm,
     anesthesia_services,  # noqa: F401 — фикстура модуля
 )
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура модуля
 
 _NEED_YES_NO = "Не понял ответ — нужен был ответ «да» или «нет»."
-_CONFIRMED = "Передаю заявку оператору для окончательного подтверждения записи"
 
 
 def _mode(monkeypatch, mode: str) -> None:
@@ -72,9 +69,8 @@ def test_limit_text_names_the_needed_answer():
     ("seed", "turns", "question"),
     [
         (_seed_collecting, ["нет", "да, отмените", "да, отмените же", "да, отмените уже"], _ABORT_TEXT),
-        (_seed_confirm, ["нет, другое время", "нет, другое время!", "нет же, другое время"], _CONFIRM_REASK),
     ],
-    ids=["abort", "confirm"],
+    ids=["abort"],  # «Подтвердите запись» снят 18.10 (STEP-2026-10-18-CONFIRM-REMOVED)
 )
 def test_off_keeps_asking_as_before(seed, turns, question, mini_prod_world, monkeypatch):  # noqa: F811
     _mode(monkeypatch, "off")
@@ -103,16 +99,6 @@ def test_on_no_to_the_offer_continues_without_the_dropped_question(mini_prod_wor
     assert limit.text.endswith(UNCLEAR_OPERATOR_OFFER_TEXT)
     assert after.text == "Хорошо, продолжаем диалог. Можете задать другой вопрос." and not after.handoff
     assert after.expects is None
-
-
-def test_on_confirm_loop_never_becomes_a_confirmed_booking(mini_prod_world, monkeypatch):  # noqa: F811
-    """Карточка «Подтвердите» — первый раз, переспрос — второй, третьего нет; «да» оффера — не подтверждение."""
-
-    _mode(monkeypatch, "on")
-    first, second, third = _play(["нет, другое время", "нет, другое время!", "да"], mini_prod_world, seed=_seed_confirm)
-    assert first.text == _CONFIRM_REASK and first.expects["asks"] == 2
-    assert second.text == f"{_NEED_YES_NO} {UNCLEAR_OPERATOR_OFFER_TEXT}"
-    assert third.handoff and _CONFIRMED not in third.text
 
 
 def test_on_answer_on_the_second_ask_is_taken_as_before(mini_prod_world, monkeypatch):  # noqa: F811
