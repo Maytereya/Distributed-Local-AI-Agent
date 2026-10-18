@@ -11,6 +11,25 @@
 
 ---
 
+## STEP-2026-10-18-CI-HERMETIC-173 — CI: герметичный набор 124 → 173 файла (~1690 → ~3850 тестов); что мешает полному pytest в CI — СДЕЛАНО (ход (ж), решение владельца 08.10 «CI — полный pytest на 3.12»)
+
+- **Замер (18.10, копия CI: Python 3.12.9 + `requirements-ci.txt`, без `config.ini` и срезов `apidata`, код `d0aeaf6`):**
+  полный pytest — 4761 passed, **261 failed** в 38 файлах, 1 ошибка сбора (`test_gradio_chat_export.py` — нет пакета
+  `gradio` в CI-зависимостях). 49 файлов полностью зелёные, но не были в `tests/hermetic_files.txt`.
+- **Сделано:** 49 файлов добавлены в список (порядок — по алфавиту); весь список отдельно прогнан в копии CI — 3854
+  passed, 42 skipped, 12 xfailed, 0 failed; потолок храповика `_FLOOR` 122 → 173; комментарий workflow обновлён.
+- **Что мешает полному pytest в CI** (38 файлов, 261 тест): тесты читают живой каталог прайса, `service_info`
+  (синонимы, памятки) и срез врачей из локальной `apidata`; лидеры — `test_price_unsatisfiable_qualifier` (25),
+  `test_walkin_named_service` (21), `test_biomaterial_and_synonyms` (20), `test_appointment_branch_reply_class` (14),
+  `test_datetime_answer_not_a_service` (14), `test_booking_service_llm_choice` (13), `test_test_assist_price_routing`
+  (13), `test_router_flow_override` (12). Путь — перевод на мир мини-прода (`tests/fixtures/mini_prod`, решение 08.10 —
+  выдержка из настоящего прайса в репо) по файлу; срез врачей — отдельно (без среза врачей локальный гейт теряет 68
+  тестов в 11 файлах: замер 18.10).
+- **Инвариант:** список герметичных только растёт; файл попадает в него, только если зелёный в копии CI.
+- **Покрытие:** `tests/test_hermetic_files_ratchet.py` (потолок 173).
+
+---
+
 ## BUG-2026-10-18-TOPIC-BY-LETTERS — «Ново-Садовая» уводила в акции: слово реестра тем меняло маршрут без смысла — ИСПРАВЛЕНО под `topic_override_llm` (по умолчанию off)
 
 - **Симптом (через эндпоинт, мир гейта, 18.10):** «Ново-садовая 13», «А на Ново-Садовой не делают?» → метка NEWS,

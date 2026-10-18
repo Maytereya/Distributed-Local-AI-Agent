@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
-_FLOOR = 122  # 14.10.2026; поднимать в том же коммите, где файл добавлен в список
+_FLOOR = 173  # 18.10: +49 файлов, зелёных в копии CI (Python 3.12, requirements-ci.txt, без config.ini и срезов)
 
 
 def test_hermetic_list_only_grows_and_every_file_exists():
