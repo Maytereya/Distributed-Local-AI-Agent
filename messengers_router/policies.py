@@ -2217,8 +2217,23 @@ def quick_fill_core_entities(text: str, state_entities: dict[str, Any], missing_
     return out
 
 
+def _address_words(text: str) -> tuple[str, ...]:
+    """Слова и числа адреса без регистра и пунктуации: «пр. Ленина, 5» = «ПР. ЛЕНИНА , 5»."""
+
+    return tuple("".join(ch if ch.isalnum() else " " for ch in normalize_ru(text)).split())
+
+
 def extract_branch_hint(text: str, state_entities: dict[str, Any]) -> str | None:
     t = (text or "").strip()
+    # Пациент повторил вариант, который бот сам показал («Какой филиал вам удобен?»), — это ответ, разбирать адрес не нужно:
+    # длинный вариант («г. <город>, ул. Ново-Садовая, 106, кор. 82» — 7 слов) разбор ниже не брал, и бот спрашивал снова
+    # (BUG-2026-10-18-BRANCH-OPTION-VERBATIM).
+    shown = state_entities.get("appointment_branch_options")
+    if isinstance(shown, list) and t:
+        said = _address_words(t)
+        for option in shown:
+            if said and _address_words(str(option or "")) == said:
+                return str(option).strip()
     branch_hint: str | None = None
     m_bx = _QF_BRANCH_EXPLICIT_RE.search(t)
     if m_bx:
@@ -3010,9 +3025,12 @@ def appointment_service_display(entities: dict[str, Any]) -> str:
     # → оператор путался. См. policies._STALE_LAB_SERVICE_RE.
     if service_raw and doctor_name and _service_looks_like_stale_lab_test(service_raw):
         service_raw = ""
+    # Фраза записи пациента вместо услуги («записаться на прием», «перенести прием») — не название. По глаголу записи, не
+    # по слову «приём»: оно есть и в названиях строк каталога («Прием (осмотр, консультация) врача-акушера-гинеколога»),
+    # и такие записи пациент и оператор видели как «запись на услугу» (BUG-2026-10-18-BOOKING-DISPLAY-PRIEM).
     if (
         not service_raw
-        or _QF_APPOINTMENT_WORD_RE.search(service_raw)
+        or detect_appointment_action(service_raw)
         or _QF_TIME_FRAGMENT_RE.search(service_raw)
     ):
         specialty = str(entities.get("specialty") or "").strip()

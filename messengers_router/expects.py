@@ -88,6 +88,9 @@ class Question(str, Enum):
     # ответ читает путь цены по контексту семейства (`_price_family_payload_from_context`). Решения владельца 15.10:
     # подсказка — висящий вопрос; ответ «все» и ответ городом разбирать через `pending_reply`, а не регулярками.
     SHOW_ALL = "show_all"
+    # «Уточните, на какую услугу вас записать: 1. … 2. …» — `router._maybe_ask_booking_service_choice` (цель записи не
+    # решена: выбор LLM назвал несколько услуг или LLM недоступна на слабом совпадении).
+    BOOKING_SERVICE = "booking_service"
 
 
 # Порядок, в котором следующий ход разбирает висящие вопросы: предпроверка записи (`run_appointment_precheck`), затем
@@ -99,6 +102,7 @@ _READING_ORDER = (
     Question.OPERATOR_OFFER,
     Question.CATALOG_CONFIRM,
     Question.APPOINTMENT_ACTION,
+    Question.BOOKING_SERVICE,
     Question.ANESTHESIA,
     Question.COMPOUND_PRICE,
     # Подсказка «напишите: "все"» — раньше вторичного оффера: его текст пациенту не показывается (с `fec9770`), а
@@ -110,7 +114,9 @@ _READING_ORDER = (
 
 # Вопросы, чей флаг живёт в `_pending` со сроком (`memory.get_pending`): между ходами он истекает сам, поэтому начало
 # хода сверяет с ним поле. У прочих флагов срока нет — их с полем сверяет конец каждого хода.
-_PENDING_SLOT_QUESTIONS = (Question.APPOINTMENT_ACTION,)
+_PENDING_SLOT_QUESTIONS = (Question.APPOINTMENT_ACTION, Question.BOOKING_SERVICE)
+# Недостающий слот записи в `_pending`, которого ждёт вопрос.
+_PENDING_SLOT = {Question.APPOINTMENT_ACTION: "appointment_action", Question.BOOKING_SERVICE: "service_name"}
 
 
 @dataclass(frozen=True)
@@ -231,15 +237,15 @@ def _armed(state: SessionState, question: Question) -> bool:
         return state.dialog.phase == AppointmentPhase.CONFIRM
     if question is Question.APPOINTMENT_ABORT:
         return bool(entities.get("appointment_cancel_pending") or entities.get("appointment_topic_switch_pending"))
-    if question is Question.APPOINTMENT_ACTION:
+    if question in _PENDING_SLOT:
         pending = entities.get("_pending")
         if not isinstance(pending, dict) or pending.get("label") != "APPOINTMENT":
             return False
         ttl = float(pending.get("ttl") or 0.0)
         if ttl and time.time() - float(pending.get("ts") or 0.0) > ttl:
-            return False  # `memory.get_pending` такой не отдаст — обработчик выбора действия не сработает
+            return False  # `memory.get_pending` такой не отдаст — обработчик ответа не сработает
         missing = pending.get("missing")
-        return isinstance(missing, list) and "appointment_action" in missing
+        return isinstance(missing, list) and _PENDING_SLOT[question] in missing
     if question is Question.SECONDARY_OFFER:
         return bool(entities.get("_secondary_offer_pending"))
     if question is Question.ANESTHESIA:

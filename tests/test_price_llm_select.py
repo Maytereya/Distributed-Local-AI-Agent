@@ -391,15 +391,12 @@ def test_tools_do_not_price_a_weak_row_when_llm_is_down(monkeypatch):
         ), decided
 
 
-def test_prompt_bundle_and_host_copies_match():
-    # Промпты в ДВУХ местах (CLAUDE.md): прод читает app_data/prompts/mr_*, и копия без правки молча оставила бы старую
-    # версию. Прежний промпт `price_service_select` снят в обеих (17.10): хост без пакетной копии читал бы его вечно.
+def test_removed_price_select_prompt_is_gone_from_both_locations():
+    # Прежний промпт `price_service_select` снят в обеих локациях (17.10): хост без пакетной копии читал бы его вечно.
+    # Равенство копий `choose_price_service` и сирот хоста — общий тест `tests/test_prompt_two_locations.py`.
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    bundle = (root / "messengers_router" / "prompts" / "choose_price_service.txt").read_text(encoding="utf-8")
-    host = (root / "app_data" / "prompts" / "mr_choose_price_service.txt").read_text(encoding="utf-8")
-    assert bundle == host
     assert not (root / "messengers_router" / "prompts" / "price_service_select.txt").exists()
     assert not (root / "app_data" / "prompts" / "mr_price_service_select.txt").exists()
 
