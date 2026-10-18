@@ -20,11 +20,12 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from agent_logic_1 import meilisearch_client as meilisearch  # noqa: F401 — tests patch svc_mod.meilisearch
-from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info
+from agent_logic_2.nayka_api import api_nayka, api_price, api_service_info, snapshots
 from converters import html_cleaner  # noqa: F401 — tests patch svc_mod.html_cleaner
 from schedule_ttl_cache import AsyncListTTLStaleCache
 
-from .. import turn_telemetry
+from .. import degradation, turn_telemetry
+from ..schedule_parse_watch import normalize_schedule
 from ._common import (
     _as_int,
     _normalise_catalog_text,
@@ -47,6 +48,16 @@ from ._regions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _in_event_loop() -> bool:
+    """Вызов идёт из потока работающего цикла событий."""
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
 
 
 class ScheduleSourceUnavailable(RuntimeError):
@@ -100,6 +111,7 @@ def _world_fingerprint() -> dict[str, Any]:
 
 
 turn_telemetry.set_world_provider(_world_fingerprint)
+snapshots.set_observer(turn_telemetry.note_snapshot)
 
 
 @dataclass
@@ -122,6 +134,7 @@ class Services:
     _regions_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
     _regions_cache_loaded_at: float = field(default=0.0, init=False)
     _regions_last_failed: bool = field(default=False, init=False)
+    _branches_warm_failed_at: float = field(default=0.0, init=False)
     _procedure_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
     _procedure_rows_loaded_at: float = field(default=0.0, init=False)
     _service_catalog_rows_cache: list[dict[str, Any]] = field(default_factory=list, init=False)
@@ -206,18 +219,12 @@ class Services:
         - price_by_region JSONL — справочник прайса.
         - service_info JSONL — описания услуг для подготовки/PRICE.
         """
+        # Один цикл для всех справочников (`daily_refresh`: 07:30 местного времени, параллельно, повтор каждые 5 минут до
+        # успеха — решение владельца 18.10). Сбой старта не ломает ход, но виден в логе (DATA-10: раньше `pass`).
         try:
             api_nayka.ensure_daily_refresh_started()
         except Exception:
-            pass
-        try:
-            api_price.ensure_daily_price_refresh_started()
-        except Exception:
-            pass
-        try:
-            api_service_info.ensure_daily_service_info_refresh_started()
-        except Exception:
-            pass
+            logger.warning("цикл обновления срезов не запущен", exc_info=True)
 
     @staticmethod
     def _schedule_cache_key(last_name: str, region_name: str | None = None) -> tuple[str, str]:
@@ -295,7 +302,7 @@ class Services:
                         # except ниже re-raise'ит без лишнего sleep+повтора.
                         raise ScheduleSourceUnavailable(payload_text)
                     return []
-                return payload
+                return normalize_schedule(payload)  # даты дней — к ISO на входе от МИС (DATA-15, решение владельца 18.10)
             except ScheduleSourceUnavailable:
                 raise
             except Exception as exc:
@@ -313,6 +320,7 @@ class Services:
             key,
             lambda: self._fetch_schedule_source(last_name, region_name),
             key_details={"last_name": key[0], "region": key[1]},
+            allow_stale=not degradation.honest(),  # под `mis_honest_degradation` — только живое (решение 08.10)
         )
 
     async def _ensure_doctors_cache_loaded(self) -> list[dict[str, Any]]:
@@ -361,6 +369,11 @@ class Services:
                 regions = await asyncio.to_thread(api_nayka.site_regions, realtime=True)
                 if not isinstance(regions, list):
                     regions = []
+                if not regions and degradation.honest() and api_nayka.regions_failed():
+                    # Сбой справочника филиалов (DATA-2): хороший кэш не затираем, сбой видят потребители
+                    # (`_regions_last_failed` → честная ветка `tech_unavailable` в адресах).
+                    self._regions_last_failed = True
+                    return self._regions_cache
                 # Прод-бэкенд /regions не отдаёт поле city — выводим его из иерархии
                 # parent ОДИН раз на загрузке, чтобы вся самарская фильтрация работала
                 # (без этого реальные филиалы роняются — BUG-A).
@@ -381,6 +394,21 @@ class Services:
             except Exception:
                 self._regions_last_failed = True
             return self._regions_cache
+
+    async def warm_branches(self) -> None:
+        """Справочник филиалов — в кэш до синхронных читателей хода (DATA-7).
+
+        `get_branches` зовут синхронные функции хода (дозаполнение слотов, ответ шага записи); раньше при пустом кэше
+        она сама синхронно шла в МИС — в цикле событий, и весь бот ждал. Теперь ход в начале прогревает кэш здесь
+        (запрос — в потоке, `_ensure_regions_loaded`), а `get_branches` в цикле событий только читает. Пустой ответ
+        МИС (сбой — `site_regions` отдаёт `[]`) — следующая попытка не раньше чем через 60 с: ходы во время сбоя
+        не ждут таймаута каждый.
+        """
+
+        if self._regions_cache or time.time() - self._branches_warm_failed_at < 60:
+            return
+        if not await self._ensure_regions_loaded():
+            self._branches_warm_failed_at = time.time()
 
     async def _samara_region_tokens(self) -> set[str]:
         regions = await self._ensure_regions_loaded()
@@ -599,7 +627,11 @@ class Services:
         Пока заглушка.
         """
         regions = self._regions_cache or []
-        if not regions:
+        if not regions and _in_event_loop():
+            # В ходе пациента кэш прогревает `warm_branches` (в потоке); синхронный запрос к МИС отсюда остановил бы
+            # весь бот (DATA-7). Пусто — значит МИС не отдала филиалы: как и раньше при сбое — пустой список.
+            logger.warning("get_branches: кэш филиалов пуст в цикле событий — синхронный запрос к МИС не делаем")
+        elif not regions:
             try:
                 data = api_nayka.site_regions()
                 if isinstance(data, list):
@@ -673,8 +705,22 @@ from .prices import (  # noqa: E402
     price_info as _price_info_impl,
     service_bundle_info as _service_bundle_info_impl,
 )
-Services.price_info = _price_info_impl
-Services.service_bundle_info = _service_bundle_info_impl
+async def _price_info_checked(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
+    """Цена — с правилом давности прайса под `mis_honest_degradation` (ход (д), шаг 3; под off — как есть)."""
+
+    from . import _freshness
+
+    return _freshness.apply(await _price_info_impl(self, query, entities), snapshots.last)
+
+
+async def _service_bundle_info_checked(self: "Services", query: str, entities: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    from . import _freshness
+
+    return _freshness.apply(await _service_bundle_info_impl(self, query, entities, **kwargs), snapshots.last)
+
+
+Services.price_info = _price_info_checked
+Services.service_bundle_info = _service_bundle_info_checked
 
 from .addresses import (  # noqa: E402
     _procedure_branches_from_index as _procedure_branches_from_index_impl,

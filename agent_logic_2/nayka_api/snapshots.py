@@ -12,6 +12,12 @@
 
 Класс дефектов `empty_snapshot_poisons_day`: пустой или недоступный ответ МИС не
 оставляет бота без данных, пока на диске есть последний непустой срез.
+
+Контракт среза (ход (д), решение владельца 08.10): `load_snapshot` → `Snapshot{rows, date, status}`,
+статус `fresh` (срез «на сегодня»), `stale` (последний непустой, старше; `age_days` — на сколько дней)
+или `unavailable` (непустых срезов нет). Сегодня статус только наблюдается — предупреждение в лог и
+поле телеметрии хода через `set_observer`; ответы пациенту не меняются (DATA-6, DATA-9: вчерашний срез
+и пустота выглядели как свежие данные).
 """
 
 from __future__ import annotations
@@ -20,16 +26,30 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 import time
-from datetime import datetime, timedelta
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 
 log = logging.getLogger(__name__)
 
+FRESH = "fresh"
+STALE = "stale"
+UNAVAILABLE = "unavailable"
+
 # После неудачной попытки скачать срез «на сегодня» следующая — не раньше чем через
-# столько секунд; в промежутке запросы сразу получают последний непустой срез.
-RETRY_AFTER_S = 600
+# столько секунд; в промежутке запросы сразу получают последний непустой срез. Пять минут — как у
+# ежедневного обновления (`daily_refresh.RETRY_EVERY_S`, решение владельца 18.10).
+RETRY_AFTER_S = 300
+
+# «День данных» начинается в 07:30 по Самаре (решение владельца 18.10): регламентные работы МИС (бэкап,
+# обновление баз) идут с 01:00 до ~07:10 по местному времени; в 07:30 качаются все срезы. До 07:30 «сегодняшний»
+# срез — вчерашний по календарю: ночью бот его не ищет и не качает. В 07:30 по Самаре на сервере (UTC) 03:30 того
+# же числа — имена файлов совпадают в обоих поясах (DATA-8: прайс датировался часами сервера, памятки — Самарой,
+# врачи — Самарой с границей 06:00).
+DATA_DAY_STARTS_AT = (7, 30)
 _failed_at: dict[str, float] = {}
 
 
@@ -60,13 +80,19 @@ def has_rows(path: Path) -> bool:
 
 
 def write_rows(path: Path, rows: Iterable[dict[str, Any]]) -> None:
-    """Пишет JSONL атомарно: читатель видит либо прежний файл, либо новый целиком."""
+    """Пишет JSONL атомарно: читатель видит либо прежний файл, либо новый целиком.
 
-    tmp = path.with_name(path.name + ".tmp")
+    Временный файл — свой у каждого писателя (`mkstemp`): с одним именем `.tmp` параллельные сборки (фон и первый
+    запрос) писали в один файл и могли оставить битый срез на весь день (DATA-10).
+    """
+
+    fd, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    tmp = Path(name)
     try:
-        with tmp.open("w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             for row in rows:
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        os.chmod(tmp, 0o644)  # права как у прежнего open(): mkstemp создаёт 0600
         os.replace(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)  # недописанный временный файл — не мусор на диске
@@ -87,6 +113,118 @@ def latest_nonempty(path: Path) -> Path | None:
     return None
 
 
+def data_day(now_samara: datetime) -> str:
+    """«День данных» (`ГГГГММДД`) — самарская дата, которая переключается в `DATA_DAY_STARTS_AT`.
+
+    :param now_samara: текущее время по Самаре
+    :return: дата среза «на сегодня» для имён файлов всех справочников
+    """
+
+    hour, minute = DATA_DAY_STARTS_AT
+    day = now_samara.date()
+    if (now_samara.hour, now_samara.minute) < (hour, minute):
+        day -= timedelta(days=1)
+    return day.strftime("%Y%m%d")
+
+
+def snapshot_date(path: Path) -> date | None:
+    """Дата среза из имени файла (`<имя>_<ГГГГММДД>.jsonl`); имя без даты — None."""
+
+    try:
+        return datetime.strptime(path.stem.rsplit("_", 1)[-1], "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """Строки среза с датой и статусом.
+
+    :param name: справочник — имя файла без даты (`price_region_3`, `price_units`, `service_info`, `doctors`,
+        `doctor_prices`)
+    :param rows: строки среза; у `unavailable` — пусто; у наблюдения без чтения строк (словарь синонимов строит
+        свой индекс сам) — тоже пусто
+    :param date: дата прочитанного среза или None
+    :param status: `fresh` | `stale` | `unavailable`
+    :param age_days: на сколько дней срез старше «сегодня» загрузчика; у `unavailable` — None
+    """
+
+    name: str
+    rows: list[dict[str, Any]]
+    date: date | None
+    status: str
+    age_days: int | None
+
+
+_observer: Callable[[Snapshot], None] | None = None
+_warned: set[tuple[str, str, date | None]] = set()
+_last: dict[str, Snapshot] = {}
+
+
+def last(prefix: str) -> Snapshot | None:
+    """Последний прочитанный срез справочника (без строк): имя — `prefix` или начинается с `prefix_`."""
+
+    for name in reversed(list(_last)):
+        if name == prefix or name.startswith(prefix + "_"):
+            return _last[name]
+    return None
+
+
+def set_observer(observer: Callable[[Snapshot], None] | None) -> None:
+    """Кому сообщать о каждом прочитанном срезе (телеметрия хода). Слой МИС не знает о роутере."""
+
+    global _observer
+    _observer = observer
+
+
+def _observe(snapshot: Snapshot) -> None:
+    _last.pop(snapshot.name, None)
+    _last[snapshot.name] = replace(snapshot, rows=[])  # последний — в конце: `last` ищет с конца
+    key = (snapshot.name, snapshot.status, snapshot.date)
+    if snapshot.status != FRESH and key not in _warned:
+        _warned.add(key)  # один раз на срез и статус: загрузчики зовут по нескольку раз за ход
+        if snapshot.status == STALE:
+            log.warning("срез %s устарел: данные на %s (%s дн.)", snapshot.name, snapshot.date, snapshot.age_days)
+        else:
+            log.warning("срез %s недоступен: непустых срезов нет", snapshot.name)
+    if _observer is not None:
+        try:
+            _observer(snapshot)
+        except Exception:  # наблюдатель не ломает чтение среза
+            log.warning("наблюдатель срезов упал", exc_info=True)
+
+
+def report(path: Path, source: Path | None, rows: list[dict[str, Any]] | None = None) -> Snapshot:
+    """Срез, который загрузчик выбрал сам, — со статусом, и сообщить о нём наблюдателю.
+
+    Для загрузчиков со своей логикой выбора файла (врачи, цены врачей, словарь синонимов): `path` — срез «на
+    сегодня» загрузчика, `source` — прочитанный (None — непустых нет). Срез не старше «сегодня» — `fresh`
+    (врачи с 00:00 до 06:00 по Самаре читают сегодняшний файл при активной вчерашней дате).
+
+    :param path: срез «на сегодня»
+    :param source: прочитанный срез или None
+    :param rows: прочитанные строки (None — наблюдение без чтения)
+    :return: срез
+    """
+
+    name = path.stem.rsplit("_", 1)[0]
+    if source is None:
+        snapshot = Snapshot(name=name, rows=[], date=None, status=UNAVAILABLE, age_days=None)
+    else:
+        today, taken = snapshot_date(path), snapshot_date(source)
+        age = (today - taken).days if today is not None and taken is not None else None
+        fresh = source == path or (age is not None and age <= 0)
+        snapshot = Snapshot(
+            name=name,
+            rows=rows if rows is not None else [],  # тот же список, что прочитал загрузчик
+            date=taken,
+            status=FRESH if fresh else STALE,
+            age_days=0 if fresh and age is not None else age,
+        )
+    _observe(snapshot)
+    return snapshot
+
+
 def retry_allowed(key: Path | str) -> bool:
     """Можно ли снова идти в МИС за срезом: прошлый сбой был давно или не был."""
 
@@ -100,20 +238,14 @@ def mark_failed(key: Path | str) -> None:
     _failed_at[str(key)] = time.monotonic()
 
 
-def load_daily(
-    path: Path,
-    download: Callable[[], Any],
-    read: Callable[[Path], list[dict[str, Any]]],
-) -> list[dict[str, Any]]:
-    """Строки дневного среза.
+def prefetch(path: Path, download: Callable[[], Any]) -> None:
+    """Скачать срез «на сегодня», если его нет или он пуст (после неудачи — не чаще раза в `RETRY_AFTER_S`).
 
-    Сегодняшний непустой — он. Нет или пуст — скачать (после неудачи — не чаще раза в
-    `RETRY_AFTER_S`); не вышло — последний непустой срез. Срезов нет совсем — пусто.
+    Первая половина `load_snapshot`. Асинхронный путь пациента зовёт её в потоке (`asyncio.to_thread`) до синхронных
+    чтений хода — тогда они уже не качают в цикле событий (DATA-7).
 
     :param path: срез «на сегодня»
     :param download: скачивает и записывает срез «на сегодня»; пустой ответ — исключение
-    :param read: читает файл среза
-    :return: строки среза
     """
 
     if not has_rows(path) and retry_allowed(path):
@@ -123,8 +255,38 @@ def load_daily(
             log.warning("срез %s не скачан (%s) — беру последний непустой", path.name, exc)
         if not has_rows(path):
             mark_failed(path)
+
+
+def load_daily(
+    path: Path,
+    download: Callable[[], Any],
+    read: Callable[[Path], list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Строки дневного среза — `load_snapshot(...).rows` (прежний контракт загрузчиков)."""
+
+    return load_snapshot(path, download, read).rows
+
+
+def load_snapshot(
+    path: Path,
+    download: Callable[[], Any],
+    read: Callable[[Path], list[dict[str, Any]]],
+) -> Snapshot:
+    """Дневной срез с датой и статусом.
+
+    Сегодняшний непустой — он (`fresh`). Нет или пуст — скачать (после неудачи — не чаще раза в
+    `RETRY_AFTER_S`); не вышло — последний непустой срез (`stale`). Срезов нет совсем — пусто
+    (`unavailable`). Давность считается от даты в имени `path` — «сегодня» самого загрузчика.
+
+    :param path: срез «на сегодня»
+    :param download: скачивает и записывает срез «на сегодня»; пустой ответ — исключение
+    :param read: читает файл среза
+    :return: срез
+    """
+
+    prefetch(path, download)
     source = latest_nonempty(path)
-    return read(source) if source is not None else []
+    return report(path, source, read(source) if source is not None else [])
 
 
 async def run_daily(hour: int, minute: int, job: Callable[[], Awaitable[Any]], now: Callable[[], datetime]) -> None:

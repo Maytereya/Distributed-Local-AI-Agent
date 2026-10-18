@@ -19,6 +19,8 @@ from ..doctor_name_port import (
     resolve_schedule_surname,
     surname_variants,
 )
+from .. import degradation
+from ..schedule_parse_watch import dates_all_unparsed
 from .. import resilience as _R
 from ..policies import handoff_message
 from ..russian_nlu import normalize_ru
@@ -164,6 +166,11 @@ async def match_catalog_doctor(self: "Services", raw_text_or_name: str) -> dict[
     return {"status": "miss", "query": queries[0], "canonical": ""}
 
 
+# Причина «расписание недоступно» по специальности под `mis_honest_degradation`: МИС не отдала расписание хотя бы одного
+# врача — честный перевод, а не «расписания нет».
+_SCHEDULE_SOURCE_UNAVAILABLE = "source_unavailable"
+
+
 async def _schedule_by_specialty(
     self: "Services",
     specialty: str,
@@ -251,6 +258,8 @@ async def _schedule_by_specialty(
     _MAX_CONCURRENT_DOCTORS = 8
     _doctor_sem = asyncio.Semaphore(_MAX_CONCURRENT_DOCTORS)
 
+    failed: list[str] = []  # врачи, чьё расписание МИС не отдала (сбой, таймаут) — DATA-3
+
     async def _fetch_one(doc: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
         """Вернуть ``(row | None, matched_but_without_slots)`` для одного врача."""
         fio = str(doc.get("fio") or "").strip()
@@ -264,12 +273,17 @@ async def _schedule_by_specialty(
                     timeout=_PER_DOCTOR_TIMEOUT_S,
                 )
             except asyncio.TimeoutError:
+                failed.append(surname)
                 return None, False
             except Exception:
+                failed.append(surname)
                 return None, False
         if _is_schedule_no_slots_text(data):
             return None, True
         if not isinstance(data, list) or not data:
+            return None, False
+        if dates_all_unparsed(data):
+            failed.append(surname)  # МИС прислала даты, которых код не понимает, — это сбой источника, не «нет окон»
             return None, False
         for row in data:
             if not isinstance(row, dict):
@@ -290,6 +304,12 @@ async def _schedule_by_specialty(
         return None, False
 
     fetched = await asyncio.gather(*(_fetch_one(d) for d in candidates))
+    if failed:
+        _R.log_degraded(upstream="doctor_schedule", failure_mode=_R.FM_EXCEPTION, fallback_used=False)
+        if degradation.honest():
+            # Сбой МИС → оператор (решение владельца 18.10): и когда не ответил никто, и когда часть — иначе «ближайшее
+            # окно» выбирается только из ответивших, а «нет расписания» перекладывает сбой на пациента (DATA-3).
+            return [], _SCHEDULE_SOURCE_UNAVAILABLE
 
     out_rows: list[dict[str, Any]] = []
     matched_but_without_slots = False
@@ -877,6 +897,14 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
             nearest_only=_has_nearest_hint(query),
             query_text=query,
         )
+        if schedule_unavailable_reason == _SCHEDULE_SOURCE_UNAVAILABLE:
+            payload = _service_fallback(
+                note="doctors_schedule_week: by specialty unavailable",
+                handoff_message=handoff_message("service_error_schedule"),
+                entities=entities,
+                extra={"schedule": []},
+            )
+            return _R.mark_degraded(payload, upstream="doctor_schedule", failure_mode=_R.FM_EXCEPTION, fallback_used=False)
         return {
             "schedule": schedule_by_spec,
             "note": "doctors_schedule_week: by specialty",
@@ -972,6 +1000,18 @@ async def doctors_schedule_week(self: "Services", query: str, entities: dict[str
         return _R.mark_degraded(
             payload, upstream="doctor_schedule", failure_mode=_R.FM_EXCEPTION, fallback_used=False
         )
+
+    if degradation.honest() and dates_all_unparsed(data):
+        # Даты расписания не поняты ни одна — показать окна нельзя, «нет расписания» — неправда (DATA-15; решение
+        # владельца 18.10: переводить на оператора).
+        _R.log_degraded(upstream="doctor_schedule", failure_mode=_R.FM_EXCEPTION, fallback_used=False)
+        payload = _service_fallback(
+            note="doctors_schedule_week: schedule dates unparsed",
+            handoff_message=handoff_message("service_error_schedule"),
+            entities=entities,
+            extra={"schedule": []},
+        )
+        return _R.mark_degraded(payload, upstream="doctor_schedule", failure_mode=_R.FM_EXCEPTION, fallback_used=False)
 
     if isinstance(data, list):
         compact_data: list[dict[str, Any]] = []

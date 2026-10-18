@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from agent_logic_2.nayka_api import api_price
 
 from ..policies import handoff_message
+from .. import degradation
 from .. import resilience as _R
 from ..service_phrase import extract_service_phrase
 from ._addresses_helpers import (
@@ -50,6 +51,10 @@ from ._regions import (
 
 if TYPE_CHECKING:
     from .core import Services
+
+
+# Запись при пустом списке врачей под `mis_honest_degradation` (решение владельца 18.10, вариант «а»).
+APPOINTMENT_BRANCHES_UNAVAILABLE_TEXT = "Не смог проверить, в каких филиалах принимает врач, — передаю оператору."
 
 
 async def address_info(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
@@ -165,6 +170,18 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
             doctors = await self._ensure_doctors_cache_loaded()
         except Exception:
             doctors = []
+        if not doctors and not procedure_flag:
+            # Список врачей пуст — сбой среза врачей: фильтр «филиалы, где принимает врач» молча выключился бы, и
+            # пациенту предложили бы все адреса, включая пункты без приёма этого врача (DATA-5).
+            _R.log_degraded(upstream="doctors", failure_mode=_R.FM_EMPTY_DATA, fallback_used=False)
+            if degradation.honest():
+                payload = _service_fallback(
+                    note="address_info: doctors list unavailable",
+                    handoff_message=APPOINTMENT_BRANCHES_UNAVAILABLE_TEXT,
+                    entities=entities,
+                    extra={"addresses": [], "branches": []},
+                )
+                return _R.mark_degraded(payload, upstream="doctors", failure_mode=_R.FM_EMPTY_DATA, fallback_used=False)
         # При записи ПО СПЕЦИАЛЬНОСТИ ограничиваем допустимые адреса врачами ЭТОЙ
         # специальности (как Fix B в doctors-cache fallback ниже). Иначе live-regions
         # путь, отфильтровав «doctor-capable» по ЛЮБОМУ врачу, вернёт самарские клиники
@@ -390,6 +407,9 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
             "handoff_message": _R.tech_unavailable_text("список филиалов"),
             "entities_used": entities,
         }
+        if degradation.honest():
+            # Сбой МИС → оператор (решение владельца 18.10): не «попробуйте позже или напишите «оператор»», а перевод.
+            tech_payload.update(handoff_required=True, handoff_reason="service_error", handoff_message=handoff_message("service_error"))
         return _R.mark_degraded(
             tech_payload, upstream="regions", failure_mode=_R.FM_EXCEPTION, fallback_used=False
         )

@@ -20,7 +20,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import expects, pending_reply, shown_context, turn_parse, turn_telemetry, turn_understanding
+from . import degradation, expects, pending_reply, shown_context, turn_parse, turn_telemetry, turn_understanding
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -267,6 +267,13 @@ def _catalog_health_degraded_text(
     need_service_catalog: bool,
     need_doctors_catalog: bool,
 ) -> str:
+    if degradation.honest():
+        # Ход (д), принцип 3 («уточните у оператора» — только с настоящим переводом): каталог пуст — перевод, а не
+        # «попробуйте через 5 минут или напишите «оператор»» (решение владельца 18.10: сбой МИС → оператор).
+        # Каталог услуг нужен и цене, и записи — общий текст (не «цены» на вопрос о записи).
+        if need_doctors_catalog and not need_service_catalog:
+            return handoff_message("service_error_doctors_list")
+        return handoff_message("service_error")
     if need_service_catalog and need_doctors_catalog:
         return (
             "Сейчас временно недоступен каталог услуг и врачей. "
@@ -2866,7 +2873,7 @@ async def _complete_route_after_doctor_guard(
                                 need_service_catalog=need_service_catalog,
                                 need_doctors_catalog=need_doctors_catalog,
                             ),
-                            "handoff": False,
+                            "handoff": degradation.honest(),
                             "status": str(health.get("status") or "degraded"),
                             "reason": str(health.get("reason") or "").strip(),
                             "need_service_catalog": need_service_catalog,
@@ -3054,6 +3061,11 @@ async def route_patient_message(
 ) -> tuple[RouteDecision, Plan, Evidence]:
     turn_understanding.begin_turn()
     shown_context.begin_turn(state)
+    # Справочник филиалов — в кэш до синхронных читателей хода (`get_branches`), запрос к МИС — в потоке (DATA-7).
+    try:
+        await services.warm_branches()
+    except Exception:
+        logger.warning("прогрев справочника филиалов не удался", exc_info=True)
     operator_offer_result = _handle_operator_offer_pending(user_text, state, memory)
     if operator_offer_result is not None:
         return operator_offer_result

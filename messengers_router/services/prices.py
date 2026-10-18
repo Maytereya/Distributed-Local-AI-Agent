@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Any
 
 from agent_logic_2.nayka_api import api_price
@@ -80,6 +81,8 @@ from ._regions import (
 
 if TYPE_CHECKING:
     from .core import Services
+
+logger = logging.getLogger(__name__)
 
 
 def _llm_family_payload(service_name: str, rows: list[dict[str, Any]], *, visible_limit: int = 10) -> dict[str, Any]:
@@ -363,6 +366,16 @@ def _llm_selection_service_name(query_text: str, rows: list[dict[str, Any]]) -> 
     return str(_extract_price_service_from_query(query_text) or query_text or "").strip()
 
 
+async def _prefetch_price_snapshots() -> None:
+    """Сегодняшние срезы прайса и priceUnits — скачать в потоке, если их нет: дальше ход читает их синхронно
+    (резолвер, гард уточнения, контекст оказания), и скачивание не должно идти в цикле событий (DATA-7)."""
+
+    try:
+        await asyncio.to_thread(api_price.prefetch_price_today)
+    except Exception:
+        logger.warning("предзагрузка срезов прайса не удалась — ход читает последние", exc_info=True)
+
+
 async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
     """Возвращает информацию о ценах на услуги или приём у врача.
 
@@ -371,6 +384,8 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     :param entities: извлечённые NLU-сущности
     :return: словарь с ценовыми строками или сообщением об ошибке
     """
+
+    await _prefetch_price_snapshots()
 
     async def _load_with_retry(fn: Any, *args: Any) -> Any:
         last_exc: Exception | None = None
@@ -698,6 +713,7 @@ async def service_bundle_info(
     top_n: int | None = None,
 ) -> dict[str, Any]:
     top_limit = _coerce_top_n(top_n, default=DOCTORS_TOP_N)
+    await _prefetch_price_snapshots()
     # Нормализуем пациентские синонимы к терминам каталога (BUG-2026-06-23-01:
     # «забор крови»→«взятие крови», «электромиография»→«ЭМГ») до матчинга услуги.
     entity_service_name = _apply_service_synonyms(_get_first_present(entities, ["service_name", "test_name"]) or "")

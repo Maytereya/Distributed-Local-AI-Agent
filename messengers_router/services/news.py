@@ -31,6 +31,10 @@ from typing import TYPE_CHECKING, Any
 
 from agent_logic_2.nayka_api import api_nayka
 
+from .. import degradation
+from .. import resilience as _R
+from ._common import _service_fallback
+
 if TYPE_CHECKING:
     from .core import Services
 
@@ -247,6 +251,21 @@ def _resolve_pick_index(query: str, entities: dict[str, Any]) -> int | None:
     return None
 
 
+PROMOTIONS_UNAVAILABLE_TEXT = "Не получилось загрузить всю информацию об акциях — передаю оператору."
+
+
+def _promotions_unavailable(entities: dict[str, Any]) -> dict[str, Any]:
+    """Сбой акций или справочника филиалов под `mis_honest_degradation` — перевод (решение владельца 18.10)."""
+
+    payload = _service_fallback(
+        note="news source unavailable",
+        handoff_message=PROMOTIONS_UNAVAILABLE_TEXT,
+        entities=entities,
+        extra={"news": [], "mode": "list"},
+    )
+    return _R.mark_degraded(payload, upstream="promotions", failure_mode=_R.FM_EXCEPTION, fallback_used=False)
+
+
 async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> dict[str, Any]:
     """Актуальные акции клиники из CRM /promotions: список / поиск / детали.
 
@@ -261,7 +280,10 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
     try:
         promos_raw = await asyncio.to_thread(api_nayka.site_promotions, realtime=True)
     except Exception:
-        # Деградация источника акций некритична: пустой ответ без handoff.
+        _R.log_degraded(upstream="promotions", failure_mode=_R.FM_EXCEPTION, fallback_used=False)
+        if degradation.honest():
+            return _promotions_unavailable(entities)
+        # Под off — как было: пустой ответ без handoff.
         return {"news": [], "mode": "list", "note": "news source unavailable", "entities_used": entities}
     try:
         # Дерево регионов через общий TTL-кэш справочников (шарится с шапкой
@@ -269,6 +291,12 @@ async def news_info(self: "Services", query: str, entities: dict[str, Any]) -> d
         regions = await asyncio.to_thread(api_nayka.site_regions_cached, realtime=True)
     except Exception:
         regions = []
+    if not regions:
+        # Справочник филиалов пуст — это сбой (`site_regions` при сбое отдаёт []): акции, привязанные к филиалам
+        # региона, отбросились бы молча — «акций нет» (DATA-14).
+        _R.log_degraded(upstream="regions", failure_mode=_R.FM_EMPTY_DATA, fallback_used=False)
+        if degradation.honest():
+            return _promotions_unavailable(entities)
 
     now_utc = datetime.now(timezone.utc)
     relevant = _samara_relevant_region_ids(regions if isinstance(regions, list) else [])

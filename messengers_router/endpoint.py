@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 from functools import lru_cache
@@ -14,7 +16,7 @@ from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from . import llm_runtime, pending_reply, turn_parse, turn_telemetry
 from .llm_mode_policy import normalize_runtime_options
@@ -26,6 +28,25 @@ from .warm_up import schedule_warm_up
 
 router = APIRouter()
 log = logging.getLogger(__name__)
+
+# Сколько ход ждёт замка своей сессии (предыдущее сообщение того же чата ещё обрабатывается). Дольше любого хода с
+# LLM; по истечении — честный ответ «предыдущее сообщение обрабатывается», а не вечное ожидание (DATA-11).
+SESSION_LOCK_TIMEOUT_S = 120.0
+SESSION_BUSY_TEXT = "Предыдущее сообщение ещё обрабатывается. Пожалуйста, напишите ещё раз через минуту."
+
+
+def _sess(session_id: str) -> str:
+    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:8]
+
+
+async def _acquire_session(memory: MemoryStore, session_id: str):
+    """Состояние сессии под её замком; замок не освободился за `SESSION_LOCK_TIMEOUT_S` — None (и log.error)."""
+
+    try:
+        return await asyncio.wait_for(memory.aget(session_id), SESSION_LOCK_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        log.error("session_lock_timeout sess=%s — замок сессии не освободился за %.0f с", _sess(session_id), SESSION_LOCK_TIMEOUT_S)
+        return None
 
 # Конец хода: разбор реплики, который ход не дождался (сбой между запуском и ожиданием), отменяется
 # (`turn_parse.cancel_unfinished`; тени разбора нет с T7 шага 3б). Тень ответа на висящий вопрос бота (D2.3,
@@ -80,11 +101,24 @@ router.on_startup.append(_on_startup)
 # ---------------------------------------------------------------------
 
 class MessengerGenerateRequest(BaseModel):
-    session_id: str = Field(
-        default="anon",
-        description="ID диалога/чата. Используйте один и тот же session_id для продолжения контекста.",
+    session_id: Optional[str] = Field(
+        default=None,
+        validate_default=True,
+        description="ID диалога/чата — обязателен. Используйте один и тот же session_id для продолжения контекста.",
         examples=["s_test", "tg_123456789", "wa_7f2c9a"],
     )
+    @field_validator("session_id")
+    @classmethod
+    def _session_id_required(cls, value: Optional[str]) -> str:
+        """Без номера чата запрос отклоняется (422): прежняя подстановка общего `anon` смешивала бы диалоги разных
+        пациентов в одной сессии (решение владельца 18.10: «ни в коем случае не передавать данные чатов между
+        пациентами»; отсутствие номера — баг шлюза, его видно в логе)."""
+
+        if value is None or not str(value).strip():
+            log.error("session_id_missing — запрос без номера чата отклонён (422)")
+            raise ValueError("session_id обязателен")
+        return str(value)
+
     text: str = Field(
         ...,
         min_length=1,
@@ -211,7 +245,7 @@ async def messenger_generate(
     memory: MemoryStore = Depends(get_memory_store),
     services: Services = Depends(get_services),
 ):
-    session_id = payload.session_id or "anon"
+    session_id = str(payload.session_id)
 
     # Защищаемся от строк, содержащих внезапные символьные суррогаты.
     text = payload.text.strip()
@@ -224,10 +258,15 @@ async def messenger_generate(
         queue_timeout_ms=payload.queue_timeout_ms,
     )
 
-    state = await memory.aget(session_id)
-    memory.append_turn(state, "user", text)
-
     async def event_stream():
+        # Замок сессии берётся ВНУТРИ генератора (DATA-11): клиент, оборвавший соединение до первой итерации, раньше
+        # оставлял замок занятым навсегда — генератор не стартовал, `finally` с `aset` не выполнялся, чат молчал до
+        # рестарта. Теперь не стартовал генератор — замок и не брался.
+        state = await _acquire_session(memory, session_id)
+        if state is None:
+            yield (json.dumps({"text": SESSION_BUSY_TEXT, "attachments": [], "handoff": False, "state_update": {}}, ensure_ascii=False) + "\n").encode("utf-8")
+            return
+        memory.append_turn(state, "user", text)
         # debug=False — осознанно
         assistant_parts: list[str] = []
         after_hours_note_added = False
@@ -312,7 +351,7 @@ async def messenger_generate_once(
     memory: MemoryStore = Depends(get_memory_store),
     services: Services = Depends(get_services),
 ):
-    session_id = payload.session_id or "anon"
+    session_id = str(payload.session_id)
     text = payload.text.strip()
     text = text.encode("utf-8", "ignore").decode("utf-8")
 
@@ -323,7 +362,9 @@ async def messenger_generate_once(
         queue_timeout_ms=payload.queue_timeout_ms,
     )
 
-    state = await memory.aget(session_id)
+    state = await _acquire_session(memory, session_id)
+    if state is None:
+        return JSONResponse(content=ResponseEnvelopeOut(text=SESSION_BUSY_TEXT, attachments=[], handoff=False, state_update={}).model_dump())
     turn = turn_telemetry.begin("once", session_id=session_id, llm_mode=runtime_options.llm_mode, button_id=payload.button_id)
     # Бюджет LLM-решений хода (L-11): у каждого хода свой, после хода закрыт.
     budget = llm_runtime.begin_turn_budget()

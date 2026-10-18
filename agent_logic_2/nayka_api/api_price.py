@@ -154,13 +154,13 @@ def _build_session() -> requests.Session:
     return session
 
 SESSION = _build_session()
-_PRICE_REFRESH_TASK: asyncio.Task | None = None
 
 # -----------------------------------------------------------------------------
 # Утилиты
 # -----------------------------------------------------------------------------
 def today_str() -> str:
-    return datetime.now().strftime(DATE_FMT)
+    """«День данных» по Самаре (`snapshots.data_day`): одна дата для имён всех срезов (DATA-8: раньше — часы сервера)."""
+    return snapshots.data_day(_now_samara())
 
 
 def _now_samara() -> datetime:
@@ -414,6 +414,18 @@ def update_price_units(force: bool = False) -> Path:
     log.info("✅ priceUnits обновлён (%s строк): %s", len(data), fn)
     cleanup_old(PRICE_UNITS_DIR, "price_units", CACHE_TTL_DAYS)
     return fn
+
+
+def prefetch_price_today(region_id: Any = None) -> None:
+    """Скачать сегодняшние срезы розничного прайса и priceUnits, если их нет (`snapshots.prefetch`).
+
+    Ценовой ход зовёт её в потоке до синхронных чтений прайса: скачивание (60 с с повторами) не идёт в цикле
+    событий (DATA-7). Строк не читает. Регион по умолчанию — прайс бота (`BOT_PRICE_REGION_ID`): ядро не называет
+    регион клиники само (храповик `test_clinic_literals_ratchet`).
+    """
+    region_id = BOT_PRICE_REGION_ID if region_id is None else region_id
+    snapshots.prefetch(price_by_region_path(region_id), lambda: update_price_by_region(region_id, force=True))
+    snapshots.prefetch(price_units_path(), lambda: update_price_units(force=True))
 
 
 def load_price_units() -> List[Dict[str, Any]]:
@@ -754,90 +766,38 @@ _has_rows = snapshots.has_rows
 
 
 def load_doctor_prices() -> List[Dict[str, Any]]:
+    """Цены врачей: сегодняшний срез, иначе последний непустой; статус — наблюдателю срезов (`snapshots.report`)."""
     fn = doctor_prices_path()
     if _has_rows(fn):
-        return jsonl_read(fn)
+        return snapshots.report(fn, fn, jsonl_read(fn)).rows
     # Сегодняшнего среза нет или он пуст: срез датирован по часам сервера, и с
     # полуночи до обновления в 08:15 по Самаре его нет каждый день. Сборка — сотни
     # запросов к МИС и минуты; внутри запроса пациента её не делаем, берём последний
     # непустой срез. Свежий соберёт фоновое обновление (08:15 или старт сервиса).
     previous = _latest_nonempty_doctor_prices(fn)
     if previous is not None:
-        return jsonl_read(previous)
+        return snapshots.report(fn, previous, jsonl_read(previous)).rows
     if fn.exists():
-        return []  # пустой срез пересоберёт фон, не первый спросивший пациент
-    update_doctor_prices()  # срезов нет совсем — первый запуск
-    return jsonl_read(fn)
-
-
-async def _refresh_doctor_prices_once() -> None:
-    """
-    Обновляет doctor_prices и связанные справочники прайса в фоновом режиме.
-
-    :return: None
-    """
-
+        return snapshots.report(fn, None).rows  # пустой срез пересоберёт фон, не первый спросивший пациент
     try:
-        await asyncio.to_thread(update_doctor_prices, True)
-        log.info("✅ [DAILY REFRESH] doctor_prices обновлен")
-    except Exception as e:
-        log.warning("⚠️ [DAILY REFRESH] doctor_prices refresh failed: %s", e)
-    try:
-        await asyncio.to_thread(update_price_units, True)
-        log.info("✅ [DAILY REFRESH] priceUnits обновлен")
-    except Exception as e:
-        log.warning("⚠️ [DAILY REFRESH] priceUnits refresh failed: %s", e)
+        update_doctor_prices()  # срезов нет совсем — первый запуск
+    except Exception:
+        snapshots.report(fn, None)  # сборка не удалась — срез недоступен; исключение — вызывающему, как было
+        raise
+    rows = jsonl_read(fn)
+    return snapshots.report(fn, fn if rows else None, rows).rows
 
 
-async def _doctor_prices_refresh_loop() -> None:
-    await snapshots.run_daily(8, 15, _refresh_doctor_prices_once, _now_samara)
-
-
-# Регион бота — Самара (`SAMARA_PRICE_REGION_ID` в messengers_router). Срез прайса
-# датирован по Самаре, ежедневного обновления у него не было: первый ценовой вопрос после
-# полуночи качал прайс прямо в запросе пациента. Теперь — в фоне сразу после смены даты.
+# Регион бота — Самара (`SAMARA_PRICE_REGION_ID` в messengers_router).
 BOT_PRICE_REGION_ID = 3
-_PRICE_LIST_REFRESH_AT = (0, 5)
-_PRICE_LIST_REFRESH_TASK = None
-
-
-async def _refresh_price_list_once() -> None:
-    """Прайс региона бота на сегодня — в фоне; сбой МИС не трогает вчерашний срез."""
-
-    try:
-        await asyncio.to_thread(update_price_by_region, BOT_PRICE_REGION_ID, True)
-        log.info("✅ [DAILY REFRESH] priceByRegion(%s) обновлён", BOT_PRICE_REGION_ID)
-    except Exception as e:
-        log.warning("⚠️ [DAILY REFRESH] priceByRegion(%s) refresh failed: %s", BOT_PRICE_REGION_ID, e)
 
 
 def ensure_daily_price_refresh_started() -> bool:
-    """Запускает фоновый refresh doctor_prices и priceUnits в 08:15 по Самаре,
-    прайса региона бота — в 00:05."""
-    global _PRICE_REFRESH_TASK, _PRICE_LIST_REFRESH_TASK
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return False
+    """Ежедневное обновление срезов — один цикл для всех справочников (`daily_refresh`, решение владельца 18.10:
+    в 07:30 по Самаре, параллельно, повтор каждые 5 минут до успеха). Имя сохранено для вызывающих."""
+    from agent_logic_2.nayka_api import daily_refresh
 
-    if _PRICE_REFRESH_TASK is None or _PRICE_REFRESH_TASK.done():
-        _PRICE_REFRESH_TASK = loop.create_task(_doctor_prices_refresh_loop())
-        log.info("▶️ [DAILY REFRESH] Планировщик doctor_prices запущен")
-        if _PRICE_LIST_REFRESH_TASK is None or _PRICE_LIST_REFRESH_TASK.done():
-            hour, minute = _PRICE_LIST_REFRESH_AT
-            _PRICE_LIST_REFRESH_TASK = loop.create_task(
-                snapshots.run_daily(hour, minute, _refresh_price_list_once, _now_samara)
-            )
-            if not _has_rows(price_by_region_path(BOT_PRICE_REGION_ID)):
-                loop.create_task(_refresh_price_list_once())
-        try:
-            # Пустой сегодняшний срез — тоже повод пересобрать на старте: так срез,
-            # записанный пустым до починки NO-DOCTORS-FOUND-FALSE, не ждёт утра.
-            if not _has_rows(doctor_prices_path()) or not price_units_path().exists():
-                loop.create_task(_refresh_doctor_prices_once())
-        except Exception:
-            pass
-    return True
+    return daily_refresh.ensure_started()
 
 # -----------------------------------------------------------------------------
 # CLI!

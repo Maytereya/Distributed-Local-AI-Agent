@@ -200,6 +200,7 @@ class MessengerRouterConfig:
     choose_readiness: str
     parse_fail_variants: int
     variant_b_wordforms: str
+    mis_honest_degradation: str
     pending_reply: str
     pending_reply_types: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
@@ -514,6 +515,11 @@ settings = Settings(
         # BUG-2026-10-17-VARIANT-B-COMMON-WORD). По умолчанию on с 17.10: офлайн-замер dev — 0 хуже (решение владельца 16.10:
         # включать только при 0 хуже). [MESSENGER_ROUTER] variant_b_wordforms
         variant_b_wordforms=_get_enum("MESSENGER_ROUTER", "variant_b_wordforms", default="on", allowed={"off", "on"}),
+        # Ход (д), видимая деградация (решения владельца 08.10 и 18.10): сбой МИС → честный перевод на оператора вместо
+        # правдоподобной неправды («расписание не найдено», «акций нет», адреса без фильтра врачей); устаревший срез —
+        # приписка «по данным на ДД.ММ» или оператор. off — как было (правило 13.10: видимое поведение под
+        # выключателем, умолчание «как было»). [MESSENGER_ROUTER] mis_honest_degradation
+        mis_honest_degradation=_get_enum("MESSENGER_ROUTER", "mis_honest_degradation", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -649,6 +655,7 @@ MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
+MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_REASK_LIMIT = settings.messenger_router.reask_limit

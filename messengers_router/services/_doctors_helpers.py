@@ -16,6 +16,7 @@ from ..doctor_name_port import (
     surname_variants,
 )
 from ..russian_nlu import normalize_ru, tokens_share_stem
+from ..schedule_parse_watch import unparsed
 from ..service_phrase import extract_service_phrase
 from ..specialty_parser import (
     ENDOSCOPY_SERVICE_RE as _ENDOSCOPY_SERVICE_RE,
@@ -886,10 +887,13 @@ def _iter_slot_datetimes(schedule: dict[str, Any]) -> list[datetime]:
             for slot in slots:
                 t = str(slot or "").strip()
                 if len(t) < 5:
+                    if t:
+                        unparsed("slot", f"{day_date} {t}")  # DATA-15: обрывок времени — пропуск со счётчиком
                     continue
                 try:
                     out.append(datetime.fromisoformat(f"{day_date}T{t[:5]}:00"))
                 except Exception:
+                    unparsed("slot", f"{day_date} {t[:5]}")  # DATA-15: пропуск слота — со счётчиком
                     continue
     return out
 

@@ -372,34 +372,3 @@ def test_load_doctor_prices_does_not_rebuild_in_request_when_today_snapshot_is_e
     monkeypatch.setattr(api_price, "update_doctor_prices", rebuild_in_request)
 
     assert api_price.load_doctor_prices() == []
-
-
-def test_service_start_rebuilds_empty_today_snapshot_in_background(monkeypatch, tmp_path: Path):
-    import asyncio
-
-    today = tmp_path / "doctor_prices_20260930.jsonl"
-    today.write_text("", encoding="utf-8")
-    units = tmp_path / "price_units_20260930.jsonl"
-    units.write_text('{"id": 146}\n', encoding="utf-8")
-    monkeypatch.setattr(api_price, "doctor_prices_path", lambda date=None: today)
-    monkeypatch.setattr(api_price, "price_units_path", lambda date=None: units)
-    monkeypatch.setattr(api_price, "_PRICE_REFRESH_TASK", None)
-    calls: list[str] = []
-
-    async def fake_refresh_once():
-        calls.append("refresh")
-
-    async def idle_loop():
-        await asyncio.sleep(3600)
-
-    monkeypatch.setattr(api_price, "_refresh_doctor_prices_once", fake_refresh_once)
-    monkeypatch.setattr(api_price, "_doctor_prices_refresh_loop", idle_loop)
-
-    async def service_start():
-        assert api_price.ensure_daily_price_refresh_started()
-        await asyncio.sleep(0)
-        api_price._PRICE_REFRESH_TASK.cancel()
-
-    asyncio.run(service_start())
-
-    assert calls == ["refresh"]

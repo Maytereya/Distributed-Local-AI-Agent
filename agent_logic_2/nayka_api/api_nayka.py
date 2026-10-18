@@ -322,11 +322,8 @@ def get_yesterday_str() -> str:
 
 
 def get_active_date_str() -> str:
-    """Дата «активного» кэша по Самаре: до 06:00 — вчера, после — сегодня."""
-    now = _now_samara()
-    if now.hour >= 6:
-        return now.strftime("%Y%m%d")
-    return (now - timedelta(days=1)).strftime("%Y%m%d")
+    """Дата «активного» кэша — «день данных» по Самаре (`snapshots.data_day`): до 07:30 — вчера, после — сегодня."""
+    return snapshots.data_day(_now_samara())
 
 
 def _file_has_doctors(file: Path) -> bool:
@@ -636,7 +633,7 @@ def get_cached_doctors_data() -> list:
         print(f"✅ Нашли кэш за активную дату {active}: {existing_file.name}")
         cached = load_doctors_data(existing_file)
         if not _doctors_schema_outdated(cached):
-            return cached
+            return snapshots.report(existing_file, existing_file, cached).rows
         print(f"ℹ️ Кэш {existing_file.name} в старом формате — перегенерируем через API")
     elif existing_file.exists():
         print(f"⚠️ Кэш за активную дату {active} пустой/битый: {existing_file.name}")
@@ -658,67 +655,48 @@ def get_cached_doctors_data() -> list:
     if doctors:
         save_doctors_data(doctors)
         print("✅ Новые данные о врачах успешно загружены")
-        return doctors
+        return snapshots.report(existing_file, existing_file, doctors).rows
 
     fallback_file = find_existing_doctors_file()
     if fallback_file is not None:
         print(f"⚠️ Используем последний непустой кэш врачей: {fallback_file.name}")
         cached = load_doctors_data(fallback_file)
         if not _doctors_schema_outdated(cached):
-            return cached
+            return snapshots.report(existing_file, fallback_file, cached).rows
         print(f"ℹ️ Фолбэк-кэш {fallback_file.name} в старом формате — верну как временный запас")
-        return cached
+        return snapshots.report(existing_file, fallback_file, cached).rows
 
-    return []
+    return snapshots.report(existing_file, None).rows
 
 # ==========================
-# Ежедневное обновление кэша в 07:45 (Самара)
+# Обновление врачей — шаг ежедневного цикла `daily_refresh` (07:30 по Самаре)
 # ==========================
-_refresh_task = None
 
 async def _refresh_once():
+    # Логгер, а не print: сбой фонового обновления должен быть виден в логе контейнера (DATA-10).
     try:
         # 1) Врачи
         docs = await asyncio.to_thread(get_all_doctors)
         if save_doctors_data(docs):  # старые срезы чистит сама запись — и только после неё
-            print("✅ [DAILY REFRESH] Кэш врачей обновлён")
+            logger.info("[DAILY REFRESH] Кэш врачей обновлён")
         else:
-            print("⚠️ [DAILY REFRESH] МИС не вернула врачей — остаётся прежний срез")
+            logger.warning("[DAILY REFRESH] МИС не вернула врачей — остаётся прежний срез")
         # 2) Заметки call-центра (zametka_button_*.json)
         try:
             from agent_logic_2.nayka_api.doctors_cc_info import get_doctors_cc_info as _get_cc
             await asyncio.to_thread(_get_cc, True)  # force=True
-            print("✅ [DAILY REFRESH] Кэш заметок КЦ обновлён")
-        except Exception as cc_e:
-            print(f"⚠️ [DAILY REFRESH] Ошибка обновления заметок КЦ: {cc_e}")
-    except Exception as e:
-        print(f"⚠️ [DAILY REFRESH] Ошибка обновления кэша: {e}")
-
-async def _daily_refresh_loop():
-    await snapshots.run_daily(7, 45, _refresh_once, _now_samara)
+            logger.info("[DAILY REFRESH] Кэш заметок КЦ обновлён")
+        except Exception:
+            logger.warning("[DAILY REFRESH] Ошибка обновления заметок КЦ", exc_info=True)
+    except Exception:
+        logger.warning("[DAILY REFRESH] Ошибка обновления кэша врачей", exc_info=True)
 
 def ensure_daily_refresh_started() -> bool:
-    """Запускает фоновую задачу обновления кэша в 07:45 по Самаре (idempotent).
-    Возвращает True, если задача запущена (или уже была запущена) внутри запущенного event loop.
-    """
-    global _refresh_task
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # нет активного event loop — запустить позже
-        return False
-    if _refresh_task is None or _refresh_task.done():
-        _refresh_task = loop.create_task(_daily_refresh_loop())
-        print("▶️ [DAILY REFRESH] Планировщик запущен")
-        # Если активного файла нет (например, приложение запущено после 07:45),
-        # дергаем немедленное обновление в фоне, чтобы не тратить время на первый запрос.
-        try:
-            active_file = DATA_DIR / f"doctors_{get_active_date_str()}.jsonl"
-            if not active_file.exists():
-                loop.create_task(_refresh_once())
-        except Exception:
-            pass
-    return True
+    """Ежедневное обновление срезов — один цикл для всех справочников (`daily_refresh`, 07:30 по Самаре, повтор каждые
+    5 минут до успеха). Имя сохранено для вызывающих (`router_preprocessor`)."""
+    from agent_logic_2.nayka_api import daily_refresh
+
+    return daily_refresh.ensure_started()
 
 
 def _units_tree() -> Dict[int, Set[int]]:
@@ -936,15 +914,28 @@ def site_doctor_regions():
         return []
 
 
+_REGIONS_FAILED = {"at": 0.0}
+
+
+def regions_failed() -> bool:
+    """Последний запрос справочника филиалов (`/regions`) упал (сеть, таймаут, 5xx, битый JSON) или МИС вернула пустой
+    список. `site_regions` при сбое отдаёт `[]` — по одному списку сбой от пустоты не отличить (DATA-2)."""
+
+    return _REGIONS_FAILED["at"] > 0
+
+
 def site_regions(*, realtime: bool = False):
-    """Получить список регионов."""
+    """Получить список регионов. Сбой — `[]` и отметка `regions_failed()` (до следующего удачного запроса)."""
     try:
         resp = _session_get(f"{base_url}/regions", realtime=realtime)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
     except (requests.RequestException, ValueError) as e:
-        print(f"Ошибка при получении списка регионов: {e}")
+        logger.warning("Ошибка при получении списка регионов: %s", e)
+        _REGIONS_FAILED["at"] = time.monotonic() or 1.0
         return []
+    _REGIONS_FAILED["at"] = 0.0 if data else (time.monotonic() or 1.0)  # клиника без филиалов не бывает: пусто — сбой
+    return data
 
 
 def site_promotions(*, realtime: bool = False) -> list:
@@ -1116,6 +1107,10 @@ def find_doctor_schedule(
     if region_name:
         region_id = next((r["id"] for r in regions if region_name.lower() in r["name"].lower()), None)
         if not region_id:
+            if not regions and regions_failed() and str(getattr(c, "MR_MIS_HONEST_DEGRADATION", "off")).lower() == "on":
+                # Справочник филиалов не получен — это сбой МИС, а не «такого региона нет» (DATA-2): строка с маркером
+                # сбоя → `ScheduleSourceUnavailable` → честный перевод `service_error_schedule`.
+                return "Не удалось получить список регионов: справочник филиалов МИС недоступен."
             return f"Регион '{region_name}' не найден."
 
     # --- Получаем врачей (шапка: TTL-кэш; ошибка не кэшируется) ---
