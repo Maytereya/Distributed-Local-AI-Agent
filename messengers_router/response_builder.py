@@ -797,6 +797,15 @@ def build_appointment_step_response(
         allow_doctor_option = not doctor_selected and bool(
             str(entities.get("service_name") or entities.get("test_name") or entities.get("specialty") or "").strip()
         )
+        if addresses:
+            # Бот знает, чего ждёт (принцип 5; класс 5, решение владельца 18.10): ответ на вопрос о филиале читает
+            # предпроверка записи, разбирает LLM (`pending_reply`).
+            extra = (expects.DOCTOR_LIST_OPTION,) if allow_doctor_option else ()
+            expects.ask(
+                expects.Question.APPOINTMENT_BRANCH,
+                kind=expects.PICK,
+                options=(*addresses, *extra, expects.ANY_BRANCH_OPTION),
+            )
         return ResponseEnvelope(
             text=appointment_text_branch_prompt(
                 service,

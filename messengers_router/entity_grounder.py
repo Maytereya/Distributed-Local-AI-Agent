@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import turn_understanding
+from . import pending_reply, turn_understanding
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
@@ -254,6 +254,18 @@ def _apply_service_verdict(
     else:
         out[BOOKING_SERVICE_OPTIONS_KEY] = list(verdict.names)
     return None
+
+
+def _branch_answer_keeps_target(*, label: str, user_text: str, state: SessionState) -> bool:
+    """Ответ на вопрос о филиале в записи, у которой уже есть цель (врач, специальность или услуга)."""
+
+    if label != "APPOINTMENT":
+        return False
+    answer = pending_reply.branch_reply(user_text)
+    if answer is None or answer[0] == "new_topic":
+        return False
+    entities = state.last_entities
+    return bool(entities.get("service_name") or entities.get("specialty") or entities.get("doctor_name") or entities.get("doctor_id"))
 
 
 def _is_verbatim_catalog_name(value: str, user_text: str) -> bool:
@@ -569,6 +581,13 @@ async def ground_decision_entities(
                     flags.add("entity_grounded_city")
             else:
                 flags.add("entity_dropped_unknown_city")
+            continue
+
+        if key == "service_name" and _branch_answer_keeps_target(label=label, user_text=user_text, state=state):
+            # Ход — ответ на вопрос «Какой филиал вам удобен?» (решение LLM или запасной путь предпроверки записи): услугу
+            # реплика не называет, цель записи остаётся прежней. Иначе слова об адресе становились «услугой»: «до скольки
+            # работает филиал на Победы?» → «Похоже, вы имели в виду «Послеоперационная консультация уролога»?» (свип 18.10).
+            flags.add("entity_ignored_service_in_branch_answer")
             continue
 
         if key == "service_name":
