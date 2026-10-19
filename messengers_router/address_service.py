@@ -36,16 +36,6 @@ def enabled() -> bool:
     return str(getattr(_cfg, "MR_ADDRESS_SERVICE_LLM", "off") or "").strip().lower() == "on"
 
 
-def llm_dropped_service(flags: Any) -> bool:
-    """Разбор хода снял услугу по решению LLM (а не потому, что правила её не нашли): `booking_service_<статус>` с
-    внятным статусом и `entity_dropped_unverified_service_name` (`entity_grounder._apply_service_verdict`)."""
-
-    flags = set(flags or ())
-    if "entity_dropped_unverified_service_name" not in flags:
-        return False
-    return any(f.startswith("booking_service_") and f != "booking_service_unavailable" for f in flags)
-
-
 @dataclass(frozen=True)
 class AddressServiceChoice:
     status: str  # picked | none_fit | unavailable | no_candidates

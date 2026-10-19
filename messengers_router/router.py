@@ -32,6 +32,7 @@ from .entity_grounder import (
     BOOKING_SERVICE_OPTIONS_KEY,
     ground_decision_entities,
     sanitize_doctor_entities,
+    service_dropped_by_llm,
     verify_doctor_entities_in_decision,
 )
 from .flow_policy import (
@@ -1567,7 +1568,7 @@ def _suppress_grounder_rejected_slots(
         if (
             slot == "service_name"
             and value
-            and not (booking_slots.suppress_enabled() and booking_slots.service_rejected_by_llm(flags))
+            and not (booking_slots.suppress_enabled() and service_dropped_by_llm(flags))
             and resolve_price_service_name_from_catalog(value)
         ):
             continue

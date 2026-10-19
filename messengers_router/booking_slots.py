@@ -31,7 +31,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 from .choice import Option, Status, Task, choose
 from .runtime_config import config as _cfg
@@ -53,16 +52,6 @@ def suppress_enabled() -> bool:
     """`slot_suppress_llm = on`."""
 
     return _on("MR_SLOT_SUPPRESS_LLM")
-
-
-def service_rejected_by_llm(flags: Any) -> bool:
-    """Услугу этого хода сняла LLM (выбор строки прайса, `entity_grounder._apply_service_verdict`), а не правила: флаг
-    снятия и внятный статус выбора `booking_service_<статус>` (недоступна — не решение)."""
-
-    flags = set(flags or ())
-    if "entity_dropped_unverified_service_name" not in flags:
-        return False
-    return any(f.startswith("booking_service_") and f not in ("booking_service_unavailable", "booking_service_strong") for f in flags)
 
 
 async def confirms_booking_specialty(user_text: str, specialty: str) -> bool:

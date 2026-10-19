@@ -27,6 +27,7 @@ import pytest
 from ollama import GenerateResponse
 
 from evalbench import world as ev_world
+from messengers_router.entity_grounder import service_dropped_by_llm
 from messengers_router import address_service, choice, llm_runtime
 from messengers_router.choice import Option
 from messengers_router.services import Services, _prices_helpers
@@ -225,7 +226,7 @@ def test_turn_llm_rejection_is_final_for_the_address_tool(mini_prod_world, monke
     off = _turn(mini_prod_world, monkeypatch, "где сделать магнитотерапию", switch="off", llm=_LLM(None, price=lambda rows: []))
 
     assert on["label"] == off["label"] == "ADDRESS"
-    assert address_service.llm_dropped_service(on["flags"]) and address_service.llm_dropped_service(off["flags"]), on["flags"]
+    assert service_dropped_by_llm(on["flags"]) and service_dropped_by_llm(off["flags"]), on["flags"]
     assert _LAB in off["addresses"], off
     assert on_llm.address_calls == []
     assert sorted(on["addresses"]) == sorted(_BRANCHES), on
@@ -241,10 +242,10 @@ def test_endpoint_without_llm_is_as_before(question, mini_prod_world, monkeypatc
 
 
 def test_llm_dropped_service_needs_a_verdict():
-    assert address_service.llm_dropped_service({"entity_dropped_unverified_service_name", "booking_service_none_fit"})
-    assert not address_service.llm_dropped_service({"entity_dropped_unverified_service_name"})  # сняли правила, не LLM
-    assert not address_service.llm_dropped_service({"entity_dropped_unverified_service_name", "booking_service_unavailable"})
-    assert not address_service.llm_dropped_service({"booking_service_picked"})  # не снята
+    assert service_dropped_by_llm({"entity_dropped_unverified_service_name", "booking_service_none_fit"})
+    assert not service_dropped_by_llm({"entity_dropped_unverified_service_name"})  # сняли правила, не LLM
+    assert not service_dropped_by_llm({"entity_dropped_unverified_service_name", "booking_service_unavailable"})
+    assert not service_dropped_by_llm({"booking_service_picked"})  # не снята
 
 
 def test_prompt_renders_question_and_rows():

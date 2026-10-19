@@ -23,6 +23,7 @@ import pytest
 from ollama import GenerateResponse
 
 from evalbench import world as ev_world
+from messengers_router.entity_grounder import service_dropped_by_llm
 from messengers_router import booking_slots, choice, llm_runtime
 from messengers_router.choice import Option
 
@@ -156,10 +157,10 @@ def test_specialty_prompt_renders_question_and_candidate():
 
 
 def test_service_rejected_by_llm_needs_a_verdict():
-    assert booking_slots.service_rejected_by_llm({"entity_dropped_unverified_service_name", "booking_service_not_a_service"})
-    assert booking_slots.service_rejected_by_llm({"entity_dropped_unverified_service_name", "booking_service_none_fit"})
-    assert not booking_slots.service_rejected_by_llm({"entity_dropped_unverified_service_name"})
-    assert not booking_slots.service_rejected_by_llm({"entity_dropped_unverified_service_name", "booking_service_unavailable"})
+    assert service_dropped_by_llm({"entity_dropped_unverified_service_name", "booking_service_not_a_service"})
+    assert service_dropped_by_llm({"entity_dropped_unverified_service_name", "booking_service_none_fit"})
+    assert not service_dropped_by_llm({"entity_dropped_unverified_service_name"})
+    assert not service_dropped_by_llm({"entity_dropped_unverified_service_name", "booking_service_unavailable"})
 
 
 # --- C2: подавитель A′-1 — отвергнутую LLM услугу буквы не воскрешают --------------------------------------------------
@@ -177,7 +178,7 @@ def test_service_rejected_by_llm_is_not_resurrected(question, booking_world, mon
     on = _dialog(booking_world, monkeypatch, [question], switches={"MR_SLOT_SUPPRESS_LLM": "on"}, llm=_LLM({_PRICE_MARK: _NONE_FIT}))
     off = _dialog(booking_world, monkeypatch, [question], switches={"MR_SLOT_SUPPRESS_LLM": "off"}, llm=_LLM({_PRICE_MARK: _NONE_FIT}))
 
-    assert booking_slots.service_rejected_by_llm(on[0]["flags"]), on[0]["flags"]
+    assert service_dropped_by_llm(on[0]["flags"]), on[0]["flags"]
     assert not on[0]["entities"].get("service_name"), on[0]["entities"]
     assert off[0]["entities"].get("service_name") == "Гастроскопию"  # как было
     assert on[0]["text"] == off[0]["text"]  # ответ этого хода тот же — честный отказ

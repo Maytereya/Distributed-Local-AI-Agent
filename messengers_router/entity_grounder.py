@@ -228,6 +228,18 @@ _LLM_JUDGED_SERVICE_LABELS = frozenset({"APPOINTMENT", "ADDRESS"})
 BOOKING_SERVICE_CLARIFY_KEY = "_booking_service_clarify"
 
 
+def service_dropped_by_llm(flags: Any) -> bool:
+    """Услугу этого хода сняла LLM выбора строки прайса (`_apply_service_verdict`), а не правила: флаг снятия
+    `entity_dropped_unverified_service_name` и внятный статус выбора `booking_service_<статус>`. «Недоступна» — не
+    решение; «сильное» совпадение — данные МИС, не LLM. Одно определение для читателей (инструмент адресов, подавитель
+    A′-1; решение владельца 19.10, п. 10)."""
+
+    flags = set(flags or ())
+    if "entity_dropped_unverified_service_name" not in flags:
+        return False
+    return any(f.startswith("booking_service_") and f not in ("booking_service_unavailable", "booking_service_strong") for f in flags)
+
+
 def _apply_service_verdict(
     *, label: str, verdict: Any, canonical: str, phrase: str, out: dict[str, Any], flags: set[str]
 ) -> str | None:
