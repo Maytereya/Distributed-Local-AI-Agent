@@ -310,6 +310,10 @@ def _extract_pending_response(
     if plan.label == "APPOINTMENT" and isinstance(missing, list) and "appointment_action" in missing:
         # «Хотите отменить или перенести запись?» — ответ разберёт `router._handle_appointment_action_pending`.
         expects.ask(expects.Question.APPOINTMENT_ACTION, kind=expects.PICK, options=expects.APPOINTMENT_ACTION_OPTIONS)
+    elif plan.label in pending_answer.SLOT_TOPICS and pending_answer.buttons_on():
+        # Вопрос-слот темы (кнопки «Подготовка к процедуре», «Подобрать анализы» и тот же вопрос текстом): ответ решает
+        # одна функция ответа на висящий вопрос — свободный ответ (решение владельца 19.10, п. 5).
+        expects.ask(expects.Question.SLOT_VALUE, kind=expects.FREE)
     return ResponseEnvelope(
         text=_button_hint(decision)
         or clarification_question(plan.label, missing if isinstance(missing, list) else [], ctx.state.last_entities),
@@ -403,6 +407,7 @@ async def pending_dispatch(
         router._handle_prepare_variant_pending,
         router._handle_compound_price_pending,
         router._handle_secondary_queue_pending,
+        router._handle_slot_value_pending,
     ):
         result = await handler(
             user_text=ctx.text,

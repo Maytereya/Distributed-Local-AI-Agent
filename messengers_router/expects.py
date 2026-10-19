@@ -8,7 +8,8 @@
 переспросов опереться не на что (дизайн `~/Dev/handoffs/2026-10-14_pending_reply_design.md`).
 
 Контракт (общий с клиентом `pending_reply`) — `state.last_entities["_expects"]`, dict:
-- `kind` — `yes_no` | `pick` (выбор из вариантов, которые бот назвал);
+- `kind` — `yes_no` | `pick` (выбор из вариантов, которые бот назвал) | `free` (свободный ответ — значение слота, под
+  `pending_buttons = on`);
 - `type` — тип вопроса (`Question`): по нему читатель находит свой обработчик, выключатель и строку телеметрии;
 - `question` — текст ответа бота, каким его увидел пациент, без персональных данных: ссылки (в ссылке на результат —
   фамилия, год рождения, номер анализа) — `[ссылка]`, ФИО пациента из состояния — `[ФИО]`; не длиннее 500 знаков
@@ -54,6 +55,9 @@ from .runtime_config import config as _cfg
 EXPECTS_KEY = "_expects"
 YES_NO = "yes_no"
 PICK = "pick"
+# Свободный ответ: бот просит назвать значение (процедуру, цель подбора, реквизиты результата), вариантов нет — под
+# `pending_buttons = on` (`pending_answer`).
+FREE = "free"
 QUESTION_MAX_CHARS = 500
 # Под `reask_limit = on`: сколько раз подряд звучит один вопрос; переспрос сверх — оффер оператора (D2.4).
 MAX_ASKS = 2
@@ -98,6 +102,11 @@ class Question(str, Enum):
     # «Какой филиал вам удобен?» — `response_builder` (шаг филиала записи); ответ читает предпроверка записи
     # (`appointment_flow_guard`) — решение владельца 18.10: ответ в домене вопроса — не смена темы, разбирает LLM.
     APPOINTMENT_BRANCH = "appointment_branch"
+    # Вопрос-слот со свободным ответом — значение слота темы `_pending` (под `pending_buttons = on`, решение владельца
+    # 19.10, п. 5): «К какой процедуре нужна подготовка?», «Для какой цели подобрать анализы?» (кнопки и общий вопрос
+    # темы, `orchestrator`), реквизиты результата анализов (`response_builder.build_test_result_response`), «Уточните
+    # название услуги» после «нет» на «Похоже, вы имели в виду …?» (`router._handle_catalog_confirm_pending`).
+    SLOT_VALUE = "slot_value"
 
 
 # Порядок, в котором следующий ход разбирает висящие вопросы: предпроверка записи (`run_appointment_precheck`), затем
@@ -116,12 +125,13 @@ _READING_ORDER = (
     # обработчик пропускает ответ не «да» дальше — «все» читает путь цены. В поле — вопрос, который пациент видел.
     Question.SHOW_ALL,
     Question.SECONDARY_OFFER,
+    Question.SLOT_VALUE,
 )
 
 
 # Вопросы, чей флаг живёт в `_pending` со сроком (`memory.get_pending`): между ходами он истекает сам, поэтому начало
 # хода сверяет с ним поле. У прочих флагов срока нет — их с полем сверяет конец каждого хода.
-_PENDING_SLOT_QUESTIONS = (Question.APPOINTMENT_ACTION, Question.BOOKING_SERVICE)
+_PENDING_SLOT_QUESTIONS = (Question.APPOINTMENT_ACTION, Question.BOOKING_SERVICE, Question.SLOT_VALUE)
 # Недостающий слот записи в `_pending`, которого ждёт вопрос.
 _PENDING_SLOT = {Question.APPOINTMENT_ACTION: "appointment_action", Question.BOOKING_SERVICE: "service_name"}
 
@@ -154,7 +164,7 @@ def read(state: SessionState) -> dict[str, Any] | None:
     except ValueError:
         return None
     asks = raw.get("asks")
-    if raw.get("kind") not in (YES_NO, PICK) or not isinstance(asks, int) or isinstance(asks, bool) or asks < 1:
+    if raw.get("kind") not in (YES_NO, PICK, FREE) or not isinstance(asks, int) or isinstance(asks, bool) or asks < 1:
         return None
     return dict(raw)
 
@@ -191,7 +201,7 @@ def ask(question: Question, *, kind: str = YES_NO, options: Iterable[str] = (), 
     """Бот задаёт вопрос и ставит висящее ожидание. Звать там, где ставится флаг, который читает обработчик ответа.
 
     :param question: тип вопроса
-    :param kind: `yes_no` | `pick`
+    :param kind: `yes_no` | `pick` | `free`
     :param options: варианты, которые бот назвал (для `pick`), — в порядке вопроса
     :param reask: обработчик не разобрал ответ на свой же вопрос и задаёт его снова
     """
@@ -242,6 +252,12 @@ def _armed(state: SessionState, question: Question) -> bool:
         return isinstance(entities.get("_catalog_confirm_pending"), dict)
     if question is Question.APPOINTMENT_ABORT:
         return bool(entities.get("appointment_cancel_pending") or entities.get("appointment_topic_switch_pending"))
+    if question is Question.SLOT_VALUE:
+        pending = entities.get("_pending")
+        if not isinstance(pending, dict) or not isinstance(pending.get("missing"), list) or not pending["missing"]:
+            return False
+        ttl = float(pending.get("ttl") or 0.0)
+        return not (ttl and time.time() - float(pending.get("ts") or 0.0) > ttl)
     if question in _PENDING_SLOT:
         pending = entities.get("_pending")
         if not isinstance(pending, dict) or pending.get("label") != "APPOINTMENT":
@@ -341,6 +357,8 @@ def reask_limit_text(current: Asked) -> str:
 
     if current.kind == PICK and current.options:
         need = "нужно было выбрать: " + " или ".join(f"«{option}»" for option in current.options)
+    elif current.kind == FREE:
+        need = "нужен был ответ на вопрос"
     else:
         need = "нужен был ответ «да» или «нет»"
     return f"Не понял ответ — {need}. {UNCLEAR_OPERATOR_OFFER_TEXT}"

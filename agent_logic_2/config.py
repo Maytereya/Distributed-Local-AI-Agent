@@ -207,13 +207,13 @@ class MessengerRouterConfig:
     booking_specialty_llm: str
     slot_suppress_llm: str
     prepare_vs_booking_llm: str
-    slot_reply_llm: str
     t7_drop_k1: str
     t7_drop_k3: str
     basket_scored_candidates: str
     price_judge_conditions: str
     pending_reply: str
     pending_reply_types: str
+    pending_buttons: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
     reask_limit: str
     parse_fragment_windows: str
@@ -488,6 +488,13 @@ settings = Settings(
         # Сейчас исполняется только operator_offer: LLM может поднять ответ до «да» (перевод), не снять.
         # [MESSENGER_ROUTER] pending_reply_types
         pending_reply_types=_get_str("MESSENGER_ROUTER", "pending_reply_types", default=""),
+        # Вопросы-слоты кнопок и остатки класса 5 — через одну функцию ответа на висящий вопрос (`pending_answer`; решение
+        # владельца 19.10, п. 5): вопрос-слот («К какой процедуре нужна подготовка?», «Для какой цели подобрать анализы?»,
+        # реквизиты результата) ставит `_expects` вида «свободный ответ», ответ решает функция; уточняющий вопрос на «Какой
+        # филиал вам удобен?» получает ответ и тот же вопрос снова; «обе» на составную цену — цены обеих; второе «нет» на
+        # «Похоже, вы имели в виду …?». Действует только под pending_reply = on; off — как было.
+        # [MESSENGER_ROUTER] pending_buttons
+        pending_buttons=_get_enum("MESSENGER_ROUTER", "pending_buttons", default="off", allowed={"off", "on"}),
         # Предел переспросов (D2.4; пункт 5 принципов, инвариант 3bacf58): off — как было (обработчик висящего
         # вопроса переспрашивает без счёта); on — один вопрос звучит не больше двух раз подряд, третьего нет:
         # бот называет нужный ответ и предлагает оператора. [MESSENGER_ROUTER] reask_limit
@@ -561,10 +568,6 @@ settings = Settings(
         # эвристика записи на диагностику) — главную тему выбирает LLM (`choose`, задача `prepare_or_booking`); сбой и
         # «запись» — как было (запись, подготовка вторым намерением); off — как было. [MESSENGER_ROUTER] prepare_vs_booking_llm
         prepare_vs_booking_llm=_get_enum("MESSENGER_ROUTER", "prepare_vs_booking_llm", default="off", allowed={"off", "on"}),
-        # Ответ на вопрос-слот кнопки («К какой процедуре нужна подготовка?», «Для какой цели подобрать анализы?»), который
-        # правила не разобрали: ответ ли это на вопрос, решает LLM (`choose`, задача `slot_reply`); да — реплика целиком —
-        # значение слота, ход — в теме кнопки; сбой и «другая тема» — как было. [MESSENGER_ROUTER] slot_reply_llm
-        slot_reply_llm=_get_enum("MESSENGER_ROUTER", "slot_reply_llm", default="off", allowed={"off", "on"}),
         # T7 K1 (облако 19.10, задача B): защиты `price_list_services` — «одно название прайса покрывает реплику» и
         # «сплошной список — только распознанный целиком». Под разбором хода (`turn_parse`) они решают только на пути
         # правил (`turn_parse.acting_for` = None). on — защит нет: «список или нет» на этом пути решает то же, что
@@ -724,13 +727,13 @@ MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
 MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
 MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm
 MR_PREPARE_VS_BOOKING_LLM = settings.messenger_router.prepare_vs_booking_llm
-MR_SLOT_REPLY_LLM = settings.messenger_router.slot_reply_llm
 MR_T7_DROP_K1 = settings.messenger_router.t7_drop_k1
 MR_T7_DROP_K3 = settings.messenger_router.t7_drop_k3
 MR_BASKET_SCORED_CANDIDATES = settings.messenger_router.basket_scored_candidates
 MR_PRICE_JUDGE_CONDITIONS = settings.messenger_router.price_judge_conditions
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
+MR_PENDING_BUTTONS = settings.messenger_router.pending_buttons
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
 MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows
 MR_PARSE_COMPLETE_WINDOWS = settings.messenger_router.parse_complete_windows
