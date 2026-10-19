@@ -12,7 +12,8 @@
   2) LLM получает реплику и пронумерованный список и возвращает номера строк, которые
      являются той услугой; выдумать позицию она не может — только выбрать номер;
   3) не нашла — предлагает до трёх названий, под которыми услуга бывает в прайсе
-     («гастроскопия» → «ФГДС»); по ним второй круг поиска и второй выбор. Такой термин
+     («гастроскопия» → «ФГДС»); по ним (целиком, а мало — по их словам) второй круг поиска и
+     второй выбор; пустой второй круг — «не нашёл» без вызова LLM. Такой термин
      пишется в журнал: синонимы заносит клиника, не мы (решение владельца 30.09);
   4) особые варианты (cito, капиллярная кровь, к.м.н., на дому…), которых пациент не
      просил, отбрасываются, если среди выбранных есть базовый.
@@ -537,7 +538,17 @@ async def select_price_rows(
         journal_miss([], reason)
         return settle(none_fit(reason))
 
-    pool_by_terms = await asyncio.to_thread(_build_pool, terms, rows, per_text=_PER_TERM_LIMIT)
+    # По словам терминов — как в первом круге: поиск правил требует всех слов термина, и «Эзофагогастродуоденоскопия
+    # с pH-метрией» не находит «Эзофагогастродуоденоскопия (ФГДС)» — второй круг выбирал из пустого или чужого списка
+    # и отвечал «не нашёл» (BUG-2026-10-19-PRICE-ROUND-TWO-POOL).
+    term_words = list(dict.fromkeys(token for term in terms for token in _price_query_tokens(term) if len(token) >= 3))
+    pool_by_terms = await asyncio.to_thread(
+        _build_pool, terms, rows, per_text=_PER_TERM_LIMIT, fallback_texts=term_words
+    )
+    # Пустой список — не вопрос к LLM: выбрать не из чего, ответ «не нашёл» тот же без решения из лимита хода.
+    if not pool_by_terms:
+        journal_miss(terms, reason)
+        return settle(none_fit(reason))
     second = await _ask(question, pool_by_terms)
     if second is None:
         return settle(*unavailable())
