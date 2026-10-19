@@ -13,6 +13,12 @@
   честного отказа в состоянии оставалась фраза пациента (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS, попутно (3);
   инвариант 2 BUG-2026-06-02-02). Под on: услугу, которую отвергла LLM этого хода, резолвер по буквам не воскрешает;
   снятие без суда LLM (правила; ответ на уточнение цены в P3) — как было.
+- `[MESSENGER_ROUTER] prepare_vs_booking_llm` — правила нашли в реплике и запись, и подготовку: «как подготовиться к узи,
+  нужно ли не есть» — «узи» + «нужно» правило записи на диагностику (`policies.detect_appointment_intent`) считает записью,
+  и вопрос о подготовке получал отказ записи «эту услугу я не нашёл…» (BUG-2026-10-18-PREPARE-UZI-AS-BOOKING). Кандидаты —
+  обе темы правил; главную выбирает модуль выбора (`choose`, задача `prepare_or_booking`): «подготовка» — ход идёт в
+  памятку, запись остаётся вторым намерением, только если пациент написал о записи словом; «запись», «ни одна», сбой —
+  как было.
 """
 
 from __future__ import annotations
@@ -59,3 +65,24 @@ async def confirms_booking_specialty(user_text: str, specialty: str) -> bool:
         return False
     choice = await choose(BOOKING_SPECIALTY_TASK, user_text, [Option(id=specialty, text=specialty)])
     return choice.status is Status.PICKED and specialty in choice.ids
+
+
+PREPARE_OR_BOOKING_TASK = Task(name="prepare_or_booking", max_picks=1, num_predict=32, timeout_s=5.0, queue_timeout_ms=1500)
+_PREPARE_OR_BOOKING_OPTIONS = (
+    Option(id="PREPARE", text="Узнать, как подготовиться к процедуре, исследованию или анализу"),
+    Option(id="APPOINTMENT", text="Записаться на приём, процедуру, исследование или анализ"),
+)
+
+
+def prepare_vs_booking_enabled() -> bool:
+    """`prepare_vs_booking_llm = on`."""
+
+    return _on("MR_PREPARE_VS_BOOKING_LLM")
+
+
+async def prepare_wins_over_booking(user_text: str) -> bool:
+    """Правила нашли и запись, и подготовку: главная тема реплики — подготовка (решение LLM). Сбой, «запись», «ни
+    одна» — False (как было)."""
+
+    choice = await choose(PREPARE_OR_BOOKING_TASK, user_text, _PREPARE_OR_BOOKING_OPTIONS)
+    return choice.status is Status.PICKED and choice.ids == ("PREPARE",)

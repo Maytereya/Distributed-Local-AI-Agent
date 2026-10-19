@@ -2881,6 +2881,25 @@ async def _resolve_nlu_decision_before_doctor_guard(
             "matched_regex": list(topic_match.matched_regex),
         }
 
+    secondary = [str(x) for x in (decision.entities.get("secondary_intents") or [])]
+    if (
+        booking_slots.prepare_vs_booking_enabled()
+        and decision.label == "APPOINTMENT"
+        and "PREPARE" in secondary
+        and await booking_slots.prepare_wins_over_booking(user_text)
+    ):
+        # Правила нашли и запись, и подготовку; главная тема по смыслу — подготовка (BUG-2026-10-18-PREPARE-UZI-AS-BOOKING).
+        # Запись остаётся вторым намерением, только если пациент написал о ней словом.
+        rest = [x for x in secondary if x != "PREPARE"]
+        if detect_appointment_action(user_text) == "book":
+            rest.append("APPOINTMENT")
+        entities = {k: v for k, v in decision.entities.items() if k not in ("secondary_intents", "appointment_action")}
+        if rest:
+            entities["secondary_intents"] = rest
+        decision = _copy_decision(
+            decision, label="PREPARE", entities=entities, flags=set(decision.flags) | {"prepare_over_booking_llm"}
+        )
+
     return decision, nlu_debug
 
 

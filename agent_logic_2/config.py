@@ -204,6 +204,7 @@ class MessengerRouterConfig:
     topic_override_llm: str
     booking_specialty_llm: str
     slot_suppress_llm: str
+    prepare_vs_booking_llm: str
     pending_reply: str
     pending_reply_types: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
@@ -535,6 +536,10 @@ settings = Settings(
         # прайса по буквам в состоянии не воскрешает (инвариант 2 BUG-2026-06-02-02); off — как было.
         # [MESSENGER_ROUTER] slot_suppress_llm
         slot_suppress_llm=_get_enum("MESSENGER_ROUTER", "slot_suppress_llm", default="off", allowed={"off", "on"}),
+        # Правила нашли в реплике и запись, и подготовку («как подготовиться к узи, нужно ли не есть»: «узи» + «нужно» —
+        # эвристика записи на диагностику) — главную тему выбирает LLM (`choose`, задача `prepare_or_booking`); сбой и
+        # «запись» — как было (запись, подготовка вторым намерением); off — как было. [MESSENGER_ROUTER] prepare_vs_booking_llm
+        prepare_vs_booking_llm=_get_enum("MESSENGER_ROUTER", "prepare_vs_booking_llm", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -674,6 +679,7 @@ MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
 MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm
+MR_PREPARE_VS_BOOKING_LLM = settings.messenger_router.prepare_vs_booking_llm
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_REASK_LIMIT = settings.messenger_router.reask_limit

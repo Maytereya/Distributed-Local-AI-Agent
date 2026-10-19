@@ -197,3 +197,52 @@ def test_without_llm_verdict_the_catalog_resolved_value_is_kept(monkeypatch):
     monkeypatch.setattr(cfg, "MR_SLOT_SUPPRESS_LLM", "on", raising=False)
     judged = {"entity_dropped_unverified_service_name", "booking_service_none_fit"}
     assert router._suppress_grounder_rejected_slots({"service_name": "Гастроскопию", "specialty": "эндоскопист"}, judged) == {"specialty": "эндоскопист"}
+
+
+# --- C3a: подготовка или запись — главную тему выбирает LLM ----------------------------------------------------------------
+#
+# BUG-2026-10-18-PREPARE-UZI-AS-BOOKING: «как подготовиться к узи, нужно ли не есть» — «узи» + «нужно» правило записи на
+# диагностику считает записью, вопрос о подготовке получал отказ записи «эту услугу я не нашёл…». Инвариант (под
+# `prepare_vs_booking_llm = on`): вопрос «как подготовиться к <услуге>» не уходит в запись, если LLM выбрала подготовку;
+# «запись», «ни одна», сбой, off — как было.
+
+_PREPARE_OR_BOOKING_MARK = "есть слова и о записи, и о подготовке"
+_PREPARE_ON = {"MR_PREPARE_VS_BOOKING_LLM": "on"}
+_PREPARE_QUESTIONS = ["как подготовиться к узи, нужно ли не есть", "нужно ли не есть перед узи", "нужно ли голодать перед узи брюшной полости"]
+
+
+@pytest.mark.parametrize("question", _PREPARE_QUESTIONS)
+def test_preparation_question_is_not_a_booking(question, booking_world, monkeypatch):
+    llm = _LLM({_PREPARE_OR_BOOKING_MARK: _PICK_FIRST})
+    [turn] = _dialog(booking_world, monkeypatch, [question], switches=_PREPARE_ON, llm=llm)
+    [before] = _dialog(booking_world, monkeypatch, [question], switches={"MR_PREPARE_VS_BOOKING_LLM": "off"}, llm=_LLM({}))
+
+    assert before["label"] == "APPOINTMENT", before  # как было: запись (отказ или «на какую услугу вас записать»)
+    assert llm.calls == [_PREPARE_OR_BOOKING_MARK]
+    assert turn["label"] == "PREPARE" and "prepare_over_booking_llm" in turn["flags"], turn
+    assert "онлайн-записи" not in turn["text"] and "вас записать" not in turn["text"], turn["text"]
+
+
+@pytest.mark.parametrize("question", _PREPARE_QUESTIONS[:2])
+@pytest.mark.parametrize("answer", [json.dumps({"picks": [2]}), _PICK_NONE, None], ids=["booking", "none", "down"])
+def test_booking_answer_none_or_failure_is_as_before(question, answer, booking_world, monkeypatch):
+    llm = _LLM({_PREPARE_OR_BOOKING_MARK: answer} if answer is not None else {})
+    [turn] = _dialog(booking_world, monkeypatch, [question], switches=_PREPARE_ON, llm=llm)
+    [before] = _dialog(booking_world, monkeypatch, [question], switches={"MR_PREPARE_VS_BOOKING_LLM": "off"}, llm=_LLM({}))
+
+    assert (turn["label"], turn["text"]) == (before["label"], before["text"])
+
+
+@pytest.mark.parametrize("question", ["как подготовиться к узи", "запишите на узи брюшной полости"])
+def test_no_conflict_no_llm_call(question, booking_world, monkeypatch):
+    llm = _LLM({_PREPARE_OR_BOOKING_MARK: _PICK_FIRST})
+    _dialog(booking_world, monkeypatch, [question], switches=_PREPARE_ON, llm=llm)
+
+    assert _PREPARE_OR_BOOKING_MARK not in llm.calls
+
+
+def test_prepare_or_booking_prompt_renders_both_options():
+    system, user = choice.render(booking_slots.PREPARE_OR_BOOKING_TASK, "нужно ли не есть перед узи", booking_slots._PREPARE_OR_BOOKING_OPTIONS)
+
+    assert "можно ли есть или пить" in system
+    assert "1. Узнать, как подготовиться" in user and "2. Записаться" in user
