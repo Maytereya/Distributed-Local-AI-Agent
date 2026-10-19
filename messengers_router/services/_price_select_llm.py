@@ -43,7 +43,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -97,7 +97,18 @@ PRICE_TASK = Task(
     timeout_s=_LLM_TIMEOUT_S,
     queue_timeout_ms=_LLM_QUEUE_TIMEOUT_MS,
 )
+# Та же задача с уточнённым правилом 3 промпта (BUG-2026-10-17-P2-JUDGE-COLLECTION-CONDITIONS): вопрос о сдаче, подготовке,
+# записи, сроке, «условиях сбора» — не условие услуги. Под `price_judge_conditions = on`; своё имя — свой промпт, своё место в
+# телеметрии и на стенде.
+PRICE_CONDITIONS_TASK = replace(PRICE_TASK, name="price_service_conditions")
 _VARIANT_B_LIMIT = 5
+
+
+def price_task() -> Task:
+    """Задача выбора строки прайса: под `[MESSENGER_ROUTER] price_judge_conditions = on` — с уточнённым правилом 3."""
+
+    on = str(getattr(_cfg, "MR_PRICE_JUDGE_CONDITIONS", "off") or "").strip().lower() == "on"
+    return PRICE_CONDITIONS_TASK if on else PRICE_TASK
 # Причины пустого выбора, при которых LLM не признала в реплике названия услуги: «Цена анализа»
 # (слишком общее), «сможете посчитать» (не услуга). Ни «не нашёл» пациенту, ни синоним клинике.
 _NOT_A_SERVICE_NAME = frozenset({"too_general", "not_a_service"})
@@ -312,7 +323,7 @@ async def _ask(question: str, pool: list[dict[str, Any]]) -> tuple[list[dict[str
     выбора) или None — сбой."""
 
     options = [Option(id=str(index), text=f"{_row_name(row)} — {_row_cost(row)} руб.") for index, row in enumerate(pool)]
-    choice = await choose(PRICE_TASK, question, options)
+    choice = await choose(price_task(), question, options)
     if choice.failed:  # сбой и мусор — решение политики (L-13) или прежний ответ правил
         return None
     return [pool[index] for index in sorted(int(i) for i in choice.ids)], list(choice.terms), choice.reason
