@@ -8,6 +8,11 @@
   вместо вопроса о филиале (карточка test 18.10, g0792). Кандидат специальности — из правил (`policies.extract_specialty`, слова каталога ролей);
   к ней ли пациент хочет записаться, решает модуль выбора (`choose`, задача `booking_specialty`). Подтвердила — цель
   записи она; «нет», сбой — как было (отказ с оффером оператора).
+- `[MESSENGER_ROUTER] slot_suppress_llm` — подавитель A′-1 (`router._suppress_grounder_rejected_slots`) держал отвергнутую
+  в этом ходу услугу, если резолвер прайса находил по ней хоть что-то по буквам («Гастроскопию» → «Гастрин»): после
+  честного отказа в состоянии оставалась фраза пациента (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS, попутно (3);
+  инвариант 2 BUG-2026-06-02-02). Под on: услугу, которую отвергла LLM этого хода, резолвер по буквам не воскрешает;
+  снятие без суда LLM (правила; ответ на уточнение цены в P3) — как было.
 """
 
 from __future__ import annotations
@@ -28,6 +33,12 @@ def specialty_enabled() -> bool:
     """`booking_specialty_llm = on`."""
 
     return _on("MR_BOOKING_SPECIALTY_LLM")
+
+
+def suppress_enabled() -> bool:
+    """`slot_suppress_llm = on`."""
+
+    return _on("MR_SLOT_SUPPRESS_LLM")
 
 
 def service_rejected_by_llm(flags: Any) -> bool:

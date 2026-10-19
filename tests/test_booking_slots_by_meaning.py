@@ -160,3 +160,40 @@ def test_service_rejected_by_llm_needs_a_verdict():
     assert booking_slots.service_rejected_by_llm({"entity_dropped_unverified_service_name", "booking_service_none_fit"})
     assert not booking_slots.service_rejected_by_llm({"entity_dropped_unverified_service_name"})
     assert not booking_slots.service_rejected_by_llm({"entity_dropped_unverified_service_name", "booking_service_unavailable"})
+
+
+# --- C2: подавитель A′-1 — отвергнутую LLM услугу буквы не воскрешают --------------------------------------------------
+#
+# BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS, попутно (3): «запишите на гастроскопию» → LLM строки не нашла → честный отказ,
+# но quick-fill клал «Гастроскопию» в состояние снова, а подавитель её держал: резолвер прайса находит по ней «Гастрин».
+# Инвариант (2 BUG-2026-06-02-02 под `slot_suppress_llm = on`): услугу, отвергнутую LLM этого хода, буквы в состоянии
+# не воскрешают; снятие без суда LLM — как было (ответ на уточнение цены, P3).
+
+_NONE_FIT = json.dumps({"picks": [], "reason": "other_service", "search_terms": []})
+
+
+@pytest.mark.parametrize("question", ["запишите на гастроскопию", "хочу записаться на гастроскопию"])
+def test_service_rejected_by_llm_is_not_resurrected(question, booking_world, monkeypatch):
+    on = _dialog(booking_world, monkeypatch, [question], switches={"MR_SLOT_SUPPRESS_LLM": "on"}, llm=_LLM({_PRICE_MARK: _NONE_FIT}))
+    off = _dialog(booking_world, monkeypatch, [question], switches={"MR_SLOT_SUPPRESS_LLM": "off"}, llm=_LLM({_PRICE_MARK: _NONE_FIT}))
+
+    assert booking_slots.service_rejected_by_llm(on[0]["flags"]), on[0]["flags"]
+    assert not on[0]["entities"].get("service_name"), on[0]["entities"]
+    assert off[0]["entities"].get("service_name") == "Гастроскопию"  # как было
+    assert on[0]["text"] == off[0]["text"]  # ответ этого хода тот же — честный отказ
+
+
+def test_without_llm_verdict_the_catalog_resolved_value_is_kept(monkeypatch):
+    # P3 (BUG-2026-06-02-02): ответ на уточнение цены «Общий анализ крови» в ходе TEST_ASSIST — флаг снятия есть,
+    # суда LLM нет: каталожное значение остаётся и под on.
+    from messengers_router import router
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(router, "resolve_price_service_name_from_catalog", lambda value, **_kw: "Общий анализ крови")
+    for switch in ("off", "on"):
+        monkeypatch.setattr(cfg, "MR_SLOT_SUPPRESS_LLM", switch, raising=False)
+        kept = router._suppress_grounder_rejected_slots({"service_name": "Общий анализ крови"}, {"entity_dropped_unverified_service_name"})
+        assert kept == {"service_name": "Общий анализ крови"}, switch
+    monkeypatch.setattr(cfg, "MR_SLOT_SUPPRESS_LLM", "on", raising=False)
+    judged = {"entity_dropped_unverified_service_name", "booking_service_none_fit"}
+    assert router._suppress_grounder_rejected_slots({"service_name": "Гастроскопию", "specialty": "эндоскопист"}, judged) == {"specialty": "эндоскопист"}

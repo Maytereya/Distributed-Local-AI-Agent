@@ -203,6 +203,7 @@ class MessengerRouterConfig:
     mis_honest_degradation: str
     topic_override_llm: str
     booking_specialty_llm: str
+    slot_suppress_llm: str
     pending_reply: str
     pending_reply_types: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
@@ -530,6 +531,10 @@ settings = Settings(
         # реплики, когда услугу из неё LLM не подтвердила («На какое время запись к неврологу»), — кандидат правил,
         # подтверждает LLM (`choose`, задача `booking_specialty`); off — как было. [MESSENGER_ROUTER] booking_specialty_llm
         booking_specialty_llm=_get_enum("MESSENGER_ROUTER", "booking_specialty_llm", default="off", allowed={"off", "on"}),
+        # Подавитель A′-1 (`router._suppress_grounder_rejected_slots`): услугу, которую в этом ходу отвергла LLM, резолвер
+        # прайса по буквам в состоянии не воскрешает (инвариант 2 BUG-2026-06-02-02); off — как было.
+        # [MESSENGER_ROUTER] slot_suppress_llm
+        slot_suppress_llm=_get_enum("MESSENGER_ROUTER", "slot_suppress_llm", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -668,6 +673,7 @@ MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
+MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_REASK_LIMIT = settings.messenger_router.reask_limit

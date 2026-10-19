@@ -20,7 +20,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import degradation, expects, pending_answer, pending_reply, shown_context, topic_confirm, turn_parse, turn_telemetry, turn_understanding
+from . import booking_slots, degradation, expects, pending_answer, pending_reply, shown_context, topic_confirm, turn_parse, turn_telemetry, turn_understanding
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -1561,8 +1561,15 @@ def _suppress_grounder_rejected_slots(
         if slot not in out or not (flags & reject_flags):
             continue
         value = str(out.get(slot) or "").strip()
-        # Каталожно-подтверждённую услугу не трогаем (она grounded, не re-extract).
-        if slot == "service_name" and value and resolve_price_service_name_from_catalog(value):
+        # Каталожно-подтверждённую услугу не трогаем (она grounded, не re-extract). Под `slot_suppress_llm = on` — кроме
+        # услуги, которую в этом ходу отвергла LLM: резолвер находит её по буквам («Гастроскопию» → «Гастрин»), а
+        # смысл уже решён (принцип 2).
+        if (
+            slot == "service_name"
+            and value
+            and not (booking_slots.suppress_enabled() and booking_slots.service_rejected_by_llm(flags))
+            and resolve_price_service_name_from_catalog(value)
+        ):
             continue
         out.pop(slot, None)
     return out
