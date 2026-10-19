@@ -41,11 +41,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from . import turn_telemetry
 from .mess_types import ResponseEnvelope, SessionState
@@ -212,6 +213,18 @@ def ask(question: Question, *, kind: str = YES_NO, options: Iterable[str] = (), 
         asks = int(prev["asks"]) + 1 if prev is not None and prev.get("type") == question.value else 2
     clean = tuple(text for text in (str(option or "").strip() for option in options) if text)
     _ASKED.set(_ASKED.get() + (Asked(question=question, kind=kind, options=clean, reask=reask, asks=asks),))
+
+
+@contextlib.contextmanager
+def aside() -> Iterator[None]:
+    """Побочный ответ внутри хода (уточняющий вопрос о вопросе бота, `pending_buttons`): вопросы, которые он задал, — не
+    вопросы хода; после него — снова только вопросы хода. Что он спросил — `asked()` внутри блока."""
+
+    token = _ASKED.set(())
+    try:
+        yield
+    finally:
+        _ASKED.reset(token)
 
 
 def _without_links(line: str) -> str:

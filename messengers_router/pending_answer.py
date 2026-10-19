@@ -39,11 +39,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 from . import turn_telemetry
 from .choice import Choice, Option, Status, Task, choose
@@ -222,6 +223,18 @@ def reset() -> None:
     """Начало хода: решения прошлого хода нет."""
 
     _CURRENT.set(None)
+
+
+@contextlib.contextmanager
+def aside() -> Iterator[None]:
+    """Побочный ответ внутри хода (уточняющий вопрос о вопросе бота): обычный путь идёт так, будто вопроса нет; после —
+    решение хода снова видно обработчикам."""
+
+    token = _CURRENT.set(None)
+    try:
+        yield
+    finally:
+        _CURRENT.reset(token)
 
 
 def _anchor(norm: str) -> Outcome | None:
@@ -561,6 +574,20 @@ def slot_answer() -> Answer | None:
 
     found = current(Question.SLOT_VALUE)
     return found if found is not None and found.decided else None
+
+
+def branch_side_question(found: Answer | None) -> bool:
+    """На «Какой филиал вам удобен?» пациент не ответил, а спросил о самом вопросе («а какой ближе к …?», «а сколько стоит
+    приём?»): решение модели «ничего из этого» (правило 4 промпта), без хвоста — под `pending_buttons`."""
+
+    return (
+        buttons_on()
+        and found is not None
+        and found.type == Question.APPOINTMENT_BRANCH.value
+        and found.source is Source.LLM
+        and found.outcome is Outcome.NONE
+        and not found.rest
+    )
 
 
 def branch_answer(text: str) -> tuple[str, str] | None:

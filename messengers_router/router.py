@@ -15,6 +15,7 @@ recovery-политика и сервисные интеграции вынес�
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import re
 from typing import AsyncGenerator, Any
@@ -3524,6 +3525,72 @@ def _build_first_structured_response(
     )
 
 
+# Уточняющий вопрос о вопросе «Какой филиал вам удобен?» отвечается обычным путём, если его тема — справка, которую
+# запись не меняет (адреса и часы, цена, врачи и расписание); иначе — как было.
+_BRANCH_SIDE_LABELS = frozenset({"ADDRESS", "PRICE", "DOCTOR_INFO", "DOCTOR_SCHEDULE"})
+
+
+async def _answer_branch_side_question(
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None,
+    debug: bool,
+) -> ResponseEnvelope | None:
+    """Ответ на уточняющий вопрос о вопросе «Какой филиал вам удобен?» и тот же вопрос снова (`pending_buttons`).
+
+    Было (стенд, `pa_branch_which_closer`, `pa_branch_new_topic`): одна функция решала «ничего из этого» (правило 4
+    промпта — вопрос о вопросе бота), запись шла дальше, и бот печатал тот же список филиалов, не ответив. Стало
+    (принцип 5): вопрос отвечается обычным путём — на копии состояния без флагов оформления (специальность, услуга, город
+    — контекст), так что собранное записи не меняется ни при каком ответе; затем звучит вопрос о филиале с прежними
+    пунктами. Ответ годится, только если его тема — справка (`_BRANCH_SIDE_LABELS`), он не перевод и сам ничего не
+    спросил; иначе None — ход идёт, как было.
+    """
+
+    from .orchestrator import run_pipeline
+
+    raw = expects.read(state)
+    options = tuple((raw or {}).get("options") or ())
+    shown = str((raw or {}).get("question") or "").strip()
+    question = shown.split("\n")[-1].strip() if shown else ""
+    if not options or not question:
+        return None
+    scratch = copy.deepcopy(state)
+    reset_appointment_runtime_state(scratch)
+    memory.clear_pending(scratch)
+    scratch.last_entities.pop(expects.EXPECTS_KEY, None)
+    with pending_answer.aside(), expects.aside():
+        try:
+            ctx = await run_pipeline(user_text, scratch, services=services, memory=memory, runtime_options=runtime_options)
+        except Exception:  # побочный ответ не ломает ход — как было
+            logger.warning("branch_side_question_failed", exc_info=True)
+            return None
+        asked_aside = expects.asked()
+    response, decision = ctx.response, ctx.decision
+    if response is None or decision is None or response.handoff or asked_aside or not str(response.text or "").strip():
+        return None
+    if decision.label not in _BRANCH_SIDE_LABELS:
+        return None
+    from .shown_context import SHOWN_KEY
+
+    if SHOWN_KEY in scratch.last_entities:  # что пациент увидел в побочном ответе — контекст следующего хода
+        state.last_entities[SHOWN_KEY] = scratch.last_entities[SHOWN_KEY]
+    expects.ask(expects.Question.APPOINTMENT_BRANCH, kind=expects.PICK, options=options)
+    return ResponseEnvelope(
+        text=f"{str(response.text).strip()}\n\n{question}",
+        attachments=list(response.attachments or []),
+        handoff=False,
+        state_update=_early_debug_state_update(
+            debug,
+            label=decision.label,
+            handoff=False,
+            flags={"appointment_branch_side_question"},
+            context_action="continue",
+        ),
+    )
+
+
 async def patient_routing_stream(
     user_text: str,
     state: SessionState,
@@ -3654,6 +3721,18 @@ async def patient_routing_stream(
     # обработчик вопроса (`pending_reply.reply_kind_for`). Состояние сессии здесь не меняется.
     if not pending_answer.on():
         await pending_reply.observe_or_act(user_text, state.last_entities, button_id=button_id)
+
+    # Уточняющий вопрос о вопросе «Какой филиал вам удобен?» (`pending_buttons`): ответ обычным путём и тот же вопрос
+    # снова, собранное записи цело.
+    if pending_answer.branch_side_question(answered):
+        side = await _answer_branch_side_question(user_text, state, services, memory, runtime_options, debug)
+        if side is not None:
+            expects.finish_turn(state, side)
+            memory.append_turn(state, role="user", text=said)
+            memory.append_turn(state, role="assistant", text=side.text)
+            update_summary(state, reason="normal")
+            yield side
+            return
 
     precheck = run_appointment_precheck(
         user_text=user_text,

@@ -230,3 +230,72 @@ def test_slot_value_is_decided_only_under_pending_buttons(monkeypatch):
     monkeypatch.setattr(cfg, "MR_PENDING_BUTTONS", "on", raising=False)
     found = asyncio.run(pending_answer.answer("slot_value", "Укажите номер анализа.", (), "нет"))
     assert found is not None and found.outcome is pending_answer.Outcome.NO and found.source is pending_answer.Source.FAST
+
+
+# --------------------------------------------------------------------------- п. 2: уточняющий вопрос о филиале
+#
+# Стенд `pa_branch_which_closer`, `pa_branch_new_topic`: на «Какой филиал вам удобен?» — «а какой ближе к …?», «а сколько
+# стоит приём?». Модель: «ничего из этого» (правило 4 промпта — вопрос о вопросе бота); прод печатал тот же список
+# филиалов, не ответив. Инвариант: уточняющий вопрос о вопросе записи получает ответ обычным путём, и вопрос о филиале
+# звучит снова с прежними пунктами; собранное записи цело при любом ответе; не справка, сбой, off — как было.
+
+_PENDING_MARK = "понять, что пациент ответил на вопрос"
+_BOOK = "хочу записаться к урологу"
+_BRANCH_TAIL = "Какой филиал вам удобен? Или написать список врачей по этой услуге?"
+_COLLECTED = ("specialty", "appointment_flow_active", "_pending")
+
+
+def _classifier(label: str) -> str:
+    return json.dumps({"label": label, "confidence": 0.9, "context_action": "new_topic", "entities": {}})
+
+
+def _branch_llm(reply_label: str | None) -> _LLM:
+    answers: dict[str, Any] = {_PENDING_MARK: json.dumps({"picks": [], "outcome": "none"})}
+    if reply_label is not None:
+        answers[_CLASSIFIER_MARK] = lambda prompt: _classifier(reply_label) if _BOOK not in prompt else _classifier("APPOINTMENT")
+    return _LLM(answers)
+
+
+def _collected(state: dict[str, Any]) -> dict[str, Any]:
+    pending = dict(state.get("_pending") or {})
+    pending.pop("ts", None)
+    return {key: (pending if key == "_pending" else state.get(key)) for key in _COLLECTED}
+
+
+@pytest.mark.parametrize(
+    ("reply", "label", "shows"),
+    [
+        ("а какой ближе к Безымянке?", "ADDRESS", "пр.Кирова"),  # адреса филиалов — ответ справочника, не список записи
+        ("а сколько стоит приём?", "PRICE", "уролог"),  # цена приёма той же специальности
+        ("а во сколько работает филиал на Победы?", "ADDRESS", "Победы"),
+    ],
+)
+def test_side_question_about_the_branch_question_is_answered_and_asked_again(reply, label, shows, booking_world, monkeypatch):  # noqa: F811
+    asked, side, picked = _in_world(booking_world, monkeypatch, [_BOOK, reply, "1"], switches=_ON, llm=_branch_llm(label))
+    off = _in_world(booking_world, monkeypatch, [_BOOK, reply], switches=_OFF, llm=_branch_llm(label))[-1]
+
+    assert asked["text"].endswith(_BRANCH_TAIL), asked["text"]
+    assert side["label"] == label and "appointment_branch_side_question" in side["flags"], side
+    assert shows in side["text"] and side["text"] != asked["text"] and side["text"].endswith("\n\n" + _BRANCH_TAIL), side["text"]
+    assert _collected(side["state"]) == _collected(asked["state"])  # собранное записи цело
+    assert side["state"][expects.EXPECTS_KEY]["type"] == expects.Question.APPOINTMENT_BRANCH.value
+    assert side["state"][expects.EXPECTS_KEY]["options"] == asked["state"][expects.EXPECTS_KEY]["options"]
+    first = asked["state"][expects.EXPECTS_KEY]["options"][0]
+    assert picked["state"].get("branch_name") == first, picked  # «1» после побочного ответа — первый филиал списка
+    assert "appointment_branch_side_question" not in off["flags"]  # как было
+
+
+@pytest.mark.parametrize("label", ["OTHER", None], ids=["not-a-reference-topic", "classifier-down"])
+def test_side_question_without_a_reference_answer_is_as_before(label, booking_world, monkeypatch):  # noqa: F811
+    on = _in_world(booking_world, monkeypatch, [_BOOK, "а какой ближе к Безымянке?"], switches=_ON, llm=_branch_llm(label))[-1]
+    off = _in_world(booking_world, monkeypatch, [_BOOK, "а какой ближе к Безымянке?"], switches=_OFF, llm=_branch_llm(label))[-1]
+
+    assert on["text"] == off["text"] and "appointment_branch_side_question" not in on["flags"]
+
+
+def test_side_question_needs_the_model_decision(booking_world, monkeypatch):  # noqa: F811
+    llm = _LLM({_CLASSIFIER_MARK: lambda prompt: _classifier("ADDRESS") if _BOOK not in prompt else _classifier("APPOINTMENT")})  # ответ — сбой
+    on = _in_world(booking_world, monkeypatch, [_BOOK, "а какой ближе к Безымянке?"], switches=_ON, llm=llm)[-1]
+    off = _in_world(booking_world, monkeypatch, [_BOOK, "а какой ближе к Безымянке?"], switches=_OFF, llm=llm)[-1]
+
+    assert on["text"] == off["text"] and "appointment_branch_side_question" not in on["flags"]
