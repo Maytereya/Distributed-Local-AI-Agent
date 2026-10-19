@@ -75,7 +75,7 @@ def _ranked(retail_rows: list[dict[str, Any]], query: str, *, limit: int) -> lis
     if rows:
         return rows
     # Запасной поиск подстрокой — только строки, где слова позиции стоят в названии целыми словами: короткое обозначение
-    # («лг», «фсг») находится, буква «с» внутри «Самара» — нет.
+    # («лг», «фсг») находится, буква «с» внутри чужого слова — нет.
     words = _normalise_catalog_text(query).split()
     return [
         item["row"]
