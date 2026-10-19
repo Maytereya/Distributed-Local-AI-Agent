@@ -894,6 +894,56 @@ async def _handle_prepare_variant_pending(
     )
 
 
+async def _compound_prices_for_each(
+    chosen: list[str],
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """«Обе» на «Вижу в запросе две услуги» (`pending_buttons`, выбор нескольких пунктов одной функцией): цена каждой
+    услуги — её обычным путём (как на выбор одного пункта), ответы — подряд. Какая-то не дала ответа или ведёт к переводу —
+    None: дальше, как было (первая услуга)."""
+
+    from .shown_context import SHOWN_KEY
+
+    texts: list[str] = []
+    shown: list[str] = []
+    last: RouteDecision | None = None
+    for service_name in chosen:
+        memory.merge_entities(state, {"service_name": service_name}, label="PRICE")
+        decision = RouteDecision(
+            label="PRICE",
+            confidence=0.92,
+            entities={"service_name": service_name, "compound_price_selected": True},
+            flags={"compound_price_selected", "compound_price_all"},
+            needs_handoff=False,
+            context_action="continue",
+            source="compound_price",
+        )
+        plan = build_plan(decision, state, service_name, memory=memory, runtime_options=runtime_options)
+        evidence = await execute_plan(plan, state, services)
+        env = response_build_first_structured_response(
+            flow_label="PRICE", evidence=evidence, state=state, services=services, memory=memory, decision=decision, user_text=service_name
+        )
+        if env is None or env.handoff or not str(env.text or "").strip() or memory.get_pending(state) is not None:
+            return None  # нет цены, перевод или встречный вопрос (город, уточнение) — по одной, как было
+        texts.append(str(env.text).strip())
+        shown.extend(str(name) for name in state.last_entities.get(SHOWN_KEY) or () if str(name or "").strip())
+        last = decision
+    if last is None:
+        return None
+    _clear_compound_price_pending(state)
+    set_secondary_queue(state, [])
+    state.last_entities["_secondary_offer_pending"] = False
+    state.last_entities.pop("secondary_intents", None)
+    # Контекст = показанное (решение владельца 14.10): показаны обе услуги — одной «услуги контекста» нет.
+    state.last_entities[SHOWN_KEY] = list(dict.fromkeys(shown))
+    state.last_entities.pop("service_name", None)
+    state.last_entities.pop("test_name", None)
+    return last, Plan(label="PRICE"), Evidence(items={ek.COMPOUND_PRICE_RESPONSE: {"text": "\n\n".join(texts)}})
+
+
 async def _handle_compound_price_pending(
     *,
     user_text: str,
@@ -941,6 +991,11 @@ async def _handle_compound_price_pending(
 
     reply_kind = pending_answer.kind(compound_q, _rules)
     answered = pending_answer.current(compound_q)
+    every = [item for item in pending_answer.picked_all(compound_q) if item in options]
+    if len(every) >= 2:
+        both = await _compound_prices_for_each(every, state, services, memory, runtime_options)
+        if both is not None:
+            return both
     if reply_kind == "yes":
         selected_service = default_service
     elif answered is not None and answered.decided:

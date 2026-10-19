@@ -137,6 +137,14 @@ def build_catalog_confirm_response(evidence: Evidence) -> ResponseEnvelope | Non
     )
 
 
+def build_compound_price_response(evidence: Evidence) -> ResponseEnvelope | None:
+    """Цены нескольких услуг составной цены подряд — каждая уже построена своим ответом цены (`router`)."""
+
+    payload = evidence.get(ek.COMPOUND_PRICE_RESPONSE)
+    text = str(payload.get("text") or "").strip() if isinstance(payload, dict) else ""
+    return ResponseEnvelope(text=text, attachments=[], handoff=False) if text else None
+
+
 def build_catalog_health_response(evidence: Evidence) -> ResponseEnvelope | None:
     payload = evidence.get(ek.CATALOG_HEALTH_RESPONSE)
     if not isinstance(payload, dict):
@@ -855,6 +863,7 @@ def build_first_structured_response(
         lambda: build_catalog_health_response(evidence),
         lambda: build_operator_offer_response(evidence),
         lambda: build_readiness_response(evidence),
+        lambda: build_compound_price_response(evidence),
         lambda: build_unsupported_catalog_response(evidence, state, memory),
         lambda: build_main_index_info_response(evidence),
         lambda: build_service_bundle_response(flow_label, evidence, state),

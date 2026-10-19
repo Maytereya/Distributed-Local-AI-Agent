@@ -34,7 +34,10 @@
   виду …?»): исход «это ответ на вопрос» (`ANSWER`) / «не могу ответить» (`NO`) / другая тема / пауза / ничего. Сужение без
   LLM — правила уже разобрали значение слота (`filled`: «колоноскопия», «Иванов, 1989, Бг, 123») или вся реплика —
   голый отказ; иначе LLM — своя задача `FREE_TASK` (промпт `choose_pending_free_reply`: у вопроса нет вариантов, а
-  исход «ответ» — не «да»). Прежний отдельный путь `booking_slots.slot_reply_llm` (задача `slot_reply`) снят — один путь.
+  исход «ответ» — не «да»). Прежний отдельный путь `booking_slots.slot_reply_llm` (задача `slot_reply`) снят — один путь;
+- «обе», «все» на вопрос с вариантами, где можно взять несколько (`TypePolicy.many`: составная цена «Вижу в запросе две
+  услуги: 1. … 2. …»), — исход `PICK` с несколькими пунктами (`Answer.picks`): задача `MANY_TASK` (те же исходы, выбор до
+  N пунктов, промпт `choose_pending_reply_many`); прочие типы — прежняя задача с одним пунктом.
 """
 
 from __future__ import annotations
@@ -106,11 +109,13 @@ class TypePolicy:
     :param veto_is_no: вопрос об отмене оформления: «да» модели гасит только отрицание («не отменяйте», «нет-нет») — до
         «нет» (собранное цело); слова «отмен…» здесь — согласие. Иначе «да» гасит отказ или оговорка
         (`policies._has_refusal_or_hedge`: «не», «передумал», «позже» …) — до «ничего из этого»
+    :param many: можно выбрать несколько показанных пунктов («обе» на составную цену) — под `pending_buttons = on`
     """
 
     polarity: Polarity
     tail_yes: str = "rest"
     veto_is_no: bool = False
+    many: bool = False
 
 
 POLICY: dict[str, TypePolicy] = {
@@ -120,7 +125,7 @@ POLICY: dict[str, TypePolicy] = {
     Question.SECONDARY_OFFER.value: TypePolicy(Polarity.YES_NO),
     Question.SHOW_ALL.value: TypePolicy(Polarity.YES_NO, tail_yes="llm"),
     Question.APPOINTMENT_ACTION.value: TypePolicy(Polarity.PICK),
-    Question.COMPOUND_PRICE.value: TypePolicy(Polarity.PICK),
+    Question.COMPOUND_PRICE.value: TypePolicy(Polarity.PICK, many=True),
     Question.ANESTHESIA.value: TypePolicy(Polarity.PICK),
     Question.BOOKING_SERVICE.value: TypePolicy(Polarity.PICK),
     Question.APPOINTMENT_BRANCH.value: TypePolicy(Polarity.PICK),
@@ -137,6 +142,8 @@ _SLOT_VALUE_MAX = 80
 
 # Свободный ответ на вопрос-слот: вариантов нет, исход «ответ» — свой (у вопроса «да/нет» «да» — согласие, здесь — нет).
 FREE_TASK = Task(name="pending_free_reply", outcomes=("answer", "no", "pause", "new_topic"), timeout_s=8, queue_timeout_ms=3000)
+# Выбор, где можно взять несколько пунктов («обе»): те же исходы, что у `pending_reply.PENDING_TASK`, пунктов — до N.
+MANY_TASK = Task(name="pending_reply_many", outcomes=("yes", "no", "pause", "new_topic"), timeout_s=8, queue_timeout_ms=3000)
 
 # Варианты, которые бот называет словами самого вопроса (не данными состояния) — для сверки в тестах.
 FIXED_OPTIONS: dict[str, tuple[str, ...]] = {
@@ -153,7 +160,8 @@ class Answer:
 
     :param type: тип вопроса (`_expects.type`)
     :param outcome: исход
-    :param pick: текст выбранного пункта (из `_expects.options`) — у `pick`, иначе None
+    :param pick: текст выбранного пункта (из `_expects.options`) — у `pick`, иначе None; выбрано несколько — первый
+    :param picks: все выбранные пункты, если их можно взять несколько (`TypePolicy.many`); иначе пусто
     :param rest: хвост реплики для обычного пути — режет код, не LLM (контракт C) — или None
     :param source: кто решил
     :param text: реплика, к которой привязано решение (обработчик, вызванный мимо точки решения, его не увидит)
@@ -165,6 +173,7 @@ class Answer:
     rest: str | None = None
     source: Source = Source.LLM
     text: str = ""
+    picks: tuple[str, ...] = ()
 
     @property
     def decided(self) -> bool:
@@ -318,10 +327,13 @@ def _is_show_all_reply(text: str) -> bool:
     return _is_price_show_all_request(text)
 
 
-def _from_choice(choice: Choice, options: tuple[str, ...]) -> tuple[Outcome, str | None] | None:
-    """Выбор модуля → (исход, пункт); сбой или не по контракту — None (запасной путь)."""
+def _from_choice(choice: Choice, options: tuple[str, ...], *, many: bool = False) -> tuple[Outcome, str | None] | None:
+    """Выбор модуля → (исход, пункт); сбой или не по контракту — None (запасной путь). `many` — пунктов может быть
+    несколько: пункт — первый по списку, все — `_picked_many`."""
 
     def _pick(ids: tuple[str, ...]) -> str | None:
+        if many and ids and all(str(i).isdigit() for i in ids):
+            ids = (str(min(int(i) for i in ids)),)
         if len(ids) != 1 or not str(ids[0]).isdigit():
             return None
         index = int(ids[0])
@@ -341,6 +353,13 @@ def _from_choice(choice: Choice, options: tuple[str, ...]) -> tuple[Outcome, str
     if choice.status is Status.NONE_FIT:
         return Outcome.NONE, None
     return None
+
+
+def _picked_many(choice: Choice, options: tuple[str, ...]) -> tuple[str, ...]:
+    """Все выбранные пункты в порядке списка."""
+
+    indices = sorted({int(i) for i in choice.ids if str(i).isdigit() and 1 <= int(i) <= len(options)})
+    return tuple(options[i - 1] for i in indices)
 
 
 def _refusal_kinds(norm: str) -> tuple[bool, bool]:
@@ -405,6 +424,7 @@ async def answer(question_type: str, question: str, options: tuple[str, ...], te
         return None
     if policy.polarity is Polarity.FREE:
         return await _free_answer(question_type, question, reply, filled=filled)
+    many = policy.many and buttons_on()
 
     picked = exact_pick(reply, options)
     if picked is None and question_type == Question.SHOW_ALL.value and _is_show_all_reply(reply):
@@ -427,15 +447,16 @@ async def answer(question_type: str, question: str, options: tuple[str, ...], te
     from .pending_reply import PENDING_TASK
 
     try:
-        choice = await choose(PENDING_TASK, reply, [Option(id=str(i), text=o) for i, o in enumerate(options, 1)], asked=question)
+        choice = await choose(MANY_TASK if many else PENDING_TASK, reply, [Option(id=str(i), text=o) for i, o in enumerate(options, 1)], asked=question)
     except Exception:  # новый слой: его сбой не ломает ход — решают прежние правила
         logger.warning("pending_answer_failed", exc_info=True)
         choice = None
-    decided = _from_choice(choice, options) if choice is not None else None
+    decided = _from_choice(choice, options, many=many) if choice is not None else None
     if decided is None:
         return _remember(Answer(question_type, Outcome.NONE, source=Source.FALLBACK, text=reply))
     outcome, pick = decided
-    found = _remember(Answer(question_type, _veto(question_type, outcome, reply), pick=pick, source=Source.LLM, text=reply))
+    picks = _picked_many(choice, options) if many and outcome is Outcome.PICK and choice is not None else ()
+    found = _remember(Answer(question_type, _veto(question_type, outcome, reply), pick=pick, source=Source.LLM, text=reply, picks=picks))
     return _refunded(found)
 
 
@@ -560,6 +581,15 @@ def keeps_flow() -> bool:
         if found is not None and found.decided and found.outcome in (Outcome.PICK, Outcome.YES) and not found.rest:
             return True
     return False
+
+
+def picked_all(question_type: str | Question) -> tuple[str, ...]:
+    """Все выбранные пункты списка, где можно взять несколько («обе»), — решение функции этого хода; иначе пусто."""
+
+    found = current(question_type)
+    if found is None or not found.decided or found.outcome is not Outcome.PICK or found.rest:
+        return ()
+    return found.picks
 
 
 def slot_value(text: str) -> str:

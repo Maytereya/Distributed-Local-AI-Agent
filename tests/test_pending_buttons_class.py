@@ -299,3 +299,75 @@ def test_side_question_needs_the_model_decision(booking_world, monkeypatch):  # 
     off = _in_world(booking_world, monkeypatch, [_BOOK, "а какой ближе к Безымянке?"], switches=_OFF, llm=llm)[-1]
 
     assert on["text"] == off["text"] and "appointment_branch_side_question" not in on["flags"]
+
+
+# --------------------------------------------------------------------------- п. 3: «обе» на составную цену
+#
+# Стенд `pa_compound_both`: на «Вижу в запросе две услуги: 1. … 2. …» ответ «обе, пожалуйста» уходил в чужую тему (подбор
+# анализов). Инвариант: выбор нескольких показанных пунктов (решение модели, `MANY_TASK`) — цены каждой услуги её обычным
+# путём, подряд; один пункт, сбой, off — как было. Пункты — только из показанного списка.
+
+_PAIR = ("ТТГ (TSH) тиреотропный гормон", "Глюкоза")
+_PAIR_PRICES = ("400 руб", "190 руб")
+
+
+def _compound(world_dir, monkeypatch, reply: str, *, switches, llm) -> dict[str, Any]:
+    """Бот уже задал вопрос составной цены (триггер через эндпоинт не найден — дизайн 18.10, §6): состояние сессии
+    готовится при первом чтении."""
+
+    from messengers_router.memory import MemoryStore
+    from tests.test_pending_reply import _expects
+
+    real_get = MemoryStore.get
+
+    def get(self, session_id):
+        state = real_get(self, session_id)
+        if not state.last_entities.get("_prepared"):
+            state.last_entities.update(
+                {
+                    "_prepared": True,
+                    "city": "Самара",
+                    "_compound_price_pending": {"services": list(_PAIR), "default_service": _PAIR[0]},
+                    expects.EXPECTS_KEY: _expects("Вижу в запросе две услуги: 1. ТТГ 2. Глюкоза", "compound_price", kind="pick", options=_PAIR),
+                }
+            )
+        return state
+
+    monkeypatch.setattr(MemoryStore, "get", get)
+    return _in_world(world_dir, monkeypatch, [reply], switches=switches, llm=llm)[-1]
+
+
+def _picks(*numbers: int) -> _LLM:
+    return _LLM({_PENDING_MARK: json.dumps({"picks": list(numbers), "outcome": "none"})})
+
+
+@pytest.mark.parametrize("reply", ["обе, пожалуйста", "давайте обе", "и то и другое", "оба анализа"])
+def test_both_on_a_compound_price_gives_the_price_of_each(reply, mini_prod_world, monkeypatch):  # noqa: F811
+    on = _compound(mini_prod_world, monkeypatch, reply, switches=_ON, llm=_picks(1, 2))
+    off = _compound(mini_prod_world, monkeypatch, reply, switches=_OFF, llm=_picks(1, 2))
+
+    assert on["label"] == "PRICE" and "compound_price_all" in on["flags"], on
+    assert all(price in on["text"] for price in _PAIR_PRICES), on["text"]
+    assert on["text"].index(_PAIR_PRICES[0]) < on["text"].index(_PAIR_PRICES[1])  # в порядке списка
+    assert on["state"].get("_shown_services") == list(_PAIR) and not on["state"].get("service_name")  # контекст = показанное
+    assert "_compound_price_pending" not in on["state"]
+    assert not all(price in off["text"] for price in _PAIR_PRICES), off["text"]  # как было
+
+
+@pytest.mark.parametrize("llm", [_picks(2), _picks(), None], ids=["one-pick", "none", "down"])
+def test_one_pick_none_or_failure_on_a_compound_price_is_as_before(llm, mini_prod_world, monkeypatch):  # noqa: F811
+    llm = llm if llm is not None else _LLM({})
+    on = _compound(mini_prod_world, monkeypatch, "вторую", switches=_ON, llm=llm)
+    off = _compound(mini_prod_world, monkeypatch, "вторую", switches=_OFF, llm=llm)
+
+    assert on["text"] == off["text"] and "compound_price_all" not in on["flags"]
+
+
+def test_many_picks_only_where_the_policy_allows():
+    many = [qtype for qtype, policy in pending_answer.POLICY.items() if policy.many]
+    schema = choice.answer_schema(pending_answer.MANY_TASK, [choice.Option("1", _PAIR[0]), choice.Option("2", _PAIR[1])])
+    system, _user = choice.render(pending_answer.MANY_TASK, "обе", [choice.Option("1", _PAIR[0]), choice.Option("2", _PAIR[1])], asked="Вижу в запросе две услуги")
+
+    assert many == [expects.Question.COMPOUND_PRICE.value]
+    assert schema["properties"]["picks"]["maxItems"] == 2
+    assert "«обе», «оба», «все» — все показанные варианты" in system
