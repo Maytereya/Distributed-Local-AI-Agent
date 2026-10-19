@@ -207,6 +207,10 @@ class MessengerRouterConfig:
     slot_suppress_llm: str
     prepare_vs_booking_llm: str
     slot_reply_llm: str
+    t7_drop_k1: str
+    t7_drop_k3: str
+    basket_scored_candidates: str
+    price_judge_conditions: str
     pending_reply: str
     pending_reply_types: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
@@ -552,6 +556,23 @@ settings = Settings(
         # правила не разобрали: ответ ли это на вопрос, решает LLM (`choose`, задача `slot_reply`); да — реплика целиком —
         # значение слота, ход — в теме кнопки; сбой и «другая тема» — как было. [MESSENGER_ROUTER] slot_reply_llm
         slot_reply_llm=_get_enum("MESSENGER_ROUTER", "slot_reply_llm", default="off", allowed={"off", "on"}),
+        # T7 K1 (облако 19.10, задача B): защиты `price_list_services` — «одно название прайса покрывает реплику» и
+        # «сплошной список — только распознанный целиком». Под разбором хода (`turn_parse`) они решают только на пути
+        # правил (`turn_parse.acting_for` = None). on — защит нет: «список или нет» на этом пути решает то же, что
+        # строит корзина (`_multi_price_items`); off — как было. [MESSENGER_ROUTER] t7_drop_k1
+        t7_drop_k1=_get_enum("MESSENGER_ROUTER", "t7_drop_k1", default="off", allowed={"off", "on"}),
+        # T7 K3: гард третьего стыка корзины (`_multi_price_items`: условие П2 в остатке реплики гасит корзину). Под
+        # разбором его заменяет флаг `unsatisfiable` у позиций разбора (`phrase_price_items`). on — гард снят; off —
+        # как было. [MESSENGER_ROUTER] t7_drop_k3
+        t7_drop_k3=_get_enum("MESSENGER_ROUTER", "t7_drop_k3", default="off", allowed={"off", "on"}),
+        # Кандидаты позиции корзины для выбора LLM — только строки, совпавшие со словами позиции по оценке ранжирования;
+        # запасной поиск подстрокой (обрывок «с» → любые строки с буквой «с», «Выезд на дом» в корзине,
+        # BUG-2026-10-17-BASKET-HOME-VISIT-ROW) кандидатов не даёт. off — как было. [MESSENGER_ROUTER] basket_scored_candidates
+        basket_scored_candidates=_get_enum("MESSENGER_ROUTER", "basket_scored_candidates", default="off", allowed={"off", "on"}),
+        # Выбор строки прайса и суд условия П2 — промпт с уточнённым правилом 3: вопрос о том, как сдать, подготовиться,
+        # записаться, сколько готовится, «условия сбора» — не условие услуги (BUG-2026-10-17-P2-JUDGE-COLLECTION-CONDITIONS);
+        # промпт `choose_price_service_conditions`. off — прежний промпт `choose_price_service`. [MESSENGER_ROUTER] price_judge_conditions
+        price_judge_conditions=_get_enum("MESSENGER_ROUTER", "price_judge_conditions", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -694,6 +715,10 @@ MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
 MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm
 MR_PREPARE_VS_BOOKING_LLM = settings.messenger_router.prepare_vs_booking_llm
 MR_SLOT_REPLY_LLM = settings.messenger_router.slot_reply_llm
+MR_T7_DROP_K1 = settings.messenger_router.t7_drop_k1
+MR_T7_DROP_K3 = settings.messenger_router.t7_drop_k3
+MR_BASKET_SCORED_CANDIDATES = settings.messenger_router.basket_scored_candidates
+MR_PRICE_JUDGE_CONDITIONS = settings.messenger_router.price_judge_conditions
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_REASK_LIMIT = settings.messenger_router.reask_limit

@@ -34,7 +34,7 @@ from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from ._common import _normalise_catalog_text
 from ._price_select_llm import _prefer_base_variants, _record_synonym_suggestion, _row_cost, _row_key, _row_name
-from ._prices_helpers import _annotate_price_rows_with_care_context, _rank_price_rows, phrase_price_items
+from ._prices_helpers import _annotate_price_rows_with_care_context, _rank_price_rows, _score_price_rows, phrase_price_items
 from ._strong_match import strong_rows
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,34 @@ def variants_max() -> int:
     return value if 2 <= value <= _VARIANTS else _VARIANTS
 
 
+def _scored_only() -> bool:
+    """`[MESSENGER_ROUTER] basket_scored_candidates = on` (BUG-2026-10-17-BASKET-HOME-VISIT-ROW)."""
+
+    return str(getattr(_cfg, "MR_BASKET_SCORED_CANDIDATES", "off") or "").strip().lower() == "on"
+
+
+def _ranked(retail_rows: list[dict[str, Any]], query: str, *, limit: int) -> list[dict[str, Any]]:
+    """Ранжированные строки прайса — кандидаты позиции. Под `basket_scored_candidates = on` — строки, у которых
+    ранжирование нашло совпадение слов (оценка > 0); запасной поиск подстрокой («с» — любая строка с буквой «с») — только
+    если слова позиции стоят в названии целыми словами: иначе это шум, из которого LLM корзины однажды выбрала «Выезд на
+    дом» (g0702). Off — как было."""
+
+    if not _scored_only():
+        return _rank_price_rows(retail_rows, query, limit=limit)
+    scored = _score_price_rows(retail_rows, query, limit=limit)
+    rows = [item["row"] for item in scored if isinstance(item.get("row"), dict) and item.get("score", 0) > 0]
+    if rows:
+        return rows
+    # Запасной поиск подстрокой — только строки, где слова позиции стоят в названии целыми словами: короткое обозначение
+    # («лг», «фсг») находится, буква «с» внутри чужого слова — нет.
+    words = _normalise_catalog_text(query).split()
+    return [
+        item["row"]
+        for item in scored
+        if isinstance(item.get("row"), dict) and words and set(words) <= set(_normalise_catalog_text(_row_name(item["row"])).split())
+    ]
+
+
 def _candidates(item: dict[str, Any], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if item.get("unsatisfiable"):
         return []  # уточнение, которого в прайсе нет («по ОМС»): не «почти то» — «Не распознал» (П2)
@@ -63,7 +91,7 @@ def _candidates(item: dict[str, Any], retail_rows: list[dict[str, Any]]) -> list
         return list(item["judge"])  # сильная фраза на суде условия: LLM решает о её строках, не ищет «почти то»
     seen: set[tuple[str, str, str]] = set()
     out: list[dict[str, Any]] = []
-    for row in [*(item.get("prices") or []), *_rank_price_rows(retail_rows, str(item.get("fragment") or item["service_name"]), limit=_PER_ITEM)]:
+    for row in [*(item.get("prices") or []), *_ranked(retail_rows, str(item.get("fragment") or item["service_name"]), limit=_PER_ITEM)]:
         if isinstance(row, dict) and _row_key(row) not in seen:
             seen.add(_row_key(row))
             out.append(row)
@@ -88,7 +116,7 @@ def _word_candidates(fragment: str, retail_rows: list[dict[str, Any]]) -> list[d
         if token.key in _FILLER:
             continue
         word = fragment[token.start : token.end]
-        for row in [*strong_rows(word, retail_rows), *_rank_price_rows(retail_rows, word, limit=_PER_ITEM)]:
+        for row in [*strong_rows(word, retail_rows), *_ranked(retail_rows, word, limit=_PER_ITEM)]:
             if isinstance(row, dict) and _row_key(row) not in seen:
                 seen.add(_row_key(row))
                 out.append(row)
@@ -123,7 +151,7 @@ def _context_candidates(index: int, items: list[dict[str, Any]], retail_rows: li
     seen: set[tuple[str, str, str]] = set()
     out: list[dict[str, Any]] = []
     for query in queries:
-        for row in [*strong_rows(query, retail_rows), *_rank_price_rows(retail_rows, query, limit=_PER_ITEM)]:
+        for row in [*strong_rows(query, retail_rows), *_ranked(retail_rows, query, limit=_PER_ITEM)]:
             if isinstance(row, dict) and _row_key(row) not in seen:
                 seen.add(_row_key(row))
                 out.append(row)
