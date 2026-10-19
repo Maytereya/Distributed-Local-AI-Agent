@@ -246,3 +246,119 @@ def test_prepare_or_booking_prompt_renders_both_options():
 
     assert "можно ли есть или пить" in system
     assert "1. Узнать, как подготовиться" in user and "2. Записаться" in user
+
+
+# --- C3b/C3c: ответ на вопрос-слот кнопки — в теме вопроса, если так решила LLM ------------------------------------------
+#
+# BUG-2026-10-08-PREPARE-ANESTHESIA-IN-QUERY: «Подготовка к процедуре» → «колоноскопия с наркозом» → «К какому анализу или
+# исследованию нужна подготовка?» (извлекатель фразы название не узнал, «наркоз» правила приняли за специальность).
+# BUG-2026-10-08-SLOT-REPLY-LOST-TO-LLM: «Подобрать анализы» → «проверить щитовидку» (пример из подсказки самой кнопки) →
+# классификатор: APPOINTMENT, новая тема → «уточните: к какому врачу…». Инвариант (под `slot_reply_llm = on`): ответ на
+# вопрос-слот кнопки, который LLM признала ответом, разбирается в теме вопроса; модификатор процедуры («с наркозом», «во
+# сне») не заменяет её и сразу выбирает вариант памятки; «другое», сбой, off — как было.
+
+_SLOT_MARK = "отвечает ли пациент на этот вопрос бота"
+_SLOT_ON = {"MR_SLOT_REPLY_LLM": "on"}
+_SLOT_OFF = {"MR_SLOT_REPLY_LLM": "off"}
+_PREPARE_BUTTON = ("menu.appointment.prepare", "Подготовка к процедуре")
+_SUGGEST_BUTTON = ("menu.tests.suggest", "Подобрать анализы")
+_PREPARE_REASK = "К какому анализу или исследованию нужна подготовка?"
+# Классификатор с живой моделью на «проверить щитовидку» после кнопки (проба прода 08.10, `qa-20261008-C7-*`).
+_CLASSIFIER_MARK = "Ты классификатор запросов пациента"
+_CLASSIFIER_NEW_TOPIC = json.dumps({"label": "APPOINTMENT", "confidence": 0.9, "context_action": "new_topic", "entities": {}})
+
+
+def _button_dialog(services, monkeypatch, turns, *, switches: dict[str, str], llm: _LLM) -> list[dict[str, Any]]:
+    from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
+    from messengers_router.memory import MemoryStore
+    from messengers_router.runtime_config import config as cfg
+
+    session = f"slot-{json.dumps(switches)}-{turns[-1]}"
+
+    async def run() -> list[dict[str, Any]]:
+        memory, out = MemoryStore(), []
+        for turn in turns:
+            button_id, text = turn if isinstance(turn, tuple) else ("", turn)
+            req = MessengerGenerateRequest(session_id=session, text=text, debug=True, button_id=button_id)
+            body = json.loads((await messenger_generate_once(req, memory=memory, services=services)).body)
+            dbg = (body.get("state_update") or {}).get("debug") or {}
+            decision = dbg.get("decision") or {}
+            out.append({"text": str(body.get("text") or ""), "label": decision.get("label"), "flags": decision.get("flags") or []})
+        return out
+
+    with monkeypatch.context() as patch:
+        for key, value in switches.items():
+            patch.setattr(cfg, key, value, raising=False)
+        patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
+        patch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+        choice._CACHE.clear()
+        return asyncio.run(run())
+
+
+@pytest.fixture
+def memo_services(monkeypatch):
+    """Памятки ФКС с наркозом и без (как в `test_prepare_kb_memo_variants`): ответ — текст памятки клиники как есть."""
+
+    from tests.test_prepare_kb_memo_variants import services as memo_fixture
+
+    return memo_fixture.__wrapped__(monkeypatch)
+
+
+@pytest.mark.parametrize("reply", ["колоноскопия с наркозом", "колоноскопия во сне", "колоноскопию под наркозом"])
+def test_procedure_with_modifier_gets_the_memo_variant_at_once(reply, memo_services, monkeypatch):
+    from tests.test_prepare_kb_memo_variants import _WITH, _WITHOUT
+
+    llm = _LLM({_SLOT_MARK: _PICK_FIRST})
+    on = _button_dialog(memo_services, monkeypatch, [_PREPARE_BUTTON, reply], switches=_SLOT_ON, llm=llm)[-1]
+    off = _button_dialog(memo_services, monkeypatch, [_PREPARE_BUTTON, reply], switches=_SLOT_OFF, llm=_LLM({}))[-1]
+
+    assert off["text"].startswith(_PREPARE_REASK), off  # как было: переспрос
+    assert llm.calls == [_SLOT_MARK]
+    assert on["label"] == "PREPARE" and "slot_reply_llm" in on["flags"], on
+    assert _WITH.text in on["text"] and _WITHOUT.text not in on["text"], on["text"]
+
+
+def test_name_the_rules_understand_does_not_call_the_llm(memo_services, monkeypatch):
+    llm = _LLM({_SLOT_MARK: _PICK_FIRST})
+    on = _button_dialog(memo_services, monkeypatch, [_PREPARE_BUTTON, "колоноскопия"], switches=_SLOT_ON, llm=llm)[-1]
+    off = _button_dialog(memo_services, monkeypatch, [_PREPARE_BUTTON, "колоноскопия"], switches=_SLOT_OFF, llm=_LLM({}))[-1]
+
+    assert llm.calls == [] and on["text"] == off["text"]  # прежний вопрос «с наркозом или без?»
+
+
+@pytest.mark.parametrize("answer", [json.dumps({"picks": [2]}), _PICK_NONE, None], ids=["other", "none", "down"])
+def test_other_topic_none_or_failure_is_as_before(answer, memo_services, monkeypatch):
+    answers = {_SLOT_MARK: answer} if answer is not None else {}
+    on = _button_dialog(memo_services, monkeypatch, [_PREPARE_BUTTON, "колоноскопия с наркозом"], switches=_SLOT_ON, llm=_LLM(answers))[-1]
+    off = _button_dialog(memo_services, monkeypatch, [_PREPARE_BUTTON, "колоноскопия с наркозом"], switches=_SLOT_OFF, llm=_LLM({}))[-1]
+
+    assert on["text"] == off["text"]
+
+
+def test_example_from_the_button_hint_stays_in_the_button_topic(booking_world, monkeypatch):
+    from messengers_router.services import Services
+
+    llm = _LLM({_CLASSIFIER_MARK: _CLASSIFIER_NEW_TOPIC, _SLOT_MARK: _PICK_FIRST})
+    with ev_world.FrozenWorld(booking_world, "day"):
+        on = _button_dialog(Services(), monkeypatch, [_SUGGEST_BUTTON, "проверить щитовидку"], switches=_SLOT_ON, llm=llm)[-1]
+        off = _button_dialog(
+            Services(), monkeypatch, [_SUGGEST_BUTTON, "проверить щитовидку"], switches=_SLOT_OFF, llm=_LLM({_CLASSIFIER_MARK: _CLASSIFIER_NEW_TOPIC})
+        )[-1]
+
+    assert off["label"] == "APPOINTMENT" and "к какому врачу" in off["text"].lower(), off  # как было: чужая тема
+    assert on["label"] == "TEST_ASSIST" and "slot_reply_llm" in on["flags"], on
+    assert "к какому врачу" not in on["text"].lower(), on["text"]
+
+
+def test_urgent_reply_is_never_kept_in_the_button_topic(memo_services, monkeypatch):
+    llm = _LLM({_SLOT_MARK: _PICK_FIRST})
+    turn = _button_dialog(memo_services, monkeypatch, [_PREPARE_BUTTON, "у меня сильная боль в груди и не могу дышать"], switches=_SLOT_ON, llm=llm)[-1]
+
+    assert turn["label"] == "URGENT" and _SLOT_MARK not in llm.calls, turn
+
+
+def test_slot_reply_prompt_renders_the_bot_question():
+    system, user = choice.render(booking_slots.SLOT_REPLY_TASK, "колоноскопия с наркозом", booking_slots._SLOT_REPLY_OPTIONS, asked=booking_slots.SLOT_REPLY_SLOTS["PREPARE"][1])
+
+    assert "«с наркозом»" in system
+    assert "Вопрос бота: «К какой процедуре или анализу нужна подготовка?" in user and "1. Ответ на вопрос бота" in user

@@ -2349,6 +2349,40 @@ async def _guard_walkin_named_service(
     return to_booking()
 
 
+async def _slot_reply_keeps_topic(
+    decision: RouteDecision,
+    state: SessionState,
+    user_text: str,
+    services: Services,
+    memory: MemoryStore,
+) -> RouteDecision:
+    """Ответ на вопрос-слот кнопки, который правила не разобрали, остаётся в теме вопроса — если так решила LLM.
+
+    Под `slot_reply_llm = on` (`booking_slots`): висит вопрос-слот кнопки («К какой процедуре нужна подготовка?», «Для
+    какой цели подобрать анализы?»), поля ожидания нет (его разбирает `pending_answer`), quick-fill слот не заполняет —
+    модуль выбора решает, ответ ли это. Да — метка темы вопроса, `continue` (смена темы классификатором не сбрасывает
+    вопрос), флаг `slot_reply_llm`: значение слота кладёт блок quick-fill хода. Нет, сбой, срочное — решение как было.
+    """
+
+    if not booking_slots.slot_reply_enabled():
+        return decision
+    if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"} or decision.needs_handoff:
+        return decision
+    pending = memory.get_pending(state)
+    pend_label = str((pending or {}).get("label") or "")
+    if pend_label not in booking_slots.SLOT_REPLY_SLOTS or state.last_entities.get(expects.EXPECTS_KEY):
+        return decision
+    missing = missing_slots(pend_label, state.last_entities)
+    if not missing:
+        return decision
+    quick = quick_fill_entities_from_text(user_text, state.last_entities, missing, services, pending_label=pend_label)
+    if missing_slots(pend_label, {**state.last_entities, **(quick or {})}) != missing:
+        return decision  # правила ответ разобрали — LLM не нужна
+    if not await booking_slots.reply_answers_slot(user_text, pend_label):
+        return decision
+    return _copy_decision(decision, label=pend_label, context_action="continue", flags=set(decision.flags) | {"slot_reply_llm"})
+
+
 async def _apply_post_nlu_guardrails(
     decision: RouteDecision,
     state: SessionState,
@@ -2443,6 +2477,7 @@ async def _apply_post_nlu_guardrails(
             needs_handoff=False,
             context_action="continue",
         )
+    decision = await _slot_reply_keeps_topic(decision, state, user_text, services, memory)
     decision = apply_context_action(decision, state, user_text, memory)
 
     pending_before_overrides = memory.get_pending(state)
@@ -3188,6 +3223,11 @@ async def _complete_route_after_doctor_guard(
                 memory.merge_entities(state, quick, label=pend_label)
         if pend_label == "APPOINTMENT":
             await _backfill_appointment_doctor_from_text(user_text, state, services, memory)
+        slot_reply = booking_slots.SLOT_REPLY_SLOTS.get(str(pend_label or ""))
+        if slot_reply is not None and "slot_reply_llm" in decision.flags and missing_slots(str(pend_label), state.last_entities):
+            # LLM решила, что реплика — ответ на вопрос-слот кнопки (`_slot_reply_keeps_topic`): правила её не разобрали —
+            # реплика целиком в слот; что это за памятка или анализы, решает инструмент темы.
+            memory.merge_entities(state, {slot_reply[0]: booking_slots.slot_value(user_text)}, label=str(pend_label))
 
     fill_date_from_schedule_windows(state, decision.label)
 

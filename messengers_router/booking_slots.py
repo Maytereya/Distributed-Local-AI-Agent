@@ -19,6 +19,14 @@
   обе темы правил; главную выбирает модуль выбора (`choose`, задача `prepare_or_booking`): «подготовка» — ход идёт в
   памятку, запись остаётся вторым намерением, только если пациент написал о записи словом; «запись», «ни одна», сбой —
   как было.
+- `[MESSENGER_ROUTER] slot_reply_llm` — ответ на вопрос-слот кнопки, который правила не разобрали. «Подготовка к процедуре»
+  → «колоноскопия с наркозом»: извлекатель фразы услуги название не узнал, «наркоз» правила приняли за специальность —
+  бот переспрашивал «К какому анализу…» (BUG-2026-10-08-PREPARE-ANESTHESIA-IN-QUERY); «Подобрать анализы» → «проверить
+  щитовидку» (пример из подсказки самой кнопки) уходил в чужую тему (BUG-2026-10-08-SLOT-REPLY-LOST-TO-LLM). Ответ ли
+  реплика на вопрос бота, решает модуль выбора (`choose`, задача `slot_reply`, вопрос бота — в данных хода): да — реплика
+  целиком — значение слота (название процедуры, цель подбора), ход — в теме вопроса, а что это за памятка или анализы,
+  решает инструмент темы по данным; «другое», сбой — как было. Вопросы с полем ожидания (`_expects`) разбирает одна функция
+  ответа на висящий вопрос (`pending_answer`) — здесь их нет; срочное не трогается.
 """
 
 from __future__ import annotations
@@ -86,3 +94,40 @@ async def prepare_wins_over_booking(user_text: str) -> bool:
 
     choice = await choose(PREPARE_OR_BOOKING_TASK, user_text, _PREPARE_OR_BOOKING_OPTIONS)
     return choice.status is Status.PICKED and choice.ids == ("PREPARE",)
+
+
+SLOT_REPLY_TASK = Task(name="slot_reply", max_picks=1, num_predict=32, timeout_s=5.0, queue_timeout_ms=1500)
+# Тема кнопки → (слот, который ждёт её вопрос; вопрос бота — данные хода для LLM). Только слоты, где ответ — слова пациента
+# целиком (название, цель): данные результата анализа (`TEST_RESULT`) — реквизиты, их разбирают правила формата.
+SLOT_REPLY_SLOTS: dict[str, tuple[str, str]] = {
+    "PREPARE": ("service_name", "К какой процедуре или анализу нужна подготовка? Напишите название."),
+    "TEST_ASSIST": ("test_goal", "Для какой цели хотите подобрать анализы? Например: «проверить щитовидку», «витамины», «чекап»."),
+}
+_SLOT_REPLY_OPTIONS = (
+    Option(id="answer", text="Ответ на вопрос бота"),
+    Option(id="other", text="Другой вопрос или просьба"),
+)
+_SLOT_VALUE_MAX = 80
+
+
+def slot_reply_enabled() -> bool:
+    """`slot_reply_llm = on`."""
+
+    return _on("MR_SLOT_REPLY_LLM")
+
+
+def slot_value(user_text: str) -> str:
+    """Реплика как значение слота: одна строка, без концевой пунктуации, разумной длины; длиннее — не ответ-слот."""
+
+    value = " ".join(str(user_text or "").split()).strip(" .,!?;:")
+    return value if 0 < len(value) <= _SLOT_VALUE_MAX else ""
+
+
+async def reply_answers_slot(user_text: str, label: str) -> bool:
+    """Реплика — ответ на вопрос-слот кнопки темы `label` (решение LLM). Сбой, мусор, «другое» — False."""
+
+    slot = SLOT_REPLY_SLOTS.get(label)
+    if slot is None or not slot_value(user_text):
+        return False
+    choice = await choose(SLOT_REPLY_TASK, user_text, _SLOT_REPLY_OPTIONS, asked=slot[1])
+    return choice.status is Status.PICKED and choice.ids == ("answer",)
