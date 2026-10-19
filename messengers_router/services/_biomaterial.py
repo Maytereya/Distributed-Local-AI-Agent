@@ -93,7 +93,11 @@ class _MisVocabularies:
         # одну из четырёх значило бы вернуть класс «дезинформация ценой».
         self.synonym_candidates: dict[str, tuple[str, ...]] = {}
         self.biomat_by_service: dict[str, tuple[frozenset[str], ...]] = {}
+        # Те же материалы как их написала клиника («соскоб с задней стенки глотки»): их видит LLM выбора строки
+        # (`service_mis_names`), а множества слов порядок теряют.
+        self.biomat_texts_by_service: dict[str, tuple[str, ...]] = {}
         self._synonym_index_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = None
+        self._synonyms_by_service_cache: tuple[tuple[Any, ...], dict[str, tuple[str, ...]]] | None = None
 
 
 _VOCAB_CACHE: dict[tuple[str, float], _MisVocabularies] = {}
@@ -163,6 +167,7 @@ def _build_vocabularies(rows: list[dict[str, Any]]) -> _MisVocabularies:
         raw_biomat = row.get("biomatNames")
         values = raw_biomat if isinstance(raw_biomat, list) else [raw_biomat]
         service_phrases: list[frozenset[str]] = []
+        service_texts: list[str] = []
         for value in values:
             for part in str(value or "").split(","):
                 part_tokens = frozenset(_tokens(part))
@@ -171,8 +176,10 @@ def _build_vocabularies(rows: list[dict[str, Any]]) -> _MisVocabularies:
                 biomat_tokens |= set(part_tokens)
                 phrases.add(part_tokens)
                 service_phrases.append(part_tokens)
+                service_texts.append(" ".join(part.split()))
         if name_key and service_phrases:
             vocab.biomat_by_service.setdefault(name_key, tuple(service_phrases))
+            vocab.biomat_texts_by_service.setdefault(name_key, tuple(dict.fromkeys(service_texts)))
 
         raw_syn = row.get("serviceSynonyms")
         syn_values = raw_syn if isinstance(raw_syn, list) else [raw_syn]
@@ -391,6 +398,42 @@ def mis_synonym_service(
 
     found = mis_synonym_candidates(query_text, vocab=vocab)
     return found[0] if len(found) == 1 else None
+
+
+def _synonyms_by_service(vocab: _MisVocabularies) -> dict[str, tuple[str, ...]]:
+    """Обратный словарь «услуга → её синонимы МИС» (кэш на словаре, отпечаток — как у `_synonym_index`)."""
+
+    stamp = (vocab.synonym_candidates, len(vocab.synonym_candidates), vocab.synonym_to_service, len(vocab.synonym_to_service))
+    cached = getattr(vocab, "_synonyms_by_service_cache", None)
+    if cached is not None and cached[0][0] is stamp[0] and cached[0][2] is stamp[2] and cached[0][1::2] == stamp[1::2]:
+        return cached[1]
+    source = vocab.synonym_candidates or {k: (v,) for k, v in vocab.synonym_to_service.items()}
+    by_service: dict[str, list[str]] = {}
+    for key, services in source.items():
+        for service in services:
+            by_service.setdefault(_normalise_input(service), []).append(key)
+    result = {name: tuple(keys) for name, keys in by_service.items()}
+    vocab._synonyms_by_service_cache = (stamp, result)
+    return result
+
+
+def service_mis_names(
+    service_name: str, *, vocab: _MisVocabularies | None = None
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Что МИС знает об услуге сверх названия: (материалы `biomatNames`, синонимы `serviceSynonyms`).
+
+    Для LLM выбора строки цены: в названии строки материала нет («Посев на микрофлору (…)»), и по одному названию
+    LLM отвергала её на «мазок … с задней стенки глотки» (BUG-2026-10-19-PRICE-ROUND-TWO-POOL, g0542). Материал здесь —
+    по-прежнему ПРОВЕРКА («услуга принимает этот материал»), не идентификация: судит LLM по смыслу.
+
+    :param service_name: каноническое название услуги из каталога
+    :param vocab: словари МИС (по умолчанию — дневной срез)
+    :return: материалы и синонимы, как их написала клиника; услуги нет в справочнике — два пустых кортежа
+    """
+
+    vocab = vocab if vocab is not None else _vocabularies()
+    key = _normalise_input(service_name)
+    return vocab.biomat_texts_by_service.get(key, ()), _synonyms_by_service(vocab).get(key, ())
 
 
 def split_biomaterial_tail(text: str) -> tuple[str, str]:

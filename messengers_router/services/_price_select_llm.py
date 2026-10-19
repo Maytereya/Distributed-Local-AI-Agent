@@ -55,6 +55,7 @@ from .. import turn_parse, turn_telemetry
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from ..russian_nlu import tokens_share_stem
+from . import _biomaterial
 from ._common import _normalise_catalog_text
 from ._prices_helpers import (
     _apply_service_synonyms,
@@ -308,11 +309,78 @@ def _policy_label(selection: PriceSelection | None) -> str:
     return {"none_fit": "not_found"}.get(selection.status, selection.status)
 
 
+def _mis_notes_on() -> bool:
+    """`[MESSENGER_ROUTER] price_option_mis_notes = off | on` (облако 19.10, умолчание — как было); мусор — off."""
+
+    return str(getattr(_cfg, "MR_PRICE_OPTION_MIS_NOTES", "off") or "").strip().lower() == "on"
+
+
+# Пометка МИС у позиции — не длиннее этого (знаков) и не больше двух названий каждого вида: длинный перечень материалов
+# (до 1363 знаков у одной строки) сбивал выбор (прямой вызов 19.10). Все пометки списка — не длиннее `_MIS_NOTES_POOL_MAX`
+# (в порядке списка: ответ правил первым): «кровь на ТТГ» пометила бы «кровь из вены» у каждой строки, а промпт — время LLM.
+_MIS_NOTE_MAX = 120
+_MIS_NOTE_ITEMS = 2
+_MIS_NOTES_POOL_MAX = 1200
+
+
+def _named_by_patient(texts: Sequence[str], wanted: set[str]) -> list[str]:
+    """Названия МИС (материалы или синонимы), в которых больше всего слов пациента; ни одного — пусто. Слово — одно
+    с учётом словоформы (`_same_word`)."""
+
+    scored = []
+    for text in texts:
+        tokens = set(_price_query_tokens(text))
+        scored.append((sum(1 for word in wanted if any(_same_word(word, token) for token in tokens)), text))
+    best = max((score for score, _text in scored), default=0)
+    return [text for score, text in scored if best and score == best][:_MIS_NOTE_ITEMS]
+
+
+def _mis_note(row: dict[str, Any], wanted: set[str], vocab: Any = None) -> str:
+    """Что МИС знает о строке и назвал пациент (BUG-2026-10-19-PRICE-ROUND-TWO-POOL, g0542): «Посев на микрофлору (…)»
+    без материала в названии LLM отвергала на «мазок … с задней стенки глотки», хотя по `biomatNames` строка этот
+    материал принимает. Только совпавшее со словами реплики: прочие материалы и синонимы судить не помогают, а длинный
+    список сбивал выбор. Пусто — данных нет или пациент их не назвал: текст позиции как раньше."""
+
+    if not wanted:
+        return ""
+    materials, synonyms = (_named_by_patient(texts, wanted) for texts in _biomaterial.service_mis_names(_row_name(row), vocab=vocab))
+    # Не влезает — меньше названий, затем без синонима (материал — проверка правила 2 промпта), затем только синоним;
+    # названия не режутся.
+    for m, n in ((_MIS_NOTE_ITEMS, _MIS_NOTE_ITEMS), (1, 1), (1, 0), (0, 1)):
+        parts = [f"{label} — {', '.join(items)}" for label, items in (("материал", materials[:m]), ("другое название", synonyms[:n])) if items]
+        note = "по справочнику клиники: " + "; ".join(parts) if parts else ""
+        if note and len(note) <= _MIS_NOTE_MAX:
+            return note
+    return ""
+
+
+def _option_text(row: dict[str, Any], note: str) -> str:
+    text = f"{_row_name(row)} — {_row_cost(row)} руб."
+    return f"{text} ({note})" if note else text
+
+
+def _options(question: str, pool: list[dict[str, Any]]) -> list[Option]:
+    """Позиции для LLM: «название — цена», под `price_option_mis_notes = on` — с пометкой МИС (`_mis_note`) в пределах
+    `_MIS_NOTES_POOL_MAX` на список; число помеченных — в телеметрию хода (`price_mis_notes`)."""
+
+    wanted = set(_price_query_tokens(question)) if _mis_notes_on() else set()
+    vocab = _biomaterial._vocabularies() if wanted else None  # один раз на список: у словаря — проверка среза на диске
+    notes, budget = [], _MIS_NOTES_POOL_MAX
+    for row in pool:
+        note = _mis_note(row, wanted, vocab)
+        note = note if len(note) <= budget else ""
+        budget -= len(note)
+        notes.append(note)
+    if wanted:  # за ход: оба круга выбора
+        turn_telemetry.bump("price_mis_notes", sum(1 for note in notes if note))
+    return [Option(id=str(index), text=_option_text(row, note)) for index, (row, note) in enumerate(zip(pool, notes))]
+
+
 async def _ask(question: str, pool: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str], str] | None:
     """Выбор LLM по пулу кандидатов: (строки «та услуга» в порядке пула, термины, код причины пустого
     выбора) или None — сбой."""
 
-    options = [Option(id=str(index), text=f"{_row_name(row)} — {_row_cost(row)} руб.") for index, row in enumerate(pool)]
+    options = _options(question, pool)
     choice = await choose(PRICE_TASK, question, options)
     if choice.failed:  # сбой и мусор — решение политики (L-13) или прежний ответ правил
         return None
