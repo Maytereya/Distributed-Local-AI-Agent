@@ -202,6 +202,7 @@ class MessengerRouterConfig:
     variant_b_wordforms: str
     mis_honest_degradation: str
     topic_override_llm: str
+    booking_specialty_llm: str
     pending_reply: str
     pending_reply_types: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
@@ -525,6 +526,10 @@ settings = Settings(
         # «чинить через LLM, уходим от совпадения букв к смыслу»; «Ново-Садовая» ловилась словом «новость»).
         # LLM недоступна — тема метку не перебивает. off — как было. [MESSENGER_ROUTER] topic_override_llm
         topic_override_llm=_get_enum("MESSENGER_ROUTER", "topic_override_llm", default="off", allowed={"off", "on"}),
+        # Слоты записи по смыслу (облако 19.10, задача C; `messengers_router/booking_slots.py`). Специальность записи из
+        # реплики, когда услугу из неё LLM не подтвердила («На какое время запись к неврологу»), — кандидат правил,
+        # подтверждает LLM (`choose`, задача `booking_specialty`); off — как было. [MESSENGER_ROUTER] booking_specialty_llm
+        booking_specialty_llm=_get_enum("MESSENGER_ROUTER", "booking_specialty_llm", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -662,6 +667,7 @@ MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
+MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
