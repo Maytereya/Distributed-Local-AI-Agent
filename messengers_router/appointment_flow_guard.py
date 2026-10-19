@@ -279,6 +279,11 @@ def _flow_answer(
         `_UNDECIDED` — решения нет (выключатель, сбой LLM, «ничего из этого») — прежние правила
     """
 
+    slot = pending_answer.slot_answer()
+    if slot is not None and slot.outcome in (pending_answer.Outcome.ANSWER, pending_answer.Outcome.NO):
+        # Ответ на вопрос-слот («Уточните название услуги» после «нет» на «Похоже, вы имели в виду …?»), решённый одной
+        # функцией (`pending_buttons`): его исполняют обработчики и NLU, не правила паузы и отмены записи.
+        return None
     answered = next((found for q in _FLOW_QUESTIONS if (found := pending_answer.current(q)) is not None), None)
     if answered is None or not answered.decided:
         return _UNDECIDED

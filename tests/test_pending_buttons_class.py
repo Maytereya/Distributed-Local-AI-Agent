@@ -371,3 +371,76 @@ def test_many_picks_only_where_the_policy_allows():
     assert many == [expects.Question.COMPOUND_PRICE.value]
     assert schema["properties"]["picks"]["maxItems"] == 2
     assert "«обе», «оба», «все» — все показанные варианты" in system
+
+
+# --------------------------------------------------------------------------- п. 4: второе «нет» на «Похоже, вы имели в виду …?»
+#
+# Стенд `pa_catalog_no_twice` (кандидат `pending_reply = on`: единственный неверный из 33): после первого «нет» бот просит
+# уточнить, но поля ожидания нет — второе «нет» читает предпроверка записи и спрашивает «Отменить текущий процесс записи?».
+# Инвариант (политика `catalog_confirm`): второй отказ — оператор; названная в ответе услуга — обычный путь; первый отказ —
+# свой вопрос уточнения; сбой LLM, off — как было.
+
+_CANONICAL = "Женский чекап Базовый"
+_CATALOG_QUESTION = f"Похоже, вы имели в виду услугу «{_CANONICAL}» (по запросу «женский чекап»). Это верно? Ответьте «да» или «нет»."
+_CATALOG_HANDOFF = "Не удалось точно сопоставить запрос с каталогом. Соединяю с оператором."
+_ABORT = "Отменить текущий процесс записи?"
+
+
+def _catalog(world_dir, monkeypatch, turns, *, label: str, switches, llm) -> list[dict[str, Any]]:
+    """Бот уже спросил «Похоже, вы имели в виду …?» (состояние готовится при первом чтении сессии)."""
+
+    from messengers_router.memory import MemoryStore
+    from tests.test_pending_reply import _expects
+
+    real_get = MemoryStore.get
+
+    def get(self, session_id):
+        state = real_get(self, session_id)
+        if not state.last_entities.get("_prepared"):
+            pending = {"kind": "service", "label": label, "entity_key": "service_name", "canonical": _CANONICAL, "query": "женский чекап"}
+            state.last_entities.update({"_prepared": True, "_catalog_confirm_pending": pending, expects.EXPECTS_KEY: _expects(_CATALOG_QUESTION, "catalog_confirm")})
+            if label == "APPOINTMENT":
+                state.last_entities["appointment_flow_active"] = True
+        return state
+
+    monkeypatch.setattr(MemoryStore, "get", get)
+    return _in_world(world_dir, monkeypatch, turns, switches=switches, llm=llm)
+
+
+def _no_llm(outcome: str = "no") -> _LLM:
+    return _LLM({_FREE_MARK: _free(outcome), _PENDING_MARK: json.dumps({"picks": [], "outcome": "no"})})
+
+
+@pytest.mark.parametrize("second", ["нет, не то", "нет", "не то", "нет, это не та услуга"])
+@pytest.mark.parametrize("label", ["APPOINTMENT", "PRICE"])
+def test_second_refusal_to_did_you_mean_is_the_operator(second, label, mini_prod_world, monkeypatch):  # noqa: F811
+    first, again = _catalog(mini_prod_world, monkeypatch, ["нет", second], label=label, switches=_ON, llm=_no_llm())
+    off = _catalog(mini_prod_world, monkeypatch, ["нет", second], label=label, switches=_OFF, llm=_no_llm())
+
+    assert first["text"].startswith("Хорошо. Уточните, пожалуйста, точное название") and not first["handoff"], first
+    assert first["state"][expects.EXPECTS_KEY]["type"] == expects.Question.SLOT_VALUE.value
+    assert again["handoff"] and again["text"] == _CATALOG_HANDOFF, again
+    assert _ABORT not in again["text"]
+    assert off[1]["text"] != _CATALOG_HANDOFF  # как было
+    if label == "APPOINTMENT" and second == "нет, не то":
+        assert off[1]["text"].startswith(_ABORT), off[1]  # стенд `pa_catalog_no_twice`: петля «Отменить?»
+
+
+def test_service_named_after_the_first_refusal_goes_the_usual_way(mini_prod_world, monkeypatch):  # noqa: F811
+    on = _catalog(mini_prod_world, monkeypatch, ["нет", "нет, мне массаж спины"], label="APPOINTMENT", switches=_ON, llm=_no_llm("answer"))[-1]
+    off = _catalog(mini_prod_world, monkeypatch, ["нет", "нет, мне массаж спины"], label="APPOINTMENT", switches=_OFF, llm=_no_llm("answer"))[-1]
+
+    assert not on["handoff"] and _ABORT not in on["text"] and on["text"] == off["text"], on
+
+
+def _down(_prompt: str) -> str:
+    raise ConnectionError("тест: LLM недоступна")
+
+
+@pytest.mark.parametrize("answer", [_down, "не json", _free("new_topic")], ids=["down", "invalid", "new_topic"])
+def test_second_turn_without_a_refusal_decision_is_as_before(answer, mini_prod_world, monkeypatch):  # noqa: F811
+    answers = {_FREE_MARK: answer, _PENDING_MARK: json.dumps({"picks": [], "outcome": "no"})}
+    on = _catalog(mini_prod_world, monkeypatch, ["нет", "нет, не то"], label="APPOINTMENT", switches=_ON, llm=_LLM(answers))[-1]
+    off = _catalog(mini_prod_world, monkeypatch, ["нет", "нет, не то"], label="APPOINTMENT", switches=_OFF, llm=_LLM(answers))[-1]
+
+    assert on["text"] == off["text"] and not on["handoff"]

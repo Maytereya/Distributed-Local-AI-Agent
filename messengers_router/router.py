@@ -1100,6 +1100,55 @@ def _catalog_refine_prompt(kind: str, label: str) -> str:
     return "Хорошо. Уточните, пожалуйста, точное название услуги."
 
 
+def _catalog_rejected_handoff(state: SessionState) -> tuple[RouteDecision, Plan, Evidence]:
+    """Второй отказ на «Похоже, вы имели в виду …?» — оператор."""
+
+    state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
+    return (
+        RouteDecision(
+            label="OTHER",
+            confidence=0.95,
+            entities={},
+            flags={"catalog_confirm_rejected_handoff"},
+            needs_handoff=False,
+            source="catalog_confirm",
+        ),
+        Plan(label="OTHER"),
+        Evidence(
+            items={
+                "catalog_confirm_response": {
+                    "text": "Не удалось точно сопоставить запрос с каталогом. Соединяю с оператором.",
+                    "handoff": True,
+                }
+            }
+        ),
+    )
+
+
+def _catalog_second_no(state: SessionState, memory: MemoryStore) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Ответ «не могу назвать» («нет, не то») на «Уточните название услуги» после первого «нет» на «Похоже, вы имели в виду
+    …?» — второй отказ, оператор (политика `catalog_confirm`: 2-е «нет» → оператор; `pending_buttons`).
+
+    Было (стенд, `pa_catalog_no_twice`): после первого «нет» вопрос уточнения поля ожидания не ставил, второе «нет» читала
+    предпроверка записи по своим правилам — «Отменить текущий процесс записи?». Вопрос уточнения — тот, что поставил первый
+    отказ: `_pending` с недостающим уточнения (`_catalog_refine_missing_slots`), счётчик отказов ≥ 1. Название услуги в
+    ответе («нет, мне массаж спины» — исход «ответ») — обычный путь, как было.
+    """
+
+    found = pending_answer.slot_answer()
+    if found is None or found.outcome is not pending_answer.Outcome.NO:
+        return None
+    if int(state.last_entities.get(_CATALOG_CONFIRM_REJECTS_KEY) or 0) < 1:
+        return None
+    pending = memory.get_pending(state) or {}
+    label = str(pending.get("label") or "")
+    refine = [_catalog_refine_missing_slots(kind, label) for kind in ("service", "doctor")]
+    if not label or pending.get("missing") not in refine:
+        return None
+    memory.clear_pending(state)
+    return _catalog_rejected_handoff(state)
+
+
 async def _handle_catalog_confirm_pending(
     *,
     user_text: str,
@@ -1110,7 +1159,7 @@ async def _handle_catalog_confirm_pending(
 ) -> tuple[RouteDecision, Plan, Evidence] | None:
     pending = _get_catalog_confirm_pending(state)
     if not pending:
-        return None
+        return _catalog_second_no(state, memory)
 
     label = str(pending.get("label") or "OTHER").strip()
     kind = str(pending.get("kind") or "").strip().lower()
@@ -1172,28 +1221,13 @@ async def _handle_catalog_confirm_pending(
         rejects = int(state.last_entities.get(_CATALOG_CONFIRM_REJECTS_KEY) or 0) + 1
         state.last_entities[_CATALOG_CONFIRM_REJECTS_KEY] = rejects
         if rejects >= _CATALOG_CONFIRM_MAX_REJECTS:
-            state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
-            return (
-                RouteDecision(
-                    label="OTHER",
-                    confidence=0.95,
-                    entities={},
-                    flags={"catalog_confirm_rejected_handoff"},
-                    needs_handoff=False,
-                    source="catalog_confirm",
-                ),
-                Plan(label="OTHER"),
-                Evidence(
-                    items={
-                        "catalog_confirm_response": {
-                            "text": "Не удалось точно сопоставить запрос с каталогом. Соединяю с оператором.",
-                            "handoff": True,
-                        }
-                    }
-                ),
-            )
+            return _catalog_rejected_handoff(state)
         missing_slots = _catalog_refine_missing_slots(kind, label)
         memory.set_pending(state, label=label, missing_slots=missing_slots)
+        if pending_answer.buttons_on():
+            # «Уточните название услуги» — вопрос со свободным ответом: второе «нет» на него («нет, не то») — второй отказ
+            # (`_catalog_second_no`), а не «Отменить процесс записи?» (BUG-2026-10-19-PENDING-BUTTONS-CLASS5, п. 4).
+            expects.ask(expects.Question.SLOT_VALUE, kind=expects.FREE)
         return (
             RouteDecision(
                 label="OTHER",
