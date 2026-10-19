@@ -176,3 +176,4 @@ tests/test_vocabularies_night_snapshot.py
 tests/test_warm_up.py
 tests/test_t7_k1_k3_switches.py
 tests/test_show_all_under_pending_answer.py
+tests/test_basket_candidates_scored.py
