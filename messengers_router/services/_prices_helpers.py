@@ -3353,6 +3353,15 @@ def _strong_phrase_guard_on() -> bool:
     return str(getattr(cfg, "MR_STRONG_PHRASE_GUARD", "llm") or "").strip().lower() == "llm"
 
 
+def _t7_drop(key: str) -> bool:
+    """T7 (снятие эвристик пути цены, облако 19.10): `[MESSENGER_ROUTER] t7_drop_<ключ>` = on — эвристика снята;
+    off (умолчание) — как было."""
+
+    from ..runtime_config import config as cfg
+
+    return str(getattr(cfg, f"MR_T7_DROP_{key.upper()}", "off") or "").strip().lower() == "on"
+
+
 def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Позиции списка из фраз разбора хода (L-15b, шаг 5; `turn_parse.ParsedPhrase`), в их порядке.
 
@@ -3601,12 +3610,13 @@ def price_list_services(
     if len(tokens) < 2 or (not separated and len(tokens) < 4):
         return (), "not_list"
     catalog = _catalog_rows(rows)
-    if _catalog_name_covering(tokens, catalog):
+    drop_k1 = _t7_drop("k1")
+    if not drop_k1 and _catalog_name_covering(tokens, catalog):
         return (), "one_catalog_name"
     items, unrecognized = _multi_price_items(query_text, catalog)
     if not items:
         return (), "not_list"
-    if not separated and unrecognized:
+    if not drop_k1 and not separated and unrecognized:
         return (), "segment_unrecognized"
     return tuple(str(item["service_name"]) for item in items), "list_split" if separated else "list_segment"
 
