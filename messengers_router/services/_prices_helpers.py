@@ -3354,7 +3354,7 @@ def _strong_phrase_guard_on() -> bool:
 
 
 def _t7_drop(key: str) -> bool:
-    """T7 (снятие эвристик пути цены, облако 19.10): `[MESSENGER_ROUTER] t7_drop_<ключ>` = on — эвристика снята;
+    """T7 (снятие эвристик пути цены, облако 19.10): `[MESSENGER_ROUTER] t7_drop_k1` / `t7_drop_k3` = on — эвристика снята;
     off (умолчание) — как было."""
 
     from ..runtime_config import config as cfg
@@ -3539,7 +3539,7 @@ def _multi_price_items(
     # `honest_unrecognized` (это не самостоятельный пункт списка), поэтому гард
     # по-прежнему гасит платный приём на вопрос про полис.
     residue = " ".join(str(part) for part in unrecognized)
-    if residue and _match_drops_unsatisfiable_qualifier(residue, offered_names, retail_rows):
+    if residue and not _t7_drop("k3") and _match_drops_unsatisfiable_qualifier(residue, offered_names, retail_rows):
         return [], []
     return items, unrecognized
 

@@ -35,6 +35,12 @@ _K1_RISKS = [
     "сколько стоит сдать общий анализ крови ферритин глюкоза натощак",
     "сколько стоит оак оам ферритин глюкоза узи",
 ]
+_K3_RISKS = [
+    "сколько стоит ферритин глюкоза по омс",
+    "сколько стоит приём терапевта по ОМС",
+    "сколько стоит мазок на микрофлору с поверхности задней стенки глотки",
+    "ферритин и глюкоза по омс сколько стоят",
+]
 
 
 def _answer(text: str, config: str, extra: dict[str, str], monkeypatch, world_dir, *, case: str = "") -> dict:
@@ -56,7 +62,7 @@ def _answer(text: str, config: str, extra: dict[str, str], monkeypatch, world_di
 
 
 @pytest.mark.parametrize("config", ["deploy_parse", "prod"])
-@pytest.mark.parametrize(("key", "text"), [("MR_T7_DROP_K1", t) for t in _K1_RISKS])
+@pytest.mark.parametrize(("key", "text"), [*(("MR_T7_DROP_K1", t) for t in _K1_RISKS), *(("MR_T7_DROP_K3", t) for t in _K3_RISKS)])
 def test_llm_down_solid_text_answers_the_same_without_the_heuristic(key, text, config, mini_prod_world, monkeypatch):  # noqa: F811
     off = _answer(text, config, {key: "off"}, monkeypatch, mini_prod_world)
     on = _answer(text, config, {key: "on"}, monkeypatch, mini_prod_world)
@@ -64,7 +70,7 @@ def test_llm_down_solid_text_answers_the_same_without_the_heuristic(key, text, c
     assert on == off
 
 
-@pytest.mark.parametrize("key", ["MR_T7_DROP_K1"])
+@pytest.mark.parametrize("key", ["MR_T7_DROP_K1", "MR_T7_DROP_K3"])
 @pytest.mark.parametrize("name", sorted(fallback.CASES))
 def test_fallback_golden_corpus_is_unchanged_without_the_heuristic(key, name, mini_prod_world, monkeypatch):  # noqa: F811
     turn = _answer(fallback.CASES[name].text, "prod", {key: "on"}, monkeypatch, mini_prod_world, case=name)
@@ -89,3 +95,15 @@ def test_k1_switch_removes_both_guards_on_the_rules_path(mini_prod_world, monkey
     monkeypatch.setattr(cfg, "MR_T7_DROP_K1", "on", raising=False)
     assert H.price_list_services(covering, rows=rows)[1] == "list_split"
     assert H.price_list_services(run_on, rows=rows)[1] == "list_segment"
+
+
+def test_k3_switch_removes_the_third_seam_guard(mini_prod_world, monkeypatch):  # noqa: F811
+    from messengers_router.runtime_config import config as cfg
+
+    rows = _catalog(mini_prod_world)
+    text = "сколько стоит ферритин глюкоза по омс"
+    monkeypatch.setattr(cfg, "MR_T7_DROP_K3", "off", raising=False)
+    assert H._multi_price_items(text, rows) == ([], [])
+    monkeypatch.setattr(cfg, "MR_T7_DROP_K3", "on", raising=False)
+    items, _unrecognized = H._multi_price_items(text, rows)
+    assert [item["service_name"] for item in items] == ["Ферритин", "Глюкоза"]

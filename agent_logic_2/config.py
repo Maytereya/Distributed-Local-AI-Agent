@@ -203,6 +203,7 @@ class MessengerRouterConfig:
     mis_honest_degradation: str
     topic_override_llm: str
     t7_drop_k1: str
+    t7_drop_k3: str
     pending_reply: str
     pending_reply_types: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
@@ -531,6 +532,10 @@ settings = Settings(
         # правил (`turn_parse.acting_for` = None). on — защит нет: «список или нет» на этом пути решает то же, что
         # строит корзина (`_multi_price_items`); off — как было. [MESSENGER_ROUTER] t7_drop_k1
         t7_drop_k1=_get_enum("MESSENGER_ROUTER", "t7_drop_k1", default="off", allowed={"off", "on"}),
+        # T7 K3: гард третьего стыка корзины (`_multi_price_items`: условие П2 в остатке реплики гасит корзину). Под
+        # разбором его заменяет флаг `unsatisfiable` у позиций разбора (`phrase_price_items`). on — гард снят; off —
+        # как было. [MESSENGER_ROUTER] t7_drop_k3
+        t7_drop_k3=_get_enum("MESSENGER_ROUTER", "t7_drop_k3", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -669,6 +674,7 @@ MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_T7_DROP_K1 = settings.messenger_router.t7_drop_k1
+MR_T7_DROP_K3 = settings.messenger_router.t7_drop_k3
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
