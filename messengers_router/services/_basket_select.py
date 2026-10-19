@@ -63,13 +63,25 @@ def _scored_only() -> bool:
 
 
 def _ranked(retail_rows: list[dict[str, Any]], query: str, *, limit: int) -> list[dict[str, Any]]:
-    """Ранжированные строки прайса — кандидаты позиции. Под `basket_scored_candidates = on` — только строки, у которых
-    ранжирование нашло совпадение слов (оценка > 0): запасной поиск подстрокой («с» — любая строка с буквой «с») —
-    не кандидат, а шум, из которого LLM корзины однажды выбрала «Выезд на дом» (g0702). Off — как было."""
+    """Ранжированные строки прайса — кандидаты позиции. Под `basket_scored_candidates = on` — строки, у которых
+    ранжирование нашло совпадение слов (оценка > 0); запасной поиск подстрокой («с» — любая строка с буквой «с») — только
+    если слова позиции стоят в названии целыми словами: иначе это шум, из которого LLM корзины однажды выбрала «Выезд на
+    дом» (g0702). Off — как было."""
 
     if not _scored_only():
         return _rank_price_rows(retail_rows, query, limit=limit)
-    return [item["row"] for item in _score_price_rows(retail_rows, query, limit=limit) if isinstance(item.get("row"), dict) and item.get("score", 0) > 0]
+    scored = _score_price_rows(retail_rows, query, limit=limit)
+    rows = [item["row"] for item in scored if isinstance(item.get("row"), dict) and item.get("score", 0) > 0]
+    if rows:
+        return rows
+    # Запасной поиск подстрокой — только строки, где слова позиции стоят в названии целыми словами: короткое обозначение
+    # («лг», «фсг») находится, буква «с» внутри «Самара» — нет.
+    words = _normalise_catalog_text(query).split()
+    return [
+        item["row"]
+        for item in scored
+        if isinstance(item.get("row"), dict) and words and set(words) <= set(_normalise_catalog_text(_row_name(item["row"])).split())
+    ]
 
 
 def _candidates(item: dict[str, Any], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

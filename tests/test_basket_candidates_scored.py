@@ -122,6 +122,9 @@ def test_off_is_as_before_and_reproduces_the_defect(home_visit_world, monkeypatc
     positions, _not_found, offered = _phrases_basket(home_visit_world, monkeypatch, "off")
 
     assert offered, "как было: обрывок «с» получал кандидатом строку выезда (запасной поиск подстрокой)"
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_BASKET_SCORED_CANDIDATES", "off", raising=False)
     with ev_world.FrozenWorld(home_visit_world, "day"):
         letters = [B._row_name(r) for r in B._candidates({"service_name": "с", "fragment": "с", "prices": []}, H._catalog_rows(None))]
     assert letters[0] == _HOME_VISIT, letters  # первые строки прайса, в которых есть буква «с»
@@ -147,3 +150,5 @@ def test_scored_candidates_keep_real_matches(home_visit_world, monkeypatch):
             assert any("Гепатит В" in name for name in names), (switch, names)
         monkeypatch.setattr(cfg, "MR_BASKET_SCORED_CANDIDATES", "on", raising=False)
         assert B._candidates({"service_name": "с", "fragment": "с", "prices": []}, rows) == []
+        # Короткое обозначение без оценки ранжирования — целым словом названия — кандидат остаётся.
+        assert any("ЛГ" in B._row_name(r) for r in B._candidates({"service_name": "лг", "fragment": "лг", "prices": []}, rows))
