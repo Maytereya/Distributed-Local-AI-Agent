@@ -202,6 +202,7 @@ class MessengerRouterConfig:
     variant_b_wordforms: str
     mis_honest_degradation: str
     topic_override_llm: str
+    address_service_llm: str
     pending_reply: str
     pending_reply_types: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
@@ -525,6 +526,12 @@ settings = Settings(
         # «чинить через LLM, уходим от совпадения букв к смыслу»; «Ново-Садовая» ловилась словом «новость»).
         # LLM недоступна — тема метку не перебивает. off — как было. [MESSENGER_ROUTER] topic_override_llm
         topic_override_llm=_get_enum("MESSENGER_ROUTER", "topic_override_llm", default="off", allowed={"off", "on"}),
+        # Инструмент адресов при пустой сущности услуги сам не решает её по буквам реплики: правила дают кандидатов (строки
+        # прайса, по которым ищутся места оказания), выбирает LLM (`choose`, задача `address_service`); «ни одна» — общий
+        # список филиалов, сбой LLM — как было. Услуга, которую LLM разбора хода уже не подтвердила, заново не ищется
+        # («где сделать магнитотерапию» → адрес «Mg+ (магний)», BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS, остаток).
+        # off — как было. [MESSENGER_ROUTER] address_service_llm
+        address_service_llm=_get_enum("MESSENGER_ROUTER", "address_service_llm", default="off", allowed={"off", "on"}),
         debug_final_input=_get_bool(
             "MESSENGER_ROUTER",
             "debug_final_input",
@@ -662,6 +669,7 @@ MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
+MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
