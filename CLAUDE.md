@@ -173,6 +173,13 @@
 нет нигде). У второго разработчика config.ini свой — проверить так же. Перед
 выводом «сломано локально» — сверить с продом.
 
+**`[DEFAULT]` в `config.ini` перебивает `[MESSENGER_ROUTER]`.** Значения `[DEFAULT]` видны в каждом разделе, а
+ключ ищется сначала в `[MESSENGER_ROUTER.<окружение>]` — и находится там из `[DEFAULT]` (имена без учёта регистра).
+18.10 `debug_final_input = false` в `[MESSENGER_ROUTER]` не действовал из-за `DEBUG_FINAL_INPUT = True` в `[DEFAULT]`.
+Проверять ключ по всему файлу (`grep -n -i "<ключ>" agent_logic_2/config.ini`), итог — `docker exec agent-api python -c
+"from agent_logic_2 import config as c; print(c.<АТРИБУТ>)"`. И `config.ini` вшит в образ (`COPY . .`): правка конфига —
+пересборка (`up -d --build`), не рестарт.
+
 **Прод-движок NLU — `legacy_v2`, rule-path активен.** Промпт классификатора
 forward-compat; реальное поведение задают правила. Когда LLM недоступна, бот
 частично работает на правилах — это маскирует поломку.
