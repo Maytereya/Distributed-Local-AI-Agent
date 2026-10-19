@@ -1100,10 +1100,22 @@ def _catalog_refine_prompt(kind: str, label: str) -> str:
     return "Хорошо. Уточните, пожалуйста, точное название услуги."
 
 
-def _catalog_rejected_handoff(state: SessionState) -> tuple[RouteDecision, Plan, Evidence]:
-    """Второй отказ на «Похоже, вы имели в виду …?» — оператор."""
+# Второй отказ на «Похоже, вы имели в виду …?» под `pending_buttons`: перевод — вопросом, решает пациент (решение
+# владельца 19.10: автоматически не переводить — участие операторов со временем сводим к минимуму).
+CATALOG_REJECTED_OFFER_TEXT = "Не удалось точно сопоставить запрос с каталогом. Перевести на оператора?"
+
+
+def _catalog_rejected_handoff(state: SessionState, memory: MemoryStore) -> tuple[RouteDecision, Plan, Evidence]:
+    """Второй отказ на «Похоже, вы имели в виду …?» — оператор; под `pending_buttons` — оффер оператора вопросом."""
 
     state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
+    if pending_answer.buttons_on():
+        mark_operator_offer_pending(state, memory)
+        return (
+            RouteDecision(label="OTHER", confidence=0.95, entities={}, flags={"catalog_confirm_rejected_offer"}, needs_handoff=False, source="catalog_confirm"),
+            Plan(label="OTHER"),
+            Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": CATALOG_REJECTED_OFFER_TEXT, "handoff": False}}),
+        )
     return (
         RouteDecision(
             label="OTHER",
@@ -1127,7 +1139,7 @@ def _catalog_rejected_handoff(state: SessionState) -> tuple[RouteDecision, Plan,
 
 def _catalog_second_no(state: SessionState, memory: MemoryStore) -> tuple[RouteDecision, Plan, Evidence] | None:
     """Ответ «не могу назвать» («нет, не то») на «Уточните название услуги» после первого «нет» на «Похоже, вы имели в виду
-    …?» — второй отказ, оператор (политика `catalog_confirm`: 2-е «нет» → оператор; `pending_buttons`).
+    …?» — второй отказ, оффер оператора вопросом (политика `catalog_confirm`: 2-е «нет» → оператор; `pending_buttons`).
 
     Было (стенд, `pa_catalog_no_twice`): после первого «нет» вопрос уточнения поля ожидания не ставил, второе «нет» читала
     предпроверка записи по своим правилам — «Отменить текущий процесс записи?». Вопрос уточнения — тот, что поставил первый
@@ -1146,7 +1158,7 @@ def _catalog_second_no(state: SessionState, memory: MemoryStore) -> tuple[RouteD
     if not label or pending.get("missing") not in refine:
         return None
     memory.clear_pending(state)
-    return _catalog_rejected_handoff(state)
+    return _catalog_rejected_handoff(state, memory)
 
 
 async def _handle_catalog_confirm_pending(
@@ -1221,7 +1233,7 @@ async def _handle_catalog_confirm_pending(
         rejects = int(state.last_entities.get(_CATALOG_CONFIRM_REJECTS_KEY) or 0) + 1
         state.last_entities[_CATALOG_CONFIRM_REJECTS_KEY] = rejects
         if rejects >= _CATALOG_CONFIRM_MAX_REJECTS:
-            return _catalog_rejected_handoff(state)
+            return _catalog_rejected_handoff(state, memory)
         missing_slots = _catalog_refine_missing_slots(kind, label)
         memory.set_pending(state, label=label, missing_slots=missing_slots)
         if pending_answer.buttons_on():
@@ -2478,7 +2490,7 @@ def _slot_filled_by_rules(user_text: str, state: SessionState, services: Service
 # Ответ «не могу назвать» на вопрос о реквизитах результата анализов (решение владельца 19.10, п. 4): подсказка, где их
 # найти, и оффер оператора вопросом; результаты по ФИО не ищем (R-01).
 TEST_RESULT_DATA_HINT_TEXT = (
-    "Код и номер анализа указаны в чеке или в договоре, которые выдают при сдаче анализов. "
+    "Номер анализа указан в чеке или в договоре, которые выдают при сдаче анализов. "
     "Если их нет под рукой, поможет оператор. Перевести на оператора?"
 )
 

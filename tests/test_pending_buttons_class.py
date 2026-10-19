@@ -176,7 +176,7 @@ def test_cant_name_the_result_data_gets_where_to_find_it_and_an_operator_offer(r
     assert off["text"] != TEST_RESULT_DATA_HINT_TEXT  # как было: подсказки не было
     hint, agreed = on[1], on[2]
     assert hint["text"] == TEST_RESULT_DATA_HINT_TEXT and not hint["handoff"], hint
-    assert "чеке" in hint["text"] and "договоре" in hint["text"] and hint["text"].endswith("Перевести на оператора?")
+    assert "Номер анализа" in hint["text"] and "чеке" in hint["text"] and "договоре" in hint["text"] and hint["text"].endswith("Перевести на оператора?")
     assert hint["state"][expects.EXPECTS_KEY]["type"] == expects.Question.OPERATOR_OFFER.value  # оффер — вопросом
     assert agreed["handoff"] and agreed["text"] == handoff_message("manual_operator"), agreed
 
@@ -383,6 +383,7 @@ def test_many_picks_only_where_the_policy_allows():
 _CANONICAL = "Женский чекап Базовый"
 _CATALOG_QUESTION = f"Похоже, вы имели в виду услугу «{_CANONICAL}» (по запросу «женский чекап»). Это верно? Ответьте «да» или «нет»."
 _CATALOG_HANDOFF = "Не удалось точно сопоставить запрос с каталогом. Соединяю с оператором."
+_CATALOG_OFFER = "Не удалось точно сопоставить запрос с каталогом. Перевести на оператора?"
 _ABORT = "Отменить текущий процесс записи?"
 
 
@@ -411,19 +412,29 @@ def _no_llm(outcome: str = "no") -> _LLM:
     return _LLM({_FREE_MARK: _free(outcome), _PENDING_MARK: json.dumps({"picks": [], "outcome": "no"})})
 
 
+# Решение владельца 19.10 (вопрос 7 итога): после второго отказа не переводить автоматически — спросить; перевести или
+# нет, решает пациент (участие операторов со временем сводим к минимуму).
 @pytest.mark.parametrize("second", ["нет, не то", "нет", "не то", "нет, это не та услуга"])
 @pytest.mark.parametrize("label", ["APPOINTMENT", "PRICE"])
-def test_second_refusal_to_did_you_mean_is_the_operator(second, label, mini_prod_world, monkeypatch):  # noqa: F811
-    first, again = _catalog(mini_prod_world, monkeypatch, ["нет", second], label=label, switches=_ON, llm=_no_llm())
+def test_second_refusal_to_did_you_mean_offers_the_operator(second, label, mini_prod_world, monkeypatch):  # noqa: F811
+    first, again, agreed = _catalog(mini_prod_world, monkeypatch, ["нет", second, "да"], label=label, switches=_ON, llm=_no_llm())
     off = _catalog(mini_prod_world, monkeypatch, ["нет", second], label=label, switches=_OFF, llm=_no_llm())
 
     assert first["text"].startswith("Хорошо. Уточните, пожалуйста, точное название") and not first["handoff"], first
     assert first["state"][expects.EXPECTS_KEY]["type"] == expects.Question.SLOT_VALUE.value
-    assert again["handoff"] and again["text"] == _CATALOG_HANDOFF, again
+    assert again["text"] == _CATALOG_OFFER and not again["handoff"], again  # перевод — вопросом, не сразу
+    assert again["state"][expects.EXPECTS_KEY]["type"] == expects.Question.OPERATOR_OFFER.value
     assert _ABORT not in again["text"]
+    assert agreed["handoff"] and agreed["text"] == handoff_message("manual_operator"), agreed
     assert off[1]["text"] != _CATALOG_HANDOFF  # как было
     if label == "APPOINTMENT" and second == "нет, не то":
         assert off[1]["text"].startswith(_ABORT), off[1]  # стенд `pa_catalog_no_twice`: петля «Отменить?»
+
+
+def test_declined_operator_offer_after_the_second_refusal_is_not_a_transfer(mini_prod_world, monkeypatch):  # noqa: F811
+    declined = _catalog(mini_prod_world, monkeypatch, ["нет", "нет, не то", "нет"], label="APPOINTMENT", switches=_ON, llm=_no_llm())[-1]
+
+    assert not declined["handoff"] and _ABORT not in declined["text"], declined
 
 
 def test_service_named_after_the_first_refusal_goes_the_usual_way(mini_prod_world, monkeypatch):  # noqa: F811
