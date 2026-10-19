@@ -110,4 +110,5 @@ def test_off_prompt_is_the_previous_prompt_byte_for_byte():
     new_system, _ = choice.render(S.PRICE_CONDITIONS_TASK, "ферритин", [Option(id="0", text="Ферритин — 530 руб.")])
 
     assert _NEW_RULE not in old_system and _NEW_RULE in new_system
-    assert new_system.replace(" Вопрос о том, как сдать, подготовиться, записаться, сколько готовится результат или какие условия сбора, — не условие услуги: по нему позиции не отсекай.", "") == old_system
+    # Отличается только правило 3 (формулировка своя — иначе отпечаток стенда путает два места вызова).
+    assert [a for a, b in zip(old_system.splitlines(), new_system.splitlines()) if a != b] == [line for line in old_system.splitlines() if line.startswith("3. ")]
