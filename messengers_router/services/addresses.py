@@ -13,6 +13,7 @@ from agent_logic_2.nayka_api import api_price
 
 from ..policies import handoff_message
 from .. import degradation
+from .. import address_service
 from .. import resilience as _R
 from ..service_phrase import extract_service_phrase
 from ._addresses_helpers import (
@@ -99,10 +100,16 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
             branch = raw_query
     branch_q = _normalise_input(branch)
     service_name = _get_first_present(entities, ["service_name", "test_name"]) or ""
-    if not service_name:
+    service_from_reply = False
+    llm_service = address_service.enabled()
+    # Входной ключ планировщика — не сущность: в `entities_used` (а оттуда в промпт ответа) не идёт.
+    entities = dict(entities)
+    service_llm_dropped = bool(entities.pop(address_service.ADDRESS_SERVICE_DROPPED_KEY, False))
+    if not service_name and not (llm_service and service_llm_dropped):
         extracted = extract_service_phrase(query or "")
         if extracted:
             service_name = extracted
+            service_from_reply = True
     service_q = _normalise_input(service_name)
     # Место оказания процедуры (УЗИ/анализы/ЭКГ) определяется флагом филиала из
     # /site/regions (usi/analysis/ecg) — авторитетный источник по словам
@@ -111,6 +118,25 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
     # пересечение с локациями врачей пропускаем (они давали единственный
     # дефолтный адрес «Ленина 5» вместо всех филиалов с флагом).
     procedure_flag = _service_procedure_flag(service_q) if service_q else None
+    # Услугу, выведенную из реплики правилами, под `address_service_llm = on` судит LLM (принцип 2): кандидаты — строки
+    # прайса, по которым ищутся места оказания (ветка `priceUnits care-setting` ниже). Те же условия, что у этой ветки.
+    llm_retail_matches: list[dict[str, Any]] | None = None
+    llm_judged = False
+    if (
+        llm_service
+        and service_from_reply
+        and not procedure_flag
+        and not (appointment_mode and _normalise_input(_get_first_present(entities, ["specialty"]) or ""))
+        and (appointment_mode or _is_procedure_branch_lookup_query(query, service_q))
+    ):
+        retail_matches = await _address_price_rows(service_name or query or "")
+        verdict = await address_service.choose_address_service(query, retail_matches)
+        llm_judged = verdict.status in ("picked", "none_fit")
+        if verdict.status == "picked":
+            llm_retail_matches = verdict.rows
+        elif verdict.status == "none_fit":
+            # «Ни одна»: услуга снимается — общий список филиалов, как у снятой разбором хода услуги.
+            service_name, service_q = "", ""
     # При схлопывании живого /regions до ≤1 («Гагарина 64» — единственная с «Самара»
     # в name) отдаём ПОЛНЫЙ статический список, а не один филиал / врачебно-несамарскую
     # утечку doctors-cache (приоритет №2 + класс BUG-2026-06-04-04). Покрываем:
@@ -209,19 +235,29 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
         _normalise_input(_get_first_present(entities, ["specialty"]) or "")
     )
 
-    if service_q and not procedure_flag and not appt_by_specialty and (appointment_mode or _is_procedure_branch_lookup_query(query, service_q)):
-        try:
-            retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
-        except Exception:
-            retail_rows = []
-        if isinstance(retail_rows, list) and retail_rows:
-            care_query = str(service_name or query or "").strip()
-            retail_matches = _select_address_price_rows(
-                [row for row in retail_rows if isinstance(row, dict)],
-                care_query,
-                limit=10,
-                family_limit=50,
-            )
+    if llm_retail_matches is not None:
+        # Строки, выбранные LLM: места оказания — только по ним. Без мест — дальше по прежним путям, кроме отбора строк
+        # по буквам (он и дал бы чужую строку).
+        care_addresses = _care_setting_addresses_from_price_rows(llm_retail_matches)
+        if branch_q:
+            care_addresses = [addr for addr in care_addresses if _branch_query_matches(branch_q, _normalise_input(addr))]
+        if care_addresses:
+            return {
+                "addresses": care_addresses,
+                "branches": _addresses_to_branch_payload(care_addresses, regions),
+                "note": "address_info: priceUnits care-setting (llm)",
+                "entities_used": entities,
+            }
+
+    if (
+        service_q
+        and not llm_judged
+        and not procedure_flag
+        and not appt_by_specialty
+        and (appointment_mode or _is_procedure_branch_lookup_query(query, service_q))
+    ):
+        retail_matches = await _address_price_rows(str(service_name or query or "").strip())
+        if retail_matches:
             care_addresses = _care_setting_addresses_from_price_rows(retail_matches)
             if branch_q:
                 care_addresses = [
@@ -424,6 +460,23 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
         _R.log_degraded(upstream="regions", failure_mode=_R.FM_EXCEPTION, fallback_used=True)
         payload = _R.mark_degraded(payload, upstream="regions", failure_mode=_R.FM_EXCEPTION, fallback_used=True)
     return payload
+
+
+async def _address_price_rows(care_query: str) -> list[dict[str, Any]]:
+    """Строки прайса региона, по которым ищутся места оказания услуги (отбор правил по тексту); сбой прайса — пусто."""
+
+    try:
+        retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
+    except Exception:
+        retail_rows = []
+    if not isinstance(retail_rows, list) or not retail_rows:
+        return []
+    return _select_address_price_rows(
+        [row for row in retail_rows if isinstance(row, dict)],
+        care_query,
+        limit=10,
+        family_limit=50,
+    )
 
 
 async def _procedure_branches_from_index(

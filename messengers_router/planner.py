@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import expects, turn_understanding
+from . import address_service, expects, turn_understanding
 from .flow_policy import apply_pending_override
 from .llm_mode_policy import RuntimeOptions
 from .memory import MemoryStore
@@ -371,7 +371,11 @@ def build_plan(
         return Plan(label=label, steps=steps)
 
     if label == "ADDRESS":
-        steps.append(PlanStep(tool="address_info", input={"query": user_text, "entities": dict(entities)}))
+        address_entities = dict(entities)
+        if address_service.enabled() and address_service.llm_dropped_service(decision.flags):
+            # Услугу из реплики LLM разбора хода не подтвердила — инструмент адресов не ищет её заново по буквам.
+            address_entities[address_service.ADDRESS_SERVICE_DROPPED_KEY] = True
+        steps.append(PlanStep(tool="address_info", input={"query": user_text, "entities": address_entities}))
         return Plan(label=label, steps=steps)
 
     if label == "PREPARE":
