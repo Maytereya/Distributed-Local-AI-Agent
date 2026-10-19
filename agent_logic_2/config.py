@@ -200,6 +200,7 @@ class MessengerRouterConfig:
     choose_readiness: str
     parse_fail_variants: int
     variant_b_wordforms: str
+    price_option_mis_notes: str
     mis_honest_degradation: str
     topic_override_llm: str
     address_service_llm: str
@@ -443,8 +444,11 @@ settings = Settings(
         # Бюджет LLM-решений на ход (ход (в), L-11): не больше N выборов и S секунд выбора на ход;
         # сверх бюджета — «LLM недоступна» без вызова, что ответить, решает вызывающий. Только для
         # структурных решений (модуль choose()), не для текста и классификатора. 0 — без ограничения.
-        llm_decision_turn_calls=_get_int("MESSENGER_ROUTER", "llm_decision_turn_calls", 2, min_value=0, max_value=20),
-        llm_decision_turn_seconds=_get_int("MESSENGER_ROUTER", "llm_decision_turn_seconds", 10, min_value=0, max_value=120),
+        # 3 решения и 20 с с 19.10 (решение владельца: «рассчитываем именно на ответы LLM»): при 2 решениях на проде
+        # 14–19.10 лимит отрезал 7 из 73 выборов строки цены — второй круг поиска после «ни одна» (разбор реплики,
+        # выбор строки, второй выбор). Прежде — 2 и 10 (решение 13.10, Q4).
+        llm_decision_turn_calls=_get_int("MESSENGER_ROUTER", "llm_decision_turn_calls", 3, min_value=0, max_value=20),
+        llm_decision_turn_seconds=_get_int("MESSENGER_ROUTER", "llm_decision_turn_seconds", 20, min_value=0, max_value=120),
         # Предохранитель LLM-решений (L-11): N сбоев генерации подряд → S секунд без вызовов; таймаут
         # очереди не считается (иначе качество бота зависит от нагрузки соседей). 0 сбоев — выключен.
         llm_decision_breaker_failures=_get_int("MESSENGER_ROUTER", "llm_decision_breaker_failures", 3, min_value=0, max_value=100),
@@ -525,6 +529,11 @@ settings = Settings(
         # BUG-2026-10-17-VARIANT-B-COMMON-WORD). По умолчанию on с 17.10: офлайн-замер dev — 0 хуже (решение владельца 16.10:
         # включать только при 0 хуже). [MESSENGER_ROUTER] variant_b_wordforms
         variant_b_wordforms=_get_enum("MESSENGER_ROUTER", "variant_b_wordforms", default="on", allowed={"off", "on"}),
+        # Позиция прайса в выборе строки LLM — с данными МИС, которые пациент назвал: материал (`biomatNames`) и синоним
+        # клиники (`serviceSynonyms`), только совпавшие со словами реплики, не длиннее 120 знаков (облако 19.10,
+        # BUG-2026-10-19-PRICE-ROUND-TWO-POOL, g0542: «мазок … с задней стенки глотки» — у «Посев на микрофлору» материала в
+        # названии нет). off — как было (текст позиции «название — цена» байт в байт). [MESSENGER_ROUTER] price_option_mis_notes
+        price_option_mis_notes=_get_enum("MESSENGER_ROUTER", "price_option_mis_notes", default="off", allowed={"off", "on"}),
         # Ход (д), видимая деградация (решения владельца 08.10 и 18.10): сбой МИС → честный перевод на оператора вместо
         # правдоподобной неправды («расписание не найдено», «акций нет», адреса без фильтра врачей); устаревший срез —
         # приписка «по данным на ДД.ММ» или оператор. off — как было (правило 13.10: видимое поведение под
@@ -708,6 +717,7 @@ MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
+MR_PRICE_OPTION_MIS_NOTES = settings.messenger_router.price_option_mis_notes
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm

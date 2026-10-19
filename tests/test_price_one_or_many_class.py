@@ -370,8 +370,9 @@ def test_one_service_or_several(name, config, llm, mini_prod_world, monkeypatch)
 
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_parse_on_spends_at_most_two_decisions(name, mini_prod_world, monkeypatch):
-    """Под `turn_parse = on` (живая LLM) решений хода не больше двух — лимит не меняли (решение владельца 13.10,
-    Q4): выбор фраз — первое, выбор строк корзины, строки цены или срока — второе; бюджет хода не исчерпан."""
+    """Под `turn_parse = on` (живая LLM, оракул выбирает верно) решений хода не больше двух: выбор фраз — первое, выбор
+    строк корзины, строки цены или срока — второе; бюджет хода не исчерпан. Лимит хода с 19.10 — 3 решения (третье —
+    второй круг поиска цены после «ни одна»); обычный ход его не тратит."""
 
     _turn, row, oracle = _class_turn(name, "deploy_parse", "oracle", mini_prod_world, monkeypatch)
     decisions = [(entry["task"], entry["status"]) for entry in row.get("choose") or [] if not entry.get("shadow")]

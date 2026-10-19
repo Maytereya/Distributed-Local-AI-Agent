@@ -99,6 +99,8 @@ tests/test_price_llm_select.py
 tests/test_price_match_policy.py
 tests/test_price_no_doctor_prices_handoff.py
 tests/test_price_one_or_many_class.py
+tests/test_price_option_mis_notes_class.py
+tests/test_price_round_two_pool_class.py
 tests/test_price_show_all_one_definition.py
 tests/test_price_switch_defaults.py
 tests/test_price_turns_golden.py
