@@ -175,3 +175,4 @@ tests/test_variant_b_wordforms.py
 tests/test_vocabularies_night_snapshot.py
 tests/test_warm_up.py
 tests/test_address_service_by_meaning.py
+tests/test_booking_slots_by_meaning.py

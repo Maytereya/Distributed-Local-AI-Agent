@@ -57,6 +57,7 @@ LAYER_BY_MODULE: dict[str, str] = {
     "schedule_parse_watch": "policy",
     "topic_confirm": "policy",
     "address_service": "policy",
+    "booking_slots": "policy",
     # Orchestration (2026-06: оркестратор — активный прод-путь, зовётся из router)
     "orchestrator": "orchestration",
     # Отпечаток рантайма для debug-ответа роутера (DATA-13, 18.10): читает реестр промптов, телеметрию (инфраструктура) и

@@ -14,12 +14,13 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import turn_understanding
+from . import booking_slots, turn_understanding
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
 from .policies import (
     extract_service_phrase,
+    extract_specialty,
     has_datetime_signal,
     is_fixed_equipment_service,
     service_name_conflicts_with_doctor,
@@ -794,5 +795,19 @@ async def ground_decision_entities(
         and "doctor_name" in raw
     ):
         flags.add("entity_doctor_kept_from_state")
+
+    if (
+        label == "APPOINTMENT"
+        and booking_slots.specialty_enabled()
+        and "entity_dropped_unverified_service_name" in flags
+        and not any(out.get(k) for k in ("specialty", "doctor_name", "doctor_id"))
+    ):
+        # Услуга реплики не подтвердилась (LLM или данные: «время» в «На какое время запись к неврологу»), цели нет:
+        # специальность из слов реплики — кандидат правил, запись к ней подтверждает LLM. Без подтверждения — честный
+        # отказ гарда B′, как было.
+        specialty = extract_specialty(user_text or "")
+        if specialty and await booking_slots.confirms_booking_specialty(user_text, specialty):
+            out["specialty"] = specialty
+            flags.add("booking_specialty_llm")
 
     return GroundingResult(entities=out, flags=flags)

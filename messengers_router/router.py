@@ -20,7 +20,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import degradation, expects, pending_answer, pending_reply, shown_context, topic_confirm, turn_parse, turn_telemetry, turn_understanding
+from . import booking_slots, degradation, expects, pending_answer, pending_reply, shown_context, topic_confirm, turn_parse, turn_telemetry, turn_understanding
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -1561,8 +1561,15 @@ def _suppress_grounder_rejected_slots(
         if slot not in out or not (flags & reject_flags):
             continue
         value = str(out.get(slot) or "").strip()
-        # Каталожно-подтверждённую услугу не трогаем (она grounded, не re-extract).
-        if slot == "service_name" and value and resolve_price_service_name_from_catalog(value):
+        # Каталожно-подтверждённую услугу не трогаем (она grounded, не re-extract). Под `slot_suppress_llm = on` — кроме
+        # услуги, которую в этом ходу отвергла LLM: резолвер находит её по буквам («Гастроскопию» → «Гастрин»), а
+        # смысл уже решён (принцип 2).
+        if (
+            slot == "service_name"
+            and value
+            and not (booking_slots.suppress_enabled() and booking_slots.service_rejected_by_llm(flags))
+            and resolve_price_service_name_from_catalog(value)
+        ):
             continue
         out.pop(slot, None)
     return out
@@ -2342,6 +2349,40 @@ async def _guard_walkin_named_service(
     return to_booking()
 
 
+async def _slot_reply_keeps_topic(
+    decision: RouteDecision,
+    state: SessionState,
+    user_text: str,
+    services: Services,
+    memory: MemoryStore,
+) -> RouteDecision:
+    """Ответ на вопрос-слот кнопки, который правила не разобрали, остаётся в теме вопроса — если так решила LLM.
+
+    Под `slot_reply_llm = on` (`booking_slots`): висит вопрос-слот кнопки («К какой процедуре нужна подготовка?», «Для
+    какой цели подобрать анализы?»), поля ожидания нет (его разбирает `pending_answer`), quick-fill слот не заполняет —
+    модуль выбора решает, ответ ли это. Да — метка темы вопроса, `continue` (смена темы классификатором не сбрасывает
+    вопрос), флаг `slot_reply_llm`: значение слота кладёт блок quick-fill хода. Нет, сбой, срочное — решение как было.
+    """
+
+    if not booking_slots.slot_reply_enabled():
+        return decision
+    if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"} or decision.needs_handoff:
+        return decision
+    pending = memory.get_pending(state)
+    pend_label = str((pending or {}).get("label") or "")
+    if pend_label not in booking_slots.SLOT_REPLY_SLOTS or state.last_entities.get(expects.EXPECTS_KEY):
+        return decision
+    missing = missing_slots(pend_label, state.last_entities)
+    if not missing:
+        return decision
+    quick = quick_fill_entities_from_text(user_text, state.last_entities, missing, services, pending_label=pend_label)
+    if missing_slots(pend_label, {**state.last_entities, **(quick or {})}) != missing:
+        return decision  # правила ответ разобрали — LLM не нужна
+    if not await booking_slots.reply_answers_slot(user_text, pend_label):
+        return decision
+    return _copy_decision(decision, label=pend_label, context_action="continue", flags=set(decision.flags) | {"slot_reply_llm"})
+
+
 async def _apply_post_nlu_guardrails(
     decision: RouteDecision,
     state: SessionState,
@@ -2436,6 +2477,7 @@ async def _apply_post_nlu_guardrails(
             needs_handoff=False,
             context_action="continue",
         )
+    decision = await _slot_reply_keeps_topic(decision, state, user_text, services, memory)
     decision = apply_context_action(decision, state, user_text, memory)
 
     pending_before_overrides = memory.get_pending(state)
@@ -2874,6 +2916,25 @@ async def _resolve_nlu_decision_before_doctor_guard(
             "matched_regex": list(topic_match.matched_regex),
         }
 
+    secondary = [str(x) for x in (decision.entities.get("secondary_intents") or [])]
+    if (
+        booking_slots.prepare_vs_booking_enabled()
+        and decision.label == "APPOINTMENT"
+        and "PREPARE" in secondary
+        and await booking_slots.prepare_wins_over_booking(user_text)
+    ):
+        # Правила нашли и запись, и подготовку; главная тема по смыслу — подготовка (BUG-2026-10-18-PREPARE-UZI-AS-BOOKING).
+        # Запись остаётся вторым намерением, только если пациент написал о ней словом.
+        rest = [x for x in secondary if x != "PREPARE"]
+        if detect_appointment_action(user_text) == "book":
+            rest.append("APPOINTMENT")
+        entities = {k: v for k, v in decision.entities.items() if k not in ("secondary_intents", "appointment_action")}
+        if rest:
+            entities["secondary_intents"] = rest
+        decision = _copy_decision(
+            decision, label="PREPARE", entities=entities, flags=set(decision.flags) | {"prepare_over_booking_llm"}
+        )
+
     return decision, nlu_debug
 
 
@@ -3162,6 +3223,11 @@ async def _complete_route_after_doctor_guard(
                 memory.merge_entities(state, quick, label=pend_label)
         if pend_label == "APPOINTMENT":
             await _backfill_appointment_doctor_from_text(user_text, state, services, memory)
+        slot_reply = booking_slots.SLOT_REPLY_SLOTS.get(str(pend_label or ""))
+        if slot_reply is not None and "slot_reply_llm" in decision.flags and missing_slots(str(pend_label), state.last_entities):
+            # LLM решила, что реплика — ответ на вопрос-слот кнопки (`_slot_reply_keeps_topic`): правила её не разобрали —
+            # реплика целиком в слот; что это за памятка или анализы, решает инструмент темы.
+            memory.merge_entities(state, {slot_reply[0]: booking_slots.slot_value(user_text)}, label=str(pend_label))
 
     fill_date_from_schedule_windows(state, decision.label)
 
