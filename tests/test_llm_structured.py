@@ -133,7 +133,7 @@ def limits(monkeypatch):
 
     from messengers_router.runtime_config import config as cfg
 
-    def set_limits(calls: int = 2, seconds: int = 10, failures: int = 3, open_s: int = 30) -> None:
+    def set_limits(calls: int = 3, seconds: int = 20, failures: int = 3, open_s: int = 30) -> None:
         monkeypatch.setattr(cfg, "MR_LLM_DECISION_TURN_CALLS", calls, raising=False)
         monkeypatch.setattr(cfg, "MR_LLM_DECISION_TURN_SECONDS", seconds, raising=False)
         monkeypatch.setattr(cfg, "MR_LLM_DECISION_BREAKER_FAILURES", failures, raising=False)
@@ -168,8 +168,9 @@ async def _decisions(count: int) -> list[str]:
 
 
 def test_decision_over_the_turn_budget_is_not_sent_to_llm(client, limits):
-    assert _in_turn(lambda: _decisions(3)) == ["ok", "ok", "budget"]
-    assert len(client.calls) == 2
+    # Лимит хода по умолчанию — 3 решения (с 19.10; прежде 2): четвёртое не уходит в LLM.
+    assert _in_turn(lambda: _decisions(4)) == ["ok", "ok", "ok", "budget"]
+    assert len(client.calls) == 3
 
 
 def test_budget_is_per_turn_and_absent_outside_a_turn(client, limits):
@@ -262,14 +263,14 @@ def test_budget_and_breaker_outcomes_reach_turn_telemetry(monkeypatch, client, l
 
     async def turn():
         token = turn_telemetry.begin("once", session_id="s")
-        await _decisions(3)
+        await _decisions(4)
         llm_runtime._BREAKER.open_until = time.monotonic() + 60
         with pytest.raises(llm_runtime.LLMCircuitOpenError):
             await llm_runtime.generate_structured(**_params())
         turn_telemetry.finish(token, handoff=False, chars=0)
 
     _in_turn(turn)
-    assert [c["outcome"] for c in rows[0]["llm"]] == ["ok", "ok", "budget", "circuit_open"]
+    assert [c["outcome"] for c in rows[0]["llm"]] == ["ok", "ok", "ok", "budget", "circuit_open"]
 
 
 def test_endpoint_opens_a_fresh_decision_budget_per_turn(monkeypatch):

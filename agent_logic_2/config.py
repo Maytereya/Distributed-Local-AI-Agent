@@ -434,8 +434,11 @@ settings = Settings(
         # Бюджет LLM-решений на ход (ход (в), L-11): не больше N выборов и S секунд выбора на ход;
         # сверх бюджета — «LLM недоступна» без вызова, что ответить, решает вызывающий. Только для
         # структурных решений (модуль choose()), не для текста и классификатора. 0 — без ограничения.
-        llm_decision_turn_calls=_get_int("MESSENGER_ROUTER", "llm_decision_turn_calls", 2, min_value=0, max_value=20),
-        llm_decision_turn_seconds=_get_int("MESSENGER_ROUTER", "llm_decision_turn_seconds", 10, min_value=0, max_value=120),
+        # 3 решения и 20 с с 19.10 (решение владельца: «рассчитываем именно на ответы LLM»): при 2 решениях на проде
+        # 14–19.10 лимит отрезал 7 из 73 выборов строки цены — второй круг поиска после «ни одна» (разбор реплики,
+        # выбор строки, второй выбор). Прежде — 2 и 10 (решение 13.10, Q4).
+        llm_decision_turn_calls=_get_int("MESSENGER_ROUTER", "llm_decision_turn_calls", 3, min_value=0, max_value=20),
+        llm_decision_turn_seconds=_get_int("MESSENGER_ROUTER", "llm_decision_turn_seconds", 20, min_value=0, max_value=120),
         # Предохранитель LLM-решений (L-11): N сбоев генерации подряд → S секунд без вызовов; таймаут
         # очереди не считается (иначе качество бота зависит от нагрузки соседей). 0 сбоев — выключен.
         llm_decision_breaker_failures=_get_int("MESSENGER_ROUTER", "llm_decision_breaker_failures", 3, min_value=0, max_value=100),

@@ -349,13 +349,13 @@ def _decision_limits() -> tuple[int, float, int, float]:
 
     try:
         return (
-            int(getattr(c, "MR_LLM_DECISION_TURN_CALLS", 2) or 0),
-            float(getattr(c, "MR_LLM_DECISION_TURN_SECONDS", 10) or 0),
+            int(getattr(c, "MR_LLM_DECISION_TURN_CALLS", 3) or 0),
+            float(getattr(c, "MR_LLM_DECISION_TURN_SECONDS", 20) or 0),
             int(getattr(c, "MR_LLM_DECISION_BREAKER_FAILURES", 3) or 0),
             float(getattr(c, "MR_LLM_DECISION_BREAKER_OPEN_S", 30) or 0),
         )
     except (TypeError, ValueError):
-        return 2, 10.0, 3, 30.0
+        return 3, 20.0, 3, 30.0
 
 
 @dataclass

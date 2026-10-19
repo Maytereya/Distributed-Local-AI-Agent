@@ -11,8 +11,8 @@
 Инварианты класса (через обработчик эндпоинта, мини-прод, прод-набор 16.10, оракул LLM):
 - `qualifier_absent` с терминами — «Не нашёл» за ОДИН вызов выбора строки, без `budget` (класс A; судья П2 под
   разбор хода — единственный режим; второй ход «а сколько стоит по омс?» после цены);
-- прочие коды (`other_service`) — второй круг как раньше (у судьи П2 — второй вызов; у класса A под `turn_parse = on`
-  он упирается в лимит хода — наблюдение, без правки);
+- прочие коды (`other_service`) — второй круг как раньше (у судьи П2 — второй вызов; у класса A под `turn_parse = on` —
+  третье решение хода; до 19.10 упирался в лимит хода 2);
 - сбой LLM выбора строки — ответ как раньше;
 - реплики без условия — ответ и число вызовов как раньше.
 """
@@ -144,15 +144,14 @@ def test_class_a_condition_absent_is_not_found_in_one_round(reply, mini_prod_wor
 
 @pytest.mark.parametrize("reply", _CLASS_A)
 def test_class_a_other_reason_keeps_the_second_round(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    """`other_service` с терминами — второй круг как раньше. Наблюдение (без правки): у класса A под `turn_parse = on`
-    разбор — решение 1, выбор строки — 2, второй круг всегда упирается в лимит хода (`budget`), и ответ тот же, что при
-    сбое выбора строки (путь правил, цены нет)."""
+    """`other_service` с терминами — второй круг как раньше: разбор — решение 1, выбор строки — 2, второй круг — 3.
+    До 19.10 (лимит хода 2 решения) второй круг здесь всегда упирался в лимит (`budget`) — на проде 14–19.10 так
+    отрезано 7 из 73 выборов строки цены; с лимитом 3 он выполняется (STEP-2026-10-19-LLM-TURN-BUDGET)."""
 
     phrase = _CLASS_A[reply]
     [turn], [row] = _run([reply], mini_prod_world, monkeypatch, llm=_Judge((phrase,), "other_service"), session=_sid("a-os", reply))
-    [down], _rows = _run([reply], mini_prod_world, monkeypatch, llm=_Judge((phrase,), rows_down=True), session=_sid("a-dn", reply))
-    assert _calls(row) == 1 and _calls(row, "budget") == 1, row.get("llm")
-    assert turn["text"] == down["text"] and not _priced(turn["text"]), turn["text"]
+    assert _calls(row) == 2 and _calls(row, "budget") == 0, row.get("llm")
+    assert not _priced(turn["text"]), turn["text"]  # оракул и во втором круге не выбирает строк — цены нет
 
 
 @pytest.mark.parametrize("reply", _CLASS_A)
