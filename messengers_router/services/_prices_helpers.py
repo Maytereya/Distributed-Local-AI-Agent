@@ -618,6 +618,24 @@ def price_question_names_service(text: str) -> bool:
     return bool(_price_query_tokens(text))
 
 
+def price_reply_names_own_service(text: str) -> bool:
+    """Называет ли реплика свою услугу — такую, которую путь цены ищет по её словам.
+
+    Строже `price_question_names_service`: «а сколько стоит приём?», «сколько стоит
+    консультация?» — слова есть, но приём без специальности услугу не называет
+    (`_extract_price_service_from_query` — None), её держит контекст. Мерило — те же два
+    правила пути цены, без новых слов (BUG-2026-10-20-BRANCH-SIDE-PRICE-FOREIGN).
+    """
+
+    return price_question_names_service(text) and _extract_price_service_from_query(text) is not None
+
+
+def consult_price_phrase(specialty: str) -> str:
+    """Запрос цены приёма врача специальности — тем же видом, каким путь цены сам разбирает «приём уролога»."""
+
+    return f"прием {specialty}"
+
+
 def _price_query_tokens(text: str) -> list[str]:
     s = _normalise_input(text)
     out: list[str] = []
@@ -795,7 +813,7 @@ def _extract_price_service_from_query(query: str) -> str | None:
     if _PRICE_CONSULT_HINT_RE.search(raw):
         specialty = _extract_specialty_from_text(raw)
         if specialty:
-            return f"прием {specialty}"
+            return consult_price_phrase(specialty)
         return None
     q = _normalise_input(raw)
     q = _PRICE_DOCTOR_SUFFIX_RE.sub("", q).strip(" ?!.,;:")

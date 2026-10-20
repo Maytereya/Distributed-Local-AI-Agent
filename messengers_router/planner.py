@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+from collections.abc import Iterator
 from typing import Any
 
 from . import address_service, expects, turn_understanding
@@ -22,6 +25,22 @@ from .policies import (
     missing_slots,
 )
 from .topic_registry import extract_topic_id_from_flags, get_topic as topic_registry_get_topic
+
+
+# Услуга, о цене которой спрашивает побочный вопрос внутри записи (`price_of`): реплика своей услуги не называет, и
+# шаг цены идёт по услуге записи, а не по словам реплики (BUG-2026-10-20-BRANCH-SIDE-PRICE-FOREIGN).
+_PRICE_OF: contextvars.ContextVar[str | None] = contextvars.ContextVar("planner_price_of", default=None)
+
+
+@contextlib.contextmanager
+def price_of(service: str) -> Iterator[None]:
+    """Ход внутри блока: шаг цены — об услуге `service` (запрос пустой, услуга — сущность), слова реплики не ищутся."""
+
+    token = _PRICE_OF.set(service)
+    try:
+        yield
+    finally:
+        _PRICE_OF.reset(token)
 
 
 def _unbookable_target_kind(user_text: str, decision_flags: set[str]) -> str:
@@ -346,6 +365,12 @@ def build_plan(
                     )
                 )
                 steps.extend(_appointment_price_steps(user_text, entities))
+        return Plan(label=label, steps=steps)
+
+    if label == "PRICE" and _PRICE_OF.get():
+        price_entities = {k: v for k, v in entities.items() if k != "test_name"}
+        price_entities.update(service_name=_PRICE_OF.get(), __price_question=True)
+        steps.append(PlanStep(tool="service_bundle_info", input={"query": "", "entities": price_entities}))
         return Plan(label=label, steps=steps)
 
     if label == "PRICE":
