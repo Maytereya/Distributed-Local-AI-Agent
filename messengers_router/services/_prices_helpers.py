@@ -3362,6 +3362,18 @@ def _t7_drop(key: str) -> bool:
     return str(getattr(cfg, f"MR_T7_DROP_{key.upper()}", "off") or "").strip().lower() == "on"
 
 
+def _weak_phrase_judge(fragment: str, retail_rows: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], str] | None:
+    """`basket_weak_phrase_judge = on`: сильное название внутри слабой фразы и слова вокруг — для суда LLM корзины."""
+
+    from ..runtime_config import config as cfg
+
+    if str(getattr(cfg, "MR_BASKET_WEAK_PHRASE_JUDGE", "off") or "").strip().lower() != "on":
+        return None
+    from ._turn_phrases import strong_inside  # разбор хода импортирует этот модуль — не на уровне модуля
+
+    return strong_inside(fragment, retail_rows)
+
+
 def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Позиции списка из фраз разбора хода (L-15b, шаг 5; `turn_parse.ParsedPhrase`), в их порядке.
 
@@ -3409,6 +3421,14 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
             and query_has_unsatisfiable_qualifier(fragment, retail_rows)
             and not query_names_service_in_other_words(fragment, retail_rows)
         ):
+            inside = _weak_phrase_judge(fragment, retail_rows)
+            if inside is not None:
+                # Гард по буквам — повод спросить LLM, не вердикт (BUG-2026-10-20-BASKET-WEAK-PHRASE-GUARD): внутри фразы
+                # сильное название («ферритин первый раз»), рядом слова, которых нет в прайсе, — суд LLM корзины, как у
+                # сильной фразы с условием; сбой LLM — «Не распознал» (П2).
+                name, rows, rest = inside
+                items.append({"service_name": name, "prices": [], "fragment": name, "strong": [], "judge": rows, "condition": rest})
+                continue
             # Остаток после резолвера — вся фраза: уточнение без услуги в прайсе — «Не распознал» (П2).
             items.append({"service_name": fragment, "prices": [], "fragment": fragment, "strong": [], "unsatisfiable": True})
             continue

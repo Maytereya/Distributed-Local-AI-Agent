@@ -129,6 +129,33 @@ def phrase_rows(raw: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]
     return strong_rows(raw, catalog, verbatim=True)
 
 
+def strong_inside(fragment: str, catalog: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], str] | None:
+    """Одно сильное по данным МИС окно (1–3 слова, длинные первыми, без шум-слова внутри) внутри слабой фразы и слова
+    фразы вокруг него без обвязки: «ферритин первый раз» → («ферритин», строки, «первый раз»). Окон нет, их несколько
+    разных или вокруг нет слов — None: что это за слова (условие или разговор), решает LLM корзины, здесь — механика
+    окон разбора (`_strong_window_pieces`), без новых словарей."""
+
+    toks = _tokens(fragment)
+    for size in _WINDOWS:
+        hits: list[tuple[int, int, str, list[dict[str, Any]]]] = []
+        for i in range(len(toks) - size + 1):
+            window = toks[i : i + size]
+            if any(_is_multi_price_noise(t.key) for t in window):
+                continue
+            raw = fragment[window[0].start : window[-1].end]
+            rows = phrase_rows(raw, catalog)
+            if rows:
+                hits.append((i, i + size, raw, rows))
+        if not hits:
+            continue
+        if len({_normalise_catalog_text(hit[2]) for hit in hits}) != 1:
+            return None  # два разных названия в одной фразе — не условие при услуге, а склейка: как было
+        lo, hi, raw, rows = hits[0]
+        rest = " ".join(fragment[t.start : t.end] for k, t in enumerate(toks) if not lo <= k < hi and t.key not in _FILLER)
+        return (raw, rows, rest) if rest else None
+    return None
+
+
 def _key(word: str) -> str:
     return word.lower().replace("ё", "е")
 
