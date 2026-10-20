@@ -121,6 +121,7 @@ tests/test_renderer_dialog_context.py
 tests/test_repeat_guard.py
 tests/test_repeat_guard_dynamic_url.py
 tests/test_resilience.py
+tests/test_role_catalog_class.py
 tests/test_result_field_reentry.py
 tests/test_result_timing_integration.py
 tests/test_result_timing_validator.py
