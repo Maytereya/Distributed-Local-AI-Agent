@@ -11,18 +11,51 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from typing import Any
 
 import pytest
 
 from evalbench import world as ev_world
+from messengers_router import choice, llm_runtime
 from messengers_router.mess_types import RouteDecision
 from messengers_router.policies import SICK_LEAVE_HANDOFF_TEXT
 from messengers_router.recovery_policy import CLARIFY_REASON_CODES, patient_clarify_text
-from tests.test_booking_slots_by_meaning import _LLM, _button_dialog
+from tests.test_booking_slots_by_meaning import _LLM
 from tests.test_price_turns_golden import mini_prod_world, synonym_fork  # noqa: F401 — фикстуры
 
 _CLASSIFIER_MARK = "Ты классификатор запросов пациента"
+
+
+def _button_dialog(services, monkeypatch, turns, *, switches: dict[str, str], llm: _LLM) -> list[dict[str, Any]]:
+    """Диалог через обработчик эндпоинта (перенесён из `test_booking_slots_by_meaning`: ветка `pending_buttons` сняла путь
+    `slot_reply` вместе с его тестами, слияние деплоя 11)."""
+
+    from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
+    from messengers_router.memory import MemoryStore
+    from messengers_router.runtime_config import config as cfg
+
+    session = f"slot-{json.dumps(switches)}-{turns[-1]}"
+
+    async def run() -> list[dict[str, Any]]:
+        memory, out = MemoryStore(), []
+        for turn in turns:
+            button_id, text = turn if isinstance(turn, tuple) else ("", turn)
+            req = MessengerGenerateRequest(session_id=session, text=text, debug=True, button_id=button_id)
+            body = json.loads((await messenger_generate_once(req, memory=memory, services=services)).body)
+            dbg = (body.get("state_update") or {}).get("debug") or {}
+            decision = dbg.get("decision") or {}
+            out.append({"text": str(body.get("text") or ""), "label": decision.get("label"), "flags": decision.get("flags") or []})
+        return out
+
+    with monkeypatch.context() as patch:
+        for key, value in switches.items():
+            patch.setattr(cfg, key, value, raising=False)
+        patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
+        patch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
+        choice._CACHE.clear()
+        return asyncio.run(run())
 
 
 def _down(_prompt: str) -> str:
