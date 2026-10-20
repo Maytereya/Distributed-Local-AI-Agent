@@ -524,6 +524,21 @@ def _network_per_test(request):
     _NETWORK["test"] = "<между тестами>"
 
 
+def pytest_sessionfinish(session):
+    # Под `pytest -n` тесты идут в процессах-воркерах, а сводку печатает главный процесс: воркер отдаёт
+    # свои попытки через `workeroutput` (xdist передаёт его главному при остановке воркера).
+    workeroutput = getattr(session.config, "workeroutput", None)
+    if workeroutput is not None:
+        workeroutput["network_attempts"] = list(_NETWORK_ATTEMPTS)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    """Хук xdist в главном процессе: попытки воркера — в общую сводку прогона."""
+    for test, target in getattr(node, "workeroutput", {}).get("network_attempts", ()):
+        _NETWORK_ATTEMPTS.append((test, target))
+
+
 def pytest_terminal_summary(terminalreporter):
     if not _NETWORK_ATTEMPTS:
         return
