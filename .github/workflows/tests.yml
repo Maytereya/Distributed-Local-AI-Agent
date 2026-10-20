@@ -6,7 +6,7 @@ name: Lint & Hermetic Tests
 # default-safe). Список файлов — tests/hermetic_files.txt (18.10: 173 файла, ~3850 тестов;
 # проверено копией CI — Python 3.12 + requirements-ci.txt, без конфига и срезов).
 # ПОЛНЫЙ suite (~2840 тестов, требует кэшей) остаётся локальным гейтом перед коммитом:
-# ./venv/bin/python -m pytest -q -p no:cacheprovider
+# ./venv/bin/python -m pytest -q -p no:cacheprovider -n auto
 # Расширение списка: добавляй файл, только если он зелёный без сети/кэшей/конфига;
 # список только растёт (tests/test_hermetic_files_ratchet.py).
 
@@ -42,4 +42,4 @@ jobs:
         run: ruff check messengers_router tests
 
       - name: Hermetic tests (no network / no caches / no config.ini)
-        run: pytest -q -p no:cacheprovider $(cat tests/hermetic_files.txt)
+        run: pytest -q -p no:cacheprovider -n auto $(cat tests/hermetic_files.txt)

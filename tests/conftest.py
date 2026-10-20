@@ -252,6 +252,21 @@ def _turn_telemetry_to_tmp(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _synonym_journal_to_tmp(tmp_path, monkeypatch):
+    """Журнал синонимов цены (`price_synonym_suggestions.jsonl`) тесты пишут во временный каталог.
+
+    До 20.10 тест, дошедший до выбора строки прайса LLM без своей подмены журнала, дописывал строку в
+    `<cwd>/app_data/journals` — в журнал разработчика, который уходит клинике как список синонимов. Под
+    `pytest -n` туда же писали бы параллельно несколько процессов. Тесты журнала подменяют путь сами
+    (monkeypatch после autouse побеждает), мир стенда — тоже.
+    """
+    from messengers_router.services import _price_select_llm
+
+    monkeypatch.setattr(_price_select_llm, "_journal_path", lambda: tmp_path / "price_synonym_suggestions.jsonl")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _operator_hours_day(monkeypatch):
     """Мир гейта по умолчанию — рабочие часы операторов.
 
@@ -507,6 +522,21 @@ def _network_per_test(request):
     yield
     _NETWORK["blocked"] = True
     _NETWORK["test"] = "<между тестами>"
+
+
+def pytest_sessionfinish(session):
+    # Под `pytest -n` тесты идут в процессах-воркерах, а сводку печатает главный процесс: воркер отдаёт
+    # свои попытки через `workeroutput` (xdist передаёт его главному при остановке воркера).
+    workeroutput = getattr(session.config, "workeroutput", None)
+    if workeroutput is not None:
+        workeroutput["network_attempts"] = list(_NETWORK_ATTEMPTS)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    """Хук xdist в главном процессе: попытки воркера — в общую сводку прогона."""
+    for test, target in getattr(node, "workeroutput", {}).get("network_attempts", ()):
+        _NETWORK_ATTEMPTS.append((test, target))
 
 
 def pytest_terminal_summary(terminalreporter):
