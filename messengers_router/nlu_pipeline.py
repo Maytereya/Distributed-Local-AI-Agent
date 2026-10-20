@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import classifier, turn_telemetry
+from . import classifier, topic_shadow, turn_telemetry
 from .context_summary import seeded_context_for_nlu
 from .llm_mode_policy import RuntimeOptions
 from .mess_types import RouteDecision, SessionState
@@ -199,6 +199,15 @@ async def _analyze_legacy_with_candidates(
 
     prefetched_rule = await _rule_decision(text, state.last_entities, runtime_options=runtime_options)
     _note_topic_source(prefetched_rule, text)
+    if prefetched_rule is not None and (runtime_options is None or runtime_options.llm_mode != "strict"):
+        # Тема решена правилом без LLM — тень LLM рядом (под `topic_shadow_llm = on`): как часто правило ошибается.
+        # Промпт — тот же, что у хода без правила (`classifier.analyze` с тем же контекстом).
+        topic_shadow.launch(
+            text,
+            classifier._seed_entities_from_memory(llm_context),
+            prefetched_rule.label,
+            queue_timeout_ms=int(runtime_options.queue_timeout_ms) if runtime_options else 30000,
+        )
     rule = prefetched_rule or RouteDecision(
         label="OTHER",
         confidence=0.2,

@@ -204,6 +204,7 @@ class MessengerRouterConfig:
     price_candidates_by_meaning: str
     mis_honest_degradation: str
     topic_override_llm: str
+    topic_shadow_llm: str
     address_service_llm: str
     booking_specialty_llm: str
     slot_suppress_llm: str
@@ -571,6 +572,10 @@ settings = Settings(
         # «чинить через LLM, уходим от совпадения букв к смыслу»; «Ново-Садовая» ловилась словом «новость»).
         # LLM недоступна — тема метку не перебивает. off — как было. [MESSENGER_ROUTER] topic_override_llm
         topic_override_llm=_get_enum("MESSENGER_ROUTER", "topic_override_llm", default="off", allowed={"off", "on"}),
+        # Тень LLM рядом с правилом темы (ход (б), решения владельца 20.10 (б) 1, 3): где тему решило правило `legacy_v2`,
+        # LLM-классификатор решает её параллельно ходу, вне его бюджета; строка `topic_shadow` после ответа — матрица
+        # «правило × LLM». Ответ не меняется. off — как было. [MESSENGER_ROUTER] topic_shadow_llm
+        topic_shadow_llm=_get_enum("MESSENGER_ROUTER", "topic_shadow_llm", default="off", allowed={"off", "on"}),
         # Инструмент адресов при пустой сущности услуги сам не решает её по буквам реплики: правила дают кандидатов (строки
         # прайса, по которым ищутся места оказания), выбирает LLM (`choose`, задача `address_service`); «ни одна» — общий
         # список филиалов, сбой LLM — как было. Услуга, которую LLM разбора хода уже не подтвердила, заново не ищется
@@ -745,6 +750,7 @@ MR_PRICE_OPTION_MIS_NOTES = settings.messenger_router.price_option_mis_notes
 MR_PRICE_CANDIDATES_BY_MEANING = settings.messenger_router.price_candidates_by_meaning
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
+MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
 MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
 MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm
