@@ -168,6 +168,8 @@ async def apply(decision: Any, user_text: str, services: "Services | None") -> A
 
     if mode() != "on" or services is None or decision.label not in _ACTING_LABELS or not str(user_text or "").strip():
         return decision
+    if "doctor_name_verified" in (decision.flags or ()) or any((decision.entities or {}).get(k) for k in _DOCTOR_KEYS):
+        return decision  # назван врач (фамилия): роль решает его карточка, а не слово о специальности (dev g0124)
     try:
         cat = await catalog(services)
         fields = await decide(decision.label, user_text, str(decision.entities.get("specialty") or ""), cat, shadow=False)
@@ -184,7 +186,10 @@ async def apply(decision: Any, user_text: str, services: "Services | None") -> A
     if llm in reception:
         role = next(role for role in cat.roles if role.name == llm)
         rules_name = str(entities.get("specialty") or "")
-        if not _names_this_role(rules_name, role):
+        # Правила роли не дали, а точный слой нашёл ту же роль, что LLM, — дальше её найдёт и прежний путь по слову;
+        # подстановка заранее сбивала поток записи (филиал из реплики терялся, dev g0023, g0613).
+        same_as_exact = not rules_name and fields.get("role_exact") == llm
+        if not same_as_exact and not _names_this_role(rules_name, role):
             entities["specialty"] = _atom_named(role, user_text)
             acted = "specialty"
         if flags & _REFUSAL_FLAGS:
@@ -203,6 +208,7 @@ async def apply(decision: Any, user_text: str, services: "Services | None") -> A
 
 
 _REFUSAL_FLAGS = frozenset({"unsupported_specialist", "unsupported_catalog"})
+_DOCTOR_KEYS = ("doctor_name", "doctor_id", "last_name", "doctor_last_name")
 
 
 def _names_this_role(name: str, role: Any) -> bool:

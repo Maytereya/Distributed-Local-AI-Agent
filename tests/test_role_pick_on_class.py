@@ -25,11 +25,13 @@ from tests.test_role_pick_shadow_class import _CATALOG, _MARK, _down, _picks
 _SERVICES = object()  # каталог подменяется — сервисный слой не читается
 
 
-def _apply(monkeypatch, text: str, answer, *, label: str = "APPOINTMENT", rules: str = "", flags=(), mode: str = "on", catalog=_CATALOG):
+def _apply(
+    monkeypatch, text: str, answer, *, label: str = "APPOINTMENT", rules: str = "", flags=(), mode: str = "on", catalog=_CATALOG, entities=None
+):
     from messengers_router.runtime_config import config as cfg
 
     fake = _LLM({_MARK: answer})
-    decision = RouteDecision(label=label, entities={"specialty": rules} if rules else {}, flags=set(flags))
+    decision = RouteDecision(label=label, entities={**({"specialty": rules} if rules else {}), **(entities or {})}, flags=set(flags))
 
     async def cat(_services):
         return catalog
@@ -80,7 +82,7 @@ def test_absent_role_is_honest_no_with_operator_offer(monkeypatch, text):
     _before, after, _calls = _apply(monkeypatch, text, _picks(None, "absent"), label="DOCTOR_INFO")
     assert "role_absent" in after.flags
     reply = build_unsupported_catalog_response(Evidence(items={"unsupported_catalog": {"kind": "role_absent"}}))
-    assert reply is not None and "такого специалиста" in reply.text.lower()
+    assert reply is not None and "такого специалиста не нашёл" in reply.text.lower()
 
 
 def test_child_qualifier_goes_to_operator(monkeypatch):
@@ -125,6 +127,21 @@ def test_rules_name_of_the_same_compound_role_is_kept(monkeypatch):
 def test_specialty_is_the_part_of_the_role_patient_named(monkeypatch):
     catalog = build_role_catalog([_doctor((3, "Врач-сердечно-сосудистый хирург, флеболог"))], in_region=_here)
     _before, after, _calls = _apply(
-        monkeypatch, "нужен флеболог", _picks("сердечно-сосудистый хирург, флеболог"), label="DOCTOR_INFO", catalog=catalog
+        monkeypatch, "нужен флеболог", _picks("сердечно-сосудистый хирург, флеболог"), label="DOCTOR_INFO", rules="хирург", catalog=catalog
     )
     assert after.entities.get("specialty") == "флеболог"
+
+
+def test_named_doctor_is_not_judged_by_role(monkeypatch):
+    """«давай Трубин, смогу сегодня?» — фамилия врача: «такого специалиста нет» не говорим (dev g0124)."""
+
+    for flags, entities in (({"doctor_name_verified"}, {}), ((), {"doctor_name": "Трубин"})):
+        before, after, calls = _apply(monkeypatch, "давай трубин смогу сегодня", _picks(None, "absent"), label="DOCTOR_SCHEDULE", flags=flags, entities=entities)
+        assert after is before and not calls
+
+
+def test_role_found_by_exact_layer_is_left_to_the_old_path(monkeypatch):
+    """Правила роли не дали, точный слой и LLM назвали одну роль — специальность заранее не ставим (филиал не теряется)."""
+
+    before, after, _calls = _apply(monkeypatch, "записаться к неврологу, ленина 5", _picks("невролог"))
+    assert after is before
