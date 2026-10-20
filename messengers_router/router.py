@@ -3720,7 +3720,9 @@ async def _answer_branch_side_question(
 
     if SHOWN_KEY in scratch.last_entities:  # что пациент увидел в побочном ответе — контекст следующего хода
         state.last_entities[SHOWN_KEY] = scratch.last_entities[SHOWN_KEY]
-    expects.ask(expects.Question.APPOINTMENT_BRANCH, kind=expects.PICK, options=options)
+    # Вопрос о филиале — прежний: в поле ожидания его текст со списком записи, не текст побочного ответа (в ответе о
+    # часах — свой нумерованный список филиалов города, BUG-2026-10-20-BRANCH-AFTER-SIDE-FOREIGN).
+    expects.keep_asking()
     return ResponseEnvelope(
         text=f"{str(response.text).strip()}\n\n{question}",
         attachments=list(response.attachments or []),

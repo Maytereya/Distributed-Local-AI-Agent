@@ -50,9 +50,18 @@ def side_price_world(tmp_path_factory) -> Path:
     """Мир: прайс `mini_prod` + приём хирурга (на настоящем прайсе «приём» по словам находит его первым), выдержка врачей
     и цены услуг своей специальности у врачей (без них ответ о цене приёма — перевод, и побочного ответа нет)."""
 
-    src = tmp_path_factory.mktemp("side_price_src")
+    src = side_price_source(tmp_path_factory.mktemp("side_price_src"))
+    return ev_world.build_world(src, "20261008", tmp_path_factory.mktemp("side_price") / "world")
+
+
+def side_price_source(src: Path, doctor=lambda doctor: doctor) -> Path:
+    """Срезы мира `side_price_world` в каталоге `src`; `doctor` правит строку врача до цен врачей (мир другого теста)."""
+
     shutil.copytree(_TESTS / "fixtures" / "mini_prod" / "snapshots", src, dirs_exist_ok=True)
-    shutil.copy(_TESTS / "fixtures" / "doctors_excerpt" / "doctors_20261008.jsonl", src / "doctors_20261008.jsonl")
+    excerpt = (_TESTS / "fixtures" / "doctors_excerpt" / "doctors_20261008.jsonl").read_text(encoding="utf-8").splitlines()
+    (src / "doctors_20261008.jsonl").write_text(
+        "".join(json.dumps(doctor(json.loads(line)), ensure_ascii=False) + "\n" for line in excerpt if line.strip()), encoding="utf-8"
+    )
     price_path = src / "price_by_region" / "price_region_3_20261008.jsonl"
     rows = [json.loads(line) for line in price_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     template = next(row for row in rows if row["serviceName"] == "Прием (осмотр, консультация) врача-уролога")
@@ -87,7 +96,7 @@ def side_price_world(tmp_path_factory) -> Path:
     (src / "doctor_prices" / "doctor_prices_20261008.jsonl").write_text(
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in doctor_prices), encoding="utf-8"
     )
-    return ev_world.build_world(src, "20261008", tmp_path_factory.mktemp("side_price") / "world")
+    return src
 
 
 def _llm(book: str) -> _LLM:
