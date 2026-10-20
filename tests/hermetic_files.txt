@@ -187,3 +187,4 @@ tests/test_pending_buttons_class.py
 tests/test_clarify_code_leak_class.py
 tests/test_switch_bench_sets.py
 tests/test_basket_weak_phrase_judge_class.py
+tests/test_llm_primary_rules_fallback_class.py

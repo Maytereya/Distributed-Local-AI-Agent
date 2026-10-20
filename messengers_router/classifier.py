@@ -261,6 +261,24 @@ async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000)
     )
 
 
+def classify_payload_failure(raw_text: str, data: dict[str, Any]) -> str | None:
+    """Вид сбоя разбора классификатора: `unavailable` (вызов не состоялся — недоступна, таймаут, бюджет хода,
+    предохранитель), `invalid` (ответ не JSON или метка вне контракта) или None — LLM ответила внятно.
+
+    Санитайзер молча превращает метку вне контракта в OTHER — такой «ответ» неотличим от настоящего OTHER, поэтому
+    метку проверяем по сырому тексту модели.
+    """
+    flags = _normalize_flags(data.get("flags"))
+    if "ollama_timeout" in flags:
+        return "unavailable"
+    if "ollama_non_json" in flags:
+        return "invalid"
+    obj = _extract_json(raw_text)
+    if not isinstance(obj, dict) or obj.get("label") not in PATIENT_LABEL_PRIORITY:
+        return "invalid"
+    return None
+
+
 async def ollama_classify_json(prompt: str, *, queue_timeout_ms: int = 30000) -> dict[str, Any]:
     """
     Реальный вызов Ollama: generate(format="json") + безопасный парсинг.
@@ -1095,6 +1113,7 @@ async def analyze_llm_primary(
         "guardrail_pre": {"hit": False},
         "llm_primary_raw": raw_text,
         "llm_primary_sanitized": data,
+        "llm_primary_failure": classify_payload_failure(raw_text, data),
         "guardrail_post": {
             "clarify_needed": decision.clarify_needed,
             "clarify_reason": decision.clarify_reason,
@@ -1619,7 +1638,14 @@ async def analyze(
     last_entities: dict[str, Any],
     runtime_options: RuntimeOptions | None = None,
     prefetched_rule: RouteDecision | None = None,
+    prefetched_llm: dict[str, Any] | None = None,
 ) -> RouteDecision:
+    """Решение `legacy_v2`: правило, если сработало, иначе разбор LLM.
+
+    `prefetched_llm` — санитизированный ответ классификатора на тот же промпт, уже полученный на этом ходе (запасной
+    путь `llm_primary`, `nlu_pipeline`): второй вызов LLM не делается, решение то же, что дал бы `legacy_v2` при том же
+    ответе модели.
+    """
     flags: set[str] = set()
     flags |= detect_pii(text)
 
@@ -1667,7 +1693,10 @@ async def analyze(
 
     prompt = _build_classify_prompt(text, seeded)
     queue_timeout_ms = int(runtime_options.queue_timeout_ms) if runtime_options else 30000
-    data = await ollama_classify_json(prompt, queue_timeout_ms=queue_timeout_ms)
+    if prefetched_llm is not None:
+        data = prefetched_llm
+    else:
+        data = await ollama_classify_json(prompt, queue_timeout_ms=queue_timeout_ms)
 
     label = _normalize_label(data.get("label"))
     conf = _normalize_confidence(data.get("confidence"))

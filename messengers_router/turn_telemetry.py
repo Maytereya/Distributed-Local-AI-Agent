@@ -12,6 +12,8 @@
 - `label`, `decision_source` (как подписал NLU), `nlu_llm` — звалась ли LLM-классификация
   на этом ходе (подпись `llm_primary` у решения правила врёт — DEBT-1, поэтому факт вызова
   пишется отдельно), `rule` — первый флаг `rule_*`;
+- `nlu_fallback = rules` и `nlu_fail` (`unavailable` | `invalid`) — под `llm_primary` разбор LLM не состоялся и ход решили
+  правила, как `legacy_v2` (`llm_primary_rules_fallback = on`, решение владельца 20.10);
 - `evidence_empty`, `handoff`, `chars`, `ms`, `stage_ms`;
 - `money_cut` — сколько предложений с денежными суммами снято со свободного текста LLM
   (`money_guard`, только при `llm_free` и только если снято);
