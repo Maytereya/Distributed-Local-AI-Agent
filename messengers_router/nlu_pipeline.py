@@ -151,6 +151,27 @@ def _merge(rule: RouteDecision, llm: RouteDecision, *, llm_mode: str = "hybrid")
     return merged, "llm_primary"
 
 
+def _rule_branch(rule: RouteDecision, text: str) -> str:
+    """Флаги, которые поставила сработавшая ветка правила, — без PII и вторичных намерений (те ставит не ветка)."""
+
+    own = set(rule.flags) - classifier.detect_pii(text) - {"multi_intent_detected"}
+    return "+".join(sorted(str(f) for f in own)) or "?"
+
+
+def _note_topic_source(rule: RouteDecision | None, text: str) -> None:
+    """Кто решил тему реплики на уровне NLU — замер хода (б), DEBT-1 (STEP-2026-10-20-B-TOPIC-SOURCE).
+
+    `nlu_src = rule` — ветка правила `legacy_v2` (или guardrail `llm_primary`), `nlu_rule` — её флаги; `nlu_src = llm` —
+    правило не сработало, решал LLM-классификатор. Подпись решения (`decision_source`) этого не различает: решение правила
+    проходит слияние с подписью `llm_primary`. Только запись, на решение не влияет.
+    """
+
+    if rule is None:
+        turn_telemetry.note(nlu_src="llm")
+    else:
+        turn_telemetry.note(nlu_src="rule", nlu_rule=_rule_branch(rule, text))
+
+
 def _engine_from_config() -> str:
     raw = str(c.MR_NLU_ENGINE).strip().lower()
     if raw in {"legacy_v2", "llm_primary"}:
@@ -177,6 +198,7 @@ async def _analyze_legacy_with_candidates(
     llm_context.update(seeded)
 
     prefetched_rule = await _rule_decision(text, state.last_entities, runtime_options=runtime_options)
+    _note_topic_source(prefetched_rule, text)
     rule = prefetched_rule or RouteDecision(
         label="OTHER",
         confidence=0.2,
@@ -232,6 +254,7 @@ async def _analyze_llm_primary_with_candidates(
         turn_telemetry.note(nlu_fallback="rules", nlu_fail=failure)
         fallback.trace = {**trace, "rules_fallback": failure, "final_decision": fallback.trace["final_decision"]}
         return fallback
+    _note_topic_source(decision if (trace.get("guardrail_pre") or {}).get("hit") else None, text)
     candidate = _candidate_from_decision("llm_primary", decision)
     return NLUResult(
         decision=decision,

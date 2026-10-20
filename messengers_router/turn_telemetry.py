@@ -12,6 +12,8 @@
 - `label`, `decision_source` (как подписал NLU), `nlu_llm` — звалась ли LLM-классификация
   на этом ходе (подпись `llm_primary` у решения правила врёт — DEBT-1, поэтому факт вызова
   пишется отдельно), `rule` — первый флаг `rule_*`;
+- `nlu_src` — кто решил тему на уровне NLU: `rule` (ветка правила `legacy_v2` или guardrail `llm_primary`; `nlu_rule` —
+  флаги ветки, без PII и вторичных намерений) или `llm` (правило не сработало — LLM-классификатор); замер хода (б), 20.10;
 - `nlu_fallback = rules` и `nlu_fail` (`unavailable` | `invalid`) — под `llm_primary` разбор LLM не состоялся и ход решили
   правила, как `legacy_v2` (`llm_primary_rules_fallback = on`, решение владельца 20.10);
 - `evidence_empty`, `handoff`, `chars`, `ms`, `stage_ms`;

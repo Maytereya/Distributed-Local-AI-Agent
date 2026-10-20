@@ -194,3 +194,5 @@ tests/test_prepare_subject_class.py
 tests/test_branch_side_price_class.py
 tests/test_branch_answer_after_side_class.py
 tests/test_branch_side_consult_rows_class.py
+tests/test_nlu_topic_source_class.py
+tests/test_evalbench_topic_source.py
