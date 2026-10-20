@@ -402,6 +402,15 @@ def _rare_rows(texts: Sequence[str], retail_rows: list[dict[str, Any]], *, short
     return out
 
 
+def names_service(question: str) -> bool:
+    """Назвал ли пациент в реплике услугу — одно определение для планировщика (не переспрашивать название) и выбора
+    строки (звать ли LLM). Под `price_candidates_by_meaning` короткое сокращение с заглавной («ЛГ», «аТ ТГ») — тоже
+    слова об услуге: её ищет LLM. До 20.10 это знал только выбор строки, а планировщик по прежнему определению
+    переспрашивал «Скажите название услуги» раньше него (test-срез 20.10: «ЛГ стоимость», «Цена аТ ТГ»)."""
+
+    return price_question_names_service(question) or bool(_by_meaning_on() and _short_name_words(question))
+
+
 def _short_name_words(text: str) -> list[str]:
     """Сокращения в две буквы, которые общий разбор цены отбрасывает как шум («ЛГ», «аТ ТГ»): написаны хотя бы с одной
     заглавной (предлоги «за», «из» пишут строчными) — без чисел и слов-вопросов."""
@@ -629,9 +638,8 @@ async def select_price_rows(
     if not question or not rows:
         return None
     by_meaning = _by_meaning_on()
-    # Ответ цифрой, «да», «а сколько стоит?» — своих слов об услуге нет, её держит контекст. Под
-    # `price_candidates_by_meaning` короткое сокращение («ЛГ», «аТ ТГ») — тоже слова об услуге: её ищет LLM.
-    if not price_question_names_service(question) and not (by_meaning and _short_name_words(question)):
+    # Ответ цифрой, «да», «а сколько стоит?» — своих слов об услуге нет, её держит контекст.
+    if not names_service(question):
         return None
     # «по ОМС» и другие уточнения, которых в прайсе нет вовсе: правила честно говорят
     # «не нашёл» (решение владельца, П2) — не даём LLM найти «почти то». Но если
