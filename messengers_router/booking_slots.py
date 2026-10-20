@@ -7,7 +7,11 @@
   услуга) или каталог её не нашёл, а специальности в решении хода не было — честный отказ гарда B′ с оффером оператора
   вместо вопроса о филиале (карточка test 18.10, g0792). Кандидат специальности — из правил (`policies.extract_specialty`, слова каталога ролей);
   к ней ли пациент хочет записаться, решает модуль выбора (`choose`, задача `booking_specialty`). Подтвердила — цель
-  записи она; «нет», сбой — как было (отказ с оффером оператора).
+  записи она; «нет», сбой — как было (отказ с оффером оператора). С 20.10 (DEBT-2026-10-20-BOOKING-SPECIALTY-QUALIFIER)
+  у задачи два исхода: подтверждение одного кандидата склоняло модель к «да» («к детскому аллергологу» → аллерголог,
+  «узи кисти рук» → «приём к узи»), и сказать «есть уточнение» ей было некуда. `qualifier` — пациент уточняет то, чего
+  нет в названии специальности (для кого врач, условие оплаты ДМС/ОМС/полис); `procedure` — пациент хочет на процедуру
+  или исследование, а не на приём врача. Исход побеждает выбор: запись к кандидату не идёт — как под off.
 - `[MESSENGER_ROUTER] slot_suppress_llm` — подавитель A′-1 (`router._suppress_grounder_rejected_slots`) держал отвергнутую
   в этом ходу услугу, если резолвер прайса находил по ней хоть что-то по буквам («Гастроскопию» → «Гастрин»): после
   честного отказа в состоянии оставалась фраза пациента (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS, попутно (3);
@@ -27,10 +31,17 @@
 from __future__ import annotations
 
 
-from .choice import Option, Status, Task, choose
+from .choice import Choice, Option, Status, Task, choose
 from .runtime_config import config as _cfg
 
-BOOKING_SPECIALTY_TASK = Task(name="booking_specialty", max_picks=1, num_predict=32, timeout_s=5.0, queue_timeout_ms=1500)
+BOOKING_SPECIALTY_TASK = Task(
+    name="booking_specialty",
+    max_picks=1,
+    outcomes=("qualifier", "procedure"),
+    num_predict=32,
+    timeout_s=5.0,
+    queue_timeout_ms=1500,
+)
 
 
 def _on(attr: str) -> bool:
@@ -49,13 +60,17 @@ def suppress_enabled() -> bool:
     return _on("MR_SLOT_SUPPRESS_LLM")
 
 
-async def confirms_booking_specialty(user_text: str, specialty: str) -> bool:
-    """Пациент хочет записаться (узнать о записи) к врачу этой специальности. Сбой, мусор или «нет» — False."""
+async def booking_specialty_choice(user_text: str, specialty: str) -> Choice:
+    """Решение LLM о записи к врачу этой специальности: PICKED — к ней; OUTCOME (`qualifier`, `procedure`), «нет», сбой,
+    мусор — не к ней."""
 
-    specialty = str(specialty or "").strip()
-    if not specialty:
-        return False
-    choice = await choose(BOOKING_SPECIALTY_TASK, user_text, [Option(id=specialty, text=specialty)])
+    return await choose(BOOKING_SPECIALTY_TASK, user_text, [Option(id=specialty, text=specialty)])
+
+
+def confirms(choice: Choice, specialty: str) -> bool:
+    """Запись к специальности подтверждена: выбор без исхода. Исход побеждает выбор (`choose`) — уточнение пациента или
+    процедура не дают записи к кандидату, даже если модель его назвала."""
+
     return choice.status is Status.PICKED and specialty in choice.ids
 
 
