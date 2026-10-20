@@ -110,3 +110,21 @@ def test_reproductologist_is_found_by_llm_from_catalog(monkeypatch):
     catalog = build_role_catalog([_doctor((1, "Врач-терапевт")), _doctor((9, "Врач-репродуктолог"))], in_region=_here)
     _before, after, _calls = _apply(monkeypatch, "есть ли у вас врач по бесплодию", _picks("репродуктолог"), label="DOCTOR_INFO", catalog=catalog)
     assert after.entities.get("specialty") == "репродуктолог"
+
+
+def test_rules_name_of_the_same_compound_role_is_kept(monkeypatch):
+    """«аллерголог» правил — та же роль «аллерголог-иммунолог»: имя правил остаётся (справочник врачей его понимает)."""
+
+    catalog = build_role_catalog([_doctor((1, "Врач-аллерголог-иммунолог"))], in_region=_here)
+    before, after, _calls = _apply(
+        monkeypatch, "есть ли у вас аллерголог-иммунолог", _picks("аллерголог-иммунолог"), label="DOCTOR_INFO", rules="аллерголог", catalog=catalog
+    )
+    assert after is before
+
+
+def test_specialty_is_the_part_of_the_role_patient_named(monkeypatch):
+    catalog = build_role_catalog([_doctor((3, "Врач-сердечно-сосудистый хирург, флеболог"))], in_region=_here)
+    _before, after, _calls = _apply(
+        monkeypatch, "нужен флеболог", _picks("сердечно-сосудистый хирург, флеболог"), label="DOCTOR_INFO", catalog=catalog
+    )
+    assert after.entities.get("specialty") == "флеболог"

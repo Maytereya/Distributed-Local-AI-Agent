@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 from . import turn_telemetry
 from .choice import Option, Status, Task, choose
 from .runtime_config import config as _cfg
-from .services._role_catalog import RoleCatalog, build_role_catalog
+from .services._role_catalog import RoleCatalog, _hit, _stem, _tokens, build_role_catalog
 from .services._symptom_specialists import in_region, region_doctors
 
 if TYPE_CHECKING:
@@ -182,9 +182,10 @@ async def apply(decision: Any, user_text: str, services: "Services | None") -> A
     entities = dict(decision.entities or {})
     reception = {role.name for role in cat.roles if role.reception}
     if llm in reception:
-        atom = llm.split(",")[0].strip()
-        if fields.get("role_rules") != llm and str(entities.get("specialty") or "") != atom:
-            entities["specialty"] = atom
+        role = next(role for role in cat.roles if role.name == llm)
+        rules_name = str(entities.get("specialty") or "")
+        if not _names_this_role(rules_name, role):
+            entities["specialty"] = _atom_named(role, user_text)
             acted = "specialty"
         if flags & _REFUSAL_FLAGS:
             flags -= _REFUSAL_FLAGS
@@ -202,6 +203,35 @@ async def apply(decision: Any, user_text: str, services: "Services | None") -> A
 
 
 _REFUSAL_FLAGS = frozenset({"unsupported_specialist", "unsupported_catalog"})
+
+
+def _names_this_role(name: str, role: Any) -> bool:
+    """Специальность правил называет эту же роль: её название целиком или часть составного слова через дефис
+    («аллерголог» — «аллерголог-иммунолог», «гинеколог» — «акушер-гинеколог»). Общее слово при уточнении прилагательным —
+    другая роль («хирург» — не «сердечно-сосудистый хирург», решение владельца 08.10)."""
+
+    words = _tokens(name)
+    if not words:
+        return False
+    for atom in role.atoms:
+        atom_words = _tokens(atom)
+        if [_stem(w) for w in atom_words] == [_stem(w) for w in words]:
+            return True
+        if len(words) == 1 and len(atom.split()) == 1 and "-" in atom and any(_stem(part) == _stem(words[0]) for part in atom_words):
+            return True
+    return False
+
+
+def _atom_named(role: Any, text: str) -> str:
+    """Специальность роли, которую назвал пациент («нужен флеболог» у роли «сердечно-сосудистый хирург, флеболог» —
+    флеболог); не назвал ни одну — первая."""
+
+    words = _tokens(text)
+    for atom in role.atoms:
+        stems = [_stem(w) for w in _tokens(atom)]
+        if stems and all(_hit(stem, words) for stem in stems):
+            return atom
+    return role.atoms[0] if role.atoms else role.name
 
 
 async def settle(timeout_s: float) -> None:
