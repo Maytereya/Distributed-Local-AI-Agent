@@ -201,10 +201,10 @@ def _run_rows(monkeypatch, mode: str, question: str, oracle: _Oracle, *, mention
 def test_bypassed_guard_is_judged_with_the_price_changing_variant_prompt(monkeypatch):
     _dictionary_guard_fires(monkeypatch)
     on = _TaskOracle(
-        Choice(Status.NONE_FIT, reason="other_service", terms=("Фиброколоноскопия под наркозом",)),
+        Choice(Status.NONE_FIT, reason="other_service", terms=("17-ОН прогестерон cito",)),
         Choice(Status.NONE_FIT, reason="qualifier_absent"),
     )
-    _run_rows(monkeypatch, "on", "Стоимость фиброколоноскопии с наркозом", on)
+    _run_rows(monkeypatch, "on", "Сколько стоит экспресс 17-ОН, чтобы результат был день в день?", on)
     assert on.tasks == ["price_service_qualifier", "price_service_qualifier"]  # оба круга судят условие
 
 
@@ -234,8 +234,11 @@ def test_qualifier_prompt_differs_only_by_rule_three_and_lives_in_both_places():
     assert len(base.splitlines()) == len(repo.splitlines()) and len(changed) == 1
     rule = changed[0][1]
     assert rule.startswith(changed[0][0].split(" — подходящих позиций нет.")[0])  # прежнее начало правила 3 — как было
-    for word in ("наркоз", "экспресс", "на дому"):
+    for word in ("срочно", "экспресс", "в тот же день"):
         assert word in rule
+    # Наркоз — отдельная строка прайса, не условие: карточка dev 20.10 со «под наркозом / с седацией / на дому» в правиле 3
+    # — «ФГС без анестезии», «ФГДС под наркозом», «ФГДС под седацией» → «не нашёл» вместо ФГДС (было верно).
+    assert "Наркоз, седация и анестезия — не условие" in rule and "на дому" not in rule
     assert "условия сбора" in rule  # вопрос о сдаче — по-прежнему не условие (`price_judge_conditions`)
 
 
