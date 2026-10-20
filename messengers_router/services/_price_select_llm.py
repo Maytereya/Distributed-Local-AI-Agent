@@ -57,9 +57,13 @@ from ..runtime_config import config as _cfg
 from ..russian_nlu import tokens_share_stem
 from . import _biomaterial
 from ._common import _normalise_catalog_text
+from ._common import _normalise_input
 from ._prices_helpers import (
+    _PRICE_QUERY_STOPWORDS,
+    _PRICE_TOKEN_RE,
     _apply_service_synonyms,
     _extract_price_service_from_query,
+    _normalise_price_token,
     _price_query_tokens,
     _query_nonbase_price_flags,
     _rank_price_rows,
@@ -320,6 +324,65 @@ def _policy_label(selection: PriceSelection | None) -> str:
     return {"none_fit": "not_found"}.get(selection.status, selection.status)
 
 
+def _by_meaning_on() -> bool:
+    """`[MESSENGER_ROUTER] price_candidates_by_meaning = off | on` (п. 1 плана 19.10, умолчание — как было); мусор — off."""
+
+    return str(getattr(_cfg, "MR_PRICE_CANDIDATES_BY_MEANING", "off") or "").strip().lower() == "on"
+
+
+# Кандидаты по редким словам: слово встречается не больше чем в стольких названиях прайса (или нет ни в одном —
+# словоформа, «карбамазепина»), берём не больше `_RARE_WORDS` слов и `_PER_RARE_WORD` строк на слово.
+_RARE_DF = 8
+_RARE_WORDS = 3
+_PER_RARE_WORD = 4
+
+
+def _rare_words(texts: Sequence[str], retail_rows: list[dict[str, Any]]) -> list[str]:
+    """Самые редкие слова реплики (или терминов) в прайсе — сначала известные редкие, затем незнакомые прайсу
+    (словоформы и сокращения): поиск по всем словам сразу отдаёт строку, только если совпали все слова, и пул забивают
+    строки по частым словам («анализ крови на концентрацию карбамазепина» — ни одной строки «Карбамазепин»; диагностика
+    п. 1, 19.10)."""
+
+    df = _token_df(retail_rows)
+    words: list[str] = []
+    for text in texts:
+        for token in _price_query_tokens(str(text or "")):
+            if token not in words and not token.isdigit():
+                words.append(token)
+    short = [w for text in texts for w in _short_name_words(str(text or "")) if w not in words]
+    known = sorted((w for w in words if 0 < df.get(w, 0) <= _RARE_DF), key=lambda w: df[w])
+    unknown = [w for w in words if w not in df and len(w) >= 4]
+    return list(dict.fromkeys(short + known + unknown))[:_RARE_WORDS]
+
+
+def _rare_rows(texts: Sequence[str], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Строки прайса по каждому редкому слову отдельно (кандидаты, не ответ: выбирает LLM)."""
+
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for word in _rare_words(texts, retail_rows):
+        for row in _rank_price_rows(retail_rows, word, limit=_PER_RARE_WORD):
+            key = _row_key(row)
+            if key not in seen:
+                seen.add(key)
+                out.append(row)
+    return out
+
+
+def _short_name_words(text: str) -> list[str]:
+    """Сокращения в две буквы, которые общий разбор цены отбрасывает как шум («ЛГ», «аТ ТГ»): написаны хотя бы с одной
+    заглавной (предлоги «за», «из» пишут строчными) — без чисел и слов-вопросов."""
+
+    out: list[str] = []
+    for raw in _PRICE_TOKEN_RE.findall(str(text or "")):
+        if len(raw) != 2 or raw.isdigit() or not any(ch.isupper() for ch in raw):
+            continue
+        token = _normalise_price_token(_normalise_input(raw))
+        if len(token) == 2 and token not in _PRICE_QUERY_STOPWORDS and token not in out:
+            out.append(token)
+    return out
+
+
 def _mis_notes_on() -> bool:
     """`[MESSENGER_ROUTER] price_option_mis_notes = off | on` (облако 19.10, умолчание — как было); мусор — off."""
 
@@ -530,17 +593,26 @@ async def select_price_rows(
     rows = [row for row in retail_rows if isinstance(row, dict)]
     if not question or not rows:
         return None
-    # Ответ цифрой, «да», «а сколько стоит?» — своих слов об услуге нет, её держит контекст.
-    if not price_question_names_service(question):
+    by_meaning = _by_meaning_on()
+    # Ответ цифрой, «да», «а сколько стоит?» — своих слов об услуге нет, её держит контекст. Под
+    # `price_candidates_by_meaning` короткое сокращение («ЛГ», «аТ ТГ») — тоже слова об услуге: её ищет LLM.
+    if not price_question_names_service(question) and not (by_meaning and _short_name_words(question)):
         return None
     # «по ОМС» и другие уточнения, которых в прайсе нет вовсе: правила честно говорят
     # «не нашёл» (решение владельца, П2) — не даём LLM найти «почти то». Но если
     # незнакомы ВСЕ слова об услуге («гастроскопия»), это не уточнение, а услуга
     # другим словом — её и ищет LLM (правило 3 промпта само отсекает «по ОМС»).
+    guard_bypassed = False
     if judge_qualifier:
         turn_telemetry.note(price_guard="llm")
     elif query_has_unsatisfiable_qualifier(question, rows) and not query_names_service_in_other_words(question, rows):
-        return None
+        if not by_meaning:
+            return None
+        # Под `price_candidates_by_meaning` словарь прайса — повод спросить LLM, не вердикт: незнакомое прайсу слово чаще
+        # сокращение или словоформа («бак посев», «ВМС», «карбамазепина»), чем «по ОМС» (п. 1 плана 19.10). Условие судит
+        # правило 3 промпта; сбой LLM — ответ правил, как без выключателя (гард прежний: чужой цены нет).
+        judge_qualifier = guard_bypassed = True
+        turn_telemetry.note(price_guard="llm_bypass")
 
     phrase = str(_extract_price_service_from_query(question) or "").strip()
     journal_phrase, journal_source = _journal_phrase(question, phrase or question)
@@ -557,6 +629,10 @@ async def select_price_rows(
     # Не `shown`: это первые кандидаты для LLM, а политика решает по строкам, которые увидит
     # пациент, — параметру `shown` (BUG-2026-10-13-L13-SHOWN-SHADOWED).
     proposal_first, rest = candidates[:_PROPOSAL_FIRST], candidates[_PROPOSAL_FIRST:]
+    if by_meaning:
+        # Строки по редким словам — сразу за ответом правил: иначе пул из 24 строк заполняют частые слова.
+        rare = await asyncio.to_thread(_rare_rows, [question, phrase, *[str(h or "") for h in hints]], rows)
+        proposal_first = [*proposal_first, *[row for row in rare if _row_key(row) not in {_row_key(r) for r in proposal_first}]]
     # Поиск по прайсу — CPU на сотни миллисекунд: не держим им цикл событий.
     pool = await asyncio.to_thread(
         _build_pool, texts, rows, per_text=_PER_QUERY_LIMIT, first=proposal_first, fallback_texts=words
@@ -574,6 +650,9 @@ async def select_price_rows(
         return decided
 
     def unavailable() -> tuple[PriceSelection | None, str]:
+        # Словарный гард пропустил вопрос к LLM только ради её суда: без решения — ответ правил, как без выключателя.
+        if guard_bypassed:
+            return None, "rules"
         # Правила ничего не предложили — чужой цены не было, их честный ответ остаётся.
         if not candidates:
             return None, "rules"
@@ -621,8 +700,9 @@ async def select_price_rows(
     # с pH-метрией» не находит «Эзофагогастродуоденоскопия (ФГДС)» — второй круг выбирал из пустого или чужого списка
     # и отвечал «не нашёл» (BUG-2026-10-19-PRICE-ROUND-TWO-POOL).
     term_words = list(dict.fromkeys(token for term in terms for token in _price_query_tokens(term) if len(token) >= 3))
+    rare_by_terms = await asyncio.to_thread(_rare_rows, terms, rows) if by_meaning else []
     pool_by_terms = await asyncio.to_thread(
-        _build_pool, terms, rows, per_text=_PER_TERM_LIMIT, fallback_texts=term_words
+        _build_pool, terms, rows, per_text=_PER_TERM_LIMIT, first=rare_by_terms, fallback_texts=term_words
     )
     # Пустой список — не вопрос к LLM: выбрать не из чего, ответ «не нашёл» тот же без решения из лимита хода.
     if not pool_by_terms:

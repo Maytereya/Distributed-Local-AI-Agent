@@ -201,6 +201,7 @@ class MessengerRouterConfig:
     parse_fail_variants: int
     variant_b_wordforms: str
     price_option_mis_notes: str
+    price_candidates_by_meaning: str
     mis_honest_degradation: str
     topic_override_llm: str
     address_service_llm: str
@@ -534,6 +535,11 @@ settings = Settings(
         # BUG-2026-10-19-PRICE-ROUND-TWO-POOL, g0542: «мазок … с задней стенки глотки» — у «Посев на микрофлору» материала в
         # названии нет). off — как было (текст позиции «название — цена» байт в байт). [MESSENGER_ROUTER] price_option_mis_notes
         price_option_mis_notes=_get_enum("MESSENGER_ROUTER", "price_option_mis_notes", default="off", allowed={"off", "on"}),
+        # Кандидаты строки цены по смыслу, а не по буквам (п. 1 плана 19.10, ход (в), L-31): словарный гард П2 не
+        # останавливает вопрос до LLM (условие судит правило 3 промпта, как у фразы разбора), строки по редким словам
+        # реплики и терминов второго круга — первыми в пуле, короткие сокращения («ЛГ», «аТ ТГ») доходят до LLM.
+        # off — как было. [MESSENGER_ROUTER] price_candidates_by_meaning
+        price_candidates_by_meaning=_get_enum("MESSENGER_ROUTER", "price_candidates_by_meaning", default="off", allowed={"off", "on"}),
         # Ход (д), видимая деградация (решения владельца 08.10 и 18.10): сбой МИС → честный перевод на оператора вместо
         # правдоподобной неправды («расписание не найдено», «акций нет», адреса без фильтра врачей); устаревший срез —
         # приписка «по данным на ДД.ММ» или оператор. off — как было (правило 13.10: видимое поведение под
@@ -718,6 +724,7 @@ MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
 MR_PRICE_OPTION_MIS_NOTES = settings.messenger_router.price_option_mis_notes
+MR_PRICE_CANDIDATES_BY_MEANING = settings.messenger_router.price_candidates_by_meaning
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
