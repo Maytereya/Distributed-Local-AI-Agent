@@ -202,3 +202,4 @@ tests/test_topic_policy_table_class.py
 tests/test_topic_shadow_class.py
 tests/test_evalbench_topic_shadow.py
 tests/test_role_pick_shadow_class.py
+tests/test_evalbench_list_readers.py
