@@ -445,7 +445,7 @@ def _price_miss(monkeypatch, catalog, question: str, parse: turn_parse.PhrasePar
     monkeypatch.setattr(PS, "_ENABLED", True)
     monkeypatch.setattr(PS, "_journal_path", lambda: journal)
 
-    async def nothing(_question, _pool):
+    async def nothing(_question, _pool, **_kw):
         return [], [], ""
 
     monkeypatch.setattr(PS, "_ask", nothing)

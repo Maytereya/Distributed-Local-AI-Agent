@@ -107,12 +107,20 @@ PRICE_TASK = Task(
 # записи, сроке, «условиях сбора» — не условие услуги. Под `price_judge_conditions = on`; своё имя — свой промпт, своё место в
 # телеметрии и на стенде.
 PRICE_CONDITIONS_TASK = replace(PRICE_TASK, name="price_service_conditions")
+# Суд условия под `price_candidates_by_meaning = on` (гард П2 сработал, вопрос судит LLM): правило 3 называет условием и
+# вариант выполнения, от которого зависит цена (срочно / экспресс, под наркозом, на дому), — карточка dev 20.10: «ФКС с
+# наркозом» → 8 100 руб. без наркоза, «экспресс 17-ОН день в день» → обычная цена. Уточнение `price_judge_conditions`
+# («как сдать, подготовиться…» — не условие) входит в тот же текст: строгое правило без него отсекало бы вопросы о сдаче.
+PRICE_QUALIFIER_TASK = replace(PRICE_TASK, name="price_service_qualifier")
 _VARIANT_B_LIMIT = 5
 
 
-def price_task() -> Task:
-    """Задача выбора строки прайса: под `[MESSENGER_ROUTER] price_judge_conditions = on` — с уточнённым правилом 3."""
+def price_task(*, judge_qualifier: bool = False) -> Task:
+    """Задача выбора строки прайса: суд условия под `price_candidates_by_meaning = on` — свой промпт; под
+    `[MESSENGER_ROUTER] price_judge_conditions = on` — с уточнённым правилом 3."""
 
+    if judge_qualifier and _by_meaning_on():
+        return PRICE_QUALIFIER_TASK
     on = str(getattr(_cfg, "MR_PRICE_JUDGE_CONDITIONS", "off") or "").strip().lower() == "on"
     return PRICE_CONDITIONS_TASK if on else PRICE_TASK
 # Причины пустого выбора, при которых LLM не признала в реплике названия услуги: «Цена анализа»
@@ -337,11 +345,12 @@ _RARE_WORDS = 3
 _PER_RARE_WORD = 4
 
 
-def _rare_words(texts: Sequence[str], retail_rows: list[dict[str, Any]]) -> list[str]:
+def _rare_words(texts: Sequence[str], retail_rows: list[dict[str, Any]], *, short_from: str = "") -> list[str]:
     """Самые редкие слова реплики (или терминов) в прайсе — сначала известные редкие, затем незнакомые прайсу
     (словоформы и сокращения): поиск по всем словам сразу отдаёт строку, только если совпали все слова, и пул забивают
     строки по частым словам («анализ крови на концентрацию карбамазепина» — ни одной строки «Карбамазепин»; диагностика
-    п. 1, 19.10)."""
+    п. 1, 19.10). Сокращения — ещё и из `short_from` (реплика как написал пациент): фраза правил приходит строчными,
+    и «ЛГ» в ней уже не отличить от предлога."""
 
     df = _token_df(retail_rows)
     words: list[str] = []
@@ -349,18 +358,42 @@ def _rare_words(texts: Sequence[str], retail_rows: list[dict[str, Any]]) -> list
         for token in _price_query_tokens(str(text or "")):
             if token not in words and not token.isdigit():
                 words.append(token)
-    short = [w for text in texts for w in _short_name_words(str(text or "")) if w not in words]
+    short = [w for text in (short_from, *texts) for w in _short_name_words(str(text or "")) if w not in words]
     known = sorted((w for w in words if 0 < df.get(w, 0) <= _RARE_DF), key=lambda w: df[w])
     unknown = [w for w in words if w not in df and len(w) >= 4]
     return list(dict.fromkeys(short + known + unknown))[:_RARE_WORDS]
 
 
-def _rare_rows(texts: Sequence[str], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _named_service_texts(question: str, phrase: str, hints: Sequence[str]) -> list[str]:
+    """Откуда брать редкие слова: только то, что пациент назвал услугой, — фраза упоминания хода (L-14), без неё —
+    фраза правил; понимание хода «услуги не названо» — ничего. Не вся реплика: «готов», «коду», «озвучить», «сердца»
+    тянули в начало списка чужие строки («Консультация готовых гистологических стёкол», «Здоровье сердца и сосудов!»),
+    и LLM выбирала их (карточка dev 20.10). Подсказки (`hints`) — названия услуг из выбора правил, их оставляем."""
+
+    mentioned = _mention_phrase(question)
+    named = phrase if mentioned is None else mentioned
+    return [text for text in (named, *[str(h or "") for h in hints]) if str(text or "").strip()]
+
+
+def _with_rare_tail(pool: list[dict[str, Any]], rare: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Строки по редким словам — в списке, но в его конце: место в начале списка LLM принимала за подсказку («ЭхоКГ узи
+    сердца» → «Здоровье сердца и сосудов!» первым номером при «Эхокардиографии» вторым, карточка dev 20.10). Полный пул
+    уступает им последние места — иначе строку «Карбамазепин» вытесняют частые слова (диагностика 19.10)."""
+
+    keys = {_row_key(row) for row in pool}
+    missing = [row for row in rare if _row_key(row) not in keys]
+    if not missing:
+        return pool
+    room = max(0, _POOL_LIMIT - len(missing))
+    return [*pool[:room], *missing][:_POOL_LIMIT]
+
+
+def _rare_rows(texts: Sequence[str], retail_rows: list[dict[str, Any]], *, short_from: str = "") -> list[dict[str, Any]]:
     """Строки прайса по каждому редкому слову отдельно (кандидаты, не ответ: выбирает LLM)."""
 
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
-    for word in _rare_words(texts, retail_rows):
+    for word in _rare_words(texts, retail_rows, short_from=short_from):
         for row in _rank_price_rows(retail_rows, word, limit=_PER_RARE_WORD):
             key = _row_key(row)
             if key not in seen:
@@ -450,12 +483,14 @@ def _options(question: str, pool: list[dict[str, Any]]) -> list[Option]:
     return [Option(id=str(index), text=_option_text(row, note)) for index, (row, note) in enumerate(zip(pool, notes))]
 
 
-async def _ask(question: str, pool: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str], str] | None:
+async def _ask(
+    question: str, pool: list[dict[str, Any]], *, judge_qualifier: bool = False
+) -> tuple[list[dict[str, Any]], list[str], str] | None:
     """Выбор LLM по пулу кандидатов: (строки «та услуга» в порядке пула, термины, код причины пустого
     выбора) или None — сбой."""
 
     options = _options(question, pool)
-    choice = await choose(price_task(), question, options)
+    choice = await choose(price_task(judge_qualifier=judge_qualifier), question, options)
     if choice.failed:  # сбой и мусор — решение политики (L-13) или прежний ответ правил
         return None
     return [pool[index] for index in sorted(int(i) for i in choice.ids)], list(choice.terms), choice.reason
@@ -629,15 +664,17 @@ async def select_price_rows(
     # Не `shown`: это первые кандидаты для LLM, а политика решает по строкам, которые увидит
     # пациент, — параметру `shown` (BUG-2026-10-13-L13-SHOWN-SHADOWED).
     proposal_first, rest = candidates[:_PROPOSAL_FIRST], candidates[_PROPOSAL_FIRST:]
-    if by_meaning:
-        # Строки по редким словам — сразу за ответом правил: иначе пул из 24 строк заполняют частые слова.
-        rare = await asyncio.to_thread(_rare_rows, [question, phrase, *[str(h or "") for h in hints]], rows)
-        proposal_first = [*proposal_first, *[row for row in rare if _row_key(row) not in {_row_key(r) for r in proposal_first}]]
     # Поиск по прайсу — CPU на сотни миллисекунд: не держим им цикл событий.
     pool = await asyncio.to_thread(
         _build_pool, texts, rows, per_text=_PER_QUERY_LIMIT, first=proposal_first, fallback_texts=words
     )
     pool += [row for row in rest if _row_key(row) not in {_row_key(r) for r in pool}][: max(0, _POOL_LIMIT - len(pool))]
+    if by_meaning:
+        # Строки по редким словам названной услуги — в конце списка: иначе пул из 24 строк заполняют частые слова.
+        rare = await asyncio.to_thread(
+            _rare_rows, _named_service_texts(question, phrase, hints), rows, short_from=question
+        )
+        pool = _with_rare_tail(pool, rare)
     strong = strong_rows(question, rows, pool=pool)
     if strong:
         turn_telemetry.note(price_policy="strong")
@@ -679,7 +716,7 @@ async def select_price_rows(
         if not candidates and not _NOT_A_SERVICE_NAME.intersection(reasons) and journal_phrase:
             _record_synonym_suggestion(journal_phrase, found_terms, [], source=journal_source)
 
-    first = await _ask(question, pool)
+    first = await _ask(question, pool, judge_qualifier=judge_qualifier)
     if first is None:
         return settle(*unavailable())
     chosen, terms, reason = first
@@ -700,7 +737,13 @@ async def select_price_rows(
     # с pH-метрией» не находит «Эзофагогастродуоденоскопия (ФГДС)» — второй круг выбирал из пустого или чужого списка
     # и отвечал «не нашёл» (BUG-2026-10-19-PRICE-ROUND-TWO-POOL).
     term_words = list(dict.fromkeys(token for term in terms for token in _price_query_tokens(term) if len(token) >= 3))
-    rare_by_terms = await asyncio.to_thread(_rare_rows, terms, rows) if by_meaning else []
+    # Редкие слова терминов — первыми (термины назвала сама LLM, слов пациента вне услуги в них нет: «резус фактор» →
+    # «Rh- принадлежность», «эхо сердца» → «Эхокардиография» находились именно так, проба 20.10), но только если LLM
+    # признала в реплике услугу: термины к «слишком общему» и «не услуге» («цены на анализы можешь озвучить?») — догадка
+    # LLM, и строки по их редким словам она же потом выбирала (карточка dev 20.10: список «Биохимия…»).
+    rare_by_terms = (
+        await asyncio.to_thread(_rare_rows, terms, rows) if by_meaning and reason not in _NOT_A_SERVICE_NAME else []
+    )
     pool_by_terms = await asyncio.to_thread(
         _build_pool, terms, rows, per_text=_PER_TERM_LIMIT, first=rare_by_terms, fallback_texts=term_words
     )
@@ -708,7 +751,7 @@ async def select_price_rows(
     if not pool_by_terms:
         journal_miss(terms, reason)
         return settle(none_fit(reason))
-    second = await _ask(question, pool_by_terms)
+    second = await _ask(question, pool_by_terms, judge_qualifier=judge_qualifier)
     if second is None:
         return settle(*unavailable())
     if not second[0]:

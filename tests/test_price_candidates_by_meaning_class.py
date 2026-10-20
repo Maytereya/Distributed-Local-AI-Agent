@@ -75,9 +75,12 @@ def test_rare_word_row_is_offered_even_when_common_words_fill_the_pool(monkeypat
     q = "Сколько стоит анализ крови на концентрацию карбамазепина"
     on = _Oracle(Choice(Status.PICKED, ids=("0",)))
     picked = _run(monkeypatch, "on", q, on)
-    # Строка по редкому слову — в начале списка, сразу за ответом правил (на живом прайсе 20261008 под off её в списке
-    # из 24 строк нет вовсе — замер 19.10; синтетика проверяет место, а не отсутствие).
-    assert on.calls and any("Карбамазепин" in text for text in on.calls[0][:_FIRST]), on.calls
+    # Строка по редкому слову — в списке, хотя частые слова заполняют его целиком (на живом прайсе 20261008 под off её в
+    # списке из 24 строк нет вовсе — замер 19.10), и в его хвосте, а не первой (карточка dev 20.10: первое место LLM
+    # принимала за подсказку).
+    assert on.calls and len(on.calls[0]) > 3 * _FIRST // 2, on.calls  # частые слова дают полный по сути список
+    assert any("Карбамазепин" in text for text in on.calls[0][-_FIRST:]), on.calls
+    assert not any("Карбамазепин" in text for text in on.calls[0][:3]), on.calls
     assert picked is not None
 
 
@@ -152,3 +155,151 @@ def test_off_does_not_search_rare_words(monkeypatch):
 
     monkeypatch.setattr(sel, "_rare_rows", boom)
     _run(monkeypatch, "off", "Сколько стоит анализ крови на концентрацию карбамазепина", _Oracle())
+
+
+# --- Карточка dev 20.10 (BUG-2026-10-19-PRICE-NAMED-SERVICE-NOT-SHOWN-TO-LLM, доработка): два класса под on ---
+# 1) Обход гарда П2 потерял настоящее условие: «ФКС с наркозом» → 8 100 руб. без наркоза, «экспресс 17-ОН день в день» →
+#    обычная цена. Инвариант: вопрос, который судит LLM (гард сработал или суд условия от разбора), идёт с промптом, где
+#    вариант выполнения, от которого зависит цена (срочно, наркоз, на дому), — тоже условие; под off и без суда — прежний.
+# 2) Редкие слова всей реплики тянули в начало списка чужие строки («готов» → «Консультация готовых гистологических
+#    стёкол», «сердца» → «Здоровье сердца и сосудов!»), во втором круге — и после «слишком общее». Инвариант: строки
+#    по редким словам — только из названной услуги, в хвосте списка, во втором круге — только если LLM признала услугу.
+
+MORE_ROWS = [
+    *ROWS,
+    {"serviceId": 1516, "serviceName": "Тотальная фиброколоноскопия (ФКС)", "cost": 8100, "priceUnitId": 1},
+    {"serviceId": 501, "serviceName": "Посев на грибы дерматофиты", "cost": 750, "priceUnitId": 1},
+    {"serviceId": 9001, "serviceName": "Консультация готовых гистологических стекол (1 стекло)", "cost": 850, "priceUnitId": 1},
+    {"serviceId": 9002, "serviceName": "«Вакцинация COVID-19: готов ли ваш организм?»", "cost": 2000, "priceUnitId": 1},
+    {"serviceId": 9003, "serviceName": "Здоровье сердца и сосудов!", "cost": 1470, "priceUnitId": 1},
+    {"serviceId": 9004, "serviceName": "Биохимия крови", "cost": 2835, "priceUnitId": 1},
+]
+
+
+class _TaskOracle(_Oracle):
+    """Как `_Oracle`, плюс имя задачи (промпта) каждого вызова."""
+
+    def __init__(self, *answers: Choice):
+        super().__init__(*answers)
+        self.tasks: list[str] = []
+
+    async def __call__(self, task, question, options, **kw):
+        self.tasks.append(task.name)
+        return await super().__call__(task, question, options, **kw)
+
+
+def _run_rows(monkeypatch, mode: str, question: str, oracle: _Oracle, *, mention=None, **kw):
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_PRICE_CANDIDATES_BY_MEANING", mode, raising=False)
+    monkeypatch.setattr(sel, "choose", oracle)
+    monkeypatch.setattr(sel, "_record_synonym_suggestion", lambda *a, **k: None)
+    monkeypatch.setattr(sel, "_mention_phrase", lambda _q: mention)
+    return asyncio.run(sel.select_price_rows(question, MORE_ROWS, **kw))
+
+
+def test_bypassed_guard_is_judged_with_the_price_changing_variant_prompt(monkeypatch):
+    _dictionary_guard_fires(monkeypatch)
+    on = _TaskOracle(
+        Choice(Status.NONE_FIT, reason="other_service", terms=("Фиброколоноскопия под наркозом",)),
+        Choice(Status.NONE_FIT, reason="qualifier_absent"),
+    )
+    _run_rows(monkeypatch, "on", "Стоимость фиброколоноскопии с наркозом", on)
+    assert on.tasks == ["price_service_qualifier", "price_service_qualifier"]  # оба круга судят условие
+
+
+@pytest.mark.parametrize(
+    ("mode", "judge", "task"),
+    [
+        ("on", True, "price_service_qualifier"),  # суд условия от разбора хода — тоже строгий промпт
+        ("off", True, "price_service"),  # под off прод не меняется
+        ("on", False, "price_service"),  # без суда условия — прежний промпт для всех вопросов о цене
+    ],
+)
+def test_qualifier_prompt_only_for_judged_questions_under_on(mode, judge, task, monkeypatch):
+    oracle = _TaskOracle(Choice(Status.NONE_FIT, reason="other_service"))
+    _run_rows(monkeypatch, mode, "сколько стоит анализ на концентрацию карбамазепина срочно", oracle, judge_qualifier=judge)
+    assert oracle.tasks and set(oracle.tasks) == {task}
+
+
+def test_qualifier_prompt_differs_only_by_rule_three_and_lives_in_both_places():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    repo = (root / "messengers_router/prompts/choose_price_service_qualifier.txt").read_text(encoding="utf-8")
+    prod = (root / "app_data/prompts/mr_choose_price_service_qualifier.txt").read_text(encoding="utf-8")
+    base = (root / "messengers_router/prompts/choose_price_service_conditions.txt").read_text(encoding="utf-8")
+    assert repo == prod  # прод берёт app_data/prompts — две локации одинаковы
+    changed = [(a, b) for a, b in zip(base.splitlines(), repo.splitlines()) if a != b]
+    assert len(base.splitlines()) == len(repo.splitlines()) and len(changed) == 1
+    rule = changed[0][1]
+    assert rule.startswith(changed[0][0].split(" — подходящих позиций нет.")[0])  # прежнее начало правила 3 — как было
+    for word in ("наркоз", "экспресс", "на дому"):
+        assert word in rule
+    assert "условия сбора" in rule  # вопрос о сдаче — по-прежнему не условие (`price_judge_conditions`)
+
+
+def _rare_sources(monkeypatch) -> list[list[str]]:
+    """Тексты, из которых бралась каждая порция строк по редким словам (первый круг, затем термины второго)."""
+
+    calls: list[list[str]] = []
+    real = sel._rare_rows
+
+    def spy(texts, rows, **kw):
+        calls.append([str(t) for t in texts])
+        return real(texts, rows, **kw)
+
+    monkeypatch.setattr(sel, "_rare_rows", spy)
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("question", "mention", "junk"),
+    [
+        ("Сдала посев на грибы, анализ готов, перешла по коду — что дальше?", "посев на грибы", ("готов", "коду")),
+        ("Сколько стоит ЭхоКГ узи сердца?", "ЭхоКГ", ("сердца",)),
+        ("цены на анализы можешь озвучить?", "", ("озвучить", "анализы")),  # понимание хода: услуги не названо
+    ],
+)
+def test_rare_words_come_only_from_the_named_service(question, mention, junk, monkeypatch):
+    sources = _rare_sources(monkeypatch)
+    _run_rows(monkeypatch, "on", question, _Oracle(), mention=mention, judge_qualifier=True)
+    assert sources, "под on поиск по редким словам зовётся"
+    words = " ".join(sources[0]).lower()
+    assert not any(j in words for j in junk), sources[0]
+
+
+def test_rare_rows_without_understanding_use_the_rules_phrase(monkeypatch):
+    sources = _rare_sources(monkeypatch)
+    _run_rows(monkeypatch, "on", "Сколько стоит анализ крови на концентрацию карбамазепина", _Oracle(), mention=None)
+    assert sources and "сколько" not in " ".join(sources[0]).lower() and "карбамазепин" in " ".join(sources[0]).lower()
+
+
+def test_round_two_after_too_general_adds_no_rare_rows(monkeypatch):
+    sources = _rare_sources(monkeypatch)
+    oracle = _Oracle(
+        Choice(Status.NONE_FIT, reason="too_general", terms=("Биохимический анализ крови",)),
+        Choice(Status.NONE_FIT, reason="too_general"),
+    )
+    _run_rows(monkeypatch, "on", "цены на анализы можешь озвучить?", oracle, mention="", judge_qualifier=True)
+    assert len(oracle.calls) == 2
+    assert not any("Биохимический анализ крови" in texts for texts in sources), sources
+
+
+def test_round_two_after_other_service_still_searches_rare_words(monkeypatch):
+    on = _Oracle(
+        Choice(Status.NONE_FIT, reason="other_service", terms=("Карбамазепин в крови",)),
+        Choice(Status.NONE_FIT, reason="other_service"),
+    )
+    _run_rows(monkeypatch, "on", "Сколько стоит анализ на концентрацию лекарства", on)
+    # Термины назвала LLM — строки по их редким словам первыми (проба 20.10: «Rh- принадлежность», «Эхокардиография»
+    # находились во втором круге только так; хвост — для слов пациента в первом круге).
+    assert len(on.calls) == 2 and any("Карбамазепин" in text for text in on.calls[1][:_FIRST]), on.calls
+
+
+def test_short_abbreviation_is_taken_from_the_message_as_written(monkeypatch):
+    """Фраза правил приходит строчными («лг»): сокращение берётся из реплики, как её написал пациент."""
+
+    on = _Oracle(Choice(Status.NONE_FIT, reason="other_service"))
+    _run_rows(monkeypatch, "on", "ЛГ стоимость", on)
+    assert _offered(on, 0, "ЛГ (LH)"), on.calls
