@@ -532,8 +532,11 @@ async def clarify_gate(ctx: OrchestratorContext) -> OrchestratorContext:
 
     decision = ctx.decision
     if decision and decision.clarify_needed:
+        from .recovery_policy import patient_clarify_text
+
         ctx.should_clarify = True
-        ctx.clarify_text = decision.clarify_reason
+        # Служебный код разбора LLM («slot_request», «intent_disambiguation») — не текст: вопрос по нему.
+        ctx.clarify_text = patient_clarify_text(decision, ctx.text)
     if ctx.state.dialog.missing_slots:
         ctx.should_clarify = True
     return ctx

@@ -117,7 +117,7 @@ def _intent_disambiguation_text(candidates: list[str]) -> str:
     if not clean:
         return _LOW_CONF_CLARIFY_OPTIONS_TEXT
     if len(clean) == 1:
-        return f"Уточните, пожалуйста: вам нужна {_label_patient_option(clean[0])}?"
+        return f"Уточните, пожалуйста: вас интересует {_label_patient_option(clean[0])}?"  # «нужна подбор анализов» — не по-русски
     human = [f"{i}. {_label_patient_option(label)}" for i, label in enumerate(clean[:3], 1)]
     return "Уточните, пожалуйста, что именно вам нужно:\n" + "\n".join(human)
 
@@ -131,6 +131,21 @@ def _structured_clarify_text(decision: RouteDecision, flow_label: str, summary: 
             candidates.insert(0, decision.label)
         return _intent_disambiguation_text(candidates)
     return _build_recovery_text(user_text, summary, flow_label)
+
+
+# Служебные коды уточнения разбора LLM (`classifier._postprocess_primary_decision`, контракт промпта): это не текст для
+# пациента. Правила кладут в `clarify_reason` готовый текст (больничный, сайт, «узнать анализы»), LLM — код.
+CLARIFY_REASON_CODES = frozenset({"intent_disambiguation", "slot_request", "context_repair", "low_confidence"})
+
+
+def patient_clarify_text(decision: RouteDecision, user_text: str) -> str:
+    """Текст уточнения для пациента: готовый текст правил — как есть; служебный код — вопрос по нему
+    (BUG-2026-10-20-CLARIFY-CODE-LEAK: под `llm_primary` пациент получал «slot_request»)."""
+
+    reason = str(decision.clarify_reason or "").strip()
+    if reason and reason not in CLARIFY_REASON_CODES:
+        return reason
+    return _structured_clarify_text(decision, decision.label, "", user_text)
 
 
 def evaluate_recovery(
