@@ -15,6 +15,7 @@ recovery-политика и сервисные интеграции вынес�
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import logging
 import re
@@ -58,7 +59,7 @@ from .appointment_flow_guard import (
 )
 from .nlu_pipeline import analyze_with_candidates
 from .llm_mode_policy import RuntimeOptions
-from .planner import build_plan as planner_build_plan
+from .planner import build_plan as planner_build_plan, price_of as planner_price_of
 from .executor import execute_plan as executor_execute_plan
 from .response_builder import (
     build_address_response as response_build_address_response,
@@ -111,7 +112,8 @@ from .recovery_policy import contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
 from .services._appointment_change_validator import is_own_appointment_change
 from .services._existing_appointment_validator import is_own_existing_appointment
-from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE
+from .services._doctors_helpers import _service_name_allows_specialty
+from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE, consult_price_phrase, price_reply_names_own_service
 from .services._readiness_select import readiness_by_choice, readiness_from_catalog, readiness_mode
 from .services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
 from .services.prepare import anesthesia_reply, prepare_variant_payload
@@ -3631,6 +3633,36 @@ def _build_first_structured_response(
 _BRANCH_SIDE_LABELS = frozenset({"ADDRESS", "PRICE", "DOCTOR_INFO", "DOCTOR_SCHEDULE"})
 
 
+def _booking_price_service(entities: dict[str, Any]) -> tuple[str, str]:
+    """Услуга записи для вопроса о цене — (запрос цены, специальность для сверки строк или "").
+
+    Запись к специальности — приём этой специальности тем видом, каким путь цены разбирает «приём уролога»: сырое слово
+    записи («Урологу») каталог по буквам уводит в чужую услугу (BUG-2026-09-25-SPECIALTY-HITS-PROCEDURE). Запись на
+    услугу — сама услуга. Цели нет — пусто.
+    """
+
+    service = str(entities.get("service_name") or entities.get("test_name") or "").strip()
+    specialty = str(entities.get("specialty") or "").strip()
+    if specialty and (not service or is_specialty_word(service)):
+        return consult_price_phrase(specialty), specialty
+    return service, ""
+
+
+def _price_rows_of_specialty(evidence: Evidence | None, specialty: str) -> bool:
+    """Все строки, которые показал ответ о цене, — приём этой специальности (правило только сужает: иначе — без цены)."""
+
+    names: list[str] = []
+    for key in (ek.SERVICE_BUNDLE, ek.PRICE):
+        payload = evidence.get(key) if evidence is not None else None
+        if not isinstance(payload, dict):
+            continue
+        names.append(str(payload.get("service_name") or ""))
+        for rows_key in ("retail_prices", "prices", "family_variants"):
+            names.extend(str(row.get("serviceName") or "") for row in payload.get(rows_key) or () if isinstance(row, dict))
+    names = [name for name in names if name.strip()]
+    return bool(names) and all(_service_name_allows_specialty(name, specialty) for name in names)
+
+
 async def _answer_branch_side_question(
     user_text: str,
     state: SessionState,
@@ -3657,11 +3689,17 @@ async def _answer_branch_side_question(
     question = shown.split("\n")[-1].strip() if shown else ""
     if not options or not question:
         return None
+    # Вопрос о цене без своей услуги («а сколько стоит приём?», «а цена?») — о цене услуги записи, не о словах реплики:
+    # по слову «приём» путь цены находил приём хирурга (стенд `pa_branch_new_topic`, BUG-2026-10-20-BRANCH-SIDE-PRICE-FOREIGN).
+    booking_price, booking_specialty = ("", "") if price_reply_names_own_service(user_text) else _booking_price_service(state.last_entities)
     scratch = copy.deepcopy(state)
     reset_appointment_runtime_state(scratch)
     memory.clear_pending(scratch)
     scratch.last_entities.pop(expects.EXPECTS_KEY, None)
-    with pending_answer.aside(), expects.aside():
+    if booking_price:
+        scratch.last_entities["service_name"] = booking_price
+    price_of = planner_price_of(booking_price) if booking_price else contextlib.nullcontext()
+    with pending_answer.aside(), expects.aside(), price_of:
         try:
             ctx = await run_pipeline(user_text, scratch, services=services, memory=memory, runtime_options=runtime_options)
         except Exception:  # побочный ответ не ломает ход — как было
@@ -3673,6 +3711,11 @@ async def _answer_branch_side_question(
         return None
     if decision.label not in _BRANCH_SIDE_LABELS:
         return None
+    if decision.label == "PRICE" and not price_reply_names_own_service(user_text):
+        # Своей услуги реплика не назвала: цена — только услуги записи; цели нет или строки не той специальности — без
+        # цены (дезинформация ценой хуже уточнения).
+        if not booking_price or (booking_specialty and not _price_rows_of_specialty(ctx.evidence, booking_specialty)):
+            return None
     from .shown_context import SHOWN_KEY
 
     if SHOWN_KEY in scratch.last_entities:  # что пациент увидел в побочном ответе — контекст следующего хода
