@@ -56,6 +56,7 @@ from ._prices_helpers import (
     _resolve_multi_price_items,
     _split_price_query_items,
     query_has_unsatisfiable_qualifier,
+    query_names_service_in_other_words,
     strip_readiness_phrasing,
 )
 from ._strong_match import strong_rows
@@ -133,11 +134,16 @@ def strong_inside(fragment: str, catalog: list[dict[str, Any]]) -> tuple[str, li
     """Одно сильное по данным МИС окно (1–3 слова, длинные первыми, без шум-слова внутри) внутри слабой фразы и слова
     фразы вокруг него без обвязки: «ферритин первый раз» → («ферритин», строки, «первый раз»). Окон нет, их несколько
     разных или вокруг нет слов — None: что это за слова (условие или разговор), решает LLM корзины, здесь — механика
-    окон разбора (`_strong_window_pieces`), без новых словарей."""
+    окон разбора (`_strong_window_pieces`), без новых словарей.
+
+    Слова вокруг, которые сами называют услугу, — не условие, а склейка перечня без запятой (дополнение 20.10, карточка
+    корзин dev, r0121): другое сильное окно любого размера вне выбранного («бактериоскопия мазка цитология …») или хоть
+    одно слово, известное прайсу («тимофеевка луговая ферритин …», `query_names_service_in_other_words` — словарь гарда
+    П2). Тогда None — как было: суд одного окна молча выкинул бы вторую услугу из ответа."""
 
     toks = _tokens(fragment)
+    hits: list[tuple[int, int, str, list[dict[str, Any]]]] = []  # окна всех размеров, длинные первыми
     for size in _WINDOWS:
-        hits: list[tuple[int, int, str, list[dict[str, Any]]]] = []
         for i in range(len(toks) - size + 1):
             window = toks[i : i + size]
             if any(_is_multi_price_noise(t.key) for t in window):
@@ -146,14 +152,16 @@ def strong_inside(fragment: str, catalog: list[dict[str, Any]]) -> tuple[str, li
             rows = phrase_rows(raw, catalog)
             if rows:
                 hits.append((i, i + size, raw, rows))
-        if not hits:
-            continue
-        if len({_normalise_catalog_text(hit[2]) for hit in hits}) != 1:
-            return None  # два разных названия в одной фразе — не условие при услуге, а склейка: как было
-        lo, hi, raw, rows = hits[0]
-        rest = " ".join(fragment[t.start : t.end] for k, t in enumerate(toks) if not lo <= k < hi and t.key not in _FILLER)
-        return (raw, rows, rest) if rest else None
-    return None
+    if not hits:
+        return None
+    lo, hi, raw, rows = hits[0]
+    name = _normalise_catalog_text(raw)
+    if any(_normalise_catalog_text(hit[2]) != name and not (lo <= hit[0] and hit[1] <= hi) for hit in hits[1:]):
+        return None  # два разных названия в одной фразе — не условие при услуге, а склейка: как было
+    rest = " ".join(fragment[t.start : t.end] for k, t in enumerate(toks) if not lo <= k < hi and t.key not in _FILLER)
+    if not rest or not query_names_service_in_other_words(rest, catalog):
+        return None  # вокруг нет слов или среди них слово прайса — суда нет, как было
+    return raw, rows, rest
 
 
 def _key(word: str) -> str:
