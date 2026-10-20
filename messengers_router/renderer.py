@@ -614,15 +614,32 @@ def format_service_bundle_for_patient(payload: dict[str, Any], entities: dict[st
         lines.append("Если нужно, покажу подробное расписание этого врача.")
     else:
         lines.append("Если нужно, покажу подробное расписание любого из этих врачей.")
+    # Приписка о ценах региона — только если в ответе фактически есть цены (retail или у врача). Иначе ответ — просто
+    # список врачей или подсказка по подготовке.
+    priced = bool(retail_prices) or any(isinstance(d, dict) and d.get("service_price") for d in doctors)
+    return _bundle_text(lines, str(payload.get("data_as_of") or ""), priced=priced)
+
+
+def _bundle_text(lines: list[str], data_as_of: str, *, priced: bool) -> str:
+    """Текст ответа об услуге из строк; есть цены — с припиской о ценах региона (одна для обоих рендеров ниже)."""
+
     text = "\n".join(lines).strip()
-    # Самарская disclaimer-приписка показывается, только если в
-    # ответе фактически есть цены (retail или у врача). Иначе ответ
-    # — просто список врачей или подсказка по подготовке.
-    if retail_prices or any(
-        isinstance(d, dict) and d.get("service_price") for d in doctors
-    ):
-        text = _append_samara_disclaimer(text, str(payload.get("data_as_of") or ""))
-    return text
+    return _append_samara_disclaimer(text, data_as_of) if priced else text
+
+
+def format_consult_price_rows(rows: list[dict[str, Any]], data_as_of: str = "") -> str:
+    """Цены приёма специальности строками прайса — все варианты (первичный, повторный, у разных врачей), не одна цена.
+
+    Решение владельца 25.09 №2 (20.10 — для побочного вопроса о цене внутри записи): при нескольких строках приёма пациент
+    видит каждую со своей ценой — дезинформация одной ценой хуже списка. Без приписки адреса: филиал записи пациент ещё
+    выбирает, а адрес строки прайса — не филиал приёма.
+    """
+
+    lines = ["Стоимость приёма по прайсу клиники:"]
+    for row in rows:
+        name = str(row.get("serviceName") or row.get("name") or "").strip()
+        lines.append(_close_sentence(f"- {name} — {_format_rub(_extract_price_amount(row))}"))
+    return _bundle_text(lines, data_as_of, priced=True)
 
 
 def _extract_price_amount(row: dict[str, Any]) -> int | None:
