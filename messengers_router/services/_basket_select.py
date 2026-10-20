@@ -287,8 +287,11 @@ def _option_label(item: dict[str, Any], fragment: str) -> str:
 
 def _not_found_label(item: dict[str, Any], fragment: str) -> str:
     """«Не распознал» сильной фразы, которую суд условия не подтвердил, — со словами пациента («ферритин омс»),
-    а не «ферритин»: ферритин в прайсе есть, нет его с этим условием."""
+    а не «ферритин»: ферритин в прайсе есть, нет его с этим условием. У слабой фразы на суде (`phrase`) — вся фраза, как
+    написал пациент: условие может стоять и перед названием («по омс ферритин»)."""
 
+    if item.get("phrase"):
+        return str(item["phrase"])
     condition = str(item.get("condition") or "")
     return f"{fragment} {condition}" if condition else fragment
 

@@ -3395,8 +3395,8 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
 
     :param phrases: фразы разбора (`text`, `rows`, `beside`)
     :param retail_rows: строки прайса региона
-    :return: [{"service_name", "prices", "fragment", "strong"[, "unsatisfiable" | "judge", "condition"]}]; `fragment` —
-        слова пациента
+    :return: [{"service_name", "prices", "fragment", "strong"[, "unsatisfiable" | "judge", "condition"[, "phrase"]]}];
+        `fragment` — слова пациента; `phrase` — у слабой фразы на суде вся фраза (окно — в `fragment`)
     """
 
     items: list[dict[str, Any]] = []
@@ -3427,7 +3427,10 @@ def phrase_price_items(phrases: Sequence[Any], retail_rows: list[dict[str, Any]]
                 # сильное название («ферритин первый раз»), рядом слова, которых нет в прайсе, — суд LLM корзины, как у
                 # сильной фразы с условием; сбой LLM — «Не распознал» (П2).
                 name, rows, rest = inside
-                items.append({"service_name": name, "prices": [], "fragment": name, "strong": [], "judge": rows, "condition": rest})
+                # `phrase` — фраза целиком: «Не распознал» словами пациента в его порядке («по омс ферритин»), не «окно + условие».
+                items.append(
+                    {"service_name": name, "prices": [], "fragment": name, "strong": [], "judge": rows, "condition": rest, "phrase": fragment}
+                )
                 continue
             # Остаток после резолвера — вся фраза: уточнение без услуги в прайсе — «Не распознал» (П2).
             items.append({"service_name": fragment, "prices": [], "fragment": fragment, "strong": [], "unsatisfiable": True})
