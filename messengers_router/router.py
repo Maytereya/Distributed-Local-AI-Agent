@@ -2670,7 +2670,9 @@ async def _apply_post_nlu_guardrails(
         for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"):
             state.last_entities.pop(k, None)
 
-    if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text):
+    # Тему хода решила LLM (`topic_by_llm`, ход (б), этап 4): детектор «без записи» её не перебивает — метка ADDRESS есть
+    # и у LLM (STEP-2026-10-21-B-TOPIC-BY-LLM, g0716: список анализов «можно ли за один визит» уходил в адреса).
+    if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text) and "topic_by_llm" not in decision.flags:
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})
         if detect_nonbookable_walkin_intent(user_text, merged_ctx):

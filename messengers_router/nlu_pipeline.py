@@ -259,6 +259,10 @@ async def _analyze_legacy_with_candidates(
         topic_source = {"src": "llm", "rule": topic_source.get("rule", "")}
     llm_mode = runtime_options.llm_mode if runtime_options else "hybrid"
     merged, source = _merge(rule, llm, llm_mode=llm_mode)
+    if by_llm and llm is not rule:
+        # Тему решила LLM, правило — кандидат: детекторы того же правила после NLU метку LLM не перебивают
+        # (`router._apply_post_nlu_guardrails`, строка `policy_nonbookable_walkin`).
+        merged.flags = set(merged.flags) | {"topic_by_llm"}
     candidates = [_candidate_from_decision("rule", rule), _candidate_from_decision("llm", llm)]
     return NLUResult(
         decision=merged,

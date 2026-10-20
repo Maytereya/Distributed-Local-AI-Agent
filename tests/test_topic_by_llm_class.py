@@ -61,3 +61,15 @@ def test_other_rules_and_safety_are_untouched(reply, mini_prod_world, monkeypatc
     on = _run(mini_prod_world, monkeypatch, reply, rules="rule_test_assist,urgent,rule_urgent", answer=_answer("OTHER"))
     assert on["text"] == off["text"]
     assert "nlu_topic_by_llm" not in on["telemetry"], on["telemetry"]
+
+
+@pytest.mark.parametrize("llm_label", ["TEST_ASSIST", "ADDRESS"])
+def test_walkin_detector_does_not_override_llm_topic(llm_label, mini_prod_world, monkeypatch):  # noqa: F811
+    """Правило — кандидат и после NLU: детектор «без записи» (guardrail) не возвращает метку правила поверх LLM."""
+
+    reply = "нужно ли записываться на анализ крови"
+    off = _run(mini_prod_world, monkeypatch, reply, rules="", answer=_answer(llm_label))["telemetry"]
+    assert off.get("tu_label_final") == "ADDRESS", off  # как было: решает правило walk-in
+    on = _run(mini_prod_world, monkeypatch, reply, rules="rule_nonbookable_walkin", answer=_answer(llm_label))["telemetry"]
+    assert not any(s.startswith("policy_nonbookable_walkin:") for s in on.get("tu_relabel_src") or []), on
+    assert on.get("tu_label_nlu") == llm_label, on
