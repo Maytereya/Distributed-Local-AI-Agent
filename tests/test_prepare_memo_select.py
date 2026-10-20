@@ -477,7 +477,7 @@ def test_no_memo_offers_the_operator_and_yes_hands_off(monkeypatch):
     payload = run(Services().test_prepare("Как подготовиться к кольпоскопии?", {}))
 
     assert payload["operator_offer"] is True
-    assert "кольпоскопии" in payload["prepare"] and payload["prepare"].endswith("Перевести на оператора?")
+    assert "кольпоскопии" not in payload["prepare"] and payload["prepare"].endswith("Перевести на оператора?")  # слово реплики — не название
     assert "Фортранс" not in payload["prepare"]
 
     state, memory = SessionState(session_id="prepare-no-memo"), MemoryStore()

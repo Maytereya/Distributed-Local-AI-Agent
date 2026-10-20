@@ -24,6 +24,7 @@ from ._common import (
 from ._prepare_select_llm import SOURCE_MIS, PrepareMemo, kb_patient_memos, select_prepare_memos
 from ._prices_helpers import _catalog_rows
 from ._strong_match import strong_rows
+from ._turn_phrases import phrase_rows, strong_inside
 from ._prepare import (
     _PREPARE_ENTITY_RE,
     _PrepareCandidate,
@@ -39,7 +40,6 @@ from ._prepare import (
     _prepare_keyword_query,
     _prepare_names_subject,
     _prepare_service_info_queries,
-    _prepare_subject_hint,
     _prepare_subject_phrase,
     _prepare_term_roots,
 )
@@ -460,6 +460,24 @@ def _names_own_subject(raw_query: str) -> bool:
     return bool(_PREPARE_ENTITY_RE.search(_normalise_prepare_text(raw_query)) or strong_rows(raw_query, _catalog_rows(None)))
 
 
+def _catalog_subject(raw_query: str) -> str:
+    """Название услуги вопроса для текста пациенту — строка прайса по данным МИС, одна; иначе пусто.
+
+    Слова реплики названием не печатаются (BUG-2026-10-20-PREPARE-SUBJECT-QUOTES-REPLY): вырезатель правил брал всё
+    после «подготовиться к» или реплику без зачина, и пациент читал «Памятки по подготовке к «узи нужно ли не есть»».
+    Услуга — сильное окно реплики (`strong_inside`: название, синоним клиники, 1–3 слова) или вся реплика. Окна с
+    разными услугами или ни одного — пусто: ответ без названия. Число — не код услуги: в вопросе о подготовке это
+    часы («не есть 8 часов перед…»)."""
+
+    catalog = _catalog_rows(None)
+    found = strong_inside(raw_query, catalog)
+    phrase, rows = (found[0], found[1]) if found else (raw_query, phrase_rows(raw_query, catalog))
+    if phrase.strip().isdigit():
+        return ""
+    names = {str(row.get("serviceName") or row.get("name") or "").strip() for row in rows} - {""}
+    return names.pop() if len(names) == 1 else ""
+
+
 def _which_of_shown_response(raw_query: str, entities: dict[str, Any]) -> dict[str, Any] | None:
     """Прошлый ответ показал несколько услуг (семейство, корзина), а вопрос о подготовке своих слов не несёт
     («а как подготовиться?»): спросить, к какой из показанных (принцип 5), а не печатать слова вопроса."""
@@ -626,9 +644,5 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
         }
 
     note = "prepare: no memo about the subject" if memos else "prepare: no matches"
-    if context or _names_own_subject(raw_query):
-        # Предмет — услуга контекста как её назвал ответ, иначе — свой предмет реплики: подсказка правил выбирает
-        # самую длинную из фраз реплики и контекста, и «а как подготовиться к ттг?» после ферритина печатала «ферритин».
-        subject = context or _prepare_subject_hint(q, {})
-        return _prepare_no_memo_response(q, entities, note=note, subject=subject)
-    return _prepare_no_memo_response(q, entities, note=note)
+    # Предмет — услуга контекста как её назвал ответ, иначе — услуга реплики по данным МИС; нет — без названия.
+    return _prepare_no_memo_response(q, entities, note=note, subject=context or _catalog_subject(q))
