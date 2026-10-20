@@ -205,3 +205,4 @@ tests/test_role_pick_shadow_class.py
 tests/test_evalbench_list_readers.py
 tests/test_turn_intent_class.py
 tests/test_topic_by_llm_class.py
+tests/test_evalbench_role_shadow.py
