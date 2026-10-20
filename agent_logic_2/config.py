@@ -579,9 +579,10 @@ settings = Settings(
         # «правило × LLM». Ответ не меняется. off — как было. [MESSENGER_ROUTER] topic_shadow_llm
         topic_shadow_llm=_get_enum("MESSENGER_ROUTER", "topic_shadow_llm", default="off", allowed={"off", "on"}),
         # Ход (г), этап 2: «слово пациента → роль приёма» по каталогу ролей МИС — точный слой + `choose(role_pick)` в тени
-        # (решения владельца 20.10 (г) 1, 2, 6); строка `role_shadow` после ответа. Ответ не меняется. off — как было.
+        # (решения владельца 20.10 (г) 1, 2, 6); строка `role_shadow` после ответа, ответ не меняется. on — решение действует
+        # (роль из каталога, «нет» по данным + оффер, уточнение — оператору). off — как было.
         # [MESSENGER_ROUTER] roles_catalog_llm
-        roles_catalog_llm=_get_enum("MESSENGER_ROUTER", "roles_catalog_llm", default="off", allowed={"off", "shadow"}),
+        roles_catalog_llm=_get_enum("MESSENGER_ROUTER", "roles_catalog_llm", default="off", allowed={"off", "shadow", "on"}),
         # Ход (б), этап 4, вариант Б (решения владельца 20.10 (б) 1, 5): ветки правил `legacy_v2` через запятую
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.

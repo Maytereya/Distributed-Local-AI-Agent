@@ -171,7 +171,7 @@ def _unsupported_catalog_kind(flags: set[str]) -> str | None:
     :return: тип unavailable-кейса или None
     """
 
-    for kind in ("unsupported_service", "unsupported_specialist", "unsupported_document_service"):
+    for kind in ("role_absent", "role_qualifier", "unsupported_service", "unsupported_specialist", "unsupported_document_service"):
         if kind in flags:
             return kind
     return None
@@ -3149,6 +3149,7 @@ async def _complete_route_after_doctor_guard(
     await turn_understanding.observe_price_turn(decision.label, user_text=user_text, pending=memory.get_pending(state))
     # Ход (г), этап 2: «слово → роль» по каталогу МИС — в тени рядом с правилами (`roles_catalog_llm = shadow`).
     role_pick.launch(decision.label, user_text, str(decision.entities.get("specialty") or ""), services)
+    decision = await role_pick.apply(decision, user_text, services)  # режим `on`: роль решает LLM по каталогу
     decision = await _inject_catalog_candidates(
         decision,
         user_text=user_text,

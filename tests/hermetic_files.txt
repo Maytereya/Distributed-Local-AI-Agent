@@ -207,3 +207,4 @@ tests/test_turn_intent_class.py
 tests/test_topic_by_llm_class.py
 tests/test_evalbench_role_shadow.py
 tests/test_p1_facet_class.py
+tests/test_role_pick_on_class.py

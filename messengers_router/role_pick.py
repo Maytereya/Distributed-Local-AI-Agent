@@ -17,14 +17,15 @@ STEP-2026-10-21-G-ROLE-PICK-SHADOW).
    `role_rules_agree` — правила согласны с LLM (если имя правил легло в роль каталога; иначе `role_rules_unmapped`).
    Названия ролей — данные МИС, реплики пациента в строке нет.
 
-`off` (по умолчанию) — ход не меняется ни на такт; ответов тень не меняет никогда. Включение решения (`on`: «нет» по
-данным + оффер, выбор роли для записи) — следующий этап, по карточке.
+`off` (по умолчанию) — ход не меняется ни на такт; ответов тень не меняет никогда. `on` — решение действует (`apply`):
+роль из каталога, честное «нет» по данным + оффер, уточнение — оператору (только метки врача и записи).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from . import turn_telemetry
@@ -38,7 +39,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ROLE_TASK = Task(name="role_pick", max_picks=1, outcomes=("qualifier", "not_role"), num_predict=48, timeout_s=8.0, queue_timeout_ms=2000)
+ROLE_TASK = Task(
+    name="role_pick", max_picks=1, outcomes=("qualifier", "not_role", "absent"), num_predict=48, timeout_s=8.0, queue_timeout_ms=2000
+)
 _DOCTOR_LABELS = frozenset({"DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"})
 _SAFETY_LABELS = frozenset({"URGENT", "COMPLAINT", "MEDICAL_ADVICE"})
 _SIDE_KIND = "role_shadow"
@@ -49,7 +52,7 @@ _CATALOG: dict[str, Any] = {"key": None, "value": None}
 
 def mode() -> str:
     raw = str(getattr(_cfg, "MR_ROLES_CATALOG_LLM", "off") or "").strip().lower()
-    return raw if raw in {"off", "shadow"} else "off"
+    return raw if raw in {"off", "shadow", "on"} else "off"
 
 
 async def catalog(services: "Services") -> RoleCatalog:
@@ -144,6 +147,61 @@ async def _decide(label: str, user_text: str, rules_specialty: str, services: "S
         turn_telemetry.note(**fields)
     if cancelled:
         raise asyncio.CancelledError
+
+
+# Режим `on` действует только на метках врача и записи: цену приёма («сколько стоит приём X») решает путь цены по строкам
+# прайса — там роль только в тени.
+_ACTING_LABELS = frozenset({"DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"})
+
+
+async def apply(decision: Any, user_text: str, services: "Services | None") -> Any:
+    """Режим `on` (ход (г), этап 3; STEP-2026-10-21-G-ROLE-PICK-ON): роль хода решает LLM по каталогу МИС, правила — кандидаты.
+
+    - роль выбрана и правила назвали другую (или никакую) — специальность хода = роль каталога («окулист» → офтальмолог,
+      «сердечно-сосудистый хирург» — не «хирург»); отказ стоп-листа снимается — роль в клинике есть;
+    - `absent` — пациент назвал специалиста, которого нет у врачей региона: честное «такого специалиста нет» + оффер оператора
+      (флаг `role_absent`, путь отказа каталога);
+    - `qualifier` — «детский», «по ДМС»: подобрать врача поможет оператор (флаг `role_qualifier`);
+    - `not_role`, «ни одна», сбой LLM, пустой каталог — как было (честное «нет» без данных невозможно — ход (д)).
+    Решение — вызов хода (в его бюджете), поля `role_*` — в строку хода, `role_acted` — что поменялось.
+    """
+
+    if mode() != "on" or services is None or decision.label not in _ACTING_LABELS or not str(user_text or "").strip():
+        return decision
+    try:
+        cat = await catalog(services)
+        fields = await decide(decision.label, user_text, str(decision.entities.get("specialty") or ""), cat, shadow=False)
+    except Exception:  # новый слой: его сбой не ломает ход
+        logger.warning("role_pick_on_failed", exc_info=True)
+        return decision
+    if not fields:
+        return decision
+    llm = str(fields.get("role_llm") or "")
+    acted = ""
+    flags = set(decision.flags or ())
+    entities = dict(decision.entities or {})
+    reception = {role.name for role in cat.roles if role.reception}
+    if llm in reception:
+        atom = llm.split(",")[0].strip()
+        if fields.get("role_rules") != llm and str(entities.get("specialty") or "") != atom:
+            entities["specialty"] = atom
+            acted = "specialty"
+        if flags & _REFUSAL_FLAGS:
+            flags -= _REFUSAL_FLAGS
+            acted = acted or "refusal_lifted"
+    elif llm == "absent" and cat.roles:
+        flags |= {"role_absent"}
+        acted = "absent"
+    elif llm == "qualifier":
+        flags |= {"role_qualifier"}
+        acted = "qualifier"
+    turn_telemetry.note(**fields, role_acted=acted or "none")
+    if not acted:
+        return decision
+    return replace(decision, entities=entities, flags=flags)
+
+
+_REFUSAL_FLAGS = frozenset({"unsupported_specialist", "unsupported_catalog"})
 
 
 async def settle(timeout_s: float) -> None:
