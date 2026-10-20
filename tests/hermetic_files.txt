@@ -198,3 +198,4 @@ tests/test_branch_side_consult_rows_class.py
 tests/test_nlu_topic_source_class.py
 tests/test_evalbench_topic_source.py
 tests/test_step_b_telemetry_class.py
+tests/test_topic_policy_table_class.py

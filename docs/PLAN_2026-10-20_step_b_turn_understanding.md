@@ -114,6 +114,42 @@
 Дизайн 19.10 покрывает **услуги и свойство на метках PRICE/TEST_ASSIST**. Тему реплики (метку) он не трогает — её
 добавляют этапы 1, 3, 4 этого плана.
 
+### 3.1. Таблица политик темы — где после NLU метку ещё решают правила (21.10, `messengers_router/topic_policy.py`)
+
+Все 27 переклеек метки после NLU идут через `router._relabel(decision, <строка>)`; сработавшая строка пишется в телеметрию хода
+(`tu_relabel_src`). Условия пока в коде у своей функции (столбец «место»); перенос условий в таблицу и замена правил решением
+LLM — строка за строкой, по карточке (этапы 3–4). «Журнал: —» — правило без записи бага: первое на проверку тенью LLM.
+
+| Строка | Слой | → метка | Место | Условие | Журнал |
+|---|---|---|---|---|---|
+| `test_assist_catalog_hit_is_price` | price_understanding | PRICE | `_relabel_test_assist_catalog_hit_as_price` | TEST_ASSIST, а реплика называет услугу каталога как вопрос о цене | PLAN-2026-10-20-B §2 (43–58% ходов rule_test_assist) |
+| `understanding_list_is_price` | price_understanding | PRICE | `_relabel_test_assist_catalog_hit_as_price` | TEST_ASSIST, а понимание хода нашло список услуг — это корзина цены | PLAN-2026-10-20-B §2 |
+| `flow_price_city_reply_override` | guardrail_post | PRICE | `_apply_post_nlu_guardrails` | ответ городом на висящий вопрос цены — продолжение цены | — |
+| `topic_registry_override_from_other` | topic_registry | (из данных) | `_apply_topic_registry_override` | OTHER, слова реестра тем подтверждены по смыслу — метка темы из реестра | BUG-2026-10-18-TOPIC-BY-LETTERS |
+| `topic_handoff` | topic_registry | OTHER | `_maybe_topic_handoff` | тема реестра «только оператор» (выезд на дом и др.) | BUG-2026-09-25-HOME-VISIT-AS-URGENT |
+| `flow_pending_answer` | appointment_flow | APPOINTMENT | `_apply_appointment_continuity_overrides` | идёт запись, реплика — ответ на её висящий вопрос | — |
+| `flow_datetime_appointment_override` | appointment_flow | APPOINTMENT | `_apply_appointment_continuity_overrides` | идёт запись, реплика — дата или время | — |
+| `flow_appointment_override` | appointment_flow | APPOINTMENT | `_apply_appointment_continuity_overrides` | идёт запись, NLU увёл в другую тему без явной смены темы | — |
+| `flow_appointment_guard_override` | appointment_flow | APPOINTMENT | `_apply_appointment_continuity_overrides` | гард потока записи удержал запись | — |
+| `appointment_change_verb` | appointment_flow | APPOINTMENT | `_confirm_appointment_change_verb` | глагол переноса/отмены записи при низкой уверенности NLU | BUG-2026-10-07-CANCEL-LOW-CONF-CLARIFY |
+| `flow_datetime_appointment_prelock` | guardrail_post | APPOINTMENT | `_apply_post_nlu_guardrails` | дата/время в реплике при начатой записи (prelock) | — |
+| `flow_schedule_to_appointment` | guardrail_post | APPOINTMENT | `_apply_post_nlu_guardrails` | вопрос о расписании внутри записи — продолжение записи | — |
+| `walkin_named_bookable_service` | guardrail_post | APPOINTMENT | `to_booking` | «без записи?» про услугу, на которую записывают, — запись | — |
+| `pending_slot_value` | pending | (из данных) | `_slot_value_keeps_topic` | значение слота висящего вопроса — тема висящего вопроса | BUG-2026-10-19-PENDING-BUTTONS-CLASS5 |
+| `bare_doctor_name` | guardrail_post | DOCTOR_SCHEDULE | `_promote_bare_doctor_name` | голая фамилия врача из справочника | BUG-2026-10-08-BARE-DOCTOR-SURNAME |
+| `verified_doctor_override` | guardrail_post | (из данных) | `_apply_post_nlu_guardrails` | врач подтверждён справочником — метка врача (`apply_verified_doctor_override`) | — |
+| `flow_doctor_info_to_schedule` | guardrail_post | DOCTOR_SCHEDULE | `_apply_post_nlu_guardrails` | вопрос о враче с признаком расписания — расписание | — |
+| `flow_price_followup_prepare` | guardrail_post | PREPARE | `_apply_post_nlu_guardrails` | после цены — вопрос о подготовке к той же услуге | — |
+| `flow_prepare_followup_override` | guardrail_post | PREPARE | `_apply_post_nlu_guardrails` | продолжение подготовки | BUG-2026-10-08-PREPARE-ANESTHESIA-IN-QUERY |
+| `prepare_over_booking_llm` | question_facet | PREPARE | `_resolve_nlu_decision_before_doctor_guard` | LLM при конфликте детекторов: подготовка, а не запись (`prepare_vs_booking_llm`) | BUG-2026-10-18-PREPARE-UZI-AS-BOOKING |
+| `flow_price_followup_address` | guardrail_post | ADDRESS | `_apply_post_nlu_guardrails` | после цены — вопрос «где сдать» | — |
+| `policy_nonbookable_walkin` | guardrail_post | ADDRESS | `_apply_post_nlu_guardrails` | услуга без записи (в порядке очереди) — адреса | — |
+| `existing_appointment_operator_handoff` | existing_appointment | OTHER | `_existing_appointment_cancel_handoff` | отмена существующей записи — оператор | BUG-2026-10-14-CANCEL-EXISTING-LOST |
+| `existing_appointment_operator_offer` | existing_appointment | OTHER | `_maybe_offer_operator_for_existing_appointment` | вопрос о существующей записи — оффер оператора | BUG-2026-09-25-CANCEL-OFFER-PREEMPTED |
+| `catalog_confirm_requested` | catalog | OTHER | `_maybe_start_catalog_confirm` | услуга найдена не уверенно — спросить подтверждение каталога | — |
+| `readiness_reply` | catalog | OTHER | `_maybe_readiness_reply` | вопрос о сроке готовности — ответ сроком | STEP-2026-10-14-L14-3-CONTEXT-SHOWN |
+| `catalog_unavailable` | catalog | OTHER | `_complete_route_after_doctor_guard` | справочник МИС недоступен — честный ответ и оператор | STEP-2026-10-18-CATALOG-UNAVAILABLE-HANDOFF |
+
 ## 4. Этапы
 
 Каждый этап — под выключателем (умолчание off = «как было»), с тестом на класс и замером на стенде (`evalbench`, срез

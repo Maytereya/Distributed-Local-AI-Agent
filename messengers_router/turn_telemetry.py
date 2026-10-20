@@ -19,6 +19,7 @@
   объекта разбора (`object`) или из правил понимания (`rules`); `price_guard` — гард условия (`llm` | `dictionary` |
   `llm_bypass` | `k3` | `none`); `tu_p2_verdict` — вердикт суда П2 (`none` — суда не было); `input_not_reply` /
   `input_no_parse` — сколько раз читатель цены получил вход не из разбора этой реплики (путь правил K1–K3);
+  `tu_relabel_src` — сработавшие строки таблицы политик темы (`topic_policy`), `<строка>:<было>><стало>`, по порядку;
 - `nlu_fallback = rules` и `nlu_fail` (`unavailable` | `invalid`) — под `llm_primary` разбор LLM не состоялся и ход решили
   правила, как `legacy_v2` (`llm_primary_rules_fallback = on`, решение владельца 20.10);
 - `evidence_empty`, `handoff`, `chars`, `ms`, `stage_ms`;
@@ -121,6 +122,14 @@ def bump(key: str, by: int = 1) -> None:
     turn = _TURN.get()
     if turn is not None:
         turn.fields[key] = int(turn.fields.get(key) or 0) + by
+
+
+def append(key: str, value: Any) -> None:
+    """Дописать значение в список хода (`tu_relabel_src` — сработавшие строки таблицы политик темы)."""
+
+    turn = _TURN.get()
+    if turn is not None:
+        turn.fields.setdefault(key, []).append(value)
 
 
 def override(**values: Any) -> None:
