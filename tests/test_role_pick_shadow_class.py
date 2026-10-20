@@ -109,6 +109,15 @@ def test_llm_failure_is_not_agreement(monkeypatch):
     assert f["role_llm"] == "unavailable" and "role_llm_agree" not in f
 
 
+def test_price_of_reception_is_a_doctor_turn(monkeypatch):
+    f = _decide(monkeypatch, "сколько стоит приём сердечно-сосудистого хирурга", _picks("сердечно-сосудистый хирург"), label="PRICE")
+    assert f["role_layer"] == "exact" and f["role_llm_agree"] is True
+
+
+def test_not_a_doctor_turn_is_not_decided(monkeypatch):
+    assert _decide(monkeypatch, "сколько стоит ферритин", _down, label="PRICE") == {}
+
+
 def test_empty_catalog_is_not_decided(monkeypatch):
     assert _decide(monkeypatch, "к неврологу", _down, catalog=build_role_catalog([], in_region=_here)) == {"role_layer": "no_catalog"}
 

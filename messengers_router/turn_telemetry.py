@@ -294,6 +294,12 @@ def side_begin(ref: tuple[str, str]) -> contextvars.Token:
     return _TURN.set(Turn(endpoint="side", llm_mode="", button="", session=session, tid=tid))
 
 
+def side_cancel(token: contextvars.Token) -> None:
+    """Закрыть сбор строки после ответа без записи (решению нечего сказать об этом ходе)."""
+
+    _TURN.reset(token)
+
+
 def side_finish(token: contextvars.Token, kind: str, **fields: Any) -> dict[str, Any] | None:
     """Закрыть строку после ответа и записать её в журнал вида `kind`. Возвращает строку."""
 

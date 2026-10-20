@@ -6,7 +6,7 @@ STEP-2026-10-21-G-ROLE-PICK-SHADOW).
 находит: LLM в тени рядом с ним, счёт расхождений. Детские и промахи резолвера — через LLM, а не правилами.
 
 Под `[MESSENGER_ROUTER] roles_catalog_llm = shadow` на ходе о враче (метка врача или записи, специальность правил или
-роль, названная словами МИС) — параллельно ходу, вне его бюджета (`choose(..., shadow=True)`), ход не ждёт:
+роль, названная словами МИС, — при любой несрочной метке: «сколько стоит приём X», «есть ли у вас X» под OTHER) — параллельно ходу, вне его бюджета (`choose(..., shadow=True)`), ход не ждёт:
 
 1. точный слой каталога (`RoleCatalog.find`): `exact` / `partial` — кандидаты, первыми в списке вариантов;
 2. `choose(role_pick)` по ролям приёма каталога: номер роли, исход `qualifier` (пациент уточнил то, чего нет в названии
@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 ROLE_TASK = Task(name="role_pick", max_picks=1, outcomes=("qualifier", "not_role"), num_predict=48, timeout_s=8.0, queue_timeout_ms=2000)
 _DOCTOR_LABELS = frozenset({"DOCTOR_INFO", "DOCTOR_SCHEDULE", "APPOINTMENT"})
+_SAFETY_LABELS = frozenset({"URGENT", "COMPLAINT", "MEDICAL_ADVICE"})
 _SIDE_KIND = "role_shadow"
 _CAP_S = 20.0
 _PENDING: set[asyncio.Future[None]] = set()
@@ -67,7 +68,7 @@ def launch(label: str, user_text: str, rules_specialty: str, services: "Services
 
     if mode() != "shadow" or services is None or not str(user_text or "").strip():
         return
-    if label not in _DOCTOR_LABELS and not str(rules_specialty or "").strip():
+    if label in _SAFETY_LABELS:
         return
     task = asyncio.ensure_future(_decide(label, user_text, str(rules_specialty or ""), services, turn_telemetry.current_ref()))
     _PENDING.add(task)
@@ -135,8 +136,10 @@ async def _decide(label: str, user_text: str, rules_specialty: str, services: "S
     except Exception:  # тень — новый слой: её сбой не ломает ход
         logger.warning("role_pick_shadow_failed", exc_info=True)
         fields = {"role_llm": "error"}
-    if token is not None:
-        turn_telemetry.side_finish(token, _SIDE_KIND, **(fields or {"role_layer": "not_doctor"}))
+    if token is not None and fields is None:
+        turn_telemetry.side_cancel(token)  # ход не о враче — строки нет
+    elif token is not None:
+        turn_telemetry.side_finish(token, _SIDE_KIND, **fields)
     elif fields:
         turn_telemetry.note(**fields)
     if cancelled:
