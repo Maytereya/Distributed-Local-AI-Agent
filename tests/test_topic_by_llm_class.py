@@ -36,7 +36,7 @@ def test_empty_switch_keeps_rule_without_llm(mini_prod_world, monkeypatch):  # n
     assert "nlu_topic_by_llm" not in tel
 
 
-@pytest.mark.parametrize("llm_label", ["PRICE", "TEST_ASSIST", "PREPARE"])
+@pytest.mark.parametrize("llm_label", ["PRICE", "TEST_ASSIST", "TEST_RESULT", "PREPARE"])
 def test_listed_rule_is_candidate_and_llm_decides(llm_label, mini_prod_world, monkeypatch):  # noqa: F811
     tel = _run(mini_prod_world, monkeypatch, _TEST_ASSIST, rules="rule_test_assist", answer=_answer(llm_label))["telemetry"]
     assert tel.get("nlu_llm") is True and tel.get("nlu_topic_by_llm") == "llm", tel
@@ -73,3 +73,12 @@ def test_walkin_detector_does_not_override_llm_topic(llm_label, mini_prod_world,
     on = _run(mini_prod_world, monkeypatch, reply, rules="rule_nonbookable_walkin", answer=_answer(llm_label))["telemetry"]
     assert not any(s.startswith("policy_nonbookable_walkin:") for s in on.get("tu_relabel_src") or []), on
     assert on.get("tu_label_nlu") == llm_label, on
+
+
+def test_llm_other_is_not_a_topic_and_rule_candidate_stays(mini_prod_world, monkeypatch):  # noqa: F811
+    """OTHER от LLM — «ни одна из тем»: на ходе правила из списка решает правило-кандидат (карточка dev 21.10)."""
+
+    off = _run(mini_prod_world, monkeypatch, _TEST_ASSIST, rules="", answer=_answer("OTHER"))
+    on = _run(mini_prod_world, monkeypatch, _TEST_ASSIST, rules="rule_test_assist", answer=_answer("OTHER"))
+    assert on["text"] == off["text"]
+    assert on["telemetry"].get("nlu_topic_by_llm") == "rules_other", on["telemetry"]
