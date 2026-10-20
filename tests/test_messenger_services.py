@@ -15,7 +15,6 @@ from messengers_router.services._doctors_helpers import (
 )
 from messengers_router.services._prepare import (
     _prepare_roots_match as _svc_prepare_roots_match,
-    _prepare_subject_hint as _svc_prepare_subject_hint,
 )
 from messengers_router.services._prices_helpers import (
     _extract_price_service_from_query as _svc_extract_price_service_from_query,
@@ -1454,7 +1453,7 @@ def test_test_prepare_memo_with_only_a_heading_is_not_offered(monkeypatch):
 
     assert "Пайпель-биопсия" not in _offered_titles(offered)
     assert res.get("operator_offer") is True
-    assert "пайпель-биопс" in str(res.get("prepare") or "").lower()
+    assert "Такой памятки по подготовке у меня нет" in str(res.get("prepare") or "")  # слова реплики названием не печатаются
 
 
 def test_test_prepare_does_not_match_unrelated_service_info_by_generic_prepare_token(monkeypatch):
@@ -1594,7 +1593,7 @@ def test_test_prepare_no_memo_offers_operator_without_handoff(monkeypatch):
     # test_prepare_blood_no_specific_rules_falls_back_to_general_memo).
     res = run(svc.test_prepare("подготовка к гастроскопии", {}))
 
-    assert "гастроскопии" in str(res.get("prepare") or "").lower()
+    assert "Такой памятки по подготовке у меня нет" in str(res.get("prepare") or "")  # «гастроскопии» — слово реплики, не услуга прайса
     assert "оператор" in str(res.get("prepare") or "").lower()
     assert res.get("operator_offer") is True
     assert res.get("handoff_required") is not True
@@ -1686,14 +1685,6 @@ def test_test_prepare_kb_memo_drops_prices_but_keeps_the_rest(monkeypatch):
     assert "Полипэктомия" not in answer  # раздел цен снят целиком
     assert "Если сдать срочно! готовы анализы в течение 3-х часов." in answer  # факт без цены остаётся
     assert "650р" not in answer and "Если сдавать анализы" not in answer  # условие, где была только цена, снято
-
-def test_prepare_subject_hint_prefers_full_phrase_from_query_over_truncated_entity():
-    hint = _svc_prepare_subject_hint(
-        "Как подготовиться к гастроскопии?",
-        {"service_name": "гастроскопи"},
-    )
-    assert hint == "гастроскопии"
-
 
 def test_test_assist_source_unavailable_returns_clarify_without_handoff(monkeypatch):
     svc = Services()

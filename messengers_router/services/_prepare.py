@@ -18,7 +18,6 @@ from converters import html_cleaner
 from . import _common as _common_mod
 from ._common import (
     _doc_tokens,
-    _get_first_present,
     _normalise_input,
 )
 
@@ -525,30 +524,12 @@ def _is_prepare_requested_in_price_query(query_text: str) -> bool:
     return bool(_PRICE_PREPARE_HINT_RE.search(str(query_text or "")))
 
 
-def _prepare_subject_hint(query: str, entities: dict[str, Any]) -> str:
-    """
-    Возвращает краткое название исследования/процедуры для fallback-ответа по подготовке.
-
-    :param query: текст текущего запроса пользователя
-    :param entities: текущие сущности роутера
-    :return: короткая фраза с названием анализа или процедуры
-    """
-
-    entity_query = _get_first_present(entities, ["test_name", "service_name"]) or ""
-    candidates: list[str] = []
-    for raw in (query, entity_query):
-        phrase = _extract_prepare_entity_phrase(str(raw or "").strip())
-        if phrase:
-            candidates.append(str(phrase).strip())
-    if candidates:
-        # Предпочитаем более полную форму из запроса пользователя.
-        return max(candidates, key=lambda x: len(str(x or "").strip()))
-    return str(query or entity_query or "исследованию").strip()
-
-
 def _prepare_clarify_response(query: str, entities: dict[str, Any], *, note: str) -> dict[str, Any]:
     """
     Возвращает безопасный non-handoff fallback для PREPARE, если точной инструкции не найдено.
+
+    Слова вопроса в ответ не попадают: предмета в вопросе нет (сюда приходит общий вопрос «правила подготовки»),
+    а цитата реплики выглядела бы названием услуги (BUG-2026-10-20-PREPARE-SUBJECT-QUOTES-REPLY).
 
     :param query: текст запроса пользователя
     :param entities: текущие сущности роутера
@@ -556,10 +537,9 @@ def _prepare_clarify_response(query: str, entities: dict[str, Any], *, note: str
     :return: payload PREPARE без handoff_required
     """
 
-    subject = _prepare_subject_hint(query, entities)
     return {
         "prepare": (
-            f"Пока не удалось автоматически найти точные правила подготовки к «{subject}». "
+            "Пока не удалось автоматически найти точные правила подготовки. "
             "Уточните полное название анализа или процедуры, и я попробую ещё раз."
         ),
         "note": note,
@@ -574,19 +554,20 @@ def _prepare_no_memo_response(query: str, entities: dict[str, Any], *, note: str
     `docs/CLINIC_REQUEST_MIS_PREPARATION_MEMOS_2026-10-02.md`). Просьба уточнить название
     тут ведёт по кругу: пациент повторит то же слово и получит тот же ответ.
 
+    В кавычках — только название услуги по данным клиники (`subject`: показанная услуга или строка прайса);
+    его нет — ответ без названия. Кусок реплики названием не печатается: «Памятки по подготовке к «ли голодать
+    перед узи брюшной полости»» (BUG-2026-10-20-PREPARE-SUBJECT-QUOTES-REPLY).
+
     :param query: текст запроса пользователя
     :param entities: текущие сущности роутера
     :param note: диагностическая пометка источника
-    :param subject: предмет, если он известен (услуга контекста — как её назвал ответ); пусто — подсказка правил
+    :param subject: название услуги по данным клиники; пусто — ответ без названия
     :return: payload PREPARE с флагом `operator_offer`
     """
 
-    subject = subject or _prepare_subject_hint(query, entities)
+    head = f"Памятки по подготовке к «{subject}» у меня нет" if subject else "Такой памятки по подготовке у меня нет"
     return {
-        "prepare": (
-            f"Памятки по подготовке к «{subject}» у меня нет — подскажет оператор. "
-            "Перевести на оператора?"
-        ),
+        "prepare": f"{head} — подскажет оператор. Перевести на оператора?",
         "operator_offer": True,
         "note": note,
         "entities_used": entities,
