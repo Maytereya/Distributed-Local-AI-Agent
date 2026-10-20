@@ -821,9 +821,15 @@ async def ground_decision_entities(
         # Услуга реплики не подтвердилась (LLM или данные: «время» в «На какое время запись к неврологу»), цели нет:
         # специальность из слов реплики — кандидат правил, запись к ней подтверждает LLM. Без подтверждения — честный
         # отказ гарда B′, как было.
+        # Уточнение пациента («к детскому аллергологу», «по ДМС») или процедура («на узи кисти рук») — исход LLM,
+        # не запись к кандидату (DEBT-2026-10-20-BOOKING-SPECIALTY-QUALIFIER); флаг исхода — для стенда.
         specialty = extract_specialty(user_text or "")
-        if specialty and await booking_slots.confirms_booking_specialty(user_text, specialty):
-            out["specialty"] = specialty
-            flags.add("booking_specialty_llm")
+        if specialty:
+            verdict = await booking_slots.booking_specialty_choice(user_text, specialty)
+            if booking_slots.confirms(verdict, specialty):
+                out["specialty"] = specialty
+                flags.add("booking_specialty_llm")
+            elif verdict.outcome:
+                flags.add(f"booking_specialty_llm_{verdict.outcome}")
 
     return GroundingResult(entities=out, flags=flags)
