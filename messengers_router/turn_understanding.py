@@ -330,6 +330,8 @@ async def _observe_parse_on(user_text: str) -> TurnUnderstanding | None:
         tu = read
         _CURRENT.set(tu)
         turn_telemetry.note(tu_list=tu.list_size, tu_rule=tu.services_rule, **_mention_fields(tu))
+    if tu is not None:
+        turn_telemetry.note(tu_understanding_src="object" if read is not None else "rules")
     return tu
 
 
@@ -355,7 +357,11 @@ async def _observe_parse_on_lazy(user_text: str) -> TurnUnderstanding | None:
         if by_parse is not None:
             _CURRENT.set(by_parse)
             turn_telemetry.note(
-                tu_list=by_parse.list_size, tu_facet=by_parse.facet, tu_rule=by_parse.services_rule, **_mention_fields(by_parse)
+                tu_list=by_parse.list_size,
+                tu_facet=by_parse.facet,
+                tu_rule=by_parse.services_rule,
+                tu_understanding_src="object",
+                **_mention_fields(by_parse),
             )
             return by_parse
     try:
@@ -371,6 +377,7 @@ async def _observe_parse_on_lazy(user_text: str) -> TurnUnderstanding | None:
         tu = read
         _CURRENT.set(tu)
         turn_telemetry.note(tu_list=tu.list_size, tu_rule=tu.services_rule, **_mention_fields(tu))
+    turn_telemetry.note(tu_understanding_src="object" if read is not None else "rules")
     return tu
 
 

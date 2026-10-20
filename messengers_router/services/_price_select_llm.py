@@ -686,6 +686,7 @@ async def select_price_rows(
         turn_telemetry.note(price_guard="llm")
     elif query_has_unsatisfiable_qualifier(question, rows) and not query_names_service_in_other_words(question, rows):
         if not by_meaning:
+            turn_telemetry.note(price_guard="dictionary")
             return None
         # Под `price_candidates_by_meaning` словарь прайса — повод спросить LLM, не вердикт: незнакомое прайсу слово чаще
         # сокращение или словоформа («бак посев», «ВМС», «карбамазепина»), чем «по ОМС» (п. 1 плана 19.10). Условие судит

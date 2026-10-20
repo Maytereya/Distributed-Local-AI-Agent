@@ -14,6 +14,11 @@
   пишется отдельно), `rule` — первый флаг `rule_*`;
 - `nlu_src` — кто решил тему на уровне NLU: `rule` (ветка правила `legacy_v2` или guardrail `llm_primary`; `nlu_rule` —
   флаги ветки, без PII и вторичных намерений) или `llm` (правило не сработало — LLM-классификатор); замер хода (б), 20.10;
+- ход (б), телеметрия до этапа 2 (консилиум 20.10 §4): `tu_label_nlu` — метка сразу после NLU, `tu_label_final` — с которой
+  ход ответил (разница — переклейки после NLU, `tu_relabel_src`); `tu_understanding_src` — услуги ценового хода взяты из
+  объекта разбора (`object`) или из правил понимания (`rules`); `price_guard` — гард условия (`llm` | `dictionary` |
+  `llm_bypass` | `k3` | `none`); `tu_p2_verdict` — вердикт суда П2 (`none` — суда не было); `input_not_reply` /
+  `input_no_parse` — сколько раз читатель цены получил вход не из разбора этой реплики (путь правил K1–K3);
 - `nlu_fallback = rules` и `nlu_fail` (`unavailable` | `invalid`) — под `llm_primary` разбор LLM не состоялся и ход решили
   правила, как `legacy_v2` (`llm_primary_rules_fallback = on`, решение владельца 20.10);
 - `evidence_empty`, `handoff`, `chars`, `ms`, `stage_ms`;
@@ -238,6 +243,7 @@ def finish(token: contextvars.Token | None, *, handoff: bool, chars: int, stage_
         "llm_mode": turn.llm_mode,
         "button": turn.button or None,
         **turn.fields,
+        **_derived(turn.fields),
         "nlu_llm": any(call["site"] == "classifier" for call in turn.llm),
         "handoff": bool(handoff),
         "chars": int(chars),
@@ -255,6 +261,20 @@ def finish(token: contextvars.Token | None, *, handoff: bool, chars: int, stage_
         row["world"] = world
     _emit(row)
     return row
+
+
+def _derived(fields: dict[str, Any]) -> dict[str, Any]:
+    """Поля, которые выводятся из записанных к концу хода (ход (б), консилиум 20.10 §4): на ценовом ходе
+    `price_guard` без гарда условия — `none`; `tu_p2_verdict` — вердикт суда П2 (`p2_llm_judge` пути цены, иначе
+    `strong_phrase_guard` сильной фразы или корзины), без суда — `none`. Только запись, на ответ не влияет."""
+
+    if fields.get("tu_label_final") != "PRICE":
+        return {}
+    out: dict[str, Any] = {}
+    if "price_guard" not in fields:
+        out["price_guard"] = "none"
+    out["tu_p2_verdict"] = fields.get("p2_llm_judge") or fields.get("strong_phrase_guard") or "none"
+    return out
 
 
 def side_begin(ref: tuple[str, str]) -> contextvars.Token:

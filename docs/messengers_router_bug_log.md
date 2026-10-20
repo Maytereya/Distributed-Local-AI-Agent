@@ -11,6 +11,26 @@
 
 ---
 
+## STEP-2026-10-21-B-TELEMETRY — ход (б), телеметрия до этапа 2 (консилиум 20.10 §4) — СДЕЛАНО (только запись)
+
+- **Зачем:** до переноса читателей цены на один объект понимания (этап 2) на проде должно быть видно, где решают правила:
+  с какой меткой ход вышел из NLU и с какой ответил, откуда понимание взяло услуги, какой гард условия сработал, каков
+  вердикт суда П2 и сколько раз читатель цены работал без разбора реплики (путь правил K1–K3).
+- **Что пишется:** `tu_label_nlu` / `tu_label_final`; `tu_understanding_src` = object | rules; `price_guard` — полный набор
+  (`llm` | `dictionary` | `llm_bypass` | `k3` | `none`; раньше писались только `llm` и `llm_bypass`, «словарь закрыл» и K3
+  были немыми); `tu_p2_verdict` (из `p2_llm_judge` / `strong_phrase_guard`, без суда — `none`); счётчики
+  `input_not_reply` (разбор есть, но вход читателя — не эта реплика) и `input_no_parse` (разбора нет). `price_guard = none`
+  и `tu_p2_verdict` выводятся в конце хода (`turn_telemetry._derived`) только на ходах с итоговой меткой PRICE.
+  `evalbench/topic_source.py` берёт слой из `nlu_src`, переклейки — из `tu_relabel_src` (когда есть) и печатает счётчики новых полей.
+- **Сигналы тревоги по журналу прода (консилиум):** цена при `price_guard` ∈ {dictionary, none} и слове условия в реплике;
+  «итог PRICE без `tu_*`» (цель 0); доля `tu_label_nlu = PRICE`, `tu_label_final ≠ PRICE`.
+- **Инвариант класса:** у хода, дошедшего до NLU, есть `tu_label_nlu` и `tu_label_final` (= `label`); у ценового — `price_guard`
+  из закрытого набора и `tu_p2_verdict`; уточнение, которого нет в прайсе («по ОМС»), не даёт `price_guard = none`.
+  Ответы не меняются.
+- **Покрытие:** `tests/test_step_b_telemetry_class.py` (через эндпоинт, мини-мир прода).
+
+---
+
 ## STEP-2026-10-20-DEPLOY12-CARDS — карточки деплоя 12: `pending_buttons` и `booking_specialty_llm` после фиксов — итог «включать»
 
 - **`booking_specialty_llm`** (фикс `31f01d3`, DEBT-2026-10-20-BOOKING-SPECIALTY-QUALIFIER): набор `sw_booking_specialty_llm` (мир

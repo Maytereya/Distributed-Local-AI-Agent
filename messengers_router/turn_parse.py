@@ -35,6 +35,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Hashable, TypeVar
 
+from . import turn_telemetry
 
 if TYPE_CHECKING:
     from .choice import Strength
@@ -266,6 +267,8 @@ def acting_for(text: str) -> PhraseParse | None:
 
     parse = phrases_now()
     if parse is None or not parse.for_text(text):
+        # Вход читателя без разбора этой реплики — путь правил K1–K3 (консилиум 20.10 §1: счётчик до этапа 2 хода (б)).
+        turn_telemetry.bump("input_not_reply" if parse is not None else "input_no_parse")
         return None
     if parse.decided:
         return parse

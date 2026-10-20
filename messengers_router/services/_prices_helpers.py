@@ -3371,6 +3371,14 @@ def _strong_phrase_guard_on() -> bool:
     return str(getattr(cfg, "MR_STRONG_PHRASE_GUARD", "llm") or "").strip().lower() == "llm"
 
 
+def _note_price_guard(value: str) -> None:
+    """`price_guard` в телеметрию хода (ход (б), консилиум 20.10 §4): какой гард условия решил на этом ходе."""
+
+    from .. import turn_telemetry
+
+    turn_telemetry.note(price_guard=value)
+
+
 def _t7_drop(key: str) -> bool:
     """T7 (снятие эвристик пути цены, облако 19.10): `[MESSENGER_ROUTER] t7_drop_k1` / `t7_drop_k3` = on — эвристика снята;
     off (умолчание) — как было."""
@@ -3581,6 +3589,7 @@ def _multi_price_items(
     # по-прежнему гасит платный приём на вопрос про полис.
     residue = " ".join(str(part) for part in unrecognized)
     if residue and not _t7_drop("k3") and _match_drops_unsatisfiable_qualifier(residue, offered_names, retail_rows):
+        _note_price_guard("k3")
         return [], []
     return items, unrecognized
 

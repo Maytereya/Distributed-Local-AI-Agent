@@ -1435,6 +1435,7 @@ def _note_decision(decision: RouteDecision | None, evidence: Evidence | None, st
     rule = next((f for f in sorted(decision.flags or []) if str(f).startswith("rule_")), None)
     turn_telemetry.note(
         label=decision.label,
+        tu_label_final=decision.label,
         decision_source=decision.source,
         rule=rule,
         evidence_empty=_evidence_is_empty(evidence) if evidence is not None else None,
@@ -3016,6 +3017,7 @@ async def _resolve_nlu_decision_before_doctor_guard(
         if use_v2_nlu:
             nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
             decision = nlu_result.decision
+            turn_telemetry.note(tu_label_nlu=decision.label)
             nlu_debug["candidates"] = [
                 {
                     "source": cand.source,
