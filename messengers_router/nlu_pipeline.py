@@ -174,6 +174,30 @@ def _note_topic_source(rule: RouteDecision | None, text: str) -> dict[str, str]:
     return {"src": "rule", "rule": branch}
 
 
+def _topic_by_llm_rules() -> frozenset[str]:
+    """`[MESSENGER_ROUTER] topic_by_llm` — ветки правил через запятую, у которых тему решает LLM (ход (б), этап 4, вариант
+    Б, решение владельца 20.10 (б) 1, 5: по одному правилу); пусто (по умолчанию) — как было."""
+
+    raw = str(getattr(c, "MR_TOPIC_BY_LLM", "") or "")
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
+def _topic_by_llm(rule: RouteDecision | None, topic_source: dict[str, str], runtime_options: RuntimeOptions | None) -> bool:
+    """Тему этого хода решает LLM, а правило — кандидат: ветка правила в `topic_by_llm`, правило не про безопасность
+    (принцип 4: срочное LLM не снимает), LLM разрешена режимом хода."""
+
+    if rule is None or rule.label in _SAFETY_LABELS:
+        return False
+    if runtime_options is not None and runtime_options.llm_mode == "strict":
+        return False
+    wanted = _topic_by_llm_rules()
+    return bool(wanted) and bool(wanted & set(str(topic_source.get("rule") or "").split("+")))
+
+
+def _llm_failed(decision: RouteDecision) -> bool:
+    return bool({"ollama_timeout", "ollama_non_json"} & set(decision.flags or ()))
+
+
 def _engine_from_config() -> str:
     raw = str(c.MR_NLU_ENGINE).strip().lower()
     if raw in {"legacy_v2", "llm_primary"}:
@@ -201,7 +225,8 @@ async def _analyze_legacy_with_candidates(
 
     prefetched_rule = await _rule_decision(text, state.last_entities, runtime_options=runtime_options)
     topic_source = _note_topic_source(prefetched_rule, text)
-    if prefetched_rule is not None and (runtime_options is None or runtime_options.llm_mode != "strict"):
+    by_llm = _topic_by_llm(prefetched_rule, topic_source, runtime_options)
+    if prefetched_rule is not None and not by_llm and (runtime_options is None or runtime_options.llm_mode != "strict"):
         # Тема решена правилом без LLM — тень LLM рядом (под `topic_shadow_llm = on`): как часто правило ошибается.
         # Промпт — тот же, что у хода без правила (`classifier.analyze` с тем же контекстом).
         topic_shadow.launch(
@@ -221,9 +246,17 @@ async def _analyze_legacy_with_candidates(
         text,
         llm_context,
         runtime_options=runtime_options,
-        prefetched_rule=prefetched_rule,
+        prefetched_rule=None if by_llm else prefetched_rule,
         prefetched_llm=prefetched_llm,
+        skip_rule=by_llm,
     )
+    if by_llm and _llm_failed(llm):
+        # Сбой LLM — решает правило, как без выключателя (политика сбоя этапа 4, как `llm_primary_rules_fallback`).
+        turn_telemetry.note(nlu_topic_by_llm="rules_fallback")
+        llm = rule
+    elif by_llm:
+        turn_telemetry.note(nlu_topic_by_llm="llm", nlu_src="llm")
+        topic_source = {"src": "llm", "rule": topic_source.get("rule", "")}
     llm_mode = runtime_options.llm_mode if runtime_options else "hybrid"
     merged, source = _merge(rule, llm, llm_mode=llm_mode)
     candidates = [_candidate_from_decision("rule", rule), _candidate_from_decision("llm", llm)]

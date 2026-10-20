@@ -206,6 +206,7 @@ class MessengerRouterConfig:
     topic_override_llm: str
     topic_shadow_llm: str
     roles_catalog_llm: str
+    topic_by_llm: str
     address_service_llm: str
     booking_specialty_llm: str
     slot_suppress_llm: str
@@ -581,6 +582,11 @@ settings = Settings(
         # (решения владельца 20.10 (г) 1, 2, 6); строка `role_shadow` после ответа. Ответ не меняется. off — как было.
         # [MESSENGER_ROUTER] roles_catalog_llm
         roles_catalog_llm=_get_enum("MESSENGER_ROUTER", "roles_catalog_llm", default="off", allowed={"off", "shadow"}),
+        # Ход (б), этап 4, вариант Б (решения владельца 20.10 (б) 1, 5): ветки правил `legacy_v2` через запятую
+        # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
+        # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
+        # [MESSENGER_ROUTER] topic_by_llm
+        topic_by_llm=_get_str("MESSENGER_ROUTER", "topic_by_llm", default=""),
         # Инструмент адресов при пустой сущности услуги сам не решает её по буквам реплики: правила дают кандидатов (строки
         # прайса, по которым ищутся места оказания), выбирает LLM (`choose`, задача `address_service`); «ни одна» — общий
         # список филиалов, сбой LLM — как было. Услуга, которую LLM разбора хода уже не подтвердила, заново не ищется
@@ -757,6 +763,7 @@ MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_ROLES_CATALOG_LLM = settings.messenger_router.roles_catalog_llm
+MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
 MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
 MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm

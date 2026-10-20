@@ -1639,8 +1639,12 @@ async def analyze(
     runtime_options: RuntimeOptions | None = None,
     prefetched_rule: RouteDecision | None = None,
     prefetched_llm: dict[str, Any] | None = None,
+    skip_rule: bool = False,
 ) -> RouteDecision:
     """Решение `legacy_v2`: правило, если сработало, иначе разбор LLM.
+
+    `skip_rule` — тему решает LLM, правило не считается (ход (б), этап 4: правило из `topic_by_llm` — кандидат,
+    его решение вызывающий передаёт в слияние сам).
 
     `prefetched_llm` — санитизированный ответ классификатора на тот же промпт, уже полученный на этом ходе (запасной
     путь `llm_primary`, `nlu_pipeline`): второй вызов LLM не делается, решение то же, что дал бы `legacy_v2` при том же
@@ -1649,8 +1653,8 @@ async def analyze(
     flags: set[str] = set()
     flags |= detect_pii(text)
 
-    rule = prefetched_rule
-    if rule is None:
+    rule = None if skip_rule else prefetched_rule
+    if rule is None and not skip_rule:
         rule = await deterministic_rule_decision(
             text,
             last_entities,
