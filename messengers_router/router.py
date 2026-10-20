@@ -77,6 +77,9 @@ from .response_builder import (
 )
 from .russian_nlu import normalize_ru
 from .policies import (
+    branch_options_to_indexable,
+    build_branch_index,
+    match_branch_hint,
     APPOINTMENT_WISH_MAX_LEN,
     looks_like_time_wish,
     missing_slots,
@@ -3293,7 +3296,7 @@ async def _complete_route_after_doctor_guard(
     )
     if perimeter_place:
         city_hint_now = _DEFAULT_CITY
-        branch_for_place = branch_name_for_place(perimeter_place)
+        branch_for_place = _offered_branch_for_place(branch_name_for_place(perimeter_place), state.last_entities)
         if branch_for_place and not str(state.last_entities.get("branch_name") or "").strip():
             memory.merge_entities(state, {"branch_name": branch_for_place}, label=decision.label)
     if city_hint_now and decision.label not in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"}:
@@ -3338,6 +3341,7 @@ async def _complete_route_after_doctor_guard(
             if quick_flow:
                 quick_flow = await _sanitize_doctor_in_entities(quick_flow, services, label=decision.label)
                 quick_flow = _suppress_grounder_rejected_slots(quick_flow, decision.flags)
+                quick_flow = _booking_city_from_reply(quick_flow, user_text)
                 memory.merge_entities(state, quick_flow, label=decision.label)
         elif decision.label == "TEST_RESULT":
             # Ре-ввод данных результата с изменённым полем (прод #673): required
@@ -3628,6 +3632,41 @@ def _build_first_structured_response(
     )
 
 
+def _own_place_city(city: str | None, user_text: str) -> str | None:
+    """«Город» из слова адреса нашего филиала или места периметра («пр-т Николаевский», «в Южном городе») — город клиники
+    по умолчанию; иначе — как есть (охрана города в начале хода, П4)."""
+
+    if city and not _is_samara_city(city) and (is_samara_perimeter_text(user_text) or is_branch_address_word(city)):
+        return _DEFAULT_CITY
+    return city
+
+
+def _booking_city_from_reply(entities: dict[str, Any], user_text: str) -> dict[str, Any]:
+    """Город записи из реплики — тем же правилом, что охрана города в начале хода (`pending_buttons`): «в Южном городе, на
+    Николаевском» давало «записи … в городе Николаевский» (BUG-2026-10-20-BRANCH-PERIMETER-UNOFFERED). Под off — как было."""
+
+    city = str(entities.get("city") or "").strip()
+    if not city or not pending_answer.buttons_on():
+        return entities
+    return {**entities, "city": _own_place_city(city, user_text)}
+
+
+def _offered_branch_for_place(branch: str | None, entities: dict[str, Any]) -> str | None:
+    """Филиал места периметра («в Южном городе») — только из предложенных, пока висит вопрос о филиале (`pending_buttons`).
+
+    Было (карточка деплоя 12, `pa_branch_hours_side_unoffered_gyn`): «давайте в Южном городе, на Николаевском» на список
+    филиалов гинеколога без Южного города — «Да, можем записать на приём к гинекологу (Южный г. Николаевский пр. 2)»:
+    подстановка места периметра шла мимо списка записи (BUG-2026-10-20-BRANCH-PERIMETER-UNOFFERED). Правило только сужает:
+    место есть среди пунктов — пункт списка; нет — филиала нет, вопрос звучит снова. Списка нет или под off — как было.
+    """
+
+    offered = entities.get("appointment_branch_options")
+    if not branch or not pending_answer.buttons_on() or not isinstance(offered, list) or not offered:
+        return branch
+    _, picked = match_branch_hint(branch, build_branch_index(branch_options_to_indexable(offered)))
+    return picked
+
+
 # Уточняющий вопрос о вопросе «Какой филиал вам удобен?» отвечается обычным путём, если его тема — справка, которую
 # запись не меняет (адреса и часы, цена, врачи и расписание); иначе — как было.
 _BRANCH_SIDE_LABELS = frozenset({"ADDRESS", "PRICE", "DOCTOR_INFO", "DOCTOR_SCHEDULE"})
@@ -3874,12 +3913,7 @@ async def patient_routing_stream(
     # собственного филиала выглядел чужим городом: «пр-т Николаевский»
     # `match_city` резолвит в город «Николаевский» из справочника → пациента
     # уводило к оператору «Сейчас могу помочь только по Самаре».
-    if (
-        city_now
-        and not _is_samara_city(city_now)
-        and (is_samara_perimeter_text(user_text) or is_branch_address_word(city_now))
-    ):
-        city_now = _DEFAULT_CITY
+    city_now = _own_place_city(city_now, user_text)
     if city_now and not _is_samara_city(city_now):
         # Исключение: запрос результатов анализов работает для любого города —
         # портал результатов (naykalab.ru/samara) не привязан к региону, достаточно

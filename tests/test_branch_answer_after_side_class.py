@@ -42,8 +42,9 @@ _SIDES = {
     "hours": ("а во сколько работает филиал на Ленина?", "ADDRESS"),
     "address": ("а где находятся ваши филиалы?", "ADDRESS"),
 }
-# Филиал, которого нет среди предложенных: есть в городе (у ЛОР-врачей) и нет вовсе.
-_NOT_OFFERED = ("давайте на Победы", "на Аминева")
+# Филиал, которого нет среди предложенных: есть в городе и в ответе о часах (у ЛОР-врачей), нет вовсе, место периметра
+# со своим филиалом (Южный город — карточка деплоя 12, BUG-2026-10-20-BRANCH-PERIMETER-UNOFFERED).
+_NOT_OFFERED = ("давайте на Победы", "на Аминева", "давайте в Южном городе, на Николаевском")
 _PICKS = {"1": 0, "первый": 0, "на Ленина": 0, "давайте на Ново-Садовую": 1}
 _ANY = "любой, без разницы"
 
@@ -124,6 +125,7 @@ def test_branch_not_offered_after_a_side_answer_is_never_booked(specialty, side,
     assert list(asked["state"][expects.EXPECTS_KEY]["options"][:2]) == list(_TWO_BRANCHES), asked["text"]
     assert "appointment_branch_side_question" in answered["flags"], answered  # побочный ответ был
     assert not after["state"].get("branch_name") and not after["handoff"], after["text"]  # ни чужого, ни «любого» филиала
+    assert after["state"].get("city") == "Самара", after["state"].get("city")  # слово адреса — не город
     assert after["text"] == without_side["text"], after["text"]  # как без побочного вопроса — снова список
     assert after["state"][expects.EXPECTS_KEY]["options"] == asked["state"][expects.EXPECTS_KEY]["options"]
 
