@@ -217,6 +217,8 @@ class MessengerRouterConfig:
     pending_buttons: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
     reask_limit: str
+    # ход (и) — запасной путь правил `llm_primary` при сбое разбора LLM (`nlu_pipeline`)
+    llm_primary_rules_fallback: str
     parse_fragment_windows: str
     parse_complete_windows: str
     strong_phrase_guard: str
@@ -501,6 +503,13 @@ settings = Settings(
         # вопроса переспрашивает без счёта); on — один вопрос звучит не больше двух раз подряд, третьего нет:
         # бот называет нужный ответ и предлагает оператора. [MESSENGER_ROUTER] reask_limit
         reask_limit=_get_enum("MESSENGER_ROUTER", "reask_limit", default="off", allowed={"off", "on"}),
+        # Запасной путь правил под nlu_engine = llm_primary (решение владельца 20.10, п. 2 — условие включения хода (и)):
+        # off — как было (сбой разбора LLM становится OTHER и меню уточнения); on — при unavailable / invalid разбора
+        # LLM ход решают правила тем же кодом, что под legacy_v2, в телеметрии хода nlu_fallback = rules. Под legacy_v2
+        # не читается. [MESSENGER_ROUTER] llm_primary_rules_fallback
+        llm_primary_rules_fallback=_get_enum(
+            "MESSENGER_ROUTER", "llm_primary_rules_fallback", default="off", allowed={"off", "on"}
+        ),
         # Гард П2 («уточнения нет в прайсе») у слабой фразы разбора судит выбор строки (класс A, решение владельца 15.10) —
         # единственный путь с 17.10: ключ [MESSENGER_ROUTER] parse_price_guard (rules — гард по словарю каталога) снят и
         # больше не читается (в config.ini прода безвреден; STEP-2026-10-17-ONE-PATH-PARSE-PRICE-GUARD).
@@ -748,6 +757,7 @@ MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_PENDING_BUTTONS = settings.messenger_router.pending_buttons
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
+MR_LLM_PRIMARY_RULES_FALLBACK = settings.messenger_router.llm_primary_rules_fallback
 MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows
 MR_PARSE_COMPLETE_WINDOWS = settings.messenger_router.parse_complete_windows
 MR_STRONG_PHRASE_GUARD = settings.messenger_router.strong_phrase_guard

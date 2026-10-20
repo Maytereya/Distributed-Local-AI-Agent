@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import classifier
+from . import classifier, turn_telemetry
 from .context_summary import seeded_context_for_nlu
 from .llm_mode_policy import RuntimeOptions
 from .mess_types import RouteDecision, SessionState
@@ -158,10 +158,18 @@ def _engine_from_config() -> str:
     return "legacy_v2"
 
 
+def _rules_fallback_from_config() -> str:
+    """`[MESSENGER_ROUTER] llm_primary_rules_fallback`: `off` (по умолчанию, как было) | `on`; нет ключа или мусор — `off`."""
+
+    raw = str(getattr(c, "MR_LLM_PRIMARY_RULES_FALLBACK", "off") or "").strip().lower()
+    return raw if raw in {"off", "on"} else "off"
+
+
 async def _analyze_legacy_with_candidates(
     text: str,
     state: SessionState,
     runtime_options: RuntimeOptions | None = None,
+    prefetched_llm: dict[str, Any] | None = None,
 ) -> NLUResult:
     # bounded контекст для LLM pass
     seeded = seeded_context_for_nlu(state)
@@ -181,6 +189,7 @@ async def _analyze_legacy_with_candidates(
         llm_context,
         runtime_options=runtime_options,
         prefetched_rule=prefetched_rule,
+        prefetched_llm=prefetched_llm,
     )
     llm_mode = runtime_options.llm_mode if runtime_options else "hybrid"
     merged, source = _merge(rule, llm, llm_mode=llm_mode)
@@ -213,6 +222,16 @@ async def _analyze_llm_primary_with_candidates(
     llm_context.update(seeded)
 
     decision, trace = await classifier.analyze_llm_primary(text, llm_context, runtime_options=runtime_options)
+    failure = trace.get("llm_primary_failure")
+    if failure and _rules_fallback_from_config() == "on":
+        # Запасной путь правил (решение владельца 20.10, п. 2; BUG-2026-10-20-LLM-PRIMARY-NO-RULES-FALLBACK): разбор LLM
+        # не состоялся — ход решает код `legacy_v2` на том же (сбойном) ответе модели, без второго вызова LLM.
+        fallback = await _analyze_legacy_with_candidates(
+            text, state, runtime_options=runtime_options, prefetched_llm=dict(trace.get("llm_primary_sanitized") or {})
+        )
+        turn_telemetry.note(nlu_fallback="rules", nlu_fail=failure)
+        fallback.trace = {**trace, "rules_fallback": failure, "final_decision": fallback.trace["final_decision"]}
+        return fallback
     candidate = _candidate_from_decision("llm_primary", decision)
     return NLUResult(
         decision=decision,
