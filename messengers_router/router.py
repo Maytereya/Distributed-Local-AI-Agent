@@ -15,6 +15,7 @@ recovery-политика и сервисные интеграции вынес�
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import re
 from typing import AsyncGenerator, Any
@@ -893,6 +894,56 @@ async def _handle_prepare_variant_pending(
     )
 
 
+async def _compound_prices_for_each(
+    chosen: list[str],
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """«Обе» на «Вижу в запросе две услуги» (`pending_buttons`, выбор нескольких пунктов одной функцией): цена каждой
+    услуги — её обычным путём (как на выбор одного пункта), ответы — подряд. Какая-то не дала ответа или ведёт к переводу —
+    None: дальше, как было (первая услуга)."""
+
+    from .shown_context import SHOWN_KEY
+
+    texts: list[str] = []
+    shown: list[str] = []
+    last: RouteDecision | None = None
+    for service_name in chosen:
+        memory.merge_entities(state, {"service_name": service_name}, label="PRICE")
+        decision = RouteDecision(
+            label="PRICE",
+            confidence=0.92,
+            entities={"service_name": service_name, "compound_price_selected": True},
+            flags={"compound_price_selected", "compound_price_all"},
+            needs_handoff=False,
+            context_action="continue",
+            source="compound_price",
+        )
+        plan = build_plan(decision, state, service_name, memory=memory, runtime_options=runtime_options)
+        evidence = await execute_plan(plan, state, services)
+        env = response_build_first_structured_response(
+            flow_label="PRICE", evidence=evidence, state=state, services=services, memory=memory, decision=decision, user_text=service_name
+        )
+        if env is None or env.handoff or not str(env.text or "").strip() or memory.get_pending(state) is not None:
+            return None  # нет цены, перевод или встречный вопрос (город, уточнение) — по одной, как было
+        texts.append(str(env.text).strip())
+        shown.extend(str(name) for name in state.last_entities.get(SHOWN_KEY) or () if str(name or "").strip())
+        last = decision
+    if last is None:
+        return None
+    _clear_compound_price_pending(state)
+    set_secondary_queue(state, [])
+    state.last_entities["_secondary_offer_pending"] = False
+    state.last_entities.pop("secondary_intents", None)
+    # Контекст = показанное (решение владельца 14.10): показаны обе услуги — одной «услуги контекста» нет.
+    state.last_entities[SHOWN_KEY] = list(dict.fromkeys(shown))
+    state.last_entities.pop("service_name", None)
+    state.last_entities.pop("test_name", None)
+    return last, Plan(label="PRICE"), Evidence(items={ek.COMPOUND_PRICE_RESPONSE: {"text": "\n\n".join(texts)}})
+
+
 async def _handle_compound_price_pending(
     *,
     user_text: str,
@@ -940,6 +991,11 @@ async def _handle_compound_price_pending(
 
     reply_kind = pending_answer.kind(compound_q, _rules)
     answered = pending_answer.current(compound_q)
+    every = [item for item in pending_answer.picked_all(compound_q) if item in options]
+    if len(every) >= 2:
+        both = await _compound_prices_for_each(every, state, services, memory, runtime_options)
+        if both is not None:
+            return both
     if reply_kind == "yes":
         selected_service = default_service
     elif answered is not None and answered.decided:
@@ -1044,6 +1100,67 @@ def _catalog_refine_prompt(kind: str, label: str) -> str:
     return "Хорошо. Уточните, пожалуйста, точное название услуги."
 
 
+# Второй отказ на «Похоже, вы имели в виду …?» под `pending_buttons`: перевод — вопросом, решает пациент (решение
+# владельца 19.10: автоматически не переводить — участие операторов со временем сводим к минимуму).
+CATALOG_REJECTED_OFFER_TEXT = "Не удалось точно сопоставить запрос с каталогом. Перевести на оператора?"
+
+
+def _catalog_rejected_handoff(state: SessionState, memory: MemoryStore) -> tuple[RouteDecision, Plan, Evidence]:
+    """Второй отказ на «Похоже, вы имели в виду …?» — оператор; под `pending_buttons` — оффер оператора вопросом."""
+
+    state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
+    if pending_answer.buttons_on():
+        mark_operator_offer_pending(state, memory)
+        return (
+            RouteDecision(label="OTHER", confidence=0.95, entities={}, flags={"catalog_confirm_rejected_offer"}, needs_handoff=False, source="catalog_confirm"),
+            Plan(label="OTHER"),
+            Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": CATALOG_REJECTED_OFFER_TEXT, "handoff": False}}),
+        )
+    return (
+        RouteDecision(
+            label="OTHER",
+            confidence=0.95,
+            entities={},
+            flags={"catalog_confirm_rejected_handoff"},
+            needs_handoff=False,
+            source="catalog_confirm",
+        ),
+        Plan(label="OTHER"),
+        Evidence(
+            items={
+                "catalog_confirm_response": {
+                    "text": "Не удалось точно сопоставить запрос с каталогом. Соединяю с оператором.",
+                    "handoff": True,
+                }
+            }
+        ),
+    )
+
+
+def _catalog_second_no(state: SessionState, memory: MemoryStore) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Ответ «не могу назвать» («нет, не то») на «Уточните название услуги» после первого «нет» на «Похоже, вы имели в виду
+    …?» — второй отказ, оффер оператора вопросом (политика `catalog_confirm`: 2-е «нет» → оператор; `pending_buttons`).
+
+    Было (стенд, `pa_catalog_no_twice`): после первого «нет» вопрос уточнения поля ожидания не ставил, второе «нет» читала
+    предпроверка записи по своим правилам — «Отменить текущий процесс записи?». Вопрос уточнения — тот, что поставил первый
+    отказ: `_pending` с недостающим уточнения (`_catalog_refine_missing_slots`), счётчик отказов ≥ 1. Название услуги в
+    ответе («нет, мне массаж спины» — исход «ответ») — обычный путь, как было.
+    """
+
+    found = pending_answer.slot_answer()
+    if found is None or found.outcome is not pending_answer.Outcome.NO:
+        return None
+    if int(state.last_entities.get(_CATALOG_CONFIRM_REJECTS_KEY) or 0) < 1:
+        return None
+    pending = memory.get_pending(state) or {}
+    label = str(pending.get("label") or "")
+    refine = [_catalog_refine_missing_slots(kind, label) for kind in ("service", "doctor")]
+    if not label or pending.get("missing") not in refine:
+        return None
+    memory.clear_pending(state)
+    return _catalog_rejected_handoff(state, memory)
+
+
 async def _handle_catalog_confirm_pending(
     *,
     user_text: str,
@@ -1054,7 +1171,7 @@ async def _handle_catalog_confirm_pending(
 ) -> tuple[RouteDecision, Plan, Evidence] | None:
     pending = _get_catalog_confirm_pending(state)
     if not pending:
-        return None
+        return _catalog_second_no(state, memory)
 
     label = str(pending.get("label") or "OTHER").strip()
     kind = str(pending.get("kind") or "").strip().lower()
@@ -1116,28 +1233,13 @@ async def _handle_catalog_confirm_pending(
         rejects = int(state.last_entities.get(_CATALOG_CONFIRM_REJECTS_KEY) or 0) + 1
         state.last_entities[_CATALOG_CONFIRM_REJECTS_KEY] = rejects
         if rejects >= _CATALOG_CONFIRM_MAX_REJECTS:
-            state.last_entities.pop(_CATALOG_CONFIRM_REJECTS_KEY, None)
-            return (
-                RouteDecision(
-                    label="OTHER",
-                    confidence=0.95,
-                    entities={},
-                    flags={"catalog_confirm_rejected_handoff"},
-                    needs_handoff=False,
-                    source="catalog_confirm",
-                ),
-                Plan(label="OTHER"),
-                Evidence(
-                    items={
-                        "catalog_confirm_response": {
-                            "text": "Не удалось точно сопоставить запрос с каталогом. Соединяю с оператором.",
-                            "handoff": True,
-                        }
-                    }
-                ),
-            )
+            return _catalog_rejected_handoff(state, memory)
         missing_slots = _catalog_refine_missing_slots(kind, label)
         memory.set_pending(state, label=label, missing_slots=missing_slots)
+        if pending_answer.buttons_on():
+            # «Уточните название услуги» — вопрос со свободным ответом: второе «нет» на него («нет, не то») — второй отказ
+            # (`_catalog_second_no`), а не «Отменить процесс записи?» (BUG-2026-10-19-PENDING-BUTTONS-CLASS5, п. 4).
+            expects.ask(expects.Question.SLOT_VALUE, kind=expects.FREE)
         return (
             RouteDecision(
                 label="OTHER",
@@ -2350,38 +2452,74 @@ async def _guard_walkin_named_service(
     return to_booking()
 
 
-async def _slot_reply_keeps_topic(
-    decision: RouteDecision,
-    state: SessionState,
-    user_text: str,
-    services: Services,
-    memory: MemoryStore,
-) -> RouteDecision:
-    """Ответ на вопрос-слот кнопки, который правила не разобрали, остаётся в теме вопроса — если так решила LLM.
+def _slot_value_keeps_topic(decision: RouteDecision, state: SessionState, memory: MemoryStore) -> RouteDecision:
+    """Ответ на вопрос-слот, который одна функция ответа на висящий вопрос признала ответом (`pending_buttons`, решение
+    LLM), остаётся в теме вопроса.
 
-    Под `slot_reply_llm = on` (`booking_slots`): висит вопрос-слот кнопки («К какой процедуре нужна подготовка?», «Для
-    какой цели подобрать анализы?»), поля ожидания нет (его разбирает `pending_answer`), quick-fill слот не заполняет —
-    модуль выбора решает, ответ ли это. Да — метка темы вопроса, `continue` (смена темы классификатором не сбрасывает
-    вопрос), флаг `slot_reply_llm`: значение слота кладёт блок quick-fill хода. Нет, сбой, срочное — решение как было.
+    Висит вопрос-слот («К какой процедуре нужна подготовка?», «Для какой цели подобрать анализы?», реквизиты результата):
+    LLM решила «это ответ» — метка темы вопроса, `continue` (смена темы классификатором не сбрасывает вопрос), флаг
+    `pending_slot_value`: значение слота кладёт блок quick-fill хода. Значение, разобранное правилами (сужение без LLM),
+    решение хода не трогает — как было; нет, сбой, срочное — как было (BUG-2026-10-08-SLOT-REPLY-LOST-TO-LLM,
+    BUG-2026-10-08-PREPARE-ANESTHESIA-IN-QUERY; один путь вместо `slot_reply_llm`).
     """
 
-    if not booking_slots.slot_reply_enabled():
+    found = pending_answer.slot_answer()
+    if found is None or found.outcome is not pending_answer.Outcome.ANSWER or found.source is not pending_answer.Source.LLM:
         return decision
     if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"} or decision.needs_handoff:
         return decision
+    pend_label = str((memory.get_pending(state) or {}).get("label") or "")
+    if pend_label not in pending_answer.SLOT_TOPICS or not missing_slots(pend_label, state.last_entities):
+        return decision
+    return _copy_decision(decision, label=pend_label, context_action="continue", flags=set(decision.flags) | {"pending_slot_value"})
+
+
+def _slot_filled_by_rules(user_text: str, state: SessionState, services: Services, memory: MemoryStore) -> bool:
+    """Правила (quick-fill) разбирают в реплике значение недостающего слота темы `_pending` — сужение без LLM для вопроса-
+    слота («колоноскопия», «Иванов, 1989, Бг, 123»)."""
+
     pending = memory.get_pending(state)
-    pend_label = str((pending or {}).get("label") or "")
-    if pend_label not in booking_slots.SLOT_REPLY_SLOTS or state.last_entities.get(expects.EXPECTS_KEY):
-        return decision
-    missing = missing_slots(pend_label, state.last_entities)
-    if not missing:
-        return decision
-    quick = quick_fill_entities_from_text(user_text, state.last_entities, missing, services, pending_label=pend_label)
-    if missing_slots(pend_label, {**state.last_entities, **(quick or {})}) != missing:
-        return decision  # правила ответ разобрали — LLM не нужна
-    if not await booking_slots.reply_answers_slot(user_text, pend_label):
-        return decision
-    return _copy_decision(decision, label=pend_label, context_action="continue", flags=set(decision.flags) | {"slot_reply_llm"})
+    label = str((pending or {}).get("label") or "")
+    missing = pending.get("missing") if isinstance(pending, dict) else None
+    if not label or not isinstance(missing, list) or not missing:
+        return False
+    quick = quick_fill_entities_from_text(user_text, state.last_entities, missing, services, pending_label=label)
+    return bool(quick) and missing_slots(label, {**state.last_entities, **quick}) != missing_slots(label, state.last_entities)
+
+
+# Ответ «не могу назвать» на вопрос о реквизитах результата анализов (решение владельца 19.10, п. 4): подсказка, где их
+# найти, и оффер оператора вопросом; результаты по ФИО не ищем (R-01).
+TEST_RESULT_DATA_HINT_TEXT = (
+    "Номер анализа указан в чеке или в договоре, которые выдают при сдаче анализов. "
+    "Если их нет под рукой, поможет оператор. Перевести на оператора?"
+)
+
+
+async def _handle_slot_value_pending(
+    *,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """«Не могу ответить» на вопрос-слот реквизитов результата — подсказка и оффер оператора (`pending_buttons`).
+
+    Решение — одной функции ответа на висящий вопрос (исход `no`: «не помню номер анализа», «не знаю», «нет»). Прочие
+    темы и исходы — обычный путь, как было.
+    """
+
+    found = pending_answer.slot_answer()
+    if found is None or found.outcome is not pending_answer.Outcome.NO:
+        return None
+    if str((memory.get_pending(state) or {}).get("label") or "") != "TEST_RESULT":
+        return None
+    mark_operator_offer_pending(state, memory)
+    return (
+        RouteDecision(label="OTHER", confidence=0.9, entities={}, flags={"test_result_data_hint"}, needs_handoff=False),
+        Plan(label="OTHER"),
+        Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": TEST_RESULT_DATA_HINT_TEXT, "handoff": False}}),
+    )
 
 
 async def _apply_post_nlu_guardrails(
@@ -2478,7 +2616,7 @@ async def _apply_post_nlu_guardrails(
             needs_handoff=False,
             context_action="continue",
         )
-    decision = await _slot_reply_keeps_topic(decision, state, user_text, services, memory)
+    decision = _slot_value_keeps_topic(decision, state, memory)
     decision = apply_context_action(decision, state, user_text, memory)
 
     pending_before_overrides = memory.get_pending(state)
@@ -3224,11 +3362,12 @@ async def _complete_route_after_doctor_guard(
                 memory.merge_entities(state, quick, label=pend_label)
         if pend_label == "APPOINTMENT":
             await _backfill_appointment_doctor_from_text(user_text, state, services, memory)
-        slot_reply = booking_slots.SLOT_REPLY_SLOTS.get(str(pend_label or ""))
-        if slot_reply is not None and "slot_reply_llm" in decision.flags and missing_slots(str(pend_label), state.last_entities):
-            # LLM решила, что реплика — ответ на вопрос-слот кнопки (`_slot_reply_keeps_topic`): правила её не разобрали —
+        slot = pending_answer.SLOT_TOPICS.get(str(pend_label or ""))
+        value = pending_answer.slot_value(user_text)
+        if slot and value and "pending_slot_value" in decision.flags and missing_slots(str(pend_label), state.last_entities):
+            # Одна функция решила, что реплика — ответ на вопрос-слот (`_slot_value_keeps_topic`): правила её не разобрали —
             # реплика целиком в слот; что это за памятка или анализы, решает инструмент темы.
-            memory.merge_entities(state, {slot_reply[0]: booking_slots.slot_value(user_text)}, label=str(pend_label))
+            memory.merge_entities(state, {slot: value}, label=str(pend_label))
 
     fill_date_from_schedule_windows(state, decision.label)
 
@@ -3487,6 +3626,72 @@ def _build_first_structured_response(
     )
 
 
+# Уточняющий вопрос о вопросе «Какой филиал вам удобен?» отвечается обычным путём, если его тема — справка, которую
+# запись не меняет (адреса и часы, цена, врачи и расписание); иначе — как было.
+_BRANCH_SIDE_LABELS = frozenset({"ADDRESS", "PRICE", "DOCTOR_INFO", "DOCTOR_SCHEDULE"})
+
+
+async def _answer_branch_side_question(
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None,
+    debug: bool,
+) -> ResponseEnvelope | None:
+    """Ответ на уточняющий вопрос о вопросе «Какой филиал вам удобен?» и тот же вопрос снова (`pending_buttons`).
+
+    Было (стенд, `pa_branch_which_closer`, `pa_branch_new_topic`): одна функция решала «ничего из этого» (правило 4
+    промпта — вопрос о вопросе бота), запись шла дальше, и бот печатал тот же список филиалов, не ответив. Стало
+    (принцип 5): вопрос отвечается обычным путём — на копии состояния без флагов оформления (специальность, услуга, город
+    — контекст), так что собранное записи не меняется ни при каком ответе; затем звучит вопрос о филиале с прежними
+    пунктами. Ответ годится, только если его тема — справка (`_BRANCH_SIDE_LABELS`), он не перевод и сам ничего не
+    спросил; иначе None — ход идёт, как было.
+    """
+
+    from .orchestrator import run_pipeline
+
+    raw = expects.read(state)
+    options = tuple((raw or {}).get("options") or ())
+    shown = str((raw or {}).get("question") or "").strip()
+    question = shown.split("\n")[-1].strip() if shown else ""
+    if not options or not question:
+        return None
+    scratch = copy.deepcopy(state)
+    reset_appointment_runtime_state(scratch)
+    memory.clear_pending(scratch)
+    scratch.last_entities.pop(expects.EXPECTS_KEY, None)
+    with pending_answer.aside(), expects.aside():
+        try:
+            ctx = await run_pipeline(user_text, scratch, services=services, memory=memory, runtime_options=runtime_options)
+        except Exception:  # побочный ответ не ломает ход — как было
+            logger.warning("branch_side_question_failed", exc_info=True)
+            return None
+        asked_aside = expects.asked()
+    response, decision = ctx.response, ctx.decision
+    if response is None or decision is None or response.handoff or asked_aside or not str(response.text or "").strip():
+        return None
+    if decision.label not in _BRANCH_SIDE_LABELS:
+        return None
+    from .shown_context import SHOWN_KEY
+
+    if SHOWN_KEY in scratch.last_entities:  # что пациент увидел в побочном ответе — контекст следующего хода
+        state.last_entities[SHOWN_KEY] = scratch.last_entities[SHOWN_KEY]
+    expects.ask(expects.Question.APPOINTMENT_BRANCH, kind=expects.PICK, options=options)
+    return ResponseEnvelope(
+        text=f"{str(response.text).strip()}\n\n{question}",
+        attachments=list(response.attachments or []),
+        handoff=False,
+        state_update=_early_debug_state_update(
+            debug,
+            label=decision.label,
+            handoff=False,
+            flags={"appointment_branch_side_question"},
+            context_action="continue",
+        ),
+    )
+
+
 async def patient_routing_stream(
     user_text: str,
     state: SessionState,
@@ -3550,7 +3755,8 @@ async def patient_routing_stream(
     if pending_answer.on() and not button_id:
         expected = pending_answer.expected_from(state.last_entities)
         if expected is not None:
-            answered = await pending_answer.answer(*expected, user_text)
+            filled = expected[0] == expects.Question.SLOT_VALUE.value and _slot_filled_by_rules(user_text, state, services, memory)
+            answered = await pending_answer.answer(*expected, user_text, filled=filled)
             if answered is not None and answered.decided and answered.rest:
                 user_text = answered.rest
 
@@ -3616,6 +3822,18 @@ async def patient_routing_stream(
     # обработчик вопроса (`pending_reply.reply_kind_for`). Состояние сессии здесь не меняется.
     if not pending_answer.on():
         await pending_reply.observe_or_act(user_text, state.last_entities, button_id=button_id)
+
+    # Уточняющий вопрос о вопросе «Какой филиал вам удобен?» (`pending_buttons`): ответ обычным путём и тот же вопрос
+    # снова, собранное записи цело.
+    if pending_answer.branch_side_question(answered):
+        side = await _answer_branch_side_question(user_text, state, services, memory, runtime_options, debug)
+        if side is not None:
+            expects.finish_turn(state, side)
+            memory.append_turn(state, role="user", text=said)
+            memory.append_turn(state, role="assistant", text=side.text)
+            update_summary(state, reason="normal")
+            yield side
+            return
 
     precheck = run_appointment_precheck(
         user_text=user_text,

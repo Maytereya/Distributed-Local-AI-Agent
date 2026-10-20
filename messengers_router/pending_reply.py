@@ -107,6 +107,7 @@ class Kind(StrEnum):
 
     YES_NO = "yes_no"
     PICK = "pick"
+    FREE = "free"  # свободный ответ — значение слота (под `pending_buttons = on`, решает только `pending_answer`)
 
 
 class QuestionType(StrEnum):
@@ -122,6 +123,7 @@ class QuestionType(StrEnum):
     SHOW_ALL = "show_all"
     BOOKING_SERVICE = "booking_service"
     APPOINTMENT_BRANCH = "appointment_branch"
+    SLOT_VALUE = "slot_value"
 
 
 class Outcome(StrEnum):

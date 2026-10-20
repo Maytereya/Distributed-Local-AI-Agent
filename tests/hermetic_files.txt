@@ -183,3 +183,4 @@ tests/test_show_all_under_pending_answer.py
 tests/test_basket_candidates_scored.py
 tests/test_price_judge_collection_conditions.py
 tests/test_price_candidates_by_meaning_class.py
+tests/test_pending_buttons_class.py

@@ -43,6 +43,8 @@ CATALOG_CONFIRM_RESPONSE = "catalog_confirm_response"
 CATALOG_HEALTH_RESPONSE = "catalog_health_response"
 # Срок готовности из справочника МИС (понимание хода, ход (б) шаг 1): [{"name", "deadline"}]
 READINESS_RESPONSE = "readiness_response"
+# Цены нескольких услуг составной цены подряд («обе», `pending_buttons`): {"text"} — уже собранный ответ
+COMPOUND_PRICE_RESPONSE = "compound_price_response"
 
 # --- Rendering sidechannel -------------------------------------------------
 ATTACHMENTS = "attachments"

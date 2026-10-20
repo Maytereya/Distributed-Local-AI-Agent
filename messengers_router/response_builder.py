@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import evidence_keys as ek
-from . import expects, shown_context
+from . import expects, pending_answer, shown_context
 from .flow_policy import (
     hydrate_appointment_context_from_schedule,
     reset_appointment_runtime_state,
@@ -135,6 +135,14 @@ def build_catalog_confirm_response(evidence: Evidence) -> ResponseEnvelope | Non
         attachments=[],
         handoff=bool(payload.get("handoff")),
     )
+
+
+def build_compound_price_response(evidence: Evidence) -> ResponseEnvelope | None:
+    """Цены нескольких услуг составной цены подряд — каждая уже построена своим ответом цены (`router`)."""
+
+    payload = evidence.get(ek.COMPOUND_PRICE_RESPONSE)
+    text = str(payload.get("text") or "").strip() if isinstance(payload, dict) else ""
+    return ResponseEnvelope(text=text, attachments=[], handoff=False) if text else None
 
 
 def build_catalog_health_response(evidence: Evidence) -> ResponseEnvelope | None:
@@ -363,6 +371,10 @@ def build_test_result_response(flow_label: str, evidence: Evidence) -> ResponseE
     # Сбор недостающих данных (ФИО/год/филиал/номер) — уточняющий вопрос.
     missing = result_status.get("missing_fields")
     if isinstance(missing, list) and missing:
+        if pending_answer.buttons_on():
+            # Реквизиты результата — вопрос-слот со свободным ответом: «не помню номер анализа» решает одна функция
+            # ответа на висящий вопрос (решение владельца 19.10, п. 4), а не общий классификатор.
+            expects.ask(expects.Question.SLOT_VALUE, kind=expects.FREE)
         return ResponseEnvelope(
             text=clarification_question("TEST_RESULT", [str(m) for m in missing]),
             attachments=[],
@@ -851,6 +863,7 @@ def build_first_structured_response(
         lambda: build_catalog_health_response(evidence),
         lambda: build_operator_offer_response(evidence),
         lambda: build_readiness_response(evidence),
+        lambda: build_compound_price_response(evidence),
         lambda: build_unsupported_catalog_response(evidence, state, memory),
         lambda: build_main_index_info_response(evidence),
         lambda: build_service_bundle_response(flow_label, evidence, state),
