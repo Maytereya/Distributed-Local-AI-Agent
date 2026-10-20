@@ -269,4 +269,7 @@ test, `cached`; off против прода — 0 различий; on прот�
   `tests/test_nlu_topic_source_class.py`, запись журнала STEP-2026-10-20-B-TOPIC-SOURCE.
 - 21.10 ночью (ветка `claude/night-1020`): телеметрия до этапа 2 (STEP-2026-10-21-B-TELEMETRY); таблица политик — этап 3
   шаг 1, §3.1 (STEP-2026-10-21-B-POLICY-TABLE, replay test 0 различий); тень LLM рядом с правилом темы `topic_shadow_llm`
-  (STEP-2026-10-21-B-TOPIC-SHADOW); перечень расхождений «список ли» — §7.2.
+  (STEP-2026-10-21-B-TOPIC-SHADOW); перечень расхождений «список ли» — §7.2; этап 1 — `TurnIntent` (STEP-2026-10-21-B-INTENT,
+  replay test: метка плана = итог темы на 196 из 196); этап 4 вариант Б — `topic_by_llm` по правилу (STEP-2026-10-21-B-TOPIC-BY-LLM,
+  выключатель пуст). Матрица тени «правило × LLM» против разметки темы test: без спорных правило 82%, LLM 95%; слабее всего
+  `rule_nonbookable_walkin` 22%, `rule_doctor_info_specialty` 30%, `rule_test_assist` 36% (dev: согласие 69%, те же ветки).
