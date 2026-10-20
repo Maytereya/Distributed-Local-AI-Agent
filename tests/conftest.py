@@ -252,6 +252,21 @@ def _turn_telemetry_to_tmp(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _synonym_journal_to_tmp(tmp_path, monkeypatch):
+    """Журнал синонимов цены (`price_synonym_suggestions.jsonl`) тесты пишут во временный каталог.
+
+    До 20.10 тест, дошедший до выбора строки прайса LLM без своей подмены журнала, дописывал строку в
+    `<cwd>/app_data/journals` — в журнал разработчика, который уходит клинике как список синонимов. Под
+    `pytest -n` туда же писали бы параллельно несколько процессов. Тесты журнала подменяют путь сами
+    (monkeypatch после autouse побеждает), мир стенда — тоже.
+    """
+    from messengers_router.services import _price_select_llm
+
+    monkeypatch.setattr(_price_select_llm, "_journal_path", lambda: tmp_path / "price_synonym_suggestions.jsonl")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _operator_hours_day(monkeypatch):
     """Мир гейта по умолчанию — рабочие часы операторов.
 
