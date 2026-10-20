@@ -205,6 +205,7 @@ class MessengerRouterConfig:
     mis_honest_degradation: str
     topic_override_llm: str
     topic_shadow_llm: str
+    roles_catalog_llm: str
     address_service_llm: str
     booking_specialty_llm: str
     slot_suppress_llm: str
@@ -576,6 +577,10 @@ settings = Settings(
         # LLM-классификатор решает её параллельно ходу, вне его бюджета; строка `topic_shadow` после ответа — матрица
         # «правило × LLM». Ответ не меняется. off — как было. [MESSENGER_ROUTER] topic_shadow_llm
         topic_shadow_llm=_get_enum("MESSENGER_ROUTER", "topic_shadow_llm", default="off", allowed={"off", "on"}),
+        # Ход (г), этап 2: «слово пациента → роль приёма» по каталогу ролей МИС — точный слой + `choose(role_pick)` в тени
+        # (решения владельца 20.10 (г) 1, 2, 6); строка `role_shadow` после ответа. Ответ не меняется. off — как было.
+        # [MESSENGER_ROUTER] roles_catalog_llm
+        roles_catalog_llm=_get_enum("MESSENGER_ROUTER", "roles_catalog_llm", default="off", allowed={"off", "shadow"}),
         # Инструмент адресов при пустой сущности услуги сам не решает её по буквам реплики: правила дают кандидатов (строки
         # прайса, по которым ищутся места оказания), выбирает LLM (`choose`, задача `address_service`); «ни одна» — общий
         # список филиалов, сбой LLM — как было. Услуга, которую LLM разбора хода уже не подтвердила, заново не ищется
@@ -751,6 +756,7 @@ MR_PRICE_CANDIDATES_BY_MEANING = settings.messenger_router.price_candidates_by_m
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
+MR_ROLES_CATALOG_LLM = settings.messenger_router.roles_catalog_llm
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
 MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
 MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm

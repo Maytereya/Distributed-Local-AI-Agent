@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from ..choice import LegacyWire, Option, Status, Task, choose
 from ..llm_runtime import DECISION_OPTIONS, generate_text
@@ -103,6 +103,20 @@ def _is_samara_doctor(doctor: dict[str, Any], samara_tokens: set[str]) -> bool:
     return not _has_explicit_non_samara_regions(regions)
 
 
+def in_region(tokens: set[str]) -> Callable[[dict[str, Any]], bool]:
+    """Предикат «врач принимает в регионе бота» по признакам филиалов региона (`Services` — токены региона)."""
+
+    return lambda doctor: _is_samara_doctor(doctor, tokens)
+
+
+async def region_doctors(services: "Services") -> tuple[list[dict[str, Any]], set[str]]:
+    """Срез врачей и признаки филиалов региона бота — одна точка для совета по жалобе и каталога ролей (ход (г))."""
+
+    doctors = await services._ensure_doctors_cache_loaded()
+    tokens = await services._samara_region_tokens()
+    return list(doctors or []), tokens
+
+
 def samara_specialties(doctors: Sequence[dict[str, Any]], samara_tokens: set[str]) -> list[str]:
     """Роли приёма самарских врачей — без повторов, в порядке появления; только те, к кому идут с жалобой.
 
@@ -112,8 +126,9 @@ def samara_specialties(doctors: Sequence[dict[str, Any]], samara_tokens: set[str
     """
 
     seen: dict[str, None] = {}
+    region = in_region(samara_tokens)
     for doctor in doctors:
-        if not isinstance(doctor, dict) or not _is_samara_doctor(doctor, samara_tokens):
+        if not isinstance(doctor, dict) or not region(doctor):
             continue
         for link in doctor.get("unit_links") or []:
             name = specialty_display_name(str((link or {}).get("company_unit_name") or ""))
@@ -225,9 +240,8 @@ async def advise(text: str, services: "Services | None") -> SpecialistAdvice | N
     if services is None:
         return None
     try:
-        doctors = await services._ensure_doctors_cache_loaded()
-        tokens = await services._samara_region_tokens()
-        specialties = samara_specialties(doctors or [], tokens)
+        doctors, tokens = await region_doctors(services)
+        specialties = samara_specialties(doctors, tokens)
     except Exception as exc:
         logger.warning("symptom_specialists_catalog_failed: %s", type(exc).__name__)
         return None

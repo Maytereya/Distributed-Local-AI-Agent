@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, degradation, expects, pending_answer, pending_reply, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding
+from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -3124,6 +3124,8 @@ async def _complete_route_after_doctor_guard(
     # Понимание хода (ход (б), шаг 1): услуги и свойство ценовой реплики — один раз, до
     # подстановки каталога, которая иначе сводит список к одной услуге. В тени только пишется.
     await turn_understanding.observe_price_turn(decision.label, user_text=user_text, pending=memory.get_pending(state))
+    # Ход (г), этап 2: «слово → роль» по каталогу МИС — в тени рядом с правилами (`roles_catalog_llm = shadow`).
+    role_pick.launch(decision.label, user_text, str(decision.entities.get("specialty") or ""), services)
     decision = await _inject_catalog_candidates(
         decision,
         user_text=user_text,
