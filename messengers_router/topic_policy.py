@@ -46,6 +46,11 @@ _ROWS: tuple[Relabel, ...] = (
         "TEST_ASSIST, а понимание хода нашло список услуг — это корзина цены", "PLAN-2026-10-20-B §2",
     ),
     Relabel(
+        "p1_where_when", "question_facet", "ADDRESS", "_relabel_test_assist_catalog_hit_as_price",
+        "ход `topic_by_llm`: тему TEST_ASSIST решила LLM, услуга найдена, свойство вопроса по LLM — «где / когда сдать»",
+        "STEP-2026-10-21-B-P1-FACET",
+    ),
+    Relabel(
         "flow_price_city_reply_override", "guardrail_post", "PRICE", "_apply_post_nlu_guardrails",
         "ответ городом на висящий вопрос цены — продолжение цены",
     ),

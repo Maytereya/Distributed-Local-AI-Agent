@@ -81,6 +81,22 @@ _PREPARE_OR_BOOKING_OPTIONS = (
 )
 
 
+TEST_ASSIST_FACET_TASK = Task(name="test_assist_facet", max_picks=1, num_predict=32, timeout_s=5.0, queue_timeout_ms=1500)
+_TEST_ASSIST_FACET_OPTIONS = (
+    Option(id="price", text="Узнать стоимость анализа или услуги"),
+    Option(id="availability", text="Узнать, есть ли такой анализ или услуга в клинике, делают ли его, что в него входит"),
+    Option(id="where_when", text="Узнать, где или в какое время можно сдать анализ или пройти услугу, нужна ли запись"),
+)
+
+
+async def test_assist_facet(user_text: str) -> str:
+    """Свойство вопроса об услуге, названной в реплике, — решение LLM (ход (б), решение владельца 20.10 (б) 3): `price` |
+    `availability` | `where_when`; «ни одна», сбой, мусор — пустая строка (вызывающий делает как было)."""
+
+    choice = await choose(TEST_ASSIST_FACET_TASK, user_text, _TEST_ASSIST_FACET_OPTIONS)
+    return choice.ids[0] if choice.status is Status.PICKED and choice.ids else ""
+
+
 def prepare_vs_booking_enabled() -> bool:
     """`prepare_vs_booking_llm = on`."""
 

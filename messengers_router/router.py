@@ -1848,10 +1848,23 @@ async def _inject_catalog_candidates(
     )
 
 
+async def _test_assist_facet_by_llm(decision: RouteDecision, user_text: str) -> str:
+    """Ход `topic_by_llm` (тему решила LLM: TEST_ASSIST), каталог нашёл услугу — что пациент о ней спрашивает, решает LLM
+    (ход (б), STEP-2026-10-21-B-P1-FACET). Не такой ход — пустая строка: П1 работает как было."""
+
+    flags = set(decision.flags or ())
+    if decision.label != "TEST_ASSIST" or "topic_by_llm" not in flags or "catalog_service_exact" not in flags:
+        return ""
+    facet = await booking_slots.test_assist_facet(user_text)
+    turn_telemetry.note(tu_p1_facet=facet or "none")
+    return facet
+
+
 def _relabel_test_assist_catalog_hit_as_price(
     decision: RouteDecision,
     *,
     user_text: str,
+    facet: str = "",
 ) -> RouteDecision:
     """П1: реплика приземлилась на РЕАЛЬНУЮ услугу каталога → это PRICE.
 
@@ -1911,6 +1924,12 @@ def _relabel_test_assist_catalog_hit_as_price(
         return decision
     if detect_test_assist_goal_phrasing(user_text):
         return _copy_decision(decision, flags=flags | {"test_assist_goal_phrasing_kept"})
+    # Тему решила LLM (`topic_by_llm`) и она же решила свойство вопроса: «есть ли / делаете ли» — не голая цена (метка LLM
+    # остаётся), «где / когда сдать» — адреса; «цена» и сбой — как было (STEP-2026-10-21-B-P1-FACET, g0811, g0816).
+    if facet == "availability":
+        return _copy_decision(decision, flags=flags | {"p1_availability_kept"})
+    if facet == "where_when":
+        return _relabel(decision, "p1_where_when", label="ADDRESS", flags=flags | {"p1_where_when"}, source="guardrail_post")
     return _relabel(
         decision, "test_assist_catalog_hit_is_price",
         label="PRICE",
@@ -3138,7 +3157,9 @@ async def _complete_route_after_doctor_guard(
         prefetched_service=catalog_prefetch,
     )
     decision = await _apply_post_nlu_guardrails(decision, state, user_text, services, memory)
-    decision = _relabel_test_assist_catalog_hit_as_price(decision, user_text=user_text)
+    decision = _relabel_test_assist_catalog_hit_as_price(
+        decision, user_text=user_text, facet=await _test_assist_facet_by_llm(decision, user_text)
+    )
     decision = await _confirm_appointment_change_verb(decision, user_text=user_text, state=state)
     decision = await _confirm_existing_appointment_question(decision, user_text=user_text, state=state)
 
