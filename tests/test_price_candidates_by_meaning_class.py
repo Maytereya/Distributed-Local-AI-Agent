@@ -306,3 +306,77 @@ def test_short_abbreviation_is_taken_from_the_message_as_written(monkeypatch):
     on = _Oracle(Choice(Status.NONE_FIT, reason="other_service"))
     _run_rows(monkeypatch, "on", "ЛГ стоимость", on)
     assert _offered(on, 0, "ЛГ (LH)"), on.calls
+
+
+# --- Test-срез 20.10: синоним МИС внутри названной услуги (g0501 «ЭхоКГ узи сердца» → «…плода») ---
+
+
+def _mis_synonyms(monkeypatch, synonyms: dict[str, tuple[str, ...]]) -> None:
+    """Словарь синонимов МИС теста (в гейте синонимы герметично пусты — `_hermetic_mis_synonyms`)."""
+
+    from messengers_router.services import _biomaterial as bio
+
+    real = bio._vocabularies
+
+    def vocab():
+        out = real()
+        out.synonym_candidates = dict(synonyms)
+        out.synonym_to_service = {key: names[0] for key, names in synonyms.items() if len(names) == 1}
+        return out
+
+    monkeypatch.setattr(bio, "_vocabularies", vocab)
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["Сколько стоит ЭхоКГ узи сердца?", "ЭХО КГ с цветовым доплером", "цена эхо-кг сердца взрослому"],
+    ids=["with_words", "spaced", "hyphen"],
+)
+def test_procedure_abbreviation_offers_the_base_row_first_not_the_fetal_variant(question, monkeypatch):
+    """Синоним клиники «ЭхоКГ» — у «Эхокардиографии»; в реплике он с уточнением («узи сердца»), раздельно или через
+    дефис. Сильным совпадением это не становится (остаток содержательный), но строка синонима — первой в списке LLM:
+    без неё LLM выбирала из строк по буквам «узи» и «сердца» вариант «плода»."""
+
+    from messengers_router.services import _biomaterial as bio
+
+    _mis_synonyms(monkeypatch, {"эхокг": ("Эхокардиография",)})
+    assert bio.mis_synonym_candidates(question) == ()  # сильное совпадение — прежнее
+    on = _Oracle(Choice(Status.PICKED, ids=("0",)))
+    picked = _run(monkeypatch, "on", question, on)
+    assert on.calls and on.calls[0][0].startswith("Эхокардиография —"), on.calls
+    assert picked is not None and [r["serviceId"] for r in picked.rows] == [1270]
+
+
+def test_off_does_not_offer_synonym_rows(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("под off синонимы внутри реплики не ищутся")
+
+    _mis_synonyms(monkeypatch, {"эхокг": ("Эхокардиография",)})
+    monkeypatch.setattr(sel, "_synonym_rows", boom)
+    _run(monkeypatch, "off", "Сколько стоит ЭхоКГ узи сердца?", _Oracle())
+
+
+def test_synonyms_within_a_phrase_are_all_services_longest_window_first(monkeypatch):
+    from messengers_router.services import _biomaterial as bio
+
+    _mis_synonyms(
+        monkeypatch,
+        {"эхокг": ("Эхокардиография",), "узи": ("УЗИ брюшной полости",), "вэб": ("ВЭБ IgG", "ВЭБ IgM")},
+    )
+    assert bio.mis_synonyms_within("ЭхоКГ узи сердца") == (("эхокг", ("Эхокардиография",)), ("узи", ("УЗИ брюшной полости",)))
+    assert bio.mis_synonyms_within("антитела к вэб") == (("вэб", ("ВЭБ IgG", "ВЭБ IgM")),)  # неоднозначный — все услуги
+    assert bio.mis_synonyms_within("эхо") == ()  # часть склеенного синонима — не синоним
+    assert bio.mis_synonyms_within("эхографическое исследование") == ()
+
+
+def test_synonym_made_of_a_price_word_adds_no_rows_first(monkeypatch):
+    """Встречный свип 20.10: синоним из слова, которое буквы находят в прайсе («узи», «igg», «терапевт»), первым номером
+    ставил чужую строку (27 из 112). Его строки ищут буквы, как раньше; синоним, которого в названиях нет, — первым."""
+
+    _mis_synonyms(monkeypatch, {"концентрации": ("Концентрация антител вариант 5",), "эхокг": ("Эхокардиография",)})
+    texts = ["анализ на концентрацию карбамазепина"]
+    assert sel._synonym_rows(texts, ROWS) == []  # словоформа слова прайса («Концентрация …»)
+    assert [r["serviceId"] for r in sel._synonym_rows(["эхокг сердца"], ROWS)] == [1270]
+    on = _Oracle(Choice(Status.NONE_FIT, reason="other_service"))
+    _run(monkeypatch, "on", "Сколько стоит анализ крови на концентрации карбамазепина", on)
+    assert on.calls and not on.calls[0][0].startswith("Концентрация антител вариант 5 —"), on.calls

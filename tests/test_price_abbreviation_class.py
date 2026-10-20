@@ -1,12 +1,15 @@
-"""Сокращение доходит до выбора строки цены (`price_candidates_by_meaning`, test-срез 20.10) — через эндпоинт.
+"""Сокращение и синоним МИС доходят до выбора строки цены (`price_candidates_by_meaning`, test-срез 20.10) — через эндпоинт.
 
 Test-срез 20.10 под on: «ЛГ стоимость» (g0850) и «Цена аТ ТГ» (g0794) получали «Скажите, пожалуйста, название
 услуги/анализа» — планировщик решал «услуга не названа» по прежнему определению (`price_question_names_service`:
 сокращения в две буквы — шум), хотя выбор строки под on уже считал сокращение с заглавной словами об услуге. Два
-определения одного вопроса разошлись; теперь оно одно (`_price_select_llm.names_service`).
+определения одного вопроса разошлись; теперь оно одно (`_price_select_llm.names_service`). «ЭхоКГ узи сердца» (g0501)
+получал «…плода при многоплодной беременности»: строки «Эхокардиография» в списке LLM не было — буквы «эхокг» в
+названиях не встречаются, а синоним МИС «ЭхоКГ» засчитывался только как сильное совпадение всей фразы.
 
 Инварианты класса (под on; под off — как было):
 - сокращение с заглавной («ЛГ», «аТ ТГ», «ФСГ», «СРБ») — названная услуга: не уточнение названия, а её строка;
+- синоним МИС внутри названной услуги — её строка в списке LLM, первой (слово клиники сильнее букв правил);
 - выбирает LLM: показывается только выбранная строка.
 """
 
@@ -53,11 +56,22 @@ class _PickLLM:
         return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
 
 
-def _turn(world_dir, monkeypatch, question: str, *, mode: str, llm: _PickLLM) -> dict:
+def _turn(world_dir, monkeypatch, question: str, *, mode: str, llm: _PickLLM, synonyms: dict[str, str] | None = None) -> dict:
     from messengers_router.runtime_config import config as cfg
+    from messengers_router.services import _biomaterial as bio
 
     monkeypatch.setattr(cfg, "MR_PRICE_CANDIDATES_BY_MEANING", mode, raising=False)
     monkeypatch.setattr(cfg, "MR_CHOOSE_CACHE_TTL_S", 0, raising=False)
+    if synonyms is not None:
+        real = bio._vocabularies
+
+        def with_synonyms() -> bio._MisVocabularies:
+            vocab = real()
+            vocab.synonym_to_service = dict(synonyms)
+            vocab.synonym_candidates = {key: (name,) for key, name in synonyms.items()}
+            return vocab
+
+        monkeypatch.setattr(bio, "_vocabularies", with_synonyms)
     with ev_world.FrozenWorld(world_dir, "day"):
         monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
         [turn] = run_dialog([question], f"abbr-{mode}-{abs(hash(question))}")
@@ -96,3 +110,11 @@ def test_bare_price_question_still_asks_for_the_name(mini_prod_world, monkeypatc
     assert " руб." not in turn["text"]
     assert not llm.offered
 
+
+def test_mis_synonym_inside_the_named_service_offers_its_row_first(mini_prod_world, monkeypatch):  # noqa: F811
+    llm = _PickLLM("Эхокардиография")
+    turn = _turn(
+        mini_prod_world, monkeypatch, "Сколько стоит ЭхоКГ узи сердца?", mode="on", llm=llm, synonyms={"эхокг": "Эхокардиография"}
+    )
+    assert llm.offered and llm.offered[0][0] == "Эхокардиография"
+    assert "Эхокардиография —" in turn["text"] and "скрининг" not in turn["text"]
