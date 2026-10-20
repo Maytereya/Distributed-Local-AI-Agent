@@ -14,7 +14,8 @@ STEP-2026-10-21-G-ROLE-PICK-SHADOW).
 3. строка `role_shadow` после ответа (как тень `pending_reply`): `role_layer` (exact | exact_many | partial | miss |
    no_catalog), `role_exact` — роль точного слоя, `role_rules` — роль, в которую ложится специальность правил,
    `role_llm` — роль LLM или исход, `role_llm_agree` — LLM согласна с точным слоем (там, где он нашёл одну роль),
-   `role_rules_agree` — правила согласны с LLM. Названия ролей — данные МИС, реплики пациента в строке нет.
+   `role_rules_agree` — правила согласны с LLM (если имя правил легло в роль каталога; иначе `role_rules_unmapped`).
+   Названия ролей — данные МИС, реплики пациента в строке нет.
 
 `off` (по умолчанию) — ход не меняется ни на такт; ответов тень не меняет никогда. Включение решения (`on`: «нет» по
 данным + оффер, выбор роли для записи) — следующий этап, по карточке.
@@ -113,8 +114,10 @@ async def decide(label: str, user_text: str, rules_specialty: str, cat: RoleCata
     if not choice.failed:
         if fields["role_exact"]:
             fields["role_llm_agree"] = llm == fields["role_exact"]
-        if rules_specialty:
-            fields["role_rules_agree"] = rules_role is not None and llm == rules_role
+        if rules_role is not None:
+            fields["role_rules_agree"] = llm == rules_role
+        elif rules_specialty:
+            fields["role_rules_unmapped"] = True  # имя правил («ЛОР», «гинеколог») не ложится в роль каталога буквально
     return fields
 
 

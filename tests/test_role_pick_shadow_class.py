@@ -70,6 +70,11 @@ def test_exact_layer_hit_is_checked_by_llm(monkeypatch):
     assert f["role_rules_agree"] is False  # правила свели к «хирургу» — чужой врач (SURGEON-PRICE-FOR-SPECIALIST)
 
 
+def test_colloquial_rules_name_is_not_counted_as_disagreement(monkeypatch):
+    f = _decide(monkeypatch, "нужен окулист", _picks("офтальмолог"), rules="окулист")
+    assert "role_rules_agree" not in f and f["role_rules_unmapped"] is True
+
+
 def test_exact_layer_disagreement_is_counted(monkeypatch):
     f = _decide(monkeypatch, "к мануальному терапевту", _picks("терапевт"))
     assert f["role_exact"] == "мануальный терапевт" and f["role_llm_agree"] is False
