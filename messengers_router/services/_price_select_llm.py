@@ -402,6 +402,51 @@ def _rare_rows(texts: Sequence[str], retail_rows: list[dict[str, Any]], *, short
     return out
 
 
+def names_service(question: str) -> bool:
+    """Назвал ли пациент в реплике услугу — одно определение для планировщика (не переспрашивать название) и выбора
+    строки (звать ли LLM). Под `price_candidates_by_meaning` короткое сокращение с заглавной («ЛГ», «аТ ТГ») — тоже
+    слова об услуге: её ищет LLM. До 20.10 это знал только выбор строки, а планировщик по прежнему определению
+    переспрашивал «Скажите название услуги» раньше него (test-срез 20.10: «ЛГ стоимость», «Цена аТ ТГ»)."""
+
+    return price_question_names_service(question) or bool(_by_meaning_on() and _short_name_words(question))
+
+
+# Строк по синонимам МИС внутри названной услуги — не больше стольких (у неоднозначного синонима их до 9: «вэб»).
+_SYNONYM_ROWS = 6
+
+
+def _synonym_rows(texts: Sequence[str], retail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Строки прайса услуг, чей синоним МИС входит в названную услугу (`mis_synonyms_within`), — кандидаты для LLM:
+    «ЭхоКГ» клиника записала синонимом «Эхокардиографии», а буквами её строку не найти (g0501, 20.10).
+
+    Только синонимы, которых нет в названиях прайса ни одним словом, ни словоформой, ни склеенными: их строку буквы не
+    находят. Синоним из слова прайса («узи» → «УЗИ брюшной полости», «igg» → ЭБВ, «биохимия» → «Мочевая кислота»,
+    «терапевт») буквы и так находят во всех его строках, а первым номером он ставил чужую строку — встречный свип 20.10
+    на 335 размеченных вопросах стенда: без условия 27 чужих первых строк из 112, с ним 0 из 27."""
+
+    df = _token_df(retail_rows)
+
+    def letters_miss(key: str) -> bool:
+        glued = _normalise_price_token(_normalise_input(key).replace(" ", "").replace("-", ""))
+        return not df.get(glued) and not any(_wordform_family_size(token, retail_rows) for token in _price_query_tokens(key))
+
+    wanted: list[str] = []
+    for text in texts:
+        for key, names in _biomaterial.mis_synonyms_within(str(text or "")):
+            if not letters_miss(key):
+                continue
+            for name in names:
+                norm = _normalise_catalog_text(name)
+                if norm and norm not in wanted:
+                    wanted.append(norm)
+    if not wanted:
+        return []
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for row in retail_rows:
+        by_name.setdefault(_normalise_catalog_text(_row_name(row)), []).append(row)
+    return [row for key in wanted for row in by_name.get(key, ())][:_SYNONYM_ROWS]
+
+
 def _short_name_words(text: str) -> list[str]:
     """Сокращения в две буквы, которые общий разбор цены отбрасывает как шум («ЛГ», «аТ ТГ»): написаны хотя бы с одной
     заглавной (предлоги «за», «из» пишут строчными) — без чисел и слов-вопросов."""
@@ -629,9 +674,8 @@ async def select_price_rows(
     if not question or not rows:
         return None
     by_meaning = _by_meaning_on()
-    # Ответ цифрой, «да», «а сколько стоит?» — своих слов об услуге нет, её держит контекст. Под
-    # `price_candidates_by_meaning` короткое сокращение («ЛГ», «аТ ТГ») — тоже слова об услуге: её ищет LLM.
-    if not price_question_names_service(question) and not (by_meaning and _short_name_words(question)):
+    # Ответ цифрой, «да», «а сколько стоит?» — своих слов об услуге нет, её держит контекст.
+    if not names_service(question):
         return None
     # «по ОМС» и другие уточнения, которых в прайсе нет вовсе: правила честно говорят
     # «не нашёл» (решение владельца, П2) — не даём LLM найти «почти то». Но если
@@ -670,11 +714,16 @@ async def select_price_rows(
     )
     pool += [row for row in rest if _row_key(row) not in {_row_key(r) for r in pool}][: max(0, _POOL_LIMIT - len(pool))]
     if by_meaning:
+        named = _named_service_texts(question, phrase, hints)
         # Строки по редким словам названной услуги — в конце списка: иначе пул из 24 строк заполняют частые слова.
-        rare = await asyncio.to_thread(
-            _rare_rows, _named_service_texts(question, phrase, hints), rows, short_from=question
-        )
+        rare = await asyncio.to_thread(_rare_rows, named, rows, short_from=question)
         pool = _with_rare_tail(pool, rare)
+        # Синоним МИС внутри названной услуги — первым: это слово клиники, довод сильнее букв ответа правил
+        # («ЭхоКГ узи сердца»: правила предложили «…плода при многоплодной беременности», LLM выбрала его первым номером).
+        by_synonym = await asyncio.to_thread(_synonym_rows, named, rows)
+        if by_synonym:
+            keys = {_row_key(row) for row in by_synonym}
+            pool = [*by_synonym, *(row for row in pool if _row_key(row) not in keys)][:_POOL_LIMIT]
     strong = strong_rows(question, rows, pool=pool)
     if strong:
         turn_telemetry.note(price_policy="strong")

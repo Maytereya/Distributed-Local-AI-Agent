@@ -253,12 +253,12 @@ def build_plan(
         and "service_name" in missing
         and set(missing) <= {"service_name", "_any_of:city,branch_name,branch_id"}
     ):
-        from .services._prices_helpers import price_question_names_service
+        from .services._price_select_llm import names_service
 
         if price_list is not None:
             missing = []
             turn_understanding.note_acted("planner_list_named")
-        elif price_question_names_service(user_text):
+        elif names_service(user_text):
             missing = []
 
     if missing:

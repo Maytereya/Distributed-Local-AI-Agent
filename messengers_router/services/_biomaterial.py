@@ -98,6 +98,7 @@ class _MisVocabularies:
         self.biomat_texts_by_service: dict[str, tuple[str, ...]] = {}
         self._synonym_index_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = None
         self._synonyms_by_service_cache: tuple[tuple[Any, ...], dict[str, tuple[str, ...]]] | None = None
+        self._joined_synonyms_cache: tuple[tuple[Any, ...], dict[str, tuple[str, ...]]] | None = None
 
 
 _VOCAB_CACHE: dict[tuple[str, float], _MisVocabularies] = {}
@@ -398,6 +399,60 @@ def mis_synonym_service(
 
     found = mis_synonym_candidates(query_text, vocab=vocab)
     return found[0] if len(found) == 1 else None
+
+
+def mis_synonyms_within(
+    query_text: str, *, vocab: _MisVocabularies | None = None
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Все синонимы МИС, входящие в реплику непрерывной цепочкой токенов, — при любом остатке, с их услугами.
+
+    Кандидаты для выбора строки LLM, не ответ: `_match_synonym_key` (сильное совпадение) засчитывает синоним, только
+    если остаток — обвязка или принятый материал, и «ЭхоКГ узи сердца» (синоним «ЭхоКГ» у «Эхокардиографии») сильным не
+    станет. Но без синонима в списке LLM этой строки нет вовсе: буквы «эхокг» в названиях не встречаются, и список
+    собирали «узи» и «сердца» («…плода при многоплодной беременности» первым номером, test-срез 20.10, g0501).
+    Синоним и окно реплики сравниваются склеенными, без пробелов и дефисов: «ЭХО КГ», «Эхо-КГ» и «ЭхоКГ» — одно слово
+    (g0747 «ЭХО КГ с цветовым доплером»). Порядок — длиннейшее окно первым, при равной длине — раньше в реплике.
+
+    :param query_text: фраза услуги пациента
+    :param vocab: словари МИС (по умолчанию — дневной срез)
+    :return: пары (ключ словаря, канонические названия его услуг) без повторов ключа (пусто — синонимов в реплике нет)
+    """
+
+    vocab = vocab if vocab is not None else _vocabularies()
+    q = _significant_tokens(query_text)
+    if not q:
+        return ()
+    joined = _joined_synonyms(vocab)
+    found: list[tuple[int, int, str]] = []
+    for pos in range(len(q)):
+        for end in range(pos + 1, len(q) + 1):
+            for key in joined.get("".join(q[pos:end]).replace("-", ""), ()):
+                found.append((pos - end, pos, key))
+    out: dict[str, tuple[str, ...]] = {}
+    for _n, _pos, key in sorted(found):
+        single = vocab.synonym_to_service.get(key)
+        names = vocab.synonym_candidates.get(key) or ((single,) if single else ())
+        if names and key not in out:
+            out[key] = tuple(names)
+    return tuple(out.items())
+
+
+def _joined_synonyms(vocab: _MisVocabularies) -> dict[str, tuple[str, ...]]:
+    """Синонимы МИС по склеенному написанию «значащие токены без пробелов и дефисов» → ключи словаря (кэш на словаре,
+    отпечаток — как у `_synonym_index`)."""
+
+    stamp = (vocab.synonym_candidates, len(vocab.synonym_candidates), vocab.synonym_to_service, len(vocab.synonym_to_service))
+    cached = getattr(vocab, "_joined_synonyms_cache", None)
+    if cached is not None and cached[0][0] is stamp[0] and cached[0][2] is stamp[2] and cached[0][1::2] == stamp[1::2]:
+        return cached[1]
+    index: dict[str, list[str]] = {}
+    for key in vocab.synonym_candidates or vocab.synonym_to_service:
+        glued = "".join(_significant_tokens(key)).replace("-", "")
+        if glued:
+            index.setdefault(glued, []).append(key)
+    result = {glued: tuple(keys) for glued, keys in index.items()}
+    vocab._joined_synonyms_cache = (stamp, result)
+    return result
 
 
 def _synonyms_by_service(vocab: _MisVocabularies) -> dict[str, tuple[str, ...]]:
