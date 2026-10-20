@@ -50,14 +50,25 @@ def side_price_world(tmp_path_factory) -> Path:
     """Мир: прайс `mini_prod` + приём хирурга (на настоящем прайсе «приём» по словам находит его первым), выдержка врачей
     и цены услуг своей специальности у врачей (без них ответ о цене приёма — перевод, и побочного ответа нет)."""
 
-    src = tmp_path_factory.mktemp("side_price_src")
+    src = side_price_source(tmp_path_factory.mktemp("side_price_src"))
+    return ev_world.build_world(src, "20261008", tmp_path_factory.mktemp("side_price") / "world")
+
+
+def side_price_source(src: Path, doctor=lambda doctor: doctor, price=lambda rows: rows) -> Path:
+    """Срезы мира `side_price_world` в каталоге `src`; `doctor` правит строку врача, `price` — строки прайса до цен врачей
+    (миры других тестов)."""
+
     shutil.copytree(_TESTS / "fixtures" / "mini_prod" / "snapshots", src, dirs_exist_ok=True)
-    shutil.copy(_TESTS / "fixtures" / "doctors_excerpt" / "doctors_20261008.jsonl", src / "doctors_20261008.jsonl")
+    excerpt = (_TESTS / "fixtures" / "doctors_excerpt" / "doctors_20261008.jsonl").read_text(encoding="utf-8").splitlines()
+    (src / "doctors_20261008.jsonl").write_text(
+        "".join(json.dumps(doctor(json.loads(line)), ensure_ascii=False) + "\n" for line in excerpt if line.strip()), encoding="utf-8"
+    )
     price_path = src / "price_by_region" / "price_region_3_20261008.jsonl"
     rows = [json.loads(line) for line in price_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     template = next(row for row in rows if row["serviceName"] == "Прием (осмотр, консультация) врача-уролога")
     for offset, (name, cost) in enumerate(_ADDED_ROWS):
         rows.insert(offset, {**template, "serviceId": 990001 + offset, "serviceHomecode": f"99.1.{offset + 1}", "serviceName": name, "cost": cost})
+    rows = price(rows)
     price_path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
 
     doctors = [json.loads(line) for line in (src / "doctors_20261008.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -87,7 +98,7 @@ def side_price_world(tmp_path_factory) -> Path:
     (src / "doctor_prices" / "doctor_prices_20261008.jsonl").write_text(
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in doctor_prices), encoding="utf-8"
     )
-    return ev_world.build_world(src, "20261008", tmp_path_factory.mktemp("side_price") / "world")
+    return src
 
 
 def _llm(book: str) -> _LLM:
@@ -100,9 +111,16 @@ def _llm(book: str) -> _LLM:
     )
 
 
+# Ловушка, которая сама — приём своей специальности: единственной ценой это чужой ответ, строкой среди всех вариантов приёма
+# (BUG-2026-10-20-BRANCH-SIDE-PRICE-ONE-ROW) — законный вариант.
+_OWN_CONSULT_TRAPS = {"уролог": _TRAPS[0]}
+_CONSULT_LIST_HEADER = "Стоимость приёма по прайсу клиники:"
+
+
 def _foreign(text: str, own: str) -> list[str]:
     low = text.lower()
-    return [stem for stem in _STEMS if stem != own and stem in low] + [trap for trap in _TRAPS if trap.lower() in low]
+    allowed = _OWN_CONSULT_TRAPS.get(own) if _CONSULT_LIST_HEADER in text else None
+    return [stem for stem in _STEMS if stem != own and stem in low] + [trap for trap in _TRAPS if trap.lower() in low and trap != allowed]
 
 
 @pytest.mark.parametrize("reply", _REPLIES)

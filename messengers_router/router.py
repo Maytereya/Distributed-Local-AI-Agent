@@ -112,7 +112,7 @@ from .recovery_policy import contextual_reply_kind, explicit_operator_requested
 from .services import Services, match_compound_price_service_option, resolve_price_service_name_from_catalog
 from .services._appointment_change_validator import is_own_appointment_change
 from .services._existing_appointment_validator import is_own_existing_appointment
-from .services._doctors_helpers import _service_name_allows_specialty
+from .services._doctors_helpers import _extract_specialties_from_text, _is_consultation_service_query, _service_name_allows_specialty
 from .services._prices_helpers import _PRICE_PROCEDURE_LIKE_RE, consult_price_phrase, price_reply_names_own_service
 from .services._readiness_select import readiness_by_choice, readiness_from_catalog, readiness_mode
 from .services.lab_tests import RESULT_TIMING_OPERATOR_TEXT
@@ -3663,6 +3663,39 @@ def _price_rows_of_specialty(evidence: Evidence | None, specialty: str) -> bool:
     return bool(names) and all(_service_name_allows_specialty(name, specialty) for name in names)
 
 
+# Сколько строк приёма показывает побочный ответ о цене: у ЛОР-врача на прайсе 13, у гинеколога — 10.
+_CONSULT_ROWS_MAX = 15
+
+
+def _consult_price_rows(rows: list[dict[str, Any]], specialty: str) -> list[dict[str, Any]]:
+    """Строки прайса — приём этой специальности (первичный, повторный, у разных врачей), с ценой.
+
+    Кандидаты — тот же поиск пути цены по «приём <специальность>» (`_select_patient_price_rows`); правило только сужает:
+    строка — приём или консультация, цена больше нуля, и каждая специальность её названия — из семейства специальности
+    записи (уролог — уролог, андролог; «приём хирурга (эндокринологическое отделение)» на запрос гинеколога — чужая).
+    """
+
+    from .services._prices_helpers import _select_patient_price_rows
+
+    family = set(_extract_specialties_from_text(specialty)) or {specialty}
+    picked: list[dict[str, Any]] = []
+    for row in _select_patient_price_rows(rows, consult_price_phrase(specialty), limit=_CONSULT_ROWS_MAX):
+        name = str(row.get("serviceName") or "")
+        found = set(_extract_specialties_from_text(name))
+        cost = row.get("cost")
+        if isinstance(cost, (int, float)) and cost > 0 and _is_consultation_service_query(name) and found and found <= family:
+            picked.append(row)
+    return picked
+
+
+async def _booking_consult_price_rows(specialty: str) -> list[dict[str, Any]]:
+    """Строки приёма специальности записи из прайса региона; сбой загрузки — пусто (ответ — как был)."""
+
+    from .services._prices_helpers import _catalog_rows
+
+    return _consult_price_rows(await asyncio.to_thread(_catalog_rows, None), specialty)
+
+
 async def _answer_branch_side_question(
     user_text: str,
     state: SessionState,
@@ -3716,13 +3749,25 @@ async def _answer_branch_side_question(
         # цены (дезинформация ценой хуже уточнения).
         if not booking_price or (booking_specialty and not _price_rows_of_specialty(ctx.evidence, booking_specialty)):
             return None
-    from .shown_context import SHOWN_KEY
+    from . import renderer
+    from .shown_context import SHOWN_KEY, remember
 
+    answer_text = str(response.text).strip()
     if SHOWN_KEY in scratch.last_entities:  # что пациент увидел в побочном ответе — контекст следующего хода
         state.last_entities[SHOWN_KEY] = scratch.last_entities[SHOWN_KEY]
-    expects.ask(expects.Question.APPOINTMENT_BRANCH, kind=expects.PICK, options=options)
+    if decision.label == "PRICE" and booking_specialty:
+        # Несколько строк приёма специальности — все со своими ценами, а не первая строка и врачи (решение 25.09 №2,
+        # BUG-2026-10-20-BRANCH-SIDE-PRICE-ONE-ROW): у невролога первичный приём стоит 3 000, 6 500 и 20 000 у разных
+        # врачей. Одна строка — ответ пути цены, как был.
+        rows = await _booking_consult_price_rows(booking_specialty)
+        if len(rows) > 1:
+            answer_text = renderer.format_consult_price_rows(rows)
+            remember(state, [str(row.get("serviceName") or "") for row in rows])
+    # Вопрос о филиале — прежний: в поле ожидания его текст со списком записи, не текст побочного ответа (в ответе о
+    # часах — свой нумерованный список филиалов города, BUG-2026-10-20-BRANCH-AFTER-SIDE-FOREIGN).
+    expects.keep_asking()
     return ResponseEnvelope(
-        text=f"{str(response.text).strip()}\n\n{question}",
+        text=f"{answer_text}\n\n{question}",
         attachments=list(response.attachments or []),
         handoff=False,
         state_update=_early_debug_state_update(

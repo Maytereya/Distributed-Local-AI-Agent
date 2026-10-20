@@ -147,6 +147,8 @@ class Asked:
     options: tuple[str, ...]
     reask: bool
     asks: int
+    # Вопрос остался прежним (`keep_asking`): в поле — его прежний текст и счёт, а не текст ответа этого хода.
+    kept: str = ""
 
 
 # Поле ожидания на начало хода (вопрос, на который отвечает реплика; после сброса кнопкой) и вопросы, заданные ходом.
@@ -213,6 +215,33 @@ def ask(question: Question, *, kind: str = YES_NO, options: Iterable[str] = (), 
         asks = int(prev["asks"]) + 1 if prev is not None and prev.get("type") == question.value else 2
     clean = tuple(text for text in (str(option or "").strip() for option in options) if text)
     _ASKED.set(_ASKED.get() + (Asked(question=question, kind=kind, options=clean, reask=reask, asks=asks),))
+
+
+def keep_asking() -> bool:
+    """Висящий вопрос остаётся прежним: тот же текст вопроса, пункты и счёт переспросов (побочный ответ на уточняющий
+    вопрос о нём, `pending_buttons`).
+
+    Текст ответа этого хода — не вопрос, к которому относятся пункты: побочный ответ о часах работы печатает свой
+    нумерованный список филиалов города, и модель следующего хода брала номер из него вместо номера пункта — «давайте на
+    Победы» записывало на Ленина (BUG-2026-10-20-BRANCH-AFTER-SIDE-FOREIGN). Уточняющий вопрос пациента — не переспрос:
+    счёт прежний.
+
+    :return: False — висящего вопроса на начало хода нет
+    """
+
+    prev = _PREVIOUS.get()
+    if prev is None:
+        return False
+    item = Asked(
+        question=Question(prev["type"]),
+        kind=str(prev["kind"]),
+        options=tuple(str(option) for option in prev.get("options") or ()),
+        reask=False,
+        asks=int(prev["asks"]),
+        kept=str(prev.get("question") or ""),
+    )
+    _ASKED.set(_ASKED.get() + (item,))
+    return True
 
 
 @contextlib.contextmanager
@@ -311,12 +340,14 @@ def finish_turn(state: SessionState, response: ResponseEnvelope) -> dict[str, An
         state.last_entities.pop(EXPECTS_KEY, None)
         return None
     current = min(armed, key=lambda item: _READING_ORDER.index(item.question))
-    question = visible_question(response.text, state.last_entities)
+    question = current.kept or visible_question(response.text, state.last_entities)
     prev = _PREVIOUS.get()
     # Переспрос обработчика — факт хода, даже если тот же вопрос затем ещё раз поставил общий путь (переспрос выбора
     # действия с записью отвечает через `orchestrator._extract_pending_response`, тем же текстом).
     reasks = [item.asks for item in _ASKED.get() if item.question is current.question and item.reask]
-    if reasks:
+    if current.kept:
+        asks = current.asks
+    elif reasks:
         asks = max(reasks)
     elif prev is not None and prev.get("type") == current.question.value and prev.get("question") == question:
         asks = int(prev["asks"]) + 1
