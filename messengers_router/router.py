@@ -2386,6 +2386,7 @@ def build_plan(
     # Все пути роутера строят план здесь — пожелание по времени (вариант A) не теряется,
     # какой бы веткой ни пришла реплика.
     _capture_appointment_wish(decision, user_text, state, memory)
+    turn_understanding.check_planned(decision.label)
     return planner_build_plan(decision, state, user_text, memory, runtime_options=runtime_options)
 
 
@@ -3027,6 +3028,7 @@ async def _resolve_nlu_decision_before_doctor_guard(
             nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
             decision = nlu_result.decision
             turn_telemetry.note(tu_label_nlu=decision.label)
+            turn_understanding.observe_intent(decision.label, decision.confidence, (nlu_result.trace or {}).get("topic_source"))
             nlu_debug["candidates"] = [
                 {
                     "source": cand.source,
@@ -3554,6 +3556,7 @@ def _debug_meta(
         "summary": state.summary,
         "nlu_trace": nlu_trace,
         "understanding": understanding.as_debug() if (understanding := turn_understanding.current()) else None,
+        "intent": topic.as_debug() if (topic := turn_understanding.intent()) else None,
         # Разбор реплики на фразы (L-15b) — на ценовых ходах (единственный режим с T7 шага 3б); на прочих ключа нет.
         **({"turn_parse": parse_debug} if (parse_debug := turn_parse.debug()) else {}),
         # Отпечаток рантайма (DATA-13): сборка, модель, хэши промптов и реестра тем, TZ, срезы — без хостов и секретов.

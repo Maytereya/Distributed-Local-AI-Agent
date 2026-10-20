@@ -161,4 +161,8 @@ def note(policy: str, before: str, after: str) -> None:
         logger.warning("topic_policy_unknown_row", extra={"policy": policy})
     if before == after:
         return
-    turn_telemetry.append("tu_relabel_src", f"{policy}:{before}>{after}")
+    entry = f"{policy}:{before}>{after}"
+    turn_telemetry.append("tu_relabel_src", entry)
+    from . import turn_understanding  # понимание хода импортирует сервисы — не на уровне модуля
+
+    turn_understanding.note_override(entry)

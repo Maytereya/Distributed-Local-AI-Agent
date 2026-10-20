@@ -158,7 +158,7 @@ def _rule_branch(rule: RouteDecision, text: str) -> str:
     return "+".join(sorted(str(f) for f in own)) or "?"
 
 
-def _note_topic_source(rule: RouteDecision | None, text: str) -> None:
+def _note_topic_source(rule: RouteDecision | None, text: str) -> dict[str, str]:
     """Кто решил тему реплики на уровне NLU — замер хода (б), DEBT-1 (STEP-2026-10-20-B-TOPIC-SOURCE).
 
     `nlu_src = rule` — ветка правила `legacy_v2` (или guardrail `llm_primary`), `nlu_rule` — её флаги; `nlu_src = llm` —
@@ -168,8 +168,10 @@ def _note_topic_source(rule: RouteDecision | None, text: str) -> None:
 
     if rule is None:
         turn_telemetry.note(nlu_src="llm")
-    else:
-        turn_telemetry.note(nlu_src="rule", nlu_rule=_rule_branch(rule, text))
+        return {"src": "llm", "rule": ""}
+    branch = _rule_branch(rule, text)
+    turn_telemetry.note(nlu_src="rule", nlu_rule=branch)
+    return {"src": "rule", "rule": branch}
 
 
 def _engine_from_config() -> str:
@@ -198,7 +200,7 @@ async def _analyze_legacy_with_candidates(
     llm_context.update(seeded)
 
     prefetched_rule = await _rule_decision(text, state.last_entities, runtime_options=runtime_options)
-    _note_topic_source(prefetched_rule, text)
+    topic_source = _note_topic_source(prefetched_rule, text)
     if prefetched_rule is not None and (runtime_options is None or runtime_options.llm_mode != "strict"):
         # Тема решена правилом без LLM — тень LLM рядом (под `topic_shadow_llm = on`): как часто правило ошибается.
         # Промпт — тот же, что у хода без правила (`classifier.analyze` с тем же контекстом).
@@ -239,6 +241,7 @@ async def _analyze_legacy_with_candidates(
                 "confidence": merged.confidence,
                 "source": source,
             },
+            "topic_source": topic_source,
         },
     )
 
@@ -261,15 +264,20 @@ async def _analyze_llm_primary_with_candidates(
             text, state, runtime_options=runtime_options, prefetched_llm=dict(trace.get("llm_primary_sanitized") or {})
         )
         turn_telemetry.note(nlu_fallback="rules", nlu_fail=failure)
-        fallback.trace = {**trace, "rules_fallback": failure, "final_decision": fallback.trace["final_decision"]}
+        fallback.trace = {
+            **trace,
+            "rules_fallback": failure,
+            "final_decision": fallback.trace["final_decision"],
+            "topic_source": fallback.trace.get("topic_source"),
+        }
         return fallback
-    _note_topic_source(decision if (trace.get("guardrail_pre") or {}).get("hit") else None, text)
+    topic_source = _note_topic_source(decision if (trace.get("guardrail_pre") or {}).get("hit") else None, text)
     candidate = _candidate_from_decision("llm_primary", decision)
     return NLUResult(
         decision=decision,
         candidates=[candidate],
         merged_from=str(decision.source or "llm_primary"),
-        trace=trace,
+        trace={**trace, "topic_source": topic_source},
     )
 
 

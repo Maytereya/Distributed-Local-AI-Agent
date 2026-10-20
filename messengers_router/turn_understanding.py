@@ -45,7 +45,7 @@ import asyncio
 import contextvars
 import logging
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from collections.abc import Awaitable
 from typing import Any, Sequence
 
@@ -135,7 +135,32 @@ class TurnUnderstanding:
         }
 
 
+@dataclass
+class TurnIntent:
+    """Тема хода — ход (б), этап 1 (STEP-2026-10-21-B-INTENT): наблюдатель, читатели не меняются.
+
+    Производитель — одна точка сразу после NLU (`observe_intent`): метка, кто её решил (`source` — `rule` | `llm`,
+    `rule` — флаги ветки правила), уверенность. Каждая переклейка после NLU (строка таблицы политик `topic_policy`)
+    дописывает себя в `overrides` (`<строка>:<было>><стало>`); `final` — метка, с которой ход идёт дальше. Инвариант:
+    метка, по которой планировщик строит план, равна `final` (`check_planned`; расхождение — `tu_intent_mismatch`).
+    """
+
+    label: str
+    source: str
+    rule: str
+    confidence: float
+    overrides: list[str] = field(default_factory=list)
+
+    @property
+    def final(self) -> str:
+        return self.overrides[-1].rsplit(">", 1)[1] if self.overrides else self.label
+
+    def as_debug(self) -> dict[str, Any]:
+        return {"label": self.label, "source": self.source, "rule": self.rule, "final": self.final, "overrides": list(self.overrides)}
+
+
 _CURRENT: contextvars.ContextVar[TurnUnderstanding | None] = contextvars.ContextVar("mr_turn_understanding", default=None)
+_INTENT: contextvars.ContextVar[TurnIntent | None] = contextvars.ContextVar("mr_turn_intent", default=None)
 _ACTED: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar("mr_turn_understanding_acted", default=())
 
 
@@ -156,7 +181,35 @@ def begin_turn() -> None:
 
     _CURRENT.set(None)
     _ACTED.set(())
+    _INTENT.set(None)
     turn_parse.begin()
+
+
+def observe_intent(label: str, confidence: float, topic_source: dict[str, Any] | None) -> None:
+    """Тема хода сразу после NLU (этап 1 хода (б)) — одна точка производителя; только наблюдение."""
+
+    source = dict(topic_source or {})
+    _INTENT.set(TurnIntent(label=str(label), source=str(source.get("src") or "?"), rule=str(source.get("rule") or ""), confidence=float(confidence)))
+
+
+def intent() -> TurnIntent | None:
+    return _INTENT.get()
+
+
+def note_override(entry: str) -> None:
+    """Переклейка метки после NLU (строка таблицы политик) — в тему хода."""
+
+    current_intent = _INTENT.get()
+    if current_intent is not None:
+        current_intent.overrides.append(entry)
+
+
+def check_planned(label: str) -> None:
+    """План строится по метке `label`: она должна совпасть с итоговой меткой темы хода (наблюдатель этапа 1)."""
+
+    current_intent = _INTENT.get()
+    if current_intent is not None and current_intent.final != str(label):
+        turn_telemetry.note(tu_intent_mismatch=f"{current_intent.final}>{label}")
 
 
 def current() -> TurnUnderstanding | None:
