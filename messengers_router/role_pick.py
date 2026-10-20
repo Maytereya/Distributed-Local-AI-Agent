@@ -28,7 +28,7 @@ import logging
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from . import turn_telemetry
+from . import llm_runtime, turn_telemetry
 from .choice import Option, Status, Task, choose
 from .runtime_config import config as _cfg
 from .services._role_catalog import RoleCatalog, _hit, _stem, _tokens, build_role_catalog
@@ -203,6 +203,10 @@ async def apply(decision: Any, user_text: str, services: "Services | None") -> A
         acted = "qualifier"
     turn_telemetry.note(**fields, role_acted=acted or "none")
     if not acted:
+        # Решение роли ход не изменило — лимит решений хода оно не тратит (как висящий вопрос, решение владельца Q5 18.10):
+        # иначе следующему выбору хода не хватало бюджета (test g0792: запись к неврологу → «не нашёл в онлайн-записи»).
+        if "role_llm" in fields and llm_runtime.refund_turn_decision():
+            turn_telemetry.note(role_refund=1)
         return decision
     return replace(decision, entities=entities, flags=flags)
 

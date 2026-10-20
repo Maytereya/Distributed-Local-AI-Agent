@@ -145,3 +145,15 @@ def test_role_found_by_exact_layer_is_left_to_the_old_path(monkeypatch):
 
     before, after, _calls = _apply(monkeypatch, "записаться к неврологу, ленина 5", _picks("невролог"))
     assert after is before
+
+
+def test_decision_that_changes_nothing_returns_the_turn_budget(monkeypatch):
+    """Роль совпала с правилами — решение не тратит лимит хода (test g0792: следующему выбору не хватало бюджета)."""
+
+    refunds: list[int] = []
+    monkeypatch.setattr(llm_runtime, "refund_turn_decision", lambda: refunds.append(1) or True)
+    _apply(monkeypatch, "запишите к неврологу", _picks("невролог"), rules="невролог")
+    assert refunds == [1]
+    refunds.clear()
+    _apply(monkeypatch, "нужен окулист", _picks("офтальмолог"))
+    assert refunds == []
