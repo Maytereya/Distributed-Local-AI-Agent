@@ -24,7 +24,7 @@ from ._common import (
 from ._prepare_select_llm import SOURCE_MIS, PrepareMemo, kb_patient_memos, select_prepare_memos
 from ._prices_helpers import _catalog_rows
 from ._strong_match import strong_rows
-from ._turn_phrases import phrase_rows, strong_inside
+from ._turn_phrases import phrase_rows, strong_window
 from ._prepare import (
     _PREPARE_ENTITY_RE,
     _PrepareCandidate,
@@ -465,12 +465,12 @@ def _catalog_subject(raw_query: str) -> str:
 
     Слова реплики названием не печатаются (BUG-2026-10-20-PREPARE-SUBJECT-QUOTES-REPLY): вырезатель правил брал всё
     после «подготовиться к» или реплику без зачина, и пациент читал «Памятки по подготовке к «узи нужно ли не есть»».
-    Услуга — сильное окно реплики (`strong_inside`: название, синоним клиники, 1–3 слова) или вся реплика. Окна с
+    Услуга — сильное окно реплики (`strong_window`: название, синоним клиники, 1–3 слова) или вся реплика. Окна с
     разными услугами или ни одного — пусто: ответ без названия. Число — не код услуги: в вопросе о подготовке это
     часы («не есть 8 часов перед…»)."""
 
     catalog = _catalog_rows(None)
-    found = strong_inside(raw_query, catalog)
+    found = strong_window(raw_query, catalog)
     phrase, rows = (found[0], found[1]) if found else (raw_query, phrase_rows(raw_query, catalog))
     if phrase.strip().isdigit():
         return ""

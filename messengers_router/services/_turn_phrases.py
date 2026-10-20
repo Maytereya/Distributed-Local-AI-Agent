@@ -130,16 +130,11 @@ def phrase_rows(raw: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]
     return strong_rows(raw, catalog, verbatim=True)
 
 
-def strong_inside(fragment: str, catalog: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], str] | None:
-    """Одно сильное по данным МИС окно (1–3 слова, длинные первыми, без шум-слова внутри) внутри слабой фразы и слова
-    фразы вокруг него без обвязки: «ферритин первый раз» → («ферритин», строки, «первый раз»). Окон нет, их несколько
-    разных или вокруг нет слов — None: что это за слова (условие или разговор), решает LLM корзины, здесь — механика
-    окон разбора (`_strong_window_pieces`), без новых словарей.
-
-    Слова вокруг, которые сами называют услугу, — не условие, а склейка перечня без запятой (дополнение 20.10, карточка
-    корзин dev, r0121): другое сильное окно любого размера вне выбранного («бактериоскопия мазка цитология …») или хоть
-    одно слово, известное прайсу («тимофеевка луговая ферритин …», `query_names_service_in_other_words` — словарь гарда
-    П2). Тогда None — как было: суд одного окна молча выкинул бы вторую услугу из ответа."""
+def strong_window(fragment: str, catalog: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], str] | None:
+    """Одно сильное по данным МИС окно (1–3 слова, длинные первыми, без шум-слова внутри) внутри фразы и слова фразы вокруг
+    него без обвязки: «нужна ли подготовка к экг» → («экг», строки, «нужна ли подготовка к»). Окон нет, вокруг нет слов или
+    в фразе другое сильное окно вне выбранного (склейка двух названий) — None. Механика окон разбора без новых словарей;
+    что за слова вокруг — решает вызывающий (`strong_inside` для корзины, `prepare._catalog_subject` для подготовки)."""
 
     toks = _tokens(fragment)
     hits: list[tuple[int, int, str, list[dict[str, Any]]]] = []  # окна всех размеров, длинные первыми
@@ -159,9 +154,24 @@ def strong_inside(fragment: str, catalog: list[dict[str, Any]]) -> tuple[str, li
     if any(_normalise_catalog_text(hit[2]) != name and not (lo <= hit[0] and hit[1] <= hi) for hit in hits[1:]):
         return None  # два разных названия в одной фразе — не условие при услуге, а склейка: как было
     rest = " ".join(fragment[t.start : t.end] for k, t in enumerate(toks) if not lo <= k < hi and t.key not in _FILLER)
-    if not rest or not query_names_service_in_other_words(rest, catalog):
+    return (raw, rows, rest) if rest else None
+
+
+def strong_inside(fragment: str, catalog: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], str] | None:
+    """Окно `strong_window` внутри слабой фразы корзины, если слова вокруг могут быть условием при услуге: «ферритин первый
+    раз» → («ферритин», строки, «первый раз»); что это за слова (условие или разговор), решает LLM корзины.
+
+    Слова вокруг, которые сами называют услугу, — не условие, а склейка перечня без запятой (дополнение 20.10, карточка
+    корзин dev, r0121): другое сильное окно любого размера вне выбранного («бактериоскопия мазка цитология …», отсекает
+    `strong_window`) или хоть одно слово, известное прайсу («тимофеевка луговая ферритин …»,
+    `query_names_service_in_other_words` — словарь гарда П2). Тогда None — как было: суд одного окна молча выкинул бы
+    вторую услугу из ответа. Проверка — только здесь: подготовке нужно само окно («подготовка к экг» — слова прайса вокруг
+    услуги, слияние деплоя 11)."""
+
+    found = strong_window(fragment, catalog)
+    if found is None or not query_names_service_in_other_words(found[2], catalog):
         return None  # вокруг нет слов или среди них слово прайса — суда нет, как было
-    return raw, rows, rest
+    return found
 
 
 def _key(word: str) -> str:
