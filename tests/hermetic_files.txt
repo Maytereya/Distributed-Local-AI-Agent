@@ -182,3 +182,4 @@ tests/test_t7_k1_k3_switches.py
 tests/test_show_all_under_pending_answer.py
 tests/test_basket_candidates_scored.py
 tests/test_price_judge_collection_conditions.py
+tests/test_switch_bench_sets.py

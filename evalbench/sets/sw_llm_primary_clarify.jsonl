@@ -1,0 +1,6 @@
+{"id": "lp_book_no_slots", "turns": ["хочу записаться"], "expect": "человеческий вопрос (город / к кому), никогда «slot_request»", "tags": ["llm_primary", "clarify_code"], "about_shown": [], "note": "выключатель nlu_engine=llm_primary"}
+{"id": "lp_vague", "turns": ["мне бы узнать насчёт анализов и врача"], "expect": "вопрос «что именно вам нужно», никогда «intent_disambiguation»", "tags": ["llm_primary", "clarify_code"], "about_shown": [], "note": "выключатель nlu_engine=llm_primary"}
+{"id": "lp_price_no_service", "turns": ["сколько стоит"], "expect": "вопрос о названии услуги", "tags": ["llm_primary", "clarify_code"], "about_shown": [], "note": "выключатель nlu_engine=llm_primary"}
+{"id": "lp_greeting", "turns": ["здравствуйте, подскажите"], "expect": "приветствие / что могу; без служебных кодов", "tags": ["llm_primary", "clarify_code"], "about_shown": [], "note": "выключатель nlu_engine=llm_primary"}
+{"id": "lp_two_turn", "turns": ["хочу записаться", "к неврологу"], "expect": "второй ход — запись к неврологу, первый — без кода", "tags": ["llm_primary", "clarify_code"], "about_shown": [], "note": "выключатель nlu_engine=llm_primary"}
+{"id": "lp_control_clear", "turns": ["сколько стоит ферритин"], "expect": "контроль: ясный вопрос — цена, уточнения нет", "tags": ["llm_primary", "control"], "about_shown": [], "note": "выключатель nlu_engine=llm_primary"}
