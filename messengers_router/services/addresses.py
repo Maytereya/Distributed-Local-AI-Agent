@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from agent_logic_2.nayka_api import api_price
 
@@ -16,6 +16,7 @@ from .. import degradation
 from .. import address_service
 from .. import resilience as _R
 from ..service_phrase import extract_service_phrase
+from . import _prices_helpers
 from ._addresses_helpers import (
     _addresses_to_branch_payload,
     _branch_query_matches,
@@ -105,6 +106,15 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
     # Входной ключ планировщика — не сущность: в `entities_used` (а оттуда в промпт ответа) не идёт.
     entities = dict(entities)
     service_llm_dropped = bool(entities.pop(address_service.ADDRESS_SERVICE_DROPPED_KEY, False))
+    service_llm_picks = address_service.turn_picks(entities.pop(address_service.ADDRESS_SERVICE_PICKS_KEY, None))
+    # Несколько названий выбрала LLM разбора хода — места оказания строк с этими названиями; услуга ответа — первая из них
+    # (флаги филиала, фиксированный адрес — по ней, а не по буквам реплики). Строк в прайсе нет — как без выбора.
+    llm_retail_matches: list[dict[str, Any]] | None = None
+    if llm_service and service_llm_picks and not service_name:
+        picked_rows = await _price_rows_named(service_llm_picks)
+        if picked_rows:
+            llm_retail_matches = picked_rows
+            service_name = service_llm_picks[0]
     if not service_name and not (llm_service and service_llm_dropped):
         extracted = extract_service_phrase(query or "")
         if extracted:
@@ -120,8 +130,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
     procedure_flag = _service_procedure_flag(service_q) if service_q else None
     # Услугу, выведенную из реплики правилами, под `address_service_llm = on` судит LLM (принцип 2): кандидаты — строки
     # прайса, по которым ищутся места оказания (ветка `priceUnits care-setting` ниже). Те же условия, что у этой ветки.
-    llm_retail_matches: list[dict[str, Any]] | None = None
-    llm_judged = False
+    llm_judged = llm_retail_matches is not None
     if (
         llm_service
         and service_from_reply
@@ -130,12 +139,13 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
         and (appointment_mode or _is_procedure_branch_lookup_query(query, service_q))
     ):
         retail_matches = await _address_price_rows(service_name or query or "")
-        verdict = await address_service.choose_address_service(query, retail_matches)
+        verdict = await address_service.choose_address_service(query, retail_matches, search=_address_price_rows_for)
         llm_judged = verdict.status in ("picked", "none_fit")
         if verdict.status == "picked":
             llm_retail_matches = verdict.rows
         elif verdict.status == "none_fit":
-            # «Ни одна»: услуга снимается — общий список филиалов, как у снятой разбором хода услуги.
+            # «Ни одна» и во втором круге: услуга снимается — общий список филиалов, как у снятой разбором хода услуги
+            # (решение владельца 19.10, п. 2; справочника «услуга → филиалы» нет — DEBT-2026-10-19-SERVICE-LOCATION-SOURCE).
             service_name, service_q = "", ""
     # При схлопывании живого /regions до ≤1 («Гагарина 64» — единственная с «Самара»
     # в name) отдаём ПОЛНЫЙ статический список, а не один филиал / врачебно-несамарскую
@@ -462,21 +472,54 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
     return payload
 
 
-async def _address_price_rows(care_query: str) -> list[dict[str, Any]]:
-    """Строки прайса региона, по которым ищутся места оказания услуги (отбор правил по тексту); сбой прайса — пусто."""
+async def _region_price_rows() -> list[dict[str, Any]]:
+    """Строки прайса региона; сбой прайса — пусто."""
 
     try:
         retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
     except Exception:
         retail_rows = []
-    if not isinstance(retail_rows, list) or not retail_rows:
+    if not isinstance(retail_rows, list):
         return []
-    return _select_address_price_rows(
-        [row for row in retail_rows if isinstance(row, dict)],
-        care_query,
-        limit=10,
-        family_limit=50,
-    )
+    return [row for row in retail_rows if isinstance(row, dict)]
+
+
+async def _address_price_rows(care_query: str) -> list[dict[str, Any]]:
+    """Строки прайса региона, по которым ищутся места оказания услуги (отбор правил по тексту); сбой прайса — пусто."""
+
+    rows = await _region_price_rows()
+    if not rows:
+        return []
+    return _select_address_price_rows(rows, care_query, limit=10, family_limit=50)
+
+
+async def _address_price_rows_for(texts: Sequence[str]) -> list[dict[str, Any]]:
+    """Отбор правил (`_select_address_price_rows`) по каждому тексту — термины второго круга LLM; строки без повторов."""
+
+    rows = await _region_price_rows()
+    if not rows:
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for text in texts:
+        if not str(text or "").strip():
+            continue
+        for row in _select_address_price_rows(rows, str(text), limit=10, family_limit=50):
+            key = (str(row.get("serviceName") or ""), str(row.get("priceUnitId") or ""))
+            if key not in seen:
+                seen.add(key)
+                out.append(row)
+    return out
+
+
+async def _price_rows_named(names: Sequence[str]) -> list[dict[str, Any]]:
+    """Строки прайса региона с этими названиями (выбор LLM) — с полями места оказания."""
+
+    wanted = {_normalise_input(name) for name in names if str(name or "").strip()}
+    rows = [
+        row for row in await _region_price_rows() if _normalise_input(str(row.get("serviceName") or row.get("name") or "")) in wanted
+    ]
+    return _prices_helpers._annotate_price_rows_with_care_context(rows) if rows else []
 
 
 async def _procedure_branches_from_index(

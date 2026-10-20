@@ -128,6 +128,8 @@ def build_plan(
 ) -> Plan:
     pending = memory.get_pending(state)
     effective_label = apply_pending_override(decision, pending, user_text=user_text)
+    # Служебный ключ грундера (названия выбора LLM для «где сделать») — вход этого хода, не сущность диалога.
+    address_picks = address_service.turn_picks(state.last_entities.pop(address_service.ADDRESS_SERVICE_PICKS_KEY, None))
 
     # Поле ожидания (вопрос бота, D2.1) — состояние диалога, не сущность: инструментам не отдаём, иначе через их
     # `entities_used` текст вопроса попал бы в промпт свободного ответа LLM и поменял бы ответ.
@@ -398,7 +400,11 @@ def build_plan(
 
     if label == "ADDRESS":
         address_entities = dict(entities)
-        if address_service.enabled() and service_dropped_by_llm(decision.flags):
+        address_entities.pop(address_service.ADDRESS_SERVICE_PICKS_KEY, None)
+        if address_service.enabled() and address_picks and "entity_dropped_unverified_service_name" in decision.flags:
+            # LLM разбора хода выбрала несколько названий — места оказания по ним (BUG-2026-10-20-ADDRESS-MULTI-PICK-AS-DROPPED).
+            address_entities[address_service.ADDRESS_SERVICE_PICKS_KEY] = address_picks
+        elif address_service.enabled() and service_dropped_by_llm(decision.flags):
             # Услугу из реплики LLM разбора хода не подтвердила — инструмент адресов не ищет её заново по буквам.
             address_entities[address_service.ADDRESS_SERVICE_DROPPED_KEY] = True
         steps.append(PlanStep(tool="address_info", input={"query": user_text, "entities": address_entities}))

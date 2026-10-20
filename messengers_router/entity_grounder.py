@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import booking_slots, turn_understanding
+from . import address_service, booking_slots, turn_understanding
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
@@ -258,6 +258,10 @@ def _apply_service_verdict(
     if label == "ADDRESS":
         if verdict.status == "unavailable":
             return canonical
+        if verdict.action == "choose" and verdict.status in ("picked", "strong") and address_service.enabled():
+            # Несколько названий выбрала LLM (или данные МИС) — для «где сделать» это ответ, а не выбор пациента: места
+            # оказания этих строк, а не общий список филиалов (BUG-2026-10-20-ADDRESS-MULTI-PICK-AS-DROPPED).
+            out[address_service.ADDRESS_SERVICE_PICKS_KEY] = list(verdict.names)
         flags.add("entity_dropped_unverified_service_name")
         return None
     if verdict.action == "refuse":
