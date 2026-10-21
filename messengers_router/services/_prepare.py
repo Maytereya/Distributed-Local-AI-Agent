@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import functools
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -361,7 +362,18 @@ def _prepare_term_roots(text: str) -> set[str]:
     Возвращает корни смысловых токенов для query/content matching.
 
     :param text: исходный текст
-    :return: множество токенов-корней
+    :return: множество токенов-корней (новый набор — вызывающий может его менять)
+    """
+
+    return set(_prepare_term_roots_cached(text))
+
+
+@functools.lru_cache(maxsize=8192)
+def _prepare_term_roots_cached(text: str) -> frozenset[str]:
+    """Корни текста — чистая функция текста и констант модуля (ход (е), STEP-2026-10-22-E-PREPARE-ROOTS).
+
+    Подбор подготовки сравнивает вопрос со всеми записями справочника и раньше на каждом
+    вопросе заново выделял корни из текста каждой памятки.
     """
 
     from ._doctors_helpers import _stem_service_token  # noqa: PLC0415
@@ -372,7 +384,7 @@ def _prepare_term_roots(text: str) -> set[str]:
         root = str(stem or token).strip()
         if len(root) >= 3:
             roots.add(root)
-    return roots
+    return frozenset(roots)
 
 
 def _prepare_roots_match(query_root: str, candidate_roots: set[str]) -> bool:
