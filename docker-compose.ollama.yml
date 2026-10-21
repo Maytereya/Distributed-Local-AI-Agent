@@ -57,8 +57,10 @@ services:
       - OLLAMA_SCHED_SPREAD=1
       - OLLAMA_CONTEXT_LENGTH=24576
       # NUM_PARALLEL множит KV-кэш: при 2 и контексте 24576 модель занимает
-      # 53 ГБ вместо 44.7. Уменьшать до 1, если упрётесь в память.
-      - OLLAMA_NUM_PARALLEL=2
+      # 53 ГБ вместо 44.7 (~8 ГБ на слот). 3 (21.10, решение владельца): прод
+      # (`llm_max_concurrency = 2`) держит свои 2 запроса, третий слот — стенду;
+      # 20.10 при 2 слотах занято ~60 из ~98 ГБ. Уменьшать, если упрётесь в память.
+      - OLLAMA_NUM_PARALLEL=3
       - OLLAMA_MAX_QUEUE=128
       - OLLAMA_FLASH_ATTENTION=1
       - OLLAMA_MAX_LOADED_MODELS=1
