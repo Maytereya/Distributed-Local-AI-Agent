@@ -210,3 +210,4 @@ tests/test_p1_facet_class.py
 tests/test_role_pick_on_class.py
 tests/test_turn_understanding_one_class.py
 tests/test_service_doctors_class.py
+tests/test_doctors_schedule_flag.py
