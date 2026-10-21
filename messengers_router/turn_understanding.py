@@ -98,6 +98,9 @@ class TurnUnderstanding:
     facet: str | None = None  # readiness | prepare | booking | where | price | None
     facet_rule: str = ""
     reply: str = ""  # реплика хода, по которой построено понимание
+    # Названа ли в реплике услуга — одно решение хода (U6, ход (б), этап 2): ставит производитель под `turn_understanding_one`
+    # (`_decide_named`), планировщик цены читает. None — не решено (выключатель off): читатель идёт прежним путём.
+    names_service: bool | None = None
 
     def for_text(self, text: str) -> bool:
         """Читатель берёт понимание, только если его вход — реплика хода (как `PhraseParse.for_text`):
@@ -221,6 +224,15 @@ def one_enabled() -> bool:
     владельца 20.10 (б) 4): под `on` «список ли» на пути правил решается один раз — пониманием хода (`rules_list`)."""
 
     return str(getattr(_cfg, "MR_TURN_UNDERSTANDING_ONE", "off") or "").strip().lower() == "on"
+
+
+def of_reply(text: str) -> TurnUnderstanding | None:
+    """Понимание, по которому читатель с входом `text` действует под `turn_understanding_one = on` (ход (б), этап 2):
+    только действующее (`turn_understanding_price = on`, не тень) и только этой реплики хода. None — выключатель off,
+    понимания нет или вход — не реплика хода (дозаполнение, контекст прошлого хода): читатель идёт прежним путём."""
+
+    tu = acting()
+    return tu if tu is not None and one_enabled() and tu.for_text(text) else None
 
 
 def parse_for(text: str) -> turn_parse.PhraseParse | None:
@@ -359,11 +371,24 @@ async def observe_price_turn(label: str, *, user_text: str, pending: dict[str, A
     if not is_price_turn(label, pending) or not str(user_text or "").strip():
         return None
     if mode() != "off":
-        if not agree_telemetry():
-            return await _observe_parse_on_lazy(user_text)
-        return await _observe_parse_on(user_text)
+        tu = await (_observe_parse_on(user_text) if agree_telemetry() else _observe_parse_on_lazy(user_text))
+        return _decide_named(tu, user_text) if tu is not None and one_enabled() else tu
     await _observe_phrases(user_text)
     return None
+
+
+def _decide_named(tu: TurnUnderstanding, user_text: str) -> TurnUnderstanding:
+    """Названа ли услуга — один раз за ход, в производителе (U6, ход (б), этап 2): есть упоминание — названа; нет — то же
+    определение, что у планировщика и выбора строки до этапа 2 (`_price_select_llm.names_service`). Только «нет упоминания»
+    не годится: вырезатель правил не видит услугу в «Сколько стоит прием к оталорингологу?», «Посев на Candida показывает
+    …?», а разбор «ни одна фраза не услуга» (`none_fit`) бывает при верной строке цены («посев на хламидии») — replay
+    test/dev 21.10: 5 потерь верной цены из 1068 ходов."""
+
+    from .services._price_select_llm import names_service  # выбор строки импортирует понимание хода — импорт на вызове
+
+    tu = replace(tu, names_service=bool(tu.services) or names_service(user_text))
+    _CURRENT.set(tu)
+    return tu
 
 
 async def _observe_parse_on(user_text: str) -> TurnUnderstanding | None:

@@ -255,9 +255,15 @@ def build_plan(
     ):
         from .services._price_select_llm import names_service
 
+        # «Названа ли услуга» под `turn_understanding_one = on` (ход (б), этап 2, U6) — решение понимания этой реплики
+        # (`names_service`, одно на ход), а не второе определение здесь. Понимания реплики нет — прежнее определение.
+        understood = turn_understanding.of_reply(user_text)
         if price_list is not None:
             missing = []
             turn_understanding.note_acted("planner_list_named")
+        elif understood is not None and understood.names_service is not None:
+            if understood.names_service:
+                missing = []
         elif names_service(user_text):
             missing = []
 
