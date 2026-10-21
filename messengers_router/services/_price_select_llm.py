@@ -595,11 +595,12 @@ def _mention_phrase(question: str) -> str | None:
     """Фраза одиночной услуги из понимания хода (L-14 шаг 2): упоминание этой
     реплики — его фраза (пациента или выбор LLM разбора, без речевой обвязки); понимание этой реплики без
     упоминаний — пусто: услуги пациент не назвал («Цена анализа»), клинике не синоним. None — понимания
-    этой реплики нет (выключено, не ценовой ход, вход — не реплика хода) или в нём список: прежний путь."""
+    этой реплики нет (выключено, не ценовой ход, вход — не реплика хода) или в нём список: прежний путь. Под
+    `turn_understanding_one = on` (ход (б), этап 2, U9) — только действующее понимание (`of_reply`), в тени — прежний путь."""
 
     from .. import turn_understanding  # понимание хода импортирует сервисы цены — не на уровне модуля
 
-    tu = turn_understanding.current()
+    tu = turn_understanding.of_reply(question) if turn_understanding.one_enabled() else turn_understanding.current()
     if tu is None or not tu.for_text(question) or tu.is_list:
         return None
     single = tu.single

@@ -1755,6 +1755,20 @@ async def _inject_catalog_candidates(
             should_try_service = False
             flags.add(shown_context.SHOW_ALL_KEPT_FLAG)
             updated = True
+        # Ход (б), этап 2, U1 (`turn_understanding_one = on`): реплика — одна услуга, сильная по данным МИС, с одним
+        # названием прайса — это название; каталог по буквам реплики не ищем (дизайн 19.10 §3, исход one_strong). У подбора
+        # анализов точное совпадение — ещё и довод П1 «это цена»; понимание находит название и в длинном вопросе, где буквы
+        # не находили, и П1 без LLM отвечал бы ценой на вопрос о сроке (replay dev 21.10, g0168). Поэтому TEST_ASSIST — только
+        # когда тему решила LLM (`topic_by_llm`): свойство вопроса для П1 там решает она же (`_test_assist_facet_by_llm`).
+        strong_ok = decision.label == "PRICE" or (decision.label == "TEST_ASSIST" and "topic_by_llm" in flags)
+        chosen = turn_understanding.strong_choice(user_text) if should_try_service and strong_ok else None
+        if chosen:
+            should_try_service = False
+            entities["service_name"] = chosen
+            entities.pop("test_name", None)
+            flags.update({"catalog_service_exact", "understanding_service_chosen"})
+            updated = True
+            turn_understanding.note_acted("catalog_from_understanding")
 
     # Part IV Stage 15 (OPTION B, partial): doctor + service catalog lookups
     # are independent — both read post-verify entities and don't depend on

@@ -345,11 +345,12 @@ async def _parse_strong_answer(
 def _names_no_service(query: str) -> bool:
     """L-14, шаг 3: понимание этой реплики есть, а услуги в ней не названо («а цена?»,
     «сколько стоит?» — упоминания нет). Тогда фраза вырезателя («а») не перебивает показанную услугу контекста
-    и не ищется в прайсе: вопрос — о том, что пациент уже видел (находка 1 STEP-…-L14-PREP-CONSUMERS)."""
+    и не ищется в прайсе: вопрос — о том, что пациент уже видел (находка 1 STEP-…-L14-PREP-CONSUMERS). Под
+    `turn_understanding_one = on` (ход (б), этап 2, U8) — только действующее понимание (`of_reply`), в тени — прежний путь."""
 
     from .. import turn_understanding  # понимание хода импортирует сервисы цены — не на уровне модуля
 
-    tu = turn_understanding.current()
+    tu = turn_understanding.of_reply(str(query or "")) if turn_understanding.one_enabled() else turn_understanding.current()
     return tu is not None and tu.for_text(str(query or "")) and not tu.services
 
 

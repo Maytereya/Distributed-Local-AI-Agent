@@ -255,9 +255,15 @@ def build_plan(
     ):
         from .services._price_select_llm import names_service
 
+        # «Названа ли услуга» под `turn_understanding_one = on` (ход (б), этап 2, U6) — решение понимания этой реплики
+        # (`names_service`, одно на ход), а не второе определение здесь. Понимания реплики нет — прежнее определение.
+        understood = turn_understanding.of_reply(user_text)
         if price_list is not None:
             missing = []
             turn_understanding.note_acted("planner_list_named")
+        elif understood is not None and understood.names_service is not None:
+            if understood.names_service:
+                missing = []
         elif names_service(user_text):
             missing = []
 
@@ -392,6 +398,21 @@ def build_plan(
             turn_understanding.note_acted("planner_list_to_cart")
             return Plan(label=label, steps=steps)
         price_entities = {**entities, "__price_question": True}
+        # Ход (б), этап 2 (U1/U2 под `turn_understanding_one = on`): услугу назвало понимание хода, а спросили цену — ответ
+        # ценой (`price_info`), не карточкой услуги с врачами: форму ответа задаёт свойство вопроса, а не то, кто нашёл
+        # название (консилиум 21.10, В2; replay dev g0255, g0380).
+        understood_price = turn_understanding.of_reply(user_text)
+        if (
+            service_known
+            and understood_price is not None
+            and understood_price.facet == "price"
+            and set(decision.flags or ()) & {"understanding_service_chosen", "entity_service_name_from_understanding"}
+        ):
+            # Строку прайса выбирает LLM, как у любого вопроса о цене: с готовым названием путь цены шёл бы по правилам
+            # мимо выбора строки (replay dev 21.10: лишняя строка «Источник цены…» у g0255, g0380).
+            service_known = False
+            price_entities = {k: v for k, v in price_entities.items() if k not in ("service_name", "test_name")}
+            turn_understanding.note_acted("planner_price_by_understanding")
         if service_known and not doctor_known:
             steps.append(PlanStep(tool="service_bundle_info", input={"query": user_text, "entities": price_entities}))
         else:

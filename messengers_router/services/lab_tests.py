@@ -115,11 +115,12 @@ _RESULTS_PORTAL_HINT = (
 
 def _turn_asks_price(query: str) -> bool:
     """В реплике хода вопрос о цене: свойство хода из понимания (`turn_understanding`), без понимания — теми
-    же детекторами (`price_turn_facet`, без LLM). Нужен подбору анализов под `turn_parse = on`."""
+    же детекторами (`price_turn_facet`, без LLM). Нужен подбору анализов под `turn_parse = on`. Под `turn_understanding_one =
+    on` (ход (б), этап 2, U7) — только действующее понимание этой реплики (`of_reply`): в тени и для чужого входа — детекторы."""
 
     from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
 
-    understanding = turn_understanding.current()
+    understanding = turn_understanding.of_reply(query) if turn_understanding.one_enabled() else turn_understanding.current()
     facet = understanding.facet if understanding is not None else turn_understanding.price_turn_facet(query)[0]
     return facet == "price"
 

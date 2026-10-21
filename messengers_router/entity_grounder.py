@@ -624,6 +624,15 @@ async def ground_decision_entities(
                 flags.add("entity_dropped_service_name_list")
                 turn_understanding.note_acted("grounder_single_dropped")
                 continue
+            # Ход (б), этап 2, U2 (`turn_understanding_one = on`): одна сильная по данным МИС услуга с одним названием прайса —
+            # это название, заземлять по буквам заново не нужно (дизайн 19.10 §3, исход one_strong). Только цена: подбор анализов
+            # с услугой из понимания — довод П1 (`router._inject_catalog_candidates`), здесь его не расширяем.
+            chosen = turn_understanding.strong_choice(user_text) if label == "PRICE" else None
+            if chosen:
+                out[key] = chosen
+                flags.add("entity_service_name_from_understanding")
+                turn_understanding.note_acted("grounder_from_understanding")
+                continue
             raw_value = str(value or "").strip()
             if _should_keep_nonbookable_service_name_as_is(
                 raw_value=raw_value,
