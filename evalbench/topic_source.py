@@ -46,6 +46,8 @@ _OVERRIDE_FLAGS = (
     "test_assist_catalog_hit_is_price", "understanding_list_is_price", "promoted_from_rule_hints",
     "rule_price_rescue",
 )
+# Телеметрия до этапа 2 хода (б), консилиум 20.10 §4 (`turn_telemetry`).
+_PRE_STAGE2_FIELDS = ("price_guard", "tu_p2_verdict", "tu_understanding_src")
 _BAD_OUTCOMES = ("handoff", "operator_offer", "clarify", "not_understood", "no_info")
 
 
@@ -63,6 +65,8 @@ def layer(turn: dict[str, Any]) -> str:
     source = tel.get("decision_source")
     if source in _PENDING_SOURCES:
         return "pending"
+    if tel.get("nlu_src") in {"rule", "llm"}:  # с этапа 0 хода (б) источник пишется явно
+        return str(tel["nlu_src"])
     if tel.get("nlu_llm"):
         return "llm"
     return "rule"
@@ -70,6 +74,8 @@ def layer(turn: dict[str, Any]) -> str:
 
 def overrides(turn: dict[str, Any]) -> list[str]:
     tel = turn.get("telemetry") or {}
+    if "tu_relabel_src" in tel:  # с таблицы политик хода (б) каждая переклейка пишет себя сама
+        return [str(src) for src in tel.get("tu_relabel_src") or []]
     flags = turn.get("flags") or []
     out = [f for f in _OVERRIDE_FLAGS if f in flags]
     if tel.get("decision_source") in _OVERRIDE_SOURCES:
@@ -106,8 +112,15 @@ def measure(header: dict[str, Any], turns: list[dict[str, Any]], labels: dict[st
     by_category: dict[str, Counter] = defaultdict(Counter)
     by_class: dict[str, Counter] = defaultdict(Counter)
     override = Counter()
+    pre_stage2: dict[str, Counter] = defaultdict(Counter)
     multi_rule = 0
     for t in turns:
+        tel = t.get("telemetry") or {}
+        for key in _PRE_STAGE2_FIELDS:
+            if tel.get(key) is not None:
+                pre_stage2[key][str(tel[key])] += 1
+        for key in ("input_not_reply", "input_no_parse"):
+            pre_stage2["inputs"][key] += int(tel.get(key) or 0)
         lay = layer(t)
         layers[lay] += 1
         flags = t.get("flags") or []
@@ -133,7 +146,7 @@ def measure(header: dict[str, Any], turns: list[dict[str, Any]], labels: dict[st
     return {
         "name": header.get("name"), "sha": header.get("code_sha"), "n": len(turns), "layers": layers,
         "by_rule": by_rule, "by_category": by_category, "by_class": by_class, "override": override,
-        "multi_rule": multi_rule,
+        "multi_rule": multi_rule, "pre_stage2": pre_stage2,
     }
 
 
@@ -159,6 +172,12 @@ def render(m: dict[str, Any]) -> str:
         f"Ходов с несколькими флагами правил: {m['multi_rule']}.",
         "",
         "Переписали метку после NLU: " + (", ".join(f"`{k}` {v}" for k, v in m["override"].most_common()) or "—"),
+        "",
+        *(
+            f"`{key}`: " + ", ".join(f"{k} {v}" for k, v in counts.most_common())
+            for key, counts in sorted((m.get("pre_stage2") or {}).items())
+            if sum(counts.values())
+        ),
         "",
         "| Правило | Ходов | Главные категории | Перевод/уточнение | Переписано после | Чужая цена / размечено |",
         "|---|---|---|---|---|---|",

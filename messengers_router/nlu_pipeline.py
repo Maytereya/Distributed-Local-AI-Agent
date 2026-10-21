@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import classifier, turn_telemetry
+from . import classifier, topic_shadow, turn_telemetry
 from .context_summary import seeded_context_for_nlu
 from .llm_mode_policy import RuntimeOptions
 from .mess_types import RouteDecision, SessionState
@@ -158,7 +158,7 @@ def _rule_branch(rule: RouteDecision, text: str) -> str:
     return "+".join(sorted(str(f) for f in own)) or "?"
 
 
-def _note_topic_source(rule: RouteDecision | None, text: str) -> None:
+def _note_topic_source(rule: RouteDecision | None, text: str) -> dict[str, str]:
     """Кто решил тему реплики на уровне NLU — замер хода (б), DEBT-1 (STEP-2026-10-20-B-TOPIC-SOURCE).
 
     `nlu_src = rule` — ветка правила `legacy_v2` (или guardrail `llm_primary`), `nlu_rule` — её флаги; `nlu_src = llm` —
@@ -168,8 +168,34 @@ def _note_topic_source(rule: RouteDecision | None, text: str) -> None:
 
     if rule is None:
         turn_telemetry.note(nlu_src="llm")
-    else:
-        turn_telemetry.note(nlu_src="rule", nlu_rule=_rule_branch(rule, text))
+        return {"src": "llm", "rule": ""}
+    branch = _rule_branch(rule, text)
+    turn_telemetry.note(nlu_src="rule", nlu_rule=branch)
+    return {"src": "rule", "rule": branch}
+
+
+def _topic_by_llm_rules() -> frozenset[str]:
+    """`[MESSENGER_ROUTER] topic_by_llm` — ветки правил через запятую, у которых тему решает LLM (ход (б), этап 4, вариант
+    Б, решение владельца 20.10 (б) 1, 5: по одному правилу); пусто (по умолчанию) — как было."""
+
+    raw = str(getattr(c, "MR_TOPIC_BY_LLM", "") or "")
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+
+
+def _topic_by_llm(rule: RouteDecision | None, topic_source: dict[str, str], runtime_options: RuntimeOptions | None) -> bool:
+    """Тему этого хода решает LLM, а правило — кандидат: ветка правила в `topic_by_llm`, правило не про безопасность
+    (принцип 4: срочное LLM не снимает), LLM разрешена режимом хода."""
+
+    if rule is None or rule.label in _SAFETY_LABELS:
+        return False
+    if runtime_options is not None and runtime_options.llm_mode == "strict":
+        return False
+    wanted = _topic_by_llm_rules()
+    return bool(wanted) and bool(wanted & set(str(topic_source.get("rule") or "").split("+")))
+
+
+def _llm_failed(decision: RouteDecision) -> bool:
+    return bool({"ollama_timeout", "ollama_non_json"} & set(decision.flags or ()))
 
 
 def _engine_from_config() -> str:
@@ -198,7 +224,17 @@ async def _analyze_legacy_with_candidates(
     llm_context.update(seeded)
 
     prefetched_rule = await _rule_decision(text, state.last_entities, runtime_options=runtime_options)
-    _note_topic_source(prefetched_rule, text)
+    topic_source = _note_topic_source(prefetched_rule, text)
+    by_llm = _topic_by_llm(prefetched_rule, topic_source, runtime_options)
+    if prefetched_rule is not None and not by_llm and (runtime_options is None or runtime_options.llm_mode != "strict"):
+        # Тема решена правилом без LLM — тень LLM рядом (под `topic_shadow_llm = on`): как часто правило ошибается.
+        # Промпт — тот же, что у хода без правила (`classifier.analyze` с тем же контекстом).
+        topic_shadow.launch(
+            text,
+            classifier._seed_entities_from_memory(llm_context),
+            prefetched_rule.label,
+            queue_timeout_ms=int(runtime_options.queue_timeout_ms) if runtime_options else 30000,
+        )
     rule = prefetched_rule or RouteDecision(
         label="OTHER",
         confidence=0.2,
@@ -210,11 +246,28 @@ async def _analyze_legacy_with_candidates(
         text,
         llm_context,
         runtime_options=runtime_options,
-        prefetched_rule=prefetched_rule,
+        prefetched_rule=None if by_llm else prefetched_rule,
         prefetched_llm=prefetched_llm,
+        skip_rule=by_llm,
     )
+    if by_llm and _llm_failed(llm):
+        # Сбой LLM — решает правило, как без выключателя (политика сбоя этапа 4, как `llm_primary_rules_fallback`).
+        turn_telemetry.note(nlu_topic_by_llm="rules_fallback")
+        llm = rule
+    elif by_llm:
+        turn_telemetry.note(nlu_topic_by_llm="llm", nlu_src="llm")
+        topic_source = {"src": "llm", "rule": topic_source.get("rule", "")}
     llm_mode = runtime_options.llm_mode if runtime_options else "hybrid"
     merged, source = _merge(rule, llm, llm_mode=llm_mode)
+    if by_llm and llm is not rule:
+        # Тему решила LLM, правило — кандидат: детекторы того же правила после NLU метку LLM не перебивают
+        # (`router._apply_post_nlu_guardrails`, строка `policy_nonbookable_walkin`).
+        merged.flags = set(merged.flags) | {"topic_by_llm"}
+        if merged.label == "OTHER" and rule.label != "OTHER":
+            # OTHER от LLM — тема: вопрос вне наших тем, данных нет — честный оффер оператора, а не ответ правила (оно
+            # выдумывало: «да, берём анализы у детей 2 лет», g0509) и не текст о техническом сбое (решение владельца 21.10).
+            merged.flags = set(merged.flags) | {"topic_other_offer"}
+            turn_telemetry.note(nlu_topic_by_llm="other_offer")
     candidates = [_candidate_from_decision("rule", rule), _candidate_from_decision("llm", llm)]
     return NLUResult(
         decision=merged,
@@ -230,6 +283,7 @@ async def _analyze_legacy_with_candidates(
                 "confidence": merged.confidence,
                 "source": source,
             },
+            "topic_source": topic_source,
         },
     )
 
@@ -252,15 +306,20 @@ async def _analyze_llm_primary_with_candidates(
             text, state, runtime_options=runtime_options, prefetched_llm=dict(trace.get("llm_primary_sanitized") or {})
         )
         turn_telemetry.note(nlu_fallback="rules", nlu_fail=failure)
-        fallback.trace = {**trace, "rules_fallback": failure, "final_decision": fallback.trace["final_decision"]}
+        fallback.trace = {
+            **trace,
+            "rules_fallback": failure,
+            "final_decision": fallback.trace["final_decision"],
+            "topic_source": fallback.trace.get("topic_source"),
+        }
         return fallback
-    _note_topic_source(decision if (trace.get("guardrail_pre") or {}).get("hit") else None, text)
+    topic_source = _note_topic_source(decision if (trace.get("guardrail_pre") or {}).get("hit") else None, text)
     candidate = _candidate_from_decision("llm_primary", decision)
     return NLUResult(
         decision=decision,
         candidates=[candidate],
         merged_from=str(decision.source or "llm_primary"),
-        trace=trace,
+        trace={**trace, "topic_source": topic_source},
     )
 
 

@@ -13,7 +13,6 @@ from urllib.parse import quote_from_bytes
 
 from agent_logic_2.nayka_api import api_price
 
-from .. import turn_parse
 from ._common import (
     _as_int,
     _get_first_present,
@@ -23,6 +22,7 @@ from ._result_timing_validator import is_result_timing_question
 from ._prices_helpers import (
     _PRICE_SERVICE_ALIASES,
     SAMARA_PRICE_REGION_ID,
+    _multi_price_items,
     _rank_price_rows,
     _resolve_multi_price_items,
     phrase_price_items,
@@ -180,11 +180,17 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
     # Разбор «одна услуга» (не список) подбор анализов читает, только если в реплике вопрос о цене: иначе
     # («есть ли полный чекап», «что входит в комплекс») это не мнение о списке, и сегментация правил
     # остаётся, как под off (G8 разбора 95 ответов, STEP-2026-10-14-L15B-6-T3, п. 2).
-    parse = turn_parse.acting_for(str(query or ""))
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+    parse = turn_understanding.parse_for(str(query or ""))
     if parse is not None and not parse.is_list and not _turn_asks_price(str(query or "")):
         parse = None
     if parse is not None:
         multi_items = phrase_price_items(parse.items, rows) if parse.is_list else []
+    elif turn_understanding.one_enabled() and turn_understanding.rules_list(str(query or ""), rows):
+        # Ход (б), этап 2: список по одному решению понимания хода (с K1) — позиции корзины, с гардом условия K3. Не список —
+        # сегментатор остаётся источником кандидатов для ответа LLM (K2 не снимается, дизайн 19.10 §4): разбор 21.10 —
+        # «Чек ап по женскому здоровью» без него терял «Женский чекап Базовый / Расширенный».
+        multi_items = _multi_price_items(str(query or ""), rows)[0]
     else:
         multi_items, _multi_unrecognized = _resolve_multi_price_items(str(query or ""), rows)
     if multi_items:

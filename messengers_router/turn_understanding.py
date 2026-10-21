@@ -45,7 +45,7 @@ import asyncio
 import contextvars
 import logging
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from collections.abc import Awaitable
 from typing import Any, Sequence
 
@@ -135,7 +135,32 @@ class TurnUnderstanding:
         }
 
 
+@dataclass
+class TurnIntent:
+    """Тема хода — ход (б), этап 1 (STEP-2026-10-21-B-INTENT): наблюдатель, читатели не меняются.
+
+    Производитель — одна точка сразу после NLU (`observe_intent`): метка, кто её решил (`source` — `rule` | `llm`,
+    `rule` — флаги ветки правила), уверенность. Каждая переклейка после NLU (строка таблицы политик `topic_policy`)
+    дописывает себя в `overrides` (`<строка>:<было>><стало>`); `final` — метка, с которой ход идёт дальше. Инвариант:
+    метка, по которой планировщик строит план, равна `final` (`check_planned`; расхождение — `tu_intent_mismatch`).
+    """
+
+    label: str
+    source: str
+    rule: str
+    confidence: float
+    overrides: list[str] = field(default_factory=list)
+
+    @property
+    def final(self) -> str:
+        return self.overrides[-1].rsplit(">", 1)[1] if self.overrides else self.label
+
+    def as_debug(self) -> dict[str, Any]:
+        return {"label": self.label, "source": self.source, "rule": self.rule, "final": self.final, "overrides": list(self.overrides)}
+
+
 _CURRENT: contextvars.ContextVar[TurnUnderstanding | None] = contextvars.ContextVar("mr_turn_understanding", default=None)
+_INTENT: contextvars.ContextVar[TurnIntent | None] = contextvars.ContextVar("mr_turn_intent", default=None)
 _ACTED: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar("mr_turn_understanding_acted", default=())
 
 
@@ -156,11 +181,69 @@ def begin_turn() -> None:
 
     _CURRENT.set(None)
     _ACTED.set(())
+    _INTENT.set(None)
     turn_parse.begin()
+
+
+def observe_intent(label: str, confidence: float, topic_source: dict[str, Any] | None) -> None:
+    """Тема хода сразу после NLU (этап 1 хода (б)) — одна точка производителя; только наблюдение."""
+
+    source = dict(topic_source or {})
+    _INTENT.set(TurnIntent(label=str(label), source=str(source.get("src") or "?"), rule=str(source.get("rule") or ""), confidence=float(confidence)))
+
+
+def intent() -> TurnIntent | None:
+    return _INTENT.get()
+
+
+def note_override(entry: str) -> None:
+    """Переклейка метки после NLU (строка таблицы политик) — в тему хода."""
+
+    current_intent = _INTENT.get()
+    if current_intent is not None:
+        current_intent.overrides.append(entry)
+
+
+def check_planned(label: str) -> None:
+    """План строится по метке `label`: она должна совпасть с итоговой меткой темы хода (наблюдатель этапа 1)."""
+
+    current_intent = _INTENT.get()
+    if current_intent is not None and current_intent.final != str(label):
+        turn_telemetry.note(tu_intent_mismatch=f"{current_intent.final}>{label}")
 
 
 def current() -> TurnUnderstanding | None:
     return _CURRENT.get()
+
+
+def one_enabled() -> bool:
+    """`[MESSENGER_ROUTER] turn_understanding_one = off | on` (ход (б), этап 2; один выключатель на всех читателей — решение
+    владельца 20.10 (б) 4): под `on` «список ли» на пути правил решается один раз — пониманием хода (`rules_list`)."""
+
+    return str(getattr(_cfg, "MR_TURN_UNDERSTANDING_ONE", "off") or "").strip().lower() == "on"
+
+
+def parse_for(text: str) -> turn_parse.PhraseParse | None:
+    """Разбор реплики, по которому действует читатель с входом `text` (L-15b). Ход (б), этап 2 (консилиум 20.10 §2): один
+    публичный объект — понимание хода, `PhraseParse` — деталь его производителя; читатели берут разбор только здесь
+    (правило CI — `tests/test_turn_understanding_one_class.py`). Поведение — как у `turn_parse.acting_for`."""
+
+    return turn_parse.acting_for(text)
+
+
+def rules_list(text: str, rows: list[dict[str, Any]] | None = None) -> bool:
+    """Путь правил (разбора нет: `empty` / `too_many` / `error` / вход — не реплика хода): назвал ли пациент список — одно
+    решение на ход (ход (б), этап 2, консилиум 20.10 §1). Понимание хода этой реплики уже решило — его вердикт; иначе
+    (вход — не реплика хода) — то же правило понимания `price_list_services` с защитами K1. Читатели корзины (R1) и подбора
+    анализов (R7) под `turn_understanding_one = on` берут его вместо своего «список ли» без K1."""
+
+    tu = _CURRENT.get()
+    if tu is not None and tu.for_text(text) and tu.services_rule and not tu.services_rule.startswith("parse_"):
+        verdict, source = tu.services_rule.startswith("list_"), "understanding"
+    else:
+        verdict, source = bool(price_list_services(text, rows=rows)[0]), "rules"
+    turn_telemetry.note(tu_rules_list=f"{source}:{'list' if verdict else 'one'}")
+    return verdict
 
 
 def acting() -> TurnUnderstanding | None:
@@ -330,6 +413,8 @@ async def _observe_parse_on(user_text: str) -> TurnUnderstanding | None:
         tu = read
         _CURRENT.set(tu)
         turn_telemetry.note(tu_list=tu.list_size, tu_rule=tu.services_rule, **_mention_fields(tu))
+    if tu is not None:
+        turn_telemetry.note(tu_understanding_src="object" if read is not None else "rules")
     return tu
 
 
@@ -355,7 +440,11 @@ async def _observe_parse_on_lazy(user_text: str) -> TurnUnderstanding | None:
         if by_parse is not None:
             _CURRENT.set(by_parse)
             turn_telemetry.note(
-                tu_list=by_parse.list_size, tu_facet=by_parse.facet, tu_rule=by_parse.services_rule, **_mention_fields(by_parse)
+                tu_list=by_parse.list_size,
+                tu_facet=by_parse.facet,
+                tu_rule=by_parse.services_rule,
+                tu_understanding_src="object",
+                **_mention_fields(by_parse),
             )
             return by_parse
     try:
@@ -371,6 +460,7 @@ async def _observe_parse_on_lazy(user_text: str) -> TurnUnderstanding | None:
         tu = read
         _CURRENT.set(tu)
         turn_telemetry.note(tu_list=tu.list_size, tu_rule=tu.services_rule, **_mention_fields(tu))
+    turn_telemetry.note(tu_understanding_src="object" if read is not None else "rules")
     return tu
 
 

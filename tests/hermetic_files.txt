@@ -121,6 +121,7 @@ tests/test_renderer_dialog_context.py
 tests/test_repeat_guard.py
 tests/test_repeat_guard_dynamic_url.py
 tests/test_resilience.py
+tests/test_role_catalog_class.py
 tests/test_result_field_reentry.py
 tests/test_result_timing_integration.py
 tests/test_result_timing_validator.py
@@ -196,3 +197,15 @@ tests/test_branch_answer_after_side_class.py
 tests/test_branch_side_consult_rows_class.py
 tests/test_nlu_topic_source_class.py
 tests/test_evalbench_topic_source.py
+tests/test_step_b_telemetry_class.py
+tests/test_topic_policy_table_class.py
+tests/test_topic_shadow_class.py
+tests/test_evalbench_topic_shadow.py
+tests/test_role_pick_shadow_class.py
+tests/test_evalbench_list_readers.py
+tests/test_turn_intent_class.py
+tests/test_topic_by_llm_class.py
+tests/test_evalbench_role_shadow.py
+tests/test_p1_facet_class.py
+tests/test_role_pick_on_class.py
+tests/test_turn_understanding_one_class.py

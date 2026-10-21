@@ -349,6 +349,12 @@ async def settle_shadows(timeout_s: float = SHADOW_SETTLE_S) -> None:
     settle = getattr(pending_reply, "settle", None)
     if settle is not None:
         await settle(timeout_s)
+    for name in ("topic_shadow", "role_pick"):  # тени хода (б) и (г), 21.10
+        try:
+            module = __import__(f"messengers_router.{name}", fromlist=["settle"])
+        except ImportError:  # версия бота до этих теней
+            continue
+        await module.settle(timeout_s)
 
 
 class FrozenWorld:

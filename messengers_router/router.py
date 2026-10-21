@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, degradation, expects, pending_answer, pending_reply, shown_context, topic_confirm, turn_parse, turn_telemetry, turn_understanding
+from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -171,7 +171,7 @@ def _unsupported_catalog_kind(flags: set[str]) -> str | None:
     :return: тип unavailable-кейса или None
     """
 
-    for kind in ("unsupported_service", "unsupported_specialist", "unsupported_document_service"):
+    for kind in ("topic_other_offer", "role_absent", "role_qualifier", "unsupported_service", "unsupported_specialist", "unsupported_document_service"):
         if kind in flags:
             return kind
     return None
@@ -361,6 +361,15 @@ async def _resolve_secondary_queue_doctor_reply(
     return {}
 
 
+def _relabel(decision: RouteDecision, policy: str, **overrides: Any) -> RouteDecision:
+    """Переклейка метки после NLU — только строкой таблицы политик `topic_policy.TABLE` (ход (б), этап 3, решение
+    владельца 20.10 (б) 7): копия решения, как `_copy_decision`, и запись строки в телеметрию хода (`tu_relabel_src`)."""
+
+    relabeled = _copy_decision(decision, **overrides)
+    topic_policy.note(policy, decision.label, relabeled.label)
+    return relabeled
+
+
 def _copy_decision(decision: RouteDecision, **overrides: Any) -> RouteDecision:
     data = {
         "label": decision.label,
@@ -431,8 +440,8 @@ def _apply_topic_registry_override(
     if topic_score < _TOPIC_OVERRIDE_MIN_SCORE:
         return _copy_decision(decision, flags=flags | {"topic_registry_hint_only"})
 
-    return _copy_decision(
-        decision,
+    return _relabel(
+        decision, "topic_registry_override_from_other",
         label=topic_label,  # type: ignore[arg-type]
         confidence=max(decision.confidence, 0.78),
         flags=flags | {"topic_registry_override_from_other"},
@@ -1372,8 +1381,8 @@ def _apply_appointment_continuity_overrides(
 
     if decision.label != "APPOINTMENT" and pending_answer.keeps_flow():
         # Ответ на вопрос шага записи решила одна функция (класс 5): «1», «давайте во второй» — ответ, а не новая тема.
-        return _copy_decision(
-            decision,
+        return _relabel(
+            decision, "flow_pending_answer",
             label="APPOINTMENT",
             confidence=max(decision.confidence, 0.9),
             flags=set(decision.flags) | {"flow_pending_answer"},
@@ -1389,8 +1398,8 @@ def _apply_appointment_continuity_overrides(
         and not detect_test_result_intent(user_text)
         and not detect_doc_request_intent(user_text)
     ):
-        return _copy_decision(
-            decision,
+        return _relabel(
+            decision, "flow_datetime_appointment_override",
             label="APPOINTMENT",
             confidence=max(decision.confidence, 0.66),
             flags=set(decision.flags) | {"flow_datetime_appointment_override"},
@@ -1403,8 +1412,8 @@ def _apply_appointment_continuity_overrides(
         and decision.context_action == "continue"
         and should_keep_appointment_flow_override(user_text)
     ):
-        return _copy_decision(
-            decision,
+        return _relabel(
+            decision, "flow_appointment_override",
             label="APPOINTMENT",
             confidence=max(decision.confidence, 0.51),
             flags=set(decision.flags) | {"flow_appointment_override"},
@@ -1413,8 +1422,8 @@ def _apply_appointment_continuity_overrides(
         )
 
     if decision.label in {"TEST_RESULT", "DOCTOR_SCHEDULE", "DOCTOR_INFO"} and should_keep_appointment_flow_override(user_text):
-        return _copy_decision(
-            decision,
+        return _relabel(
+            decision, "flow_appointment_guard_override",
             label="APPOINTMENT",
             confidence=max(decision.confidence, 0.60),
             flags=set(decision.flags) | {"flow_appointment_guard_override"},
@@ -1435,6 +1444,7 @@ def _note_decision(decision: RouteDecision | None, evidence: Evidence | None, st
     rule = next((f for f in sorted(decision.flags or []) if str(f).startswith("rule_")), None)
     turn_telemetry.note(
         label=decision.label,
+        tu_label_final=decision.label,
         decision_source=decision.source,
         rule=rule,
         evidence_empty=_evidence_is_empty(evidence) if evidence is not None else None,
@@ -1569,8 +1579,8 @@ async def _promote_bare_doctor_name(
     surname = await services.doctor_surname_for_bare_name(user_text)
     if not surname:
         return decision
-    return _copy_decision(
-        decision,
+    return _relabel(
+        decision, "bare_doctor_name",
         label="DOCTOR_SCHEDULE",
         entities={"doctor_name": surname},
         flags=set(decision.flags) | {"bare_doctor_name"},
@@ -1838,10 +1848,23 @@ async def _inject_catalog_candidates(
     )
 
 
+async def _test_assist_facet_by_llm(decision: RouteDecision, user_text: str) -> str:
+    """Ход `topic_by_llm` (тему решила LLM: TEST_ASSIST), каталог нашёл услугу — что пациент о ней спрашивает, решает LLM
+    (ход (б), STEP-2026-10-21-B-P1-FACET). Не такой ход — пустая строка: П1 работает как было."""
+
+    flags = set(decision.flags or ())
+    if decision.label != "TEST_ASSIST" or "topic_by_llm" not in flags or "catalog_service_exact" not in flags:
+        return ""
+    facet = await booking_slots.test_assist_facet(user_text)
+    turn_telemetry.note(tu_p1_facet=facet or "none")
+    return facet
+
+
 def _relabel_test_assist_catalog_hit_as_price(
     decision: RouteDecision,
     *,
     user_text: str,
+    facet: str = "",
 ) -> RouteDecision:
     """П1: реплика приземлилась на РЕАЛЬНУЮ услугу каталога → это PRICE.
 
@@ -1892,7 +1915,7 @@ def _relabel_test_assist_catalog_hit_as_price(
         and not detect_test_assist_goal_phrasing(user_text)
     ):
         turn_understanding.note_acted("list_is_price")
-        return _copy_decision(decision, label="PRICE", flags=flags | {"understanding_list_is_price"})
+        return _relabel(decision, "understanding_list_is_price", label="PRICE", flags=flags | {"understanding_list_is_price"})
     if "catalog_service_exact" not in flags:
         return decision
     if not str((decision.entities or {}).get("service_name") or "").strip():
@@ -1901,8 +1924,14 @@ def _relabel_test_assist_catalog_hit_as_price(
         return decision
     if detect_test_assist_goal_phrasing(user_text):
         return _copy_decision(decision, flags=flags | {"test_assist_goal_phrasing_kept"})
-    return _copy_decision(
-        decision,
+    # Тему решила LLM (`topic_by_llm`) и она же решила свойство вопроса: «есть ли / делаете ли» — не голая цена (метка LLM
+    # остаётся), «где / когда сдать» — адреса; «цена» и сбой — как было (STEP-2026-10-21-B-P1-FACET, g0811, g0816).
+    if facet == "availability":
+        return _copy_decision(decision, flags=flags | {"p1_availability_kept"})
+    if facet == "where_when":
+        return _relabel(decision, "p1_where_when", label="ADDRESS", flags=flags | {"p1_where_when"}, source="guardrail_post")
+    return _relabel(
+        decision, "test_assist_catalog_hit_is_price",
         label="PRICE",
         flags=flags | {"test_assist_catalog_hit_is_price"},
     )
@@ -1949,8 +1978,8 @@ async def _confirm_appointment_change_verb(
     action = detect_appointment_change_without_object(user_text)
     if action is None or await is_own_appointment_change(user_text) is False:
         return decision
-    return _copy_decision(
-        decision,
+    return _relabel(
+        decision, "appointment_change_verb",
         label="APPOINTMENT",
         entities={"appointment_action": normalize_appointment_action(action, user_text)},
         flags=set(decision.flags) | {"appointment_change_verb"},
@@ -2014,8 +2043,8 @@ def _existing_appointment_cancel_handoff(
     reset_appointment_runtime_state(state)
     memory.clear_pending(state)
     return (
-        _copy_decision(
-            decision,
+        _relabel(
+            decision, "existing_appointment_operator_handoff",
             label="OTHER",
             entities={},
             flags=set(decision.flags) | {"existing_appointment_operator_handoff", "existing_appointment_cancel"},
@@ -2089,8 +2118,8 @@ def _maybe_offer_operator_for_existing_appointment(
     memory.clear_pending(state)
     mark_operator_offer_pending(state, memory)
     return (
-        _copy_decision(
-            decision,
+        _relabel(
+            decision, "existing_appointment_operator_offer",
             label="OTHER",
             entities={},
             flags=set(decision.flags) | {"existing_appointment_operator_offer", f"existing_appointment_{kind}"},
@@ -2134,8 +2163,8 @@ def _maybe_topic_handoff(
         return None
     memory.clear_pending(state)
     return (
-        _copy_decision(
-            decision,
+        _relabel(
+            decision, "topic_handoff",
             label="OTHER",
             entities={},
             flags=set(decision.flags) | {"topic_handoff"},
@@ -2192,7 +2221,7 @@ async def _maybe_readiness_reply(
         turn_understanding.note_acted("readiness_to_operator")
         flag, items = "understanding_readiness_handoff", {ek.OPERATOR_OFFER_RESPONSE: {"text": RESULT_TIMING_OPERATOR_TEXT, "handoff": True}}
     return (
-        _copy_decision(decision, label="OTHER", entities={}, flags=set(decision.flags) | {flag}, needs_handoff=False),
+        _relabel(decision, "readiness_reply", label="OTHER", entities={}, flags=set(decision.flags) | {flag}, needs_handoff=False),
         Plan(label="OTHER"),
         Evidence(items=items),
     )
@@ -2239,8 +2268,8 @@ def _maybe_start_catalog_confirm(
     expects.ask(expects.Question.CATALOG_CONFIRM)
 
     return (
-        _copy_decision(
-            decision,
+        _relabel(
+            decision, "catalog_confirm_requested",
             label="OTHER",
             entities={},
             flags=set(decision.flags) | {"catalog_confirm_requested"},
@@ -2376,6 +2405,7 @@ def build_plan(
     # Все пути роутера строят план здесь — пожелание по времени (вариант A) не теряется,
     # какой бы веткой ни пришла реплика.
     _capture_appointment_wish(decision, user_text, state, memory)
+    turn_understanding.check_planned(decision.label)
     return planner_build_plan(decision, state, user_text, memory, runtime_options=runtime_options)
 
 
@@ -2424,8 +2454,8 @@ async def _guard_walkin_named_service(
         if str(state.last_entities.get("service_name") or "").casefold() in _NONBOOKABLE_GENERIC_HINTS:
             state.last_entities.pop("service_name", None)
         entities = {k: v for k, v in decision.entities.items() if k != "service_name"}
-        return _copy_decision(
-            decision,
+        return _relabel(
+            decision, "walkin_named_bookable_service",
             label="APPOINTMENT",
             entities={**entities, **named},
             flags=(set(decision.flags) - _WALKIN_FLAGS) | {"walkin_named_bookable_service"},
@@ -2476,7 +2506,7 @@ def _slot_value_keeps_topic(decision: RouteDecision, state: SessionState, memory
     pend_label = str((memory.get_pending(state) or {}).get("label") or "")
     if pend_label not in pending_answer.SLOT_TOPICS or not missing_slots(pend_label, state.last_entities):
         return decision
-    return _copy_decision(decision, label=pend_label, context_action="continue", flags=set(decision.flags) | {"pending_slot_value"})
+    return _relabel(decision, "pending_slot_value", label=pend_label, context_action="continue", flags=set(decision.flags) | {"pending_slot_value"})
 
 
 def _slot_filled_by_rules(user_text: str, state: SessionState, services: Services, memory: MemoryStore) -> bool:
@@ -2575,8 +2605,8 @@ async def _apply_post_nlu_guardrails(
         entities = dict(decision.entities)
         if not entities.get("service_name"):
             entities["service_name"] = service_context
-        decision = _copy_decision(
-            decision,
+        decision = _relabel(
+            decision, "flow_price_followup_prepare",
             label="PREPARE",
             confidence=max(decision.confidence, 0.72),
             entities=entities,
@@ -2596,8 +2626,8 @@ async def _apply_post_nlu_guardrails(
             entities = dict(decision.entities)
             if not entities.get("service_name"):
                 entities["service_name"] = service_context
-            decision = _copy_decision(
-                decision,
+            decision = _relabel(
+                decision, "flow_price_followup_address",
                 label="ADDRESS",
                 confidence=max(decision.confidence, 0.76),
                 entities=entities,
@@ -2613,8 +2643,8 @@ async def _apply_post_nlu_guardrails(
         and _is_appointment_datetime_followup(user_text)
         and decision.label in {"OTHER", "DOCTOR_SCHEDULE", "DOCTOR_INFO", "TEST_RESULT", "ADDRESS", "PRICE"}
     ):
-        decision = _copy_decision(
-            decision,
+        decision = _relabel(
+            decision, "flow_datetime_appointment_prelock",
             label="APPOINTMENT",
             confidence=max(decision.confidence, 0.68),
             flags=set(decision.flags) | {"flow_datetime_appointment_prelock"},
@@ -2631,8 +2661,8 @@ async def _apply_post_nlu_guardrails(
         and decision.label == "ADDRESS"
         and is_city_only_reply(user_text)
     ):
-        decision = _copy_decision(
-            decision,
+        decision = _relabel(
+            decision, "flow_price_city_reply_override",
             label="PRICE",
             confidence=max(decision.confidence, 0.72),
             flags=set(decision.flags) | {"flow_price_city_reply_override"},
@@ -2642,8 +2672,8 @@ async def _apply_post_nlu_guardrails(
 
     promoted_label, promoted_flags = apply_verified_doctor_override(decision.label, set(decision.flags), user_text)
     if promoted_label != decision.label or promoted_flags != decision.flags:
-        decision = _copy_decision(
-            decision,
+        decision = _relabel(
+            decision, "verified_doctor_override",
             label=promoted_label,  # type: ignore[arg-type]
             confidence=max(decision.confidence, 0.65),
             flags=promoted_flags,
@@ -2659,7 +2689,9 @@ async def _apply_post_nlu_guardrails(
         for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"):
             state.last_entities.pop(k, None)
 
-    if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text):
+    # Тему хода решила LLM (`topic_by_llm`, ход (б), этап 4): детектор «без записи» её не перебивает — метка ADDRESS есть
+    # и у LLM (STEP-2026-10-21-B-TOPIC-BY-LLM, g0716: список анализов «можно ли за один визит» уходил в адреса).
+    if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text) and "topic_by_llm" not in decision.flags:
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})
         if detect_nonbookable_walkin_intent(user_text, merged_ctx):
@@ -2675,8 +2707,8 @@ async def _apply_post_nlu_guardrails(
                 or "catalog_service_exact" in set(decision.flags)
             ):
                 entities["service_name"] = svc
-            decision = _copy_decision(
-                decision,
+            decision = _relabel(
+                decision, "policy_nonbookable_walkin",
                 label="ADDRESS",
                 confidence=max(decision.confidence, 0.78),
                 entities=entities,
@@ -2696,8 +2728,8 @@ async def _apply_post_nlu_guardrails(
         and not detect_nonbookable_walkin_intent(user_text, state.last_entities)
         and not any(decision.entities.get(k) for k in ("doctor_name", "doctor_id", "last_name", "doctor_last_name"))
     ):
-        decision = _copy_decision(
-            decision,
+        decision = _relabel(
+            decision, "flow_prepare_followup_override",
             label="PREPARE",
             confidence=max(decision.confidence, 0.62),
             flags=set(decision.flags) | {"flow_prepare_followup_override"},
@@ -2731,8 +2763,8 @@ async def _apply_post_nlu_guardrails(
             entities.update(doctor_followup_entities)
             state.last_entities["_secondary_offer_pending"] = False
             set_secondary_queue(state, [])
-            decision = _copy_decision(
-                decision,
+            decision = _relabel(
+                decision, "flow_doctor_info_to_schedule",
                 label="DOCTOR_SCHEDULE",
                 confidence=max(decision.confidence, 0.74),
                 entities=entities,
@@ -2754,8 +2786,8 @@ async def _apply_post_nlu_guardrails(
         for key in ("doctor_id", "doctor_name", "branch_id", "branch_name"):
             if not entities.get(key) and state.last_entities.get(key):
                 entities[key] = state.last_entities.get(key)
-        decision = _copy_decision(
-            decision,
+        decision = _relabel(
+            decision, "flow_schedule_to_appointment",
             label="APPOINTMENT",
             confidence=max(decision.confidence, 0.72),
             entities=entities,
@@ -3016,6 +3048,8 @@ async def _resolve_nlu_decision_before_doctor_guard(
         if use_v2_nlu:
             nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
             decision = nlu_result.decision
+            turn_telemetry.note(tu_label_nlu=decision.label)
+            turn_understanding.observe_intent(decision.label, decision.confidence, (nlu_result.trace or {}).get("topic_source"))
             nlu_debug["candidates"] = [
                 {
                     "source": cand.source,
@@ -3075,8 +3109,8 @@ async def _resolve_nlu_decision_before_doctor_guard(
         entities = {k: v for k, v in decision.entities.items() if k not in ("secondary_intents", "appointment_action")}
         if rest:
             entities["secondary_intents"] = rest
-        decision = _copy_decision(
-            decision, label="PREPARE", entities=entities, flags=set(decision.flags) | {"prepare_over_booking_llm"}
+        decision = _relabel(
+            decision, "prepare_over_booking_llm", label="PREPARE", entities=entities, flags=set(decision.flags) | {"prepare_over_booking_llm"}
         )
 
     return decision, nlu_debug
@@ -3113,6 +3147,9 @@ async def _complete_route_after_doctor_guard(
     # Понимание хода (ход (б), шаг 1): услуги и свойство ценовой реплики — один раз, до
     # подстановки каталога, которая иначе сводит список к одной услуге. В тени только пишется.
     await turn_understanding.observe_price_turn(decision.label, user_text=user_text, pending=memory.get_pending(state))
+    # Ход (г), этап 2: «слово → роль» по каталогу МИС — в тени рядом с правилами (`roles_catalog_llm = shadow`).
+    role_pick.launch(decision.label, user_text, str(decision.entities.get("specialty") or ""), services)
+    decision = await role_pick.apply(decision, user_text, services)  # режим `on`: роль решает LLM по каталогу
     decision = await _inject_catalog_candidates(
         decision,
         user_text=user_text,
@@ -3121,7 +3158,9 @@ async def _complete_route_after_doctor_guard(
         prefetched_service=catalog_prefetch,
     )
     decision = await _apply_post_nlu_guardrails(decision, state, user_text, services, memory)
-    decision = _relabel_test_assist_catalog_hit_as_price(decision, user_text=user_text)
+    decision = _relabel_test_assist_catalog_hit_as_price(
+        decision, user_text=user_text, facet=await _test_assist_facet_by_llm(decision, user_text)
+    )
     decision = await _confirm_appointment_change_verb(decision, user_text=user_text, state=state)
     decision = await _confirm_existing_appointment_question(decision, user_text=user_text, state=state)
 
@@ -3200,8 +3239,8 @@ async def _complete_route_after_doctor_guard(
             if need_doctors_catalog and not doctors_catalog_ok:
                 degraded_flags.add("catalog_doctors_unavailable")
             return (
-                _copy_decision(
-                    decision,
+                _relabel(
+                    decision, "catalog_unavailable",
                     label="OTHER",
                     confidence=max(decision.confidence, 0.92),
                     entities={},
@@ -3541,6 +3580,7 @@ def _debug_meta(
         "summary": state.summary,
         "nlu_trace": nlu_trace,
         "understanding": understanding.as_debug() if (understanding := turn_understanding.current()) else None,
+        "intent": topic.as_debug() if (topic := turn_understanding.intent()) else None,
         # Разбор реплики на фразы (L-15b) — на ценовых ходах (единственный режим с T7 шага 3б); на прочих ключа нет.
         **({"turn_parse": parse_debug} if (parse_debug := turn_parse.debug()) else {}),
         # Отпечаток рантайма (DATA-13): сборка, модель, хэши промптов и реестра тем, TZ, срезы — без хостов и секретов.

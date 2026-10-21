@@ -60,6 +60,14 @@ _UNSUPPORTED_CATALOG_TEXT: dict[str, str] = {
     "unsupported_specialist": "Данные врачи не ведут прием.",
     "unsupported_document_service": "Наша клиника не оказывает данные услуги.",
 }
+# Решения LLM, а не стоп-листа, — тот же путь ответа с оффером оператора. Ход (г), `roles_catalog_llm = on`: роли нет у врачей
+# клиники (LLM по каталогу ролей) или пациент уточнил то, чего в роли нет. Ход (б), `topic_by_llm`: тема OTHER от LLM — вопрос
+# вне наших тем, данных нет (решение владельца 21.10: честный оффер, ни в коем случае не выдумывать).
+_ROLE_CATALOG_TEXT: dict[str, str] = {
+    "topic_other_offer": "По этому вопросу у меня нет данных — точно ответит оператор.",
+    "role_absent": "Среди врачей клиники такого специалиста не нашёл — точнее подскажет администратор.",
+    "role_qualifier": "Подобрать врача с таким уточнением (например, детский приём или приём по ДМС) поможет администратор.",
+}
 
 
 # L-06в (ревью 05.10, решение владельца 08.10): отказ стоп-листа — с оффером оператора.
@@ -75,7 +83,7 @@ def build_unsupported_catalog_response(
     if not isinstance(payload, dict):
         return None
     kind = str(payload.get("kind") or "").strip()
-    text = _UNSUPPORTED_CATALOG_TEXT.get(kind)
+    text = _UNSUPPORTED_CATALOG_TEXT.get(kind) or _ROLE_CATALOG_TEXT.get(kind)
     if not text:
         return None
     if state is not None and memory is not None:

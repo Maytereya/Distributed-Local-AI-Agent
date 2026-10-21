@@ -114,6 +114,42 @@
 Дизайн 19.10 покрывает **услуги и свойство на метках PRICE/TEST_ASSIST**. Тему реплики (метку) он не трогает — её
 добавляют этапы 1, 3, 4 этого плана.
 
+### 3.1. Таблица политик темы — где после NLU метку ещё решают правила (21.10, `messengers_router/topic_policy.py`)
+
+Все 27 переклеек метки после NLU идут через `router._relabel(decision, <строка>)`; сработавшая строка пишется в телеметрию хода
+(`tu_relabel_src`). Условия пока в коде у своей функции (столбец «место»); перенос условий в таблицу и замена правил решением
+LLM — строка за строкой, по карточке (этапы 3–4). «Журнал: —» — правило без записи бага: первое на проверку тенью LLM.
+
+| Строка | Слой | → метка | Место | Условие | Журнал |
+|---|---|---|---|---|---|
+| `test_assist_catalog_hit_is_price` | price_understanding | PRICE | `_relabel_test_assist_catalog_hit_as_price` | TEST_ASSIST, а реплика называет услугу каталога как вопрос о цене | PLAN-2026-10-20-B §2 (43–58% ходов rule_test_assist) |
+| `understanding_list_is_price` | price_understanding | PRICE | `_relabel_test_assist_catalog_hit_as_price` | TEST_ASSIST, а понимание хода нашло список услуг — это корзина цены | PLAN-2026-10-20-B §2 |
+| `flow_price_city_reply_override` | guardrail_post | PRICE | `_apply_post_nlu_guardrails` | ответ городом на висящий вопрос цены — продолжение цены | — |
+| `topic_registry_override_from_other` | topic_registry | (из данных) | `_apply_topic_registry_override` | OTHER, слова реестра тем подтверждены по смыслу — метка темы из реестра | BUG-2026-10-18-TOPIC-BY-LETTERS |
+| `topic_handoff` | topic_registry | OTHER | `_maybe_topic_handoff` | тема реестра «только оператор» (выезд на дом и др.) | BUG-2026-09-25-HOME-VISIT-AS-URGENT |
+| `flow_pending_answer` | appointment_flow | APPOINTMENT | `_apply_appointment_continuity_overrides` | идёт запись, реплика — ответ на её висящий вопрос | — |
+| `flow_datetime_appointment_override` | appointment_flow | APPOINTMENT | `_apply_appointment_continuity_overrides` | идёт запись, реплика — дата или время | — |
+| `flow_appointment_override` | appointment_flow | APPOINTMENT | `_apply_appointment_continuity_overrides` | идёт запись, NLU увёл в другую тему без явной смены темы | — |
+| `flow_appointment_guard_override` | appointment_flow | APPOINTMENT | `_apply_appointment_continuity_overrides` | гард потока записи удержал запись | — |
+| `appointment_change_verb` | appointment_flow | APPOINTMENT | `_confirm_appointment_change_verb` | глагол переноса/отмены записи при низкой уверенности NLU | BUG-2026-10-07-CANCEL-LOW-CONF-CLARIFY |
+| `flow_datetime_appointment_prelock` | guardrail_post | APPOINTMENT | `_apply_post_nlu_guardrails` | дата/время в реплике при начатой записи (prelock) | — |
+| `flow_schedule_to_appointment` | guardrail_post | APPOINTMENT | `_apply_post_nlu_guardrails` | вопрос о расписании внутри записи — продолжение записи | — |
+| `walkin_named_bookable_service` | guardrail_post | APPOINTMENT | `to_booking` | «без записи?» про услугу, на которую записывают, — запись | — |
+| `pending_slot_value` | pending | (из данных) | `_slot_value_keeps_topic` | значение слота висящего вопроса — тема висящего вопроса | BUG-2026-10-19-PENDING-BUTTONS-CLASS5 |
+| `bare_doctor_name` | guardrail_post | DOCTOR_SCHEDULE | `_promote_bare_doctor_name` | голая фамилия врача из справочника | BUG-2026-10-08-BARE-DOCTOR-SURNAME |
+| `verified_doctor_override` | guardrail_post | (из данных) | `_apply_post_nlu_guardrails` | врач подтверждён справочником — метка врача (`apply_verified_doctor_override`) | — |
+| `flow_doctor_info_to_schedule` | guardrail_post | DOCTOR_SCHEDULE | `_apply_post_nlu_guardrails` | вопрос о враче с признаком расписания — расписание | — |
+| `flow_price_followup_prepare` | guardrail_post | PREPARE | `_apply_post_nlu_guardrails` | после цены — вопрос о подготовке к той же услуге | — |
+| `flow_prepare_followup_override` | guardrail_post | PREPARE | `_apply_post_nlu_guardrails` | продолжение подготовки | BUG-2026-10-08-PREPARE-ANESTHESIA-IN-QUERY |
+| `prepare_over_booking_llm` | question_facet | PREPARE | `_resolve_nlu_decision_before_doctor_guard` | LLM при конфликте детекторов: подготовка, а не запись (`prepare_vs_booking_llm`) | BUG-2026-10-18-PREPARE-UZI-AS-BOOKING |
+| `flow_price_followup_address` | guardrail_post | ADDRESS | `_apply_post_nlu_guardrails` | после цены — вопрос «где сдать» | — |
+| `policy_nonbookable_walkin` | guardrail_post | ADDRESS | `_apply_post_nlu_guardrails` | услуга без записи (в порядке очереди) — адреса | — |
+| `existing_appointment_operator_handoff` | existing_appointment | OTHER | `_existing_appointment_cancel_handoff` | отмена существующей записи — оператор | BUG-2026-10-14-CANCEL-EXISTING-LOST |
+| `existing_appointment_operator_offer` | existing_appointment | OTHER | `_maybe_offer_operator_for_existing_appointment` | вопрос о существующей записи — оффер оператора | BUG-2026-09-25-CANCEL-OFFER-PREEMPTED |
+| `catalog_confirm_requested` | catalog | OTHER | `_maybe_start_catalog_confirm` | услуга найдена не уверенно — спросить подтверждение каталога | — |
+| `readiness_reply` | catalog | OTHER | `_maybe_readiness_reply` | вопрос о сроке готовности — ответ сроком | STEP-2026-10-14-L14-3-CONTEXT-SHOWN |
+| `catalog_unavailable` | catalog | OTHER | `_complete_route_after_doctor_guard` | справочник МИС недоступен — честный ответ и оператор | STEP-2026-10-18-CATALOG-UNAVAILABLE-HANDOFF |
+
 ## 4. Этапы
 
 Каждый этап — под выключателем (умолчание off = «как было»), с тестом на класс и замером на стенде (`evalbench`, срез
@@ -211,8 +247,38 @@ test, `cached`; off против прода — 0 различий; on прот�
    прода — цена при `price_guard` ∈ {dictionary, none} и слове условия в реплике; «итог PRICE без tu_*» (цель 0); доля
    «PRICE→X после понимания».
 
+### 7.2. Перечень расхождений читателей «список ли» (консилиум §1, 21.10 ночью)
+
+Скрипт `python -m evalbench.list_readers <прогон>` (офлайн, мир 20261008): на репликах ценовых ходов (PRICE / TEST_ASSIST)
+сравнивает понимание хода (`price_list_services`, с K1) и читателей корзины R1/R7 (`_multi_price_items`, без K1; K3 у обоих).
+
+| Срез | Ценовых ходов | Расхождений | Где |
+|---|---|---|---|
+| test (`n21_pt_replay_test`) | 65 | 4 (6%) | `segment_unrecognized` → список только у корзины: g0723, g0724, g0748; `not_list` → только у корзины: g0815 |
+| dev (`d12bs_5c7fc7a_dev`) | 282 | 17 (6%) | `segment_unrecognized` → только у корзины: 15 (g0042, g0048, g0182, g0289, g0326, g0344, g0359, g0381, g0512, g0604, g0609, g0644, r0056, r0141, r0147); `one_catalog_name` → только у корзины: g0126, r0016 |
+
+Расхождение всегда одностороннее: корзина видит список, понимание — нет (защиты K1 есть только у понимания). Обратного (список
+только у понимания) — 0. **Поимённый разбор (21.10):** в 19 из 21 права защита K1 — корзина режет одну услугу или вопрос на
+слова и находит чужие строки (акция «Антитела в подарок» на анализ антител, «Платизмопластика» на «платить за», «Удаление
+экзостоза» на «удаление геморроя»); в 2 из 21 (g0126, r0016 — две услуги через запятую / с новой строки) права корзина: K1
+`one_catalog_name` видит одно комплексное название, покрывающее все слова. Значит, этап 2 (читатели — по вердикту понимания)
+убирает 19 мусорных корзин; чтобы не потерять 2 настоящих списка, `one_catalog_name` не должен срабатывать при явных
+разделителях между узнанными услугами. Таблица с репликами — вне репо (`~/Dev/handoffs/dla/list_readers_divergence_review.md`). Для карточки владельца: на этих 21 ходе этап 2 (читатели берут вердикт понимания) уберёт корзину —
+нужен разбор поимённо, где корзина была права («сплошной список с лишним словом»), а где K1 спас от ложной корзины
+(«одно название прайса с запятой»).
+
 ## 8. Сделано в этот день
 
 - Замер-основа: `evalbench/topic_source.py` (раздел 2).
 - Этап 0: телеметрия `nlu_src` / `nlu_rule` в `nlu_pipeline` (`legacy_v2` и `llm_primary`), тест на класс
   `tests/test_nlu_topic_source_class.py`, запись журнала STEP-2026-10-20-B-TOPIC-SOURCE.
+- 21.10 ночью (ветка `claude/night-1020`): телеметрия до этапа 2 (STEP-2026-10-21-B-TELEMETRY); таблица политик — этап 3
+  шаг 1, §3.1 (STEP-2026-10-21-B-POLICY-TABLE, replay test 0 различий); тень LLM рядом с правилом темы `topic_shadow_llm`
+  (STEP-2026-10-21-B-TOPIC-SHADOW); перечень расхождений «список ли» — §7.2; этап 1 — `TurnIntent` (STEP-2026-10-21-B-INTENT,
+  replay test: метка плана = итог темы на 196 из 196); этап 4 вариант Б — `topic_by_llm` по правилу (STEP-2026-10-21-B-TOPIC-BY-LLM,
+  выключатель пуст). Матрица тени «правило × LLM» против разметки темы test: без спорных правило 82%, LLM 95%; слабее всего
+  `rule_nonbookable_walkin` 22%, `rule_doctor_info_specialty` 30%, `rule_test_assist` 36% (dev: согласие 69%, те же ветки).
+- 21.10 днём: **этап 2** (STEP-2026-10-21-B-STAGE2-ONE, выключатель `turn_understanding_one`, off): один вход читателей к разбору
+  (`turn_understanding.parse_for`, 9 вызовов, правило CI), одно решение «список ли» на пути правил (`turn_understanding.rules_list`)
+  для корзины R1, подбора R7 и срока R5/R6, правка K1 для явного перечня своих названий. Replay test/dev: on против off — 0
+  различий. Дальше по §4 дизайна 19.10: U6 «названа ли» по исходу понимания, U1/U2 — строки фразы вместо каталога по буквам.

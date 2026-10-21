@@ -617,7 +617,8 @@ def _journal_phrase(question: str, rules_phrase: str) -> tuple[str, str]:
     mentioned = _mention_phrase(question)
     if mentioned is not None:
         return mentioned, "price"
-    parse = turn_parse.acting_for(question)
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+    parse = turn_understanding.parse_for(question)
     if parse is None:
         return rules_phrase, ""
     if parse.status == turn_parse.ParseStatus.NONE_FIT:
@@ -686,6 +687,7 @@ async def select_price_rows(
         turn_telemetry.note(price_guard="llm")
     elif query_has_unsatisfiable_qualifier(question, rows) and not query_names_service_in_other_words(question, rows):
         if not by_meaning:
+            turn_telemetry.note(price_guard="dictionary")
             return None
         # Под `price_candidates_by_meaning` словарь прайса — повод спросить LLM, не вердикт: незнакомое прайсу слово чаще
         # сокращение или словоформа («бак посев», «ВМС», «карбамазепина»), чем «по ОМС» (п. 1 плана 19.10). Условие судит
