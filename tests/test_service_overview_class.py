@@ -14,7 +14,7 @@ import json
 import pytest
 
 from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
-from tests.test_service_answer_class import _classifier, _number_of, answer_world, turn  # noqa: F401
+from tests.test_service_answer_class import CHECK_MARK, _classifier, _number_of, answer_world, confirm_all, turn  # noqa: F401
 
 _OVERVIEW_MARK = "прислал ли пациент только название услуги"
 _T_SPOT = "T-SPOT (диагностика латентной и активной туберкулезной инфекции у детей и взрослых)"
@@ -27,7 +27,7 @@ def _overview(*names: str, outcome: str = "none"):
 
 def _answers(overview) -> dict:
     # Классификатор — как правило реплики (адреса), чтобы «как было» не зависело от класса 4 (тему ветки walk-in решает LLM).
-    return {_CLASSIFIER_MARK: _classifier("ADDRESS"), _OVERVIEW_MARK: overview}
+    return {_CLASSIFIER_MARK: _classifier("ADDRESS"), _OVERVIEW_MARK: overview, CHECK_MARK: confirm_all}
 
 
 def test_bare_name_gets_the_maximum_from_data(answer_world, monkeypatch):  # noqa: F811

@@ -15,7 +15,7 @@ import json
 import pytest
 
 from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
-from tests.test_service_answer_class import _SERVICE_ANSWER_MARK, _classifier, _number_of, answer_world, turn, verdict  # noqa: F401
+from tests.test_service_answer_class import CHECK_MARK, _SERVICE_ANSWER_MARK, _classifier, _number_of, answer_world, confirm_all, turn, verdict  # noqa: F401
 
 _G0277 = "Делают ли фкс с биопсией?"
 _PRICE_ROW = "Прайс клиники: Биопсия при ФКС"
@@ -29,7 +29,7 @@ def _pick(*rows: str):
 
 
 def _other(service_answer) -> dict:
-    return {_CLASSIFIER_MARK: _classifier("OTHER"), _SERVICE_ANSWER_MARK: service_answer}
+    return {_CLASSIFIER_MARK: _classifier("OTHER"), _SERVICE_ANSWER_MARK: service_answer, CHECK_MARK: confirm_all}
 
 
 # --------------------------------------------------------------------------- OTHER от LLM (`topic_by_llm`)

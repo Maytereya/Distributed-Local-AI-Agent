@@ -44,6 +44,20 @@ TASK = Task(
     queue_timeout_ms=2000,
 )
 
+# Проверка исхода (BUG-2026-10-21-SVC-SIMILAR-NOISE): первый выбор держит полноту кандидатов, проверка — точность. Живая
+# карточка 21.10: «да, есть» по родству названия без метода («ПЦР на аскаридоз» → «Ascaris IgG»), «похожее» по слову
+# («поставить систему» → «индукционная система SIS», справки на «кровь ребёнку»). Один вопрос на пункт — «полностью ли
+# отвечает, со всем уточнением» — или тот же объект в другом варианте (`variant`); иначе — честный оффер.
+CHECK_TASK = Task(
+    name="service_answer_check",
+    max_picks=4,
+    outcomes=("variant",),
+    num_predict=48,
+    timeout_s=6.0,
+    queue_timeout_ms=1500,
+)
+CHECK_VARIANT = "variant"
+
 ANSWER = "answer"
 SIMILAR = "similar"
 NO_DATA = "no_data"
@@ -268,6 +282,40 @@ async def _ask(question: str, facts: Sequence[Fact]) -> tuple[Verdict, tuple[str
     return Verdict(NO_DATA), picked.terms  # вопрос о клинике, ни один пункт ответа не держит
 
 
+async def check(question: str, facts: Sequence[Fact]) -> tuple[tuple[Fact, ...], tuple[Fact, ...]] | None:
+    """Проверка пунктов, которые бот хочет показать: (полностью отвечают, тот же объект в другом варианте — только строки
+    прайса); сбой или мусор — None. Строка памятки «похожим» не бывает: это утверждение, а не услуга."""
+
+    options = [Option(id=str(i), text=fact.option_text()) for i, fact in enumerate(facts)]
+    picked = await choose(CHECK_TASK, question, options)
+    if picked.failed:
+        turn_telemetry.note(svc_check="failed")
+        return None
+    chosen = tuple(facts[int(i)] for i in picked.ids)
+    if picked.status is Status.OUTCOME and picked.outcome == CHECK_VARIANT:
+        variants = tuple(fact for fact in chosen if fact.kind == "price")
+        turn_telemetry.note(svc_check="variant" if variants else "none")
+        return (), variants
+    turn_telemetry.note(svc_check="full" if chosen else "none")
+    return chosen, ()
+
+
+async def _checked(question: str, verdict: Verdict) -> Verdict:
+    """Ответ или «похожее» первого выбора — только после проверки исхода: «да» — пункты, отвечающие полностью; «похожее» —
+    строки прайса того же объекта; иначе «нет данных» (честный оффер). Сбой проверки — FAILED (как было у места)."""
+
+    if verdict.kind not in (ANSWER, SIMILAR) or not verdict.facts:
+        return verdict
+    checked = await check(question, verdict.facts)
+    if checked is None:
+        return Verdict(FAILED)
+    full, variants = checked
+    if verdict.kind == ANSWER and full:
+        return Verdict(ANSWER, full)
+    similar = variants or tuple(fact for fact in full if fact.kind == "price")  # первый выбор сказал «похожее» — не «да»
+    return Verdict(SIMILAR, similar) if similar else Verdict(NO_DATA)
+
+
 async def decide(question: str, *, site: str, first_rows: Sequence[dict[str, Any]] = ()) -> Verdict:
     """Что ответить на вопрос о клинике по её данным. Сбой LLM — FAILED: что делать, решает вызывающий."""
 
@@ -281,6 +329,7 @@ async def decide(question: str, *, site: str, first_rows: Sequence[dict[str, Any
         if len(merged) > len(facts):
             verdict, _terms = await _ask(question, merged)
             rounds = 2
+    verdict = await _checked(question, verdict)
     turn_telemetry.note(svc_answer=verdict.kind, svc_answer_site=site, svc_answer_facts=len(verdict.facts), svc_answer_rounds=rounds)
     return Verdict(verdict.kind, verdict.facts, calls=max(0, llm_runtime.turn_decisions_spent() - spent_before))
 

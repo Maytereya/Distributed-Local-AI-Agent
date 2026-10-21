@@ -28,6 +28,7 @@ _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "mini_prod" / "snapsho
 _DOCTORS = Path(__file__).resolve().parent / "fixtures" / "doctors_excerpt" / "doctors_20261008.jsonl"
 _SERVICE_ANSWER_MARK = "ответить на вопрос пациента о клинике ТОЛЬКО по данным клиники"
 _RENDER_MARK = "Ты помощник клиники в мессенджере"
+CHECK_MARK = "Ты проверяешь ответ чат-бота медицинской клиники"
 FABRICATED = "Да, мы проводим это в нашей клинике для всех возрастов."
 
 # Строки прайса и памятка, которых нет в выдержке mini_prod: g0277 «Делают ли ФКС с биопсией?» (данные — синтетика по
@@ -120,6 +121,13 @@ def _classifier(label: str) -> str:
     return json.dumps({"label": label, "confidence": 0.9, "context_action": "new_topic", "entities": {}})
 
 
+def confirm_all(prompt: str) -> str:
+    """Проверка исхода подтверждает все пункты (умолчание подделки: класс «проверка» — в своём тесте)."""
+
+    numbers = [int(line.split(".", 1)[0]) for line in prompt.splitlines() if line.split(".", 1)[0].isdigit()]
+    return json.dumps({"picks": numbers, "outcome": "none"})
+
+
 def verdict(outcome: str = "none", picks: tuple[int, ...] = (), terms: tuple[str, ...] = ()) -> str:
     return json.dumps({"picks": list(picks), "outcome": outcome, "search_terms": list(terms)})
 
@@ -178,7 +186,7 @@ CLAIM_QUESTIONS = [
 
 
 def _free_text_answers(service_answer: Any) -> dict[str, Any]:
-    return {_CLASSIFIER_MARK: _classifier("TEST_ASSIST"), _SERVICE_ANSWER_MARK: service_answer, _RENDER_MARK: FABRICATED}
+    return {_CLASSIFIER_MARK: _classifier("TEST_ASSIST"), _SERVICE_ANSWER_MARK: service_answer, CHECK_MARK: confirm_all, _RENDER_MARK: FABRICATED}
 
 
 @pytest.mark.parametrize("reply", CLAIM_QUESTIONS)

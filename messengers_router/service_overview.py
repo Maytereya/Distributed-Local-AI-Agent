@@ -82,8 +82,18 @@ async def decide(user_text: str) -> Overview | None:
         turn_telemetry.note(svc_overview=picked.outcome or picked.status.value, svc_overview_refund=int(spent and llm_runtime.refund_turn_decision()))
         return None
     chosen = tuple(pool[int(i)] for i in picked.ids)
-    turn_telemetry.note(svc_overview="one" if len(chosen) == 1 else "several")
-    return Overview(chosen)
+    # Проверка исхода (BUG-2026-10-21-SVC-SIMILAR-NOISE): строка — та самая услуга, со всем уточнением («Справка 026» не
+    # «070/у», «УЗДГ БЦС ребёнку» не справка о здоровье ребёнка); не подтверждена — как было.
+    from .service_answer import Fact, check
+
+    checked = await check(user_text, [Fact(kind="price", title=_row_name(row), row=dict(row)) for row in chosen])
+    confirmed = tuple(fact.row for fact in checked[0] if fact.row) if checked else ()
+    if not confirmed:
+        returned = sum(1 for _ in range(max(0, llm_runtime.turn_decisions_spent() - spent_before)) if llm_runtime.refund_turn_decision())
+        turn_telemetry.note(svc_overview="not_confirmed", svc_overview_refund=returned)
+        return None
+    turn_telemetry.note(svc_overview="one" if len(confirmed) == 1 else "several")
+    return Overview(confirmed)
 
 
 # --------------------------------------------------------------------------- текст (печатает код)
@@ -150,7 +160,8 @@ def _one(row: dict[str, Any]) -> str:
     if _deadline(row):
         lines.append("— где: в лабораторных филиалах клиники, без записи, в порядке живой очереди; адреса — по запросу «где сдать».")
     else:
-        lines.append("— где: по записи; записаться — по запросу «записаться».")
+        # Где и по записи ли — у неанализа в данных нет (ЭКГ, например, без записи): не утверждаем, только подсказка.
+        lines.append("— записаться или узнать адреса — напишите «записаться» или «где сделать».")
     return _bundle_text(lines, "", priced=bool(amount))
 
 
