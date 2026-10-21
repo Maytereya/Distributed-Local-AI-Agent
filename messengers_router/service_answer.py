@@ -302,13 +302,18 @@ async def check(question: str, facts: Sequence[Fact]) -> tuple[tuple[Fact, ...],
 
 async def _checked(question: str, verdict: Verdict) -> Verdict:
     """Ответ или «похожее» первого выбора — только после проверки исхода: «да» — пункты, отвечающие полностью; «похожее» —
-    строки прайса того же объекта; иначе «нет данных» (честный оффер). Сбой проверки — FAILED (как было у места)."""
+    строки прайса того же объекта; иначе «нет данных» (честный оффер).
+
+    Сбой проверки — тоже «нет данных», а не «как было»: первый выбор уже решил, что вопрос о клинике и ответ в данных, а
+    подтвердить его нечем. «Как было» на месте свободного текста — выдумка (карточка 22.10 `d13_n2_dev`: 12 сбоев проверки,
+    все — исчерпанный лимит решений хода; g0388 «аннексин суммарные» → «Да, у нас есть … IgG» свободным текстом). Места со
+    своим оффером при «нет данных» отвечают им же — как было."""
 
     if verdict.kind not in (ANSWER, SIMILAR) or not verdict.facts:
         return verdict
     checked = await check(question, verdict.facts)
     if checked is None:
-        return Verdict(FAILED)
+        return Verdict(NO_DATA)
     full, variants = checked
     if verdict.kind == ANSWER and full:
         return Verdict(ANSWER, full)

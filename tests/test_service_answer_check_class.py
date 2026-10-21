@@ -92,12 +92,23 @@ def test_unconfirmed_claim_in_free_text_is_an_offer(answer_world, monkeypatch): 
 
 
 @pytest.mark.parametrize("failure", [ConnectionError("тест: LLM недоступна"), "не json"])
-def test_check_failure_is_as_before(failure, answer_world, monkeypatch):  # noqa: F811
-    off = turn(answer_world, monkeypatch, _CLAIM, switch="off", answers=_answers(_first_option, confirm_all, label="TEST_ASSIST"))
+def test_check_failure_is_an_honest_offer_not_free_text(failure, answer_world, monkeypatch):  # noqa: F811
+    """Первый выбор нашёл ответ в данных, проверка не смогла (лимит хода, сбой) — не выдумка свободным текстом, а оффер
+    (карточка 22.10: g0388 → «Да, у нас есть … IgG» свободным текстом после исчерпанного лимита)."""
+
     on = turn(answer_world, monkeypatch, _CLAIM, switch="on", answers=_answers(_first_option, failure, label="TEST_ASSIST"))
 
-    assert on["text"] == off["text"]  # свободный текст, как без выключателя
     assert on["telemetry"].get("svc_check") == "failed", on["telemetry"]
+    assert on["telemetry"].get("answer_source") == "service_answer", on["telemetry"]
+    assert FABRICATED not in on["text"] and "нет данных" in on["text"], on["text"]
+
+
+def test_check_out_of_turn_budget_is_an_honest_offer(answer_world, monkeypatch):  # noqa: F811
+    cfg = {"MR_LLM_DECISION_TURN_CALLS": 2}  # разбор фраз и первый выбор — проверке лимита не осталось
+    out = turn(answer_world, monkeypatch, _CLAIM, switch="on", answers=_answers(_first_option, confirm_all, label="TEST_ASSIST"), cfg_extra=cfg)
+
+    assert out["telemetry"].get("svc_check") == "failed", out["telemetry"]
+    assert FABRICATED not in out["text"] and "нет данных" in out["text"], out["text"]
 
 
 # --------------------------------------------------------------------------- голое название
