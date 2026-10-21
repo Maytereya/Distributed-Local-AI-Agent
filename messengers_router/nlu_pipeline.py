@@ -254,11 +254,6 @@ async def _analyze_legacy_with_candidates(
         # Сбой LLM — решает правило, как без выключателя (политика сбоя этапа 4, как `llm_primary_rules_fallback`).
         turn_telemetry.note(nlu_topic_by_llm="rules_fallback")
         llm = rule
-    elif by_llm and llm.label == "OTHER" and rule.label != "OTHER":
-        # OTHER — не тема, а «ни одна из тем»: вопрос «есть ли у вас X» в наборе тем классификатора не назван, и LLM уводила
-        # его к оператору (карточка dev 21.10: 18 ходов «есть ли 3D-УЗИ / чекап / анализы детям»). Решает правило-кандидат.
-        turn_telemetry.note(nlu_topic_by_llm="rules_other")
-        llm = rule
     elif by_llm:
         turn_telemetry.note(nlu_topic_by_llm="llm", nlu_src="llm")
         topic_source = {"src": "llm", "rule": topic_source.get("rule", "")}
@@ -268,6 +263,11 @@ async def _analyze_legacy_with_candidates(
         # Тему решила LLM, правило — кандидат: детекторы того же правила после NLU метку LLM не перебивают
         # (`router._apply_post_nlu_guardrails`, строка `policy_nonbookable_walkin`).
         merged.flags = set(merged.flags) | {"topic_by_llm"}
+        if merged.label == "OTHER" and rule.label != "OTHER":
+            # OTHER от LLM — тема: вопрос вне наших тем, данных нет — честный оффер оператора, а не ответ правила (оно
+            # выдумывало: «да, берём анализы у детей 2 лет», g0509) и не текст о техническом сбое (решение владельца 21.10).
+            merged.flags = set(merged.flags) | {"topic_other_offer"}
+            turn_telemetry.note(nlu_topic_by_llm="other_offer")
     candidates = [_candidate_from_decision("rule", rule), _candidate_from_decision("llm", llm)]
     return NLUResult(
         decision=merged,

@@ -75,10 +75,12 @@ def test_walkin_detector_does_not_override_llm_topic(llm_label, mini_prod_world,
     assert on.get("tu_label_nlu") == llm_label, on
 
 
-def test_llm_other_is_not_a_topic_and_rule_candidate_stays(mini_prod_world, monkeypatch):  # noqa: F811
-    """OTHER от LLM — «ни одна из тем»: на ходе правила из списка решает правило-кандидат (карточка dev 21.10)."""
+def test_llm_other_is_a_topic_with_honest_operator_offer(mini_prod_world, monkeypatch):  # noqa: F811
+    """OTHER от LLM — тема: честный оффер оператора, а не ответ правила (g0509 «да, берём у детей 2 лет» — выдумано) и не
+    текст о техническом сбое (решение владельца 21.10; dev g0378, g0414, g0509, g0641)."""
 
-    off = _run(mini_prod_world, monkeypatch, _TEST_ASSIST, rules="", answer=_answer("OTHER"))
     on = _run(mini_prod_world, monkeypatch, _TEST_ASSIST, rules="rule_test_assist", answer=_answer("OTHER"))
-    assert on["text"] == off["text"]
-    assert on["telemetry"].get("nlu_topic_by_llm") == "rules_other", on["telemetry"]
+    assert on["telemetry"].get("nlu_topic_by_llm") == "other_offer", on["telemetry"]
+    assert "нет данных — точно ответит оператор" in on["text"], on["text"]
+    assert "перевести" in on["text"].lower()
+    assert "не удалось" not in on["text"].lower() and not on["telemetry"].get("handoff"), on

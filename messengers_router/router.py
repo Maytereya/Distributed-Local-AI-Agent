@@ -171,7 +171,7 @@ def _unsupported_catalog_kind(flags: set[str]) -> str | None:
     :return: тип unavailable-кейса или None
     """
 
-    for kind in ("role_absent", "role_qualifier", "unsupported_service", "unsupported_specialist", "unsupported_document_service"):
+    for kind in ("topic_other_offer", "role_absent", "role_qualifier", "unsupported_service", "unsupported_specialist", "unsupported_document_service"):
         if kind in flags:
             return kind
     return None
