@@ -7,8 +7,10 @@ price clarification and multi-service resolution. Moved out of
 
 from __future__ import annotations
 
+import functools
 import json
 import re
+from dataclasses import dataclass
 from typing import Any, Sequence
 
 from agent_logic_2.nayka_api import api_price
@@ -1733,30 +1735,86 @@ def _query_nonbase_price_flags(query_text: str) -> set[str]:
     return flags
 
 
+@dataclass(frozen=True)
+class _RowFeatures:
+    """Признаки строки прайса, не зависящие от вопроса (ход (е), STEP-2026-10-22-E-PRICE-ROW-FEATURES).
+
+    Ранжирование прайса оценивает ~3 700 строк на каждый запрос и раньше на каждом
+    запросе заново нормализовало название строки и искало в нём флаги — 2–8 с на ход
+    цены вне LLM. Признаки — чистые функции текста названия и кода (константы модуля),
+    поэтому кэшируются по этим строкам; новый срез прайса с тем же названием даёт те же
+    признаки.
+    """
+
+    name: str
+    homecode: str
+    tokens: tuple[str, ...]
+    tokens_set: frozenset[str]
+    lab_flags: frozenset[str]
+    nonbase_flags: frozenset[str]
+
+
+@functools.lru_cache(maxsize=32768)
+def _row_features_cached(name_raw: str, homecode_raw: str) -> _RowFeatures:
+    name = _normalise_input(name_raw)
+    homecode = _normalise_input(homecode_raw)
+    tokens: tuple[str, ...] = ()
+    if name:
+        tokens = tuple(
+            _augment_price_tokens(
+                [_normalise_price_token(tok) for tok in _PRICE_TOKEN_RE.findall(name) if tok],
+                raw_text=name,
+            )
+        )
+    lab: set[str] = set()
+    if _PRICE_CITO_ROW_RE.search(name):
+        lab.add("cito")
+    if _PRICE_CAPILLARY_ROW_RE.search(name) or homecode.endswith("к"):
+        lab.add("capillary")
+    if _PRICE_CHILD_ROW_RE.search(name):
+        lab.add("child")
+    nonbase = set(lab)
+    if _PRICE_REPEAT_ROW_RE.search(name):
+        nonbase.add("repeat")
+    if _PRICE_KMN_ROW_RE.search(name):
+        nonbase.add("kmn")
+    if _PRICE_HOME_ROW_RE.search(name):
+        nonbase.add("home")
+    if _PRICE_PACKAGE_ROW_RE.search(name):
+        nonbase.add("package")
+    if _PRICE_GENETIC_ROW_RE.search(name):
+        nonbase.add("genetic")
+    return _RowFeatures(
+        name=name,
+        homecode=homecode,
+        tokens=tokens,
+        tokens_set=frozenset(_expand_row_token_synonyms(set(tokens))),
+        lab_flags=frozenset(lab),
+        nonbase_flags=frozenset(nonbase),
+    )
+
+
+def _row_features(row: dict[str, Any]) -> _RowFeatures:
+    return _row_features_cached(
+        str(row.get("serviceName") or row.get("name") or ""),
+        str(row.get("serviceHomecode") or row.get("homecode") or ""),
+    )
+
+
 def _row_nonbase_price_flags(row: dict[str, Any]) -> set[str]:
     """
     Выделяет модификаторы из конкретной строки прайса.
 
     :param row: строка прайса
-    :return: набор флагов модификаторов
+    :return: набор флагов модификаторов (новый набор — вызывающий может его менять)
     """
 
-    name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
-    flags = _lab_price_variant_flags(row)
-    if _PRICE_REPEAT_ROW_RE.search(name):
-        flags.add("repeat")
-    if _PRICE_KMN_ROW_RE.search(name):
-        flags.add("kmn")
-    if _PRICE_HOME_ROW_RE.search(name):
-        flags.add("home")
-    if _PRICE_PACKAGE_ROW_RE.search(name):
-        flags.add("package")
-    if _PRICE_GENETIC_ROW_RE.search(name):
-        flags.add("genetic")
-    return flags
+    return set(_row_features(row).nonbase_flags)
 
 
-def _price_row_modifier_penalty(row: dict[str, Any], query_text: str) -> int:
+def _price_row_modifier_penalty(
+    row: dict[str, Any], query_text: str, *, requested: set[str] | frozenset[str] | None = None
+) -> int:
     """
     Считает штраф для специальных модификаторов, которые пользователь не просил.
 
@@ -1765,13 +1823,15 @@ def _price_row_modifier_penalty(row: dict[str, Any], query_text: str) -> int:
 
     :param row: строка прайса
     :param query_text: исходный пользовательский запрос
+    :param requested: флаги запроса, если уже посчитаны (`_query_nonbase_price_flags(query_text)`)
     :return: отрицательный штраф или 0
     """
 
-    requested = _query_nonbase_price_flags(query_text)
-    row_flags = _row_nonbase_price_flags(row)
+    row_flags = _row_features(row).nonbase_flags
     if not row_flags:
         return 0
+    if requested is None:
+        requested = _query_nonbase_price_flags(query_text)
 
     penalties = {
         "child": -100,
@@ -1814,12 +1874,13 @@ def _score_price_rows(
     # queries so behaviour is unchanged when there is nothing to clean.
     query = " ".join(tokens) or _normalise_input(query_text)
     homecode_query = _extract_homecode_query(query_text)
+    qf = _query_score_features(query)
 
     scored: list[tuple[int, int, int, int, dict[str, Any]]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
-        score, matched = _price_row_score(row, query=query, tokens=tokens, homecode_query=homecode_query)
+        score, matched = _price_row_score(row, query=query, tokens=tokens, homecode_query=homecode_query, qf=qf)
         if score <= 0:
             continue
         if not _is_price_match_strong(
@@ -1830,7 +1891,7 @@ def _score_price_rows(
             homecode_query=homecode_query,
         ):
             continue
-        name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
+        name = _row_features(row).name
         name_gap = abs(len(name) - len(query)) if query else len(name)
         cost = _as_int(row.get("cost")) or 0
         scored.append((score, matched, -name_gap, -cost, row))
@@ -1857,9 +1918,8 @@ def _score_price_rows(
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for score, matched, _, _, row in scored:
-        name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
-        code = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
-        key = (name, code)
+        feats = _row_features(row)
+        key = (feats.name, feats.homecode)
         if key in seen:
             continue
         seen.add(key)
@@ -1897,21 +1957,53 @@ def _expand_row_token_synonyms(row_tokens_set: set[str]) -> set[str]:
     return row_tokens_set | extra
 
 
-def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], homecode_query: str) -> tuple[int, int]:
-    name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
-    homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
+@dataclass(frozen=True)
+class _QueryScoreFeatures:
+    """Признаки запроса для `_price_row_score` — одни на все строки прайса одного ранжирования.
+
+    Не кэшируются между запросами: специальность берётся из справочника, который
+    обновляется за день (`daily_refresh`).
+    """
+
+    query: str
+    specialty: str
+    consult: bool
+    requested: frozenset[str]
+    child: bool
+
+
+def _query_score_features(query: str) -> _QueryScoreFeatures:
+    return _QueryScoreFeatures(
+        query=query,
+        specialty=_extract_specialty_from_text(query),
+        consult=bool(_PRICE_CONSULT_HINT_RE.search(query)),
+        requested=frozenset(_query_nonbase_price_flags(query)),
+        child=bool(_PRICE_CHILD_QUERY_RE.search(query)),
+    )
+
+
+def _price_row_score(
+    row: dict[str, Any],
+    *,
+    query: str,
+    tokens: list[str],
+    homecode_query: str,
+    qf: _QueryScoreFeatures | None = None,
+) -> tuple[int, int]:
+    feats = _row_features(row)
+    name = feats.name
+    homecode = feats.homecode
     if not name:
         return 0, 0
-    row_tokens = _augment_price_tokens(
-        [_normalise_price_token(tok) for tok in _PRICE_TOKEN_RE.findall(name) if tok],
-        raw_text=name,
-    )
-    row_tokens_set = _expand_row_token_synonyms(set(row_tokens))
+    row_tokens = feats.tokens
+    row_tokens_set = feats.tokens_set
+    if qf is None or qf.query != query:
+        qf = _query_score_features(query)
 
     # Жесткий фильтр для консультационных price-запросов по специальности:
     # "стоимость приема уролога" не должен матчиться на фониатра/терапевта.
-    query_specialty = _extract_specialty_from_text(query)
-    if _PRICE_CONSULT_HINT_RE.search(query):
+    query_specialty = qf.specialty
+    if qf.consult:
         if not _is_clean_consultation_row_name(name):
             return 0, 0
         if query_specialty and not _service_name_allows_specialty(name, query_specialty):
@@ -2021,10 +2113,10 @@ def _price_row_score(row: dict[str, Any], *, query: str, tokens: list[str], home
         "узи" in tokens
         and "ультразвук" in name
         and matched == len(tokens)
-        and not _PRICE_CHILD_QUERY_RE.search(query)
+        and not qf.child
     ):
         score += 160
-    score += _price_row_modifier_penalty(row, query)
+    score += _price_row_modifier_penalty(row, query, requested=qf.requested)
 
     return score, matched
 
@@ -2064,16 +2156,7 @@ def _lab_price_variant_flags(row: dict[str, Any]) -> set[str]:
     :return: набор флагов варианта (`cito`, `capillary`, `child`)
     """
 
-    name = _normalise_input(str(row.get("serviceName") or row.get("name") or ""))
-    homecode = _normalise_input(str(row.get("serviceHomecode") or row.get("homecode") or ""))
-    flags: set[str] = set()
-    if _PRICE_CITO_ROW_RE.search(name):
-        flags.add("cito")
-    if _PRICE_CAPILLARY_ROW_RE.search(name) or homecode.endswith("к"):
-        flags.add("capillary")
-    if _PRICE_CHILD_ROW_RE.search(name):
-        flags.add("child")
-    return flags
+    return set(_row_features(row).lab_flags)
 
 
 def _query_price_variant_flags(query_text: str) -> set[str]:
