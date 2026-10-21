@@ -10,7 +10,7 @@ import asyncio
 import re
 from datetime import datetime
 from difflib import get_close_matches
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from agent_logic_2.nayka_api import api_price
 
@@ -19,10 +19,11 @@ from ..doctor_name_port import (
     resolve_schedule_surname,
     surname_variants,
 )
-from .. import degradation
+from .. import degradation, turn_telemetry
 from ..schedule_parse_watch import dates_all_unparsed
 from .. import resilience as _R
 from ..policies import handoff_message
+from ..runtime_config import config as _cfg
 from ..russian_nlu import normalize_ru
 from ..service_phrase import extract_service_phrase
 from ..specialty_parser import PROCEDURE_TO_SPECIALTY, PROCEDURE_TO_SPECIALTY_RE
@@ -60,6 +61,8 @@ from ._doctors_helpers import (
     _specialty_priority_rank,
 )
 from ._prices_helpers import keeps_family_letter, resolve_price_service_name_from_catalog
+from ._role_catalog import build_role_catalog
+from ._service_doctors import agreement as _service_doctors_agreement, build_service_doctor_index
 from ._regions import (
     _extract_region_phone,
     _has_explicit_non_samara_regions,
@@ -586,6 +589,59 @@ async def _doctor_ids_by_service_code(service_q: str) -> set[int]:
     return ids
 
 
+_SERVICE_INDEX: dict[str, Any] = {"key": None, "value": None}
+
+
+def _doctors_by_service_data_mode() -> str:
+    raw = str(getattr(_cfg, "MR_DOCTORS_BY_SERVICE_DATA", "off") or "").strip().lower()
+    return raw if raw in {"off", "shadow", "on"} else "off"
+
+
+async def _service_data_doctor_ids(
+    service_q: str, region_doctor_ids: set[int], branch_in_region: Callable[[str], bool]
+) -> tuple[str, tuple[str, ...], tuple[int, ...]] | None:
+    """Ход (г), L-06: как опознана услуга, её коды и врачи региона, которых МИС с ними связывает (`doctor_prices`).
+
+    Опознание (`ident`): `exact` — название строки МИС целиком или однозначный синоним МИС; `words` — все слова запроса
+    есть в названии строки (как в `_doctor_ids_by_service_code`). `words` — это буквы, не опознание: свип 21.10 —
+    «эндоскопия» цепляет только «Эндоскопию полости носа» (ЛОР), «массаж» — «Массаж предстательной железы» (урологи).
+    Поэтому действует (`on`) только `exact`; `words` — лишь в телеметрию тени. Срез недоступен — None.
+    """
+
+    query_tokens = _service_name_tokens(service_q)
+    if not query_tokens:
+        return "none", (), ()
+    try:
+        rows = await asyncio.to_thread(api_price.load_doctor_prices)
+    except Exception:
+        return None
+    from ._biomaterial import mis_synonym_service
+
+    synonym = _normalise_input(mis_synonym_service(service_q) or "")
+    rows = rows or []
+    shape = hash(tuple((r.get("doctorId"), r.get("serviceHomecode"), r.get("regionName")) for r in rows if isinstance(r, dict)))
+    branches = {str(r.get("regionName") or "").strip() for r in rows if isinstance(r, dict)} - {""}
+    branch_ok = {branch: branch_in_region(branch) for branch in branches}  # филиалов — десятки, строк — тысячи
+    key = (len(rows), shape, frozenset(region_doctor_ids), frozenset(branch_ok.items()))
+    if _SERVICE_INDEX["key"] != key:  # срез читается с диска на каждый вопрос — индекс пересобираем, только когда он сменился
+
+        def in_region(row: dict[str, Any]) -> bool:
+            if _coerce_doctor_id({"id": row.get("doctorId")}) not in region_doctor_ids:
+                return False
+            branch = str(row.get("regionName") or "").strip()
+            return branch_ok.get(branch, True)  # филиал не указан — регион решает врач
+
+        _SERVICE_INDEX["value"] = build_service_doctor_index(rows, in_region=in_region)
+        _SERVICE_INDEX["key"] = key
+    index = _SERVICE_INDEX["value"]
+    whole = {name for name in (_normalise_input(service_q).strip(), synonym.strip()) if name}
+    codes = index.codes_where(lambda name: _normalise_input(name).strip() in whole)
+    if codes:
+        return "exact", codes, index.doctors_for(codes)
+    codes = index.codes_where(lambda name: query_tokens <= _service_name_tokens(name))
+    return ("words" if codes else "none"), codes, index.doctors_for(codes)
+
+
 async def doctors_info(
     self: "Services",
     query: str,
@@ -653,6 +709,15 @@ async def doctors_info(
 
     keyword = keyword.strip()
 
+    def in_region(doc: dict[str, Any]) -> bool:
+        raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
+        # Врач может вести приём и в Самаре, и в другом городе — оставляем его
+        # по самарскому присутствию, а не отбрасываем по любому несамарскому
+        # филиалу. «Явный несамарский» дроп — fallback без samara_tokens.
+        if samara_tokens:
+            return any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions)
+        return not _has_explicit_non_samara_regions(raw_regions)
+
     def match_doc(doc: dict[str, Any], *, require_service: bool = True, require_specialty: bool = True) -> bool:
         fio = _normalise_input(str(doc.get("fio", "")))
         spec_text = _normalise_input(str(doc.get("specialization", "")))
@@ -661,13 +726,7 @@ async def doctors_info(
         units = " ".join([_normalise_input(str(x)) for x in (doc.get("units") or [])])
 
         hay = " | ".join([fio, spec_text, regions, units])
-        # Врач может вести приём и в Самаре, и в другом городе — оставляем его
-        # по самарскому присутствию, а не отбрасываем по любому несамарскому
-        # филиалу. «Явный несамарский» дроп — fallback без samara_tokens.
-        if samara_tokens:
-            if not any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions):
-                return False
-        elif _has_explicit_non_samara_regions(raw_regions):
+        if not in_region(doc):
             return False
         if fio_q:
             if not _doctor_matches_fio(fio, fio_q, resolved_surname):
@@ -710,6 +769,38 @@ async def doctors_info(
                 for d in doctors
                 if _coerce_doctor_id(d) in coded_ids and match_doc(d, require_service=False, require_specialty=False)
             ]
+    # Ход (г), L-06: кто делает услугу — по данным МИС. shadow — только согласие нынешней выдачи с данными в ход;
+    # on — врачи услуги из `doctor_prices`, если услуга опознана точно («Эндоскопия полости носа и носоглотки с
+    # видеозаписью» → ЛОР, а не все эндоскописты; опознание по словам — нет, см. `_service_data_doctor_ids`). Роль, выведенная
+    # правилом из процедуры («цистоскопия → уролог»), не фильтрует — это знание кода; сужает только роль приёма, которую
+    # пациент назвал словами МИС (точный слой каталога ролей L-17), и только если среди врачей услуги есть её врачи.
+    data_mode = _doctors_by_service_data_mode()
+    data_source = ""
+    if data_mode != "off" and service_q and not fio_q:
+        region_ids = {i for i in (_coerce_doctor_id(d) for d in doctors if in_region(d)) if i is not None}
+        found = await _service_data_doctor_ids(service_q, region_ids, lambda branch: in_region({"regions": [branch]}))
+        ident, codes, data_list = found if found is not None else ("no_slice", (), ())
+        data_ids = set(data_list)
+        shown_ids = {i for i in (_coerce_doctor_id(d) for d in _dedupe_doctors_by_fio(filtered)) if i is not None}
+        fields: dict[str, Any] = {
+            "svc_doc_ident": ident,
+            "svc_doc_codes": len(codes),
+            "svc_doc_data": len(data_ids),
+            "svc_doc_shown": len(shown_ids),
+            "svc_doc_agree": _service_doctors_agreement(data_ids, shown_ids) if found is not None else "no_slice",
+        }
+        if data_mode == "on" and ident == "exact" and data_ids:
+            by_data = [d for d in doctors if _coerce_doctor_id(d) in data_ids and in_region(d)]
+            named = [role for role in build_role_catalog(doctors, in_region=in_region).find(query).exact if role.reception]
+            units = {unit for role in named for unit in role.unit_ids}
+            narrowed = [
+                d for d in by_data if any((link or {}).get("company_unit_id") in units for link in d.get("unit_links") or [])
+            ]
+            if by_data:
+                filtered = narrowed or by_data
+                data_source = "data_role" if narrowed else "data"
+        fields["svc_doc_src"] = data_source or "rules"
+        turn_telemetry.note(**fields)
     # L-06(б): фильтр по услуге опустошил непустой список — это не «врача нет».
     service_filter_emptied = bool(
         not filtered and service_q and spec_q and not fio_q and any(match_doc(d, require_service=False) for d in doctors)
@@ -759,6 +850,7 @@ async def doctors_info(
         "doctors": compact,
         "note": "doctors_info: from cached registry (jsonl)",
         "service_filter_emptied": service_filter_emptied,
+        "doctors_source": data_source or "rules",
         "cache_file": self._doctors_cache_path,
         "entities_used": {
             "doctor_query": fio_q,

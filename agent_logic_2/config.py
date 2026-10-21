@@ -211,6 +211,7 @@ class MessengerRouterConfig:
     service_answer_from_data: str
     address_service_llm: str
     booking_specialty_llm: str
+    doctors_by_service_data: str
     slot_suppress_llm: str
     prepare_vs_booking_llm: str
     t7_drop_k1: str
@@ -609,6 +610,11 @@ settings = Settings(
         # реплики, когда услугу из неё LLM не подтвердила («На какое время запись к неврологу»), — кандидат правил,
         # подтверждает LLM (`choose`, задача `booking_specialty`); off — как было. [MESSENGER_ROUTER] booking_specialty_llm
         booking_specialty_llm=_get_enum("MESSENGER_ROUTER", "booking_specialty_llm", default="off", allowed={"off", "on"}),
+        # Ход (г), L-06: «кто делает услугу» — врачи по коду услуги в срезе `doctor_prices` (МИС), а не по правилу
+        # «процедура → специальность» в коде. shadow — ответ не меняется, в ход пишется согласие нынешней выдачи врачей с
+        # данными (`svc_doc_*`); on — врачи услуги из данных (роль правил только сужает, если среди них есть); off — как было.
+        # [MESSENGER_ROUTER] doctors_by_service_data
+        doctors_by_service_data=_get_enum("MESSENGER_ROUTER", "doctors_by_service_data", default="off", allowed={"off", "shadow", "on"}),
         # Подавитель A′-1 (`router._suppress_grounder_rejected_slots`): услугу, которую в этом ходу отвергла LLM, резолвер
         # прайса по буквам в состоянии не воскрешает (инвариант 2 BUG-2026-06-02-02); off — как было.
         # [MESSENGER_ROUTER] slot_suppress_llm
@@ -780,6 +786,7 @@ MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
 MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
+MR_DOCTORS_BY_SERVICE_DATA = settings.messenger_router.doctors_by_service_data
 MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm
 MR_PREPARE_VS_BOOKING_LLM = settings.messenger_router.prepare_vs_booking_llm
 MR_T7_DROP_K1 = settings.messenger_router.t7_drop_k1

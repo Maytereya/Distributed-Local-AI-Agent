@@ -107,6 +107,8 @@ EXCLUDED_REGION_ROOTS: Set[int] = {19}
 
 # кеш для проверок наличия расписания (doctor_id, company_unit, region_id)
 _SCHEDULE_CACHE: Dict[Tuple[int, int, int], bool] = {}
+# пары, где проверка расписания не удалась (сеть / ответ МИС): «нет расписания» по ним утверждать нельзя (L-06б)
+_SCHEDULE_UNKNOWN: Set[Tuple[int, int, int]] = set()
 SPECIAL_REGION_NAMES: Dict[int, str] = {
     8502: "Выезд на дом",
 }
@@ -270,10 +272,30 @@ def _has_schedule(doctor_id: int, company_unit: int, region_id: int, start: str,
         data = resp.json() or []
         result = bool(data)
     except (requests.RequestException, ValueError):
+        _SCHEDULE_UNKNOWN.add(key)
         result = False
 
     _SCHEDULE_CACHE[key] = result
     return result
+
+
+def _schedule_status(doctor_id: int, entries: List[Dict[str, Any]]) -> bool | None:
+    """Есть ли у врача расписание на 7 дней хоть на одной площадке — по проверкам `_filter_region_entries_with_schedule`.
+
+    Ход (г), L-06б: True — есть; False — МИС ответила, окон нет ни на одной площадке; None — проверить не удалось
+    (сбой запроса) или площадок нет: «нет расписания» не утверждаем.
+    """
+    status: bool | None = False
+    for entry in entries:
+        company_unit, region_id = entry.get("companyUnit"), entry.get("region")
+        if not company_unit or not region_id or entry.get("hasSchedule") is False:
+            continue
+        key = (doctor_id, company_unit, region_id)
+        if _SCHEDULE_CACHE.get(key) and key not in _SCHEDULE_UNKNOWN:
+            return True
+        if key in _SCHEDULE_UNKNOWN or key not in _SCHEDULE_CACHE:
+            status = None
+    return status if entries else None
 
 
 def _filter_region_entries_with_schedule(
@@ -439,6 +461,7 @@ def get_all_doctors() -> List[Dict]:
         }.
     """
     _SCHEDULE_CACHE.clear()
+    _SCHEDULE_UNKNOWN.clear()
     # Получаем все данные через API
     doctors = site_doctors()
     units = site_company_units()
@@ -493,6 +516,7 @@ def get_all_doctors() -> List[Dict]:
             doctor_id, valid_region_links, start_iso, end_iso
         )
         selected_region_links = active_region_links or valid_region_links
+        has_schedule_7d = True if active_region_links else _schedule_status(doctor_id, valid_region_links)
 
         seen_region_ids: Set[int] = set()
         region_pairs: List[Tuple[int, str]] = []
@@ -614,6 +638,9 @@ def get_all_doctors() -> List[Dict]:
             "experience": str(doctor.get("experience") or "").strip() or None,
             "qualification": str(doctor.get("qualification") or "").strip() or None,
             "education": str(doctor.get("education") or "").strip() or None,
+            # Ход (г), L-06б: есть ли расписание на 7 дней хоть на одной площадке (раньше проверка выбрасывалась).
+            # None — проверить не удалось; поля нет — срез собран до 21.10 (формат не устаревает, пересборка не нужна).
+            "has_schedule_7d": has_schedule_7d,
         }
 
         result.append(doctor_data)
