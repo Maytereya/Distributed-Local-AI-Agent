@@ -5,7 +5,7 @@
   (`turn_understanding.parse_for`) — `turn_parse.acting_for` / `phrases_now` / `phrases` вне производителя — красный;
 - под `turn_understanding_one = on` «список ли» на пути правил — одно решение (`turn_understanding.rules_list`): вердикт
   понимания этой реплики, без него — правило понимания с защитами K1; корзина правил (R1) и подбор анализов (R7) его читают и
-  сами не решают (разбор 21.10: в 19 из 21 расхождения корзина без K1 резала одну услугу на чужие строки);
+  сами не решают (у R7 «не список» — кандидаты сегментатора для ответа LLM, K2 не снимается) (разбор 21.10: в 19 из 21 расхождения корзина без K1 резала одну услугу на чужие строки);
 - защита K1 «одно название покрывает реплику» не для явного перечня своих названий («Витамин В1, Витамин В6» — не
   «Расширенный комплексный анализ на витамины (…)»), а для одного названия с запятыми — в силе;
 - под `off` — как было.
@@ -117,7 +117,7 @@ def test_basket_reader_obeys_the_one_verdict_under_on(one, monkeypatch):
 
 def _test_assist(monkeypatch, *, verdict: bool) -> dict:
     monkeypatch.setattr(lab_tests.api_price, "load_price_by_region", lambda _region: list(_VITAMINS))
-    monkeypatch.setattr(lab_tests, "_resolve_multi_price_items", lambda *_a, **_k: pytest.fail("сегментатор без защит под on"))
+    monkeypatch.setattr(lab_tests, "_resolve_multi_price_items", lambda *_a, **_k: ([], []))  # не список — кандидаты сегментатора
     monkeypatch.setattr(turn_understanding, "parse_for", lambda _text: None)
     monkeypatch.setattr(turn_understanding, "rules_list", lambda *_a, **_k: verdict)
     items = [{"service_name": n, "fragment": n, "prices": [r]} for n, r in (("B1", _VITAMINS[2]), ("B6", _VITAMINS[1]))]
@@ -126,6 +126,8 @@ def _test_assist(monkeypatch, *, verdict: bool) -> dict:
 
 
 def test_test_assist_reader_obeys_the_one_verdict_under_on(one, monkeypatch):
+    """Список — позиции корзины (с K3) по одному решению; не список — не позиции корзины (кандидаты сегментатора, K2)."""
+
     one("on")
     assert "multi-item" in str(_test_assist(monkeypatch, verdict=True).get("note"))
     assert "multi-item" not in str(_test_assist(monkeypatch, verdict=False).get("note"))

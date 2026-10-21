@@ -186,9 +186,11 @@ async def test_assist(self: "Services", query: str, entities: dict[str, Any]) ->
         parse = None
     if parse is not None:
         multi_items = phrase_price_items(parse.items, rows) if parse.is_list else []
-    elif turn_understanding.one_enabled():
-        # Ход (б), этап 2: «список ли» — решение понимания хода (с K1); позиции — корзины (с гардом K3), не сегментатор без защит.
-        multi_items = _multi_price_items(str(query or ""), rows)[0] if turn_understanding.rules_list(str(query or ""), rows) else []
+    elif turn_understanding.one_enabled() and turn_understanding.rules_list(str(query or ""), rows):
+        # Ход (б), этап 2: список по одному решению понимания хода (с K1) — позиции корзины, с гардом условия K3. Не список —
+        # сегментатор остаётся источником кандидатов для ответа LLM (K2 не снимается, дизайн 19.10 §4): разбор 21.10 —
+        # «Чек ап по женскому здоровью» без него терял «Женский чекап Базовый / Расширенный».
+        multi_items = _multi_price_items(str(query or ""), rows)[0]
     else:
         multi_items, _multi_unrecognized = _resolve_multi_price_items(str(query or ""), rows)
     if multi_items:
