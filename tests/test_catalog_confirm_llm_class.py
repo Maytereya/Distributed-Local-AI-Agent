@@ -97,3 +97,55 @@ def test_on_price_label_not_judged(monkeypatch) -> None:
     out, _, calls = _run("PRICE", BookingServiceVerdict("refuse", status="none_fit"), monkeypatch, mode="on")
     assert calls == []
     assert "_catalog_service_candidate" in out
+
+
+def test_on_budget_exhausted_after_judgement_no_letter_confirm(monkeypatch) -> None:
+    """Вторая фраза хода после суда первой: «недоступна» = лимит решений хода — догадку по буквам не выносим (g0196)."""
+
+    async def fake_judge(phrase, canonical, **kw):
+        return BookingServiceVerdict("choose", names=(canonical,), status="unavailable")
+
+    monkeypatch.setattr(G, "judge_booking_service", fake_judge)
+    monkeypatch.setattr(cfg, "MR_CATALOG_CONFIRM_LLM", "on", raising=False)
+    out: dict = {}
+    flags: set = {"catalog_confirm_judged_none_fit"}
+    asyncio.run(
+        G.judge_fuzzy_service_candidate(
+            label="TEST_ASSIST",
+            candidate="Вирус клещевого энцефалита Ig G",
+            query="инцифалит",
+            user_text="есть ли исследование клеща на инцифалит?",
+            services=_Services(),
+            runtime_llm_mode="hybrid",
+            out=out,
+            flags=flags,
+            candidate_flag="entity_catalog_service_fuzzy_candidate",
+        )
+    )
+    assert "_catalog_service_candidate" not in out
+
+
+def test_on_budget_exhausted_after_router_judgement_no_letter_confirm(monkeypatch) -> None:
+    """Суд роутера (флаг в решении хода) до заземления — тоже «LLM в этом ходе была доступна»."""
+
+    async def fake_judge(phrase, canonical, **kw):
+        return BookingServiceVerdict("choose", names=(canonical,), status="unavailable")
+
+    monkeypatch.setattr(G, "judge_booking_service", fake_judge)
+    monkeypatch.setattr(cfg, "MR_CATALOG_CONFIRM_LLM", "on", raising=False)
+    out: dict = {}
+    asyncio.run(
+        G.judge_fuzzy_service_candidate(
+            label="TEST_ASSIST",
+            candidate="Вирус клещевого энцефалита Ig G",
+            query="инцифалит",
+            user_text="есть ли исследование клеща на инцифалит?",
+            services=_Services(),
+            runtime_llm_mode="hybrid",
+            out=out,
+            flags=set(),
+            candidate_flag="entity_catalog_service_fuzzy_candidate",
+            prior_flags={"catalog_confirm_judged_none_fit"},
+        )
+    )
+    assert "_catalog_service_candidate" not in out

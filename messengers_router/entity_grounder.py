@@ -303,6 +303,7 @@ async def judge_fuzzy_service_candidate(
     out: dict[str, Any],
     flags: set[str],
     candidate_flag: str,
+    prior_flags: set[str] | frozenset[str] = frozenset(),
 ) -> None:
     """Нечёткая догадка каталога → переспрос «Похоже, вы имели в виду …?» (BUG-2026-10-22-CATALOG-CONFIRM-BY-LETTERS).
 
@@ -320,6 +321,9 @@ async def judge_fuzzy_service_candidate(
     if not catalog_confirm_llm_enabled() or label not in _LLM_JUDGED_FUZZY_LABELS:
         _confirm(candidate)
         return
+    judged_before = any(
+        f.startswith("catalog_confirm_judged_") and not f.endswith("_unavailable") for f in set(flags) | set(prior_flags)
+    )
     verdict = await judge_booking_service(
         query,
         candidate,
@@ -329,7 +333,10 @@ async def judge_fuzzy_service_candidate(
     )
     flags.add(f"catalog_confirm_judged_{verdict.status or verdict.action}")
     if verdict.status == "unavailable":
-        _confirm(candidate)
+        # LLM этого хода уже судила другую фразу (была доступна) — «недоступна» здесь значит исчерпанный лимит решений
+        # хода, а не сбой: догадку по буквам не выносим (g0196: первая фраза снята LLM, вторая ушла на «да/нет»).
+        if not judged_before:
+            _confirm(candidate)
         return
     judged = _apply_service_verdict(label=label, verdict=verdict, canonical=candidate, phrase=query, out=out, flags=flags)
     if judged:
@@ -795,6 +802,7 @@ async def ground_decision_entities(
                                 out=out,
                                 flags=flags,
                                 candidate_flag="entity_catalog_service_fuzzy_candidate",
+                                prior_flags=set(decision.flags or ()),
                             )
                         else:
                             flags.add("entity_dropped_unverified_service_name")
