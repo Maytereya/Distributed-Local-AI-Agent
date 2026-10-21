@@ -235,6 +235,18 @@ def of_reply(text: str) -> TurnUnderstanding | None:
     return tu if tu is not None and one_enabled() and tu.for_text(text) else None
 
 
+def strong_choice(text: str) -> str | None:
+    """Исход `one_strong` (дизайн 19.10 §3, U1/U2): реплика хода — одна услуга, сильная по данным МИС (дословное название,
+    синоним клиники, код) и с одним названием прайса — это название. Иначе (слабая фраза, несколько названий, список, понимания
+    этой реплики нет, выключатель off) — None: подстановка каталога и грундер идут прежним путём."""
+
+    tu = of_reply(text)
+    single = tu.single if tu is not None else None
+    if single is None or single.strength != "strong" or not single.chosen:
+        return None
+    return single.chosen
+
+
 def parse_for(text: str) -> turn_parse.PhraseParse | None:
     """Разбор реплики, по которому действует читатель с входом `text` (L-15b). Ход (б), этап 2 (консилиум 20.10 §2): один
     публичный объект — понимание хода, `PhraseParse` — деталь его производителя; читатели берут разбор только здесь

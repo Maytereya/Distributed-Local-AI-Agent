@@ -5,6 +5,10 @@
 - U6 «названа ли услуга» — одно решение хода в производителе понимания (`TurnUnderstanding.names_service`: упоминание
   или прежнее определение `names_service`, один вызов за ход); планировщик цены читает поле и сам не решает. Только «нет
   упоминания» не годится — replay 21.10: 5 потерь верной цены из 1068 ходов (вопрос владельцу);
+- U1 (подстановка каталога) и U2 (грундер) при исходе `one_strong` (одна услуга, сильная по данным МИС, одно название
+  прайса) берут это название из понимания и не ищут каталог по буквам реплики; слабая фраза, несколько названий, список — как было.
+  У подбора анализов точное совпадение — довод П1 «это цена»: U1 для TEST_ASSIST — только когда тему решила LLM (`topic_by_llm`,
+  свойство вопроса для П1 решает она же), иначе П1 без LLM отвечал бы ценой на вопрос о сроке (replay dev 21.10, g0168);
 - понимания этой реплики нет (вход — не реплика хода, тень, выключатель off) — прежний путь.
 """
 
@@ -14,7 +18,7 @@ import asyncio
 
 import pytest
 
-from messengers_router import turn_understanding
+from messengers_router import entity_grounder, router, turn_understanding
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision, SessionState
 from messengers_router.planner import build_plan
@@ -121,3 +125,112 @@ def test_u6_without_decision_of_this_reply_the_old_definition_decides(switches, 
     understood(TurnUnderstanding(services_rule="parse_single", reply=reply, names_service=decided))
     assert not _asks_name("Узнать цену анализов")  # шпион прежнего определения говорит «названа»
     assert letters == ["Узнать цену анализов"]
+
+
+# --- U1 / U2: исход one_strong — название из понимания, не каталог по буквам ----------------------------------------------
+
+_CHOSEN = "Посев на грибы рода Candida (чувствительность к антимикотическим препаратам)"
+_REPLY = "Посев на кандиду сколько стоит"
+
+
+def _strong(chosen: str | None = _CHOSEN, *, strength: str = "strong", reply: str = _REPLY) -> TurnUnderstanding:
+    mention = ServiceMention(phrase="посев на кандиду", candidates=(chosen,) if chosen else (), strength=strength, chosen=chosen, source="parse")
+    return TurnUnderstanding(services=(mention,), services_rule="parse_strong_whole", facet="price", reply=reply)
+
+
+class _Catalog:
+    """Шпион каталога по буквам: что спросили — то записано; отвечает «точно — Чужая услуга»."""
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    async def match_catalog_service(self, query, **_kw):
+        self.asked.append(query)
+        return {"status": "exact", "canonical": "Чужая услуга", "query": query}
+
+    async def match_catalog_doctor(self, *_a, **_kw):
+        return None
+
+
+def _inject(label: str = "PRICE", flags: frozenset[str] = frozenset()) -> tuple[RouteDecision, _Catalog]:
+    catalog = _Catalog()
+    decision = RouteDecision(label=label, confidence=0.9, entities={}, flags=set(flags))
+    out = asyncio.run(router._inject_catalog_candidates(decision, user_text=_REPLY, state=SessionState(session_id="t"), services=catalog))
+    return out, catalog
+
+
+@pytest.mark.parametrize("label, flags", [("PRICE", frozenset()), ("TEST_ASSIST", frozenset({"topic_by_llm"}))])
+def test_u1_one_strong_takes_the_name_from_the_understanding(switches, understood, label, flags):
+    switches(one="on")
+    understood(_strong())
+    decision, catalog = _inject(label, flags)
+    assert decision.entities.get("service_name") == _CHOSEN
+    assert {"catalog_service_exact", "understanding_service_chosen"} <= set(decision.flags)
+    assert catalog.asked == []
+
+
+@pytest.mark.parametrize(
+    "one, tu",
+    [
+        ("off", _strong()),  # выключатель off — как было
+        ("on", _strong(strength="weak", chosen=None)),  # слабая фраза — выбор строки, каталог как было
+        ("on", _strong(chosen=None)),  # сильная, но названий несколько — не выбираем за пациента
+        ("on", _strong(reply="другая реплика")),  # понимание не этой реплики
+    ],
+)
+def test_u1_otherwise_the_catalog_decides_as_before(switches, understood, one, tu):
+    switches(one=one)
+    understood(tu)
+    decision, catalog = _inject()
+    assert catalog.asked == [_REPLY]
+    assert decision.entities.get("service_name") == "Чужая услуга"
+
+
+def test_u1_test_assist_by_rule_does_not_widen_p1(switches, understood):
+    """Тему решило правило — довод П1 даёт, как было, каталог по буквам (g0168: вопрос о сроке не становится ценой)."""
+
+    switches(one="on")
+    understood(_strong())
+    decision, catalog = _inject("TEST_ASSIST")
+    assert catalog.asked == [_REPLY] and "understanding_service_chosen" not in decision.flags
+
+
+class _Grounding(_Catalog):
+    async def resolve_doctor_name(self, name):
+        return None
+
+
+def _ground(monkeypatch, label: str = "PRICE") -> tuple[dict, set, list[str]]:
+    resolved: list[str] = []
+
+    def resolver(text, current_service_name=""):
+        resolved.append(text)
+        return "Чужая услуга"
+
+    monkeypatch.setattr(entity_grounder, "resolve_price_service_name_from_catalog", resolver)
+    decision = RouteDecision(label=label, confidence=0.9, entities={"service_name": "кандида"}, flags=set())
+    out = asyncio.run(entity_grounder.ground_decision_entities(decision, _REPLY, SessionState(session_id="t"), _Grounding()))
+    return out.entities, out.flags, resolved
+
+
+def test_u2_one_strong_keeps_the_name_of_the_understanding(switches, understood, monkeypatch):
+    switches(one="on")
+    understood(_strong())
+    entities, flags, resolved = _ground(monkeypatch)
+    assert entities.get("service_name") == _CHOSEN and "entity_service_name_from_understanding" in flags
+    assert resolved == []
+
+
+@pytest.mark.parametrize("one, tu", [("off", _strong()), ("on", _strong(strength="weak", chosen=None)), ("on", _strong(chosen=None))])
+def test_u2_otherwise_grounds_by_letters_as_before(switches, understood, monkeypatch, one, tu):
+    switches(one=one)
+    understood(tu)
+    entities, flags, resolved = _ground(monkeypatch)
+    assert resolved == [_REPLY] and "entity_service_name_from_understanding" not in flags
+
+
+def test_u2_test_assist_grounds_as_before(switches, understood, monkeypatch):
+    switches(one="on")
+    understood(_strong())
+    entities, flags, _resolved = _ground(monkeypatch, label="TEST_ASSIST")
+    assert "entity_service_name_from_understanding" not in flags
