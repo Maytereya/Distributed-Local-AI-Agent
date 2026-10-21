@@ -107,7 +107,11 @@ def _enter_code_root(code_root: Path) -> None:
         sys.path.insert(1, str(REPO_ROOT))
 
 
-async def _run_cases(cases, *, client: HarnessClient, world: FrozenWorld, tpl: Templates, catalog: PriceCatalog, llm_mode: str, run_name: str, out, progress) -> dict[str, Any]:
+async def _run_cases(cases, *, client: HarnessClient, world: FrozenWorld, tpl: Templates, catalog: PriceCatalog, llm_mode: str, run_name: str, out, progress, concurrency: int = 1) -> dict[str, Any]:
+    if concurrency > 1:
+        return await _run_cases_concurrent(
+            cases, client=client, world=world, tpl=tpl, catalog=catalog, llm_mode=llm_mode, run_name=run_name, out=out, progress=progress, concurrency=concurrency
+        )
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
     from messengers_router.services import Services
@@ -161,6 +165,78 @@ async def _run_cases(cases, *, client: HarnessClient, world: FrozenWorld, tpl: T
     return stats
 
 
+async def _run_cases_concurrent(cases, *, client: HarnessClient, world: FrozenWorld, tpl: Templates, catalog: PriceCatalog, llm_mode: str, run_name: str, out, progress, concurrency: int) -> dict[str, Any]:
+    """Нагрузочный режим (ход (е)): `concurrency` ходов разных сессий одновременно, в одном процессе бота.
+
+    Меряется время хода под параллельной нагрузкой: очередь к LLM (`llm_max_concurrency`), деление CPU
+    между ходами. Вызовы LLM и телеметрия стенда копятся на весь прогон, а не на ход, — при параллельных
+    ходах их не разнести, поэтому в строке хода они пустые (`llm_calls = null`, `telemetry = null`);
+    ответ, исход и время — свои у каждого хода. Карточку сравнения с последовательным прогоном по
+    вызовам LLM не строить — только по времени и исходам.
+    """
+
+    from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
+    from messengers_router.memory import MemoryStore
+    from messengers_router.services import Services
+
+    memory = MemoryStore(ttl_seconds=3600, pending_ttl_seconds=900)
+    services = Services()
+    stats: dict[str, Any] = {"done": 0, "stopped": None}
+    queue: asyncio.Queue = asyncio.Queue()
+    for item in enumerate(cases, 1):
+        queue.put_nowait(item)
+    t0 = time.monotonic()
+
+    async def worker(slot: int) -> None:
+        while not queue.empty() and not stats["stopped"]:
+            i, case = queue.get_nowait()
+            sid = f"bench-{run_name}-{case['id']}"
+            req = MessengerGenerateRequest(session_id=sid, text=str(case["question"]), debug=True, llm_mode=llm_mode, button_id=case.get("button") or "")
+            started = time.monotonic()
+            error = None
+            try:
+                resp = await asyncio.wait_for(messenger_generate_once(req, memory=memory, services=services), TURN_TIMEOUT_S)
+                body = json.loads(resp.body)
+            except LiveBudgetExhausted as exc:
+                stats["stopped"] = str(exc)
+                return
+            except Exception as exc:  # ход не завершился — фиксируем, идём дальше
+                body = {"text": "", "handoff": False, "state_update": {"debug": {"endpoint_error": f"{type(exc).__name__}: {exc}"}}}
+                error = type(exc).__name__
+            ms = int((time.monotonic() - started) * 1000)
+            state = memory.get(sid)
+            outcome = classify_turn(body, dict(state.last_entities or {}), tpl, catalog)
+            row = {
+                "id": case["id"],
+                "set": case.get("set"),
+                "split": case.get("split"),
+                "category": case.get("category") or case.get("topic_llm"),
+                "tier": case.get("tier"),
+                "expect_urgent": case.get("expect_urgent"),
+                "question": case["question"],
+                "answer": body.get("text", ""),
+                "ms": ms,
+                "harness_error": error,
+                **outcome.as_row(),
+                "stage_ms": ((body.get("state_update") or {}).get("debug") or {}).get("stage_timings"),
+                "llm_calls": None,
+                "telemetry": None,
+                "load": {"concurrency": concurrency, "slot": slot, "start_ms": int((started - t0) * 1000)},
+            }
+            out.write(json.dumps(row, ensure_ascii=False) + "\n")
+            out.flush()
+            stats["done"] += 1
+            if stats["done"] % 10 == 0 or stats["done"] == len(cases):
+                progress(f"{stats['done']}/{len(cases)} последний: {case['id']} → {outcome.outcome} ({ms} мс)")
+
+    await asyncio.gather(*(worker(k) for k in range(concurrency)))
+    await settle_shadows()
+    stats["load_llm_outcomes"] = dict(Counter(c.outcome for c in client.take_turn_calls()))
+    world.take_telemetry()
+    stats["wall_s"] = round(time.monotonic() - t0, 1)
+    return stats
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--set", dest="sets", action="append", type=Path, required=True, help="JSONL набора (можно несколько)")
@@ -174,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--live-pause", type=float, default=1.0, help="пауза между вызовами настоящей LLM, с")
     ap.add_argument("--max-live-calls", type=int, help="потолок вызовов настоящей LLM на прогон")
     ap.add_argument("--limit", type=int)
+    ap.add_argument("--concurrency", type=int, default=1, help="ход (е): столько ходов разных сессий одновременно (нагрузка); >1 — без вызовов LLM по ходам")
     ap.add_argument("--ids", help="только эти id через запятую")
     ap.add_argument("--split", choices=("dev", "test"))
     ap.add_argument("--name", help="имя прогона (по умолчанию <sha>_<режим>_<профиль>)")
@@ -269,7 +346,7 @@ def main(argv: list[str] | None = None) -> int:
 
                     started = time.time()
                     stats = asyncio.run(
-                        _run_cases(cases, client=client, world=world, tpl=tpl, catalog=catalog, llm_mode=args.llm_mode, run_name=name, out=out, progress=progress)
+                        _run_cases(cases, client=client, world=world, tpl=tpl, catalog=catalog, llm_mode=args.llm_mode, run_name=name, out=out, progress=progress, concurrency=args.concurrency)
                     )
                 finally:
                     llm_runtime._OLLAMA_CLIENT = real_client
@@ -283,6 +360,9 @@ def main(argv: list[str] | None = None) -> int:
                     "cases": len(cases),
                     "done": stats["done"],
                     "stopped": stats["stopped"],
+                    "concurrency": args.concurrency,
+                    "load_llm_outcomes": stats.get("load_llm_outcomes"),
+                    "wall_s": stats.get("wall_s") or round(time.time() - started, 1),
                     "mode": args.mode,
                     "llm_mode": args.llm_mode,
                     "cfg": cfg_applied,
@@ -301,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
                 }
         problems = verify_world(world_root)
     turns = [json.loads(line) for line in (run_dir / "turns.jsonl").open(encoding="utf-8")]
-    calls = Counter(c["outcome"] for t in turns for c in t["llm_calls"])
+    calls = Counter(c["outcome"] for t in turns for c in (t["llm_calls"] or []))
     header["llm_outcomes"] = dict(calls)
     header["world_problems"] = problems
     header["valid"] = not (header["net_attempts"] or header["cleanup_calls"] or problems or calls.get("unknown_site") or header["ambiguous_sites"])
