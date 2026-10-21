@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from messengers_router import choice, llm_runtime
 from tests.test_llm_primary_rules_fallback_class import _CLASSIFIER_MARK
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "mini_prod" / "snapshots"
+_DOCTORS = Path(__file__).resolve().parent / "fixtures" / "doctors_excerpt" / "doctors_20261008.jsonl"
 _SERVICE_ANSWER_MARK = "ответить на вопрос пациента о клинике ТОЛЬКО по данным клиники"
 _RENDER_MARK = "Ты помощник клиники в мессенджере"
 FABRICATED = "Да, мы проводим это в нашей клинике для всех возрастов."
@@ -53,6 +55,7 @@ def answer_world(tmp_path_factory) -> Path:
             if sub == "price_by_region":
                 text = text.rstrip("\n") + "\n" + "\n".join(json.dumps(r, ensure_ascii=False) for r in _EXTRA_ROWS) + "\n"
             (source / sub / path.name).write_text(text, encoding="utf-8")
+    shutil.copy2(_DOCTORS, source / _DOCTORS.name)  # врачи — выдержка из репо (путь «врачей по услуге не нашёл»)
     root = ev_world.build_world(source, "20261008", tmp_path_factory.mktemp("svc_world") / "world")
     (root / "captured").mkdir()
     (root / "captured" / "kb_main_index.json").write_text(json.dumps(_KB, ensure_ascii=False), encoding="utf-8")

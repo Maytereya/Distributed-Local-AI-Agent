@@ -644,6 +644,10 @@ async def _empty_evidence_response(ctx: OrchestratorContext, memory: Any | None 
     if kind == "NOISE":
         return ResponseEnvelope(text=LOW_CONF_CLARIFY_TEXT, handoff=False)
     if kind == "QUESTION":
+        # Вопрос без данных хода (L-05): до честного оффера — данные клиники (класс 2, `service_answer_from_data`).
+        from_data = await service_answer.from_data_first(ctx.text, site="empty_evidence")
+        if from_data is not None:
+            return service_answer.envelope(from_data, ctx.state, memory, offer_no_data=False)
         if memory is not None:
             from .response_builder import mark_operator_offer_pending
 

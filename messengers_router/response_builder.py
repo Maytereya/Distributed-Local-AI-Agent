@@ -93,6 +93,19 @@ def build_unsupported_catalog_response(
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
 
 
+def build_service_answer_response(
+    evidence: Evidence, state: SessionState, memory: MemoryStore | None = None
+) -> ResponseEnvelope | None:
+    """Ответ о клинике по её данным (`service_answer`): пункты прайса и памяток, выбранные LLM, — текстом кода."""
+
+    from . import service_answer
+
+    verdict = service_answer.Verdict.from_payload(evidence.get(ek.SERVICE_ANSWER))
+    if verdict is None or not verdict.from_data:
+        return None
+    return service_answer.envelope(verdict, state, memory, offer_no_data=False)
+
+
 def build_operator_offer_response(evidence: Evidence) -> ResponseEnvelope | None:
     """
     Возвращает ответ для подтверждения/обработки перевода на оператора.
@@ -877,6 +890,7 @@ def build_first_structured_response(
         lambda: build_operator_offer_response(evidence),
         lambda: build_readiness_response(evidence),
         lambda: build_compound_price_response(evidence),
+        lambda: build_service_answer_response(evidence, state, memory),
         lambda: build_unsupported_catalog_response(evidence, state, memory),
         lambda: build_main_index_info_response(evidence),
         lambda: build_service_bundle_response(flow_label, evidence, state),

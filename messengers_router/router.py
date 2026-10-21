@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, service_answer, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -2416,6 +2416,15 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
 _WALKIN_FLAGS = frozenset({"rule_nonbookable_walkin", "policy_nonbookable_walkin"})
 
 
+def _doctors_by_service_not_found(payload: Any) -> bool:
+    """Справочник врачей по вопросу об услуге никого не дал (услуга названа, врач по ФИО — нет)."""
+
+    if not isinstance(payload, dict) or payload.get("doctors"):
+        return False
+    used = payload.get("entities_used") if isinstance(payload.get("entities_used"), dict) else {}
+    return bool(str(used.get("service_query") or "").strip()) and not str(used.get("doctor_query") or "").strip()
+
+
 async def _walkin_by_llm(decision: RouteDecision, user_text: str, *, site: str) -> tuple[RouteDecision, bool | None]:
     """Детектор «без записи» сработал — кандидат; под `service_answer_from_data` решает LLM по правилу клиники (класс 4,
     решения владельца 21.10, `walkin.py`). (решение с флагом хода, True — без записи, False — по записи или о другом,
@@ -3245,6 +3254,11 @@ async def _complete_route_after_doctor_guard(
             state,
             reason="topic_switch" if decision.context_action in {"new_topic", "overwrite_doctor"} else "",
         )
+        # OTHER от LLM («ни одна из наших тем»): до честного оффера — данные клиники (класс 2, решение владельца 21.10:
+        # «есть ли / делаете ли X» — сначала прайс и памятки, оператор — только если данных нет; g0277).
+        from_data = await service_answer.from_data_first(user_text, site="other_offer") if unsupported_kind == "topic_other_offer" else None
+        if from_data is not None:
+            return decision, Plan(label=decision.label), Evidence(items={ek.SERVICE_ANSWER: from_data.payload()})
         return (
             decision,
             Plan(label=decision.label),
@@ -3451,6 +3465,13 @@ async def _complete_route_after_doctor_guard(
 
     plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
     evidence = await execute_plan(plan, state, services)
+    if _doctors_by_service_not_found(evidence.get(ek.DOCTORS_INFO)):
+        # Врачей по услуге не нашли («не нашёл в справочнике», L-06(б); «информация о враче не найдена») — до отказа данные
+        # клиники: услуга бывает в прайсе и памятке, а врачей по её словам справочник не даёт (g0277 «делают ли ФКС с
+        # биопсией»; класс 2, решение владельца 21.10).
+        from_data = await service_answer.from_data_first(user_text, site="doctors_by_service")
+        if from_data is not None:
+            evidence.put(ek.SERVICE_ANSWER, from_data.payload())
     if nlu_debug:
         evidence.debug_trace.append({"nlu": nlu_debug})
     # Graph state transition (FSM слой)

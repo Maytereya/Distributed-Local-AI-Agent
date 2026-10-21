@@ -283,6 +283,16 @@ async def decide(question: str, *, site: str, first_rows: Sequence[dict[str, Any
     return verdict
 
 
+async def from_data_first(question: str, *, site: str, first_rows: Sequence[dict[str, Any]] = ()) -> Verdict | None:
+    """Место, где бот сдался бы без данных (свой честный оффер уже есть): сначала данные клиники. Ответ или близкое —
+    решение; «нет данных», «не о клинике», сбой — None (прежний оффер). Выключатель снят — None без вызова LLM."""
+
+    if not enabled():
+        return None
+    verdict = await decide(question, site=site, first_rows=first_rows)
+    return verdict if verdict.from_data else None
+
+
 # --------------------------------------------------------------------------- текст ответа (печатает код)
 
 
