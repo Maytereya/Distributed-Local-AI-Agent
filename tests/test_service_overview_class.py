@@ -83,3 +83,10 @@ def test_where_question_is_decided_by_llm(answer_world, monkeypatch):  # noqa: F
 
     assert _OVERVIEW_MARK in on["calls"] and on["telemetry"].get("svc_overview") == "asks", on["telemetry"]
     assert on["text"] == off["text"]
+
+
+def test_decision_that_changes_nothing_returns_the_turn_budget(answer_world, monkeypatch):  # noqa: F811
+    asks = json.dumps({"picks": [], "outcome": "asks"})
+    out = turn(answer_world, monkeypatch, _REPLY, switch="on", answers=_answers(asks), cfg_extra={"MR_LLM_DECISION_TURN_CALLS": 1})
+
+    assert out["telemetry"].get("svc_overview") == "asks" and out["telemetry"].get("svc_overview_refund") == 1, out["telemetry"]

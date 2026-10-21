@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import turn_telemetry
+from . import llm_runtime, turn_telemetry
 from .choice import Option, Status, Task, choose
 from .runtime_config import config as _cfg
 
@@ -57,9 +57,12 @@ async def service(user_text: str, *, site: str) -> str | None:
     """Что пациент хочет сдать или сделать без записи — решение LLM: «анализы» | «ЭКГ» | «анализы и ЭКГ»; "" — по записи
     или о другом; None — сбой (вызывающий делает как было)."""
 
+    spent_before = llm_runtime.turn_decisions_spent()
     picked = await choose(TASK, user_text, _OPTIONS)
     if picked.failed:
-        turn_telemetry.note(walkin_llm="failed", walkin_llm_site=site)
+        # Сбой — решает детектор, как было: лимит решений хода не тратится.
+        spent = llm_runtime.turn_decisions_spent() > spent_before
+        turn_telemetry.note(walkin_llm="failed", walkin_llm_site=site, walkin_llm_refund=int(spent and llm_runtime.refund_turn_decision()))
         return None
     if picked.status is Status.PICKED:
         ids = [o.id for o in _OPTIONS if o.id in picked.ids]

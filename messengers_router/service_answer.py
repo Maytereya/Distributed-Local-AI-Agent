@@ -28,7 +28,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from . import turn_telemetry
+from . import llm_runtime, turn_telemetry
 from .choice import Option, Status, Task, choose
 from .runtime_config import config as _cfg
 
@@ -109,6 +109,7 @@ class Verdict:
 
     kind: str
     facts: tuple[Fact, ...] = ()
+    calls: int = 0  # сколько решений LLM потрачено (круги поиска) — вернуть ходу, если ответ хода не изменился
 
     @property
     def from_data(self) -> bool:
@@ -270,6 +271,7 @@ async def _ask(question: str, facts: Sequence[Fact]) -> tuple[Verdict, tuple[str
 async def decide(question: str, *, site: str, first_rows: Sequence[dict[str, Any]] = ()) -> Verdict:
     """Что ответить на вопрос о клинике по её данным. Сбой LLM — FAILED: что делать, решает вызывающий."""
 
+    spent_before = llm_runtime.turn_decisions_spent()
     facts = await gather_facts(question, first_rows=first_rows)
     verdict, terms = await _ask(question, facts)
     rounds = 1
@@ -280,7 +282,16 @@ async def decide(question: str, *, site: str, first_rows: Sequence[dict[str, Any
             verdict, _terms = await _ask(question, merged)
             rounds = 2
     turn_telemetry.note(svc_answer=verdict.kind, svc_answer_site=site, svc_answer_facts=len(verdict.facts), svc_answer_rounds=rounds)
-    return verdict
+    return Verdict(verdict.kind, verdict.facts, calls=max(0, llm_runtime.turn_decisions_spent() - spent_before))
+
+
+def refund(verdict: Verdict) -> None:
+    """Решение не изменило ответ хода (место ответило как было) — лимит решений хода оно не тратит: иначе выбору строки
+    прайса и другим решениям хода его не хватает (как у висящего вопроса и роли, решение владельца Q5 18.10)."""
+
+    returned = sum(1 for _ in range(verdict.calls) if llm_runtime.refund_turn_decision())
+    if returned:
+        turn_telemetry.note(svc_answer_refund=returned)
 
 
 async def from_data_first(question: str, *, site: str, first_rows: Sequence[dict[str, Any]] = ()) -> Verdict | None:
@@ -290,7 +301,10 @@ async def from_data_first(question: str, *, site: str, first_rows: Sequence[dict
     if not enabled():
         return None
     verdict = await decide(question, site=site, first_rows=first_rows)
-    return verdict if verdict.from_data else None
+    if verdict.from_data:
+        return verdict
+    refund(verdict)
+    return None
 
 
 # --------------------------------------------------------------------------- текст ответа (печатает код)

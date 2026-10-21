@@ -771,6 +771,7 @@ async def _render_impl(
             ctx.response = answer
             turn_telemetry.note(answer_source="service_answer")
             return ctx
+        service_answer.refund(verdict)
 
     # 4. LLM path — collect render_stream into one envelope.
     if ctx.decision is not None and ctx.evidence is not None:

@@ -19,7 +19,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from . import turn_telemetry
+from . import llm_runtime, turn_telemetry
 from .choice import Option, Status, Task, choose
 from .service_answer import enabled  # noqa: F401 — тот же выключатель, что у ответа по данным
 
@@ -74,9 +74,12 @@ async def decide(user_text: str) -> Overview | None:
         turn_telemetry.note(svc_overview="no_candidates")
         return None
     options = [Option(id=str(i), text=_row_name(row)) for i, row in enumerate(pool)]
+    spent_before = llm_runtime.turn_decisions_spent()
     picked = await choose(TASK, user_text, options)
     if picked.status is not Status.PICKED:
-        turn_telemetry.note(svc_overview=picked.outcome or picked.status.value)
+        # Не голое название или сбой — ход идёт как было: лимит решений хода это решение не тратит.
+        spent = llm_runtime.turn_decisions_spent() > spent_before
+        turn_telemetry.note(svc_overview=picked.outcome or picked.status.value, svc_overview_refund=int(spent and llm_runtime.refund_turn_decision()))
         return None
     chosen = tuple(pool[int(i)] for i in picked.ids)
     turn_telemetry.note(svc_overview="one" if len(chosen) == 1 else "several")

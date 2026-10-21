@@ -238,3 +238,17 @@ def _number_of(prompt: str, text: str) -> int:
         if head.isdigit() and rest.startswith(text):
             return int(head)
     raise AssertionError(f"нет пункта «{text}» в промпте:\n{prompt}")
+
+
+def test_free_text_fallthrough_returns_the_turn_budget(answer_world, monkeypatch):
+    out = turn(
+        answer_world,
+        monkeypatch,
+        CLAIM_QUESTIONS[0],
+        switch="on",
+        answers=_free_text_answers(verdict("not_about_clinic")),
+        cfg_extra={"MR_LLM_DECISION_TURN_CALLS": 2},  # первое решение хода — разбор фраз
+    )
+
+    assert out["telemetry"].get("answer_source") == "llm_free"
+    assert out["telemetry"].get("svc_answer_refund") == 1, out["telemetry"]  # ход как был — лимит решений не потрачен
