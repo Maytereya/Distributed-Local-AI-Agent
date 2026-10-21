@@ -545,6 +545,24 @@ def test_card_counts_service_text_turns_by_kind():
     assert "| Служебный текст в ответе | 2 |" in text and "double_dot 1, field_label 1" in text
 
 
+def test_card_counts_free_text_turns():
+    """Свободный текст LLM — своя строка карточки (BUG-2026-10-21-WALKIN-LLM-FREE-TEXT: цена и переводы его не видят)."""
+
+    from evalbench import card
+
+    turn = {"outcome": "answer", "handoff": False, "urgent": False, "ms": 10}
+    turns = [
+        {**turn, "id": "1", "telemetry": {"answer_source": "llm_free"}},
+        {**turn, "id": "2", "telemetry": {"answer_source": "service_answer"}},
+        {**turn, "id": "3", "telemetry": {"answer_source": "prebuilt"}},
+        {**turn, "id": "4", "telemetry": None},
+    ]
+    m = card.metrics(turns, {})
+    assert (m["llm_free"], m["service_answer"]) == (1, 1)
+    text = card.render([({"name": "r", "code_sha": "x", "mode": "down", "cases": 4, "done": 4, "valid": True}, m)])
+    assert "| Свободный текст LLM (llm_free) | 1 |" in text
+
+
 # --------------------------------------------------------------------------- диалоги из нескольких ходов
 
 

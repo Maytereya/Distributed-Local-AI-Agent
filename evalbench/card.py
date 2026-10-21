@@ -191,6 +191,10 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
         "service_text": sum(1 for kinds in leaked if kinds),
         "service_text_kinds": dict(Counter(kind for kinds in leaked for kind in kinds)),
         "long_1500": sum(1 for t in turns if t.get("chars", 0) > 1500),
+        # Свободный текст LLM без данных хода — класс «утверждение без данных» (BUG-2026-10-21-WALKIN-LLM-FREE-TEXT: карточка
+        # выключателя темы была зелёной по цене и переводам, а 34 ответа ушли в свободный текст). Ответ по данным — для сравнения.
+        "llm_free": sum(1 for t in turns if (t.get("telemetry") or {}).get("answer_source") == "llm_free"),
+        "service_answer": sum(1 for t in turns if (t.get("telemetry") or {}).get("answer_source") == "service_answer"),
         "price_labeled": sum(verdicts.values()),
         "price_verdicts": dict(verdicts),
         "foreign": verdicts.get("foreign", 0) + verdicts.get("list_miss", 0),
@@ -298,6 +302,8 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]], diff: tuple[int, i
         ("Служебный текст в ответе", "service_text"),
         ("Утечка внутренностей", "leak"),
         ("Длиннее 1500 знаков", "long_1500"),
+        ("Свободный текст LLM (llm_free)", "llm_free"),
+        ("Ответ о клинике по данным (service_answer)", "service_answer"),
         ("p50, мс", "p50_ms"),
         ("p95, мс", "p95_ms"),
         ("Вызовов LLM", "llm_calls"),
