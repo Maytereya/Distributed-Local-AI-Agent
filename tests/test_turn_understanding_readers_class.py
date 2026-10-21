@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -289,3 +290,33 @@ def test_u7_off_keeps_the_old_reading_even_in_shadow(switches, understood, detec
     understood(TurnUnderstanding(services=(_mention("ггтп"),), services_rule="no_list", facet="price", reply=_ASK))
     assert lab_tests._turn_asks_price(_ASK) is True and detectors == []
     assert _price_select_llm._mention_phrase(_ASK) == "ггтп"
+
+
+# --- U1/U2 → планировщик: на вопрос о цене — цена, не карточка услуги (консилиум 21.10, В2) ----------------------------
+
+def _price_plan(flags: set[str]) -> object:
+    state = SessionState(session_id="t")
+    state.last_entities.update(service_name=_CHOSEN, city="Самара")
+    return build_plan(RouteDecision(label="PRICE", confidence=0.9, entities={}, flags=flags), state, _REPLY, MemoryStore())
+
+
+@pytest.mark.parametrize("flag", ["understanding_service_chosen", "entity_service_name_from_understanding"])
+def test_price_question_named_by_the_understanding_is_answered_by_price(switches, understood, flag):
+    switches(one="on")
+    understood(_strong())
+    step = _price_plan({flag}).steps[0]
+    assert step.tool == "price_info" and "service_name" not in step.input["entities"]
+
+
+@pytest.mark.parametrize(
+    "one, facet, flags",
+    [
+        ("off", "price", {"understanding_service_chosen"}),  # выключатель off — как было
+        ("on", None, {"understanding_service_chosen"}),  # цену не спрашивали — карточка, как было
+        ("on", "price", {"catalog_service_exact"}),  # название нашёл каталог по буквам — как было
+    ],
+)
+def test_otherwise_known_service_keeps_the_card(switches, understood, one, facet, flags):
+    switches(one=one)
+    understood(replace(_strong(), facet=facet))
+    assert _price_plan(flags).steps[0].tool == "service_bundle_info"
