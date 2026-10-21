@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding
+from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -2416,6 +2416,32 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
 _WALKIN_FLAGS = frozenset({"rule_nonbookable_walkin", "policy_nonbookable_walkin"})
 
 
+async def _walkin_by_llm(decision: RouteDecision, user_text: str, *, site: str) -> tuple[RouteDecision, bool | None]:
+    """Детектор «без записи» сработал — кандидат; под `service_answer_from_data` решает LLM по правилу клиники (класс 4,
+    решения владельца 21.10, `walkin.py`). (решение с флагом хода, True — без записи, False — по записи или о другом,
+    None — выключатель снят или сбой LLM: как было, решает детектор). Решение хода спрашивается один раз."""
+
+    if not walkin.enabled():
+        return decision, None
+    answer = walkin.decided(decision.flags)
+    if answer is None:
+        answer = await walkin.service(user_text, site=site)
+        if answer is None:
+            return decision, None
+        decision = _copy_decision(decision, flags=set(decision.flags) | walkin.flags_for(answer))
+    return decision, bool(answer)
+
+
+async def _walkin_sentence_by_llm(decision: RouteDecision, user_text: str) -> RouteDecision:
+    """Ответ адресами с фразой «… без записи, в порядке живой очереди» (флаги walk-in): что именно без записи — решение
+    LLM, а не буквы реплики (`response_builder.build_address_response`). Не такой ход или выключатель снят — как было."""
+
+    if decision.label != "ADDRESS" or not any("nonbookable" in str(f) for f in decision.flags):
+        return decision
+    decision, _by_llm = await _walkin_by_llm(decision, user_text, site="address_sentence")
+    return decision
+
+
 async def _guard_walkin_named_service(
     decision: RouteDecision,
     *,
@@ -2622,7 +2648,10 @@ async def _apply_post_nlu_guardrails(
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})
         followup_address_hint = bool(re.search(r"\b(где|адрес|филиал|сдать|сдавать)\b", user_text or "", re.I))
+        by_llm: bool | None = None
         if followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
+            decision, by_llm = await _walkin_by_llm(decision, user_text, site="flow_price_followup_address")
+        if by_llm is not False and followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
             entities = dict(decision.entities)
             if not entities.get("service_name"):
                 entities["service_name"] = service_context
@@ -2694,9 +2723,12 @@ async def _apply_post_nlu_guardrails(
     if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text) and "topic_by_llm" not in decision.flags:
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})
+        by_llm = None
         if detect_nonbookable_walkin_intent(user_text, merged_ctx):
+            decision, by_llm = await _walkin_by_llm(decision, user_text, site="policy_nonbookable_walkin")
+        if by_llm is not False and detect_nonbookable_walkin_intent(user_text, merged_ctx):
             entities = dict(decision.entities)
-            svc = nonbookable_service_hint(user_text, merged_ctx)
+            svc = walkin.decided(decision.flags) if by_llm else nonbookable_service_hint(user_text, merged_ctx)
             # Для walk-in (анализы/ЭКГ без записи) важен КЛАСС услуги, а не строка
             # каталога. Если service_name пуст или был мягко подставлен catalog-
             # инъекцией (флаг catalog_service_exact — напр. ошибочный «профиль 2» на
@@ -3285,6 +3317,7 @@ async def _complete_route_after_doctor_guard(
             entities=grounding.entities,
             flags=set(decision.flags) | set(grounding.flags),
         )
+    decision = await _walkin_sentence_by_llm(decision, user_text)
     decision = await _guard_walkin_named_service(decision, user_text=user_text, state=state, services=services)
 
     catalog_confirm = _maybe_start_catalog_confirm(

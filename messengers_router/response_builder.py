@@ -10,6 +10,7 @@ from typing import Any
 
 from . import evidence_keys as ek
 from . import expects, pending_answer, shown_context
+from . import walkin as walkin_llm
 from .flow_policy import (
     hydrate_appointment_context_from_schedule,
     reset_appointment_runtime_state,
@@ -566,7 +567,11 @@ def build_address_response(
 
     walkin_hint: str | None = None
     walkin = any("nonbookable" in str(f) for f in decision.flags)
-    if walkin:
+    by_llm = walkin_llm.decided(decision.flags) if walkin and walkin_llm.enabled() else None
+    if by_llm is not None:
+        # Класс 4 (`service_answer_from_data`): что именно без записи, назвала LLM по правилу клиники; «нет» — фразы нет.
+        walkin_hint = by_llm or None
+    elif walkin:
         walkin_hint = nonbookable_service_hint(user_text, state.last_entities) or str(state.last_entities.get("service_name") or "").strip()
         if walkin_hint == "":
             walkin_hint = None
