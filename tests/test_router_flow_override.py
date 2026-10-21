@@ -898,9 +898,9 @@ def test_route_message_short_circuits_on_catalog_health_degraded(monkeypatch):
         return decision
 
     async def fake_inject_catalog(
-        decision, *, user_text, state, services, prefetched_service=None
+        decision, *, user_text, state, services, prefetched_service=None, runtime_llm_mode=""
     ):
-        _ = user_text, state, services, prefetched_service
+        _ = user_text, state, services, prefetched_service, runtime_llm_mode
         return decision
 
     async def fake_get_catalog_health(self):

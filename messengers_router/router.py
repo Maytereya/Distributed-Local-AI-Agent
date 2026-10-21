@@ -33,6 +33,7 @@ from .entity_grounder import (
     BOOKING_SERVICE_CLARIFY_KEY,
     BOOKING_SERVICE_OPTIONS_KEY,
     ground_decision_entities,
+    judge_fuzzy_service_candidate,
     sanitize_doctor_entities,
     service_dropped_by_llm,
     verify_doctor_entities_in_decision,
@@ -1700,6 +1701,7 @@ async def _inject_catalog_candidates(
     state: SessionState,
     services: Services,
     prefetched_service: dict[str, Any] | None = None,
+    runtime_llm_mode: str = "",
 ) -> RouteDecision:
     entities = dict(decision.entities or {})
     flags = set(decision.flags or set())
@@ -1848,9 +1850,17 @@ async def _inject_catalog_candidates(
             flags.add("catalog_service_exact")
             updated = True
         elif status == "fuzzy" and canonical:
-            entities["_catalog_service_candidate"] = canonical
-            entities["_catalog_service_query"] = str(service_match.get("query") or "").strip()
-            flags.add("catalog_service_fuzzy_candidate")
+            await judge_fuzzy_service_candidate(
+                label=decision.label,
+                candidate=canonical,
+                query=str(service_match.get("query") or service_query or "").strip(),
+                user_text=user_text,
+                services=services,
+                runtime_llm_mode=runtime_llm_mode,
+                out=entities,
+                flags=flags,
+                candidate_flag="catalog_service_fuzzy_candidate",
+            )
             updated = True
 
     if not updated:
@@ -3239,6 +3249,7 @@ async def _complete_route_after_doctor_guard(
         state=state,
         services=services,
         prefetched_service=catalog_prefetch,
+        runtime_llm_mode=runtime_options.llm_mode if runtime_options is not None else "",
     )
     decision = await _apply_post_nlu_guardrails(decision, state, user_text, services, memory)
     decision = _relabel_test_assist_catalog_hit_as_price(

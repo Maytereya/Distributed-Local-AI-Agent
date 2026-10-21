@@ -206,6 +206,7 @@ class MessengerRouterConfig:
     topic_override_llm: str
     topic_shadow_llm: str
     roles_catalog_llm: str
+    catalog_confirm_llm: str
     topic_by_llm: str
     turn_understanding_one: str
     service_answer_from_data: str
@@ -586,6 +587,11 @@ settings = Settings(
         # (роль из каталога, «нет» по данным + оффер, уточнение — оператору). off — как было.
         # [MESSENGER_ROUTER] roles_catalog_llm
         roles_catalog_llm=_get_enum("MESSENGER_ROUTER", "roles_catalog_llm", default="off", allowed={"off", "shadow", "on"}),
+        # «Похоже, вы имели в виду …?» (BUG-2026-10-22-CATALOG-CONFIRM-BY-LETTERS): нечёткую догадку каталога по буквам перед
+        # переспросом судит LLM (`judge_booking_service`, как у точного совпадения записи): подтвердила или назвала другую —
+        # переспрос с её названием; «не услуга» / «ничего не подходит» — переспроса нет; LLM недоступна — как было. off — как было.
+        # [MESSENGER_ROUTER] catalog_confirm_llm
+        catalog_confirm_llm=_get_enum("MESSENGER_ROUTER", "catalog_confirm_llm", default="off", allowed={"off", "on"}),
         # Ход (б), этап 4, вариант Б (решения владельца 20.10 (б) 1, 5): ветки правил `legacy_v2` через запятую
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
@@ -781,6 +787,7 @@ MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_ROLES_CATALOG_LLM = settings.messenger_router.roles_catalog_llm
+MR_CATALOG_CONFIRM_LLM = settings.messenger_router.catalog_confirm_llm
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data

@@ -281,6 +281,61 @@ def _apply_service_verdict(
     return None
 
 
+# Метки, где нечёткую догадку каталога перед «Похоже, вы имели в виду …?» судит LLM (`catalog_confirm_llm = on`); у цены
+# переспроса нет вовсе — строку выбирает LLM (`router._maybe_start_catalog_confirm`).
+_LLM_JUDGED_FUZZY_LABELS = frozenset({"APPOINTMENT", "ADDRESS", "TEST_ASSIST"})
+
+
+def catalog_confirm_llm_enabled() -> bool:
+    from agent_logic_2 import config as _cfg  # noqa: PLC0415 — настройка читается на ход (стенд меняет её на прогон)
+
+    return str(getattr(_cfg, "MR_CATALOG_CONFIRM_LLM", "off") or "off").strip().lower() == "on"
+
+
+async def judge_fuzzy_service_candidate(
+    *,
+    label: str,
+    candidate: str,
+    query: str,
+    user_text: str,
+    services: Any,
+    runtime_llm_mode: str,
+    out: dict[str, Any],
+    flags: set[str],
+    candidate_flag: str,
+) -> None:
+    """Нечёткая догадка каталога → переспрос «Похоже, вы имели в виду …?» (BUG-2026-10-22-CATALOG-CONFIRM-BY-LETTERS).
+
+    Под off — как было: догадка правил по буквам идёт на «да/нет» («анализ» → «Анализ крови на аминокислоты»,
+    «фадиатоп» → «Кровь на ВИЧ»). Под on её судит LLM тем же выбором, что точное совпадение записи
+    (`judge_booking_service`): подтвердила — переспрос как был; назвала другую — переспрос с её названием; «не услуга»,
+    «слишком общее», «ничего не подходит» — переспроса нет, ход идёт без услуги; LLM недоступна — как было.
+    """
+
+    def _confirm(name: str) -> None:
+        out["_catalog_service_candidate"] = name
+        out["_catalog_service_query"] = query
+        flags.add(candidate_flag)
+
+    if not catalog_confirm_llm_enabled() or label not in _LLM_JUDGED_FUZZY_LABELS:
+        _confirm(candidate)
+        return
+    verdict = await judge_booking_service(
+        query,
+        candidate,
+        catalog=services._ensure_service_catalog_rows_loaded,
+        reply=user_text,
+        runtime_llm_mode=runtime_llm_mode,
+    )
+    flags.add(f"catalog_confirm_judged_{verdict.status or verdict.action}")
+    if verdict.status == "unavailable":
+        _confirm(candidate)
+        return
+    judged = _apply_service_verdict(label=label, verdict=verdict, canonical=candidate, phrase=query, out=out, flags=flags)
+    if judged:
+        _confirm(judged)
+
+
 def _branch_answer_keeps_target(*, label: str, user_text: str, state: SessionState) -> bool:
     """Ответ на вопрос о филиале в записи, у которой уже есть цель (врач, специальность или услуга)."""
 
@@ -730,9 +785,17 @@ async def ground_decision_entities(
                         candidate = str(match.get("canonical") or "").strip()
                         query = str(match.get("query") or phrase).strip()
                         if candidate:
-                            out["_catalog_service_candidate"] = candidate
-                            out["_catalog_service_query"] = query
-                            flags.add("entity_catalog_service_fuzzy_candidate")
+                            await judge_fuzzy_service_candidate(
+                                label=label,
+                                candidate=candidate,
+                                query=query,
+                                user_text=user_text,
+                                services=services,
+                                runtime_llm_mode=runtime_llm_mode,
+                                out=out,
+                                flags=flags,
+                                candidate_flag="entity_catalog_service_fuzzy_candidate",
+                            )
                         else:
                             flags.add("entity_dropped_unverified_service_name")
                         continue
