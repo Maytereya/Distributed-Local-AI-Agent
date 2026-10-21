@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding
+from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -2430,6 +2430,69 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
 _WALKIN_FLAGS = frozenset({"rule_nonbookable_walkin", "policy_nonbookable_walkin"})
 
 
+# Темы, где реплика — не голое название услуги по смыслу хода: безопасность, запись и результаты решают свои пути.
+_OVERVIEW_SKIP_LABELS = role_pick._SAFETY_LABELS | {"APPOINTMENT", "TEST_RESULT"}
+
+
+async def _maybe_service_overview(
+    *, decision: RouteDecision, user_text: str, state: SessionState, memory: MemoryStore
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Голое название услуги → максимум по данным (класс 3, решение владельца 21.10, `service_overview.py`): короткая
+    реплика без висящего вопроса — кандидат, решает LLM. Не такой ход, выключатель снят, сбой — None (как было)."""
+
+    if (
+        not service_overview.enabled()
+        or decision.label in _OVERVIEW_SKIP_LABELS
+        or decision.source == "button"
+        or memory.get_pending(state)
+        or state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
+        or not service_overview.candidate(user_text)
+        # Явный вопрос о цене, сроке, подготовке — не голое название; «запись» и «где» по буквам детектора walk-in не в
+        # счёт («Анализ T-SPOT» он считает записью) — их решает LLM (исход `asks`).
+        or turn_understanding.price_turn_facet(user_text)[0] in {"price", "readiness", "prepare"}
+    ):
+        return None
+    overview = await service_overview.decide(user_text)
+    if overview is None:
+        return None
+    return decision, Plan(label=decision.label), Evidence(items={ek.SERVICE_OVERVIEW: overview.payload()})
+
+
+def _doctors_by_service_not_found(payload: Any) -> bool:
+    """Справочник врачей по вопросу об услуге никого не дал (услуга названа, врач по ФИО — нет)."""
+
+    if not isinstance(payload, dict) or payload.get("doctors"):
+        return False
+    used = payload.get("entities_used") if isinstance(payload.get("entities_used"), dict) else {}
+    return bool(str(used.get("service_query") or "").strip()) and not str(used.get("doctor_query") or "").strip()
+
+
+async def _walkin_by_llm(decision: RouteDecision, user_text: str, *, site: str) -> tuple[RouteDecision, bool | None]:
+    """Детектор «без записи» сработал — кандидат; под `service_answer_from_data` решает LLM по правилу клиники (класс 4,
+    решения владельца 21.10, `walkin.py`). (решение с флагом хода, True — без записи, False — по записи или о другом,
+    None — выключатель снят или сбой LLM: как было, решает детектор). Решение хода спрашивается один раз."""
+
+    if not walkin.enabled():
+        return decision, None
+    answer = walkin.decided(decision.flags)
+    if answer is None:
+        answer = await walkin.service(user_text, site=site)
+        if answer is None:
+            return decision, None
+        decision = _copy_decision(decision, flags=set(decision.flags) | walkin.flags_for(answer))
+    return decision, bool(answer)
+
+
+async def _walkin_sentence_by_llm(decision: RouteDecision, user_text: str) -> RouteDecision:
+    """Ответ адресами с фразой «… без записи, в порядке живой очереди» (флаги walk-in): что именно без записи — решение
+    LLM, а не буквы реплики (`response_builder.build_address_response`). Не такой ход или выключатель снят — как было."""
+
+    if decision.label != "ADDRESS" or not any("nonbookable" in str(f) for f in decision.flags):
+        return decision
+    decision, _by_llm = await _walkin_by_llm(decision, user_text, site="address_sentence")
+    return decision
+
+
 async def _guard_walkin_named_service(
     decision: RouteDecision,
     *,
@@ -2636,7 +2699,10 @@ async def _apply_post_nlu_guardrails(
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})
         followup_address_hint = bool(re.search(r"\b(где|адрес|филиал|сдать|сдавать)\b", user_text or "", re.I))
+        by_llm: bool | None = None
         if followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
+            decision, by_llm = await _walkin_by_llm(decision, user_text, site="flow_price_followup_address")
+        if by_llm is not False and followup_address_hint and detect_nonbookable_walkin_intent(user_text, merged_ctx):
             entities = dict(decision.entities)
             if not entities.get("service_name"):
                 entities["service_name"] = service_context
@@ -2708,9 +2774,12 @@ async def _apply_post_nlu_guardrails(
     if decision.label in {"APPOINTMENT", "TEST_ASSIST"} and not detect_prepare_intent(user_text) and "topic_by_llm" not in decision.flags:
         merged_ctx = dict(state.last_entities)
         merged_ctx.update(decision.entities or {})
+        by_llm = None
         if detect_nonbookable_walkin_intent(user_text, merged_ctx):
+            decision, by_llm = await _walkin_by_llm(decision, user_text, site="policy_nonbookable_walkin")
+        if by_llm is not False and detect_nonbookable_walkin_intent(user_text, merged_ctx):
             entities = dict(decision.entities)
-            svc = nonbookable_service_hint(user_text, merged_ctx)
+            svc = walkin.decided(decision.flags) if by_llm else nonbookable_service_hint(user_text, merged_ctx)
             # Для walk-in (анализы/ЭКГ без записи) важен КЛАСС услуги, а не строка
             # каталога. Если service_name пуст или был мягко подставлен catalog-
             # инъекцией (флаг catalog_service_exact — напр. ошибочный «профиль 2» на
@@ -3195,6 +3264,10 @@ async def _complete_route_after_doctor_guard(
     if readiness_reply is not None:
         return readiness_reply
 
+    overview = await _maybe_service_overview(decision=decision, user_text=user_text, state=state, memory=memory)
+    if overview is not None:
+        return overview
+
     if decision.label == "DOCTOR_SCHEDULE":
         # Очищаем хвосты сценария записи, чтобы расписание не фильтровалось
         # старым branch/date/time из предыдущих шагов.
@@ -3227,6 +3300,11 @@ async def _complete_route_after_doctor_guard(
             state,
             reason="topic_switch" if decision.context_action in {"new_topic", "overwrite_doctor"} else "",
         )
+        # OTHER от LLM («ни одна из наших тем»): до честного оффера — данные клиники (класс 2, решение владельца 21.10:
+        # «есть ли / делаете ли X» — сначала прайс и памятки, оператор — только если данных нет; g0277).
+        from_data = await service_answer.from_data_first(user_text, site="other_offer") if unsupported_kind == "topic_other_offer" else None
+        if from_data is not None:
+            return decision, Plan(label=decision.label), Evidence(items={ek.SERVICE_ANSWER: from_data.payload()})
         return (
             decision,
             Plan(label=decision.label),
@@ -3299,6 +3377,7 @@ async def _complete_route_after_doctor_guard(
             entities=grounding.entities,
             flags=set(decision.flags) | set(grounding.flags),
         )
+    decision = await _walkin_sentence_by_llm(decision, user_text)
     decision = await _guard_walkin_named_service(decision, user_text=user_text, state=state, services=services)
 
     catalog_confirm = _maybe_start_catalog_confirm(
@@ -3432,6 +3511,13 @@ async def _complete_route_after_doctor_guard(
 
     plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
     evidence = await execute_plan(plan, state, services)
+    if _doctors_by_service_not_found(evidence.get(ek.DOCTORS_INFO)):
+        # Врачей по услуге не нашли («не нашёл в справочнике», L-06(б); «информация о враче не найдена») — до отказа данные
+        # клиники: услуга бывает в прайсе и памятке, а врачей по её словам справочник не даёт (g0277 «делают ли ФКС с
+        # биопсией»; класс 2, решение владельца 21.10).
+        from_data = await service_answer.from_data_first(user_text, site="doctors_by_service")
+        if from_data is not None:
+            evidence.put(ek.SERVICE_ANSWER, from_data.payload())
     if nlu_debug:
         evidence.debug_trace.append({"nlu": nlu_debug})
     # Graph state transition (FSM слой)

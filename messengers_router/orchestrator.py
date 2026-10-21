@@ -14,7 +14,7 @@ from time import perf_counter
 from typing import Any, AsyncIterator
 
 from . import evidence_keys as ek
-from . import expects, pending_answer, shown_context, turn_telemetry, turn_understanding
+from . import expects, pending_answer, service_answer, shown_context, turn_telemetry, turn_understanding
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 
 logger = logging.getLogger(__name__)
@@ -644,6 +644,10 @@ async def _empty_evidence_response(ctx: OrchestratorContext, memory: Any | None 
     if kind == "NOISE":
         return ResponseEnvelope(text=LOW_CONF_CLARIFY_TEXT, handoff=False)
     if kind == "QUESTION":
+        # Вопрос без данных хода (L-05): до честного оффера — данные клиники (класс 2, `service_answer_from_data`).
+        from_data = await service_answer.from_data_first(ctx.text, site="empty_evidence")
+        if from_data is not None:
+            return service_answer.envelope(from_data, ctx.state, memory, offer_no_data=False)
         if memory is not None:
             from .response_builder import mark_operator_offer_pending
 
@@ -756,6 +760,18 @@ async def _render_impl(
             ctx.response = empty_reply
             turn_telemetry.note(answer_source="empty_evidence")
             return ctx
+
+    # 4b. Ответ о клинике — только по её данным (`service_answer_from_data`, решения владельца 21.10): свободный текст LLM
+    # утверждал факты, которых в данных нет («да, берём анализы у детей 2 лет», g0509). Сначала данные: ответ или близкое —
+    # из прайса и памяток, нет данных — честный оффер; «не о клинике» и сбой LLM — свободный текст, как было.
+    if ctx.decision is not None and ctx.evidence is not None and service_answer.enabled():
+        verdict = await service_answer.decide(ctx.text, site="free_text", first_rows=service_answer.evidence_rows(ctx.evidence))
+        answer = service_answer.envelope(verdict, ctx.state, memory)
+        if answer is not None:
+            ctx.response = answer
+            turn_telemetry.note(answer_source="service_answer")
+            return ctx
+        service_answer.refund(verdict)
 
     # 4. LLM path — collect render_stream into one envelope.
     if ctx.decision is not None and ctx.evidence is not None:

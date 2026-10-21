@@ -10,6 +10,7 @@ from typing import Any
 
 from . import evidence_keys as ek
 from . import expects, pending_answer, shown_context
+from . import walkin as walkin_llm
 from .flow_policy import (
     hydrate_appointment_context_from_schedule,
     reset_appointment_runtime_state,
@@ -90,6 +91,30 @@ def build_unsupported_catalog_response(
         mark_operator_offer_pending(state, memory)
         text = f"{text}\n\n{UNSUPPORTED_CATALOG_OPERATOR_OFFER}"
     return ResponseEnvelope(text=text, attachments=[], handoff=False)
+
+
+def build_service_answer_response(
+    evidence: Evidence, state: SessionState, memory: MemoryStore | None = None
+) -> ResponseEnvelope | None:
+    """Ответ о клинике по её данным (`service_answer`): пункты прайса и памяток, выбранные LLM, — текстом кода."""
+
+    from . import service_answer
+
+    verdict = service_answer.Verdict.from_payload(evidence.get(ek.SERVICE_ANSWER))
+    if verdict is None or not verdict.from_data:
+        return None
+    return service_answer.envelope(verdict, state, memory, offer_no_data=False)
+
+
+def build_service_overview_response(evidence: Evidence) -> ResponseEnvelope | None:
+    """Голое название услуги — максимум по данным клиники (`service_overview`): текст печатает код."""
+
+    from . import service_overview
+
+    overview = service_overview.Overview.from_payload(evidence.get(ek.SERVICE_OVERVIEW))
+    if overview is None:
+        return None
+    return ResponseEnvelope(text=service_overview.text(overview), handoff=False)
 
 
 def build_operator_offer_response(evidence: Evidence) -> ResponseEnvelope | None:
@@ -566,7 +591,11 @@ def build_address_response(
 
     walkin_hint: str | None = None
     walkin = any("nonbookable" in str(f) for f in decision.flags)
-    if walkin:
+    by_llm = walkin_llm.decided(decision.flags) if walkin and walkin_llm.enabled() else None
+    if by_llm is not None:
+        # Класс 4 (`service_answer_from_data`): что именно без записи, назвала LLM по правилу клиники; «нет» — фразы нет.
+        walkin_hint = by_llm or None
+    elif walkin:
         walkin_hint = nonbookable_service_hint(user_text, state.last_entities) or str(state.last_entities.get("service_name") or "").strip()
         if walkin_hint == "":
             walkin_hint = None
@@ -872,6 +901,8 @@ def build_first_structured_response(
         lambda: build_operator_offer_response(evidence),
         lambda: build_readiness_response(evidence),
         lambda: build_compound_price_response(evidence),
+        lambda: build_service_answer_response(evidence, state, memory),
+        lambda: build_service_overview_response(evidence),
         lambda: build_unsupported_catalog_response(evidence, state, memory),
         lambda: build_main_index_info_response(evidence),
         lambda: build_service_bundle_response(flow_label, evidence, state),

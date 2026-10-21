@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import classifier, topic_shadow, turn_telemetry
+from . import classifier, topic_shadow, turn_telemetry, walkin
 from .context_summary import seeded_context_for_nlu
 from .llm_mode_policy import RuntimeOptions
 from .mess_types import RouteDecision, SessionState
@@ -179,7 +179,11 @@ def _topic_by_llm_rules() -> frozenset[str]:
     Б, решение владельца 20.10 (б) 1, 5: по одному правилу); пусто (по умолчанию) — как было."""
 
     raw = str(getattr(c, "MR_TOPIC_BY_LLM", "") or "")
-    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+    rules = {part.strip() for part in raw.split(",") if part.strip()}
+    if walkin.enabled():
+        # Класс 4 (решения владельца 21.10): «без записи» по буквам тему не решает — решает LLM, правило — кандидат.
+        rules.add("rule_nonbookable_walkin")
+    return frozenset(rules)
 
 
 def _topic_by_llm(rule: RouteDecision | None, topic_source: dict[str, str], runtime_options: RuntimeOptions | None) -> bool:
