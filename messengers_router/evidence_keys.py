@@ -48,6 +48,8 @@ COMPOUND_PRICE_RESPONSE = "compound_price_response"
 # Ответ о клинике по её данным (`service_answer`, решения владельца 21.10): {"kind", "facts"} — пункты прайса и памяток,
 # выбранные LLM; текст печатает код
 SERVICE_ANSWER = "service_answer"
+# Голое название услуги → максимум по данным (`service_overview`): {"rows"} — строки прайса, которые назвал пациент
+SERVICE_OVERVIEW = "service_overview"
 
 # --- Rendering sidechannel -------------------------------------------------
 ATTACHMENTS = "attachments"

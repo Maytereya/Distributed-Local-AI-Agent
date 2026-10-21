@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, service_answer, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -2416,6 +2416,34 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
 _WALKIN_FLAGS = frozenset({"rule_nonbookable_walkin", "policy_nonbookable_walkin"})
 
 
+# Темы, где реплика — не голое название услуги по смыслу хода: безопасность, запись и результаты решают свои пути.
+_OVERVIEW_SKIP_LABELS = role_pick._SAFETY_LABELS | {"APPOINTMENT", "TEST_RESULT"}
+
+
+async def _maybe_service_overview(
+    *, decision: RouteDecision, user_text: str, state: SessionState, memory: MemoryStore
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Голое название услуги → максимум по данным (класс 3, решение владельца 21.10, `service_overview.py`): короткая
+    реплика без висящего вопроса — кандидат, решает LLM. Не такой ход, выключатель снят, сбой — None (как было)."""
+
+    if (
+        not service_overview.enabled()
+        or decision.label in _OVERVIEW_SKIP_LABELS
+        or decision.source == "button"
+        or memory.get_pending(state)
+        or state.dialog.phase in (AppointmentPhase.COLLECTING, AppointmentPhase.CONFIRM)
+        or not service_overview.candidate(user_text)
+        # Явный вопрос о цене, сроке, подготовке — не голое название; «запись» и «где» по буквам детектора walk-in не в
+        # счёт («Анализ T-SPOT» он считает записью) — их решает LLM (исход `asks`).
+        or turn_understanding.price_turn_facet(user_text)[0] in {"price", "readiness", "prepare"}
+    ):
+        return None
+    overview = await service_overview.decide(user_text)
+    if overview is None:
+        return None
+    return decision, Plan(label=decision.label), Evidence(items={ek.SERVICE_OVERVIEW: overview.payload()})
+
+
 def _doctors_by_service_not_found(payload: Any) -> bool:
     """Справочник врачей по вопросу об услуге никого не дал (услуга названа, врач по ФИО — нет)."""
 
@@ -3221,6 +3249,10 @@ async def _complete_route_after_doctor_guard(
     readiness_reply = await _maybe_readiness_reply(decision=decision, user_text=user_text, state=state, memory=memory)
     if readiness_reply is not None:
         return readiness_reply
+
+    overview = await _maybe_service_overview(decision=decision, user_text=user_text, state=state, memory=memory)
+    if overview is not None:
+        return overview
 
     if decision.label == "DOCTOR_SCHEDULE":
         # Очищаем хвосты сценария записи, чтобы расписание не фильтровалось

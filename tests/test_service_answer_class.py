@@ -45,6 +45,19 @@ _KB = [
 ]
 
 
+# Карточки справочника услуг МИС (синтетика по образцу среза): что это и подготовка — для ответа на голое название.
+SERVICE_INFO = [
+    {
+        "serviceId": 6278,
+        "serviceHomecode": "247",
+        "serviceName": "T-SPOT (диагностика латентной и активной туберкулезной инфекции у детей и взрослых)",
+        "description": "<p>Тест выявляет туберкулёзную инфекцию по реакции клеток крови. Подходит детям и взрослым.</p>",
+        "preparation": "<p>Кровь сдаётся утром. Накануне исключить жирную пищу.</p>",
+        "biomatNames": "кровь из вены",
+    },
+]
+
+
 @pytest.fixture(scope="module")
 def answer_world(tmp_path_factory) -> Path:
     source = tmp_path_factory.mktemp("svc_src")
@@ -55,6 +68,10 @@ def answer_world(tmp_path_factory) -> Path:
             if sub == "price_by_region":
                 text = text.rstrip("\n") + "\n" + "\n".join(json.dumps(r, ensure_ascii=False) for r in _EXTRA_ROWS) + "\n"
             (source / sub / path.name).write_text(text, encoding="utf-8")
+    (source / "service_info").mkdir()
+    (source / "service_info" / "service_info_20261008.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in SERVICE_INFO) + "\n", encoding="utf-8"
+    )
     shutil.copy2(_DOCTORS, source / _DOCTORS.name)  # врачи — выдержка из репо (путь «врачей по услуге не нашёл»)
     root = ev_world.build_world(source, "20261008", tmp_path_factory.mktemp("svc_world") / "world")
     (root / "captured").mkdir()
