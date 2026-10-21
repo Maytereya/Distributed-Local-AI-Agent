@@ -103,13 +103,14 @@ def readiness_from_catalog(question: str, *, rows: list[dict[str, Any]] | None =
     """
 
     catalog = _catalog_rows(rows)
-    parse = turn_parse.acting_for(question)
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+    parse = turn_understanding.parse_for(question)
     if parse is not None:
         return _deadline_of_parsed(parse)
     core, _ = strip_readiness_phrasing(question)
     if not core.strip():
         return None
-    if price_list_services(core, rows=catalog)[0]:
+    if _core_is_list(core, catalog):
         return None  # список: строку каждой позиции выбирает choose() (ход (в)), до него — перевод
     strong = strong_rows(core, catalog)
     names = list(dict.fromkeys(str(row.get("serviceName") or "").strip() for row in strong))
@@ -118,6 +119,17 @@ def readiness_from_catalog(question: str, *, rows: list[dict[str, Any]] | None =
         return None
     name, deadline = names[0], _one_deadline(strong)
     return [{"name": name, "deadline": deadline}] if deadline else None
+
+
+def _core_is_list(core: str, catalog: list[dict[str, Any]]) -> bool:
+    """«Ядро» вопроса о сроке — список? Под `turn_understanding_one = on` — одно решение понимания хода (ход (б), этап 2),
+    иначе — правило понимания, как раньше (то же `price_list_services`)."""
+
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+
+    if turn_understanding.one_enabled():
+        return turn_understanding.rules_list(core, catalog)
+    return bool(price_list_services(core, rows=catalog)[0])
 
 
 async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | None = None) -> list[dict[str, str]] | None:
@@ -131,7 +143,8 @@ async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | Non
     catalog = _catalog_rows(rows)
     first: list[str] = []
     weak_phrase = ""  # слабая фраза разбора — в журнал синонимов с выбором LLM (L-15b, шаг 5)
-    parse = turn_parse.acting_for(question)
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+    parse = turn_understanding.parse_for(question)
     if parse is not None:
         phrase = _single_phrase(parse)
         if phrase is None:
@@ -147,7 +160,7 @@ async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | Non
         core = _apply_service_synonyms(phrase.text)
     else:
         core, _ = strip_readiness_phrasing(question)
-        if not core.strip() or price_list_services(core, rows=catalog)[0]:
+        if not core.strip() or _core_is_list(core, catalog):
             return None
     names: list[str] = []
     guess = "" if first else resolve_price_service_name_from_catalog(core, rows=catalog)

@@ -150,7 +150,8 @@ async def _multi_price_payload(
 
     llm_allowed = bool(entities.get("__price_question")) and str(entities.get("__runtime_llm_mode") or "").strip().lower() != "strict"
     choosing = llm_allowed
-    parse = turn_parse.acting_for(str(query or ""))
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+    parse = turn_understanding.parse_for(str(query or ""))
     if parse is not None:
         if not parse.is_list:
             return None
@@ -166,6 +167,10 @@ async def _multi_price_payload(
     # Разбора нет или он не годится для действия (`empty`, `too_many`, `error`, вход — не реплика хода): корзина правил
     # с политикой сбоя разбора — строки слабых позиций выбирает LLM, при сбое — варианты кода (T7 шаг 3б: прежняя
     # корзина правил без выбора, путь `turn_parse = off`, снята).
+    if turn_understanding.one_enabled() and not turn_understanding.rules_list(query_text, retail_rows):
+        # Ход (б), этап 2: «список ли» — одно решение понимания хода (с защитами K1), корзина правил сама его не принимает
+        # (разбор 21.10: в 19 из 21 расхождения корзина без K1 резала одну услугу на чужие строки).
+        return None
     items, unrecognized = _multi_price_items(query_text, retail_rows)
     if not items:
         return None
@@ -187,7 +192,9 @@ def _parse_phrase_judged_by_llm(query: str) -> str:
     которую LLM разбора выбрала одной слабой услугой, — её «есть ли такое в прайсе» решает выбор строки, а не гард П2
     по словарю каталога. Иначе пусто — гард как раньше (сбой LLM выбора строки — ответ правил, а у них гард)."""
 
-    parse = turn_parse.acting_for(query)
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+
+    parse = turn_understanding.parse_for(query)
     if parse is None or parse.is_list or len(parse.items) != 1 or parse.status != turn_parse.ParseStatus.PICKED:
         return ""
     item = parse.items[0]
@@ -249,7 +256,9 @@ def _parse_strong_selection(query: str) -> PriceSelection | None:
     (дословное название, синоним МИС, код), — её строки без выбора LLM, вместо ответа правил по буквам
     (решение владельца 13.10: STRONG — только данные МИС). Иначе None — выбор строки как раньше."""
 
-    parse = turn_parse.acting_for(query)
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+
+    parse = turn_understanding.parse_for(query)
     if parse is None or parse.is_list or len(parse.items) != 1 or not parse.items[0].rows:
         return None
     return PriceSelection(rows=tuple(dict(row) for row in parse.items[0].rows), status="strong")
@@ -261,7 +270,9 @@ def _qualifier_outside_strong_phrase(query: str, strong: PriceSelection, retail_
     фраза и названия её строк: слово фразы и словоформы названий уточнением не считаются. Срабатывает только там,
     где тот же гард по всей реплике отказал бы и под turn_parse = off, — это повод спросить LLM, а не вердикт."""
 
-    parse = turn_parse.acting_for(query)
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+
+    parse = turn_understanding.parse_for(query)
     phrase = str(parse.items[0].text or "") if parse is not None and parse.items else ""
     names = [str(row.get("serviceName") or row.get("name") or "") for row in strong.rows]
     return _match_drops_unsatisfiable_qualifier(query, " ".join([phrase, *names]), retail_rows)
@@ -301,7 +312,8 @@ async def _parse_strong_answer(
         return None
     if not _strong_phrase_guard_on() or not _qualifier_outside_strong_phrase(query, strong, retail_rows):
         return strong
-    parse = turn_parse.acting_for(query)
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+    parse = turn_understanding.parse_for(query)
     phrase = str(parse.items[0].text or "") if parse is not None and parse.items else ""
     selection = await select_price_rows(
         query,

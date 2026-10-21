@@ -216,6 +216,36 @@ def current() -> TurnUnderstanding | None:
     return _CURRENT.get()
 
 
+def one_enabled() -> bool:
+    """`[MESSENGER_ROUTER] turn_understanding_one = off | on` (ход (б), этап 2; один выключатель на всех читателей — решение
+    владельца 20.10 (б) 4): под `on` «список ли» на пути правил решается один раз — пониманием хода (`rules_list`)."""
+
+    return str(getattr(_cfg, "MR_TURN_UNDERSTANDING_ONE", "off") or "").strip().lower() == "on"
+
+
+def parse_for(text: str) -> turn_parse.PhraseParse | None:
+    """Разбор реплики, по которому действует читатель с входом `text` (L-15b). Ход (б), этап 2 (консилиум 20.10 §2): один
+    публичный объект — понимание хода, `PhraseParse` — деталь его производителя; читатели берут разбор только здесь
+    (правило CI — `tests/test_turn_understanding_one_class.py`). Поведение — как у `turn_parse.acting_for`."""
+
+    return turn_parse.acting_for(text)
+
+
+def rules_list(text: str, rows: list[dict[str, Any]] | None = None) -> bool:
+    """Путь правил (разбора нет: `empty` / `too_many` / `error` / вход — не реплика хода): назвал ли пациент список — одно
+    решение на ход (ход (б), этап 2, консилиум 20.10 §1). Понимание хода этой реплики уже решило — его вердикт; иначе
+    (вход — не реплика хода) — то же правило понимания `price_list_services` с защитами K1. Читатели корзины (R1) и подбора
+    анализов (R7) под `turn_understanding_one = on` берут его вместо своего «список ли» без K1."""
+
+    tu = _CURRENT.get()
+    if tu is not None and tu.for_text(text) and tu.services_rule and not tu.services_rule.startswith("parse_"):
+        verdict, source = tu.services_rule.startswith("list_"), "understanding"
+    else:
+        verdict, source = bool(price_list_services(text, rows=rows)[0]), "rules"
+    turn_telemetry.note(tu_rules_list=f"{source}:{'list' if verdict else 'one'}")
+    return verdict
+
+
 def acting() -> TurnUnderstanding | None:
     """Понимание хода, если по нему разрешено действовать (`on`); в тени — None."""
 

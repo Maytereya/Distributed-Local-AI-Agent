@@ -208,3 +208,4 @@ tests/test_topic_by_llm_class.py
 tests/test_evalbench_role_shadow.py
 tests/test_p1_facet_class.py
 tests/test_role_pick_on_class.py
+tests/test_turn_understanding_one_class.py

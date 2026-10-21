@@ -3379,6 +3379,35 @@ def _note_price_guard(value: str) -> None:
     turn_telemetry.note(price_guard=value)
 
 
+def _understanding_one_on() -> bool:
+    """`[MESSENGER_ROUTER] turn_understanding_one = on` (ход (б), этап 2): «список ли» решается один раз — пониманием хода."""
+
+    from ..runtime_config import config as cfg
+
+    return str(getattr(cfg, "MR_TURN_UNDERSTANDING_ONE", "off") or "").strip().lower() == "on"
+
+
+def _explicit_list_of_own_names(query_text: str, covering: str, catalog: list[dict[str, Any]]) -> bool:
+    """Защита K1 «одно название покрывает реплику» не для явного перечня (ход (б), этап 2, решение владельца 21.10): позиции
+    разделены запятой, точкой с запятой или переносом строки, у каждой — своё название прайса, покрывающее её слова, названия
+    разные и ни одно не «покрывающее» («Витамин В1, Витамин В6» — не «Расширенный комплексный анализ на витамины (…)»).
+    Одно название с запятыми внутри («приём, осмотр и консультация терапевта») даёт двум позициям одно название — K1 в силе."""
+
+    text = str(query_text or "")
+    parts = [part for part in text.replace("\n", ",").replace(";", ",").split(",") if part.strip()]
+    if len(parts) < 2:
+        return False
+    items, _unrecognized = _multi_price_items(text, catalog)
+    names = [str(item.get("service_name") or "") for item in items]
+    if len(items) < 2 or len(set(names)) != len(names) or covering in names:
+        return False
+    for item, name in zip(items, names):
+        fragment_tokens = _price_query_content_tokens(str(item.get("fragment") or ""))
+        if not fragment_tokens or not _tokens_covered_by_name(fragment_tokens, name):
+            return False
+    return True
+
+
 def _t7_drop(key: str) -> bool:
     """T7 (снятие эвристик пути цены, облако 19.10): `[MESSENGER_ROUTER] t7_drop_k1` / `t7_drop_k3` = on — эвристика снята;
     off (умолчание) — как было."""
@@ -3661,7 +3690,8 @@ def price_list_services(
         return (), "not_list"
     catalog = _catalog_rows(rows)
     drop_k1 = _t7_drop("k1")
-    if not drop_k1 and _catalog_name_covering(tokens, catalog):
+    covering = None if drop_k1 else _catalog_name_covering(tokens, catalog)
+    if covering and not (_understanding_one_on() and _explicit_list_of_own_names(query_text, covering, catalog)):
         return (), "one_catalog_name"
     items, unrecognized = _multi_price_items(query_text, catalog)
     if not items:

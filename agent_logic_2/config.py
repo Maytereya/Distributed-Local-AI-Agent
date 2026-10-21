@@ -207,6 +207,7 @@ class MessengerRouterConfig:
     topic_shadow_llm: str
     roles_catalog_llm: str
     topic_by_llm: str
+    turn_understanding_one: str
     address_service_llm: str
     booking_specialty_llm: str
     slot_suppress_llm: str
@@ -588,6 +589,10 @@ settings = Settings(
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
         # [MESSENGER_ROUTER] topic_by_llm
         topic_by_llm=_get_str("MESSENGER_ROUTER", "topic_by_llm", default=""),
+        # Ход (б), этап 2 (решения владельца 20.10 (б) 4, 21.10): «список ли» на пути правил решается один раз — пониманием
+        # хода (с защитами K1, без K1 у явного перечня своих названий); корзина правил и подбор анализов читают его, а не
+        # решают сами. off — как было. [MESSENGER_ROUTER] turn_understanding_one
+        turn_understanding_one=_get_enum("MESSENGER_ROUTER", "turn_understanding_one", default="off", allowed={"off", "on"}),
         # Инструмент адресов при пустой сущности услуги сам не решает её по буквам реплики: правила дают кандидатов (строки
         # прайса, по которым ищутся места оказания), выбирает LLM (`choose`, задача `address_service`); «ни одна» — общий
         # список филиалов, сбой LLM — как было. Услуга, которую LLM разбора хода уже не подтвердила, заново не ищется
@@ -765,6 +770,7 @@ MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_ROLES_CATALOG_LLM = settings.messenger_router.roles_catalog_llm
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
+MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
 MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
 MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm
