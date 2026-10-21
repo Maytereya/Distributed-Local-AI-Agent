@@ -9,6 +9,9 @@
   прайса) берут это название из понимания и не ищут каталог по буквам реплики; слабая фраза, несколько названий, список — как было.
   У подбора анализов точное совпадение — довод П1 «это цена»: U1 для TEST_ASSIST — только когда тему решила LLM (`topic_by_llm`,
   свойство вопроса для П1 решает она же), иначе П1 без LLM отвечал бы ценой на вопрос о сроке (replay dev 21.10, g0168);
+- U7 (свойство «цена» у подбора анализов), U8 («услуга не названа» у пути цены), U9 (фраза упоминания для выбора строки и
+  журнала синонимов) читают только действующее понимание этой реплики: режим `turn_understanding_price = shadow` для них —
+  настоящая тень (до этапа 2 `current()` действовал и в тени), U7 не берёт свойство чужой реплики;
 - понимания этой реплики нет (вход — не реплика хода, тень, выключатель off) — прежний путь.
 """
 
@@ -22,7 +25,7 @@ from messengers_router import entity_grounder, router, turn_understanding
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision, SessionState
 from messengers_router.planner import build_plan
-from messengers_router.services import _price_select_llm
+from messengers_router.services import _price_select_llm, lab_tests, prices
 from messengers_router.turn_understanding import ServiceMention, TurnUnderstanding
 
 
@@ -234,3 +237,55 @@ def test_u2_test_assist_grounds_as_before(switches, understood, monkeypatch):
     understood(_strong())
     entities, flags, _resolved = _ground(monkeypatch, label="TEST_ASSIST")
     assert "entity_service_name_from_understanding" not in flags
+
+
+# --- U7–U9: только действующее понимание этой реплики (тень — настоящая тень) -------------------------------------------
+
+_ASK = "сколько стоит ггтп"
+
+
+@pytest.fixture
+def detectors(monkeypatch):
+    """Шпион детекторов свойства: подбор анализов решает свойство сам только без понимания."""
+
+    calls: list[str] = []
+
+    def spy(text):
+        calls.append(text)
+        return None, ""
+
+    monkeypatch.setattr(turn_understanding, "price_turn_facet", spy)
+    return calls
+
+
+def test_u7_u9_read_the_acting_understanding_of_this_reply(switches, understood, detectors):
+    switches(one="on")
+    understood(TurnUnderstanding(services=(_mention("ггтп"),), services_rule="no_list", facet="price", reply=_ASK))
+    assert lab_tests._turn_asks_price(_ASK) is True and detectors == []
+    assert prices._names_no_service(_ASK) is False
+    assert _price_select_llm._mention_phrase(_ASK) == "ггтп"
+
+
+def test_u8_reads_no_service_from_the_understanding(switches, understood):
+    switches(one="on")
+    understood(TurnUnderstanding(services=(), services_rule="no_list", facet="price", reply="а цена?"))
+    assert prices._names_no_service("а цена?") is True
+    assert _price_select_llm._mention_phrase("а цена?") == ""
+
+
+@pytest.mark.parametrize("price, reply", [("shadow", _ASK), ("on", "другая реплика")])
+def test_u7_u9_without_acting_understanding_of_this_reply_go_the_old_way(switches, understood, detectors, price, reply):
+    switches(one="on", price=price)
+    understood(TurnUnderstanding(services=(_mention("ггтп"),), services_rule="no_list", facet="price", reply=reply))
+    assert lab_tests._turn_asks_price(_ASK) is False and detectors == [_ASK]
+    assert prices._names_no_service(_ASK) is False
+    assert _price_select_llm._mention_phrase(_ASK) is None
+
+
+def test_u7_off_keeps_the_old_reading_even_in_shadow(switches, understood, detectors):
+    """Выключатель off — как было: понимание читается и в тени (это и снимает этап 2)."""
+
+    switches(one="off", price="shadow")
+    understood(TurnUnderstanding(services=(_mention("ггтп"),), services_rule="no_list", facet="price", reply=_ASK))
+    assert lab_tests._turn_asks_price(_ASK) is True and detectors == []
+    assert _price_select_llm._mention_phrase(_ASK) == "ггтп"
