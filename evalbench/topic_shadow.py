@@ -7,7 +7,8 @@
 
 - согласие правила и LLM по ветке правила (`nlu_rule`) и по категории эталона;
 - матрицу «метка правила → метка LLM» (только расхождения);
-- если есть разметка «правильной темы» (`--gold`): точность правила и LLM против разметки — всего, без спорных, по ветке.
+- если есть разметка «правильной темы» (`--gold`): точность правила и LLM против разметки — всего, без спорных, по ветке;
+  разметка v2 — мультиметка (`labels`: допустимые метки реплики), попадание в любую засчитывается.
 
 Печатает Markdown только со счётчиками, именами правил и меток — без реплик пациентов.
 """
@@ -69,15 +70,16 @@ def measure(turns: list[dict[str, Any]], gold: dict[str, dict[str, Any]]) -> dic
         g = gold.get(r["id"])
         if g is None:
             continue
+        allowed = set(g.get("labels") or [g["label"]])  # мультиметка (v2, решение владельца 21.10): любая из допустимых
         for scope in ("all", "clear") if not g.get("disputed") else ("all",):
             acc[scope]["n"] += 1
-            acc[scope]["rule_ok"] += r["rule_label"] == g["label"]
-            acc[scope]["llm_ok"] += r["llm_label"] == g["label"]
-            acc[scope]["final_ok"] += r["final_label"] == g["label"]
+            acc[scope]["rule_ok"] += r["rule_label"] in allowed
+            acc[scope]["llm_ok"] += r["llm_label"] in allowed
+            acc[scope]["final_ok"] += r["final_label"] in allowed
         acc[f"rule:{r['rule']}"]["n"] += 1
-        acc[f"rule:{r['rule']}"]["rule_ok"] += r["rule_label"] == g["label"]
-        acc[f"rule:{r['rule']}"]["llm_ok"] += r["llm_label"] == g["label"]
-        acc[f"rule:{r['rule']}"]["final_ok"] += r["final_label"] == g["label"]
+        acc[f"rule:{r['rule']}"]["rule_ok"] += r["rule_label"] in allowed
+        acc[f"rule:{r['rule']}"]["llm_ok"] += r["llm_label"] in allowed
+        acc[f"rule:{r['rule']}"]["final_ok"] += r["final_label"] in allowed
     failures = Counter(r["llm_label"] for r in rows if r not in decided)
     return {"n": len(rows), "decided": len(decided), "failures": failures, "by_rule": by_rule,
             "by_category": by_category, "matrix": matrix, "acc": acc}

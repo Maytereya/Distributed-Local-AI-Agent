@@ -28,3 +28,9 @@ def test_matrix_counts_disagreements_and_accuracy_against_gold():
     assert m["acc"]["clear"] == {"n": 2, "rule_ok": 1, "llm_ok": 1, "final_ok": 1}
     text = topic_shadow.render("x", m)
     assert "TEST_ASSIST → PRICE | 1" in text
+
+
+def test_multilabel_gold_accepts_any_allowed_label():
+    turns = [_t("a", "rule_test_assist", "TEST_ASSIST", "PRICE")]
+    m = topic_shadow.measure(turns, {"a": {"label": "PRICE", "labels": ["PRICE", "TEST_ASSIST"]}})
+    assert (m["acc"]["all"]["rule_ok"], m["acc"]["all"]["llm_ok"]) == (1, 1)
