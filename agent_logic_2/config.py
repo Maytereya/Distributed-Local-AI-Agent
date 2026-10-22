@@ -217,7 +217,6 @@ class MessengerRouterConfig:
     prepare_vs_booking_llm: str
     t7_drop_k1: str
     t7_drop_k3: str
-    basket_scored_candidates: str
     price_judge_conditions: str
     pending_reply: str
     pending_reply_types: str
@@ -638,10 +637,6 @@ settings = Settings(
         # разбором его заменяет флаг `unsatisfiable` у позиций разбора (`phrase_price_items`). on — гард снят; off —
         # как было. [MESSENGER_ROUTER] t7_drop_k3
         t7_drop_k3=_get_enum("MESSENGER_ROUTER", "t7_drop_k3", default="off", allowed={"off", "on"}),
-        # Кандидаты позиции корзины для выбора LLM — только строки, совпавшие со словами позиции по оценке ранжирования;
-        # запасной поиск подстрокой (обрывок «с» → любые строки с буквой «с», «Выезд на дом» в корзине,
-        # BUG-2026-10-17-BASKET-HOME-VISIT-ROW) кандидатов не даёт. off — как было. [MESSENGER_ROUTER] basket_scored_candidates
-        basket_scored_candidates=_get_enum("MESSENGER_ROUTER", "basket_scored_candidates", default="off", allowed={"off", "on"}),
         # Выбор строки прайса и суд условия П2 — промпт с уточнённым правилом 3: вопрос о том, как сдать, подготовиться,
         # записаться, сколько готовится, «условия сбора» — не условие услуги (BUG-2026-10-17-P2-JUDGE-COLLECTION-CONDITIONS);
         # промпт `choose_price_service_conditions`. off — прежний промпт `choose_price_service`. [MESSENGER_ROUTER] price_judge_conditions
@@ -798,7 +793,6 @@ MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm
 MR_PREPARE_VS_BOOKING_LLM = settings.messenger_router.prepare_vs_booking_llm
 MR_T7_DROP_K1 = settings.messenger_router.t7_drop_k1
 MR_T7_DROP_K3 = settings.messenger_router.t7_drop_k3
-MR_BASKET_SCORED_CANDIDATES = settings.messenger_router.basket_scored_candidates
 MR_PRICE_JUDGE_CONDITIONS = settings.messenger_router.price_judge_conditions
 MR_PENDING_REPLY = settings.messenger_router.pending_reply
 MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types

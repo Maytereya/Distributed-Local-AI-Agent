@@ -175,7 +175,8 @@ def test_strong_basket_position_does_not_rank_the_catalog(rows, monkeypatch):
     from messengers_router.services import _basket_select as bs
 
     ranked = []
-    monkeypatch.setattr(bs, "_rank_price_rows", lambda *a, **k: ranked.append(a[1]) or [])
+    # Кандидаты позиции считает `_score_price_rows` (путь `_rank_price_rows` снят вместе с `basket_scored_candidates`, 22.10).
+    monkeypatch.setattr(bs, "_score_price_rows", lambda *a, **k: ranked.append(a[1]) or [])
     glucose = sm.strong_rows("Глюкоза", rows, verbatim=True)
     assert glucose
     items = [{"service_name": "Глюкоза", "fragment": "Глюкоза", "strong": glucose}]
