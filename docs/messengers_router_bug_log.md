@@ -11,6 +11,22 @@
 
 ---
 
+## STEP-2026-10-22-E-TURN-TIMING — ход (е): журнал хода показывает время по инструментам и лимит решений хода — СДЕЛАНО (только телеметрия)
+
+- **Зачем:** на проде p95 хода деплоев 12–13 — 13,8–13,9 с; журнал видел только `stage_ms.tool_loop` целиком, а отказ лимита решений хода
+  (`llm_decision_turn_calls = 3`) — только исходом `budget` в списке вызовов. Ночью 22.10 лимит дважды обрывал ход посреди решений
+  (g0196, g0577) — откат к правилам по буквам.
+- **Сделано:** `turn_telemetry.note_tool` + `executor.execute_plan` (`finally` у шага) → `tool_ms` (`{"price_info": мс, …}`, повтор —
+  сумма, упавший и необязательный шаг — тоже); эндпоинт пишет `tu_decisions_spent`; `finish` — `tu_decisions_denied` (вызовы хода с
+  исходом `budget`, без теней; только если были). Сводка `scripts/turn_telemetry_summary.py` — строки «инструменты, мс» и «решения хода».
+  Ответы не меняются (replay test 0 / 201).
+- **Первый замер (стенд, replay, набор деплоя 12, LLM из кэша):** `test_prepare` 2,3 с (2 хода), `service_bundle_info` p95 1,1 с,
+  `price_info` p95 0,43 с; лимит решений — до 3 из 3 за ход.
+- **Покрытие:** `tests/test_turn_timing_class.py` (в CI), `tests/test_turn_telemetry.py::test_both_endpoints_write_decisions_spent`,
+  `tests/test_turn_telemetry_summary.py::test_summary_shows_tool_timing_and_decision_denials`.
+
+---
+
 ## BUG-2026-10-22-CATALOG-CONFIRM-BY-LETTERS — «Похоже, вы имели в виду …?» предлагает чужую услугу по буквам — СДЕЛАНО под выключателем (`catalog_confirm_llm`, off)
 
 - **Симптом (стенд, прогоны деплоя 13 `d13_t2_*`, `b_*`):** переспрос каталога на меткe записи / адресов / подбора анализов

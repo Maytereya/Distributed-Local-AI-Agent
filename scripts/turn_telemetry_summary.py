@@ -79,6 +79,18 @@ def summarize(rows: list[dict[str, Any]]) -> tuple[list[str], bool]:
         f"llm исходы: {dict(outcomes)} | err: {dict(errors)} | queue_ms p95 {queue_p95}",
         f"разбор: {dict(parse)} | запасной путь правил {share(fallback, sum(parse.values()))}",
     ]
+    tools: dict[str, list[float]] = {}
+    for r in rows:
+        for name, ms in (r.get("tool_ms") or {}).items():
+            tools.setdefault(name, []).append(ms)
+    if tools:  # ход (е), 22.10: где секунды вне LLM — время шагов плана по инструментам
+        per_tool = ", ".join(f"{name} n={len(v)} p95={p95(v)}" for name, v in sorted(tools.items(), key=lambda kv: -len(kv[1])))
+        lines.append(f"инструменты, мс: {per_tool}")
+    if any("tu_decisions_spent" in r for r in rows):
+        denied = sum(1 for r in rows if r.get("tu_decisions_denied"))
+        lines.append(
+            f"решения хода: p95 потрачено {p95(r.get('tu_decisions_spent', 0) for r in rows)} | ходов с отказом лимита {share(denied, len(rows))}"
+        )
     priced = [r for r in rows if any(r.get(field) for field in _PRICE_FIELDS)]
     if priced:
         fields = " | ".join(

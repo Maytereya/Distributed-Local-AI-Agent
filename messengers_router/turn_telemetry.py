@@ -23,6 +23,9 @@
 - `nlu_fallback = rules` и `nlu_fail` (`unavailable` | `invalid`) — под `llm_primary` разбор LLM не состоялся и ход решили
   правила, как `legacy_v2` (`llm_primary_rules_fallback = on`, решение владельца 20.10);
 - `evidence_empty`, `handoff`, `chars`, `ms`, `stage_ms`;
+- ход (е), 22.10: `tool_ms` — время шагов плана по инструментам (`{"price_info": мс, …}`, повторы суммируются);
+  `tu_decisions_spent` — сколько решений хода потрачено (лимит `llm_decision_turn_calls`); `tu_decisions_denied` —
+  сколько вызовов LLM хода не дошли до модели из-за лимита решений или времени хода (исход `budget`), только если были;
 - `money_cut` — сколько предложений с денежными суммами снято со свободного текста LLM
   (`money_guard`, только при `llm_free` и только если снято);
 - `llm` — вызовы: место (модуль), исход, мс, ожидание очереди, токены; у сбоя — `err`, корневая
@@ -86,6 +89,7 @@ class Turn:
     llm: list[dict[str, Any]] = field(default_factory=list)
     choices: list[dict[str, Any]] = field(default_factory=list)
     sources: dict[str, dict[str, Any]] = field(default_factory=dict)
+    tools: dict[str, int] = field(default_factory=dict)
 
 
 def begin(endpoint: str, *, session_id: str, llm_mode: str = "", button_id: str = "") -> contextvars.Token | None:
@@ -200,6 +204,17 @@ def note_choice(
     turn.choices.append(entry)
 
 
+def note_tool(name: str, ms: float) -> None:
+    """Время шага плана (инструмента сервисного слоя) в ходе, мс — для хода (е): где секунды вне LLM внутри
+    `tool_loop`. Повтор одного инструмента в ходе суммируется. Только имя и число — без запроса."""
+
+    turn = _TURN.get()
+    if turn is None:
+        return
+    key = str(name or "unknown")
+    turn.tools[key] = turn.tools.get(key, 0) + int(ms)
+
+
 def note_snapshot(snapshot: Any) -> None:
     """Срез МИС, прочитанный в ходе (`snapshots.Snapshot`): статус и давность — без строк и дат.
     Из потока (`asyncio.to_thread`) ход виден: контекст копируется."""
@@ -264,6 +279,13 @@ def finish(token: contextvars.Token | None, *, handoff: bool, chars: int, stage_
         row["choose"] = turn.choices
     if turn.sources:
         row["src"] = turn.sources
+    if turn.tools:
+        row["tool_ms"] = dict(turn.tools)
+    denied = sum(1 for call in turn.llm if call.get("outcome") == "budget" and not call.get("shadow"))
+    if denied:
+        # Решение хода не дошло до модели — кончился лимит решений хода (`llm_decision_turn_calls`) или время хода:
+        # вызывающий видит «LLM недоступна» (ход (е), бюджет хода).
+        row["tu_decisions_denied"] = denied
     if stage_ms:
         row["stage_ms"] = {k: int(v) for k, v in stage_ms.items()}
     if world is not None:
