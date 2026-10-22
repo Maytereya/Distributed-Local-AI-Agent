@@ -243,6 +243,7 @@ async def _p2_llm_verdict(
         context=context,
         runtime_llm_mode=runtime_llm_mode,
         judge_qualifier=True,
+        budget_clarify=True,  # отказ лимита решений хода — уточнение (`price_budget_clarify`)
     )
     if selection is None or (not selection.rows and selection.status != "none_fit"):
         turn_telemetry.note(p2_llm_judge="fallback")
@@ -325,6 +326,7 @@ async def _parse_strong_answer(
         runtime_llm_mode=runtime_llm_mode,
         judge_qualifier=True,
         one_round=True,
+        budget_clarify=True,  # отказ лимита решений хода — уточнение (`price_budget_clarify`)
     )
     if selection is not None and selection.rows:
         turn_telemetry.note(strong_phrase_guard="rows")
@@ -604,6 +606,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             context=entity_service_name,
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
             judge_qualifier=bool(judged),
+            budget_clarify=True,  # отказ лимита решений хода — уточнение (`price_budget_clarify`)
         )
 
     def _llm_answer(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -795,6 +798,7 @@ async def service_bundle_info(
             hints=[rules_guess],
             context=entity_service_name,
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
+            budget_clarify=True,  # отказ лимита решений хода — уточнение (`price_budget_clarify`)
         )
 
     def _llm_variants(rows: list[dict[str, Any]]) -> dict[str, Any]:

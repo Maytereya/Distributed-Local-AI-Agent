@@ -51,7 +51,7 @@ from typing import Any, Sequence
 
 from agent_logic_2.persist import DATA_DIR, ensure_dir
 
-from .. import turn_parse, turn_telemetry
+from .. import llm_runtime, turn_parse, turn_telemetry
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from ..russian_nlu import tokens_share_stem
@@ -322,6 +322,12 @@ def _wordform_names(wanted: set[str], key: str, pool: list[dict[str, Any]], reta
     forms = [name for name in tokens if distinguishes and name not in exact and any(_same_word(key, t) for t in tokens[name]) and cover(name) > best]
     ranked = sorted([*forms, *exact], key=cover, reverse=True)  # устойчиво: при равенстве — порядок кандидатов
     return tuple(ranked[:_VARIANT_B_LIMIT])
+
+
+def _budget_clarify_on() -> bool:
+    """`[MESSENGER_ROUTER] price_budget_clarify = on`: отказ лимита решений хода на выборе строки — уточнение, не ответ правил."""
+
+    return str(getattr(_cfg, "MR_PRICE_BUDGET_CLARIFY", "off") or "").strip().lower() == "on"
 
 
 def _policy_label(selection: PriceSelection | None) -> str:
@@ -641,6 +647,7 @@ async def select_price_rows(
     judge_qualifier: bool = False,
     one_round: bool = False,
     general_as_none_fit: bool = False,
+    budget_clarify: bool = False,
 ) -> PriceSelection | None:
     """Строки прайса, которые являются той услугой, о которой спросил пациент.
 
@@ -739,6 +746,16 @@ async def select_price_rows(
         return decided
 
     def unavailable() -> tuple[PriceSelection | None, str]:
+        if budget_clarify and _budget_clarify_on() and llm_runtime.turn_budget_exhausted():
+            # Только путь ответа о цене (`budget_clarify=True` из `prices.py`); суд записи и переспроса каталога
+            # (`judge_booking_service`) держит свою политику отказа. Отказ лимита решений хода — не сбой модели: LLM в этом ходе уже ответила «не то», и ответ правил по буквам
+            # давал цену чужой строки (g0577 → «Анализ крови на аминокислоты»). Уточнение вместо букв (решение владельца
+            # 22.10, DESIGN-2026-10-22-TURN-DECISION-BUDGET, вариант А): названия целым словом — на выбор без цен; нет —
+            # «не нашёл, уточните название». Цены нет ни в одном случае.
+            names = _whole_word_names(question, pool, rows)
+            if names:
+                return PriceSelection(rows=(), status="unavailable", names=names), "budget_names"
+            return PriceSelection(rows=(), status="none_fit", reason="budget"), "budget_clarify"
         # Словарный гард пропустил вопрос к LLM только ради её суда: без решения — ответ правил, как без выключателя.
         if guard_bypassed:
             return None, "rules"

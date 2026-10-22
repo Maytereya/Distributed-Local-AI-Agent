@@ -208,6 +208,7 @@ class MessengerRouterConfig:
     roles_catalog_llm: str
     catalog_confirm_llm: str
     p1_facet_none_offer: str
+    price_budget_clarify: str
     topic_by_llm: str
     turn_understanding_one: str
     service_answer_from_data: str
@@ -597,6 +598,10 @@ settings = Settings(
         # не «есть ли» и не «где / когда» (подготовка, возраст, результат, неясно) — не цена, а честный оффер оператора (как OTHER
         # от LLM). Сбой LLM свойства — как было (П1 → цена). off — как было. [MESSENGER_ROUTER] p1_facet_none_offer
         p1_facet_none_offer=_get_enum("MESSENGER_ROUTER", "p1_facet_none_offer", default="off", allowed={"off", "on"}),
+        # Отказ лимита решений хода на выборе строки цены / суде условия (DESIGN-2026-10-22-TURN-DECISION-BUDGET, вариант А,
+        # решение владельца 22.10): не ответ правил по буквам (g0577 → цена чужой строки), а уточнение — названия без цен или
+        # «не нашёл, уточните название». Сбой самой модели — как было. off — как было. [MESSENGER_ROUTER] price_budget_clarify
+        price_budget_clarify=_get_enum("MESSENGER_ROUTER", "price_budget_clarify", default="off", allowed={"off", "on"}),
         # Ход (б), этап 4, вариант Б (решения владельца 20.10 (б) 1, 5): ветки правил `legacy_v2` через запятую
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
@@ -794,6 +799,7 @@ MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_ROLES_CATALOG_LLM = settings.messenger_router.roles_catalog_llm
 MR_CATALOG_CONFIRM_LLM = settings.messenger_router.catalog_confirm_llm
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
+MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
