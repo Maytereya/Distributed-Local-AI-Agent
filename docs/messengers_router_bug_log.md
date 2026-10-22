@@ -11,6 +11,21 @@
 
 ---
 
+## STEP-2026-10-22-E-SPECIALTY-PREPARE-CACHE — ход (е): разбор специальности, «содержательна ли памятка» и сравнение корней — без пересчёта — СДЕЛАНО (ответы не меняются)
+
+- **Симптом (журнал хода стенда `tool_ms`, STEP-2026-10-22-E-TURN-TIMING):** `test_prepare` до 2,3 с, `service_bundle_info` p95 1,1 с вне LLM.
+  Профиль: `_prepare_roots_match` — 232 тыс. вызовов (корень вопроса × корни каждой памятки перебором), `_is_prepare_content_actionable`
+  — регулярки по тексту памятки на каждом вызове, `extract_specialties_from_text` — разбор специальности названия строки прайса на
+  каждый вопрос о приёме (`_service_name_allows_specialty`).
+- **Фикс:** кэш `extract_specialties_from_text` и `_is_prepare_content_actionable` по тексту (чистые функции текста и констант модуля, как
+  у соседней `extract_specialty_from_text`, BUG-2026-09-16-SPECIALTY-PARSE-PER-ROW); `_roots_index` — индекс набора корней памятки
+  (префиксы от 5 букв, 6-буквенные начала) и `_prepare_roots_match_indexed` — тот же ответ без перебора.
+- **Замер (replay, набор прода деплоя 14, против той же цепочки без правки):** ответы test 0 / 201, dev 0 / 867. dev: `test_prepare`
+  p50 1,27 → 0,50 с, p95 1,8 → 0,98 с; `service_bundle_info` p95 0,93 → 0,58 с; максимум хода 2,5 → 1,9 с.
+- **Покрытие:** `tests/test_prepare_roots_index_class.py` (индекс = перебору на корнях справочника МИС; кэши — тот же ответ холодным и тёплым).
+
+---
+
 ## BUG-2026-10-22-P1-FACET-NONE-AS-PRICE — П1: свойство вопроса «ни одно» уводит в цену чужой строки — СДЕЛАНО под выключателем (`p1_facet_none_offer`, off)
 
 - **Симптом (стенд 22.10, `topic_by_llm` + ветка `rule_address_work_hours`, прогоны `b_hours_dev`, `d14_all_dev`):** g0577 «Со скольки лет

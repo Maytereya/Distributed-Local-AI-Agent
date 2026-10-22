@@ -424,6 +424,33 @@ def _prepare_names_subject(subject_roots: set[str], title_roots: set[str]) -> bo
     return bool(subject_roots) and all(any(same_word(s, t) for t in title_roots) for s in subject_roots)
 
 
+@functools.lru_cache(maxsize=8192)
+def _roots_index(candidate_roots: frozenset[str]) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+    """Индекс набора корней кандидата для `_prepare_roots_match` (ход (е), STEP-2026-10-22-E-SPECIALTY-PREPARE-CACHE):
+    корни от 5 букв, все их префиксы от 5 букв, 6-буквенные начала корней от 7 букв. Тот же ответ, что перебор."""
+
+    long5 = frozenset(c for c in (str(x or "").strip() for x in candidate_roots) if len(c) >= 5)
+    prefixes = frozenset(c[:k] for c in long5 for k in range(5, len(c) + 1))
+    six = frozenset(c[:6] for c in long5 if len(c) >= 7)
+    return long5, prefixes, six
+
+
+def _prepare_roots_match_indexed(query_root: str, candidate_roots: frozenset[str]) -> bool:
+    """`_prepare_roots_match` по индексу набора — без перебора кандидатов (результат тот же)."""
+
+    if query_root in candidate_roots:
+        return True
+    q = str(query_root or "").strip()
+    if len(q) < 5:
+        return False
+    long5, prefixes, six = _roots_index(candidate_roots)
+    if q in prefixes:  # кандидат начинается с корня запроса
+        return True
+    if any(q[:k] in long5 for k in range(5, len(q) + 1)):  # корень запроса начинается с кандидата
+        return True
+    return len(q) >= 7 and q[:6] in six
+
+
 def _prepare_roots_coverage(query_roots: set[str], candidate_roots: set[str]) -> float:
     """
     Покрытие корней запроса в кандидате (0..1).
@@ -435,9 +462,10 @@ def _prepare_roots_coverage(query_roots: set[str], candidate_roots: set[str]) ->
 
     if not query_roots or not candidate_roots:
         return 0.0
+    frozen = candidate_roots if isinstance(candidate_roots, frozenset) else frozenset(candidate_roots)
     matched = 0
     for q in query_roots:
-        if _prepare_roots_match(q, candidate_roots):
+        if _prepare_roots_match_indexed(q, frozen):
             matched += 1
     return float(matched) / float(len(query_roots))
 
@@ -462,8 +490,9 @@ def _prepare_fast_relevance_score(query: str, content: str, *, title: str = "") 
             return 0.40 if content_norm else 0.0
         return 0.0
 
-    content_roots = _prepare_term_roots(content)
-    title_roots = _prepare_term_roots(title)
+    # Наборы из кэша как есть (неизменяемые) — индекс `_roots_index` строится по ним один раз на памятку.
+    content_roots = _prepare_term_roots_cached(content)
+    title_roots = _prepare_term_roots_cached(title)
     if not content_roots and not title_roots:
         return 0.0
 
@@ -592,9 +621,11 @@ def _is_generic_prepare_heading(text: str) -> bool:
     return _normalise_input(text).strip(" .:") in _PREPARE_GENERIC_HEADINGS
 
 
+@functools.lru_cache(maxsize=8192)
 def _is_prepare_content_actionable(content: str) -> bool:
     """
-    Отсекает слишком общий/шаблонный текст подготовки.
+    Отсекает слишком общий/шаблонный текст подготовки. Чистая функция текста и констант модуля — кэш по тексту
+    (ход (е), STEP-2026-10-22-E-SPECIALTY-PREPARE-CACHE).
 
     :param content: кандидатный текст подготовки
     :return: True, если текст выглядит содержательным
