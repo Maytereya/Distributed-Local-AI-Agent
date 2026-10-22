@@ -240,6 +240,7 @@ async def _pick(
         else:
             weak.append((index, fragment, candidates))
     if not weak:
+        _note_pool(chosen, [])
         return chosen, weak, False
     # Корзина из фраз (`fair_share`): позиции, у которой по фразе целиком кандидатов нет, LLM получает
     # кандидатов по общей части соседей по списку, затем по словам; при сбое LLM варианты строятся из прежних
@@ -264,6 +265,7 @@ async def _pick(
             option_id = str(len(options))
             owners[option_id] = (index, row)
             options.append(Option(id=option_id, text=f"{label} → {_row_name(row)} — {_row_cost(row)} руб."))
+    _note_pool(chosen, [row for _index, row in owners.values()] if llm_allowed else [])
     if not options:
         return chosen, weak, False  # у слабых позиций нет ни одного кандидата — выбирать не из чего
     if not llm_allowed:
@@ -275,6 +277,15 @@ async def _pick(
         index, row = owners[option_id]
         chosen.setdefault(index, []).append(row)
     return chosen, weak, False
+
+
+def _note_pool(strong: dict[int, list[dict[str, Any]]], seen: list[dict[str, Any]]) -> None:
+    """Пул корзины в журнал хода (`price_pool`, `src: "basket"`; Recall@pool, 22.10) — только запись: `serviceId` строк,
+    которые увидит LLM корзины, в порядке вариантов, и строк сильных позиций, решённых по данным без LLM."""
+
+    turn_telemetry.note_price_pool(
+        1, [row.get("serviceId") for row in seen], strong=[row.get("serviceId") for rows in strong.values() for row in rows]
+    )
 
 
 def _option_label(item: dict[str, Any], fragment: str) -> str:

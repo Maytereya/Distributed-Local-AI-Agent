@@ -27,7 +27,8 @@
   `tu_decisions_spent` — сколько решений хода потрачено (лимит `llm_decision_turn_calls`); `tu_decisions_denied` —
   сколько вызовов LLM хода не дошли до модели из-за лимита решений или времени хода (исход `budget`), только если были;
 - `price_pool` — пулы кандидатов выбора строки прайса, ушедшие в `choose()`: `[{"r": круг, "n": размер, "ids": [serviceId…]}]`
-  (Recall@pool на стенде, 22.10; только запись, на ответ не влияет);
+  (Recall@pool на стенде, 22.10; только запись, на ответ не влияет); у корзины — `{"r": 1, "src": "basket", "n", "ids",
+  "strong": [serviceId…]}`: `ids` видела LLM корзины, `strong` — строки сильных позиций по данным;
 - `money_cut` — сколько предложений с денежными суммами снято со свободного текста LLM
   (`money_guard`, только при `llm_free` и только если снято);
 - `llm` — вызовы: место (модуль), исход, мс, ожидание очереди, токены; у сбоя — `err`, корневая
@@ -206,21 +207,32 @@ def note_choice(
     turn.choices.append(entry)
 
 
-def note_price_pool(round_no: int, service_ids: list[Any]) -> None:
-    """Пул кандидатов, ушедший в `choose()` выбора строки прайса (Recall@pool, замер 22.10): круг (1 — по реплике,
-    2 — по терминам LLM), размер пула и `serviceId` его строк в порядке пула — без названий и текста. Каждый вызов
-    выбора в ходе — отдельная запись `price_pool`; строка без `serviceId` входит в `n`, но не в `ids`."""
-
-    turn = _TURN.get()
-    if turn is None:
-        return
+def _service_ids(values: list[Any]) -> list[int]:
     ids = []
-    for value in service_ids:
+    for value in values:
         try:
             ids.append(int(value))
         except (TypeError, ValueError):
             continue
-    turn.fields.setdefault("price_pool", []).append({"r": int(round_no), "n": len(service_ids), "ids": ids})
+    return ids
+
+
+def note_price_pool(round_no: int, service_ids: list[Any], *, strong: list[Any] | None = None) -> None:
+    """Пул кандидатов, ушедший в `choose()` выбора строки прайса (Recall@pool, замер 22.10): круг (1 — по реплике,
+    2 — по терминам LLM), размер пула и `serviceId` его строк в порядке пула — без названий и текста. Каждый вызов
+    выбора в ходе — отдельная запись `price_pool`; строка без `serviceId` входит в `n`, но не в `ids`.
+
+    `strong` — запись корзины (`src: "basket"`, один круг): `ids` — строки слабых позиций, которые видела LLM корзины
+    (пусто, если LLM не звалась: слабых нет, кандидатов нет, режим `strict`), `strong` — строки сильных позиций, решённые
+    по данным без LLM (они идут в ответ как есть)."""
+
+    turn = _TURN.get()
+    if turn is None:
+        return
+    entry: dict[str, Any] = {"r": int(round_no), "n": len(service_ids), "ids": _service_ids(service_ids)}
+    if strong is not None:
+        entry.update(src="basket", strong=_service_ids(strong))
+    turn.fields.setdefault("price_pool", []).append(entry)
 
 
 def note_tool(name: str, ms: float) -> None:
