@@ -1884,9 +1884,15 @@ async def _test_assist_facet_by_llm(decision: RouteDecision, user_text: str) -> 
     flags = set(decision.flags or ())
     if decision.label != "TEST_ASSIST" or "topic_by_llm" not in flags or "catalog_service_exact" not in flags:
         return ""
-    facet = await booking_slots.test_assist_facet(user_text)
+    facet = await booking_slots.test_assist_facet(user_text, full=_p1_facet_none_offer())
     turn_telemetry.note(tu_p1_facet=facet or "failed")
     return facet
+
+
+def _p1_facet_none_offer() -> bool:
+    """`p1_facet_none_offer = on` (BUG-2026-10-22-P1-FACET-NONE-AS-PRICE): полный набор свойств вопроса и «ни одно» → оффер."""
+
+    return str(getattr(c, "MR_P1_FACET_NONE_OFFER", "off") or "off").strip().lower() == "on"
 
 
 def _relabel_test_assist_catalog_hit_as_price(
@@ -1959,7 +1965,7 @@ def _relabel_test_assist_catalog_hit_as_price(
         return _copy_decision(decision, flags=flags | {"p1_availability_kept"})
     if facet == "where_when":
         return _relabel(decision, "p1_where_when", label="ADDRESS", flags=flags | {"p1_where_when"}, source="guardrail_post")
-    if facet == "none" and str(getattr(c, "MR_P1_FACET_NONE_OFFER", "off") or "off").strip().lower() == "on":
+    if facet == "none" and _p1_facet_none_offer():
         # «Ни одно» от LLM — спрашивают об услуге не цену («со скольки лет берут кровь из вены?», g0577): данных хода на такой
         # вопрос нет — честный оффер оператора тем же путём, что OTHER от LLM, а не цена чужой строки
         # (BUG-2026-10-22-P1-FACET-NONE-AS-PRICE). Сбой LLM свойства (пустая строка) — П1 как было.

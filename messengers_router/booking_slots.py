@@ -89,12 +89,25 @@ _TEST_ASSIST_FACET_OPTIONS = (
 )
 
 
-async def test_assist_facet(user_text: str) -> str:
-    """Свойство вопроса об услуге, названной в реплике, — решение LLM (ход (б), решение владельца 20.10 (б) 3): `price` |
-    `availability` | `where_when`; `none` — LLM ответила «ни одно» (спрашивают о другом: подготовка, возраст, результат,
-    или смысл неясен); сбой, мусор — пустая строка (вызывающий делает как было)."""
+# Полный набор свойств (`p1_facet_none_offer = on`, BUG-2026-10-22-P1-FACET-NONE-AS-PRICE): «ни одно» прежней задачи сливало срок
+# готовности, подготовку и голое название с «о другом» — оффер на «Сколько готовится ОАМ?» и «ТТГ» (карточка 22.10). Здесь
+# они — свои варианты; «ни одно» — только вопрос о другом (возраст, значение показателя, свой материал).
+TEST_ASSIST_FACET_FULL_TASK = Task(name="test_assist_facet_full", max_picks=1, num_predict=32, timeout_s=5.0, queue_timeout_ms=1500)
+_TEST_ASSIST_FACET_FULL_OPTIONS = _TEST_ASSIST_FACET_OPTIONS + (
+    Option(id="readiness", text="Узнать срок готовности результата"),
+    Option(id="prepare", text="Узнать, как подготовиться к анализу или услуге"),
+    Option(id="bare", text="Просто назвал анализ или услугу, без вопроса"),
+)
 
-    choice = await choose(TEST_ASSIST_FACET_TASK, user_text, _TEST_ASSIST_FACET_OPTIONS)
+
+async def test_assist_facet(user_text: str, *, full: bool = False) -> str:
+    """Свойство вопроса об услуге, названной в реплике, — решение LLM (ход (б), решение владельца 20.10 (б) 3): `price` |
+    `availability` | `where_when` (под `full` ещё `readiness` | `prepare` | `bare`); `none` — LLM ответила «ни одно»
+    (прежняя задача: спрашивают о другом или смысл неясен; полная — только «о другом»); сбой, мусор — пустая строка
+    (вызывающий делает как было)."""
+
+    task, options = (TEST_ASSIST_FACET_FULL_TASK, _TEST_ASSIST_FACET_FULL_OPTIONS) if full else (TEST_ASSIST_FACET_TASK, _TEST_ASSIST_FACET_OPTIONS)
+    choice = await choose(task, user_text, options)
     if choice.status is Status.NONE_FIT:
         return "none"
     return choice.ids[0] if choice.status is Status.PICKED and choice.ids else ""

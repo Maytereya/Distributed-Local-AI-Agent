@@ -7,7 +7,9 @@
 Инварианты класса (ход `topic_by_llm`, услуга найдена каталогом):
 - off — как было: «ни одно» → цена (П1);
 - on: «ни одно» → честный оффер оператора (метка OTHER, строка таблицы `p1_facet_none_offer`), цены нет;
-- on: «цена» → цена; сбой LLM свойства → цена (как было) — «ни одно» и сбой различаются.
+- on: «цена» → цена; сбой LLM свойства → цена (как было) — «ни одно» и сбой различаются;
+- on: «срок готовности», «подготовка», «просто назвал» — свои варианты полной задачи (карточка 22.10: первая версия слила их с
+  «ни одно» — оффер на «Сколько готовится ОАМ?», «ТТГ»), путь — как было.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фи
 
 # Реплика ветки `rule_test_assist` с услугой каталога; свойство вопроса решает подделка LLM.
 _REPLY = "есть ли у вас анализ на ферритин"
+_FULL = {"readiness": 4, "prepare": 5, "bare": 6}  # номера вариантов полной задачи `test_assist_facet_full`
 
 
 def _turn(world_dir, monkeypatch, *, mode: str, facet: Any) -> dict[str, Any]:
@@ -40,6 +43,8 @@ def _turn(world_dir, monkeypatch, *, mode: str, facet: Any) -> dict[str, Any]:
         answers[_FACET_MARK] = json.dumps({"picks": []})
     elif callable(facet):
         answers[_FACET_MARK] = facet
+    elif facet in _FULL:
+        answers[_FACET_MARK] = json.dumps({"picks": [_FULL[facet]]})
     else:
         answers[_FACET_MARK] = json.dumps({"picks": [_FACETS[facet]]})
     fake = _LLM(answers)
@@ -83,3 +88,12 @@ def test_on_price_or_failure_keeps_p1(facet, mini_prod_world, monkeypatch):  # n
     tel = out["telemetry"]
     assert tel.get("tu_label_final") == "PRICE", tel
     assert tel.get("tu_p1_facet") == ("price" if facet == "price" else "failed"), tel
+
+
+@pytest.mark.parametrize("facet", ["readiness", "prepare", "bare"])
+def test_on_full_facets_keep_old_path(facet, mini_prod_world, monkeypatch):  # noqa: F811
+    out = _turn(mini_prod_world, monkeypatch, mode="on", facet=facet)
+    tel = out["telemetry"]
+    assert tel.get("tu_p1_facet") == facet, tel
+    assert not any(s.startswith("p1_facet_none_offer:") for s in tel.get("tu_relabel_src") or []), tel
+    assert tel.get("tu_label_final") == "PRICE", tel  # как было: П1
