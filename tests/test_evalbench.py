@@ -731,3 +731,104 @@ def test_dialogs_show_has_summary_and_marks_turns(tmp_path):
     ev_dialogs.refresh_annotations({**header, "sets": [str(current)]}, rows)
     assert (rows["glucose_a"]["tags"], rows["glucose_a"]["about_shown"]) == (["new_class"], [])
     assert rows["offer_yes"]["tags"] == ["yes_no", "operator_offer"]  # диалога нет в файле — разметка прогона
+
+
+# --------------------------------------------------------------------------- Recall@pool (цена)
+
+
+def _pool_turn(qid: str, question: str, *pools: tuple[int, list[int]]) -> dict:
+    telemetry = {"price_pool": [{"r": r, "n": len(ids), "ids": ids} for r, ids in pools]} if pools else {}
+    return {"id": qid, "question": question, "outcome": "price", "handoff": False, "urgent": False, "ms": 1, "telemetry": telemetry}
+
+
+def test_pool_recall_intersects_pool_with_core_and_ok_by_round():
+    from evalbench.detectors import pool_recall
+
+    single = {"kind": "single", "core": [1], "ok": [2]}
+    hit = pool_recall({"price_pool": [{"r": 1, "n": 2, "ids": [5, 2]}]}, single)
+    assert (hit.recorded, hit.first, hit.both, hit.sizes_first, hit.sizes_second) == (True, 1.0, 1.0, (2,), ())
+    late = pool_recall({"price_pool": [{"r": 1, "n": 1, "ids": [5]}, {"r": 2, "n": 3, "ids": [7, 8, 1]}]}, single)
+    assert (late.first, late.both, late.sizes_second) == (0.0, 1.0, (3,))
+    miss = pool_recall({"price_pool": [{"r": 1, "n": 2, "ids": [5, 6]}]}, {"kind": "family", "core": [1, 3], "ok": []})
+    assert (miss.first, miss.both) == (0.0, 0.0)
+    # Список — доля услуг core в пуле (по всем вызовам хода: у корзины выбор зовётся по каждой услуге).
+    multi = {"kind": "multi", "core": [1, 2, 3, 4], "ok": [9]}
+    part = pool_recall({"price_pool": [{"r": 1, "n": 2, "ids": [1, 9]}, {"r": 1, "n": 1, "ids": [2]}]}, multi)
+    assert (part.first, part.both, part.sizes_first) == (0.5, 0.5, (2, 1))
+    # Пула нет — LLM строку не выбирала: вопрос размечен, но доли не считаются.
+    assert pool_recall({}, single) == pool_recall(None, single)
+    assert pool_recall({}, single).recorded is False and pool_recall({}, single).first is None
+    # Не цена, без контекста, услуги нет в прайсе, эталон пуст — вне замера.
+    for label in ({"kind": "not_price"}, {"kind": "context_dependent"}, {"kind": "absent", "core": []}, {"kind": "single", "core": []}, None):
+        assert pool_recall({"price_pool": [{"r": 1, "n": 1, "ids": [1]}]}, label) is None
+
+
+def test_clinic_synonyms_slice_uses_clinic_separators_and_whole_words(tmp_path):
+    from evalbench.detectors import ClinicSynonyms
+
+    folder = tmp_path / "service_info"
+    folder.mkdir()
+    rows = [
+        {"serviceName": "Общий анализ крови", "serviceSynonyms": "ОАК; клинический анализ крови"},
+        {"serviceName": "Посев", "serviceSynonyms": "мазок на флору || бакпосев"},
+        {"serviceName": "Стероиды", "serviceSynonyms": "11, 13-диметил"},
+        {"serviceName": "Ёж", "serviceSynonyms": ["Ёлка"]},
+        {"serviceName": "Пусто", "serviceSynonyms": None},
+    ]
+    (folder / "service_info_20261003.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+    syn = ClinicSynonyms.from_world(tmp_path)
+    assert syn.named("сколько стоит ОАК?") and syn.named("Мазок на флору из зева") and syn.named("бакпосев цена")
+    assert syn.named("елка") and syn.named("13-диметил есть?")
+    assert not syn.named("мазок из зева") and not syn.named("сколько стоит 11") and not syn.named("оакк")
+    assert not ClinicSynonyms([]).named("оак")
+
+
+def test_card_pool_metrics_slices_and_names_questions_that_left_or_entered_the_pool():
+    from evalbench import card
+    from evalbench.detectors import ClinicSynonyms
+
+    labels = {
+        "a": {"kind": "single", "core": [1], "ok": []},
+        "b": {"kind": "single", "core": [2], "ok": [3]},
+        "c": {"kind": "multi", "core": [4, 5], "ok": []},
+        "d": {"kind": "family", "core": [6], "ok": []},
+        "e": {"kind": "absent", "core": []},
+    }
+    syn = ClinicSynonyms(["оак"])
+    before = [
+        _pool_turn("a", "сколько стоит оак", (1, [1, 9])),
+        _pool_turn("b", "сколько стоит ферритин", (1, [9]), (2, [3])),
+        _pool_turn("c", "оак и глюкоза", (1, [4])),
+        _pool_turn("d", "узи"),
+        _pool_turn("e", "мрт сердца", (1, [9])),
+    ]
+    after = [
+        _pool_turn("a", "сколько стоит оак", (1, [9])),
+        _pool_turn("b", "сколько стоит ферритин", (1, [2])),
+        _pool_turn("c", "оак и глюкоза", (1, [4, 5])),
+        _pool_turn("d", "узи", (1, [6])),
+        _pool_turn("e", "мрт сердца"),
+    ]
+    m0, m1 = card.metrics(before, labels, syn), card.metrics(after, labels, syn)
+    assert m0["pool"]["dict"] == {"n": 1, "recorded": 1, "first_pct": 100, "both_pct": 100, "size_mean": 2.0, "size_p90": 2, "second_calls": 0}
+    assert (m0["pool"]["nodict"]["n"], m0["pool"]["nodict"]["recorded"], m0["pool"]["nodict"]["first_pct"], m0["pool"]["nodict"]["both_pct"]) == (2, 1, 0, 100)
+    assert m0["pool"]["nodict"]["second_calls"] == 1
+    assert (m0["pool"]["list"]["first_pct"], m1["pool"]["list"]["first_pct"]) == (50, 100)
+    assert (m0["pool"]["all"]["n"], m0["pool"]["all"]["recorded"]) == (4, 3)  # «absent» вне замера
+    changes = card.pool_changes(m0["pool_q"], m1["pool_q"])
+    assert changes == {
+        "first_lost": ["a"],
+        "first_gained": ["b", "c"],
+        "both_lost": ["a"],
+        "both_gained": ["c"],
+        "pool_gone": [],
+        "pool_new": ["d"],
+    }
+    header = {"name": "x", "code_sha": "s", "mode": "cached", "world": {}, "done": 5, "cases": 5, "valid": True}
+    text = card.render([(dict(header, name="было"), m0), (dict(header, name="стало"), m1)], (0, 5, []), changes)
+    assert "**Recall@pool (цена)**" in text and "| вне словаря | 0% / 100% (1/2)" in text
+    assert "- выпали из пула 1-го круга: 1 — a" in text and "- пул появился: 1 — d" in text
+    assert "сколько стоит" not in text  # в карточке только id, без реплик
+    # Прогон без записи пула (код до 22.10) — честное «не записан», не 0%.
+    old = card.metrics([_pool_turn("a", "оак")], labels, syn)
+    assert "пул не записан (0/1)" in "\n".join(card.render_pool([(header, old)]))

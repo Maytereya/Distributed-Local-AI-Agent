@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-from .prices import PriceCatalog, PricePair
+from .prices import PriceCatalog, PricePair, _latest, _read_jsonl
 
 # Служебный текст в ответе пациенту — класс «шаблон или внутренности бота протекли в текст» (слепая зона стенда,
 # решение 13.10; BUG-2026-10-14-RENDER-FORMAT-LABEL: «Формат: По услуге «X»:» и «руб..» жили в ответах с 2b9278d,
@@ -188,4 +190,93 @@ def classify_turn(body: dict[str, Any], session_entities: dict[str, Any], tpl: T
         leak=bool(_LEAK_RE.search(core)),
         chars=len(text),
         error=(str(error)[:200] if error else None),
+    )
+
+
+# --------------------------------------------------------------------------- Recall@pool (цена)
+
+_WORD_RE = re.compile(r"[0-9a-zа-я]+")
+_SYNONYM_SPLIT_RE = re.compile(r"[,;]|\|\|")
+POOL_KINDS = ("single", "family", "multi")
+
+
+def _words(text: str) -> tuple[str, ...]:
+    return tuple(_WORD_RE.findall(str(text or "").lower().replace("ё", "е")))
+
+
+class ClinicSynonyms:
+    """Слова пациентов из словаря клиники (`serviceSynonyms` справочника мира) — срез «слово в словаре» Recall@pool.
+
+    Срез считается по данным мира, а не кодом бота: у двух сравниваемых прогонов он один и тот же. Разделители — как
+    у клиники (`,`, `;`, `||`); ключ без букв («2», «11» — обрывки химических названий) словом не считается
+    (BUG-2026-09-16-NUMERIC-SYNONYM-SHARD). Слово в реплике — непрерывная цепочка её слов."""
+
+    def __init__(self, synonyms: Iterable[str]) -> None:
+        keys = (_words(text) for text in synonyms)
+        self.keys = {key for key in keys if key and any(ch.isalpha() for ch in "".join(key))}
+        self.longest = max((len(key) for key in self.keys), default=0)
+
+    @classmethod
+    def from_world(cls, apidata: Path) -> "ClinicSynonyms":
+        parts: list[str] = []
+        for row in _read_jsonl(_latest(apidata / "service_info", "service_info_*.jsonl")):
+            raw = row.get("serviceSynonyms")
+            for value in raw if isinstance(raw, list) else [raw]:
+                parts.extend(_SYNONYM_SPLIT_RE.split(str(value or "")))
+        return cls(parts)
+
+    def named(self, question: str) -> bool:
+        words = _words(question)
+        return any(
+            words[start : start + size] in self.keys
+            for size in range(1, min(self.longest, len(words)) + 1)
+            for start in range(len(words) - size + 1)
+        )
+
+
+@dataclass(frozen=True)
+class PoolRecall:
+    """Есть ли эталон среди кандидатов, ушедших в выбор строки LLM (`price_pool` телеметрии хода).
+
+    `first` — по пулам первого круга, `both` — по пулам обоих кругов; одна услуга — 0 или 1 (пул пересекается с
+    core ∪ ok), список (`multi`) — доля услуг core в пуле. Пула нет (LLM строку не выбирала: сильная фраза, гард,
+    ответ правил) — `recorded=False`, доли None."""
+
+    kind: str
+    recorded: bool
+    first: float | None = None
+    both: float | None = None
+    sizes_first: tuple[int, ...] = ()
+    sizes_second: tuple[int, ...] = ()
+
+
+def pool_recall(telemetry: dict[str, Any] | None, label: dict[str, Any] | None) -> PoolRecall | None:
+    """Recall@pool одного хода по разметке цен; None — вопрос не о цене, без контекста или услуги нет в прайсе."""
+
+    if not label or label.get("kind") not in POOL_KINDS:
+        return None
+    core = {int(x) for x in label.get("core") or []}
+    allowed = core | {int(x) for x in label.get("ok") or []}
+    if not allowed:
+        return None
+    pools = [p for p in (telemetry or {}).get("price_pool") or [] if isinstance(p, dict)]
+    kind = str(label["kind"])
+    if not pools:
+        return PoolRecall(kind, False)
+
+    def share(ids: set[int]) -> float:
+        if kind == "multi":
+            wanted = core or allowed
+            return len(ids & wanted) / len(wanted)
+        return 1.0 if ids & allowed else 0.0
+
+    first = {int(i) for p in pools if p.get("r") == 1 for i in p.get("ids") or []}
+    both = {int(i) for p in pools for i in p.get("ids") or []}
+    return PoolRecall(
+        kind,
+        True,
+        share(first),
+        share(both),
+        tuple(int(p.get("n") or 0) for p in pools if p.get("r") == 1),
+        tuple(int(p.get("n") or 0) for p in pools if p.get("r") == 2),
     )

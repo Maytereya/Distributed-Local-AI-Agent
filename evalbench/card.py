@@ -21,7 +21,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from .detectors import service_text
+from .detectors import ClinicSynonyms, PoolRecall, pool_recall, service_text
 from .prices import PriceCatalog, PricePair, multi_coverage, price_verdict
 from .specialties import SpecialtyMatcher, specialty_verdict
 from .world import PRIVATE_ROOT
@@ -149,7 +149,7 @@ def rescore_prices(header: dict[str, Any], turns: list[dict[str, Any]]) -> None:
         t["unsourced_prices"] = sum(1 for p in pairs if p.status == "unsourced")
 
 
-def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]], synonyms: ClinicSynonyms | None = None) -> dict[str, Any]:
     n = len(turns)
     outcomes = Counter(t["outcome"] for t in turns)
     verdicts = Counter()
@@ -175,6 +175,8 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
     ms = [t["ms"] for t in turns]
     # Служебный текст — по сохранённому ответу (как цены): правка детектора не требует перепрогона.
     leaked = [service_text(t.get("answer") or "") for t in turns]
+    # Recall@pool — по пулу, который записал сам ход (`price_pool`), срез «в словаре» — по данным мира.
+    pool_q = pool_by_question(turns, labels, synonyms)
     return {
         "n": n,
         "outcomes": dict(outcomes),
@@ -214,6 +216,8 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
         "llm_calls": sum(llm.values()),
         "llm_outcomes": dict(llm),
         "llm_sites": dict(sites),
+        "pool": pool_metrics(pool_q),
+        "pool_q": pool_q,
     }
 
 
@@ -237,7 +241,130 @@ def answer_diff(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> tupl
     return len(differ), len(shared), differ[:10]
 
 
-def render(runs: list[tuple[dict[str, Any], dict[str, Any]]], diff: tuple[int, int, list[str]] | None = None) -> str:
+# Срезы Recall@pool (замер 22.10, L-31): слово пациента в словаре клиники или нет — для одной услуги; список — отдельно.
+POOL_SLICES = (("dict", "слово в словаре клиники"), ("nodict", "вне словаря"), ("list", "список услуг"), ("all", "всего"))
+
+
+def load_synonyms(header: dict[str, Any]) -> ClinicSynonyms | None:
+    apidata = PRIVATE_ROOT / "worlds" / str(header.get("world", {}).get("date")) / "apidata"
+    return ClinicSynonyms.from_world(apidata) if apidata.is_dir() else None
+
+
+def pool_slice(turn: dict[str, Any], kind: str, synonyms: ClinicSynonyms | None) -> str:
+    if kind == "multi":
+        return "list"
+    return "dict" if synonyms is not None and synonyms.named(turn.get("question") or "") else "nodict"
+
+
+def pool_by_question(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]], synonyms: ClinicSynonyms | None) -> dict[str, tuple[str, PoolRecall]]:
+    """id вопроса → (срез, Recall@pool хода) — по размеченным ценовым вопросам, где эталон есть в прайсе."""
+
+    out: dict[str, tuple[str, PoolRecall]] = {}
+    for t in turns:
+        recall = pool_recall(t.get("telemetry"), labels.get(t["id"]))
+        if recall is not None:
+            out[t["id"]] = (pool_slice(t, recall.kind, synonyms), recall)
+    return out
+
+
+def pool_metrics(by_question: dict[str, tuple[str, PoolRecall]]) -> dict[str, dict[str, Any]]:
+    """По срезам: размечено, с записанным пулом, Recall@pool первого круга и обоих кругов (%, среднее по вопросам с
+    пулом), размер пула первого круга (среднее и p90 по вызовам выбора), вызовов второго круга."""
+
+    acc: dict[str, dict[str, Any]] = {key: {"n": 0, "recorded": 0, "first": 0.0, "both": 0.0, "sizes": [], "second": 0} for key, _ in POOL_SLICES}
+    for slice_key, recall in by_question.values():
+        for key in (slice_key, "all"):
+            s = acc[key]
+            s["n"] += 1
+            if recall.recorded:
+                s["recorded"] += 1
+                s["first"] += recall.first or 0.0
+                s["both"] += recall.both or 0.0
+                s["sizes"].extend(recall.sizes_first)
+                s["second"] += len(recall.sizes_second)
+    out = {}
+    for key, s in acc.items():
+        k = s["recorded"]
+        out[key] = {
+            "n": s["n"],
+            "recorded": k,
+            "first_pct": round(100 * s["first"] / k) if k else None,
+            "both_pct": round(100 * s["both"] / k) if k else None,
+            "size_mean": round(sum(s["sizes"]) / len(s["sizes"]), 1) if s["sizes"] else None,
+            "size_p90": _pct(s["sizes"], 0.9),
+            "second_calls": s["second"],
+        }
+    return out
+
+
+def pool_changes(before: dict[str, tuple[str, PoolRecall]], after: dict[str, tuple[str, PoolRecall]]) -> dict[str, list[str]]:
+    """Поимённо: какие вопросы выпали из пула и какие вошли (по первому кругу и по обоим), у каких пул появился или
+    пропал. Список — по доле услуг: меньше — «выпал», больше — «вошёл». Только id, без реплик."""
+
+    out: dict[str, list[str]] = {k: [] for k in ("first_lost", "first_gained", "both_lost", "both_gained", "pool_gone", "pool_new")}
+    for qid in sorted(set(before) & set(after)):
+        old, new = before[qid][1], after[qid][1]
+        if old.recorded != new.recorded:
+            out["pool_gone" if old.recorded else "pool_new"].append(qid)
+            continue
+        if not old.recorded:
+            continue
+        for stage in ("first", "both"):
+            was, now = getattr(old, stage), getattr(new, stage)
+            if now < was:
+                out[f"{stage}_lost"].append(qid)
+            elif now > was:
+                out[f"{stage}_gained"].append(qid)
+    return out
+
+
+def _pool_cell(s: dict[str, Any]) -> str:
+    if not s["n"]:
+        return "—"
+    if not s["recorded"]:
+        return f"пул не записан (0/{s['n']})"
+    return (
+        f"{s['first_pct']}% / {s['both_pct']}% ({s['recorded']}/{s['n']}); "
+        f"пул {_fmt(s['size_mean'])} / p90 {_fmt(s['size_p90'])}; 2-й круг {s['second_calls']}"
+    )
+
+
+def render_pool(runs: list[tuple[dict[str, Any], dict[str, Any]]], changes: dict[str, list[str]] | None = None) -> list[str]:
+    """Раздел карточки «Recall@pool (цена)»: строки — срезы, столбцы — прогоны; при двух прогонах — поимённые
+    переходы вопросов."""
+
+    lines = [
+        "",
+        "**Recall@pool (цена)** — есть ли строка эталона (core ∪ ok; у списка — доля услуг core) среди кандидатов, ушедших "
+        "в выбор строки LLM (`price_pool` хода). Ячейка: 1-й круг / с 2-м кругом (вопросов с пулом / размечено); размер "
+        "пула 1-го круга — среднее / p90 по вызовам; вызовов 2-го круга.",
+        "",
+        "| Срез | " + " | ".join(h["name"] for h, _ in runs) + " |",
+        "|---|" + "---|" * len(runs),
+    ]
+    for key, title in POOL_SLICES:
+        lines.append(f"| {title} | " + " | ".join(_pool_cell(m["pool"][key]) for _, m in runs) + " |")
+    if changes is not None:
+        titles = (
+            ("first_lost", "выпали из пула 1-го круга"),
+            ("first_gained", "вошли в пул 1-го круга"),
+            ("both_lost", "выпали из пула (оба круга)"),
+            ("both_gained", "вошли в пул (оба круга)"),
+            ("pool_gone", "пул пропал (LLM строку не выбирала)"),
+            ("pool_new", "пул появился"),
+        )
+        lines.append("")
+        for key, title in titles:
+            ids = changes[key]
+            lines.append(f"- {title}: {len(ids)}" + (f" — {', '.join(ids)}" if ids else ""))
+    return lines
+
+
+def render(
+    runs: list[tuple[dict[str, Any], dict[str, Any]]],
+    diff: tuple[int, int, list[str]] | None = None,
+    changes: dict[str, list[str]] | None = None,
+) -> str:
     lines = ["# Карточка замера", ""]
     for header, _m in runs:
         world = header.get("world", {})
@@ -319,6 +446,7 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]], diff: tuple[int, i
     if diff is not None:
         lines.append("")
         lines.append(f"**Ответ отличается:** {diff[0]} из {diff[1]} общих вопросов" + (f" (например: {', '.join(diff[2])})" if diff[2] else ""))
+    lines.extend(render_pool(runs, changes))
     lines.append("")
     lines.append("**Исходы ходов:**")
     lines.append("")
@@ -368,8 +496,9 @@ def main(argv: list[str] | None = None) -> int:
         refresh_expectations(header, turns)
         rescore_prices(header, turns)
         score_specialties(header, turns)
-        loaded.append((header, metrics(turns, labels)))
-    print(render(loaded, diff))
+        loaded.append((header, metrics(turns, labels, load_synonyms(header))))
+    changes = pool_changes(loaded[0][1]["pool_q"], loaded[1][1]["pool_q"]) if len(loaded) == 2 else None
+    print(render(loaded, diff, changes))
     return 0
 
 
