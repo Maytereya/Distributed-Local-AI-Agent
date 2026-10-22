@@ -357,6 +357,16 @@ async def settle_shadows(timeout_s: float = SHADOW_SETTLE_S) -> None:
         await module.settle(timeout_s)
 
 
+def session_rows(rows: list[dict[str, Any]], session_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Разделить строки телеметрии на строки сессии `session_id` и прочие: `sess` строки — первые 8 знаков sha256 id сессии
+    (`messengers_router.turn_telemetry.begin`)."""
+
+    sess = hashlib.sha256(str(session_id or "").encode("utf-8")).hexdigest()[:8]
+    mine = [row for row in rows if row.get("sess") == sess]
+    rest = [row for row in rows if row.get("sess") != sess]
+    return mine, rest
+
+
 class FrozenWorld:
     """Контекст-менеджер: на время прогона бот живёт в мире `root` с часами `profile`.
 
@@ -525,6 +535,21 @@ class FrozenWorld:
         if merge_side is not None:
             rows = merge_side(rows)
         return rows[-1] if rows else None
+
+    def take_telemetry_for(self, session_id: str) -> dict[str, Any] | None:
+        """Строка телеметрии хода сессии `session_id` — для параллельных ходов (`run --concurrency ≥ 2`), где строки
+        разных ходов копятся вперемешку: строки этой сессии забираются, чужие остаются (DEBT-2026-10-22-STAND-CONCURRENCY-TELEMETRY).
+        Строки, дописанные после ответа (`pending_shadow`), успевшие прийти, — тоже, через `merge_side`."""
+
+        mine, rest = session_rows(self.telemetry, session_id)
+        self.telemetry[:] = rest
+        try:
+            from messengers_router.turn_telemetry import merge_side
+        except ImportError:  # версия до строк после ответа
+            merge_side = None
+        if merge_side is not None:
+            mine = merge_side(mine)
+        return mine[-1] if mine else None
 
     def _install_kb(self, meili: Any) -> None:
         docs = self.captured.get("kb_main_index")
