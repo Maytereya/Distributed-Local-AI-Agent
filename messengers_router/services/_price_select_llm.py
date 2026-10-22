@@ -535,11 +535,12 @@ def _options(question: str, pool: list[dict[str, Any]]) -> list[Option]:
 
 
 async def _ask(
-    question: str, pool: list[dict[str, Any]], *, judge_qualifier: bool = False
+    question: str, pool: list[dict[str, Any]], *, judge_qualifier: bool = False, round_no: int = 1
 ) -> tuple[list[dict[str, Any]], list[str], str] | None:
     """Выбор LLM по пулу кандидатов: (строки «та услуга» в порядке пула, термины, код причины пустого
-    выбора) или None — сбой."""
+    выбора) или None — сбой. Пул (`serviceId` строк) и круг `round_no` — в телеметрию хода (Recall@pool), только запись."""
 
+    turn_telemetry.note_price_pool(round_no, [row.get("serviceId") for row in pool])
     options = _options(question, pool)
     choice = await choose(price_task(judge_qualifier=judge_qualifier), question, options)
     if choice.failed:  # сбой и мусор — решение политики (L-13) или прежний ответ правил
@@ -820,7 +821,7 @@ async def select_price_rows(
     if not pool_by_terms:
         journal_miss(terms, reason)
         return settle(none_fit(reason))
-    second = await _ask(question, pool_by_terms, judge_qualifier=judge_qualifier)
+    second = await _ask(question, pool_by_terms, judge_qualifier=judge_qualifier, round_no=2)
     if second is None:
         return settle(*unavailable())
     if not second[0]:
