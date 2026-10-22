@@ -461,12 +461,6 @@ def _short_name_words(text: str) -> list[str]:
     return out
 
 
-def _mis_notes_on() -> bool:
-    """`[MESSENGER_ROUTER] price_option_mis_notes = off | on` (облако 19.10, умолчание — как было); мусор — off."""
-
-    return str(getattr(_cfg, "MR_PRICE_OPTION_MIS_NOTES", "off") or "").strip().lower() == "on"
-
-
 # Пометка МИС у позиции — не длиннее этого (знаков) и не больше двух названий каждого вида: длинный перечень материалов
 # (до 1363 знаков у одной строки) сбивал выбор (прямой вызов 19.10). Все пометки списка — не длиннее `_MIS_NOTES_POOL_MAX`
 # (в порядке списка: ответ правил первым): «кровь на ТТГ» пометила бы «кровь из вены» у каждой строки, а промпт — время LLM.
@@ -512,10 +506,10 @@ def _option_text(row: dict[str, Any], note: str) -> str:
 
 
 def _options(question: str, pool: list[dict[str, Any]]) -> list[Option]:
-    """Позиции для LLM: «название — цена», под `price_option_mis_notes = on` — с пометкой МИС (`_mis_note`) в пределах
-    `_MIS_NOTES_POOL_MAX` на список; число помеченных — в телеметрию хода (`price_mis_notes`)."""
+    """Позиции для LLM: «название — цена» с пометкой МИС (`_mis_note`) в пределах `_MIS_NOTES_POOL_MAX` на список; число
+    помеченных — в телеметрию хода (`price_mis_notes`). Выключатель `price_option_mis_notes` снят 22.10 (неделя `on` на проде)."""
 
-    wanted = set(_price_query_tokens(question)) if _mis_notes_on() else set()
+    wanted = set(_price_query_tokens(question))
     vocab = _biomaterial._vocabularies() if wanted else None  # один раз на список: у словаря — проверка среза на диске
     notes, budget = [], _MIS_NOTES_POOL_MAX
     for row in pool:

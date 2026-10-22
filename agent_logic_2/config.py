@@ -200,7 +200,6 @@ class MessengerRouterConfig:
     choose_readiness: str
     parse_fail_variants: int
     variant_b_wordforms: str
-    price_option_mis_notes: str
     price_candidates_by_meaning: str
     mis_honest_degradation: str
     topic_override_llm: str
@@ -558,11 +557,6 @@ settings = Settings(
         # BUG-2026-10-17-VARIANT-B-COMMON-WORD). По умолчанию on с 17.10: офлайн-замер dev — 0 хуже (решение владельца 16.10:
         # включать только при 0 хуже). [MESSENGER_ROUTER] variant_b_wordforms
         variant_b_wordforms=_get_enum("MESSENGER_ROUTER", "variant_b_wordforms", default="on", allowed={"off", "on"}),
-        # Позиция прайса в выборе строки LLM — с данными МИС, которые пациент назвал: материал (`biomatNames`) и синоним
-        # клиники (`serviceSynonyms`), только совпавшие со словами реплики, не длиннее 120 знаков (облако 19.10,
-        # BUG-2026-10-19-PRICE-ROUND-TWO-POOL, g0542: «мазок … с задней стенки глотки» — у «Посев на микрофлору» материала в
-        # названии нет). off — как было (текст позиции «название — цена» байт в байт). [MESSENGER_ROUTER] price_option_mis_notes
-        price_option_mis_notes=_get_enum("MESSENGER_ROUTER", "price_option_mis_notes", default="off", allowed={"off", "on"}),
         # Кандидаты строки цены по смыслу, а не по буквам (п. 1 плана 19.10, ход (в), L-31): словарный гард П2 не
         # останавливает вопрос до LLM (условие судит правило 3 промпта, как у фразы разбора), строки по редким словам
         # реплики и терминов второго круга — первыми в пуле, короткие сокращения («ЛГ», «аТ ТГ») доходят до LLM.
@@ -776,7 +770,6 @@ MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
-MR_PRICE_OPTION_MIS_NOTES = settings.messenger_router.price_option_mis_notes
 MR_PRICE_CANDIDATES_BY_MEANING = settings.messenger_router.price_candidates_by_meaning
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm

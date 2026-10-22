@@ -44,6 +44,8 @@ class _PickLLM:
         for line in prompt.splitlines():
             head, dot, rest = line.partition(". ")
             if dot and head.isdigit():
+                # Пометка МИС у позиции («… руб. (по справочнику клиники: другое название — …)») — не часть названия.
+                rest = rest.split(" (по справочнику клиники: ", 1)[0]
                 name = " ".join(rest.rsplit(" — ", 1)[0].split())
                 names.append(name)
                 if name == self.target:
