@@ -52,7 +52,7 @@ from typing import Any, Sequence
 from . import turn_parse, turn_telemetry
 from .policies import detect_address_intent, detect_nonbookable_walkin_intent, detect_prepare_intent, detect_price_intent
 from .runtime_config import config as _cfg
-from .services import _turn_phrases
+from .services import _turn_phrases, _turn_spans
 from .services._biomaterial import _SPEECH_WRAPPER
 from .services._strong_match import strong_rows
 from .services._prices_helpers import (
@@ -557,7 +557,14 @@ async def _parse_phrases(
     agreed: str | None = None
     try:
         catalog = await asyncio.to_thread(_catalog_rows, None)
-        parse = await _turn_phrases.parse_turn_phrases(text, facet=facet, catalog=catalog, prepared=prepared)
+        if _turn_spans.enabled():
+            # Без списков слов: LLM размечает номера слов реплики (DESIGN-2026-10-23-NO-STOPWORDS, этап 1); генератора окон нет —
+            # правилам понимания ждать нечего.
+            if prepared is not None:
+                prepared.set()
+            parse = await _turn_spans.parse_turn_spans(text, facet=facet, catalog=catalog)
+        else:
+            parse = await _turn_phrases.parse_turn_phrases(text, facet=facet, catalog=catalog, prepared=prepared)
         if not agree:
             return _noted(parse, None)
         if rules is not None:

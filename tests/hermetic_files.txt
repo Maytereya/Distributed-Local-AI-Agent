@@ -219,3 +219,4 @@ tests/test_turn_budget_reason_class.py
 tests/test_price_budget_clarify_class.py
 tests/test_evalbench_wordforms.py
 tests/test_prepare_general_memo_class.py
+tests/test_turn_spans_class.py

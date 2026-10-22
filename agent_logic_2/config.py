@@ -210,6 +210,7 @@ class MessengerRouterConfig:
     p1_facet_none_offer: str
     price_budget_clarify: str
     prepare_general_memo_llm: str
+    turn_spans_llm: str
     topic_by_llm: str
     turn_understanding_one: str
     service_answer_from_data: str
@@ -608,6 +609,10 @@ settings = Settings(
         # найденных по буквам («Анализ мочи по Нечипоренко»). Без LLM не выбирается. off — как было.
         # [MESSENGER_ROUTER] prepare_general_memo_llm
         prepare_general_memo_llm=_get_enum("MESSENGER_ROUTER", "prepare_general_memo_llm", default="off", allowed={"off", "on"}),
+        # Разбор реплики на фразы-услуги без списков слов: LLM размечает номера слов (DESIGN-2026-10-23-NO-STOPWORDS, этап 1;
+        # решения владельца 22.10 — 28 списков стоп-слов удалить, без LLM услугу не угадывать). off — прежний генератор окон.
+        # [MESSENGER_ROUTER] turn_spans_llm
+        turn_spans_llm=_get_enum("MESSENGER_ROUTER", "turn_spans_llm", default="off", allowed={"off", "on"}),
         # Ход (б), этап 4, вариант Б (решения владельца 20.10 (б) 1, 5): ветки правил `legacy_v2` через запятую
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
@@ -807,6 +812,7 @@ MR_CATALOG_CONFIRM_LLM = settings.messenger_router.catalog_confirm_llm
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
 MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
 MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
+MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
