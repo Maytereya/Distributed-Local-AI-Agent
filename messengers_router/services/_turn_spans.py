@@ -40,10 +40,15 @@ TASK_NAME = "turn_spans"
 SITE = TASK_NAME  # не задача `choose()`: свой контракт ответа (группы номеров), промпт `turn_spans`
 _MAX_WORDS = 40  # длиннее — `too_many`: не разметка, а письмо (p95 ценовой реплики — около 15 слов)
 _MAX_PHRASES = 16  # решение владельца 13.10 (Q3): не больше 16 услуг в одной реплике
-_TIMEOUT_S = 5.0
 _QUEUE_TIMEOUT_MS = 1500
+# Ответ растёт с числом услуг: пара «[12, 13], » — 7–8 токенов (карточка 2, 22.10: при 3 токенах на слово длинный список
+# обрезался — все INVALID; при таймауте 5 с список из 15+ позиций не успевал — все UNAVAILABLE).
 _TOKENS_FIXED = 24
-_TOKENS_PER_WORD = 3  # ответ — номера слов: ≈3 токена на номер со скобками и запятыми
+_TOKENS_PER_WORD = 8
+_TOKENS_MAX = 400
+_TIMEOUT_BASE_S = 5.0
+_TIMEOUT_PER_WORD_S = 0.25
+_TIMEOUT_MAX_S = 12.0
 
 _SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -106,6 +111,12 @@ def decide_without_llm(reply: str, catalog: list[dict[str, Any]]) -> PhraseParse
     return None
 
 
+def timeout_for(n_words: int) -> float:
+    """Ожидание ответа разметки: длинный перечень — длинный ответ."""
+
+    return min(_TIMEOUT_MAX_S, _TIMEOUT_BASE_S + _TIMEOUT_PER_WORD_S * n_words)
+
+
 def prompt(reply: str, toks: Sequence[_Word]) -> tuple[str, str]:
     """Инструкция (system) и данные хода (user): реплика пациента — данные, а не инструкция (SEC-3)."""
 
@@ -166,8 +177,8 @@ async def parse_turn_spans(reply: str, *, facet: str | None, catalog: list[dict[
             system=system,
             user=user,
             schema=_SCHEMA,
-            options={"temperature": 0, "num_predict": _TOKENS_FIXED + _TOKENS_PER_WORD * len(toks)},
-            timeout_s=_TIMEOUT_S,
+            options={"temperature": 0, "num_predict": min(_TOKENS_MAX, _TOKENS_FIXED + _TOKENS_PER_WORD * len(toks))},
+            timeout_s=timeout_for(len(toks)),
             queue_timeout_ms=_QUEUE_TIMEOUT_MS,
         )
     except Exception as exc:  # сбой LLM — без разреза по буквам (решение владельца 22.10, вариант (а))

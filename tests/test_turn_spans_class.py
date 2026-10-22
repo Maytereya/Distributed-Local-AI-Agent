@@ -143,3 +143,12 @@ def test_switch_routes_understanding_to_spans(monkeypatch) -> None:
     monkeypatch.setattr(turn_understanding, "_catalog_rows", lambda _r: _CATALOG)
     parse = asyncio.run(turn_understanding._parse_phrases("сколько стоят анализы", facet=None, tu=None, agree=False))
     assert called == ["сколько стоят анализы"] and parse.status == "none_fit"
+
+
+def test_long_list_gets_answer_budget_and_time(monkeypatch) -> None:
+    """Перечень из 15 позиций: ответ — 15 групп по 7–8 токенов; бюджет и ожидание растут со словами (карточка 2, 22.10)."""
+
+    reply = ", ".join(["ферритин", "глюкоза", "ттг"] * 5)
+    parse, seen = _parse(monkeypatch, reply, {"phrases": [[k] for k in range(1, 16)]})
+    assert parse.status == "picked" and len(parse.items) == 15
+    assert seen["options"]["num_predict"] >= 8 * 15 and seen["timeout_s"] > 5.0
