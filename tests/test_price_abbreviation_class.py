@@ -97,14 +97,6 @@ def test_capitalised_abbreviation_gets_its_row_not_a_request_for_the_name(questi
     assert row in turn["text"] and "руб" in turn["text"]
 
 
-@pytest.mark.parametrize("question", ["ЛГ стоимость", "Цена аТ ТГ"])
-def test_off_keeps_asking_for_the_name_of_a_two_letter_abbreviation(question, mini_prod_world, monkeypatch):  # noqa: F811
-    llm = _PickLLM("")
-    turn = _turn(mini_prod_world, monkeypatch, question, mode="off", llm=llm)
-    assert turn["text"] == _ASK_NAME
-    assert not llm.offered
-
-
 def test_bare_price_question_still_asks_for_the_name(mini_prod_world, monkeypatch):  # noqa: F811
     # Слов об услуге нет (предлоги строчными — не сокращение): уточнение, как было.
     llm = _PickLLM("")

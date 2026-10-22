@@ -107,7 +107,7 @@ PRICE_TASK = Task(
 # записи, сроке, «условиях сбора» — не условие услуги. Под `price_judge_conditions = on`; своё имя — свой промпт, своё место в
 # телеметрии и на стенде.
 PRICE_CONDITIONS_TASK = replace(PRICE_TASK, name="price_service_conditions")
-# Суд условия под `price_candidates_by_meaning = on` (гард П2 сработал, вопрос судит LLM): правило 3 называет условием и
+# Суд условия (гард П2 сработал, вопрос судит LLM; выключатель `price_candidates_by_meaning` снят 22.10): правило 3 называет условием и
 # вариант выполнения, от которого зависит цена (срочно / экспресс, под наркозом, на дому), — карточка dev 20.10: «ФКС с
 # наркозом» → 8 100 руб. без наркоза, «экспресс 17-ОН день в день» → обычная цена. Уточнение `price_judge_conditions`
 # («как сдать, подготовиться…» — не условие) входит в тот же текст: строгое правило без него отсекало бы вопросы о сдаче.
@@ -116,10 +116,10 @@ _VARIANT_B_LIMIT = 5
 
 
 def price_task(*, judge_qualifier: bool = False) -> Task:
-    """Задача выбора строки прайса: суд условия под `price_candidates_by_meaning = on` — свой промпт; под
-    `[MESSENGER_ROUTER] price_judge_conditions = on` — с уточнённым правилом 3."""
+    """Задача выбора строки прайса: суд условия — свой промпт; под `[MESSENGER_ROUTER] price_judge_conditions = on` — с
+    уточнённым правилом 3."""
 
-    if judge_qualifier and _by_meaning_on():
+    if judge_qualifier:
         return PRICE_QUALIFIER_TASK
     on = str(getattr(_cfg, "MR_PRICE_JUDGE_CONDITIONS", "off") or "").strip().lower() == "on"
     return PRICE_CONDITIONS_TASK if on else PRICE_TASK
@@ -332,12 +332,6 @@ def _policy_label(selection: PriceSelection | None) -> str:
     return {"none_fit": "not_found"}.get(selection.status, selection.status)
 
 
-def _by_meaning_on() -> bool:
-    """`[MESSENGER_ROUTER] price_candidates_by_meaning = off | on` (п. 1 плана 19.10, умолчание — как было); мусор — off."""
-
-    return str(getattr(_cfg, "MR_PRICE_CANDIDATES_BY_MEANING", "off") or "").strip().lower() == "on"
-
-
 # Кандидаты по редким словам: слово встречается не больше чем в стольких названиях прайса (или нет ни в одном —
 # словоформа, «карбамазепина»), берём не больше `_RARE_WORDS` слов и `_PER_RARE_WORD` строк на слово.
 _RARE_DF = 8
@@ -404,11 +398,11 @@ def _rare_rows(texts: Sequence[str], retail_rows: list[dict[str, Any]], *, short
 
 def names_service(question: str) -> bool:
     """Назвал ли пациент в реплике услугу — одно определение для планировщика (не переспрашивать название) и выбора
-    строки (звать ли LLM). Под `price_candidates_by_meaning` короткое сокращение с заглавной («ЛГ», «аТ ТГ») — тоже
+    строки (звать ли LLM). Короткое сокращение с заглавной («ЛГ», «аТ ТГ») — тоже
     слова об услуге: её ищет LLM. До 20.10 это знал только выбор строки, а планировщик по прежнему определению
     переспрашивал «Скажите название услуги» раньше него (test-срез 20.10: «ЛГ стоимость», «Цена аТ ТГ»)."""
 
-    return price_question_names_service(question) or bool(_by_meaning_on() and _short_name_words(question))
+    return price_question_names_service(question) or bool(_short_name_words(question))
 
 
 # Строк по синонимам МИС внутри названной услуги — не больше стольких (у неоднозначного синонима их до 9: «вэб»).
@@ -669,7 +663,6 @@ async def select_price_rows(
     rows = [row for row in retail_rows if isinstance(row, dict)]
     if not question or not rows:
         return None
-    by_meaning = _by_meaning_on()
     # Ответ цифрой, «да», «а сколько стоит?» — своих слов об услуге нет, её держит контекст.
     if not names_service(question):
         return None
@@ -681,10 +674,7 @@ async def select_price_rows(
     if judge_qualifier:
         turn_telemetry.note(price_guard="llm")
     elif query_has_unsatisfiable_qualifier(question, rows) and not query_names_service_in_other_words(question, rows):
-        if not by_meaning:
-            turn_telemetry.note(price_guard="dictionary")
-            return None
-        # Под `price_candidates_by_meaning` словарь прайса — повод спросить LLM, не вердикт: незнакомое прайсу слово чаще
+        # Словарь прайса — повод спросить LLM, не вердикт: незнакомое прайсу слово чаще
         # сокращение или словоформа («бак посев», «ВМС», «карбамазепина»), чем «по ОМС» (п. 1 плана 19.10). Условие судит
         # правило 3 промпта; сбой LLM — ответ правил, как без выключателя (гард прежний: чужой цены нет).
         judge_qualifier = guard_bypassed = True
@@ -710,17 +700,16 @@ async def select_price_rows(
         _build_pool, texts, rows, per_text=_PER_QUERY_LIMIT, first=proposal_first, fallback_texts=words
     )
     pool += [row for row in rest if _row_key(row) not in {_row_key(r) for r in pool}][: max(0, _POOL_LIMIT - len(pool))]
-    if by_meaning:
-        named = _named_service_texts(question, phrase, hints)
-        # Строки по редким словам названной услуги — в конце списка: иначе пул из 24 строк заполняют частые слова.
-        rare = await asyncio.to_thread(_rare_rows, named, rows, short_from=question)
-        pool = _with_rare_tail(pool, rare)
-        # Синоним МИС внутри названной услуги — первым: это слово клиники, довод сильнее букв ответа правил
-        # («ЭхоКГ узи сердца»: правила предложили «…плода при многоплодной беременности», LLM выбрала его первым номером).
-        by_synonym = await asyncio.to_thread(_synonym_rows, named, rows)
-        if by_synonym:
-            keys = {_row_key(row) for row in by_synonym}
-            pool = [*by_synonym, *(row for row in pool if _row_key(row) not in keys)][:_POOL_LIMIT]
+    named = _named_service_texts(question, phrase, hints)
+    # Строки по редким словам названной услуги — в конце списка: иначе пул из 24 строк заполняют частые слова.
+    rare = await asyncio.to_thread(_rare_rows, named, rows, short_from=question)
+    pool = _with_rare_tail(pool, rare)
+    # Синоним МИС внутри названной услуги — первым: это слово клиники, довод сильнее букв ответа правил
+    # («ЭхоКГ узи сердца»: правила предложили «…плода при многоплодной беременности», LLM выбрала его первым номером).
+    by_synonym = await asyncio.to_thread(_synonym_rows, named, rows)
+    if by_synonym:
+        keys = {_row_key(row) for row in by_synonym}
+        pool = [*by_synonym, *(row for row in pool if _row_key(row) not in keys)][:_POOL_LIMIT]
     strong = strong_rows(question, rows, pool=pool)
     if strong:
         turn_telemetry.note(price_policy="strong")
@@ -788,7 +777,7 @@ async def select_price_rows(
     # признала в реплике услугу: термины к «слишком общему» и «не услуге» («цены на анализы можешь озвучить?») — догадка
     # LLM, и строки по их редким словам она же потом выбирала (карточка dev 20.10: список «Биохимия…»).
     rare_by_terms = (
-        await asyncio.to_thread(_rare_rows, terms, rows) if by_meaning and reason not in _NOT_A_SERVICE_NAME else []
+        await asyncio.to_thread(_rare_rows, terms, rows) if reason not in _NOT_A_SERVICE_NAME else []
     )
     pool_by_terms = await asyncio.to_thread(
         _build_pool, terms, rows, per_text=_PER_TERM_LIMIT, first=rare_by_terms, fallback_texts=term_words

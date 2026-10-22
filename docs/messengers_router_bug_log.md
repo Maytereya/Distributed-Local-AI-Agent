@@ -17,11 +17,12 @@
   его регулярки и словари, сам выключатель, тесты пути `off`; потолок храповика — в том же коммите. Деплои 10–12 — с 27–28.10.
 - **Ветка** `claude/2026-10-22-switch-removal` (от прода деплоя 14): по коммиту на выключатель. Перед слиянием — replay набора прода
   (§1 `docs/HANDOFF_2026-10-22_cloud_four_tasks.md`) на коде ветки против прода: 0 различий (на проде все эти выключатели `on`).
+- **Проверка 2 (22.10, с `price_candidates_by_meaning`):** replay набора прода — test 0 / 201, dev 0 / 867; гейт 5900 passed / 13 xfailed.
 - **Проверка (22.10, ветка на `cd5bc49`):** replay набора прода деплоя 14 (мир 20261008) против `d14_rec_*` — **test 0 / 201, dev 0 / 867**
   различий, все запросы к LLM — из записи (`cache_hit` 327 / 1292): снятие поведения прода не меняет. Гейт после каждого коммита — зелёный
   (5907 passed / 13 xfailed на вершине).
 - **Не сняты:** `pending_reply` и `pending_buttons` (деплои 10 и 12; самые большие — 16 и 8 файлов кода, дублёры, CONFIRM) — отдельным шагом.
-- **Отложено:** `price_candidates_by_meaning` — снятие роняет 19 тестов гейта (`test_qualifier_round_two_class` ×9, `test_price_judge_collection_conditions` ×3, `test_p2_llm_judge_class` ×2, `test_price_llm_select` ×2, `test_parse_price_guard_class`, `test_basket_weak_phrase_judge_class`): они молча проверяли путь off (словарный гард П2 до LLM), которого на проде нет; переводить по смыслу каждый — отдельный шаг.
+- **Было отложено, снято 22.10 днём:** `price_candidates_by_meaning` — снятие роняло 19 тестов гейта (`test_qualifier_round_two_class` ×9, `test_price_judge_collection_conditions` ×3, `test_p2_llm_judge_class` ×2, `test_price_llm_select` ×2, `test_parse_price_guard_class`, `test_basket_weak_phrase_judge_class`): они молча проверяли путь off (словарный гард П2 до LLM), которого на проде нет; переводить по смыслу каждый — отдельный шаг.
 - Строки `<ключ> = on` в `config.ini` прода после снятия не мешают: неизвестный ключ раздела не читается (убрать при следующей правке).
 
 | Выключатель | На проде `on` с | Коммит (по порядку в ветке) | Снято | Тесты |
@@ -31,6 +32,7 @@
 | `basket_weak_phrase_judge` | деплой 11 (20.10) | 3 | условие в `_prices_helpers._weak_phrase_judge` (суд слабой фразы с сильным названием внутри — всегда); ключ, атрибут | `test_basket_weak_phrase_judge_class.py`: сравнения с off удалены, «нет слов вне названий — нет суда» — проверкой подсказки; `test_p2_strong_phrase_basket_class.py::test_without_windows_nothing_changes` — снято утверждение «нет поля `strong_phrase_guard`» (на проде суд слабой фразы есть, ответ тот же) |
 | `prepare_vs_booking_llm` | деплой 11 (20.10) | 4 | условие в роутере (суд «подготовка или запись» при конфликте детекторов — всегда), `booking_slots.prepare_vs_booking_enabled`; ключ, атрибут | `test_booking_slots_by_meaning.py`: база «как было» — тот же ход с недоступной LLM; `test_prepare_subject_class.py` — без установки выключателя |
 | `booking_specialty_llm` | деплой 12 (21.10) — сливать не раньше 28.10 | 5 | условие в `entity_grounder` (суд специальности записи — всегда), `booking_slots.specialty_enabled`; ключ, атрибут | `test_booking_slots_by_meaning.py`: ряд «off + подтверждено» удалён, база «как было» — без ответа задачи специальности; `test_booking_specialty_qualifier_class.py` — база с недоступной задачей специальности (`_SchemaLLM(specialty_down=True)`) |
+| `price_candidates_by_meaning` | деплой 11 (20.10) | 6 | `_by_meaning_on`: суд условия — всегда промпт `qualifier`; словарный гард П2 — повод спросить LLM, не вердикт; короткие сокращения — слова об услуге; редкие слова и синонимы МИС в пуле; ключ, атрибут | 19 тестов гейта проверяли путь off (решение владельца 22.10 — перевести на путь прода): `test_qualifier_round_two_class` — счёт вызовов по обоим местам выбора строки; `test_price_llm_select` ×2 и `test_parse_price_guard_class` — «по ОМС» судит LLM, модель по правилу 3 → без цены (было «LLM не зовём»); `test_p2_llm_judge_class` — эталон «без судьи» только при недоступной LLM; `test_price_judge_collection_conditions` — суд условия всегда с уточнением правила 3; тесты пути off удалены |
 
 ---
 

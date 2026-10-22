@@ -200,7 +200,6 @@ class MessengerRouterConfig:
     choose_readiness: str
     parse_fail_variants: int
     variant_b_wordforms: str
-    price_candidates_by_meaning: str
     mis_honest_degradation: str
     topic_override_llm: str
     topic_shadow_llm: str
@@ -549,11 +548,6 @@ settings = Settings(
         # BUG-2026-10-17-VARIANT-B-COMMON-WORD). По умолчанию on с 17.10: офлайн-замер dev — 0 хуже (решение владельца 16.10:
         # включать только при 0 хуже). [MESSENGER_ROUTER] variant_b_wordforms
         variant_b_wordforms=_get_enum("MESSENGER_ROUTER", "variant_b_wordforms", default="on", allowed={"off", "on"}),
-        # Кандидаты строки цены по смыслу, а не по буквам (п. 1 плана 19.10, ход (в), L-31): словарный гард П2 не
-        # останавливает вопрос до LLM (условие судит правило 3 промпта, как у фразы разбора), строки по редким словам
-        # реплики и терминов второго круга — первыми в пуле, короткие сокращения («ЛГ», «аТ ТГ») доходят до LLM.
-        # off — как было. [MESSENGER_ROUTER] price_candidates_by_meaning
-        price_candidates_by_meaning=_get_enum("MESSENGER_ROUTER", "price_candidates_by_meaning", default="off", allowed={"off", "on"}),
         # Ход (д), видимая деградация (решения владельца 08.10 и 18.10): сбой МИС → честный перевод на оператора вместо
         # правдоподобной неправды («расписание не найдено», «акций нет», адреса без фильтра врачей); устаревший срез —
         # приписка «по данным на ДД.ММ» или оператор. off — как было (правило 13.10: видимое поведение под
@@ -754,7 +748,6 @@ MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
-MR_PRICE_CANDIDATES_BY_MEANING = settings.messenger_router.price_candidates_by_meaning
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
