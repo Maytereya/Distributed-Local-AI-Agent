@@ -149,3 +149,31 @@ def test_on_budget_exhausted_after_router_judgement_no_letter_confirm(monkeypatc
         )
     )
     assert "_catalog_service_candidate" not in out
+
+
+def test_on_budget_exhausted_by_other_decisions_no_letter_confirm(monkeypatch) -> None:
+    """Лимит решений хода потратили другие суды (не переспроса) — «недоступна» не возвращает переспрос по буквам (g0287)."""
+
+    from messengers_router import llm_runtime
+
+    async def fake_judge(phrase, canonical, **kw):
+        return BookingServiceVerdict("choose", names=(canonical,), status="unavailable")
+
+    monkeypatch.setattr(G, "judge_booking_service", fake_judge)
+    monkeypatch.setattr(cfg, "MR_CATALOG_CONFIRM_LLM", "on", raising=False)
+    monkeypatch.setattr(llm_runtime, "turn_budget_exhausted", lambda: True)
+    out: dict = {}
+    asyncio.run(
+        G.judge_fuzzy_service_candidate(
+            label="TEST_ASSIST",
+            candidate="Анализ крови на аминокислоты (48 показателей)",
+            query="анализ",
+            user_text="Я смогу принести кал на анализ в 15.00?",
+            services=_Services(),
+            runtime_llm_mode="hybrid",
+            out=out,
+            flags=set(),
+            candidate_flag="entity_catalog_service_fuzzy_candidate",
+        )
+    )
+    assert "_catalog_service_candidate" not in out

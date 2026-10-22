@@ -395,7 +395,10 @@ async def choose(
         )
     except Exception as exc:  # сбой LLM — UNAVAILABLE; что ответить пациенту, решает вызывающий
         logger.warning("choose_unavailable: %s %s %s", task.name, type(exc).__name__, llm_runtime.error_detail(exc) or "-")
-        return _noted(task, Choice(Status.UNAVAILABLE, latency_ms=_ms(started)), len(options), shadow=shadow)
+        # Кончился лимит решений хода — не сбой модели: причина `budget` видна в телеметрии хода и вызывающему
+        # (ход (е), DESIGN-2026-10-22-TURN-DECISION-BUDGET); статус прежний — политика вызывающих не меняется.
+        reason = "budget" if isinstance(exc, llm_runtime.LLMBudgetExhaustedError) else ""
+        return _noted(task, Choice(Status.UNAVAILABLE, reason=reason, latency_ms=_ms(started)), len(options), shadow=shadow)
     if legacy is None:
         try:
             data = json.loads(str(raw or "").strip())

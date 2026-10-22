@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import address_service, booking_slots, turn_understanding
+from . import address_service, booking_slots, llm_runtime, turn_understanding
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
@@ -333,9 +333,10 @@ async def judge_fuzzy_service_candidate(
     )
     flags.add(f"catalog_confirm_judged_{verdict.status or verdict.action}")
     if verdict.status == "unavailable":
-        # LLM этого хода уже судила другую фразу (была доступна) — «недоступна» здесь значит исчерпанный лимит решений
-        # хода, а не сбой: догадку по буквам не выносим (g0196: первая фраза снята LLM, вторая ушла на «да/нет»).
-        if not judged_before:
+        # LLM этого хода уже судила другую фразу (была доступна) или кончился лимит решений хода — «недоступна» здесь не
+        # сбой модели: догадку по буквам не выносим (g0196; g0287 «принести кал на анализ» — лимит потратили другие суды
+        # хода, и переспрос шёл «Анализ крови на аминокислоты?»).
+        if not judged_before and not llm_runtime.turn_budget_exhausted():
             _confirm(candidate)
         return
     judged = _apply_service_verdict(label=label, verdict=verdict, canonical=candidate, phrase=query, out=out, flags=flags)
