@@ -177,3 +177,73 @@ def test_on_budget_exhausted_by_other_decisions_no_letter_confirm(monkeypatch) -
         )
     )
     assert "_catalog_service_candidate" not in out
+
+
+def _run_query(query: str, verdict: BookingServiceVerdict, monkeypatch, *, label: str = "ADDRESS") -> tuple[dict, set, list]:
+    calls: list[tuple] = []
+
+    async def fake_judge(phrase, canonical, **kw):
+        calls.append((phrase, canonical))
+        return verdict
+
+    monkeypatch.setattr(G, "judge_booking_service", fake_judge)
+    monkeypatch.setattr(cfg, "MR_CATALOG_CONFIRM_LLM", "on", raising=False)
+    out: dict = {}
+    flags: set = set()
+    asyncio.run(
+        G.judge_fuzzy_service_candidate(
+            label=label,
+            candidate="Анализ крови на аминокислоты (48 показателей)",
+            query=query,
+            user_text="Анализ T-SPOT",
+            services=_Services(),
+            runtime_llm_mode="hybrid",
+            out=out,
+            flags=flags,
+            candidate_flag="entity_catalog_service_fuzzy_candidate",
+        )
+    )
+    return out, flags, calls
+
+
+@pytest.mark.parametrize("label", ["APPOINTMENT", "ADDRESS", "TEST_ASSIST"])
+def test_on_phrase_names_no_service_no_letter_confirm(monkeypatch, label: str) -> None:
+    """Фраза догадки не называет услугу («анализы» правила walk-in): выбор строки LLM не зовёт, «оставить» без решения —
+    не подтверждение; переспроса по буквам нет (прод 22.10 после деплоя 15: «кровь ребенку 9 месяцев», «Анализ T-SPOT» →
+    «Анализ крови на аминокислоты?» — нормализатор услуги переписал «анализы» в эту строку, ответ закэширован в процессе)."""
+
+    out, flags, calls = _run_query("анализы", BookingServiceVerdict("keep", "Анализ крови на аминокислоты (48 показателей)"), monkeypatch, label=label)
+    assert "_catalog_service_candidate" not in out
+    assert calls == []
+    assert "catalog_confirm_judged_not_a_service" in flags
+
+
+@pytest.mark.parametrize("query", ["анализ", "T-SPOT", "фадиатоп", "УЗИ суставов ног"])
+def test_on_phrase_names_service_still_judged(monkeypatch, query: str) -> None:
+    """Встречный случай: фраза называет услугу — суд LLM как был (подтвердила — переспрос)."""
+
+    verdict = BookingServiceVerdict("keep", "Анализ крови на аминокислоты (48 показателей)", status="picked")
+    out, _, calls = _run_query(query, verdict, monkeypatch)
+    assert calls
+    assert out["_catalog_service_candidate"].startswith("Анализ крови на аминокислоты")
+
+
+def test_off_phrase_names_no_service_as_before(monkeypatch) -> None:
+    """off — как было: догадка правил на переспрос и для общего слова."""
+
+    monkeypatch.setattr(cfg, "MR_CATALOG_CONFIRM_LLM", "off", raising=False)
+    out: dict = {}
+    asyncio.run(
+        G.judge_fuzzy_service_candidate(
+            label="ADDRESS",
+            candidate="Анализ крови на аминокислоты (48 показателей)",
+            query="анализы",
+            user_text="Анализ T-SPOT",
+            services=_Services(),
+            runtime_llm_mode="hybrid",
+            out=out,
+            flags=set(),
+            candidate_flag="entity_catalog_service_fuzzy_candidate",
+        )
+    )
+    assert "_catalog_service_candidate" in out

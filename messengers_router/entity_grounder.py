@@ -28,6 +28,7 @@ from .policies import (
 from .russian_nlu import normalize_ru
 from .services import Services, resolve_price_service_name_from_catalog
 from .services._booking_service_select import judge_booking_service
+from .services._price_select_llm import names_service
 from .services._common import _normalise_catalog_text
 
 _CONTROL_KEYS = {
@@ -320,6 +321,12 @@ async def judge_fuzzy_service_candidate(
 
     if not catalog_confirm_llm_enabled() or label not in _LLM_JUDGED_FUZZY_LABELS:
         _confirm(candidate)
+        return
+    if not names_service(query):
+        # Фраза догадки услугу не называет («анализы» правила walk-in): выбор строки LLM не зовёт, и «оставить» суда — не
+        # решение, а переспрос по буквам (прод 22.10: «кровь ребенку 9 месяцев», «Анализ T-SPOT» → «Анализ крови на
+        # аминокислоты?» — нормализатор услуги переписал «анализы» в эту строку, ответ закэширован в процессе).
+        flags.add("catalog_confirm_judged_not_a_service")
         return
     judged_before = any(
         f.startswith("catalog_confirm_judged_") and not f.endswith("_unavailable") for f in set(flags) | set(prior_flags)
