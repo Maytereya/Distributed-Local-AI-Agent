@@ -25,6 +25,7 @@
 | `basket_scored_candidates` | деплой 11 (20.10) | 1 | путь `_rank_price_rows` (запасной поиск подстрокой для кандидатов позиции корзины); ключ, атрибут `MR_BASKET_SCORED_CANDIDATES` | `test_basket_candidates_scored.py`: тест пути off (воспроизведение дефекта) удалён, остальные — без параметра; `test_strong_rows_index.py` — шпион на `_score_price_rows` |
 | `price_option_mis_notes` | деплой 11 (20.10) | 2 | условие `_mis_notes_on` (пометка МИС у позиций выбора строки — всегда); ключ, атрибут | `test_price_option_mis_notes_class.py`: тест «off байт в байт» удалён, инвариант «пометка не меняет кандидатов и порядок» — сравнением с «название — цена»; `test_price_abbreviation_class.py` — подделка LLM отрезает пометку МИС при разборе варианта |
 | `basket_weak_phrase_judge` | деплой 11 (20.10) | 3 | условие в `_prices_helpers._weak_phrase_judge` (суд слабой фразы с сильным названием внутри — всегда); ключ, атрибут | `test_basket_weak_phrase_judge_class.py`: сравнения с off удалены, «нет слов вне названий — нет суда» — проверкой подсказки; `test_p2_strong_phrase_basket_class.py::test_without_windows_nothing_changes` — снято утверждение «нет поля `strong_phrase_guard`» (на проде суд слабой фразы есть, ответ тот же) |
+| `prepare_vs_booking_llm` | деплой 11 (20.10) | 4 | условие в роутере (суд «подготовка или запись» при конфликте детекторов — всегда), `booking_slots.prepare_vs_booking_enabled`; ключ, атрибут | `test_booking_slots_by_meaning.py`: база «как было» — тот же ход с недоступной LLM; `test_prepare_subject_class.py` — без установки выключателя |
 
 ---
 

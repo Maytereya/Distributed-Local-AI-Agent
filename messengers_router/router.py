@@ -3194,8 +3194,7 @@ async def _resolve_nlu_decision_before_doctor_guard(
 
     secondary = [str(x) for x in (decision.entities.get("secondary_intents") or [])]
     if (
-        booking_slots.prepare_vs_booking_enabled()
-        and decision.label == "APPOINTMENT"
+        decision.label == "APPOINTMENT"
         and "PREPARE" in secondary
         and await booking_slots.prepare_wins_over_booking(user_text)
     ):

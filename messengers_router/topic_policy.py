@@ -124,7 +124,7 @@ _ROWS: tuple[Relabel, ...] = (
     ),
     Relabel(
         "prepare_over_booking_llm", "question_facet", "PREPARE", "_resolve_nlu_decision_before_doctor_guard",
-        "LLM при конфликте детекторов: подготовка, а не запись (`prepare_vs_booking_llm`)", "BUG-2026-10-18-PREPARE-UZI-AS-BOOKING",
+        "LLM при конфликте детекторов: подготовка, а не запись (`prepare_or_booking`)", "BUG-2026-10-18-PREPARE-UZI-AS-BOOKING",
     ),
     Relabel(
         "flow_price_followup_address", "guardrail_post", "ADDRESS", "_apply_post_nlu_guardrails",

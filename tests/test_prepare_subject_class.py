@@ -56,7 +56,6 @@ def _ask(world_dir: Path, monkeypatch, question: str, *, switch: str) -> tuple[s
 
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
-    from messengers_router.runtime_config import config as cfg
     from messengers_router.services import Services
 
     async def run() -> tuple[str, str, set[str]]:
@@ -67,7 +66,6 @@ def _ask(world_dir: Path, monkeypatch, question: str, *, switch: str) -> tuple[s
         return str(label), str(body.get("text") or ""), names
 
     with ev_world.FrozenWorld(world_dir, "day"), monkeypatch.context() as patch:
-        patch.setattr(cfg, "MR_PREPARE_VS_BOOKING_LLM", switch, raising=False)
         patch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
         patch.setattr(llm_runtime, "_OLLAMA_CLIENT", _LLM())
         choice._CACHE.clear()
