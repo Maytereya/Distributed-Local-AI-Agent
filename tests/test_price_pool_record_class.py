@@ -42,22 +42,24 @@ def _price_ids() -> dict[tuple[str, int], int]:
 
 
 def _option_id(text: str, ids: dict[tuple[str, int], int]) -> int:
-    name, _dash, tail = text.rpartition(" — ")
-    return ids[(name.strip(), int(tail.split(" руб.", 1)[0]))]
+    # «название — цена руб. (пометка МИС)»: в пометке бывает своё « — » («материал — …»), поэтому сначала отрезаем её.
+    name, _dash, cost = text.split(" руб.", 1)[0].rpartition(" — ")
+    return ids[(name.strip(), int(cost))]
 
 
-def _turn(case: str, world, monkeypatch, *, record: bool, **switches):
+def _turn(case: str, world, monkeypatch, *, record: bool, notes: str = "off", **switches):
     reply, phrase, pick, material = _CASES[case]
     oracle = _ByMaterial(phrase, pick, material)
     monkeypatch.setattr(turn_telemetry, "note_price_pool", _NOTE_PRICE_POOL if record else (lambda *_a, **_kw: None))
-    session = f"pool-{case}-{'on' if record else 'off'}-{'-'.join(f'{k}{v}' for k, v in switches.items())}"
-    [turn], rows = _run([reply], world, monkeypatch, llm=oracle, session=session, MR_PRICE_OPTION_MIS_NOTES="off", **switches)
+    session = f"pool-{case}-{'on' if record else 'off'}-{notes}-{'-'.join(f'{k}{v}' for k, v in switches.items())}"
+    [turn], rows = _run([reply], world, monkeypatch, llm=oracle, session=session, MR_PRICE_OPTION_MIS_NOTES=notes, **switches)
     return oracle, turn, rows
 
 
+@pytest.mark.parametrize("notes", ["off", "on"])  # on — позиции с пометкой МИС (в ней своё « — »)
 @pytest.mark.parametrize("case", _CASES)
-def test_pool_record_is_exactly_what_the_llm_saw(case, mini_prod_world, mis_vocab, monkeypatch):  # noqa: F811
-    oracle, _turn_record, [row] = _turn(case, mini_prod_world, monkeypatch, record=True)
+def test_pool_record_is_exactly_what_the_llm_saw(case, notes, mini_prod_world, mis_vocab, monkeypatch):  # noqa: F811
+    oracle, _turn_record, [row] = _turn(case, mini_prod_world, monkeypatch, record=True, notes=notes)
     pools = row.get("price_pool")
     assert pools and len(pools) == len(oracle.pools), (pools, oracle.pools)
     ids = _price_ids()
@@ -67,7 +69,7 @@ def test_pool_record_is_exactly_what_the_llm_saw(case, mini_prod_world, mis_voca
         assert entry["ids"] == [_option_id(text, ids) for text in seen], (entry, seen)
     assert [entry["r"] for entry in pools][0] == 1
     assert all(entry["r"] in (1, 2) for entry in pools)
-    if case == "throat":  # LLM отвергла строку в первом круге и дала термины: второй круг записан отдельно
+    if case == "throat" and notes == "off":  # LLM не видит материала, отвергает строку и даёт термины: второй круг отдельно
         assert [entry["r"] for entry in pools] == [1, 2], pools
 
 
