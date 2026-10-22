@@ -763,6 +763,25 @@ def test_pool_recall_intersects_pool_with_core_and_ok_by_round():
         assert pool_recall({"price_pool": [{"r": 1, "n": 1, "ids": [1]}]}, label) is None
 
 
+def test_pool_recall_basket_counts_llm_pool_and_strong_rows():
+    """Запись корзины (`src: "basket"`): потолок ответа списка — варианты LLM корзины ∪ строки сильных позиций; корзина
+    без вызова LLM (все позиции сильные) — пул записан, но в размеры пула (по вызовам LLM) не входит."""
+
+    from evalbench.detectors import pool_recall
+
+    multi = {"kind": "multi", "core": [1, 2, 3, 4], "ok": [9]}
+    basket = {"r": 1, "src": "basket", "n": 3, "ids": [2, 7, 9], "strong": [1]}
+    mixed = pool_recall({"price_pool": [basket]}, multi)
+    assert (mixed.recorded, mixed.first, mixed.both, mixed.sizes_first) == (True, 0.5, 0.5, (3,))
+    strong_only = pool_recall({"price_pool": [{"r": 1, "src": "basket", "n": 0, "ids": [], "strong": [1, 2, 3]}]}, multi)
+    assert (strong_only.recorded, strong_only.first, strong_only.sizes_first) == (True, 0.75, ())
+    # Корзина и выбор строки в одном ходе — одно объединение; второй круг выбора строки добавляет своё.
+    both = pool_recall({"price_pool": [basket, {"r": 2, "n": 1, "ids": [4]}]}, multi)
+    assert (both.first, both.both, both.sizes_first, both.sizes_second) == (0.5, 0.75, (3,), (1,))
+    # Одна услуга, решённая корзиной: эталон среди сильных строк — в пуле.
+    assert pool_recall({"price_pool": [{"r": 1, "src": "basket", "n": 0, "ids": [], "strong": [2]}]}, {"kind": "single", "core": [1], "ok": [2]}).first == 1.0
+
+
 def test_clinic_synonyms_slice_uses_clinic_separators_and_whole_words(tmp_path):
     from evalbench.detectors import ClinicSynonyms
 

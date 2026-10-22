@@ -240,7 +240,11 @@ class PoolRecall:
 
     `first` — по пулам первого круга, `both` — по пулам обоих кругов; одна услуга — 0 или 1 (пул пересекается с
     core ∪ ok), список (`multi`) — доля услуг core в пуле. Пула нет (LLM строку не выбирала: сильная фраза, гард,
-    ответ правил) — `recorded=False`, доли None."""
+    ответ правил) — `recorded=False`, доли None.
+
+    Запись корзины (`src: "basket"`, один круг) — пул хода вместе со строками сильных позиций (`strong`): их решили
+    данные без LLM, и они идут в ответ как есть — потолок ответа списка — кандидаты LLM ∪ сильные строки. Корзина без
+    вызова LLM (все позиции сильные, `n` = 0) — пул записан, в размеры пула не входит (размер — по вызовам LLM)."""
 
     kind: str
     recorded: bool
@@ -270,13 +274,19 @@ def pool_recall(telemetry: dict[str, Any] | None, label: dict[str, Any] | None) 
             return len(ids & wanted) / len(wanted)
         return 1.0 if ids & allowed else 0.0
 
-    first = {int(i) for p in pools if p.get("r") == 1 for i in p.get("ids") or []}
-    both = {int(i) for p in pools for i in p.get("ids") or []}
+    def ids(p: dict[str, Any]) -> list[Any]:
+        return [*(p.get("ids") or []), *(p.get("strong") or [])]
+
+    def sized(p: dict[str, Any], round_no: int) -> bool:
+        return p.get("r") == round_no and not (p.get("src") == "basket" and not p.get("n"))
+
+    first = {int(i) for p in pools if p.get("r") == 1 for i in ids(p)}
+    both = {int(i) for p in pools for i in ids(p)}
     return PoolRecall(
         kind,
         True,
         share(first),
         share(both),
-        tuple(int(p.get("n") or 0) for p in pools if p.get("r") == 1),
-        tuple(int(p.get("n") or 0) for p in pools if p.get("r") == 2),
+        tuple(int(p.get("n") or 0) for p in pools if sized(p, 1)),
+        tuple(int(p.get("n") or 0) for p in pools if sized(p, 2)),
     )
