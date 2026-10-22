@@ -91,9 +91,12 @@ _TEST_ASSIST_FACET_OPTIONS = (
 
 async def test_assist_facet(user_text: str) -> str:
     """Свойство вопроса об услуге, названной в реплике, — решение LLM (ход (б), решение владельца 20.10 (б) 3): `price` |
-    `availability` | `where_when`; «ни одна», сбой, мусор — пустая строка (вызывающий делает как было)."""
+    `availability` | `where_when`; `none` — LLM ответила «ни одно» (спрашивают о другом: подготовка, возраст, результат,
+    или смысл неясен); сбой, мусор — пустая строка (вызывающий делает как было)."""
 
     choice = await choose(TEST_ASSIST_FACET_TASK, user_text, _TEST_ASSIST_FACET_OPTIONS)
+    if choice.status is Status.NONE_FIT:
+        return "none"
     return choice.ids[0] if choice.status is Status.PICKED and choice.ids else ""
 
 
