@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 
 SOURCE_MIS = "serviceInfoAll"
 SOURCE_KB = "main_index"
+# Общая памятка клиники о сдаче крови — вариант выбора LLM (`prepare_general_memo_llm`); без LLM не выбирается
+# (`_choose_without_llm` берёт только карточки МИС).
+SOURCE_CLINIC_GENERAL = "clinic_general"
 
 _EXCERPT_CHARS = 300
 _LLM_TIMEOUT_S = 12
