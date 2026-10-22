@@ -152,3 +152,11 @@ def test_long_list_gets_answer_budget_and_time(monkeypatch) -> None:
     parse, seen = _parse(monkeypatch, reply, {"phrases": [[k] for k in range(1, 16)]})
     assert parse.status == "picked" and len(parse.items) == 15
     assert seen["options"]["num_predict"] >= 8 * 15 and seen["timeout_s"] > 5.0
+
+
+def test_more_than_16_services_is_too_many(monkeypatch) -> None:
+    """17 услуг в реплике — `too_many`, как у прежнего разбора (решение владельца 13.10, Q3), а не сбой формата."""
+
+    reply = ", ".join(["ферритин", "глюкоза", "ттг", "алт", "аст", "лг"] * 3)
+    parse, _ = _parse(monkeypatch, reply, {"phrases": [[k] for k in range(1, 18)]})
+    assert parse.status == "too_many" and not parse.items

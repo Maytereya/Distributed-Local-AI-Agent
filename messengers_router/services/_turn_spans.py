@@ -190,6 +190,10 @@ async def parse_turn_spans(reply: str, *, facet: str | None, catalog: list[dict[
         data = json.loads(str(raw or "").strip())
     except (TypeError, ValueError):
         data = None
+    if isinstance(data, dict) and isinstance(data.get("phrases"), list) and len(data["phrases"]) > _MAX_PHRASES:
+        # Больше 16 услуг в одной реплике — не разбор, а письмо: как `too_many` прежнего разбора (решение владельца 13.10, Q3).
+        turn_telemetry.note_choice(TASK_NAME, "too_many", options=len(toks), ms=_ms(started), cached=False, reason="", outcome="", shadow=False)
+        return _with_ms(_result(reply, ParseStatus.TOO_MANY, "llm", len(toks)), started)
     spans = judge(data, len(toks))
     if spans is None:
         logger.warning("turn_spans_invalid: %r", str(raw or "")[:200])
