@@ -755,6 +755,13 @@ def test_pool_recall_intersects_pool_with_core_and_ok_by_round():
     multi = {"kind": "multi", "core": [1, 2, 3, 4], "ok": [9]}
     part = pool_recall({"price_pool": [{"r": 1, "n": 2, "ids": [1, 9]}, {"r": 1, "n": 1, "ids": [2]}]}, multi)
     assert (part.first, part.both, part.sizes_first) == (0.5, 0.5, (2, 1))
+    # Пул каталога записи (строки без serviceId) — не пул цены: как будто пула нет; пустой пул цены — промах.
+    booking = pool_recall({"price_pool": [{"r": 1, "n": 11, "ids": []}]}, single)
+    assert booking.recorded is False and booking.first is None
+    empty = pool_recall({"price_pool": [{"r": 1, "n": 0, "ids": []}]}, single)
+    assert (empty.recorded, empty.first, empty.sizes_first) == (True, 0.0, (0,))
+    mixed = pool_recall({"price_pool": [{"r": 1, "n": 11, "ids": []}, {"r": 1, "n": 2, "ids": [1, 7]}]}, single)
+    assert (mixed.first, mixed.sizes_first) == (1.0, (2,))
     # Пула нет — LLM строку не выбирала: вопрос размечен, но доли не считаются.
     assert pool_recall({}, single) == pool_recall(None, single)
     assert pool_recall({}, single).recorded is False and pool_recall({}, single).first is None
