@@ -116,9 +116,11 @@ def prompt(reply: str, toks: Sequence[_Word]) -> tuple[str, str]:
 
 
 def judge(raw: Any, n_words: int) -> list[tuple[int, int]] | None:
-    """Группы номеров → отрезки (первый, последний) номер с нуля; None — ответ нарушил контракт.
+    """Группы → отрезки (первый, последний) номер с нуля; None — ответ нарушил контракт.
 
-    Контракт: номера 1..n, в группе — подряд по возрастанию, группы не пересекаются, групп не больше `_MAX_PHRASES`.
+    Контракт промпта — группа `[первое, последнее]` (модель так и отвечает: карточка 22.10 — «[[1, 3]]» значит слова 1–3);
+    принимаются и `[k]` (одно слово) и перечень подряд `[k, k+1, …]`. Номера 1..n, отрезки не пересекаются, групп не больше
+    `_MAX_PHRASES`.
     """
 
     if not isinstance(raw, dict) or not isinstance(raw.get("phrases"), list):
@@ -127,17 +129,24 @@ def judge(raw: Any, n_words: int) -> list[tuple[int, int]] | None:
     if len(groups) > _MAX_PHRASES:
         return None
     spans: list[tuple[int, int]] = []
-    used: set[int] = set()
     for group in groups:
         if not isinstance(group, list) or not group or not all(isinstance(k, int) and not isinstance(k, bool) for k in group):
             return None
-        if any(k < 1 or k > n_words for k in group) or group != list(range(group[0], group[0] + len(group))):
+        if len(group) == 1:
+            first = last = group[0]
+        elif len(group) == 2:
+            first, last = group
+        elif group == list(range(group[0], group[0] + len(group))):
+            first, last = group[0], group[-1]
+        else:
             return None
-        if used.intersection(group):
+        if not 1 <= first <= last <= n_words:
             return None
-        used.update(group)
-        spans.append((group[0] - 1, group[-1] - 1))
-    return sorted(spans)
+        spans.append((first - 1, last - 1))
+    spans.sort()
+    if any(prev[1] >= cur[0] for prev, cur in zip(spans, spans[1:])):
+        return None
+    return spans
 
 
 async def parse_turn_spans(reply: str, *, facet: str | None, catalog: list[dict[str, Any]]) -> PhraseParse:

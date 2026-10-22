@@ -54,6 +54,14 @@ def test_picked_span_is_substring_with_data_rows(monkeypatch) -> None:
     assert item.text == "ферритин" and item.rows and item.rows[0]["serviceHomecode"] == "408"
 
 
+@pytest.mark.parametrize("group", [[3, 5], [3, 4, 5]])
+def test_range_or_full_run_is_one_phrase(monkeypatch, group) -> None:
+    """Группа — `[первое, последнее]` (так отвечает модель: карточка 22.10) или перечень подряд — одна фраза."""
+
+    parse, _ = _parse(monkeypatch, "Сколько стоит анализ на ферритин", {"phrases": [group]})
+    assert parse.status == "picked" and [i.text for i in parse.items] == ["анализ на ферритин"]
+
+
 def test_several_groups_are_a_list(monkeypatch) -> None:
     parse, _ = _parse(monkeypatch, "ферритин, глюкоза — сколько?", {"phrases": [[1], [2]]})
     assert [i.text for i in parse.items] == ["ферритин", "глюкоза"]
@@ -64,7 +72,10 @@ def test_empty_answer_is_none_fit(monkeypatch) -> None:
     assert parse.status == "none_fit" and not parse.items
 
 
-@pytest.mark.parametrize("answer", [{"phrases": [[0]]}, {"phrases": [[9]]}, {"phrases": [[1, 3]]}, {"phrases": [[1, 2], [2]]}, {"x": 1}, "не json"])
+@pytest.mark.parametrize(
+    "answer",
+    [{"phrases": [[0]]}, {"phrases": [[9]]}, {"phrases": [[3, 1]]}, {"phrases": [[1, 2, 4]]}, {"phrases": [[1, 2], [2, 2]]}, {"x": 1}, "не json"],
+)
 def test_contract_violation_is_invalid(monkeypatch, answer) -> None:
     parse, _ = _parse(monkeypatch, "ферритин и глюкоза сколько", answer)
     assert parse.status == "invalid" and not parse.items and not parse.split
