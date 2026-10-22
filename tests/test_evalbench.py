@@ -787,6 +787,11 @@ def test_pool_recall_basket_counts_llm_pool_and_strong_rows():
     assert (both.first, both.both, both.sizes_first, both.sizes_second) == (0.5, 0.75, (3,), (1,))
     # Одна услуга, решённая корзиной: эталон среди сильных строк — в пуле.
     assert pool_recall({"price_pool": [{"r": 1, "src": "basket", "n": 0, "ids": [], "strong": [2]}]}, {"kind": "single", "core": [1], "ok": [2]}).first == 1.0
+    # Корзина узнаётся по `src`, а не по форме: варианты без `serviceId` (`n > 0`, `ids` пуст) — всё равно пул цены (промах),
+    # а не запись выбора услуги записи, которую детектор пропускает.
+    blind = pool_recall({"price_pool": [{"r": 1, "src": "basket", "n": 2, "ids": [], "strong": []}]}, multi)
+    assert (blind.recorded, blind.first) == (True, 0.0)
+    assert pool_recall({"price_pool": [{"r": 1, "n": 2, "ids": []}]}, multi).recorded is False
 
 
 def test_clinic_synonyms_slice_uses_clinic_separators_and_whole_words(tmp_path):

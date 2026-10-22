@@ -264,9 +264,12 @@ def pool_recall(telemetry: dict[str, Any] | None, label: dict[str, Any] | None) 
     if not allowed:
         return None
     # Строки без `serviceId` при непустом пуле — каталог услуг записи (`judge_booking_service`), не прайс: это не пул
-    # ответа о цене, и пересечь его с разметкой нечем (на dev 22.10 такие записи считались промахом — 9 ходов).
+    # ответа о цене, и пересечь его с разметкой нечем (на dev 22.10 такие записи считались промахом — 9 ходов). Запись
+    # корзины (`src: "basket"`) — всегда пул цены: её узнаём по полю, а не по форме записи.
     pools = [
-        p for p in (telemetry or {}).get("price_pool") or [] if isinstance(p, dict) and (p.get("ids") or not p.get("n"))
+        p
+        for p in (telemetry or {}).get("price_pool") or []
+        if isinstance(p, dict) and (p.get("src") == "basket" or p.get("ids") or not p.get("n"))
     ]
     kind = str(label["kind"])
     if not pools:
