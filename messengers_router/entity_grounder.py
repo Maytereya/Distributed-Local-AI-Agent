@@ -894,7 +894,6 @@ async def ground_decision_entities(
 
     if (
         label == "APPOINTMENT"
-        and booking_slots.specialty_enabled()
         and "entity_dropped_unverified_service_name" in flags
         and not any(out.get(k) for k in ("specialty", "doctor_name", "doctor_id"))
     ):

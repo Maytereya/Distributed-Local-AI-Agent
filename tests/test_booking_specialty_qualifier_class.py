@@ -46,16 +46,16 @@ def booking_world(tmp_path_factory) -> Path:
     shutil.copy(_TESTS / "fixtures" / "doctors_excerpt" / "doctors_20261008.jsonl", src / "doctors_20261008.jsonl")
     return ev_world.build_world(src, "20261008", tmp_path_factory.mktemp("qualifier") / "world")
 
-_ON = {"MR_BOOKING_SPECIALTY_LLM": "on"}
-_OFF = {"MR_BOOKING_SPECIALTY_LLM": "off"}
+_ON: dict[str, str] = {}
 
 
 class _SchemaLLM:
     """Модель со структурным выводом: на задачу специальности всегда выбирает кандидата; исход — `honest`, если схема
     ответа его допускает (иначе исхода в ответе нет: грамматика схемы не даст лишнего поля). Цена — «не услуга»."""
 
-    def __init__(self, honest: str = "none"):
+    def __init__(self, honest: str = "none", *, specialty_down: bool = False):
         self.honest = honest
+        self.specialty_down = specialty_down  # база «как было» (выключатель `booking_specialty_llm` снят 22.10)
         self.calls: list[str] = []
 
     async def generate(self, *, prompt: str = "", system: str | None = None, format: Any = None, **_kwargs):
@@ -63,7 +63,7 @@ class _SchemaLLM:
         if _PRICE_MARK in seen:
             self.calls.append(_PRICE_MARK)
             return GenerateResponse(model="m", response=_NOT_A_SERVICE, done=True)
-        if _SPECIALTY_MARK in seen:
+        if _SPECIALTY_MARK in seen and not self.specialty_down:
             self.calls.append(_SPECIALTY_MARK)
             answer: dict[str, Any] = {"picks": [1]}
             outcome = (format or {}).get("properties", {}).get("outcome") if isinstance(format, dict) else None
@@ -98,7 +98,7 @@ _CARD = ("Записаться к детскому аллергологу, Са�
 def test_qualified_or_procedure_booking_is_as_without_the_switch(question, honest, booking_world, monkeypatch):
     llm = _SchemaLLM(honest)
     [on] = _dialog(booking_world, monkeypatch, [question], switches=_ON, llm=llm)
-    [off] = _dialog(booking_world, monkeypatch, [question], switches=_OFF, llm=_SchemaLLM(honest))
+    [off] = _dialog(booking_world, monkeypatch, [question], switches={}, llm=_SchemaLLM(honest, specialty_down=True))
 
     assert on["text"] == off["text"], (on["text"], off["text"])
     assert "booking_specialty_llm" not in on["flags"], on["flags"]
