@@ -3501,12 +3501,9 @@ def _t7_drop(key: str) -> bool:
 
 
 def _weak_phrase_judge(fragment: str, retail_rows: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], str] | None:
-    """`basket_weak_phrase_judge = on`: сильное название внутри слабой фразы и слова вокруг — для суда LLM корзины."""
+    """Сильное название внутри слабой фразы и слова вокруг — для суда LLM корзины (выключатель `basket_weak_phrase_judge`
+    снят 22.10 — неделя `on` на проде с деплоя 11)."""
 
-    from ..runtime_config import config as cfg
-
-    if str(getattr(cfg, "MR_BASKET_WEAK_PHRASE_JUDGE", "off") or "").strip().lower() != "on":
-        return None
     from ._turn_phrases import strong_inside  # разбор хода импортирует этот модуль — не на уровне модуля
 
     return strong_inside(fragment, retail_rows)

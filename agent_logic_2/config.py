@@ -227,7 +227,6 @@ class MessengerRouterConfig:
     parse_fragment_windows: str
     parse_complete_windows: str
     strong_phrase_guard: str
-    basket_weak_phrase_judge: str
     parse_agree_telemetry: str
     debug_final_input: bool
     url: str
@@ -539,11 +538,6 @@ settings = Settings(
         # — «не нашёл», сбой LLM — ход как под turn_parse = off; off — как было с 15.10 (откат). Решение владельца 16.10 —
         # фикс следующим деплоем, поэтому по умолчанию llm. [MESSENGER_ROUTER] strong_phrase_guard
         strong_phrase_guard=_get_enum("MESSENGER_ROUTER", "strong_phrase_guard", default="llm", allowed={"off", "llm"}),
-        # Слабая фраза корзины, которую словарный гард П2 счёл уточнением («ферритин первый раз»: «первый», «раз» — не
-        # слова прайса), а внутри неё есть сильное по данным МИС название («ферритин»): on — позиция идёт на суд LLM
-        # корзины, как сильная фраза с условием (`judge`, правило 5 промпта: разговор — цена, условие — нет); сбой LLM —
-        # «Не распознал», как было; off — как было (честное «Не распознал» без LLM). [MESSENGER_ROUTER] basket_weak_phrase_judge
-        basket_weak_phrase_judge=_get_enum("MESSENGER_ROUTER", "basket_weak_phrase_judge", default="off", allowed={"off", "on"}),
         # Телеметрия согласия разрезов `tu_parse_agree` под turn_parse = on (T7, шаг 4): on — как было (правила понимания
         # хода считаются на каждом ценовом ходе параллельно выбору фраз LLM, O3b, — согласию нужен их разрез); off —
         # согласия под on нет, правила считаются лениво: только когда разбор не годится для действия (`acting_for` —
@@ -795,7 +789,6 @@ MR_LLM_PRIMARY_RULES_FALLBACK = settings.messenger_router.llm_primary_rules_fall
 MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows
 MR_PARSE_COMPLETE_WINDOWS = settings.messenger_router.parse_complete_windows
 MR_STRONG_PHRASE_GUARD = settings.messenger_router.strong_phrase_guard
-MR_BASKET_WEAK_PHRASE_JUDGE = settings.messenger_router.basket_weak_phrase_judge
 MR_PARSE_AGREE_TELEMETRY = settings.messenger_router.parse_agree_telemetry
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url

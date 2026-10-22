@@ -80,21 +80,17 @@ def _turn(reply: str, world, monkeypatch, *, judge: str, llm: _RuleFive) -> dict
 def test_conversational_word_beside_the_name_keeps_both_prices(reply, mini_prod_world, monkeypatch):  # noqa: F811
     llm = _RuleFive()
     on = _turn(reply, mini_prod_world, monkeypatch, judge="on", llm=llm)
-    off = _turn(reply, mini_prod_world, monkeypatch, judge="off", llm=_RuleFive())
 
     assert _FERRITIN in on["text"] and _GLUCOSE in on["text"], on["text"]
     assert "[добавлено: «первый раз»]" in llm.rows_prompts[0]
-    assert _FERRITIN not in off["text"], off["text"]  # как было: «Не распознал: ферритин первый раз»
 
 
 @pytest.mark.parametrize("reply", _CONDITION)
 def test_a_condition_the_clinic_does_not_offer_gives_no_price(reply, mini_prod_world, monkeypatch):  # noqa: F811
     on = _turn(reply, mini_prod_world, monkeypatch, judge="on", llm=_RuleFive())
-    off = _turn(reply, mini_prod_world, monkeypatch, judge="off", llm=_RuleFive())
 
     assert _FERRITIN not in on["text"] and _GLUCOSE in on["text"], on["text"]
     assert "Не распознал: ферритин по омс" in on["text"], on["text"]  # словами пациента
-    assert _FERRITIN not in off["text"]
 
 
 @pytest.mark.parametrize("reply", _CONVERSATIONAL[:2])
@@ -106,10 +102,11 @@ def test_failed_row_choice_gives_no_price(reply, mini_prod_world, monkeypatch): 
 
 @pytest.mark.parametrize("reply", ["сколько стоит ферритин и глюкоза", "сколько стоит ферритин, глюкоза"])
 def test_lists_without_outside_words_do_not_change(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    on = _turn(reply, mini_prod_world, monkeypatch, judge="on", llm=_RuleFive())
-    off = _turn(reply, mini_prod_world, monkeypatch, judge="off", llm=_RuleFive())
+    llm = _RuleFive()
+    on = _turn(reply, mini_prod_world, monkeypatch, judge="on", llm=llm)
 
-    assert on["text"] == off["text"] and _FERRITIN in on["text"]
+    assert _FERRITIN in on["text"] and _GLUCOSE in on["text"], on["text"]
+    assert not any("[добавлено:" in prompt for prompt in llm.rows_prompts)  # слов вне названий нет — суда слабой фразы нет
 
 
 def test_strong_inside_finds_one_name_and_the_words_beside(mini_prod_world):  # noqa: F811
@@ -156,9 +153,8 @@ _GLUED = (
 @pytest.mark.parametrize("reply, cut", _GLUED)
 def test_a_service_beside_the_name_is_not_a_condition(reply, cut, mini_prod_world, monkeypatch):  # noqa: F811
     on = _turn(reply, mini_prod_world, monkeypatch, judge="on", llm=_GluedList(cut))
-    off = _turn(reply, mini_prod_world, monkeypatch, judge="off", llm=_GluedList(cut))
 
-    assert on["text"] == off["text"], on["text"]  # суд не сужает список: вторая услуга не пропадает молча
+    # Суд не сужает список: вторая услуга не пропадает молча (до снятия выключателя — ответ как под off).
     assert f"Не распознал: {cut[0]}" in on["text"], on["text"]  # словами пациента, целиком
     assert _GLUCOSE in on["text"]
 
