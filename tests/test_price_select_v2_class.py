@@ -8,6 +8,8 @@
 Инварианты под `price_select_v2 = on`:
 - у позиции — раздел прайса МИС (два нижних уровня, без корня и римского номера); справочник недоступен — позиция как была;
 - промпты `*_v2` (в двух локациях): плод, беременность, до года — особое условие; «только похоже» — подходящих нет;
+  марка, производитель, метод — уточнение пациента (класс 4: «респираторная панель immulite» → RIDA-2, хотя строка Immulite
+  была первой в списке);
 - off — тексты позиций и промпты прежние.
 """
 
@@ -78,8 +80,8 @@ def test_v2_prompts_carry_the_rules_and_live_in_both_places(base) -> None:
     old = (_ROOT / f"messengers_router/prompts/{base}.txt").read_text(encoding="utf-8")
     new = (_ROOT / f"messengers_router/prompts/{base}_v2.txt").read_text(encoding="utf-8")
     assert new == (_ROOT / f"app_data/prompts/mr_{base}_v2.txt").read_text(encoding="utf-8")
-    for rule in ("для плода, при беременности, до 1 года", "раздел прайса", "уточнение лучше чужой цены"):
+    for rule in ("для плода, при беременности, до 1 года", "раздел прайса", "уточнение лучше чужой цены", "производителя или метод"):
         assert rule in new and rule not in old, rule
     # прежние правила v2 не теряет: всё, что было в прежнем промпте построчно, есть и в новом (кроме изменённых строк)
     changed = {line for line in old.splitlines() if line not in new.splitlines()}
-    assert all(line.startswith(("Ты помогаешь", "4.", "5.", "- \"reason\"", "Позиции из прайса")) for line in changed), changed
+    assert all(line.startswith(("Ты помогаешь", "2.", "4.", "5.", "- \"reason\"", "Позиции из прайса")) for line in changed), changed
