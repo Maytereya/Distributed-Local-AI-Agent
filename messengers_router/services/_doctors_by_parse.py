@@ -17,7 +17,8 @@
 - врачи услуги — связь «врач ↔ код услуги» в МИС (`doctor_prices`, ход (г) L-06); роль приёма, названная словами МИС (каталог
   ролей L-17), сужает; описание врача — блок роли, под которой он делает услугу по данным;
 - сбой разбора или выбора, LLM не узнала услугу, слишком общее слово — «уточните услугу или специальность» с оффером
-  оператора (решение (а)); услуга есть, а врачей по ней в данных нет (ЭКГ, анализы) или срез недоступен — оффер оператора:
+  оператора (решение (а)); назвал пациент роль словами МИС («кто из урологов…») — врачи этой роли (услугу не угадываем);
+  услуга есть, а врачей по ней в данных нет (ЭКГ, анализы) или срез недоступен — оффер оператора:
   «врачей нет» по пустым данным не утверждаем; в реплике услуги нет — вопрос о враче без услуги (роль, филиал), без них — «уточните».
 Модуль не читает пяти списков и функций, которые их читают (`tests/test_doctors_by_parse_class.py`, AST и ловушки).
 """
@@ -334,6 +335,14 @@ async def doctors_info(
             return len(q) >= 3 and q in hay(doc)
         return True
 
+    def named_role(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Врачи ролей приёма, которые пациент назвал словами МИС (точный слой каталога ролей L-17), — не роль, выведенная из
+        процедуры правилом («колоноскопия → эндоскопист» — буквы, их L-06 не допускает)."""
+
+        roles = [role for role in build_role_catalog(doctors, in_region=in_region).find(query).exact if role.reception]
+        units = {unit for role in roles for unit in role.unit_ids}
+        return [d for d in docs if any((link or {}).get("company_unit_id") in units for link in d.get("unit_links") or [])]
+
     subject: Subject | None = None
     found: Found | None = None
     filtered: list[dict[str, Any]] = []
@@ -356,11 +365,14 @@ async def doctors_info(
         elif not by_data:
             source = "parse_no_slice" if found.answer == "no_slice" else "parse_no_doctors"
         else:
-            named = [role for role in build_role_catalog(doctors, in_region=in_region).find(query).exact if role.reception]
-            units = {unit for role in named for unit in role.unit_ids}
-            narrowed = [d for d in by_data if any((link or {}).get("company_unit_id") in units for link in d.get("unit_links") or [])]
+            narrowed = named_role(by_data)
             filtered = narrowed or by_data
             source = "parse_data_role" if narrowed else "parse_data"
+    if source == "parse_clarify":
+        # Услугу понять не удалось, но пациент назвал роль («кто из урологов делает …») — врачи этой роли, как на вопрос о роли:
+        # услугу не угадываем, роль назвал он сам. Роли словами МИС нет — «уточните».
+        filtered = named_role([d for d in doctors if in_region(d)])
+        source = "parse_role" if filtered else source
     if subject is not None:
         turn_telemetry.note(
             doc_parse_outcome=subject.outcome,

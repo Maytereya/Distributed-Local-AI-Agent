@@ -217,6 +217,14 @@ def test_llm_failure_asks_to_clarify_instead_of_guessing(services, monkeypatch, 
     assert state.last_entities.get("_operator_offer_pending") is True
 
 
+def test_named_role_answers_when_the_service_is_not_understood(services, monkeypatch) -> None:
+    """Услугу не понять (сбой разбора), но пациент назвал роль — врачи роли, как на вопрос о роли; не «уточните» и не угадывание услуги."""
+
+    llm = _LLM(mark="цистоскоп", fail="turn_spans")
+    ids, payload = _ask(services, monkeypatch, "Кто из урологов делает цистоскопию?", llm, {"specialty": "уролог"})
+    assert ids == [1, 2] and payload["doctors_source"] == "parse_role" and payload["service_clarify"] is False
+
+
 def test_service_without_doctors_in_mis_offers_operator(services, monkeypatch) -> None:
     ids, payload = _ask(services, monkeypatch, "Кто делает электрокардиограмму?", _LLM(mark="электрокардиограм"))
 
