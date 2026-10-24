@@ -8,7 +8,8 @@ FEAT-2026-07-15-SERVICE-SLOT-LLM). Справочника кодов в МИС �
 
 - **код анализа** — форма (полный порядок «фамилия, год, код, номер»; «код Бг») или сущность `filial` LLM-классификатора этого хода,
   и только если это слова реплики подряд (модель код не придумала) и не слово другого реквизита хода (одно слово — один реквизит).
-  LLM не звали, сбой, кода не назвала — кода нет: бот переспросит (решение владельца 22.10 (а)).
+  LLM не звали, сбой, кода не назвала — кода нет: бот переспросит (решение владельца 22.10 (а));
+- **одно число — один реквизит**: «1985» было и годом рождения, и номером анализа.
 
 off — как было (`policies._guess_result_code`).
 """
@@ -88,3 +89,22 @@ def llm_code(value: Any, text: str, entities: dict[str, Any]) -> str:
         return ""
     _acted("code:llm")
     return raw
+
+
+def one_number_one_field(
+    text: str, missing: list[str], out: dict[str, Any], *, year_marked: bool, number_marked: bool
+) -> None:
+    """Одно число реплики стало и годом, и номером — оставить один реквизит: тот, что назван словом («номер 1985», «год рождения
+    1985», «заказ 1985»), иначе тот, которого ждём (год раньше номера); не ждём ни того, ни другого — ни один (не перетирать)."""
+
+    year = out.get("year")
+    if year is None or year != out.get("number") or _words(text).count(str(year)) > 1:
+        return
+    if number_marked != year_marked:
+        keep = "number" if number_marked else "year"
+    else:
+        keep = next((field for field in ("year", "number") if field in missing), "")
+    for field in ("year", "number"):
+        if field != keep:
+            out.pop(field, None)
+    _acted(f"number:{keep or 'none'}")

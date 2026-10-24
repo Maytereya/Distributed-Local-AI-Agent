@@ -2015,6 +2015,9 @@ def _fill_test_result_entities(text: str, missing_rules: list[str], out: dict[st
             filtered = [n for n in nums if year_val is None or n != year_val]
             if filtered:
                 out["number"] = filtered[-1]
+    if result_slots.on():
+        # Одно число реплики — один реквизит: «1985» — год рождения или номер анализа, не оба.
+        result_slots.one_number_one_field(t, missing_rules, out, year_marked=bool(m_year), number_marked=bool(m_number or m_oid))
 
     if "surname" in missing_rules and "surname" not in out:
         words = [w for w in re.split(r"\s+", t) if w]

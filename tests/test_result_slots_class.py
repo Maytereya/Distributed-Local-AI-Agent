@@ -90,6 +90,39 @@ def test_code_marker_with_number(monkeypatch) -> None:
     assert _fields("код ву 276", ["filial", "number"]) == {"filial": "ву", "number": 276}
 
 
+# --- одно число — один реквизит ---------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "missing", "expected"),
+    [
+        ("1985", _ALL, {"year": 1985}),
+        ("1985", ["filial", "number"], {"number": 1985}),  # год уже есть — это номер, известный год не перетирается
+        ("1985", ["surname"], {}),  # ни год, ни номер не ждём — не перетирать ни один
+        ("номер 1985", _ALL, {"number": 1985}),
+        ("номер анализа: 2001", _ALL, {"number": 2001}),
+        ("год рождения 1985", _ALL, {"year": 1985}),
+        ("Сидорова 1985", _ALL, {"year": 1985}),
+        ("1985 123", _ALL, {"year": 1985, "number": 123}),
+    ],
+)
+def test_one_number_is_one_field(monkeypatch, text: str, missing: list[str], expected: dict) -> None:
+    _switch(monkeypatch)
+    out = _fields(text, missing)
+    assert {k: out[k] for k in ("year", "number") if k in out} == expected
+
+
+def test_order_number_is_not_also_the_year(monkeypatch) -> None:
+    _switch(monkeypatch)
+    out = _fields("заказ 1985", _ALL)
+    assert (out.get("number"), out.get("order_id"), "year" in out) == (1985, "1985", False)
+
+
+def test_one_number_off_as_before(monkeypatch) -> None:
+    _switch(monkeypatch, "off")
+    assert _fields("1985", _ALL) == {"year": 1985, "number": 1985}
+
+
 # --- сущность LLM: слова реплики, одно слово — один реквизит -------------------------------------------------------
 
 
