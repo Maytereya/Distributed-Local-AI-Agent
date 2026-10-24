@@ -68,6 +68,7 @@ from .policies import (
     service_name_conflicts_with_doctor,
     detect_unsupported_catalog,
     detect_specific_lab_code_intent,
+    lab_code_by_llm,
 )
 
 _CLASSIFY_TIMEOUT = 45
@@ -1581,7 +1582,7 @@ async def deterministic_rule_decision(
                     needs_handoff=False,
                     context_action="continue",
                 )
-            elif detect_specific_lab_code_intent(text):
+            elif detect_specific_lab_code_intent(text) and not lab_code_by_llm():
                 # Bare Latin-coded lab marker (e.g. «Са-125», «CA-125», «HbA1c»,
                 # «CA 19-9») — конкретный анализ без ценового/контекстного слова.
                 # Роутим как TEST_ASSIST с заполненным test_name, чтобы missing_slots

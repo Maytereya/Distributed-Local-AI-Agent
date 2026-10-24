@@ -425,3 +425,46 @@ def test_switch_is_a_config_field_off_by_default() -> None:
     from agent_logic_2 import config
 
     assert config.MR_RESULT_SLOTS_LLM == "off"
+
+
+# --- промпты: часть реквизитов — ответ; код анализа — не город (24.10, решения владельца) ------------------------------
+
+_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _prompt(name: str) -> str:
+    text = (_ROOT / "messengers_router" / "prompts" / f"{name}.txt").read_text(encoding="utf-8")
+    assert text == (_ROOT / "app_data" / "prompts" / f"mr_{name}.txt").read_text(encoding="utf-8"), "промпт в двух локациях разошёлся"
+    return text
+
+
+def test_free_reply_prompt_counts_part_of_the_data_as_an_answer() -> None:
+    """Голая фамилия на вопрос о четырёх реквизитах — ответ, не «нет» (карточка 24.10: «Сидорова» → подсказка и оффер)."""
+
+    assert "часть из них — тоже \"answer\"" in _prompt("choose_pending_free_reply")
+
+
+def test_classifier_prompt_explains_the_code_and_teaches_no_city_in_it() -> None:
+    text = _prompt("classifier_patient")
+    assert "filial — буквенный код анализа" in text and "НЕ город" in text
+    assert "филиал Самара" not in text and "Оренбург, код" not in text
+
+
+# --- правило лаб-кода: lab_code_by_llm = on — правило молчит, ход решает LLM ---------------------------------------
+
+
+def _rule(text: str):
+    return asyncio.run(classifier.deterministic_rule_decision(text, {}, allow_refine=False, attach_secondary=False))
+
+
+@pytest.mark.parametrize("text", ["Са-125", "CA 19-9", "Ву 148", "Тк 404"])
+def test_lab_code_rule_silent_on(monkeypatch, text: str) -> None:
+    monkeypatch.setattr(result_slots._cfg, "MR_LAB_CODE_BY_LLM", "on", raising=False)
+    decision = _rule(text)
+    assert decision is None or "rule_test_assist_lab_code" not in decision.flags
+
+
+@pytest.mark.parametrize("text", ["Са-125", "Ву 148"])
+def test_lab_code_rule_off_as_before(monkeypatch, text: str) -> None:
+    monkeypatch.setattr(result_slots._cfg, "MR_LAB_CODE_BY_LLM", "off", raising=False)
+    assert "rule_test_assist_lab_code" in _rule(text).flags

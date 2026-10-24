@@ -16,6 +16,7 @@ from typing import Any
 from . import result_slots, turn_names
 from .city import looks_like_address, match_city
 from .doctor_name_port import resolve_cached_doctor_name_candidate, surname_variants
+from .runtime_config import config as _cfg
 from .russian_nlu import common_prefix_len, normalize_ru
 from .service_phrase import extract_service_phrase
 from .specialty_parser import SPECIALTY_CANONICAL, extract_specialty_from_text
@@ -1571,6 +1572,12 @@ _LAB_CODE_RE = re.compile(
 # Дополнительный паттерн: известные лаб-коды без цифр (PSA, CEA, ПСА, РЭА, ТТГ и т.п.)
 # уже покрыты TEST_ASSIST_PATTERNS через _PRICE_SHORT_TOKEN_WHITELIST или TEST_ASSIST_PATTERNS[last].
 # Здесь добавляем только «alphanumeric+digit» класс.
+
+
+def lab_code_by_llm() -> bool:
+    """`[MESSENGER_ROUTER] lab_code_by_llm = on`: правило лаб-кода (`rule_test_assist_lab_code`) молчит — ход решает LLM."""
+
+    return str(getattr(_cfg, "MR_LAB_CODE_BY_LLM", "off") or "off").strip().lower() == "on"
 
 
 def detect_specific_lab_code_intent(text: str) -> bool:

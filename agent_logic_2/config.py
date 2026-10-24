@@ -243,6 +243,7 @@ class MessengerRouterConfig:
     names_patient_rule: str
     names_patient_fill: str
     result_slots_llm: str
+    lab_code_by_llm: str
     debug_final_input: bool
     url: str
 
@@ -602,6 +603,10 @@ settings = Settings(
         # одно число — один реквизит (BUG-2026-10-24-RESULT-SLOT-COMMAND; класс «слот берёт команду как данные»). off — как было.
         # [MESSENGER_ROUTER] result_slots_llm
         result_slots_llm=_get_enum("MESSENGER_ROUTER", "result_slots_llm", default="off", allowed={"off", "on"}),
+        # Правило «короткие буквы + цифры — анализ» (rule_test_assist_lab_code, BUG-2026-06-04-03: «Са-125») молчит, ход решает
+        # LLM-классификатор: на трафике 08.10 правило чаще брало реквизиты результата «Ву 148», «Тк 404», чем маркеры
+        # (BUG-2026-10-24-RESULT-SLOT-COMMAND). off — как было. [MESSENGER_ROUTER] lab_code_by_llm
+        lab_code_by_llm=_get_enum("MESSENGER_ROUTER", "lab_code_by_llm", default="off", allowed={"off", "on"}),
         # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
         # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
         # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —
@@ -888,6 +893,7 @@ MR_NAMES_PATIENT_FIO = settings.messenger_router.names_patient_fio
 MR_NAMES_PATIENT_RULE = settings.messenger_router.names_patient_rule
 MR_NAMES_PATIENT_FILL = settings.messenger_router.names_patient_fill
 MR_RESULT_SLOTS_LLM = settings.messenger_router.result_slots_llm
+MR_LAB_CODE_BY_LLM = settings.messenger_router.lab_code_by_llm
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 
