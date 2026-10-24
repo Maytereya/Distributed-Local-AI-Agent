@@ -12,7 +12,10 @@ FEAT-2026-07-15-SERVICE-SLOT-LLM). Справочника кодов в МИС �
 - **одно число — один реквизит**: «1985» было и годом рождения, и номером анализа;
 - **переспрос называет недостающее** (пункт 5 принципов): часть реквизитов принята — бот просит только остальные, а не те же четыре
   (тот же вопрос второй раз подряд — сразу оффер оператора, хотя пациент продвинулся); ответ в том же порядке («1985, Бг, 123») —
-  остаток формы, как полный порядок.
+  остаток формы, как полный порядок;
+- **ответ на вопрос об одном реквизите** («Укажите код анализа»), который одна функция ответа на висящий вопрос (LLM,
+  `pending_buttons`) признала ответом, — значение этого реквизита, если подходит по виду: «ЯВ» — код, «да» и «не знаю код» модель
+  ответом не считает. LLM-классификатор поле `filial` кодом не понимает (стенд 24.10: «Самара», вся реплика, код — в `order_id`).
 
 off — как было (`policies._guess_result_code`).
 """
@@ -118,6 +121,16 @@ def one_number_one_field(
     _acted(f"number:{keep or 'none'}")
 
 
+def _label_words() -> frozenset[str]:
+    """Слова подписей граф формы («фамилия», «год рождения», «код анализа», «номер анализа»): подпись — не значение."""
+
+    return frozenset(word for name in _HAVE.values() for word in _words(name))
+
+
+def _value(field: str, part: str) -> Any:
+    return int(part) if field in ("year", "number") else part.capitalize() if field == "surname" else part
+
+
 def _fits(field: str, part: str) -> bool:
     """Значение подходит реквизиту по виду — как у полного порядка (`policies._QF_RESULT_ORDERED_RE`); код — с буквы."""
 
@@ -141,14 +154,22 @@ def rest_of_form(text: str, missing: list[str]) -> dict[str, Any]:
     if len(parts) != len(rest) or not all(_fits(field, part) for field, part in zip(rest, parts)):
         return {}
     # Подпись графы — не значение: «код 5437», «номер 123» — слово формы и число, а не код и номер.
-    labels = {word for name in _HAVE.values() for word in _words(name)}
-    if labels.intersection(_words(" ".join(parts))):
+    if _label_words().intersection(_words(" ".join(parts))):
         return {}
     _acted("form:rest")
-    return {
-        field: int(part) if field in ("year", "number") else part.capitalize() if field == "surname" else part
-        for field, part in zip(rest, parts)
-    }
+    return {field: _value(field, part) for field, part in zip(rest, parts)}
+
+
+def answer_to_one_field(value: str, missing: list[str]) -> dict[str, Any]:
+    """Ждём один реквизит, и одна функция ответа на висящий вопрос (LLM) признала реплику ответом: она — значение этого реквизита,
+    если подходит по виду и не подпись графы («ЯВ» на «Укажите код анализа»); иначе пусто — бот переспросит."""
+
+    rest = [field for field in _FORM if field in missing]
+    part = str(value or "").strip()
+    if len(rest) != 1 or not _fits(rest[0], part) or _label_words().intersection(_words(part)):
+        return {}
+    _acted(f"answer:{rest[0]}")
+    return {rest[0]: _value(rest[0], part)}
 
 
 def _listed(items: list[str]) -> str:

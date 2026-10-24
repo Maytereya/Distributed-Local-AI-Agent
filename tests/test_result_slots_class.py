@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,9 @@ from messengers_router.entity_grounder import ground_decision_entities
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision, SessionState
 from messengers_router.services import Services
+from tests.test_booking_slots_by_meaning import _LLM
+from tests.test_pending_buttons_class import _CLASSIFIER_MARK, _FREE_MARK, _ON, _free, _in_world
+from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 
 _ALL = ["surname", "year", "filial", "number"]
 
@@ -327,6 +331,61 @@ def test_dialog_off_progress_repeats_question(monkeypatch) -> None:
     _switch(monkeypatch, "off")
     (_, again, _), _ = _say(monkeypatch, ["Хочу получить результаты анализов", "1985", "Сидорова, Бг, 123"])
     assert _WHOLE_QUESTION in again and "Перевести на оператора?" in again
+
+
+# --- ответ на вопрос об одном реквизите — решение одной функции ответа на висящий вопрос (LLM) ----------------------
+
+# Стенд 24.10: живой классификатор код в `filial` не кладёт (кладёт город, всю реплику, код — в `order_id`), а одна функция ответа
+# на висящий вопрос «ЯВ» на «Укажите код анализа» признаёт ответом, «да» и «не знаю код» — «нет».
+_ASK_CODE = "Укажите код анализа (например: Бг)."
+_BEFORE_CODE = ["Хочу получить результаты анализов", "Сидорова 1985 123"]
+
+
+def _classifier(prompt: str) -> str:
+    reply = prompt.rsplit("Текст пациента:", 1)[-1].strip()
+    entities = {"surname": "Сидорова", "year": 1985, "number": 123} if reply == "Сидорова 1985 123" else {}
+    return json.dumps({"label": "TEST_RESULT", "confidence": 0.9, "context_action": "continue", "entities": entities})
+
+
+def _code_dialog(world, monkeypatch, reply: str, *, free: str | None, result_slots_llm: str = "on", buttons: dict | None = None):
+    answers = {_CLASSIFIER_MARK: _classifier, **({_FREE_MARK: _free(free)} if free else {})}
+    switches = {**(buttons or _ON), "MR_RESULT_SLOTS_LLM": result_slots_llm}
+    return _in_world(world, monkeypatch, [*_BEFORE_CODE, reply], switches=switches, llm=_LLM(answers))
+
+
+@pytest.mark.parametrize("code", ["ЯВ", "Тд", "уб"])
+def test_code_answer_by_the_one_function_gives_the_link(code: str, mini_prod_world, monkeypatch) -> None:  # noqa: F811
+    _, ask, link = _code_dialog(mini_prod_world, monkeypatch, code, free="answer")
+    assert ask["text"] == _ASK_CODE
+    assert link["state"].get("filial") == code and "getanaliz.php?" in link["text"], link
+
+
+@pytest.mark.parametrize("reply", ["да", "не знаю код"])
+def test_not_an_answer_is_not_the_code(reply: str, mini_prod_world, monkeypatch) -> None:  # noqa: F811
+    from messengers_router.router import TEST_RESULT_DATA_HINT_TEXT
+
+    turn = _code_dialog(mini_prod_world, monkeypatch, reply, free="no")[-1]
+    assert "filial" not in turn["state"] and turn["text"] == TEST_RESULT_DATA_HINT_TEXT, turn
+
+
+@pytest.mark.parametrize("reply", ["Сидорова 1985 123", "код анализа", "не знаю какой"])
+def test_answer_of_the_wrong_kind_is_not_the_code(reply: str, mini_prod_world, monkeypatch) -> None:  # noqa: F811
+    """Модель сочла ответом, но это не код по виду (несколько слов, подпись графы) — кода нет, бот переспросит."""
+
+    turn = _code_dialog(mini_prod_world, monkeypatch, reply, free="answer")[-1]
+    assert "filial" not in turn["state"] and "getanaliz.php?" not in turn["text"], turn
+
+
+def test_code_answer_without_the_one_function_asks_again(mini_prod_world, monkeypatch) -> None:  # noqa: F811
+    """LLM ответа на висящий вопрос нет (сбой или `pending_buttons = off`), классификатор кода не назвал — переспрос."""
+
+    turn = _code_dialog(mini_prod_world, monkeypatch, "ЯВ", free=None)[-1]
+    assert "filial" not in turn["state"] and turn["text"].startswith(_ASK_CODE), turn
+
+
+def test_code_answer_off_as_before(mini_prod_world, monkeypatch) -> None:  # noqa: F811
+    turn = _code_dialog(mini_prod_world, monkeypatch, "ЯВ", free=None, result_slots_llm="off")[-1]
+    assert turn["state"].get("filial") == "ЯВ" and "getanaliz.php?" in turn["text"], turn
 
 
 # --- путь on не зовёт прежнюю догадку (AST) --------------------------------------------------------------------------

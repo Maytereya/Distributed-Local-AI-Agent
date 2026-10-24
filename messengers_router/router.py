@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import booking_slots, degradation, expects, pending_answer, pending_reply, result_slots, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -3535,6 +3535,12 @@ async def _complete_route_after_doctor_guard(
             # Одна функция решила, что реплика — ответ на вопрос-слот (`_slot_value_keeps_topic`): правила её не разобрали —
             # реплика целиком в слот; что это за памятка или анализы, решает инструмент темы.
             memory.merge_entities(state, {slot: value}, label=str(pend_label))
+        elif pend_label == "TEST_RESULT" and value and "pending_slot_value" in decision.flags and result_slots.on():
+            # Реквизитов четыре — слота темы нет; ждём один («Укажите код анализа») — ответ в него, если подходит по виду
+            # (BUG-2026-10-24-RESULT-SLOT-COMMAND: классификатор поле filial кодом не понимает).
+            answered = result_slots.answer_to_one_field(value, missing_slots("TEST_RESULT", state.last_entities))
+            if answered:
+                memory.merge_entities(state, answered, label="TEST_RESULT")
 
     fill_date_from_schedule_windows(state, decision.label)
 
