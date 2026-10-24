@@ -24,6 +24,7 @@ from messengers_router.mess_types import RouteDecision, SessionState
 from messengers_router.policies import nonbookable_service_hint
 from messengers_router.service_phrase import extract_service_phrase
 from messengers_router.services import Services
+from messengers_router.services import _biomaterial as B
 
 _CORE = Path(__file__).resolve().parents[1] / "messengers_router"
 
@@ -126,3 +127,60 @@ def test_on_does_not_depend_on_the_letter_regex(monkeypatch) -> None:
 
 def test_only_the_off_helper_reads_the_letter_regex() -> None:
     assert _readers(Path(G.__file__), "_GENERIC_SERVICE_FALLBACK_RE") == {"_llm_service_name_is_generic"}
+
+
+# --------------------------------------------------------------------------- биоматериал: хвост — только слова МИС
+
+# Слово места забора во всех формах: путь off знал «поверхности», «поверхность», «области», «область», «участка», «участке»,
+# «зоны», «зоне» — и не знал «поверхностью», «областью», «участком», «зоной», «зону».
+_PLACE_FORMS = ("поверхности", "поверхностью", "поверхность", "области", "областью", "участка", "участком", "зоны", "зоной", "зону")
+_SERVICE = "посев на микрофлору"
+
+
+def _vocab() -> B._MisVocabularies:
+    """Словарь МИС как у справочника: слова фраз материалов (с предлогами внутри) и материал услуги."""
+
+    vocab = B._MisVocabularies()
+    phrase = frozenset({"соскоб", "с", "задней", "стенки", "глотки"})
+    vocab.biomat_tokens = phrase | {"кровь", "из", "вены"}
+    vocab.biomat_by_service = {_SERVICE: (phrase,)}
+    return vocab
+
+
+def _tail_answers(monkeypatch, *, mode: str) -> dict[str, tuple[str, str, bool | None]]:
+    """Для каждой формы слова места: что правило снимает как материал и принимает ли его услуга по МИС."""
+
+    monkeypatch.setattr(cfg, "MR_BIOMATERIAL_BY_MIS", mode, raising=False)
+    vocab = _vocab()
+    monkeypatch.setattr(B, "_vocabularies", lambda: vocab)
+    out = {}
+    for word in _PLACE_FORMS:
+        head, tail = B.split_biomaterial_tail(f"мазок на микрофлору с {word} задней стенки глотки")
+        out[word] = (head.replace(word, "<место>"), tail.replace(word, "<место>"), B.service_accepts_biomaterial(_SERVICE, f"с {word} задней стенки глотки", vocab=vocab))
+    return out
+
+
+def test_on_every_form_of_a_place_word_gets_one_answer(monkeypatch) -> None:
+    answers = set(_tail_answers(monkeypatch, mode="on").values())
+    assert answers == {("мазок на микрофлору с <место>", "задней стенки глотки", False)}
+
+
+def test_off_split_the_forms_by_the_list_as_before(monkeypatch) -> None:
+    """Характеристика пути off: формы из списка уходят в материал (и услуга его «принимает»), прочие — нет."""
+
+    answers = _tail_answers(monkeypatch, mode="off")
+    assert answers["поверхности"] == ("мазок на микрофлору", "с <место> задней стенки глотки", True)
+    assert answers["поверхностью"] == ("мазок на микрофлору с <место>", "задней стенки глотки", False)
+
+
+def test_on_does_not_depend_on_the_place_list(monkeypatch) -> None:
+    """Мутация: в списке места — все слова реплики; под on ответы те же."""
+
+    before = _tail_answers(monkeypatch, mode="on")
+    monkeypatch.setattr(B, "_LOCATIVE_FILLER", frozenset({"мазок", "на", "микрофлору", *_PLACE_FORMS}))
+    assert _tail_answers(monkeypatch, mode="on") == before
+    assert _tail_answers(monkeypatch, mode="off") != before
+
+
+def test_only_the_off_helper_reads_the_place_list() -> None:
+    assert _readers(Path(B.__file__), "_LOCATIVE_FILLER") == {"_place_words"}

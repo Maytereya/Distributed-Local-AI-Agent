@@ -208,6 +208,7 @@ class MessengerRouterConfig:
     roles_catalog_llm: str
     catalog_confirm_llm: str
     grounder_generic_by_llm: str
+    biomaterial_by_mis: str
     p1_facet_none_offer: str
     price_budget_clarify: str
     prepare_general_memo_llm: str
@@ -602,6 +603,10 @@ settings = Settings(
         # общих слов (`_GENERIC_SERVICE_FALLBACK_RE`: запись, врач, услуга, хочу…). off — как было.
         # [MESSENGER_ROUTER] grounder_generic_by_llm
         grounder_generic_by_llm=_get_enum("MESSENGER_ROUTER", "grounder_generic_by_llm", default="off", allowed={"off", "on"}),
+        # Хвост-биоматериал в правиле цены — только слова материалов МИС (`biomatNames`) и предлоги, без локативной обвязки
+        # в коде («поверхности», «области»…; STEP-2026-10-24-S2-DOCS-PHRASE): тот ли это материал, решает выбор строки LLM —
+        # он видит материалы МИС строки. off — как было. [MESSENGER_ROUTER] biomaterial_by_mis
+        biomaterial_by_mis=_get_enum("MESSENGER_ROUTER", "biomaterial_by_mis", default="off", allowed={"off", "on"}),
         # П1 на ходах `topic_by_llm` (BUG-2026-10-22-P1-FACET-NONE-AS-PRICE): LLM решила, что пациент спрашивает об услуге не цену,
         # не «есть ли» и не «где / когда» (подготовка, возраст, результат, неясно) — не цена, а честный оффер оператора (как OTHER
         # от LLM). Сбой LLM свойства — как было (П1 → цена). off — как было. [MESSENGER_ROUTER] p1_facet_none_offer
@@ -816,6 +821,7 @@ MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_ROLES_CATALOG_LLM = settings.messenger_router.roles_catalog_llm
 MR_CATALOG_CONFIRM_LLM = settings.messenger_router.catalog_confirm_llm
 MR_GROUNDER_GENERIC_BY_LLM = settings.messenger_router.grounder_generic_by_llm
+MR_BIOMATERIAL_BY_MIS = settings.messenger_router.biomaterial_by_mis
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
 MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
 MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
