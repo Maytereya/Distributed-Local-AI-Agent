@@ -227,3 +227,5 @@ tests/test_button_pass_topic_class.py
 tests/test_prepare_by_parse_class.py
 tests/test_stage2_docs_phrase_class.py
 tests/test_test_assist_answer_class.py
+tests/test_price_stage2_readers.py
+tests/test_price_stage2_turns.py
