@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextvars
 import json
@@ -115,19 +116,8 @@ def test_switch_of_other_module_is_programmer_error() -> None:
         turn_names.on("pending_reply")
 
 
-SWITCHES = {
-    "names_patient_fio": ("flow_policy", "_PATIENT_FIO_STOPWORDS"),
-    "names_patient_rule": ("classifier", "_PATIENT_NAME_STOPWORDS"),
-    "names_patient_fill": ("policies", "_QF_PATIENT_NAME_STOPWORDS"),
-    "names_result_surname": ("policies", "_QF_RESULT_SURNAME_STOPWORDS"),
-    "names_doctor_followup": ("classifier", "_DOCTOR_FOLLOWUP_FILLERS"),
-    "names_doctor_noise": ("entity_grounder", "_DOCTOR_NOISE_TOKENS"),
-    "names_doctor_catalog": ("services/_doctors_helpers", "_CATALOG_DOCTOR_STOPWORDS"),
-}
-
-
 def test_switches_are_off_by_default() -> None:
-    assert not any(turn_names.on(name) for name in SWITCHES)
+    assert not any(turn_names.on(name) for name in _GUARDS)
 
 
 # --- names_doctor_catalog: врач реплики — по справочнику МИС --------------------------------------------------------
@@ -457,3 +447,114 @@ def test_patient_fill_does_not_take_service(monkeypatch, text: str) -> None:
     out: dict = {}
     policies._fill_patient_entities(text, ["patient_name"], out)
     assert "patient_name" not in out
+
+
+# --- путь `on` не читает список (AST) --------------------------------------------------------------------------------
+
+_CORE = Path(__file__).resolve().parents[1] / "messengers_router"
+# Выключатель → (файл, функция-развилка, что читает только путь off): список или единственный его читатель.
+_GUARDS = {
+    "names_patient_fio": ("flow_policy.py", "_looks_like_patient_fio", "_PATIENT_FIO_STOPWORDS"),
+    "names_patient_rule": ("classifier.py", "_looks_like_patient_name_only", "_PATIENT_NAME_STOPWORDS"),
+    "names_patient_fill": ("policies.py", "_is_valid_patient_name_candidate", "_QF_PATIENT_NAME_STOPWORDS"),
+    "names_result_surname": ("policies.py", "_fill_test_result_entities", "_QF_RESULT_SURNAME_STOPWORDS"),
+    "names_doctor_followup": ("classifier.py", "_doctor_followup_name_in_context", "_DOCTOR_FOLLOWUP_FILLERS"),
+    "names_doctor_noise": ("entity_grounder.py", "_sanitize_raw_doctor_name", "_DOCTOR_NOISE_TOKENS"),
+    "names_doctor_catalog": ("services/doctors.py", "match_catalog_doctor", "_doctor_catalog_query_candidates"),
+}
+
+
+def _is_on(node: ast.AST, switch: str) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "on"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "turn_names"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == switch
+    )
+
+
+def _is_off(node: ast.AST, switch: str) -> bool:
+    return isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not) and _is_on(node.operand, switch)
+
+
+def _returns_on(stmt: ast.stmt, switch: str) -> bool:
+    """`if turn_names.on(switch): … return …` — дальше по этому списку операторов идёт только путь off."""
+
+    return isinstance(stmt, ast.If) and _is_on(stmt.test, switch) and bool(stmt.body) and isinstance(stmt.body[-1], ast.Return)
+
+
+def _off_only(func: ast.AST, target: ast.AST, switch: str) -> bool:
+    parents = {child: parent for parent in ast.walk(func) for child in ast.iter_child_nodes(parent)}
+    node = target
+    while node is not func:
+        parent = parents[node]
+        if isinstance(parent, ast.If) and node in parent.body and _is_off(parent.test, switch):
+            return True
+        if isinstance(parent, ast.If) and node in parent.orelse and _is_on(parent.test, switch):
+            return True
+        for field in ("body", "orelse", "finalbody"):
+            block = getattr(parent, field, None)
+            if isinstance(block, list) and node in block and any(_returns_on(s, switch) for s in block[: block.index(node)]):
+                return True
+        node = parent
+    return False
+
+
+def _function(path: Path, name: str) -> ast.AST:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return next(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+
+
+@pytest.mark.parametrize("switch", sorted(_GUARDS))
+def test_on_path_does_not_read_the_list(switch: str) -> None:
+    file, function, symbol = _GUARDS[switch]
+    func = _function(_CORE / file, function)
+    reads = [n for n in ast.walk(func) if isinstance(n, ast.Name) and n.id == symbol]
+    assert reads, f"{function} не читает {symbol} — развилка устарела"
+    assert all(_off_only(func, n, switch) for n in reads), f"{function}: {symbol} читает путь on"
+    assert any(_is_on(n, switch) for n in ast.walk(func)), f"{function} не смотрит на выключатель {switch}"
+
+
+def _readers(symbol: str) -> set[str]:
+    """Функции ядра, которые читают имя (`ast.Name` в теле), — кто читает список, по всему `messengers_router`."""
+
+    found: set[str] = set()
+    for path in sorted(_CORE.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for func in ast.walk(tree):
+            if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+                isinstance(n, ast.Name) and n.id == symbol for n in ast.walk(func)
+            ):
+                found.add(f"{path.relative_to(_CORE)}::{func.name}")
+    return found
+
+
+@pytest.mark.parametrize("switch", sorted(_GUARDS))
+def test_list_has_no_reader_besides_the_guarded_one(switch: str) -> None:
+    """Новый читатель списка обошёл бы выключатель — опись (журнал) и развилка должны его знать."""
+
+    file, function, symbol = _GUARDS[switch]
+    if symbol == "_doctor_catalog_query_candidates":
+        assert _readers("_CATALOG_DOCTOR_STOPWORDS") == {"services/_doctors_helpers.py::_doctor_catalog_query_candidates"}
+    assert _readers(symbol) == {f"{file}::{function}"}
+
+
+def test_names_module_reads_no_list() -> None:
+    tree = ast.parse((_CORE / "turn_names.py").read_text(encoding="utf-8"))
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    listed = {sym for _, _, sym in _GUARDS.values()} | {
+        "_CATALOG_DOCTOR_STOPWORDS", "STOP_WORDS", "_EXTRA_STOPWORDS",
+    }
+    assert names.isdisjoint(listed)
+
+
+def test_every_switch_is_a_config_field() -> None:
+    """Выключатель читается из `config.ini` (`[MESSENGER_ROUTER] names_*`), а не только атрибутом на прогон."""
+
+    from agent_logic_2 import config
+
+    assert all(getattr(config, "MR_" + name.upper()) == "off" for name in _GUARDS)
