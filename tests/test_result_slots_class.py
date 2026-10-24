@@ -205,6 +205,26 @@ def test_dialog_code_named_by_llm(monkeypatch) -> None:
     assert _dialog(monkeypatch, "Бг", {"filial": "Бг"}).get("filial") == "Бг"
 
 
+@pytest.mark.parametrize("buttons", ["off", "on"])
+@pytest.mark.parametrize("code", ["ЯВ", "Тд", "уб"])
+def test_code_question_answer_is_code_by_llm(monkeypatch, code: str, buttons: str) -> None:
+    """Встречный свип 24.10: на «Укажите код анализа» пациенты отвечают голым кодом из двух букв (13 из 24 ответов) — путь on
+    принимает его по LLM хода (и при одной функции ответа на висящий вопрос), без LLM — переспрос."""
+
+    _switch(monkeypatch)
+    monkeypatch.setattr(result_slots._cfg, "MR_PENDING_BUTTONS", buttons, raising=False)
+    by_reply = {"Сидорова 1985 123": {"surname": "Сидорова", "year": 1985, "number": 123}, code: {"filial": code}}
+
+    async def llm(prompt: str, *, queue_timeout_ms: int = 30000) -> dict:
+        entities = by_reply.get(prompt.rsplit("Текст пациента:", 1)[-1].strip(), {})
+        return {"label": "TEST_RESULT", "confidence": 0.9, "context_action": "continue", "entities": entities}
+
+    monkeypatch.setattr(classifier, "ollama_classify_json", llm)
+    (_, ask, link), entities = _say(monkeypatch, ["Хочу получить результаты анализов", "Сидорова 1985 123", code])
+    assert ask == "Укажите код анализа (например: Бг)."
+    assert entities.get("filial") == code and "getanaliz.php?" in link
+
+
 # --- переспрос называет недостающее; ответ в том же порядке — остаток формы ----------------------------------------
 
 _WHOLE_QUESTION = "фамилия, год рождения, код анализа, номер анализа"
