@@ -69,6 +69,7 @@ from ._prices_helpers import (
     _rank_price_rows,
     _row_nonbase_price_flags,
     price_question_names_service,
+    price_units_index,
     query_has_unsatisfiable_qualifier,
     query_names_service_in_other_words,
 )
@@ -564,15 +565,57 @@ def _mis_note(row: dict[str, Any], wanted: set[str], vocab: Any = None) -> str:
     return ""
 
 
-def _option_text(row: dict[str, Any], note: str) -> str:
+def _option_text(row: dict[str, Any], note: str, section: str = "") -> str:
     text = f"{_row_name(row)} — {_row_cost(row)} руб."
-    return f"{text} ({note})" if note else text
+    parts = [*([f"раздел прайса: {section}"] if section else []), *([note] if note else [])]
+    return f"{text} ({'; '.join(parts)})" if parts else text
+
+
+# Раздел прайса — два нижних уровня дерева `priceUnits` МИС без корня и римского номера раздела («III Амбулаторно-поликлиническая
+# помощь › УЗИ › УЗИ беременных» → «УЗИ › УЗИ беременных»): вид услуги, которого нет в названии строки («1-12 неделя
+# беременности» — профиль анализов, BUG-2026-10-24-FOREIGN-PRICE-D17, класс 2).
+_SECTION_LEVELS = 2
+_ROMAN_DIGITS = frozenset("IVXLC")
+
+
+def _section_name(name: str) -> str:
+    """Название раздела без римского номера впереди («II Профили исследований» → «Профили исследований»)."""
+
+    head, _, rest = str(name or "").strip().partition(" ")
+    return rest.strip() if head and set(head) <= _ROMAN_DIGITS and rest.strip() else str(name or "").strip()
+
+
+def _price_sections() -> Callable[[dict[str, Any]], str]:
+    """Раздел прайса строки под `price_select_v2 = on`; справочник недоступен или off — пусто (позиция как раньше)."""
+
+    if not _select_v2_on():
+        return lambda _row: ""
+    try:
+        units = price_units_index()
+    except Exception as exc:  # справочник разделов — подсказка выбору, не условие ответа
+        logger.warning("price_sections_unavailable: %s", type(exc).__name__)
+        return lambda _row: ""
+
+    def section(row: dict[str, Any]) -> str:
+        names: list[str] = []
+        current, seen = row.get("priceUnitId"), set()
+        while isinstance(current, int) and current in units and current not in seen:
+            seen.add(current)
+            unit = units[current]
+            if unit.get("parent") in units:  # корень дерева («Дерево прайсов») — не раздел
+                names.append(_section_name(str(unit.get("name") or "")))
+            current = unit.get("parent")
+        return " › ".join(reversed([name for name in names if name][:_SECTION_LEVELS]))
+
+    return section
 
 
 def _options(question: str, pool: list[dict[str, Any]]) -> list[Option]:
     """Позиции для LLM: «название — цена», под `price_option_mis_notes = on` — с пометкой МИС (`_mis_note`) в пределах
-    `_MIS_NOTES_POOL_MAX` на список; число помеченных — в телеметрию хода (`price_mis_notes`)."""
+    `_MIS_NOTES_POOL_MAX` на список; число помеченных — в телеметрию хода (`price_mis_notes`); под `price_select_v2 = on` — с
+    разделом прайса (`_price_sections`)."""
 
+    section = _price_sections()
     wanted = set(_price_query_tokens(question)) if _mis_notes_on() else set()
     vocab = _biomaterial._vocabularies() if wanted else None  # один раз на список: у словаря — проверка среза на диске
     notes, budget = [], _MIS_NOTES_POOL_MAX
@@ -583,7 +626,7 @@ def _options(question: str, pool: list[dict[str, Any]]) -> list[Option]:
         notes.append(note)
     if wanted:  # за ход: оба круга выбора
         turn_telemetry.bump("price_mis_notes", sum(1 for note in notes if note))
-    return [Option(id=str(index), text=_option_text(row, note)) for index, (row, note) in enumerate(zip(pool, notes))]
+    return [Option(id=str(index), text=_option_text(row, note, section(row))) for index, (row, note) in enumerate(zip(pool, notes))]
 
 
 async def _ask(
