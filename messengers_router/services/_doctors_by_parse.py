@@ -58,7 +58,7 @@ from ._doctors_helpers import (
     _specialty_priority_rank,
 )
 from ._prices_helpers import _catalog_fingerprint, _catalog_rows
-from ._role_catalog import _hit as _role_hit, _stem as _role_stem, _tokens as _role_tokens, build_role_catalog
+from ._role_catalog import Role, RoleCatalog, _hit as _role_hit, _stem as _role_stem, _tokens as _role_tokens, build_role_catalog
 from ._service_doctors import ServiceDoctorIndex, ServiceDoctors
 from ._turn_phrases import phrase_rows
 
@@ -111,6 +111,7 @@ class Found:
     doctor_ids: tuple[int, ...] = ()
     unit_ids: frozenset[int] = frozenset()
     options: int = 0
+    role_units: frozenset[int] = frozenset()  # роли, которые LLM выбрала целиком («эндоскопист» на «кто делает эндоскопию»)
 
 
 _FORMS: list[tuple[list[dict[str, Any]], tuple[int, str, str], dict[int, list[tuple[tuple[str, ...], int]]]]] = []
@@ -216,18 +217,39 @@ def candidate_services(phrases: tuple[str, ...], index: ServiceDoctorIndex) -> l
     return [item for _miss, item in sorted(scored, key=lambda pair: (pair[0], pair[1].name, pair[1].code))]
 
 
-def _found(answer: str, codes: tuple[str, ...], index: ServiceDoctorIndex, options: int = 0) -> Found:
+def candidate_roles(phrases: tuple[str, ...], catalog: RoleCatalog) -> list[Role]:
+    """Роли МИС, в названии которых есть длинная основа слова пациента («эндоскопию» — «эндоскопист», «физиотерапию» — «специалист
+    по физиотерапии»), — тоже варианты выбора LLM. Процедурные роли (не приёмные) — как раз те, кто «делает» исследование, а услуги
+    желудка и кишечника в МИС зовутся без слова «эндоскопия» («Эзофагогастродуоденоскопия», «Фиброколоноскопия»): без роли пул на
+    «кто делает эндоскопию» — только эндоскопии ЛОР (свип 24.10). Короткая основа роль не предлагает: «прием» — внутри служебной
+    роли «<фамилия> -прием»."""
+
+    words = [word for phrase in phrases for word in _role_tokens(phrase) if len(word) - 2 >= _INNER_CORE]
+    return [role for role in catalog.roles if role.doctors and any(_inside(word, _role_tokens(role.name)) for word in words)]
+
+
+def _found(
+    answer: str, codes: tuple[str, ...], index: ServiceDoctorIndex, options: int = 0, roles: tuple[Role, ...] = ()
+) -> Found:
     units = {unit for code in codes if (item := index.by_code(code)) is not None for unit in item.unit_ids}
+    role_units = frozenset(unit for role in roles for unit in role.unit_ids)
     ids = index.doctors_for(codes)
-    return Found(answer if ids or answer != "data" else "no_doctors", codes, ids, frozenset(units), options)
+    found = ids or role_units or answer != "data"
+    return Found(answer if found else "no_doctors", codes, ids, frozenset(units) | role_units, options, role_units)
 
 
 ServiceIndex = Callable[[set[int], Callable[[str], bool]], Awaitable[ServiceDoctorIndex | None]]
 
 
-async def service_doctors(subject: Subject, question: str, index: ServiceDoctorIndex | None) -> Found:
+_ROLE_ID = "role:"
+
+
+async def service_doctors(
+    subject: Subject, question: str, index: ServiceDoctorIndex | None, roles: RoleCatalog | None = None
+) -> Found:
     """Коды услуги и её врачи: строки по данным — соединением по коду (`serviceHomecode`); фраза не из данных — выбором LLM из
-    услуг с теми же словами. Решение «какая услуга» принимает либо данные дословно, либо LLM — не сопоставление слов."""
+    услуг с теми же словами и ролей МИС, чьё название их содержит. Решение «какая услуга» принимает либо данные дословно, либо LLM —
+    не сопоставление слов."""
 
     if index is None or not index.services:  # срез недоступен или пуст — «нет» по нему не решаем
         return Found("no_slice")
@@ -235,14 +257,19 @@ async def service_doctors(subject: Subject, question: str, index: ServiceDoctorI
         codes = tuple(code for code in dict.fromkeys(str(row.get("serviceHomecode") or "").strip() for row in subject.rows) if code)
         return _found("data", codes, index)
     pool = await asyncio.to_thread(candidate_services, subject.phrases, index)
-    if not pool:
+    role_pool = candidate_roles(subject.phrases, roles) if roles is not None else []
+    if not pool and not role_pool:
         return Found("no_doctors")
     if len(pool) > MAX_OPTIONS:
         return Found("clarify", options=len(pool))
-    choice = await choose(TASK, question, [Option(id=item.code, text=item.name) for item in pool])
+    options = [Option(id=item.code, text=item.name) for item in pool]
+    options += [Option(id=f"{_ROLE_ID}{role.name}", text=f"Все услуги специалиста «{role.name}»") for role in role_pool]
+    choice = await choose(TASK, question, options)
     if choice.status is not Status.PICKED or not choice.ids:
-        return Found("clarify", options=len(pool))  # не узнала, сбой, бюджет хода — без LLM услугу не угадываем
-    return _found("data", tuple(choice.ids), index, len(pool))
+        return Found("clarify", options=len(options))  # не узнала, сбой, бюджет хода — без LLM услугу не угадываем
+    picked_roles = tuple(role for role in role_pool if f"{_ROLE_ID}{role.name}" in choice.ids)
+    codes = tuple(code for code in choice.ids if not code.startswith(_ROLE_ID))
+    return _found("data", codes, index, len(options), picked_roles)
 
 
 def _display_specialization(doc: dict[str, Any], *, unit_ids: frozenset[int], specialty: str) -> str:
@@ -336,11 +363,13 @@ async def doctors_info(
             return len(q) >= 3 and q in hay(doc)
         return True
 
+    roles_catalog = build_role_catalog(doctors, in_region=in_region)
+
     def named_role(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Врачи ролей приёма, которые пациент назвал словами МИС (точный слой каталога ролей L-17), — не роль, выведенная из
         процедуры правилом («колоноскопия → эндоскопист» — буквы, их L-06 не допускает)."""
 
-        roles = [role for role in build_role_catalog(doctors, in_region=in_region).find(query).exact if role.reception]
+        roles = [role for role in roles_catalog.find(query).exact if role.reception]
         units = {unit for role in roles for unit in role.unit_ids}
         return [d for d in docs if any((link or {}).get("company_unit_id") in units for link in d.get("unit_links") or [])]
 
@@ -357,8 +386,16 @@ async def doctors_info(
     else:
         region_ids = {i for i in (_as_int(d.get("id")) for d in doctors if in_region(d)) if i is not None}
         index = await service_index(region_ids, lambda branch: in_region({"regions": [branch]}))
-        found = await service_doctors(subject, query, index)
-        by_data = [d for d in doctors if _as_int(d.get("id")) in found.doctor_ids and in_region(d)]
+        found = await service_doctors(subject, query, index, roles_catalog)
+        by_data = [
+            d
+            for d in doctors
+            if in_region(d)
+            and (
+                _as_int(d.get("id")) in found.doctor_ids
+                or any((link or {}).get("company_unit_id") in found.role_units for link in d.get("unit_links") or [])
+            )
+        ]
         if region_q:
             by_data = [d for d in by_data if region_q in hay(d)]
         if found.answer == "clarify":

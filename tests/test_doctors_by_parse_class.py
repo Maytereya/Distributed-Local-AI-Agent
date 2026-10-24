@@ -202,6 +202,17 @@ def test_letters_alone_do_not_name_the_service(services, monkeypatch) -> None:
     assert ids == [5]
 
 
+def test_procedure_role_of_mis_is_an_option_for_a_general_procedure(services, monkeypatch) -> None:
+    """«Эндоскопия» желудка в МИС зовётся без этого слова — без роли пул только ЛОР (свип 24.10); роль «эндоскопист» — вариант
+    из каталога ролей МИС, выбирает её LLM, а не правило «процедура → роль»."""
+
+    llm = _LLM(mark="эндоскоп", picks=[2])
+    ids, payload = _ask(services, monkeypatch, "Кто делает эндоскопию?", llm)
+
+    assert llm.options() == [_NOSE, "Все услуги специалиста «эндоскопист»"]
+    assert ids == [4] and payload["doctors_source"] == "parse_data"
+
+
 @pytest.mark.parametrize("fail", ["turn_spans", "choose_doctors_service"])
 def test_llm_failure_asks_to_clarify_instead_of_guessing(services, monkeypatch, fail) -> None:
     ids, payload = _ask(services, monkeypatch, "Кто делает колоноскопию?", _LLM(mark="колоноскоп", picks=[1], fail=fail))
