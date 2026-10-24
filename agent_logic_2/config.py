@@ -242,6 +242,7 @@ class MessengerRouterConfig:
     names_patient_fio: str
     names_patient_rule: str
     names_patient_fill: str
+    result_slots_llm: str
     debug_final_input: bool
     url: str
 
@@ -596,6 +597,11 @@ settings = Settings(
         # свип 24.10: прежний путь клал «Общий Анализ Крови» в ФИО). off — как было (_QF_PATIENT_NAME_STOPWORDS).
         # [MESSENGER_ROUTER] names_patient_fill
         names_patient_fill=_get_enum("MESSENGER_ROUTER", "names_patient_fill", default="off", allowed={"off", "on"}),
+        # Реквизиты результатов анализов («фамилия, год, код, номер»): код анализа — только из формы (полный порядок, «код Бг») или
+        # сущность LLM-классификатора хода (слова реплики, не то же слово, что фамилия); любые 1–3 слова и город кодом не становятся;
+        # одно число — один реквизит (BUG-2026-10-24-RESULT-SLOT-COMMAND; класс «слот берёт команду как данные»). off — как было.
+        # [MESSENGER_ROUTER] result_slots_llm
+        result_slots_llm=_get_enum("MESSENGER_ROUTER", "result_slots_llm", default="off", allowed={"off", "on"}),
         # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
         # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
         # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —
@@ -881,6 +887,7 @@ MR_NAMES_RESULT_SURNAME = settings.messenger_router.names_result_surname
 MR_NAMES_PATIENT_FIO = settings.messenger_router.names_patient_fio
 MR_NAMES_PATIENT_RULE = settings.messenger_router.names_patient_rule
 MR_NAMES_PATIENT_FILL = settings.messenger_router.names_patient_fill
+MR_RESULT_SLOTS_LLM = settings.messenger_router.result_slots_llm
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

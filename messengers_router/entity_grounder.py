@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import address_service, booking_slots, llm_runtime, turn_names, turn_understanding
+from . import address_service, booking_slots, llm_runtime, result_slots, turn_names, turn_understanding
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
@@ -671,6 +671,15 @@ async def ground_decision_entities(
                     flags.add("entity_grounded_doctor_name")
             else:
                 flags.add("entity_dropped_unverified_doctor_name")
+            continue
+
+        if key == "filial" and result_slots.on():
+            # Код анализа от LLM — слова реплики, не слово другого реквизита (BUG-2026-10-24-RESULT-SLOT-COMMAND).
+            code = result_slots.llm_code(value, user_text, raw)
+            if code:
+                out[key] = code
+            elif str(value or "").strip():
+                flags.add("entity_dropped_result_code")
             continue
 
         if key == "city":

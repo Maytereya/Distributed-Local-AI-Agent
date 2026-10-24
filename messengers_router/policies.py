@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
-from . import turn_names
+from . import result_slots, turn_names
 from .city import looks_like_address, match_city
 from .doctor_name_port import resolve_cached_doctor_name_candidate, surname_variants
 from .russian_nlu import common_prefix_len, normalize_ru
@@ -1933,6 +1933,22 @@ def _fill_datetime_entities(text: str, out: dict[str, Any]) -> None:
         out["time_flexible"] = True
 
 
+def _guess_result_code(t: str, missing_rules: list[str], out: dict[str, Any]) -> None:
+    """Код анализа по-старому (`result_slots_llm = off`): после «филиал / отделение / город», город реплики, любые 1–3 слова без
+    цифр — кроме слов записи (BUG-2026-10-24-RESULT-SLOT-COMMAND: «Сидорова» — и фамилия, и код)."""
+
+    m_filial = _QF_RESULT_FILIAL_RE.search(t)
+    if m_filial:
+        out["filial"] = m_filial.group(1).strip(" ,.")
+    elif "filial" in missing_rules:
+        city_guess = match_city(t)
+        if city_guess:
+            out["filial"] = city_guess
+        words = [w for w in re.split(r"\s+", t) if w]
+        if "filial" not in out and 1 <= len(words) <= 3 and not re.search(r"\d", t) and not _QF_APPOINTMENT_WORD_RE.search(t.lower()):
+            out["filial"] = t.strip(" ,.")
+
+
 def _fill_test_result_entities(text: str, missing_rules: list[str], out: dict[str, Any]) -> None:
     """Извлекает номер заказа и данные для сценария получения результатов.
 
@@ -1943,7 +1959,6 @@ def _fill_test_result_entities(text: str, missing_rules: list[str], out: dict[st
     """
 
     t = str(text or "").strip()
-    low = t.lower()
 
     m_oid = _QF_ORDER_ID_RE.search(t)
     if m_oid:
@@ -1973,23 +1988,18 @@ def _fill_test_result_entities(text: str, missing_rules: list[str], out: dict[st
     m_year = _QF_RESULT_YEAR_RE.search(t)
     if m_year:
         out["year"] = int(m_year.group(1))
-    elif re.fullmatch(r"\s*(?:19|20)\d{2}\s*", t):
-        out["year"] = int(t.strip())
     else:
         y_any = re.search(r"\b((?:19|20)\d{2})\b", t)
         if y_any:
             out["year"] = int(y_any.group(1))
 
-    m_filial = _QF_RESULT_FILIAL_RE.search(t)
-    if m_filial:
-        out["filial"] = m_filial.group(1).strip(" ,.")
-    elif "filial" in missing_rules:
-        city_guess = match_city(t)
-        if city_guess:
-            out["filial"] = city_guess
-        words = [w for w in re.split(r"\s+", t) if w]
-        if "filial" not in out and 1 <= len(words) <= 3 and not re.search(r"\d", t) and not _QF_APPOINTMENT_WORD_RE.search(low):
-            out["filial"] = t.strip(" ,.")
+    if result_slots.on():
+        # Код анализа — только форма «код Бг» или сущность LLM хода (её проверяет граундер); слова реплики и город кодом не становятся.
+        code = result_slots.marked_code(t)
+        if code:
+            out["filial"] = code
+    else:
+        _guess_result_code(t, missing_rules, out)
 
     m_number = _QF_RESULT_NUMBER_RE.search(t)
     if m_number:

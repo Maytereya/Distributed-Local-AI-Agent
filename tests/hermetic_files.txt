@@ -222,3 +222,5 @@ tests/test_prepare_general_memo_class.py
 tests/test_turn_spans_class.py
 tests/test_names_by_llm_class.py
 tests/test_names_paths_characterization.py
+tests/test_result_slots_characterization.py
+tests/test_result_slots_class.py
