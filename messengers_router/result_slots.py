@@ -9,7 +9,10 @@ FEAT-2026-07-15-SERVICE-SLOT-LLM). Справочника кодов в МИС �
 - **код анализа** — форма (полный порядок «фамилия, год, код, номер»; «код Бг») или сущность `filial` LLM-классификатора этого хода,
   и только если это слова реплики подряд (модель код не придумала) и не слово другого реквизита хода (одно слово — один реквизит).
   LLM не звали, сбой, кода не назвала — кода нет: бот переспросит (решение владельца 22.10 (а));
-- **одно число — один реквизит**: «1985» было и годом рождения, и номером анализа.
+- **одно число — один реквизит**: «1985» было и годом рождения, и номером анализа;
+- **переспрос называет недостающее** (пункт 5 принципов): часть реквизитов принята — бот просит только остальные, а не те же четыре
+  (тот же вопрос второй раз подряд — сразу оффер оператора, хотя пациент продвинулся); ответ в том же порядке («1985, Бг, 123») —
+  остаток формы, как полный порядок.
 
 off — как было (`policies._guess_result_code`).
 """
@@ -24,6 +27,11 @@ from .runtime_config import config as _cfg
 
 # Реквизиты хода, чьи слова кодом быть не могут: одно слово реплики — один реквизит.
 _OTHER_FIELDS = ("surname", "patient_name", "year", "number")
+# Порядок формы — как в вопросе бота (`policies.clarification_question`): фамилия, год рождения, код анализа, номер анализа.
+_FORM = ("surname", "year", "filial", "number")
+_ASK = {"surname": "фамилию", "year": "год рождения", "filial": "код анализа", "number": "номер анализа"}
+_HAVE = {"surname": "фамилия", "year": "год рождения", "filial": "код анализа", "number": "номер анализа"}
+_EXAMPLE = {"surname": "Иванов", "year": "1989", "filial": "Бг", "number": "123"}
 
 
 def on() -> bool:
@@ -108,3 +116,53 @@ def one_number_one_field(
         if field != keep:
             out.pop(field, None)
     _acted(f"number:{keep or 'none'}")
+
+
+def _fits(field: str, part: str) -> bool:
+    """Значение подходит реквизиту по виду — как у полного порядка (`policies._QF_RESULT_ORDERED_RE`); код — с буквы."""
+
+    if field == "year":
+        return len(part) == 4 and part.isascii() and part.isdigit() and part[:2] in ("19", "20")
+    if field == "number":
+        return len(part) >= 3 and part.isascii() and part.isdigit()
+    if field == "surname":
+        return len(part) >= 2 and all(ch.isalpha() or ch == "-" for ch in part)
+    return 0 < len(part) <= 20 and part[0].isalpha() and all(ch.isalnum() or ch == "-" for ch in part)
+
+
+def rest_of_form(text: str, missing: list[str]) -> dict[str, Any]:
+    """Остаток формы в порядке вопроса: два-три недостающих реквизита через запятую или пробел, каждый своего вида, и среди них число
+    (год или номер) — «1985, Бг, 123», «ву 276». Голое слово формой не считается: «Бг» или «Сидорова» решает LLM хода."""
+
+    rest = [field for field in _FORM if field in missing]
+    if not 2 <= len(rest) <= 3 or not {"year", "number"}.intersection(rest):
+        return {}
+    parts = str(text or "").replace(",", " ").replace(";", " ").strip(" .!").split()
+    if len(parts) != len(rest) or not all(_fits(field, part) for field, part in zip(rest, parts)):
+        return {}
+    # Подпись графы — не значение: «код 5437», «номер 123» — слово формы и число, а не код и номер.
+    labels = {word for name in _HAVE.values() for word in _words(name)}
+    if labels.intersection(_words(" ".join(parts))):
+        return {}
+    _acted("form:rest")
+    return {
+        field: int(part) if field in ("year", "number") else part.capitalize() if field == "surname" else part
+        for field, part in zip(rest, parts)
+    }
+
+
+def _listed(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " и " + items[-1]
+
+
+def ask_rest(missing: list[str]) -> str:
+    """Переспрос, когда часть реквизитов уже есть: только недостающие, в порядке формы, с примером; нечего назвать — пусто."""
+
+    rest = [field for field in _FORM if field in missing]
+    have = [field for field in _FORM if field not in missing]
+    if len(rest) < 2 or not have:
+        return ""
+    return (
+        f"Укажите ещё {_listed([_ASK[f] for f in rest])} — через запятую, в таком порядке. "
+        f"Пример: «{', '.join(_EXAMPLE[f] for f in rest)}». {_listed([_HAVE[f] for f in have]).capitalize()} уже есть."
+    )

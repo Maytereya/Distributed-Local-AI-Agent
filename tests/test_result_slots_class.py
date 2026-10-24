@@ -205,6 +205,110 @@ def test_dialog_code_named_by_llm(monkeypatch) -> None:
     assert _dialog(monkeypatch, "Бг", {"filial": "Бг"}).get("filial") == "Бг"
 
 
+# --- переспрос называет недостающее; ответ в том же порядке — остаток формы ----------------------------------------
+
+_WHOLE_QUESTION = "фамилия, год рождения, код анализа, номер анализа"
+
+
+@pytest.mark.parametrize(
+    ("missing", "asks", "have"),
+    [
+        (["year", "filial", "number"], "Укажите ещё год рождения, код анализа и номер анализа", "Фамилия уже есть."),
+        (["surname", "filial", "number"], "Укажите ещё фамилию, код анализа и номер анализа", "Год рождения уже есть."),
+        (["filial", "number"], "Укажите ещё код анализа и номер анализа", "Фамилия и год рождения уже есть."),
+    ],
+)
+def test_partial_clarify_names_only_the_rest(monkeypatch, missing: list[str], asks: str, have: str) -> None:
+    _switch(monkeypatch)
+    text = policies.clarification_question("TEST_RESULT", missing)
+    assert text.startswith(asks) and text.endswith(have)
+    assert _WHOLE_QUESTION not in text
+
+
+def test_clarify_without_progress_and_single_field_as_before(monkeypatch) -> None:
+    _switch(monkeypatch)
+    assert _WHOLE_QUESTION in policies.clarification_question("TEST_RESULT", list(_ALL))
+    assert policies.clarification_question("TEST_RESULT", ["filial"]) == "Укажите код анализа (например: Бг)."
+
+
+def test_partial_clarify_off_as_before(monkeypatch) -> None:
+    _switch(monkeypatch, "off")
+    assert _WHOLE_QUESTION in policies.clarification_question("TEST_RESULT", ["year", "filial", "number"])
+
+
+@pytest.mark.parametrize(
+    ("text", "missing", "expected"),
+    [
+        ("1985, Бг, 123", ["year", "filial", "number"], {"year": 1985, "filial": "Бг", "number": 123}),
+        ("1985 бг 123.", ["year", "filial", "number"], {"year": 1985, "filial": "бг", "number": 123}),
+        ("ву 276", ["filial", "number"], {"filial": "ву", "number": 276}),
+        ("сидорова, Бг, 123", ["surname", "filial", "number"], {"surname": "Сидорова", "filial": "Бг", "number": 123}),
+        ("Сидорова; 1985", ["surname", "year"], {"surname": "Сидорова", "year": 1985}),
+    ],
+)
+def test_rest_of_form_fills_the_rest(monkeypatch, text: str, missing: list[str], expected: dict) -> None:
+    _switch(monkeypatch)
+    assert {k: v for k, v in _fields(text, missing).items() if k in _ALL} == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "missing"),
+    [
+        ("Сидорова, Бг", ["surname", "filial"]),  # без числа — не форма: слова решает LLM
+        ("Бг", ["filial", "number"]),
+        ("1985, Бг", ["year", "filial", "number"]),  # не все недостающие — не форма
+        ("Результаты анализов", ["year", "filial", "number"]),
+        ("код 5437", ["filial", "number"]),  # подпись графы — не значение
+        ("номер 123", ["filial", "number"]),
+        ("Код 123", ["filial", "number"]),
+    ],
+)
+def test_not_the_rest_of_form_no_code(monkeypatch, text: str, missing: list[str]) -> None:
+    _switch(monkeypatch)
+    assert "filial" not in _fields(text, missing)
+
+
+def _say(monkeypatch, texts: list[str]) -> tuple[list[str], dict]:
+    monkeypatch.setattr(result_slots._cfg, "MR_NAMES_RESULT_SURNAME", "off", raising=False)
+    state = SessionState(session_id="result-slots-say-" + "-".join(texts))
+    memory = MemoryStore()
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+
+    async def go() -> list[str]:
+        answers = []
+        for text in texts:
+            out = [env async for env in router_mod.patient_routing_stream(text, state, services, memory)]
+            answers.append("".join(env.text for env in out if env.text))
+        return answers
+
+    return asyncio.run(go()), dict(state.last_entities)
+
+
+@pytest.mark.parametrize(
+    "turns",
+    [
+        ["Хочу получить результаты анализов", "Сидорова", "1985, Бг, 123"],
+        ["Результаты анализов", "сидорова", "1985 бг 123"],
+        ["Хочу получить результаты анализов", "1985", "Сидорова, Бг, 123"],
+    ],
+)
+def test_dialog_progress_asks_the_rest_then_gives_link(monkeypatch, turns: list[str]) -> None:
+    """Без LLM (сеть закрыта): реквизит принят — бот просит остальные, без оффера оператора; остаток формы — ссылка."""
+
+    _switch(monkeypatch)
+    (_, rest, link), entities = _say(monkeypatch, turns)
+    assert rest.startswith("Укажите ещё") and "оператор" not in rest
+    assert "getanaliz.php?" in link and "year=1985" in link and "nom2=123" in link
+    assert str(entities.get("filial")).casefold() == "бг"
+
+
+def test_dialog_off_progress_repeats_question(monkeypatch) -> None:
+    _switch(monkeypatch, "off")
+    (_, again, _), _ = _say(monkeypatch, ["Хочу получить результаты анализов", "1985", "Сидорова, Бг, 123"])
+    assert _WHOLE_QUESTION in again and "Перевести на оператора?" in again
+
+
 # --- путь on не зовёт прежнюю догадку (AST) --------------------------------------------------------------------------
 
 _POLICIES = Path(__file__).resolve().parents[1] / "messengers_router" / "policies.py"

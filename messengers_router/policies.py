@@ -1980,6 +1980,11 @@ def _fill_test_result_entities(text: str, missing_rules: list[str], out: dict[st
     # случайное слово не должно перетирать уже заполненное поле.
     if not _missing_rules_include(missing_rules, "surname", "year", "filial", "number"):
         return
+    rest = result_slots.rest_of_form(t, missing_rules) if result_slots.on() else {}
+    if rest:
+        # Остаток той же формы в порядке вопроса («1985, Бг, 123» — фамилия уже есть): механика формы, как полный порядок.
+        out.update(rest)
+        return
 
     m_surname = _QF_RESULT_SURNAME_RE.search(t)
     if m_surname:
@@ -2417,6 +2422,10 @@ def clarification_question(label: str, missing: list[str], entities: dict[str, A
         need = frozenset(missing)
         if need in TEST_RESULT_CLARIFY_MAP:
             return TEST_RESULT_CLARIFY_MAP[need]
+        # Часть реквизитов уже есть — назвать, чего не хватает, а не те же четыре (пункт 5 принципов, `result_slots_llm`).
+        rest = result_slots.ask_rest([str(m) for m in missing]) if result_slots.on() else ""
+        if rest:
+            return rest
         return (
             "Чтобы получить результат, укажите данные в таком порядке: "
             "фамилия, год рождения, код анализа, номер анализа. "
