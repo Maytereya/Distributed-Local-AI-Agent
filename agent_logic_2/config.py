@@ -212,6 +212,7 @@ class MessengerRouterConfig:
     topic_by_llm: str
     turn_understanding_one: str
     service_answer_from_data: str
+    test_assist_from_data: str
     address_service_llm: str
     booking_specialty_llm: str
     doctors_by_service_data: str
@@ -616,6 +617,10 @@ settings = Settings(
         # написал бы свободный текст или сдался бы без данных; текст печатает код, нет данных — честный оффер оператора.
         # off — как было. [MESSENGER_ROUTER] service_answer_from_data
         service_answer_from_data=_get_enum("MESSENGER_ROUTER", "service_answer_from_data", default="off", allowed={"off", "on"}),
+        # Ход подбора анализов (TEST_ASSIST), дошедший до свободного текста LLM, отвечает по данным хода
+        # (BUG-2026-10-21-WALKIN-LLM-FREE-TEXT): строки прайса выбирает LLM (`choose`, задача `test_assist_answer`), название
+        # и срок печатает код, нет данных и сбой — честный оффер оператора. off — как было. [MESSENGER_ROUTER] test_assist_from_data
+        test_assist_from_data=_get_enum("MESSENGER_ROUTER", "test_assist_from_data", default="off", allowed={"off", "on"}),
         # Инструмент адресов при пустой сущности услуги сам не решает её по буквам реплики: правила дают кандидатов (строки
         # прайса, по которым ищутся места оказания), выбирает LLM (`choose`, задача `address_service`); «ни одна» — общий
         # список филиалов, сбой LLM — как было. Услуга, которую LLM разбора хода уже не подтвердила, заново не ищется
@@ -803,6 +808,7 @@ MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
+MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
 MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
 MR_DOCTORS_BY_SERVICE_DATA = settings.messenger_router.doctors_by_service_data
