@@ -84,8 +84,8 @@ def test_unknown_button_id_has_no_action():
 def _route(button_id: str, monkeypatch, nlu_decision: RouteDecision | None = None):
     calls = []
 
-    async def fake_nlu(*, user_text, state, services, memory, runtime_options):
-        calls.append(user_text)
+    async def fake_nlu(*, user_text, state, services, memory, runtime_options, button_topic=""):
+        calls.append((user_text, button_topic))
         return (nlu_decision or RouteDecision(label="OTHER", confidence=0.5, source="nlu")), {}
 
     monkeypatch.setattr(router_mod, "_resolve_nlu_decision_before_doctor_guard", fake_nlu)
@@ -127,7 +127,9 @@ def test_hint_button_answers_with_its_text_without_operator(button_id, monkeypat
 def test_pass_and_unknown_buttons_go_through_nlu(button_id, monkeypatch):
     marker = RouteDecision(label="ADDRESS", confidence=0.9, source="nlu")
     ctx, nlu_calls = _route(button_id, monkeypatch, nlu_decision=marker)
-    assert nlu_calls == [GATEWAY_V1_TITLES.get(button_id, "Неизвестная кнопка")]
+    # Тема кнопки `pass` уходит в NLU вместе с подписью (`topic_by_llm` её не переспрашивает), у неизвестной кнопки темы нет.
+    action = button_menu.action_for(button_id)
+    assert nlu_calls == [(GATEWAY_V1_TITLES.get(button_id, "Неизвестная кнопка"), action.label if action else "")]
     assert ctx.decision is marker
 
 

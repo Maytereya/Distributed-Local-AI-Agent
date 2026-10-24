@@ -114,6 +114,7 @@ async def judge_booking_service(
         hints=(canonical,),
         runtime_llm_mode=runtime_llm_mode,
         general_as_none_fit=True,
+        price_answer=False,  # суд записи — прежний промпт: правила пути цены (`price_select_rules`) его не касаются
     )
     if selection is None:
         return keep

@@ -29,7 +29,6 @@ from .classifier import analyze
 from .context_summary import update_summary
 from .dialog_graph import GraphEngine
 from .entity_grounder import (
-    _NONBOOKABLE_GENERIC_HINTS,
     BOOKING_SERVICE_CLARIFY_KEY,
     BOOKING_SERVICE_OPTIONS_KEY,
     ground_decision_entities,
@@ -40,6 +39,7 @@ from .entity_grounder import (
 )
 from .flow_policy import (
     apply_context_action,
+    apply_pending_override,
     clear_on_handoff,
     clear_on_topic_switch,
     fill_date_from_schedule_windows,
@@ -2556,7 +2556,7 @@ async def _guard_walkin_named_service(
     def to_booking(**named: str) -> RouteDecision:
         # Класс из контекста («анализы» от кнопки) — не услуга записи: иначе запись
         # подхватит его из состояния («Есть возможность записи на анализы», свип 08.10).
-        if str(state.last_entities.get("service_name") or "").casefold() in _NONBOOKABLE_GENERIC_HINTS:
+        if walkin.is_class(state.last_entities.get("service_name")):
             state.last_entities.pop("service_name", None)
         entities = {k: v for k, v in decision.entities.items() if k != "service_name"}
         return _relabel(
@@ -3071,6 +3071,7 @@ async def _resolve_nlu_decision_before_doctor_guard(
     services: Services,
     memory: MemoryStore,
     runtime_options: RuntimeOptions | None = None,
+    button_topic: str = "",
 ) -> tuple[RouteDecision, dict[str, Any]]:
     """Строит NLU-решение до doctor verification.
 
@@ -3084,6 +3085,7 @@ async def _resolve_nlu_decision_before_doctor_guard(
     :param services: сервисный слой для prelock-логики
     :param memory: memory-store для чтения pending-состояния
     :param runtime_options: runtime-настройки LLM/NLU
+    :param button_topic: тема нажатой кнопки режима `pass` (`button_menu`); пусто — набранный текст
     :return: решение маршрутизации и NLU debug-метаданные
     """
 
@@ -3157,7 +3159,9 @@ async def _resolve_nlu_decision_before_doctor_guard(
         use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
         shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False) or _env_flag("MR_NLU_SHADOW", False)
         if use_v2_nlu:
-            nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
+            nlu_result = await analyze_with_candidates(
+                user_text, state, runtime_options=runtime_options, **({"button_topic": button_topic} if button_topic else {})
+            )
             decision = nlu_result.decision
             turn_telemetry.note(tu_label_nlu=decision.label)
             turn_understanding.observe_intent(decision.label, decision.confidence, (nlu_result.trace or {}).get("topic_source"))
@@ -3538,6 +3542,11 @@ async def _complete_route_after_doctor_guard(
 
     fill_date_from_schedule_windows(state, decision.label)
 
+    if turn_understanding.prepare_by_parse():
+        # Подготовка читает фразы разбора (этап 2 «без стоп-слов»): разбор хода — и на ходу подготовки, по теме, по которой
+        # строится план (ответ на вопрос подготовки — тоже).
+        planned = apply_pending_override(decision, memory.get_pending(state), user_text=user_text)
+        await turn_understanding.observe_prepare_turn(planned, user_text=user_text)
     plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
     evidence = await execute_plan(plan, state, services)
     if _doctors_by_service_not_found(evidence.get(ek.DOCTORS_INFO)):

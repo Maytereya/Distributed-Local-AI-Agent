@@ -32,6 +32,18 @@ _OPTIONS = (
 FLAG = "walkin_llm"  # LLM решила: без записи — `walkin_llm:<что именно>`
 FLAG_NO = "walkin_llm_no"  # LLM решила: не «без записи» (по записи или о другом)
 _PREFIX = f"{FLAG}:"
+_AND = " и "
+# Что бот кладёт в `service_name` как класс «без записи»: варианты выбора и оба вместе. Тот же ответ при сбое LLM даёт детектор
+# `policies.nonbookable_service_hint` («анализы», «ЭКГ», «анализы и ЭКГ»).
+_CLASSES = frozenset({*(o.id.casefold() for o in _OPTIONS), _AND.join(o.id for o in _OPTIONS).casefold()})
+
+
+def is_class(value: Any) -> bool:
+    """Значение `service_name` — класс «без записи» («анализы», «ЭКГ», «анализы и ЭКГ»), который поставил сам бот, а не
+    строка каталога. Одно определение — варианты задачи `walkin` (до 24.10 — отдельный список в заземлении,
+    STEP-2026-10-24-S2-DOCS-PHRASE)."""
+
+    return str(value or "").casefold() in _CLASSES
 
 
 def enabled() -> bool:
@@ -66,7 +78,7 @@ async def service(user_text: str, *, site: str) -> str | None:
         return None
     if picked.status is Status.PICKED:
         ids = [o.id for o in _OPTIONS if o.id in picked.ids]
-        answer = " и ".join(ids)
+        answer = _AND.join(ids)
     else:
         answer = ""
     turn_telemetry.note(walkin_llm=answer or "no", walkin_llm_site=site)

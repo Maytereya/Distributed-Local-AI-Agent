@@ -207,13 +207,21 @@ class MessengerRouterConfig:
     topic_shadow_llm: str
     roles_catalog_llm: str
     catalog_confirm_llm: str
+    grounder_generic_by_llm: str
+    biomaterial_by_mis: str
     p1_facet_none_offer: str
     price_budget_clarify: str
+    price_general_clarify: str
+    price_select_rules: str
+    synonym_wordforms: str
     prepare_general_memo_llm: str
     turn_spans_llm: str
+    prepare_by_parse: str
     topic_by_llm: str
+    button_pass_rules: str
     turn_understanding_one: str
     service_answer_from_data: str
+    test_assist_from_data: str
     address_service_llm: str
     booking_specialty_llm: str
     doctors_by_service_data: str
@@ -597,6 +605,15 @@ settings = Settings(
         # переспрос с её названием; «не услуга» / «ничего не подходит» — переспроса нет; LLM недоступна — как было. off — как было.
         # [MESSENGER_ROUTER] catalog_confirm_llm
         catalog_confirm_llm=_get_enum("MESSENGER_ROUTER", "catalog_confirm_llm", default="off", allowed={"off", "on"}),
+        # Значение `service_name` LLM-классификатора на метке без каталога (DOCTOR_INFO, PREPARE) без фразы услуги в реплике
+        # (STEP-2026-10-24-S2-DOCS-PHRASE, решения владельца 22.10): что это услуга, решила LLM — без перепроверки буквами
+        # общих слов (`_GENERIC_SERVICE_FALLBACK_RE`: запись, врач, услуга, хочу…). off — как было.
+        # [MESSENGER_ROUTER] grounder_generic_by_llm
+        grounder_generic_by_llm=_get_enum("MESSENGER_ROUTER", "grounder_generic_by_llm", default="off", allowed={"off", "on"}),
+        # Хвост-биоматериал в правиле цены — только слова материалов МИС (`biomatNames`) и предлоги, без локативной обвязки
+        # в коде («поверхности», «области»…; STEP-2026-10-24-S2-DOCS-PHRASE): тот ли это материал, решает выбор строки LLM —
+        # он видит материалы МИС строки. off — как было. [MESSENGER_ROUTER] biomaterial_by_mis
+        biomaterial_by_mis=_get_enum("MESSENGER_ROUTER", "biomaterial_by_mis", default="off", allowed={"off", "on"}),
         # П1 на ходах `topic_by_llm` (BUG-2026-10-22-P1-FACET-NONE-AS-PRICE): LLM решила, что пациент спрашивает об услуге не цену,
         # не «есть ли» и не «где / когда» (подготовка, возраст, результат, неясно) — не цена, а честный оффер оператора (как OTHER
         # от LLM). Сбой LLM свойства — как было (П1 → цена). off — как было. [MESSENGER_ROUTER] p1_facet_none_offer
@@ -605,6 +622,20 @@ settings = Settings(
         # решение владельца 22.10): не ответ правил по буквам (g0577 → цена чужой строки), а уточнение — названия без цен или
         # «не нашёл, уточните название». Сбой самой модели — как было. off — как было. [MESSENGER_ROUTER] price_budget_clarify
         price_budget_clarify=_get_enum("MESSENGER_ROUTER", "price_budget_clarify", default="off", allowed={"off", "on"}),
+        # Код после выбора строки цены LLM (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3): «слишком общее» / «не услуга» — уточнение,
+        # а не ответ правил со списком цен («гастропанель» → «Гастрин»); несколько разных услуг, выбранных LLM, — список на
+        # выбор, а не первая строка с её врачами («консультация врача» → приём хирурга). off — как было.
+        # [MESSENGER_ROUTER] price_general_clarify
+        price_general_clarify=_get_enum("MESSENGER_ROUTER", "price_general_clarify", default="off", allowed={"off", "on"}),
+        # Правила промпта выбора строки на пути ответа о цене (BUG-2026-10-24-FOREIGN-PRICE-D17; суд записи — прежний промпт):
+        # general — слишком общее название («анализы», приём врача без специальности) — не группа услуг правила 5, подходящих
+        # позиций нет (промпты `*_general`). off — прежние промпты. [MESSENGER_ROUTER] price_select_rules
+        price_select_rules=_get_enum("MESSENGER_ROUTER", "price_select_rules", default="off", allowed={"off", "general"}),
+        # Синоним МИС в другой словоформе («коагулограммы» — синоним «коагулограмма» гемостазиограмм; BUG-2026-10-24-FOREIGN-
+        # PRICE-D17, класс 1) — строки его услуг первыми в списке выбора строки цены LLM, как синоним дословный (не сильное
+        # совпадение: общее начало слова склеивает и разные слова — их отсеет выбор). off — как было.
+        # [MESSENGER_ROUTER] synonym_wordforms
+        synonym_wordforms=_get_enum("MESSENGER_ROUTER", "synonym_wordforms", default="off", allowed={"off", "on"}),
         # Общая памятка клиники «как сдавать кровь» — вариант выбора памятки LLM (BUG-2026-10-22-PREPARE-GENERAL-BY-LETTERS,
         # решение владельца 22.10 «по смыслу»): на «подготовка к анализам крови» LLM выбирает её сама, а не наименее плохую из
         # найденных по буквам («Анализ мочи по Нечипоренко»). Без LLM не выбирается. off — как было.
@@ -614,11 +645,21 @@ settings = Settings(
         # решения владельца 22.10 — 28 списков стоп-слов удалить, без LLM услугу не угадывать). off — прежний генератор окон.
         # [MESSENGER_ROUTER] turn_spans_llm
         turn_spans_llm=_get_enum("MESSENGER_ROUTER", "turn_spans_llm", default="off", allowed={"off", "on"}),
+        # Подготовка читает фразы разбора хода (DESIGN-2026-10-23-NO-STOPWORDS, этап 2; STEP-2026-10-24-PREPARE-BY-PARSE): предмет
+        # памятки — услуги, которые разбор нашёл в реплике, а не реплика без слов пяти списков подготовки; ни одной услуги — без
+        # поиска по словам; сбой разбора — «уточните». Разбор строится и на ходах подготовки. off — как было.
+        # [MESSENGER_ROUTER] prepare_by_parse
+        prepare_by_parse=_get_enum("MESSENGER_ROUTER", "prepare_by_parse", default="off", allowed={"off", "on"}),
         # Ход (б), этап 4, вариант Б (решения владельца 20.10 (б) 1, 5): ветки правил `legacy_v2` через запятую
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
         # [MESSENGER_ROUTER] topic_by_llm
         topic_by_llm=_get_str("MESSENGER_ROUTER", "topic_by_llm", default=""),
+        # Ход-кнопка режима `pass` (подпись кнопки — полноценный запрос, тему пациент выбрал нажатием, `button_menu`) тему у LLM
+        # (`topic_by_llm`) не переспрашивает — решает правило, как без `topic_by_llm` (BUG-2026-10-24-BUTTON-PASS-TOPIC-LLM:
+        # «Где и до скольки принимают» с деплоя 15 — классификатор 11–12 с вместо 0,15–0,5 с). Набранный текст — как был.
+        # off — как было. [MESSENGER_ROUTER] button_pass_rules
+        button_pass_rules=_get_enum("MESSENGER_ROUTER", "button_pass_rules", default="off", allowed={"off", "on"}),
         # Ход (б), этап 2 (решения владельца 20.10 (б) 4, 21.10): «список ли» на пути правил решается один раз — пониманием
         # хода (с защитами K1, без K1 у явного перечня своих названий); корзина правил и подбор анализов читают его, а не
         # решают сами. off — как было. [MESSENGER_ROUTER] turn_understanding_one
@@ -628,6 +669,10 @@ settings = Settings(
         # написал бы свободный текст или сдался бы без данных; текст печатает код, нет данных — честный оффер оператора.
         # off — как было. [MESSENGER_ROUTER] service_answer_from_data
         service_answer_from_data=_get_enum("MESSENGER_ROUTER", "service_answer_from_data", default="off", allowed={"off", "on"}),
+        # Ход подбора анализов (TEST_ASSIST), дошедший до свободного текста LLM, отвечает по данным хода
+        # (BUG-2026-10-21-WALKIN-LLM-FREE-TEXT): строки прайса выбирает LLM (`choose`, задача `test_assist_answer`), название
+        # и срок печатает код, нет данных и сбой — честный оффер оператора. off — как было. [MESSENGER_ROUTER] test_assist_from_data
+        test_assist_from_data=_get_enum("MESSENGER_ROUTER", "test_assist_from_data", default="off", allowed={"off", "on"}),
         # Инструмент адресов при пустой сущности услуги сам не решает её по буквам реплики: правила дают кандидатов (строки
         # прайса, по которым ищутся места оказания), выбирает LLM (`choose`, задача `address_service`); «ни одна» — общий
         # список филиалов, сбой LLM — как было. Услуга, которую LLM разбора хода уже не подтвердила, заново не ищется
@@ -814,13 +859,21 @@ MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
 MR_ROLES_CATALOG_LLM = settings.messenger_router.roles_catalog_llm
 MR_CATALOG_CONFIRM_LLM = settings.messenger_router.catalog_confirm_llm
+MR_GROUNDER_GENERIC_BY_LLM = settings.messenger_router.grounder_generic_by_llm
+MR_BIOMATERIAL_BY_MIS = settings.messenger_router.biomaterial_by_mis
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
 MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
+MR_PRICE_GENERAL_CLARIFY = settings.messenger_router.price_general_clarify
+MR_PRICE_SELECT_RULES = settings.messenger_router.price_select_rules
+MR_SYNONYM_WORDFORMS = settings.messenger_router.synonym_wordforms
 MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
+MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
+MR_BUTTON_PASS_RULES = settings.messenger_router.button_pass_rules
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
+MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
 MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
 MR_DOCTORS_BY_SERVICE_DATA = settings.messenger_router.doctors_by_service_data
