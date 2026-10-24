@@ -444,10 +444,10 @@ def test_free_reply_prompt_counts_part_of_the_data_as_an_answer() -> None:
     assert "часть из них — тоже \"answer\"" in _prompt("choose_pending_free_reply")
 
 
-def test_classifier_prompt_explains_the_code_and_teaches_no_city_in_it() -> None:
-    text = _prompt("classifier_patient")
-    assert "filial — буквенный код анализа" in text and "НЕ город" in text
-    assert "филиал Самара" not in text and "Оренбург, код" not in text
+def test_classifier_prompt_two_locations_equal() -> None:
+    """Правка промпта классификатора 24.10 (пояснение filial) откатана по карточке: dev — 19 смен темы по всему боту."""
+
+    _prompt("classifier_patient")
 
 
 # --- правило лаб-кода: lab_code_by_llm = on — правило молчит, ход решает LLM ---------------------------------------
