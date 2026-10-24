@@ -209,6 +209,8 @@ class MessengerRouterConfig:
     catalog_confirm_llm: str
     p1_facet_none_offer: str
     price_budget_clarify: str
+    price_general_clarify: str
+    price_select_v2: str
     prepare_general_memo_llm: str
     turn_spans_llm: str
     topic_by_llm: str
@@ -604,6 +606,16 @@ settings = Settings(
         # решение владельца 22.10): не ответ правил по буквам (g0577 → цена чужой строки), а уточнение — названия без цен или
         # «не нашёл, уточните название». Сбой самой модели — как было. off — как было. [MESSENGER_ROUTER] price_budget_clarify
         price_budget_clarify=_get_enum("MESSENGER_ROUTER", "price_budget_clarify", default="off", allowed={"off", "on"}),
+        # Код после выбора строки цены LLM (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3): «слишком общее» / «не услуга» — уточнение,
+        # а не ответ правил со списком цен («гастропанель» → «Гастрин»); несколько разных услуг, выбранных LLM, — список на
+        # выбор, а не первая строка с её врачами («консультация врача» → приём хирурга). off — как было.
+        # [MESSENGER_ROUTER] price_general_clarify
+        price_general_clarify=_get_enum("MESSENGER_ROUTER", "price_general_clarify", default="off", allowed={"off", "on"}),
+        # Выбор строки цены — промпты `choose_price_service_v2` / `choose_price_service_qualifier_v2` (BUG-2026-10-24-FOREIGN-
+        # PRICE-D17, классы 2–4): приём врача без специальности — «слишком общее»; особая группа пациентов (плод, беременность,
+        # до года) — только если её назвал пациент; марка и производитель — уточнение. off — прежние промпты.
+        # [MESSENGER_ROUTER] price_select_v2
+        price_select_v2=_get_enum("MESSENGER_ROUTER", "price_select_v2", default="off", allowed={"off", "on"}),
         # Общая памятка клиники «как сдавать кровь» — вариант выбора памятки LLM (BUG-2026-10-22-PREPARE-GENERAL-BY-LETTERS,
         # решение владельца 22.10 «по смыслу»): на «подготовка к анализам крови» LLM выбирает её сама, а не наименее плохую из
         # найденных по буквам («Анализ мочи по Нечипоренко»). Без LLM не выбирается. off — как было.
@@ -811,6 +823,8 @@ MR_ROLES_CATALOG_LLM = settings.messenger_router.roles_catalog_llm
 MR_CATALOG_CONFIRM_LLM = settings.messenger_router.catalog_confirm_llm
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
 MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
+MR_PRICE_GENERAL_CLARIFY = settings.messenger_router.price_general_clarify
+MR_PRICE_SELECT_V2 = settings.messenger_router.price_select_v2
 MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm

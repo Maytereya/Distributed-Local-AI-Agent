@@ -112,17 +112,37 @@ PRICE_CONDITIONS_TASK = replace(PRICE_TASK, name="price_service_conditions")
 # наркозом» → 8 100 руб. без наркоза, «экспресс 17-ОН день в день» → обычная цена. Уточнение `price_judge_conditions`
 # («как сдать, подготовиться…» — не условие) входит в тот же текст: строгое правило без него отсекало бы вопросы о сдаче.
 PRICE_QUALIFIER_TASK = replace(PRICE_TASK, name="price_service_qualifier")
+# Те же две задачи с правилами BUG-2026-10-24-FOREIGN-PRICE-D17 (классы 2–4) под `price_select_v2 = on`: свои промпты `*_v2`.
+PRICE_TASK_V2 = replace(PRICE_TASK, name="price_service_v2")
+PRICE_QUALIFIER_TASK_V2 = replace(PRICE_TASK, name="price_service_qualifier_v2")
 _VARIANT_B_LIMIT = 5
+
+
+def _select_v2_on() -> bool:
+    """`[MESSENGER_ROUTER] price_select_v2 = on`: промпты выбора строки `*_v2`; мусор — off (как было)."""
+
+    return str(getattr(_cfg, "MR_PRICE_SELECT_V2", "off") or "").strip().lower() == "on"
+
+
+def general_clarify_on() -> bool:
+    """`[MESSENGER_ROUTER] price_general_clarify = on` (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3): «слишком общее» на пути
+    цены — уточнение, несколько разных услуг выбора — список; мусор — off (как было)."""
+
+    return str(getattr(_cfg, "MR_PRICE_GENERAL_CLARIFY", "off") or "").strip().lower() == "on"
 
 
 def price_task(*, judge_qualifier: bool = False) -> Task:
     """Задача выбора строки прайса: суд условия под `price_candidates_by_meaning = on` — свой промпт; под
-    `[MESSENGER_ROUTER] price_judge_conditions = on` — с уточнённым правилом 3."""
+    `[MESSENGER_ROUTER] price_judge_conditions = on` — с уточнённым правилом 3; под `price_select_v2 = on` — промпты `*_v2`
+    (уточнённое правило 3 `price_judge_conditions` в них не входит: на проде он off)."""
 
+    v2 = _select_v2_on()
     if judge_qualifier and _by_meaning_on():
-        return PRICE_QUALIFIER_TASK
+        return PRICE_QUALIFIER_TASK_V2 if v2 else PRICE_QUALIFIER_TASK
     on = str(getattr(_cfg, "MR_PRICE_JUDGE_CONDITIONS", "off") or "").strip().lower() == "on"
-    return PRICE_CONDITIONS_TASK if on else PRICE_TASK
+    if on:
+        return PRICE_CONDITIONS_TASK
+    return PRICE_TASK_V2 if v2 else PRICE_TASK
 # Причины пустого выбора, при которых LLM не признала в реплике названия услуги: «Цена анализа»
 # (слишком общее), «сможете посчитать» (не услуга). Ни «не нашёл» пациенту, ни синоним клинике.
 _NOT_A_SERVICE_NAME = frozenset({"too_general", "not_a_service"})
@@ -833,6 +853,13 @@ async def select_price_rows(
     return settle(picked)
 
 
+def distinct_services(rows: Sequence[dict[str, Any]]) -> bool:
+    """Строки — разные услуги, а не варианты одной: у выбранных строк больше одного названия (варианты одной услуги в прайсе —
+    одно название с разными ценами и единицами). Сравнение — `_normalise_catalog_text`, как у сильного совпадения."""
+
+    return len({_normalise_catalog_text(_row_name(row)) for row in rows if isinstance(row, dict)}) > 1
+
+
 def rows_overlap(left: Sequence[dict[str, Any]], right: Sequence[dict[str, Any]]) -> bool:
     """Есть ли общие строки прайса (сравнение по названию, коду и цене, не по объекту)."""
 
@@ -850,7 +877,10 @@ def reconcile_with_proposal(
     - из списка правил остаются строки, которые LLM признала той услугой, плюс найденные
       ею варианты вне списка; чужие строки уходят;
     - LLM не признала ни одной строки правил — показываем её выбор;
-    - выбора нет — ответ правил: «не нашла» от LLM слабее, чем найденное правилами.
+    - выбора нет — ответ правил: «не нашла» от LLM слабее, чем найденное правилами;
+    - под `price_general_clarify = on`: правила показали бы одну строку, а LLM выбрала с ней и другие услуги (не варианты
+      одной) — весь её выбор; иначе он сводился к строке правил («консультация врача» → приём хирурга,
+      BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3).
 
     :param proposal: строки, которые показали бы правила
     :param selection: выбор LLM
@@ -861,6 +891,8 @@ def reconcile_with_proposal(
         return None
     proposed = [row for row in (proposal or []) if isinstance(row, dict)]
     if not proposed:
+        return list(selection.rows)
+    if len(proposed) == 1 and len(selection.rows) > 1 and general_clarify_on() and distinct_services(selection.rows):
         return list(selection.rows)
     selected_keys = {_row_key(row) for row in selection.rows}
     matched = [row for row in proposed if _row_key(row) in selected_keys]

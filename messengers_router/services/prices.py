@@ -44,7 +44,14 @@ from ._prepare import _is_prepare_requested_in_price_query
 from ._basket_select import basket_from_phrases, choose_basket_rows
 from ._turn_phrases import _FILLER
 from ._turn_phrases import _tokens as _phrase_tokens
-from ._price_select_llm import PriceSelection, reconcile_with_proposal, rows_overlap, select_price_rows
+from ._price_select_llm import (
+    PriceSelection,
+    distinct_services,
+    general_clarify_on,
+    reconcile_with_proposal,
+    rows_overlap,
+    select_price_rows,
+)
 from ._prices_helpers import (
     SAMARA_PRICE_REGION_ID,
     _DOCTOR_PRICE_HINT_RE,
@@ -607,6 +614,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
             judge_qualifier=bool(judged),
             budget_clarify=True,  # отказ лимита решений хода — уточнение (`price_budget_clarify`)
+            general_as_none_fit=general_clarify_on(),  # «слишком общее» — уточнение, не цены правил (`price_general_clarify`)
         )
 
     def _llm_answer(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -799,6 +807,7 @@ async def service_bundle_info(
             context=entity_service_name,
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
             budget_clarify=True,  # отказ лимита решений хода — уточнение (`price_budget_clarify`)
+            general_as_none_fit=general_clarify_on(),  # «слишком общее» — уточнение, не цены правил (`price_general_clarify`)
         )
 
     def _llm_variants(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -936,6 +945,10 @@ async def service_bundle_info(
         if llm_rows is not None and len(llm_rows) > 1 and not rows_overlap(llm_rows, out["retail_prices"]):
             # Правила промахнулись целиком, а LLM нашла несколько вариантов — их и
             # показываем на выбор, без врачей чужой услуги.
+            return _llm_variants(llm_rows)
+        if llm_rows is not None and general_clarify_on() and distinct_services(llm_rows):
+            # LLM выбрала несколько разных услуг (не варианты одной): дальше путь показал бы первую строку с её врачами —
+            # «консультация врача» → приём хирурга (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3). Список на выбор.
             return _llm_variants(llm_rows)
     if llm_rows:
         out["retail_prices"] = _annotate_price_rows_with_care_context(list(llm_rows))
