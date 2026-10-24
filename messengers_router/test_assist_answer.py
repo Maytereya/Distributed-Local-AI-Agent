@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 TASK = Task(
     name="test_assist_answer",
-    max_picks=4,
+    max_picks=6,
     outcomes=("partly", "need_name", "no_data"),
     num_predict=64,
     timeout_s=6.0,
@@ -52,7 +52,7 @@ _PREVIOUS_CHARS = 300
 PICKED_HEADING = "В прайсе клиники есть:"
 PICKED_TAIL = "Цену и подготовку подскажу по названию."
 PARTLY_TAIL = "Остального из вашего вопроса в данных клиники нет — точно ответит оператор."
-NEED_NAME_TEXT = "Сроки готовности и подготовка зависят от анализа. Напишите, пожалуйста, названия анализов — подскажу по каждому."
+NEED_NAME_TEXT = "Ответ зависит от конкретного анализа. Напишите, пожалуйста, названия анализов — подскажу по данным клиники."
 
 
 def enabled() -> bool:
