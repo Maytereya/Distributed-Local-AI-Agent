@@ -40,6 +40,7 @@ from .entity_grounder import (
 )
 from .flow_policy import (
     apply_context_action,
+    apply_pending_override,
     clear_on_handoff,
     clear_on_topic_switch,
     fill_date_from_schedule_windows,
@@ -3538,6 +3539,11 @@ async def _complete_route_after_doctor_guard(
 
     fill_date_from_schedule_windows(state, decision.label)
 
+    if turn_understanding.prepare_by_parse():
+        # Подготовка читает фразы разбора (этап 2 «без стоп-слов»): разбор хода — и на ходу подготовки, по теме, по которой
+        # строится план (ответ на вопрос подготовки — тоже).
+        planned = apply_pending_override(decision, memory.get_pending(state), user_text=user_text)
+        await turn_understanding.observe_prepare_turn(planned, user_text=user_text)
     plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
     evidence = await execute_plan(plan, state, services)
     if _doctors_by_service_not_found(evidence.get(ek.DOCTORS_INFO)):

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from agent_logic_2.nayka_api import api_service_info
 
@@ -21,13 +21,22 @@ from ._common import (
     _get_first_present,
     _normalise_catalog_text,
 )
-from ._prepare_select_llm import SOURCE_CLINIC_GENERAL, SOURCE_MIS, PrepareMemo, kb_patient_memos, select_prepare_memos
-from ._prices_helpers import _catalog_rows
+from ._prepare_select_llm import (
+    SOURCE_CLINIC_GENERAL,
+    SOURCE_MIS,
+    PrepareMemo,
+    kb_patient_memos,
+    select_prepare_memos,
+    select_prepare_memos_by_parse,
+)
+from ._prices_helpers import _PRICE_TOKEN_RE, _catalog_rows
 from ._strong_match import strong_rows
 from ._turn_phrases import phrase_rows, strong_window
 from ._prepare import (
     _PREPARE_ENTITY_RE,
     _PrepareCandidate,
+    _caption_key,
+    _memo_has_instructions,
     _dedupe_prepare_candidates,
     _is_generic_prepare_heading,
     _is_prepare_content_actionable,
@@ -42,6 +51,11 @@ from ._prepare import (
     _prepare_service_info_queries,
     _prepare_subject_phrase,
     _prepare_term_roots,
+    _phrase_roots,
+    _prepare_synonym_queries,
+    memo_corpus,
+    phrase_memo_score,
+    phrase_memo_usable,
 )
 
 if TYPE_CHECKING:
@@ -347,7 +361,20 @@ def _without_prices(lines: list[str]) -> list[str]:
     return out
 
 
-def _memo_block(memo: PrepareMemo, heading: str, *, max_chars: int) -> str:
+def _memo_lines(memo: PrepareMemo) -> list[str]:
+    """Строки памятки без переносов посреди фразы и без заголовков вида «Подготовка к исследованию»."""
+
+    return [line for line in join_wrapped_lines(memo.text) if not _is_generic_prepare_heading(line)]
+
+
+def _memo_lines_without_caption(memo: PrepareMemo, caption: str) -> list[str]:
+    """`_memo_lines` пути фраз разбора (`prepare_by_parse`): без подписи поля «Подготовка», которую задаёт срез МИС
+    (`MemoCorpus.caption`), а не список заголовков в коде. На срезах 03.10 и 20.10 строки те же."""
+
+    return [line for line in join_wrapped_lines(memo.text) if not caption or _caption_key(line) != caption]
+
+
+def _memo_block(memo: PrepareMemo, heading: str, *, max_chars: int, lines: list[str]) -> str:
     """Памятка под заголовком: текст клиники как есть, только склеены переносы строк.
 
     Памятка базы знаний — без цен. Длиннее `max_chars` — сжатие без LLM и только из её
@@ -355,7 +382,6 @@ def _memo_block(memo: PrepareMemo, heading: str, *, max_chars: int) -> str:
     процедуре (BUG-2026-10-01-PREPARE-FALLBACK-MIXES-DOCS).
     """
 
-    lines = [line for line in join_wrapped_lines(memo.text) if not _is_generic_prepare_heading(line)]
     if memo.source != SOURCE_MIS:
         lines = _without_prices(lines)
     full = "\n".join(lines)
@@ -375,14 +401,22 @@ def _single_memo_answer(memo: PrepareMemo) -> str:
     стоило 11–20 с), база знаний — 07.10 (пересказ ошибался в дозах и времени: «Пикопреп»
     при дневной колоноскопии, «по схеме» без схемы)."""
 
-    return _memo_block(memo, f"Памятка клиники {_quoted(memo.title)}:", max_chars=_SINGLE_MEMO_MAX_CHARS)
+    return _single_memo_block(memo, _memo_lines(memo))
 
 
 def _several_memos_answer(memos: Sequence[PrepareMemo]) -> str:
     """Несколько памяток в одном ответе — каждая отдельным блоком под своим названием."""
 
+    return _several_memos_block([(memo, _memo_lines(memo)) for memo in memos])
+
+
+def _single_memo_block(memo: PrepareMemo, lines: list[str]) -> str:
+    return _memo_block(memo, f"Памятка клиники {_quoted(memo.title)}:", max_chars=_SINGLE_MEMO_MAX_CHARS, lines=lines)
+
+
+def _several_memos_block(memos: Sequence[tuple[PrepareMemo, list[str]]]) -> str:
     parts = ["Подходят несколько памяток клиники — посмотрите ту, что про ваш анализ."]
-    parts.extend(_memo_block(memo, f"{_quoted(memo.title)}:", max_chars=_SINGLE_MEMO_MAX_CHARS) for memo in memos)
+    parts.extend(_memo_block(memo, f"{_quoted(memo.title)}:", max_chars=_SINGLE_MEMO_MAX_CHARS, lines=lines) for memo, lines in memos)
     return "\n\n".join(parts)
 
 
@@ -428,17 +462,54 @@ def _anesthesia_variants(memo: PrepareMemo, kb_memos: Sequence[PrepareMemo]) -> 
     return variants if len(variants) == 2 else {}
 
 
+def _variant_words(title: str) -> tuple[str, ...]:
+    """Слова названия памятки без указания на наркоз — для `_anesthesia_variants_by_words` (`prepare_by_parse`).
+
+    Без списка «шумных» слов (`_VARIANT_NOISE_RE`): слова, которые задевает указание на наркоз («без наркоза», «наркозом»), и
+    однобуквенные («с») не в счёт; общее у обеих памяток («ПАМЯТКА», скобки) сравнение не различает и так.
+    """
+
+    text = str(title or "").lower()
+    marked = [m.span() for rx in (_WITHOUT_ANESTHESIA_RE, _WITH_ANESTHESIA_RE) for m in rx.finditer(text)]
+    words = (m for m in _PRICE_TOKEN_RE.finditer(text) if len(m.group(0)) > 1)
+    return tuple(sorted(m.group(0) for m in words if not any(m.start() < end and start < m.end() for start, end in marked)))
+
+
+def _anesthesia_variants_by_words(memo: PrepareMemo, kb_memos: Sequence[PrepareMemo]) -> dict[str, PrepareMemo]:
+    """`_anesthesia_variants` пути фраз разбора: та же процедура — те же слова названия без указания на наркоз."""
+
+    key = _variant_words(memo.title)
+    variants = {kind: m for m in kb_memos if _variant_words(m.title) == key and (kind := _anesthesia_of(m.title))}
+    return variants if len(variants) == 2 else {}
+
+
+def _memo_lines_of_turn() -> Callable[[PrepareMemo], list[str]]:
+    """Строки памятки ответа на вопрос о наркозе — тем же путём, что задал вопрос: `prepare_by_parse = on` — без подписи
+    поля по срезу МИС (`MemoCorpus.caption`), иначе — без заголовков по списку."""
+
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+
+    if not turn_understanding.prepare_by_parse():
+        return _memo_lines
+    try:
+        caption = memo_corpus(api_service_info.load_service_info()).caption
+    except Exception:  # без среза — памятка целиком
+        caption = ""
+    return lambda memo: _memo_lines_without_caption(memo, caption)
+
+
 def prepare_variant_payload(titles: dict[str, str], choice: str) -> dict[str, Any] | None:
     """Памятка по ответу о наркозе (`_handle_prepare_variant_pending`); «both» — обе."""
 
     by_title = {m.title: m for m in kb_patient_memos()}
+    lines_of = _memo_lines_of_turn()
     if choice == "both":
         memos = [by_title[t] for t in titles.values() if t in by_title]
-        text = _several_memos_answer(memos) if memos else ""
+        text = _several_memos_block([(memo, lines_of(memo)) for memo in memos]) if memos else ""
     else:
         memo = by_title.get(str(titles.get(choice) or ""))
         memos = [memo] if memo else []
-        text = _single_memo_answer(memo) if memo else ""
+        text = _single_memo_block(memo, lines_of(memo)) if memo else ""
     if not text:
         return None
     return {
@@ -543,6 +614,10 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
     if entity_query and raw_material and stale_material and raw_material != stale_material:
         entities = {k: v for k, v in entities.items() if k not in ("test_name", "service_name")}
         entity_query = ""
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+
+    if turn_understanding.prepare_by_parse():
+        return await _test_prepare_by_parse(self, raw_query, entities)
     # Вопрос без своего предмета после ответа, который назвал одну услугу, — о ней (контекст = показанное).
     which = _which_of_shown_response(raw_query, entities)
     if which is not None:
@@ -672,3 +747,240 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
     note = "prepare: no memo about the subject" if memos else "prepare: no matches"
     # Предмет — услуга контекста как её назвал ответ, иначе — услуга реплики по данным МИС; нет — без названия.
     return _prepare_no_memo_response(q, entities, note=note, subject=context or _catalog_subject(q))
+
+
+# ---------------------------------------------------------------------------
+# Путь фраз разбора хода (`prepare_by_parse = on`, STEP-2026-10-24-PREPARE-BY-PARSE)
+# ---------------------------------------------------------------------------
+
+_PARSE_FAILED_TEXT = "Уточните, пожалуйста, к какому анализу или процедуре нужна подготовка — напишите название."
+
+
+def _parse_failed_response(entities: dict[str, Any]) -> dict[str, Any]:
+    """Разбор реплики не удался (LLM не ответила, ответ нарушил контракт, реплика длиннее разбора): без LLM услугу не
+    угадываем — ни по буквам, ни по сущностям прошлых ходов (решение владельца 22.10 (а))."""
+
+    return {"prepare": _PARSE_FAILED_TEXT, "note": "prepare: parse failed, asking for the subject", "entities_used": entities}
+
+
+def _subjects_of_turn(raw_query: str, entities: dict[str, Any]) -> tuple[list[tuple[str, tuple[dict[str, Any], ...] | None]], str]:
+    """Предметы вопроса о подготовке и откуда они: фразы разбора хода (`parse`), разбора нет — услуга сущностей (`entity`:
+    вход — не реплика хода, а название услуги — «подготовка» в ответе о цене, вторая тема из очереди, подтверждённый вариант
+    каталога), ни одной услуги (`none`), сбой разбора (`failed`). Каждая фраза — со строками прайса разбора (None — найти
+    по данным)."""
+
+    from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+    from ..turn_parse import ParseStatus  # noqa: PLC0415
+
+    parse = turn_understanding.parse_for(raw_query)
+    if parse is not None:
+        return [(item.text, tuple(item.rows)) for item in parse.items], "parse" if parse.items else "none"
+    status = turn_understanding.parse_status(raw_query)
+    if status == ParseStatus.EMPTY:
+        return [], "none"
+    if status is not None:
+        return [], "failed"
+    entity = str(_get_first_present(entities, ["test_name", "service_name"]) or "").strip()
+    return ([(entity, None)], "entity") if entity else ([], "none")
+
+
+def _suffixes(phrase: str) -> list[str]:
+    """Хвосты фразы от длинного к короткому: «анализу на сахар» → «анализу на сахар», «на сахар», «сахар». Название и синоним
+    клиники стоят в конце фразы пациента («анализу на …», «сдаче крови на …»), а словарь синонимов и дословное название
+    чувствительны к словоформе слов перед ними (синоним «сахар» находится в «анализ на сахар», а в «анализу на сахар» — нет).
+    Без списка слов-обвязки: какие слова впереди, не важно — берётся самый длинный хвост, который знают данные."""
+
+    return [phrase[w.start() :].strip() for w in _PRICE_TOKEN_RE.finditer(str(phrase or ""))]
+
+
+def _names_by_data(phrase: str, rows: tuple[dict[str, Any], ...] | None) -> set[str]:
+    """Названия услуг, которые фраза называет по данным МИС: строки прайса разбора (дословное название, синоним, код —
+    `phrase_rows`) и синонимы клиники (`mis_synonym_candidates`: карточки справочника, которых может не быть в прайсе) —
+    у самого длинного хвоста фразы, который данные знают (`_suffixes`). Строки разбора — у фразы целиком."""
+
+    for k, tail in enumerate(_suffixes(phrase)):
+        found = rows if k == 0 and rows else tuple(phrase_rows(tail, _catalog_rows(None)))
+        names = {str(row.get("serviceName") or row.get("name") or "").strip() for row in found}
+        names.update(mis_synonym_candidates(tail))
+        names.discard("")
+        if names:
+            return names
+    return set()
+
+
+def _phrase_candidates(rows: list[Any], subjects: Sequence[tuple[str, tuple[dict[str, Any], ...] | None]]) -> list[Any]:
+    """Памятки МИС по фразам разбора — кандидаты выбора LLM, лучшие первыми.
+
+    Карточка, которую фраза называет по данным МИС (`_names_by_data`), — первая и «названа» (опора выбора без LLM: без LLM
+    действует только совпадение с данными, решение владельца 22.10 (а)). Остальные годятся, если в памятке есть самое редкое
+    слово фразы и оценка по самой фразе не ниже порога (`phrase_memo_score`, `phrase_memo_usable` — как прежний путь проверял
+    годность по реплике); подсказки синонимов процедур (`_prepare_synonym_queries`: «фгдс» → «гастроскопия») только поднимают
+    годную памятку выше.
+    """
+
+    corpus = memo_corpus(rows)
+    named: set[str] = set()
+    for phrase, phrase_rows_ in subjects:
+        named |= {_normalise_catalog_text(name) for name in _names_by_data(phrase, phrase_rows_)}
+    phrases = [phrase for phrase, _rows in subjects if _phrase_roots(phrase)]
+    hints = {phrase: [v for v in _prepare_synonym_queries(phrase) if not v.startswith("подготовка к ")] for phrase in phrases}
+    candidates: list[Any] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        service_name = str(row.get("serviceName") or "").strip()
+        preparation = str(row.get("preparation") or "").strip()
+        if not service_name or not preparation:
+            continue
+        text = _memo_plain_text(preparation)
+        by_data = _normalise_catalog_text(service_name) in named
+        best, best_variant, usable = (1.0, "", _memo_has_instructions(text)) if by_data else (0.0, "", False)
+        if not by_data:
+            for phrase in phrases:
+                score, title_cov, distinctive = phrase_memo_score(phrase, preparation, title=service_name, corpus=corpus)
+                if not (distinctive and phrase_memo_usable(score, title_cov, text)):
+                    continue
+                usable = True
+                for variant, variant_score in [(phrase, score)] + [
+                    (hint, phrase_memo_score(hint, preparation, title=service_name, corpus=corpus)[0]) for hint in hints[phrase]
+                ]:
+                    if variant_score > best:
+                        best, best_variant = variant_score, variant
+        if not usable or best <= 0.0:
+            continue
+        candidates.append(
+            _PrepareCandidate(
+                source="serviceInfoAll",
+                text=preparation,
+                query_variant=best_variant,
+                service_title=service_name,
+                score=best,
+                note="prepare: serviceInfoAll candidate (parse)",
+                named=by_data,
+            )
+        )
+    return _dedupe_prepare_candidates(candidates, limit=16)
+
+
+def _subject_title(subjects: Sequence[tuple[str, tuple[dict[str, Any], ...] | None]]) -> str:
+    """Название услуги для текста «памятки нет» — одно название по данным МИС у всех фраз; иначе пусто (без названия).
+    Слова реплики названием не печатаются (BUG-2026-10-20-PREPARE-SUBJECT-QUOTES-REPLY)."""
+
+    names = set().union(*(_names_by_data(phrase, rows) for phrase, rows in subjects)) if subjects else set()
+    return names.pop() if len(names) == 1 else ""
+
+
+async def _test_prepare_by_parse(self: "Services", raw_query: str, entities: dict[str, Any]) -> dict[str, Any]:
+    """Подготовка по фразам разбора хода (`prepare_by_parse = on`; DESIGN-2026-10-23-NO-STOPWORDS, этап 2).
+
+    Предмет памятки — услуги, которые разбор хода нашёл в реплике (`turn_understanding.parse_for`); реплику списками слов
+    подготовки код не режет. Ни одной услуги — без поиска по словам: контекст прошлого ответа (L-14) или общая памятка о
+    крови как вариант выбора LLM (`prepare_general_memo_llm`), иначе — просьба назвать анализ. Сбой разбора — «уточните»
+    (решение владельца 22.10 (а)). Выбор памятки, памятки как есть, вопрос о наркозе — как у прежнего пути.
+    """
+
+    from .. import turn_telemetry  # noqa: PLC0415
+
+    subjects, source = _subjects_of_turn(raw_query, entities)
+    if source == "failed":
+        turn_telemetry.note(prepare_subject="failed")
+        return _parse_failed_response(entities)
+    context = ""
+    if not subjects:
+        shown = shown_context.previous()
+        if len(shown) >= 2:
+            turn_telemetry.note(prepare_subject="which_of_shown")
+            names = ", ".join(f"«{name}»" for name in shown[:5])
+            return {
+                "prepare": f"К какому из анализов нужна подготовка: {names}? Напишите название.",
+                "note": "prepare: which of shown",
+                "entities_used": entities,
+            }
+        if len(shown) == 1:
+            context, source = shown[0], "context"
+            subjects = [(context, None)]
+            entities = {**entities, "service_name": context}
+    turn_telemetry.note(prepare_subject=source)
+    q = raw_query or context
+    if not q and not subjects:
+        return {"prepare": "", "note": "no query", "entities_used": entities}
+
+    try:
+        rows = await asyncio.to_thread(api_service_info.load_service_info)
+    except Exception:
+        rows = []
+    caption = (await asyncio.to_thread(memo_corpus, rows)).caption if rows else ""
+    memos: list[PrepareMemo] = []
+    if subjects and rows:
+        candidates = await asyncio.to_thread(_phrase_candidates, rows, subjects)
+        memos = [
+            PrepareMemo(source=SOURCE_MIS, title=cand.service_title, text=_memo_plain_text(cand.text), score=cand.score, named=cand.named)
+            for cand in candidates[:_PREPARE_MIS_CANDIDATES]
+        ]
+    if subjects:
+        # Памятки пациенту из базы знаний — о процедурах (решения владельца 02.10); без названной услуги их предмет не назван.
+        memos.extend(await asyncio.to_thread(kb_patient_memos))
+    general_option = _general_memo_llm()
+    if general_option:
+        memos.append(PrepareMemo(source=SOURCE_CLINIC_GENERAL, title=_BLOOD_GENERAL_TITLE, text=_BLOOD_COLLECTION_GUIDANCE))
+    subject_roots = frozenset().union(*(_phrase_roots(phrase) for phrase, _rows in subjects)) if subjects else frozenset()
+    chosen = await select_prepare_memos_by_parse(
+        q or context, memos, subject_roots=subject_roots, runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""), context=context
+    )
+    if general_option:
+        if len(chosen) == 1 and chosen[0].source == SOURCE_CLINIC_GENERAL:
+            return {"prepare": _BLOOD_COLLECTION_GUIDANCE, "note": "prepare: blood-collection general memo (LLM)", "entities_used": entities}
+        chosen = tuple(memo for memo in chosen if memo.source != SOURCE_CLINIC_GENERAL)
+
+    def lines(memo: PrepareMemo) -> list[str]:
+        return _memo_lines_without_caption(memo, caption)
+
+    if len(chosen) == 1 and chosen[0].source == SOURCE_MIS:
+        memo = chosen[0]
+        return {
+            "prepare": _single_memo_block(memo, lines(memo)),
+            "note": f"prepare: {memo.source}",
+            "prepare_source_title": memo.title,
+            "entities_used": entities,
+            "prepare_wrap_status": "not_wrapped",
+            "prepare_wrap_reason": "mis_memo_as_is",
+        }
+    if len(chosen) == 1:
+        memo = chosen[0]
+        variants = _anesthesia_variants_by_words(memo, await asyncio.to_thread(kb_patient_memos))
+        if variants:
+            choice = _anesthesia_of(raw_query)
+            if choice is None:
+                return {
+                    "prepare": _ANESTHESIA_QUESTION,
+                    "prepare_variants": {kind: m.title for kind, m in variants.items()},
+                    "note": "prepare: anesthesia question",
+                    "entities_used": entities,
+                }
+            memo = variants[choice]
+        return {
+            "prepare": _single_memo_block(memo, lines(memo)),
+            "note": f"prepare: {memo.source}",
+            "prepare_source_title": memo.title,
+            "entities_used": entities,
+            "prepare_wrap_status": "not_wrapped",
+            "prepare_wrap_reason": "kb_memo_as_is",
+        }
+    if chosen:
+        return {
+            "prepare": _several_memos_block([(memo, lines(memo)) for memo in chosen]),
+            "note": "prepare: several memos",
+            "prepare_source_title": " | ".join(memo.title for memo in chosen),
+            "entities_used": entities,
+            "prepare_wrap_status": "several_memos",
+            "prepare_wrap_reason": "several_memos",
+        }
+    if not subjects:
+        # Ни одной услуги в вопросе, и общая памятка о крови по смыслу не подошла (или её нет среди вариантов) — назвать анализ.
+        return _prepare_clarify_response(q, entities, note="prepare: no subject in the parse, asking for specific subject")
+    if context:
+        if any(memo.source == SOURCE_MIS and memo.named for memo in memos):
+            return _context_clarify_response(context, entities)
+        return _prepare_no_memo_response(q, entities, note="prepare: no memo about the subject", subject=context)
+    note = "prepare: no memo about the subject" if memos else "prepare: no matches"
+    return _prepare_no_memo_response(q, entities, note=note, subject=_subject_title(subjects))

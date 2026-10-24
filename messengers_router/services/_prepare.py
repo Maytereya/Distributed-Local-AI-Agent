@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import functools
+import math
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -417,11 +419,14 @@ def _prepare_names_subject(subject_roots: set[str], title_roots: set[str]) -> bo
     :return: True, если все слова предмета есть в названии
     """
 
-    def same_word(a: str, b: str) -> bool:
-        short, long = sorted((a, b), key=len)
-        return a == b or (len(short) >= 4 and long.startswith(short) and len(long) - len(short) <= 2)
+    return bool(subject_roots) and all(any(_same_word(s, t) for t in title_roots) for s in subject_roots)
 
-    return bool(subject_roots) and all(any(same_word(s, t) for t in title_roots) for s in subject_roots)
+
+def _same_word(a: str, b: str) -> bool:
+    """Одно слово с точностью до окончания: до двух букв при основе от четырёх."""
+
+    short, long = sorted((a, b), key=len)
+    return a == b or (len(short) >= 4 and long.startswith(short) and len(long) - len(short) <= 2)
 
 
 @functools.lru_cache(maxsize=8192)
@@ -631,10 +636,18 @@ def _is_prepare_content_actionable(content: str) -> bool:
     :return: True, если текст выглядит содержательным
     """
 
+    if _is_generic_prepare_heading(content):
+        return False
+    return _memo_has_instructions(content)
+
+
+@functools.lru_cache(maxsize=8192)
+def _memo_has_instructions(content: str) -> bool:
+    """Текст памятки содержательный — есть указания или он длинный. Заголовок без указаний («Подготовка к исследованию»)
+    не проходит и без списка заголовков: в нём нет ни одного указания, а слов меньше пяти."""
+
     norm = _normalise_input(content)
     if not norm:
-        return False
-    if _is_generic_prepare_heading(content):
         return False
 
     tokens = re.findall(r"[a-zа-я0-9]{3,}", norm)
@@ -672,3 +685,158 @@ def _is_prepare_service_info_usable(query: str, content: str, *, title: str = ""
         if title_cov >= 0.99 and _has_prepare_strong_hints(content):
             return True
     return score >= low
+
+
+# ---------------------------------------------------------------------------
+# Подготовка по фразам разбора хода (`prepare_by_parse`, STEP-2026-10-24-PREPARE-BY-PARSE)
+# ---------------------------------------------------------------------------
+#
+# Предмет памятки — фраза разбора: её границы в реплике поставила LLM (`services/_turn_spans.py`), обвязку вопроса («как
+# подготовиться к») она в фразу не берёт. Пять списков подготовки (`_PREPARE_QUERY_STOPWORDS`,
+# `_PREPARE_SERVICE_INFO_GENERIC_TOKENS`, `_PREPARE_GENERIC_HEADINGS`, `_GENERIC_PREPARE_QUERY_RE`, `_VARIANT_NOISE_RE`) этот путь
+# не читает (AST-проверка — `tests/test_prepare_by_parse_class.py`). Общее слово внутри названия («анализ на ферритин») в фразе
+# остаётся; сколько оно решает в поиске памяток, задают данные: корень, который стоит в половине памяток МИС, весит мало
+# (`MemoCorpus.weight`). Что памятка о предмете, решает выбор LLM — вес только упорядочивает кандидатов.
+
+
+def _phrase_roots(text: str) -> frozenset[str]:
+    return _phrase_roots_cached(str(text or ""))
+
+
+@functools.lru_cache(maxsize=8192)
+def _phrase_roots_cached(text: str) -> frozenset[str]:
+    """Корни всех слов текста от трёх букв (без чисел) — без списков общих слов: что в фразе услуга, решила LLM разбора."""
+
+    from ._doctors_helpers import _stem_service_token  # noqa: PLC0415
+    from ._prices_helpers import _PRICE_TOKEN_RE  # noqa: PLC0415 — слова реплики, как у разбора хода
+
+    roots: set[str] = set()
+    for token in (m.group(0) for m in _PRICE_TOKEN_RE.finditer(_normalise_input(text))):
+        if len(token) < 3 or token.isdigit():
+            continue
+        root = str(_stem_service_token(token) or token).strip()
+        if len(root) >= 3:
+            roots.add(root)
+    return frozenset(roots)
+
+
+def _caption_key(line: str) -> str:
+    return _normalise_input(line).strip(" .:")
+
+
+class MemoCorpus:
+    """Памятки МИС одного среза для поиска по фразе: корни каждой (название и текст) и подпись поля «Подготовка».
+
+    Вес корня — редкость в памятках: `log(1 + N / (1 + df))`, df — в скольких памятках корень есть (то же сравнение корней,
+    что у оценки, `_prepare_roots_match_indexed`). Подпись поля — строка, которой начинается большинство памяток («Подготовка
+    к исследованию»: 1412 из 1621, срез 20.10): у ответа свой заголовок («Памятка клиники «X»:»), подпись его дублирует.
+    Её задаёт срез, а не список заголовков в коде; одинаковой первой строки у большинства нет — подписи нет.
+    """
+
+    def __init__(self, rows: list[Any]) -> None:
+        from ..llm_doesnt_work_fallback import join_wrapped_lines  # noqa: PLC0415
+
+        docs: list[frozenset[str]] = []
+        firsts: dict[str, int] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("serviceName") or "").strip()
+            preparation = str(row.get("preparation") or "").strip()
+            if not name or not preparation:
+                continue
+            docs.append(_phrase_roots(name) | _phrase_roots(preparation))
+            lines = join_wrapped_lines(_memo_plain_text(preparation))
+            if lines:
+                key = _caption_key(lines[0])
+                firsts[key] = firsts.get(key, 0) + 1
+        self.docs = tuple(docs)
+        top = max(firsts.items(), key=lambda kv: kv[1], default=("", 0))
+        self.caption = top[0] if top[1] * 2 > len(docs) else ""
+        self._weights: dict[str, float] = {}
+
+    def weight(self, root: str) -> float:
+        cached = self._weights.get(root)
+        if cached is None:
+            df = sum(1 for doc in self.docs if _prepare_roots_match_indexed(root, doc))
+            cached = self._weights[root] = math.log(1.0 + len(self.docs) / (1.0 + df))
+        return cached
+
+
+_CORPUS: list[tuple[tuple[Any, ...], MemoCorpus]] = []
+_CORPUS_LOCK = threading.Lock()
+
+
+def memo_corpus(rows: list[Any]) -> MemoCorpus:
+    """Корпус памяток среза — один на срез (ключ — число записей и названия по краям и в середине)."""
+
+    names = [str(row.get("serviceName") or "") for row in (rows[0], rows[len(rows) // 2], rows[-1]) if isinstance(row, dict)] if rows else []
+    key = (len(rows), *names)
+    with _CORPUS_LOCK:
+        for known, corpus in _CORPUS:
+            if known == key:
+                return corpus
+    corpus = MemoCorpus(rows)
+    with _CORPUS_LOCK:
+        _CORPUS[:] = [entry for entry in _CORPUS if entry[0] != key][-1:]
+        _CORPUS.append((key, corpus))
+    return corpus
+
+
+def _weighted_coverage(query_roots: frozenset[str], candidate_roots: frozenset[str], corpus: MemoCorpus) -> float:
+    if not query_roots or not candidate_roots:
+        return 0.0
+    total = sum(corpus.weight(q) for q in query_roots)
+    if total <= 0.0:
+        return 0.0
+    return sum(corpus.weight(q) for q in query_roots if _prepare_roots_match_indexed(q, candidate_roots)) / total
+
+
+def phrase_memo_score(phrase: str, content: str, *, title: str, corpus: MemoCorpus) -> tuple[float, float, bool]:
+    """Оценка памятки по фразе разбора — та же формула, что `_prepare_fast_relevance_score` (0,62 текст, 0,28 название,
+    0,10 содержательность), но корни фразы — все её слова с весом по редкости в памятках МИС.
+
+    :return: (оценка 0..1, покрытие названия 0..1, есть ли в памятке самое редкое слово фразы — то, что называет услугу:
+        «гомоцистеин» у «анализу крови на гомоцистеин»; памятка, где есть только «анализ» и «кровь», предмет не называет)
+    """
+
+    query = _phrase_roots(phrase)
+    body, head = _phrase_roots(content), _phrase_roots(title)
+    if not query or (not body and not head):
+        return 0.0, 0.0, False
+    body_cov = _weighted_coverage(query, body, corpus)
+    title_cov = _weighted_coverage(query, head, corpus)
+    top = max(corpus.weight(q) for q in query)
+    distinctive = any(
+        corpus.weight(q) == top and (_prepare_roots_match_indexed(q, body) or _prepare_roots_match_indexed(q, head)) for q in query
+    )
+    actionable = 1.0 if _memo_has_instructions(content) else 0.0
+    score = 0.62 * body_cov + 0.28 * title_cov + 0.10 * actionable
+    if actionable < 1.0:
+        score -= 0.08
+    phrase_norm = _normalise_input(phrase)
+    if len(phrase_norm) >= 6:
+        if phrase_norm in _normalise_input(content):
+            score += 0.05
+        if phrase_norm in _normalise_input(title):
+            score += 0.08
+    return max(0.0, min(1.0, score)), title_cov, distinctive
+
+
+def phrase_memo_usable(score: float, title_cov: float, content: str) -> bool:
+    """Памятка годится в кандидаты выбора LLM: содержательная и с оценкой не ниже порога (`_is_prepare_service_info_usable`)."""
+
+    if not _memo_has_instructions(content):
+        return False
+    if score < _prepare_relevance_low_threshold() and title_cov >= 0.99 and _has_prepare_strong_hints(content):
+        return True
+    return score >= _prepare_relevance_low_threshold()
+
+
+def naming_roots(subject_roots: frozenset[str], title: str) -> frozenset[str]:
+    """Слова предмета, которыми названа выбранная услуга: корни фразы, которые есть в её названии (то же слово с точностью
+    до окончания). «анализ на ттг» и «ТТГ (TSH) тиреотропный гормон» — {ттг}: общее слово фразы, которого нет в названии,
+    в счёт не идёт — без списка общих слов."""
+
+    title_roots = _phrase_roots(title)
+    return frozenset(s for s in subject_roots if any(_same_word(s, t) for t in title_roots))

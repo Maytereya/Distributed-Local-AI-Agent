@@ -27,14 +27,21 @@ import math
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from agent_logic_1 import meilisearch_client as meilisearch
 
 from ..llm_runtime import generate_text
 from ..prompt_registry import load_prompt_text
 from . import _common as _common_mod
-from ._prepare import _memo_plain_text, _prepare_names_subject, _prepare_subject_phrase, _prepare_term_roots
+from ._prepare import (
+    _memo_plain_text,
+    _phrase_roots,
+    _prepare_names_subject,
+    _prepare_subject_phrase,
+    _prepare_term_roots,
+    naming_roots,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +209,22 @@ def _twin_candidate(question: str, chosen: PrepareMemo, memos: Sequence[PrepareM
     return max(twins, key=lambda memo: memo.score) if twins else None
 
 
+def _twin_by_naming(subject_roots: frozenset[str], chosen: PrepareMemo, memos: Sequence[PrepareMemo]) -> PrepareMemo | None:
+    """`_twin_candidate` пути фраз разбора (`prepare_by_parse`): ещё одна карточка МИС, в названии которой — те слова фразы,
+    которыми названа выбранная («анализ на ттг» → {ттг}: «Антитела к рецепторам ТТГ»). Общее слово фразы, которого нет в
+    названии выбранной, в счёт не идёт — без списка общих слов. Синоним клиники не засчитывается, как у `_twin_candidate`."""
+
+    if chosen.source != SOURCE_MIS:
+        return None
+    naming = naming_roots(subject_roots, chosen.title)
+    twins = [
+        memo
+        for memo in memos
+        if memo is not chosen and memo.source == SOURCE_MIS and _prepare_names_subject(set(naming), set(_phrase_roots(memo.title)))
+    ]
+    return max(twins, key=lambda memo: memo.score) if twins else None
+
+
 async def _same_preparation(first: PrepareMemo, second: PrepareMemo) -> bool:
     """LLM: подготовка в двух памятках практически одинаковая? Сбой — «нет» (одна памятка)."""
 
@@ -248,6 +271,35 @@ async def select_prepare_memos(
     :return: выбранные памятки
     """
 
+    return await _select(
+        question, memos, runtime_llm_mode=runtime_llm_mode, context=context, twin=lambda chosen, ms: _twin_candidate(question, chosen, ms)
+    )
+
+
+async def select_prepare_memos_by_parse(
+    question: str,
+    memos: Sequence[PrepareMemo],
+    *,
+    subject_roots: frozenset[str],
+    runtime_llm_mode: str = "",
+    context: str = "",
+) -> tuple[PrepareMemo, ...]:
+    """`select_prepare_memos` пути фраз разбора (`prepare_by_parse`): то же, но «названа словами пациента» — по корням фраз
+    разбора (`subject_roots`), а не по реплике без слов списка общих слов подготовки."""
+
+    return await _select(
+        question, memos, runtime_llm_mode=runtime_llm_mode, context=context, twin=lambda chosen, ms: _twin_by_naming(subject_roots, chosen, ms)
+    )
+
+
+async def _select(
+    question: str,
+    memos: Sequence[PrepareMemo],
+    *,
+    runtime_llm_mode: str,
+    context: str,
+    twin: Callable[[PrepareMemo, Sequence[PrepareMemo]], PrepareMemo | None],
+) -> tuple[PrepareMemo, ...]:
     memos = [memo for memo in memos if isinstance(memo, PrepareMemo) and memo.text.strip()]
     if not memos:
         return ()
@@ -274,7 +326,7 @@ async def select_prepare_memos(
     if len(chosen) == 1:
         # Решение владельца 03.10: практически одинаковые памятки — обе, пациент выберет.
         # Отдельный короткий вопрос: в одном промпте с выбором правило модель не держала.
-        twin = _twin_candidate(question, chosen[0], memos)
-        if twin is not None and await _same_preparation(chosen[0], twin):
-            return (chosen[0], twin)
+        other = twin(chosen[0], memos)
+        if other is not None and await _same_preparation(chosen[0], other):
+            return (chosen[0], other)
     return chosen
