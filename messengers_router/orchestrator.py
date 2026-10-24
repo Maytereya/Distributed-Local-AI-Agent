@@ -454,6 +454,13 @@ def _button_decision(button_id: str, action: Any) -> RouteDecision:
     )
 
 
+def _button_topic_kwargs(action: Any) -> dict[str, str]:
+    """Кнопка `pass`: подпись идёт как текст, но тему выбрал пациент — NLU получает её тему (`topic_by_llm` её не
+    переспрашивает, `button_pass_rules`). Только когда кнопка есть: путь набранного текста не меняется."""
+
+    return {"button_topic": action.label} if action is not None and action.mode == "pass" else {}
+
+
 async def nlu_route(
     ctx: OrchestratorContext,
     services: Any | None = None,
@@ -484,6 +491,7 @@ async def nlu_route(
             services=services,
             memory=memory,
             runtime_options=runtime_options,
+            **_button_topic_kwargs(action),
         )
     else:
         from . import nlu_pipeline
@@ -492,6 +500,7 @@ async def nlu_route(
             ctx.text,
             ctx.state,
             runtime_options,
+            **_button_topic_kwargs(action),
         )
         ctx.decision = result.decision
         ctx.nlu_debug = {}

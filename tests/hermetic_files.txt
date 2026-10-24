@@ -223,3 +223,4 @@ tests/test_turn_spans_class.py
 tests/test_price_general_clarify_class.py
 tests/test_synonym_wordforms_class.py
 tests/test_price_select_rules_class.py
+tests/test_button_pass_topic_class.py

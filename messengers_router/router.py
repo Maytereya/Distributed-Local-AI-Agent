@@ -3071,6 +3071,7 @@ async def _resolve_nlu_decision_before_doctor_guard(
     services: Services,
     memory: MemoryStore,
     runtime_options: RuntimeOptions | None = None,
+    button_topic: str = "",
 ) -> tuple[RouteDecision, dict[str, Any]]:
     """Строит NLU-решение до doctor verification.
 
@@ -3084,6 +3085,7 @@ async def _resolve_nlu_decision_before_doctor_guard(
     :param services: сервисный слой для prelock-логики
     :param memory: memory-store для чтения pending-состояния
     :param runtime_options: runtime-настройки LLM/NLU
+    :param button_topic: тема нажатой кнопки режима `pass` (`button_menu`); пусто — набранный текст
     :return: решение маршрутизации и NLU debug-метаданные
     """
 
@@ -3157,7 +3159,9 @@ async def _resolve_nlu_decision_before_doctor_guard(
         use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
         shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False) or _env_flag("MR_NLU_SHADOW", False)
         if use_v2_nlu:
-            nlu_result = await analyze_with_candidates(user_text, state, runtime_options=runtime_options)
+            nlu_result = await analyze_with_candidates(
+                user_text, state, runtime_options=runtime_options, **({"button_topic": button_topic} if button_topic else {})
+            )
             decision = nlu_result.decision
             turn_telemetry.note(tu_label_nlu=decision.label)
             turn_understanding.observe_intent(decision.label, decision.confidence, (nlu_result.trace or {}).get("topic_source"))

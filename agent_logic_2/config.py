@@ -215,6 +215,7 @@ class MessengerRouterConfig:
     prepare_general_memo_llm: str
     turn_spans_llm: str
     topic_by_llm: str
+    button_pass_rules: str
     turn_understanding_one: str
     service_answer_from_data: str
     address_service_llm: str
@@ -636,6 +637,11 @@ settings = Settings(
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
         # [MESSENGER_ROUTER] topic_by_llm
         topic_by_llm=_get_str("MESSENGER_ROUTER", "topic_by_llm", default=""),
+        # Ход-кнопка режима `pass` (подпись кнопки — полноценный запрос, тему пациент выбрал нажатием, `button_menu`) тему у LLM
+        # (`topic_by_llm`) не переспрашивает — решает правило, как без `topic_by_llm` (BUG-2026-10-24-BUTTON-PASS-TOPIC-LLM:
+        # «Где и до скольки принимают» с деплоя 15 — классификатор 11–12 с вместо 0,15–0,5 с). Набранный текст — как был.
+        # off — как было. [MESSENGER_ROUTER] button_pass_rules
+        button_pass_rules=_get_enum("MESSENGER_ROUTER", "button_pass_rules", default="off", allowed={"off", "on"}),
         # Ход (б), этап 2 (решения владельца 20.10 (б) 4, 21.10): «список ли» на пути правил решается один раз — пониманием
         # хода (с защитами K1, без K1 у явного перечня своих названий); корзина правил и подбор анализов читают его, а не
         # решают сами. off — как было. [MESSENGER_ROUTER] turn_understanding_one
@@ -835,6 +841,7 @@ MR_SYNONYM_WORDFORMS = settings.messenger_router.synonym_wordforms
 MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
+MR_BUTTON_PASS_RULES = settings.messenger_router.button_pass_rules
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
 MR_ADDRESS_SERVICE_LLM = settings.messenger_router.address_service_llm
