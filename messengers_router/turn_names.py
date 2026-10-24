@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 import contextvars
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import get_close_matches
 from typing import Any
 
@@ -70,6 +70,7 @@ class _Turn:
     """Память хода — изменяемая: классификатор может работать в дочерней задаче (`gather`), читатели — в родительской."""
 
     names: _LlmNames | None = None
+    acted: set[str] = field(default_factory=set)
 
 
 _CURRENT: contextvars.ContextVar[_Turn | None] = contextvars.ContextVar("mr_turn_names", default=None)
@@ -105,7 +106,15 @@ def note_llm(text: str, entities: dict[str, Any] | None) -> None:
 
 
 def _acted(switch: str, outcome: str) -> None:
-    turn_telemetry.append("names_acted", f"{switch}:{outcome}")
+    """Журнал хода `names_acted` — что решил путь `on`; одна запись на исход (`_looks_like_patient_fio` зовут до 12 раз за ход)."""
+
+    entry = f"{switch}:{outcome}"
+    turn = _CURRENT.get()
+    if turn is not None:
+        if entry in turn.acted:
+            return
+        turn.acted.add(entry)
+    turn_telemetry.append("names_acted", entry)
 
 
 def llm_patient_fio(text: str, *, switch: str) -> bool:

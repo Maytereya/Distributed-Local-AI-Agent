@@ -235,6 +235,7 @@ class MessengerRouterConfig:
     strong_phrase_guard: str
     basket_weak_phrase_judge: str
     parse_agree_telemetry: str
+    names_doctor_catalog: str
     debug_final_input: bool
     url: str
 
@@ -557,6 +558,11 @@ settings = Settings(
         # экономия — CPU хода. По умолчанию off с 16.10 (решение владельца,
         # T7 шаг 4). [MESSENGER_ROUTER] parse_agree_telemetry
         parse_agree_telemetry=_get_enum("MESSENGER_ROUTER", "parse_agree_telemetry", default="off", allowed={"off", "on"}),
+        # Врач реплики для сверки с каталогом — по справочнику врачей МИС, без выбора слов списком (STEP-2026-10-24-NAMES-NO-STOPWORDS,
+        # решения владельца 22.10): фамилия — слово реплики, точно совпавшее с фамилией врача в любой падежной форме; опечатка — только
+        # в имени, которое назвала LLM, и исход — вопрос «Похоже, вы имели в виду…?». off — как было (_CATALOG_DOCTOR_STOPWORDS).
+        # [MESSENGER_ROUTER] names_doctor_catalog
+        names_doctor_catalog=_get_enum("MESSENGER_ROUTER", "names_doctor_catalog", default="off", allowed={"off", "on"}),
         # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
         # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
         # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —
@@ -835,6 +841,7 @@ MR_PARSE_COMPLETE_WINDOWS = settings.messenger_router.parse_complete_windows
 MR_STRONG_PHRASE_GUARD = settings.messenger_router.strong_phrase_guard
 MR_BASKET_WEAK_PHRASE_JUDGE = settings.messenger_router.basket_weak_phrase_judge
 MR_PARSE_AGREE_TELEMETRY = settings.messenger_router.parse_agree_telemetry
+MR_NAMES_DOCTOR_CATALOG = settings.messenger_router.names_doctor_catalog
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

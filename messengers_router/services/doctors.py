@@ -19,7 +19,7 @@ from ..doctor_name_port import (
     resolve_schedule_surname,
     surname_variants,
 )
-from .. import degradation, turn_telemetry
+from .. import degradation, turn_names, turn_telemetry
 from ..schedule_parse_watch import dates_all_unparsed
 from .. import resilience as _R
 from ..policies import handoff_message
@@ -122,6 +122,9 @@ async def match_catalog_doctor(self: "Services", raw_text_or_name: str) -> dict[
     doctors = await self._ensure_doctors_cache_loaded()
     if not doctors:
         return {"status": "miss", "query": "", "canonical": ""}
+    if turn_names.on("names_doctor_catalog"):
+        # Какое слово реплики — фамилия, решает справочник МИС, а не список служебных слов (STEP-2026-10-24-NAMES-NO-STOPWORDS).
+        return turn_names.match_catalog_doctor_by_data(raw_text_or_name, doctors)
 
     queries = _doctor_catalog_query_candidates(raw_text_or_name)
     if not queries:

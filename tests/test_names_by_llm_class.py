@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
+from pathlib import Path
 
 import pytest
 
 from messengers_router import classifier, turn_names, turn_understanding
+from messengers_router.services import Services
 
 
 @pytest.fixture(autouse=True)
@@ -125,3 +128,93 @@ SWITCHES = {
 
 def test_switches_are_off_by_default() -> None:
     assert not any(turn_names.on(name) for name in SWITCHES)
+
+
+# --- names_doctor_catalog: врач реплики — по справочнику МИС --------------------------------------------------------
+
+_EXCERPT = Path(__file__).resolve().parent / "fixtures" / "doctors_excerpt" / "doctors_20261008.jsonl"
+
+
+def _excerpt_doctors() -> list[dict]:
+    with _EXCERPT.open(encoding="utf-8") as fh:
+        return [json.loads(line) for line in fh if line.strip()]
+
+
+def _surnames() -> list[str]:
+    found = [str(d.get("fio") or "").split()[0] for d in _excerpt_doctors() if str(d.get("fio") or "").strip()]
+    return sorted(s for s in set(found) if found.count(s) == 1 and s.isalpha())
+
+
+def _word_forms(surname: str) -> list[str]:
+    """Падежные формы фамилии на -ов/-ев/-ин и -ова/-ева/-ина (как пишут пациенты: «к Иванову», «у Ивановой»)."""
+
+    low = surname.lower()
+    if low.endswith(("ова", "ева", "ина")):
+        stem = surname[:-1]
+        return [surname, stem + "ой", stem + "у"]
+    if low.endswith(("ов", "ев", "ин")):
+        return [surname, surname + "а", surname + "у", surname + "ым", surname + "е"]
+    return [surname]
+
+
+def _declined_surnames() -> list[str]:
+    male = next(s for s in _surnames() if s.lower().endswith(("ов", "ев", "ин")))
+    female = next(s for s in _surnames() if s.lower().endswith(("ова", "ева", "ина")))
+    return [male, female]
+
+
+def _catalog_services() -> Services:
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+
+    async def loaded():
+        return _excerpt_doctors()
+
+    services._ensure_doctors_cache_loaded = loaded
+    return services
+
+
+def _match(text: str) -> dict:
+    return asyncio.run(_catalog_services().match_catalog_doctor(text))
+
+
+@pytest.mark.parametrize("surname", _declined_surnames())
+@pytest.mark.parametrize("case", [str, str.lower, str.upper])
+def test_catalog_doctor_by_data_any_word_form_and_case(monkeypatch, surname: str, case) -> None:
+    _switch(monkeypatch, "names_doctor_catalog")
+    for form in _word_forms(surname):
+        match = _match(f"Хочу записаться на приём к врачу {case(form)}")
+        assert (match["status"], match["canonical"]) == ("exact", surname), form
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "По каким адресам можно сделать флюорографию",
+        "УЗИ органов малого таза",
+        "Какова стоимость услуг",
+        "Хочу записаться к врачу",
+        "да, хорошо",
+    ],
+)
+def test_catalog_doctor_by_data_no_surname_no_guess(monkeypatch, text: str) -> None:
+    """Слово без фамилии справочника — не врач; прежний путь находил «Ким» в «каким» нечётким сравнением (свип 24.10)."""
+
+    _switch(monkeypatch, "names_doctor_catalog")
+    assert _match(text)["status"] == "miss"
+
+
+def _typo(surname: str) -> str:
+    middle = len(surname) // 2
+    return surname[:middle] + ("о" if surname[middle] != "о" else "а") + surname[middle + 1 :]
+
+
+def test_catalog_doctor_typo_only_in_name_llm_named(monkeypatch) -> None:
+    _switch(monkeypatch, "names_doctor_catalog")
+    surname = max(_surnames(), key=len)
+    typo = _typo(surname)
+    reply = f"Запишите к {typo}"
+    assert _match(reply)["status"] == "miss"  # LLM имени не называла — по буквам не угадываем
+    turn_names.note_llm(reply, {"doctor_name": typo})
+    match = _match(reply)
+    assert (match["status"], match["canonical"]) == ("fuzzy", surname)  # исход — вопрос «Похоже, вы имели в виду…?»
