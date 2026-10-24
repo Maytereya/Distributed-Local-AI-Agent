@@ -268,3 +268,86 @@ def test_doctor_followup_without_surname_is_not_a_name(monkeypatch, text: str) -
 
     _switch(monkeypatch, "names_doctor_followup")
     assert classifier._doctor_followup_name_in_context(text, dict(_DOCTOR_CONTEXT)) is None
+
+
+# --- names_result_surname: одно слово — фамилия, только если её назвала LLM ------------------------------------------
+
+_RESULT_FIELDS = ["surname", "year", "filial", "number"]
+
+
+def _result_after_llm(reply: str, llm_entities: dict | None) -> dict:
+    from messengers_router import policies
+
+    if llm_entities is not None:
+        turn_names.note_llm(reply, llm_entities)
+    out: dict = {}
+    policies._fill_test_result_entities(reply, _RESULT_FIELDS, out)
+    return out
+
+
+@pytest.mark.parametrize("reply", ["Сидорова", "сидорова", "СИДОРОВА", "Сидорова-Белая"])
+def test_result_surname_named_by_llm_any_case(monkeypatch, reply: str) -> None:
+    _switch(monkeypatch, "names_result_surname")
+    said = reply.title()
+    assert _result_after_llm(reply, {"surname": said})["surname"] == reply.capitalize()
+
+
+@pytest.mark.parametrize("reply", ["Результаты", "Результатов", "Анализы", "Анализом", "Хочу", "Подскажите", "Пожалуйста"])
+def test_result_word_llm_did_not_name_is_not_surname(monkeypatch, reply: str) -> None:
+    """Любая форма служебного слова (и те, которых в списке нет: «Результатов», «Анализом», «Пожалуйста») — не фамилия."""
+
+    _switch(monkeypatch, "names_result_surname")
+    assert "surname" not in _result_after_llm(reply, {"test_name": "анализы"})
+
+
+def test_result_no_llm_no_surname(monkeypatch) -> None:
+    _switch(monkeypatch, "names_result_surname")
+    assert "surname" not in _result_after_llm("Сидорова", None)
+
+
+def test_result_ordered_fields_do_not_need_llm(monkeypatch) -> None:
+    """Порядок «фамилия, год, код, номер» — механика формы, не имя по смыслу: LLM не нужна."""
+
+    _switch(monkeypatch, "names_result_surname")
+    out = _result_after_llm("Сидорова, 1985, Бг, 123", None)
+    assert (out["surname"], out["year"], out["number"]) == ("Сидорова", 1985, 123)
+
+
+def _result_dialog(monkeypatch, second: str, llm_entities: dict | None) -> tuple[str, dict]:
+    from messengers_router import router as router_mod
+    from messengers_router.memory import MemoryStore
+    from messengers_router.mess_types import SessionState
+
+    if llm_entities is not None:
+        async def llm(_prompt: str, *, queue_timeout_ms: int = 30000) -> dict:
+            return {"label": "TEST_RESULT", "confidence": 0.9, "context_action": "continue", "entities": llm_entities}
+
+        monkeypatch.setattr(classifier, "ollama_classify_json", llm)
+    state = SessionState(session_id=f"names-result-{second}-{bool(llm_entities)}")
+    memory = MemoryStore()
+    services = Services()
+    services.ensure_background_refresh_started = lambda: None
+
+    async def go() -> str:
+        answer = ""
+        for text in ("Хочу получить результаты анализов", second):
+            out = [env async for env in router_mod.patient_routing_stream(text, state, services, memory)]
+            answer = "".join(env.text for env in out if env.text)
+        return answer
+
+    return asyncio.run(go()), dict(state.last_entities)
+
+
+def test_result_dialog_surname_from_llm(monkeypatch) -> None:
+    _switch(monkeypatch, "names_result_surname")
+    _, entities = _result_dialog(monkeypatch, "Сидорова", {"surname": "Сидорова"})
+    assert entities.get("surname") == "Сидорова"
+
+
+def test_result_dialog_without_llm_asks_again(monkeypatch) -> None:
+    """LLM недоступна (сеть в тестах закрыта): одно слово фамилией не становится — бот снова просит реквизиты."""
+
+    _switch(monkeypatch, "names_result_surname")
+    answer, entities = _result_dialog(monkeypatch, "Сидорова", None)
+    assert "surname" not in entities
+    assert "фамилия, год рождения, код анализа, номер анализа" in answer
