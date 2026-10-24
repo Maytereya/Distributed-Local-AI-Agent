@@ -14,7 +14,7 @@ from time import perf_counter
 from typing import Any, AsyncIterator
 
 from . import evidence_keys as ek
-from . import expects, pending_answer, service_answer, shown_context, turn_telemetry, turn_understanding
+from . import expects, pending_answer, service_answer, shown_context, test_assist_answer, turn_telemetry, turn_understanding
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 
 logger = logging.getLogger(__name__)
@@ -131,6 +131,18 @@ def _extract_prebuilt_response(
         decision=decision,
         user_text=ctx.text,
     )
+
+
+def _history_before_turn(ctx: OrchestratorContext) -> list[Any]:
+    """История диалога без текущей реплики. Эндпоинты дописывают ТЕКУЩУЮ реплику пользователя в history ДО пайплайна
+    (router докидывает после, дедуп в append_turn) — срезаем её с хвоста, иначе она дублируется с «Запрос пациента» в
+    промпте (Cursor-ревью 10.07)."""
+
+    history = list(ctx.state.history or [])
+    if history and isinstance(history[-1], dict) \
+            and history[-1].get("role") == "user" and history[-1].get("text") == ctx.text:
+        history = history[:-1]
+    return history
 
 
 def _mark_secondary_offer_pending(ctx: OrchestratorContext) -> None:
@@ -782,17 +794,24 @@ async def _render_impl(
             return ctx
         service_answer.refund(verdict)
 
+    # 4c. Подбор анализов — только по данным хода (`test_assist_from_data`, BUG-2026-10-21-WALKIN-LLM-FREE-TEXT): свободный
+    # текст LLM дописывал к строкам прайса «подготовка обычно включает диету» (g0783) и «анализ доступен» при пустом поиске.
+    # Строки выбирает LLM, печатает код; нет данных и сбой — честный оффер, свободного текста нет.
+    if test_assist_answer.applies(ctx.decision, ctx.evidence):
+        answer = await test_assist_answer.decide(ctx.text, ctx.evidence, history=_history_before_turn(ctx))
+        ctx.response, offer = test_assist_answer.envelope(
+            answer, ctx.state, memory, attachments=ctx.evidence.items.get(ek.ATTACHMENTS) or ()
+        )
+        if not offer:
+            _mark_secondary_offer_pending(ctx)
+        turn_telemetry.note(answer_source="test_assist_data")
+        return ctx
+
     # 4. LLM path — collect render_stream into one envelope.
     if ctx.decision is not None and ctx.evidence is not None:
         # Хвост диалога: без него follow-up («а это подходит студентам?» после
-        # карточки акции) LLM отвечал вслепую. Эндпоинты дописывают ТЕКУЩУЮ
-        # реплику пользователя в history ДО пайплайна (router докидывает после,
-        # дедуп в append_turn) — срезаем её с хвоста, иначе она дублируется
-        # с «Запрос пациента» в промпте (Cursor-ревью 10.07).
-        history = list(ctx.state.history or [])
-        if history and isinstance(history[-1], dict) \
-                and history[-1].get("role") == "user" and history[-1].get("text") == ctx.text:
-            history = history[:-1]
+        # карточки акции) LLM отвечал вслепую.
+        history = _history_before_turn(ctx)
         from .llm_runtime import LLM_UNAVAILABLE_ERRORS
         from .policies import handoff_message
 

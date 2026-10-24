@@ -6,7 +6,8 @@
 
 Что пишется (`v=1`):
 - `answer_source` — ветка, давшая текст: `precheck:<причина>`, `safety:<метка>`, `clarify`,
-  `intro`, `recovery`, `pending`, `prebuilt`, `empty_evidence`, `llm_free`,
+  `intro`, `recovery`, `pending`, `prebuilt`, `empty_evidence`, `llm_free`, `test_assist_data` (подбор анализов по
+  данным хода вместо свободного текста, `test_assist_from_data`; поля `ta_answer`, `ta_rows`, `ta_tool_rows`, `ta_picked`),
   `render_timeout`, `render_error` (LLM упала в свободном ответе, поле `error` — тип),
   `route_error`; поверх — `operator_offer_on_repeat`;
 - `label`, `decision_source` (как подписал NLU), `nlu_llm` — звалась ли LLM-классификация
