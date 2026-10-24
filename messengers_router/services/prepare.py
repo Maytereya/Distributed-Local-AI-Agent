@@ -21,7 +21,7 @@ from ._common import (
     _get_first_present,
     _normalise_catalog_text,
 )
-from ._prepare_select_llm import SOURCE_MIS, PrepareMemo, kb_patient_memos, select_prepare_memos
+from ._prepare_select_llm import SOURCE_CLINIC_GENERAL, SOURCE_MIS, PrepareMemo, kb_patient_memos, select_prepare_memos
 from ._prices_helpers import _catalog_rows
 from ._strong_match import strong_rows
 from ._turn_phrases import phrase_rows, strong_window
@@ -310,6 +310,18 @@ _PRICE_RE = re.compile(r"\s*[-–—:]?\s*\d[\d\s]*(?:[.,]\d+)?\s*(?:руб\w*\.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
+# Название общей памятки для выбора LLM: когда она — предмет вопроса (общий вопрос о сдаче крови, без своего анализа).
+_BLOOD_GENERAL_TITLE = "Общие правила сдачи крови — вопрос о подготовке к анализам крови вообще, без названия конкретного анализа"
+
+
+def _general_memo_llm() -> bool:
+    """`[MESSENGER_ROUTER] prepare_general_memo_llm = on`: общая памятка о сдаче крови — вариант выбора памятки LLM."""
+
+    from agent_logic_2 import config as _cfg  # noqa: PLC0415 — настройка читается на ход (стенд меняет её на прогон)
+
+    return str(getattr(_cfg, "MR_PREPARE_GENERAL_MEMO_LLM", "off") or "off").strip().lower() == "on"
+
+
 def _sentence_without_price(sentence: str) -> str:
     """Предложение без цены; условие «Если …», у которого была только цена, — пусто."""
 
@@ -580,9 +592,23 @@ async def test_prepare(self: "Services", query: str, entities: dict[str, Any]) -
         for cand in mis_candidates[:_PREPARE_MIS_CANDIDATES]
     ]
     memos.extend(await asyncio.to_thread(kb_patient_memos))
+    general_option = _general_memo_llm()
+    if general_option:
+        # Общая памятка клиники «как сдавать кровь» — вариант выбора по смыслу (BUG-2026-10-22-PREPARE-GENERAL-BY-LETTERS):
+        # раньше её отдавал только запасной путь, когда буквенный поиск не нашёл ни одной карточки, и на «подготовка к
+        # анализам крови» («анализам» нет в списке общих слов) LLM выбирала наименее плохую из найденных — Нечипоренко.
+        memos.append(PrepareMemo(source=SOURCE_CLINIC_GENERAL, title=_BLOOD_GENERAL_TITLE, text=_BLOOD_COLLECTION_GUIDANCE))
     chosen = await select_prepare_memos(
         q, memos, runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""), context=context
     )
+    if general_option:
+        if len(chosen) == 1 and chosen[0].source == SOURCE_CLINIC_GENERAL:
+            return {
+                "prepare": _BLOOD_COLLECTION_GUIDANCE,
+                "note": "prepare: blood-collection general memo (LLM)",
+                "entities_used": entities,
+            }
+        chosen = tuple(memo for memo in chosen if memo.source != SOURCE_CLINIC_GENERAL)
     if context and not context_sure and not chosen:
         return _context_clarify_response(context, entities)
     if len(chosen) == 1 and chosen[0].source == SOURCE_MIS:

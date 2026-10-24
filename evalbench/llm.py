@@ -158,6 +158,10 @@ def adversary_answer(site: str, prompt: str) -> str | None:
         return json.dumps({"match": last})
     if site == "prepare_same_memo":
         return json.dumps({"same": True})
+    if site == "turn_spans":  # разметка слов реплики (DESIGN-2026-10-23-NO-STOPWORDS): вся реплика одной услугой — список слит, вопрос внутри
+        numbered = prompt.split("Слова сообщения с номерами:")[-1]
+        count = len(re.findall(r"(?:^|\s)(\d+):", numbered))
+        return json.dumps({"phrases": [list(range(1, count + 1))] if count else []})
     if site == "price_kind_ambiguous":
         return json.dumps({"kind": _pick(_PRICE_KINDS, prompt), "reason": "так"}, ensure_ascii=False)
     fixed = {
