@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import address_service, booking_slots, llm_runtime, turn_understanding
+from . import address_service, booking_slots, llm_runtime, turn_names, turn_understanding
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
@@ -176,6 +176,9 @@ def _sanitize_raw_doctor_name(raw: str, flags: set[str], entities: dict[str, Any
     value = str(raw or "").strip()
     if not value:
         return ""
+    if turn_names.on("names_doctor_noise"):
+        # Врач ли это, решает справочник МИС (`resolve_doctor_name` у вызывающего), а не список служебных слов.
+        return value
     norm = " ".join(normalize_ru(value).split())
     tokens = [t for t in norm.split(" ") if t]
     if len(tokens) == 1 and tokens[0] in _DOCTOR_NOISE_TOKENS:

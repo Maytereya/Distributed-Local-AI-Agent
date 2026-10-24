@@ -236,6 +236,7 @@ class MessengerRouterConfig:
     basket_weak_phrase_judge: str
     parse_agree_telemetry: str
     names_doctor_catalog: str
+    names_doctor_noise: str
     debug_final_input: bool
     url: str
 
@@ -563,6 +564,10 @@ settings = Settings(
         # в имени, которое назвала LLM, и исход — вопрос «Похоже, вы имели в виду…?». off — как было (_CATALOG_DOCTOR_STOPWORDS).
         # [MESSENGER_ROUTER] names_doctor_catalog
         names_doctor_catalog=_get_enum("MESSENGER_ROUTER", "names_doctor_catalog", default="off", allowed={"off", "on"}),
+        # doctor_name из ответа LLM из одного служебного слова («хочу», «запись») — не врач по справочнику МИС (resolve_doctor_name), а не по
+        # списку (STEP-2026-10-24-NAMES-NO-STOPWORDS; свип 24.10: справочник ни одно из 14 слов не находит). off — как было (_DOCTOR_NOISE_TOKENS).
+        # [MESSENGER_ROUTER] names_doctor_noise
+        names_doctor_noise=_get_enum("MESSENGER_ROUTER", "names_doctor_noise", default="off", allowed={"off", "on"}),
         # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
         # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
         # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —
@@ -842,6 +847,7 @@ MR_STRONG_PHRASE_GUARD = settings.messenger_router.strong_phrase_guard
 MR_BASKET_WEAK_PHRASE_JUDGE = settings.messenger_router.basket_weak_phrase_judge
 MR_PARSE_AGREE_TELEMETRY = settings.messenger_router.parse_agree_telemetry
 MR_NAMES_DOCTOR_CATALOG = settings.messenger_router.names_doctor_catalog
+MR_NAMES_DOCTOR_NOISE = settings.messenger_router.names_doctor_noise
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

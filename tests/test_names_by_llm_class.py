@@ -218,3 +218,31 @@ def test_catalog_doctor_typo_only_in_name_llm_named(monkeypatch) -> None:
     turn_names.note_llm(reply, {"doctor_name": typo})
     match = _match(reply)
     assert (match["status"], match["canonical"]) == ("fuzzy", surname)  # исход — вопрос «Похоже, вы имели в виду…?»
+
+
+# --- names_doctor_noise: служебное слово как doctor_name — решает справочник ------------------------------------------
+
+
+def _verify(services: Services, doctor_name: str, text: str):
+    from messengers_router import entity_grounder
+    from messengers_router.mess_types import RouteDecision
+
+    decision = RouteDecision(label="DOCTOR_SCHEDULE", confidence=0.8, entities={"doctor_name": doctor_name}, source="llm_primary")
+    return asyncio.run(entity_grounder.verify_doctor_entities_in_decision(decision, text, services))
+
+
+@pytest.mark.parametrize("word", ["хочу", "Запись", "ЗАПИСАТЬСЯ", "когда", "да", "нет", "подскажите", "приёма", "записи", "хотела"])
+def test_service_word_as_doctor_name_is_not_a_doctor_by_data(monkeypatch, word: str) -> None:
+    """Любая форма служебного слова (и те, которых в списке не было) — не врач: справочник его не находит."""
+
+    _switch(monkeypatch, "names_doctor_noise")
+    out = _verify(_catalog_services(), word, f"{word} к врачу")
+    assert "doctor_name" not in out.entities and "doctor_name_unverified" in out.flags
+
+
+@pytest.mark.parametrize("surname", _declined_surnames())
+def test_doctor_surname_entity_any_form_verified_by_data(monkeypatch, surname: str) -> None:
+    _switch(monkeypatch, "names_doctor_noise")
+    for form in _word_forms(surname):
+        out = _verify(_catalog_services(), form.lower(), f"когда принимает {form.lower()}")
+        assert out.entities.get("doctor_name") == surname and "doctor_name_verified" in out.flags, form
