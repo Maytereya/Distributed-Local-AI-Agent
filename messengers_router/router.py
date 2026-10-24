@@ -29,7 +29,6 @@ from .classifier import analyze
 from .context_summary import update_summary
 from .dialog_graph import GraphEngine
 from .entity_grounder import (
-    _NONBOOKABLE_GENERIC_HINTS,
     BOOKING_SERVICE_CLARIFY_KEY,
     BOOKING_SERVICE_OPTIONS_KEY,
     ground_decision_entities,
@@ -2557,7 +2556,7 @@ async def _guard_walkin_named_service(
     def to_booking(**named: str) -> RouteDecision:
         # Класс из контекста («анализы» от кнопки) — не услуга записи: иначе запись
         # подхватит его из состояния («Есть возможность записи на анализы», свип 08.10).
-        if str(state.last_entities.get("service_name") or "").casefold() in _NONBOOKABLE_GENERIC_HINTS:
+        if walkin.is_class(state.last_entities.get("service_name")):
             state.last_entities.pop("service_name", None)
         entities = {k: v for k, v in decision.entities.items() if k != "service_name"}
         return _relabel(

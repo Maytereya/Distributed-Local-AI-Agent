@@ -225,3 +225,4 @@ tests/test_synonym_wordforms_class.py
 tests/test_price_select_rules_class.py
 tests/test_button_pass_topic_class.py
 tests/test_prepare_by_parse_class.py
+tests/test_stage2_docs_phrase_class.py
