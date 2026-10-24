@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import address_service, booking_slots, llm_runtime, turn_understanding
+from . import address_service, booking_slots, llm_runtime, turn_understanding, walkin
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
@@ -440,15 +440,6 @@ def _should_drop_service_name_in_active_reschedule(
     )
 
 
-# Детерминированные generic-классы из policies.nonbookable_service_hint:
-# описывают КЛАСС услуги («анализы»/«ЭКГ»), а не строку каталога. Casefold-ключи.
-_NONBOOKABLE_GENERIC_HINTS: frozenset[str] = frozenset({
-    "анализы",
-    "экг",
-    "анализы и экг",
-})
-
-
 def _should_keep_nonbookable_service_name_as_is(
     *,
     raw_value: str,
@@ -483,11 +474,11 @@ def _should_keep_nonbookable_service_name_as_is(
         return False
     if "policy_nonbookable_walkin" not in decision_flags:
         return False
-    # Generic-классы из nonbookable_service_hint намеренно описывают класс услуги,
+    # Классы walk-in (`walkin.is_class`: выбор LLM или детектор nonbookable_service_hint) намеренно описывают класс услуги,
     # а не строку прайса, поэтому у них нет общего префикса с тем, что назвал
-    # пациент («диабетический профиль»). Они детерминированы (не LLM) и безопасны —
+    # пациент («диабетический профиль»). Их ставит бот, а не модель свободным текстом, —
     # сохраняем без prefix-проверки, которая ниже ловит только free-form галлюцинации.
-    if value.casefold() in _NONBOOKABLE_GENERIC_HINTS:
+    if walkin.is_class(value):
         return True
     if user_text:
         text_lower = user_text.lower()

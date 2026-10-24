@@ -203,10 +203,10 @@ def sync_address(state: SessionState, decision: RouteDecision, *, walkin: bool =
         return
     if not held or _norm(held) == _norm(_BEFORE.get()) or _norm(held) in {_norm(name) for name in shown}:
         return  # контекст ход не менял или он — показанное
-    # Классы walk-in. Импорт здесь: заземление импортирует сервисы цены, а они — этот модуль (цикл).
-    from .entity_grounder import _NONBOOKABLE_GENERIC_HINTS
+    # Классы walk-in. Импорт здесь: выбор LLM (`walkin` → `choice`) тянет рантайм LLM — модулю контекста он не нужен.
+    from .walkin import is_class
 
-    if walkin and held.casefold() in _NONBOOKABLE_GENERIC_HINTS:
+    if walkin and is_class(held):
         return
     state.last_entities.pop(SHOWN_KEY, None)
 
