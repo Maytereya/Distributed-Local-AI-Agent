@@ -186,16 +186,34 @@ def _topic_by_llm_rules() -> frozenset[str]:
     return frozenset(rules)
 
 
-def _topic_by_llm(rule: RouteDecision | None, topic_source: dict[str, str], runtime_options: RuntimeOptions | None) -> bool:
+def _button_pass_rules() -> bool:
+    """`[MESSENGER_ROUTER] button_pass_rules = on` (BUG-2026-10-24-BUTTON-PASS-TOPIC-LLM): ход-кнопка `pass` — тему решает правило."""
+
+    return str(getattr(c, "MR_BUTTON_PASS_RULES", "off") or "").strip().lower() == "on"
+
+
+def _topic_by_llm(
+    rule: RouteDecision | None,
+    topic_source: dict[str, str],
+    runtime_options: RuntimeOptions | None,
+    button_topic: str = "",
+) -> bool:
     """Тему этого хода решает LLM, а правило — кандидат: ветка правила в `topic_by_llm`, правило не про безопасность
-    (принцип 4: срочное LLM не снимает), LLM разрешена режимом хода."""
+    (принцип 4: срочное LLM не снимает), LLM разрешена режимом хода, ход — не нажатие кнопки с известной темой."""
 
     if rule is None or rule.label in _SAFETY_LABELS:
         return False
     if runtime_options is not None and runtime_options.llm_mode == "strict":
         return False
     wanted = _topic_by_llm_rules()
-    return bool(wanted) and bool(wanted & set(str(topic_source.get("rule") or "").split("+")))
+    if not (wanted and wanted & set(str(topic_source.get("rule") or "").split("+"))):
+        return False
+    if button_topic and _button_pass_rules():
+        # Тему выбрал пациент нажатием (`button_menu`, режим `pass`), подпись — запрос этой темы: переспрашивать её у LLM —
+        # только ждать классификатор (прод 23.10: 11–12 с на «Где и до скольки принимают»). Решает правило, как без списка.
+        turn_telemetry.note(nlu_topic_by_llm="button")
+        return False
+    return True
 
 
 def _llm_failed(decision: RouteDecision) -> bool:
@@ -221,6 +239,7 @@ async def _analyze_legacy_with_candidates(
     state: SessionState,
     runtime_options: RuntimeOptions | None = None,
     prefetched_llm: dict[str, Any] | None = None,
+    button_topic: str = "",
 ) -> NLUResult:
     # bounded контекст для LLM pass
     seeded = seeded_context_for_nlu(state)
@@ -229,7 +248,7 @@ async def _analyze_legacy_with_candidates(
 
     prefetched_rule = await _rule_decision(text, state.last_entities, runtime_options=runtime_options)
     topic_source = _note_topic_source(prefetched_rule, text)
-    by_llm = _topic_by_llm(prefetched_rule, topic_source, runtime_options)
+    by_llm = _topic_by_llm(prefetched_rule, topic_source, runtime_options, button_topic)
     if prefetched_rule is not None and not by_llm and (runtime_options is None or runtime_options.llm_mode != "strict"):
         # Тема решена правилом без LLM — тень LLM рядом (под `topic_shadow_llm = on`): как часто правило ошибается.
         # Промпт — тот же, что у хода без правила (`classifier.analyze` с тем же контекстом).
@@ -331,10 +350,14 @@ async def analyze_with_candidates(
     text: str,
     state: SessionState,
     runtime_options: RuntimeOptions | None = None,
+    button_topic: str = "",
 ) -> NLUResult:
+    """`button_topic` — тема нажатой кнопки режима `pass` (подпись идёт как текст); пусто — набранный текст."""
+
     opts = runtime_options or RuntimeOptions()
+    button = {"button_topic": button_topic} if button_topic else {}  # только когда кнопка есть: путь текста не меняется
     if not opts.uses_llm_primary_nlu:
-        return await _analyze_legacy_with_candidates(text, state, runtime_options=runtime_options)
+        return await _analyze_legacy_with_candidates(text, state, runtime_options=runtime_options, **button)
     if _engine_from_config() != "llm_primary":
-        return await _analyze_legacy_with_candidates(text, state, runtime_options=runtime_options)
+        return await _analyze_legacy_with_candidates(text, state, runtime_options=runtime_options, **button)
     return await _analyze_llm_primary_with_candidates(text, state, runtime_options=runtime_options)
