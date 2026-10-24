@@ -246,3 +246,25 @@ def test_doctor_surname_entity_any_form_verified_by_data(monkeypatch, surname: s
     for form in _word_forms(surname):
         out = _verify(_catalog_services(), form.lower(), f"когда принимает {form.lower()}")
         assert out.entities.get("doctor_name") == surname and "doctor_name_verified" in out.flags, form
+
+
+# --- names_doctor_followup: «да / хорошо» — не фамилия по справочнику -----------------------------------------------
+
+_DOCTOR_CONTEXT = {"_last_label": "DOCTOR_SCHEDULE", "specialty": "кардиолог"}
+
+
+@pytest.mark.parametrize("surname", _declined_surnames())
+@pytest.mark.parametrize("case", [str, str.lower, str.upper])
+def test_doctor_followup_surname_any_form_and_case(monkeypatch, surname: str, case) -> None:
+    _switch(monkeypatch, "names_doctor_followup")
+    for form in _word_forms(surname):
+        for text in (f"{case(form)}, да", f"{case(form)} подходит"):
+            assert classifier._doctor_followup_name_in_context(text, dict(_DOCTOR_CONTEXT)) == surname, text
+
+
+@pytest.mark.parametrize("text", ["да, хорошо", "ладно", "подходит", "хорошо", "ок, именно", "Хорошо, спасибо", "Угу, подойдёт"])
+def test_doctor_followup_without_surname_is_not_a_name(monkeypatch, text: str) -> None:
+    """Без фамилии справочника правило молчит; «хорошо» ≠ «Хорошун» — сравнение точное (BUG-2026-10-08-BARE-DOCTOR-SURNAME)."""
+
+    _switch(monkeypatch, "names_doctor_followup")
+    assert classifier._doctor_followup_name_in_context(text, dict(_DOCTOR_CONTEXT)) is None

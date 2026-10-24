@@ -421,9 +421,11 @@ def _doctor_followup_name_in_context(text: str, last_entities: dict[str, Any]) -
     tokens = re.findall(r"[A-Za-zА-Яа-яЁё0-9\-]+", s)
     if not tokens or len(tokens) > 4:
         return None
-    core_tokens = [normalize_ru(t) for t in tokens if normalize_ru(t) not in _DOCTOR_FOLLOWUP_FILLERS]
-    if not core_tokens:
-        return None
+    if not turn_names.on("names_doctor_followup"):
+        core_tokens = [normalize_ru(t) for t in tokens if normalize_ru(t) not in _DOCTOR_FOLLOWUP_FILLERS]
+        if not core_tokens:
+            return None
+    # `on`: реплика без фамилии («да, хорошо») отсеивается ниже — кандидат обязан точно совпасть с фамилией справочника МИС.
 
     candidate = _extract_doctor_name(s, mode="schedule") or _extract_doctor_name(s, mode="appointment")
     if not candidate:

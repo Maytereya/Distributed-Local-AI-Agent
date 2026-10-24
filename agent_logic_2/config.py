@@ -237,6 +237,7 @@ class MessengerRouterConfig:
     parse_agree_telemetry: str
     names_doctor_catalog: str
     names_doctor_noise: str
+    names_doctor_followup: str
     debug_final_input: bool
     url: str
 
@@ -568,6 +569,10 @@ settings = Settings(
         # списку (STEP-2026-10-24-NAMES-NO-STOPWORDS; свип 24.10: справочник ни одно из 14 слов не находит). off — как было (_DOCTOR_NOISE_TOKENS).
         # [MESSENGER_ROUTER] names_doctor_noise
         names_doctor_noise=_get_enum("MESSENGER_ROUTER", "names_doctor_noise", default="off", allowed={"off", "on"}),
+        # Короткий ответ в контексте врача («<фамилия>, да») — фамилия только по справочнику МИС (точное совпадение у правила), без списка
+        # «да / хорошо / ладно» (STEP-2026-10-24-NAMES-NO-STOPWORDS; свип 24.10: список ни разу не решал исход). off — как было (_DOCTOR_FOLLOWUP_FILLERS).
+        # [MESSENGER_ROUTER] names_doctor_followup
+        names_doctor_followup=_get_enum("MESSENGER_ROUTER", "names_doctor_followup", default="off", allowed={"off", "on"}),
         # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
         # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
         # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —
@@ -848,6 +853,7 @@ MR_BASKET_WEAK_PHRASE_JUDGE = settings.messenger_router.basket_weak_phrase_judge
 MR_PARSE_AGREE_TELEMETRY = settings.messenger_router.parse_agree_telemetry
 MR_NAMES_DOCTOR_CATALOG = settings.messenger_router.names_doctor_catalog
 MR_NAMES_DOCTOR_NOISE = settings.messenger_router.names_doctor_noise
+MR_NAMES_DOCTOR_FOLLOWUP = settings.messenger_router.names_doctor_followup
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 
