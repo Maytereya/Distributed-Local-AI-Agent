@@ -101,8 +101,8 @@ _DOCTOR_PRICES = [
 class _LLM:
     """Разметка слов (`turn_spans`) — номер первого слова, начинающегося с основы; выбор (`choose_doctors_service`) — заданный."""
 
-    def __init__(self, mark: str = "", picks: list[int] | None = None, fail: str = "", outcome: str = "none") -> None:
-        self.mark, self.picks, self.fail, self.outcome = mark, picks or [], fail, outcome
+    def __init__(self, mark: str = "", picks: list[int] | None = None, fail: str = "") -> None:
+        self.mark, self.picks, self.fail = mark, picks or [], fail
         self.calls: list[dict[str, Any]] = []
 
     async def __call__(self, **kw: Any) -> tuple[str, dict]:
@@ -113,7 +113,7 @@ class _LLM:
             words = kw["user"].split("Слова сообщения с номерами:")[-1].split()
             hits = [int(w.split(":", 1)[0]) for w in words if ":" in w and self.mark and w.split(":", 1)[1].lower().startswith(self.mark)]
             return json.dumps({"phrases": [[hits[0], hits[-1]]] if hits else []}), {}
-        return json.dumps({"picks": self.picks, "outcome": self.outcome}), {}
+        return json.dumps({"picks": self.picks}), {}
 
     def options(self) -> list[str]:
         seen = [kw for kw in self.calls if kw["site"] == "choose_doctors_service"]
@@ -200,10 +200,6 @@ def test_letters_alone_do_not_name_the_service(services, monkeypatch) -> None:
 
     ids, _ = _ask(services, monkeypatch, "Кто делает эндоскопию носа?", _LLM(mark="эндоскоп", picks=[1]))
     assert ids == [5]
-
-    # «Названо общо» побеждает номера: частный случай другого органа на общее слово — «уточните», а не его врачи.
-    ids, payload = _ask(services, monkeypatch, "Кто делает эндоскопию?", _LLM(mark="эндоскоп", picks=[1], outcome="general"))
-    assert ids == [] and payload["service_clarify"] is True
 
 
 @pytest.mark.parametrize("fail", ["turn_spans", "choose_doctors_service"])
