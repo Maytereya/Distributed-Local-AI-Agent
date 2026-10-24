@@ -214,6 +214,7 @@ class MessengerRouterConfig:
     synonym_wordforms: str
     prepare_general_memo_llm: str
     turn_spans_llm: str
+    prepare_by_parse: str
     topic_by_llm: str
     button_pass_rules: str
     turn_understanding_one: str
@@ -632,6 +633,11 @@ settings = Settings(
         # решения владельца 22.10 — 28 списков стоп-слов удалить, без LLM услугу не угадывать). off — прежний генератор окон.
         # [MESSENGER_ROUTER] turn_spans_llm
         turn_spans_llm=_get_enum("MESSENGER_ROUTER", "turn_spans_llm", default="off", allowed={"off", "on"}),
+        # Подготовка читает фразы разбора хода (DESIGN-2026-10-23-NO-STOPWORDS, этап 2; STEP-2026-10-24-PREPARE-BY-PARSE): предмет
+        # памятки — услуги, которые разбор нашёл в реплике, а не реплика без слов пяти списков подготовки; ни одной услуги — без
+        # поиска по словам; сбой разбора — «уточните». Разбор строится и на ходах подготовки. off — как было.
+        # [MESSENGER_ROUTER] prepare_by_parse
+        prepare_by_parse=_get_enum("MESSENGER_ROUTER", "prepare_by_parse", default="off", allowed={"off", "on"}),
         # Ход (б), этап 4, вариант Б (решения владельца 20.10 (б) 1, 5): ветки правил `legacy_v2` через запятую
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
@@ -840,6 +846,7 @@ MR_PRICE_SELECT_RULES = settings.messenger_router.price_select_rules
 MR_SYNONYM_WORDFORMS = settings.messenger_router.synonym_wordforms
 MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
+MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_BUTTON_PASS_RULES = settings.messenger_router.button_pass_rules
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
