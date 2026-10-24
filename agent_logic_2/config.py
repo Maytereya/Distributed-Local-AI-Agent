@@ -627,10 +627,9 @@ settings = Settings(
         # [MESSENGER_ROUTER] price_general_clarify
         price_general_clarify=_get_enum("MESSENGER_ROUTER", "price_general_clarify", default="off", allowed={"off", "on"}),
         # Правила промпта выбора строки на пути ответа о цене (BUG-2026-10-24-FOREIGN-PRICE-D17; суд записи — прежний промпт):
-        # general — приём врача без специальности — «слишком общее» (промпты `*_general`); groups — то же и особая группа
-        # пациентов (плод, беременность, до года) — только если её назвал пациент (`*_groups`). off — прежние промпты.
-        # [MESSENGER_ROUTER] price_select_rules
-        price_select_rules=_get_enum("MESSENGER_ROUTER", "price_select_rules", default="off", allowed={"off", "general", "groups"}),
+        # general — слишком общее название («анализы», приём врача без специальности) — не группа услуг правила 5, подходящих
+        # позиций нет (промпты `*_general`). off — прежние промпты. [MESSENGER_ROUTER] price_select_rules
+        price_select_rules=_get_enum("MESSENGER_ROUTER", "price_select_rules", default="off", allowed={"off", "general"}),
         # Синоним МИС в другой словоформе («коагулограммы» — синоним «коагулограмма» гемостазиограмм; BUG-2026-10-24-FOREIGN-
         # PRICE-D17, класс 1) — строки его услуг первыми в списке выбора строки цены LLM, как синоним дословный (не сильное
         # совпадение: общее начало слова склеивает и разные слова — их отсеет выбор). off — как было.

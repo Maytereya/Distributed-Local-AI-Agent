@@ -112,17 +112,17 @@ PRICE_CONDITIONS_TASK = replace(PRICE_TASK, name="price_service_conditions")
 # наркозом» → 8 100 руб. без наркоза, «экспресс 17-ОН день в день» → обычная цена. Уточнение `price_judge_conditions`
 # («как сдать, подготовиться…» — не условие) входит в тот же текст: строгое правило без него отсекало бы вопросы о сдаче.
 PRICE_QUALIFIER_TASK = replace(PRICE_TASK, name="price_service_qualifier")
-# Те же две задачи с правилами BUG-2026-10-24-FOREIGN-PRICE-D17 на пути ответа о цене (`price_select_rules`): `general` — приём
-# без специальности — «слишком общее»; `groups` — то же и особая группа пациентов (плод, беременность, до года). Свои промпты.
+# Те же две задачи с правилами BUG-2026-10-24-FOREIGN-PRICE-D17 на пути ответа о цене (`price_select_rules`): `general` — слишком
+# общее название («анализы», приём врача без специальности) — не группа услуг правила 5. Свои промпты.
 _RULES_TASKS = {
     mode: (replace(PRICE_TASK, name=f"price_service_{mode}"), replace(PRICE_TASK, name=f"price_service_qualifier_{mode}"))
-    for mode in ("general", "groups")
+    for mode in ("general",)
 }
 _VARIANT_B_LIMIT = 5
 
 
 def _select_rules() -> str:
-    """`[MESSENGER_ROUTER] price_select_rules = off | general | groups`; мусор — off (как было)."""
+    """`[MESSENGER_ROUTER] price_select_rules = off | general`; мусор — off (как было)."""
 
     mode = str(getattr(_cfg, "MR_PRICE_SELECT_RULES", "off") or "").strip().lower()
     return mode if mode in _RULES_TASKS else "off"

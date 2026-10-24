@@ -6,8 +6,9 @@
 давал новую чужую цену (ЛОР → фониатр), был строже нужного и менял запись («запись к неврологу» → уточнение) — снят.
 
 Инварианты:
-- `general` — приём врача без специальности — «слишком общее»; `groups` — то же и особая группа пациентов (плод,
-  беременность, до года) — только если её назвал пациент; прочие строки промптов — прежние;
+- `general` — слишком общее название («анализы», приём врача без специальности) — не группа правила 5; прочие строки промпта —
+  прежние (режим `groups` — «плод, беременность, до года» — снят: карточка 24.10, test — две новые чужие цены; первая
+  формулировка `general` делала «анализы» группой — «стоимость анализов» → список из 8 анализов);
 - суд записи (`price_answer=False`) — прежний промпт при любом режиме;
 - промпты — в двух локациях, одинаковые; off — прежние задачи.
 """
@@ -38,8 +39,7 @@ def _mode(monkeypatch, mode: str) -> None:
         ("off", True, "price_service_qualifier"),
         ("general", False, "price_service_general"),
         ("general", True, "price_service_qualifier_general"),
-        ("groups", False, "price_service_groups"),
-        ("groups", True, "price_service_qualifier_groups"),
+        ("groups", False, "price_service"),  # снятый режим (карточка 24.10: test — две новые чужие цены) — как off
         ("мусор", False, "price_service"),
     ],
 )
@@ -48,7 +48,7 @@ def test_price_answer_reads_the_rules_prompt_of_its_mode(mode, judge, task, monk
     assert sel.price_task(judge_qualifier=judge).name == task
 
 
-@pytest.mark.parametrize("mode", ["off", "general", "groups"])
+@pytest.mark.parametrize("mode", ["off", "general"])
 @pytest.mark.parametrize("judge", [False, True])
 def test_booking_judge_keeps_the_old_prompt(mode, judge, monkeypatch) -> None:
     _mode(monkeypatch, mode)
@@ -65,30 +65,29 @@ def _lines(name: str) -> list[str]:
 
 
 @pytest.mark.parametrize("base", _BASES)
-def test_rules_prompts_differ_from_the_old_one_only_by_their_rules(base) -> None:
-    old, general, groups = _lines(base), _lines(f"{base}_general"), _lines(f"{base}_groups")
-    changed_general = [i for i, (a, b) in enumerate(zip(old, general)) if a != b]
-    changed_groups = [i for i, (a, b) in enumerate(zip(general, groups)) if a != b]
-    assert len(old) == len(general) == len(groups)
-    assert [old[i][:2] for i in changed_general] == ["5.", "- "], "general: правило 5 и код причины too_general"
-    assert "консультация врача" in general[changed_general[0]] and "приём врача без специальности" in general[changed_general[1]]
-    assert [general[i][:2] for i in changed_groups] == ["4."], "groups: только правило 4"
-    assert "для плода, при беременности, до 1 года" in groups[changed_groups[0]]
-    for line in (*general, *groups):
-        assert "раздел прайса" not in line and "производител" not in line  # снятые правила первого варианта
+def test_rules_prompt_differs_from_the_old_one_only_by_its_rule(base) -> None:
+    old, general = _lines(base), _lines(f"{base}_general")
+    changed = [i for i, (a, b) in enumerate(zip(old, general)) if a != b]
+    assert len(old) == len(general)
+    assert [old[i][:2] for i in changed] == ["5.", "- "], "правило 5 и код причины too_general"
+    rule5, reason = general[changed[0]], general[changed[1]]
+    for word in ("слишком общее название — не группа", "«анализы»", "консультация врача"):
+        assert word in rule5, word
+    assert "приём врача без специальности" in reason
+    for line in general:
+        assert "раздел прайса" not in line and "производител" not in line and "для плода" not in line  # снятые правила
 
 
 @pytest.mark.parametrize("base", _BASES)
-@pytest.mark.parametrize("mode", ["general", "groups"])
-def test_rules_prompts_live_in_both_places(base, mode) -> None:
-    repo = (_ROOT / f"messengers_router/prompts/{base}_{mode}.txt").read_text(encoding="utf-8")
-    assert repo == (_ROOT / f"app_data/prompts/mr_{base}_{mode}.txt").read_text(encoding="utf-8")
+def test_rules_prompt_lives_in_both_places(base) -> None:
+    repo = (_ROOT / f"messengers_router/prompts/{base}_general.txt").read_text(encoding="utf-8")
+    assert repo == (_ROOT / f"app_data/prompts/mr_{base}_general.txt").read_text(encoding="utf-8")
 
 
 def test_options_carry_no_price_section(monkeypatch) -> None:
     from messengers_router.runtime_config import config as cfg
 
     monkeypatch.setattr(cfg, "MR_PRICE_OPTION_MIS_NOTES", "off", raising=False)
-    _mode(monkeypatch, "groups")
+    _mode(monkeypatch, "general")
     rows = [{"serviceName": "Эхокардиография", "cost": 3500, "priceUnitId": 175}]
     assert [o.text for o in sel._options("эхо сердца", rows)] == ["Эхокардиография — 3500 руб."]
