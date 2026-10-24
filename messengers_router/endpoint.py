@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from . import llm_runtime, pending_reply, turn_parse, turn_telemetry
+from . import llm_runtime, turn_parse, turn_telemetry
 from .llm_mode_policy import normalize_runtime_options
 from .memory import MemoryStore
 from .router import patient_routing_stream
@@ -315,7 +315,6 @@ async def messenger_generate(
             assistant_text = "".join(assistant_parts).strip()
             try:
                 turn_parse.cancel_unfinished()
-                pending_reply.detach()
             finally:
                 turn_telemetry.note(tu_decisions_spent=llm_runtime.turn_decisions_spent())
                 llm_runtime.end_turn_budget(budget)
@@ -431,7 +430,6 @@ async def messenger_generate_once(
     finally:
         try:
             turn_parse.cancel_unfinished()
-            pending_reply.detach()
         finally:
             turn_telemetry.note(tu_decisions_spent=llm_runtime.turn_decisions_spent())
             llm_runtime.end_turn_budget(budget)

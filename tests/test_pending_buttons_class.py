@@ -32,8 +32,8 @@ _FREE_MARK = "Бот попросил назвать что-то своими с
 _CLASSIFIER_MARK = "Ты классификатор запросов пациента"
 _CLASSIFIER_NEW_TOPIC = json.dumps({"label": "APPOINTMENT", "confidence": 0.9, "context_action": "new_topic", "entities": {}})
 
-_ON = {"MR_PENDING_REPLY": "on", "MR_PENDING_BUTTONS": "on", "MR_CHOOSE_CACHE_TTL_S": 0}
-_OFF = {"MR_PENDING_REPLY": "on", "MR_PENDING_BUTTONS": "off", "MR_CHOOSE_CACHE_TTL_S": 0}  # прод: деплой 10
+_ON = {"MR_PENDING_BUTTONS": "on", "MR_CHOOSE_CACHE_TTL_S": 0}
+_OFF = {"MR_PENDING_BUTTONS": "off", "MR_CHOOSE_CACHE_TTL_S": 0}  # прод: деплой 10
 
 _PREPARE_BUTTON = ("menu.appointment.prepare", "Подготовка к процедуре")
 _SUGGEST_BUTTON = ("menu.tests.suggest", "Подобрать анализы")
@@ -223,7 +223,6 @@ def test_free_answer_prompt_renders_the_bot_question_without_options():
 def test_slot_value_is_decided_only_under_pending_buttons(monkeypatch):
     from messengers_router.runtime_config import config as cfg
 
-    monkeypatch.setattr(cfg, "MR_PENDING_REPLY", "on", raising=False)
     monkeypatch.setattr(cfg, "MR_PENDING_BUTTONS", "off", raising=False)
     pending_answer.reset()
     assert asyncio.run(pending_answer.answer("slot_value", "Укажите номер анализа.", (), "нет")) is None

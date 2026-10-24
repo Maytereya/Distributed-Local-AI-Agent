@@ -234,8 +234,21 @@ def test_the_corpus_reaches_each_guard_on_the_fallback():
 _TWO_TURNS = ("run_on_bare", "run_on_extra_words", "one_name_covers_igg", "phrase_smear_pharynx")
 
 
-@pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
-@pytest.mark.parametrize("name", _TWO_TURNS)
+# Известное красное (xfail strict): «да» на ответ с подсказкой «напишите: "все"» одна функция читает как «показать все»
+# (решение 15.10), а полный список семейства ОАК несёт чужие строки — BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD (прод с деплоя 10;
+# до снятия `pending_reply` тест молча проверял путь off).
+_FOLLOW_UP_RED = {("run_on_bare", "да"): "BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD: «да» → полный список семейства ОАК с чужими строками"}
+
+
+def _follow_up_params():
+    for name in _TWO_TURNS:
+        for follow_up in _FOLLOW_UPS:
+            reason = _FOLLOW_UP_RED.get((name, follow_up))
+            marks = [pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason)] if reason else []
+            yield pytest.param(name, follow_up, marks=marks, id=f"{name}-{follow_up}")
+
+
+@pytest.mark.parametrize(("name", "follow_up"), list(_follow_up_params()))
 def test_follow_up_after_the_fallback_answer_stays_on_what_was_shown(name, follow_up, mini_prod_world, monkeypatch):  # noqa: F811
     """Короткий вопрос после ответа запасного пути («а сколько?», «да», цифра): цены — только строк, которые
     пациент уже видел, услуга сессии — из ответа; первый ход — как в эталоне."""

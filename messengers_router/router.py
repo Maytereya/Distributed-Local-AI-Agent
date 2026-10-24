@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import booking_slots, degradation, expects, pending_answer, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -2946,10 +2946,7 @@ async def _handle_secondary_queue_pending(
         return None
 
     show_all_q, secondary_q = expects.Question.SHOW_ALL, expects.Question.SECONDARY_OFFER
-    if pending_answer.shows_all() or (
-        pending_answer.current(show_all_q) is None
-        and pending_reply.reply_kind_for(pending_reply.QuestionType.SHOW_ALL, "other", user_text) == "yes"
-    ):
+    if pending_answer.shows_all():
         # Ответ на подсказку «напишите: "все"» («да, давайте все») — «показать все»: вторичный оффер снимается, как на
         # «все», ответ читает путь цены (`_price_show_all_requested`).
         state.last_entities["_secondary_offer_pending"] = False
@@ -3018,11 +3015,8 @@ def _handle_operator_offer_pending(
         return None
 
     def _rules() -> str:
-        reply_kind = contextual_reply_kind(user_text)
-        if explicit_operator_requested(user_text):
-            reply_kind = "yes"
-        # Тень `pending_reply` (под on c типами — прежнее «поднять до да»); запасной путь одной функции.
-        return pending_reply.reply_kind_for("operator_offer", reply_kind, user_text)
+        # Запасной путь одной функции (сбой LLM): правила обработчика.
+        return "yes" if explicit_operator_requested(user_text) else contextual_reply_kind(user_text)
 
     reply_kind = pending_answer.kind(expects.Question.OPERATOR_OFFER, _rules)
     if reply_kind == "pause":
@@ -4050,13 +4044,14 @@ async def patient_routing_stream(
         return
 
     # Ответ на висящий вопрос бота — одна функция, одно решение на ход (класс 5, дизайн
-    # `docs/DESIGN_2026-10-18_one_pending_answer.md`; под `pending_reply = on`): после срочного, до явного запроса
-    # оператора — «не надо оператора» на вопрос бота — ответ, не просьба о переводе. Решение читают обработчики
-    # вопросов (`pending_answer.kind / passes / picked`); хвост реплики («нет, мне ферритин») идёт обычным путём.
+    # `docs/DESIGN_2026-10-18_one_pending_answer.md`): после срочного, до явного запроса оператора — «не надо
+    # оператора» на вопрос бота — ответ, не просьба о переводе. Решение читают обработчики вопросов
+    # (`pending_answer.kind / passes / picked`); хвост реплики («нет, мне ферритин») идёт обычным путём. Кнопка снимает
+    # висящий вопрос — функция не зовётся.
     pending_answer.reset()
     answered = None
     said = user_text  # реплика как есть — в историю диалога; дальше ход может идти хвостом
-    if pending_answer.on() and not button_id:
+    if not button_id:
         expected = pending_answer.expected_from(state.last_entities)
         if expected is not None:
             filled = expected[0] == expects.Question.SLOT_VALUE.value and _slot_filled_by_rules(user_text, state, services, memory)
@@ -4114,13 +4109,6 @@ async def patient_routing_stream(
                 ),
             )
             return
-
-    # Ответ на висящий вопрос бота силами LLM (D2.3, `pending_reply`) — одна точка хода: после срочного, явного запроса
-    # оператора и охраны города, до разбора висящего вопроса (предпроверка записи, обработчики в оркестраторе). Под off
-    # и на кнопке — ничего; под shadow — тень; под on — типы `pending_reply_types` решает LLM в ходе, исполняет
-    # обработчик вопроса (`pending_reply.reply_kind_for`). Состояние сессии здесь не меняется.
-    if not pending_answer.on():
-        await pending_reply.observe_or_act(user_text, state.last_entities, button_id=button_id)
 
     # Уточняющий вопрос о вопросе «Какой филиал вам удобен?» (`pending_buttons`): ответ обычным путём и тот же вопрос
     # снова, собранное записи цело.

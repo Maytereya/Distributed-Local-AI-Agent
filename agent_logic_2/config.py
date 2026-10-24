@@ -226,8 +226,6 @@ class MessengerRouterConfig:
     t7_drop_k1: str
     t7_drop_k3: str
     price_judge_conditions: str
-    pending_reply: str
-    pending_reply_types: str
     pending_buttons: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
     reask_limit: str
@@ -495,21 +493,14 @@ settings = Settings(
         # journal_phrase снят и больше не читается (в config.ini прода безвреден; STEP-2026-10-17-ONE-PATH-JOURNAL-PHRASE).
         # Контекст сессии = показанное (L-14, шаг 3) — единственный путь с 17.10: ключ [MESSENGER_ROUTER] context_shown
         # снят и больше не читается (в config.ini прода безвреден; STEP-2026-10-17-ONE-PATH-CONTEXT-SHOWN).
-        # Ответ на висящий вопрос бота силами LLM (D2.3, `messengers_router/pending_reply.py`): off — как было;
-        # shadow — тень: решение LLM вне бюджета хода и предохранителя, только телеметрия (tu_pending_*), ответ
-        # прежний; on — пока как shadow (исполнение — следующий шаг, после живого замера и встречного свипа).
-        # [MESSENGER_ROUTER] pending_reply
-        pending_reply=_get_enum("MESSENGER_ROUTER", "pending_reply", default="off", allowed={"off", "shadow", "on"}),
-        # Под pending_reply = on — типы вопросов (`_expects.type`, через запятую), на которые решение LLM исполняется в
-        # ходе (асимметрия безопасности по типу, решение владельца 15.10); прочие типы — тень. Пусто — как shadow.
-        # Сейчас исполняется только operator_offer: LLM может поднять ответ до «да» (перевод), не снять.
-        # [MESSENGER_ROUTER] pending_reply_types
-        pending_reply_types=_get_str("MESSENGER_ROUTER", "pending_reply_types", default=""),
+        # Ответ на висящий вопрос бота — одна функция `pending_answer` — единственный путь с 24.10: ключи [MESSENGER_ROUTER]
+        # pending_reply и pending_reply_types сняты и больше не читаются (в config.ini прода безвредны;
+        # STEP-2026-10-22-SWITCH-REMOVAL).
         # Вопросы-слоты кнопок и остатки класса 5 — через одну функцию ответа на висящий вопрос (`pending_answer`; решение
         # владельца 19.10, п. 5): вопрос-слот («К какой процедуре нужна подготовка?», «Для какой цели подобрать анализы?»,
         # реквизиты результата) ставит `_expects` вида «свободный ответ», ответ решает функция; уточняющий вопрос на «Какой
         # филиал вам удобен?» получает ответ и тот же вопрос снова; «обе» на составную цену — цены обеих; второе «нет» на
-        # «Похоже, вы имели в виду …?». Действует только под pending_reply = on; off — как было.
+        # «Похоже, вы имели в виду …?». off — как было.
         # [MESSENGER_ROUTER] pending_buttons
         pending_buttons=_get_enum("MESSENGER_ROUTER", "pending_buttons", default="off", allowed={"off", "on"}),
         # Предел переспросов (D2.4; пункт 5 принципов, инвариант 3bacf58): off — как было (обработчик висящего
@@ -840,8 +831,6 @@ MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm
 MR_T7_DROP_K1 = settings.messenger_router.t7_drop_k1
 MR_T7_DROP_K3 = settings.messenger_router.t7_drop_k3
 MR_PRICE_JUDGE_CONDITIONS = settings.messenger_router.price_judge_conditions
-MR_PENDING_REPLY = settings.messenger_router.pending_reply
-MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_PENDING_BUTTONS = settings.messenger_router.pending_buttons
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
 MR_LLM_PRIMARY_RULES_FALLBACK = settings.messenger_router.llm_primary_rules_fallback

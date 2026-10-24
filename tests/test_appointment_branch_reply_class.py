@@ -86,12 +86,10 @@ class _BranchOracle:
 
 @pytest.fixture
 def branch_llm(monkeypatch):
-    """`pending_reply = on`, тип `appointment_branch` исполняется; LLM — оракул (ставит тест)."""
+    """Ответ на вопрос о филиале решает одна функция; LLM — оракул (ставит тест)."""
 
     from messengers_router.runtime_config import config as cfg
 
-    monkeypatch.setattr(cfg, "MR_PENDING_REPLY", "on", raising=False)
-    monkeypatch.setattr(cfg, "MR_PENDING_REPLY_TYPES", "appointment_branch", raising=False)
     monkeypatch.setattr(cfg, "MR_CHOOSE_CACHE_TTL_S", 0, raising=False)
 
     def install(answers: dict[str, tuple[str, str]]) -> _BranchOracle:

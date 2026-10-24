@@ -41,7 +41,7 @@ def test_show_all_under_one_pending_answer_holds_what_was_shown(reply, by_llm, m
     llm = _PendingLLM()
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", llm)
     monkeypatch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
-    monkeypatch.setitem(bugs._ALL_SETS, "deploy_pending_on", {**bugs._SETS["deploy"], "MR_PENDING_REPLY": "on"})
+    monkeypatch.setitem(bugs._ALL_SETS, "deploy_pending_on", {**bugs._SETS["deploy"]})
     choice._CACHE.clear()
 
     turns = [bugs._FAMILY_QUESTION, reply, bugs._PREPARE]
