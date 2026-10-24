@@ -42,6 +42,7 @@ _CONTROL_KEYS = {
     "_catalog_doctor_query",
     "_catalog_service_candidate",
     "_catalog_service_query",
+    test_assist_answer.CATALOG_GUESS_KEY,
     # NEWS promo follow-up (rule_news_promo_followup): выбор акции из списка
     # номером/названием + прокинутый контекст показанных акций для news_info.
     # promo_query_for — маркер «выдано для этого хода» (анти-протухание).
@@ -344,6 +345,8 @@ async def judge_fuzzy_service_candidate(
         # Подбор анализов отвечает по данным хода (`test_assist_from_data`): строку выбирает LLM ответа хода среди всех
         # кандидатов, как у цены, — суд догадки и «да/нет» по ней дублировали это решение и съедали лимит решений хода
         # («исследование клеща»: разбор, два круга суда здесь, суд ещё раз в заземлении — ответу решения не осталось).
+        # Сама догадка — кандидат ответа хода: поиск по реплике её строку находит не всегда («уровень железа в крови»).
+        out[test_assist_answer.CATALOG_GUESS_KEY] = candidate
         flags.add("catalog_confirm_skipped_test_assist_data")
         return
     if not catalog_confirm_llm_enabled() or label not in _LLM_JUDGED_FUZZY_LABELS:

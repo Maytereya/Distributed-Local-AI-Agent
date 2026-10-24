@@ -50,6 +50,9 @@ COMPOUND_PRICE_RESPONSE = "compound_price_response"
 SERVICE_ANSWER = "service_answer"
 # Голое название услуги → максимум по данным (`service_overview`): {"rows"} — строки прайса, которые назвал пациент
 SERVICE_OVERVIEW = "service_overview"
+# Нечёткая догадка каталога на ходе подбора анализов (`test_assist_from_data`): название строки — кандидат ответа хода,
+# без «да/нет» по ней (str)
+TEST_ASSIST_CATALOG_GUESS = "test_assist_catalog_guess"
 
 # --- Rendering sidechannel -------------------------------------------------
 ATTACHMENTS = "attachments"

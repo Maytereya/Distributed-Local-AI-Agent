@@ -6,8 +6,9 @@
 вместо ответа по данным; 21 с на проде. Суд догадки решает, переспросить ли «Похоже, вы имели в виду …?», а под
 `test_assist_from_data` строку выбирает LLM ответа хода среди всех кандидатов — как у цены, где переспроса нет вовсе.
 
-Инвариант под on: на ходе TEST_ASSIST суд догадки не зовётся (решения хода не тратятся) и «да/нет» по ней не ставится; другие
-метки (запись, адреса) и off — как было.
+Инвариант под on: на ходе TEST_ASSIST суд догадки не зовётся (решения хода не тратятся) и «да/нет» по ней не ставится, а сама
+догадка остаётся кандидатом ответа хода (без неё «уровень железа в крови» терял «Железо в сыворотке» — поиск по реплике
+нашёл только «CA 15-3 (молочная железа)»); другие метки (запись, адреса) и off — как было.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from messengers_router import entity_grounder
+from messengers_router import entity_grounder, test_assist_answer
 from messengers_router.services._booking_service_select import BookingServiceVerdict
 
 
@@ -65,6 +66,8 @@ def test_on_test_assist_guess_is_not_judged_and_not_confirmed(monkeypatch):
     assert calls == []  # решение хода не потрачено
     assert "_catalog_service_candidate" not in out  # «Похоже, вы имели в виду …?» не будет — строку выберет ответ хода
     assert "catalog_confirm_skipped_test_assist_data" in flags
+    # догадка — кандидат ответа хода, а не переспрос
+    assert out[test_assist_answer.CATALOG_GUESS_KEY] == "Исследование клеща на зараженность инфекциями"
 
 
 def test_off_test_assist_guess_is_judged_as_before(monkeypatch):
@@ -73,6 +76,7 @@ def test_off_test_assist_guess_is_judged_as_before(monkeypatch):
     assert calls == ["исследование клеща на инцифалит"]
     assert out.get("_catalog_service_candidate") == "Исследование клеща на зараженность инфекциями"
     assert "catalog_confirm_judged_picked" in flags
+    assert test_assist_answer.CATALOG_GUESS_KEY not in out
 
 
 @pytest.mark.parametrize("label", ["APPOINTMENT", "ADDRESS"])
@@ -81,3 +85,9 @@ def test_on_other_labels_are_judged_as_before(label, monkeypatch):
 
     assert calls == ["исследование клеща на инцифалит"]
     assert "catalog_confirm_skipped_test_assist_data" not in flags
+    assert test_assist_answer.CATALOG_GUESS_KEY not in out
+
+
+def test_guess_key_survives_grounding_as_control_key():
+    # заземление отбрасывает ключи не из белого списка метки — догадка до роутера дожить должна
+    assert entity_grounder._is_allowed_key(test_assist_answer.CATALOG_GUESS_KEY, "TEST_ASSIST", None)

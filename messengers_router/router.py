@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import booking_slots, degradation, expects, pending_answer, pending_reply, role_pick, service_answer, service_overview, shown_context, test_assist_answer, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -3424,7 +3424,9 @@ async def _complete_route_after_doctor_guard(
     if booking_choice is not None:
         return booking_choice
 
-    # Служебные каталожные ключи не должны попадать в долгоживущий state.
+    # Служебные каталожные ключи не должны попадать в долгоживущий state. Догадка каталога подбора анализов уходит в данные
+    # хода — кандидатом ответа по данным (`test_assist_answer`).
+    test_assist_guess = str(decision.entities.get(test_assist_answer.CATALOG_GUESS_KEY) or "").strip()
     if any(
         k in decision.entities
         for k in (
@@ -3432,6 +3434,7 @@ async def _complete_route_after_doctor_guard(
             "_catalog_doctor_query",
             "_catalog_service_candidate",
             "_catalog_service_query",
+            test_assist_answer.CATALOG_GUESS_KEY,
         )
     ):
         clean_entities = dict(decision.entities)
@@ -3440,6 +3443,7 @@ async def _complete_route_after_doctor_guard(
             "_catalog_doctor_query",
             "_catalog_service_candidate",
             "_catalog_service_query",
+            test_assist_answer.CATALOG_GUESS_KEY,
         ):
             clean_entities.pop(key, None)
         decision = _copy_decision(decision, entities=clean_entities)
@@ -3549,6 +3553,8 @@ async def _complete_route_after_doctor_guard(
         await turn_understanding.observe_prepare_turn(planned, user_text=user_text)
     plan = build_plan(decision, state, user_text, memory=memory, runtime_options=runtime_options)
     evidence = await execute_plan(plan, state, services)
+    if test_assist_guess and decision.label == "TEST_ASSIST":
+        evidence.put(ek.TEST_ASSIST_CATALOG_GUESS, test_assist_guess)
     if _doctors_by_service_not_found(evidence.get(ek.DOCTORS_INFO)):
         # Врачей по услуге не нашли («не нашёл в справочнике», L-06(б); «информация о враче не найдена») — до отказа данные
         # клиники: услуга бывает в прайсе и памятке, а врачей по её словам справочник не даёт (g0277 «делают ли ФКС с
