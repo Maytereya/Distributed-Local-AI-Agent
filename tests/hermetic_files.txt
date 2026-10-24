@@ -29,6 +29,7 @@ tests/test_date_parsing.py
 tests/test_dialog_state.py
 tests/test_doctor_info_procedure_detail.py
 tests/test_doctor_name_matching.py
+tests/test_doctors_by_parse_class.py
 tests/test_doctors_by_service_code.py
 tests/test_doctors_dms_age.py
 tests/test_doctors_excerpt_fallback.py

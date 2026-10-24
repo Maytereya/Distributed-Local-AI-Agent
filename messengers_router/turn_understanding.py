@@ -255,6 +255,33 @@ def parse_for(text: str) -> turn_parse.PhraseParse | None:
     return turn_parse.acting_for(text)
 
 
+async def parse_service_reply(text: str) -> tuple[turn_parse.PhraseParse | None, str]:
+    """Разбор реплики на ходе, где услугу читает не путь цены (врачи по услуге, `doctors_by_parse`; DESIGN-2026-10-23-NO-STOPWORDS,
+    этап 2). Разбор хода этой реплики уже есть — он; нет — строится сейчас разметкой слов LLM (`_turn_spans`, без списков),
+    раз за ход, в тот же слот (вне хода — без слота). Действовать читатель может тем же, что `parse_for` (решённый разбор этой
+    реплики), иначе None; второй элемент — статус разбора для телеметрии читателя."""
+
+    text = str(text or "")
+    if turn_parse.current() is None:
+        parse = await _spans_parse(text)
+        return (parse if parse.decided else None), parse.status
+    if turn_parse.start_phrases(lambda: _spans_parse(text), reply=text) is not None:
+        await turn_parse.phrases()
+    done = turn_parse.phrases_now()
+    return turn_parse.acting_for(text), (done.status if done is not None and done.for_text(text) else "other_reply")
+
+
+async def _spans_parse(text: str) -> turn_parse.PhraseParse:
+    started = time.monotonic()
+    try:
+        catalog = await asyncio.to_thread(_catalog_rows, None)
+        parse = await _turn_spans.parse_turn_spans(text, facet=None, catalog=catalog)
+    except Exception:  # разбор — новый слой: сбой не ломает ход, читатель отвечает «уточните»
+        logger.warning("turn_parse_failed", exc_info=True)
+        parse = turn_parse.PhraseParse(reply=text, status=turn_parse.ParseStatus.ERROR.value, source="none", ms=int((time.monotonic() - started) * 1000))
+    return _noted(parse, None)
+
+
 def rules_list(text: str, rows: list[dict[str, Any]] | None = None) -> bool:
     """Путь правил (разбора нет: `empty` / `too_many` / `error` / вход — не реплика хода): назвал ли пациент список — одно
     решение на ход (ход (б), этап 2, консилиум 20.10 §1). Понимание хода этой реплики уже решило — его вердикт; иначе

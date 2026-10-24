@@ -60,9 +60,10 @@ from ._doctors_helpers import (
     _service_catalog_query_candidates,
     _specialty_priority_rank,
 )
+from . import _doctors_by_parse
 from ._prices_helpers import keeps_family_letter, resolve_price_service_name_from_catalog
 from ._role_catalog import build_role_catalog
-from ._service_doctors import agreement as _service_doctors_agreement, build_service_doctor_index
+from ._service_doctors import ServiceDoctorIndex, agreement as _service_doctors_agreement, build_service_doctor_index
 from ._regions import (
     _extract_region_phone,
     _has_explicit_non_samara_regions,
@@ -597,27 +598,15 @@ def _doctors_by_service_data_mode() -> str:
     return raw if raw in {"off", "shadow", "on"} else "off"
 
 
-async def _service_data_doctor_ids(
-    service_q: str, region_doctor_ids: set[int], branch_in_region: Callable[[str], bool]
-) -> tuple[str, tuple[str, ...], tuple[int, ...]] | None:
-    """Ход (г), L-06: как опознана услуга, её коды и врачи региона, которых МИС с ними связывает (`doctor_prices`).
+async def _service_doctor_index(
+    region_doctor_ids: set[int], branch_in_region: Callable[[str], bool]
+) -> ServiceDoctorIndex | None:
+    """Индекс «код услуги → врачи региона» по срезу `doctor_prices` (ход (г), L-06); срез недоступен — None."""
 
-    Опознание (`ident`): `exact` — название строки МИС целиком или однозначный синоним МИС; `words` — все слова запроса
-    есть в названии строки (как в `_doctor_ids_by_service_code`). `words` — это буквы, не опознание: свип 21.10 —
-    «эндоскопия» цепляет только «Эндоскопию полости носа» (ЛОР), «массаж» — «Массаж предстательной железы» (урологи).
-    Поэтому действует (`on`) только `exact`; `words` — лишь в телеметрию тени. Срез недоступен — None.
-    """
-
-    query_tokens = _service_name_tokens(service_q)
-    if not query_tokens:
-        return "none", (), ()
     try:
         rows = await asyncio.to_thread(api_price.load_doctor_prices)
     except Exception:
         return None
-    from ._biomaterial import mis_synonym_service
-
-    synonym = _normalise_input(mis_synonym_service(service_q) or "")
     rows = rows or []
     shape = hash(tuple((r.get("doctorId"), r.get("serviceHomecode"), r.get("regionName")) for r in rows if isinstance(r, dict)))
     branches = {str(r.get("regionName") or "").strip() for r in rows if isinstance(r, dict)} - {""}
@@ -633,7 +622,46 @@ async def _service_data_doctor_ids(
 
         _SERVICE_INDEX["value"] = build_service_doctor_index(rows, in_region=in_region)
         _SERVICE_INDEX["key"] = key
-    index = _SERVICE_INDEX["value"]
+    return _SERVICE_INDEX["value"]
+
+
+async def _doctor_in_region(self: "Services") -> Callable[[dict[str, Any]], bool]:
+    """Врач принимает в регионе бота: по филиалам `/regions`; без них — отбрасываются только явно чужие города."""
+
+    samara_tokens = await self._samara_region_tokens()
+
+    def in_region(doc: dict[str, Any]) -> bool:
+        raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
+        # Врач может вести приём и в Самаре, и в другом городе — оставляем его
+        # по самарскому присутствию, а не отбрасываем по любому несамарскому
+        # филиалу. «Явный несамарский» дроп — fallback без samara_tokens.
+        if samara_tokens:
+            return any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions)
+        return not _has_explicit_non_samara_regions(raw_regions)
+
+    return in_region
+
+
+async def _service_data_doctor_ids(
+    service_q: str, region_doctor_ids: set[int], branch_in_region: Callable[[str], bool]
+) -> tuple[str, tuple[str, ...], tuple[int, ...]] | None:
+    """Ход (г), L-06: как опознана услуга, её коды и врачи региона, которых МИС с ними связывает (`doctor_prices`).
+
+    Опознание (`ident`): `exact` — название строки МИС целиком или однозначный синоним МИС; `words` — все слова запроса
+    есть в названии строки (как в `_doctor_ids_by_service_code`). `words` — это буквы, не опознание: свип 21.10 —
+    «эндоскопия» цепляет только «Эндоскопию полости носа» (ЛОР), «массаж» — «Массаж предстательной железы» (урологи).
+    Поэтому действует (`on`) только `exact`; `words` — лишь в телеметрию тени. Срез недоступен — None.
+    """
+
+    query_tokens = _service_name_tokens(service_q)
+    if not query_tokens:
+        return "none", (), ()
+    index = await _service_doctor_index(region_doctor_ids, branch_in_region)
+    if index is None:
+        return None
+    from ._biomaterial import mis_synonym_service
+
+    synonym = _normalise_input(mis_synonym_service(service_q) or "")
     whole = {name for name in (_normalise_input(service_q).strip(), synonym.strip()) if name}
     codes = index.codes_where(lambda name: _normalise_input(name).strip() in whole)
     if codes:
@@ -656,6 +684,12 @@ async def doctors_info(
     :param output_max: верхний предел выдачи
     :return: payload с карточками врачей или fallback-ответом
     """
+
+    if _doctors_by_parse.enabled():
+        # DESIGN-2026-10-23-NO-STOPWORDS, этап 2: услуга — фразы разбора хода, её врачи — данные МИС, без списков слов ниже.
+        return await _doctors_by_parse.doctors_info(
+            self, query, entities, output_max, in_region=await _doctor_in_region(self), service_index=_service_doctor_index
+        )
 
     doctors = await self._ensure_doctors_cache_loaded()
     if not doctors:
@@ -690,7 +724,7 @@ async def doctors_info(
         fio_q = ""
         resolved_surname = None
 
-    samara_tokens = await self._samara_region_tokens()
+    in_region = await _doctor_in_region(self)
     role_query = bool(spec_q and _is_role_specialty_query(query, spec_q))
     role_levels = {
         id(d): _doctor_role_specialty_match_level(d, spec_q)
@@ -708,15 +742,6 @@ async def doctors_info(
         keyword = q
 
     keyword = keyword.strip()
-
-    def in_region(doc: dict[str, Any]) -> bool:
-        raw_regions = [str(x) for x in (doc.get("regions") or []) if str(x).strip()]
-        # Врач может вести приём и в Самаре, и в другом городе — оставляем его
-        # по самарскому присутствию, а не отбрасываем по любому несамарскому
-        # филиалу. «Явный несамарский» дроп — fallback без samara_tokens.
-        if samara_tokens:
-            return any(_region_matches_samara_tokens(x, samara_tokens) for x in raw_regions)
-        return not _has_explicit_non_samara_regions(raw_regions)
 
     def match_doc(doc: dict[str, Any], *, require_service: bool = True, require_specialty: bool = True) -> bool:
         fio = _normalise_input(str(doc.get("fio", "")))

@@ -329,6 +329,10 @@ DOCTORS_BY_SERVICE_NOT_FOUND_OFFER = (
     "Врачей по запросу «{service}» в онлайн-справочнике не нашёл — точно подскажет оператор. "
     "Перевести на оператора?"
 )
+DOCTORS_SERVICE_CLARIFY_OFFER = (
+    "Уточните, пожалуйста, полное название услуги или специальность врача — подскажу, кто её делает. "
+    "Или перевести на оператора?"
+)
 
 
 def build_doctor_info_response(
@@ -342,6 +346,11 @@ def build_doctor_info_response(
     doctors_raw = doctors_info_payload.get("doctors")
     doctors = doctors_raw if isinstance(doctors_raw, list) else []
     used = doctors_info_payload.get("entities_used")
+    if not doctors and doctors_info_payload.get("service_clarify") and memory is not None:
+        # `doctors_by_parse` (DESIGN-2026-10-23-NO-STOPWORDS, этап 2): какую услугу назвал пациент, разбор не понял (сбой LLM,
+        # фразы нет в данных МИС) — «уточните» с оффером, а не врачи по буквам (решение владельца 22.10 (а)).
+        mark_operator_offer_pending(state, memory)
+        return ResponseEnvelope(text=DOCTORS_SERVICE_CLARIFY_OFFER, handoff=False)
     if not doctors and doctors_info_payload.get("service_filter_emptied") and memory is not None:
         # L-06(б): врачи специальности есть, отсеял фильтр по словам услуги — это не «врача
         # нет» (FGDS-DOCTORS-NOT-FOUND), а повод спросить оператора (пункт 3 принципов).
