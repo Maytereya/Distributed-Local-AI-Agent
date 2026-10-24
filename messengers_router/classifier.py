@@ -491,6 +491,9 @@ def _looks_like_patient_name_only(text: str) -> bool:
     tokens = [normalize_ru(t) for t in re.findall(r"[А-Яа-яЁёA-Za-z\-]+", s) if t]
     if len(tokens) < 2:
         return False
+    if turn_names.on("names_patient_rule"):
+        # Правило зовут до LLM — имени ещё нет, правило молчит: ФИО и тему решает LLM-классификатор хода.
+        return turn_names.llm_patient_fio(s, switch="names_patient_rule")
     if any(t in _PATIENT_NAME_STOPWORDS for t in tokens):
         return False
     return True

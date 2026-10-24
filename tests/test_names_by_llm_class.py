@@ -380,7 +380,7 @@ def _fio_on_path(switch: str, text: str) -> bool:
     return bool(out.get("patient_name"))
 
 
-_PATIENT_SWITCHES = ["names_patient_fio"]
+_PATIENT_SWITCHES = ["names_patient_fio", "names_patient_rule"]
 
 
 @pytest.mark.parametrize("switch", _PATIENT_SWITCHES)
@@ -424,3 +424,12 @@ def test_patient_fio_unbookable_target_needs_llm(monkeypatch) -> None:
     assert planner._unbookable_target_kind("Сидорова Анна Петровна", set()) != "patient_name"
     turn_names.note_llm("Сидорова Анна Петровна", {"patient_name": "Сидорова Анна Петровна"})
     assert planner._unbookable_target_kind("Сидорова Анна Петровна", set()) == "patient_name"
+
+
+def test_patient_rule_waits_for_llm(monkeypatch) -> None:
+    """Правило шага ФИО зовут до LLM: под `on` оно молчит, и ход решает LLM-классификатор."""
+
+    _switch(monkeypatch, "names_patient_rule")
+    pending = {"_pending": {"label": "APPOINTMENT", "missing": ["patient_name"]}}
+    decision = asyncio.run(classifier.deterministic_rule_decision("Сидорова Анна", pending))
+    assert decision is None or "rule_appointment_patient_name" not in decision.flags
