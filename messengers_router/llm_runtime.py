@@ -352,6 +352,17 @@ def turn_decisions_spent() -> int:
     return budget.calls if budget is not None else 0
 
 
+def turn_budget_exhausted() -> bool:
+    """Лимит решений хода исчерпан (следующее решение получит отказ `budget`) — в отличие от недоступной LLM: модель
+    в этом ходе отвечала, решений просто больше нет (ход (е), DESIGN-2026-10-22-TURN-DECISION-BUDGET). Вне хода — False."""
+
+    budget = _TURN_BUDGET.get()
+    if budget is None:
+        return False
+    max_calls, max_turn_s, _, _ = _decision_limits()
+    return bool(max_calls and budget.calls >= max_calls) or bool(max_turn_s and max_turn_s - budget.spent_s < 1.0)
+
+
 def refund_turn_decision() -> bool:
     """Вернуть ходу одно решение (секунды не возвращаются): ответ на висящий вопрос, не закрывший ход, лимит решений не
     тратит — обычному пути остаются оба (решение владельца Q5 18.10, `pending_answer`). Вне хода или нечего вернуть — False."""

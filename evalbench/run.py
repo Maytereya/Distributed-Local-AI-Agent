@@ -169,10 +169,10 @@ async def _run_cases_concurrent(cases, *, client: HarnessClient, world: FrozenWo
     """Нагрузочный режим (ход (е)): `concurrency` ходов разных сессий одновременно, в одном процессе бота.
 
     Меряется время хода под параллельной нагрузкой: очередь к LLM (`llm_max_concurrency`), деление CPU
-    между ходами. Вызовы LLM и телеметрия стенда копятся на весь прогон, а не на ход, — при параллельных
-    ходах их не разнести, поэтому в строке хода они пустые (`llm_calls = null`, `telemetry = null`);
-    ответ, исход и время — свои у каждого хода. Карточку сравнения с последовательным прогоном по
-    вызовам LLM не строить — только по времени и исходам.
+    между ходами. Вызовы LLM стенда копятся на весь прогон, а не на ход, — при параллельных ходах их не
+    разнести, поэтому в строке хода `llm_calls = null`; телеметрия хода — по сессии хода (`take_telemetry_for`:
+    строка несёт хэш сессии), в ней и вызовы LLM хода (`llm`). Строки, дописанные после ответа и пришедшие
+    позже, в ход не попадают. Ответ, исход и время — свои у каждого хода.
     """
 
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
@@ -220,7 +220,7 @@ async def _run_cases_concurrent(cases, *, client: HarnessClient, world: FrozenWo
                 **outcome.as_row(),
                 "stage_ms": ((body.get("state_update") or {}).get("debug") or {}).get("stage_timings"),
                 "llm_calls": None,
-                "telemetry": None,
+                "telemetry": world.take_telemetry_for(sid),
                 "load": {"concurrency": concurrency, "slot": slot, "start_ms": int((started - t0) * 1000)},
             }
             out.write(json.dumps(row, ensure_ascii=False) + "\n")

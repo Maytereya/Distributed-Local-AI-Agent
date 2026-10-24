@@ -106,6 +106,14 @@ def test_stream_endpoint_writes_one_row(rows):
     assert len(rows) == 1 and rows[0]["endpoint"] == "stream" and rows[0]["handoff"] is True
 
 
+@pytest.mark.parametrize("path", ["/api/messenger-generate-once", "/api/messenger-generate"])
+def test_both_endpoints_write_decisions_spent(rows, path):
+    """Ход (е), 22.10: сколько решений хода потрачено — в строке хода у обоих эндпоинтов (лимит `llm_decision_turn_calls`)."""
+
+    _client().post(path, json={"session_id": "s-spent", "text": "сколько стоит общий анализ крови"})
+    assert isinstance(rows[0]["tu_decisions_spent"], int) and rows[0]["tu_decisions_spent"] >= 0
+
+
 @pytest.mark.parametrize("fail, outcome", [(False, "ok"), (True, "error:ConnectionError")])
 def test_llm_call_is_recorded_with_site_and_outcome(monkeypatch, fail, outcome):
     monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _FakeOllama(fail=fail))

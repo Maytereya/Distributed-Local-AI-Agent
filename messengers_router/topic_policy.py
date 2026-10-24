@@ -51,6 +51,12 @@ _ROWS: tuple[Relabel, ...] = (
         "STEP-2026-10-21-B-P1-FACET",
     ),
     Relabel(
+        "p1_facet_none_offer", "question_facet", "OTHER", "_relabel_test_assist_catalog_hit_as_price",
+        "ход `topic_by_llm`: тему TEST_ASSIST решила LLM, услуга найдена, свойство вопроса по LLM — «ни одно» → честный оффер"
+        " (`p1_facet_none_offer = on`)",
+        "BUG-2026-10-22-P1-FACET-NONE-AS-PRICE",
+    ),
+    Relabel(
         "flow_price_city_reply_override", "guardrail_post", "PRICE", "_apply_post_nlu_guardrails",
         "ответ городом на висящий вопрос цены — продолжение цены",
     ),

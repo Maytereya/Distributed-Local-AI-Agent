@@ -213,3 +213,17 @@ tests/test_turn_understanding_readers_class.py
 tests/test_service_doctors_class.py
 tests/test_doctors_schedule_flag.py
 tests/test_catalog_confirm_llm_class.py
+tests/test_turn_timing_class.py
+tests/test_p1_facet_none_class.py
+tests/test_turn_budget_reason_class.py
+tests/test_price_budget_clarify_class.py
+tests/test_evalbench_wordforms.py
+tests/test_prepare_general_memo_class.py
+tests/test_turn_spans_class.py
+tests/test_price_general_clarify_class.py
+tests/test_synonym_wordforms_class.py
+tests/test_price_select_rules_class.py
+tests/test_button_pass_topic_class.py
+tests/test_prepare_by_parse_class.py
+tests/test_stage2_docs_phrase_class.py
+tests/test_test_assist_answer_class.py

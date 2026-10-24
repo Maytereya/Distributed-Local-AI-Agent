@@ -221,7 +221,11 @@ def specialty_equivalent(left: str, right: str) -> bool:
     return bool(left_terms & right_terms)
 
 
+@lru_cache(maxsize=16384)
 def extract_specialties_from_text(text: str) -> tuple[str, ...]:
+    # Кэш — по той же причине, что у `extract_specialty_from_text` ниже (разбор зависит только от текста, константы модуля):
+    # `_service_name_allows_specialty` зовёт её для каждой строки прайса на вопросе о приёме (ход (е), 22.10:
+    # STEP-2026-10-22-E-SPECIALTY-PREPARE-CACHE — карточка услуги p95 1,1 с вне LLM).
     norm = _normalise_input(text)
     if not norm:
         return tuple()

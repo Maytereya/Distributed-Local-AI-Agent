@@ -731,3 +731,25 @@ def test_dialogs_show_has_summary_and_marks_turns(tmp_path):
     ev_dialogs.refresh_annotations({**header, "sets": [str(current)]}, rows)
     assert (rows["glucose_a"]["tags"], rows["glucose_a"]["about_shown"]) == (["new_class"], [])
     assert rows["offer_yes"]["tags"] == ["yes_no", "operator_offer"]  # диалога нет в файле — разметка прогона
+
+
+def test_concurrent_turns_get_their_own_telemetry():
+    """Параллельные ходы (`run --concurrency ≥ 2`): строки телеметрии копятся вперемешку, ход забирает свою по хэшу сессии
+    (DEBT-2026-10-22-STAND-CONCURRENCY-TELEMETRY: до 23.10 у всех ходов параллельного прогона телеметрия была пустой)."""
+
+    import hashlib
+
+    from evalbench.world import session_rows
+
+    def sess(sid: str) -> str:
+        return hashlib.sha256(sid.encode("utf-8")).hexdigest()[:8]
+
+    rows = [
+        {"sess": sess("bench-a"), "tid": "1", "tu_parse_status": "picked"},
+        {"sess": sess("bench-b"), "tid": "2", "tu_parse_status": "none_fit"},
+        {"sess": sess("bench-a"), "tid": "3", "tu_parse_status": "single"},
+    ]
+    mine, rest = session_rows(rows, "bench-b")
+    assert [r["tid"] for r in mine] == ["2"] and [r["tid"] for r in rest] == ["1", "3"]
+    mine, rest = session_rows(rest, "bench-a")
+    assert [r["tid"] for r in mine] == ["1", "3"] and rest == []

@@ -66,3 +66,17 @@ def test_price_turns_show_who_judged_the_qualifier(tmp_path, capsys):
     assert "p2_llm_judge" not in out
     S.main(["--since", "2026-10-16T00:30:00", "--journals", _write(tmp_path, [_turn("2026-10-16T01:00:00")])])
     assert "цена (" not in capsys.readouterr().out
+
+
+def test_summary_shows_tool_timing_and_decision_denials():
+    """Ход (е), 22.10: сводка показывает время по инструментам и долю ходов с отказом лимита решений."""
+
+    from scripts.turn_telemetry_summary import summarize
+
+    rows = [
+        {"ms": 900, "tool_ms": {"price_info": 400}, "tu_decisions_spent": 2},
+        {"ms": 1200, "tool_ms": {"price_info": 700, "test_prepare": 50}, "tu_decisions_spent": 3, "tu_decisions_denied": 1},
+    ]
+    text = "\n".join(summarize(rows)[0])
+    assert "price_info n=2" in text and "test_prepare n=1" in text
+    assert "ходов с отказом лимита 1 из 2" in text

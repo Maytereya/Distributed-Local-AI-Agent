@@ -52,7 +52,7 @@ from typing import Any, Sequence
 from . import turn_parse, turn_telemetry
 from .policies import detect_address_intent, detect_nonbookable_walkin_intent, detect_prepare_intent, detect_price_intent
 from .runtime_config import config as _cfg
-from .services import _turn_phrases
+from .services import _turn_phrases, _turn_spans
 from .services._biomaterial import _SPEECH_WRAPPER
 from .services._strong_match import strong_rows
 from .services._prices_helpers import (
@@ -253,6 +253,33 @@ def parse_for(text: str) -> turn_parse.PhraseParse | None:
     (правило CI — `tests/test_turn_understanding_one_class.py`). Поведение — как у `turn_parse.acting_for`."""
 
     return turn_parse.acting_for(text)
+
+
+def parse_status(text: str) -> str | None:
+    """Чем кончился разбор этой реплики (`turn_parse.ParseStatus`), без права действовать по нему: читателю с политикой
+    сбоя (подготовка, `prepare_by_parse`) нужно отличить «услуги нет» (`empty`) и сбой (`unavailable`, `invalid`, `too_many`,
+    `error`) от «разбора этой реплики в ходе нет» — `parse_for` во всех трёх случаях отдаёт None. None — разбора нет."""
+
+    parse = turn_parse.phrases_now()
+    return parse.status if parse is not None and parse.for_text(text) else None
+
+
+def prepare_by_parse() -> bool:
+    """`[MESSENGER_ROUTER] prepare_by_parse = off | on` (этап 2 «без стоп-слов», STEP-2026-10-24-PREPARE-BY-PARSE): разбор
+    хода строится и на ходу подготовки (`observe_prepare_turn`), предмет памятки — его фразы (`services/prepare.py`)."""
+
+    return str(getattr(_cfg, "MR_PREPARE_BY_PARSE", "off") or "").strip().lower() == "on"
+
+
+async def observe_prepare_turn(label: str, *, user_text: str) -> None:
+    """Разбор реплики на фразы на ходу подготовки (`label` — тема, по которой строится план; `prepare_by_parse = on`).
+
+    Понимание хода (услуги и свойство для ценовых читателей) здесь не строится — разбор нужен только подготовке. Ход уже
+    разобран (ценовой, переклеенный в подготовку) — тот же разбор, второго решения LLM нет."""
+
+    if label != "PREPARE" or not prepare_by_parse() or not str(user_text or "").strip():
+        return
+    await _observe_phrases(user_text, agree=False)
 
 
 def rules_list(text: str, rows: list[dict[str, Any]] | None = None) -> bool:
@@ -530,12 +557,13 @@ def _from_phrases(tu: TurnUnderstanding, text: str) -> TurnUnderstanding | None:
     )
 
 
-async def _observe_phrases(user_text: str) -> None:
-    """Разбор реплики на фразы без понимания хода (`turn_understanding_price = off`): ход ждёт его здесь же —
-    решение тратит бюджет хода; согласие разрезов — с разрезом правил той же реплики."""
+async def _observe_phrases(user_text: str, *, agree: bool = True) -> None:
+    """Разбор реплики на фразы без понимания хода (`turn_understanding_price = off`; ход подготовки — `agree=False`, без
+    согласия с разрезом цены): ход ждёт его здесь же — решение тратит бюджет хода; согласие разрезов — с разрезом правил
+    той же реплики."""
 
     facet = price_turn_facet(user_text)[0]
-    if turn_parse.start_phrases(lambda: _parse_phrases(user_text, facet=facet, tu=None), reply=user_text) is not None:
+    if turn_parse.start_phrases(lambda: _parse_phrases(user_text, facet=facet, tu=None, agree=agree), reply=user_text) is not None:
         await turn_parse.phrases()
 
 
@@ -557,7 +585,14 @@ async def _parse_phrases(
     agreed: str | None = None
     try:
         catalog = await asyncio.to_thread(_catalog_rows, None)
-        parse = await _turn_phrases.parse_turn_phrases(text, facet=facet, catalog=catalog, prepared=prepared)
+        if _turn_spans.enabled():
+            # Без списков слов: LLM размечает номера слов реплики (DESIGN-2026-10-23-NO-STOPWORDS, этап 1); генератора окон нет —
+            # правилам понимания ждать нечего.
+            if prepared is not None:
+                prepared.set()
+            parse = await _turn_spans.parse_turn_spans(text, facet=facet, catalog=catalog)
+        else:
+            parse = await _turn_phrases.parse_turn_phrases(text, facet=facet, catalog=catalog, prepared=prepared)
         if not agree:
             return _noted(parse, None)
         if rules is not None:

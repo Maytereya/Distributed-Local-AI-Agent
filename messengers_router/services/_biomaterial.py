@@ -36,10 +36,11 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from agent_logic_2.nayka_api import api_service_info, snapshots
 
+from ..runtime_config import config as _cfg
 from ._common import _normalise_input
 
 log = logging.getLogger(__name__)
@@ -52,9 +53,27 @@ _PREPOSITIONS = frozenset({"с", "со", "из", "от", "на", "в", "по", "
 # Локативная обвязка, которой нет в справочнике МИС, но которой пациент
 # описывает то же место: «с ПОВЕРХНОСТИ задней стенки глотки». Список
 # анатомически-локативный (где брали), НЕ список услуг и не стоп-лист интентов.
+# Путь off выключателя `biomaterial_by_mis` — уходит вместе с ним (`_place_words`).
 _LOCATIVE_FILLER = frozenset(
     {"поверхности", "поверхность", "области", "область", "участка", "участке", "зоны", "зоне"}
 )
+
+
+def biomaterial_by_mis() -> bool:
+    """`biomaterial_by_mis = on` (STEP-2026-10-24-S2-DOCS-PHRASE): хвост-биоматериал — только слова материалов МИС и
+    предлоги. «с поверхности задней стенки глотки» правило целиком не снимает: тот ли это материал, что «соскоб с задней
+    стенки глотки» у строки, решает выбор строки цены LLM — он видит материалы МИС строки (`service_mis_names`)."""
+
+    return str(getattr(_cfg, "MR_BIOMATERIAL_BY_MIS", "off") or "off").strip().lower() == "on"
+
+
+def _place_words() -> frozenset[str]:
+    """Слова сверх материалов МИС и предлогов, допустимые в хвосте-биоматериале: под `on` — никаких; off — как было,
+    локативная обвязка."""
+
+    if biomaterial_by_mis():
+        return frozenset()
+    return _LOCATIVE_FILLER
 
 # Минимальная длина хвоста-биоматериала в токенах. Одно слово («кал», «моча»,
 # «нос») — часто само название услуги или её различающий токен, снимать нельзя.
@@ -437,6 +456,62 @@ def mis_synonyms_within(
     return tuple(out.items())
 
 
+def mis_synonyms_within_wordforms(
+    query_text: str, same_word: Callable[[str, str], bool], *, vocab: _MisVocabularies | None = None
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Синонимы МИС, входящие в реплику цепочкой токенов в другой словоформе (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1):
+    «коагулограммы» — синоним «коагулограмма» гемостазиограмм. Как `mis_synonyms_within` — кандидаты для выбора строки LLM,
+    не ответ: общее начало слова склеивает и разные слова («простата» / «простатит»), их отсеет выбор. Слово окна и слово
+    синонима сравнивает `same_word` вызывающего (одно определение «одно ли это слово» — `_price_select_llm._same_word`).
+
+    :param query_text: фраза услуги пациента
+    :param same_word: одно ли это слово
+    :param vocab: словари МИС (по умолчанию — дневной срез)
+    :return: пары (ключ словаря, канонические названия его услуг), длиннейшее окно первым; пусто — словоформ синонимов нет
+    """
+
+    vocab = vocab if vocab is not None else _vocabularies()
+    q = _significant_tokens(query_text)
+    if not q:
+        return ()
+    index = _synonym_prefix_index(vocab)
+    found: list[tuple[int, int, str]] = []
+    for pos, token in enumerate(q):
+        for toks, key in index.get(token[:_PREFIX_KEY], ()):
+            window = q[pos : pos + len(toks)]
+            if len(window) == len(toks) and all(same_word(a, b) for a, b in zip(window, toks)):
+                found.append((-len(toks), pos, key))
+    out: dict[str, tuple[str, ...]] = {}
+    for _n, _pos, key in sorted(found):
+        single = vocab.synonym_to_service.get(key)
+        names = vocab.synonym_candidates.get(key) or ((single,) if single else ())
+        if names and key not in out:
+            out[key] = tuple(names)
+    return tuple(out.items())
+
+
+# Ключ индекса словоформ — первые буквы первого слова синонима: отбор пар до сравнения `same_word` (порог словоформы — 6 букв,
+# три — заведомо общее начало любой словоформы слова длиннее порога; короче порога слова сравниваются целиком).
+_PREFIX_KEY = 3
+
+
+def _synonym_prefix_index(vocab: _MisVocabularies) -> dict[str, list[tuple[tuple[str, ...], str]]]:
+    """Индекс «первые буквы первого значащего токена синонима → (токены, ключ)» для словоформ (кэш на словаре, отпечаток — как
+    у `_synonym_index`)."""
+
+    stamp = (vocab.synonym_candidates, len(vocab.synonym_candidates), vocab.synonym_to_service, len(vocab.synonym_to_service))
+    cached = getattr(vocab, "_synonym_prefix_index_cache", None)
+    if cached is not None and cached[0][0] is stamp[0] and cached[0][2] is stamp[2] and cached[0][1::2] == stamp[1::2]:
+        return cached[1]
+    index: dict[str, list[tuple[tuple[str, ...], str]]] = {}
+    for key in vocab.synonym_candidates or vocab.synonym_to_service:
+        toks = tuple(_significant_tokens(key))
+        if toks:
+            index.setdefault(toks[0][:_PREFIX_KEY], []).append((toks, key))
+    vocab._synonym_prefix_index_cache = (stamp, index)
+    return index
+
+
 def _joined_synonyms(vocab: _MisVocabularies) -> dict[str, tuple[str, ...]]:
     """Синонимы МИС по склеенному написанию «значащие токены без пробелов и дефисов» → ключи словаря (кэш на словаре,
     отпечаток — как у `_synonym_index`)."""
@@ -495,7 +570,7 @@ def split_biomaterial_tail(text: str) -> tuple[str, str]:
     """Снимает с конца запроса фразу-биоматериал.
 
     Ищем самый длинный ХВОСТ, все токены которого — слова биоматериалов МИС,
-    локативная обвязка или предлоги. Хвост из одного слова не снимаем: «кал»,
+    слова места (`_place_words`: под `biomaterial_by_mis = on` их нет) или предлоги. Хвост из одного слова не снимаем: «кал»,
     «моча», «нос» сами бывают названием услуги.
 
     :param text: исходный запрос пациента
@@ -510,9 +585,10 @@ def split_biomaterial_tail(text: str) -> tuple[str, str]:
     if not tokens:
         return text, ""
 
+    place = _place_words()
     idx = len(tokens)
     while idx > 0 and (
-        tokens[idx - 1] in vocab.biomat_tokens or tokens[idx - 1] in _LOCATIVE_FILLER
+        tokens[idx - 1] in vocab.biomat_tokens or tokens[idx - 1] in place
     ):
         idx -= 1
     tail = tokens[idx:]
@@ -549,7 +625,7 @@ def service_accepts_biomaterial(
     tail_tokens = {t for t in _tokens(biomaterial) if t not in _PREPOSITIONS}
     if not tail_tokens:
         return None
-    allowed_extra = _LOCATIVE_FILLER | _PREPOSITIONS
+    allowed_extra = _place_words() | _PREPOSITIONS
     for phrase in phrases:
         if tail_tokens <= (set(phrase) | allowed_extra):
             return True

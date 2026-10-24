@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from . import evidence_keys as ek
@@ -55,6 +56,7 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
         q = inp.get("query", "")
         ent = inp.get("entities") or {}
 
+        started = time.perf_counter()
         try:
             if tool == "doctors_info":
                 payload = await services.doctors_info(q, ent)
@@ -147,5 +149,8 @@ async def execute_plan(plan: Plan, state: SessionState, services: Services) -> E
                 handoff_message("service_error"),
             )
             return ev
+        finally:
+            # Ход (е): время шага в строку журнала хода (`tool_ms`) — где секунды вне LLM внутри `tool_loop`.
+            turn_telemetry.note_tool(tool, (time.perf_counter() - started) * 1000)
 
     return ev
