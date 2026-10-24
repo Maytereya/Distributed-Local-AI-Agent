@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 TASK = Task(
     name="test_assist_answer",
-    max_picks=6,
+    max_picks=4,
     outcomes=("partly", "need_name", "no_data"),
     num_predict=64,
     timeout_s=6.0,
