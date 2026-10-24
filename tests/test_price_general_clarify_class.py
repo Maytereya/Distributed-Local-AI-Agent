@@ -11,7 +11,7 @@ LLM выбрала приёмы разных специальностей, а п
   разные цены) — путь с врачами, как был;
 - каждый вызов выбора строки на пути цены передаёт выключатель (новый путь не забудет его);
 - off — как было.
-Промпты `*_v2` (`price_select_v2`): приём врача без специальности — «слишком общее»; прежние промпты не меняются.
+Правило промпта «приём врача без специальности — слишком общее» — `tests/test_price_select_rules_class.py`.
 """
 
 from __future__ import annotations
@@ -131,26 +131,3 @@ def test_every_price_path_choice_passes_the_switch() -> None:
             continue  # судьи условия (П2 по сущности, гард сильной фразы): «слишком общее» — None, решает основной выбор ниже
         value = kw.get("general_as_none_fit")
         assert isinstance(value, ast.Call) and getattr(value.func, "id", "") == "general_clarify_on", ast.dump(call)[:200]
-
-
-@pytest.mark.parametrize(("mode", "judge", "task"), [
-    ("off", False, "price_service"),
-    ("off", True, "price_service_qualifier"),
-    ("on", False, "price_service_v2"),
-    ("on", True, "price_service_qualifier_v2"),
-])
-def test_v2_prompts_only_under_the_switch(mode, judge, task, monkeypatch) -> None:
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_PRICE_SELECT_V2", mode, raising=False)
-    monkeypatch.setattr(cfg, "MR_PRICE_CANDIDATES_BY_MEANING", "on", raising=False)
-    assert PS.price_task(judge_qualifier=judge).name == task
-
-
-@pytest.mark.parametrize("base", ["choose_price_service", "choose_price_service_qualifier"])
-def test_v2_prompt_calls_a_doctor_visit_without_specialty_too_general(base) -> None:
-    old = (_ROOT / f"messengers_router/prompts/{base}.txt").read_text(encoding="utf-8")
-    new = (_ROOT / f"messengers_router/prompts/{base}_v2.txt").read_text(encoding="utf-8")
-    assert "без специальности" not in old
-    assert "консультация врача" in new and "приём врача без специальности" in new
-    assert new == (_ROOT / f"app_data/prompts/mr_{base}_v2.txt").read_text(encoding="utf-8")

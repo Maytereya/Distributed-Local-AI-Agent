@@ -69,7 +69,6 @@ from ._prices_helpers import (
     _rank_price_rows,
     _row_nonbase_price_flags,
     price_question_names_service,
-    price_units_index,
     query_has_unsatisfiable_qualifier,
     query_names_service_in_other_words,
 )
@@ -113,16 +112,20 @@ PRICE_CONDITIONS_TASK = replace(PRICE_TASK, name="price_service_conditions")
 # наркозом» → 8 100 руб. без наркоза, «экспресс 17-ОН день в день» → обычная цена. Уточнение `price_judge_conditions`
 # («как сдать, подготовиться…» — не условие) входит в тот же текст: строгое правило без него отсекало бы вопросы о сдаче.
 PRICE_QUALIFIER_TASK = replace(PRICE_TASK, name="price_service_qualifier")
-# Те же две задачи с правилами BUG-2026-10-24-FOREIGN-PRICE-D17 (классы 2–4) под `price_select_v2 = on`: свои промпты `*_v2`.
-PRICE_TASK_V2 = replace(PRICE_TASK, name="price_service_v2")
-PRICE_QUALIFIER_TASK_V2 = replace(PRICE_TASK, name="price_service_qualifier_v2")
+# Те же две задачи с правилами BUG-2026-10-24-FOREIGN-PRICE-D17 на пути ответа о цене (`price_select_rules`): `general` — приём
+# без специальности — «слишком общее»; `groups` — то же и особая группа пациентов (плод, беременность, до года). Свои промпты.
+_RULES_TASKS = {
+    mode: (replace(PRICE_TASK, name=f"price_service_{mode}"), replace(PRICE_TASK, name=f"price_service_qualifier_{mode}"))
+    for mode in ("general", "groups")
+}
 _VARIANT_B_LIMIT = 5
 
 
-def _select_v2_on() -> bool:
-    """`[MESSENGER_ROUTER] price_select_v2 = on`: промпты выбора строки `*_v2`; мусор — off (как было)."""
+def _select_rules() -> str:
+    """`[MESSENGER_ROUTER] price_select_rules = off | general | groups`; мусор — off (как было)."""
 
-    return str(getattr(_cfg, "MR_PRICE_SELECT_V2", "off") or "").strip().lower() == "on"
+    mode = str(getattr(_cfg, "MR_PRICE_SELECT_RULES", "off") or "").strip().lower()
+    return mode if mode in _RULES_TASKS else "off"
 
 
 def _synonym_wordforms_on() -> bool:
@@ -139,18 +142,19 @@ def general_clarify_on() -> bool:
     return str(getattr(_cfg, "MR_PRICE_GENERAL_CLARIFY", "off") or "").strip().lower() == "on"
 
 
-def price_task(*, judge_qualifier: bool = False) -> Task:
+def price_task(*, judge_qualifier: bool = False, price_answer: bool = True) -> Task:
     """Задача выбора строки прайса: суд условия под `price_candidates_by_meaning = on` — свой промпт; под
-    `[MESSENGER_ROUTER] price_judge_conditions = on` — с уточнённым правилом 3; под `price_select_v2 = on` — промпты `*_v2`
-    (уточнённое правило 3 `price_judge_conditions` в них не входит: на проде он off)."""
+    `[MESSENGER_ROUTER] price_judge_conditions = on` — с уточнённым правилом 3; на пути ответа о цене (`price_answer`) под
+    `price_select_rules` — промпты с правилами (уточнённое правило 3 `price_judge_conditions` в них не входит: на проде он off).
+    Суд записи (`price_answer=False`) — прежний промпт: «запись к неврологу» правилом приёма без специальности не судится."""
 
-    v2 = _select_v2_on()
+    rules = _RULES_TASKS.get(_select_rules()) if price_answer else None
     if judge_qualifier and _by_meaning_on():
-        return PRICE_QUALIFIER_TASK_V2 if v2 else PRICE_QUALIFIER_TASK
+        return rules[1] if rules else PRICE_QUALIFIER_TASK
     on = str(getattr(_cfg, "MR_PRICE_JUDGE_CONDITIONS", "off") or "").strip().lower() == "on"
     if on:
         return PRICE_CONDITIONS_TASK
-    return PRICE_TASK_V2 if v2 else PRICE_TASK
+    return rules[0] if rules else PRICE_TASK
 # Причины пустого выбора, при которых LLM не признала в реплике названия услуги: «Цена анализа»
 # (слишком общее), «сможете посчитать» (не услуга). Ни «не нашёл» пациенту, ни синоним клинике.
 _NOT_A_SERVICE_NAME = frozenset({"too_general", "not_a_service"})
@@ -565,57 +569,15 @@ def _mis_note(row: dict[str, Any], wanted: set[str], vocab: Any = None) -> str:
     return ""
 
 
-def _option_text(row: dict[str, Any], note: str, section: str = "") -> str:
+def _option_text(row: dict[str, Any], note: str) -> str:
     text = f"{_row_name(row)} — {_row_cost(row)} руб."
-    parts = [*([f"раздел прайса: {section}"] if section else []), *([note] if note else [])]
-    return f"{text} ({'; '.join(parts)})" if parts else text
-
-
-# Раздел прайса — два нижних уровня дерева `priceUnits` МИС без корня и римского номера раздела («III Амбулаторно-поликлиническая
-# помощь › УЗИ › УЗИ беременных» → «УЗИ › УЗИ беременных»): вид услуги, которого нет в названии строки («1-12 неделя
-# беременности» — профиль анализов, BUG-2026-10-24-FOREIGN-PRICE-D17, класс 2).
-_SECTION_LEVELS = 2
-_ROMAN_DIGITS = frozenset("IVXLC")
-
-
-def _section_name(name: str) -> str:
-    """Название раздела без римского номера впереди («II Профили исследований» → «Профили исследований»)."""
-
-    head, _, rest = str(name or "").strip().partition(" ")
-    return rest.strip() if head and set(head) <= _ROMAN_DIGITS and rest.strip() else str(name or "").strip()
-
-
-def _price_sections() -> Callable[[dict[str, Any]], str]:
-    """Раздел прайса строки под `price_select_v2 = on`; справочник недоступен или off — пусто (позиция как раньше)."""
-
-    if not _select_v2_on():
-        return lambda _row: ""
-    try:
-        units = price_units_index()
-    except Exception as exc:  # справочник разделов — подсказка выбору, не условие ответа
-        logger.warning("price_sections_unavailable: %s", type(exc).__name__)
-        return lambda _row: ""
-
-    def section(row: dict[str, Any]) -> str:
-        names: list[str] = []
-        current, seen = row.get("priceUnitId"), set()
-        while isinstance(current, int) and current in units and current not in seen:
-            seen.add(current)
-            unit = units[current]
-            if unit.get("parent") in units:  # корень дерева («Дерево прайсов») — не раздел
-                names.append(_section_name(str(unit.get("name") or "")))
-            current = unit.get("parent")
-        return " › ".join(reversed([name for name in names if name][:_SECTION_LEVELS]))
-
-    return section
+    return f"{text} ({note})" if note else text
 
 
 def _options(question: str, pool: list[dict[str, Any]]) -> list[Option]:
     """Позиции для LLM: «название — цена», под `price_option_mis_notes = on` — с пометкой МИС (`_mis_note`) в пределах
-    `_MIS_NOTES_POOL_MAX` на список; число помеченных — в телеметрию хода (`price_mis_notes`); под `price_select_v2 = on` — с
-    разделом прайса (`_price_sections`)."""
+    `_MIS_NOTES_POOL_MAX` на список; число помеченных — в телеметрию хода (`price_mis_notes`)."""
 
-    section = _price_sections()
     wanted = set(_price_query_tokens(question)) if _mis_notes_on() else set()
     vocab = _biomaterial._vocabularies() if wanted else None  # один раз на список: у словаря — проверка среза на диске
     notes, budget = [], _MIS_NOTES_POOL_MAX
@@ -626,17 +588,17 @@ def _options(question: str, pool: list[dict[str, Any]]) -> list[Option]:
         notes.append(note)
     if wanted:  # за ход: оба круга выбора
         turn_telemetry.bump("price_mis_notes", sum(1 for note in notes if note))
-    return [Option(id=str(index), text=_option_text(row, note, section(row))) for index, (row, note) in enumerate(zip(pool, notes))]
+    return [Option(id=str(index), text=_option_text(row, note)) for index, (row, note) in enumerate(zip(pool, notes))]
 
 
 async def _ask(
-    question: str, pool: list[dict[str, Any]], *, judge_qualifier: bool = False
+    question: str, pool: list[dict[str, Any]], *, judge_qualifier: bool = False, price_answer: bool = True
 ) -> tuple[list[dict[str, Any]], list[str], str] | None:
     """Выбор LLM по пулу кандидатов: (строки «та услуга» в порядке пула, термины, код причины пустого
     выбора) или None — сбой."""
 
     options = _options(question, pool)
-    choice = await choose(price_task(judge_qualifier=judge_qualifier), question, options)
+    choice = await choose(price_task(judge_qualifier=judge_qualifier, price_answer=price_answer), question, options)
     if choice.failed:  # сбой и мусор — решение политики (L-13) или прежний ответ правил
         return None
     return [pool[index] for index in sorted(int(i) for i in choice.ids)], list(choice.terms), choice.reason
@@ -743,6 +705,7 @@ async def select_price_rows(
     one_round: bool = False,
     general_as_none_fit: bool = False,
     budget_clarify: bool = False,
+    price_answer: bool = True,
 ) -> PriceSelection | None:
     """Строки прайса, которые являются той услугой, о которой спросил пациент.
 
@@ -768,6 +731,8 @@ async def select_price_rows(
     :param general_as_none_fit: «слишком общее» и «не услуга» — тоже `none_fit` с кодом причины и названиями варианта B
         (`names`), а не None. Для записи (`_booking_service_select`): там «ответ правил» — молчаливая запись на догадку
         («массаж» → «Массаж век»), а не уточнение, как у цены (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS).
+    :param price_answer: выбор отвечает на вопрос о цене — промпты с правилами `price_select_rules`; суд записи — False
+        (прежний промпт: правила пути цены записи не касаются, карточка 24.10 — g0792)
     :return: выбор LLM; None — оставить ответ правил
     """
 
@@ -880,7 +845,7 @@ async def select_price_rows(
         if not candidates and not _NOT_A_SERVICE_NAME.intersection(reasons) and journal_phrase:
             _record_synonym_suggestion(journal_phrase, found_terms, [], source=journal_source)
 
-    first = await _ask(question, pool, judge_qualifier=judge_qualifier)
+    first = await _ask(question, pool, judge_qualifier=judge_qualifier, price_answer=price_answer)
     if first is None:
         return settle(*unavailable())
     chosen, terms, reason = first
@@ -915,7 +880,7 @@ async def select_price_rows(
     if not pool_by_terms:
         journal_miss(terms, reason)
         return settle(none_fit(reason))
-    second = await _ask(question, pool_by_terms, judge_qualifier=judge_qualifier)
+    second = await _ask(question, pool_by_terms, judge_qualifier=judge_qualifier, price_answer=price_answer)
     if second is None:
         return settle(*unavailable())
     if not second[0]:

@@ -210,7 +210,7 @@ class MessengerRouterConfig:
     p1_facet_none_offer: str
     price_budget_clarify: str
     price_general_clarify: str
-    price_select_v2: str
+    price_select_rules: str
     synonym_wordforms: str
     prepare_general_memo_llm: str
     turn_spans_llm: str
@@ -612,11 +612,11 @@ settings = Settings(
         # выбор, а не первая строка с её врачами («консультация врача» → приём хирурга). off — как было.
         # [MESSENGER_ROUTER] price_general_clarify
         price_general_clarify=_get_enum("MESSENGER_ROUTER", "price_general_clarify", default="off", allowed={"off", "on"}),
-        # Выбор строки цены — промпты `choose_price_service_v2` / `choose_price_service_qualifier_v2` (BUG-2026-10-24-FOREIGN-
-        # PRICE-D17, классы 2–4): приём врача без специальности — «слишком общее»; особая группа пациентов (плод, беременность,
-        # до года) — только если её назвал пациент; марка и производитель — уточнение. off — прежние промпты.
-        # [MESSENGER_ROUTER] price_select_v2
-        price_select_v2=_get_enum("MESSENGER_ROUTER", "price_select_v2", default="off", allowed={"off", "on"}),
+        # Правила промпта выбора строки на пути ответа о цене (BUG-2026-10-24-FOREIGN-PRICE-D17; суд записи — прежний промпт):
+        # general — приём врача без специальности — «слишком общее» (промпты `*_general`); groups — то же и особая группа
+        # пациентов (плод, беременность, до года) — только если её назвал пациент (`*_groups`). off — прежние промпты.
+        # [MESSENGER_ROUTER] price_select_rules
+        price_select_rules=_get_enum("MESSENGER_ROUTER", "price_select_rules", default="off", allowed={"off", "general", "groups"}),
         # Синоним МИС в другой словоформе («коагулограммы» — синоним «коагулограмма» гемостазиограмм; BUG-2026-10-24-FOREIGN-
         # PRICE-D17, класс 1) — строки его услуг первыми в списке выбора строки цены LLM, как синоним дословный (не сильное
         # совпадение: общее начало слова склеивает и разные слова — их отсеет выбор). off — как было.
@@ -830,7 +830,7 @@ MR_CATALOG_CONFIRM_LLM = settings.messenger_router.catalog_confirm_llm
 MR_P1_FACET_NONE_OFFER = settings.messenger_router.p1_facet_none_offer
 MR_PRICE_BUDGET_CLARIFY = settings.messenger_router.price_budget_clarify
 MR_PRICE_GENERAL_CLARIFY = settings.messenger_router.price_general_clarify
-MR_PRICE_SELECT_V2 = settings.messenger_router.price_select_v2
+MR_PRICE_SELECT_RULES = settings.messenger_router.price_select_rules
 MR_SYNONYM_WORDFORMS = settings.messenger_router.synonym_wordforms
 MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm

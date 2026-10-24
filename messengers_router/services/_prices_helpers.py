@@ -2899,13 +2899,6 @@ def _price_family_payload_from_context(entities: dict[str, Any], *, show_all: bo
     }
 
 
-def price_units_index() -> dict[int, dict[str, Any]]:
-    """Дерево разделов прайса МИС (`priceUnits`) по id — для вида услуги у позиции выбора строки (`_price_select_llm`); сбой
-    загрузки — исключение вызывающему."""
-
-    return api_price.build_price_units_index(api_price.load_price_units())
-
-
 def _annotate_price_rows_with_care_context(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Обогащает строки прайса контекстом оказания услуги из справочника priceUnits.
