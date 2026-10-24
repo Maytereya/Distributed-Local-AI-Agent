@@ -351,3 +351,76 @@ def test_result_dialog_without_llm_asks_again(monkeypatch) -> None:
     answer, entities = _result_dialog(monkeypatch, "Сидорова", None)
     assert "surname" not in entities
     assert "фамилия, год рождения, код анализа, номер анализа" in answer
+
+
+# --- ФИО пациента: names_patient_fio / names_patient_rule / names_patient_fill --------------------------------------
+
+# Служебные слова в разных формах: форма ФИО (2–3 слова) их принимает; списки знали не все формы.
+_NOT_NAMES = [
+    "Общий анализ крови",
+    "Анализом крови",
+    "Результатов анализов",
+    "Расписание гинеколога",
+    "Врачу терапевту",
+    "Записи нет",
+    "Стоимость приёма",
+    "Хотела уточнить",
+]
+
+
+def _fio_on_path(switch: str, text: str) -> bool:
+    from messengers_router import flow_policy, policies
+
+    if switch == "names_patient_fio":
+        return flow_policy._looks_like_patient_fio(text)
+    if switch == "names_patient_rule":
+        return classifier._looks_like_patient_name_only(text)
+    out: dict = {}
+    policies._fill_patient_entities(text, ["patient_name"], out)
+    return bool(out.get("patient_name"))
+
+
+_PATIENT_SWITCHES = ["names_patient_fio"]
+
+
+@pytest.mark.parametrize("switch", _PATIENT_SWITCHES)
+@pytest.mark.parametrize("text", ["Сидорова Анна", "сидорова анна петровна", "СИДОРОВА АННА", "Сидорова Алёна"])
+def test_patient_fio_named_by_llm_any_case(monkeypatch, switch: str, text: str) -> None:
+    _switch(monkeypatch, switch)
+    turn_names.note_llm(text, {"patient_name": text.title().replace("ё", "е")})
+    assert _fio_on_path(switch, text)
+
+
+@pytest.mark.parametrize("switch", _PATIENT_SWITCHES)
+@pytest.mark.parametrize("text", _NOT_NAMES)
+def test_service_words_in_any_form_are_not_a_patient_name(monkeypatch, switch: str, text: str) -> None:
+    """LLM хода имени не назвала — форма ФИО не делает реплику именем, какой бы формой ни было служебное слово."""
+
+    _switch(monkeypatch, switch)
+    turn_names.note_llm(text, {"service_name": text})
+    assert not _fio_on_path(switch, text)
+
+
+@pytest.mark.parametrize("switch", _PATIENT_SWITCHES)
+def test_no_llm_this_turn_no_patient_name(monkeypatch, switch: str) -> None:
+    _switch(monkeypatch, switch)
+    assert not _fio_on_path(switch, "Сидорова Анна")
+
+
+@pytest.mark.parametrize("switch", _PATIENT_SWITCHES)
+def test_llm_name_not_in_reply_is_not_accepted(monkeypatch, switch: str) -> None:
+    _switch(monkeypatch, switch)
+    turn_names.note_llm("Сидорова Анна", {"patient_name": "Петрова Анна"})
+    assert not _fio_on_path(switch, "Сидорова Анна")
+
+
+
+def test_patient_fio_unbookable_target_needs_llm(monkeypatch) -> None:
+    """Вид недоступной цели «ФИО пациента» (вопрос о цели, не «такого врача нет») — по LLM хода, не по форме."""
+
+    from messengers_router import planner
+
+    _switch(monkeypatch, "names_patient_fio")
+    assert planner._unbookable_target_kind("Сидорова Анна Петровна", set()) != "patient_name"
+    turn_names.note_llm("Сидорова Анна Петровна", {"patient_name": "Сидорова Анна Петровна"})
+    assert planner._unbookable_target_kind("Сидорова Анна Петровна", set()) == "patient_name"

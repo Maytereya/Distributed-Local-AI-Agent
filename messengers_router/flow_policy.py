@@ -11,7 +11,7 @@ import logging
 import re
 from typing import Any
 
-from . import expects, pending_answer, turn_understanding
+from . import expects, pending_answer, turn_names, turn_understanding
 from .expects import EXPECTS_KEY
 from .memory import MemoryStore
 from .mess_types import AppointmentPhase, DialogState, RouteDecision, SessionState
@@ -147,6 +147,9 @@ def _looks_like_patient_fio(text: str) -> bool:
     tokens = [t for t in s.split() if t]
     if len(tokens) < 2:
         return False
+    if turn_names.on("names_patient_fio"):
+        # Форма принимает и «Общий анализ крови»: ФИО ли это, решает LLM этого хода (`patient_name` — те же слова).
+        return turn_names.llm_patient_fio(s, switch="names_patient_fio")
     normalized = [normalize_ru(t) for t in tokens]
     if any(t in _PATIENT_FIO_STOPWORDS for t in normalized):
         return False

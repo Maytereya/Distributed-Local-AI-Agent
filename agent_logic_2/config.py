@@ -239,6 +239,7 @@ class MessengerRouterConfig:
     names_doctor_noise: str
     names_doctor_followup: str
     names_result_surname: str
+    names_patient_fio: str
     debug_final_input: bool
     url: str
 
@@ -579,6 +580,11 @@ settings = Settings(
         # STEP-2026-10-24-NAMES-NO-STOPWORDS). Порядок «фамилия, год, код, номер» — как было. off — как было (_QF_RESULT_SURNAME_STOPWORDS).
         # [MESSENGER_ROUTER] names_result_surname
         names_result_surname=_get_enum("MESSENGER_ROUTER", "names_result_surname", default="off", allowed={"off", "on"}),
+        # Реплика — ФИО пациента (12 мест: запись, вид недоступной цели, неподтверждённый врач → ФИО): форма 2–3 слова принимает и
+        # «Общий анализ крови» — решает LLM-классификатор этого хода (patient_name — те же слова реплики); без LLM — не ФИО (решение
+        # владельца 22.10 (а); STEP-2026-10-24-NAMES-NO-STOPWORDS). off — как было (_PATIENT_FIO_STOPWORDS).
+        # [MESSENGER_ROUTER] names_patient_fio
+        names_patient_fio=_get_enum("MESSENGER_ROUTER", "names_patient_fio", default="off", allowed={"off", "on"}),
         # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
         # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
         # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —
@@ -861,6 +867,7 @@ MR_NAMES_DOCTOR_CATALOG = settings.messenger_router.names_doctor_catalog
 MR_NAMES_DOCTOR_NOISE = settings.messenger_router.names_doctor_noise
 MR_NAMES_DOCTOR_FOLLOWUP = settings.messenger_router.names_doctor_followup
 MR_NAMES_RESULT_SURNAME = settings.messenger_router.names_result_surname
+MR_NAMES_PATIENT_FIO = settings.messenger_router.names_patient_fio
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 
