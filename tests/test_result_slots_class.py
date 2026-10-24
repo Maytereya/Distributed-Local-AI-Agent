@@ -468,3 +468,54 @@ def test_lab_code_rule_silent_on(monkeypatch, text: str) -> None:
 def test_lab_code_rule_off_as_before(monkeypatch, text: str) -> None:
     monkeypatch.setattr(result_slots._cfg, "MR_LAB_CODE_BY_LLM", "off", raising=False)
     assert "rule_test_assist_lab_code" in _rule(text).flags
+
+
+# --- ответ на вопрос о реквизитах — остаток формы: ход остаётся в результатах (прод #659: «ву 276») -----------------
+
+_WAITS_CODE_NUMBER = {"_pending": {"label": "TEST_RESULT", "missing": ["filial", "number"]}}
+
+
+def _rule_in(text: str, last_entities: dict):
+    return asyncio.run(classifier.deterministic_rule_decision(text, last_entities, allow_refine=False, attach_secondary=False))
+
+
+@pytest.mark.parametrize(("text", "code", "number"), [("ву 276", "ву", 276), ("Ву 148", "Ву", 148), ("ТМ, 192", "ТМ", 192)])
+def test_rest_of_form_answer_stays_in_results(monkeypatch, text: str, code: str, number: int) -> None:
+    _switch(monkeypatch)
+    decision = _rule_in(text, _WAITS_CODE_NUMBER)
+    assert decision.label == "TEST_RESULT" and "rule_test_result_rest_of_form" in decision.flags
+    assert decision.entities == {"filial": code, "number": number}
+
+
+@pytest.mark.parametrize(
+    ("text", "last_entities"),
+    [
+        ("Са-125", _WAITS_CODE_NUMBER),  # маркер посреди сбора реквизитов — не остаток формы: правило лаб-кода как было
+        ("ву 276", {}),  # реквизитов не ждём — как было
+        ("ву 276", {"_pending": {"label": "TEST_RESULT", "missing": ["surname", "year", "filial", "number"]}}),
+    ],
+)
+def test_not_rest_of_form_lab_code_rule_as_before(monkeypatch, text: str, last_entities: dict) -> None:
+    _switch(monkeypatch)
+    assert "rule_test_assist_lab_code" in _rule_in(text, last_entities).flags
+
+
+def test_rest_of_form_rule_off_as_before(monkeypatch) -> None:
+    _switch(monkeypatch, "off")
+    assert "rule_test_assist_lab_code" in _rule_in("ву 276", _WAITS_CODE_NUMBER).flags
+
+
+def test_dialog_code_and_number_after_surname_and_year_gives_link(monkeypatch) -> None:
+    """Прод #659: «Сидорова 1985» → «Укажите ещё код анализа и номер анализа…» → «ву 276» — ссылка, а не подбор анализов."""
+
+    _switch(monkeypatch)
+    by_reply = {"Сидорова 1985": {"surname": "Сидорова", "year": 1985}}
+
+    async def llm(prompt: str, *, queue_timeout_ms: int = 30000) -> dict:
+        entities = by_reply.get(prompt.rsplit("Текст пациента:", 1)[-1].strip(), {})
+        return {"label": "TEST_RESULT", "confidence": 0.9, "context_action": "continue", "entities": entities}
+
+    monkeypatch.setattr(classifier, "ollama_classify_json", llm)
+    (_, ask, link), entities = _say(monkeypatch, ["Хочу получить результаты анализов", "Сидорова 1985", "ву 276"])
+    assert ask.startswith("Укажите ещё код анализа и номер анализа")
+    assert (entities.get("filial"), entities.get("number")) == ("ву", 276) and "getanaliz.php?" in link

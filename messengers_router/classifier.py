@@ -18,7 +18,7 @@ import re
 from typing import Any, cast
 
 from .llm_mode_policy import RuntimeOptions
-from . import turn_names
+from . import result_slots, turn_names
 from .llm_runtime import generate_text
 from .doctor_name_port import resolve_cached_doctor_name_candidate
 from .russian_nlu import normalize_ru, ENTITY_WHITELIST
@@ -469,6 +469,19 @@ def _is_procedure_doctor_info_query(text: str, service_name: str | None) -> bool
     if not service_name:
         return False
     return bool(_PROCEDURE_DOCTOR_INFO_RE.search(text or ""))
+
+
+def _pending_result_rest_of_form(text: str, last_entities: dict[str, Any]) -> dict[str, Any]:
+    """Висит вопрос о реквизитах результата, а реплика — остаток их формы в порядке вопроса («ву 276», «1985, Бг, 123»): ход
+    остаётся в результатах с этими реквизитами (`result_slots_llm = on`). Иначе правило лаб-кода уводило такой ответ в подбор
+    анализов, а LLM — в цену (прод #659, BUG-2026-10-24-RESULT-SLOT-COMMAND)."""
+
+    if not result_slots.on():
+        return {}
+    pending = last_entities.get("_pending")
+    if not isinstance(pending, dict) or pending.get("label") != "TEST_RESULT" or not isinstance(pending.get("missing"), list):
+        return {}
+    return result_slots.rest_of_form(text, pending["missing"])
 
 
 def _pending_waits_appointment_patient_name(last_entities: dict[str, Any]) -> bool:
@@ -1254,6 +1267,15 @@ async def deterministic_rule_decision(
             confidence=0.9,
             entities={"patient_name": str(text or "").strip()},
             flags=local_flags | {"rule_appointment_patient_name"},
+            needs_handoff=False,
+            context_action="continue",
+        )
+    elif result_rest := _pending_result_rest_of_form(text, last_entities):
+        decision = RouteDecision(
+            label="TEST_RESULT",
+            confidence=0.9,
+            entities=result_rest,
+            flags=local_flags | {"rule_test_result_rest_of_form"},
             needs_handoff=False,
             context_action="continue",
         )
