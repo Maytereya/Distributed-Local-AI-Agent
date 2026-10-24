@@ -47,7 +47,7 @@ import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from agent_logic_2.persist import DATA_DIR, ensure_dir
 
@@ -122,6 +122,13 @@ def _select_v2_on() -> bool:
     """`[MESSENGER_ROUTER] price_select_v2 = on`: промпты выбора строки `*_v2`; мусор — off (как было)."""
 
     return str(getattr(_cfg, "MR_PRICE_SELECT_V2", "off") or "").strip().lower() == "on"
+
+
+def _synonym_wordforms_on() -> bool:
+    """`[MESSENGER_ROUTER] synonym_wordforms = on` (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1): синоним МИС в другой словоформе —
+    кандидат выбора строки, как дословный; мусор — off (как было)."""
+
+    return str(getattr(_cfg, "MR_SYNONYM_WORDFORMS", "off") or "").strip().lower() == "on"
 
 
 def general_clarify_on() -> bool:
@@ -269,12 +276,13 @@ def _token_names(retail_rows: list[dict[str, Any]]) -> dict[str, frozenset[str]]
     return cached
 
 
-def _wordform_family_size(word: str, retail_rows: list[dict[str, Any]]) -> int:
-    """Во скольких названиях прайса есть слово вместе со словоформами (`_same_word`)."""
+def _wordform_family_size(word: str, retail_rows: list[dict[str, Any]], *, same: Callable[[str, str], bool] | None = None) -> int:
+    """Во скольких названиях прайса есть слово вместе со словоформами (`same`, по умолчанию `_same_word`)."""
 
+    same = same or _same_word
     names: set[str] = set()
     for token, owners in _token_names(retail_rows).items():
-        if _same_word(word, token):
+        if same(word, token):
             names |= owners
     return len(names)
 
@@ -294,6 +302,22 @@ _WORDFORM_PREFIX = 6
 
 def _same_word(a: str, b: str) -> bool:
     return a == b or (a.isalpha() and b.isalpha() and tokens_share_stem(a, b, length=_WORDFORM_PREFIX))
+
+
+# Окончание словоформы — не длиннее трёх букв («-ами», «-ого»): у длинного слова общее начало словоформ — всё, кроме него.
+_WORDFORM_ENDING = 3
+
+
+def _same_word_strict(a: str, b: str) -> bool:
+    """Словоформа под `synonym_wordforms` (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1): общее начало — длинное из двух слов без
+    окончания, но не меньше порога `_same_word`. Шести букв мало длинному слову: «коагулограмма» и «коагуляция», «креатинина»
+    и «креатинфосфокиназа», «прогестерон» и «прогестин» — разные слова (свип 24.10 по 1 068 вопросам эталона), «коагулограмма»
+    и «коагулограммы» — одно; у слов до 9 букв — как `_same_word` («терапевт» = «терапевта»)."""
+
+    if a == b:
+        return True
+    length = max(_WORDFORM_PREFIX, max(len(a), len(b)) - _WORDFORM_ENDING)
+    return a.isalpha() and b.isalpha() and tokens_share_stem(a, b, length=length)
 
 
 def _whole_word_names(question: str, pool: list[dict[str, Any]], retail_rows: list[dict[str, Any]]) -> tuple[str, ...]:
@@ -451,14 +475,22 @@ def _synonym_rows(texts: Sequence[str], retail_rows: list[dict[str, Any]]) -> li
     на 335 размеченных вопросах стенда: без условия 27 чужих первых строк из 112, с ним 0 из 27."""
 
     df = _token_df(retail_rows)
+    wordforms = _synonym_wordforms_on()
+    # Под `synonym_wordforms` словоформа — строгая: «коагулограмма» не словоформа «коагуляции» (14 названий), её строки буквы не
+    # находят (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1); off — как было.
+    same = _same_word_strict if wordforms else _same_word
 
     def letters_miss(key: str) -> bool:
         glued = _normalise_price_token(_normalise_input(key).replace(" ", "").replace("-", ""))
-        return not df.get(glued) and not any(_wordform_family_size(token, retail_rows) for token in _price_query_tokens(key))
+        return not df.get(glued) and not any(_wordform_family_size(token, retail_rows, same=same) for token in _price_query_tokens(key))
 
     wanted: list[str] = []
     for text in texts:
-        for key, names in _biomaterial.mis_synonyms_within(str(text or "")):
+        found = _biomaterial.mis_synonyms_within(str(text or ""))
+        if wordforms:
+            # Синоним в другой словоформе («коагулограммы») — тот же довод клиники (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 1).
+            found = (*found, *_biomaterial.mis_synonyms_within_wordforms(str(text or ""), _same_word_strict))
+        for key, names in found:
             if not letters_miss(key):
                 continue
             for name in names:
