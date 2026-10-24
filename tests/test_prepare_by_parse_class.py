@@ -71,6 +71,7 @@ _ROWS = [
     _memo("Холестерол", "Анализ крови: натощак, за сутки исключить жирное. " + _BLOOD),
     _memo("Креатинин", "Анализ крови: натощак, за сутки исключить мясо. " + _BLOOD),
     _memo("Общий анализ мочи", "Утром собрать среднюю порцию мочи в стерильный контейнер, накануне исключить мочегонные."),
+    _memo("Анализ спектра органических кислот мочи", "Утреннюю порцию мочи собрать натощак, за сутки исключить витамины."),
 ]
 
 
@@ -112,7 +113,7 @@ def _spans(reply: str, phrases: list[str]) -> dict:
 def world(monkeypatch):
     """Подготовка на синтетическом срезе; LLM разбора и выбора — подделки «по смыслу», которые задаёт тест."""
 
-    state = {"phrases": {}, "want": set(), "select_calls": 0, "spans_down": False, "prompts": []}
+    state = {"phrases": {}, "want": set(), "select_calls": 0, "spans_down": False, "prompts": [], "same_always": False}
 
     async def spans_llm(**kw):
         if state["spans_down"]:
@@ -129,7 +130,7 @@ def world(monkeypatch):
         return json.dumps({"match": None})
 
     async def same(first, second):
-        return {first.title, second.title} <= state["want"]
+        return state["same_always"] or {first.title, second.title} <= state["want"]
 
     monkeypatch.setattr(cfg, "MR_PREPARE_BY_PARSE", "on", raising=False)
     monkeypatch.setattr(cfg, "MR_TURN_SPANS_LLM", "on", raising=False)
@@ -228,6 +229,16 @@ def test_word_form_unknown_to_data_does_not_block_the_memo(world) -> None:
 
     answers = _answers(world, _OAM, {"Общий анализ мочи"})
     assert len(set(answers)) == 1 and answers[0].startswith("Памятка клиники «Общий анализ мочи»:"), answers
+
+
+def test_twin_only_when_patient_words_name_exactly_two_cards(world) -> None:
+    """Вторая памятка — только пара: слова фразы, которыми названа выбранная карточка, называют ровно две карточки МИС («ттг»).
+    «общему анализу мочи» → {анализ, мочи} — их три (общий анализ, Нечипоренко, спектр кислот): семейство, а не пара, и даже
+    если LLM скажет «подготовка та же», вторая памятка не добавляется (карточка 24.10: «Анализ спектра органических кислот мочи»)."""
+
+    world["same_always"] = True
+    answers = _answers(world, _OAM, {"Общий анализ мочи"})
+    assert answers == [answers[0]] * len(_OAM) and answers[0].startswith("Памятка клиники «Общий анализ мочи»:"), answers
 
 
 def test_general_word_of_the_phrase_does_not_bring_foreign_memos(world) -> None:

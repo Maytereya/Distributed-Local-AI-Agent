@@ -740,6 +740,7 @@ class MemoCorpus:
         from ..llm_doesnt_work_fallback import join_wrapped_lines  # noqa: PLC0415
 
         docs: list[frozenset[str]] = []
+        titles: list[frozenset[str]] = []
         firsts: dict[str, int] = {}
         for row in rows:
             if not isinstance(row, dict):
@@ -749,11 +750,13 @@ class MemoCorpus:
             if not name or not preparation:
                 continue
             docs.append(_phrase_roots(name) | _phrase_roots(preparation))
+            titles.append(_phrase_roots(name))
             lines = join_wrapped_lines(_memo_plain_text(preparation))
             if lines:
                 key = _caption_key(lines[0])
                 firsts[key] = firsts.get(key, 0) + 1
         self.docs = tuple(docs)
+        self.titles = tuple(titles)
         self.vocabulary = frozenset().union(*docs, *(_phrase_roots(name) for name in catalog_names))
         top = max(firsts.items(), key=lambda kv: kv[1], default=("", 0))
         self.caption = top[0] if top[1] * 2 > len(docs) else ""
@@ -761,6 +764,11 @@ class MemoCorpus:
 
     def known(self, root: str) -> bool:
         return _prepare_roots_match_indexed(root, self.vocabulary)
+
+    def named_cards(self, naming: frozenset[str]) -> int:
+        """Сколько карточек МИС с памяткой названо этими словами (все слова — в названии карточки)."""
+
+        return sum(1 for title in self.titles if _prepare_names_subject(set(naming), set(title))) if naming else 0
 
     def weight(self, root: str) -> float:
         cached = self._weights.get(root)

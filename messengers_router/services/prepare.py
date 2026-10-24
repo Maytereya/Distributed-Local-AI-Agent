@@ -915,7 +915,8 @@ async def _test_prepare_by_parse(self: "Services", raw_query: str, entities: dic
         rows = await asyncio.to_thread(api_service_info.load_service_info)
     except Exception:
         rows = []
-    caption = (await asyncio.to_thread(lambda: memo_corpus(rows, _catalog_names()))).caption if rows else ""
+    corpus = await asyncio.to_thread(lambda: memo_corpus(rows, _catalog_names())) if rows else None
+    caption = corpus.caption if corpus is not None else ""
     memos: list[PrepareMemo] = []
     if subjects and rows:
         candidates = await asyncio.to_thread(_phrase_candidates, rows, subjects)
@@ -931,7 +932,7 @@ async def _test_prepare_by_parse(self: "Services", raw_query: str, entities: dic
         memos.append(PrepareMemo(source=SOURCE_CLINIC_GENERAL, title=_BLOOD_GENERAL_TITLE, text=_BLOOD_COLLECTION_GUIDANCE))
     subject_roots = frozenset().union(*(_phrase_roots(phrase) for phrase, _rows in subjects)) if subjects else frozenset()
     chosen = await select_prepare_memos_by_parse(
-        q or context, memos, subject_roots=subject_roots, runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""), context=context
+        q or context, memos, subject_roots=subject_roots, corpus=corpus, runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""), context=context
     )
     if general_option:
         if len(chosen) == 1 and chosen[0].source == SOURCE_CLINIC_GENERAL:

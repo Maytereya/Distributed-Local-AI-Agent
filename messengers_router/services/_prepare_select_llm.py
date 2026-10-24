@@ -35,6 +35,7 @@ from ..llm_runtime import generate_text
 from ..prompt_registry import load_prompt_text
 from . import _common as _common_mod
 from ._prepare import (
+    MemoCorpus,
     _memo_plain_text,
     _phrase_roots,
     _prepare_names_subject,
@@ -209,14 +210,22 @@ def _twin_candidate(question: str, chosen: PrepareMemo, memos: Sequence[PrepareM
     return max(twins, key=lambda memo: memo.score) if twins else None
 
 
-def _twin_by_naming(subject_roots: frozenset[str], chosen: PrepareMemo, memos: Sequence[PrepareMemo]) -> PrepareMemo | None:
+def _twin_by_naming(
+    subject_roots: frozenset[str], chosen: PrepareMemo, memos: Sequence[PrepareMemo], corpus: MemoCorpus | None = None
+) -> PrepareMemo | None:
     """`_twin_candidate` пути фраз разбора (`prepare_by_parse`): ещё одна карточка МИС, в названии которой — те слова фразы,
     которыми названа выбранная («анализ на ттг» → {ттг}: «Антитела к рецепторам ТТГ»). Общее слово фразы, которого нет в
-    названии выбранной, в счёт не идёт — без списка общих слов. Синоним клиники не засчитывается, как у `_twin_candidate`."""
+    названии выбранной, в счёт не идёт — без списка общих слов. Синоним клиники не засчитывается, как у `_twin_candidate`.
+
+    Пара — только если эти слова называют ровно две карточки МИС с памяткой (`MemoCorpus.named_cards`): «ттг» — две, это пара;
+    «анализ … мочи» — общий анализ, Нечипоренко, спектр органических кислот: семейство, а не пара (карточка 24.10: «общему
+    анализу мочи» → вторая памятка «Анализ спектра органических кислот мочи»); «хгч» — пять."""
 
     if chosen.source != SOURCE_MIS:
         return None
     naming = naming_roots(subject_roots, chosen.title)
+    if corpus is not None and corpus.named_cards(naming) != 2:
+        return None
     twins = [
         memo
         for memo in memos
@@ -281,6 +290,7 @@ async def select_prepare_memos_by_parse(
     memos: Sequence[PrepareMemo],
     *,
     subject_roots: frozenset[str],
+    corpus: MemoCorpus | None = None,
     runtime_llm_mode: str = "",
     context: str = "",
 ) -> tuple[PrepareMemo, ...]:
@@ -288,7 +298,7 @@ async def select_prepare_memos_by_parse(
     разбора (`subject_roots`), а не по реплике без слов списка общих слов подготовки."""
 
     return await _select(
-        question, memos, runtime_llm_mode=runtime_llm_mode, context=context, twin=lambda chosen, ms: _twin_by_naming(subject_roots, chosen, ms)
+        question, memos, runtime_llm_mode=runtime_llm_mode, context=context, twin=lambda chosen, ms: _twin_by_naming(subject_roots, chosen, ms, corpus)
     )
 
 
