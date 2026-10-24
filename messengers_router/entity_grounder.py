@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import address_service, booking_slots, llm_runtime, turn_understanding, walkin
+from . import address_service, booking_slots, llm_runtime, test_assist_answer, turn_understanding, walkin
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
@@ -340,6 +340,12 @@ async def judge_fuzzy_service_candidate(
         out["_catalog_service_query"] = query
         flags.add(candidate_flag)
 
+    if label == "TEST_ASSIST" and test_assist_answer.enabled():
+        # Подбор анализов отвечает по данным хода (`test_assist_from_data`): строку выбирает LLM ответа хода среди всех
+        # кандидатов, как у цены, — суд догадки и «да/нет» по ней дублировали это решение и съедали лимит решений хода
+        # («исследование клеща»: разбор, два круга суда здесь, суд ещё раз в заземлении — ответу решения не осталось).
+        flags.add("catalog_confirm_skipped_test_assist_data")
+        return
     if not catalog_confirm_llm_enabled() or label not in _LLM_JUDGED_FUZZY_LABELS:
         _confirm(candidate)
         return
