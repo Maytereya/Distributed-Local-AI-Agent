@@ -333,6 +333,10 @@ DOCTORS_SERVICE_CLARIFY_OFFER = (
     "Уточните, пожалуйста, полное название услуги или специальность врача — подскажу, кто её делает. "
     "Или перевести на оператора?"
 )
+DOCTORS_SERVICE_CLARIFY_BOOKING_OFFER = (
+    "Уточните, пожалуйста, полное название услуги или специальность врача, к которому хотите записаться. "
+    "Или перевести на оператора?"
+)
 
 
 def build_doctor_info_response(
@@ -802,6 +806,11 @@ def build_appointment_step_response(
                     text=format_doctor_info_for_patient(doctors_info_payload, entities),  # type: ignore[arg-type]
                     handoff=False,
                 )
+            if isinstance(doctors_info_payload, dict) and doctors_info_payload.get("service_clarify"):
+                # `doctors_by_parse`: какую услугу записи имел в виду пациент, данные и LLM не решили — честное «уточните» с
+                # оффером, а не тихий уход к выбору филиала (консилиум 25.10, МЕГА п. 1).
+                mark_operator_offer_pending(state, memory)
+                return ResponseEnvelope(text=DOCTORS_SERVICE_CLARIFY_BOOKING_OFFER, handoff=False)
             # Если список врачей не найден, мягко возвращаемся к выбору филиала.
             set_appointment_selection_mode(state, "branch")
             selection_mode = "branch"

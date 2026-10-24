@@ -40,6 +40,7 @@ from ._common import (
     _as_int,
     _coerce_top_n,
     _get_first_present,
+    _normalise_catalog_text,
     _normalise_input,
     _service_fallback,
 )
@@ -177,6 +178,17 @@ async def subject_of(reply: str, context_service: str) -> Subject:
     return Subject(NO_SERVICE, status=status)
 
 
+async def context_subject(service: str) -> Subject:
+    """Услуга записи из контекста хода — на шаге записи «по врачу» реплика пациента — выбор пункта («список врачей»), а не название
+    услуги, и её разбор не нужен: строки по данным (0 решений LLM); нет дословно — выбор LLM из данных (+1), как у фразы разбора."""
+
+    catalog = await asyncio.to_thread(_catalog_rows, None)
+    rows = await asyncio.to_thread(lambda: _rows_of(service, tuple(phrase_rows(service, catalog)), catalog))
+    if rows:
+        return Subject(ROWS, service, tuple(_unique(rows)), source="context", status="not_parsed")
+    return Subject(WEAK, service, phrases=(service,), source="context", status="not_parsed")
+
+
 def _unique(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -256,6 +268,12 @@ async def service_doctors(
     if subject.outcome == ROWS:
         codes = tuple(code for code in dict.fromkeys(str(row.get("serviceHomecode") or "").strip() for row in subject.rows) if code)
         return _found("data", codes, index)
+    # Фраза — название строки `doctor_prices` целиком (каталог записи — прайс и цены врачей: «Ультразвуковое исследование
+    # щитовидной железы» есть только там) — опознание по данным, как точное у L-06, без выбора LLM.
+    whole = {_normalise_catalog_text(phrase) for phrase in subject.phrases} - {""}
+    exact = index.codes_where(lambda name: _normalise_catalog_text(name) in whole)
+    if exact:
+        return _found("data", exact, index)
     pool = await asyncio.to_thread(candidate_services, subject.phrases, index)
     role_pool = candidate_roles(subject.phrases, roles) if roles is not None else []
     if not pool and not role_pool:
@@ -325,6 +343,7 @@ async def doctors_info(
     if not spec_q:
         spec_q = _extract_specialty_from_text(query)
     context_service = str(_get_first_present(entities, ["service_name", "test_name"]) or "")
+    booking = bool(entities.get("__appointment_mode"))  # шаг записи «по врачу»: услуга — из записи, реплика — выбор пункта
     # Вопрос о враче по услуге — тот же круг ходов, что у прежнего пути (сущность услуги или слово процедуры в реплике);
     # что в реплике услуга, решает разбор, а не эти слова.
     service_asked = bool(context_service.strip()) or bool(_SERVICE_QUERY_SIGNAL_RE.search(q))
@@ -377,7 +396,9 @@ async def doctors_info(
     found: Found | None = None
     filtered: list[dict[str, Any]] = []
     source = "rules"
-    if service_asked and not fio_q:  # назван врач — выдачу решает имя, услугу не разбираем
+    if booking and context_service.strip() and not fio_q:
+        subject = await context_subject(context_service)
+    elif service_asked and not fio_q:  # назван врач — выдачу решает имя, услугу не разбираем
         subject = await subject_of(query, context_service)
     if subject is None or (subject.outcome == NO_SERVICE and (spec_q or region_q)):
         filtered = [d for d in doctors if match_doc(d)]

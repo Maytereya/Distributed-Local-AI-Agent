@@ -346,10 +346,11 @@ def build_plan(
                 )
         else:
             if selection_mode == "doctor":
+                # Шаг записи «по врачу»: реплика — выбор пункта, услуга — из записи (`doctors_by_parse` её реплику не разбирает).
                 steps.append(
                     PlanStep(
                         tool="doctors_info",
-                        input={"query": user_text, "entities": dict(entities)},
+                        input={"query": user_text, "entities": {**entities, "__appointment_mode": True}},
                         required=not flow_active,
                     )
                 )
