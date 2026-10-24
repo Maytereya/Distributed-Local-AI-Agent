@@ -18,6 +18,7 @@ import re
 from typing import Any, cast
 
 from .llm_mode_policy import RuntimeOptions
+from . import turn_names
 from .llm_runtime import generate_text
 from .doctor_name_port import resolve_cached_doctor_name_candidate
 from .russian_nlu import normalize_ru, ENTITY_WHITELIST
@@ -1000,6 +1001,7 @@ def _postprocess_primary_decision(
     label = _normalize_label(data.get("label"))
     conf = _normalize_confidence(data.get("confidence"))
     entities = _sanitize_entities(data.get("entities"))
+    turn_names.note_llm(text, entities)
     flags = _normalize_flags(data.get("flags")) | detect_pii(text)
     context_action = _normalize_context_action(data.get("context_action"))
     clarify_needed = bool(data.get("clarify_needed"))
@@ -1705,6 +1707,7 @@ async def analyze(
     label = _normalize_label(data.get("label"))
     conf = _normalize_confidence(data.get("confidence"))
     entities = _sanitize_entities(data.get("entities"))
+    turn_names.note_llm(text, entities)
     flags |= _normalize_flags(data.get("flags"))
     context_action = _normalize_context_action(data.get("context_action"))
 
