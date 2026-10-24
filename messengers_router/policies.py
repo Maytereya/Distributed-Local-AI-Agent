@@ -2100,6 +2100,9 @@ def _is_valid_patient_name_candidate(candidate_text: str) -> bool:
     tokens = [w for w in re.split(r"\s+", low_raw) if w]
     if len(tokens) < 2:
         return False
+    if turn_names.on("names_patient_fill"):
+        # Кандидат — те же слова, что `patient_name` LLM этого хода; без LLM ФИО не заполняем (решение (а) 22.10).
+        return turn_names.llm_patient_fio(raw, switch="names_patient_fill")
     if any(token in _QF_PATIENT_NAME_STOPWORDS for token in tokens):
         return False
     if not any(len(token) >= 3 for token in tokens):

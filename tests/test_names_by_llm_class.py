@@ -380,7 +380,7 @@ def _fio_on_path(switch: str, text: str) -> bool:
     return bool(out.get("patient_name"))
 
 
-_PATIENT_SWITCHES = ["names_patient_fio", "names_patient_rule"]
+_PATIENT_SWITCHES = ["names_patient_fio", "names_patient_rule", "names_patient_fill"]
 
 
 @pytest.mark.parametrize("switch", _PATIENT_SWITCHES)
@@ -433,3 +433,27 @@ def test_patient_rule_waits_for_llm(monkeypatch) -> None:
     pending = {"_pending": {"label": "APPOINTMENT", "missing": ["patient_name"]}}
     decision = asyncio.run(classifier.deterministic_rule_decision("Сидорова Анна", pending))
     assert decision is None or "rule_appointment_patient_name" not in decision.flags
+
+
+def test_patient_fill_after_prefix_takes_llm_name(monkeypatch) -> None:
+    from messengers_router import policies
+
+    _switch(monkeypatch, "names_patient_fill")
+    reply = "Меня зовут Сидорова Анна"
+    turn_names.note_llm(reply, {"patient_name": "Сидорова Анна"})
+    out: dict = {}
+    policies._fill_patient_entities(reply, ["patient_name"], out)
+    assert out["patient_name"] == "Сидорова Анна"
+
+
+@pytest.mark.parametrize("text", ["Общий анализ крови", "Анализ крови"])
+def test_patient_fill_does_not_take_service(monkeypatch, text: str) -> None:
+    """Известный дефект пути off (характеристика): услуга в графе ФИО. Под `on` её туда кладёт только LLM, а она назвала услугу."""
+
+    from messengers_router import policies
+
+    _switch(monkeypatch, "names_patient_fill")
+    turn_names.note_llm(text, {"service_name": text})
+    out: dict = {}
+    policies._fill_patient_entities(text, ["patient_name"], out)
+    assert "patient_name" not in out

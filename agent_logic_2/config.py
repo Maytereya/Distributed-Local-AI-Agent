@@ -241,6 +241,7 @@ class MessengerRouterConfig:
     names_result_surname: str
     names_patient_fio: str
     names_patient_rule: str
+    names_patient_fill: str
     debug_final_input: bool
     url: str
 
@@ -590,6 +591,11 @@ settings = Settings(
         # реплику (ФИО или нет, какая тема) решает LLM-классификатор хода (STEP-2026-10-24-NAMES-NO-STOPWORDS). off — как было
         # (_PATIENT_NAME_STOPWORDS). [MESSENGER_ROUTER] names_patient_rule
         names_patient_rule=_get_enum("MESSENGER_ROUTER", "names_patient_rule", default="off", allowed={"off", "on"}),
+        # Быстрое заполнение ФИО пациента (после «ФИО / меня зовут», голая форма, тройка слов) — только если кандидат — те же слова, что
+        # patient_name LLM-классификатора этого хода; без LLM ФИО не заполняется (решение владельца 22.10 (а); STEP-2026-10-24-NAMES-NO-STOPWORDS;
+        # свип 24.10: прежний путь клал «Общий Анализ Крови» в ФИО). off — как было (_QF_PATIENT_NAME_STOPWORDS).
+        # [MESSENGER_ROUTER] names_patient_fill
+        names_patient_fill=_get_enum("MESSENGER_ROUTER", "names_patient_fill", default="off", allowed={"off", "on"}),
         # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
         # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
         # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —
@@ -874,6 +880,7 @@ MR_NAMES_DOCTOR_FOLLOWUP = settings.messenger_router.names_doctor_followup
 MR_NAMES_RESULT_SURNAME = settings.messenger_router.names_result_surname
 MR_NAMES_PATIENT_FIO = settings.messenger_router.names_patient_fio
 MR_NAMES_PATIENT_RULE = settings.messenger_router.names_patient_rule
+MR_NAMES_PATIENT_FILL = settings.messenger_router.names_patient_fill
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 
