@@ -49,6 +49,8 @@ _PRICE = [
     {"serviceName": "ТТГ (TSH) тиреотропный гормон", "serviceHomecode": "301"},
     {"serviceName": "Антитела к рецепторам ТТГ", "serviceHomecode": "317"},
     {"serviceName": "Анализ мочи по Нечипоренко", "serviceHomecode": "601"},
+    {"serviceName": "Общий анализ мочи", "serviceHomecode": "602"},
+    {"serviceName": "Гомоцистеин", "serviceHomecode": "455"},  # услуга есть, памятки нет
 ]
 
 _BLOOD = "Кровь сдают утром строго натощак, после 8–12 часов ночного голодания. Можно пить воду."
@@ -68,6 +70,7 @@ _ROWS = [
     _memo("Глюкоза", "Анализ крови на глюкозу: строго натощак, за сутки исключить сладкое. " + _BLOOD),
     _memo("Холестерол", "Анализ крови: натощак, за сутки исключить жирное. " + _BLOOD),
     _memo("Креатинин", "Анализ крови: натощак, за сутки исключить мясо. " + _BLOOD),
+    _memo("Общий анализ мочи", "Утром собрать среднюю порцию мочи в стерильный контейнер, накануне исключить мочегонные."),
 ]
 
 
@@ -212,9 +215,24 @@ def test_clinic_synonym_found_whatever_the_form_of_words_before_it(world) -> Non
     assert strict == answers and world["select_calls"] == 0  # без LLM — та же карточка: её назвали данные
 
 
+_OAM = [
+    ("Подготовка к общему анализу мочи", ["общему анализу мочи"]),
+    ("Как сдавать общий анализ мочи?", ["общий анализ мочи"]),
+    ("Как подготовиться к сдаче общего анализа мочи?", ["общего анализа мочи"]),
+]
+
+
+def test_word_form_unknown_to_data_does_not_block_the_memo(world) -> None:
+    """«общему» стеммер сводит к «общем» — такой основы нет ни в памятках, ни в прайсе: это словоформа, а не услуга, и она не
+    делает памятку «Общий анализ мочи» негодной (карточка 24.10: «Подготовка к общему анализу мочи» → оффер вместо памятки)."""
+
+    answers = _answers(world, _OAM, {"Общий анализ мочи"})
+    assert len(set(answers)) == 1 and answers[0].startswith("Памятка клиники «Общий анализ мочи»:"), answers
+
+
 def test_general_word_of_the_phrase_does_not_bring_foreign_memos(world) -> None:
     """«анализу крови на гомоцистеин»: памятки, где есть только «анализ» и «кровь», предмет не называют — в кандидаты LLM не
-    идут (нужно самое редкое слово фразы); памятки о гомоцистеине нет — оффер, а не чужая памятка."""
+    идут (нужны слова фразы, несущие половину её веса); памятки о гомоцистеине нет — оффер, а не чужая памятка."""
 
     world["phrases"] = {"Подготовка к анализу крови на гомоцистеин": ["анализу крови на гомоцистеин"]}
     world["want"] = {"Анализ мочи по Нечипоренко", "Общий анализ крови (Le, Er, Hb, СОЭ)", "Глюкоза", "Холестерол", "Креатинин"}
@@ -318,24 +336,23 @@ def test_off_does_not_parse_prepare_turns(world, monkeypatch) -> None:
     assert asyncio.run(go()) is None
 
 
-@pytest.mark.parametrize("mode, planned", [("on", True), ("off", False)])
-def test_planner_takes_the_service_from_the_parse(world, monkeypatch, mode: str, planned: bool) -> None:
-    """NLU не извлёк услугу, а разбор её назвал: под `on` подготовка планируется (предмет решает разбор), под `off` —
-    вопрос «к какому анализу» планировщика, как было."""
+@pytest.mark.parametrize("mode", ["on", "off"])
+def test_planner_slot_gate_stays_with_nlu(world, monkeypatch, mode: str) -> None:
+    """Гейт слота планировщика («к какому анализу нужна подготовка?», если NLU не извлёк услугу) под `on` прежний: карточка
+    24.10 — обход гейта по фразам разбора сработал на одном ходе из 1068, и там хуже (g0673 «в какой день недели приносить
+    анализы кала и мочи?» — памятка вместо вопроса). Сущность NLU — тоже решение LLM, не список."""
 
-    monkeypatch.setattr(cfg, "MR_PREPARE_BY_PARSE", mode, raising=False)
-    world["phrases"] = {"Как подготовиться к колоноскопии?": ["колоноскопии"]}
+    world["phrases"] = {"В какой день недели можно приносить анализы кала и мочи?": ["анализы кала", "мочи"]}
 
     async def go():
         turn_understanding.begin_turn()
         monkeypatch.setattr(cfg, "MR_PREPARE_BY_PARSE", "on", raising=False)
-        await turn_understanding.observe_prepare_turn("PREPARE", user_text="Как подготовиться к колоноскопии?")
+        await turn_understanding.observe_prepare_turn("PREPARE", user_text="В какой день недели можно приносить анализы кала и мочи?")
         monkeypatch.setattr(cfg, "MR_PREPARE_BY_PARSE", mode, raising=False)
         decision = RouteDecision(label="PREPARE", confidence=0.9, entities={}, flags=set())
-        return build_plan(decision, SessionState(session_id="t"), "Как подготовиться к колоноскопии?", MemoryStore())
+        return build_plan(decision, SessionState(session_id="t"), "В какой день недели можно приносить анализы кала и мочи?", MemoryStore())
 
-    plan = asyncio.run(go())
-    assert any(step.tool == "test_prepare" for step in plan.steps) is planned
+    assert not any(step.tool == "test_prepare" for step in asyncio.run(go()).steps)
 
 
 # --------------------------------------------------------------------------- путь `on` не читает пяти списков (AST)

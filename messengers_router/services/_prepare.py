@@ -14,7 +14,7 @@ import math
 import re
 import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 from converters import html_cleaner
 
@@ -725,15 +725,18 @@ def _caption_key(line: str) -> str:
 
 
 class MemoCorpus:
-    """Памятки МИС одного среза для поиска по фразе: корни каждой (название и текст) и подпись поля «Подготовка».
+    """Памятки МИС одного среза для поиска по фразе: корни каждой (название и текст), словарь данных и подпись поля «Подготовка».
 
     Вес корня — редкость в памятках: `log(1 + N / (1 + df))`, df — в скольких памятках корень есть (то же сравнение корней,
-    что у оценки, `_prepare_roots_match_indexed`). Подпись поля — строка, которой начинается большинство памяток («Подготовка
-    к исследованию»: 1412 из 1621, срез 20.10): у ответа свой заголовок («Памятка клиники «X»:»), подпись его дублирует.
-    Её задаёт срез, а не список заголовков в коде; одинаковой первой строки у большинства нет — подписи нет.
+    что у оценки, `_prepare_roots_match_indexed`). Словарь данных — корни памяток и названий прайса: корень фразы, которого в
+    нём нет, — словоформа, которую не свёл стеммер («общему» → «общем»), а не услуга; в оценке он не участвует (`known`).
+    Корень из прайса без памятки («гомоцистеин», если памятки нет) — участвует: он и говорит, что памятки о предмете нет.
+    Подпись поля — строка, которой начинается большинство памяток («Подготовка к исследованию»: 1412 из 1621, срез 20.10):
+    у ответа свой заголовок («Памятка клиники «X»:»), подпись его дублирует. Её задаёт срез, а не список заголовков в коде;
+    одинаковой первой строки у большинства нет — подписи нет.
     """
 
-    def __init__(self, rows: list[Any]) -> None:
+    def __init__(self, rows: list[Any], catalog_names: Sequence[str] = ()) -> None:
         from ..llm_doesnt_work_fallback import join_wrapped_lines  # noqa: PLC0415
 
         docs: list[frozenset[str]] = []
@@ -751,9 +754,13 @@ class MemoCorpus:
                 key = _caption_key(lines[0])
                 firsts[key] = firsts.get(key, 0) + 1
         self.docs = tuple(docs)
+        self.vocabulary = frozenset().union(*docs, *(_phrase_roots(name) for name in catalog_names))
         top = max(firsts.items(), key=lambda kv: kv[1], default=("", 0))
         self.caption = top[0] if top[1] * 2 > len(docs) else ""
         self._weights: dict[str, float] = {}
+
+    def known(self, root: str) -> bool:
+        return _prepare_roots_match_indexed(root, self.vocabulary)
 
     def weight(self, root: str) -> float:
         cached = self._weights.get(root)
@@ -767,16 +774,19 @@ _CORPUS: list[tuple[tuple[Any, ...], MemoCorpus]] = []
 _CORPUS_LOCK = threading.Lock()
 
 
-def memo_corpus(rows: list[Any]) -> MemoCorpus:
-    """Корпус памяток среза — один на срез (ключ — число записей и названия по краям и в середине)."""
+def memo_corpus(rows: list[Any], catalog_names: Sequence[str] = ()) -> MemoCorpus:
+    """Корпус памяток среза — один на срез (ключ — число записей и названия по краям и в середине, у прайса — так же)."""
 
-    names = [str(row.get("serviceName") or "") for row in (rows[0], rows[len(rows) // 2], rows[-1]) if isinstance(row, dict)] if rows else []
-    key = (len(rows), *names)
+    def edges(items: Sequence[Any]) -> list[str]:
+        picked = (items[0], items[len(items) // 2], items[-1]) if items else ()
+        return [str(item.get("serviceName") or "") if isinstance(item, dict) else str(item) for item in picked]
+
+    key = (len(rows), *edges(rows), len(catalog_names), *edges(catalog_names))
     with _CORPUS_LOCK:
         for known, corpus in _CORPUS:
             if known == key:
                 return corpus
-    corpus = MemoCorpus(rows)
+    corpus = MemoCorpus(rows, catalog_names)
     with _CORPUS_LOCK:
         _CORPUS[:] = [entry for entry in _CORPUS if entry[0] != key][-1:]
         _CORPUS.append((key, corpus))
@@ -794,22 +804,21 @@ def _weighted_coverage(query_roots: frozenset[str], candidate_roots: frozenset[s
 
 def phrase_memo_score(phrase: str, content: str, *, title: str, corpus: MemoCorpus) -> tuple[float, float, bool]:
     """Оценка памятки по фразе разбора — та же формула, что `_prepare_fast_relevance_score` (0,62 текст, 0,28 название,
-    0,10 содержательность), но корни фразы — все её слова с весом по редкости в памятках МИС.
+    0,10 содержательность), но корни фразы — все её слова, известные данным (`MemoCorpus.known`), с весом по редкости в
+    памятках МИС.
 
-    :return: (оценка 0..1, покрытие названия 0..1, есть ли в памятке самое редкое слово фразы — то, что называет услугу:
-        «гомоцистеин» у «анализу крови на гомоцистеин»; памятка, где есть только «анализ» и «кровь», предмет не называет)
+    :return: (оценка 0..1, покрытие названия 0..1, называет ли памятка предмет — в ней (в тексте или названии) слова фразы,
+        несущие не меньше половины её веса: у «анализу крови на гомоцистеин» это «гомоцистеин»; памятка, где есть только
+        «анализ» и «кровь», предмет не называет)
     """
 
-    query = _phrase_roots(phrase)
+    query = frozenset(q for q in _phrase_roots(phrase) if corpus.known(q))
     body, head = _phrase_roots(content), _phrase_roots(title)
     if not query or (not body and not head):
         return 0.0, 0.0, False
     body_cov = _weighted_coverage(query, body, corpus)
     title_cov = _weighted_coverage(query, head, corpus)
-    top = max(corpus.weight(q) for q in query)
-    distinctive = any(
-        corpus.weight(q) == top and (_prepare_roots_match_indexed(q, body) or _prepare_roots_match_indexed(q, head)) for q in query
-    )
+    distinctive = _weighted_coverage(query, body | head, corpus) >= 0.5
     actionable = 1.0 if _memo_has_instructions(content) else 0.0
     score = 0.62 * body_cov + 0.28 * title_cov + 0.10 * actionable
     if actionable < 1.0:

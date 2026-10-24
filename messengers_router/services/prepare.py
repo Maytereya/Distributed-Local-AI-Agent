@@ -492,7 +492,7 @@ def _memo_lines_of_turn() -> Callable[[PrepareMemo], list[str]]:
     if not turn_understanding.prepare_by_parse():
         return _memo_lines
     try:
-        caption = memo_corpus(api_service_info.load_service_info()).caption
+        caption = memo_corpus(api_service_info.load_service_info(), _catalog_names()).caption
     except Exception:  # без среза — памятка целиком
         caption = ""
     return lambda memo: _memo_lines_without_caption(memo, caption)
@@ -784,6 +784,12 @@ def _subjects_of_turn(raw_query: str, entities: dict[str, Any]) -> tuple[list[tu
     return ([(entity, None)], "entity") if entity else ([], "none")
 
 
+def _catalog_names() -> list[str]:
+    """Названия прайса — словарь данных корпуса памяток (`MemoCorpus.known`)."""
+
+    return [str(row.get("serviceName") or row.get("name") or "") for row in _catalog_rows(None) if isinstance(row, dict)]
+
+
 def _suffixes(phrase: str) -> list[str]:
     """Хвосты фразы от длинного к короткому: «анализу на сахар» → «анализу на сахар», «на сахар», «сахар». Название и синоним
     клиники стоят в конце фразы пациента («анализу на …», «сдаче крови на …»), а словарь синонимов и дословное название
@@ -812,13 +818,13 @@ def _phrase_candidates(rows: list[Any], subjects: Sequence[tuple[str, tuple[dict
     """Памятки МИС по фразам разбора — кандидаты выбора LLM, лучшие первыми.
 
     Карточка, которую фраза называет по данным МИС (`_names_by_data`), — первая и «названа» (опора выбора без LLM: без LLM
-    действует только совпадение с данными, решение владельца 22.10 (а)). Остальные годятся, если в памятке есть самое редкое
-    слово фразы и оценка по самой фразе не ниже порога (`phrase_memo_score`, `phrase_memo_usable` — как прежний путь проверял
-    годность по реплике); подсказки синонимов процедур (`_prepare_synonym_queries`: «фгдс» → «гастроскопия») только поднимают
+    действует только совпадение с данными, решение владельца 22.10 (а)). Остальные годятся, если в памятке слова фразы, несущие
+    не меньше половины её веса, и оценка по самой фразе не ниже порога (`phrase_memo_score`, `phrase_memo_usable` — как прежний
+    путь проверял годность по реплике); подсказки синонимов процедур (`_prepare_synonym_queries`: «фгдс» → «гастроскопия») только поднимают
     годную памятку выше.
     """
 
-    corpus = memo_corpus(rows)
+    corpus = memo_corpus(rows, _catalog_names())
     named: set[str] = set()
     for phrase, phrase_rows_ in subjects:
         named |= {_normalise_catalog_text(name) for name in _names_by_data(phrase, phrase_rows_)}
@@ -909,7 +915,7 @@ async def _test_prepare_by_parse(self: "Services", raw_query: str, entities: dic
         rows = await asyncio.to_thread(api_service_info.load_service_info)
     except Exception:
         rows = []
-    caption = (await asyncio.to_thread(memo_corpus, rows)).caption if rows else ""
+    caption = (await asyncio.to_thread(lambda: memo_corpus(rows, _catalog_names()))).caption if rows else ""
     memos: list[PrepareMemo] = []
     if subjects and rows:
         candidates = await asyncio.to_thread(_phrase_candidates, rows, subjects)

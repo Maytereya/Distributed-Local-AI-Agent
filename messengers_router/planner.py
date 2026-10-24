@@ -147,9 +147,6 @@ def build_plan(
 
         if _is_lab_visit_timing_query(user_text):
             missing = []
-        elif turn_understanding.prepare_by_parse() and (parse := turn_understanding.parse_for(user_text)) is not None and parse.items:
-            # Подготовка читает фразы разбора (`prepare_by_parse`): услугу назвал разбор хода — названа, даже если её не извлёк NLU.
-            missing = []
 
     # Compound-УЗИ (BUG-2026-06-02-08): набор из >1 УЗИ-исследования («жтк + почки»,
     # follow-up «плюс поджелудочная» к активной УЗИ-записи). По решению владельца
