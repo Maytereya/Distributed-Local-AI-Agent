@@ -130,3 +130,13 @@ def test_off_keeps_the_general_answer(mini_prod_world, monkeypatch):  # noqa: F8
     turns = [_press("menu.address"), "по адресу аминева 29 можно сдать анализы?"]
     off = _dialog(mini_prod_world, monkeypatch, turns, switch="off", followup=_answer("branch", "ул.Аминева, 29"))
     assert "address_followup" not in off[1]["telemetry"] and address_flow.ADDRESS_BUTTON_KEY not in off[0]["state"]
+
+
+def test_branch_not_named_in_the_reply_is_not_carded(mini_prod_world, monkeypatch):  # noqa: F811
+    """Карточка 25.10: LLM выбирала филиалы, которых пациент не называл («рядом с метро …», «рядом с моим адресом», пустой выбор
+    — три одних и тех же): выбор сужает правило «слово адреса филиала есть в реплике»; без названного филиала — общий путь."""
+
+    turns = [_press("menu.address"), "есть ли филиал рядом с метро Московская?"]
+    on = _dialog(mini_prod_world, monkeypatch, turns, switch="on", followup=_answer("branch", "ул.Аминева, 29"))
+    off = _dialog(mini_prod_world, monkeypatch, turns, switch="off", followup=None)
+    assert on[1]["text"] == off[1]["text"] and on[1]["telemetry"].get("address_followup_vetoed") == 1, on[1]["telemetry"]

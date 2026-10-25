@@ -174,13 +174,32 @@ async def followup(text: str, branches: list[dict[str, Any]]) -> Followup | None
         choice = None
     outcome = choice.outcome if choice is not None and choice.status is Status.OUTCOME else ""
     picks = tuple(rows[int(i) - 1] for i in (choice.ids if choice is not None else ()) if str(i).isdigit() and 1 <= int(i) <= len(rows))
-    decided = outcome in ("branch", "no_data", "weekend") or (picks and outcome == "list")
+    named = tuple(b for b in picks if named_in(text, str(b["address"])))
+    if len(named) < len(picks):
+        turn_telemetry.note(address_followup_vetoed=len(picks) - len(named))  # филиал выбран, но в реплике не назван
+    picks = named
+    decided = outcome in ("no_data", "weekend") or (bool(picks) and outcome in ("branch", "list"))
     turn_telemetry.note(address_followup=outcome or "none", address_followup_picks=len(picks))
     if not decided:
         if llm_runtime.turn_decisions_spent() > spent and llm_runtime.refund_turn_decision():
             turn_telemetry.note(tu_address_followup_refund=1)
         return None
     return Followup(outcome=outcome, branches=picks)
+
+
+def named_in(text: str, address: str) -> bool:
+    """Выбранный LLM филиал назван в реплике: слово его адреса (от четырёх букв, основа — первые пять) есть в ней. Правило только
+    сужает выбор модели (карточка 25.10: «рядом с метро», «рядом с моим адресом» и пустой выбор давали карточки неназванных
+    филиалов)."""
+
+    from .russian_nlu import normalize_ru
+
+    said = normalize_ru(text or "")
+    flat = normalize_ru(address or "")
+    for mark in ",.-":
+        flat = flat.replace(mark, " ")
+    words = [w for w in flat.split() if w.isalpha() and len(w) >= 4]
+    return any(w[:5] in said for w in words)
 
 
 def _card(branch: dict[str, Any]) -> list[str]:
