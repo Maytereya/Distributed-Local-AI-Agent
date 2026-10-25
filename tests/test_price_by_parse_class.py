@@ -18,6 +18,8 @@
 - Ш4, без LLM: разбор реплики не решён (сбой LLM) — пациент не видит ни одной цены, если не назвал услугу дословно или кодом
   (тогда её решают данные без LLM, `strong_whole`); ни списка правил с ценами («лг» внутри «аналгезии»), ни корзины правил, ни
   срока по словам; догадка заземления по буквам в контексте не остаётся (свип по прайсу мини-прод через эндпоинт);
+- Ш5, журнал синонимов клинике (K7): только фраза разбора этой реплики — срез реплики; разбора нет, он не решён или решил «услуги
+  нет» — записи нет; ни фразы вырезателя, ни упоминания правил понимания (контракт `_journal_phrase` и все записи эталона on);
 - off — как было (контраст: вырезатель делает реплику с обвязкой сильной и печатает склейки).
 """
 
@@ -238,3 +240,29 @@ def test_down_sweep_no_price_without_verbatim_name_under_on(mini_prod_world, mon
     assert attempts == []
     assert priced == {}
     assert guessed == {}  # догадка заземления по буквам, которой пациент не видел, в контексте не остаётся
+
+
+# --------------------------------------------------------------------------- Ш5: журнал синонимов клинике — только фраза разбора
+
+
+@pytest.mark.parametrize("parsed", ["флороценоз", "анализ на флороценоз", "", None])
+def test_journal_phrase_is_the_parse_phrase_only_under_on(monkeypatch, parsed):
+    from messengers_router.services import _price_by_parse
+    from messengers_router.services import _price_select_llm as PS
+
+    _switch(monkeypatch, "on")
+    monkeypatch.setattr(_price_by_parse, "phrase", lambda text: parsed)
+    assert PS._journal_phrase("сколько стоит анализ на флороценоз", "фраза вырезателя") == (parsed or "", "price")
+
+
+def test_journal_entries_are_reply_slices_under_on():
+    from tests.test_price_stage2_turns import CASES
+
+    data = json.loads((_GOLDEN / "price_stage2_turns_on.json").read_text(encoding="utf-8"))
+    foreign = {
+        key: entry["phrase"]
+        for key, record in data.items()
+        for entry in record["journal"]
+        if not any(_norm(entry["phrase"]) in _norm(reply) for reply in CASES[key.rsplit("-", 1)[0]].turns)
+    }
+    assert foreign == {}

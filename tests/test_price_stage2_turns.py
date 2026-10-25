@@ -113,6 +113,9 @@ CASES: dict[str, Case] = {
     # журнал синонимов клинике (K7): промах — фраза разметки, а не реплика и не вырезатель
     "journal_miss": Case(("сколько стоит спирометрия",), ("спирометрия",), rows=(), why="услуги нет в прайсе"),
     "journal_wrapped": Case(("сколько стоит флороценоз подскажите пожалуйста",), ("флороценоз",), rows=(), why="обвязка вокруг"),
+    "journal_grouped": Case(
+        ("сколько стоит анализ на флороценоз",), ("анализ на флороценоз",), rows=(), why="фраза разметки с «анализ на» (правило 5 промпта)"
+    ),
     # корзина: позиции — фразы разметки
     "basket_commas": Case(("ферритин, глюкоза, холестерин",), ("ферритин", "глюкоза", "холестерин"), rows=("Холестерол",)),
     "basket_run_on": Case(("ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА",), ("ОАК", "ОАМ", "ФЕРРИТИН", "ГЛЮКОЗА"), rows=("Общий анализ крови (Le", "Общий анализ мочи")),
@@ -139,7 +142,7 @@ CLASSES: dict[str, tuple[str, ...]] = {
         "one_generic_word",
     ),
     "price_select": ("weak_select_picks", "weak_select_down", "weak_abbr"),
-    "journal": ("journal_miss", "journal_wrapped"),
+    "journal": ("journal_miss", "journal_wrapped", "journal_grouped"),
     "basket": ("basket_commas", "basket_run_on"),
     "readiness": ("readiness_named",),
     "prepare": ("prepare_named", "prepare_pick_by_number"),

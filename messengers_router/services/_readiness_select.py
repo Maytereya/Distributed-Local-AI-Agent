@@ -153,7 +153,7 @@ async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | Non
         if phrase is None:
             return None
         weak_phrase = "" if phrase.rows else phrase.text
-        if weak_phrase:  # фраза журнала — упоминание хода (L-14, шаг 2)
+        if weak_phrase and not _price_by_parse.enabled():  # фраза журнала — упоминание хода (L-14, шаг 2); под on — фраза разбора (Ш5)
             mentioned = _mention_phrase(question)
             weak_phrase = weak_phrase if mentioned is None else mentioned
         first = list(dict.fromkeys(str(row.get("serviceName") or "").strip() for row in phrase.rows))

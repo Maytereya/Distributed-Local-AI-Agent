@@ -176,6 +176,83 @@
    "rows"
   ]
  },
+ "journal_grouped-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "journal_grouped-llm": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "rules",
+     "price_guard": "llm"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "none_fit"
+     ]
+    ]
+   }
+  ],
+  "journal": [
+   {
+    "phrase": "анализ на флороценоз",
+    "source": "price",
+    "found": false
+   }
+  ],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
  "journal_miss-down": {
   "turns": [
    {
