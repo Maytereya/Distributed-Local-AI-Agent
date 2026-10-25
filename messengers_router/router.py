@@ -2717,6 +2717,54 @@ async def _handle_button_new_topic(
     )
 
 
+async def _handle_address_followup(
+    *,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Реплика сразу после «Адреса и часы работы» / «Где и до скольки принимают» — ответ по данным филиалов, а не общий список
+    (`address_followup_llm`, BUG-2026-10-25-ADDRESS-FOLLOWUP-TEMPLATE): LLM выбрала, какие филиалы названы и что спрошено, код
+    печатает их адрес, телефон, график и что там делают; чего в данных нет — честно и оффер оператора. Общий вопрос, другая тема,
+    сбой LLM — общий путь, как было. Срочное и явный оператор отвечены раньше."""
+
+    if not address_flow.followup_on() or not address_flow.followup_turn():
+        return None
+    if runtime_options is not None and runtime_options.llm_mode == "strict":
+        return None
+    try:
+        # Филиалы — тем же путём, что общий ответ адресами: живой срез, снимок или запасной список — и с флагами.
+        payload = await services.address_info("", {})
+    except Exception:
+        payload = {}
+    regions = [b for b in (payload.get("branches") or []) if isinstance(b, dict) and str(b.get("address") or "").strip()]
+    if not regions:
+        return None
+    found = await address_flow.followup(user_text, regions)
+    if found is None:
+        return None
+    text, offer = address_flow.followup_text(found, regions)
+    if offer:
+        mark_operator_offer_pending(state, memory)
+    # С оффером — метка OTHER: ответ с вопросом «Перевести на оператора?» — свой, не переспрос по слоту (`_extract_pending_response`).
+    label = "OTHER" if offer else "ADDRESS"
+    return (
+        RouteDecision(
+            label=label,
+            confidence=0.9,
+            entities={},
+            flags={"address_followup", f"address_followup:{found.outcome}"},
+            needs_handoff=False,
+            context_action="continue",
+            source="address_followup",
+        ),
+        Plan(label=label),
+        Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": text, "handoff": False}}),
+    )
+
+
 async def _apply_post_nlu_guardrails(
     decision: RouteDecision,
     state: SessionState,
