@@ -12,15 +12,31 @@
   не сработало или его ветка в `topic_by_llm`); надёжные правила и срочное — как всегда. У кнопок цены своего вопроса-слота
   не было — его ответ судила LLM-классификатор; под on его судит та же функция (≈ 1 с вместо 3,7 с), и это решение лимита
   решений хода не тратит: оно — шаг NLU вместо классификатора, а пути цены остаются её решения, как без кнопки.
+* `button_topic_hint` (BUG-2026-10-25-BUTTON-FOREIGN-TOPIC) — на чужую тему в ответ на вопрос кнопки бот подсказывает
+  нужную кнопку, а не угадывает тему общим путём (предложение владельца 25.10). Одна функция решила «другая тема», а тему
+  угадывала бы LLM-классификатор (надёжное правило другой темы отвечает само) — LLM
+  выбирает из закрытого списка листьев меню (принцип 2), где пациент найдёт ответ (`HINT_TASK`, промпт
+  `choose_button_hint`): «Это вопрос про … — основная информация в кнопке «…» раздела «…».». В сообщении и ответ на вопрос
+  кнопки, и другой вопрос (ТЗ: 1 % сообщений) — ответ по теме кнопки и подсказка в конце. Лист той же темы, что у кнопки
+  («Сколько стоит анализ» на «Цена анализа»), — не подсказка: ход идёт как без выключателя. Ничего не подошло, сбой LLM —
+  общий путь, как было; это решение лимит решений хода не тратит (как «другая тема» одной функции, Q5 18.10). Ложная
+  подсказка безопаснее неверного ответа, но её долю меряет карточка (`button_hint` в журнале хода).
 """
 
 from __future__ import annotations
 
+import contextvars
+import logging
+from dataclasses import dataclass
 from typing import Any, Iterable
 
 from . import button_menu, pending_answer, turn_telemetry
+from .choice import Option, Status, Task, choose
 from .expects import Question
+from .mess_types import ResponseEnvelope
 from .runtime_config import config as _cfg
+
+logger = logging.getLogger(__name__)
 
 QUESTION_KEY = "button"  # `_pending[QUESTION_KEY]` — лист меню, который задал висящий вопрос
 # Темы вопросов кнопок, ответ на которые судит одна функция только под `button_answer_topic` (остальные — `SLOT_TOPICS`).
@@ -37,10 +53,16 @@ def answer_topic_on() -> bool:
     return _on("MR_BUTTON_ANSWER_TOPIC")
 
 
+def hint_on() -> bool:
+    """`[MESSENGER_ROUTER] button_topic_hint = on`: на чужую тему в ответ на вопрос кнопки — подсказка кнопки меню."""
+
+    return _on("MR_BUTTON_TOPIC_HINT")
+
+
 def marks_questions() -> bool:
     """Висящий вопрос кнопки помечается её листом — только когда пометку кто-то читает (off — состояние как было)."""
 
-    return answer_topic_on()
+    return answer_topic_on() or hint_on()
 
 
 def pressed(flags: Iterable[Any] | None) -> str:
@@ -70,13 +92,16 @@ def judges_answer(label: str, pending: Any) -> bool:
     """Вопрос кнопки этой темы получает свободный ответ одной функции под `button_answer_topic` (кнопки цены): вопрос
     `SLOT_TOPICS` получает его и без выключателя (`pending_buttons`)."""
 
-    return answer_topic_on() and label in _JUDGED_UNDER_SWITCH and bool(question_button(pending))
+    return (answer_topic_on() or hint_on()) and label in _JUDGED_UNDER_SWITCH and bool(question_button(pending))
 
 
 def answer_topic(pending: Any) -> str:
     """Тема ответа на вопрос кнопки, если её знает кнопка: выключатель, вопрос задала кнопка, одна функция решила «это
     ответ» (правилами или LLM). Иначе пусто — тему решает NLU, как было."""
 
+    mixed = _MIXED.get()
+    if mixed is not None:
+        return mixed[0]  # в сообщении и ответ, и другой вопрос (`button_topic_hint`): ответ — по теме кнопки
     if not answer_topic_on() or not question_button(pending):
         return ""
     found = pending_answer.slot_answer()
@@ -85,14 +110,16 @@ def answer_topic(pending: Any) -> str:
     return str(pending.get("label") or "")
 
 
-def refund_topic_judge(answered: pending_answer.Answer | None, pending: Any) -> None:
+def refund_topic_judge(answered: pending_answer.Answer | None, pending: Any, spent_before: int) -> None:
     """Решение одной функции об ответе на вопрос кнопки цены — шаг NLU вместо классификатора: лимит решений хода не тратит,
-    пути цены остаются её решения, как без кнопки (`button_answer_topic`)."""
+    пути цены остаются её решения, как без кнопки (`button_answer_topic`). `spent_before` — решений хода до функции: ответ из
+    кэша решения не тратил, и возвращать нечего."""
 
     from . import llm_runtime
 
     if (
-        answered is None
+        llm_runtime.turn_decisions_spent() <= spent_before
+        or answered is None
         or answered.source is not pending_answer.Source.LLM
         or answered.outcome is not pending_answer.Outcome.ANSWER  # прочие исходы ход не закрывают — их уже вернула функция (Q5)
         or answered.type != Question.SLOT_VALUE.value
@@ -101,3 +128,115 @@ def refund_topic_judge(answered: pending_answer.Answer | None, pending: Any) -> 
         return
     if llm_runtime.refund_turn_decision():
         turn_telemetry.note(tu_button_refund=1)
+
+
+# --------------------------------------------------------------------------- подсказка кнопки (`button_topic_hint`)
+
+# Где пациент найдёт ответ: листья меню, до двух (в сообщении два вопроса).
+HINT_TASK = Task(name="button_hint", max_picks=2, num_predict=48, timeout_s=8, queue_timeout_ms=3000)
+# Не подсказываем: перевод на оператора — явный запрос, его исполняет ход раньше.
+_NOT_HINTED = frozenset({"menu.operator"})
+# Ответ по теме кнопки и подсказка в конце — (тема кнопки, текст подсказки) этого хода.
+_MIXED: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar("mr_button_mixed", default=None)
+
+
+@dataclass(frozen=True)
+class Hint:
+    """Подсказка: листья другой темы и было ли в сообщении ещё и ответ на вопрос кнопки."""
+
+    leaves: tuple[str, ...]
+    mixed: bool = False
+
+
+def reset() -> None:
+    """Начало хода: ответа с подсказкой прошлого хода нет."""
+
+    _MIXED.set(None)
+
+
+def _where(action: button_menu.ButtonAction) -> str:
+    return f" раздела «{action.section}»" if action.section else " главного меню"
+
+
+def menu_options() -> list[Option]:
+    """Листья меню для выбора LLM: подпись, раздел, о чём лист (`button_menu`)."""
+
+    return [
+        Option(id=button_id, text=f"«{action.title}»{_where(action)} — вопросы про {action.about}")
+        for button_id, action in button_menu.BUTTONS.items()
+        if button_id not in _NOT_HINTED and action.title
+    ]
+
+
+def _same_topic(button_id: str, current: str) -> bool:
+    """Лист той же темы, что кнопка вопроса («Сколько стоит анализ» и «Цена анализа»), — не другая тема."""
+
+    a, b = button_menu.action_for(button_id), button_menu.action_for(current)
+    return a is not None and b is not None and a.label == b.label
+
+
+def hint_text(leaves: tuple[str, ...], *, tail: bool = False) -> str:
+    """«Это вопрос про … — основная информация в кнопке «…» раздела «…».»; `tail` — вторая часть ответа («А про …»)."""
+
+    actions = [a for a in (button_menu.action_for(b) for b in leaves) if a is not None]
+    if not actions:
+        return ""
+    about = " и ".join(a.about for a in actions)
+    buttons = " и ".join(f"«{a.title}»{_where(a)}" for a in actions)
+    where = "в кнопке" if len(actions) == 1 else "в кнопках"
+    if tail:
+        return f"А про {about} — основная информация {where} {buttons}."
+    head = "Это вопрос" if len(actions) == 1 else "Это вопросы"
+    return f"{head} про {about} — основная информация {where} {buttons}."
+
+
+async def hint(text: str, current: str, asked: str) -> Hint | None:
+    """Где пациент найдёт ответ на сообщение о другой теме — листья меню по выбору LLM (`HINT_TASK`).
+
+    :param text: реплика пациента
+    :param current: лист кнопки, на чей вопрос ждали ответ
+    :param asked: вопрос бота, без ПДн
+    :return: подсказка; None — подсказки нет (ничего не подошло, только тема кнопки, сбой LLM): ход идёт общим путём, а
+        решение лимит решений хода не тратит
+    """
+
+    from . import llm_runtime
+
+    spent = llm_runtime.turn_decisions_spent()
+    try:
+        choice = await choose(HINT_TASK, text, menu_options(), asked=asked)
+    except Exception:  # новый слой: его сбой не ломает ход — общий путь
+        logger.warning("button_hint_failed", exc_info=True)
+        choice = None
+    picked = tuple(choice.ids) if choice is not None and choice.status is Status.PICKED else ()
+    others = tuple(dict.fromkeys(b for b in picked if button_menu.action_for(b) is not None and not _same_topic(b, current)))
+    if not others:
+        if llm_runtime.turn_decisions_spent() > spent and llm_runtime.refund_turn_decision():
+            turn_telemetry.note(tu_button_hint_refund=1)
+        turn_telemetry.note(button_hint="none")
+        return None
+    found = Hint(leaves=others, mixed=len(others) < len(picked))
+    turn_telemetry.note(button_hint=("mixed:" if found.mixed else "") + "+".join(others))
+    return found
+
+
+def mixed_topic() -> bool:
+    """Ход отвечает на смешанное сообщение: тема — кнопки, и её не перебивает надёжное правило другой темы."""
+
+    return _MIXED.get() is not None
+
+
+def answer_with_hint(topic: str, found: Hint) -> None:
+    """Сообщение — и ответ на вопрос кнопки, и другой вопрос: ход отвечает по теме кнопки, подсказка — в конце ответа."""
+
+    _MIXED.set((topic, hint_text(found.leaves, tail=True)))
+
+
+def with_mixed_hint(response: ResponseEnvelope) -> ResponseEnvelope:
+    """Ответ хода с подсказкой в конце, если сообщение было смешанным; перевод на оператора — без подсказки."""
+
+    mixed = _MIXED.get()
+    if mixed is None or response.handoff or not str(response.text or "").strip():
+        return response
+    response.text = f"{response.text.rstrip()}\n\n{mixed[1]}"
+    return response

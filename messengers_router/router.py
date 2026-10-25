@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, button_flow, degradation, expects, pending_answer, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import booking_slots, button_flow, degradation, expects, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -2662,6 +2662,61 @@ async def _handle_slot_value_pending(
     )
 
 
+async def _handle_button_new_topic(
+    *,
+    user_text: str,
+    state: SessionState,
+    services: Services,
+    memory: MemoryStore,
+    runtime_options: RuntimeOptions | None = None,
+) -> tuple[RouteDecision, Plan, Evidence] | None:
+    """Чужая тема в ответ на вопрос кнопки меню — подсказка нужной кнопки, а не угадывание темы общим путём
+    (`button_topic_hint`, BUG-2026-10-25-BUTTON-FOREIGN-TOPIC).
+
+    Одна функция ответа на висящий вопрос решила «другая тема», а тему общий путь угадывал бы LLM-классификатором (правило
+    не сработало или его ветка в `topic_by_llm`): LLM выбирает листья меню, где пациент найдёт ответ (`button_flow.hint`).
+    Надёжное правило другой темы («а в субботу открыто?» — часы филиалов) отвечает само, как было: прямой верный ответ
+    лучше подсказки. Смешанное сообщение — и ответ на вопрос кнопки, и другой вопрос — ход идёт по теме кнопки, подсказка —
+    в конце ответа. Подсказки нет (ничего не подошло, только тема кнопки, сбой LLM) — общий путь, как было. Срочное,
+    жалоба и медвопрос по правилам отвечены раньше (`orchestrator.early_guards`).
+    """
+
+    from .classifier import deterministic_rule_decision
+    from .nlu_pipeline import rule_defers_topic
+
+    pending = memory.get_pending(state)
+    current = button_flow.question_button(pending)
+    found = pending_answer.slot_answer()
+    if not button_flow.hint_on() or not current or found is None or found.outcome is not pending_answer.Outcome.NEW_TOPIC:
+        return None
+    if runtime_options is not None and runtime_options.llm_mode == "strict":
+        return None
+    rule = await deterministic_rule_decision(user_text, state.last_entities, runtime_options=runtime_options, allow_refine=False, attach_secondary=False)
+    if rule is not None and not rule_defers_topic(rule, user_text):
+        return None
+    expected = pending_answer.expected_from(state.last_entities)
+    hint = await button_flow.hint(user_text, current, expected[1] if expected is not None else "")
+    if hint is None:
+        return None
+    if hint.mixed:
+        button_flow.answer_with_hint(str((pending or {}).get("label") or ""), hint)
+        return None
+    memory.clear_pending(state)
+    return (
+        RouteDecision(
+            label="OTHER",
+            confidence=0.9,
+            entities={},
+            flags={"button_hint", *(f"button_hint:{leaf}" for leaf in hint.leaves)},
+            needs_handoff=False,
+            context_action="new_topic",
+            source="button_hint",
+        ),
+        Plan(label="OTHER"),
+        Evidence(items={ek.OPERATOR_OFFER_RESPONSE: {"text": button_flow.hint_text(hint.leaves), "handoff": False}}),
+    )
+
+
 async def _apply_post_nlu_guardrails(
     decision: RouteDecision,
     state: SessionState,
@@ -3153,14 +3208,18 @@ async def _resolve_nlu_decision_before_doctor_guard(
         use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
         shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False) or _env_flag("MR_NLU_SHADOW", False)
         if use_v2_nlu:
-            # Ответ на вопрос кнопки, признанный ответом, — тема кнопки (`button_answer_topic`); только когда она есть.
+            # Ответ на вопрос кнопки, признанный ответом, — тема кнопки (`button_answer_topic`); смешанное сообщение — тоже
+            # (`button_topic_hint`: ответ по теме кнопки, подсказка в конце — её не перебивает и надёжное правило). Только
+            # когда тема есть.
             answer_topic = button_flow.answer_topic(pending_before_nlu)
+            firm = {"answer_topic_firm": True} if answer_topic and button_flow.mixed_topic() else {}
             nlu_result = await analyze_with_candidates(
                 user_text,
                 state,
                 runtime_options=runtime_options,
                 **({"button_topic": button_topic} if button_topic else {}),
                 **({"answer_topic": answer_topic} if answer_topic else {}),
+                **firm,
             )
             decision = nlu_result.decision
             turn_telemetry.note(tu_label_nlu=decision.label)
@@ -4055,14 +4114,16 @@ async def patient_routing_stream(
     # (`pending_answer.kind / passes / picked`); хвост реплики («нет, мне ферритин») идёт обычным путём. Кнопка снимает
     # висящий вопрос — функция не зовётся.
     pending_answer.reset()
+    button_flow.reset()
     answered = None
     said = user_text  # реплика как есть — в историю диалога; дальше ход может идти хвостом
     if not button_id:
         expected = pending_answer.expected_from(state.last_entities)
         if expected is not None:
             filled = expected[0] == expects.Question.SLOT_VALUE.value and _slot_filled_by_rules(user_text, state, services, memory)
+            spent = llm_runtime.turn_decisions_spent()
             answered = await pending_answer.answer(*expected, user_text, filled=filled)
-            button_flow.refund_topic_judge(answered, memory.get_pending(state))
+            button_flow.refund_topic_judge(answered, memory.get_pending(state), spent)
             if answered is not None and answered.decided and answered.rest:
                 user_text = answered.rest
 
@@ -4194,6 +4255,8 @@ async def patient_routing_stream(
     if offered is not response:
         turn_telemetry.override(answer_source="operator_offer_on_repeat")
     response = offered
+    # Смешанное сообщение внутри кнопки (`button_topic_hint`): ответ по теме кнопки — и подсказка кнопки на остальное.
+    response = button_flow.with_mixed_hint(response)
     # Поле ожидания — по тексту, который увидит пациент (после анти-залипа: он дописывает свой оффер).
     expects.finish_turn(state, response)
 

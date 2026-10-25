@@ -186,6 +186,12 @@ def _topic_by_llm_rules() -> frozenset[str]:
     return frozenset(rules)
 
 
+def rule_defers_topic(rule: RouteDecision, text: str) -> bool:
+    """Ветка сработавшего правила в `topic_by_llm` — тему этого хода решала бы LLM-классификатор, а правило — кандидат."""
+
+    return bool(_topic_by_llm_rules() & set(_rule_branch(rule, text).split("+")))
+
+
 def _button_pass_rules() -> bool:
     """`[MESSENGER_ROUTER] button_pass_rules = on` (BUG-2026-10-24-BUTTON-PASS-TOPIC-LLM): ход-кнопка `pass` — тему решает правило."""
 
@@ -262,6 +268,7 @@ async def _analyze_legacy_with_candidates(
     prefetched_llm: dict[str, Any] | None = None,
     button_topic: str = "",
     answer_topic: str = "",
+    answer_topic_firm: bool = False,
 ) -> NLUResult:
     # bounded контекст для LLM pass
     seeded = seeded_context_for_nlu(state)
@@ -271,7 +278,8 @@ async def _analyze_legacy_with_candidates(
     prefetched_rule = await _rule_decision(text, state.last_entities, runtime_options=runtime_options)
     topic_source = _note_topic_source(prefetched_rule, text)
     by_llm = _topic_by_llm(prefetched_rule, topic_source, runtime_options, button_topic)
-    if answer_topic and (prefetched_rule is None or by_llm):
+    firm = answer_topic_firm and prefetched_rule is not None and prefetched_rule.label not in _SAFETY_LABELS and not prefetched_rule.needs_handoff
+    if answer_topic and (prefetched_rule is None or by_llm or firm):
         return _button_answer_result(text, prefetched_rule, answer_topic, topic_source)
     if prefetched_rule is not None and not by_llm and (runtime_options is None or runtime_options.llm_mode != "strict"):
         # Тема решена правилом без LLM — тень LLM рядом (под `topic_shadow_llm = on`): как часто правило ошибается.
@@ -376,14 +384,18 @@ async def analyze_with_candidates(
     runtime_options: RuntimeOptions | None = None,
     button_topic: str = "",
     answer_topic: str = "",
+    answer_topic_firm: bool = False,
 ) -> NLUResult:
     """`button_topic` — тема нажатой кнопки режима `pass` (подпись идёт как текст); `answer_topic` — тема кнопки, на чей
-    вопрос реплика — ответ (`button_answer_topic`; движок `llm_primary` её не читает); пусто — набранный текст."""
+    вопрос реплика — ответ (`button_answer_topic`; движок `llm_primary` её не читает), `answer_topic_firm` — её не
+    перебивает и надёжное правило другой темы (смешанное сообщение, `button_topic_hint`); пусто — набранный текст."""
 
     opts = runtime_options or RuntimeOptions()
-    button = {"button_topic": button_topic} if button_topic else {}  # только когда кнопка есть: путь текста не меняется
+    button: dict[str, Any] = {"button_topic": button_topic} if button_topic else {}  # только когда кнопка есть: путь текста не меняется
     if answer_topic:
         button["answer_topic"] = answer_topic
+    if answer_topic_firm:
+        button["answer_topic_firm"] = True
     if not opts.uses_llm_primary_nlu:
         return await _analyze_legacy_with_candidates(text, state, runtime_options=runtime_options, **button)
     if _engine_from_config() != "llm_primary":

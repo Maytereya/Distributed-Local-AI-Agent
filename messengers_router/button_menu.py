@@ -22,11 +22,14 @@
 
 Любое нажатие — явная смена темы (см. patient_routing_stream): висящий вопрос —
 дата записи, «да/нет» оффера оператора — подпись кнопки не получает.
+
+Подпись, раздел и тема листа (`title`, `section`, `about`) — место листа в меню шлюза («Таблица экранов, версия 1»):
+по ним бот подсказывает нужную кнопку, когда в ответ на вопрос одной кнопки пациент пишет о другом (`button_flow`).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .policies import SICK_LEAVE_HANDOFF_TEXT, handoff_message
 
@@ -38,6 +41,9 @@ class ButtonAction:
     entities: tuple[tuple[str, str], ...] = ()
     flags: frozenset[str] = frozenset()
     text: str = ""
+    title: str = ""  # подпись листа в меню шлюза
+    section: str = ""  # кнопка первого уровня, под которой лист; пусто — лист в главном меню
+    about: str = ""  # о чём лист — «Это вопрос про …» (винительный падеж)
 
 
 def _slot(label: str, hint: str = "", **entities: str) -> ButtonAction:
@@ -57,78 +63,121 @@ def _pass(label: str) -> ButtonAction:
     return ButtonAction(label=label, mode="pass")
 
 
+def _at(action: ButtonAction, title: str, about: str, section: str = "") -> ButtonAction:
+    """Место листа в меню: подпись, раздел (кнопка первого уровня) и о чём он."""
+
+    return replace(action, title=title, section=section, about=about)
+
+
+# Кнопки первого уровня меню шлюза — разделы листьев.
+_BOOK = "Записаться к врачу"
+_TESTS = "Сдать анализы"
+_RESULTS = "Результаты анализов"
+_PRICE = "Сколько стоит"
+_DOCS = "Справки и документы"
+
+
 BUTTONS: dict[str, ButtonAction] = {
     # --- Записаться к врачу
-    "menu.appointment.book": _slot(
-        "APPOINTMENT",
-        "К какому врачу или на какую услугу записать? Напишите специальность или услугу — "
-        "например: «кардиолог», «гинеколог», «УЗИ брюшной полости».",
+    "menu.appointment.book": _at(
+        _slot(
+            "APPOINTMENT",
+            "К какому врачу или на какую услугу записать? Напишите специальность или услугу — "
+            "например: «кардиолог», «гинеколог», «УЗИ брюшной полости».",
+        ),
+        "Записаться на приём", "запись к врачу или на процедуру", _BOOK,
     ),
-    "menu.appointment.schedule": _slot("DOCTOR_SCHEDULE"),
+    "menu.appointment.schedule": _at(_slot("DOCTOR_SCHEDULE"), "Когда принимает врач", "расписание врача", _BOOK),
     # Решение владельца 07.10: кнопка — подсказка формата, не перевод. С 08.10 (вариант A)
     # перенос: бот берёт врача и пожелание по времени и передаёт оператору со сводкой;
     # «отменить запись» — сразу оператор.
-    "menu.appointment.change": _hint(
-        "APPOINTMENT",
-        "Перенести запись помогу. Напишите фамилию врача и на какой день перенести — например: "
-        "«перенести запись к Иванову на пятницу».\n"
-        "Отменить запись поможет оператор — напишите «отменить запись».",
+    "menu.appointment.change": _at(
+        _hint(
+            "APPOINTMENT",
+            "Перенести запись помогу. Напишите фамилию врача и на какой день перенести — например: "
+            "«перенести запись к Иванову на пятницу».\n"
+            "Отменить запись поможет оператор — напишите «отменить запись».",
+        ),
+        "Перенести или отменить", "перенос или отмену записи", _BOOK,
     ),
-    "menu.appointment.prepare": _slot(
-        "PREPARE",
-        "К какой процедуре нужна подготовка? Напишите её название — например: "
-        "«гастроскопия», «колоноскопия».",
+    "menu.appointment.prepare": _at(
+        _slot(
+            "PREPARE",
+            "К какой процедуре нужна подготовка? Напишите её название — например: "
+            "«гастроскопия», «колоноскопия».",
+        ),
+        "Подготовка к процедуре", "подготовку к процедуре (УЗИ, ФГДС, колоноскопия)", _BOOK,
     ),
     # --- Сдать анализы
-    "menu.tests.where": _pass("ADDRESS"),
+    "menu.tests.where": _at(_pass("ADDRESS"), "Где и до скольки принимают", "где и во сколько сдать анализы", _TESTS),
     # Кнопка из раздела «Сдать анализы»: контекст анализов известен заранее. Штатный
     # walk-in ответ — «Анализы выполняются без записи, в порядке живой очереди» и
     # адреса. Флаг — ШТАТНЫЙ `policy_nonbookable_walkin`: по нему entity_grounder
     # оставляет «анализы» как класс услуги. Со своим флагом grounder отправлял
     # «анализы» в каталог — и бот предлагал «Анализ крови на аминокислоты» (29.09).
-    "menu.tests.booking_needed": ButtonAction(
-        label="ADDRESS",
-        mode="slot",
-        entities=(("service_name", "анализы"),),
-        flags=frozenset({"policy_nonbookable_walkin"}),
+    "menu.tests.booking_needed": _at(
+        ButtonAction(
+            label="ADDRESS",
+            mode="slot",
+            entities=(("service_name", "анализы"),),
+            flags=frozenset({"policy_nonbookable_walkin"}),
+        ),
+        "Нужно ли записываться", "запись на анализы", _TESTS,
     ),
-    "menu.tests.prepare": _slot(
-        "PREPARE",
-        "К какому анализу нужна подготовка? Напишите название — например: "
-        "«общий анализ крови», «ферритин», «ТТГ».",
+    "menu.tests.prepare": _at(
+        _slot(
+            "PREPARE",
+            "К какому анализу нужна подготовка? Напишите название — например: "
+            "«общий анализ крови», «ферритин», «ТТГ».",
+        ),
+        "Как подготовиться к анализу", "подготовку к анализу", _TESTS,
     ),
-    "menu.tests.suggest": _slot("TEST_ASSIST"),
+    "menu.tests.suggest": _at(_slot("TEST_ASSIST"), "Подобрать анализы", "подбор анализов по жалобе или цели", _TESTS),
     # Без «можно несколько через запятую» (BTN-1, ревью 05.10): список в ответе сводится
     # к одной услуге — «ферритин, глюкоза, холестерин» → только «Липидограмма» (открытый П2).
-    "menu.tests.price": _slot(
-        "PRICE",
-        "Какой анализ интересует? Напишите название — например: «общий анализ крови», «ферритин».",
+    "menu.tests.price": _at(
+        _slot(
+            "PRICE",
+            "Какой анализ интересует? Напишите название — например: «общий анализ крови», «ферритин».",
+        ),
+        "Сколько стоит анализ", "цену анализа", _TESTS,
     ),
     # --- Результаты анализов
-    "menu.results.lookup": _slot("TEST_RESULT"),
-    "menu.results.missing": _slot("TEST_RESULT"),
+    "menu.results.lookup": _at(_slot("TEST_RESULT"), "Ввести данные", "результаты анализов", _RESULTS),
+    "menu.results.missing": _at(_slot("TEST_RESULT"), "Результат не пришёл", "результат анализа, который не пришёл", _RESULTS),
     # Срок готовности анализа бот пока не знает: даже «когда будет готов анализ на
     # ферритин» текстом даёт цену (замер 29.09). Неверный ответ хуже уточнения —
     # до появления сроков в ответах честно переводим на оператора.
-    "menu.results.eta": _handoff("TEST_ASSIST", "Срок готовности результата подскажет оператор — соединяю."),
+    "menu.results.eta": _at(
+        _handoff("TEST_ASSIST", "Срок готовности результата подскажет оператор — соединяю."),
+        "Когда будет готов", "срок готовности результата", _RESULTS,
+    ),
     # --- Сколько стоит
-    "menu.price.test": _slot(
-        "PRICE",
-        "Какой анализ интересует? Напишите название — например: «общий анализ крови», «ферритин».",
+    "menu.price.test": _at(
+        _slot(
+            "PRICE",
+            "Какой анализ интересует? Напишите название — например: «общий анализ крови», «ферритин».",
+        ),
+        "Цена анализа", "цену анализа", _PRICE,
     ),
-    "menu.price.doctor": _slot(
-        "PRICE",
-        "К какому врачу? Напишите специальность — например: «кардиолог», «невролог», «гинеколог».",
+    "menu.price.doctor": _at(
+        _slot(
+            "PRICE",
+            "К какому врачу? Напишите специальность — например: «кардиолог», «невролог», «гинеколог».",
+        ),
+        "Цена приёма врача", "цену приёма врача", _PRICE,
     ),
-    "menu.price.promo": _pass("NEWS"),
+    "menu.price.promo": _at(_pass("NEWS"), "Акции и скидки", "акции и скидки", _PRICE),
     # --- Адреса и часы работы (лист, решение владельца 28.09)
-    "menu.address": _pass("ADDRESS"),
+    "menu.address": _at(_pass("ADDRESS"), "Адреса и часы работы", "адреса и часы работы филиалов"),
     # --- Справки и документы
-    "menu.docs.tax": _pass("OTHER"),
-    "menu.docs.contract": _handoff("OTHER", handoff_message("doc_request_handoff")),
-    "menu.docs.sick_leave": _handoff("OTHER", SICK_LEAVE_HANDOFF_TEXT),
+    "menu.docs.tax": _at(_pass("OTHER"), "Справка для вычета", "справку для налогового вычета", _DOCS),
+    "menu.docs.contract": _at(
+        _handoff("OTHER", handoff_message("doc_request_handoff")), "Копия договора, выписка", "копию договора или выписку", _DOCS
+    ),
+    "menu.docs.sick_leave": _at(_handoff("OTHER", SICK_LEAVE_HANDOFF_TEXT), "Больничный лист", "больничный лист", _DOCS),
     # --- На каждом экране
-    "menu.operator": _handoff("OTHER", handoff_message("manual_operator")),
+    "menu.operator": _at(_handoff("OTHER", handoff_message("manual_operator")), "Оператор", "перевод на оператора"),
 }
 
 

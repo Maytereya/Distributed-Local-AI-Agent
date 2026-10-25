@@ -46,7 +46,7 @@ def _free(outcome: str) -> str:
     return json.dumps({"picks": [], "outcome": outcome})
 
 
-def _dialog(world_dir, monkeypatch, turns, *, switch: str, rules: str = "", free: str | None = "answer") -> list[dict[str, Any]]:
+def _dialog(world_dir, monkeypatch, turns, *, switch: str, rules: str = "", free: str | None = "answer", cache_ttl: int = 0) -> list[dict[str, Any]]:
     from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
     from messengers_router.runtime_config import config as cfg
@@ -80,7 +80,7 @@ def _dialog(world_dir, monkeypatch, turns, *, switch: str, rules: str = "", free
         for key, value in {
             "MR_NLU_ENGINE": "legacy_v2",
             "MR_PENDING_BUTTONS": "on",
-            "MR_CHOOSE_CACHE_TTL_S": 0,
+            "MR_CHOOSE_CACHE_TTL_S": cache_ttl,
             "MR_TOPIC_BY_LLM": rules,
             "MR_BUTTON_ANSWER_TOPIC": switch,
         }.items():
@@ -180,3 +180,15 @@ def test_price_judge_does_not_spend_turn_decision(mini_prod_world, monkeypatch):
     assert tel.get("tu_button_refund") == 1, tel
     judged = [c for c in tel.get("choose") or [] if c.get("task") == "pending_free_reply"]
     assert len(judged) == 1 and tel.get("tu_decisions_spent", 0) == len(tel.get("choose") or []) - 1, tel
+
+
+
+def test_cached_judge_refunds_nothing(mini_prod_world, monkeypatch):  # noqa: F811
+    """Ответ судьи из кэша решения хода не тратил — возвращать нечего (иначе путь цены получил бы лишнее решение)."""
+
+    turns = [_press("menu.price.test"), _REPLIES[0], _press("menu.price.test"), _REPLIES[0]]
+    on = _dialog(mini_prod_world, monkeypatch, turns, switch="on", cache_ttl=600)
+    assert on[1]["telemetry"].get("tu_button_refund") == 1, on[1]["telemetry"]
+    judged = [c for c in on[3]["telemetry"].get("choose") or [] if c.get("task") == "pending_free_reply"]
+    assert judged and judged[0].get("cached") is True, on[3]["telemetry"]
+    assert "tu_button_refund" not in on[3]["telemetry"], on[3]["telemetry"]
