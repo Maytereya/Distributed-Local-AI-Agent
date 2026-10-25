@@ -8,7 +8,7 @@
 
 Выключатель `[MESSENGER_ROUTER] booking_target_slot_llm = off | on` (по умолчанию off — как было) поверх `pending_buttons = on`.
 Инвариант: под on ответ, который одна функция (LLM) признала ответом на вопрос цели записи, идёт в запись и вопроса об отмене не
-получает; другая тема, пока в записи ничего не выбрано, — обычный путь без вопроса об отмене (отменять нечего); сбой LLM и off — как
+получает; другая тема, пока в записи ничего не выбрано, — обычный путь без вопроса об отмене (отменять нечего; запись не снимается); сбой LLM и off — как
 было. Тесты — через обработчик эндпоинта, LLM — подделка настоящего типа.
 """
 
@@ -84,11 +84,18 @@ def test_off_keeps_the_old_abort_question(booking_world, monkeypatch):  # noqa: 
 
 def test_other_topic_before_anything_is_chosen_is_answered_without_abort_question(booking_world, monkeypatch):  # noqa: F811
     """Другая тема на вопрос цели записи (решение LLM), а в записи ещё ничего не выбрано: отменять нечего — бот не спрашивает
-    «Отменить оформление?», запись снимается, реплика идёт обычным путём (`buttons_v1`: 7 из 30 после первой части фикса)."""
+    «Отменить оформление?», реплика идёт обычным путём (`buttons_v1`: 7 из 30 после первой части фикса)."""
 
     on = _in_world(booking_world, monkeypatch, [_BOOK_BUTTON, _NO_VALUE], switches=_ON, llm=_LLM({_FREE_MARK: _free("new_topic")}))[-1]
-    assert not _abort_asked(on), on["text"]
-    assert "appointment_topic_switch_pending" not in on["state"] and not on["state"].get("appointment_flow_active"), on["state"]
+    assert not _abort_asked(on) and "appointment_topic_switch_pending" not in on["state"], on["text"]
+
+
+def test_wrong_new_topic_keeps_the_booking(booking_world, monkeypatch):  # noqa: F811
+    """Модель ошиблась («другая тема» на просьбу записаться с филиалом в реплике): запись не снимается — обычный путь
+    продолжает запись, а не теряет контекст до «Не совсем понял…» (карточка `bkt_on3`, r0142: потерян названный филиал)."""
+
+    on = _in_world(booking_world, monkeypatch, [_BOOK_BUTTON, "хочу к врачу на ленина 5"], switches=_ON, llm=_LLM({_FREE_MARK: _free("new_topic")}))[-1]
+    assert not _abort_asked(on) and on["label"] == "APPOINTMENT" and not on["text"].startswith("Не совсем понял"), on
 
 
 @pytest.mark.parametrize("answer", ["не json", None], ids=["invalid", "down"])
