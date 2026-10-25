@@ -38,7 +38,7 @@ from ollama import GenerateResponse
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services._common import _normalise_catalog_text
-from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
+from tests.test_price_turns_golden import mini_prod_world, run_dialog, synonym_fork  # noqa: F401 — фикстуры
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "price_stage2_turns.json"
 GOLDENS = {"off": GOLDEN, "on": GOLDEN.with_name("price_stage2_turns_on.json")}
@@ -113,6 +113,10 @@ CASES: dict[str, Case] = {
         ("сколько стоит ферритин по омс",), ("ферритин",), rows=(), reason="qualifier_absent", why="суд: той услуги с условием нет"
     ),
     "condition_cut_judge_down": Case(("сколько стоит ферритин по омс",), ("ферритин",), why="суд условия недоступен"),
+    "condition_cut_synonym": Case(
+        ("сколько стоит оак по омс",), ("оак",), rows=(), reason="qualifier_absent", why="синоним МИС на несколько услуг — развилка мимо условия"
+    ),
+    "synonym_fork": Case(("сколько стоит оак",), ("оак",), why="синоним МИС на несколько услуг — все варианты"),
     # выбор строки LLM у слабой фразы
     "weak_select_picks": Case(("сколько стоит кардиограмма",), ("кардиограмма",), rows=("ЭКГ",), why="слово пациента не из прайса"),
     "weak_select_down": Case(("сколько стоит кардиограмма",), ("кардиограмма",), why="выбор строки недоступен — ответ правил"),
@@ -144,6 +148,8 @@ CLASSES: dict[str, tuple[str, ...]] = {
     "price_one": (
         "condition_cut",
         "condition_cut_judge_down",
+        "condition_cut_synonym",
+        "synonym_fork",
         "one_strong",
         "one_analysis_on",
         "one_analysis_on_grouped",
@@ -260,7 +266,9 @@ def _store(key: str, record: dict[str, Any], switch: str) -> None:
 @pytest.mark.parametrize("switch", SWITCH)
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("case_name", sorted(CASES))
-def test_turn_matches_golden(case_name, mode, switch, mini_prod_world, monkeypatch):  # noqa: F811
+def test_turn_matches_golden(case_name, mode, switch, mini_prod_world, monkeypatch, request):  # noqa: F811
+    if "synonym" in case_name:
+        request.getfixturevalue("synonym_fork")  # синоним МИС «оак» на три услуги (мини-прод, как `test_price_turns_golden`)
     record = json.loads(json.dumps(_turns(case_name, mode, switch, mini_prod_world, monkeypatch), ensure_ascii=False))
     for turn in record["turns"]:
         assert turn["text"].strip(), (case_name, mode, switch, turn)

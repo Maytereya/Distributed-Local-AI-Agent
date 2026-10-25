@@ -314,5 +314,5 @@ def test_without_llm_means_unavailable_and_none_fit_keeps_search(monkeypatch, st
 def test_condition_cut_by_parse_never_gets_a_price_under_on():
     data = json.loads((_GOLDEN / "price_stage2_turns_on.json").read_text(encoding="utf-8"))
     cut = {key: record for key, record in data.items() if key.startswith("condition_cut")}
-    assert len(cut) == 4  # оба исхода суда × оба режима LLM
+    assert len(cut) == 6  # оба исхода суда и развилка синонима МИС × оба режима LLM
     assert {key: record["turns"][0]["text"][:80] for key, record in cut.items() if "руб." in record["turns"][0]["text"]} == {}

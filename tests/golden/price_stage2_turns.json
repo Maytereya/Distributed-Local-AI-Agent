@@ -343,6 +343,81 @@
    "spans"
   ]
  },
+ "condition_cut_synonym-down": {
+  "turns": [
+   {
+    "text": "По запросу «общий анализ крови» нашёл варианты стоимости:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n\nПо вашему запросу найдено еще 6 вариантов. Чтобы показать их, напишите: \"все\".\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "rules",
+     "price_guard": "llm_bypass"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ],
+     [
+      "price_service_qualifier_general",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "condition_cut_synonym-llm": {
+  "turns": [
+   {
+    "text": "Не нашёл актуальную стоимость для «оак омс». Уточните название услуги или ФИО врача, и я проверю снова.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "оак омс",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "strong",
+     "price_policy": "not_found",
+     "price_guard": "llm"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "none_fit"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
  "journal_grouped-down": {
   "turns": [
    {
@@ -1783,6 +1858,71 @@
      "tu_acted": [
       "readiness_from_mis"
      ]
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans"
+  ]
+ },
+ "synonym_fork-down": {
+  "turns": [
+   {
+    "text": "По запросу «оак» нашёл варианты стоимости:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n3. Cito Общий анализ крови (Le, Er,Hb) — 580 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "strong",
+     "price_policy": "strong",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "synonym_fork-llm": {
+  "turns": [
+   {
+    "text": "По запросу «оак» нашёл варианты стоимости:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n3. Cito Общий анализ крови (Le, Er,Hb) — 580 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "strong",
+     "price_guard": "none"
     },
     "llm": [
      [

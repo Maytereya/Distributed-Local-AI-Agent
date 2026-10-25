@@ -632,7 +632,11 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     # ВСЕ варианты, выбирает пациент. Стоит ПОСЛЕ мульти-пути, чтобы корзина
     # («оак, ферритин») по-прежнему считалась как корзина, и ДО семейного —
     # словарь клиники доверенней лексической догадки.
-    synonym_fork = _build_synonym_fork_payload(search_text, retail_rows_clean)
+    # Под `price_by_parse = on` развилка ищет по фразе разбора, а фраза бывает синонимом без оторванного условия («эстрадиол» из
+    # «эстрадиол по ОМС»): цены по данным мимо условия (свип П2, карточка Ш7). Слово реплики вне прайса — развилки нет, строки
+    # выбирает LLM с судом условия.
+    fork_blocked = search_text != query_text and query_has_unsatisfiable_qualifier(query_text, retail_rows_clean)
+    synonym_fork = None if fork_blocked else _build_synonym_fork_payload(search_text, retail_rows_clean)
     if synonym_fork is not None and not doctor_id:
         synonym_fork["entities_used"] = {
             **entities,
