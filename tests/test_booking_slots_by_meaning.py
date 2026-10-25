@@ -203,12 +203,12 @@ def test_without_llm_verdict_the_catalog_resolved_value_is_kept(monkeypatch):
 # --- C3a: подготовка или запись — главную тему выбирает LLM ----------------------------------------------------------------
 #
 # BUG-2026-10-18-PREPARE-UZI-AS-BOOKING: «как подготовиться к узи, нужно ли не есть» — «узи» + «нужно» правило записи на
-# диагностику считает записью, вопрос о подготовке получал отказ записи «эту услугу я не нашёл…». Инвариант (под
-# `prepare_vs_booking_llm = on`): вопрос «как подготовиться к <услуге>» не уходит в запись, если LLM выбрала подготовку;
-# «запись», «ни одна», сбой, off — как было.
+# диагностику считает записью, вопрос о подготовке получал отказ записи «эту услугу я не нашёл…». Инвариант: вопрос «как
+# подготовиться к <услуге>» не уходит в запись, если LLM выбрала подготовку; «запись», «ни одна», сбой — как было (база
+# «как было» — тот же ход с недоступной LLM; выключатель `prepare_vs_booking_llm` снят 22.10).
 
 _PREPARE_OR_BOOKING_MARK = "есть слова и о записи, и о подготовке"
-_PREPARE_ON = {"MR_PREPARE_VS_BOOKING_LLM": "on"}
+_PREPARE_ON: dict[str, str] = {}
 _PREPARE_QUESTIONS = ["как подготовиться к узи, нужно ли не есть", "нужно ли не есть перед узи", "нужно ли голодать перед узи брюшной полости"]
 
 
@@ -216,7 +216,7 @@ _PREPARE_QUESTIONS = ["как подготовиться к узи, нужно �
 def test_preparation_question_is_not_a_booking(question, booking_world, monkeypatch):
     llm = _LLM({_PREPARE_OR_BOOKING_MARK: _PICK_FIRST})
     [turn] = _dialog(booking_world, monkeypatch, [question], switches=_PREPARE_ON, llm=llm)
-    [before] = _dialog(booking_world, monkeypatch, [question], switches={"MR_PREPARE_VS_BOOKING_LLM": "off"}, llm=_LLM({}))
+    [before] = _dialog(booking_world, monkeypatch, [question], switches={}, llm=_LLM({}))  # LLM недоступна — как было
 
     assert before["label"] == "APPOINTMENT", before  # как было: запись (отказ или «на какую услугу вас записать»)
     assert llm.calls == [_PREPARE_OR_BOOKING_MARK]
@@ -229,7 +229,7 @@ def test_preparation_question_is_not_a_booking(question, booking_world, monkeypa
 def test_booking_answer_none_or_failure_is_as_before(question, answer, booking_world, monkeypatch):
     llm = _LLM({_PREPARE_OR_BOOKING_MARK: answer} if answer is not None else {})
     [turn] = _dialog(booking_world, monkeypatch, [question], switches=_PREPARE_ON, llm=llm)
-    [before] = _dialog(booking_world, monkeypatch, [question], switches={"MR_PREPARE_VS_BOOKING_LLM": "off"}, llm=_LLM({}))
+    [before] = _dialog(booking_world, monkeypatch, [question], switches={}, llm=_LLM({}))  # LLM недоступна — как было
 
     assert (turn["label"], turn["text"]) == (before["label"], before["text"])
 

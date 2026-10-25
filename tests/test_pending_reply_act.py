@@ -1,17 +1,16 @@
-"""Ответ на оффер оператора — одна функция ответа на висящий вопрос (класс 5, `pending_reply = on`; дизайн
+"""Ответ на оффер оператора — одна функция ответа на висящий вопрос (класс 5; дизайн
 `docs/DESIGN_2026-10-18_one_pending_answer.md`, решения владельца 16.10 и Q1–Q5 18.10).
 
 Аудит 14.10, пункт 5: на «Перевести на оператора?» ответ «конечно переведите» правила не понимают — оффер снимается без
 перевода; стенд 18.10: «не надо оператора, я сам» — перевод (явный запрос оператора по буквам раньше разбора ответа).
-Под `on` ответ решает одна функция: якорь согласия — перевод без LLM; иначе LLM; «нет» модели — отказ, перевода нет,
+Ответ решает одна функция: якорь согласия — перевод без LLM; иначе LLM; «нет» модели — отказ, перевода нет,
 даже если в реплике есть слово «оператор»; сбой — прежние правила.
 
 Инварианты класса (через обработчик эндпоинта, мини-прод, оракул LLM):
-- согласие словами → перевод; тот же диалог под off — без перевода (как было);
+- согласие словами → перевод; при сбое LLM — правила, без перевода (как было);
 - отказ от оператора словами → без перевода, «Хорошо, продолжаем»;
-- пауза — без перевода; сбой LLM — ответ правил, как под off;
+- пауза — без перевода; сбой LLM — ответ правил (`src = fallback`);
 - голый якорь и «якорь + хвост» — без вызова LLM; срочное — раньше всего;
-- список `pending_reply_types` не читается — решаются все типы разом;
 - два хода: после перевода следующий ответ не про оффер.
 """
 
@@ -37,20 +36,16 @@ _MANUAL = "Соединяю с оператором"
 _DECLINED = "Хорошо, продолжаем диалог"
 
 
-def _types(monkeypatch, value: str) -> None:
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_PENDING_REPLY_TYPES", value, raising=False)
+_DOWN = ConnectionError("ollama лежит")
 
 
-def _offer(reply: str, mode: str, world, monkeypatch, *, types: str = "", oracle=None, name: str = "act"):
-    _types(monkeypatch, types)
+def _offer(reply: str, mode: str, world, monkeypatch, *, oracle=None, name: str = "act"):
     return _play([_STOPLIST_OFFER, reply], f"{name}-{mode}", mode, world, monkeypatch, before=_offer_after_first_turn(), oracle=oracle)
 
 
 def test_yes_in_other_words_is_transferred_under_on(mini_prod_world, monkeypatch):  # noqa: F811
-    off, *_ = _offer(_YES, "off", mini_prod_world, monkeypatch, oracle=_PendingOracle({_YES: _answer("yes")}))
-    assert not off[1]["handoff"]  # как было: правила «конечно переведите» не поняли
+    down, *_ = _offer(_YES, "down", mini_prod_world, monkeypatch, oracle=_PendingOracle(exc=_DOWN))
+    assert not down[1]["handoff"]  # сбой LLM — правила «конечно переведите» не понимают, как было
     on, _states, rows, oracle = _offer(_YES, "on", mini_prod_world, monkeypatch, oracle=_PendingOracle({_YES: _answer("yes")}))
     assert on[1]["handoff"] and _MANUAL in on[1]["text"], on[1]
     assert len(oracle.calls) == 1
@@ -79,16 +74,9 @@ def test_pause_is_not_a_transfer(mini_prod_world, monkeypatch):  # noqa: F811
 
 
 def test_llm_failure_keeps_the_rules_answer(mini_prod_world, monkeypatch):  # noqa: F811
-    off, off_states, *_ = _offer(_YES, "off", mini_prod_world, monkeypatch, oracle=_PendingOracle(), name="down")
-    on, on_states, rows, _o = _offer(_YES, "on", mini_prod_world, monkeypatch, oracle=_PendingOracle(exc=ConnectionError("ollama лежит")), name="down")
-    assert on == off and on_states == off_states
+    on, on_states, rows, _o = _offer(_YES, "on", mini_prod_world, monkeypatch, oracle=_PendingOracle(exc=_DOWN), name="down")
+    assert not on[1]["handoff"] and on_states[1].get("_operator_offer_pending") is not True  # правила не поняли — оффер снят
     assert rows[1]["tu_pending_src"] == "fallback"
-
-
-@pytest.mark.parametrize("types", ["", "catalog_confirm", "operator_offer_typo"])
-def test_on_decides_every_type_whatever_the_list_says(types, mini_prod_world, monkeypatch):  # noqa: F811
-    on, *_ = _offer(_YES, "on", mini_prod_world, monkeypatch, types=types, oracle=_PendingOracle({_YES: _answer("yes")}), name=f"list-{types}")
-    assert on[1]["handoff"], on[1]["text"]
 
 
 @pytest.mark.parametrize("reply", ["да", "конечно, переведите", "да, пожалуйста, соедините"])

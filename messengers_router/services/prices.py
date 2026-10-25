@@ -13,8 +13,9 @@ from typing import TYPE_CHECKING, Any
 from agent_logic_2.nayka_api import api_price
 
 from .. import shown_context, turn_parse, turn_telemetry
+from . import _price_by_parse
 from ..policies import handoff_message
-from ..text_templates import price_names_without_prices_text, price_not_found_text
+from ..text_templates import PRICE_CLARIFY_NAME_TEXT, price_names_without_prices_text, price_not_found_text
 from ._addresses_helpers import _extract_homecode_query
 from ._common import (
     DOCTORS_TOP_N,
@@ -44,7 +45,14 @@ from ._prepare import _is_prepare_requested_in_price_query
 from ._basket_select import basket_from_phrases, choose_basket_rows
 from ._turn_phrases import _FILLER
 from ._turn_phrases import _tokens as _phrase_tokens
-from ._price_select_llm import PriceSelection, reconcile_with_proposal, rows_overlap, select_price_rows
+from ._price_select_llm import (
+    PriceSelection,
+    distinct_services,
+    general_clarify_on,
+    reconcile_with_proposal,
+    rows_overlap,
+    select_price_rows,
+)
 from ._prices_helpers import (
     SAMARA_PRICE_REGION_ID,
     _DOCTOR_PRICE_HINT_RE,
@@ -112,6 +120,53 @@ def _llm_family_payload(service_name: str, rows: list[dict[str, Any]], *, visibl
     }
 
 
+def _shown_phrase(query: str) -> str:
+    """Фраза услуги в тексте пациенту («Не нашёл стоимость для «…»», «По запросу «…» нашёл похожие»). Под `price_by_parse = on`
+    (цена, этап 2, Ш2) — фраза разбора этой реплики (срез реплики), а не вырезатель правил: «стоят ферритин» пациент больше не
+    читает; одной фразы нет — пусто, текст без названия. Off — как было."""
+
+    if _price_by_parse.enabled():
+        return str(_price_by_parse.phrase(str(query or "")) or "").strip()
+    return str(_extract_price_service_from_query(query) or query or "").strip()
+
+
+def _search_text(query: str, query_text: str) -> str:
+    """Что искать в прайсе — резолвер, семейство, развилка синонима МИС, буква семейства. Под `price_by_parse = on` (Ш2) — фраза
+    разбора этой реплики через синонимы кода, как реплика; разбор решил «услуги нет» — пусто (услугу держит контекст); одной фразы
+    нет (разбора нет, вход — не реплика хода, список) — реплика, как было."""
+
+    if not _price_by_parse.enabled():
+        return query_text
+    named = _price_by_parse.phrase(str(query or ""))
+    return query_text if named is None else _apply_service_synonyms(named)
+
+
+def _service_phrase(query: str, query_text: str) -> str | None:
+    """Фраза услуги — запасной поиск строк и кандидат розницы. Под `price_by_parse = on` (Ш2) — фраза разбора (услуги нет — None);
+    одной фразы нет — вырезатель, как было."""
+
+    if _price_by_parse.enabled():
+        named = _price_by_parse.phrase(str(query or ""))
+        if named is not None:
+            return _apply_service_synonyms(named) or None
+    return _extract_price_service_from_query(query_text)
+
+
+def _parse_failed_clarify(query: str, entities: dict[str, Any]) -> dict[str, Any] | None:
+    """Без LLM услугу не угадываем (решение владельца 22.10 (а); цена, этап 2, Ш4, `price_by_parse = on`): разбор этой реплики не
+    решён (LLM не ответила, ответ не по контракту, сбой) — «уточните название», без поиска по словам и без списка правил с ценами.
+    Реплика, которая сама — название или код клиники, сюда не доходит: её решают данные без LLM (`strong_whole`), и ответ на дословное
+    название и есть путь без LLM. Цена попутно (запись, карточка врача; `__price_question` нет) — как было. Пометка — ответа политики
+    (`price_match_policy: …`): услугу, которую до него подставило заземление по буквам, ответ снимает из контекста
+    (BUG-2026-10-13-L13-CONTEXT-LEAK) — иначе «а сколько стоит?» следующим ходом назвал бы цену догадки."""
+
+    if not _price_by_parse.enabled() or not entities.get("__price_question") or not _price_by_parse.failed(str(query or "")):
+        return None
+    turn_telemetry.note(price_policy="parse_failed_clarify")
+    note = "price_match_policy: parse_failed"
+    return {"service_name": "", "prices": [], "retail_prices": [], "doctors": [], "clarify_text": PRICE_CLARIFY_NAME_TEXT, "note": note, "entities_used": entities}
+
+
 def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, Any]) -> dict[str, Any] | None:
     """Политика силы совпадения (L-13) под `price_match_policy = on`: вместо ответа правил — честное
     «не нашёл» (LLM не нашла услугу и во втором круге) или названия без цен (LLM не ответила внятно
@@ -122,7 +177,10 @@ def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, A
     status = getattr(selection, "status", "")
     if status not in ("none_fit", "unavailable"):
         return None
-    phrase = str(_extract_price_service_from_query(query_text) or query_text or "").strip()
+    absent = status == "none_fit" and getattr(selection, "reason", "") == "qualifier_absent"
+    # Суд условия ответил «той услуги с этим условием нет»: фраза разбора бывает названием без оторванного условия («ферритин» из
+    # «ферритин по ОМС»), и «не нашёл для «ферритин»» читалось бы как «ферритина нет» — под `price_by_parse = on` без названия.
+    phrase = "" if absent and _price_by_parse.enabled() else _shown_phrase(query_text)
     used = {**entities, "service_name_effective": phrase}
     note = f"price_match_policy: {status}"
     if status == "unavailable" and not selection.names:
@@ -311,6 +369,9 @@ async def _parse_strong_answer(
     strong = _parse_strong_selection(query)
     if strong is None:
         return None
+    # Под `price_by_parse = on` гард тот же (карточка Ш7, 25.10, RISK-2026-10-25-STRONG-PHRASE-NO-GUARD): без него живая LLM разметки
+    # отрывала «по ОМС» от дословного названия в 59 вопросах из 82 свипа П2 — платная цена вместо «не нашёл»; правило 3 её промпта
+    # модель не держит.
     if not _strong_phrase_guard_on() or not _qualifier_outside_strong_phrase(query, strong, retail_rows):
         return strong
     from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
@@ -373,11 +434,15 @@ def _rows_shown_before(query: str, rows: list[dict[str, Any]]) -> list[dict[str,
     return found or None
 
 
-def _llm_selection_service_name(query_text: str, rows: list[dict[str, Any]]) -> str:
-    """Подпись к ответу из выбора LLM: одна строка — её название, несколько — фраза пациента."""
+def _llm_selection_service_name(query_text: str, rows: list[dict[str, Any]], *, reply: str = "") -> str:
+    """Подпись к ответу из выбора LLM: одна строка — её название, несколько — фраза пациента. Под `price_by_parse = on` (Ш2) —
+    фраза разбора реплики `reply`; её нет — название первой строки (слова реплики подписью не печатаются)."""
 
+    first = str(rows[0].get("serviceName") or rows[0].get("name") or "").strip() if rows else ""
     if len(rows) == 1:
-        return str(rows[0].get("serviceName") or rows[0].get("name") or "").strip()
+        return first
+    if _price_by_parse.enabled():
+        return _shown_phrase(reply) or first
     return str(_extract_price_service_from_query(query_text) or query_text or "").strip()
 
 
@@ -432,6 +497,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     # «забор крови»→«взятие крови», «электромиография»→«ЭМГ») до матчинга услуги.
     entity_service_name = _apply_service_synonyms(_get_first_present(entities, ["service_name", "test_name"]) or "")
     query_text = _apply_service_synonyms(str(query or "").strip())
+    search_text = _search_text(query, query_text)
     has_price_request = bool(query_text and _PRICE_REQUEST_RE.search(query_text))
     if _price_show_all_requested(query_text, query):
         family_payload = _price_family_payload_from_context(entities, show_all=True)
@@ -454,7 +520,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     if doctor_id:
         # Для doctor-specific PRICE не приземляемся в городский retail-catalog:
         # иначе вопрос "у Иванова" может маппиться в случайную услугу по всему прайсу.
-        query_service_name = _extract_price_service_from_query(query_text) if query_text else None
+        query_service_name = _service_phrase(query, query_text) if query_text else None
         if not query_service_name:
             query_service_name = entity_service_name
         # "сколько стоит прием у <врач>" без специальности:
@@ -472,7 +538,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             query_service_name = None
         else:
             query_service_name = resolve_price_service_name_from_catalog(
-                query_text,
+                search_text,
                 current_service_name=entity_service_name,
             )
             # Гард неудовлетворимого уточнения — ЧЕТВЁРТЫЙ стык. Отказ резолвера
@@ -480,7 +546,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             # «прием терапевт» → ранжирование → платная цена. Если каталог такого
             # свойства не знает вовсе — честное «не нашёл», а не цена без него.
             if not query_service_name and not query_has_unsatisfiable_qualifier(query_text) and not _names_no_service(query):
-                query_service_name = _extract_price_service_from_query(query_text)
+                query_service_name = _service_phrase(query, query_text)
         service_name = _select_effective_price_service_name(
             entity_service_name,
             query_service_name,
@@ -536,6 +602,10 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             },
         }
 
+    # Цена, этап 2, Ш4: до корзины правил и поиска по словам — разбор не решён, без LLM услугу (и список) не угадываем.
+    clarify = _parse_failed_clarify(query, entities)
+    if clarify is not None:
+        return clarify
     # retail prices: city-level regionId в /priceByRegion/{cityRegionId}
     try:
         price_rows = await _load_with_retry(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
@@ -562,7 +632,11 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     # ВСЕ варианты, выбирает пациент. Стоит ПОСЛЕ мульти-пути, чтобы корзина
     # («оак, ферритин») по-прежнему считалась как корзина, и ДО семейного —
     # словарь клиники доверенней лексической догадки.
-    synonym_fork = _build_synonym_fork_payload(query_text, retail_rows_clean)
+    # Под `price_by_parse = on` развилка ищет по фразе разбора, а фраза бывает синонимом без оторванного условия («эстрадиол» из
+    # «эстрадиол по ОМС»): цены по данным мимо условия (свип П2, карточка Ш7). Слово реплики вне прайса — развилки нет, строки
+    # выбирает LLM с судом условия.
+    fork_blocked = search_text != query_text and query_has_unsatisfiable_qualifier(query_text, retail_rows_clean)
+    synonym_fork = None if fork_blocked else _build_synonym_fork_payload(search_text, retail_rows_clean)
     if synonym_fork is not None and not doctor_id:
         synonym_fork["entities_used"] = {
             **entities,
@@ -607,10 +681,11 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
             judge_qualifier=bool(judged),
             budget_clarify=True,  # отказ лимита решений хода — уточнение (`price_budget_clarify`)
+            general_as_none_fit=general_clarify_on(),  # «слишком общее» — уточнение, не цены правил (`price_general_clarify`)
         )
 
     def _llm_answer(rows: list[dict[str, Any]]) -> dict[str, Any]:
-        name = _llm_selection_service_name(query_text, rows)
+        name = _llm_selection_service_name(query_text, rows, reply=str(query or ""))
         if len(rows) > 1:
             payload = _llm_family_payload(name, rows)
         else:
@@ -638,7 +713,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         payload["note"] = "price_info: shown_before"
         return payload
     family_payload = _build_price_family_payload(
-        query_text,
+        search_text,
         retail_rows_clean,
         show_all=False,
         visible_limit=10,
@@ -669,7 +744,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
         return {"prices": [], "note": "no service query", "entities_used": entities}
     retail_query = service_name
     if query_text and not _is_city_only_reply(query_text) and not _names_no_service(query):
-        query_candidate = _extract_price_service_from_query(query_text)
+        query_candidate = _service_phrase(query, query_text)
         if _should_prefer_retail_query_candidate(query_candidate or "", service_name):
             retail_query = query_candidate or service_name
     # Гард различающего токена семейства для МАЛЫХ семейств (гепатит А/D/E —
@@ -677,7 +752,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
     # ТОЛЬКО по строкам этой буквы, иначе всплывёт чужой гепатит (В за запрос про А).
     # Для запросов без дискриминатора список не меняется.
     family_scoped_rows = restrict_rows_to_family_letter(
-        query_text, [p for p in price_rows if isinstance(p, dict)]
+        search_text, [p for p in price_rows if isinstance(p, dict)]
     )
     matches = _select_patient_price_rows(
         family_scoped_rows,
@@ -734,6 +809,7 @@ async def service_bundle_info(
     # «забор крови»→«взятие крови», «электромиография»→«ЭМГ») до матчинга услуги.
     entity_service_name = _apply_service_synonyms(_get_first_present(entities, ["service_name", "test_name"]) or "")
     query_text = _apply_service_synonyms(str(query or "").strip())
+    search_text = _search_text(query, query_text)
     if _price_show_all_requested(query_text, query):
         family_payload = _price_family_payload_from_context(entities, show_all=True)
         if family_payload:
@@ -754,6 +830,10 @@ async def service_bundle_info(
             "note": "service_bundle_info: generic_uzi_clarify",
             "entities_used": entities,
         }
+    clarify = _parse_failed_clarify(query, entities)
+    if clarify is not None:
+        clarify["top_n_applied"] = top_limit
+        return clarify
     try:
         retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
     except Exception:
@@ -799,10 +879,11 @@ async def service_bundle_info(
             context=entity_service_name,
             runtime_llm_mode=str(entities.get("__runtime_llm_mode") or ""),
             budget_clarify=True,  # отказ лимита решений хода — уточнение (`price_budget_clarify`)
+            general_as_none_fit=general_clarify_on(),  # «слишком общее» — уточнение, не цены правил (`price_general_clarify`)
         )
 
     def _llm_variants(rows: list[dict[str, Any]]) -> dict[str, Any]:
-        llm_payload = _llm_family_payload(_llm_selection_service_name(query_text, rows), rows)
+        llm_payload = _llm_family_payload(_llm_selection_service_name(query_text, rows, reply=str(query or "")), rows)
         llm_payload["top_n_applied"] = top_limit
         llm_payload["entities_used"] = entities
         return llm_payload
@@ -813,7 +894,7 @@ async def service_bundle_info(
         shown_payload.update(top_n_applied=top_limit, entities_used=entities, note="service_bundle_info: shown_before")
         return shown_payload
     family_payload = None if llm_rows else _build_price_family_payload(
-        query_text,
+        search_text,
         retail_rows,
         show_all=False,
         visible_limit=10,
@@ -834,18 +915,18 @@ async def service_bundle_info(
             return _llm_variants(llm_rows)
     if llm_rows:
         # Одна строка — дальше обычный путь: цена, врачи по её коду.
-        query_service_name = _llm_selection_service_name(query_text, llm_rows)
+        query_service_name = _llm_selection_service_name(query_text, llm_rows, reply=str(query or ""))
     elif entity_service_name and _is_city_only_reply(query_text):
         query_service_name = None
     else:
         query_service_name = resolve_price_service_name_from_catalog(
-            query_text,
+            search_text,
             current_service_name=entity_service_name,
         )
         # Тот же гард, что в `price_info` (см. комментарий там): fallback на сырую
         # фразу не имеет права обходить отказ по неудовлетворимому уточнению.
         if not query_service_name and not query_has_unsatisfiable_qualifier(query_text, retail_rows) and not _names_no_service(query):
-            query_service_name = _extract_price_service_from_query(query_text)
+            query_service_name = _service_phrase(query, query_text)
     service_name = (
         query_service_name
         if llm_rows
@@ -883,14 +964,14 @@ async def service_bundle_info(
             return out
         if len(llm_rows) > 1:
             return _llm_variants(llm_rows)
-        service_name = _llm_selection_service_name(query_text, llm_rows)
+        service_name = _llm_selection_service_name(query_text, llm_rows, reply=str(query or ""))
         needle = _normalise_input(service_name)
 
     # 1) Retail price by city-level regionId (Самара = 3).
     retail_query = service_name
     retail_prefers_query_candidate = False
     if query_text and not _is_city_only_reply(query_text) and not _names_no_service(query):
-        query_candidate = _extract_price_service_from_query(query_text)
+        query_candidate = _service_phrase(query, query_text)
         retail_prefers_query_candidate = _should_prefer_retail_query_candidate(
             query_candidate or "",
             service_name,
@@ -936,6 +1017,10 @@ async def service_bundle_info(
         if llm_rows is not None and len(llm_rows) > 1 and not rows_overlap(llm_rows, out["retail_prices"]):
             # Правила промахнулись целиком, а LLM нашла несколько вариантов — их и
             # показываем на выбор, без врачей чужой услуги.
+            return _llm_variants(llm_rows)
+        if llm_rows is not None and general_clarify_on() and distinct_services(llm_rows):
+            # LLM выбрала несколько разных услуг (не варианты одной): дальше путь показал бы первую строку с её врачами —
+            # «консультация врача» → приём хирурга (BUG-2026-10-24-FOREIGN-PRICE-D17, класс 3). Список на выбор.
             return _llm_variants(llm_rows)
     if llm_rows:
         out["retail_prices"] = _annotate_price_rows_with_care_context(list(llm_rows))
@@ -1080,7 +1165,7 @@ async def service_bundle_info(
         )
     if service_kind == "family_query":
         family_payload = _build_price_family_payload(
-            query_text,
+            search_text,
             retail_rows,
             show_all=False,
             visible_limit=10,

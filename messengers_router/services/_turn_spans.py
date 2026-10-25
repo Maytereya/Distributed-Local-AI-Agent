@@ -29,6 +29,7 @@ from ..choice import Strength
 from ..prompt_registry import load_prompt_text
 from ..runtime_config import config as _cfg
 from ..turn_parse import ParsedPhrase, ParseStatus, PhraseParse
+from . import _price_by_parse
 from ._common import _normalise_catalog_text
 from ._prices_helpers import _PRICE_TOKEN_RE
 from ._strong_match import _catalog_index
@@ -79,6 +80,8 @@ def _verbatim_rows(reply: str, catalog: list[dict[str, Any]]) -> list[dict[str, 
 
     text = str(reply or "").strip()
     if text.isdigit():
+        if _price_by_parse.enabled() and _price_by_parse.number_is_choice(text):
+            return []  # номер из показанного прошлым ответом, а не код услуги (цена, этап 2, Ш1)
         return [row for row in catalog if str(row.get("serviceHomecode") or "").strip() == text]
     by_norm, _by_name = _catalog_index(catalog)
     return [catalog[pos] for pos in sorted(by_norm.get(_normalise_catalog_text(text), ()))]

@@ -394,7 +394,9 @@ KNOWN_CONTEXT: dict[tuple[str, str], dict[str, str]] = {}
 # после одной строки «Глюкоза» показывал семью, «а как подготовиться» печаталось предметом памятки, после «а где сдать?»
 # класс «анализы» затирал показанную услугу), закрыто «контекстом = показанным» — единственный путь с 17.10.
 # (сценарии, вопрос, наборы, {код: причина}) → построчно в KNOWN_FOLLOWUP.
-_FOLLOWUP_RED: tuple[tuple[tuple[str, ...], str, tuple[str, ...], dict[str, str]], ...] = ()
+_FOLLOWUP_RED: tuple[tuple[tuple[str, ...], str, tuple[str, ...], dict[str, str]], ...] = (
+    (("family_oak",), "one", tuple(_SETS), {"rows": 'BUG-2026-10-24-SHOW-ALL-HINT-ON-PROD: под одной функцией (прод с деплоя 10; тест молча проверял путь off до снятия pending_reply) «1» на список с подсказкой «напишите: "все"» читается как пункт 1 подсказки — «все», а полный список семейства ОАК несёт чужие строки (ОАМ, «ЗППП: анализ крови»)'}),
+)
 # (сценарий, вопрос, набор) → {код: причина}. Пусто — зелёный. Вопрос — метка из FOLLOWUPS.
 KNOWN_FOLLOWUP: dict[tuple[str, str, str], dict[str, str]] = {
     (scenario, question, config): codes for scenarios, question, configs, codes in _FOLLOWUP_RED for scenario in scenarios for config in configs

@@ -37,7 +37,9 @@ _PROD_1016 = {
     "MR_STRONG_MATCH": "data",
     "MR_STRONG_PHRASE_GUARD": "llm",
 }
-_SITE = "choose_price_service"
+# Выбор строки: обычный промпт и промпт суда условия (`choose_price_service_qualifier`; на проде — единственный путь
+# суда с 22.10, выключатель `price_candidates_by_meaning` снят).
+_SITES = ("choose_price_service", "choose_price_service_qualifier")
 
 # Класс A: разбор (LLM) выбирает одну СЛАБУЮ фразу вместе с условием (правило 3 промпта разбора) — её судит выбор строки.
 _CLASS_A = {
@@ -97,7 +99,7 @@ def _run(turns, world, monkeypatch, *, llm: _Oracle, session: str, **switches) -
 def _calls(row: dict, outcome: str = "ok") -> int:
     """Вызовы выбора строки в ходе с исходом `outcome` (без тени)."""
 
-    return sum(1 for call in row.get("llm") or [] if call.get("site") == _SITE and call.get("outcome") == outcome and not call.get("shadow"))
+    return sum(1 for call in row.get("llm") or [] if call.get("site") in _SITES and call.get("outcome") == outcome and not call.get("shadow"))
 
 
 def _priced(text: str) -> bool:

@@ -1,17 +1,17 @@
-"""Ответ на подсказку «…напишите: "все"» — одна функция ответа на висящий вопрос (класс 5, `pending_reply = on`;
+"""Ответ на подсказку «…напишите: "все"» — одна функция ответа на висящий вопрос (класс 5;
 решения владельца 15.10 — подсказка — висящий вопрос, ответ разбирать через LLM, не дописывать слова в регулярки).
 
 Было: «показать все» узнаёт только `_prices_helpers._is_price_show_all_request` — целая реплика «все», «всё», «покажи
 все», «показать все», «все варианты / услуги / анализы». «покажите все варианты пожалуйста», «покажите все», «полный
 список», «давай все» уходят мимо цены («Не совсем понял…»), «да, давайте все» забирает вторичный оффер (подбор анализов).
 
-Стало: под `on` ответ решает одна функция (`pending_answer`): пункт «все» или «да» — «показать все» тем же путём, что у
+Стало: ответ решает одна функция (`pending_answer`): пункт «все» или «да» — «показать все» тем же путём, что у
 правил (`_price_family_payload_from_context(..., show_all=True)`): полный список того же семейства. «другая тема»,
 ничего, сбой — как было; реплику из одного определения «все» LLM не решает (сужение без LLM).
 
 Инварианты класса (через обработчик эндпоинта, мини-прод, оракул LLM):
-- ответ «все» другими словами → полный список (строк с ценой больше, подсказки нет); тот же диалог под off — как было;
-- другая тема / ничего / сбой LLM — ответы и состояние как под off; «нет» — не полный список;
+- ответ «все» другими словами → полный список (строк с ценой больше, подсказки нет); при сбое LLM — правила, как было;
+- другая тема / ничего / мусор — ответы и состояние как при сбое LLM (правила); «нет» — не полный список;
 - реплику из одного определения «все» LLM не решает (`src = fast`);
 - решение — в бюджете хода (не тень);
 - два хода: после полного списка короткий вопрос не получает цену невиданной услуги.
@@ -39,14 +39,10 @@ _IN_OTHER_WORDS = ("покажите все варианты пожалуйст�
 _PICK_ALL = _answer(picks=(1,))
 
 
-def _types(monkeypatch, value: str) -> None:
-    from messengers_router.runtime_config import config as cfg
-
-    monkeypatch.setattr(cfg, "MR_PENDING_REPLY_TYPES", value, raising=False)
+_DOWN = ConnectionError("ollama лежит")
 
 
-def _after_hint(reply, mode: str, world, monkeypatch, *, types: str = "", oracle=None, name: str = "sa", more: tuple[str, ...] = ()):
-    _types(monkeypatch, types)
+def _after_hint(reply, mode: str, world, monkeypatch, *, oracle=None, name: str = "sa", more: tuple[str, ...] = ()):
     return _play([_FAMILY, reply, *more], f"{name}-{mode}", mode, world, monkeypatch, oracle=oracle)
 
 
@@ -56,12 +52,12 @@ def _full_list(first: dict, second: dict) -> bool:
 
 @pytest.mark.parametrize("reply", _IN_OTHER_WORDS)
 def test_all_in_other_words_shows_the_full_list_under_on(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    off, *_ = _after_hint(reply, "off", mini_prod_world, monkeypatch, oracle=_PendingOracle({reply: _PICK_ALL}))
-    assert not _full_list(off[0], off[1]), off[1]["text"]  # как было: правила не поняли
+    down, *_ = _after_hint(reply, "down", mini_prod_world, monkeypatch, oracle=_PendingOracle(exc=_DOWN))
+    assert not _full_list(down[0], down[1]), down[1]["text"]  # сбой LLM — правила, как было: не поняли
     on, states, rows, oracle = _after_hint(reply, "on", mini_prod_world, monkeypatch, oracle=_PendingOracle({reply: _PICK_ALL}))
     assert _full_list(on[0], on[1]), on[1]["text"]
     # та же выдача, что у ответа «все» правилами
-    by_rules, *_ = _after_hint("все", "off", mini_prod_world, monkeypatch, name="sa-rules")
+    by_rules, *_ = _after_hint("все", "rules", mini_prod_world, monkeypatch, name="sa-rules")
     assert on[1]["text"] == by_rules[1]["text"]
     assert (states[1].get("_expects") or {}).get("type") != "show_all"
     assert len(oracle.calls) == 1
@@ -89,9 +85,9 @@ def test_yes_from_the_llm_also_shows_all(mini_prod_world, monkeypatch):  # noqa:
 )
 def test_anything_but_all_keeps_the_rules_answer(reply, llm, mini_prod_world, monkeypatch):  # noqa: F811
     oracle = _PendingOracle(exc=llm) if isinstance(llm, BaseException) else _PendingOracle({reply: llm})
-    off, off_states, *_ = _after_hint(reply, "off", mini_prod_world, monkeypatch, oracle=_PendingOracle(), name="sa-keep")
+    down, down_states, *_ = _after_hint(reply, "down", mini_prod_world, monkeypatch, oracle=_PendingOracle(exc=_DOWN), name="sa-keep")
     on, on_states, _rows, _o = _after_hint(reply, "on", mini_prod_world, monkeypatch, oracle=oracle, name="sa-keep")
-    assert on == off and on_states == off_states
+    assert on == down and on_states == down_states
 
 
 def test_no_is_not_the_full_list(mini_prod_world, monkeypatch):  # noqa: F811
@@ -100,20 +96,11 @@ def test_no_is_not_the_full_list(mini_prod_world, monkeypatch):  # noqa: F811
     assert not _full_list(on[0], on[1]) and not on[1]["handoff"], on[1]["text"]
 
 
-@pytest.mark.parametrize("types", ["", "operator_offer", "show_all_typo"])
-def test_on_decides_every_type_whatever_the_list_says(types, mini_prod_world, monkeypatch):  # noqa: F811
-    """Список `pending_reply_types` одна функция не читает: под `on` решаются все типы разом (решение 16.10)."""
-
-    reply = "покажите все варианты пожалуйста"
-    on, _states, _rows, _o = _after_hint(reply, "on", mini_prod_world, monkeypatch, types=types, oracle=_PendingOracle({reply: _PICK_ALL}), name=f"sa-list-{types}")
-    assert _full_list(on[0], on[1]), on[1]["text"]
-
-
 @pytest.mark.parametrize("reply", ["все", "покажи все", "Все варианты!"])
 def test_what_the_rules_read_as_all_does_not_call_the_llm(reply, mini_prod_world, monkeypatch):  # noqa: F811
-    off, off_states, *_ = _after_hint(reply, "off", mini_prod_world, monkeypatch, oracle=_PendingOracle(), name="sa-bare")
+    down, down_states, *_ = _after_hint(reply, "down", mini_prod_world, monkeypatch, oracle=_PendingOracle(exc=_DOWN), name="sa-bare")
     on, on_states, rows, oracle = _after_hint(reply, "on", mini_prod_world, monkeypatch, oracle=_PendingOracle({reply: _answer("no")}), name="sa-bare")
-    assert oracle.calls == [] and on == off and on_states == off_states
+    assert oracle.calls == [] and on == down and on_states == down_states
     assert _full_list(on[0], on[1]), on[1]["text"]
     assert (rows[1]["tu_pending_type"], rows[1]["tu_pending_outcome"], rows[1]["tu_pending_src"]) == ("show_all", "pick", "fast")
 

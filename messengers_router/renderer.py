@@ -25,7 +25,7 @@ from .prompt_registry import load_prompt_text
 from .russian_nlu import normalize_ru
 from .schedule_parse_watch import unparsed as unparsed_slot
 from .self_check import build_critic_prompt, parse_critic_result, should_regenerate
-from .text_templates import price_not_found_text
+from .text_templates import PRICE_CLARIFY_NAME_TEXT, price_not_found_text
 from .runtime_config import config as c
 
 # Бюджет свободного ответа LLM целиком: очередь, разбор промпта и генерация (владелец
@@ -827,7 +827,7 @@ def format_price_for_patient(payload: dict[str, Any], entities: dict[str, Any]) 
     if not prices:
         if service_hint:
             return _finish(price_not_found_text(service_hint))
-        return _finish("Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.")
+        return _finish(PRICE_CLARIFY_NAME_TEXT)
 
     rows: list[dict[str, str | int | None]] = []
     seen: set[tuple[str, int | None, str, str]] = set()

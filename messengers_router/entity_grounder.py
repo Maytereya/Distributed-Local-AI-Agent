@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import address_service, booking_slots, llm_runtime, turn_names, turn_understanding
+from . import address_service, booking_slots, llm_runtime, turn_names, turn_understanding, walkin
 from .city import looks_like_address, match_city
 from .flow_policy import looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
@@ -25,6 +25,7 @@ from .policies import (
     is_fixed_equipment_service,
     service_name_conflicts_with_doctor,
 )
+from .runtime_config import config as _cfg
 from .russian_nlu import normalize_ru
 from .services import Services, resolve_price_service_name_from_catalog
 from .services._booking_service_select import judge_booking_service
@@ -50,10 +51,30 @@ _CONTROL_KEYS = {
     "_promo_context",
 }
 
+# Путь off выключателя `grounder_generic_by_llm` — уходит вместе с ним (`_llm_service_name_is_generic`).
 _GENERIC_SERVICE_FALLBACK_RE = re.compile(
     r"\b(запис\w*|врач\w*|доктор\w*|специалист\w*|услуг\w*|хочу|нужно|надо|можно)\b",
     re.I,
 )
+
+
+def grounder_generic_by_llm_enabled() -> bool:
+    """`grounder_generic_by_llm = on` (STEP-2026-10-24-S2-DOCS-PHRASE): что значение `service_name` классификатора — услуга,
+    решила LLM; общие слова по буквам его не отбрасывают."""
+
+    return str(getattr(_cfg, "MR_GROUNDER_GENERIC_BY_LLM", "off") or "off").strip().lower() == "on"
+
+
+def _llm_service_name_is_generic(value: str) -> bool:
+    """Значение `service_name` LLM-классификатора на метке без каталога (фразы услуги в реплике нет) — общее слово, а не
+    услуга? Под `on` — нет: услугу назвала LLM, а роль в это поле она не кладёт по правилу своего промпта; off — как было,
+    регулярка общих слов («запись», «врач», «услуга», «хочу»…)."""
+
+    if grounder_generic_by_llm_enabled():
+        return False
+    return bool(_GENERIC_SERVICE_FALLBACK_RE.search(value))
+
+
 _SERVICE_ANCHOR_HINT_RE = re.compile(
     r"\b(узи|экг|холтер|мрт|кт|фгдс|фкс|эндоскоп|гастроскоп|колоноскоп|анализ|биопс|рентген|флюорограф)\b",
     re.I,
@@ -443,15 +464,6 @@ def _should_drop_service_name_in_active_reschedule(
     )
 
 
-# Детерминированные generic-классы из policies.nonbookable_service_hint:
-# описывают КЛАСС услуги («анализы»/«ЭКГ»), а не строку каталога. Casefold-ключи.
-_NONBOOKABLE_GENERIC_HINTS: frozenset[str] = frozenset({
-    "анализы",
-    "экг",
-    "анализы и экг",
-})
-
-
 def _should_keep_nonbookable_service_name_as_is(
     *,
     raw_value: str,
@@ -486,11 +498,11 @@ def _should_keep_nonbookable_service_name_as_is(
         return False
     if "policy_nonbookable_walkin" not in decision_flags:
         return False
-    # Generic-классы из nonbookable_service_hint намеренно описывают класс услуги,
+    # Классы walk-in (`walkin.is_class`: выбор LLM или детектор nonbookable_service_hint) намеренно описывают класс услуги,
     # а не строку прайса, поэтому у них нет общего префикса с тем, что назвал
-    # пациент («диабетический профиль»). Они детерминированы (не LLM) и безопасны —
+    # пациент («диабетический профиль»). Их ставит бот, а не модель свободным текстом, —
     # сохраняем без prefix-проверки, которая ниже ловит только free-form галлюцинации.
-    if value.casefold() in _NONBOOKABLE_GENERIC_HINTS:
+    if walkin.is_class(value):
         return True
     if user_text:
         text_lower = user_text.lower()
@@ -876,7 +888,7 @@ async def ground_decision_entities(
                         flags.add("entity_kept_nonbookable_service_name")
                     else:
                         flags.add("entity_dropped_unverified_service_name")
-                elif fallback and not match_city(fallback) and not _GENERIC_SERVICE_FALLBACK_RE.search(fallback):
+                elif fallback and not match_city(fallback) and not _llm_service_name_is_generic(fallback):
                     out[key] = fallback
                     flags.add("entity_kept_llm_service_name")
                 else:

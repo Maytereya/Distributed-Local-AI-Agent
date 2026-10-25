@@ -24,6 +24,12 @@
 Срок переходит на это определение под выключателем `[MESSENGER_ROUTER] strong_match = legacy | data`
 (по умолчанию `legacy` — прежнее определение срока с «до скобок» и словарём кода): срок в наборе
 деплоя, и смена определения меняет его ответы.
+
+Цена, этап 2, Ш1 (`price_by_parse = on`, DESIGN-2026-10-25-PRICE-STAGE2): ключ — фраза как есть, без вырезателя правил
+(`_extract_price_service_from_query`, 11 списков): что в реплике услуга, решил разбор хода, и читатели передают его фразу;
+реплика целиком сильна, только если она сама — название, синоним или код (решение 22.10 (а)). Число — код услуги, только
+если это вся фраза и не номер из показанного прошлым ответом (`_price_by_parse.number_is_choice`: коды 1–20 в прайсе все
+заняты, и «1» после списка цен было услугой с кодом 1).
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Sequence
 
+from . import _price_by_parse
 from ._biomaterial import mis_synonym_candidates
 from ._common import _normalise_catalog_text
 from ._prices_helpers import _catalog_fingerprint, _extract_price_service_from_query
@@ -86,13 +93,19 @@ def strong_rows(
     :return: строки в порядке `pool` (затем строки кода), без повторов
     """
 
-    key = _normalise_catalog_text(_extract_price_service_from_query(phrase) or phrase)
-    names = {key, _normalise_catalog_text(phrase)} if verbatim else {key}
+    if _price_by_parse.enabled():
+        key = _normalise_catalog_text(phrase)
+        names = {key}
+        code = key.isdigit() and not _price_by_parse.number_is_choice(key)
+    else:
+        key = _normalise_catalog_text(_extract_price_service_from_query(phrase) or phrase)
+        names = {key, _normalise_catalog_text(phrase)} if verbatim else {key}
+        code = key.isdigit()
     names.discard("")
     if not names:
         return []
     synonyms = set(mis_synonym_candidates(phrase))
-    by_code = [row for row in catalog if key.isdigit() and str(row.get("serviceHomecode") or "").strip() == key]
+    by_code = [row for row in catalog if code and str(row.get("serviceHomecode") or "").strip() == key]
     out: list[dict[str, Any]] = []
     if pool is None:
         # Те же строки в том же порядке, что и проход по всему срезу: позиции совпадений по индексу.
