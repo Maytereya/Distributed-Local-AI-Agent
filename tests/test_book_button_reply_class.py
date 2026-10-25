@@ -103,14 +103,17 @@ def test_failure_is_as_before(answer, booking_world, monkeypatch):  # noqa: F811
 # --------------------------------------------------------------------------- класс E: условие, которое бот не выполняет
 
 class _QualifierLLM:
-    """Модель со структурным выводом (как `test_booking_specialty_qualifier_class._SchemaLLM`): специальность с уточнением
-    («по ДМС», «детский») — исход `qualifier`; вопрос цели записи — исход `free`; прочие места — недоступны."""
+    """Модель прода по месту вызова: выбор роли по каталогу (`role_pick`, `roles_catalog_llm = on`) и задача специальности
+    (`booking_specialty_llm = on`) называют уточнение «по ДМС» / «детский» исходом `qualifier` (на проде на пути кнопки его
+    ставил выбор роли — `bkt_on4`, флаг `role_qualifier`); вопрос цели записи — исход `free`; прочие места — недоступны."""
 
     def __init__(self, free: str):
         from tests.test_booking_specialty_qualifier_class import _SchemaLLM
+        from tests.test_role_pick_shadow_class import _MARK, _picks
 
         self.free = free
         self.inner = _SchemaLLM("qualifier")
+        self.role_mark, self.role_answer = _MARK, _picks(None, "qualifier")
         self.calls: list[str] = []
 
     async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
@@ -120,10 +123,13 @@ class _QualifierLLM:
         if _FREE_MARK in seen:
             self.calls.append(_FREE_MARK)
             return GenerateResponse(model="m", response=_free(self.free), done=True)
+        if self.role_mark in seen:
+            self.calls.append(self.role_mark)
+            return GenerateResponse(model="m", response=self.role_answer(prompt), done=True)
         return await self.inner.generate(prompt=prompt, system=system, **kwargs)
 
 
-_PROD = {**_ON, "MR_BOOKING_SPECIALTY_LLM": "on"}
+_PROD = {**_ON, "MR_BOOKING_SPECIALTY_LLM": "on", "MR_ROLES_CATALOG_LLM": "on"}
 _SPECIALTY_REPRASK = "к какому врачу/специалисту или на какую услугу"
 # Реплика с условием, которое бот не выполняет · решение функции о вопросе цели записи.
 _CONDITIONED = (

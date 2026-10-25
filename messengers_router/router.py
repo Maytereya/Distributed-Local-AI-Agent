@@ -78,7 +78,6 @@ from .response_builder import (
 )
 from .russian_nlu import normalize_ru
 from .policies import (
-    REQUIRED_SLOTS,
     branch_options_to_indexable,
     build_branch_index,
     match_branch_hint,
@@ -3060,22 +3059,6 @@ def _handle_operator_offer_pending(
     return None
 
 
-def _answers_booking_target_question(state: SessionState, pending: Any) -> bool:
-    """Реплика отвечает на вопрос цели записи («К какому врачу или на какую услугу записать?»), `booking_target_slot_llm = on`.
-
-    Такой ответ идёт как набранный текст — NLU, разбор специальности и выбор роли, — а не детерминированной предзаписью:
-    предзапись берёт роль из реплики и теряет условие, которого бот не выполняет («по ДМС», «детский», «онлайн»), и тогда
-    вместо оффера оператора запись спрашивает врача заново (BUG-2026-10-25-BOOK-BUTTON-REPLY-AS-TOPIC-SWITCH, класс E).
-    Шаги записи после выбора цели (филиал, пожелание по времени) — предзаписью, как было.
-    """
-
-    if not pending_answer.booking_target_on() or not isinstance(pending, dict) or pending.get("label") != "APPOINTMENT":
-        return False
-    expected = pending_answer.expected_from(state.last_entities)
-    missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
-    return expected is not None and expected[0] == expects.Question.SLOT_VALUE.value and REQUIRED_SLOTS["APPOINTMENT"][0] in missing
-
-
 async def _resolve_nlu_decision_before_doctor_guard(
     user_text: str,
     state: SessionState,
@@ -3107,15 +3090,11 @@ async def _resolve_nlu_decision_before_doctor_guard(
 
     nlu_debug: dict[str, Any] = {}
     pending_before_nlu = memory.get_pending(state)
-    appointment_prelock = (
-        None
-        if _answers_booking_target_question(state, pending_before_nlu)
-        else await prelock_active_appointment_turn(
-            user_text,
-            state.last_entities,
-            pending_before_nlu if isinstance(pending_before_nlu, dict) else None,
-            services,
-        )
+    appointment_prelock = await prelock_active_appointment_turn(
+        user_text,
+        state.last_entities,
+        pending_before_nlu if isinstance(pending_before_nlu, dict) else None,
+        services,
     )
     if appointment_prelock is not None:
         # #3 (прод #668): ФИО принимается формой `_looks_like_patient_fio`
