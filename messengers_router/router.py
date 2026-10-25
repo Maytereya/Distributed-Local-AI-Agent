@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, degradation, expects, pending_answer, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import booking_slots, button_flow, degradation, expects, pending_answer, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -3153,8 +3153,14 @@ async def _resolve_nlu_decision_before_doctor_guard(
         use_v2_nlu = _env_flag("MR_ROUTER_V2_ENABLE", True)
         shadow_nlu = _env_flag("MR_ROUTER_V2_SHADOW", False) or _env_flag("MR_NLU_SHADOW", False)
         if use_v2_nlu:
+            # Ответ на вопрос кнопки, признанный ответом, — тема кнопки (`button_answer_topic`); только когда она есть.
+            answer_topic = button_flow.answer_topic(pending_before_nlu)
             nlu_result = await analyze_with_candidates(
-                user_text, state, runtime_options=runtime_options, **({"button_topic": button_topic} if button_topic else {})
+                user_text,
+                state,
+                runtime_options=runtime_options,
+                **({"button_topic": button_topic} if button_topic else {}),
+                **({"answer_topic": answer_topic} if answer_topic else {}),
             )
             decision = nlu_result.decision
             turn_telemetry.note(tu_label_nlu=decision.label)
@@ -4056,6 +4062,7 @@ async def patient_routing_stream(
         if expected is not None:
             filled = expected[0] == expects.Question.SLOT_VALUE.value and _slot_filled_by_rules(user_text, state, services, memory)
             answered = await pending_answer.answer(*expected, user_text, filled=filled)
+            button_flow.refund_topic_judge(answered, memory.get_pending(state))
             if answered is not None and answered.decided and answered.rest:
                 user_text = answered.rest
 

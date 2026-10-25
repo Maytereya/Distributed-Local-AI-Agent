@@ -44,6 +44,7 @@ LAYER_BY_MODULE: dict[str, str] = {
     # вопрос; карта отстала, чек краснел): решатели и наблюдатели хода — политика; импортируют политику,
     # домен, инфраструктуру (`choice`, `turn_telemetry`) и порт конфигурации.
     "button_menu": "policy",
+    "button_flow": "policy",  # тема ответа на вопрос кнопки меню (25.10): читает `button_menu`, `pending_answer`
     "turn_parse": "policy",
     "turn_understanding": "policy",
     "shown_context": "policy",
