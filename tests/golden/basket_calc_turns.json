@@ -33,6 +33,7 @@
     "pending": null,
     "telemetry": {
      "basket_total": "exact",
+     "basket_total_kind": "sum",
      "basket_takes": 2,
      "tu_parse_status": "picked"
     }
@@ -113,6 +114,7 @@
     "pending": null,
     "telemetry": {
      "basket_total": "exact",
+     "basket_total_kind": "sum",
      "basket_takes": 0,
      "tu_parse_status": "picked"
     }
@@ -153,6 +155,7 @@
     "pending": null,
     "telemetry": {
      "basket_total": "range",
+     "basket_total_kind": "sum",
      "basket_takes": 1,
      "tu_parse_status": "picked"
     }
@@ -193,6 +196,48 @@
     "pending": null,
     "telemetry": {
      "basket_total": "exact",
+     "basket_total_kind": "sum",
+     "basket_takes": 1,
+     "tu_parse_status": "picked"
+    }
+   }
+  ]
+ },
+ "same_service_asked-off": {
+  "turns": [
+   {
+    "text": "По запросу «Ферритин, Железо в сыворотке» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Железо в сыворотке»:\n1. Железо в сыворотке — 240 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "Ферритин, Железо в сыворотке",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked"
+    }
+   }
+  ]
+ },
+ "same_service_asked-on": {
+  "turns": [
+   {
+    "text": "По запросу «Ферритин, Железо в сыворотке» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Железо в сыворотке»:\n1. Железо в сыворотке — 240 руб.\n\nВзятие биоматериала оплачивается отдельно:\n— Взятие крови из вены — 195 руб.\n\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "Ферритин, Железо в сыворотке",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "basket_total": "not_summed",
+     "basket_total_kind": "alternatives",
      "basket_takes": 1,
      "tu_parse_status": "picked"
     }
@@ -233,6 +278,7 @@
     "pending": null,
     "telemetry": {
      "basket_total": "exact",
+     "basket_total_kind": "sum",
      "basket_takes": 2,
      "tu_parse_status": "picked"
     }
@@ -273,6 +319,48 @@
     "pending": null,
     "telemetry": {
      "basket_total": "exact",
+     "basket_total_kind": "sum",
+     "basket_takes": 1,
+     "tu_parse_status": "picked"
+    }
+   }
+  ]
+ },
+ "total_llm_down-off": {
+  "turns": [
+   {
+    "text": "По запросу «Ферритин, Глюкоза» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "Ферритин, Глюкоза",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked"
+    }
+   }
+  ]
+ },
+ "total_llm_down-on": {
+  "turns": [
+   {
+    "text": "По запросу «Ферритин, Глюкоза» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\n\nВзятие биоматериала оплачивается отдельно:\n— Взятие крови из вены — 195 руб.\n\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "Ферритин, Глюкоза",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "basket_total": "not_summed",
+     "basket_total_kind": "failed",
      "basket_takes": 1,
      "tu_parse_status": "picked"
     }
@@ -313,6 +401,7 @@
     "pending": null,
     "telemetry": {
      "basket_total": "exact",
+     "basket_total_kind": "sum",
      "basket_takes": 0,
      "tu_parse_status": "picked"
     }

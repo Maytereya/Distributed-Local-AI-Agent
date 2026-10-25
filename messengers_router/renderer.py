@@ -531,7 +531,8 @@ def _basket_calc_lines(calc: dict[str, Any]) -> list[str]:
     (`_basket_select.basket_calculation`). Суммы печатает код: итог посчитан из тех же строк, что напечатаны выше."""
 
     lines: list[str] = []
-    total = int(calc.get("positions") or 0) >= 2 and not calc.get("total_unknown")  # цена 0 — не указана: суммы нет
+    # Цена 0 — не указана: суммы нет; позиции — альтернативы или вопрос «есть ли» (решение LLM, `summed`) — тоже.
+    total = int(calc.get("positions") or 0) >= 2 and not calc.get("total_unknown") and calc.get("summed", True)
     if total:
         low, high = int(calc.get("total_min") or 0), int(calc.get("total_max") or 0)
         amount = _format_rub(low) if low == high else f"от {_format_rub(low)} до {_format_rub(high)}"

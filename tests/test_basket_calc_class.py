@@ -11,7 +11,10 @@ STEP-2026-10-25-BASKET-CALC. Под позициями корзины — ито
   отменяют); материалов со взятием нет (моча, кал) — взятия нет; у ДОПУСТИМЫХ материалов разное взятие — оговорка
   заказчика без догадки; «Взятие крови без последующего исследования» — никогда; цена взятия — цена его строки прайса;
 - базовый вариант позиции — без cito и капиллярных, если пациент их не просил; вариантов после этого больше одного —
-  развилка (итог «от … до …»), а не «самый дорогой».
+  развилка (итог «от … до …»), а не «самый дорогой»;
+- складывать ли позиции, решает LLM по реплике (`basket_total`): итог — только когда пациент перечислил разные услуги;
+  варианты на выбор, «есть ли / что это / одно ли это» (g0868, g0700), «ни одна», сбой, запрет LLM — позиции и взятие как были,
+  без «Итого» и оговорки о скидках; итога и так нет — LLM не зовётся.
 
 Материалы МИС — выдержка `biomatNames` для строк мини-прода (`tests/fixtures/mini_prod/biomat_names_20261003.jsonl`, срез
 справочника 03.10): гейт герметичен, справочника в облаке нет. Строки «Взятие мазка (соскоба)» в мини-проде нет — тест
@@ -20,6 +23,7 @@ STEP-2026-10-25-BASKET-CALC. Под позициями корзины — ито
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -29,6 +33,7 @@ import pytest
 
 from evalbench.prices import PriceCatalog
 from messengers_router import renderer
+from messengers_router.choice import Choice, Status
 from messengers_router.services import _basket_select as B
 from messengers_router.services import _biomaterial as bio
 from messengers_router.services._prices_helpers import multi_price_payload_from_items
@@ -329,6 +334,73 @@ def test_oak_family_is_a_fork_not_the_most_expensive(rows):
     calc = payload["basket_calc"]
     assert (calc["total_min"], calc["total_max"]) == (min(costs) + 190, max(costs) + 190) and calc["forks"] == ["оак"]
     assert "Итого по прайсу: от " in text
+
+
+# --- складывать ли (решение LLM) -------------------------------------------------------------------------------------------
+
+_VERDICTS = {
+    "sum": Choice(Status.PICKED, ("sum",)),
+    "alternatives": Choice(Status.PICKED, ("alternatives",)),
+    "none": Choice(Status.NONE_FIT),
+    "unavailable": Choice(Status.UNAVAILABLE),
+    "invalid": Choice(Status.INVALID),
+}
+
+
+def _fake_choose(monkeypatch, verdict: Choice, asked: list[tuple[str, str, tuple[str, ...]]]):
+    async def choose(task, question, options, **_kwargs):
+        asked.append((task.name, question, tuple(option.id for option in options)))
+        return verdict
+
+    monkeypatch.setattr(B, "choose", choose)
+
+
+def _calc_answer(question: str, positions, rows, *, llm_allowed: bool = True) -> str:
+    calc = asyncio.run(B.basket_calc(question, positions, rows, llm_allowed=llm_allowed))
+    return renderer._format_price_family_variants(multi_price_payload_from_items(positions, [], allow_single=True, calculation=calc))
+
+
+@pytest.mark.parametrize("verdict", sorted(_VERDICTS))
+def test_total_only_when_llm_says_different_services_on_whole_price(rows, monkeypatch, verdict):
+    """Каждые 7 строк прайса — корзина из двух позиций: итог и оговорка о скидках — тогда и только тогда, когда LLM ответила
+    «разные услуги»; иначе ответ — тот же, без этих строк (позиции, взятие — как были). LLM видит реплику пациента и два
+    варианта задачи."""
+
+    priced = [row for row in _priced(rows) if float(row["cost"]) > 0]
+    checked = 0
+    for i in range(0, len(priced) - 1, 7):
+        positions = [_position(f"а{i}", [priced[i]]), _position(f"б{i}", [priced[i + 1]])]
+        asked: list[tuple[str, str, tuple[str, ...]]] = []
+        _fake_choose(monkeypatch, _VERDICTS["sum"], asked)
+        summed = _calc_answer("сколько стоят а и б", positions, rows).splitlines()
+        _fake_choose(monkeypatch, _VERDICTS[verdict], asked)
+        text = _calc_answer("сколько стоят а и б", positions, rows).splitlines()
+        assert asked == [("basket_total", "сколько стоят а и б", ("sum", "alternatives"))] * 2
+        if verdict == "sum":
+            assert text == summed and any(line.startswith("Итого по прайсу") for line in text)
+        else:
+            dropped = [line for line in summed if line.startswith("Итого по прайсу") or line == BASKET_DISCOUNT_NOTE]
+            assert [line for line in text if line.strip()] == [line for line in summed if line.strip() and line not in dropped]
+            assert text.count("") <= summed.count("")  # блок без строк — без лишних отбивок
+        checked += 1
+    assert checked >= 40
+
+
+def test_no_llm_call_when_there_is_no_total_or_llm_is_not_allowed(rows, monkeypatch):
+    """Одна позиция, цена 0 — итога и так нет: LLM не зовётся, ответ прежний. LLM нельзя (`strict`) — без вызова и без «Итого»."""
+
+    priced = [row for row in _priced(rows) if float(row["cost"]) > 0]
+    asked: list[tuple[str, str, tuple[str, ...]]] = []
+    _fake_choose(monkeypatch, _VERDICTS["sum"], asked)
+    single = [_position("а", [priced[0], priced[1]])]
+    assert _calc_answer("а", single, rows) == _answer(single, rows)[0]
+    free = next(row for row in rows if float(row["cost"]) <= 0)
+    no_price = [_position("а", [priced[0]]), _position("б", [free])]
+    assert _calc_answer("а и б", no_price, rows) == _answer(no_price, rows)[0]
+    assert asked == []
+    two = [_position("а", [priced[0]]), _position("б", [priced[1]])]
+    strict = _calc_answer("а и б", two, rows, llm_allowed=False)
+    assert asked == [] and "Итого" not in strict and BASKET_DISCOUNT_NOTE not in strict
 
 
 # --- выключатель ---------------------------------------------------------------------------------------------------------

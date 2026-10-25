@@ -26,7 +26,9 @@
 Калькулятор (ТЗ 17.08 §6, базовый объём; ответы заказчика 16.09) — `basket_calculation`, под `basket_calc = on`: итог по
 позициям и взятие биоматериала по данным. Базовый вариант позиции — без cito/капиллярной/на дому…, если пациент их не просил
 (`_prefer_base_variants` в `_positions`); вариантов после этого больше одного — развилка, и итог — «от … до …», а не одна
-выдуманная сумма (решение владельца 22.07: дезинформация ценой хуже уточнения).
+выдуманная сумма (решение владельца 22.07: дезинформация ценой хуже уточнения). Складывать ли позиции вообще, решает LLM
+(`basket_total`): перечень разных услуг — итог; одна услуга разными словами, варианты на выбор, «есть ли / что это / одно ли это»
+(g0868, g0700) — перечень того, что есть в прайсе, без «Итого»; сбой LLM — тоже без «Итого».
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ import logging
 from typing import Any, Sequence
 
 from .. import turn_telemetry
-from ..choice import Option, Task, choose
+from ..choice import Option, Status, Task, choose
 from ..runtime_config import config as _cfg
 from ._biomaterial import service_mis_names
 from ._common import _normalise_catalog_text
@@ -600,3 +602,49 @@ def basket_calculation(positions: Sequence[dict[str, Any]], retail_rows: Sequenc
         "take_unknown": unknown,
         "total_unknown": no_price,
     }
+
+
+# Складывать ли позиции — решает LLM по реплике (принцип 2): перечень разных услуг — итог; одна услуга разными словами,
+# варианты на выбор, «есть ли / что это / одно ли это» — не сумма (g0868 «Чек ап… — есть ли комплексные анализы?», g0700
+# «Витамин Д это витамин д 25 он и просто витамин д?»). Пациент назвал позиции сам — по буквам этого не различить.
+BASKET_TOTAL_TASK = Task(name="basket_total", max_picks=1, num_predict=32, timeout_s=5.0, queue_timeout_ms=1500)
+_SUM = "sum"
+_ALTERNATIVES = "alternatives"
+_BASKET_TOTAL_OPTIONS = (
+    Option(id=_SUM, text="Узнать стоимость нескольких разных анализов или услуг, которые пациент перечислил, — общая сумма за все"),
+    Option(
+        id=_ALTERNATIVES,
+        text="Узнать про одну услугу или про варианты на выбор: есть ли такие, что это, одно ли это, чем отличаются, какой выбрать",
+    ),
+)
+
+
+async def basket_calc(
+    question: str, positions: Sequence[dict[str, Any]], retail_rows: Sequence[dict[str, Any]], *, llm_allowed: bool = True
+) -> dict[str, Any] | None:
+    """Расчёт корзины (`basket_calculation`) и решение LLM, складывать ли позиции (`basket_total`): итог печатается, только если
+    пациент перечислил разные услуги. Альтернативы и вопрос «есть ли / что это», «ни одна», сбой LLM, вызов запрещён (`strict`) —
+    `summed: False`: позиции и взятие — как были, «Итого» нет (лучше без суммы, чем сумма альтернатив). Итога и так нет (одна
+    позиция, цена 0) — LLM не зовётся.
+
+    :param question: реплика пациента (как написал он сам)
+    :param positions: позиции корзины
+    :param retail_rows: строки прайса региона
+    :param llm_allowed: можно ли звать LLM
+    """
+
+    calc = basket_calculation(positions, retail_rows)
+    if calc is None or calc["positions"] < 2 or calc["total_unknown"]:
+        return calc
+    kind = "llm_off"
+    if llm_allowed:
+        choice = await choose(BASKET_TOTAL_TASK, question, _BASKET_TOTAL_OPTIONS)
+        if choice.status is Status.PICKED and choice.ids:
+            kind = choice.ids[0]
+        else:
+            kind = "none" if choice.status is Status.NONE_FIT else "failed"
+    turn_telemetry.note(basket_total_kind=kind)
+    if kind == _SUM:
+        return calc
+    turn_telemetry.note(basket_total="not_summed")
+    return {**calc, "summed": False}

@@ -7,7 +7,8 @@
 `GOLDEN_UPDATE=1 pytest tests/test_basket_calc_turns.py`, дифф разобрать в журнале).
 
 LLM — оракул `test_price_stage2_turns` (разметка — ровно фразы случая, выбор строки — строки с заданным началом названия)
-или «недоступна» (`down`: без LLM услугу не угадываем — «уточните», калькулятор не при чём).
+или «недоступна» (`down`: без LLM услугу не угадываем — «уточните», калькулятор не при чём); «складывать ли позиции»
+(`basket_total`) — ответ случая из `_TOTAL` (по умолчанию — общая сумма), `None` — LLM этого места недоступна (без «Итого»).
 Реплики — классов корзины, не вопросы эталона стенда (Гудхарт, 25.10).
 """
 
@@ -20,11 +21,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from ollama import GenerateResponse
 
 from evalbench import world as ev_world
 from messengers_router import llm_runtime
 from messengers_router.services import _biomaterial as bio
 from tests.test_basket_calc_class import _BIOMAT, _SWAB_ROW, _read
+
 from tests.test_price_stage2_turns import PROD_D17, Case, _Down, _Oracle
 from tests.test_price_turns_golden import FIXTURE, run_dialog
 
@@ -53,9 +56,36 @@ CASES: dict[str, Case] = {
     "named_take": Case(("взятие крови из вены, ферритин",), ("взятие крови из вены", "ферритин"), why="взятие — позиция, не перечень"),
     "partial": Case(("ферритин, глюкоза, флороценоз",), ("ферритин", "глюкоза", "флороценоз"), rows=(), why="итог по найденным"),
     "llm_down": Case(("сколько стоит оак, ферритин, глюкоза",), ("оак", "ферритин", "глюкоза"), why="без LLM — «уточните»"),
+    # Складывать ли — решает LLM по реплике (g0700, g0868): варианты на выбор, «есть ли» — перечень без «Итого».
+    "same_service_asked": Case(
+        ("ферритин или железо в сыворотке — какой лучше сдать?",), ("ферритин", "железо в сыворотке"),
+        why="варианты на выбор — не сумма",
+    ),
+    "total_llm_down": Case(
+        ("сколько стоит ферритин и глюкоза",), ("ферритин", "глюкоза"), why="LLM «складывать ли» недоступна — без «Итого»",
+    ),
 }
+_TOTAL: dict[str, str | None] = {"same_service_asked": "alternatives", "total_llm_down": None}
+_TOTAL_MARK = "нужна ли пациенту общая сумма"
+_TOTAL_IDS = ("sum", "alternatives")  # порядок вариантов задачи `basket_total`
 _SYNONYMS = {"т3": ("сТ3 (FT3) Свободный трийодтиронин",), "т4": ("сТ4 (FT4) Свободный тироксин",)}  # как в справочнике МИС 03.10
-_TELEMETRY = ("basket_total", "basket_takes", "basket_take_unknown", "tu_parse_status", "price_policy")
+_TELEMETRY = ("basket_total", "basket_total_kind", "basket_takes", "basket_take_unknown", "tu_parse_status", "price_policy")
+
+
+class _TotalOracle(_Oracle):
+    """Оракул случая и ответ на «складывать ли позиции» (`basket_total`): номер варианта из `_TOTAL`; `None` — недоступна."""
+
+    def __init__(self, case: Case, total: str | None) -> None:
+        super().__init__(case)
+        self.total = total
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
+        if _TOTAL_MARK in f"{system}\n{prompt}":
+            self.asked.append("total")
+            if self.total is None:
+                raise ConnectionError("тест: LLM «складывать ли» недоступна")
+            return GenerateResponse(model="m", response=json.dumps({"picks": [_TOTAL_IDS.index(self.total) + 1]}), done=True)
+        return await super().generate(prompt=prompt, system=system, **kwargs)
 
 
 @pytest.fixture(scope="module")
@@ -79,7 +109,8 @@ def _turns(case_name: str, switch: str, world_dir: Path, monkeypatch) -> dict[st
         vocab.synonym_to_service = {key: names[0] for key, names in _SYNONYMS.items()}
     monkeypatch.setattr(bio, "_vocabularies", lambda: vocab)
     case = CASES[case_name]
-    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _Down() if case_name == "llm_down" else _Oracle(case))
+    oracle = _Down() if case_name == "llm_down" else _TotalOracle(case, _TOTAL.get(case_name, "sum"))
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", oracle)
     monkeypatch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
     with ev_world.FrozenWorld(world_dir, "day") as world:
         records = run_dialog(list(case.turns), f"basket-calc-{case_name}-{switch}")
@@ -127,6 +158,8 @@ def test_on_only_adds_the_calculation_under_the_positions(case_name):
     assert expected is None, f"строка off потеряна: {expected!r}"
     calc = ("Итого по прайсу", "Взятие биоматериала", "— Взятие", "Скидки применяет")
     assert all(line.startswith(calc) or not line.strip() for line in added), added
+    if case_name in _TOTAL:  # не сумма — ни «Итого», ни оговорки о скидках к нему
+        assert not [line for line in added if line.startswith(("Итого по прайсу", "Скидки применяет"))], added
 
 
 def test_golden_has_no_orphans():
