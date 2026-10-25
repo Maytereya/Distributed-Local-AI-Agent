@@ -256,7 +256,7 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]], diff: tuple[int, i
             lines.append(
                 f"  - недействителен: сеть {header.get('net_attempts')}, очистки {header.get('cleanup_calls')}, "
                 f"мир {header.get('world_problems')}, неопознанные промпты {header.get('llm_outcomes', {}).get('unknown_site', 0)}, "
-                f"неоднозначные {header.get('ambiguous_sites')}"
+                f"неоднозначные {header.get('ambiguous_sites')}, LLM недоступна посреди прогона {header.get('llm_unreachable', 0)}"
             )
         lines.append(f"  - недоступно в мире: {', '.join(world.get('unavailable', []))}")
     lines.append("")

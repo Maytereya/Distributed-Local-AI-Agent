@@ -90,6 +90,18 @@ def _llm_reachable(url: str, timeout_s: float = 8.0) -> bool:
     return True
 
 
+# Живой вызов не дошёл до сервера LLM (VPN, сеть): это свойство стенда, а не бота — ход прошёл как «LLM недоступна»,
+# и прогон с такими вызовами не замер живой LLM (25.10: `bkt_on` — 39 из 44 живых вызовов, valid=true). Тайм-аут ответа
+# медленной модели (`timeout`, `cancelled`) — настоящее поведение, прогон не портит.
+_UNREACHABLE = ("error:ConnectError", "error:ConnectTimeout", "error:ConnectionError", "error:ConnectionRefusedError")
+
+
+def llm_unreachable(outcomes: Counter) -> int:
+    """Сколько живых вызовов LLM не дошли до сервера."""
+
+    return sum(n for outcome, n in outcomes.items() if outcome in _UNREACHABLE)
+
+
 def _parse_cfg(item: str) -> tuple[str, Any]:
     """`ИМЯ=ЗНАЧЕНИЕ` → (ИМЯ, значение): true/false — bool, целое — int, иначе строка."""
 
@@ -432,7 +444,10 @@ def main(argv: list[str] | None = None) -> int:
     calls = Counter(c["outcome"] for t in turns for c in (t["llm_calls"] or []))
     header["llm_outcomes"] = dict(calls)
     header["world_problems"] = problems
-    header["valid"] = not (header["net_attempts"] or header["cleanup_calls"] or problems or calls.get("unknown_site") or header["ambiguous_sites"])
+    header["llm_unreachable"] = llm_unreachable(calls + Counter(header.get("load_llm_outcomes") or {}))
+    header["valid"] = not (
+        header["net_attempts"] or header["cleanup_calls"] or problems or calls.get("unknown_site") or header["ambiguous_sites"] or header["llm_unreachable"]
+    )
     (run_dir / "run.json").write_text(json.dumps(header, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"[evalbench] готово: {run_dir} valid={header['valid']} исходы={dict(Counter(t['outcome'] for t in turns))}", file=sys.__stderr__)
     return 0 if header["valid"] else 2

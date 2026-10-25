@@ -856,3 +856,15 @@ def test_button_card_section_counts_per_leaf_without_utterances():
     assert "## Успех по кнопкам" in text and "**50% (1/2)**" in text and "Цена анализа (`menu.price.test`)" in text
     assert "стало лучше:** 1 (g1)" in text and "СЕКРЕТНАЯ" not in text and "все филиалы" not in text
     assert buttons.button_metrics(after, {}, labels, judged) is None  # прогон не по набору кнопок — раздела нет
+
+
+def test_run_with_unreachable_live_llm_is_not_valid():
+    """Обрыв связи с LLM посреди прогона (VPN) — прогон не мерил живую LLM: `valid=false` (25.10, `bkt_on`: 39 из 44 живых
+    вызовов упали, а прогон был действителен). Тайм-аут ответа модели — поведение бота, прогон не портит."""
+
+    from collections import Counter
+
+    from evalbench.run import llm_unreachable
+
+    assert llm_unreachable(Counter({"ok": 5, "error:ConnectTimeout": 15, "error:ConnectionError": 24})) == 39
+    assert llm_unreachable(Counter({"ok": 5, "timeout": 2, "cancelled": 1, "cache_hit": 9})) == 0
