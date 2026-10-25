@@ -753,3 +753,118 @@ def test_concurrent_turns_get_their_own_telemetry():
     assert [r["tid"] for r in mine] == ["2"] and [r["tid"] for r in rest] == ["1", "3"]
     mine, rest = session_rows(rest, "bench-a")
     assert [r["tid"] for r in mine] == ["1", "3"] and rest == []
+
+
+# --------------------------------------------------------------------------- успех по кнопкам (метрика «рабочий бот», 25.10)
+
+
+def test_button_captions_are_the_gateway_screen_table():
+    from evalbench import buttons
+    from tests.test_button_actions import GATEWAY_V1_TITLES
+
+    assert buttons.GATEWAY_CAPTIONS == GATEWAY_V1_TITLES and set(buttons.LEAF_TOPIC) == set(GATEWAY_V1_TITLES)
+
+
+def test_press_case_sends_button_then_question_and_handoff_button_stops(tmp_path):
+    """Набор кнопок идёт как у пациента: нажатие листа (подпись в `text`), затем вопрос без `button_id` в той же сессии.
+    Одним запросом кнопка-тема `slot` вопрос не читает — ответом была бы подсказка кнопки, а не цена."""
+
+    import io
+
+    from evalbench import run as ev_run
+
+    fixture = ROOT / "tests" / "fixtures" / "mini_prod" / "snapshots"
+    root = ev_world.build_world(fixture, "20261008", tmp_path / "world")
+
+    class _NoCalls:
+        def take_turn_calls(self):
+            return []
+
+    cases = [
+        {"id": "p1", "set": "b", "question": "ферритин", "button": "menu.price.test", "press": True},
+        {"id": "p2", "set": "b", "question": "когда будет готов ферритин", "button": "menu.results.eta", "press": True},
+        {"id": "p3", "set": "b", "question": "ферритин", "button": "menu.price.test"},
+    ]
+    out = io.StringIO()
+    with ev_world.FrozenWorld(root, "day") as world:
+        stats = asyncio.run(
+            ev_run._run_cases(
+                cases, client=_NoCalls(), world=world, tpl=Templates.from_bot(), catalog=PriceCatalog.from_world(root / "apidata"),
+                llm_mode="hybrid", run_name="t", out=out, progress=lambda _m: None,
+            )
+        )
+        attempts = list(world.net.attempts)
+    assert attempts == [] and stats["done"] == 3
+    priced, eta, one_request = (json.loads(line) for line in out.getvalue().splitlines())
+    assert priced["press"]["question_sent"] and priced["press"]["outcome"] != "price" and priced["outcome"] == "price"
+    assert "Ферритин" in priced["answer"] and priced["state"]["service_name"] == "Ферритин"
+    assert eta["press"]["handoff"] and not eta["press"]["question_sent"] and eta["handoff"]
+    assert one_request["press"] is None and one_request["outcome"] != "price"
+
+
+def _btn_turn(tid: str, answer: str, **kw):
+    return {"id": tid, "answer": answer, "outcome": kw.pop("outcome", "answer"), "price_pairs": kw.pop("pairs", []), "press": {"question_sent": True}, **kw}
+
+
+def test_button_verdicts_price_by_labels_rest_by_judge_on_this_answer():
+    from evalbench import buttons
+
+    pair = {"amount": 530, "service_id": 7, "name": "Ферритин", "status": "matched"}
+    label = {"kind": "single", "core": [7], "ok": [], "ambiguous": False}
+    case = {"id": "x", "button": "menu.price.test", "press": True}
+    assert buttons.turn_verdict(_btn_turn("x", "Ферритин — 530 руб.", pairs=[pair]), case, label, {}) == ("success", None)
+    assert buttons.turn_verdict(_btn_turn("x", "Глюкоза — 530 руб.", pairs=[{**pair, "service_id": 8}]), case, label, {}) == ("fail", "цена: чужая цена")
+    assert buttons.turn_verdict(_btn_turn("x", "Перевести?", outcome="operator_offer"), case, label, {}) == ("fail", "цена: перевод вместо цены")
+    assert buttons.turn_verdict(_btn_turn("x", "Такой услуги нет.", outcome="no_info"), case, {**label, "kind": "absent"}, {})[0] == "success"
+    assert buttons.turn_verdict(_btn_turn("x", "x"), case, {**label, "kind": "context_dependent"}, {}) == ("excluded", "без контекста")
+    assert buttons.turn_verdict(_btn_turn("x", "Цена <<PRICE>>"), case, label, {}) == ("fail", "служебный текст")
+    assert buttons.turn_verdict(_btn_turn("x", "", outcome="tech_error"), case, label, {}) == ("fail", "сбой")
+    doctor_line = {"amount": 3000, "service_id": None, "name": None, "status": "doctor"}
+    assert buttons.turn_verdict(_btn_turn("x", "Иванов И. И. (Уролог) — 3 000 руб.", pairs=[doctor_line]), case, label, {}) == ("unjudged", None)
+
+    addr = {"id": "a", "button": "menu.address", "press": True}
+    answer = "ул. Солнечная, 53 — будни 07:00–18:30"
+    judged = {("a", buttons.answer_sha(answer)): {"verdict": "success", "answer_sha": buttons.answer_sha(answer)}}
+    assert buttons.turn_verdict(_btn_turn("a", answer), addr, None, judged) == ("success", None)
+    assert buttons.turn_verdict(_btn_turn("a", answer + " Другой текст."), addr, None, judged) == ("unjudged", None)  # ответ изменился
+    assert buttons.turn_verdict(_btn_turn("a", answer), {**addr, "exclude": "другой город"}, None, judged) == ("excluded", "другой город")
+
+    eta = {"id": "e", "button": "menu.results.eta", "press": True}
+    stopped = {"id": "e", "answer": "соединяю", "press": {"question_sent": False, "handoff": True}}
+    assert buttons.turn_verdict(stopped, eta, None, {}) == ("by_design", None)
+    assert buttons.turn_verdict({**stopped, "id": "a"}, addr, None, {}) == ("fail", "перевод на нажатии")
+
+
+def test_button_card_section_counts_per_leaf_without_utterances():
+    from evalbench import buttons
+
+    cases = {
+        "g1": {"id": "g1", "button": "menu.price.test", "press": True, "question": "СЕКРЕТНАЯ РЕПЛИКА"},
+        "g2": {"id": "g2", "button": "menu.address", "press": True, "question": "СЕКРЕТНАЯ РЕПЛИКА"},
+        "g3": {"id": "g3", "button": "menu.address", "press": True, "question": "СЕКРЕТНАЯ РЕПЛИКА", "exclude": "другой город"},
+    }
+    labels = {"g1": {"kind": "single", "core": [7], "ok": []}}
+    pair = {"amount": 530, "service_id": 7, "name": "Ферритин", "status": "matched"}
+    before = [_btn_turn("g1", "нет", outcome="no_info"), _btn_turn("g2", "все филиалы"), _btn_turn("g3", "x")]
+    after = [_btn_turn("g1", "Ферритин — 530 руб.", pairs=[pair]), _btn_turn("g2", "все филиалы"), _btn_turn("g3", "x")]
+    judged = {("g2", buttons.answer_sha("все филиалы")): {"verdict": "fail", "klass": "шаблон вместо ответа", "answer_sha": buttons.answer_sha("все филиалы")}}
+    b0 = buttons.button_metrics(before, cases, labels, judged)
+    b1 = buttons.button_metrics(after, cases, labels, judged)
+    assert b0["total"] == {"fail": 2} and b1["total"] == {"success": 1, "fail": 1} and b1["excluded"] == {"другой город": 1}
+    assert b1["classes"] == {"шаблон вместо ответа": ["g2"]}
+    text = "\n".join(buttons.render_buttons([({"name": "d17"}, b0), ({"name": "d18"}, b1)]))
+    assert "## Успех по кнопкам" in text and "**50% (1/2)**" in text and "Цена анализа (`menu.price.test`)" in text
+    assert "стало лучше:** 1 (g1)" in text and "СЕКРЕТНАЯ" not in text and "все филиалы" not in text
+    assert buttons.button_metrics(after, {}, labels, judged) is None  # прогон не по набору кнопок — раздела нет
+
+
+def test_run_with_unreachable_live_llm_is_not_valid():
+    """Обрыв связи с LLM посреди прогона (VPN) — прогон не мерил живую LLM: `valid=false` (25.10, `bkt_on`: 39 из 44 живых
+    вызовов упали, а прогон был действителен). Тайм-аут ответа модели — поведение бота, прогон не портит."""
+
+    from collections import Counter
+
+    from evalbench.run import llm_unreachable
+
+    assert llm_unreachable(Counter({"ok": 5, "error:ConnectTimeout": 15, "error:ConnectionError": 24})) == 39
+    assert llm_unreachable(Counter({"ok": 5, "timeout": 2, "cancelled": 1, "cache_hit": 9})) == 0

@@ -256,7 +256,7 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]], diff: tuple[int, i
             lines.append(
                 f"  - недействителен: сеть {header.get('net_attempts')}, очистки {header.get('cleanup_calls')}, "
                 f"мир {header.get('world_problems')}, неопознанные промпты {header.get('llm_outcomes', {}).get('unknown_site', 0)}, "
-                f"неоднозначные {header.get('ambiguous_sites')}"
+                f"неоднозначные {header.get('ambiguous_sites')}, LLM недоступна посреди прогона {header.get('llm_unreachable', 0)}"
             )
         lines.append(f"  - недоступно в мире: {', '.join(world.get('unavailable', []))}")
     lines.append("")
@@ -363,13 +363,17 @@ def main(argv: list[str] | None = None) -> int:
         shared = keys[0] & keys[1]
         runs = [(dict(h, cases=len(shared), done=len(shared)), [t for t in turns if (t.get("set"), t["id"]) in shared]) for h, turns in runs]
     diff = answer_diff(runs[0][1], runs[1][1]) if len(runs) == 2 else None
-    loaded = []
+    from . import buttons
+
+    judged = buttons.load_judge()
+    loaded, by_button = [], []
     for header, turns in runs:
         refresh_expectations(header, turns)
         rescore_prices(header, turns)
         score_specialties(header, turns)
         loaded.append((header, metrics(turns, labels)))
-    print(render(loaded, diff))
+        by_button.append((header, buttons.button_metrics(turns, buttons.load_cases(header), labels, judged)))
+    print("\n".join([render(loaded, diff), *buttons.render_buttons(by_button)]))
     return 0
 
 

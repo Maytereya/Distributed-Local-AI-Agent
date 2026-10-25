@@ -249,7 +249,7 @@ def _extract_pending_response(
         return None
 
     from . import router
-    from .policies import clarification_question, handoff_message
+    from .policies import REQUIRED_SLOTS, clarification_question, handoff_message
     from .recovery_policy import contextual_reply_kind
 
     missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
@@ -326,9 +326,12 @@ def _extract_pending_response(
     if plan.label == "APPOINTMENT" and isinstance(missing, list) and "appointment_action" in missing:
         # «Хотите отменить или перенести запись?» — ответ разберёт `router._handle_appointment_action_pending`.
         expects.ask(expects.Question.APPOINTMENT_ACTION, kind=expects.PICK, options=expects.APPOINTMENT_ACTION_OPTIONS)
-    elif plan.label in pending_answer.SLOT_TOPICS and pending_answer.buttons_on():
-        # Вопрос-слот темы (кнопки «Подготовка к процедуре», «Подобрать анализы» и тот же вопрос текстом): ответ решает
-        # одна функция ответа на висящий вопрос — свободный ответ (решение владельца 19.10, п. 5).
+    elif plan.label in pending_answer.slot_topics() and pending_answer.buttons_on() and (
+        plan.label != "APPOINTMENT" or (isinstance(missing, list) and REQUIRED_SLOTS["APPOINTMENT"][0] in missing)
+    ):
+        # Вопрос-слот темы (кнопки «Подготовка к процедуре», «Подобрать анализы», «Записаться на приём» — вопрос цели записи,
+        # и тот же вопрос текстом): ответ решает одна функция ответа на висящий вопрос — свободный ответ (решение владельца
+        # 19.10, п. 5; запись — `booking_target_slot_llm`).
         expects.ask(expects.Question.SLOT_VALUE, kind=expects.FREE)
     return ResponseEnvelope(
         text=_button_hint(decision)

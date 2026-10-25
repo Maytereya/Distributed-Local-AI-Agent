@@ -206,6 +206,22 @@ def buttons_on() -> bool:
     return str(getattr(cfg, "MR_PENDING_BUTTONS", "off") or "").strip().lower() == "on"
 
 
+def booking_target_on() -> bool:
+    """Вопрос цели записи — вопрос-слот функции: `booking_target_slot_llm = on` (BUG-2026-10-25-BOOK-BUTTON-REPLY-AS-TOPIC-SWITCH)."""
+
+    from .runtime_config import config as cfg
+
+    return str(getattr(cfg, "MR_BOOKING_TARGET_SLOT_LLM", "off") or "").strip().lower() == "on"
+
+
+def slot_topics() -> dict[str, str | None]:
+    """Темы вопросов-слотов этого хода. Под `booking_target_slot_llm = on` — и цель записи («К какому врачу или на какую
+    услугу записать?»): слота для реплики целиком нет — врача, специальность или услугу разбирают правила и NLU, решение
+    «это ответ» держит тему записи, и предпроверка записи не принимает ответ за смену темы."""
+
+    return {**SLOT_TOPICS, "APPOINTMENT": None} if booking_target_on() else SLOT_TOPICS
+
+
 def current(question_type: str | Question | None = None, text: str | None = None) -> Answer | None:
     """Решение этого хода; с типом — только если оно о вопросе этого типа; с репликой — только если о ней."""
 
