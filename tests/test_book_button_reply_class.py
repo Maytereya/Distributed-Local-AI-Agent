@@ -8,7 +8,8 @@
 
 Выключатель `[MESSENGER_ROUTER] booking_target_slot_llm = off | on` (по умолчанию off — как было) поверх `pending_buttons = on`.
 Инвариант: под on ответ, который одна функция (LLM) признала ответом на вопрос цели записи, идёт в запись и вопроса об отмене не
-получает; другая тема, пока в записи ничего не выбрано, — обычный путь без вопроса об отмене (отменять нечего; запись не снимается); сбой LLM и off — как
+получает; ответ с условием, которого бот не выполняет (ДМС, ребёнок, онлайн), и другая тема, пока в записи ничего не выбрано, — тот же
+ответ, что на ту же реплику текстом (оффер оператора, без повтора «к какому врачу?» и без вопроса об отмене); сбой LLM и off — как
 было. Тесты — через обработчик эндпоинта, LLM — подделка настоящего типа.
 """
 
@@ -32,7 +33,7 @@ _REPLIES = (
     ("Как записаться на УЗИ?", True),
     ("Можно записаться на узи брюшной полости и почек?", True),
     ("Хотела бы записаться на ЭКГ с расшифровкой", False),  # ЭКГ — без записи, живая очередь (штатный ответ)
-    ("Кардиолог когда принимает?", True),
+    ("Кардиолог когда принимает?", False),  # вопрос расписания — врачи и расписание, как текстом
     ("Где можно сделать УЗИ щитовидной железы?", False),
 )
 # Реплика без врача, специальности и услуги: значение не разбирают правила — решает LLM.
@@ -90,14 +91,6 @@ def test_other_topic_before_anything_is_chosen_is_answered_without_abort_questio
     assert not _abort_asked(on) and "appointment_topic_switch_pending" not in on["state"], on["text"]
 
 
-def test_wrong_new_topic_keeps_the_booking(booking_world, monkeypatch):  # noqa: F811
-    """Модель ошиблась («другая тема» на просьбу записаться с филиалом в реплике): запись не снимается — обычный путь
-    продолжает запись, а не теряет контекст до «Не совсем понял…» (карточка `bkt_on3`, r0142: потерян названный филиал)."""
-
-    on = _in_world(booking_world, monkeypatch, [_BOOK_BUTTON, "хочу к врачу на ленина 5"], switches=_ON, llm=_LLM({_FREE_MARK: _free("new_topic")}))[-1]
-    assert not _abort_asked(on) and on["label"] == "APPOINTMENT" and not on["text"].startswith("Не совсем понял"), on
-
-
 @pytest.mark.parametrize("answer", ["не json", None], ids=["invalid", "down"])
 def test_failure_is_as_before(answer, booking_world, monkeypatch):  # noqa: F811
     answers = {_FREE_MARK: answer} if answer is not None else {}
@@ -105,3 +98,50 @@ def test_failure_is_as_before(answer, booking_world, monkeypatch):  # noqa: F811
     off = _in_world(booking_world, monkeypatch, [_BOOK_BUTTON, _NO_VALUE], switches=_OFF, llm=_LLM(answers))[-1]
 
     assert (on["text"], on["label"], on["handoff"]) == (off["text"], off["label"], off["handoff"])
+
+
+# --------------------------------------------------------------------------- класс E: условие, которое бот не выполняет
+
+class _QualifierLLM:
+    """Модель со структурным выводом (как `test_booking_specialty_qualifier_class._SchemaLLM`): специальность с уточнением
+    («по ДМС», «детский») — исход `qualifier`; вопрос цели записи — исход `free`; прочие места — недоступны."""
+
+    def __init__(self, free: str):
+        from tests.test_booking_specialty_qualifier_class import _SchemaLLM
+
+        self.free = free
+        self.inner = _SchemaLLM("qualifier")
+        self.calls: list[str] = []
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
+        from ollama import GenerateResponse
+
+        seen = f"{system}\n\n{prompt}" if system else prompt
+        if _FREE_MARK in seen:
+            self.calls.append(_FREE_MARK)
+            return GenerateResponse(model="m", response=_free(self.free), done=True)
+        return await self.inner.generate(prompt=prompt, system=system, **kwargs)
+
+
+_PROD = {**_ON, "MR_BOOKING_SPECIALTY_LLM": "on"}
+_SPECIALTY_REPRASK = "к какому врачу/специалисту или на какую услугу"
+# Реплика с условием, которое бот не выполняет · решение функции о вопросе цели записи.
+_CONDITIONED = (
+    ("Гастроэнтеролог ведет прием по ДМС?", "answer"),
+    ("можно записаться к кардиологу по ДМС?", "answer"),
+    ("запишите к детскому неврологу", "answer"),
+    ("А маленьких детей принимаете?", "new_topic"),
+)
+
+
+@pytest.mark.parametrize("reply,free", _CONDITIONED, ids=[r for r, _ in _CONDITIONED])
+def test_condition_the_bot_cannot_meet_gets_the_same_answer_as_typed_text(reply, free, booking_world, monkeypatch):  # noqa: F811
+    """BUG-2026-10-25-BOOK-BUTTON-REPLY-AS-TOPIC-SWITCH, класс E (`bkt_on4`: g0302, g0337, g0456, g0494, g0548): внутри кнопки
+    ответ с ДМС / ребёнком / онлайн-приёмом — тот же, что на ту же реплику текстом (оффер оператора), а не повторный вопрос
+    «к какому врачу?»: готовый ответ обработчика не перебивается висящим вопросом записи."""
+
+    button = _in_world(booking_world, monkeypatch, [_BOOK_BUTTON, reply], switches=_PROD, llm=_QualifierLLM(free))[-1]
+    typed = _in_world(booking_world, monkeypatch, [reply], switches=_PROD, llm=_QualifierLLM(free))[-1]
+
+    assert _SPECIALTY_REPRASK not in button["text"] and not _abort_asked(button), button["text"]
+    assert button["text"] == typed["text"], (button["text"], typed["text"])
