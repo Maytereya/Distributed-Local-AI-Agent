@@ -12,6 +12,9 @@
   списка цен было услугой с кодом 1 — находка № 8); число больше показанного — код, как было;
 - Ш2, фраза услуги: в тексте пациенту в «ёлочках» — только срез его реплики (фраза разбора) или название прайса; слов реплики,
   склеенных вырезателем («стоят ферритин», «прием уролог»), и реплики целиком пациент не читает (по всем ходам эталона on);
+- Ш3, «названа ли услуга»: решение понимания этой реплики (`TurnUnderstanding.names_service`), а не буквы — строчное «лг»,
+  «тг» буквы не видят (ждут заглавной), и выбор строки не звался: список правил с чужой строкой при работающей LLM; понимания
+  этой реплики нет — прежнее определение;
 - off — как было (контраст: вырезатель делает реплику с обвязкой сильной и печатает склейки).
 """
 
@@ -164,3 +167,30 @@ def test_patient_reads_only_reply_slices_or_catalog_names_under_on(mode):
 def test_extractor_glued_reply_words_under_off():
     foreign = _foreign_quotes("price_stage2_turns.json")
     assert "стоят ферритин" in foreign.get("one_strong_parse_select_down-llm", [])  # контраст: склейка вырезателя на проде
+
+
+# --------------------------------------------------------------------------- Ш3: «названа ли услуга» — решение понимания хода
+
+_NAMES_CORPUS = ("сколько стоит лг", "лг сколько", "а тг почем", "сколько стоит ферритин", "сколько стоит", "а цена?")
+
+
+@pytest.mark.parametrize("decided", [True, False])
+def test_names_service_is_the_understanding_decision_under_on(monkeypatch, decided):
+    from messengers_router import turn_understanding as TU
+    from messengers_router.services import _price_select_llm as PS
+
+    _switch(monkeypatch, "on")
+    monkeypatch.setattr(TU, "of_reply", lambda text: TU.TurnUnderstanding(reply=text, names_service=decided))
+    assert {reply: PS.names_service(reply) for reply in _NAMES_CORPUS} == dict.fromkeys(_NAMES_CORPUS, decided)
+
+
+def test_names_service_without_understanding_keeps_letters(monkeypatch):
+    from messengers_router import turn_understanding as TU
+    from messengers_router.services import _price_select_llm as PS
+
+    _switch(monkeypatch, "off")
+    letters = {reply: PS.names_service(reply) for reply in _NAMES_CORPUS}
+    assert letters["сколько стоит лг"] is False  # контраст: строчное сокращение буквы не видят
+    _switch(monkeypatch, "on")
+    monkeypatch.setattr(TU, "of_reply", lambda text: None)
+    assert {reply: PS.names_service(reply) for reply in _NAMES_CORPUS} == letters

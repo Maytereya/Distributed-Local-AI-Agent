@@ -467,6 +467,15 @@ def names_service(question: str) -> bool:
     слова об услуге: её ищет LLM. До 20.10 это знал только выбор строки, а планировщик по прежнему определению
     переспрашивал «Скажите название услуги» раньше него (test-срез 20.10: «ЛГ стоимость», «Цена аТ ТГ»)."""
 
+    if _price_by_parse.enabled():
+        # Цена, этап 2, Ш3: одно решение хода — понимание этой реплики (`TurnUnderstanding.names_service`, ставит производитель:
+        # фраза разбора есть — названа). Строчное «лг» буквы не видят (`_short_name_words` ждёт заглавной), и выбор строки не звался:
+        # список правил с чужой строкой при работающей LLM. Понимания этой реплики нет — прежнее определение.
+        from .. import turn_understanding  # понимание хода импортирует выбор строки — импорт на вызове
+
+        understood = turn_understanding.of_reply(question)
+        if understood is not None and understood.names_service is not None:
+            return understood.names_service
     return price_question_names_service(question) or bool(_short_name_words(question))
 
 

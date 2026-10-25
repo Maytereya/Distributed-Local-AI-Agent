@@ -1037,11 +1037,16 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
+     "price_policy": "rules_list",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
+      "unavailable"
+     ],
+     [
+      "price_service_general",
       "unavailable"
      ]
     ]
@@ -1053,26 +1058,31 @@
  "one_two_letter_lower-llm": {
   "turns": [
    {
-    "text": "Нашёл варианты по стоимости:\n1. ЛГ (LH) Лютеинизирующий гормон — 410 руб.\n2. Внутривенная аналгезия до 1 часа — 6 000 руб.\nЕсли нужен точный вариант, уточните врача или филиал.\nИсточник цены: розничный прайс Самары.\n\n_Цены актуальны для г. Самара._",
+    "text": "ЛГ (LH) Лютеинизирующий гормон — 410 руб.\n\n_Цены актуальны для г. Самара._",
     "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
      "price_info"
     ],
-    "service_name_effective": "лг",
-    "service_name": null,
+    "service_name_effective": "ЛГ (LH) Лютеинизирующий гормон",
+    "service_name": "ЛГ (LH) Лютеинизирующий гормон",
     "pending": null,
     "telemetry": {
      "tu_parse_status": "picked",
      "tu_rule": "parse_picked",
      "tu_mention_src": "parse",
      "tu_mention_strength": "weak",
-     "price_guard": "none"
+     "price_policy": "picked",
+     "price_guard": "llm"
     },
     "llm": [
      [
       "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
       "picked"
      ]
     ]
@@ -1080,7 +1090,8 @@
   ],
   "journal": [],
   "asked": [
-   "spans"
+   "spans",
+   "rows"
   ]
  },
  "prepare_named-down": {
