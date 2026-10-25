@@ -103,8 +103,8 @@ def _dialog(world_dir, monkeypatch, turns: list[str], *, switches: dict[str, str
 
 # --- C1: специальность записи из реплики — по смыслу ---------------------------------------------------------------------
 
-_SPECIALTY_ON = {"MR_BOOKING_SPECIALTY_LLM": "on"}
-_SPECIALTY_OFF = {"MR_BOOKING_SPECIALTY_LLM": "off"}
+# Выключатель `booking_specialty_llm` снят 22.10: база «как было» — тот же ход без ответа задачи специальности (LLM недоступна).
+_SPECIALTY_ON: dict[str, str] = {}
 _TIME_QUESTIONS = [
     ("На какое время запись к неврологу", "невролог"),
     ("На какое время можно записаться к урологу", "уролог"),
@@ -126,15 +126,15 @@ def test_specialty_confirmed_by_llm_is_the_booking_target(question, specialty, b
 @pytest.mark.parametrize(("question", "specialty"), _TIME_QUESTIONS)
 @pytest.mark.parametrize(
     ("switches", "specialty_answer"),
-    [(_SPECIALTY_OFF, _PICK_FIRST), (_SPECIALTY_ON, _PICK_NONE), (_SPECIALTY_ON, None)],
-    ids=["off", "llm-no", "llm-down"],
+    [(_SPECIALTY_ON, _PICK_NONE), (_SPECIALTY_ON, None)],
+    ids=["llm-no", "llm-down"],
 )
 def test_without_confirmation_it_is_as_before(question, specialty, switches, specialty_answer, booking_world, monkeypatch):
     answers: dict[str, Any] = {_PRICE_MARK: _NOT_A_SERVICE}
     if specialty_answer is not None:
         answers[_SPECIALTY_MARK] = specialty_answer
     [turn] = _dialog(booking_world, monkeypatch, [question], switches=switches, llm=_LLM(answers))
-    [before] = _dialog(booking_world, monkeypatch, [question], switches=_SPECIALTY_OFF, llm=_LLM({_PRICE_MARK: _NOT_A_SERVICE}))
+    [before] = _dialog(booking_world, monkeypatch, [question], switches={}, llm=_LLM({_PRICE_MARK: _NOT_A_SERVICE}))
 
     assert turn["text"] == before["text"]
     assert _REFUSAL in turn["text"], turn["text"]  # как было: честный отказ с оффером оператора
