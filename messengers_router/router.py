@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, degradation, expects, pending_answer, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import booking_slots, degradation, expects, pending_answer, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_names, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -37,6 +37,7 @@ from .entity_grounder import (
     service_dropped_by_llm,
     verify_doctor_entities_in_decision,
 )
+from .doctor_name_port import cached_doctor_fios
 from .flow_policy import (
     apply_context_action,
     apply_pending_override,
@@ -2403,6 +2404,10 @@ async def _backfill_appointment_doctor_from_text(
 
     raw = str(user_text or "").strip()
     if not raw:
+        return
+    if turn_names.on("names_doctor_followup") and turn_names.name_reply_is_doctor(raw, cached_doctor_fios()) is False:
+        # Реплика — ФИО, но не врача справочника целиком: нечёткий `resolve_doctor_name` нашёл бы однофамильца пациента
+        # («Сидорова Анна» → врач «Сидоров») и записал бы к нему (R-01, консилиум 25.10).
         return
 
     probes: list[str] = [raw]

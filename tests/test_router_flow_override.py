@@ -2,6 +2,8 @@ import asyncio
 import logging
 import pytest
 
+from tests.names_modes import MODES, after_classifier, llm_answers, set_names
+
 from messengers_router.flow_policy import (
     apply_context_action,
     apply_pending_override,
@@ -85,7 +87,10 @@ def _run_stream_once_debug(user_text: str, state: SessionState, services: Servic
     return asyncio.run(_collect())
 
 
-def test_appointment_flow_override_allows_city_datetime_and_fio():
+@pytest.mark.parametrize("names", MODES)
+def test_appointment_flow_override_allows_city_datetime_and_fio(monkeypatch, names):
+    # names = on: «похоже на ФИО» для маршрута держит запись и без LLM (имя при этом не берётся — STEP-2026-10-24-NAMES).
+    set_names(monkeypatch, names)
     assert _should_keep_appointment_flow_override("Самара") is True
     assert _should_keep_appointment_flow_override("на 16:30") is True
     assert _should_keep_appointment_flow_override("Рахманов Владимир Александрович") is True
@@ -1671,8 +1676,15 @@ def test_quick_fill_patient_name_skips_datetime_phrase():
     assert out.get("time_from") == "09:00"
 
 
-def test_quick_fill_patient_name_accepts_real_fio():
-    out = quick_fill_core_entities("Рахманов Владимир", {}, ["patient_name"])
+@pytest.mark.parametrize("names", MODES)
+def test_quick_fill_patient_name_accepts_real_fio(monkeypatch, names):
+    set_names(monkeypatch, names)
+    if names == "off":
+        out = quick_fill_core_entities("Рахманов Владимир", {}, ["patient_name"])
+    else:  # ФИО называет LLM-классификатор хода; правила его только кладут в графу
+        llm_answers(monkeypatch, label="APPOINTMENT", entities={"patient_name": "Рахманов Владимир"})
+        out = after_classifier("Рахманов Владимир", {}, lambda: quick_fill_core_entities("Рахманов Владимир", {}, ["patient_name"]))
+        assert "patient_name" not in quick_fill_core_entities("Рахманов Владимир", {}, ["patient_name"])  # без LLM — нет
     assert out.get("patient_name") == "Рахманов Владимир"
 
 
@@ -2477,17 +2489,22 @@ def test_extract_branch_hint_parses_full_address_reply():
     assert "83" in low
 
 
-def test_deterministic_rule_uses_patient_name_when_pending_appointment():
-    decision = asyncio.run(
-        classifier_mod.deterministic_rule_decision(
-            "Рахманов Владимир",
-            {
-                "appointment_flow_active": True,
-                "_pending": {"label": "APPOINTMENT", "missing": ["patient_name"]},
-            },
-            allow_refine=False,
-        )
-    )
+@pytest.mark.parametrize("names", MODES)
+def test_deterministic_rule_uses_patient_name_when_pending_appointment(monkeypatch, names):
+    set_names(monkeypatch, names)
+    last = {
+        "appointment_flow_active": True,
+        "_pending": {"label": "APPOINTMENT", "missing": ["patient_name"]},
+    }
+    decision = asyncio.run(classifier_mod.deterministic_rule_decision("Рахманов Владимир", last, allow_refine=False))
+    if names == "on":
+        # Правило шага ФИО молчит — имя и тему решает LLM-классификатор хода.
+        assert decision is None or "rule_appointment_patient_name" not in decision.flags
+        llm_answers(monkeypatch, label="APPOINTMENT", entities={"patient_name": "Рахманов Владимир"})
+        decision = asyncio.run(classifier_mod.analyze("Рахманов Владимир", last))
+        assert decision.label == "APPOINTMENT"
+        assert decision.entities.get("patient_name") == "Рахманов Владимир"
+        return
 
     assert decision is not None
     assert decision.label == "APPOINTMENT"
@@ -2521,7 +2538,9 @@ def test_refine_skips_ambiguous_appointment_action(monkeypatch):
     assert "llm_refine_used" not in out.flags
 
 
-def test_apply_context_action_blocks_new_topic_on_patient_name_step():
+@pytest.mark.parametrize("names", MODES)
+def test_apply_context_action_blocks_new_topic_on_patient_name_step(monkeypatch, names):
+    set_names(monkeypatch, names)
     state = SessionState(
         session_id="appt-new-topic-block",
         last_entities={

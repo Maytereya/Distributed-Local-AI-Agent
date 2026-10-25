@@ -1,0 +1,18 @@
+{"id": "nm_result_step", "turns": ["Хочу получить результаты анализов", "Сидорова"], "expect": "фамилия принята, бот просит остальные реквизиты (год, код, номер); без LLM — переспрос", "tags": ["names", "result", "names_result_surname"]}
+{"id": "nm_result_step_lower", "turns": ["Результаты анализов", "сидорова"], "expect": "то же, что nm_result_step: регистр не важен", "tags": ["names", "result", "names_result_surname"]}
+{"id": "nm_result_ordered", "turns": ["Хочу получить результаты анализов", "Сидорова, 1985, Бг, 123"], "expect": "ссылка на результат; LLM не нужна (форма реквизитов)", "tags": ["names", "result"]}
+{"id": "nm_result_word", "turns": ["Хочу получить результаты анализов", "Результаты"], "expect": "«Результаты» — не фамилия: переспрос реквизитов", "tags": ["names", "result", "names_result_surname"]}
+{"id": "nm_result_please", "turns": ["Хочу получить результаты анализов", "Подскажите"], "expect": "«Подскажите» — не фамилия: переспрос", "tags": ["names", "result", "names_result_surname"]}
+{"id": "nm_doctor_dative", "turns": ["Хочу записаться к Бородиной"], "expect": "врач Бородина из справочника, не «нет такого врача»", "tags": ["names", "doctor", "names_doctor_catalog"]}
+{"id": "nm_doctor_after_words", "turns": ["Запишите, пожалуйста, на приём к врачу Бородиной"], "expect": "врач Бородина; служебные слова — не фамилия", "tags": ["names", "doctor", "names_doctor_catalog"]}
+{"id": "nm_doctor_typo", "turns": ["Запишите к Бородной"], "expect": "вопрос «Похоже, вы имели в виду …?» или уточнение — не чужой врач", "tags": ["names", "doctor", "names_doctor_catalog"]}
+{"id": "nm_doctor_followup", "turns": ["Когда принимает Бородина?", "Бородина, да"], "expect": "расписание того же врача", "tags": ["names", "doctor", "names_doctor_followup"]}
+{"id": "nm_doctor_filler", "turns": ["Когда принимает Бородина?", "да, хорошо"], "expect": "«да, хорошо» — не фамилия врача", "tags": ["names", "doctor", "names_doctor_followup"]}
+{"id": "nm_doctor_word_entity", "turns": ["Хочу записаться к врачу"], "expect": "вопрос о специальности или враче; «хочу» / «записаться» — не врач", "tags": ["names", "doctor", "names_doctor_noise"]}
+{"id": "nm_self_intro", "turns": ["Меня зовут Сидорова Анна, хочу записаться к терапевту"], "expect": "запись к терапевту; имя пациента — не цель записи", "tags": ["names", "patient", "names_patient_fio"]}
+{"id": "nm_fio_only", "turns": ["Сидорова Анна Петровна"], "expect": "вопрос о цели (чем помочь), не «такого врача нет»", "tags": ["names", "patient", "names_patient_fio"]}
+{"id": "nm_service_shape", "turns": ["Общий анализ крови"], "expect": "цена или уточнение по услуге, не ФИО", "tags": ["names", "patient", "names_patient_fio"]}
+{"id": "nm_specialty_shape", "turns": ["Расписание гинеколога"], "expect": "о гинекологах, не ФИО", "tags": ["names", "patient", "names_patient_fio"]}
+{"id": "nm_catalog_words", "turns": ["По каким адресам можно сделать флюорографию"], "expect": "адреса для флюорографии, без врача «Ким»", "tags": ["names", "doctor", "names_doctor_catalog"]}
+{"id": "nm_booking_namesake", "turns": ["Хочу записаться к врачу", "Сидорова Анна"], "expect": "своё ФИО пациента — не врач-однофамилец («Сидоров»): вопрос о цели записи, без расписания чужого врача (R-01)", "tags": ["names", "patient", "names_doctor_followup", "names_patient_fio"]}
+{"id": "nm_branch_namesake", "turns": ["Запишите на УЗИ щитовидной железы", "Сидорова Анна"], "expect": "запись продолжается с той же услугой, врача по ФИО пациента не ищем", "tags": ["names", "patient", "names_patient_fill"]}

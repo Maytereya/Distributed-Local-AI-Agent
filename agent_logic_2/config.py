@@ -237,6 +237,13 @@ class MessengerRouterConfig:
     parse_complete_windows: str
     strong_phrase_guard: str
     parse_agree_telemetry: str
+    names_doctor_catalog: str
+    names_doctor_noise: str
+    names_doctor_followup: str
+    names_result_surname: str
+    names_patient_fio: str
+    names_patient_rule: str
+    names_patient_fill: str
     debug_final_input: bool
     url: str
 
@@ -547,6 +554,38 @@ settings = Settings(
         # экономия — CPU хода. По умолчанию off с 16.10 (решение владельца,
         # T7 шаг 4). [MESSENGER_ROUTER] parse_agree_telemetry
         parse_agree_telemetry=_get_enum("MESSENGER_ROUTER", "parse_agree_telemetry", default="off", allowed={"off", "on"}),
+        # Врач реплики для сверки с каталогом — по справочнику врачей МИС, без выбора слов списком (STEP-2026-10-24-NAMES-NO-STOPWORDS,
+        # решения владельца 22.10): фамилия — слово реплики, точно совпавшее с фамилией врача в любой падежной форме; опечатка — только
+        # в имени, которое назвала LLM, и исход — вопрос «Похоже, вы имели в виду…?». off — как было (_CATALOG_DOCTOR_STOPWORDS).
+        # [MESSENGER_ROUTER] names_doctor_catalog
+        names_doctor_catalog=_get_enum("MESSENGER_ROUTER", "names_doctor_catalog", default="off", allowed={"off", "on"}),
+        # doctor_name из ответа LLM из одного служебного слова («хочу», «запись») — не врач по справочнику МИС (resolve_doctor_name), а не по
+        # списку (STEP-2026-10-24-NAMES-NO-STOPWORDS; свип 24.10: справочник ни одно из 14 слов не находит). off — как было (_DOCTOR_NOISE_TOKENS).
+        # [MESSENGER_ROUTER] names_doctor_noise
+        names_doctor_noise=_get_enum("MESSENGER_ROUTER", "names_doctor_noise", default="off", allowed={"off", "on"}),
+        # Короткий ответ в контексте врача («<фамилия>, да») — фамилия только по справочнику МИС (точное совпадение у правила), без списка
+        # «да / хорошо / ладно» (STEP-2026-10-24-NAMES-NO-STOPWORDS; свип 24.10: список ни разу не решал исход). off — как было (_DOCTOR_FOLLOWUP_FILLERS).
+        # [MESSENGER_ROUTER] names_doctor_followup
+        names_doctor_followup=_get_enum("MESSENGER_ROUTER", "names_doctor_followup", default="off", allowed={"off", "on"}),
+        # Результаты анализов: одно слово на вопрос о реквизитах — фамилия, только если её назвала LLM-классификатор этого хода (сущность
+        # surname / patient_name — те же слова реплики); без LLM — не фамилия, бот переспросит (решение владельца 22.10 (а);
+        # STEP-2026-10-24-NAMES-NO-STOPWORDS). Порядок «фамилия, год, код, номер» — как было. off — как было (_QF_RESULT_SURNAME_STOPWORDS).
+        # [MESSENGER_ROUTER] names_result_surname
+        names_result_surname=_get_enum("MESSENGER_ROUTER", "names_result_surname", default="off", allowed={"off", "on"}),
+        # Реплика — ФИО пациента (12 мест: запись, вид недоступной цели, неподтверждённый врач → ФИО): форма 2–3 слова принимает и
+        # «Общий анализ крови» — решает LLM-классификатор этого хода (patient_name — те же слова реплики); без LLM — не ФИО (решение
+        # владельца 22.10 (а); STEP-2026-10-24-NAMES-NO-STOPWORDS). off — как было (_PATIENT_FIO_STOPWORDS).
+        # [MESSENGER_ROUTER] names_patient_fio
+        names_patient_fio=_get_enum("MESSENGER_ROUTER", "names_patient_fio", default="off", allowed={"off", "on"}),
+        # Правило шага ФИО записи (rule_appointment_patient_name) не решает по форме и списку: правило зовут до LLM, под on оно молчит, и
+        # реплику (ФИО или нет, какая тема) решает LLM-классификатор хода (STEP-2026-10-24-NAMES-NO-STOPWORDS). off — как было
+        # (_PATIENT_NAME_STOPWORDS). [MESSENGER_ROUTER] names_patient_rule
+        names_patient_rule=_get_enum("MESSENGER_ROUTER", "names_patient_rule", default="off", allowed={"off", "on"}),
+        # Быстрое заполнение ФИО пациента (после «ФИО / меня зовут», голая форма, тройка слов) — только если кандидат — те же слова, что
+        # patient_name LLM-классификатора этого хода; без LLM ФИО не заполняется (решение владельца 22.10 (а); STEP-2026-10-24-NAMES-NO-STOPWORDS;
+        # свип 24.10: прежний путь клал «Общий Анализ Крови» в ФИО). off — как было (_QF_PATIENT_NAME_STOPWORDS).
+        # [MESSENGER_ROUTER] names_patient_fill
+        names_patient_fill=_get_enum("MESSENGER_ROUTER", "names_patient_fill", default="off", allowed={"off", "on"}),
         # Вариант B L-13 (названия без цен при недоступной LLM): строка со словоформой различающего слова пациента
         # («сифилиса» к «сифилис») — тоже кандидат, если покрывает больше слов пациента; порядок — по их числу. off — как
         # было (только слово целиком); on — словоформы, если слово вместе с ними различает (облако 16.10; общее слово —
@@ -851,6 +890,13 @@ MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows
 MR_PARSE_COMPLETE_WINDOWS = settings.messenger_router.parse_complete_windows
 MR_STRONG_PHRASE_GUARD = settings.messenger_router.strong_phrase_guard
 MR_PARSE_AGREE_TELEMETRY = settings.messenger_router.parse_agree_telemetry
+MR_NAMES_DOCTOR_CATALOG = settings.messenger_router.names_doctor_catalog
+MR_NAMES_DOCTOR_NOISE = settings.messenger_router.names_doctor_noise
+MR_NAMES_DOCTOR_FOLLOWUP = settings.messenger_router.names_doctor_followup
+MR_NAMES_RESULT_SURNAME = settings.messenger_router.names_result_surname
+MR_NAMES_PATIENT_FIO = settings.messenger_router.names_patient_fio
+MR_NAMES_PATIENT_RULE = settings.messenger_router.names_patient_rule
+MR_NAMES_PATIENT_FILL = settings.messenger_router.names_patient_fill
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url
 

@@ -12,9 +12,13 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+from messengers_router import classifier as classifier_mod
 from messengers_router import router as router_mod
 from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import SessionState
+from tests.names_modes import MODES, llm_answers, set_names
 
 
 def run(coro):
@@ -57,16 +61,35 @@ def test_non_name_reply_rejected_and_reasked(monkeypatch):
     assert state.last_entities.get("patient_name") in (None, "")
 
 
-def test_valid_name_accepted(monkeypatch):
-    """Валидатор «ФИО» → имя принято, запись движется к подтверждению."""
+@pytest.mark.parametrize("names", MODES)
+def test_valid_name_accepted(monkeypatch, names):
+    """Валидатор «ФИО» → имя принято, запись движется к подтверждению. `names_* = on`: до NLU имени нет — его называет
+    LLM-классификатор хода (подделка — ответ модели); без LLM имя не угадывается (`test_name_not_guessed_when_llm_is_down`)."""
     async def _accept(_text):
         return True
 
     monkeypatch.setattr(router_mod, "is_patient_name_reply", _accept)
+    set_names(monkeypatch, names)
+    if names == "on":
+        llm_answers(monkeypatch, label="APPOINTMENT", entities={"patient_name": "Иванов Иван Иванович"})
 
     state, memory = _state_waiting_name()
     decision = _resolve("Иванов Иван Иванович", state, memory)
     assert decision.entities.get("patient_name") == "Иванов Иван Иванович"
+
+
+def test_name_not_guessed_when_llm_is_down(monkeypatch):
+    """`names_* = on`, LLM упала: реплику формы ФИО именем не берём (решение владельца 22.10 (а)) — запись переспросит."""
+
+    async def down(*_a, **_k):
+        raise TimeoutError("llm down")
+
+    set_names(monkeypatch, "on")
+    monkeypatch.setattr(classifier_mod, "generate_text", down)
+    state, memory = _state_waiting_name()
+    decision = _resolve("Иванов Иван Иванович", state, memory)
+    assert decision.entities.get("patient_name") in (None, "")
+    assert state.last_entities.get("patient_name") in (None, "")
 
 
 def test_validator_not_called_when_not_waiting_name(monkeypatch):

@@ -57,7 +57,8 @@ def _unbookable_target_kind(user_text: str, decision_flags: set[str]) -> str:
     :return: ``doctor`` | ``service`` | ``patient_name`` | ``unknown``
     """
 
-    from .flow_policy import looks_like_patient_fio
+    from . import turn_names
+    from .flow_policy import is_patient_name_value, looks_like_patient_fio
     from .service_phrase import extract_service_phrase
 
     text = str(user_text or "").strip()
@@ -66,6 +67,8 @@ def _unbookable_target_kind(user_text: str, decision_flags: set[str]) -> str:
     # Собственное имя пациента НЕ является целью записи: на «<ФИО>» отвечаем
     # вопросом о цели, а не «такого врача нет».
     if text and looks_like_patient_fio(text):
+        if turn_names.on("names_patient_fio") and not is_patient_name_value(text):
+            return "unknown"  # похоже на ФИО, но имени LLM не назвала: не услуга и не врач, ответ — тот же вопрос о цели
         return "patient_name"
     if text and extract_service_phrase(text):
         return "service"

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
+from . import turn_names
 from .city import looks_like_address, match_city
 from .doctor_name_port import resolve_cached_doctor_name_candidate, surname_variants
 from .russian_nlu import common_prefix_len, normalize_ru
@@ -2007,12 +2008,13 @@ def _fill_test_result_entities(text: str, missing_rules: list[str], out: dict[st
 
     if "surname" in missing_rules and "surname" not in out:
         words = [w for w in re.split(r"\s+", t) if w]
-        if (
-            len(words) == 1
-            and re.fullmatch(r"[А-Яа-яЁё\-]{2,}", words[0])
-            and words[0].lower() not in _QF_RESULT_SURNAME_STOPWORDS
-        ):
-            out["surname"] = words[0].capitalize()
+        if len(words) == 1 and re.fullmatch(r"[А-Яа-яЁё\-]{2,}", words[0]):
+            if turn_names.on("names_result_surname"):
+                # Одно слово — фамилия, только если её назвала LLM этого хода; иначе бот переспросит (решение (а) 22.10).
+                if turn_names.llm_person_word(words[0], switch="names_result_surname"):
+                    out["surname"] = words[0].capitalize()
+            elif words[0].lower() not in _QF_RESULT_SURNAME_STOPWORDS:
+                out["surname"] = words[0].capitalize()
 
 
 def _fill_appointment_entities(
@@ -2098,6 +2100,9 @@ def _is_valid_patient_name_candidate(candidate_text: str) -> bool:
     tokens = [w for w in re.split(r"\s+", low_raw) if w]
     if len(tokens) < 2:
         return False
+    if turn_names.on("names_patient_fill"):
+        # Кандидат — те же слова, что `patient_name` LLM этого хода; без LLM ФИО не заполняем (решение (а) 22.10).
+        return turn_names.llm_patient_fio(raw, switch="names_patient_fill")
     if any(token in _QF_PATIENT_NAME_STOPWORDS for token in tokens):
         return False
     if not any(len(token) >= 3 for token in tokens):
