@@ -255,6 +255,12 @@ def _extract_pending_response(
     from .recovery_policy import contextual_reply_kind
 
     missing = pending.get("missing") if isinstance(pending.get("missing"), list) else []
+    if pending_answer.booking_target_on() and pending.get("label") == "APPOINTMENT" and REQUIRED_SLOTS["APPOINTMENT"][0] in missing:
+        # Ответ на вопрос цели записи (`booking_target_slot_llm`): готовый ответ обработчика — оффер оператора на «по ДМС»,
+        # «детский» (`unsupported_catalog`) — не перебивается повтором вопроса «к какому врачу?», как и на набранный текст
+        # (BUG-2026-10-25-BOOK-BUTTON-REPLY-AS-TOPIC-SWITCH, класс E; тот же инвариант — BUG-2026-09-25-CANCEL-OFFER-PREEMPTED).
+        if isinstance(evidence.get("unsupported_catalog"), dict):
+            return None
     # Обработчик выставил pending под СВОЙ готовый ответ (вопрос «да/нет»): ответ —
     # его, а не общий переспрос по пустому слоту. Без этого оффер оператора по
     # существующей записи превращался в «Уточните, пожалуйста, детали запроса»

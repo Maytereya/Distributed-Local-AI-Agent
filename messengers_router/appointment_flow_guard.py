@@ -422,9 +422,11 @@ def run_appointment_precheck(
             )
         if _nothing_chosen_new_topic(pending_missing):
             # Отменять нечего: на вопрос цели записи — другая тема (решение одной функции), а врач, специальность и услуга
-            # ещё не выбраны. Без вопроса «Отменить оформление?» реплика идёт обычным путём; запись не снимаем — решение
-            # модели бывает ошибочным («болит стопа, нужно записаться на Ленина 5» — «другая тема»), и названный филиал
-            # тогда берёт обычный путь записи (BUG-2026-10-25-BOOK-BUTTON-REPLY-AS-TOPIC-SWITCH, `booking_target_slot_llm`).
+            # ещё не выбраны. Без вопроса «Отменить оформление?» реплика идёт так же, как набранная в новой сессии: запись,
+            # в которой ничего нет, снимается — иначе ответом другой темы становился повтор «к какому врачу?» (класс E).
+            # Ошибся ли выбор модели («болит стопа, нужно записаться на Ленина 5» — «другая тема»), решает обычный путь, как
+            # для текста (BUG-2026-10-25-BOOK-BUTTON-REPLY-AS-TOPIC-SWITCH, `booking_target_slot_llm`).
+            clear_on_appointment_end(state, memory)
             return None
         if not _answers_branch_question(state, user_text) and is_likely_topic_switch_from_appointment(user_text):
             mark_appointment_topic_switch_pending(state)
