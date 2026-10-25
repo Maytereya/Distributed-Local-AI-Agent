@@ -1,0 +1,3821 @@
+{
+ "alias_candidates": {
+  "bare_name": [
+   "ферритин"
+  ],
+  "bare_name_caps": [
+   "ферритин"
+  ],
+  "q_name": [
+   "сколько стоит ферритин",
+   "ферритин"
+  ],
+  "q_analysis_on": [
+   "сколько стоит анализ на ферритин",
+   "анализ ферритин"
+  ],
+  "q_analyses_on": [
+   "сколько стоят анализы на ферритин",
+   "стоят ферритин"
+  ],
+  "q_price_of_analyses": [
+   "цена анализов на ферритин",
+   "анализов ферритин"
+  ],
+  "q_polite_wrap": [
+   "подскажите пожалуйста сколько стоит ттг",
+   "ттг"
+  ],
+  "q_pochem": [
+   "почем экг"
+  ],
+  "q_price_after": [
+   "экг цена",
+   "экг"
+  ],
+  "q_want_to_take": [
+   "хочу сдать кровь на сахар",
+   "кровь сахар"
+  ],
+  "q_can_do": [
+   "можно ли сделать кардиограмму",
+   "кардиограмму"
+  ],
+  "q_unknown_word": [
+   "сколько стоит спирометрия",
+   "спирометрия"
+  ],
+  "q_long_no_hint": [
+   "добрый день хотела бы узнать сколько будет стоить сдать кровь на гормоны щитовидки",
+   "хотела бы кровь гормоны щитовидки",
+   "хотела кровь гормоны щитовидки"
+  ],
+  "abbr_oak": [
+   "сколько стоит оак",
+   "оак"
+  ],
+  "abbr_oak_cito": [
+   "оак срочно",
+   "оак"
+  ],
+  "abbr_two_letter_caps": [
+   "сколько стоит лг",
+   "лг"
+  ],
+  "abbr_two_letter_lower": [
+   "лг сколько",
+   "лг"
+  ],
+  "code_homecode": [
+   "240"
+  ],
+  "full_name_brackets": [
+   "общий анализ крови (le, er, hb, соэ)",
+   "общий анализ крови le er hb соэ",
+   "общий анализ крови соэ"
+  ],
+  "full_name_hyphen_plus": [
+   "сколько стоит глюкозотолерантный тест (глюкоза+ c-пептид)",
+   "глюкозотолерантный тест глюкоза c пептид",
+   "глюкозотолерантный тест глюкоза пептид"
+  ],
+  "homoglyph_code": [
+   "сколько стоит са-125",
+   "са 125",
+   "125"
+  ],
+  "vitamin_letter": [
+   "сколько стоит витамин d",
+   "витамин d",
+   "витамин витамин_d"
+  ],
+  "family_word": [
+   "сколько стоит мазок",
+   "мазок"
+  ],
+  "generic_analysis": [
+   "сколько стоит анализ",
+   "анализ"
+  ],
+  "generic_analyses": [
+   "сколько стоят анализы",
+   "стоят"
+  ],
+  "generic_services": [
+   "какие у вас цены на услуги",
+   "какие"
+  ],
+  "consult_specialty": [
+   "сколько стоит прием уролога",
+   "прием уролог",
+   "прием консультац уролога"
+  ],
+  "consult_no_specialty": [
+   "сколько стоит прием врача",
+   "прием консультац"
+  ],
+  "consult_word": [
+   "сколько стоит консультация",
+   "консультация прием"
+  ],
+  "qualifier_oms": [
+   "сколько стоит прием терапевта по омс",
+   "прием терапевт",
+   "прием консультац терапевта омс"
+  ],
+  "uzi_generic": [
+   "сколько стоит узи",
+   "узи"
+  ],
+  "uzi_compound": [
+   "сколько стоит узи почек и щитовидной железы",
+   "узи почек щитовидной железы"
+  ],
+  "readiness_named": [
+   "когда будет готов анализ на ферритин",
+   "когда готов анализ ферритин"
+  ],
+  "readiness_generic": [
+   "сколько готовятся анализы",
+   "готовятся"
+  ],
+  "prepare_named": [
+   "как подготовиться к анализу на глюкозу",
+   "подготовиться к анализу глюкозу",
+   "подготовиться анализ глюкозу"
+  ],
+  "walkin_named": [
+   "а на ферритин нужна запись",
+   "а ферритин запись",
+   "ферритин запись"
+  ],
+  "date_digits": [
+   "6.09.2026",
+   "09 2026"
+  ],
+  "time_digits": [
+   "10:30",
+   "10 30"
+  ],
+  "date_words": [
+   "20 ноября в 10 утра",
+   "20 ноября 10 утра"
+  ],
+  "context_question": [
+   "а сколько стоит",
+   "а"
+  ],
+  "context_price": [
+   "а цена",
+   "а"
+  ],
+  "yes": [
+   "да"
+  ],
+  "digit": [
+   "1"
+  ],
+  "list_commas": [
+   "ферритин, глюкоза, холестерин",
+   "ферритин глюкоза холестерин",
+   "холестерин"
+  ],
+  "list_and": [
+   "ферритин и глюкоза",
+   "ферритин глюкоза"
+  ],
+  "list_run_on": [
+   "оак оам ферритин глюкоза",
+   "оак",
+   "оам"
+  ]
+ },
+ "bare_phrase": {
+  "bare_name": "ферритин",
+  "bare_name_caps": "ФЕРРИТИН",
+  "q_name": "ферритин",
+  "q_analysis_on": "ферритин",
+  "q_analyses_on": "стоят анализы на ферритин",
+  "q_price_of_analyses": "анализов на ферритин",
+  "q_polite_wrap": "ттг",
+  "q_pochem": "почем экг",
+  "q_price_after": "экг",
+  "q_want_to_take": "кровь на сахар",
+  "q_can_do": "кардиограмму",
+  "q_unknown_word": "спирометрия",
+  "q_long_no_hint": "хотела бы узнать сколько будет стоить сдать кровь на гормоны щитовидки",
+  "abbr_oak": "оак",
+  "abbr_oak_cito": "оак срочно",
+  "abbr_two_letter_caps": "ЛГ",
+  "abbr_two_letter_lower": "лг",
+  "code_homecode": "240",
+  "full_name_brackets": "Общий анализ крови (Le, Er, Hb, СОЭ",
+  "full_name_hyphen_plus": "Глюкозотолерантный тест (глюкоза+ C-пептид",
+  "homoglyph_code": "Са-125",
+  "vitamin_letter": "витамин D",
+  "family_word": "мазок",
+  "generic_analysis": "",
+  "generic_analyses": "стоят",
+  "generic_services": "",
+  "consult_specialty": "прием уролога",
+  "consult_no_specialty": "прием",
+  "consult_word": "консультация",
+  "qualifier_oms": "прием терапевта по ОМС",
+  "uzi_generic": "узи",
+  "uzi_compound": "узи почек и щитовидной железы",
+  "readiness_named": "когда будет готов анализ на ферритин",
+  "readiness_generic": "готовятся",
+  "prepare_named": "подготовиться к анализу на глюкозу",
+  "walkin_named": "ферритин нужна запись",
+  "date_digits": "6.09.2026",
+  "time_digits": "10:30",
+  "date_words": "20 ноября в 10 утра",
+  "context_question": "",
+  "context_price": "",
+  "yes": "да",
+  "digit": "1",
+  "list_commas": "ферритин, глюкоза, холестерин",
+  "list_and": "ферритин и глюкоза",
+  "list_run_on": "ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА"
+ },
+ "catalog_queries": {
+  "bare_name": [
+   "ферритин"
+  ],
+  "bare_name_caps": [
+   "ферритин"
+  ],
+  "q_name": [
+   "ферритин",
+   "сколько стоит ферритин"
+  ],
+  "q_analysis_on": [
+   "анализ ферритин",
+   "ферритин",
+   "сколько стоит анализ на ферритин"
+  ],
+  "q_analyses_on": [
+   "стоят ферритин",
+   "Ферритин",
+   "сколько стоят анализы на ферритин"
+  ],
+  "q_price_of_analyses": [
+   "анализов ферритин",
+   "ферритин",
+   "цена анализов на ферритин"
+  ],
+  "q_polite_wrap": [
+   "ттг",
+   "подскажите пожалуйста сколько стоит ттг"
+  ],
+  "q_pochem": [
+   "почем экг",
+   "ЭКГ"
+  ],
+  "q_price_after": [
+   "экг",
+   "ЭКГ цена"
+  ],
+  "q_want_to_take": [
+   "кровь сахар",
+   "Сахар",
+   "хочу сдать кровь на сахар"
+  ],
+  "q_can_do": [
+   "кардиограмму",
+   "можно ли сделать кардиограмму"
+  ],
+  "q_unknown_word": [
+   "спирометрия",
+   "сколько стоит спирометрия"
+  ],
+  "q_long_no_hint": [
+   "хотела бы кровь гормоны щитовидки",
+   "Гормоны щитовидки",
+   "хотела кровь гормоны щитовидки",
+   "добрый день хотела бы узнать сколько будет стоить сдать кровь на гормоны щитовидки"
+  ],
+  "abbr_oak": [
+   "оак",
+   "сколько стоит оак"
+  ],
+  "abbr_oak_cito": [
+   "оак срочно"
+  ],
+  "abbr_two_letter_caps": [],
+  "abbr_two_letter_lower": [],
+  "code_homecode": [
+   "240"
+  ],
+  "full_name_brackets": [
+   "общий анализ крови le er hb соэ",
+   "общий крови le er hb соэ",
+   "общий анализ крови соэ",
+   "Общий анализ крови (Le, Er, Hb, СОЭ)"
+  ],
+  "full_name_hyphen_plus": [
+   "глюкозотолерантный тест глюкоза c пептид",
+   "глюкозотолерантный тест глюкоза пептид",
+   "сколько стоит Глюкозотолерантный тест (глюкоза+ C-пептид)"
+  ],
+  "homoglyph_code": [
+   "са 125",
+   "125",
+   "сколько стоит Са-125"
+  ],
+  "vitamin_letter": [
+   "витамин d",
+   "витамин витамин_d",
+   "сколько стоит витамин D"
+  ],
+  "family_word": [
+   "мазок",
+   "сколько стоит мазок"
+  ],
+  "generic_analysis": [],
+  "generic_analyses": [
+   "стоят",
+   "сколько стоят анализы"
+  ],
+  "generic_services": [],
+  "consult_specialty": [
+   "прием уролог",
+   "прием консультац уролога",
+   "сколько стоит прием уролога"
+  ],
+  "consult_no_specialty": [
+   "прием консультац",
+   "сколько стоит прием врача"
+  ],
+  "consult_word": [
+   "консультация прием"
+  ],
+  "qualifier_oms": [
+   "прием терапевт",
+   "Омс",
+   "прием консультац терапевта омс",
+   "сколько стоит прием терапевта по ОМС"
+  ],
+  "uzi_generic": [],
+  "uzi_compound": [
+   "узи почек щитовидной железы",
+   "УЗИ почек",
+   "сколько стоит узи почек и щитовидной железы"
+  ],
+  "readiness_named": [
+   "когда готов анализ ферритин",
+   "когда готов ферритин",
+   "Ферритин",
+   "когда будет готов анализ на ферритин"
+  ],
+  "readiness_generic": [
+   "готовятся",
+   "сколько готовятся анализы"
+  ],
+  "prepare_named": [
+   "подготовиться к анализу глюкозу",
+   "подготовиться к глюкозу",
+   "подготовиться анализ глюкозу",
+   "как подготовиться к анализу на глюкозу"
+  ],
+  "walkin_named": [
+   "а ферритин запись",
+   "Ферритин нужна запись",
+   "ферритин запись",
+   "а на ферритин нужна запись?"
+  ],
+  "date_digits": [
+   "09 2026",
+   "6.09.2026"
+  ],
+  "time_digits": [],
+  "date_words": [
+   "20 ноября 10 утра",
+   "20 ноября в 10 утра"
+  ],
+  "context_question": [],
+  "context_price": [],
+  "yes": [],
+  "digit": [],
+  "list_commas": [
+   "ферритин глюкоза холестерин",
+   "ферритин, глюкоза, холестерин"
+  ],
+  "list_and": [
+   "ферритин глюкоза",
+   "ферритин и глюкоза"
+  ],
+  "list_run_on": [
+   "оак оам ферритин глюкоза"
+  ]
+ },
+ "content_tokens": {
+  "bare_name": [
+   "ферритин"
+  ],
+  "bare_name_caps": [
+   "ферритин"
+  ],
+  "q_name": [
+   "ферритин"
+  ],
+  "q_analysis_on": [
+   "анализ",
+   "на",
+   "ферритин"
+  ],
+  "q_analyses_on": [
+   "стоят",
+   "анализы",
+   "на",
+   "ферритин"
+  ],
+  "q_price_of_analyses": [
+   "анализов",
+   "на",
+   "ферритин"
+  ],
+  "q_polite_wrap": [
+   "ттг"
+  ],
+  "q_pochem": [
+   "почем",
+   "экг"
+  ],
+  "q_price_after": [
+   "экг"
+  ],
+  "q_want_to_take": [
+   "сдать",
+   "кровь",
+   "на",
+   "сахар"
+  ],
+  "q_can_do": [
+   "ли",
+   "сделать",
+   "кардиограмму"
+  ],
+  "q_unknown_word": [
+   "спирометрия"
+  ],
+  "q_long_no_hint": [
+   "хотела",
+   "бы",
+   "узнать",
+   "сдать",
+   "кровь",
+   "на",
+   "гормоны",
+   "щитовидки"
+  ],
+  "abbr_oak": [
+   "оак"
+  ],
+  "abbr_oak_cito": [
+   "оак",
+   "срочно"
+  ],
+  "abbr_two_letter_caps": [
+   "лг"
+  ],
+  "abbr_two_letter_lower": [
+   "лг"
+  ],
+  "code_homecode": [
+   "240"
+  ],
+  "full_name_brackets": [
+   "общий",
+   "анализ",
+   "крови",
+   "le",
+   "er",
+   "hb",
+   "соэ"
+  ],
+  "full_name_hyphen_plus": [
+   "глюкозотолерантный",
+   "тест",
+   "глюкоза",
+   "пептид"
+  ],
+  "homoglyph_code": [
+   "са",
+   "125"
+  ],
+  "vitamin_letter": [
+   "витамин"
+  ],
+  "family_word": [
+   "мазок"
+  ],
+  "generic_analysis": [
+   "анализ"
+  ],
+  "generic_analyses": [
+   "стоят",
+   "анализы"
+  ],
+  "generic_services": [
+   "какие",
+   "вас",
+   "на",
+   "услуги"
+  ],
+  "consult_specialty": [
+   "прием",
+   "уролога"
+  ],
+  "consult_no_specialty": [
+   "прием",
+   "врача"
+  ],
+  "consult_word": [
+   "консультация"
+  ],
+  "qualifier_oms": [
+   "прием",
+   "терапевта",
+   "по",
+   "омс"
+  ],
+  "uzi_generic": [
+   "узи"
+  ],
+  "uzi_compound": [
+   "узи",
+   "почек",
+   "щитовидной",
+   "железы"
+  ],
+  "readiness_named": [
+   "когда",
+   "готов",
+   "анализ",
+   "на",
+   "ферритин"
+  ],
+  "readiness_generic": [
+   "готовятся",
+   "анализы"
+  ],
+  "prepare_named": [
+   "как",
+   "подготовиться",
+   "анализу",
+   "на",
+   "глюкозу"
+  ],
+  "walkin_named": [
+   "на",
+   "ферритин",
+   "нужна",
+   "запись"
+  ],
+  "date_digits": [
+   "09",
+   "2026"
+  ],
+  "time_digits": [
+   "10",
+   "30"
+  ],
+  "date_words": [
+   "20",
+   "ноября",
+   "10",
+   "утра"
+  ],
+  "context_question": [],
+  "context_price": [],
+  "yes": [
+   "да"
+  ],
+  "digit": [],
+  "list_commas": [
+   "ферритин",
+   "глюкоза",
+   "холестерин"
+  ],
+  "list_and": [
+   "ферритин",
+   "глюкоза"
+  ],
+  "list_run_on": [
+   "оак",
+   "оам",
+   "ферритин",
+   "глюкоза"
+  ]
+ },
+ "datetime_only": {
+  "bare_name": false,
+  "bare_name_caps": false,
+  "q_name": false,
+  "q_analysis_on": false,
+  "q_analyses_on": false,
+  "q_price_of_analyses": false,
+  "q_polite_wrap": false,
+  "q_pochem": false,
+  "q_price_after": false,
+  "q_want_to_take": false,
+  "q_can_do": false,
+  "q_unknown_word": false,
+  "q_long_no_hint": false,
+  "abbr_oak": false,
+  "abbr_oak_cito": false,
+  "abbr_two_letter_caps": false,
+  "abbr_two_letter_lower": false,
+  "code_homecode": false,
+  "full_name_brackets": false,
+  "full_name_hyphen_plus": false,
+  "homoglyph_code": false,
+  "vitamin_letter": false,
+  "family_word": false,
+  "generic_analysis": false,
+  "generic_analyses": false,
+  "generic_services": false,
+  "consult_specialty": false,
+  "consult_no_specialty": false,
+  "consult_word": false,
+  "qualifier_oms": false,
+  "uzi_generic": false,
+  "uzi_compound": false,
+  "readiness_named": false,
+  "readiness_generic": false,
+  "prepare_named": false,
+  "walkin_named": false,
+  "date_digits": true,
+  "time_digits": true,
+  "date_words": true,
+  "context_question": false,
+  "context_price": false,
+  "yes": false,
+  "digit": false,
+  "list_commas": false,
+  "list_and": false,
+  "list_run_on": false
+ },
+ "distinctive_tokens": {
+  "bare_name": [
+   "ферритин"
+  ],
+  "bare_name_caps": [
+   "ферритин"
+  ],
+  "q_name": [
+   "ферритин"
+  ],
+  "q_analysis_on": [
+   "ферритин"
+  ],
+  "q_analyses_on": [
+   "стоят",
+   "ферритин"
+  ],
+  "q_price_of_analyses": [
+   "ферритин"
+  ],
+  "q_polite_wrap": [
+   "ттг"
+  ],
+  "q_pochem": [
+   "почем",
+   "экг"
+  ],
+  "q_price_after": [
+   "экг"
+  ],
+  "q_want_to_take": [
+   "кровь",
+   "сахар"
+  ],
+  "q_can_do": [
+   "кардиограмму"
+  ],
+  "q_unknown_word": [
+   "спирометрия"
+  ],
+  "q_long_no_hint": [
+   "гормоны",
+   "кровь",
+   "хотела",
+   "щитовидки"
+  ],
+  "abbr_oak": [
+   "оак"
+  ],
+  "abbr_oak_cito": [
+   "оак",
+   "срочно"
+  ],
+  "abbr_two_letter_caps": [],
+  "abbr_two_letter_lower": [],
+  "code_homecode": [
+   "240"
+  ],
+  "full_name_brackets": [
+   "крови",
+   "общий",
+   "соэ"
+  ],
+  "full_name_hyphen_plus": [
+   "глюкоза",
+   "глюкозотолерантный",
+   "пептид",
+   "тест"
+  ],
+  "homoglyph_code": [
+   "125"
+  ],
+  "vitamin_letter": [
+   "витамин",
+   "витамин_d"
+  ],
+  "family_word": [
+   "мазок"
+  ],
+  "generic_analysis": [],
+  "generic_analyses": [
+   "стоят"
+  ],
+  "generic_services": [],
+  "consult_specialty": [
+   "консультац",
+   "прием",
+   "уролога"
+  ],
+  "consult_no_specialty": [
+   "консультац",
+   "прием"
+  ],
+  "consult_word": [
+   "консультация",
+   "прием"
+  ],
+  "qualifier_oms": [
+   "консультац",
+   "омс",
+   "прием",
+   "терапевта"
+  ],
+  "uzi_generic": [],
+  "uzi_compound": [
+   "железы",
+   "почек",
+   "щитовидной"
+  ],
+  "readiness_named": [
+   "готов",
+   "когда",
+   "ферритин"
+  ],
+  "readiness_generic": [
+   "готовятся"
+  ],
+  "prepare_named": [
+   "глюкозу",
+   "подготовиться"
+  ],
+  "walkin_named": [
+   "запись",
+   "ферритин"
+  ],
+  "date_digits": [
+   "2026"
+  ],
+  "time_digits": [],
+  "date_words": [
+   "ноября",
+   "утра"
+  ],
+  "context_question": [],
+  "context_price": [],
+  "yes": [],
+  "digit": [],
+  "list_commas": [
+   "глюкоза",
+   "ферритин",
+   "холестерин"
+  ],
+  "list_and": [
+   "глюкоза",
+   "ферритин"
+  ],
+  "list_run_on": [
+   "глюкоза",
+   "оак",
+   "оам",
+   "ферритин"
+  ]
+ },
+ "effective_service": {
+  "bare_name": "Ферритин",
+  "bare_name_caps": "Ферритин",
+  "q_name": "Ферритин",
+  "q_analysis_on": "Ферритин",
+  "q_analyses_on": "стоят ферритин",
+  "q_price_of_analyses": "Ферритин",
+  "q_polite_wrap": "ТТГ (TSH) тиреотропный гормон",
+  "q_pochem": "почем экг",
+  "q_price_after": "ЭКГ",
+  "q_want_to_take": "кровь сахар",
+  "q_can_do": "Высокочувствительный С-реактивный белок (кардио), (СРБ высокочувствительный, high sensitivity CRP, hs-CRP)",
+  "q_unknown_word": "спирометрия",
+  "q_long_no_hint": "хотела бы кровь гормоны щитовидки",
+  "abbr_oak": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+  "abbr_oak_cito": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+  "abbr_two_letter_caps": "ТТГ (TSH) тиреотропный гормон",
+  "abbr_two_letter_lower": "ТТГ (TSH) тиреотропный гормон",
+  "code_homecode": "240",
+  "full_name_brackets": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+  "full_name_hyphen_plus": "Глюкозотолерантный тест (глюкоза+ C-пептид)",
+  "homoglyph_code": "CA - 125 (яичники)",
+  "vitamin_letter": "Витамин D суммарный (25-OH витамин D2 и 25-OH витамин D3, общий)",
+  "family_word": "Мазок на степень чистоты влагалища",
+  "generic_analysis": "ТТГ (TSH) тиреотропный гормон",
+  "generic_analyses": "стоят",
+  "generic_services": "ТТГ (TSH) тиреотропный гормон",
+  "consult_specialty": "Прием (осмотр, консультация) врача-уролога",
+  "consult_no_specialty": "Прием (осмотр, консультация) врача-уролога",
+  "consult_word": "Прием (осмотр, консультация) врача-уролога",
+  "qualifier_oms": "прием терапевт",
+  "uzi_generic": "узи",
+  "uzi_compound": "узи почек щитовидной железы",
+  "readiness_named": "когда готов анализ ферритин",
+  "readiness_generic": "готовятся",
+  "prepare_named": "подготовиться к анализу глюкозу",
+  "walkin_named": "а ферритин запись",
+  "date_digits": "ТТГ (TSH) тиреотропный гормон",
+  "time_digits": "ТТГ (TSH) тиреотропный гормон",
+  "date_words": "ТТГ (TSH) тиреотропный гормон",
+  "context_question": "ТТГ (TSH) тиреотропный гормон",
+  "context_price": "ТТГ (TSH) тиреотропный гормон",
+  "yes": "ТТГ (TSH) тиреотропный гормон",
+  "digit": "ТТГ (TSH) тиреотропный гормон",
+  "list_commas": "Липидограмма",
+  "list_and": "ферритин глюкоза",
+  "list_run_on": "Общий анализ крови (Le, Er, Hb, СОЭ)"
+ },
+ "extractor": {
+  "bare_name": "ферритин",
+  "bare_name_caps": "ферритин",
+  "q_name": "ферритин",
+  "q_analysis_on": "анализ ферритин",
+  "q_analyses_on": "стоят ферритин",
+  "q_price_of_analyses": "анализов ферритин",
+  "q_polite_wrap": "ттг",
+  "q_pochem": "почем экг",
+  "q_price_after": "экг",
+  "q_want_to_take": "кровь сахар",
+  "q_can_do": "кардиограмму",
+  "q_unknown_word": "спирометрия",
+  "q_long_no_hint": "хотела бы кровь гормоны щитовидки",
+  "abbr_oak": "оак",
+  "abbr_oak_cito": "оак срочно",
+  "abbr_two_letter_caps": "лг",
+  "abbr_two_letter_lower": "лг",
+  "code_homecode": "240",
+  "full_name_brackets": "общий анализ крови le er hb соэ",
+  "full_name_hyphen_plus": "глюкозотолерантный тест глюкоза c пептид",
+  "homoglyph_code": "са 125",
+  "vitamin_letter": "витамин d",
+  "family_word": "мазок",
+  "generic_analysis": null,
+  "generic_analyses": "стоят",
+  "generic_services": "какие",
+  "consult_specialty": "прием уролог",
+  "consult_no_specialty": null,
+  "consult_word": null,
+  "qualifier_oms": "прием терапевт",
+  "uzi_generic": "узи",
+  "uzi_compound": "узи почек щитовидной железы",
+  "readiness_named": "когда готов анализ ферритин",
+  "readiness_generic": "готовятся",
+  "prepare_named": "подготовиться к анализу глюкозу",
+  "walkin_named": "а ферритин запись",
+  "date_digits": null,
+  "time_digits": null,
+  "date_words": null,
+  "context_question": "а",
+  "context_price": "а",
+  "yes": "да",
+  "digit": "1",
+  "list_commas": "ферритин глюкоза холестерин",
+  "list_and": "ферритин глюкоза",
+  "list_run_on": "оак оам ферритин глюкоза"
+ },
+ "family_candidate": {
+  "bare_name": false,
+  "bare_name_caps": false,
+  "q_name": false,
+  "q_analysis_on": false,
+  "q_analyses_on": false,
+  "q_price_of_analyses": false,
+  "q_polite_wrap": false,
+  "q_pochem": false,
+  "q_price_after": false,
+  "q_want_to_take": false,
+  "q_can_do": false,
+  "q_unknown_word": false,
+  "q_long_no_hint": false,
+  "abbr_oak": false,
+  "abbr_oak_cito": false,
+  "abbr_two_letter_caps": false,
+  "abbr_two_letter_lower": false,
+  "code_homecode": false,
+  "full_name_brackets": true,
+  "full_name_hyphen_plus": true,
+  "homoglyph_code": false,
+  "vitamin_letter": false,
+  "family_word": true,
+  "generic_analysis": false,
+  "generic_analyses": false,
+  "generic_services": false,
+  "consult_specialty": false,
+  "consult_no_specialty": false,
+  "consult_word": false,
+  "qualifier_oms": false,
+  "uzi_generic": false,
+  "uzi_compound": true,
+  "readiness_named": false,
+  "readiness_generic": false,
+  "prepare_named": false,
+  "walkin_named": false,
+  "date_digits": false,
+  "time_digits": false,
+  "date_words": false,
+  "context_question": false,
+  "context_price": false,
+  "yes": false,
+  "digit": false,
+  "list_commas": false,
+  "list_and": false,
+  "list_run_on": false
+ },
+ "family_payload": {
+  "bare_name": null,
+  "bare_name_caps": null,
+  "q_name": null,
+  "q_analysis_on": null,
+  "q_analyses_on": null,
+  "q_price_of_analyses": null,
+  "q_polite_wrap": null,
+  "q_pochem": null,
+  "q_price_after": null,
+  "q_want_to_take": null,
+  "q_can_do": null,
+  "q_unknown_word": null,
+  "q_long_no_hint": null,
+  "abbr_oak": [],
+  "abbr_oak_cito": null,
+  "abbr_two_letter_caps": null,
+  "abbr_two_letter_lower": null,
+  "code_homecode": null,
+  "full_name_brackets": [],
+  "full_name_hyphen_plus": [],
+  "homoglyph_code": null,
+  "vitamin_letter": null,
+  "family_word": [],
+  "generic_analysis": null,
+  "generic_analyses": null,
+  "generic_services": null,
+  "consult_specialty": null,
+  "consult_no_specialty": null,
+  "consult_word": null,
+  "qualifier_oms": null,
+  "uzi_generic": null,
+  "uzi_compound": null,
+  "readiness_named": null,
+  "readiness_generic": null,
+  "prepare_named": null,
+  "walkin_named": null,
+  "date_digits": null,
+  "time_digits": null,
+  "date_words": null,
+  "context_question": null,
+  "context_price": null,
+  "yes": null,
+  "digit": null,
+  "list_commas": null,
+  "list_and": null,
+  "list_run_on": []
+ },
+ "family_root_tokens": {
+  "bare_name": [
+   "ферритин"
+  ],
+  "bare_name_caps": [
+   "ферритин"
+  ],
+  "q_name": [
+   "ферритин"
+  ],
+  "q_analysis_on": [
+   "ферритин"
+  ],
+  "q_analyses_on": [
+   "ферритин",
+   "стоят"
+  ],
+  "q_price_of_analyses": [
+   "ферритин"
+  ],
+  "q_polite_wrap": [],
+  "q_pochem": [
+   "почем"
+  ],
+  "q_price_after": [],
+  "q_want_to_take": [
+   "кровь",
+   "сахар"
+  ],
+  "q_can_do": [
+   "кардиограмму"
+  ],
+  "q_unknown_word": [
+   "спирометрия"
+  ],
+  "q_long_no_hint": [
+   "щитовидки",
+   "гормоны",
+   "хотела",
+   "кровь"
+  ],
+  "abbr_oak": [],
+  "abbr_oak_cito": [
+   "срочно"
+  ],
+  "abbr_two_letter_caps": [],
+  "abbr_two_letter_lower": [],
+  "code_homecode": [],
+  "full_name_brackets": [
+   "общий",
+   "крови"
+  ],
+  "full_name_hyphen_plus": [
+   "глюкозотолерантный",
+   "глюкоза",
+   "пептид",
+   "тест"
+  ],
+  "homoglyph_code": [],
+  "vitamin_letter": [
+   "витамин"
+  ],
+  "family_word": [
+   "мазок"
+  ],
+  "generic_analysis": [],
+  "generic_analyses": [
+   "стоят"
+  ],
+  "generic_services": [],
+  "consult_specialty": [
+   "консультац",
+   "уролог"
+  ],
+  "consult_no_specialty": [
+   "консультац"
+  ],
+  "consult_word": [],
+  "qualifier_oms": [
+   "консультац",
+   "терапевт"
+  ],
+  "uzi_generic": [],
+  "uzi_compound": [
+   "щитовидной",
+   "железы",
+   "почек"
+  ],
+  "readiness_named": [
+   "ферритин",
+   "когда",
+   "готов"
+  ],
+  "readiness_generic": [
+   "готовятся"
+  ],
+  "prepare_named": [
+   "подготовиться",
+   "глюкозу"
+  ],
+  "walkin_named": [
+   "ферритин",
+   "запись"
+  ],
+  "date_digits": [],
+  "time_digits": [],
+  "date_words": [],
+  "context_question": [],
+  "context_price": [],
+  "yes": [],
+  "digit": [],
+  "list_commas": [
+   "холестерин",
+   "ферритин",
+   "глюкоза"
+  ],
+  "list_and": [
+   "ферритин",
+   "глюкоза"
+  ],
+  "list_run_on": [
+   "ферритин",
+   "глюкоза"
+  ]
+ },
+ "family_rows": {
+  "bare_name": [
+   "Ферритин"
+  ],
+  "bare_name_caps": [
+   "Ферритин"
+  ],
+  "q_name": [
+   "Ферритин"
+  ],
+  "q_analysis_on": [],
+  "q_analyses_on": [],
+  "q_price_of_analyses": [],
+  "q_polite_wrap": [
+   "ТТГ (TSH) тиреотропный гормон"
+  ],
+  "q_pochem": [],
+  "q_price_after": [
+   "ЭКГ"
+  ],
+  "q_want_to_take": [],
+  "q_can_do": [
+   "Высокочувствительный С-реактивный белок (кардио), (СРБ высокочувствительный, high sensitivity CRP, hs-CRP)"
+  ],
+  "q_unknown_word": [],
+  "q_long_no_hint": [],
+  "abbr_oak": [
+   "ОАК (без лейкоцитарной формулы и СОЭ)"
+  ],
+  "abbr_oak_cito": [],
+  "abbr_two_letter_caps": [],
+  "abbr_two_letter_lower": [],
+  "code_homecode": [],
+  "full_name_brackets": [
+   "Общий анализ крови (Le, Er, Hb, СОЭ)",
+   "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты)",
+   "Общий белок",
+   "Общий анализ мочи",
+   "Общий тироксин - T4",
+   "Общий трийодтиронин - T3"
+  ],
+  "full_name_hyphen_plus": [
+   "Глюкозотолерантный тест (глюкоза+ C-пептид)",
+   "Экспресс-тест на глюкозу",
+   "Экспресс-тест для определения ВИЧ",
+   "Экспресс-тест Helicobacter pylori",
+   "Гепатит В - HBsAg подтверждающий тест",
+   "Глюкозотолерантный тест (глюкоза+ Инсулин)"
+  ],
+  "homoglyph_code": [
+   "CA - 125 (яичники)"
+  ],
+  "vitamin_letter": [
+   "Витамин D суммарный (25-OH витамин D2 и 25-OH витамин D3, общий)",
+   "Витамин D, 25-гидрокси (кальциферол), ВЭЖХ-МС/МС - метод масс-спектрометрия",
+   "Витамин B12",
+   "Витамин В7 (биотин)",
+   "Витамин А (ретинол)",
+   "Витамин В2 (Рибофлавин)"
+  ],
+  "family_word": [
+   "Мазок на степень чистоты влагалища",
+   "Мазок из зева и носа на патогенный стафилококк",
+   "Цитология (мазок на атипичные клетки)"
+  ],
+  "generic_analysis": [
+   "Общий анализ мочи",
+   "ЗППП: анализ крови",
+   "Общий анализ крови (Le, Er, Hb, СОЭ)",
+   "Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты)",
+   "Кровь на ВИЧ (для одновременного выявления антител к вирусам иммунодефицита человека 1 и 2 типов (ВИЧ-1 и ВИЧ-2), ВИЧ-1 группы О и антигена р24 ВИЧ-1 методом иммуноферментного анализа, версия 2.0)"
+  ],
+  "generic_analyses": [],
+  "generic_services": [],
+  "consult_specialty": [
+   "Прием (осмотр, консультация) врача-уролога",
+   "Прием (осмотр, консультация) врача- уролога (андролога)",
+   "Прием (осмотр, консультация) врача-уролога по синдрому хронической тазовой боли (СХТБ)",
+   "Прием (осмотр, консультация) врача-онколога",
+   "Прием (осмотр, консультация) врача-терапевта",
+   "Прием (осмотр, консультация) врача-терапевта"
+  ],
+  "consult_no_specialty": [
+   "Прием (осмотр, консультация) врача-уролога",
+   "Прием (осмотр, консультация) врача-онколога",
+   "Прием (осмотр, консультация) врача-терапевта",
+   "Прием (осмотр, консультация) врача-терапевта",
+   "Прием (осмотр, консультация) врача- невролога",
+   "Прием (осмотр, консультация) врача-гематолога"
+  ],
+  "consult_word": [
+   "Прием (осмотр, консультация) врача-уролога",
+   "Прием (осмотр, консультация) врача-онколога",
+   "Прием (осмотр, консультация) врача-терапевта",
+   "Прием (осмотр, консультация) врача-терапевта",
+   "Прием (осмотр, консультация) врача- невролога",
+   "Прием (осмотр, консультация) врача-гематолога"
+  ],
+  "qualifier_oms": [
+   "Прием (осмотр, консультация) врача-терапевта",
+   "Прием (осмотр, консультация) врача-терапевта",
+   "Прием (осмотр, консультация) врача-терапевта (эндокринологическое отделение)",
+   "Прием (осмотр, консультация) врача-терапевта перед оперативным вмешательством",
+   "Прием (осмотр, консультация) врача-уролога",
+   "Прием (осмотр, консультация) врача-онколога"
+  ],
+  "uzi_generic": [
+   "Ультразвуковое исследование щитовидной железы и паращитовидных желез",
+   "Ультразвуковое исследование лимфатических узлов (одна анатомическая зона)",
+   "Ультразвуковое исследование при сроке беременности 11-14 недели при одноплодной беременности по оценке антенатального развития плодов с целью выявления хромосомных аномалий, пороков развития, рисков задержки роста плода, преждевременных родов, преэклапсии",
+   "УЗИ органов мошонки + ЦДК сосудов",
+   "Узи щитовидной железы (экспертное)",
+   "УЗИ беременных до 11 недель при одноплодной беременности"
+  ],
+  "uzi_compound": [
+   "Узи щитовидной железы (экспертное)",
+   "Ультразвуковое исследование щитовидной железы и паращитовидных желез",
+   "Тонкоигольная аспирационная биопсия щитовидной железы",
+   "УЗИ щитовидной, паращитовидной желез с регионарными лимфоузлами (детское)"
+  ],
+  "readiness_named": [],
+  "readiness_generic": [],
+  "prepare_named": [],
+  "walkin_named": [],
+  "date_digits": [],
+  "time_digits": [],
+  "date_words": [],
+  "context_question": [],
+  "context_price": [],
+  "yes": [],
+  "digit": [],
+  "list_commas": [],
+  "list_and": [],
+  "list_run_on": []
+ },
+ "fragment_service": {
+  "bare_name": "Ферритин",
+  "bare_name_caps": "Ферритин",
+  "q_name": "Ферритин",
+  "q_analysis_on": "Ферритин",
+  "q_analyses_on": "",
+  "q_price_of_analyses": "Ферритин",
+  "q_polite_wrap": "ТТГ (TSH) тиреотропный гормон",
+  "q_pochem": "",
+  "q_price_after": "ЭКГ",
+  "q_want_to_take": "",
+  "q_can_do": "Высокочувствительный С-реактивный белок (кардио), (СРБ высокочувствительный, high sensitivity CRP, hs-CRP)",
+  "q_unknown_word": "",
+  "q_long_no_hint": "",
+  "abbr_oak": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+  "abbr_oak_cito": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+  "abbr_two_letter_caps": "",
+  "abbr_two_letter_lower": "",
+  "code_homecode": "",
+  "full_name_brackets": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+  "full_name_hyphen_plus": "Глюкозотолерантный тест (глюкоза+ C-пептид)",
+  "homoglyph_code": "CA - 125 (яичники)",
+  "vitamin_letter": "Витамин D суммарный (25-OH витамин D2 и 25-OH витамин D3, общий)",
+  "family_word": "Мазок на степень чистоты влагалища",
+  "generic_analysis": "",
+  "generic_analyses": "",
+  "generic_services": "",
+  "consult_specialty": "Прием (осмотр, консультация) врача-уролога",
+  "consult_no_specialty": "Прием (осмотр, консультация) врача-уролога",
+  "consult_word": "Прием (осмотр, консультация) врача-уролога",
+  "qualifier_oms": "",
+  "uzi_generic": "",
+  "uzi_compound": "",
+  "readiness_named": "",
+  "readiness_generic": "",
+  "prepare_named": "",
+  "walkin_named": "",
+  "date_digits": "",
+  "time_digits": "",
+  "date_words": "",
+  "context_question": "",
+  "context_price": "",
+  "yes": "",
+  "digit": "",
+  "list_commas": "Липидограмма",
+  "list_and": "",
+  "list_run_on": "Общий анализ крови (Le, Er, Hb, СОЭ)"
+ },
+ "generic_uzi": {
+  "bare_name": false,
+  "bare_name_caps": false,
+  "q_name": false,
+  "q_analysis_on": false,
+  "q_analyses_on": false,
+  "q_price_of_analyses": false,
+  "q_polite_wrap": false,
+  "q_pochem": false,
+  "q_price_after": false,
+  "q_want_to_take": false,
+  "q_can_do": false,
+  "q_unknown_word": false,
+  "q_long_no_hint": false,
+  "abbr_oak": false,
+  "abbr_oak_cito": false,
+  "abbr_two_letter_caps": false,
+  "abbr_two_letter_lower": false,
+  "code_homecode": false,
+  "full_name_brackets": false,
+  "full_name_hyphen_plus": false,
+  "homoglyph_code": false,
+  "vitamin_letter": false,
+  "family_word": false,
+  "generic_analysis": false,
+  "generic_analyses": false,
+  "generic_services": false,
+  "consult_specialty": false,
+  "consult_no_specialty": false,
+  "consult_word": false,
+  "qualifier_oms": false,
+  "uzi_generic": true,
+  "uzi_compound": false,
+  "readiness_named": false,
+  "readiness_generic": false,
+  "prepare_named": false,
+  "walkin_named": false,
+  "date_digits": false,
+  "time_digits": false,
+  "date_words": false,
+  "context_question": false,
+  "context_price": false,
+  "yes": false,
+  "digit": false,
+  "list_commas": false,
+  "list_and": false,
+  "list_run_on": false
+ },
+ "meaningful_tokens": {
+  "bare_name": [
+   "ферритин"
+  ],
+  "bare_name_caps": [
+   "ферритин"
+  ],
+  "q_name": [
+   "ферритин"
+  ],
+  "q_analysis_on": [
+   "ферритин"
+  ],
+  "q_analyses_on": [
+   "стоят",
+   "ферритин"
+  ],
+  "q_price_of_analyses": [
+   "ферритин"
+  ],
+  "q_polite_wrap": [
+   "ттг"
+  ],
+  "q_pochem": [
+   "почем",
+   "экг"
+  ],
+  "q_price_after": [
+   "экг"
+  ],
+  "q_want_to_take": [
+   "кровь",
+   "сахар"
+  ],
+  "q_can_do": [
+   "кардиограмму"
+  ],
+  "q_unknown_word": [
+   "спирометрия"
+  ],
+  "q_long_no_hint": [
+   "хотела",
+   "кровь",
+   "гормоны",
+   "щитовидки"
+  ],
+  "abbr_oak": [
+   "оак"
+  ],
+  "abbr_oak_cito": [
+   "оак",
+   "срочно"
+  ],
+  "abbr_two_letter_caps": [],
+  "abbr_two_letter_lower": [],
+  "code_homecode": [
+   "240"
+  ],
+  "full_name_brackets": [
+   "общий",
+   "крови",
+   "соэ"
+  ],
+  "full_name_hyphen_plus": [
+   "глюкозотолерантный",
+   "тест",
+   "глюкоза",
+   "пептид"
+  ],
+  "homoglyph_code": [
+   "125"
+  ],
+  "vitamin_letter": [
+   "витамин",
+   "витамин_d"
+  ],
+  "family_word": [
+   "мазок"
+  ],
+  "generic_analysis": [],
+  "generic_analyses": [
+   "стоят"
+  ],
+  "generic_services": [],
+  "consult_specialty": [
+   "консультац",
+   "уролога"
+  ],
+  "consult_no_specialty": [
+   "консультац"
+  ],
+  "consult_word": [],
+  "qualifier_oms": [
+   "консультац",
+   "терапевта",
+   "омс"
+  ],
+  "uzi_generic": [
+   "узи"
+  ],
+  "uzi_compound": [
+   "узи",
+   "почек",
+   "щитовидной",
+   "железы"
+  ],
+  "readiness_named": [
+   "когда",
+   "готов",
+   "ферритин"
+  ],
+  "readiness_generic": [
+   "готовятся"
+  ],
+  "prepare_named": [
+   "подготовиться",
+   "глюкозу"
+  ],
+  "walkin_named": [
+   "ферритин",
+   "запись"
+  ],
+  "date_digits": [
+   "09",
+   "2026"
+  ],
+  "time_digits": [
+   "10",
+   "30"
+  ],
+  "date_words": [
+   "20",
+   "ноября",
+   "10",
+   "утра"
+  ],
+  "context_question": [],
+  "context_price": [],
+  "yes": [],
+  "digit": [],
+  "list_commas": [
+   "ферритин",
+   "глюкоза",
+   "холестерин"
+  ],
+  "list_and": [
+   "ферритин",
+   "глюкоза"
+  ],
+  "list_run_on": [
+   "оак",
+   "оам",
+   "ферритин",
+   "глюкоза"
+  ]
+ },
+ "multi_items": {
+  "bare_name": {
+   "items": [],
+   "unrecognized": []
+  },
+  "bare_name_caps": {
+   "items": [],
+   "unrecognized": []
+  },
+  "q_name": {
+   "items": [],
+   "unrecognized": []
+  },
+  "q_analysis_on": {
+   "items": [],
+   "unrecognized": []
+  },
+  "q_analyses_on": {
+   "items": [],
+   "unrecognized": []
+  },
+  "q_price_of_analyses": {
+   "items": [],
+   "unrecognized": []
+  },
+  "q_polite_wrap": {
+   "items": [],
+   "unrecognized": []
+  },
+  "q_pochem": {
+   "items": [],
+   "unrecognized": []
+  },
+  "q_price_after": {
+   "items": [],
+   "unrecognized": []
+  },
+  "q_want_to_take": {
+   "items": [],
+   "unrecognized": []
+  },
+  "q_can_do": {
+   "items": [],
+   "unrecognized": []
+  },
+  "q_unknown_word": {
+   "items": [],
+   "unrecognized": []
+  },
+  "q_long_no_hint": {
+   "items": [],
+   "unrecognized": []
+  },
+  "abbr_oak": {
+   "items": [],
+   "unrecognized": []
+  },
+  "abbr_oak_cito": {
+   "items": [],
+   "unrecognized": []
+  },
+  "abbr_two_letter_caps": {
+   "items": [],
+   "unrecognized": []
+  },
+  "abbr_two_letter_lower": {
+   "items": [],
+   "unrecognized": []
+  },
+  "code_homecode": {
+   "items": [],
+   "unrecognized": []
+  },
+  "full_name_brackets": {
+   "items": [],
+   "unrecognized": []
+  },
+  "full_name_hyphen_plus": {
+   "items": [
+    [
+     "Глюкозотолерантный тест (глюкоза",
+     "Глюкозотолерантный тест (глюкоза+ Инсулин)"
+    ],
+    [
+     "C-пептид)",
+     "Глюкозотолерантный тест (глюкоза+ C-пептид)"
+    ]
+   ],
+   "unrecognized": []
+  },
+  "homoglyph_code": {
+   "items": [],
+   "unrecognized": []
+  },
+  "vitamin_letter": {
+   "items": [],
+   "unrecognized": []
+  },
+  "family_word": {
+   "items": [],
+   "unrecognized": []
+  },
+  "generic_analysis": {
+   "items": [],
+   "unrecognized": []
+  },
+  "generic_analyses": {
+   "items": [],
+   "unrecognized": []
+  },
+  "generic_services": {
+   "items": [],
+   "unrecognized": []
+  },
+  "consult_specialty": {
+   "items": [],
+   "unrecognized": []
+  },
+  "consult_no_specialty": {
+   "items": [],
+   "unrecognized": []
+  },
+  "consult_word": {
+   "items": [],
+   "unrecognized": []
+  },
+  "qualifier_oms": {
+   "items": [],
+   "unrecognized": []
+  },
+  "uzi_generic": {
+   "items": [],
+   "unrecognized": []
+  },
+  "uzi_compound": {
+   "items": [],
+   "unrecognized": []
+  },
+  "readiness_named": {
+   "items": [],
+   "unrecognized": []
+  },
+  "readiness_generic": {
+   "items": [],
+   "unrecognized": []
+  },
+  "prepare_named": {
+   "items": [
+    [
+     "подготовиться",
+     "Преаналитическая подготовка к исследованию (энтеробиоз)"
+    ],
+    [
+     "на глюкозу",
+     "Экспресс-тест на глюкозу"
+    ]
+   ],
+   "unrecognized": [
+    "как",
+    "анализу"
+   ]
+  },
+  "walkin_named": {
+   "items": [
+    [
+     "на ферритин",
+     "Ферритин"
+    ],
+    [
+     "запись",
+     "Запись видео изображения 4D при проведении акушерского УЗИ (доп. Услуга)"
+    ]
+   ],
+   "unrecognized": [
+    "нужна"
+   ]
+  },
+  "date_digits": {
+   "items": [],
+   "unrecognized": []
+  },
+  "time_digits": {
+   "items": [],
+   "unrecognized": []
+  },
+  "date_words": {
+   "items": [],
+   "unrecognized": []
+  },
+  "context_question": {
+   "items": [],
+   "unrecognized": []
+  },
+  "context_price": {
+   "items": [],
+   "unrecognized": []
+  },
+  "yes": {
+   "items": [],
+   "unrecognized": []
+  },
+  "digit": {
+   "items": [],
+   "unrecognized": []
+  },
+  "list_commas": {
+   "items": [
+    [
+     "ферритин",
+     "Ферритин"
+    ],
+    [
+     "глюкоза",
+     "Глюкоза"
+    ],
+    [
+     "холестерин",
+     "Липидограмма"
+    ]
+   ],
+   "unrecognized": []
+  },
+  "list_and": {
+   "items": [
+    [
+     "ферритин",
+     "Ферритин"
+    ],
+    [
+     "глюкоза",
+     "Глюкоза"
+    ]
+   ],
+   "unrecognized": []
+  },
+  "list_run_on": {
+   "items": [
+    [
+     "ОАК",
+     "Общий анализ крови (Le, Er, Hb, СОЭ)"
+    ],
+    [
+     "ОАМ",
+     "Общий анализ мочи"
+    ],
+    [
+     "ФЕРРИТИН",
+     "Ферритин"
+    ],
+    [
+     "ГЛЮКОЗА",
+     "Глюкоза"
+    ]
+   ],
+   "unrecognized": []
+  }
+ },
+ "names_a_service": {
+  "bare_name": [
+   "ферритин"
+  ],
+  "bare_name_caps": [
+   "ФЕРРИТИН"
+  ],
+  "q_name": [
+   "сколько стоит ферритин"
+  ],
+  "q_analysis_on": [
+   "сколько стоит анализ на ферритин"
+  ],
+  "q_analyses_on": [
+   "сколько стоят анализы на ферритин"
+  ],
+  "q_price_of_analyses": [
+   "цена анализов на ферритин"
+  ],
+  "q_polite_wrap": [
+   "подскажите пожалуйста сколько стоит ттг"
+  ],
+  "q_pochem": [
+   "почем экг"
+  ],
+  "q_price_after": [
+   "экг цена"
+  ],
+  "q_want_to_take": [
+   "хочу сдать кровь на сахар"
+  ],
+  "q_can_do": [
+   "можно ли сделать кардиограмму"
+  ],
+  "q_unknown_word": [
+   "сколько стоит спирометрия"
+  ],
+  "q_long_no_hint": [
+   "добрый день хотела бы узнать сколько будет стоить сдать кровь на гормоны щитовидки"
+  ],
+  "abbr_oak": [
+   "сколько стоит оак"
+  ],
+  "abbr_oak_cito": [
+   "оак срочно"
+  ],
+  "abbr_two_letter_caps": [
+   "сколько стоит ЛГ"
+  ],
+  "abbr_two_letter_lower": [
+   "лг сколько"
+  ],
+  "code_homecode": [
+   "240"
+  ],
+  "full_name_brackets": [
+   "Общий анализ крови (Le, Er, Hb, СОЭ)"
+  ],
+  "full_name_hyphen_plus": [
+   "сколько стоит Глюкозотолерантный тест (глюкоза+ C-пептид)"
+  ],
+  "homoglyph_code": [
+   "сколько стоит Са-125"
+  ],
+  "vitamin_letter": [
+   "сколько стоит витамин D"
+  ],
+  "family_word": [
+   "сколько стоит мазок"
+  ],
+  "generic_analysis": [],
+  "generic_analyses": [
+   "сколько стоят анализы"
+  ],
+  "generic_services": [],
+  "consult_specialty": [
+   "сколько стоит прием уролога"
+  ],
+  "consult_no_specialty": [],
+  "consult_word": [],
+  "qualifier_oms": [
+   "сколько стоит прием терапевта по ОМС"
+  ],
+  "uzi_generic": [
+   "сколько стоит узи"
+  ],
+  "uzi_compound": [
+   "сколько стоит узи почек и щитовидной железы"
+  ],
+  "readiness_named": [
+   "когда будет готов анализ на ферритин"
+  ],
+  "readiness_generic": [
+   "сколько готовятся анализы"
+  ],
+  "prepare_named": [
+   "как подготовиться к анализу на глюкозу"
+  ],
+  "walkin_named": [
+   "а на ферритин нужна запись?"
+  ],
+  "date_digits": [
+   "6.09.2026"
+  ],
+  "time_digits": [
+   "10:30"
+  ],
+  "date_words": [
+   "20 ноября в 10 утра"
+  ],
+  "context_question": [
+   "а сколько стоит?"
+  ],
+  "context_price": [
+   "а цена?"
+  ],
+  "yes": [
+   "да"
+  ],
+  "digit": [
+   "1"
+  ],
+  "list_commas": [
+   "ферритин, глюкоза, холестерин"
+  ],
+  "list_and": [
+   "ферритин и глюкоза"
+  ],
+  "list_run_on": [
+   "ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА"
+  ]
+ },
+ "names_own_service": {
+  "bare_name": true,
+  "bare_name_caps": true,
+  "q_name": true,
+  "q_analysis_on": true,
+  "q_analyses_on": true,
+  "q_price_of_analyses": true,
+  "q_polite_wrap": true,
+  "q_pochem": true,
+  "q_price_after": true,
+  "q_want_to_take": true,
+  "q_can_do": true,
+  "q_unknown_word": true,
+  "q_long_no_hint": true,
+  "abbr_oak": true,
+  "abbr_oak_cito": true,
+  "abbr_two_letter_caps": false,
+  "abbr_two_letter_lower": false,
+  "code_homecode": true,
+  "full_name_brackets": true,
+  "full_name_hyphen_plus": true,
+  "homoglyph_code": true,
+  "vitamin_letter": true,
+  "family_word": true,
+  "generic_analysis": false,
+  "generic_analyses": true,
+  "generic_services": false,
+  "consult_specialty": true,
+  "consult_no_specialty": false,
+  "consult_word": false,
+  "qualifier_oms": true,
+  "uzi_generic": true,
+  "uzi_compound": true,
+  "readiness_named": true,
+  "readiness_generic": true,
+  "prepare_named": true,
+  "walkin_named": true,
+  "date_digits": false,
+  "time_digits": false,
+  "date_words": false,
+  "context_question": false,
+  "context_price": false,
+  "yes": false,
+  "digit": false,
+  "list_commas": true,
+  "list_and": true,
+  "list_run_on": true
+ },
+ "names_service": {
+  "bare_name": true,
+  "bare_name_caps": true,
+  "q_name": true,
+  "q_analysis_on": true,
+  "q_analyses_on": true,
+  "q_price_of_analyses": true,
+  "q_polite_wrap": true,
+  "q_pochem": true,
+  "q_price_after": true,
+  "q_want_to_take": true,
+  "q_can_do": true,
+  "q_unknown_word": true,
+  "q_long_no_hint": true,
+  "abbr_oak": true,
+  "abbr_oak_cito": true,
+  "abbr_two_letter_caps": true,
+  "abbr_two_letter_lower": false,
+  "code_homecode": true,
+  "full_name_brackets": true,
+  "full_name_hyphen_plus": true,
+  "homoglyph_code": true,
+  "vitamin_letter": true,
+  "family_word": true,
+  "generic_analysis": true,
+  "generic_analyses": true,
+  "generic_services": false,
+  "consult_specialty": true,
+  "consult_no_specialty": true,
+  "consult_word": true,
+  "qualifier_oms": true,
+  "uzi_generic": true,
+  "uzi_compound": true,
+  "readiness_named": true,
+  "readiness_generic": true,
+  "prepare_named": true,
+  "walkin_named": true,
+  "date_digits": true,
+  "time_digits": true,
+  "date_words": true,
+  "context_question": false,
+  "context_price": false,
+  "yes": false,
+  "digit": false,
+  "list_commas": true,
+  "list_and": true,
+  "list_run_on": true
+ },
+ "noise_tokens": {
+  "bare_name": [],
+  "bare_name_caps": [],
+  "q_name": [],
+  "q_analysis_on": [],
+  "q_analyses_on": [],
+  "q_price_of_analyses": [],
+  "q_polite_wrap": [],
+  "q_pochem": [],
+  "q_price_after": [],
+  "q_want_to_take": [],
+  "q_can_do": [],
+  "q_unknown_word": [],
+  "q_long_no_hint": [],
+  "abbr_oak": [],
+  "abbr_oak_cito": [],
+  "abbr_two_letter_caps": [],
+  "abbr_two_letter_lower": [],
+  "code_homecode": [
+   "240"
+  ],
+  "full_name_brackets": [],
+  "full_name_hyphen_plus": [],
+  "homoglyph_code": [
+   "125"
+  ],
+  "vitamin_letter": [],
+  "family_word": [],
+  "generic_analysis": [],
+  "generic_analyses": [],
+  "generic_services": [],
+  "consult_specialty": [],
+  "consult_no_specialty": [],
+  "consult_word": [],
+  "qualifier_oms": [],
+  "uzi_generic": [],
+  "uzi_compound": [],
+  "readiness_named": [],
+  "readiness_generic": [],
+  "prepare_named": [],
+  "walkin_named": [],
+  "date_digits": [
+   "09",
+   "2026"
+  ],
+  "time_digits": [
+   "10",
+   "30"
+  ],
+  "date_words": [
+   "20",
+   "10"
+  ],
+  "context_question": [],
+  "context_price": [],
+  "yes": [],
+  "digit": [],
+  "list_commas": [],
+  "list_and": [],
+  "list_run_on": []
+ },
+ "phrase_rows": {
+  "bare_name": [
+   "Ферритин"
+  ],
+  "bare_name_caps": [
+   "Ферритин"
+  ],
+  "q_name": [
+   "Ферритин"
+  ],
+  "q_analysis_on": [],
+  "q_analyses_on": [],
+  "q_price_of_analyses": [],
+  "q_polite_wrap": [],
+  "q_pochem": [],
+  "q_price_after": [
+   "ЭКГ"
+  ],
+  "q_want_to_take": [],
+  "q_can_do": [],
+  "q_unknown_word": [],
+  "q_long_no_hint": [],
+  "abbr_oak": [],
+  "abbr_oak_cito": [],
+  "abbr_two_letter_caps": [],
+  "abbr_two_letter_lower": [],
+  "code_homecode": [
+   "Ферритин"
+  ],
+  "full_name_brackets": [
+   "Общий анализ крови (Le, Er, Hb, СОЭ)"
+  ],
+  "full_name_hyphen_plus": [],
+  "homoglyph_code": [],
+  "vitamin_letter": [],
+  "family_word": [],
+  "generic_analysis": [],
+  "generic_analyses": [],
+  "generic_services": [],
+  "consult_specialty": [],
+  "consult_no_specialty": [],
+  "consult_word": [],
+  "qualifier_oms": [],
+  "uzi_generic": [],
+  "uzi_compound": [],
+  "readiness_named": [],
+  "readiness_generic": [],
+  "prepare_named": [],
+  "walkin_named": [],
+  "date_digits": [],
+  "time_digits": [],
+  "date_words": [],
+  "context_question": [],
+  "context_price": [],
+  "yes": [],
+  "digit": [
+   "Chlamydia trachomatis [кач.]"
+  ],
+  "list_commas": [],
+  "list_and": [],
+  "list_run_on": []
+ },
+ "prefer_current_over_context": {
+  "bare_name": false,
+  "bare_name_caps": false,
+  "q_name": false,
+  "q_analysis_on": true,
+  "q_analyses_on": true,
+  "q_price_of_analyses": true,
+  "q_polite_wrap": false,
+  "q_pochem": false,
+  "q_price_after": true,
+  "q_want_to_take": false,
+  "q_can_do": false,
+  "q_unknown_word": false,
+  "q_long_no_hint": true,
+  "abbr_oak": false,
+  "abbr_oak_cito": false,
+  "abbr_two_letter_caps": false,
+  "abbr_two_letter_lower": false,
+  "code_homecode": false,
+  "full_name_brackets": false,
+  "full_name_hyphen_plus": true,
+  "homoglyph_code": true,
+  "vitamin_letter": true,
+  "family_word": false,
+  "generic_analysis": false,
+  "generic_analyses": false,
+  "generic_services": false,
+  "consult_specialty": true,
+  "consult_no_specialty": true,
+  "consult_word": true,
+  "qualifier_oms": true,
+  "uzi_generic": false,
+  "uzi_compound": true,
+  "readiness_named": false,
+  "readiness_generic": false,
+  "prepare_named": false,
+  "walkin_named": false,
+  "date_digits": false,
+  "time_digits": false,
+  "date_words": false,
+  "context_question": false,
+  "context_price": false,
+  "yes": false,
+  "digit": false,
+  "list_commas": false,
+  "list_and": false,
+  "list_run_on": false
+ },
+ "prepare_own_subject": {
+  "bare_name": true,
+  "bare_name_caps": true,
+  "q_name": true,
+  "q_analysis_on": false,
+  "q_analyses_on": false,
+  "q_price_of_analyses": false,
+  "q_polite_wrap": false,
+  "q_pochem": false,
+  "q_price_after": true,
+  "q_want_to_take": true,
+  "q_can_do": false,
+  "q_unknown_word": false,
+  "q_long_no_hint": true,
+  "abbr_oak": false,
+  "abbr_oak_cito": false,
+  "abbr_two_letter_caps": false,
+  "abbr_two_letter_lower": false,
+  "code_homecode": true,
+  "full_name_brackets": true,
+  "full_name_hyphen_plus": false,
+  "homoglyph_code": false,
+  "vitamin_letter": false,
+  "family_word": false,
+  "generic_analysis": false,
+  "generic_analyses": false,
+  "generic_services": false,
+  "consult_specialty": false,
+  "consult_no_specialty": false,
+  "consult_word": false,
+  "qualifier_oms": false,
+  "uzi_generic": false,
+  "uzi_compound": false,
+  "readiness_named": false,
+  "readiness_generic": false,
+  "prepare_named": true,
+  "walkin_named": false,
+  "date_digits": false,
+  "time_digits": false,
+  "date_words": false,
+  "context_question": false,
+  "context_price": false,
+  "yes": false,
+  "digit": true,
+  "list_commas": false,
+  "list_and": false,
+  "list_run_on": false
+ },
+ "query_tokens": {
+  "bare_name": [
+   "ферритин"
+  ],
+  "bare_name_caps": [
+   "ферритин"
+  ],
+  "q_name": [
+   "ферритин"
+  ],
+  "q_analysis_on": [
+   "анализ",
+   "ферритин"
+  ],
+  "q_analyses_on": [
+   "стоят",
+   "ферритин"
+  ],
+  "q_price_of_analyses": [
+   "анализов",
+   "ферритин"
+  ],
+  "q_polite_wrap": [
+   "ттг"
+  ],
+  "q_pochem": [
+   "почем",
+   "экг"
+  ],
+  "q_price_after": [
+   "экг"
+  ],
+  "q_want_to_take": [
+   "кровь",
+   "сахар"
+  ],
+  "q_can_do": [
+   "кардиограмму"
+  ],
+  "q_unknown_word": [
+   "спирометрия"
+  ],
+  "q_long_no_hint": [
+   "хотела",
+   "кровь",
+   "гормоны",
+   "щитовидки"
+  ],
+  "abbr_oak": [
+   "оак"
+  ],
+  "abbr_oak_cito": [
+   "оак",
+   "срочно"
+  ],
+  "abbr_two_letter_caps": [],
+  "abbr_two_letter_lower": [],
+  "code_homecode": [
+   "240"
+  ],
+  "full_name_brackets": [
+   "общий",
+   "анализ",
+   "крови",
+   "соэ"
+  ],
+  "full_name_hyphen_plus": [
+   "глюкозотолерантный",
+   "тест",
+   "глюкоза",
+   "пептид"
+  ],
+  "homoglyph_code": [
+   "125"
+  ],
+  "vitamin_letter": [
+   "витамин",
+   "витамин_d"
+  ],
+  "family_word": [
+   "мазок"
+  ],
+  "generic_analysis": [
+   "анализ"
+  ],
+  "generic_analyses": [
+   "стоят"
+  ],
+  "generic_services": [],
+  "consult_specialty": [
+   "прием",
+   "консультац",
+   "уролога"
+  ],
+  "consult_no_specialty": [
+   "прием",
+   "консультац"
+  ],
+  "consult_word": [
+   "консультация",
+   "прием"
+  ],
+  "qualifier_oms": [
+   "прием",
+   "консультац",
+   "терапевта",
+   "омс"
+  ],
+  "uzi_generic": [
+   "узи"
+  ],
+  "uzi_compound": [
+   "узи",
+   "почек",
+   "щитовидной",
+   "железы"
+  ],
+  "readiness_named": [
+   "когда",
+   "готов",
+   "анализ",
+   "ферритин"
+  ],
+  "readiness_generic": [
+   "готовятся"
+  ],
+  "prepare_named": [
+   "подготовиться",
+   "анализ",
+   "глюкозу"
+  ],
+  "walkin_named": [
+   "ферритин",
+   "запись"
+  ],
+  "date_digits": [
+   "09",
+   "2026"
+  ],
+  "time_digits": [
+   "10",
+   "30"
+  ],
+  "date_words": [
+   "20",
+   "ноября",
+   "10",
+   "утра"
+  ],
+  "context_question": [],
+  "context_price": [],
+  "yes": [],
+  "digit": [],
+  "list_commas": [
+   "ферритин",
+   "глюкоза",
+   "холестерин"
+  ],
+  "list_and": [
+   "ферритин",
+   "глюкоза"
+  ],
+  "list_run_on": [
+   "оак",
+   "оам",
+   "ферритин",
+   "глюкоза"
+  ]
+ },
+ "readiness_from_catalog": {
+  "bare_name": [
+   {
+    "name": "Ферритин",
+    "deadline": "1–2 дня"
+   }
+  ],
+  "bare_name_caps": [
+   {
+    "name": "Ферритин",
+    "deadline": "1–2 дня"
+   }
+  ],
+  "q_name": [
+   {
+    "name": "Ферритин",
+    "deadline": "1–2 дня"
+   }
+  ],
+  "q_analysis_on": null,
+  "q_analyses_on": null,
+  "q_price_of_analyses": null,
+  "q_polite_wrap": null,
+  "q_pochem": null,
+  "q_price_after": null,
+  "q_want_to_take": null,
+  "q_can_do": null,
+  "q_unknown_word": null,
+  "q_long_no_hint": null,
+  "abbr_oak": null,
+  "abbr_oak_cito": null,
+  "abbr_two_letter_caps": null,
+  "abbr_two_letter_lower": null,
+  "code_homecode": [
+   {
+    "name": "Ферритин",
+    "deadline": "1–2 дня"
+   }
+  ],
+  "full_name_brackets": [
+   {
+    "name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+    "deadline": "1–2 дня"
+   }
+  ],
+  "full_name_hyphen_plus": null,
+  "homoglyph_code": null,
+  "vitamin_letter": null,
+  "family_word": null,
+  "generic_analysis": null,
+  "generic_analyses": null,
+  "generic_services": null,
+  "consult_specialty": null,
+  "consult_no_specialty": null,
+  "consult_word": null,
+  "qualifier_oms": null,
+  "uzi_generic": null,
+  "uzi_compound": null,
+  "readiness_named": [
+   {
+    "name": "Ферритин",
+    "deadline": "1–2 дня"
+   }
+  ],
+  "readiness_generic": null,
+  "prepare_named": null,
+  "walkin_named": null,
+  "date_digits": null,
+  "time_digits": null,
+  "date_words": null,
+  "context_question": null,
+  "context_price": null,
+  "yes": null,
+  "digit": [
+   {
+    "name": "Chlamydia trachomatis [кач.]",
+    "deadline": "1–2 дня"
+   }
+  ],
+  "list_commas": null,
+  "list_and": null,
+  "list_run_on": null
+ },
+ "readiness_strip": {
+  "bare_name": [
+   "ферритин",
+   false
+  ],
+  "bare_name_caps": [
+   "ФЕРРИТИН",
+   false
+  ],
+  "q_name": [
+   "сколько стоит ферритин",
+   false
+  ],
+  "q_analysis_on": [
+   "сколько стоит анализ на ферритин",
+   false
+  ],
+  "q_analyses_on": [
+   "сколько стоят анализы на ферритин",
+   false
+  ],
+  "q_price_of_analyses": [
+   "цена анализов на ферритин",
+   false
+  ],
+  "q_polite_wrap": [
+   "подскажите пожалуйста сколько стоит ттг",
+   false
+  ],
+  "q_pochem": [
+   "почем экг",
+   false
+  ],
+  "q_price_after": [
+   "экг цена",
+   false
+  ],
+  "q_want_to_take": [
+   "хочу сдать кровь на сахар",
+   false
+  ],
+  "q_can_do": [
+   "можно ли сделать кардиограмму",
+   false
+  ],
+  "q_unknown_word": [
+   "сколько стоит спирометрия",
+   false
+  ],
+  "q_long_no_hint": [
+   "добрый день хотела бы узнать сколько будет стоить сдать кровь на гормоны щитовидки",
+   false
+  ],
+  "abbr_oak": [
+   "сколько стоит оак",
+   false
+  ],
+  "abbr_oak_cito": [
+   "оак срочно",
+   false
+  ],
+  "abbr_two_letter_caps": [
+   "сколько стоит ЛГ",
+   false
+  ],
+  "abbr_two_letter_lower": [
+   "лг сколько",
+   false
+  ],
+  "code_homecode": [
+   "240",
+   false
+  ],
+  "full_name_brackets": [
+   "Общий анализ крови (Le, Er, Hb, СОЭ)",
+   false
+  ],
+  "full_name_hyphen_plus": [
+   "сколько стоит Глюкозотолерантный тест (глюкоза+ C-пептид)",
+   false
+  ],
+  "homoglyph_code": [
+   "сколько стоит Са-125",
+   false
+  ],
+  "vitamin_letter": [
+   "сколько стоит витамин D",
+   false
+  ],
+  "family_word": [
+   "сколько стоит мазок",
+   false
+  ],
+  "generic_analysis": [
+   "сколько стоит анализ",
+   false
+  ],
+  "generic_analyses": [
+   "сколько стоят анализы",
+   false
+  ],
+  "generic_services": [
+   "какие у вас цены на услуги",
+   false
+  ],
+  "consult_specialty": [
+   "сколько стоит прием уролога",
+   false
+  ],
+  "consult_no_specialty": [
+   "сколько стоит прием врача",
+   false
+  ],
+  "consult_word": [
+   "сколько стоит консультация",
+   false
+  ],
+  "qualifier_oms": [
+   "сколько стоит прием терапевта по ОМС",
+   false
+  ],
+  "uzi_generic": [
+   "сколько стоит узи",
+   false
+  ],
+  "uzi_compound": [
+   "сколько стоит узи почек и щитовидной железы",
+   false
+  ],
+  "readiness_named": [
+   "ферритин",
+   true
+  ],
+  "readiness_generic": [
+   "",
+   true
+  ],
+  "prepare_named": [
+   "как подготовиться к анализу на глюкозу",
+   false
+  ],
+  "walkin_named": [
+   "а на ферритин нужна запись?",
+   false
+  ],
+  "date_digits": [
+   "6.09.2026",
+   false
+  ],
+  "time_digits": [
+   "10:30",
+   false
+  ],
+  "date_words": [
+   "20 ноября в 10 утра",
+   false
+  ],
+  "context_question": [
+   "а сколько стоит?",
+   false
+  ],
+  "context_price": [
+   "а цена?",
+   false
+  ],
+  "yes": [
+   "да",
+   false
+  ],
+  "digit": [
+   "1",
+   false
+  ],
+  "list_commas": [
+   "ферритин, глюкоза, холестерин",
+   false
+  ],
+  "list_and": [
+   "ферритин и глюкоза",
+   false
+  ],
+  "list_run_on": [
+   "ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА",
+   false
+  ]
+ },
+ "resolver": {
+  "bare_name": "Ферритин",
+  "bare_name_caps": "Ферритин",
+  "q_name": "Ферритин",
+  "q_analysis_on": "Ферритин",
+  "q_analyses_on": null,
+  "q_price_of_analyses": "Ферритин",
+  "q_polite_wrap": "ТТГ (TSH) тиреотропный гормон",
+  "q_pochem": null,
+  "q_price_after": "ЭКГ",
+  "q_want_to_take": null,
+  "q_can_do": "Высокочувствительный С-реактивный белок (кардио), (СРБ высокочувствительный, high sensitivity CRP, hs-CRP)",
+  "q_unknown_word": null,
+  "q_long_no_hint": null,
+  "abbr_oak": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+  "abbr_oak_cito": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+  "abbr_two_letter_caps": null,
+  "abbr_two_letter_lower": null,
+  "code_homecode": null,
+  "full_name_brackets": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+  "full_name_hyphen_plus": "Глюкозотолерантный тест (глюкоза+ C-пептид)",
+  "homoglyph_code": "CA - 125 (яичники)",
+  "vitamin_letter": "Витамин D суммарный (25-OH витамин D2 и 25-OH витамин D3, общий)",
+  "family_word": "Мазок на степень чистоты влагалища",
+  "generic_analysis": null,
+  "generic_analyses": null,
+  "generic_services": null,
+  "consult_specialty": "Прием (осмотр, консультация) врача-уролога",
+  "consult_no_specialty": "Прием (осмотр, консультация) врача-уролога",
+  "consult_word": "Прием (осмотр, консультация) врача-уролога",
+  "qualifier_oms": null,
+  "uzi_generic": null,
+  "uzi_compound": null,
+  "readiness_named": null,
+  "readiness_generic": null,
+  "prepare_named": null,
+  "walkin_named": null,
+  "date_digits": null,
+  "time_digits": null,
+  "date_words": null,
+  "context_question": null,
+  "context_price": null,
+  "yes": null,
+  "digit": null,
+  "list_commas": "Липидограмма",
+  "list_and": null,
+  "list_run_on": "Общий анализ крови (Le, Er, Hb, СОЭ)"
+ },
+ "retail_candidate": {
+  "bare_name": false,
+  "bare_name_caps": false,
+  "q_name": false,
+  "q_analysis_on": false,
+  "q_analyses_on": true,
+  "q_price_of_analyses": false,
+  "q_polite_wrap": true,
+  "q_pochem": true,
+  "q_price_after": false,
+  "q_want_to_take": true,
+  "q_can_do": true,
+  "q_unknown_word": true,
+  "q_long_no_hint": true,
+  "abbr_oak": false,
+  "abbr_oak_cito": false,
+  "abbr_two_letter_caps": true,
+  "abbr_two_letter_lower": true,
+  "code_homecode": true,
+  "full_name_brackets": false,
+  "full_name_hyphen_plus": false,
+  "homoglyph_code": true,
+  "vitamin_letter": true,
+  "family_word": true,
+  "generic_analysis": false,
+  "generic_analyses": true,
+  "generic_services": true,
+  "consult_specialty": false,
+  "consult_no_specialty": false,
+  "consult_word": false,
+  "qualifier_oms": true,
+  "uzi_generic": true,
+  "uzi_compound": true,
+  "readiness_named": true,
+  "readiness_generic": true,
+  "prepare_named": true,
+  "walkin_named": true,
+  "date_digits": false,
+  "time_digits": false,
+  "date_words": false,
+  "context_question": true,
+  "context_price": true,
+  "yes": true,
+  "digit": true,
+  "list_commas": false,
+  "list_and": true,
+  "list_run_on": false
+ },
+ "short_name_words": {
+  "bare_name": [],
+  "bare_name_caps": [],
+  "q_name": [],
+  "q_analysis_on": [],
+  "q_analyses_on": [],
+  "q_price_of_analyses": [],
+  "q_polite_wrap": [],
+  "q_pochem": [],
+  "q_price_after": [],
+  "q_want_to_take": [],
+  "q_can_do": [],
+  "q_unknown_word": [],
+  "q_long_no_hint": [],
+  "abbr_oak": [],
+  "abbr_oak_cito": [],
+  "abbr_two_letter_caps": [
+   "лг"
+  ],
+  "abbr_two_letter_lower": [],
+  "code_homecode": [],
+  "full_name_brackets": [
+   "le",
+   "er",
+   "hb"
+  ],
+  "full_name_hyphen_plus": [],
+  "homoglyph_code": [
+   "са"
+  ],
+  "vitamin_letter": [],
+  "family_word": [],
+  "generic_analysis": [],
+  "generic_analyses": [],
+  "generic_services": [],
+  "consult_specialty": [],
+  "consult_no_specialty": [],
+  "consult_word": [],
+  "qualifier_oms": [],
+  "uzi_generic": [],
+  "uzi_compound": [],
+  "readiness_named": [],
+  "readiness_generic": [],
+  "prepare_named": [],
+  "walkin_named": [],
+  "date_digits": [],
+  "time_digits": [],
+  "date_words": [],
+  "context_question": [],
+  "context_price": [],
+  "yes": [],
+  "digit": [],
+  "list_commas": [],
+  "list_and": [],
+  "list_run_on": []
+ },
+ "shown_phrase": {
+  "bare_name": "ферритин",
+  "bare_name_caps": "ферритин",
+  "q_name": "ферритин",
+  "q_analysis_on": "анализ ферритин",
+  "q_analyses_on": "стоят ферритин",
+  "q_price_of_analyses": "анализов ферритин",
+  "q_polite_wrap": "ттг",
+  "q_pochem": "почем экг",
+  "q_price_after": "экг",
+  "q_want_to_take": "кровь сахар",
+  "q_can_do": "кардиограмму",
+  "q_unknown_word": "спирометрия",
+  "q_long_no_hint": "хотела бы кровь гормоны щитовидки",
+  "abbr_oak": "оак",
+  "abbr_oak_cito": "оак срочно",
+  "abbr_two_letter_caps": "лг",
+  "abbr_two_letter_lower": "лг",
+  "code_homecode": "240",
+  "full_name_brackets": "общий анализ крови le er hb соэ",
+  "full_name_hyphen_plus": "глюкозотолерантный тест глюкоза c пептид",
+  "homoglyph_code": "са 125",
+  "vitamin_letter": "витамин d",
+  "family_word": "мазок",
+  "generic_analysis": "сколько стоит анализ",
+  "generic_analyses": "стоят",
+  "generic_services": "какие",
+  "consult_specialty": "прием уролог",
+  "consult_no_specialty": "сколько стоит прием врача",
+  "consult_word": "сколько стоит консультация",
+  "qualifier_oms": "прием терапевт",
+  "uzi_generic": "узи",
+  "uzi_compound": "узи почек щитовидной железы",
+  "readiness_named": "когда готов анализ ферритин",
+  "readiness_generic": "готовятся",
+  "prepare_named": "подготовиться к анализу глюкозу",
+  "walkin_named": "а ферритин запись",
+  "date_digits": "6.09.2026",
+  "time_digits": "10:30",
+  "date_words": "20 ноября в 10 утра",
+  "context_question": "а",
+  "context_price": "а",
+  "yes": "да",
+  "digit": "1",
+  "list_commas": "ферритин глюкоза холестерин",
+  "list_and": "ферритин глюкоза",
+  "list_run_on": "оак оам ферритин глюкоза"
+ },
+ "single_mention": {
+  "bare_name": [
+   [
+    "ферритин",
+    "strong",
+    [
+     "Ферритин"
+    ]
+   ]
+  ],
+  "bare_name_caps": [
+   [
+    "ферритин",
+    "strong",
+    [
+     "Ферритин"
+    ]
+   ]
+  ],
+  "q_name": [
+   [
+    "ферритин",
+    "strong",
+    [
+     "Ферритин"
+    ]
+   ]
+  ],
+  "q_analysis_on": [
+   [
+    "ферритин",
+    "weak",
+    []
+   ]
+  ],
+  "q_analyses_on": [
+   [
+    "стоят ферритин",
+    "weak",
+    []
+   ]
+  ],
+  "q_price_of_analyses": [
+   [
+    "анализов ферритин",
+    "weak",
+    []
+   ]
+  ],
+  "q_polite_wrap": [
+   [
+    "ттг",
+    "weak",
+    []
+   ]
+  ],
+  "q_pochem": [
+   [
+    "почем экг",
+    "weak",
+    []
+   ]
+  ],
+  "q_price_after": [
+   [
+    "экг",
+    "strong",
+    [
+     "ЭКГ"
+    ]
+   ]
+  ],
+  "q_want_to_take": [
+   [
+    "кровь сахар",
+    "weak",
+    []
+   ]
+  ],
+  "q_can_do": [
+   [
+    "кардиограмму",
+    "weak",
+    []
+   ]
+  ],
+  "q_unknown_word": [
+   [
+    "спирометрия",
+    "weak",
+    []
+   ]
+  ],
+  "q_long_no_hint": [
+   [
+    "хотела бы кровь гормоны щитовидки",
+    "weak",
+    []
+   ]
+  ],
+  "abbr_oak": [
+   [
+    "оак",
+    "weak",
+    []
+   ]
+  ],
+  "abbr_oak_cito": [
+   [
+    "оак срочно",
+    "weak",
+    []
+   ]
+  ],
+  "abbr_two_letter_caps": [
+   [
+    "лг",
+    "weak",
+    []
+   ]
+  ],
+  "abbr_two_letter_lower": [
+   [
+    "лг",
+    "weak",
+    []
+   ]
+  ],
+  "code_homecode": [
+   [
+    "240",
+    "strong",
+    [
+     "Ферритин"
+    ]
+   ]
+  ],
+  "full_name_brackets": [
+   [
+    "общий анализ крови le er hb соэ",
+    "strong",
+    [
+     "Общий анализ крови (Le, Er, Hb, СОЭ)"
+    ]
+   ]
+  ],
+  "full_name_hyphen_plus": [
+   [
+    "глюкозотолерантный тест глюкоза c пептид",
+    "weak",
+    []
+   ]
+  ],
+  "homoglyph_code": [
+   [
+    "са 125",
+    "weak",
+    []
+   ]
+  ],
+  "vitamin_letter": [
+   [
+    "витамин d",
+    "weak",
+    []
+   ]
+  ],
+  "family_word": [
+   [
+    "мазок",
+    "weak",
+    []
+   ]
+  ],
+  "generic_analysis": [],
+  "generic_analyses": [
+   [
+    "стоят",
+    "weak",
+    []
+   ]
+  ],
+  "generic_services": [],
+  "consult_specialty": [
+   [
+    "прием уролог",
+    "weak",
+    []
+   ]
+  ],
+  "consult_no_specialty": [],
+  "consult_word": [],
+  "qualifier_oms": [
+   [
+    "прием терапевт",
+    "weak",
+    []
+   ]
+  ],
+  "uzi_generic": [
+   [
+    "узи",
+    "weak",
+    []
+   ]
+  ],
+  "uzi_compound": [
+   [
+    "узи почек щитовидной железы",
+    "weak",
+    []
+   ]
+  ],
+  "readiness_named": [
+   [
+    "когда готов анализ ферритин",
+    "weak",
+    []
+   ]
+  ],
+  "readiness_generic": [
+   [
+    "готовятся",
+    "weak",
+    []
+   ]
+  ],
+  "prepare_named": [
+   [
+    "подготовиться к анализу глюкозу",
+    "weak",
+    []
+   ]
+  ],
+  "walkin_named": [
+   [
+    "ферритин запись",
+    "weak",
+    []
+   ]
+  ],
+  "date_digits": [],
+  "time_digits": [],
+  "date_words": [],
+  "context_question": [],
+  "context_price": [],
+  "yes": [
+   [
+    "да",
+    "weak",
+    []
+   ]
+  ],
+  "digit": [
+   [
+    "1",
+    "strong",
+    [
+     "Chlamydia trachomatis [кач.]"
+    ]
+   ]
+  ],
+  "list_commas": [
+   [
+    "ферритин глюкоза холестерин",
+    "weak",
+    []
+   ]
+  ],
+  "list_and": [
+   [
+    "ферритин глюкоза",
+    "weak",
+    []
+   ]
+  ],
+  "list_run_on": [
+   [
+    "оак оам ферритин глюкоза",
+    "weak",
+    []
+   ]
+  ]
+ },
+ "specific_tokens": {
+  "bare_name": true,
+  "bare_name_caps": true,
+  "q_name": true,
+  "q_analysis_on": true,
+  "q_analyses_on": true,
+  "q_price_of_analyses": true,
+  "q_polite_wrap": true,
+  "q_pochem": true,
+  "q_price_after": true,
+  "q_want_to_take": true,
+  "q_can_do": true,
+  "q_unknown_word": true,
+  "q_long_no_hint": true,
+  "abbr_oak": true,
+  "abbr_oak_cito": true,
+  "abbr_two_letter_caps": false,
+  "abbr_two_letter_lower": false,
+  "code_homecode": true,
+  "full_name_brackets": true,
+  "full_name_hyphen_plus": true,
+  "homoglyph_code": true,
+  "vitamin_letter": true,
+  "family_word": true,
+  "generic_analysis": false,
+  "generic_analyses": true,
+  "generic_services": false,
+  "consult_specialty": true,
+  "consult_no_specialty": true,
+  "consult_word": false,
+  "qualifier_oms": true,
+  "uzi_generic": true,
+  "uzi_compound": true,
+  "readiness_named": true,
+  "readiness_generic": true,
+  "prepare_named": true,
+  "walkin_named": true,
+  "date_digits": true,
+  "time_digits": true,
+  "date_words": true,
+  "context_question": false,
+  "context_price": false,
+  "yes": false,
+  "digit": false,
+  "list_commas": true,
+  "list_and": true,
+  "list_run_on": true
+ },
+ "split_items": {
+  "bare_name": [
+   "ферритин"
+  ],
+  "bare_name_caps": [
+   "ФЕРРИТИН"
+  ],
+  "q_name": [
+   "ферритин"
+  ],
+  "q_analysis_on": [
+   "анализ на ферритин"
+  ],
+  "q_analyses_on": [
+   "сколько стоят анализы на ферритин"
+  ],
+  "q_price_of_analyses": [
+   "анализов на ферритин"
+  ],
+  "q_polite_wrap": [
+   "подскажите пожалуйста сколько стоит ттг"
+  ],
+  "q_pochem": [
+   "почем экг"
+  ],
+  "q_price_after": [
+   "экг цена"
+  ],
+  "q_want_to_take": [
+   "хочу сдать кровь на сахар"
+  ],
+  "q_can_do": [
+   "можно ли сделать кардиограмму"
+  ],
+  "q_unknown_word": [
+   "спирометрия"
+  ],
+  "q_long_no_hint": [
+   "добрый день хотела бы узнать сколько будет стоить сдать кровь на гормоны щитовидки"
+  ],
+  "abbr_oak": [
+   "оак"
+  ],
+  "abbr_oak_cito": [
+   "оак срочно"
+  ],
+  "abbr_two_letter_caps": [],
+  "abbr_two_letter_lower": [
+   "лг сколько"
+  ],
+  "code_homecode": [],
+  "full_name_brackets": [
+   "Общий анализ крови (Le",
+   "СОЭ)"
+  ],
+  "full_name_hyphen_plus": [
+   "Глюкозотолерантный тест (глюкоза",
+   "C-пептид)"
+  ],
+  "homoglyph_code": [],
+  "vitamin_letter": [
+   "витамин D"
+  ],
+  "family_word": [
+   "мазок"
+  ],
+  "generic_analysis": [
+   "анализ"
+  ],
+  "generic_analyses": [
+   "сколько стоят анализы"
+  ],
+  "generic_services": [
+   "какие у вас цены на услуги"
+  ],
+  "consult_specialty": [
+   "прием уролога"
+  ],
+  "consult_no_specialty": [
+   "прием врача"
+  ],
+  "consult_word": [
+   "консультация"
+  ],
+  "qualifier_oms": [
+   "прием терапевта по ОМС"
+  ],
+  "uzi_generic": [
+   "узи"
+  ],
+  "uzi_compound": [
+   "узи почек",
+   "щитовидной железы"
+  ],
+  "readiness_named": [
+   "когда будет готов анализ на ферритин"
+  ],
+  "readiness_generic": [
+   "сколько готовятся анализы"
+  ],
+  "prepare_named": [
+   "как подготовиться к анализу на глюкозу"
+  ],
+  "walkin_named": [
+   "а на ферритин нужна запись"
+  ],
+  "date_digits": [],
+  "time_digits": [],
+  "date_words": [
+   "20 ноября в 10 утра"
+  ],
+  "context_question": [
+   "а сколько стоит"
+  ],
+  "context_price": [
+   "а цена"
+  ],
+  "yes": [],
+  "digit": [],
+  "list_commas": [
+   "ферритин",
+   "глюкоза",
+   "холестерин"
+  ],
+  "list_and": [
+   "ферритин",
+   "глюкоза"
+  ],
+  "list_run_on": [
+   "ОАК ОАМ ФЕРРИТИН ГЛЮКОЗА"
+  ]
+ },
+ "strong_rows": {
+  "bare_name": [
+   "Ферритин"
+  ],
+  "bare_name_caps": [
+   "Ферритин"
+  ],
+  "q_name": [
+   "Ферритин"
+  ],
+  "q_analysis_on": [],
+  "q_analyses_on": [],
+  "q_price_of_analyses": [],
+  "q_polite_wrap": [],
+  "q_pochem": [],
+  "q_price_after": [
+   "ЭКГ"
+  ],
+  "q_want_to_take": [],
+  "q_can_do": [],
+  "q_unknown_word": [],
+  "q_long_no_hint": [],
+  "abbr_oak": [],
+  "abbr_oak_cito": [],
+  "abbr_two_letter_caps": [],
+  "abbr_two_letter_lower": [],
+  "code_homecode": [
+   "Ферритин"
+  ],
+  "full_name_brackets": [
+   "Общий анализ крови (Le, Er, Hb, СОЭ)"
+  ],
+  "full_name_hyphen_plus": [],
+  "homoglyph_code": [],
+  "vitamin_letter": [],
+  "family_word": [],
+  "generic_analysis": [],
+  "generic_analyses": [],
+  "generic_services": [],
+  "consult_specialty": [],
+  "consult_no_specialty": [],
+  "consult_word": [],
+  "qualifier_oms": [],
+  "uzi_generic": [],
+  "uzi_compound": [],
+  "readiness_named": [],
+  "readiness_generic": [],
+  "prepare_named": [],
+  "walkin_named": [],
+  "date_digits": [],
+  "time_digits": [],
+  "date_words": [],
+  "context_question": [],
+  "context_price": [],
+  "yes": [],
+  "digit": [
+   "Chlamydia trachomatis [кач.]"
+  ],
+  "list_commas": [],
+  "list_and": [],
+  "list_run_on": []
+ },
+ "strong_window": {
+  "bare_name": null,
+  "bare_name_caps": null,
+  "q_name": null,
+  "q_analysis_on": null,
+  "q_analyses_on": [
+   "анализы на ферритин",
+   [
+    "Ферритин"
+   ],
+   "стоят"
+  ],
+  "q_price_of_analyses": null,
+  "q_polite_wrap": null,
+  "q_pochem": [
+   "экг",
+   [
+    "ЭКГ"
+   ],
+   "почем"
+  ],
+  "q_price_after": null,
+  "q_want_to_take": null,
+  "q_can_do": null,
+  "q_unknown_word": null,
+  "q_long_no_hint": null,
+  "abbr_oak": null,
+  "abbr_oak_cito": null,
+  "abbr_two_letter_caps": null,
+  "abbr_two_letter_lower": null,
+  "code_homecode": null,
+  "full_name_brackets": null,
+  "full_name_hyphen_plus": [
+   "глюкоза",
+   [
+    "Глюкоза"
+   ],
+   "Глюкозотолерантный тест C пептид"
+  ],
+  "homoglyph_code": null,
+  "vitamin_letter": null,
+  "family_word": null,
+  "generic_analysis": null,
+  "generic_analyses": null,
+  "generic_services": null,
+  "consult_specialty": null,
+  "consult_no_specialty": null,
+  "consult_word": null,
+  "qualifier_oms": null,
+  "uzi_generic": null,
+  "uzi_compound": null,
+  "readiness_named": [
+   "на ферритин",
+   [
+    "Ферритин"
+   ],
+   "когда готов"
+  ],
+  "readiness_generic": null,
+  "prepare_named": null,
+  "walkin_named": [
+   "на ферритин нужна",
+   [
+    "Ферритин"
+   ],
+   "а запись"
+  ],
+  "date_digits": null,
+  "time_digits": null,
+  "date_words": null,
+  "context_question": null,
+  "context_price": null,
+  "yes": null,
+  "digit": null,
+  "list_commas": null,
+  "list_and": null,
+  "list_run_on": null
+ },
+ "trailing_noise": {
+  "bare_name": "ферритин",
+  "bare_name_caps": "ферритин",
+  "q_name": "сколько стоит ферритин",
+  "q_analysis_on": "сколько стоит анализ на ферритин",
+  "q_analyses_on": "сколько стоят анализы на ферритин",
+  "q_price_of_analyses": "цена анализов на ферритин",
+  "q_polite_wrap": "подскажите пожалуйста сколько стоит ттг",
+  "q_pochem": "почем экг",
+  "q_price_after": "экг",
+  "q_want_to_take": "хочу сдать кровь на сахар",
+  "q_can_do": "можно ли сделать кардиограмму",
+  "q_unknown_word": "сколько стоит спирометрия",
+  "q_long_no_hint": "добрый день хотела бы узнать сколько будет стоить сдать кровь на гормоны щитовидки",
+  "abbr_oak": "сколько стоит оак",
+  "abbr_oak_cito": "оак срочно",
+  "abbr_two_letter_caps": "сколько стоит лг",
+  "abbr_two_letter_lower": "лг",
+  "code_homecode": "240",
+  "full_name_brackets": "общий анализ крови le er hb соэ",
+  "full_name_hyphen_plus": "сколько стоит глюкозотолерантный тест глюкоза c пептид",
+  "homoglyph_code": "сколько стоит са 125",
+  "vitamin_letter": "сколько стоит витамин d",
+  "family_word": "сколько стоит мазок",
+  "generic_analysis": "сколько стоит анализ",
+  "generic_analyses": "сколько стоят анализы",
+  "generic_services": "какие у вас цены на услуги",
+  "consult_specialty": "сколько стоит прием уролога",
+  "consult_no_specialty": "сколько стоит прием врача",
+  "consult_word": "сколько стоит консультация",
+  "qualifier_oms": "сколько стоит прием терапевта по омс",
+  "uzi_generic": "сколько стоит узи",
+  "uzi_compound": "сколько стоит узи почек и щитовидной железы",
+  "readiness_named": "когда будет готов анализ на ферритин",
+  "readiness_generic": "сколько готовятся анализы",
+  "prepare_named": "как подготовиться к анализу на глюкозу",
+  "walkin_named": "а на ферритин нужна запись",
+  "date_digits": "6 09 2026",
+  "time_digits": "10 30",
+  "date_words": "20 ноября в 10 утра",
+  "context_question": "а",
+  "context_price": "а",
+  "yes": "да",
+  "digit": "1",
+  "list_commas": "ферритин глюкоза холестерин",
+  "list_and": "ферритин и глюкоза",
+  "list_run_on": "оак оам ферритин глюкоза"
+ },
+ "understanding_rules": {
+  "bare_name": {
+   "services": [
+    "ферритин"
+   ],
+   "rule": "not_list",
+   "facet": null
+  },
+  "bare_name_caps": {
+   "services": [
+    "ферритин"
+   ],
+   "rule": "not_list",
+   "facet": null
+  },
+  "q_name": {
+   "services": [
+    "ферритин"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "q_analysis_on": {
+   "services": [
+    "ферритин"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "q_analyses_on": {
+   "services": [
+    "стоят ферритин"
+   ],
+   "rule": "not_list",
+   "facet": null
+  },
+  "q_price_of_analyses": {
+   "services": [
+    "анализов ферритин"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "q_polite_wrap": {
+   "services": [
+    "ттг"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "q_pochem": {
+   "services": [
+    "почем экг"
+   ],
+   "rule": "not_list",
+   "facet": "booking"
+  },
+  "q_price_after": {
+   "services": [
+    "экг"
+   ],
+   "rule": "not_list",
+   "facet": "booking"
+  },
+  "q_want_to_take": {
+   "services": [
+    "кровь сахар"
+   ],
+   "rule": "not_list",
+   "facet": "booking"
+  },
+  "q_can_do": {
+   "services": [
+    "кардиограмму"
+   ],
+   "rule": "not_list",
+   "facet": null
+  },
+  "q_unknown_word": {
+   "services": [
+    "спирометрия"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "q_long_no_hint": {
+   "services": [
+    "хотела бы кровь гормоны щитовидки"
+   ],
+   "rule": "not_list",
+   "facet": "booking"
+  },
+  "abbr_oak": {
+   "services": [
+    "оак"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "abbr_oak_cito": {
+   "services": [
+    "оак срочно"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "abbr_two_letter_caps": {
+   "services": [
+    "лг"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "abbr_two_letter_lower": {
+   "services": [
+    "лг"
+   ],
+   "rule": "not_list",
+   "facet": null
+  },
+  "code_homecode": {
+   "services": [
+    "240"
+   ],
+   "rule": "not_list",
+   "facet": null
+  },
+  "full_name_brackets": {
+   "services": [
+    "общий анализ крови le er hb соэ"
+   ],
+   "rule": "one_catalog_name",
+   "facet": null
+  },
+  "full_name_hyphen_plus": {
+   "services": [
+    "глюкозотолерантный тест глюкоза c пептид"
+   ],
+   "rule": "one_catalog_name",
+   "facet": "price"
+  },
+  "homoglyph_code": {
+   "services": [
+    "са 125"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "vitamin_letter": {
+   "services": [
+    "витамин d"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "family_word": {
+   "services": [
+    "мазок"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "generic_analysis": {
+   "services": [],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "generic_analyses": {
+   "services": [
+    "стоят"
+   ],
+   "rule": "not_list",
+   "facet": null
+  },
+  "generic_services": {
+   "services": [],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "consult_specialty": {
+   "services": [
+    "прием уролог"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "consult_no_specialty": {
+   "services": [],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "consult_word": {
+   "services": [],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "qualifier_oms": {
+   "services": [
+    "прием терапевт"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "uzi_generic": {
+   "services": [
+    "узи"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "uzi_compound": {
+   "services": [
+    "узи почек щитовидной железы"
+   ],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "readiness_named": {
+   "services": [
+    "ферритин"
+   ],
+   "rule": "not_list",
+   "facet": "readiness"
+  },
+  "readiness_generic": {
+   "services": [],
+   "rule": "not_list",
+   "facet": "readiness"
+  },
+  "prepare_named": {
+   "services": [
+    "подготовиться к анализу глюкозу"
+   ],
+   "rule": "segment_unrecognized",
+   "facet": "prepare"
+  },
+  "walkin_named": {
+   "services": [
+    "ферритин запись"
+   ],
+   "rule": "segment_unrecognized",
+   "facet": null
+  },
+  "date_digits": {
+   "services": [],
+   "rule": "not_list",
+   "facet": null
+  },
+  "time_digits": {
+   "services": [],
+   "rule": "not_list",
+   "facet": null
+  },
+  "date_words": {
+   "services": [],
+   "rule": "not_list",
+   "facet": null
+  },
+  "context_question": {
+   "services": [],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "context_price": {
+   "services": [],
+   "rule": "not_list",
+   "facet": "price"
+  },
+  "yes": {
+   "services": [
+    "да"
+   ],
+   "rule": "not_list",
+   "facet": null
+  },
+  "digit": {
+   "services": [
+    "1"
+   ],
+   "rule": "not_list",
+   "facet": null
+  },
+  "list_commas": {
+   "services": [
+    "Ферритин",
+    "Глюкоза",
+    "Липидограмма"
+   ],
+   "rule": "list_split",
+   "facet": null
+  },
+  "list_and": {
+   "services": [
+    "Ферритин",
+    "Глюкоза"
+   ],
+   "rule": "list_split",
+   "facet": null
+  },
+  "list_run_on": {
+   "services": [
+    "Общий анализ крови (Le, Er, Hb, СОЭ)",
+    "Общий анализ мочи",
+    "Ферритин",
+    "Глюкоза"
+   ],
+   "rule": "list_segment",
+   "facet": null
+  }
+ }
+}

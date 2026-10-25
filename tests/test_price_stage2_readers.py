@@ -21,6 +21,11 @@
 
 Перезапись эталона после НАМЕРЕННОЙ правки: `GOLDEN_UPDATE=1 pytest tests/test_price_stage2_readers.py`, затем дифф
 `tests/golden/price_stage2_readers.json` — в коммит вместе с правкой и с объяснением по каждому читателю.
+
+Код этапа 2 — под выключателем `price_by_parse` (дизайн §5): каждый читатель снимается в обоих положениях. Эталон `off` —
+поведение прода, код этапа 2 его не меняет ни на байт; эталон `on` (`tests/golden/price_stage2_readers_on.json`) — дифф
+каждого шага Ш1–Ш5 с разбором в журнале багов. Читатель здесь вызывается вне хода (разбора реплики нет): под `on` видна
+роль «ключ сильного совпадения» и путь без разбора; фраза разбора — во втором слое.
 """
 
 from __future__ import annotations
@@ -37,6 +42,8 @@ from evalbench import world as ev_world
 from tests.test_price_turns_golden import FIXTURE, mini_prod_world  # noqa: F401 — фикстура
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "price_stage2_readers.json"
+GOLDENS = {"off": GOLDEN, "on": GOLDEN.with_name("price_stage2_readers_on.json")}
+SWITCH = tuple(GOLDENS)
 UPDATE = os.environ.get("GOLDEN_UPDATE") == "1"
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -229,34 +236,43 @@ def _operator_snapshot() -> dict[str, Any]:
     return {case: _price_row_matches_service(row, service) for case, (row, service) in OPERATOR_PAIRS.items()}
 
 
-def _load() -> dict[str, Any]:
-    return json.loads(GOLDEN.read_text(encoding="utf-8")) if GOLDEN.exists() else {}
+def _load(switch: str = "off") -> dict[str, Any]:
+    path = GOLDENS[switch]
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
-def _store(section: str, value: dict[str, Any]) -> None:
-    data = _load()
+def _store(section: str, value: dict[str, Any], switch: str) -> None:
+    data = _load(switch)
     data[section] = value
-    GOLDEN.write_text(json.dumps(dict(sorted(data.items())), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    GOLDENS[switch].write_text(json.dumps(dict(sorted(data.items())), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
 
-def _check(section: str, record: dict[str, Any]) -> None:
+def _switch(monkeypatch, switch: str) -> None:
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_PRICE_BY_PARSE", switch, raising=False)
+
+
+def _check(section: str, record: dict[str, Any], switch: str = "off") -> None:
     record = json.loads(json.dumps(record, ensure_ascii=False))  # кортежи → списки, как в эталоне
     if UPDATE:
-        _store(section, record)
+        _store(section, record, switch)
         return
-    base = _load().get(section)
+    base = _load(switch).get(section)
     assert base is not None, f"нет эталона для {section}: GOLDEN_UPDATE=1"
     changed = {case: {"было": base.get(case), "стало": value} for case, value in record.items() if base.get(case) != value}
     assert not changed and set(base) == set(record), json.dumps(changed, ensure_ascii=False, indent=1)
 
 
+@pytest.mark.parametrize("switch", SWITCH)
 @pytest.mark.parametrize("reader", sorted(_readers()))
-def test_reader_matches_golden(reader, mini_prod_world):  # noqa: F811
+def test_reader_matches_golden(reader, switch, mini_prod_world, monkeypatch):  # noqa: F811
+    _switch(monkeypatch, switch)
     with ev_world.FrozenWorld(mini_prod_world, "day") as world:
         record = _snapshot(reader)
         attempts = list(world.net.attempts)
     assert attempts == []
-    _check(reader, record)
+    _check(reader, record, switch)
 
 
 def test_operator_summary_price_matches_golden(mini_prod_world):  # noqa: F811
@@ -268,7 +284,8 @@ def test_operator_summary_price_matches_golden(mini_prod_world):  # noqa: F811
 
 
 def test_golden_has_no_orphans():
-    assert set(_load()) == {*_readers(), "operator_summary_price"}
+    assert set(_load("off")) == {*_readers(), "operator_summary_price"}
+    assert set(_load("on")) == set(_readers())  # сводка оператору — свой шаг и выключатель (Ш6, `operator_price_by_row`)
 
 
 # --------------------------------------------------------------------------- объявления читателей

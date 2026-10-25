@@ -17,6 +17,10 @@
 `tests/golden/price_stage2_turns.json` — поведение как есть, с известными дефектами: этап 2 меняет его только перезаписью
 с разбором диффа (`GOLDEN_UPDATE=1 pytest tests/test_price_stage2_turns.py`).
 
+Код этапа 2 — под выключателем `price_by_parse` (дизайн §5): каждый ход снимается в обоих положениях. Эталон `off` — путь
+прода, код этапа 2 его не меняет ни на байт; эталон `on` (`tests/golden/price_stage2_turns_on.json`) — дифф шагов Ш1–Ш5, каждое
+отличие разобрано в журнале багов (STEP-2026-10-25-PRICE-STAGE2-CODE).
+
 Реплики — классов, не вопросы эталона стенда (Гудхарт, 25.10).
 """
 
@@ -37,6 +41,8 @@ from messengers_router.services._common import _normalise_catalog_text
 from tests.test_price_turns_golden import mini_prod_world, run_dialog  # noqa: F401 — фикстура
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "price_stage2_turns.json"
+GOLDENS = {"off": GOLDEN, "on": GOLDEN.with_name("price_stage2_turns_on.json")}
+SWITCH = tuple(GOLDENS)
 UPDATE = os.environ.get("GOLDEN_UPDATE") == "1"
 
 # Выключатели прода деплоя 17 (24.10), которые читает код этой ветки; снятые веткой снятия выключателей — не нужны.
@@ -90,9 +96,13 @@ CASES: dict[str, Case] = {
     # одна услуга: что пациент назвал, решает разметка; строки — данные или выбор
     "one_strong": Case(("сколько стоит ферритин",), ("ферритин",), why="фраза разметки — дословное название"),
     "one_analysis_on": Case(("сколько стоит анализ на ферритин",), ("ферритин",), rows=("Ферритин",), why="обвязка «анализ на»"),
+    "one_analysis_on_grouped": Case(
+        ("сколько стоит анализ на ферритин",), ("анализ на ферритин",), rows=("Ферритин",), why="правило 5 промпта разметки: «анализ на» — в группе"
+    ),
     "one_analyses_on": Case(("сколько стоят анализы на ферритин",), ("ферритин",), rows=("Ферритин",), why="словоформы вне списка («стоят»)"),
     "one_strong_parse_select_down": Case(("сколько стоят анализы на ферритин",), ("ферритин",), why="сильная фраза разметки, выбор строки недоступен"),
     "one_two_letter": Case(("сколько стоит ЛГ",), ("ЛГ",), rows=("ЛГ (LH)",), why="сокращение в две буквы"),
+    "one_two_letter_lower": Case(("сколько стоит лг",), ("лг",), rows=("ЛГ (LH)",), why="строчными: «названа ли» — по разбору, не по заглавным"),
     "one_consult": Case(("сколько стоит прием уролога",), ("прием уролога",), rows=("Прием (осмотр, консультация) врача-уролога",), why="приём врача со специальностью"),
     "one_consult_generic": Case(("сколько стоит прием врача",), ("прием врача",), rows=(), why="приём без специальности"),
     "one_generic_word": Case(("сколько стоят анализы",), (), why="общее слово — разметка: ни одной услуги"),
@@ -116,7 +126,18 @@ CASES: dict[str, Case] = {
 
 # Класс характеристик → случаи (на них ссылаются объявления читателей в `test_price_stage2_readers.DECLARED`).
 CLASSES: dict[str, tuple[str, ...]] = {
-    "price_one": ("one_strong", "one_analysis_on", "one_analyses_on", "one_strong_parse_select_down", "one_two_letter", "one_consult", "one_consult_generic", "one_generic_word"),
+    "price_one": (
+        "one_strong",
+        "one_analysis_on",
+        "one_analysis_on_grouped",
+        "one_analyses_on",
+        "one_strong_parse_select_down",
+        "one_two_letter",
+        "one_two_letter_lower",
+        "one_consult",
+        "one_consult_generic",
+        "one_generic_word",
+    ),
     "price_select": ("weak_select_picks", "weak_select_down", "weak_abbr"),
     "journal": ("journal_miss", "journal_wrapped"),
     "basket": ("basket_commas", "basket_run_on"),
@@ -185,10 +206,10 @@ def _journal(world_dir: Path) -> list[dict[str, Any]]:
     return [{key: entry.get(key) for key in ("phrase", "source", "found") if key in entry} for entry in entries]
 
 
-def _turns(case_name: str, mode: str, world_dir: Path, monkeypatch) -> dict[str, Any]:
+def _turns(case_name: str, mode: str, switch: str, world_dir: Path, monkeypatch) -> dict[str, Any]:
     from messengers_router.runtime_config import config as cfg
 
-    for key, value in PROD_D17.items():
+    for key, value in {**PROD_D17, "MR_PRICE_BY_PARSE": switch}.items():
         monkeypatch.setattr(cfg, key, value, raising=False)
     case = CASES[case_name]
     oracle = _Oracle(case) if mode == "llm" else _Down()
@@ -206,33 +227,36 @@ def _turns(case_name: str, mode: str, world_dir: Path, monkeypatch) -> dict[str,
     return {"turns": records, "journal": journal, "asked": list(getattr(oracle, "asked", []))}
 
 
-def _load() -> dict[str, Any]:
-    return json.loads(GOLDEN.read_text(encoding="utf-8")) if GOLDEN.exists() else {}
+def _load(switch: str = "off") -> dict[str, Any]:
+    path = GOLDENS[switch]
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
-def _store(key: str, record: dict[str, Any]) -> None:
-    data = _load()
+def _store(key: str, record: dict[str, Any], switch: str) -> None:
+    data = _load(switch)
     data[key] = record
-    GOLDEN.write_text(json.dumps(dict(sorted(data.items())), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    GOLDENS[switch].write_text(json.dumps(dict(sorted(data.items())), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
 
+@pytest.mark.parametrize("switch", SWITCH)
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("case_name", sorted(CASES))
-def test_turn_matches_golden(case_name, mode, mini_prod_world, monkeypatch):  # noqa: F811
-    record = json.loads(json.dumps(_turns(case_name, mode, mini_prod_world, monkeypatch), ensure_ascii=False))
+def test_turn_matches_golden(case_name, mode, switch, mini_prod_world, monkeypatch):  # noqa: F811
+    record = json.loads(json.dumps(_turns(case_name, mode, switch, mini_prod_world, monkeypatch), ensure_ascii=False))
     for turn in record["turns"]:
-        assert turn["text"].strip(), (case_name, mode, turn)
+        assert turn["text"].strip(), (case_name, mode, switch, turn)
     key = f"{case_name}-{mode}"
     if UPDATE:
-        _store(key, record)
+        _store(key, record, switch)
         return
-    base = _load().get(key)
-    assert base is not None, f"нет эталона для {key}: GOLDEN_UPDATE=1"
+    base = _load(switch).get(key)
+    assert base is not None, f"нет эталона для {key} ({switch}): GOLDEN_UPDATE=1"
     assert record == base
 
 
-def test_golden_has_no_orphans():
-    assert set(_load()) == {f"{name}-{mode}" for name in CASES for mode in MODES}
+@pytest.mark.parametrize("switch", SWITCH)
+def test_golden_has_no_orphans(switch):
+    assert set(_load(switch)) == {f"{name}-{mode}" for name in CASES for mode in MODES}
 
 
 def test_classes_cover_every_case():

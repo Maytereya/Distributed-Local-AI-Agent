@@ -215,6 +215,7 @@ class MessengerRouterConfig:
     prepare_general_memo_llm: str
     turn_spans_llm: str
     prepare_by_parse: str
+    price_by_parse: str
     topic_by_llm: str
     button_pass_rules: str
     turn_understanding_one: str
@@ -619,6 +620,11 @@ settings = Settings(
         # поиска по словам; сбой разбора — «уточните». Разбор строится и на ходах подготовки. off — как было.
         # [MESSENGER_ROUTER] prepare_by_parse
         prepare_by_parse=_get_enum("MESSENGER_ROUTER", "prepare_by_parse", default="off", allowed={"off", "on"}),
+        # Цена читает фразу разбора хода (DESIGN-2026-10-25-PRICE-STAGE2, этап 2 «без стоп-слов»): сильное совпадение — фраза
+        # как есть, без вырезателя; фраза поиска, подписи и журнала синонимов — из разбора, а не срез реплики по спискам;
+        # «названа ли услуга» — решение понимания хода; без LLM — только дословное название или код, иначе «уточните» /
+        # оффер, без списка правил с ценами. off — как было. [MESSENGER_ROUTER] price_by_parse
+        price_by_parse=_get_enum("MESSENGER_ROUTER", "price_by_parse", default="off", allowed={"off", "on"}),
         # Ход (б), этап 4, вариант Б (решения владельца 20.10 (б) 1, 5): ветки правил `legacy_v2` через запятую
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
@@ -820,6 +826,7 @@ MR_SYNONYM_WORDFORMS = settings.messenger_router.synonym_wordforms
 MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
+MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_BUTTON_PASS_RULES = settings.messenger_router.button_pass_rules
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one

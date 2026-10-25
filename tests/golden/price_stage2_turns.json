@@ -499,6 +499,81 @@
    "spans"
   ]
  },
+ "one_analysis_on_grouped-down": {
+  "turns": [
+   {
+    "text": "По запросу «анализ ферритин» нашёл похожую услугу: «Ферритин». Если нужна она, напишите её название — подскажу цену.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "анализ ферритин",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "names",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ],
+     [
+      "price_service_general",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "one_analysis_on_grouped-llm": {
+  "turns": [
+   {
+    "text": "По услуге «Ферритин» нашёл следующее:\n1) Розничная цена: Ферритин — 530 руб.\n2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.\nЕсли нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "picked",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_general",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
  "one_consult-down": {
   "turns": [
    {
@@ -958,6 +1033,70 @@
   "asked": [
    "spans",
    "rows"
+  ]
+ },
+ "one_two_letter_lower-down": {
+  "turns": [
+   {
+    "text": "Нашёл варианты по стоимости:\n1. ЛГ (LH) Лютеинизирующий гормон — 410 руб.\n2. Внутривенная аналгезия до 1 часа — 6 000 руб.\nЕсли нужен точный вариант, уточните врача или филиал.\nИсточник цены: розничный прайс Самары.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "лг",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "one_two_letter_lower-llm": {
+  "turns": [
+   {
+    "text": "Нашёл варианты по стоимости:\n1. ЛГ (LH) Лютеинизирующий гормон — 410 руб.\n2. Внутривенная аналгезия до 1 часа — 6 000 руб.\nЕсли нужен точный вариант, уточните врача или филиал.\nИсточник цены: розничный прайс Самары.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "лг",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans"
   ]
  },
  "prepare_named-down": {
