@@ -200,6 +200,9 @@ def metrics(turns: list[dict[str, Any]], labels: dict[str, dict[str, Any]]) -> d
         "multi_core_pct": round(100 * sum(hit / total for _, hit, total, _ in coverage if total) / len(coverage)) if coverage else None,
         "multi_named": sum(named for named, _, _, _ in coverage),
         "multi_outside": sum(outside for _, _, _, outside in coverage),
+        # Корзина-калькулятор (`basket_calc`): итог, сошедшийся с позициями ответа, и перечень взятия (`evalbench.prices`).
+        "basket_total_turns": sum(1 for t in turns if any(p["status"] == "total" for p in t.get("price_pairs") or [])),
+        "basket_take_turns": sum(1 for t in turns if any(p["status"] == "take" for p in t.get("price_pairs") or [])),
         "urgent_recall": (sum(1 for t in urgent_cases if t["urgent"]), len(urgent_cases)),
         "urgent_false": (sum(1 for t in twins if t["urgent"]), len(twins)),
         "symptom_n": sum(spec.values()),
@@ -275,6 +278,8 @@ def render(runs: list[tuple[dict[str, Any], dict[str, Any]]], diff: tuple[int, i
         ("  покрытие core, % (среднее)", "multi_core_pct"),
         ("  допустимых услуг названо (сумма)", "multi_named"),
         ("  услуг вне разметки показано (сумма)", "multi_outside"),
+        ("Итог корзины, сошёлся с позициями (ходов)", "basket_total_turns"),
+        ("Взятие биоматериала с ценой (ходов)", "basket_take_turns"),
         ("Срочное: полнота", "urgent_recall"),
         ("Срочное: ложное на двойниках", "urgent_false"),
         ("Симптом → врач: размечено", "symptom_n"),
