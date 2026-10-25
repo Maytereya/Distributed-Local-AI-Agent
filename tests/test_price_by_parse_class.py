@@ -10,12 +10,16 @@
   («сколько стоит <название>») сильной не бывает — ни у одного названия прайса (вырезатель делал сильными почти все);
 - Ш1, число: код услуги, только если это не номер из показанного прошлым ответом (коды 1–20 в прайсе все заняты: «1» после
   списка цен было услугой с кодом 1 — находка № 8); число больше показанного — код, как было;
-- off — как было (контраст: вырезатель делает реплику с обвязкой сильной).
+- Ш2, фраза услуги: в тексте пациенту в «ёлочках» — только срез его реплики (фраза разбора) или название прайса; слов реплики,
+  склеенных вырезателем («стоят ферритин», «прием уролог»), и реплики целиком пациент не читает (по всем ходам эталона on);
+- off — как было (контраст: вырезатель делает реплику с обвязкой сильной и печатает склейки).
 """
 
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -100,3 +104,63 @@ def test_turn_spans_take_a_shown_number_for_a_choice_under_on(monkeypatch, shown
     assert all(not item.rows for item in decided.items)
     _switch(monkeypatch, "off")
     assert _turn_spans.decide_without_llm(code, ROWS).status == "strong_whole"
+
+
+# --------------------------------------------------------------------------- Ш2: фраза услуги в тексте пациенту
+
+_GOLDEN = Path(__file__).resolve().parent / "golden"
+_QUOTED = re.compile(r"«([^»]+)»")
+
+
+def _norm(text: str) -> str:
+    from messengers_router.services._common import _normalise_catalog_text
+
+    return _normalise_catalog_text(text)
+
+
+def _foreign_quotes(golden: str) -> dict[str, list[str]]:
+    """Фразы в «ёлочках», которые не срез реплики хода и не название прайса (перечень корзины — по частям)."""
+
+    from tests.test_price_stage2_turns import CASES
+
+    names = {_norm(name) for name in NAMES}
+    data = json.loads((_GOLDEN / golden).read_text(encoding="utf-8"))
+    out: dict[str, list[str]] = {}
+    for key, record in data.items():
+        case = CASES[key.rsplit("-", 1)[0]]
+        for reply, turn in zip(case.turns, record["turns"]):
+            for quoted in _QUOTED.findall(turn["text"]):
+                if not _covered(quoted.split(", "), lambda part: _norm(part) in names or _norm(part) in _norm(reply)):
+                    out.setdefault(key, []).append(quoted)
+    return out
+
+
+def _covered(segments: list[str], ok) -> bool:
+    """Перечень «A, B, C» — подряд идущие части, каждая годится (`ok`); у названия прайса бывают свои запятые."""
+
+    reach = [True] + [False] * len(segments)
+    for end in range(1, len(segments) + 1):
+        reach[end] = any(reach[start] and ok(", ".join(segments[start:end])) for start in range(end))
+    return reach[-1]
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "llm",
+        pytest.param(
+            "down",
+            marks=pytest.mark.xfail(
+                strict=True, reason="Ш4: без LLM — список правил с подписью словаря кода («оак» → «общий анализ крови») уходит"
+            ),
+        ),
+    ],
+)
+def test_patient_reads_only_reply_slices_or_catalog_names_under_on(mode):
+    foreign = _foreign_quotes("price_stage2_turns_on.json")
+    assert {key: quotes for key, quotes in foreign.items() if key.endswith(f"-{mode}")} == {}
+
+
+def test_extractor_glued_reply_words_under_off():
+    foreign = _foreign_quotes("price_stage2_turns.json")
+    assert "стоят ферритин" in foreign.get("one_strong_parse_select_down-llm", [])  # контраст: склейка вырезателя на проде

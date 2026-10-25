@@ -419,7 +419,7 @@ def _named_service_texts(question: str, phrase: str, hints: Sequence[str]) -> li
     тянули в начало списка чужие строки («Консультация готовых гистологических стёкол», «Здоровье сердца и сосудов!»),
     и LLM выбирала их (карточка dev 20.10). Подсказки (`hints`) — названия услуг из выбора правил, их оставляем."""
 
-    mentioned = _mention_phrase(question)
+    mentioned = _price_by_parse.phrase(question) if _price_by_parse.enabled() else _mention_phrase(question)
     named = phrase if mentioned is None else mentioned
     return [text for text in (named, *[str(h or "") for h in hints]) if str(text or "").strip()]
 
@@ -759,11 +759,17 @@ async def select_price_rows(
 
     phrase = str(_extract_price_service_from_query(question) or "").strip()
     journal_phrase, journal_source = _journal_phrase(question, phrase or question)
+    parse_phrase = _price_by_parse.phrase(question) if _price_by_parse.enabled() else None
     synonymized = _apply_service_synonyms(question)
     texts = [question, synonymized, phrase, str(context or ""), *[str(h or "") for h in hints]]
+    if parse_phrase is not None:
+        # Цена, этап 2, Ш2 (слова поиска): названная услуга — фраза разбора, она уже без обвязки вопроса; реплика целиком и
+        # вырезатель в поиск не идут.
+        phrase = parse_phrase
+        texts = [parse_phrase, _apply_service_synonyms(parse_phrase), str(context or ""), *[str(h or "") for h in hints]]
     # По отдельным словам — если кандидатов мало: поиск правил требует всех слов сразу,
     # и «хгч срочно» не находит ни «ХГЧ», ни «Cito ХГЧ». Шум отсеет выбор LLM.
-    words = [token for token in _price_query_tokens(question) if len(token) >= 3]
+    words = [token for token in _price_query_tokens(question if parse_phrase is None else parse_phrase) if len(token) >= 3]
     # Ответ правил — первым, но не весь: длинный семейный список (до 50 строк) иначе
     # занимал весь список LLM, и лучшая находка поиска по словам в него не попадала
     # («панель женские наследственные» → чужие панели Геномеда, свип 01.10).
@@ -805,7 +811,7 @@ async def select_price_rows(
             # давал цену чужой строки (g0577 → «Анализ крови на аминокислоты»). Уточнение вместо букв (решение владельца
             # 22.10, DESIGN-2026-10-22-TURN-DECISION-BUDGET, вариант А): названия целым словом — на выбор без цен; нет —
             # «не нашёл, уточните название». Цены нет ни в одном случае.
-            names = _whole_word_names(question, pool, rows)
+            names = _whole_word_names(phrase if parse_phrase is not None else question, pool, rows)
             if names:
                 return PriceSelection(rows=(), status="unavailable", names=names), "budget_names"
             return PriceSelection(rows=(), status="none_fit", reason="budget"), "budget_clarify"
@@ -818,7 +824,7 @@ async def select_price_rows(
         # Правила покажут список — при неоднозначности список, а не одна цена (решение 22.07).
         if len(shown) >= 2:
             return None, "rules_list"
-        return PriceSelection(rows=(), status="unavailable", names=_whole_word_names(question, pool, rows)), ""
+        return PriceSelection(rows=(), status="unavailable", names=_whole_word_names(phrase if parse_phrase is not None else question, pool, rows)), ""
 
     def none_fit(reason: str) -> PriceSelection | None:
         # Названо слишком общее или не услуга — уточнение правил честнее, чем «не нашёл».
@@ -827,7 +833,7 @@ async def select_price_rows(
         if reason in _NOT_A_SERVICE_NAME:
             if not general_as_none_fit:
                 return None
-            return PriceSelection(rows=(), status="none_fit", reason=reason, names=_whole_word_names(question, pool, rows))
+            return PriceSelection(rows=(), status="none_fit", reason=reason, names=_whole_word_names(phrase if parse_phrase is not None else question, pool, rows))
         return PriceSelection(rows=(), status="none_fit", reason=reason)
 
     def journal_miss(found_terms: list[str], *reasons: str) -> None:

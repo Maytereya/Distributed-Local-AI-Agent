@@ -357,11 +357,10 @@ DECLARED: dict[str, str] = {
     "messengers_router.services._turn_phrases._with_beside": _OLD_PARSE,
     "messengers_router.services._turn_phrases._only_wrapper_outside": _OLD_PARSE,
     "messengers_router.services.prepare._names_own_subject": "reader:prepare_own_subject",
-    "messengers_router.services.prices._match_policy_payload": "reader:shown_phrase",
+    "messengers_router.services.prices._shown_phrase": "reader:shown_phrase",  # Ш2: «не нашёл» / похожие — фраза разбора
+    "messengers_router.services.prices._service_phrase": "turns:price_one",  # Ш2: запасной поиск и кандидат розницы
     "messengers_router.services.prices._names_a_service": "reader:names_a_service",
     "messengers_router.services.prices._llm_selection_service_name": "reader:shown_phrase",
-    "messengers_router.services.prices.price_info": "turns:price_one",
-    "messengers_router.services.prices.service_bundle_info": "turns:price_one",
     "messengers_router.turn_understanding._bare_phrase": "reader:bare_phrase",
     "messengers_router.turn_understanding._single_mention": "reader:single_mention",
 }
