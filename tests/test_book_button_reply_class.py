@@ -8,7 +8,8 @@
 
 Выключатель `[MESSENGER_ROUTER] booking_target_slot_llm = off | on` (по умолчанию off — как было) поверх `pending_buttons = on`.
 Инвариант: под on ответ, который одна функция (LLM) признала ответом на вопрос цели записи, идёт в запись и вопроса об отмене не
-получает; другая тема, сбой LLM и off — как было. Тесты — через обработчик эндпоинта, LLM — подделка настоящего типа.
+получает; другая тема, пока в записи ничего не выбрано, — обычный путь без вопроса об отмене (отменять нечего); сбой LLM и off — как
+было. Тесты — через обработчик эндпоинта, LLM — подделка настоящего типа.
 """
 
 from __future__ import annotations
@@ -81,8 +82,17 @@ def test_off_keeps_the_old_abort_question(booking_world, monkeypatch):  # noqa: 
     assert _abort_asked(off), off["text"]
 
 
-@pytest.mark.parametrize("answer", [_free("new_topic"), "не json", None], ids=["new_topic", "invalid", "down"])
-def test_other_topic_or_failure_is_as_before(answer, booking_world, monkeypatch):  # noqa: F811
+def test_other_topic_before_anything_is_chosen_is_answered_without_abort_question(booking_world, monkeypatch):  # noqa: F811
+    """Другая тема на вопрос цели записи (решение LLM), а в записи ещё ничего не выбрано: отменять нечего — бот не спрашивает
+    «Отменить оформление?», запись снимается, реплика идёт обычным путём (`buttons_v1`: 7 из 30 после первой части фикса)."""
+
+    on = _in_world(booking_world, monkeypatch, [_BOOK_BUTTON, _NO_VALUE], switches=_ON, llm=_LLM({_FREE_MARK: _free("new_topic")}))[-1]
+    assert not _abort_asked(on), on["text"]
+    assert "appointment_topic_switch_pending" not in on["state"] and not on["state"].get("appointment_flow_active"), on["state"]
+
+
+@pytest.mark.parametrize("answer", ["не json", None], ids=["invalid", "down"])
+def test_failure_is_as_before(answer, booking_world, monkeypatch):  # noqa: F811
     answers = {_FREE_MARK: answer} if answer is not None else {}
     on = _in_world(booking_world, monkeypatch, [_BOOK_BUTTON, _NO_VALUE], switches=_ON, llm=_LLM(answers))[-1]
     off = _in_world(booking_world, monkeypatch, [_BOOK_BUTTON, _NO_VALUE], switches=_OFF, llm=_LLM(answers))[-1]

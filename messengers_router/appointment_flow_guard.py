@@ -22,6 +22,7 @@ from .state_mutations import (
     set_appointment_selection_mode,
 )
 from .policies import (
+    REQUIRED_SLOTS,
     appointment_service_display,
     appointment_text_cancel_confirm,
     appointment_text_cancelled,
@@ -205,6 +206,19 @@ def _answers_branch_question(state: SessionState, user_text: str) -> bool:
     if answers:
         pending_reply.note_rules_branch_answer(user_text)
     return answers
+
+
+def _nothing_chosen_new_topic(pending_missing: list[str]) -> bool:
+    """На вопрос цели записи одна функция решила «другая тема», а цель записи (врач / специальность / услуга) ещё не выбрана
+    (`booking_target_slot_llm = on`)."""
+
+    found = pending_answer.slot_answer()
+    return (
+        pending_answer.booking_target_on()
+        and found is not None
+        and found.outcome is pending_answer.Outcome.NEW_TOPIC
+        and REQUIRED_SLOTS["APPOINTMENT"][0] in pending_missing
+    )
 
 
 def _appointment_wish_resume_prompt(state: SessionState, memory: MemoryStore) -> str:
@@ -406,6 +420,12 @@ def run_appointment_precheck(
                     confidence=1.0,
                 ),
             )
+        if _nothing_chosen_new_topic(pending_missing):
+            # Отменять нечего: на вопрос цели записи — другая тема (решение одной функции), а врач, специальность и услуга
+            # ещё не выбраны. Запись снимается без вопроса «Отменить оформление?», реплика идёт обычным путём
+            # (BUG-2026-10-25-BOOK-BUTTON-REPLY-AS-TOPIC-SWITCH, `booking_target_slot_llm`).
+            clear_on_appointment_end(state, memory)
+            return None
         if not _answers_branch_question(state, user_text) and is_likely_topic_switch_from_appointment(user_text):
             mark_appointment_topic_switch_pending(state)
             expects.ask(expects.Question.APPOINTMENT_ABORT)
