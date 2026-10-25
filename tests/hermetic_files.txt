@@ -230,3 +230,4 @@ tests/test_test_assist_answer_class.py
 tests/test_price_stage2_readers.py
 tests/test_price_stage2_turns.py
 tests/test_price_by_parse_class.py
+tests/test_book_button_reply_class.py

@@ -2609,7 +2609,7 @@ def _slot_value_keeps_topic(decision: RouteDecision, state: SessionState, memory
     if decision.label in {"URGENT", "COMPLAINT", "MEDICAL_ADVICE"} or decision.needs_handoff:
         return decision
     pend_label = str((memory.get_pending(state) or {}).get("label") or "")
-    if pend_label not in pending_answer.SLOT_TOPICS or not missing_slots(pend_label, state.last_entities):
+    if pend_label not in pending_answer.slot_topics() or not missing_slots(pend_label, state.last_entities):
         return decision
     return _relabel(decision, "pending_slot_value", label=pend_label, context_action="continue", flags=set(decision.flags) | {"pending_slot_value"})
 
