@@ -824,11 +824,15 @@ async def select_price_rows(
             if names:
                 return PriceSelection(rows=(), status="unavailable", names=names), "budget_names"
             return PriceSelection(rows=(), status="none_fit", reason="budget"), "budget_clarify"
+        # Правила ничего не предложили — чужой цены не было, их честный ответ остаётся.
+        if not candidates and (not guard_bypassed or not _price_by_parse.enabled()):
+            return None, "rules"
+        if _price_by_parse.enabled():
+            # Цена, этап 2, Ш4: без решения LLM строку не выбираем — ни ответ правил, ни их список с ценами (кандидаты правил — по
+            # буквам: «лг» внутри «аналгезии», BUG-2026-10-25-RULES-LIST-FOREIGN-ROW); названия целым словом без цен или перевод.
+            return PriceSelection(rows=(), status="unavailable", names=_whole_word_names(phrase if parse_phrase is not None else question, pool, rows)), ""
         # Словарный гард пропустил вопрос к LLM только ради её суда: без решения — ответ правил, как без выключателя.
         if guard_bypassed:
-            return None, "rules"
-        # Правила ничего не предложили — чужой цены не было, их честный ответ остаётся.
-        if not candidates:
             return None, "rules"
         # Правила покажут список — при неоднозначности список, а не одна цена (решение 22.07).
         if len(shown) >= 2:

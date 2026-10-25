@@ -2,14 +2,14 @@
  "basket_commas-down": {
   "turns": [
    {
-    "text": "По запросу «Ферритин, Глюкоза, холестерин» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\n\nПо услуге «холестерин»:\n1. Липидограмма — 860 руб.\n2. Липидограмма расширенная — 1 050 руб.\n3. Холестерол — 225 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
      "price_info"
     ],
-    "service_name_effective": "Ферритин, Глюкоза, холестерин",
+    "service_name_effective": null,
     "service_name": null,
     "pending": null,
     "telemetry": {
@@ -22,15 +22,12 @@
       "planner_list_named",
       "planner_list_to_cart"
      ],
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_basket",
       "unavailable"
      ]
     ]
@@ -91,14 +88,14 @@
  "basket_run_on-down": {
   "turns": [
    {
-    "text": "По запросу «ОАК, ОАМ, Ферритин, Глюкоза» нашёл варианты стоимости:\n\nПо услуге «ОАК»:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n3. ОАК (без лейкоцитарной формулы и СОЭ) — 250 руб.\n\nПо услуге «ОАМ»:\n1. Общий анализ мочи — 280 руб.\n2. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
      "price_info"
     ],
-    "service_name_effective": "ОАК, ОАМ, Ферритин, Глюкоза",
+    "service_name_effective": null,
     "service_name": null,
     "pending": null,
     "telemetry": {
@@ -111,15 +108,12 @@
       "planner_list_named",
       "planner_list_to_cart"
      ],
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_basket",
       "unavailable"
      ]
     ]
@@ -200,16 +194,12 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "rules",
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_general",
       "unavailable"
      ]
     ]
@@ -281,16 +271,12 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "rules",
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_general",
       "unavailable"
      ]
     ]
@@ -347,7 +333,7 @@
  "one_analyses_on-down": {
   "turns": [
    {
-    "text": "Не нашёл актуальную стоимость. Уточните название услуги или ФИО врача, и я проверю снова.",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
@@ -362,20 +348,12 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "budget_clarify",
-     "price_guard": "llm_bypass"
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_qualifier_general",
-      "unavailable"
-     ],
-     [
-      "price_service_qualifier_general",
       "unavailable"
      ]
     ]
@@ -423,7 +401,7 @@
  "one_analysis_on-down": {
   "turns": [
    {
-    "text": "Нашёл похожую услугу: «Ферритин». Если нужна она, напишите её название — подскажу цену.",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
@@ -438,16 +416,12 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "names",
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_general",
       "unavailable"
      ]
     ]
@@ -496,7 +470,7 @@
  "one_analysis_on_grouped-down": {
   "turns": [
    {
-    "text": "Нашёл похожую услугу: «Ферритин». Если нужна она, напишите её название — подскажу цену.",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
@@ -511,16 +485,12 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "names",
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_general",
       "unavailable"
      ]
     ]
@@ -571,7 +541,7 @@
  "one_consult-down": {
   "turns": [
    {
-    "text": "Нашёл похожие услуги:\n— Прием (осмотр, консультация) врача-уролога\n— Прием (осмотр, консультация) врача- уролога (андролога)\n— Прием (осмотр, консультация) врача-уролога по синдрому хронической тазовой боли (СХТБ)\n— Прием (осмотр, консультация) врача- уролога, к.м.н.\n— Прием (осмотр, консультация) врача- уролога (андролога), к.м.н\nНапишите, какая из них нужна, — подскажу цену.",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
@@ -586,16 +556,12 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "names",
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_general",
       "unavailable"
      ]
     ]
@@ -646,7 +612,7 @@
  "one_consult_generic-down": {
   "turns": [
    {
-    "text": "Нашёл похожие услуги:\n— Прием (осмотр, консультация) врача-уролога\n— Прием (осмотр, консультация) врача- уролога (андролога)\n— Прием (осмотр, консультация) врача-уролога по синдрому хронической тазовой боли (СХТБ)\n— Прием (осмотр, консультация) врача- уролога, к.м.н.\n— Прием (осмотр, консультация) врача- уролога (андролога), к.м.н\nНапишите, какая из них нужна, — подскажу цену.",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
@@ -659,16 +625,12 @@
     "telemetry": {
      "tu_parse_status": "unavailable",
      "tu_rule": "not_list",
-     "price_policy": "names",
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_general",
       "unavailable"
      ]
     ]
@@ -797,7 +759,7 @@
  "one_strong-down": {
   "turns": [
    {
-    "text": "Нашёл похожую услугу: «Ферритин». Если нужна она, напишите её название — подскажу цену.",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
@@ -812,16 +774,12 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "names",
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_general",
       "unavailable"
      ]
     ]
@@ -871,7 +829,7 @@
  "one_strong_parse_select_down-down": {
   "turns": [
    {
-    "text": "Не нашёл актуальную стоимость. Уточните название услуги или ФИО врача, и я проверю снова.",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
@@ -886,20 +844,12 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "budget_clarify",
-     "price_guard": "llm_bypass"
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_qualifier_general",
-      "unavailable"
-     ],
-     [
-      "price_service_qualifier_general",
       "unavailable"
      ]
     ]
@@ -947,14 +897,14 @@
  "one_two_letter-down": {
   "turns": [
    {
-    "text": "Нашёл варианты по стоимости:\n1. ЛГ (LH) Лютеинизирующий гормон — 410 руб.\n2. Внутривенная аналгезия до 1 часа — 6 000 руб.\nЕсли нужен точный вариант, уточните врача или филиал.\nИсточник цены: розничный прайс Самары.\n\n_Цены актуальны для г. Самара._",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
      "price_info"
     ],
-    "service_name_effective": "лг",
+    "service_name_effective": null,
     "service_name": null,
     "pending": null,
     "telemetry": {
@@ -962,16 +912,12 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "rules_list",
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_general",
       "unavailable"
      ]
     ]
@@ -1022,14 +968,14 @@
  "one_two_letter_lower-down": {
   "turns": [
    {
-    "text": "Нашёл варианты по стоимости:\n1. ЛГ (LH) Лютеинизирующий гормон — 410 руб.\n2. Внутривенная аналгезия до 1 часа — 6 000 руб.\nЕсли нужен точный вариант, уточните врача или филиал.\nИсточник цены: розничный прайс Самары.\n\n_Цены актуальны для г. Самара._",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
      "price_info"
     ],
-    "service_name_effective": "лг",
+    "service_name_effective": null,
     "service_name": null,
     "pending": null,
     "telemetry": {
@@ -1037,16 +983,12 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "rules_list",
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_general",
       "unavailable"
      ]
     ]
@@ -1158,14 +1100,14 @@
  "prepare_pick_by_number-down": {
   "turns": [
    {
-    "text": "По запросу «Ферритин, Глюкоза» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
      "price_info"
     ],
-    "service_name_effective": "Ферритин, Глюкоза",
+    "service_name_effective": null,
     "service_name": null,
     "pending": null,
     "telemetry": {
@@ -1177,6 +1119,7 @@
       "planner_list_named",
       "planner_list_to_cart"
      ],
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
@@ -1231,7 +1174,7 @@
      ]
     },
     "telemetry": {
-     "tu_parse_status": "single"
+     "tu_parse_status": "strong_whole"
     },
     "llm": [
      [
@@ -1339,14 +1282,14 @@
  "readiness_named-down": {
   "turns": [
    {
-    "text": "Срок готовности «Ферритин» — 1–2 дня.",
-    "handoff": false,
+    "text": "Точные сроки готовности результата зависят от конкретного анализа — их подскажет оператор. Соединяю с оператором.",
+    "handoff": true,
     "label": "OTHER",
     "plan": [
      "OTHER"
     ],
     "service_name_effective": null,
-    "service_name": "Ферритин",
+    "service_name": null,
     "pending": null,
     "telemetry": {
      "tu_parse_status": "unavailable",
@@ -1354,7 +1297,7 @@
      "tu_mention_src": "rules",
      "tu_mention_strength": "strong",
      "tu_acted": [
-      "readiness_from_mis"
+      "readiness_to_operator"
      ]
     },
     "llm": [
@@ -1405,7 +1348,7 @@
  "weak_abbr-down": {
   "turns": [
    {
-    "text": "По запросу «общий анализ крови» нашёл варианты стоимости:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n\nПо вашему запросу найдено еще 6 вариантов. Чтобы показать их, напишите: \"все\".\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
@@ -1413,23 +1356,19 @@
      "service_bundle_info"
     ],
     "service_name_effective": null,
-    "service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+    "service_name": null,
     "pending": null,
     "telemetry": {
      "tu_parse_status": "unavailable",
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "rules_list",
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_general",
       "unavailable"
      ]
     ]
@@ -1480,8 +1419,8 @@
  "weak_select_down-down": {
   "turns": [
    {
-    "text": "Чтобы не ошибиться в ответе, подключаю оператора для уточнения деталей.",
-    "handoff": true,
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
@@ -1495,16 +1434,12 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "handoff",
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_general",
       "unavailable"
      ]
     ]
@@ -1554,8 +1489,8 @@
  "weak_select_picks-down": {
   "turns": [
    {
-    "text": "Чтобы не ошибиться в ответе, подключаю оператора для уточнения деталей.",
-    "handoff": true,
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
@@ -1569,16 +1504,12 @@
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
      "tu_mention_strength": "weak",
-     "price_policy": "handoff",
+     "price_policy": "parse_failed_clarify",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
-      "unavailable"
-     ],
-     [
-      "price_service_general",
       "unavailable"
      ]
     ]

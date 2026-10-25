@@ -15,6 +15,9 @@
 - Ш3, «названа ли услуга»: решение понимания этой реплики (`TurnUnderstanding.names_service`), а не буквы — строчное «лг»,
   «тг» буквы не видят (ждут заглавной), и выбор строки не звался: список правил с чужой строкой при работающей LLM; понимания
   этой реплики нет — прежнее определение;
+- Ш4, без LLM: разбор реплики не решён (сбой LLM) — пациент не видит ни одной цены, если не назвал услугу дословно или кодом
+  (тогда её решают данные без LLM, `strong_whole`); ни списка правил с ценами («лг» внутри «аналгезии»), ни корзины правил, ни
+  срока по словам; догадка заземления по буквам в контексте не остаётся (свип по прайсу мини-прод через эндпоинт);
 - off — как было (контраст: вырезатель делает реплику с обвязкой сильной и печатает склейки).
 """
 
@@ -29,7 +32,7 @@ import pytest
 
 from messengers_router import shown_context
 from messengers_router.services._strong_match import strong_rows
-from tests.test_price_turns_golden import FIXTURE
+from tests.test_price_turns_golden import FIXTURE, mini_prod_world  # noqa: F401 — фикстура
 
 _WRAPPED = "сколько стоит {}"
 
@@ -147,18 +150,7 @@ def _covered(segments: list[str], ok) -> bool:
     return reach[-1]
 
 
-@pytest.mark.parametrize(
-    "mode",
-    [
-        "llm",
-        pytest.param(
-            "down",
-            marks=pytest.mark.xfail(
-                strict=True, reason="Ш4: без LLM — список правил с подписью словаря кода («оак» → «общий анализ крови») уходит"
-            ),
-        ),
-    ],
-)
+@pytest.mark.parametrize("mode", ["llm", "down"])
 def test_patient_reads_only_reply_slices_or_catalog_names_under_on(mode):
     foreign = _foreign_quotes("price_stage2_turns_on.json")
     assert {key: quotes for key, quotes in foreign.items() if key.endswith(f"-{mode}")} == {}
@@ -194,3 +186,55 @@ def test_names_service_without_understanding_keeps_letters(monkeypatch):
     _switch(monkeypatch, "on")
     monkeypatch.setattr(TU, "of_reply", lambda text: None)
     assert {reply: PS.names_service(reply) for reply in _NAMES_CORPUS} == letters
+
+
+# --------------------------------------------------------------------------- Ш4: без LLM — только дословное название или код
+
+
+def test_down_mode_shows_prices_only_for_verbatim_replies_under_on():
+    """Эталон ходов on, LLM недоступна: цена в ответе — только у реплики, которую решили данные без LLM."""
+
+    data = json.loads((_GOLDEN / "price_stage2_turns_on.json").read_text(encoding="utf-8"))
+    priced = {
+        key: turn["telemetry"].get("tu_parse_status")
+        for key, record in data.items()
+        if key.endswith("-down")
+        for turn in record["turns"]
+        if "руб." in turn["text"] and turn["telemetry"].get("tu_parse_status") not in ("strong_whole", "strong_all")
+    }
+    assert priced == {}
+
+
+_SWEEP = NAMES[::10]  # каждое десятое название мини-прода (40 реплик): реплика с обвязкой вопроса, LLM недоступна
+
+
+class _Down:
+    async def generate(self, **_kwargs):
+        raise ConnectionError("тест: LLM недоступна")
+
+
+def test_down_sweep_no_price_without_verbatim_name_under_on(mini_prod_world, monkeypatch):  # noqa: F811
+    from evalbench import world as ev_world
+    from messengers_router import llm_runtime
+    from messengers_router.runtime_config import config as cfg
+    from tests.test_price_stage2_turns import PROD_D17
+    from tests.test_price_turns_golden import run_dialog
+
+    for key, value in {**PROD_D17, "MR_PRICE_BY_PARSE": "on"}.items():
+        monkeypatch.setattr(cfg, key, value, raising=False)
+    monkeypatch.setattr(llm_runtime, "_OLLAMA_CLIENT", _Down())
+    monkeypatch.setattr(llm_runtime, "_BREAKER", llm_runtime._Breaker())
+    priced: dict[str, str] = {}
+    guessed: dict[str, str] = {}
+    with ev_world.FrozenWorld(mini_prod_world, "day") as world:
+        for k, name in enumerate(_SWEEP):
+            reply = _WRAPPED.format(name)
+            (turn,) = run_dialog([reply], f"stage2-sweep-down-{k}")
+            if "руб." in turn["text"]:
+                priced[reply] = turn["text"][:120]
+            if turn["service_name"] and not turn["handoff"] and "руб." not in turn["text"]:
+                guessed[reply] = turn["service_name"]
+        attempts = list(world.net.attempts)
+    assert attempts == []
+    assert priced == {}
+    assert guessed == {}  # догадка заземления по буквам, которой пациент не видел, в контексте не остаётся

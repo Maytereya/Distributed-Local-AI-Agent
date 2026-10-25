@@ -15,7 +15,7 @@ from agent_logic_2.nayka_api import api_price
 from .. import shown_context, turn_parse, turn_telemetry
 from . import _price_by_parse
 from ..policies import handoff_message
-from ..text_templates import price_names_without_prices_text, price_not_found_text
+from ..text_templates import PRICE_CLARIFY_NAME_TEXT, price_names_without_prices_text, price_not_found_text
 from ._addresses_helpers import _extract_homecode_query
 from ._common import (
     DOCTORS_TOP_N,
@@ -152,6 +152,21 @@ def _service_phrase(query: str, query_text: str) -> str | None:
     return _extract_price_service_from_query(query_text)
 
 
+def _parse_failed_clarify(query: str, entities: dict[str, Any]) -> dict[str, Any] | None:
+    """Без LLM услугу не угадываем (решение владельца 22.10 (а); цена, этап 2, Ш4, `price_by_parse = on`): разбор этой реплики не
+    решён (LLM не ответила, ответ не по контракту, сбой) — «уточните название», без поиска по словам и без списка правил с ценами.
+    Реплика, которая сама — название или код клиники, сюда не доходит: её решают данные без LLM (`strong_whole`), и ответ на дословное
+    название и есть путь без LLM. Цена попутно (запись, карточка врача; `__price_question` нет) — как было. Пометка — ответа политики
+    (`price_match_policy: …`): услугу, которую до него подставило заземление по буквам, ответ снимает из контекста
+    (BUG-2026-10-13-L13-CONTEXT-LEAK) — иначе «а сколько стоит?» следующим ходом назвал бы цену догадки."""
+
+    if not _price_by_parse.enabled() or not entities.get("__price_question") or not _price_by_parse.failed(str(query or "")):
+        return None
+    turn_telemetry.note(price_policy="parse_failed_clarify")
+    note = "price_match_policy: parse_failed"
+    return {"service_name": "", "prices": [], "retail_prices": [], "doctors": [], "clarify_text": PRICE_CLARIFY_NAME_TEXT, "note": note, "entities_used": entities}
+
+
 def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, Any]) -> dict[str, Any] | None:
     """Политика силы совпадения (L-13) под `price_match_policy = on`: вместо ответа правил — честное
     «не нашёл» (LLM не нашла услугу и во втором круге) или названия без цен (LLM не ответила внятно
@@ -204,6 +219,10 @@ async def _multi_price_payload(
             journal=parse.status == turn_parse.ParseStatus.PICKED,
         )
         return multi_price_payload_from_items(positions, _names_a_service(unrecognized), allow_single=True)
+    if _price_by_parse.failed(str(query or "")) and _price_by_parse.enabled():
+        # Цена, этап 2, Ш4: разбор этой реплики не решён (сбой LLM) — список правил по разделителям и спискам слов не строим
+        # (решение 22.10 (а)); путь одной услуги ответит «уточните название».
+        return None
     # Разбора нет или он не годится для действия (`empty`, `too_many`, `error`, вход — не реплика хода): корзина правил
     # с политикой сбоя разбора — строки слабых позиций выбирает LLM, при сбое — варианты кода (T7 шаг 3б: прежняя
     # корзина правил без выбора, путь `turn_parse = off`, снята).
@@ -586,6 +605,9 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             },
         }
 
+    clarify = _parse_failed_clarify(query, entities)
+    if clarify is not None:
+        return clarify
     # retail prices: city-level regionId в /priceByRegion/{cityRegionId}
     try:
         price_rows = await _load_with_retry(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
@@ -806,6 +828,10 @@ async def service_bundle_info(
             "note": "service_bundle_info: generic_uzi_clarify",
             "entities_used": entities,
         }
+    clarify = _parse_failed_clarify(query, entities)
+    if clarify is not None:
+        clarify["top_n_applied"] = top_limit
+        return clarify
     try:
         retail_rows = await asyncio.to_thread(api_price.load_price_by_region, SAMARA_PRICE_REGION_ID)
     except Exception:
