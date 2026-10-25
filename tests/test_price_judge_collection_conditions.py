@@ -4,9 +4,9 @@
 `choose_price_service`: «условие, которого нет ни в одной позиции») счёл «условия сбора» свойством услуги — `none_fit,
 qualifier_absent` — и цена одиночной услуги стала «Не нашёл». Путь из записи — LLM-first, без словаря: уточнить правило 3.
 
-Под `[MESSENGER_ROUTER] price_judge_conditions = on` (умолчание off) выбор строки и суд условия идут промптом
-`choose_price_service_conditions` — правило 3 с уточнением «вопрос о том, как сдать, подготовиться, записаться, сколько
-готовится результат или какие условия сбора, — не условие услуги»; off — прежний промпт байт в байт.
+Суд условия (`judge_qualifier`) идёт промптом `choose_price_service_qualifier` — правило 3 с этим уточнением всегда (с 22.10:
+выключатель `price_candidates_by_meaning` снят); `[MESSENGER_ROUTER] price_judge_conditions = on` (умолчание off) даёт то же
+уточнение выбору строки без суда (`choose_price_service_conditions`); off — прежний промпт байт в байт.
 
 Что делает живая модель с новым правилом — замер на Mac (28 случаев `p2g_*` + синтетика). Здесь — проводка на уровне суда
 условия (`select_price_rows(judge_qualifier=True)`): через эндпоинт в мире гейта до суда без живого разбора хода не дойти
@@ -89,13 +89,12 @@ def _judge(world_dir, monkeypatch, question: str, service: str, switch: str):
 
 @pytest.mark.parametrize(("question", "service"), _QUESTIONS)
 def test_collection_question_beside_the_name_is_not_an_absent_condition(question, service, mini_prod_world, monkeypatch):  # noqa: F811
-    on, model_on = _judge(mini_prod_world, monkeypatch, question, service, "on")
-    off, model_off = _judge(mini_prod_world, monkeypatch, question, service, "off")
-
-    assert model_on.saw_new_rule and all(model_on.saw_new_rule), "под on суд идёт новым промптом"
-    assert model_off.saw_new_rule and not any(model_off.saw_new_rule), "под off — прежний промпт"
-    assert off is not None and off.status == "none_fit" and off.reason == "qualifier_absent", off  # как было: «Не нашёл»
-    assert on is not None and [str(r.get("serviceName")) for r in on.rows] == [service], on
+    # Суд условия идёт промптом `choose_price_service_qualifier`, в котором уточнение правила 3 уже есть (выключатель
+    # `price_candidates_by_meaning` снят 22.10 — так на проде с деплоя 11): `price_judge_conditions` суда не касается.
+    for mode in ("on", "off"):
+        selection, model = _judge(mini_prod_world, monkeypatch, question, service, mode)
+        assert model.saw_new_rule and all(model.saw_new_rule), (mode, "суд условия — промпт с уточнением правила 3")
+        assert selection is not None and [str(r.get("serviceName")) for r in selection.rows] == [service], (mode, selection)
 
 
 @pytest.mark.parametrize("question", ["сколько стоит ферритин по омс", "сколько стоит ферритин по омс и какие условия сбора"])

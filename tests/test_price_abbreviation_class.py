@@ -44,6 +44,8 @@ class _PickLLM:
         for line in prompt.splitlines():
             head, dot, rest = line.partition(". ")
             if dot and head.isdigit():
+                # Пометка МИС у позиции («… руб. (по справочнику клиники: другое название — …)») — не часть названия.
+                rest = rest.split(" (по справочнику клиники: ", 1)[0]
                 name = " ".join(rest.rsplit(" — ", 1)[0].split())
                 names.append(name)
                 if name == self.target:
@@ -93,14 +95,6 @@ def test_capitalised_abbreviation_gets_its_row_not_a_request_for_the_name(questi
     assert turn["text"] != _ASK_NAME
     assert any(row in offered for offered in llm.offered), "строка сокращения не дошла до выбора LLM"
     assert row in turn["text"] and "руб" in turn["text"]
-
-
-@pytest.mark.parametrize("question", ["ЛГ стоимость", "Цена аТ ТГ"])
-def test_off_keeps_asking_for_the_name_of_a_two_letter_abbreviation(question, mini_prod_world, monkeypatch):  # noqa: F811
-    llm = _PickLLM("")
-    turn = _turn(mini_prod_world, monkeypatch, question, mode="off", llm=llm)
-    assert turn["text"] == _ASK_NAME
-    assert not llm.offered
 
 
 def test_bare_price_question_still_asks_for_the_name(mini_prod_world, monkeypatch):  # noqa: F811

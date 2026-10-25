@@ -153,21 +153,6 @@ def test_note_shows_only_what_the_patient_named(mini_prod_world, mis_vocab, monk
         assert note == "" or (note.startswith(" (по справочнику клиники: ") and len(note) <= S._MIS_NOTE_MAX + 3), text
 
 
-@pytest.mark.parametrize("case", _CASES)
-def test_switch_off_is_byte_identical_and_pool_unchanged(case, mini_prod_world, mis_vocab, monkeypatch):
-    """off — тексты позиций прежние («название — цена»), ответ прежний: без цены (о глотке — «Не нашёл», как на проде
-    19.10); on — те же строки в том же порядке: пометка не добавляет кандидатов и не меняет их порядок."""
-
-    off, turn_off, row_off = _turn(case, mini_prod_world, monkeypatch, "off")
-    on, _turn_on, _row_on = _turn(case, mini_prod_world, monkeypatch, "on")
-    assert all(re.fullmatch(r".+ — \d+ руб\.", text) for pool in off.pools for text in pool), off.pools
-    assert not _priced(turn_off["text"]), turn_off["text"]
-    assert case != "throat" or "Не нашёл" in turn_off["text"], turn_off["text"]
-    assert "price_mis_notes" not in row_off
-    first_on = [text.split(" (по справочнику клиники: ", 1)[0] for text in on.pools[0]]
-    assert first_on == off.pools[0], (first_on, off.pools[0])
-
-
 def test_note_is_bounded_by_dropping_items_not_cutting_words(monkeypatch):
     """Длинные данные МИС — пометка не длиннее предела: уходят названия целиком (сначала лишние, затем синоним), слова
     не режутся; не влезает ни одно — пометки нет. Строки нет в справочнике — пометки нет."""
@@ -192,16 +177,14 @@ def test_note_is_bounded_by_dropping_items_not_cutting_words(monkeypatch):
 
 def test_notes_of_one_list_are_bounded(monkeypatch):
     """Материал, общий для всех строк («кровь на ТТГ» → «кровь из вены» у каждой), — пометки всего списка не длиннее
-    `_MIS_NOTES_POOL_MAX`, первыми помечены строки в начале списка (ответ правил); off — ни одной пометки."""
+    `_MIS_NOTES_POOL_MAX`, первыми помечены строки в начале списка (ответ правил)."""
 
-    from messengers_router.runtime_config import config as cfg
     from messengers_router.services import _biomaterial as bio
     from messengers_router.services import _price_select_llm as S
 
     pool = [{"serviceName": f"Тиреотропный гормон, вариант {n}", "cost": 300 + n} for n in range(24)]
     vocab = bio._build_vocabularies([{"serviceName": row["serviceName"], "biomatNames": "кровь из вены, кровь капиллярная", "serviceSynonyms": None} for row in pool])
     monkeypatch.setattr(bio, "_vocabularies", lambda: vocab)
-    monkeypatch.setattr(cfg, "MR_PRICE_OPTION_MIS_NOTES", "on", raising=False)
     texts = [option.text for option in S._options("сколько стоит кровь на ттг", pool)]
     plain = [f"{row['serviceName']} — {row['cost']} руб." for row in pool]
     added = sum(len(text) - len(base) for text, base in zip(texts, plain))
@@ -209,5 +192,5 @@ def test_notes_of_one_list_are_bounded(monkeypatch):
     assert 0 < added <= S._MIS_NOTES_POOL_MAX + 3 * sum(marked), added
     assert marked == sorted(marked, reverse=True) and not all(marked), marked
     assert "по справочнику клиники: материал — кровь из вены, кровь капиллярная" in texts[0], texts[0]
-    monkeypatch.setattr(cfg, "MR_PRICE_OPTION_MIS_NOTES", "off", raising=False)
-    assert [option.text for option in S._options("сколько стоит кровь на ттг", pool)] == plain
+    # Пометка не меняет кандидатов и их порядок: без неё — прежние «название — цена» (выключатель снят 22.10).
+    assert [text.split(" (по справочнику клиники: ", 1)[0] for text in texts] == plain

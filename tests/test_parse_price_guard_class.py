@@ -18,7 +18,10 @@ g0757 «Сколько стоит анализ крови на концентр�
 
 from __future__ import annotations
 
+import json
+
 import pytest
+from ollama import GenerateResponse
 
 from tests.test_price_turns_golden import mini_prod_world  # noqa: F401 — фикстура
 from tests.test_turn_parse_t3 import _FOLLOW_UPS, _Oracle, _assert_follow_up_stays_on_what_was_shown, _dialog
@@ -60,13 +63,30 @@ def test_llm_down_keeps_the_rules_answer_without_a_price(mini_prod_world, monkey
     assert "руб" not in turn["text"], turn["text"]
 
 
+# Отличительная фраза промпта суда условия (`choose_price_service_qualifier`, правило 3).
+_QUALIFIER_RULE = "условие получения услуги"
+
+
+class _RuleThreeOracle(_Oracle):
+    """Как `_Oracle`, но на промпте суда условия — модель по правилу 3: условия «по ОМС» в позициях нет → пустой выбор."""
+
+    async def generate(self, *, prompt: str = "", system: str | None = None, **kwargs):
+        seen = f"{system}\n\n{prompt}" if system else prompt
+        if _QUALIFIER_RULE in seen:
+            self.asked.append("qualifier")
+            return GenerateResponse(model="m", response=json.dumps({"picks": [], "reason": "qualifier_absent"}), done=True)
+        return await super().generate(prompt=prompt, system=system, **kwargs)
+
+
 @pytest.mark.parametrize("reply", ["Сколько стоит приём терапевта по ОМС"])
 def test_a_qualifier_the_parse_does_not_hand_to_the_llm_stays_unpriced(reply, mini_prod_world, monkeypatch):  # noqa: F811
     """П2 (решение владельца): уточнение, которого клиника не оказывает, — честное «не нашёл», не платная цена.
-    Выбор строки, который «нашёл бы» терапевта, здесь не спрашивается: разбор не выбирает фразу LLM."""
+    С 20.10 (деплой 11; выключатель `price_candidates_by_meaning` снят 22.10) словарь прайса — не вердикт: условие судит
+    LLM (промпт суда условия, правило 3); модель по правилу — пустой выбор, цены нет."""
 
-    oracle = _Oracle(("приём терапевта по ОМС",), ("Прием", "Консультация"))
+    oracle = _RuleThreeOracle(("приём терапевта по ОМС",), ("Прием", "Консультация"))
     [turn], _rows = _dialog([reply], mini_prod_world, monkeypatch, f"guard-p2-{reply[-4:]}", oracle)
+    assert "qualifier" in oracle.asked, oracle.asked
     assert "руб" not in turn["text"], turn["text"]
 
 

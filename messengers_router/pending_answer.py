@@ -24,11 +24,11 @@
 Решение, не закрывшее ход (нет / другая тема / ничего из этого без якоря), лимит решений хода не тратит (решение
 владельца Q5 18.10): обычному пути цены остаются оба решения; телеметрия `tu_pending_refund`.
 
-Выключатель — прежний `[MESSENGER_ROUTER] pending_reply`: функция решает только под `on`, все типы разом
-(`pending_reply_types` для неё не читается). `off` / `shadow` — как было.
+Выключатель `pending_reply` снят 24.10 (неделя `on` на проде с деплоя 10, STEP-2026-10-22-SWITCH-REMOVAL): функция решает
+всегда, все типы разом.
 
 Вопросы-слоты кнопок и остатки класса 5 (решение владельца 19.10, п. 5) — под `[MESSENGER_ROUTER] pending_buttons = on`
-поверх `pending_reply = on` (`buttons_on`), по умолчанию off — как было:
+(`buttons_on`), по умолчанию off — как было:
 - вопрос-слот со свободным ответом (`Question.SLOT_VALUE`, вид `free`: «К какой процедуре нужна подготовка?», «Для
   какой цели подобрать анализы?», реквизиты результата, «Уточните название услуги» после «нет» на «Похоже, вы имели в
   виду …?»): исход «это ответ на вопрос» (`ANSWER`) / «не могу ответить» (`NO`) / другая тема / пауза / ничего. Сужение без
@@ -198,20 +198,12 @@ _TAIL_WORDS = ("а", "но", "—", "–")
 _CANCEL_STEMS = ("отмен", "передума")
 
 
-def on() -> bool:
-    """Функция решает: `[MESSENGER_ROUTER] pending_reply = on`."""
-
-    from .pending_reply import mode
-
-    return mode() == "on"
-
-
 def buttons_on() -> bool:
-    """Вопросы-слоты кнопок и остатки класса 5 — через функцию: `pending_buttons = on` поверх `pending_reply = on`."""
+    """Вопросы-слоты кнопок и остатки класса 5 — через функцию: `pending_buttons = on`."""
 
     from .runtime_config import config as cfg
 
-    return on() and str(getattr(cfg, "MR_PENDING_BUTTONS", "off") or "").strip().lower() == "on"
+    return str(getattr(cfg, "MR_PENDING_BUTTONS", "off") or "").strip().lower() == "on"
 
 
 def current(question_type: str | Question | None = None, text: str | None = None) -> Answer | None:
@@ -321,7 +313,7 @@ def _is_show_all_reply(text: str) -> bool:
     """Реплика — пункт «все» подсказки «…напишите: "все"» своими словами из одного определения пути цены
     (`_prices_helpers._is_price_show_all_request`: «все», «покажи все», «все варианты»)."""
 
-    # Импорт в функции: модуль хода не тянет сервисный слой при своём импорте (как `pending_reply.rules_kind`).
+    # Импорт в функции: модуль хода не тянет сервисный слой при своём импорте.
     from .services._prices_helpers import _is_price_show_all_request
 
     return _is_price_show_all_request(text)
@@ -622,7 +614,8 @@ def branch_side_question(found: Answer | None) -> bool:
 
 def branch_answer(text: str) -> tuple[str, str] | None:
     """Ответ на вопрос «Какой филиал вам удобен?» — (исход, выбранный пункт или ""): решение одной функции этого хода,
-    без неё — прежний клиент `pending_reply` (выключатель ниже `on`); решения нет — None."""
+    без него (сбой LLM) — ответ, который узнали правила предпроверки записи (`pending_reply.branch_reply`, исход
+    `rules`); решения нет — None."""
 
     found = current(Question.APPOINTMENT_BRANCH)
     if found is not None and found.decided:

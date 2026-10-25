@@ -189,13 +189,21 @@ def test_exact_price_name_does_not_call_llm(monkeypatch):
     assert calls == []
 
 
-def test_unsatisfiable_qualifier_stays_with_rules(monkeypatch):
-    # «по ОМС»: правила честно отвечают «не нашёл» (решение владельца, П2) — LLM не зовём.
+def _qualifier_absent(prompt, rows):
+    """Модель по правилу 3 промпта суда условия: «по ОМС» клиника не оказывает — пустой выбор `qualifier_absent`."""
+
+    return {"match": [], "search_terms": ["прием терапевта"], "reason": "qualifier_absent"}
+
+
+def test_unsatisfiable_qualifier_is_judged_and_unpriced(monkeypatch):
+    # П2 (решение владельца): «по ОМС» — честное «не нашёл», не цена. С 20.10 (деплой 11, `price_candidates_by_meaning`;
+    # выключатель снят 22.10) словарь прайса — не вердикт: условие судит LLM (правило 3, промпт суда условия), один круг.
     calls: list = []
-    _fake_llm(monkeypatch, _pick("Прием (осмотр, консультация) врача-терапевта"), calls)
+    _fake_llm(monkeypatch, _qualifier_absent, calls)
     rows = RETAIL + [{"serviceName": f"Услуга {i}", "cost": 100} for i in range(200)]
-    assert run(PS.select_price_rows("Сколько стоит приём терапевта по ОМС", rows)) is None
-    assert calls == []
+    sel = run(PS.select_price_rows("Сколько стоит приём терапевта по ОМС", rows))
+    assert sel is not None and not sel.rows and (sel.status, sel.reason) == ("none_fit", "qualifier_absent")
+    assert len(calls) == 1  # «условия нет» — окончательно, без второго круга
 
 
 def test_base_variant_wins_over_unrequested_cito(monkeypatch):
@@ -518,12 +526,13 @@ def test_service_named_in_other_words_reaches_llm_on_full_catalog(monkeypatch):
     assert len(calls) == 2
 
 
-def test_qualifier_next_to_known_service_still_stays_with_rules_on_full_catalog(monkeypatch):
-    # Анти-регрессия П2: «по ОМС» рядом с узнанной услугой — LLM не зовём.
+def test_qualifier_next_to_known_service_is_unpriced_on_full_catalog(monkeypatch):
+    # Анти-регрессия П2 на полном каталоге: «по ОМС» рядом с узнанной услугой — суд условия, цены нет.
     calls: list = []
-    _fake_llm(monkeypatch, _pick("Прием (осмотр, консультация) врача-терапевта"), calls)
-    assert run(PS.select_price_rows("Сколько стоит приём терапевта по ОМС", RETAIL + _FULL_SIZE)) is None
-    assert calls == []
+    _fake_llm(monkeypatch, _qualifier_absent, calls)
+    sel = run(PS.select_price_rows("Сколько стоит приём терапевта по ОМС", RETAIL + _FULL_SIZE))
+    assert sel is not None and not sel.rows and sel.reason == "qualifier_absent"
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize(

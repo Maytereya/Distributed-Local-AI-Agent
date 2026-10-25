@@ -1,0 +1,2081 @@
+{
+ "basket_commas-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "list_split",
+     "tu_acted": [
+      "catalog_inject_skipped",
+      "list_is_price",
+      "quick_fill_single_skipped",
+      "planner_list_named",
+      "planner_list_to_cart"
+     ],
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "basket_commas-llm": {
+  "turns": [
+   {
+    "text": "По запросу «Ферритин, Глюкоза, холестерин» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\n\nПо услуге «холестерин»:\n1. Холестерол — 225 руб.\n2. Холестерол - ЛПНП — 220 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "Ферритин, Глюкоза, холестерин",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_acted": [
+      "catalog_inject_skipped",
+      "list_is_price",
+      "quick_fill_single_skipped",
+      "planner_list_named",
+      "planner_list_to_cart"
+     ],
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_basket",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [
+   {
+    "phrase": "холестерин",
+    "source": "basket",
+    "found": true
+   }
+  ],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "basket_run_on-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "list_segment",
+     "tu_acted": [
+      "catalog_inject_skipped",
+      "list_is_price",
+      "quick_fill_single_skipped",
+      "planner_list_named",
+      "planner_list_to_cart"
+     ],
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "basket_run_on-llm": {
+  "turns": [
+   {
+    "text": "По запросу «Общий анализ крови (Le, Er, Hb, СОЭ), ОАМ, Ферритин, Глюкоза» нашёл варианты стоимости:\n\nПо услуге «Общий анализ крови (Le, Er, Hb, СОЭ)»:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n\nПо услуге «ОАМ»:\n1. Общий анализ мочи — 280 руб.\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "Общий анализ крови (Le, Er, Hb, СОЭ), ОАМ, Ферритин, Глюкоза",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_acted": [
+      "catalog_inject_skipped",
+      "list_is_price",
+      "quick_fill_single_skipped",
+      "planner_list_named",
+      "planner_list_to_cart"
+     ],
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_basket",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [
+   {
+    "phrase": "ОАК",
+    "source": "basket",
+    "found": true
+   },
+   {
+    "phrase": "ОАМ",
+    "source": "basket",
+    "found": true
+   }
+  ],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "condition_cut-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "condition_cut-llm": {
+  "turns": [
+   {
+    "text": "Не нашёл актуальную стоимость. Уточните название услуги или ФИО врача, и я проверю снова.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "strong",
+     "tu_acted": [
+      "grounder_from_understanding",
+      "planner_price_by_understanding"
+     ],
+     "price_policy": "not_found",
+     "price_guard": "llm"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "none_fit"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "condition_cut_judge_down-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "condition_cut_judge_down-llm": {
+  "turns": [
+   {
+    "text": "По запросу «ферритин» нашёл похожую услугу: «Ферритин». Если нужна она, напишите её название — подскажу цену.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "ферритин",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "strong",
+     "tu_acted": [
+      "grounder_from_understanding",
+      "planner_price_by_understanding"
+     ],
+     "price_policy": "budget_names",
+     "price_guard": "llm_bypass"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "unavailable"
+     ],
+     [
+      "price_service_qualifier_general",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans"
+  ]
+ },
+ "condition_cut_synonym-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "condition_cut_synonym-llm": {
+  "turns": [
+   {
+    "text": "Не нашёл актуальную стоимость. Уточните название услуги или ФИО врача, и я проверю снова.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "strong",
+     "price_policy": "not_found",
+     "price_guard": "llm"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "none_fit"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "journal_grouped-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "journal_grouped-llm": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "rules",
+     "price_guard": "llm"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "none_fit"
+     ]
+    ]
+   }
+  ],
+  "journal": [
+   {
+    "phrase": "анализ на флороценоз",
+    "source": "price",
+    "found": false
+   }
+  ],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "journal_miss-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "journal_miss-llm": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "rules",
+     "price_guard": "llm"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "none_fit"
+     ]
+    ]
+   }
+  ],
+  "journal": [
+   {
+    "phrase": "спирометрия",
+    "source": "price",
+    "found": false
+   }
+  ],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "journal_wrapped-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "journal_wrapped-llm": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "rules",
+     "price_guard": "llm"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "none_fit"
+     ]
+    ]
+   }
+  ],
+  "journal": [
+   {
+    "phrase": "флороценоз",
+    "source": "price",
+    "found": false
+   }
+  ],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "one_analyses_on-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "one_analyses_on-llm": {
+  "turns": [
+   {
+    "text": "По услуге «Ферритин» нашёл следующее:\n1) Розничная цена: Ферритин — 530 руб.\n2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.\nЕсли нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "strong",
+     "tu_acted": [
+      "grounder_from_understanding"
+     ],
+     "price_policy": "picked",
+     "price_guard": "llm"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "one_analysis_on-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "one_analysis_on-llm": {
+  "turns": [
+   {
+    "text": "Ферритин — 530 руб.\nИсточник цены: розничный прайс Самары.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "strong",
+     "tu_acted": [
+      "grounder_from_understanding",
+      "planner_price_by_understanding"
+     ],
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans"
+  ]
+ },
+ "one_analysis_on_grouped-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "one_analysis_on_grouped-llm": {
+  "turns": [
+   {
+    "text": "По услуге «Ферритин» нашёл следующее:\n1) Розничная цена: Ферритин — 530 руб.\n2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.\nЕсли нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "picked",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_general",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "one_consult-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "one_consult-llm": {
+  "turns": [
+   {
+    "text": "По запросу «прием уролога» нашёл варианты стоимости:\n\nВ поликлинике по адресу: г. Самара, пр. Ленина, 5:\n1. Прием (осмотр, консультация) врача-уролога — 3 100 руб.\n2. Прием (осмотр, консультация) врача-уролога по синдрому хронической тазовой боли (СХТБ) — 4 500 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": "Прием (осмотр, консультация) врача-уролога",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "picked",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_general",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "one_consult_generic-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "one_consult_generic-llm": {
+  "turns": [
+   {
+    "text": "Не нашёл актуальную стоимость для «прием врача». Уточните название услуги или ФИО врача, и я проверю снова.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "прием врача",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "not_found",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_general",
+      "none_fit"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "one_generic_word-down": {
+  "turns": [
+   {
+    "text": "По этому вопросу у меня нет данных — точно ответит оператор.\n\nЕсли хотите уточнить, переведу на оператора. Перевести?",
+    "handoff": false,
+    "label": "TEST_ASSIST",
+    "plan": [
+     "TEST_ASSIST",
+     "test_assist"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": {
+     "label": "OTHER",
+     "missing": [
+      "operator_offer_confirm"
+     ]
+    },
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ],
+     [
+      "test_assist_answer",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "one_generic_word-llm": {
+  "turns": [
+   {
+    "text": "По этому вопросу у меня нет данных — точно ответит оператор.\n\nЕсли хотите уточнить, переведу на оператора. Перевести?",
+    "handoff": false,
+    "label": "TEST_ASSIST",
+    "plan": [
+     "TEST_ASSIST",
+     "test_assist"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": {
+     "label": "OTHER",
+     "missing": [
+      "operator_offer_confirm"
+     ]
+    },
+    "telemetry": {
+     "tu_parse_status": "none_fit",
+     "tu_rule": "parse_none_fit"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "none_fit"
+     ],
+     [
+      "test_assist_answer",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans"
+  ]
+ },
+ "one_strong-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "one_strong-llm": {
+  "turns": [
+   {
+    "text": "Ферритин — 530 руб.\nИсточник цены: розничный прайс Самары.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "strong",
+     "tu_acted": [
+      "catalog_from_understanding",
+      "grounder_from_understanding",
+      "planner_price_by_understanding"
+     ],
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans"
+  ]
+ },
+ "one_strong_parse_select_down-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "one_strong_parse_select_down-llm": {
+  "turns": [
+   {
+    "text": "По запросу «ферритин» нашёл похожую услугу: «Ферритин». Если нужна она, напишите её название — подскажу цену.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "ферритин",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "strong",
+     "tu_acted": [
+      "grounder_from_understanding"
+     ],
+     "price_policy": "budget_names",
+     "price_guard": "llm_bypass"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "unavailable"
+     ],
+     [
+      "price_service_qualifier_general",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans"
+  ]
+ },
+ "one_two_letter-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "one_two_letter-llm": {
+  "turns": [
+   {
+    "text": "ЛГ (LH) Лютеинизирующий гормон — 410 руб.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "ЛГ (LH) Лютеинизирующий гормон",
+    "service_name": "ЛГ (LH) Лютеинизирующий гормон",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "picked",
+     "price_guard": "llm"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "one_two_letter_lower-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "one_two_letter_lower-llm": {
+  "turns": [
+   {
+    "text": "ЛГ (LH) Лютеинизирующий гормон — 410 руб.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "ЛГ (LH) Лютеинизирующий гормон",
+    "service_name": "ЛГ (LH) Лютеинизирующий гормон",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "picked",
+     "price_guard": "llm"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_qualifier_general",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "parse_invalid-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "parse_invalid-llm": {
+  "turns": [
+   {
+    "text": "По услуге «Ферритин» нашёл следующее:\n1) Розничная цена: Ферритин — 530 руб.\n2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.\nЕсли нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "invalid",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "picked",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "invalid"
+     ],
+     [
+      "price_service_general",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "parse_none_fit_findable-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "parse_none_fit_findable-llm": {
+  "turns": [
+   {
+    "text": "По услуге «Ферритин» нашёл следующее:\n1) Розничная цена: Ферритин — 530 руб.\n2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.\nЕсли нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "none_fit",
+     "tu_rule": "parse_none_fit",
+     "price_policy": "picked",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "none_fit"
+     ],
+     [
+      "price_service_general",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "prepare_named-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, к какому анализу или процедуре нужна подготовка — напишите название.",
+    "handoff": false,
+    "label": "PREPARE",
+    "plan": [
+     "PREPARE",
+     "test_prepare"
+    ],
+    "service_name_effective": null,
+    "service_name": "Анализу",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "prepare_named-llm": {
+  "turns": [
+   {
+    "text": "Такой памятки по подготовке у меня нет — подскажет оператор. Перевести на оператора?",
+    "handoff": false,
+    "label": "PREPARE",
+    "plan": [
+     "PREPARE",
+     "test_prepare"
+    ],
+    "service_name_effective": null,
+    "service_name": "Анализу",
+    "pending": {
+     "label": "OTHER",
+     "missing": [
+      "operator_offer_confirm"
+     ]
+    },
+    "telemetry": {
+     "tu_parse_status": "picked"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans"
+  ]
+ },
+ "prepare_pick_by_number-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "list_split",
+     "tu_acted": [
+      "catalog_inject_skipped",
+      "quick_fill_single_skipped",
+      "planner_list_named",
+      "planner_list_to_cart"
+     ],
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   },
+   {
+    "text": "К какому анализу или исследованию нужна подготовка? Напишите название.",
+    "handoff": false,
+    "label": "PREPARE",
+    "plan": [
+     "PREPARE"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": {
+     "label": "PREPARE",
+     "missing": [
+      "_any_of:test_name,service_name"
+     ]
+    },
+    "telemetry": {
+     "tu_parse_status": "unavailable"
+    },
+    "llm": [
+     [
+      "pending_reply",
+      "unavailable"
+     ],
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   },
+   {
+    "text": "К какому анализу или исследованию нужна подготовка? Напишите название.\n\nПохоже, мне не удаётся помочь с этим в чате. Перевести на оператора?",
+    "handoff": false,
+    "label": "PREPARE",
+    "plan": [
+     "PREPARE"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": {
+     "label": "OTHER",
+     "missing": [
+      "operator_offer_confirm"
+     ]
+    },
+    "telemetry": {
+     "tu_parse_status": "strong_whole"
+    },
+    "llm": [
+     [
+      "pending_free_reply",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "prepare_pick_by_number-llm": {
+  "turns": [
+   {
+    "text": "По запросу «Ферритин, Глюкоза» нашёл варианты стоимости:\n\nПо услуге «Ферритин»:\n1. Ферритин — 530 руб.\n\nПо услуге «Глюкоза»:\n1. Глюкоза — 190 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "price_info"
+    ],
+    "service_name_effective": "Ферритин, Глюкоза",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_acted": [
+      "catalog_inject_skipped",
+      "quick_fill_single_skipped",
+      "planner_list_named",
+      "planner_list_to_cart"
+     ],
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ]
+    ]
+   },
+   {
+    "text": "К какому анализу или исследованию нужна подготовка? Напишите название.",
+    "handoff": false,
+    "label": "PREPARE",
+    "plan": [
+     "PREPARE"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": {
+     "label": "PREPARE",
+     "missing": [
+      "_any_of:test_name,service_name"
+     ]
+    },
+    "telemetry": {
+     "tu_parse_status": "none_fit"
+    },
+    "llm": [
+     [
+      "pending_reply",
+      "unavailable"
+     ],
+     [
+      "turn_spans",
+      "none_fit"
+     ]
+    ]
+   },
+   {
+    "text": "К какому анализу или исследованию нужна подготовка? Напишите название.\n\nПохоже, мне не удаётся помочь с этим в чате. Перевести на оператора?",
+    "handoff": false,
+    "label": "PREPARE",
+    "plan": [
+     "PREPARE"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": {
+     "label": "OTHER",
+     "missing": [
+      "operator_offer_confirm"
+     ]
+    },
+    "telemetry": {
+     "tu_parse_status": "single"
+    },
+    "llm": [
+     [
+      "pending_free_reply",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "spans"
+  ]
+ },
+ "readiness_named-down": {
+  "turns": [
+   {
+    "text": "Точные сроки готовности результата зависят от конкретного анализа — их подскажет оператор. Соединяю с оператором.",
+    "handoff": true,
+    "label": "OTHER",
+    "plan": [
+     "OTHER"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "strong",
+     "tu_acted": [
+      "readiness_to_operator"
+     ]
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "readiness_named-llm": {
+  "turns": [
+   {
+    "text": "Срок готовности «Ферритин» — 1–2 дня.",
+    "handoff": false,
+    "label": "OTHER",
+    "plan": [
+     "OTHER"
+    ],
+    "service_name_effective": null,
+    "service_name": "Ферритин",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "strong",
+     "tu_acted": [
+      "readiness_from_mis"
+     ]
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans"
+  ]
+ },
+ "synonym_fork-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "strong",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "synonym_fork-llm": {
+  "turns": [
+   {
+    "text": "По запросу «оак» нашёл варианты стоимости:\n1. Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2. Общий анализ крови (полный)(СОЭ,Le,Er,Hb,L-формула, тромбоциты, эритроциты) — 550 руб.\n3. Cito Общий анализ крови (Le, Er,Hb) — 580 руб.\nЕсли нужно, помогу выбрать подходящий вариант или подскажу подготовку.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "strong",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans"
+  ]
+ },
+ "weak_abbr-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "weak_abbr-llm": {
+  "turns": [
+   {
+    "text": "По услуге «Общий анализ крови (Le, Er, Hb, СОЭ)» нашёл следующее:\n1) Розничная цена: Общий анализ крови (Le, Er, Hb, СОЭ) — 390 руб.\n2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.\nЕсли нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.\n\n_Цены актуальны для г. Самара._",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+    "service_name": "Общий анализ крови (Le, Er, Hb, СОЭ)",
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "picked",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_general",
+      "picked"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ },
+ "weak_select_down-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "weak_select_down-llm": {
+  "turns": [
+   {
+    "text": "Чтобы не ошибиться в ответе, подключаю оператора для уточнения деталей.",
+    "handoff": true,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "кардиограмма",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "handoff",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_general",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans"
+  ]
+ },
+ "weak_select_picks-down": {
+  "turns": [
+   {
+    "text": "Уточните, пожалуйста, название услуги или анализа — подскажу стоимость.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": null,
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "unavailable",
+     "tu_rule": "not_list",
+     "tu_mention_src": "rules",
+     "tu_mention_strength": "weak",
+     "price_policy": "parse_failed_clarify",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "unavailable"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": []
+ },
+ "weak_select_picks-llm": {
+  "turns": [
+   {
+    "text": "Не нашёл актуальную стоимость для «кардиограмма». Уточните название услуги или ФИО врача, и я проверю снова.",
+    "handoff": false,
+    "label": "PRICE",
+    "plan": [
+     "PRICE",
+     "service_bundle_info"
+    ],
+    "service_name_effective": "кардиограмма",
+    "service_name": null,
+    "pending": null,
+    "telemetry": {
+     "tu_parse_status": "picked",
+     "tu_rule": "parse_picked",
+     "tu_mention_src": "parse",
+     "tu_mention_strength": "weak",
+     "price_policy": "not_found",
+     "price_guard": "none"
+    },
+    "llm": [
+     [
+      "turn_spans",
+      "picked"
+     ],
+     [
+      "price_service_general",
+      "none_fit"
+     ]
+    ]
+   }
+  ],
+  "journal": [],
+  "asked": [
+   "spans",
+   "rows"
+  ]
+ }
+}

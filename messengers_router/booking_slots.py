@@ -17,7 +17,7 @@
   честного отказа в состоянии оставалась фраза пациента (BUG-2026-10-18-BOOKING-SERVICE-BY-LETTERS, попутно (3);
   инвариант 2 BUG-2026-06-02-02). Под on: услугу, которую отвергла LLM этого хода, резолвер по буквам не воскрешает;
   снятие без суда LLM (правила; ответ на уточнение цены в P3) — как было.
-- `[MESSENGER_ROUTER] prepare_vs_booking_llm` — правила нашли в реплике и запись, и подготовку: «как подготовиться к узи,
+- Подготовка или запись (выключатель `prepare_vs_booking_llm` снят 22.10 — неделя `on` на проде с деплоя 11) — правила нашли в реплике и запись, и подготовку: «как подготовиться к узи,
   нужно ли не есть» — «узи» + «нужно» правило записи на диагностику (`policies.detect_appointment_intent`) считает записью,
   и вопрос о подготовке получал отказ записи «эту услугу я не нашёл…» (BUG-2026-10-18-PREPARE-UZI-AS-BOOKING). Кандидаты —
   обе темы правил; главную выбирает модуль выбора (`choose`, задача `prepare_or_booking`): «подготовка» — ход идёт в
@@ -111,12 +111,6 @@ async def test_assist_facet(user_text: str, *, full: bool = False) -> str:
     if choice.status is Status.NONE_FIT:
         return "none"
     return choice.ids[0] if choice.status is Status.PICKED and choice.ids else ""
-
-
-def prepare_vs_booking_enabled() -> bool:
-    """`prepare_vs_booking_llm = on`."""
-
-    return _on("MR_PREPARE_VS_BOOKING_LLM")
 
 
 async def prepare_wins_over_booking(user_text: str) -> bool:

@@ -3029,25 +3029,23 @@ def _is_price_show_all_request(query_text: str) -> bool:
 
 def _price_show_all_requested(query_text: str, user_text: str) -> bool:
     """
-    Просит ли реплика показать все варианты: правила (`_is_price_show_all_request`) или — под `pending_reply = on`
-    и типе `show_all` в `pending_reply_types` — решение LLM этого хода на подсказку «напишите: "все"» (D2.3). Иначе —
-    правила, как было. Одно место, где путь цены и классификатор читают «показать все».
+    Просит ли реплика показать все варианты: решение одной функции ответа на подсказку «напишите: "все"», а без него —
+    правила (`_is_price_show_all_request`). Одно место, где путь цены и классификатор читают «показать все».
 
     :param query_text: текст реплики для правил (после синонимов каталога)
-    :param user_text: реплика пациента как есть — привязка решения LLM к ходу
+    :param user_text: реплика пациента как есть (прежняя привязка решения LLM к ходу; функция хранит его сама)
     :return: True, если показать полный список
     """
 
     # Импорт в функции: сервисный слой не тянет модуль хода при своём импорте.
-    from .. import pending_answer, pending_reply
+    from .. import pending_answer
 
     answered = pending_answer.current(pending_answer.Question.SHOW_ALL)
     if answered is not None and answered.decided and not answered.rest:
         # Одна функция ответа на висящий вопрос решила, что ответил пациент на подсказку «напишите: "все"»; хвост
         # реплики («да, покажите все варианты» → «покажите все варианты») читает обычный путь — правила ниже.
         return pending_answer.shows_all()
-    rules = "yes" if _is_price_show_all_request(query_text) else "other"
-    return pending_reply.reply_kind_for(pending_reply.QuestionType.SHOW_ALL, rules, user_text) == "yes"
+    return _is_price_show_all_request(query_text)
 
 
 def _build_price_kind_ambiguous_prompt(
@@ -3501,12 +3499,9 @@ def _t7_drop(key: str) -> bool:
 
 
 def _weak_phrase_judge(fragment: str, retail_rows: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], str] | None:
-    """`basket_weak_phrase_judge = on`: сильное название внутри слабой фразы и слова вокруг — для суда LLM корзины."""
+    """Сильное название внутри слабой фразы и слова вокруг — для суда LLM корзины (выключатель `basket_weak_phrase_judge`
+    снят 22.10 — неделя `on` на проде с деплоя 11)."""
 
-    from ..runtime_config import config as cfg
-
-    if str(getattr(cfg, "MR_BASKET_WEAK_PHRASE_JUDGE", "off") or "").strip().lower() != "on":
-        return None
     from ._turn_phrases import strong_inside  # разбор хода импортирует этот модуль — не на уровне модуля
 
     return strong_inside(fragment, retail_rows)

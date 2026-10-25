@@ -179,7 +179,9 @@ def test_without_windows_nothing_changes(reply, mini_prod_world, monkeypatch):  
     [off], _rows = _run([reply], mini_prod_world, monkeypatch, guard="off", llm=_RuleFive(phrases), windows=False, session=_sid("woff", reply))
     [on], [row] = _run([reply], mini_prod_world, monkeypatch, guard="llm", llm=_RuleFive(phrases), windows=False, session=_sid("won", reply))
     assert on["text"] == off["text"] and _FERRITIN not in on["text"], on["text"]
-    assert "strong_phrase_guard" not in row
+    # Слабую позицию с сильным названием внутри судит LLM корзины (суд слабой фразы — всегда с 22.10, выключатель
+    # `basket_weak_phrase_judge` снят), поэтому строка хода может нести вердикт суда; ответ — тот же, цены по ОМС нет.
+    _ = row
 
 
 @pytest.mark.parametrize("follow_up", _FOLLOW_UPS)

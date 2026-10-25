@@ -1,4 +1,4 @@
-"""Кандидаты строки цены по смыслу (`price_candidates_by_meaning`, п. 1 плана 19.10; ход (в), L-31).
+"""Кандидаты строки цены по смыслу (`price_candidates_by_meaning` — снят 22.10, путь off и его тесты удалены; п. 1 плана 19.10; ход (в), L-31).
 
 Диагностика 19.10 (test-срез, 8 настоящих промахов «Уточните название» на названную услугу): решали буквы, LLM до выбора
 не доходила —
@@ -89,8 +89,6 @@ def test_capitalised_short_abbreviation_reaches_the_llm(question, monkeypatch):
     on = _Oracle(Choice(Status.NONE_FIT, reason="other_service"))
     _run(monkeypatch, "on", question, on)
     assert on.calls, "под on сокращение — слова об услуге, LLM зовётся"
-    off = _Oracle()
-    assert _run(monkeypatch, "off", question, off) is None and not off.calls  # как было: «услуга не названа»
 
 
 def test_lowercase_prepositions_are_not_abbreviations():
@@ -109,8 +107,6 @@ def _dictionary_guard_fires(monkeypatch) -> None:
 def test_word_unknown_to_the_price_is_judged_by_the_llm_not_the_dictionary(monkeypatch):
     _dictionary_guard_fires(monkeypatch)
     q = "Введение ВМС — цена"
-    off = _Oracle()
-    assert _run(monkeypatch, "off", q, off) is None and not off.calls  # как было: ответ правил до LLM
     on = _Oracle(
         Choice(Status.NONE_FIT, reason="other_service", terms=("Введение внутриматочного контрацептива",)),
         Choice(Status.PICKED, ids=("0",)),
@@ -147,14 +143,6 @@ def test_round_two_terms_are_searched_by_rare_words(monkeypatch):
     )
     _run(monkeypatch, "on", "Сколько стоит ЭХО КГ с цветовым доплером", on)
     assert len(on.calls) == 2 and _offered(on, 1, "Эхокардиография"), on.calls
-
-
-def test_off_does_not_search_rare_words(monkeypatch):
-    def boom(*_a, **_k):
-        raise AssertionError("под off поиск по редким словам не зовётся")
-
-    monkeypatch.setattr(sel, "_rare_rows", boom)
-    _run(monkeypatch, "off", "Сколько стоит анализ крови на концентрацию карбамазепина", _Oracle())
 
 
 # --- Карточка dev 20.10 (BUG-2026-10-19-PRICE-NAMED-SERVICE-NOT-SHOWN-TO-LLM, доработка): два класса под on ---
@@ -212,7 +200,6 @@ def test_bypassed_guard_is_judged_with_the_price_changing_variant_prompt(monkeyp
     ("mode", "judge", "task"),
     [
         ("on", True, "price_service_qualifier"),  # суд условия от разбора хода — тоже строгий промпт
-        ("off", True, "price_service"),  # под off прод не меняется
         ("on", False, "price_service"),  # без суда условия — прежний промпт для всех вопросов о цене
     ],
 )
@@ -345,15 +332,6 @@ def test_procedure_abbreviation_offers_the_base_row_first_not_the_fetal_variant(
     picked = _run(monkeypatch, "on", question, on)
     assert on.calls and on.calls[0][0].startswith("Эхокардиография —"), on.calls
     assert picked is not None and [r["serviceId"] for r in picked.rows] == [1270]
-
-
-def test_off_does_not_offer_synonym_rows(monkeypatch):
-    def boom(*_a, **_k):
-        raise AssertionError("под off синонимы внутри реплики не ищутся")
-
-    _mis_synonyms(monkeypatch, {"эхокг": ("Эхокардиография",)})
-    monkeypatch.setattr(sel, "_synonym_rows", boom)
-    _run(monkeypatch, "off", "Сколько стоит ЭхоКГ узи сердца?", _Oracle())
 
 
 def test_synonyms_within_a_phrase_are_all_services_longest_window_first(monkeypatch):

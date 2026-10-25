@@ -3,13 +3,13 @@
 Семейный список цены с подсказкой ждёт ответа «все» (полный список по контексту семейства). Ответ раньше разбирали
 только правила (`_is_price_show_all_request`), а ответ городом — отдельное правило «только город»; решение владельца —
 разбирать через `pending_reply`, где подсказка бота — висящий вопрос. Этот шаг — только наблюдатель: поле пишется, ответы
-не меняются; тень `pending_reply` получает вопрос и тип.
+не меняются; ответ на подсказку решает одна функция ответа на висящий вопрос (`pending_answer`).
 
 Инварианты (через обработчик эндпоинта, мини-прод):
 - ответ с подсказкой → `_expects` = {kind: pick, type: show_all, options: ["все"]}; вопрос — текст ответа с подсказкой;
 - «все» → полный список, как было; подсказки нет — поле снято;
 - ответ без подсказки (одна цена) — поля `show_all` нет;
-- под тенью `pending_reply` ход после подсказки несёт `tu_pending_type = show_all`; ответы — как под off.
+- ход после подсказки несёт `tu_pending_type = show_all`: вопрос и пункт «все» видит модель.
 """
 
 from __future__ import annotations
@@ -46,10 +46,8 @@ def test_a_single_price_answer_asks_nothing(mini_prod_world, monkeypatch):  # no
     assert (states[0].get("_expects") or {}).get("type") != "show_all"
 
 
-def test_the_shadow_sees_the_show_all_question(mini_prod_world, monkeypatch):  # noqa: F811
-    off, off_states, *_ = _play([_FAMILY, "покажите все варианты пожалуйста"], "show-all-shadow", "off", mini_prod_world, monkeypatch)
+def test_the_one_function_sees_the_show_all_question(mini_prod_world, monkeypatch):  # noqa: F811
     oracle = _PendingOracle({"покажите все варианты пожалуйста": _answer(picks=(1,))})
-    shadow, shadow_states, rows, oracle = _play([_FAMILY, "покажите все варианты пожалуйста"], "show-all-shadow", "shadow", mini_prod_world, monkeypatch, oracle=oracle)
-    assert shadow == off and shadow_states == off_states
+    _records, _states, rows, oracle = _play([_FAMILY, "покажите все варианты пожалуйста"], "show-all-one", "on", mini_prod_world, monkeypatch, oracle=oracle)
     assert rows[1]["tu_pending_type"] == "show_all" and rows[1]["tu_pending_outcome"] == "pick"
     assert oracle.calls and oracle.calls[0]["prompt"].rstrip().endswith("1. все")

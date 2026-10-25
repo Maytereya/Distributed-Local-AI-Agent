@@ -154,9 +154,13 @@ def test_old_off_key_in_the_config_changes_nothing(mini_prod_world, monkeypatch)
     assert "rows" in client.asked and row["p2_llm_judge"] == "not_found"
 
 
-@pytest.mark.parametrize("llm", ["not_it", "pick", "down"])
+@pytest.mark.parametrize("llm", ["down"])
 def test_without_the_judge_the_entity_prices(llm, mini_prod_world, monkeypatch):  # noqa: F811
-    """Эталон сравнений — ход без судьи (было до 15.10): цена УЗИ по сущности, выбор строки LLM не спрашивается."""
+    """Эталон сравнений — ход без судьи (было до 15.10): цена УЗИ по сущности, выбор строки LLM не спрашивается.
+
+    Только при недоступной LLM: с 20.10 (деплой 11; выключатель `price_candidates_by_meaning` снят 22.10) словарный гард П2
+    не останавливает вопрос до LLM — «по омс» судит выбор строки и без судьи сущности, так что «без судьи» с работающей LLM
+    на проде не бывает."""
 
     [turn], [row], client = _run([_P2], mini_prod_world, monkeypatch, judge=False, llm=llm, session=f"p2llm-off-{llm}")
     assert _USG in turn["text"], turn["text"]

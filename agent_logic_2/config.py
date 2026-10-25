@@ -200,8 +200,6 @@ class MessengerRouterConfig:
     choose_readiness: str
     parse_fail_variants: int
     variant_b_wordforms: str
-    price_option_mis_notes: str
-    price_candidates_by_meaning: str
     mis_honest_degradation: str
     topic_override_llm: str
     topic_shadow_llm: str
@@ -217,6 +215,7 @@ class MessengerRouterConfig:
     prepare_general_memo_llm: str
     turn_spans_llm: str
     prepare_by_parse: str
+    price_by_parse: str
     topic_by_llm: str
     button_pass_rules: str
     turn_understanding_one: str
@@ -227,13 +226,9 @@ class MessengerRouterConfig:
     doctors_by_service_data: str
     doctors_by_parse: str
     slot_suppress_llm: str
-    prepare_vs_booking_llm: str
     t7_drop_k1: str
     t7_drop_k3: str
-    basket_scored_candidates: str
     price_judge_conditions: str
-    pending_reply: str
-    pending_reply_types: str
     pending_buttons: str
     # D2.4 — предел переспросов (поле ожидания `_expects`, `messengers_router/expects.py`)
     reask_limit: str
@@ -242,7 +237,6 @@ class MessengerRouterConfig:
     parse_fragment_windows: str
     parse_complete_windows: str
     strong_phrase_guard: str
-    basket_weak_phrase_judge: str
     parse_agree_telemetry: str
     debug_final_input: bool
     url: str
@@ -502,21 +496,14 @@ settings = Settings(
         # journal_phrase снят и больше не читается (в config.ini прода безвреден; STEP-2026-10-17-ONE-PATH-JOURNAL-PHRASE).
         # Контекст сессии = показанное (L-14, шаг 3) — единственный путь с 17.10: ключ [MESSENGER_ROUTER] context_shown
         # снят и больше не читается (в config.ini прода безвреден; STEP-2026-10-17-ONE-PATH-CONTEXT-SHOWN).
-        # Ответ на висящий вопрос бота силами LLM (D2.3, `messengers_router/pending_reply.py`): off — как было;
-        # shadow — тень: решение LLM вне бюджета хода и предохранителя, только телеметрия (tu_pending_*), ответ
-        # прежний; on — пока как shadow (исполнение — следующий шаг, после живого замера и встречного свипа).
-        # [MESSENGER_ROUTER] pending_reply
-        pending_reply=_get_enum("MESSENGER_ROUTER", "pending_reply", default="off", allowed={"off", "shadow", "on"}),
-        # Под pending_reply = on — типы вопросов (`_expects.type`, через запятую), на которые решение LLM исполняется в
-        # ходе (асимметрия безопасности по типу, решение владельца 15.10); прочие типы — тень. Пусто — как shadow.
-        # Сейчас исполняется только operator_offer: LLM может поднять ответ до «да» (перевод), не снять.
-        # [MESSENGER_ROUTER] pending_reply_types
-        pending_reply_types=_get_str("MESSENGER_ROUTER", "pending_reply_types", default=""),
+        # Ответ на висящий вопрос бота — одна функция `pending_answer` — единственный путь с 24.10: ключи [MESSENGER_ROUTER]
+        # pending_reply и pending_reply_types сняты и больше не читаются (в config.ini прода безвредны;
+        # STEP-2026-10-22-SWITCH-REMOVAL).
         # Вопросы-слоты кнопок и остатки класса 5 — через одну функцию ответа на висящий вопрос (`pending_answer`; решение
         # владельца 19.10, п. 5): вопрос-слот («К какой процедуре нужна подготовка?», «Для какой цели подобрать анализы?»,
         # реквизиты результата) ставит `_expects` вида «свободный ответ», ответ решает функция; уточняющий вопрос на «Какой
         # филиал вам удобен?» получает ответ и тот же вопрос снова; «обе» на составную цену — цены обеих; второе «нет» на
-        # «Похоже, вы имели в виду …?». Действует только под pending_reply = on; off — как было.
+        # «Похоже, вы имели в виду …?». off — как было.
         # [MESSENGER_ROUTER] pending_buttons
         pending_buttons=_get_enum("MESSENGER_ROUTER", "pending_buttons", default="off", allowed={"off", "on"}),
         # Предел переспросов (D2.4; пункт 5 принципов, инвариант 3bacf58): off — как было (обработчик висящего
@@ -554,11 +541,6 @@ settings = Settings(
         # — «не нашёл», сбой LLM — ход как под turn_parse = off; off — как было с 15.10 (откат). Решение владельца 16.10 —
         # фикс следующим деплоем, поэтому по умолчанию llm. [MESSENGER_ROUTER] strong_phrase_guard
         strong_phrase_guard=_get_enum("MESSENGER_ROUTER", "strong_phrase_guard", default="llm", allowed={"off", "llm"}),
-        # Слабая фраза корзины, которую словарный гард П2 счёл уточнением («ферритин первый раз»: «первый», «раз» — не
-        # слова прайса), а внутри неё есть сильное по данным МИС название («ферритин»): on — позиция идёт на суд LLM
-        # корзины, как сильная фраза с условием (`judge`, правило 5 промпта: разговор — цена, условие — нет); сбой LLM —
-        # «Не распознал», как было; off — как было (честное «Не распознал» без LLM). [MESSENGER_ROUTER] basket_weak_phrase_judge
-        basket_weak_phrase_judge=_get_enum("MESSENGER_ROUTER", "basket_weak_phrase_judge", default="off", allowed={"off", "on"}),
         # Телеметрия согласия разрезов `tu_parse_agree` под turn_parse = on (T7, шаг 4): on — как было (правила понимания
         # хода считаются на каждом ценовом ходе параллельно выбору фраз LLM, O3b, — согласию нужен их разрез); off —
         # согласия под on нет, правила считаются лениво: только когда разбор не годится для действия (`acting_for` —
@@ -572,16 +554,6 @@ settings = Settings(
         # BUG-2026-10-17-VARIANT-B-COMMON-WORD). По умолчанию on с 17.10: офлайн-замер dev — 0 хуже (решение владельца 16.10:
         # включать только при 0 хуже). [MESSENGER_ROUTER] variant_b_wordforms
         variant_b_wordforms=_get_enum("MESSENGER_ROUTER", "variant_b_wordforms", default="on", allowed={"off", "on"}),
-        # Позиция прайса в выборе строки LLM — с данными МИС, которые пациент назвал: материал (`biomatNames`) и синоним
-        # клиники (`serviceSynonyms`), только совпавшие со словами реплики, не длиннее 120 знаков (облако 19.10,
-        # BUG-2026-10-19-PRICE-ROUND-TWO-POOL, g0542: «мазок … с задней стенки глотки» — у «Посев на микрофлору» материала в
-        # названии нет). off — как было (текст позиции «название — цена» байт в байт). [MESSENGER_ROUTER] price_option_mis_notes
-        price_option_mis_notes=_get_enum("MESSENGER_ROUTER", "price_option_mis_notes", default="off", allowed={"off", "on"}),
-        # Кандидаты строки цены по смыслу, а не по буквам (п. 1 плана 19.10, ход (в), L-31): словарный гард П2 не
-        # останавливает вопрос до LLM (условие судит правило 3 промпта, как у фразы разбора), строки по редким словам
-        # реплики и терминов второго круга — первыми в пуле, короткие сокращения («ЛГ», «аТ ТГ») доходят до LLM.
-        # off — как было. [MESSENGER_ROUTER] price_candidates_by_meaning
-        price_candidates_by_meaning=_get_enum("MESSENGER_ROUTER", "price_candidates_by_meaning", default="off", allowed={"off", "on"}),
         # Ход (д), видимая деградация (решения владельца 08.10 и 18.10): сбой МИС → честный перевод на оператора вместо
         # правдоподобной неправды («расписание не найдено», «акций нет», адреса без фильтра врачей); устаревший срез —
         # приписка «по данным на ДД.ММ» или оператор. off — как было (правило 13.10: видимое поведение под
@@ -650,6 +622,11 @@ settings = Settings(
         # поиска по словам; сбой разбора — «уточните». Разбор строится и на ходах подготовки. off — как было.
         # [MESSENGER_ROUTER] prepare_by_parse
         prepare_by_parse=_get_enum("MESSENGER_ROUTER", "prepare_by_parse", default="off", allowed={"off", "on"}),
+        # Цена читает фразу разбора хода (DESIGN-2026-10-25-PRICE-STAGE2, этап 2 «без стоп-слов»): сильное совпадение — фраза
+        # как есть, без вырезателя; фраза поиска, подписи и журнала синонимов — из разбора, а не срез реплики по спискам;
+        # «названа ли услуга» — решение понимания хода; без LLM — только дословное название или код, иначе «уточните» /
+        # оффер, без списка правил с ценами. off — как было. [MESSENGER_ROUTER] price_by_parse
+        price_by_parse=_get_enum("MESSENGER_ROUTER", "price_by_parse", default="off", allowed={"off", "on"}),
         # Ход (б), этап 4, вариант Б (решения владельца 20.10 (б) 1, 5): ветки правил `legacy_v2` через запятую
         # (`rule_test_assist`), у которых тему решает LLM-классификатор, а правило — кандидат (слияние: LLM решает метку,
         # правило дарит сущности; безопасность — как была; сбой LLM — решает правило). Пусто — как было.
@@ -696,10 +673,6 @@ settings = Settings(
         # прайса по буквам в состоянии не воскрешает (инвариант 2 BUG-2026-06-02-02); off — как было.
         # [MESSENGER_ROUTER] slot_suppress_llm
         slot_suppress_llm=_get_enum("MESSENGER_ROUTER", "slot_suppress_llm", default="off", allowed={"off", "on"}),
-        # Правила нашли в реплике и запись, и подготовку («как подготовиться к узи, нужно ли не есть»: «узи» + «нужно» —
-        # эвристика записи на диагностику) — главную тему выбирает LLM (`choose`, задача `prepare_or_booking`); сбой и
-        # «запись» — как было (запись, подготовка вторым намерением); off — как было. [MESSENGER_ROUTER] prepare_vs_booking_llm
-        prepare_vs_booking_llm=_get_enum("MESSENGER_ROUTER", "prepare_vs_booking_llm", default="off", allowed={"off", "on"}),
         # T7 K1 (облако 19.10, задача B): защиты `price_list_services` — «одно название прайса покрывает реплику» и
         # «сплошной список — только распознанный целиком». Под разбором хода (`turn_parse`) они решают только на пути
         # правил (`turn_parse.acting_for` = None). on — защит нет: «список или нет» на этом пути решает то же, что
@@ -709,10 +682,6 @@ settings = Settings(
         # разбором его заменяет флаг `unsatisfiable` у позиций разбора (`phrase_price_items`). on — гард снят; off —
         # как было. [MESSENGER_ROUTER] t7_drop_k3
         t7_drop_k3=_get_enum("MESSENGER_ROUTER", "t7_drop_k3", default="off", allowed={"off", "on"}),
-        # Кандидаты позиции корзины для выбора LLM — только строки, совпавшие со словами позиции по оценке ранжирования;
-        # запасной поиск подстрокой (обрывок «с» → любые строки с буквой «с», «Выезд на дом» в корзине,
-        # BUG-2026-10-17-BASKET-HOME-VISIT-ROW) кандидатов не даёт. off — как было. [MESSENGER_ROUTER] basket_scored_candidates
-        basket_scored_candidates=_get_enum("MESSENGER_ROUTER", "basket_scored_candidates", default="off", allowed={"off", "on"}),
         # Выбор строки прайса и суд условия П2 — промпт с уточнённым правилом 3: вопрос о том, как сдать, подготовиться,
         # записаться, сколько готовится, «условия сбора» — не условие услуги (BUG-2026-10-17-P2-JUDGE-COLLECTION-CONDITIONS);
         # промпт `choose_price_service_conditions`. off — прежний промпт `choose_price_service`. [MESSENGER_ROUTER] price_judge_conditions
@@ -852,8 +821,6 @@ MR_CHOOSE_SYMPTOM = settings.messenger_router.choose_symptom
 MR_CHOOSE_READINESS = settings.messenger_router.choose_readiness
 MR_PARSE_FAIL_VARIANTS = settings.messenger_router.parse_fail_variants
 MR_VARIANT_B_WORDFORMS = settings.messenger_router.variant_b_wordforms
-MR_PRICE_OPTION_MIS_NOTES = settings.messenger_router.price_option_mis_notes
-MR_PRICE_CANDIDATES_BY_MEANING = settings.messenger_router.price_candidates_by_meaning
 MR_MIS_HONEST_DEGRADATION = settings.messenger_router.mis_honest_degradation
 MR_TOPIC_OVERRIDE_LLM = settings.messenger_router.topic_override_llm
 MR_TOPIC_SHADOW_LLM = settings.messenger_router.topic_shadow_llm
@@ -869,6 +836,7 @@ MR_SYNONYM_WORDFORMS = settings.messenger_router.synonym_wordforms
 MR_PREPARE_GENERAL_MEMO_LLM = settings.messenger_router.prepare_general_memo_llm
 MR_TURN_SPANS_LLM = settings.messenger_router.turn_spans_llm
 MR_PREPARE_BY_PARSE = settings.messenger_router.prepare_by_parse
+MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_BUTTON_PASS_RULES = settings.messenger_router.button_pass_rules
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
@@ -879,20 +847,15 @@ MR_BOOKING_SPECIALTY_LLM = settings.messenger_router.booking_specialty_llm
 MR_DOCTORS_BY_SERVICE_DATA = settings.messenger_router.doctors_by_service_data
 MR_DOCTORS_BY_PARSE = settings.messenger_router.doctors_by_parse
 MR_SLOT_SUPPRESS_LLM = settings.messenger_router.slot_suppress_llm
-MR_PREPARE_VS_BOOKING_LLM = settings.messenger_router.prepare_vs_booking_llm
 MR_T7_DROP_K1 = settings.messenger_router.t7_drop_k1
 MR_T7_DROP_K3 = settings.messenger_router.t7_drop_k3
-MR_BASKET_SCORED_CANDIDATES = settings.messenger_router.basket_scored_candidates
 MR_PRICE_JUDGE_CONDITIONS = settings.messenger_router.price_judge_conditions
-MR_PENDING_REPLY = settings.messenger_router.pending_reply
-MR_PENDING_REPLY_TYPES = settings.messenger_router.pending_reply_types
 MR_PENDING_BUTTONS = settings.messenger_router.pending_buttons
 MR_REASK_LIMIT = settings.messenger_router.reask_limit
 MR_LLM_PRIMARY_RULES_FALLBACK = settings.messenger_router.llm_primary_rules_fallback
 MR_PARSE_FRAGMENT_WINDOWS = settings.messenger_router.parse_fragment_windows
 MR_PARSE_COMPLETE_WINDOWS = settings.messenger_router.parse_complete_windows
 MR_STRONG_PHRASE_GUARD = settings.messenger_router.strong_phrase_guard
-MR_BASKET_WEAK_PHRASE_JUDGE = settings.messenger_router.basket_weak_phrase_judge
 MR_PARSE_AGREE_TELEMETRY = settings.messenger_router.parse_agree_telemetry
 DEBUG_FINAL_INPUT = settings.messenger_router.debug_final_input
 MESSENGER_API_URL = settings.messenger_router.url

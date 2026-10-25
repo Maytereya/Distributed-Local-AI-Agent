@@ -34,6 +34,7 @@ from typing import Any
 from .. import turn_parse
 from ..choice import Option, Status, Task, choose
 from ..runtime_config import config as _cfg
+from . import _price_by_parse
 from ._common import _normalise_catalog_text
 from ._price_select_llm import _mention_phrase, _record_synonym_suggestion
 from ._prices_helpers import (
@@ -107,6 +108,8 @@ def readiness_from_catalog(question: str, *, rows: list[dict[str, Any]] | None =
     parse = turn_understanding.parse_for(question)
     if parse is not None:
         return _deadline_of_parsed(parse)
+    if _price_by_parse.enabled() and _price_by_parse.failed(question):
+        return None  # цена, этап 2, Ш4: разбор не решён (сбой LLM) — срок по словам реплики не ищем, честный перевод
     core, _ = strip_readiness_phrasing(question)
     if not core.strip():
         return None
@@ -150,7 +153,7 @@ async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | Non
         if phrase is None:
             return None
         weak_phrase = "" if phrase.rows else phrase.text
-        if weak_phrase:  # фраза журнала — упоминание хода (L-14, шаг 2)
+        if weak_phrase and not _price_by_parse.enabled():  # фраза журнала — упоминание хода (L-14, шаг 2); под on — фраза разбора (Ш5)
             mentioned = _mention_phrase(question)
             weak_phrase = weak_phrase if mentioned is None else mentioned
         first = list(dict.fromkeys(str(row.get("serviceName") or "").strip() for row in phrase.rows))
@@ -159,6 +162,8 @@ async def readiness_by_choice(question: str, *, rows: list[dict[str, Any]] | Non
         # Синоним МИС на несколько услуг — выбор только из его услуг; слабая фраза — кандидаты правил по ней.
         core = _apply_service_synonyms(phrase.text)
     else:
+        if _price_by_parse.enabled() and _price_by_parse.failed(question):
+            return None  # цена, этап 2, Ш4: без решения LLM разметки услугу не угадываем
         core, _ = strip_readiness_phrasing(question)
         if not core.strip() or _core_is_list(core, catalog):
             return None
