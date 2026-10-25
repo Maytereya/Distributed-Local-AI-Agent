@@ -24,6 +24,7 @@ from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import SessionState
 from messengers_router.planner import _unbookable_target_kind
 from messengers_router.response_builder import _doctor_not_bookable_via_bot_offer
+from tests.names_modes import after_classifier, llm_answers, set_names
 
 
 # --- Классификация обронённой цели ----------------------------------------
@@ -40,8 +41,22 @@ from messengers_router.response_builder import _doctor_not_bookable_via_bot_offe
     ],
     ids=["fio_full", "fio_female", "doctor_flag", "service_named", "no_target", "empty"],
 )
-def test_unbookable_target_kind_classification(text, flags, expected):
+def test_unbookable_target_kind_classification(monkeypatch, text, flags, expected):
+    set_names(monkeypatch, "off")  # форма и списки; путь сущностей LLM — `test_patient_fio_is_never_a_missing_doctor_names_on`
     assert _unbookable_target_kind(text, flags) == expected
+
+
+@pytest.mark.parametrize("text", ["Иванов Иван Иванович", "Петрова Мария Сергеевна"], ids=["fio_full", "fio_female"])
+def test_patient_fio_is_never_a_missing_doctor_names_on(monkeypatch, text):
+    """`names_* = on`: вид «ФИО пациента» — по LLM хода; без LLM — «нераспознанное». Инвариант тот же: на своё имя пациент
+    получает вопрос о цели (тексты двух видов одинаковы), а не «такого врача нет»."""
+
+    set_names(monkeypatch, "on")
+    assert _unbookable_target_kind(text, set()) == "unknown"
+    llm_answers(monkeypatch, label="APPOINTMENT", entities={"patient_name": text})
+    assert after_classifier(text, {}, lambda: _unbookable_target_kind(text, set())) == "patient_name"
+    lead = {kind: _doctor_not_bookable_via_bot_offer(SessionState(session_id="u"), MemoryStore(), kind=kind).text for kind in ("patient_name", "unknown")}
+    assert lead["patient_name"] == lead["unknown"] and "врача нет" not in lead["unknown"]
 
 
 def test_doctor_flag_wins_over_fio_shape():

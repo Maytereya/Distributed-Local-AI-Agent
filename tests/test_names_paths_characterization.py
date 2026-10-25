@@ -19,9 +19,17 @@ from messengers_router.memory import MemoryStore
 from messengers_router.mess_types import RouteDecision, SessionState
 from messengers_router.services import Services
 from messengers_router.services import _doctors_helpers
+from tests.names_modes import set_names
 
 _EXCERPT = Path(__file__).resolve().parent / "fixtures" / "doctors_excerpt" / "doctors_20261008.jsonl"
 _RESULT_FIELDS = ["surname", "year", "filial", "number"]
+
+
+@pytest.fixture(autouse=True)
+def _names_off(monkeypatch):
+    """Характеристика пути off — явно, при любом конфиге прогона."""
+
+    set_names(monkeypatch, "off")
 
 
 def _excerpt_doctors() -> list[dict]:

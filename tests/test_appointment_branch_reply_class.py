@@ -30,6 +30,7 @@ from ollama import GenerateResponse
 
 from messengers_router import llm_runtime
 from messengers_router.policies import appointment_text_topic_switch_confirm
+from tests.names_modes import MODES, set_names
 
 _BRANCH_QUESTION = "Какой филиал вам удобен?"
 _UNKNOWN_TARGET = "Пока не понял, к какому врачу или на какую услугу вас записать"
@@ -215,11 +216,14 @@ def test_named_branch_moves_to_the_time_wish_and_the_operator(opening):
         assert option in third["text"] and "«в субботу утром»" in third["text"], (option, third["text"])
 
 
+@pytest.mark.parametrize("names", MODES)
 @pytest.mark.parametrize("answer", SLOT_ANSWERS)
 @pytest.mark.parametrize("opening", SERVICE_OPENINGS)
-def test_slot_answer_keeps_the_service_target(opening, answer):
+def test_slot_answer_keeps_the_service_target(monkeypatch, opening, answer, names):
     # Паритет со специальностью: ответ без новой цели — запись продолжается с той же услугой, не «не понял, куда».
-    first, second = _dialog((opening, answer), f"branch-slot-{opening}-{answer}")
+    # names = on: ФИО без LLM имени не даёт, но и врача по нему не ищут — запись держится (STEP-2026-10-24-NAMES).
+    set_names(monkeypatch, names)
+    first, second = _dialog((opening, answer), f"branch-slot-{opening}-{answer}-{names}")
     assert _UNKNOWN_TARGET not in second["text"], second["text"]
     assert not second["handoff"], second["text"]
     assert second["entities"].get("service_name") == first["entities"].get("service_name"), second["entities"]
