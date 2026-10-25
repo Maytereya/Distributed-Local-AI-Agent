@@ -118,6 +118,13 @@ def judges_answer(label: str, pending: Any) -> bool:
     return (answer_topic_on() or hint_on()) and label in _JUDGED_UNDER_SWITCH and bool(question_button(pending))
 
 
+def judged_by_llm(pending: Any) -> bool:
+    """Ответ на вопрос кнопки судит LLM, а не сужение правилами (`filled`): правила дозаполнения находят значение слота и в
+    реплике о другом — 31 из 32 чужих вопросов, которым карточка 25.10 навязала тему кнопки, решило такое сужение."""
+
+    return (answer_topic_on() or hint_on()) and bool(question_button(pending))
+
+
 def answer_topic(pending: Any) -> str:
     """Тема ответа на вопрос кнопки, если её знает кнопка: выключатель, вопрос задала кнопка, одна функция решила «это
     ответ» (правилами или LLM). Иначе пусто — тему решает NLU, как было."""
@@ -134,9 +141,9 @@ def answer_topic(pending: Any) -> str:
 
 
 def refund_topic_judge(answered: pending_answer.Answer | None, pending: Any, spent_before: int) -> None:
-    """Решение одной функции об ответе на вопрос кнопки цены — шаг NLU вместо классификатора: лимит решений хода не тратит,
-    пути цены остаются её решения, как без кнопки (`button_answer_topic`). `spent_before` — решений хода до функции: ответ из
-    кэша решения не тратил, и возвращать нечего."""
+    """Решение одной функции об ответе на вопрос кнопки — шаг NLU вместо классификатора: лимит решений хода не тратит, пути
+    темы остаются её решения, как без кнопки (`button_answer_topic`, `button_topic_hint`). `spent_before` — решений хода до
+    функции: ответ из кэша решения не тратил, и возвращать нечего."""
 
     from . import llm_runtime
 
@@ -146,7 +153,7 @@ def refund_topic_judge(answered: pending_answer.Answer | None, pending: Any, spe
         or answered.source is not pending_answer.Source.LLM
         or answered.outcome is not pending_answer.Outcome.ANSWER  # прочие исходы ход не закрывают — их уже вернула функция (Q5)
         or answered.type != Question.SLOT_VALUE.value
-        or not judges_answer(str((pending or {}).get("label") or ""), pending)
+        or not judged_by_llm(pending)
     ):
         return
     if llm_runtime.refund_turn_decision():

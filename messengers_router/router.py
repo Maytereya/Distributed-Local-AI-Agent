@@ -4120,7 +4120,13 @@ async def patient_routing_stream(
     if not button_id:
         expected = pending_answer.expected_from(state.last_entities)
         if expected is not None:
-            filled = expected[0] == expects.Question.SLOT_VALUE.value and _slot_filled_by_rules(user_text, state, services, memory)
+            # Вопрос кнопки меню под `button_answer_topic` / `button_topic_hint` судит LLM всегда: значение слота, найденное
+            # правилами в реплике о другом («где сдать ОАК?» на «Цену анализа»), — не ответ на вопрос кнопки.
+            filled = (
+                expected[0] == expects.Question.SLOT_VALUE.value
+                and not button_flow.judged_by_llm(memory.get_pending(state))
+                and _slot_filled_by_rules(user_text, state, services, memory)
+            )
             spent = llm_runtime.turn_decisions_spent()
             answered = await pending_answer.answer(*expected, user_text, filled=filled)
             button_flow.refund_topic_judge(answered, memory.get_pending(state), spent)

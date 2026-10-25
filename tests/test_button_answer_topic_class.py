@@ -192,3 +192,27 @@ def test_cached_judge_refunds_nothing(mini_prod_world, monkeypatch):  # noqa: F8
     judged = [c for c in on[3]["telemetry"].get("choose") or [] if c.get("task") == "pending_free_reply"]
     assert judged and judged[0].get("cached") is True, on[3]["telemetry"]
     assert "tu_button_refund" not in on[3]["telemetry"], on[3]["telemetry"]
+
+
+def test_value_found_by_rules_in_foreign_reply_is_judged_by_llm(mini_prod_world, monkeypatch):  # noqa: F811
+    """Карточка 25.10 (набор «чужая тема»): правила дозаполнения находят значение слота и в реплике о другом («где сдать общий
+    анализ крови?», «ЭКГ как подготовиться?» на «Цену анализа»), и сужение без LLM навязывало тему кнопки 31 чужому вопросу из 32. Под on вопрос кнопки
+    судит LLM — она сказала «другая тема», и тему решает NLU. Встречный: без этого (сужение правил) — тема кнопки навязана."""
+
+    turns = [_press("menu.price.test"), "ЭКГ как подготовиться?"]  # правила находят «ЭКГ», ветка подготовки — в `topic_by_llm`
+    on = _dialog(mini_prod_world, monkeypatch, turns, switch="on", rules="rule_prepare", free="new_topic")
+    tel = on[1]["telemetry"]
+    assert tel.get("tu_pending_src") == "llm" and tel.get("tu_pending_outcome") == "new_topic", tel
+    assert tel.get("nlu_topic_by_llm") != "button_answer", tel
+    with monkeypatch.context() as patch:
+        patch.setattr(button_flow, "judged_by_llm", lambda pending: False)
+        rules = _dialog(mini_prod_world, monkeypatch, turns, switch="on", rules="rule_prepare", free="new_topic")[1]["telemetry"]
+    assert rules.get("tu_pending_src") == "fast" and rules.get("nlu_topic_by_llm") == "button_answer", rules
+
+
+def test_slot_judge_does_not_spend_turn_decision(mini_prod_world, monkeypatch):  # noqa: F811
+    """Решение судьи темы у вопроса-слота кнопки — тоже шаг NLU вместо классификатора: лимит решений хода не тратит."""
+
+    on = _dialog(mini_prod_world, monkeypatch, [_press("menu.tests.prepare"), "колоноскопия"], switch="on")
+    tel = on[1]["telemetry"]
+    assert tel.get("tu_pending_src") == "llm" and tel.get("tu_button_refund") == 1, tel
