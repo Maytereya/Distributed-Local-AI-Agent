@@ -34,6 +34,7 @@ from .policies import (
     quick_fill_core_entities,
     service_name_conflicts_with_doctor,
 )
+from .doctor_name_port import cached_doctor_fios
 from .russian_nlu import normalize_ru
 from .services import Services, resolve_price_service_name_from_catalog
 
@@ -148,10 +149,11 @@ def _looks_like_patient_fio(text: str) -> bool:
     if len(tokens) < 2:
         return False
     if turn_names.on("names_patient_fio"):
-        # Маршрут, не значение графы: форма ФИО — «похоже на ФИО», пока LLM этого хода не сказала, что имени здесь нет. Без
-        # LLM (до NLU в prelock записи, сбой) реплика не уходит ни в фамилию врача, ни в имя (R-01, решение (а) 22.10);
-        # ФИО как значение — `_is_patient_name_value`.
-        return turn_names.person_named(s, switch="names_patient_fio") != "no"
+        # Маршрут, не значение графы: решает LLM этого хода; без неё (до NLU в prelock записи, ход решили правила, сбой) —
+        # словарь имён справочника МИС: одна фамилия + имена и отчества (R-01, решение (а) 22.10). ФИО как значение графы —
+        # `_is_patient_name_value`.
+        verdict = turn_names.person_named(s, switch="names_patient_fio")
+        return verdict == "yes" or (verdict == "unknown" and turn_names.looks_like_person(s, cached_doctor_fios()))
     normalized = [normalize_ru(t) for t in tokens]
     if any(t in _PATIENT_FIO_STOPWORDS for t in normalized):
         return False
@@ -316,6 +318,10 @@ async def _resolve_appointment_doctor_name(text: str, services: Services) -> str
     raw = str(text or "").strip()
     if not raw:
         return None
+    if turn_names.on("names_patient_fio") and turn_names.name_shaped(raw):
+        # Реплика из 2–3 слов-имени до NLU: врач — только точное ФИО справочника, нечёткое сравнение нашло бы однофамильца
+        # пациента с редким именем (R-01, консилиум 25.10).
+        return await services.doctor_surname_for_bare_name(raw)
 
     probes: list[str] = [raw]
     if raw.lower().startswith("к "):
@@ -434,6 +440,8 @@ async def prelock_active_appointment_turn(
     if branch_answer is not None and branch_answer[0] != "new_topic":
         return {}  # ответ в домене вопроса (пункт, «да», уточняющий вопрос о филиалах) — запись идёт дальше
     if _is_appointment_waiting_patient_name(pending) and _looks_like_patient_fio(text):
+        if turn_names.on("names_patient_fio") and not _is_patient_name_value(text):
+            return None  # шаг ФИО: до NLU имени не знаем — его назовёт LLM-классификатор хода; без LLM имени нет, переспрос
         return {}
     if _is_appointment_waiting_branch_or_city(pending) and (_is_appointment_branch_reply(text) or _is_city_only_reply(text)):
         return {}

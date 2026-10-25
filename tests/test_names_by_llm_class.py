@@ -411,9 +411,12 @@ def test_fio_route_without_llm_is_neither_name_nor_doctor(monkeypatch) -> None:
     from messengers_router import flow_policy
 
     _switch(monkeypatch, "names_patient_fio")
-    assert flow_policy._looks_like_patient_fio("Сидорова Анна")
-    assert not flow_policy._is_patient_name_value("Сидорова Анна")
-    assert not flow_policy._looks_like_appointment_doctor_reply("Сидорова Анна")
+    patient = _namesake_patient()  # фамилия + имя из словаря имён справочника
+    assert flow_policy._looks_like_patient_fio(patient)
+    assert not flow_policy._is_patient_name_value(patient)
+    assert not flow_policy._looks_like_appointment_doctor_reply(patient)
+    for not_a_person in ("запишите на гастроскопию", "Общий анализ крови", "Хочу перенести"):
+        assert not flow_policy._looks_like_patient_fio(not_a_person), not_a_person  # без LLM — не по одной форме
 
 
 def test_fio_route_after_llm_said_no_name(monkeypatch) -> None:

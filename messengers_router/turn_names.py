@@ -171,11 +171,9 @@ def _name_shaped(text: str) -> tuple[str, ...]:
     return words if 2 <= len(words) <= 3 else ()
 
 
-def name_reply_is_doctor(text: str, fios: Iterable[str]) -> bool | None:
-    """Реплика — чьё-то ФИО (2–3 слова: одно — фамилия, остальные — имена и отчества, встреченные в справочнике врачей МИС, или
-    инициалы): ``True`` — это ФИО одного врача (фамилия — в любой падежной форме, `surname_variants`); ``False`` — ФИО, но не
-    врача: может быть ФИО пациента («Сидорова Анна» при враче «Сидоров» — R-01, консилиум 25.10); ``None`` — реплика не ФИО
-    («Вахобов подходит», «Хочу к Бородиной») — решает прежний путь. Словарь имён — данные МИС, не список в коде."""
+def _fio_split(text: str, fios: Iterable[str]) -> tuple[str, tuple[str, ...], list[tuple[str, ...]]] | None:
+    """Реплика — чьё-то ФИО по словарю имён справочника МИС: 2–3 слова, одно — фамилия, прочие — имена и отчества врачей
+    справочника или инициалы. ``(фамилия, прочие слова, ФИО врачей словами)``; иначе ``None``."""
 
     words = _name_shaped(text)
     if not words:
@@ -185,14 +183,37 @@ def name_reply_is_doctor(text: str, fios: Iterable[str]) -> bool | None:
     others = [i for i, w in enumerate(words) if not (len(w) == 1 or w in given)]
     if len(others) != 1:
         return None
-    surname_word = words[others[0]]
-    rest = words[: others[0]] + words[others[0] + 1 :]
+    return words[others[0]], words[: others[0]] + words[others[0] + 1 :], fio_parts
+
+
+def looks_like_person(text: str, fios: Iterable[str]) -> bool:
+    """Реплика — чьё-то ФИО по словарю имён справочника (`_fio_split`): маршрут без LLM, не значение графы."""
+
+    return _fio_split(text, fios) is not None
+
+
+def name_reply_is_doctor(text: str, fios: Iterable[str]) -> bool | None:
+    """Реплика-ФИО (`_fio_split`) — врач справочника, только если это ФИО одного врача: фамилия — в любой падежной форме
+    (`surname_variants`), имя и отчество — словом или инициалом. ``False`` — ФИО, но не врача: может быть ФИО пациента
+    («Сидорова Анна» при враче «Сидоров» — R-01, консилиум 25.10); ``None`` — реплика не ФИО («Вахобов подходит», «Хочу к
+    Бородиной») — решает прежний путь. Словарь имён — данные МИС, не список в коде."""
+
+    split = _fio_split(text, fios)
+    if split is None:
+        return None
+    surname_word, rest, fio_parts = split
     for parts in fio_parts:
         if any(_words(v) == (parts[0],) for v in surname_variants(surname_word)) and all(
             w in parts[1:] or (len(w) == 1 and any(p.startswith(w) for p in parts[1:])) for w in rest
         ):
             return True
     return False
+
+
+def name_shaped(text: str) -> bool:
+    """Реплика по форме — 2–3 слова-имени (буквы, дефис, инициал): механика, без словаря."""
+
+    return bool(_name_shaped(text))
 
 
 def _surname_index(doctors: list[dict[str, Any]]) -> dict[str, str]:
