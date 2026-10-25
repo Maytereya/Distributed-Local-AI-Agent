@@ -22,6 +22,13 @@
 
 Выключателя нет с 16.10 (решение владельца, §5 итога облака): разбор хода — единственный режим, и `choose_basket = off`
 решал только, звать ли LLM для строк слабых позиций; LLM не зовётся лишь в режиме `strict` и при сбое.
+
+Калькулятор (ТЗ 17.08 §6, базовый объём; ответы заказчика 16.09) — `basket_calculation`, под `basket_calc = on`: итог по
+позициям и взятие биоматериала по данным. Базовый вариант позиции — без cito/капиллярной/на дому…, если пациент их не просил
+(`_prefer_base_variants` в `_positions`); вариантов после этого больше одного — развилка, и итог — «от … до …», а не одна
+выдуманная сумма (решение владельца 22.07: дезинформация ценой хуже уточнения). Складывать ли позиции вообще, решает LLM
+(`basket_total`): перечень разных услуг — итог; одна услуга разными словами, варианты на выбор, «есть ли / что это / одно ли это»
+(g0868, g0700) — перечень того, что есть в прайсе, без «Итого»; сбой LLM — тоже без «Итого».
 """
 
 from __future__ import annotations
@@ -30,11 +37,12 @@ import logging
 from typing import Any, Sequence
 
 from .. import turn_telemetry
-from ..choice import Option, Task, choose
+from ..choice import Option, Status, Task, choose
 from ..runtime_config import config as _cfg
+from ._biomaterial import service_mis_names
 from ._common import _normalise_catalog_text
 from ._price_select_llm import _prefer_base_variants, _record_synonym_suggestion, _row_cost, _row_key, _row_name
-from ._prices_helpers import _annotate_price_rows_with_care_context, _score_price_rows, phrase_price_items
+from ._prices_helpers import _annotate_price_rows_with_care_context, _query_nonbase_price_flags, _score_price_rows, phrase_price_items
 from ._strong_match import strong_rows
 
 logger = logging.getLogger(__name__)
@@ -437,3 +445,206 @@ async def basket_from_phrases(
     unpriced = _settle_weak_as_variants([entry for entry in weak if entry[0] not in judged], chosen) if failed else {}
     positions, not_found = _positions(items, chosen, unpriced)
     return _without_repeats(positions), [*leftover, *not_found]
+
+
+# --- Калькулятор: итог и взятие биоматериала (ТЗ 17.08 §6, ответы заказчика 16.09, пп. 2–3; `basket_calc = on`) ---
+
+# Строки прайса взятия — как их назвал заказчик 16.09 («Взятие крови из вены», а не «Взятие крови без последующего
+# исследования»); цена — из прайса по названию, не константой. Порядок — порядок перечня под итогом.
+_VEIN = "Взятие крови из вены"
+_FINGER = "Взятие крови из пальца"
+_SWAB = "Взятие мазка (соскоба)"
+_TAKES = (_VEIN, _FINGER, _SWAB)
+# Слова, которыми клиника пишет материал в МИС (`biomatNames`) и капиллярность в названии строки прайса. Это правило
+# заказчика (16.09) над данными клиники, а не разбор слов пациента: «капиллярная» в названии → палец; мазок / соскоб →
+# мазок; иначе кровь → вена.
+_CAPILLARY_ROW = "капиллярная"
+_BLOOD = "кровь"
+_VEIN_WORD = "вены"
+_CAPILLARY = frozenset({_CAPILLARY_ROW, "пальца"})
+_SWAB_WORDS = frozenset({"соскоб", "мазок"})
+
+
+def calc_enabled() -> bool:
+    """`[MESSENGER_ROUTER] basket_calc = on`: под позициями корзины — итог и взятие биоматериала; мусор — off (как было)."""
+
+    return str(getattr(_cfg, "MR_BASKET_CALC", "off") or "").strip().lower() == "on"
+
+
+def _words(text: str) -> set[str]:
+    return set(_normalise_catalog_text(text).split())
+
+
+def _material_takes(material: str) -> frozenset[str]:
+    """Какое взятие нужно для одного материала МИС («кровь из вены», «соскоб из уретры»); пусто — материал пациент приносит
+    сам или берёт врач (моча, кал, биоптат)."""
+
+    words = _words(material)
+    takes: set[str] = set()
+    if words & _SWAB_WORDS:
+        takes.add(_SWAB)
+    if _BLOOD in words:
+        if words & _CAPILLARY:
+            takes.add(_FINGER)
+        if _VEIN_WORD in words or not words & _CAPILLARY:
+            takes.add(_VEIN)
+    return frozenset(takes)
+
+
+def _row_takes(row: dict[str, Any]) -> tuple[frozenset[str] | None, bool]:
+    """Взятие для строки прайса по данным: (взятие или None — из данных не выводится, лабораторная ли услуга).
+
+    `biomatNames` перечисляет ДОПУСТИМЫЕ материалы, а не выбранный (у ОАК — «кровь из вены, кровь капиллярная»): взятие
+    выводится, если всем допустимым материалам, которые берут в клинике, нужно одно и то же; материалы без взятия (моча,
+    сперма, пунктат) его не отменяют — перечень под итогом предупреждает о доплате, когда материал берут («Chlamydia» —
+    соскоб или моча → «Взятие мазка (соскоба)»). Кровь из вены или из пальца у строки без «капиллярная» в названии — из
+    вены (капиллярный вариант — своя строка прайса, ответ заказчика 16.09). Взятие разное («кровь из вены, соскоб с шейки
+    матки») — из данных не выводится. Услуги нет в справочнике МИС — о взятии данных нет (не лабораторная по данным).
+    """
+
+    name = _row_name(row)
+    if _CAPILLARY_ROW in _words(name):
+        return frozenset({_FINGER}), True
+    materials, _synonyms = service_mis_names(name)
+    if not materials:
+        return None, False
+    options = {takes for takes in map(_material_takes, materials) if takes}
+    if len(options) <= 1:
+        return (options.pop() if options else frozenset()), True
+    if options == {frozenset({_VEIN}), frozenset({_FINGER})}:
+        return frozenset({_VEIN}), True
+    return None, True
+
+
+def _amount(row: dict[str, Any]) -> int:
+    """Сумма строки, как её печатает рендер (`renderer._extract_price_amount`: округление, не отбрасывание копеек)."""
+
+    for key in ("servicePrice", "price", "service_price", "amount", "cost"):
+        value = row.get(key)
+        if isinstance(value, (int, float)):
+            return int(round(float(value)))
+    return _row_cost(row)
+
+
+def basket_calculation(positions: Sequence[dict[str, Any]], retail_rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    """Итог и взятие биоматериала по позициям корзины (`basket_calc = on`); off или позиций с ценой нет — None.
+
+    Итог — сумма по позициям с ценой: у позиции одна цена (после базового варианта — `_positions`) — она; несколько
+    вариантов с разными ценами — развилка: итог «от суммы меньших до суммы больших», позиция — в `forks`. Взятие — строки
+    прайса `_TAKES`, которые нужны позициям по данным (`_row_takes`); у развилки — только если всем её вариантам нужно одно и
+    то же. Взятие, которое пациент назвал сам, — его позиция, в перечень не входит. `take_unknown` — у лабораторной позиции
+    взятие из данных не выводится или строки взятия нет в прайсе: тогда под итогом остаётся одна оговорка заказчика.
+
+    :param positions: позиции корзины (`service_name`, `prices`)
+    :param retail_rows: строки прайса региона — цены взятия
+    :return: `positions` (групп с ценой, как их печатает рендер), `total_min`, `total_max`, `forks` (заголовки развилок), `takes`
+        (`serviceName`, `cost`), `take_unknown`, `total_unknown` (у показанного варианта цена 0 — не указана: итога нет)
+    """
+
+    if not calc_enabled():
+        return None
+    # Позиции — как их печатает рендер: группа на заголовок «По услуге «…»» (две позиции с одним названием — одна группа,
+    # `renderer._group_family_variants_by_care_context`): итог считается по тому, что пациент видит.
+    groups: dict[str, list[dict[str, Any]]] = {}
+    capillary_asked: set[str] = set()
+    for position in positions:
+        rows = [row for row in position.get("prices") or [] if isinstance(row, dict)]
+        if rows:
+            label = str(position.get("service_name") or "")
+            groups.setdefault(label, []).extend(rows)
+            if "capillary" in _query_nonbase_price_flags(str(position.get("fragment") or "")):
+                capillary_asked.add(label)
+    if not groups:
+        return None
+    total_min = total_max = 0
+    forks: list[str] = []
+    needed: set[str] = set()
+    unknown = no_price = False
+    for label, rows in groups.items():
+        amounts = [_amount(row) for row in rows]
+        # 0 в прайсе — цена не указана, а не цена: с ней сумма неизвестна, итог не печатается (g0345: «от 2 800» из «аборт — 0 руб.»).
+        no_price = no_price or min(amounts) <= 0
+        total_min += min(amounts)
+        total_max += max(amounts)
+        if min(amounts) != max(amounts):
+            forks.append(label)
+        verdicts = [_row_takes(row) for row in rows]
+        takes = {take for take, _lab in verdicts}
+        if len(takes) == 1 and None not in takes and not (label in capillary_asked and _FINGER not in next(iter(takes))):
+            needed |= next(iter(takes))
+        elif any(lab for _take, lab in verdicts):
+            # Взятие у вариантов разное — или пациент просил «из пальца», а показанные строки не капиллярные (их выбрала LLM;
+            # «из вены» спорило бы с его словами, g0363): из данных не выводится — только оговорка.
+            unknown = True
+    named = {_normalise_catalog_text(_row_name(row)) for rows in groups.values() for row in rows}
+    by_name = {_normalise_catalog_text(_row_name(row)): row for row in reversed(retail_rows) if isinstance(row, dict)}
+    shown: list[dict[str, Any]] = []
+    for take in _TAKES:
+        key = _normalise_catalog_text(take)
+        if take not in needed or key in named:
+            continue
+        row = by_name.get(key)
+        if row is None:
+            unknown = True  # строки взятия нет в прайсе — перечень без неё, оговорка остаётся
+            continue
+        shown.append({"serviceName": _row_name(row), "cost": _amount(row)})
+    turn_telemetry.note(
+        basket_total="single" if len(groups) < 2 else ("no_price" if no_price else ("range" if forks else "exact")),
+        basket_takes=len(shown),
+        **({"basket_take_unknown": True} if unknown else {}),
+    )
+    return {
+        "positions": len(groups),
+        "total_min": total_min,
+        "total_max": total_max,
+        "forks": forks,
+        "takes": shown,
+        "take_unknown": unknown,
+        "total_unknown": no_price,
+    }
+
+
+# Складывать ли позиции — решает LLM по реплике (принцип 2): перечень разных услуг — итог; одна услуга разными словами,
+# варианты на выбор, «есть ли / что это / одно ли это» — не сумма (g0868 «Чек ап… — есть ли комплексные анализы?», g0700
+# «Витамин Д это витамин д 25 он и просто витамин д?»). Пациент назвал позиции сам — по буквам этого не различить.
+BASKET_TOTAL_TASK = Task(name="basket_total", max_picks=1, num_predict=32, timeout_s=5.0, queue_timeout_ms=1500)
+_SUM = "sum"
+_ALTERNATIVES = "alternatives"
+_BASKET_TOTAL_OPTIONS = (
+    Option(id=_SUM, text="Узнать стоимость анализов или услуг, которые пациент перечислил, — общая сумма за все"),
+    Option(
+        id=_ALTERNATIVES,
+        text="Узнать не цену списка, а есть ли такое в клинике, что это, одно ли это, чем отличаются, какой выбрать",
+    ),
+)
+
+
+async def basket_calc(
+    question: str, positions: Sequence[dict[str, Any]], retail_rows: Sequence[dict[str, Any]], *, llm_allowed: bool = True
+) -> dict[str, Any] | None:
+    """Расчёт корзины (`basket_calculation`) и решение LLM, складывать ли позиции (`basket_total`): итог печатается, только если
+    пациент перечислил разные услуги. Альтернативы и вопрос «есть ли / что это», «ни одна», сбой LLM, вызов запрещён (`strict`) —
+    `summed: False`: позиции и взятие — как были, «Итого» нет (лучше без суммы, чем сумма альтернатив). Итога и так нет (одна
+    позиция, цена 0) — LLM не зовётся.
+
+    :param question: реплика пациента (как написал он сам)
+    :param positions: позиции корзины
+    :param retail_rows: строки прайса региона
+    :param llm_allowed: можно ли звать LLM
+    """
+
+    calc = basket_calculation(positions, retail_rows)
+    if calc is None or calc["positions"] < 2 or calc["total_unknown"]:
+        return calc
+    kind = "llm_off"
+    if llm_allowed:
+        choice = await choose(BASKET_TOTAL_TASK, question, _BASKET_TOTAL_OPTIONS)
+        if choice.status is Status.PICKED and choice.ids:
+            kind = choice.ids[0]
+        else:
+            kind = "none" if choice.status is Status.NONE_FIT else "failed"
+    turn_telemetry.note(basket_total_kind=kind)
+    if kind == _SUM:
+        return calc
+    turn_telemetry.note(basket_total="not_summed")
+    return {**calc, "summed": False}

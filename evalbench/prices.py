@@ -12,7 +12,11 @@
 - строка врача «ФИО (Специальность) — N руб.» с ценой из цен врачей — `doctor`; сумма из
   текста акции МИС — `promo`;
 - сумма есть в данных, но строка ничем не объяснена — «без привязки»: так выглядит выдуманная
-  LLM цена, совпавшая с чьей-то ценой прайса (adversary «1 990 руб.»).
+  LLM цена, совпавшая с чьей-то ценой прайса (adversary «1 990 руб.»);
+- корзина-калькулятор (`basket_calc`, ТЗ 17.08): строка «Итого: …» — `total`, только если её суммы сходятся с
+  напечатанными позициями («По услуге «…»:» и строки под ней: одна цена у каждой — сумма; иначе «от суммы меньших до
+  суммы больших»); не сходится — проверяется как любая сумма (выдуманный итог — «без источника»). Строки перечня под
+  «Взятие биоматериала оплачивается отдельно:» с ценой своей строки прайса — `take`: в услуги ответа (разметку) не входят.
 """
 
 from __future__ import annotations
@@ -28,6 +32,11 @@ _DOCTOR_LINE_RE = re.compile(
     r"\([А-ЯЁа-яё\- ]{3,}\)\s*—\s*\d|^\s*\d+\.\s+[А-ЯЁ][а-яё\-]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+(?:\s+\(|\s*—)"
 )
 _AMOUNT_RE = re.compile(r"(?<![\d.,])(\d{1,3}(?:[\s  ]\d{3})+|\d+)(?:[.,]\d{1,2})?\s*(?:руб|₽)", re.I)
+# Рендер корзины (`renderer._format_price_family_variants`): заголовок позиции, строка варианта, итог, перечень взятия.
+_GROUP_RE = re.compile(r"^по услуге «.*»:$")
+_ROW_RE = re.compile(r"^\d+\.\s")
+_TOTAL_PREFIX = "итого"
+_TAKE_HEADER = "взятие биоматериала оплачивается отдельно:"
 
 
 def _norm(text: str) -> str:
@@ -43,7 +52,7 @@ class PricePair:
     amount: int
     service_id: int | None
     name: str | None
-    status: str  # matched | doctor | promo | unattributed | unsourced
+    status: str  # matched | doctor | promo | unattributed | unsourced | total | take
 
 
 class PriceCatalog:
@@ -91,13 +100,23 @@ class PriceCatalog:
 
     def pairs(self, text: str) -> list[PricePair]:
         out: list[PricePair] = []
-        for line in str(text or "").splitlines():
+        lines = str(text or "").splitlines()
+        totals = _basket_totals(lines)
+        in_takes = False
+        for line in lines:
             norm_line = _norm(line)
-            for match in _AMOUNT_RE.finditer(line):
-                amount = _amount(match.group(1))
+            if norm_line == _TAKE_HEADER:
+                in_takes = True
+                continue
+            in_takes = in_takes and norm_line.startswith("—")
+            amounts = [_amount(match.group(1)) for match in _AMOUNT_RE.finditer(line)]
+            if norm_line.startswith(_TOTAL_PREFIX) and amounts in totals:
+                out.extend(PricePair(amount, None, None, "total") for amount in amounts)
+                continue
+            for amount in amounts:
                 found = next(((name, sid) for name, sid in self.by_cost.get(amount, ()) if name in norm_line), None)
                 if found is not None:
-                    out.append(PricePair(amount, found[1], self.names.get(found[1]), "matched"))
+                    out.append(PricePair(amount, found[1], self.names.get(found[1]), "take" if in_takes else "matched"))
                 elif amount in self.doctor_costs and _DOCTOR_LINE_RE.search(line):
                     out.append(PricePair(amount, None, None, "doctor"))
                 elif amount in self.promo_costs:
@@ -107,6 +126,30 @@ class PriceCatalog:
                 else:
                     out.append(PricePair(amount, None, None, "unsourced"))
         return out
+
+
+def _basket_totals(lines: list[str]) -> list[list[int]]:
+    """Какой итог сходится с позициями корзины в тексте: `[сумма]` — у каждой позиции одна цена, `[меньшая, большая]` —
+    есть позиция с разными ценами; позиций с ценой меньше двух — итога нет (пусто)."""
+
+    groups: list[list[int]] = []
+    current: list[int] | None = None
+    for line in lines:
+        norm_line = _norm(line)
+        if _GROUP_RE.match(norm_line):
+            current = []
+            groups.append(current)
+        elif current is not None and _ROW_RE.match(norm_line):
+            found = _AMOUNT_RE.search(line)
+            if found:
+                current.append(_amount(found.group(1)))
+        elif norm_line:
+            current = None
+    groups = [group for group in groups if group]
+    if len(groups) < 2:
+        return []
+    low, high = sum(min(group) for group in groups), sum(max(group) for group in groups)
+    return [[low]] if low == high else [[low, high]]
 
 
 def _latest(folder: Path, pattern: str) -> Path | None:

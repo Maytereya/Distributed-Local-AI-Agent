@@ -284,6 +284,29 @@ def test_multi_coverage_counts_named_list_positions():
     assert multi_coverage(both, {"kind": "single", "core": [1], "ok": []}) is None
 
 
+def test_basket_total_and_take_lines():
+    """Корзина-калькулятор (`basket_calc`): итог — `total`, только если сходится с напечатанными позициями (выдуманный итог —
+    «без источника»); строки перечня взятия — `take`, в услуги ответа (покрытие, вне разметки) не входят."""
+
+    rows = [*_ROWS, {"serviceId": 9, "serviceName": "Взятие крови из вены", "cost": 195.0}]
+    catalog = PriceCatalog(rows)
+    head = (
+        "По услуге «оак»:\n1. Общий анализ крови — 500 руб.\n2. Общий анализ крови с лейкоформулой — 750 руб.\n\n"
+        "По услуге «Глюкоза»:\n1. Глюкоза — 300 руб.\n\n"
+    )
+    takes = "Взятие биоматериала оплачивается отдельно:\n— Взятие крови из вены — 195 руб.\nЕсли нужно, помогу."
+    ok = catalog.pairs(head + "Итого: от 800 руб. до 1 050 руб. — зависит от варианта «оак».\n" + takes)
+    assert [(p.status, p.amount) for p in ok if p.status != "matched"] == [("total", 800), ("total", 1050), ("take", 195)]
+    label = {"kind": "multi", "core": [1, 3], "ok": [2], "ambiguous": False}
+    assert multi_coverage(ok, label) == (3, 2, 2, 0)  # взятие — не «услуга вне разметки»
+    wrong = catalog.pairs(head + "Итого: 1 050 руб.\n" + takes)
+    assert [p.status for p in wrong if p.amount == 1050] == ["unsourced"]
+    exact = catalog.pairs("По услуге «А»:\n1. Глюкоза — 300 руб.\n\nПо услуге «Б»:\n1. Общий анализ крови — 500 руб.\n\nИтого: 800 руб.")
+    assert [p.status for p in exact] == ["matched", "matched", "total"]
+    # Строка взятия вне перечня (пациент назвал её позицией) — обычная услуга ответа.
+    assert [p.status for p in catalog.pairs("1. Взятие крови из вены — 195 руб.")] == ["matched"]
+
+
 def test_run_cfg_override_parsing():
     from evalbench.run import _parse_cfg
 

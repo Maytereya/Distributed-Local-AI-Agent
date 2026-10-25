@@ -3784,6 +3784,7 @@ def multi_price_payload_from_items(
     unrecognized: list[str],
     *,
     allow_single: bool = False,
+    calculation: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Payload корзины из готовых позиций (правил или выбора LLM, `_basket_select`).
 
@@ -3793,6 +3794,8 @@ def multi_price_payload_from_items(
 
     :param allow_single: одна позиция — тоже корзина, если остальные честно перечислены как
         нераспознанные (выбор LLM отверг позицию: путь одной услуги показал бы её по буквам)
+    :param calculation: итог и взятие биоматериала (`_basket_select.basket_calculation`, `basket_calc = on`) — в
+        `basket_calc` вместе с `partial`: есть позиции без цены или нераспознанные, итог — только по найденным ценам
     """
 
     variants: list[dict[str, Any]] = []
@@ -3843,6 +3846,8 @@ def multi_price_payload_from_items(
         payload["names_note"] = "\n\n".join(names_notes)
     if unrecognized_note:
         payload["unrecognized_note"] = unrecognized_note
+    if calculation:
+        payload["basket_calc"] = {**calculation, "partial": bool(names_notes or unrecognized_note)}
     return payload
 
 
