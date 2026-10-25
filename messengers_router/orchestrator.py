@@ -14,7 +14,7 @@ from time import perf_counter
 from typing import Any, AsyncIterator
 
 from . import evidence_keys as ek
-from . import expects, pending_answer, service_answer, shown_context, test_assist_answer, turn_telemetry, turn_understanding
+from . import button_flow, expects, pending_answer, service_answer, shown_context, test_assist_answer, turn_telemetry, turn_understanding
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,8 @@ class OrchestratorContext:
     text: str
     state: SessionState
     button_id: str = ""
+    # Лист меню, который задал вопрос, висевший в начале хода (`button_flow`): переспрос той же темы помнит его.
+    question_button: str = ""
     decision: RouteDecision | None = None
     should_clarify: bool = False
     clarify_text: str = ""
@@ -323,15 +325,20 @@ def _extract_pending_response(
         f"pending:{plan.label}",
         missing if isinstance(missing, list) else [],
     )
+    if button_flow.marks_questions():
+        # Вопрос кнопки помнит её лист — и на переспросе той же темы (`button_flow`).
+        button_flow.mark_question(pending, button_flow.pressed(decision.flags) or ctx.question_button)
     if plan.label == "APPOINTMENT" and isinstance(missing, list) and "appointment_action" in missing:
         # «Хотите отменить или перенести запись?» — ответ разберёт `router._handle_appointment_action_pending`.
         expects.ask(expects.Question.APPOINTMENT_ACTION, kind=expects.PICK, options=expects.APPOINTMENT_ACTION_OPTIONS)
-    elif plan.label in pending_answer.slot_topics() and pending_answer.buttons_on() and (
-        plan.label != "APPOINTMENT" or (isinstance(missing, list) and REQUIRED_SLOTS["APPOINTMENT"][0] in missing)
+    elif (
+        (plan.label in pending_answer.slot_topics() or button_flow.judges_answer(plan.label, pending))
+        and pending_answer.buttons_on()
+        and (plan.label != "APPOINTMENT" or (isinstance(missing, list) and REQUIRED_SLOTS["APPOINTMENT"][0] in missing))
     ):
         # Вопрос-слот темы (кнопки «Подготовка к процедуре», «Подобрать анализы», «Записаться на приём» — вопрос цели записи,
         # и тот же вопрос текстом): ответ решает одна функция ответа на висящий вопрос — свободный ответ (решение владельца
-        # 19.10, п. 5; запись — `booking_target_slot_llm`).
+        # 19.10, п. 5; запись — `booking_target_slot_llm`, вопрос кнопок цены — `button_answer_topic`).
         expects.ask(expects.Question.SLOT_VALUE, kind=expects.FREE)
     return ResponseEnvelope(
         text=_button_hint(decision)
@@ -427,6 +434,7 @@ async def pending_dispatch(
         router._handle_compound_price_pending,
         router._handle_secondary_queue_pending,
         router._handle_slot_value_pending,
+        router._handle_button_new_topic,
     ):
         result = await handler(
             user_text=ctx.text,
@@ -491,6 +499,8 @@ async def nlu_route(
 
     from . import button_menu
 
+    if memory is not None and button_flow.marks_questions():
+        ctx.question_button = button_flow.question_button(memory.get_pending(ctx.state))
     action = button_menu.action_for(ctx.button_id) if ctx.button_id else None
     if action is not None and action.mode in ("slot", "handoff", "hint"):
         # Нажатие кнопки — явный выбор темы: подпись не разбирается NLU и не даёт

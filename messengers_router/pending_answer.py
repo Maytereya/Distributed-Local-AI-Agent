@@ -415,7 +415,9 @@ def _remember(found: Answer) -> Answer:
     return found
 
 
-async def answer(question_type: str, question: str, options: tuple[str, ...], text: str, *, filled: bool = False) -> Answer | None:
+async def answer(
+    question_type: str, question: str, options: tuple[str, ...], text: str, *, filled: bool = False, confirm_topic: bool = False
+) -> Answer | None:
     """Ответ пациента на висящий вопрос этого типа — одно решение на ход (см. модуль).
 
     :param question_type: `_expects.type`
@@ -423,6 +425,8 @@ async def answer(question_type: str, question: str, options: tuple[str, ...], te
     :param options: показанные пункты (`_expects.options`)
     :param text: реплика пациента
     :param filled: вопрос-слот — правила уже разобрали в реплике значение слота (сужение без LLM)
+    :param confirm_topic: вопрос кнопки меню (`button_flow.judged_by_llm`): значение, найденное правилами, LLM проверяет только
+        на «другую тему» — правила находят значение и в реплике о другом; прочие её исходы — сужение правил, как было
     :return: решение (оно же — `current()` до конца хода); тип не из таблицы или пустая реплика — None
     """
 
@@ -431,7 +435,7 @@ async def answer(question_type: str, question: str, options: tuple[str, ...], te
     if policy is None or not reply or (question_type in _BUTTON_TYPES and not buttons_on()):
         return None
     if policy.polarity is Polarity.FREE:
-        return await _free_answer(question_type, question, reply, filled=filled)
+        return await _free_answer(question_type, question, reply, filled=filled, confirm_topic=confirm_topic)
     many = policy.many and buttons_on()
 
     picked = exact_pick(reply, options)
@@ -478,12 +482,21 @@ def _refunded(found: Answer) -> Answer:
     return found
 
 
-async def _free_answer(question_type: str, question: str, reply: str, *, filled: bool) -> Answer:
-    """Свободный ответ на вопрос-слот: голый отказ — «не могу ответить»; правила разобрали значение — ответ; иначе LLM
-    (`FREE_TASK`); сбой — запасной путь (как было)."""
+async def _free_answer(question_type: str, question: str, reply: str, *, filled: bool, confirm_topic: bool = False) -> Answer:
+    """Свободный ответ на вопрос-слот: голый отказ — «не могу ответить»; правила разобрали значение — ответ (у вопроса кнопки
+    — если LLM не сказала «другая тема», `confirm_topic`); иначе LLM (`FREE_TASK`); сбой — запасной путь (как было)."""
 
     if _anchor(_normalize_confirmation_text(reply)) is Outcome.NO:
         return _remember(Answer(question_type, Outcome.NO, source=Source.FAST, text=reply))  # «нет» — не фамилия
+    if filled and confirm_topic:
+        try:
+            choice = await choose(FREE_TASK, reply, [], asked=question)
+        except Exception:  # новый слой: его сбой не ломает ход — сужение правил, как было
+            logger.warning("pending_answer_failed", exc_info=True)
+            choice = None
+        if choice is not None and choice.status is Status.OUTCOME and choice.outcome == Outcome.NEW_TOPIC.value:
+            return _refunded(_remember(Answer(question_type, Outcome.NEW_TOPIC, source=Source.LLM, text=reply)))
+        return _remember(Answer(question_type, Outcome.ANSWER, source=Source.FAST, text=reply))
     if filled:
         return _remember(Answer(question_type, Outcome.ANSWER, source=Source.FAST, text=reply))
     try:

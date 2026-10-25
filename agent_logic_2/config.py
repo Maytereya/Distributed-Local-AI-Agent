@@ -219,6 +219,9 @@ class MessengerRouterConfig:
     topic_by_llm: str
     button_pass_rules: str
     booking_target_slot_llm: str
+    button_answer_topic: str
+    button_topic_hint: str
+    button_price_scope: str
     turn_understanding_one: str
     service_answer_from_data: str
     test_assist_from_data: str
@@ -681,6 +684,23 @@ settings = Settings(
         # ответом, идёт в запись, а не в вопрос «Отменить оформление?» правил смены темы
         # (BUG-2026-10-25-BOOK-BUTTON-REPLY-AS-TOPIC-SWITCH). off — как было. [MESSENGER_ROUTER] booking_target_slot_llm
         booking_target_slot_llm=_get_enum("MESSENGER_ROUTER", "booking_target_slot_llm", default="off", allowed={"off", "on"}),
+        # Ответ на вопрос кнопки-темы (`button_menu`, режим `slot`: «Какой анализ интересует?», «К какой процедуре нужна
+        # подготовка?»): тему знает кнопка, LLM-классификатор её не переспрашивает (журнал прода 14–24.10: 59 % таких ответов
+        # ждали его 3,7 с, до 12 с). Одна функция ответа на висящий вопрос решила «это ответ» — тема кнопки. `slot` — вопросы-
+        # слоты (подготовка, подбор анализов, результаты), `on` — и кнопки цены (их ответ судит та же функция; карточка 25.10:
+        # +3 чужие цены выбора строки — блок). Нужен `pending_buttons = on`. off — как было. [MESSENGER_ROUTER] button_answer_topic
+        button_answer_topic=_get_enum("MESSENGER_ROUTER", "button_answer_topic", default="off", allowed={"off", "slot", "on"}),
+        # Чужая тема в ответ на вопрос кнопки («Цена анализа» → «а где вы находитесь?»): одна функция ответа решила «другая тема» —
+        # LLM выбирает из закрытого списка листьев меню, бот подсказывает нужную кнопку («Это вопрос про … — основная информация в
+        # кнопке «…»»), а не угадывает тему общим путём; в сообщении и ответ, и другой вопрос — ответ по теме кнопки и подсказка.
+        # Нужен `pending_buttons = on`. off — как было. [MESSENGER_ROUTER] button_topic_hint
+        button_topic_hint=_get_enum("MESSENGER_ROUTER", "button_topic_hint", default="off", allowed={"off", "on"}),
+        # Область цены кнопки второго уровня (ТЗ 17.08, «сужение поиска по теме»): ответ на вопрос «Цена приёма врача» ищется
+        # среди услуг без срока готовности (не анализов, данные прайса МИС), «Цена анализа» / «Сколько стоит анализ» — среди
+        # анализов (со сроком готовности); в области нет кандидата на фразу — весь прайс, как без кнопки. `doctor` — только
+        # «Цена приёма врача» (на «Цену анализа» пациенты ведут и УЗИ, и процедуры — набор buttons_v1: 84 из 264), `all` — обе.
+        # off — как было. [MESSENGER_ROUTER] button_price_scope
+        button_price_scope=_get_enum("MESSENGER_ROUTER", "button_price_scope", default="off", allowed={"off", "doctor", "all"}),
         # Ход (б), этап 2 (решения владельца 20.10 (б) 4, 21.10): «список ли» на пути правил решается один раз — пониманием
         # хода (с защитами K1, без K1 у явного перечня своих названий); корзина правил и подбор анализов читают его, а не
         # решают сами. off — как было. [MESSENGER_ROUTER] turn_understanding_one
@@ -880,6 +900,9 @@ MR_PRICE_BY_PARSE = settings.messenger_router.price_by_parse
 MR_TOPIC_BY_LLM = settings.messenger_router.topic_by_llm
 MR_BUTTON_PASS_RULES = settings.messenger_router.button_pass_rules
 MR_BOOKING_TARGET_SLOT_LLM = settings.messenger_router.booking_target_slot_llm
+MR_BUTTON_ANSWER_TOPIC = settings.messenger_router.button_answer_topic
+MR_BUTTON_TOPIC_HINT = settings.messenger_router.button_topic_hint
+MR_BUTTON_PRICE_SCOPE = settings.messenger_router.button_price_scope
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
 MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data
