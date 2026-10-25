@@ -2,8 +2,7 @@
 
 Выключатели, по умолчанию off — как было:
 
-- Специальность записи из реплики, когда услуга из неё не подтвердилась (выключатель `booking_specialty_llm` снят 22.10 —
-  неделя `on` на проде с деплоя 12).
+- `[MESSENGER_ROUTER] booking_specialty_llm` — специальность записи из реплики, когда услуга из неё не подтвердилась.
   «На какое время запись к неврологу»: разбор хода брал «время» за услугу, LLM выбора строки прайса её отвергла (не
   услуга) или каталог её не нашёл, а специальности в решении хода не было — честный отказ гарда B′ с оффером оператора
   вместо вопроса о филиале (карточка test 18.10, g0792). Кандидат специальности — из правил (`policies.extract_specialty`, слова каталога ролей);
@@ -47,6 +46,12 @@ BOOKING_SPECIALTY_TASK = Task(
 
 def _on(attr: str) -> bool:
     return str(getattr(_cfg, attr, "off") or "").strip().lower() == "on"
+
+
+def specialty_enabled() -> bool:
+    """`booking_specialty_llm = on`."""
+
+    return _on("MR_BOOKING_SPECIALTY_LLM")
 
 
 def suppress_enabled() -> bool:
