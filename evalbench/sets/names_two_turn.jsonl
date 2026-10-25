@@ -14,3 +14,5 @@
 {"id": "nm_service_shape", "turns": ["Общий анализ крови"], "expect": "цена или уточнение по услуге, не ФИО", "tags": ["names", "patient", "names_patient_fio"]}
 {"id": "nm_specialty_shape", "turns": ["Расписание гинеколога"], "expect": "о гинекологах, не ФИО", "tags": ["names", "patient", "names_patient_fio"]}
 {"id": "nm_catalog_words", "turns": ["По каким адресам можно сделать флюорографию"], "expect": "адреса для флюорографии, без врача «Ким»", "tags": ["names", "doctor", "names_doctor_catalog"]}
+{"id": "nm_booking_namesake", "turns": ["Хочу записаться к врачу", "Сидорова Анна"], "expect": "своё ФИО пациента — не врач-однофамилец («Сидоров»): вопрос о цели записи, без расписания чужого врача (R-01)", "tags": ["names", "patient", "names_doctor_followup", "names_patient_fio"]}
+{"id": "nm_branch_namesake", "turns": ["Запишите на УЗИ щитовидной железы", "Сидорова Анна"], "expect": "запись продолжается с той же услугой, врача по ФИО пациента не ищем", "tags": ["names", "patient", "names_patient_fill"]}
