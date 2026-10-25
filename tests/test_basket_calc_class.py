@@ -123,6 +123,9 @@ def test_total_is_the_sum_of_printed_positions_on_whole_price(rows):
         positions = [_position(f"а{i}", [priced[i]]), _position(f"б{i}", fork), _position(f"в{i}", [priced[i + 3]])]
         text, payload = _answer(positions, rows)
         totals = [line for line in text.splitlines() if line.startswith("Итого")]
+        if any(float(row["cost"]) <= 0 for row in (priced[i], *fork, priced[i + 3])):
+            assert totals == [], text  # цена не указана — итога нет (`test_no_total_when_a_shown_price_is_not_given`)
+            continue
         assert len(totals) == 1, text
         statuses = [pair.status for pair in catalog.pairs(text)]
         assert "total" in statuses and not {"unsourced", "unattributed"} & set(statuses), text
@@ -136,7 +139,7 @@ def test_total_is_the_sum_of_printed_positions_on_whole_price(rows):
         assert (calc["total_min"], calc["total_max"]) == (low, low - min(costs) + max(costs))
         checked += 1
         ranges += is_range
-    assert checked >= 75 and ranges >= 30
+    assert checked >= 70 and ranges >= 30
 
 
 def test_total_counts_only_found_prices_and_says_so(rows):
@@ -147,6 +150,35 @@ def test_total_counts_only_found_prices_and_says_so(rows):
     assert any(line.startswith("Итого по прайсу за найденные позиции: ") for line in text.splitlines()), text
     single, payload = _answer([_position("а", [priced[0]])], rows, unrecognized=("флороценоз",))
     assert "Итого" not in single and payload["basket_calc"]["positions"] == 1
+
+
+def test_no_total_when_a_shown_price_is_not_given(rows):
+    """0 в прайсе — цена не указана: с ней сумма неизвестна, итог не печатается ни для одной строки, ни для развилки
+    (g0345 стенда кнопок: «от 2 800 руб.» из варианта «аборт — 0 руб.»); перечень взятия остаётся."""
+
+    priced = _priced(rows)
+    ferritin = next(row for row in rows if row["serviceName"] == "Ферритин")
+    for i in range(0, len(priced) - 1, 7):
+        free = dict(priced[i], cost=0.0)
+        for positions in ([_position("а", [free]), _position("б", [ferritin])], [_position("а", [free, priced[i + 1]]), _position("б", [ferritin])]):
+            text, payload = _answer(positions, rows)
+            assert "Итого" not in text and BASKET_DISCOUNT_NOTE not in text, text
+            assert payload["basket_calc"]["total_unknown"] is True
+            assert _taken(text) >= {B._VEIN} or f"{BASKET_TAKE_NOTE}." in text.splitlines()  # ферритин — из вены
+
+
+def test_capillary_asked_but_venous_rows_shown_is_not_a_vein_take(rows):
+    """Пациент просил «из пальца», а LLM показала строки без «капиллярная»: «Взятие крови из вены» спорило бы с его словами
+    (g0363) — взятие из данных не выводится, только оговорка; капиллярная строка по просьбе — из пальца."""
+
+    oak = next(row for row in rows if row["serviceName"] == "Общий анализ крови (Le, Er, Hb, СОЭ)")
+    oak_cap = next(row for row in rows if row["serviceName"] == "Общий анализ крови (Le, Er, Hb, СОЭ) капиллярная кровь")
+    urine = next(row for row in rows if row["serviceName"] == "Общий анализ мочи")
+    asked = {"service_name": "ОАК из пальца", "fragment": "ОАК ребенку из пальца", "prices": [oak]}
+    text, _ = _answer([asked, _position("ОАМ", [urine])], rows)
+    assert _taken(text) == set() and f"{BASKET_TAKE_NOTE}." in text.splitlines(), text
+    text, _ = _answer([{**asked, "prices": [oak_cap]}, _position("ОАМ", [urine])], rows)
+    assert _taken(text) == {B._FINGER}
 
 
 def test_positions_with_one_heading_are_summed_as_printed(rows):

@@ -40,7 +40,7 @@ from ..runtime_config import config as _cfg
 from ._biomaterial import service_mis_names
 from ._common import _normalise_catalog_text
 from ._price_select_llm import _prefer_base_variants, _record_synonym_suggestion, _row_cost, _row_key, _row_name
-from ._prices_helpers import _annotate_price_rows_with_care_context, _score_price_rows, phrase_price_items
+from ._prices_helpers import _annotate_price_rows_with_care_context, _query_nonbase_price_flags, _score_price_rows, phrase_price_items
 from ._strong_match import strong_rows
 
 logger = logging.getLogger(__name__)
@@ -536,7 +536,7 @@ def basket_calculation(positions: Sequence[dict[str, Any]], retail_rows: Sequenc
     :param positions: позиции корзины (`service_name`, `prices`)
     :param retail_rows: строки прайса региона — цены взятия
     :return: `positions` (групп с ценой, как их печатает рендер), `total_min`, `total_max`, `forks` (заголовки развилок), `takes`
-        (`serviceName`, `cost`), `take_unknown`
+        (`serviceName`, `cost`), `take_unknown`, `total_unknown` (у показанного варианта цена 0 — не указана: итога нет)
     """
 
     if not calc_enabled():
@@ -544,27 +544,35 @@ def basket_calculation(positions: Sequence[dict[str, Any]], retail_rows: Sequenc
     # Позиции — как их печатает рендер: группа на заголовок «По услуге «…»» (две позиции с одним названием — одна группа,
     # `renderer._group_family_variants_by_care_context`): итог считается по тому, что пациент видит.
     groups: dict[str, list[dict[str, Any]]] = {}
+    capillary_asked: set[str] = set()
     for position in positions:
         rows = [row for row in position.get("prices") or [] if isinstance(row, dict)]
         if rows:
-            groups.setdefault(str(position.get("service_name") or ""), []).extend(rows)
+            label = str(position.get("service_name") or "")
+            groups.setdefault(label, []).extend(rows)
+            if "capillary" in _query_nonbase_price_flags(str(position.get("fragment") or "")):
+                capillary_asked.add(label)
     if not groups:
         return None
     total_min = total_max = 0
     forks: list[str] = []
     needed: set[str] = set()
-    unknown = False
+    unknown = no_price = False
     for label, rows in groups.items():
         amounts = [_amount(row) for row in rows]
+        # 0 в прайсе — цена не указана, а не цена: с ней сумма неизвестна, итог не печатается (g0345: «от 2 800» из «аборт — 0 руб.»).
+        no_price = no_price or min(amounts) <= 0
         total_min += min(amounts)
         total_max += max(amounts)
         if min(amounts) != max(amounts):
             forks.append(label)
         verdicts = [_row_takes(row) for row in rows]
         takes = {take for take, _lab in verdicts}
-        if len(takes) == 1 and None not in takes:
+        if len(takes) == 1 and None not in takes and not (label in capillary_asked and _FINGER not in next(iter(takes))):
             needed |= next(iter(takes))
         elif any(lab for _take, lab in verdicts):
+            # Взятие у вариантов разное — или пациент просил «из пальца», а показанные строки не капиллярные (их выбрала LLM;
+            # «из вены» спорило бы с его словами, g0363): из данных не выводится — только оговорка.
             unknown = True
     named = {_normalise_catalog_text(_row_name(row)) for rows in groups.values() for row in rows}
     by_name = {_normalise_catalog_text(_row_name(row)): row for row in reversed(retail_rows) if isinstance(row, dict)}
@@ -579,7 +587,7 @@ def basket_calculation(positions: Sequence[dict[str, Any]], retail_rows: Sequenc
             continue
         shown.append({"serviceName": _row_name(row), "cost": _amount(row)})
     turn_telemetry.note(
-        basket_total="single" if len(groups) < 2 else ("range" if forks else "exact"),
+        basket_total="single" if len(groups) < 2 else ("no_price" if no_price else ("range" if forks else "exact")),
         basket_takes=len(shown),
         **({"basket_take_unknown": True} if unknown else {}),
     )
@@ -590,4 +598,5 @@ def basket_calculation(positions: Sequence[dict[str, Any]], retail_rows: Sequenc
         "forks": forks,
         "takes": shown,
         "take_unknown": unknown,
+        "total_unknown": no_price,
     }
