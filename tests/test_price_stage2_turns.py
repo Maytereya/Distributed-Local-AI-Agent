@@ -91,6 +91,7 @@ class Case:
     rows: tuple[str, ...] | None = None  # начало названий, которые выбирает LLM строки; () — «ни одна»; None — недоступна
     why: str = field(default="", compare=False)
     spans: str = ""  # ответ разметки как есть (не по контракту — `invalid`); пусто — по фразам случая
+    reason: str = ""  # код причины пустого выбора строки (`qualifier_absent` — «той услуги с условием нет»)
 
 
 CASES: dict[str, Case] = {
@@ -107,6 +108,11 @@ CASES: dict[str, Case] = {
     "one_consult": Case(("сколько стоит прием уролога",), ("прием уролога",), rows=("Прием (осмотр, консультация) врача-уролога",), why="приём врача со специальностью"),
     "one_consult_generic": Case(("сколько стоит прием врача",), ("прием врача",), rows=(), why="приём без специальности"),
     "one_generic_word": Case(("сколько стоят анализы",), (), why="общее слово — разметка: ни одной услуги"),
+    # разметка оторвала условие от дословного названия (живая LLM — 59 из 82 свипа П2, карточка Ш7): цена — только по суду условия
+    "condition_cut": Case(
+        ("сколько стоит ферритин по омс",), ("ферритин",), rows=(), reason="qualifier_absent", why="суд: той услуги с условием нет"
+    ),
+    "condition_cut_judge_down": Case(("сколько стоит ферритин по омс",), ("ферритин",), why="суд условия недоступен"),
     # выбор строки LLM у слабой фразы
     "weak_select_picks": Case(("сколько стоит кардиограмма",), ("кардиограмма",), rows=("ЭКГ",), why="слово пациента не из прайса"),
     "weak_select_down": Case(("сколько стоит кардиограмма",), ("кардиограмма",), why="выбор строки недоступен — ответ правил"),
@@ -136,6 +142,8 @@ CASES: dict[str, Case] = {
 # Класс характеристик → случаи (на них ссылаются объявления читателей в `test_price_stage2_readers.DECLARED`).
 CLASSES: dict[str, tuple[str, ...]] = {
     "price_one": (
+        "condition_cut",
+        "condition_cut_judge_down",
         "one_strong",
         "one_analysis_on",
         "one_analysis_on_grouped",
@@ -196,6 +204,8 @@ class _Oracle:
             options = [(int(head), rest) for head, dot, rest in (line.partition(". ") for line in prompt.splitlines()) if dot and head.isdigit()]
             picks = [n for n, text in options if self.case.rows and text.split(" → ", 1)[-1].startswith(self.case.rows)]
             answer = {"match": picks, "search_terms": []} if system is None else {"picks": picks}
+            if self.case.reason and not picks:
+                answer["reason"] = self.case.reason
             return GenerateResponse(model="m", response=json.dumps(answer, ensure_ascii=False), done=True)
         raise ConnectionError("тест: LLM недоступна для этого места")
 

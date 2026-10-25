@@ -177,7 +177,10 @@ def _match_policy_payload(selection: Any, query_text: str, entities: dict[str, A
     status = getattr(selection, "status", "")
     if status not in ("none_fit", "unavailable"):
         return None
-    phrase = _shown_phrase(query_text)
+    absent = status == "none_fit" and getattr(selection, "reason", "") == "qualifier_absent"
+    # Суд условия ответил «той услуги с этим условием нет»: фраза разбора бывает названием без оторванного условия («ферритин» из
+    # «ферритин по ОМС»), и «не нашёл для «ферритин»» читалось бы как «ферритина нет» — под `price_by_parse = on` без названия.
+    phrase = "" if absent and _price_by_parse.enabled() else _shown_phrase(query_text)
     used = {**entities, "service_name_effective": phrase}
     note = f"price_match_policy: {status}"
     if status == "unavailable" and not selection.names:
@@ -366,11 +369,9 @@ async def _parse_strong_answer(
     strong = _parse_strong_selection(query)
     if strong is None:
         return None
-    if _price_by_parse.enabled():
-        # Цена, этап 2, Ш2: границы фразы поставила LLM разметки — уточнение («по ОМС», «на дому») по правилу 3 её промпта входит в
-        # фразу, и такая фраза не дословное название; слова вне фразы — обвязка вопроса. Гард по буквам (слова вне фразы без
-        # `_PRICE_QUERY_STOPWORDS`) считал условием словоформу вопроса («стоят») и тратил решение LLM на суд.
-        return strong
+    # Под `price_by_parse = on` гард тот же (карточка Ш7, 25.10, RISK-2026-10-25-STRONG-PHRASE-NO-GUARD): без него живая LLM разметки
+    # отрывала «по ОМС» от дословного названия в 59 вопросах из 82 свипа П2 — платная цена вместо «не нашёл»; правило 3 её промпта
+    # модель не держит.
     if not _strong_phrase_guard_on() or not _qualifier_outside_strong_phrase(query, strong, retail_rows):
         return strong
     from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове

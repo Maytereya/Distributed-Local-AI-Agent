@@ -23,6 +23,8 @@
 - «без LLM» — только «LLM разметки не ответила» (`unavailable`): ответ не по контракту, письмо длиннее 40 слов, сбой кода — модель
   работает, строку выбирает LLM, «уточните» не ставится; «ни одна фраза не услуга» (`none_fit`) — не «услуги нет»: поиск по реплике,
   как раньше (карточка Ш7, 25.10: на обоих классах «уточните» и пустой поиск стоили 8 верных ответов dev из 867);
+- П2 под on не ослабляется: разметка оторвала условие («по ОМС») от дословного названия — цены нет ни при каком исходе суда условия
+  (живая LLM разметки отрывала условие в 59 вопросах из 82 свипа П2, карточка Ш7 — RISK-2026-10-25-STRONG-PHRASE-NO-GUARD);
 - off — как было (контраст: вырезатель делает реплику с обвязкой сильной и печатает склейки).
 """
 
@@ -304,3 +306,13 @@ def test_without_llm_means_unavailable_and_none_fit_keeps_search(monkeypatch, st
     monkeypatch.setattr(TU, "parse_status", lambda text: parse.status)
     monkeypatch.setattr(TU, "parse_for", lambda text: parse if parse.decided else None)
     assert (_price_by_parse.failed("r"), _price_by_parse.phrase("r")) == (failed, phrase)
+
+
+# --------------------------------------------------------------------------- П2: условие, оторванное разметкой
+
+
+def test_condition_cut_by_parse_never_gets_a_price_under_on():
+    data = json.loads((_GOLDEN / "price_stage2_turns_on.json").read_text(encoding="utf-8"))
+    cut = {key: record for key, record in data.items() if key.startswith("condition_cut")}
+    assert len(cut) == 4  # оба исхода суда × оба режима LLM
+    assert {key: record["turns"][0]["text"][:80] for key, record in cut.items() if "руб." in record["turns"][0]["text"]} == {}

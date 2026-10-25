@@ -808,7 +808,13 @@ async def select_price_rows(
     if by_synonym:
         keys = {_row_key(row) for row in by_synonym}
         pool = [*by_synonym, *(row for row in pool if _row_key(row) not in keys)][:_POOL_LIMIT]
-    strong = strong_rows(question, rows, pool=pool) if not _price_by_parse.enabled() else _strong_by_parse(question, rows, pool)
+    if not _price_by_parse.enabled():
+        strong = strong_rows(question, rows, pool=pool)
+    else:
+        # Цена, этап 2, Ш1: сильное — по фразе разбора; но не там, где выбор зовут судить условие (`judge_qualifier`: слово реплики,
+        # которого нет в прайсе, или суд условия у сильной фразы). Фраза разбора бывает дословным названием без оторванного условия
+        # («приём терапевта» из «… по ОМС»), и её строки — платная цена мимо условия (свип П2, карточка Ш7: 59 из 82).
+        strong = [] if judge_qualifier else _strong_by_parse(question, rows, pool)
     if strong:
         turn_telemetry.note(price_policy="strong")
         return PriceSelection(rows=tuple(strong), status="strong")
