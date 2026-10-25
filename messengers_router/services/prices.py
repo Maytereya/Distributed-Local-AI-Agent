@@ -219,10 +219,6 @@ async def _multi_price_payload(
             journal=parse.status == turn_parse.ParseStatus.PICKED,
         )
         return multi_price_payload_from_items(positions, _names_a_service(unrecognized), allow_single=True)
-    if _price_by_parse.failed(str(query or "")) and _price_by_parse.enabled():
-        # Цена, этап 2, Ш4: разбор этой реплики не решён (сбой LLM) — список правил по разделителям и спискам слов не строим
-        # (решение 22.10 (а)); путь одной услуги ответит «уточните название».
-        return None
     # Разбора нет или он не годится для действия (`empty`, `too_many`, `error`, вход — не реплика хода): корзина правил
     # с политикой сбоя разбора — строки слабых позиций выбирает LLM, при сбое — варианты кода (T7 шаг 3б: прежняя
     # корзина правил без выбора, путь `turn_parse = off`, снята).
@@ -605,6 +601,7 @@ async def price_info(self: "Services", query: str, entities: dict[str, Any]) -> 
             },
         }
 
+    # Цена, этап 2, Ш4: до корзины правил и поиска по словам — разбор не решён, без LLM услугу (и список) не угадываем.
     clarify = _parse_failed_clarify(query, entities)
     if clarify is not None:
         return clarify
