@@ -7,6 +7,12 @@
 сравнения версий — второй ход зависит от первого ответа). Ход идёт через
 `messenger_generate_once` с `debug=true`, в одном asyncio-цикле на весь прогон.
 
+Вопрос набора с `"press": true` и листом меню в `button` идёт как у пациента в меню шлюза (25.10):
+нажатие листа (`button_id` + подпись кнопки в `text`, «Таблица экранов» — `evalbench.buttons`),
+затем вопрос свободным текстом без `button_id`, в той же сессии. Одним запросом кнопка-тема `slot`
+вопрос не читает вовсе — тема и сущности берутся из кнопки, ответом была бы подсказка кнопки.
+Исход и метрики — по второму ходу; нажатие — в поле `press`. После кнопки-перевода второго хода нет.
+
 Выход — каталог прогона вне репо (`~/Dev/dla-private/bench/runs/<имя>/`):
 - `turns.jsonl` — строка на вопрос: вопрос, ответ, исход, признаки, вызовы LLM, задержка;
 - `run.json` — шапка: код, мир, модель, режим, отпечатки промптов, словарь синонимов,
@@ -107,12 +113,92 @@ def _enter_code_root(code_root: Path) -> None:
         sys.path.insert(1, str(REPO_ROOT))
 
 
+async def _send(req, *, memory, services) -> tuple[dict[str, Any], str | None, int]:
+    """Один ход через эндпоинт: (тело ответа, имя исключения стенда, мс). `LiveBudgetExhausted` — наружу."""
+
+    from messengers_router.endpoint import messenger_generate_once
+
+    started = time.monotonic()
+    error = None
+    try:
+        resp = await asyncio.wait_for(messenger_generate_once(req, memory=memory, services=services), TURN_TIMEOUT_S)
+        body = json.loads(resp.body)
+    except LiveBudgetExhausted:
+        raise
+    except Exception as exc:  # ход не завершился — фиксируем, идём дальше
+        body = {"text": "", "handoff": False, "state_update": {"debug": {"endpoint_error": f"{type(exc).__name__}: {exc}"}}}
+        error = type(exc).__name__
+    return body, error, int((time.monotonic() - started) * 1000)
+
+
+# Контекст сессии после хода, который читает критерий кнопки (запись дошла до нужной специальности, услуга хода).
+_STATE_KEYS = ("service_name", "test_name", "specialty", "doctor_name", "doctor_id", "branch_name", "appointment_flow_active", "appointment_action", "_last_label")
+
+
+def state_after(entities: dict[str, Any]) -> dict[str, Any]:
+    view = {key: entities[key] for key in _STATE_KEYS if entities.get(key) not in (None, "", [], ())}
+    pending = entities.get("_pending")
+    if isinstance(pending, dict):
+        view["pending"] = {"label": pending.get("label"), "missing": pending.get("missing")}
+    return view
+
+
+async def _exchange(case, sid: str, *, memory, services, llm_mode: str, tpl: Templates, catalog: PriceCatalog) -> tuple[dict[str, Any], str | None, int, dict[str, Any] | None]:
+    """Вопрос набора → (тело ответа на вопрос, ошибка стенда, мс, нажатие или None).
+
+    `press` — сначала нажатие листа `button` с подписью из таблицы шлюза, потом вопрос без `button_id`. Кнопка-перевод
+    (`handoff`) отдаёт пациента оператору: вопрос не отправляется, ответом хода остаётся ответ нажатия.
+    """
+
+    from messengers_router.endpoint import MessengerGenerateRequest
+
+    from .buttons import GATEWAY_CAPTIONS
+
+    press = None
+    if case.get("press") and case.get("button"):
+        button = str(case["button"])
+        req = MessengerGenerateRequest(session_id=sid, text=GATEWAY_CAPTIONS[button], debug=True, llm_mode=llm_mode, button_id=button)
+        body, error, ms = await _send(req, memory=memory, services=services)
+        outcome = classify_turn(body, dict(memory.get(sid).last_entities or {}), tpl, catalog)
+        press = {"button": button, "answer": body.get("text", ""), "outcome": outcome.outcome, "label": outcome.label, "handoff": outcome.handoff, "ms": ms, "error": error}
+        if outcome.handoff or error:
+            press["question_sent"] = False
+            return body, error, ms, press
+        press["question_sent"] = True
+        req = MessengerGenerateRequest(session_id=sid, text=str(case["question"]), debug=True, llm_mode=llm_mode)
+    else:
+        req = MessengerGenerateRequest(session_id=sid, text=str(case["question"]), debug=True, llm_mode=llm_mode, button_id=case.get("button") or "")
+    body, error, ms = await _send(req, memory=memory, services=services)
+    return body, error, ms, press
+
+
+def _case_row(case, body: dict[str, Any], error: str | None, ms: int, press: dict[str, Any] | None, outcome, state) -> dict[str, Any]:
+    """Общие поля строки хода у обоих режимов прогона: вопрос, ответ, исход, нажатие и контекст после хода."""
+
+    return {
+        "id": case["id"],
+        "set": case.get("set"),
+        "split": case.get("split"),
+        "category": case.get("category") or case.get("topic_llm"),
+        "tier": case.get("tier"),
+        "expect_urgent": case.get("expect_urgent"),
+        "question": case["question"],
+        "button": case.get("button"),
+        "press": press,
+        "answer": body.get("text", ""),
+        "ms": ms,
+        "harness_error": error,
+        **outcome.as_row(),
+        "state": state_after(dict(state.last_entities or {})),
+        "stage_ms": ((body.get("state_update") or {}).get("debug") or {}).get("stage_timings"),
+    }
+
+
 async def _run_cases(cases, *, client: HarnessClient, world: FrozenWorld, tpl: Templates, catalog: PriceCatalog, llm_mode: str, run_name: str, out, progress, concurrency: int = 1) -> dict[str, Any]:
     if concurrency > 1:
         return await _run_cases_concurrent(
             cases, client=client, world=world, tpl=tpl, catalog=catalog, llm_mode=llm_mode, run_name=run_name, out=out, progress=progress, concurrency=concurrency
         )
-    from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
     from messengers_router.services import Services
 
@@ -121,19 +207,11 @@ async def _run_cases(cases, *, client: HarnessClient, world: FrozenWorld, tpl: T
     stats: dict[str, Any] = {"done": 0, "stopped": None}
     for i, case in enumerate(cases, 1):
         sid = f"bench-{run_name}-{case['id']}"
-        req = MessengerGenerateRequest(session_id=sid, text=str(case["question"]), debug=True, llm_mode=llm_mode, button_id=case.get("button") or "")
-        started = time.monotonic()
-        error = None
         try:
-            resp = await asyncio.wait_for(messenger_generate_once(req, memory=memory, services=services), TURN_TIMEOUT_S)
-            body = json.loads(resp.body)
+            body, error, ms, press = await _exchange(case, sid, memory=memory, services=services, llm_mode=llm_mode, tpl=tpl, catalog=catalog)
         except LiveBudgetExhausted as exc:
             stats["stopped"] = str(exc)
             break
-        except Exception as exc:  # ход не завершился — фиксируем, идём дальше
-            body = {"text": "", "handoff": False, "state_update": {"debug": {"endpoint_error": f"{type(exc).__name__}: {exc}"}}}
-            error = type(exc).__name__
-        ms = int((time.monotonic() - started) * 1000)
         await settle_shadows()  # тени, которые ход не ждёт, — после замера, до вызовов и телеметрии
         state = memory.get(sid)
         calls = client.take_turn_calls()
@@ -142,18 +220,7 @@ async def _run_cases(cases, *, client: HarnessClient, world: FrozenWorld, tpl: T
             break
         outcome = classify_turn(body, dict(state.last_entities or {}), tpl, catalog)
         row = {
-            "id": case["id"],
-            "set": case.get("set"),
-            "split": case.get("split"),
-            "category": case.get("category") or case.get("topic_llm"),
-            "tier": case.get("tier"),
-            "expect_urgent": case.get("expect_urgent"),
-            "question": case["question"],
-            "answer": body.get("text", ""),
-            "ms": ms,
-            "harness_error": error,
-            **outcome.as_row(),
-            "stage_ms": ((body.get("state_update") or {}).get("debug") or {}).get("stage_timings"),
+            **_case_row(case, body, error, ms, press, outcome, state),
             "llm_calls": [c.__dict__ for c in calls],
             "telemetry": world.take_telemetry(),
         }
@@ -175,7 +242,6 @@ async def _run_cases_concurrent(cases, *, client: HarnessClient, world: FrozenWo
     позже, в ход не попадают. Ответ, исход и время — свои у каждого хода.
     """
 
-    from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
     from messengers_router.memory import MemoryStore
     from messengers_router.services import Services
 
@@ -191,34 +257,16 @@ async def _run_cases_concurrent(cases, *, client: HarnessClient, world: FrozenWo
         while not queue.empty() and not stats["stopped"]:
             i, case = queue.get_nowait()
             sid = f"bench-{run_name}-{case['id']}"
-            req = MessengerGenerateRequest(session_id=sid, text=str(case["question"]), debug=True, llm_mode=llm_mode, button_id=case.get("button") or "")
             started = time.monotonic()
-            error = None
             try:
-                resp = await asyncio.wait_for(messenger_generate_once(req, memory=memory, services=services), TURN_TIMEOUT_S)
-                body = json.loads(resp.body)
+                body, error, ms, press = await _exchange(case, sid, memory=memory, services=services, llm_mode=llm_mode, tpl=tpl, catalog=catalog)
             except LiveBudgetExhausted as exc:
                 stats["stopped"] = str(exc)
                 return
-            except Exception as exc:  # ход не завершился — фиксируем, идём дальше
-                body = {"text": "", "handoff": False, "state_update": {"debug": {"endpoint_error": f"{type(exc).__name__}: {exc}"}}}
-                error = type(exc).__name__
-            ms = int((time.monotonic() - started) * 1000)
             state = memory.get(sid)
             outcome = classify_turn(body, dict(state.last_entities or {}), tpl, catalog)
             row = {
-                "id": case["id"],
-                "set": case.get("set"),
-                "split": case.get("split"),
-                "category": case.get("category") or case.get("topic_llm"),
-                "tier": case.get("tier"),
-                "expect_urgent": case.get("expect_urgent"),
-                "question": case["question"],
-                "answer": body.get("text", ""),
-                "ms": ms,
-                "harness_error": error,
-                **outcome.as_row(),
-                "stage_ms": ((body.get("state_update") or {}).get("debug") or {}).get("stage_timings"),
+                **_case_row(case, body, error, ms, press, outcome, state),
                 "llm_calls": None,
                 "telemetry": world.take_telemetry_for(sid),
                 "load": {"concurrency": concurrency, "slot": slot, "start_ms": int((started - t0) * 1000)},

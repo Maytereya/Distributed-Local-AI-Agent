@@ -363,13 +363,17 @@ def main(argv: list[str] | None = None) -> int:
         shared = keys[0] & keys[1]
         runs = [(dict(h, cases=len(shared), done=len(shared)), [t for t in turns if (t.get("set"), t["id"]) in shared]) for h, turns in runs]
     diff = answer_diff(runs[0][1], runs[1][1]) if len(runs) == 2 else None
-    loaded = []
+    from . import buttons
+
+    judged = buttons.load_judge()
+    loaded, by_button = [], []
     for header, turns in runs:
         refresh_expectations(header, turns)
         rescore_prices(header, turns)
         score_specialties(header, turns)
         loaded.append((header, metrics(turns, labels)))
-    print(render(loaded, diff))
+        by_button.append((header, buttons.button_metrics(turns, buttons.load_cases(header), labels, judged)))
+    print("\n".join([render(loaded, diff), *buttons.render_buttons(by_button)]))
     return 0
 
 
