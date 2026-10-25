@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import evidence_keys as ek
-from . import expects, pending_answer, shown_context
+from . import address_flow, expects, pending_answer, shown_context
 from . import walkin as walkin_llm
 from .flow_policy import (
     hydrate_appointment_context_from_schedule,
@@ -599,6 +599,12 @@ def build_address_response(
         walkin_hint = nonbookable_service_hint(user_text, state.last_entities) or str(state.last_entities.get("service_name") or "").strip()
         if walkin_hint == "":
             walkin_hint = None
+    if address_flow.branch_flags_on():
+        # Филиалы этого ответа — там, где по данным делают то, о чём ответ (`address_branch_flags`): «анализы без записи» и
+        # «Где и до скольки принимают» — без филиала, где анализы не принимают.
+        kept = address_flow.filter_branches(address_payload.get("branches") or [], address_flow.needed_flags(walkin_hint))
+        if kept is not None:
+            address_payload = {**address_payload, "branches": kept, "addresses": [b["address"] for b in kept]}
     text = format_address_for_patient(
         address_payload,
         state.last_entities,

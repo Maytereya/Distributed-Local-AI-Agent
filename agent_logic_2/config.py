@@ -221,6 +221,7 @@ class MessengerRouterConfig:
     button_answer_topic: str
     button_topic_hint: str
     button_price_scope: str
+    address_branch_flags: str
     turn_understanding_one: str
     service_answer_from_data: str
     test_assist_from_data: str
@@ -656,6 +657,10 @@ settings = Settings(
         # «Цена приёма врача» (на «Цену анализа» пациенты ведут и УЗИ, и процедуры — набор buttons_v1: 84 из 264), `all` — обе.
         # off — как было. [MESSENGER_ROUTER] button_price_scope
         button_price_scope=_get_enum("MESSENGER_ROUTER", "button_price_scope", default="off", allowed={"off", "doctor", "all"}),
+        # Список филиалов в ответе о сдаче анализов (ЭКГ, УЗИ) без записи и на кнопке «Где и до скольки принимают» (раздел
+        # «Сдать анализы») — только филиалы с этим флагом данных филиалов (`analysis` / `ecg` / `usi`): карточка buttons_v1 25.10 —
+        # в 26 ответах «где сдать» был филиал без забора анализов. off — как было. [MESSENGER_ROUTER] address_branch_flags
+        address_branch_flags=_get_enum("MESSENGER_ROUTER", "address_branch_flags", default="off", allowed={"off", "on"}),
         # Ход (б), этап 2 (решения владельца 20.10 (б) 4, 21.10): «список ли» на пути правил решается один раз — пониманием
         # хода (с защитами K1, без K1 у явного перечня своих названий); корзина правил и подбор анализов читают его, а не
         # решают сами. off — как было. [MESSENGER_ROUTER] turn_understanding_one
@@ -857,6 +862,7 @@ MR_BUTTON_PASS_RULES = settings.messenger_router.button_pass_rules
 MR_BUTTON_ANSWER_TOPIC = settings.messenger_router.button_answer_topic
 MR_BUTTON_TOPIC_HINT = settings.messenger_router.button_topic_hint
 MR_BUTTON_PRICE_SCOPE = settings.messenger_router.button_price_scope
+MR_ADDRESS_BRANCH_FLAGS = settings.messenger_router.address_branch_flags
 MR_TURN_UNDERSTANDING_ONE = settings.messenger_router.turn_understanding_one
 MR_SERVICE_ANSWER_FROM_DATA = settings.messenger_router.service_answer_from_data
 MR_TEST_ASSIST_FROM_DATA = settings.messenger_router.test_assist_from_data

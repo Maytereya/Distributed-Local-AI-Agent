@@ -282,6 +282,24 @@ def _service_procedure_flag(service_q: str) -> str | None:
     return None
 
 
+def branch_flags_for(text: str) -> frozenset[str]:
+    """Флаги филиала (`analysis` / `ecg` / `usi`), которые нужны услугам, названным в тексте («анализы», «ЭКГ», «УЗИ») — те же
+    признаки, что у отбора филиалов по услуге (`_filter_regions_by_service_flags`); ничего — пусто."""
+
+    sq = _normalise_input(text or "")
+    if not sq:
+        return frozenset()
+    from ._addresses_helpers import _nonbookable_needs  # noqa: PLC0415
+
+    need_analysis, need_ekg = _nonbookable_needs(sq)
+    flags = {"analysis"} if need_analysis else set()
+    if need_ekg:
+        flags.add("ecg")
+    if _UZI_QUERY_RE.search(sq):
+        flags.add("usi")
+    return frozenset(flags)
+
+
 def _filter_regions_by_service_flags(regions: list[dict[str, Any]], service_q: str) -> list[dict[str, Any]]:
     sq = _normalise_input(service_q or "")
     if not sq:

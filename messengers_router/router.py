@@ -22,7 +22,7 @@ import re
 from typing import AsyncGenerator, Any
 
 from . import evidence_keys as ek
-from . import booking_slots, button_flow, degradation, expects, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
+from . import address_flow, booking_slots, button_flow, degradation, expects, llm_runtime, pending_answer, role_pick, service_answer, service_overview, shown_context, topic_confirm, topic_policy, turn_parse, turn_telemetry, turn_understanding, walkin
 from .state_mutations import reactivate_appointment_collecting
 from .mess_types import AppointmentPhase, Evidence, Plan, ResponseEnvelope, RouteDecision, SessionState
 from .classifier import analyze
@@ -4077,6 +4077,8 @@ async def patient_routing_stream(
         # подтверждение услуги. Поэтому сбрасываем тему ДО всех ранних проверок,
         # включая предпроверку активной записи.
         clear_on_topic_switch(state, memory)
+    # Метка адресной кнопки (`address_branch_flags`): нажатие ставит, следующая реплика старит — после сброса кнопкой.
+    address_flow.track_address_button(state, button_id)
     # Вопрос, на который отвечает реплика, — после сброса кнопкой (поле ожидания, D2.1; пишет его конец хода).
     expects.begin_turn(state)
 
@@ -4261,6 +4263,7 @@ async def patient_routing_stream(
     response = offered
     # Смешанное сообщение внутри кнопки (`button_topic_hint`): ответ по теме кнопки — и подсказка кнопки на остальное.
     response = button_flow.with_mixed_hint(response)
+    address_flow.finish_turn(state)  # метка адресной кнопки — следующей реплике (`address_branch_flags`)
     # Поле ожидания — по тексту, который увидит пациент (после анти-залипа: он дописывает свой оффер).
     expects.finish_turn(state, response)
 

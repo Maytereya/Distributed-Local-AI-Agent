@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .. import address_flow
 from ._common import _as_int, _normalise_input
 from ._regions import (
     _ADDRESS_HINT_RE,
@@ -164,6 +165,7 @@ def _addresses_to_branch_payload(
                 "city": str(best_region.get("city") or "").strip() if isinstance(best_region, dict) else "Самара",
                 "phone": _extract_region_phone(best_region) if isinstance(best_region, dict) else "",
                 "work_time": _extract_region_work_time(best_region) if isinstance(best_region, dict) else "",
+                **address_flow.region_flags(best_region),  # под `address_branch_flags`: где сдают анализы, ЭКГ, УЗИ
             }
         )
     return out

@@ -233,3 +233,4 @@ tests/test_price_by_parse_class.py
 tests/test_button_answer_topic_class.py
 tests/test_button_topic_hint_class.py
 tests/test_button_price_scope_class.py
+tests/test_address_branch_flags_class.py
