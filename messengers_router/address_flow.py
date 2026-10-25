@@ -175,7 +175,7 @@ async def followup(text: str, branches: list[dict[str, Any]]) -> Followup | None
     outcome = choice.outcome if choice is not None and choice.status is Status.OUTCOME else ""
     picks = tuple(rows[int(i) - 1] for i in (choice.ids if choice is not None else ()) if str(i).isdigit() and 1 <= int(i) <= len(rows))
     common = _common_words([str(b["address"]) for b in rows])
-    named = tuple(b for b in picks if named_in(text, str(b["address"]), common=common))
+    named = tuple(b for b in picks if named_in(text, str(b["address"]), common=common | frozenset(_address_words(str(b.get("city") or "")))))
     if len(named) < len(picks):
         turn_telemetry.note(address_followup_vetoed=len(picks) - len(named))  # филиал выбран, но в реплике не назван
     picks = named
@@ -200,7 +200,8 @@ def _address_words(address: str) -> list[str]:
 
 
 def _common_words(addresses: list[str]) -> frozenset[str]:
-    """Основы, которые есть в адресах нескольких филиалов (город, «проспект»), — по ним филиал не назван (по данным, без списка)."""
+    """Основы, которые есть в адресах нескольких филиалов («проспект», «шоссе»), — по ним филиал не назван (по данным, без
+    списка); город филиала (`city` его данных) — тоже, его вызывающий добавляет к этим основам."""
 
     counts: dict[str, int] = {}
     for address in addresses:

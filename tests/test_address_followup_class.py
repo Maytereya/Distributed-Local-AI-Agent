@@ -35,6 +35,7 @@ _REGIONS = [
     {"addressForSite": "пр.Ленина, 5", "analysis": True, "ecg": True, "usi": True, **_HOURS, "weekdaysTo": "20:00:00"},
     {"addressForSite": "ул.Ново-Садовая, 106, корпус 82", "analysis": False, "ecg": False, "usi": False, **_HOURS},
 ]
+_REGIONS_CITY = "Энск"  # город подделки — у настоящих филиалов он записан и в адресе
 _ADDRESS_LEAVES = sorted(b for b, a in button_menu.BUTTONS.items() if a.mode == "pass" and a.label == "ADDRESS")
 
 
@@ -142,10 +143,12 @@ def test_branch_not_named_in_the_reply_is_not_carded(mini_prod_world, monkeypatc
     assert on[1]["text"] == off[1]["text"] and on[1]["telemetry"].get("address_followup_vetoed") == 1, on[1]["telemetry"]
 
 
-def test_city_word_in_an_address_does_not_name_the_branch():
-    """Карточка 25.10: «в Самаре» называло филиал с «г. Самара» в адресе — слово, общее для многих адресов, филиал не называет."""
+def test_city_word_in_an_address_does_not_name_the_branch(mini_prod_world, monkeypatch):  # noqa: F811
+    """Карточка 25.10: город в реплике называл филиал, у которого город записан в адресе, — город филиала (`city` его данных) и
+    слова, общие для многих адресов, филиал не называют."""
 
-    addresses = ["г. Самара, ул. Победы, 126", "г. Самара, ул. Мичурина, 112", "г. Самара, ул. Гагарина, 64", "ул.Аминева, 29"]
-    common = address_flow._common_words(addresses)
-    assert not address_flow.named_in("как работаете в праздники в Самаре?", addresses[0], common=common)
-    assert address_flow.named_in("на Победы 126 в субботу?", addresses[0], common=common)
+    city = _REGIONS_CITY
+    addresses = [f"г. {city}, ул. Победы, 126", "ул. Мичурина, 112", "ул.Аминева, 29"]
+    stems = address_flow._common_words(addresses) | frozenset(address_flow._address_words(city))
+    assert not address_flow.named_in(f"как работаете в праздники в {city}е?", addresses[0], common=stems)
+    assert address_flow.named_in("на Победы 126 в субботу?", addresses[0], common=stems)
