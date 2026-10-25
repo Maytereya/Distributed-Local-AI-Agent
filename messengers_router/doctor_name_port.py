@@ -82,6 +82,12 @@ def _ensure_local_doctors_index_loaded() -> tuple[dict[str, str], dict[str, str]
     return _DOCTOR_SURNAMES_MAP, _DOCTOR_FIO_MAP
 
 
+def cached_doctor_fios() -> list[str]:
+    """ФИО врачей локального среза справочника МИС (как в `fio`)."""
+    _, fio_map = _ensure_local_doctors_index_loaded()
+    return list(fio_map.values())
+
+
 def extract_doctor_name_candidate(text: str, *, prefer_schedule: bool = False) -> str | None:
     return _extract_doctor_name_candidate(text, prefer_schedule=prefer_schedule)
 

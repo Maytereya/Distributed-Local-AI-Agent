@@ -362,7 +362,7 @@ def _fio_on_path(switch: str, text: str) -> bool:
     from messengers_router import flow_policy, policies
 
     if switch == "names_patient_fio":
-        return flow_policy._looks_like_patient_fio(text)
+        return flow_policy._is_patient_name_value(text)  # ФИО как значение графы; маршрут — тесты ниже
     if switch == "names_patient_rule":
         return classifier._looks_like_patient_name_only(text)
     out: dict = {}
@@ -405,13 +405,55 @@ def test_llm_name_not_in_reply_is_not_accepted(monkeypatch, switch: str) -> None
 
 
 
+def test_fio_route_without_llm_is_neither_name_nor_doctor(monkeypatch) -> None:
+    """До NLU (prelock записи) и при сбое LLM реплика-ФИО для маршрута — «похоже на ФИО»: её не ищут врачом и не берут именем."""
+
+    from messengers_router import flow_policy
+
+    _switch(monkeypatch, "names_patient_fio")
+    assert flow_policy._looks_like_patient_fio("Сидорова Анна")
+    assert not flow_policy._is_patient_name_value("Сидорова Анна")
+    assert not flow_policy._looks_like_appointment_doctor_reply("Сидорова Анна")
+
+
+def test_fio_route_after_llm_said_no_name(monkeypatch) -> None:
+    from messengers_router import flow_policy
+
+    _switch(monkeypatch, "names_patient_fio")
+    turn_names.note_llm("Общий анализ крови", {"service_name": "Общий анализ крови"})
+    assert not flow_policy._looks_like_patient_fio("Общий анализ крови")
+
+
+def _classifier_down(monkeypatch) -> None:
+    """LLM упала: вызов модели бросает — настоящий путь `ollama_classify_payload` отдаёт заглушку `ollama_timeout`."""
+
+    async def down(*_a, **_k):
+        raise TimeoutError("llm down")
+
+    monkeypatch.setattr(classifier, "generate_text", down)
+
+
+def test_llm_failure_leaves_the_name_unknown(monkeypatch) -> None:
+    from messengers_router import flow_policy
+
+    _switch(monkeypatch, "names_patient_fio")
+    _classifier_down(monkeypatch)
+
+    async def turn() -> tuple[str, bool]:
+        turn_understanding.begin_turn()
+        await classifier.analyze("Сидорова Анна", {}, skip_rule=True)
+        return turn_names.person_named("Сидорова Анна", switch="names_patient_fio"), flow_policy._is_patient_name_value("Сидорова Анна")
+
+    assert asyncio.run(turn()) == ("unknown", False)
+
+
 def test_patient_fio_unbookable_target_needs_llm(monkeypatch) -> None:
     """Вид недоступной цели «ФИО пациента» (вопрос о цели, не «такого врача нет») — по LLM хода, не по форме."""
 
     from messengers_router import planner
 
     _switch(monkeypatch, "names_patient_fio")
-    assert planner._unbookable_target_kind("Сидорова Анна Петровна", set()) != "patient_name"
+    assert planner._unbookable_target_kind("Сидорова Анна Петровна", set()) == "unknown"  # тот же вопрос о цели
     turn_names.note_llm("Сидорова Анна Петровна", {"patient_name": "Сидорова Анна Петровна"})
     assert planner._unbookable_target_kind("Сидорова Анна Петровна", set()) == "patient_name"
 
@@ -447,6 +489,136 @@ def test_patient_fill_does_not_take_service(monkeypatch, text: str) -> None:
     out: dict = {}
     policies._fill_patient_entities(text, ["patient_name"], out)
     assert "patient_name" not in out
+
+
+# --- ФИО пациента не уходит во врача: реплика-ФИО — врач только целиком (R-01, консилиум 25.10) --------------------
+
+
+def _doctor_fio(words: int) -> str:
+    fio = next(d["fio"] for d in sorted(_excerpt_doctors(), key=lambda d: d["fio"]) if len(str(d.get("fio") or "").split()) == 3)
+    return " ".join(fio.split()[:words])
+
+
+def _namesake_patient() -> str:
+    """Пациентка — однофамилица врача справочника: фамилия врача на -ов/-ин/-ев + «а», имя — женское имя из того же справочника
+    (имена в нём — словарь имён), врача с таким ФИО нет. Выбор кодом — ни одного настоящего ФИО пациента."""
+
+    male = next(s for s in _surnames() if s.lower().endswith(("ов", "ин", "ев")))
+    female_name = next(
+        str(d["fio"]).split()[1] for d in sorted(_excerpt_doctors(), key=lambda d: d["fio"])
+        if str(d.get("fio") or "").split()[0].lower().endswith(("ова", "ева", "ина")) and len(str(d["fio"]).split()) == 3
+    )
+    patient = f"{male}а {female_name}"
+    assert not any(str(d.get("fio") or "").lower().startswith(patient.lower()) for d in _excerpt_doctors())
+    return patient
+
+
+def _fios() -> list[str]:
+    return [str(d.get("fio") or "") for d in _excerpt_doctors()]
+
+
+def test_name_reply_is_doctor_only_when_every_word_is_one_doctors() -> None:
+    fio = _doctor_fio(3)
+    surname, name, patronymic = fio.split()
+    assert turn_names.name_reply_is_doctor(fio, _fios()) is True
+    assert turn_names.name_reply_is_doctor(f"{surname} {name}".lower(), _fios()) is True
+    assert turn_names.name_reply_is_doctor(f"{surname} {name[0]}.{patronymic[0]}.", _fios()) is True
+    assert turn_names.name_reply_is_doctor(_namesake_patient(), _fios()) is False
+    assert turn_names.name_reply_is_doctor("Сидорова Анна", ["Сидоров Иван Петрович", "Петрова Анна Ивановна"]) is False
+    for not_a_name in ("Запишите к терапевту, пожалуйста", f"{surname} подходит", f"Хочу к {surname}"):
+        assert turn_names.name_reply_is_doctor(not_a_name, _fios()) is None, not_a_name  # не ФИО — прежний путь
+
+
+def test_doctor_followup_namesake_patient_is_not_the_doctor(monkeypatch) -> None:
+    _switch(monkeypatch, "names_doctor_followup")
+    assert classifier._doctor_followup_name_in_context(_namesake_patient(), dict(_DOCTOR_CONTEXT)) is None
+    fio2 = _doctor_fio(2)
+    assert classifier._doctor_followup_name_in_context(fio2, dict(_DOCTOR_CONTEXT)) == fio2.split()[0]
+
+
+def test_catalog_doctor_namesake_patient_no_guess_even_if_llm_says_doctor(monkeypatch) -> None:
+    _switch(monkeypatch, "names_doctor_catalog")
+    patient = _namesake_patient()
+    turn_names.note_llm(patient, {"doctor_name": patient})
+    assert _match(patient)["status"] == "miss"
+
+
+_ALL_NAMES = ("names_patient_fio", "names_patient_rule", "names_patient_fill", "names_result_surname",
+              "names_doctor_followup", "names_doctor_noise", "names_doctor_catalog")
+
+
+def _all_names(monkeypatch, value: str) -> None:
+    for name in _ALL_NAMES:
+        _switch(monkeypatch, name, value)
+
+
+def _dialog(turns: tuple[str, ...], session_id: str) -> list[dict]:
+    """Ходы через эндпоинт, LLM в тестах недоступна (сеть закрыта) — путь prelock и сбой классификатора как на проде."""
+
+    from messengers_router.endpoint import MessengerGenerateRequest, messenger_generate_once
+    from messengers_router.memory import MemoryStore
+
+    async def run() -> list[dict]:
+        memory, services = MemoryStore(), _catalog_services()
+        services.ensure_background_refresh_started = lambda: None
+        out = []
+        for text in turns:
+            req = MessengerGenerateRequest(session_id=session_id, text=text, debug=True)
+            body = json.loads((await messenger_generate_once(req, memory=memory, services=services)).body)
+            out.append({"text": str(body.get("text") or ""), "handoff": bool(body.get("handoff")), "entities": dict(memory.get(session_id).last_entities or {})})
+        return out
+
+    return asyncio.run(run())
+
+
+def test_booking_doctor_step_patient_fio_without_classifier_is_not_a_doctor(monkeypatch) -> None:
+    """Двухходовая запись без классификатора (prelock + сбой LLM): ФИО пациента на вопрос «к какому врачу?» не становится
+    врачом-однофамильцем и не уходит в его расписание — бот просит уточнить цель (решение (а) 22.10)."""
+
+    _all_names(monkeypatch, "on")
+    patient = _namesake_patient()
+    doctor_surname = patient.split()[0][:-1]
+    first, second = _dialog(("Хочу записаться к врачу", patient), "names-prelock-doctor-step")
+    assert "doctor_name" not in second["entities"], second["entities"]
+    assert doctor_surname not in second["text"] and "имели в виду" not in second["text"], second["text"]
+    assert not second["handoff"] and "уточните" in second["text"].lower(), second["text"]
+
+
+def test_booking_doctor_step_doctor_fio_same_as_without_switches(monkeypatch) -> None:
+    """Встречный случай: врач справочника, названный ФИО, — тот же путь, что без выключателей (данные решают; расписание МИС
+    в тестах недоступно — ответ тот же технический перевод)."""
+
+    fio2 = _doctor_fio(2)
+    answers = {}
+    for value in ("off", "on"):
+        _all_names(monkeypatch, value)
+        answers[value] = _dialog(("Хочу записаться к врачу", fio2), f"names-prelock-doctor-found-{value}")[1]
+    assert answers["on"]["text"] == answers["off"]["text"]
+    assert answers["on"]["handoff"] == answers["off"]["handoff"]
+
+
+def test_booking_branch_step_patient_fio_keeps_the_booking(monkeypatch) -> None:
+    """На вопрос о филиале ФИО пациента без LLM: запись идёт дальше с той же целью, бот повторяет вопрос, врача не ищет."""
+
+    _all_names(monkeypatch, "on")
+    opening = "запишите на Ультразвуковое исследование щитовидной железы"
+    first, second = _dialog((opening, _namesake_patient()), "names-prelock-branch-step")
+    assert not second["handoff"], second["text"]
+    assert second["entities"].get("service_name") == first["entities"].get("service_name")
+    assert "doctor_name" not in second["entities"] and "patient_name" not in second["entities"], second["entities"]
+    assert second["entities"].get("appointment_flow_active"), second["entities"]
+
+
+@pytest.mark.parametrize("command", ["Отмените запись", "Не надо", "Сколько стоит"])
+def test_booking_hold_does_not_swallow_commands(monkeypatch, command: str) -> None:
+    """Удержание реплики-ФИО в записи не глотает команду той же формы (два слова): отмена и смена темы — как без выключателя."""
+
+    answers = {}
+    for value in ("off", "on"):
+        _all_names(monkeypatch, value)
+        opening = "запишите на Ультразвуковое исследование щитовидной железы"
+        answers[value] = _dialog((opening, command), f"names-hold-{command}-{value}")[1]["text"]
+    assert answers["on"] == answers["off"]
 
 
 # --- путь `on` не читает список (AST) --------------------------------------------------------------------------------

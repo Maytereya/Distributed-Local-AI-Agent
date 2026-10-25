@@ -16,7 +16,7 @@ from typing import Any
 
 from . import address_service, booking_slots, llm_runtime, turn_names, turn_understanding, walkin
 from .city import looks_like_address, match_city
-from .flow_policy import looks_like_patient_fio
+from .flow_policy import is_patient_name_value, looks_like_patient_fio
 from .mess_types import RouteDecision, SessionState
 from .policies import (
     extract_service_phrase,
@@ -598,7 +598,7 @@ async def verify_doctor_entities_in_decision(
     elif raw:
         entities.pop("doctor_name", None)
         flags.add("doctor_name_unverified")
-        if decision.label == "APPOINTMENT" and looks_like_patient_fio(raw):
+        if decision.label == "APPOINTMENT" and is_patient_name_value(raw):
             entities["patient_name"] = raw
             flags.add("patient_name_from_unverified_doctor")
             context_action = "continue"
@@ -646,7 +646,7 @@ async def sanitize_doctor_entities(
         return out
 
     out.pop("doctor_name", None)
-    if label == "APPOINTMENT" and looks_like_patient_fio(raw) and not out.get("patient_name"):
+    if label == "APPOINTMENT" and is_patient_name_value(raw) and not out.get("patient_name"):
         out["patient_name"] = raw
     return out
 

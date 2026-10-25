@@ -22,7 +22,7 @@ from __future__ import annotations
 import contextvars
 from dataclasses import dataclass, field
 from difflib import get_close_matches
-from typing import Any
+from typing import Any, Iterable
 
 from . import turn_telemetry
 from .doctor_name_port import surname_variants
@@ -87,9 +87,14 @@ def _names() -> _LlmNames | None:
     return turn.names if turn else None
 
 
-def note_llm(text: str, entities: dict[str, Any] | None) -> None:
-    """Сущности имён из ответа LLM-классификатора этого хода (единственный производитель — `classifier`)."""
+def note_llm(text: str, entities: dict[str, Any] | None, *, failed: bool = False) -> None:
+    """Сущности имён из ответа LLM-классификатора этого хода (единственный производитель — `classifier`).
 
+    `failed` — разбора не было (недоступна, таймаут, не JSON): имени ход не знает, как и до вызова LLM («LLM упала»).
+    """
+
+    if failed:
+        return
     entities = entities if isinstance(entities, dict) else {}
     reply_words = _words(text)
     person: dict[str, tuple[str, ...]] = {}
@@ -117,6 +122,23 @@ def _acted(switch: str, outcome: str) -> None:
     turn_telemetry.append("names_acted", entry)
 
 
+def person_named(text: str, *, switch: str) -> str:
+    """Есть ли в реплике ФИО пациента по LLM этого хода: ``yes`` — `patient_name` (от двух слов) — слова этой реплики подряд;
+    ``no`` — LLM ответила и такого имени не назвала; ``unknown`` — LLM на этом ходе не было (до NLU — prelock записи — или сбой).
+
+    Для маршрута: ``unknown`` не делает реплику ни именем, ни фамилией врача — её решит LLM (или бот переспросит).
+    """
+
+    current = _names()
+    if current is None:
+        verdict = "unknown"
+    else:
+        words = current.person.get("patient_name")
+        verdict = "yes" if words and len(words) >= 2 and _contains(_words(text), words) else "no"
+    _acted(switch, f"route_{verdict}")
+    return verdict
+
+
 def llm_patient_fio(text: str, *, switch: str) -> bool:
     """Реплика целиком — ФИО пациента по LLM этого хода (`patient_name` — те же слова, не меньше двух)."""
 
@@ -137,6 +159,40 @@ def llm_person_word(word: str, *, switch: str) -> bool:
     )
     _acted(switch, "llm" if found else ("no_llm" if current is None else "not_named"))
     return found
+
+
+def _name_shaped(text: str) -> tuple[str, ...]:
+    """Слова реплики, если она сама — ФИО из 2–3 слов (буквы, дефис, точка инициала); иначе пусто."""
+
+    raw = str(text or "").strip().rstrip("?!")
+    if not raw or any(not (ch.isalpha() or ch in " -.") for ch in raw):
+        return ()
+    words = _words(raw)
+    return words if 2 <= len(words) <= 3 else ()
+
+
+def name_reply_is_doctor(text: str, fios: Iterable[str]) -> bool | None:
+    """Реплика — чьё-то ФИО (2–3 слова: одно — фамилия, остальные — имена и отчества, встреченные в справочнике врачей МИС, или
+    инициалы): ``True`` — это ФИО одного врача (фамилия — в любой падежной форме, `surname_variants`); ``False`` — ФИО, но не
+    врача: может быть ФИО пациента («Сидорова Анна» при враче «Сидоров» — R-01, консилиум 25.10); ``None`` — реплика не ФИО
+    («Вахобов подходит», «Хочу к Бородиной») — решает прежний путь. Словарь имён — данные МИС, не список в коде."""
+
+    words = _name_shaped(text)
+    if not words:
+        return None
+    fio_parts = [parts for parts in (_words(fio) for fio in fios) if len(parts) >= 2]
+    given = {w for parts in fio_parts for w in parts[1:]}
+    others = [i for i, w in enumerate(words) if not (len(w) == 1 or w in given)]
+    if len(others) != 1:
+        return None
+    surname_word = words[others[0]]
+    rest = words[: others[0]] + words[others[0] + 1 :]
+    for parts in fio_parts:
+        if any(_words(v) == (parts[0],) for v in surname_variants(surname_word)) and all(
+            w in parts[1:] or (len(w) == 1 and any(p.startswith(w) for p in parts[1:])) for w in rest
+        ):
+            return True
+    return False
 
 
 def _surname_index(doctors: list[dict[str, Any]]) -> dict[str, str]:
@@ -166,6 +222,10 @@ def doctor_surname_in(text: str, doctors: list[dict[str, Any]]) -> tuple[str, st
 def match_catalog_doctor_by_data(text: str, doctors: list[dict[str, Any]]) -> dict[str, Any]:
     """`names_doctor_catalog = on`: врач реплики — по справочнику, без выбора слов списком (`match_catalog_doctor`)."""
 
+    if name_reply_is_doctor(text, (str(d.get("fio") or "") for d in doctors or [] if isinstance(d, dict))) is False:
+        # Реплика — ФИО, но не врача справочника: ни точного по одному слову, ни «Похоже, вы имели в виду…?» (R-01).
+        _acted("names_doctor_catalog", "name_not_doctor")
+        return {"status": "miss", "query": "", "canonical": ""}
     exact = doctor_surname_in(text, doctors)
     if exact:
         _acted("names_doctor_catalog", "exact")

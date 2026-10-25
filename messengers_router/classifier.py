@@ -20,7 +20,7 @@ from typing import Any, cast
 from .llm_mode_policy import RuntimeOptions
 from . import turn_names
 from .llm_runtime import generate_text
-from .doctor_name_port import resolve_cached_doctor_name_candidate
+from .doctor_name_port import cached_doctor_fios, resolve_cached_doctor_name_candidate
 from .russian_nlu import normalize_ru, ENTITY_WHITELIST
 from .mess_types import PATIENT_LABEL_PRIORITY, Label, RouteDecision, ContextAction, CONFIDENCE
 from .prompt_contracts import sanitize_classifier_json
@@ -262,6 +262,10 @@ async def ollama_classify_payload(prompt: str, *, queue_timeout_ms: int = 30000)
     )
 
 
+# Пометки ответа-заглушки `ollama_classify_payload`: разбора LLM не было.
+_LLM_FAILURE_FLAGS = frozenset({"ollama_timeout", "ollama_non_json"})
+
+
 def classify_payload_failure(raw_text: str, data: dict[str, Any]) -> str | None:
     """Вид сбоя разбора классификатора: `unavailable` (вызов не состоялся — недоступна, таймаут, бюджет хода,
     предохранитель), `invalid` (ответ не JSON или метка вне контракта) или None — LLM ответила внятно.
@@ -431,6 +435,10 @@ def _doctor_followup_name_in_context(text: str, last_entities: dict[str, Any]) -
     if not candidate:
         return None
     if _looks_like_specialty_or_service_token(candidate, s):
+        return None
+    if turn_names.on("names_doctor_followup") and turn_names.name_reply_is_doctor(s, cached_doctor_fios()) is False:
+        # Реплика — ФИО, но не врача справочника целиком: одной фамилии мало — «Сидорова Анна» при враче «Сидоров» — ФИО
+        # пациента, а не продолжение о враче (R-01, консилиум 25.10). Решает LLM-классификатор хода.
         return None
     return candidate
 
@@ -1006,7 +1014,7 @@ def _postprocess_primary_decision(
     label = _normalize_label(data.get("label"))
     conf = _normalize_confidence(data.get("confidence"))
     entities = _sanitize_entities(data.get("entities"))
-    turn_names.note_llm(text, entities)
+    turn_names.note_llm(text, entities, failed=bool(_normalize_flags(data.get("flags")) & _LLM_FAILURE_FLAGS))
     flags = _normalize_flags(data.get("flags")) | detect_pii(text)
     context_action = _normalize_context_action(data.get("context_action"))
     clarify_needed = bool(data.get("clarify_needed"))
@@ -1712,7 +1720,7 @@ async def analyze(
     label = _normalize_label(data.get("label"))
     conf = _normalize_confidence(data.get("confidence"))
     entities = _sanitize_entities(data.get("entities"))
-    turn_names.note_llm(text, entities)
+    turn_names.note_llm(text, entities, failed=bool(_normalize_flags(data.get("flags")) & _LLM_FAILURE_FLAGS))
     flags |= _normalize_flags(data.get("flags"))
     context_action = _normalize_context_action(data.get("context_action"))
 

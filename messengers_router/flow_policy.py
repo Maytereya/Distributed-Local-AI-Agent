@@ -148,12 +148,23 @@ def _looks_like_patient_fio(text: str) -> bool:
     if len(tokens) < 2:
         return False
     if turn_names.on("names_patient_fio"):
-        # Форма принимает и «Общий анализ крови»: ФИО ли это, решает LLM этого хода (`patient_name` — те же слова).
-        return turn_names.llm_patient_fio(s, switch="names_patient_fio")
+        # Маршрут, не значение графы: форма ФИО — «похоже на ФИО», пока LLM этого хода не сказала, что имени здесь нет. Без
+        # LLM (до NLU в prelock записи, сбой) реплика не уходит ни в фамилию врача, ни в имя (R-01, решение (а) 22.10);
+        # ФИО как значение — `_is_patient_name_value`.
+        return turn_names.person_named(s, switch="names_patient_fio") != "no"
     normalized = [normalize_ru(t) for t in tokens]
     if any(t in _PATIENT_FIO_STOPWORDS for t in normalized):
         return False
     return True
+
+
+def _is_patient_name_value(text: str) -> bool:
+    """Реплика — ФИО пациента как значение графы (не маршрут): под `names_patient_fio = on` — только если его назвала LLM
+    этого хода (`patient_name` — те же слова); off — как `_looks_like_patient_fio`."""
+
+    if turn_names.on("names_patient_fio"):
+        return turn_names.llm_patient_fio(str(text or "").strip(), switch="names_patient_fio")
+    return _looks_like_patient_fio(text)
 
 
 _CITY_REPLY_BLOCK_RE = re.compile(
@@ -437,6 +448,16 @@ async def prelock_active_appointment_turn(
     ):
         if schedule_context and not _looks_like_patient_fio(text):
             return {"__clear_patient_name": True}
+        return {}
+    if (
+        turn_names.on("names_patient_fill")
+        and branch_answer is None
+        and not _is_appointment_waiting_doctor_or_service(pending)
+        and _looks_like_patient_fio(text)
+    ):
+        # Реплика похожа на ФИО, а имени до NLU не знаем (быстрое заполнение без LLM его не берёт): держим запись без разбора —
+        # бот повторит свой вопрос. Иначе общий путь при сбое LLM искал бы врача по фамилии пациента (R-01, ПДн; консилиум
+        # 25.10). Ответ о враче (шаг врача или услуги) по-прежнему решает NLU — как и без выключателя.
         return {}
     return None
 
@@ -1178,6 +1199,10 @@ def is_short_prepare_followup(text: str) -> bool:
 
 def looks_like_patient_fio(text: str) -> bool:
     return _looks_like_patient_fio(text)
+
+
+def is_patient_name_value(text: str) -> bool:
+    return _is_patient_name_value(text)
 
 
 def normalize_secondary_labels(value: Any) -> list[str]:
