@@ -1,0 +1,102 @@
+"""Класс: цена читает фразу разбора хода, а не реплику, срезанную вырезателем правил (цена, этап 2, DESIGN-2026-10-25-PRICE-STAGE2).
+
+Решения владельца 22.10: что в реплике услуга — решает LLM разметки; 28 списков стоп-слов удаляются; без LLM услугу не угадываем —
+дословное название или код клиники, иначе «уточните название» / оффер. Вырезатель `_extract_price_service_from_query` (11 списков)
+играл четыре роли: фраза услуги, «названа ли услуга», ключ сильного совпадения и слова поиска. Под `price_by_parse = on` их берут
+из разбора хода. Поведение по ходам — эталоны `tests/golden/price_stage2_*_on.json`; здесь — инварианты на всём прайсе «мини-прод».
+
+Инварианты под `price_by_parse = on`:
+- Ш1, ключ сильного совпадения: фраза сильна, только если она сама — название, синоним МИС или код; реплика с обвязкой вопроса
+  («сколько стоит <название>») сильной не бывает — ни у одного названия прайса (вырезатель делал сильными почти все);
+- Ш1, число: код услуги, только если это не номер из показанного прошлым ответом (коды 1–20 в прайсе все заняты: «1» после
+  списка цен было услугой с кодом 1 — находка № 8); число больше показанного — код, как было;
+- off — как было (контраст: вырезатель делает реплику с обвязкой сильной).
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import pytest
+
+from messengers_router import shown_context
+from messengers_router.services._strong_match import strong_rows
+from tests.test_price_turns_golden import FIXTURE
+
+_WRAPPED = "сколько стоит {}"
+
+
+def _rows() -> list[dict[str, Any]]:
+    path = next((FIXTURE / "price_by_region").glob("*.jsonl"))
+    return [row for row in map(json.loads, path.read_text(encoding="utf-8").splitlines()) if isinstance(row, dict)]
+
+
+ROWS = _rows()
+NAMES = sorted({str(row.get("serviceName") or "").strip() for row in ROWS} - {""})
+CODES = sorted({str(row.get("serviceHomecode") or "").strip() for row in ROWS if str(row.get("serviceHomecode") or "").strip().isdigit()}, key=int)
+
+
+def _switch(monkeypatch, mode: str) -> None:
+    from messengers_router.runtime_config import config as cfg
+
+    monkeypatch.setattr(cfg, "MR_PRICE_BY_PARSE", mode, raising=False)
+
+
+@pytest.fixture()
+def shown():
+    """Что показал прошлый ответ (`shown_context.previous()`): названия строк; сброс — после теста."""
+
+    tokens = []
+
+    def _set(names: tuple[str, ...]) -> None:
+        tokens.append(shown_context._PREVIOUS.set(names))
+
+    yield _set
+    for token in reversed(tokens):
+        shown_context._PREVIOUS.reset(token)
+
+
+def test_every_name_is_strong_and_never_with_question_wrapper_under_on(monkeypatch):
+    _switch(monkeypatch, "on")
+    weak_names = [name for name in NAMES if not strong_rows(name, ROWS)]
+    wrapped_strong = [name for name in NAMES if strong_rows(_WRAPPED.format(name), ROWS)]
+    assert weak_names == []
+    assert wrapped_strong == []
+
+
+def test_wrapped_reply_was_strong_by_extractor_under_off(monkeypatch):
+    _switch(monkeypatch, "off")
+    wrapped_strong = [name for name in NAMES if strong_rows(_WRAPPED.format(name), ROWS)]
+    # Контраст: под off вырезатель снимает обвязку — реплика сильна (на мини-проде 25.10: 185 названий из 398; у остальных он
+    # калечит само название — режет до 8 слов, выбрасывает слова списков, — и сила зависит от букв, а не от данных).
+    assert len(wrapped_strong) > len(NAMES) // 4
+
+
+def test_number_within_shown_is_a_choice_not_a_code_under_on(monkeypatch, shown):
+    _switch(monkeypatch, "on")
+    small = [code for code in CODES if int(code) <= 5]
+    assert small, "в мини-проде нет кодов 1–5 — тест не проверяет класс"
+    shown(("Ферритин", "Глюкоза", "Холестерол", "ЭКГ", "Липидограмма"))
+    assert {code: strong_rows(code, ROWS) for code in small if strong_rows(code, ROWS)} == {}
+    beyond = [code for code in CODES if int(code) > 5][:20]
+    assert all(strong_rows(code, ROWS) for code in beyond)
+
+
+def test_number_is_a_code_when_nothing_was_shown_under_on(monkeypatch, shown):
+    _switch(monkeypatch, "on")
+    shown(())
+    assert all(strong_rows(code, ROWS) for code in CODES[:20])
+
+
+def test_turn_spans_take_a_shown_number_for_a_choice_under_on(monkeypatch, shown):
+    from messengers_router.services import _turn_spans
+
+    _switch(monkeypatch, "on")
+    code = CODES[0]
+    shown(tuple(NAMES[: int(code)]))
+    decided = _turn_spans.decide_without_llm(code, ROWS)
+    assert decided is not None and decided.status != "strong_whole"
+    assert all(not item.rows for item in decided.items)
+    _switch(monkeypatch, "off")
+    assert _turn_spans.decide_without_llm(code, ROWS).status == "strong_whole"

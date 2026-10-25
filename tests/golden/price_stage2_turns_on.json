@@ -405,16 +405,12 @@
      "tu_acted": [
       "grounder_from_understanding"
      ],
-     "price_policy": "picked",
+     "price_policy": "strong",
      "price_guard": "llm"
     },
     "llm": [
      [
       "turn_spans",
-      "picked"
-     ],
-     [
-      "price_service_qualifier_general",
       "picked"
      ]
     ]
@@ -422,8 +418,7 @@
   ],
   "journal": [],
   "asked": [
-   "spans",
-   "rows"
+   "spans"
   ]
  },
  "one_analysis_on-down": {
@@ -803,32 +798,31 @@
  "one_strong-down": {
   "turns": [
    {
-    "text": "Ферритин — 530 руб.\nИсточник цены: розничный прайс Самары.\n\n_Цены актуальны для г. Самара._",
+    "text": "По запросу «ферритин» нашёл похожую услугу: «Ферритин». Если нужна она, напишите её название — подскажу цену.",
     "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
-     "price_info"
+     "service_bundle_info"
     ],
-    "service_name_effective": "Ферритин",
-    "service_name": "Ферритин",
+    "service_name_effective": "ферритин",
+    "service_name": null,
     "pending": null,
     "telemetry": {
      "tu_parse_status": "unavailable",
      "tu_rule": "not_list",
      "tu_mention_src": "rules",
-     "tu_mention_strength": "strong",
-     "tu_acted": [
-      "catalog_from_understanding",
-      "grounder_from_understanding",
-      "planner_price_by_understanding"
-     ],
-     "price_policy": "strong",
+     "tu_mention_strength": "weak",
+     "price_policy": "names",
      "price_guard": "none"
     },
     "llm": [
      [
       "turn_spans",
+      "unavailable"
+     ],
+     [
+      "price_service_general",
       "unavailable"
      ]
     ]
@@ -918,15 +912,15 @@
  "one_strong_parse_select_down-llm": {
   "turns": [
    {
-    "text": "Не нашёл актуальную стоимость для «стоят ферритин». Уточните название услуги или ФИО врача, и я проверю снова.",
+    "text": "По услуге «Ферритин» нашёл следующее:\n1) Розничная цена: Ферритин — 530 руб.\n2) Для этого лабораторного анализа запись к конкретному врачу обычно не требуется.\nЕсли нужно, подскажу подготовку к анализу или подходящие филиалы для сдачи.\n\n_Цены актуальны для г. Самара._",
     "handoff": false,
     "label": "PRICE",
     "plan": [
      "PRICE",
      "service_bundle_info"
     ],
-    "service_name_effective": "стоят ферритин",
-    "service_name": null,
+    "service_name_effective": "Ферритин",
+    "service_name": "Ферритин",
     "pending": null,
     "telemetry": {
      "tu_parse_status": "picked",
@@ -936,21 +930,13 @@
      "tu_acted": [
       "grounder_from_understanding"
      ],
-     "price_policy": "budget_clarify",
+     "price_policy": "strong",
      "price_guard": "llm"
     },
     "llm": [
      [
       "turn_spans",
       "picked"
-     ],
-     [
-      "price_service_qualifier_general",
-      "unavailable"
-     ],
-     [
-      "price_service_qualifier_general",
-      "unavailable"
      ]
     ]
    }
@@ -1236,7 +1222,7 @@
      ]
     },
     "telemetry": {
-     "tu_parse_status": "strong_whole"
+     "tu_parse_status": "single"
     },
     "llm": [
      [
@@ -1325,7 +1311,7 @@
      ]
     },
     "telemetry": {
-     "tu_parse_status": "strong_whole"
+     "tu_parse_status": "single"
     },
     "llm": [
      [

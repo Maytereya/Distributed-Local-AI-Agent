@@ -55,7 +55,7 @@ from .. import llm_runtime, turn_parse, turn_telemetry
 from ..choice import Option, Task, choose
 from ..runtime_config import config as _cfg
 from ..russian_nlu import tokens_share_stem
-from . import _biomaterial
+from . import _biomaterial, _price_by_parse
 from ._common import _normalise_catalog_text
 from ._common import _normalise_input
 from ._prices_helpers import (
@@ -451,6 +451,16 @@ def _rare_rows(texts: Sequence[str], retail_rows: list[dict[str, Any]], *, short
     return out
 
 
+def _strong_by_parse(question: str, rows: list[dict[str, Any]], pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Сильное совпадение под `price_by_parse = on` (цена, этап 2, Ш1): по фразе разбора этой реплики, а не по реплике,
+    срезанной вырезателем. Разбор решил, что услуги нет, — сильного нет; разбора этой реплики нет (вход — не реплика хода,
+    сбой LLM) — вход как есть: сильна только реплика, которая сама — название, синоним или код."""
+
+    named = _price_by_parse.phrase(question)
+    probe = question if named is None else named
+    return strong_rows(probe, rows, pool=pool) if probe else []
+
+
 def names_service(question: str) -> bool:
     """Назвал ли пациент в реплике услугу — одно определение для планировщика (не переспрашивать название) и выбора
     строки (звать ли LLM). Короткое сокращение с заглавной («ЛГ», «аТ ТГ») — тоже
@@ -777,7 +787,7 @@ async def select_price_rows(
     if by_synonym:
         keys = {_row_key(row) for row in by_synonym}
         pool = [*by_synonym, *(row for row in pool if _row_key(row) not in keys)][:_POOL_LIMIT]
-    strong = strong_rows(question, rows, pool=pool)
+    strong = strong_rows(question, rows, pool=pool) if not _price_by_parse.enabled() else _strong_by_parse(question, rows, pool)
     if strong:
         turn_telemetry.note(price_policy="strong")
         return PriceSelection(rows=tuple(strong), status="strong")

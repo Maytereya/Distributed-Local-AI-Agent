@@ -325,6 +325,7 @@ DECLARED: dict[str, str] = {
     "messengers_router.services._doctors_helpers._meaningful_price_service_tokens": "reader:meaningful_tokens",
     "messengers_router.services._doctors_helpers._is_price_service_noise_token": "reader:noise_tokens",
     "messengers_router.services._price_select_llm._short_name_words": "reader:short_name_words",
+    "messengers_router.services._price_select_llm._strong_by_parse": "turns:price_select",  # Ш1: сильное по фразе разбора
     "messengers_router.services._price_select_llm.select_price_rows": "turns:price_select",
     "messengers_router.services._prices_helpers.strip_readiness_phrasing": "reader:readiness_strip",
     "messengers_router.services._prices_helpers.price_reply_names_own_service": "reader:names_own_service",

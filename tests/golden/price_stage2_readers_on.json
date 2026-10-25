@@ -2067,17 +2067,13 @@
   "bare_name_caps": [
    "Ферритин"
   ],
-  "q_name": [
-   "Ферритин"
-  ],
+  "q_name": [],
   "q_analysis_on": [],
   "q_analyses_on": [],
   "q_price_of_analyses": [],
   "q_polite_wrap": [],
   "q_pochem": [],
-  "q_price_after": [
-   "ЭКГ"
-  ],
+  "q_price_after": [],
   "q_want_to_take": [],
   "q_can_do": [],
   "q_unknown_word": [],
@@ -2173,13 +2169,13 @@
  "prepare_own_subject": {
   "bare_name": true,
   "bare_name_caps": true,
-  "q_name": true,
+  "q_name": false,
   "q_analysis_on": false,
   "q_analyses_on": false,
   "q_price_of_analyses": false,
   "q_polite_wrap": false,
   "q_pochem": false,
-  "q_price_after": true,
+  "q_price_after": false,
   "q_want_to_take": true,
   "q_can_do": false,
   "q_unknown_word": false,
@@ -2400,12 +2396,7 @@
     "deadline": "1–2 дня"
    }
   ],
-  "q_name": [
-   {
-    "name": "Ферритин",
-    "deadline": "1–2 дня"
-   }
-  ],
+  "q_name": null,
   "q_analysis_on": null,
   "q_analyses_on": null,
   "q_price_of_analyses": null,
@@ -2878,10 +2869,8 @@
   "q_name": [
    [
     "ферритин",
-    "strong",
-    [
-     "Ферритин"
-    ]
+    "weak",
+    []
    ]
   ],
   "q_analysis_on": [
@@ -2922,10 +2911,8 @@
   "q_price_after": [
    [
     "экг",
-    "strong",
-    [
-     "ЭКГ"
-    ]
+    "weak",
+    []
    ]
   ],
   "q_want_to_take": [
@@ -3327,17 +3314,13 @@
   "bare_name_caps": [
    "Ферритин"
   ],
-  "q_name": [
-   "Ферритин"
-  ],
+  "q_name": [],
   "q_analysis_on": [],
   "q_analyses_on": [],
   "q_price_of_analyses": [],
   "q_polite_wrap": [],
   "q_pochem": [],
-  "q_price_after": [
-   "ЭКГ"
-  ],
+  "q_price_after": [],
   "q_want_to_take": [],
   "q_can_do": [],
   "q_unknown_word": [],
@@ -3388,7 +3371,7 @@
   "q_name": null,
   "q_analysis_on": null,
   "q_analyses_on": [
-   "анализы на ферритин",
+   "ферритин",
    [
     "Ферритин"
    ],
@@ -3434,7 +3417,7 @@
   "uzi_generic": null,
   "uzi_compound": null,
   "readiness_named": [
-   "на ферритин",
+   "ферритин",
    [
     "Ферритин"
    ],
@@ -3443,7 +3426,7 @@
   "readiness_generic": null,
   "prepare_named": null,
   "walkin_named": [
-   "на ферритин нужна",
+   "ферритин",
    [
     "Ферритин"
    ],

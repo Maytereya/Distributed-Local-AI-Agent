@@ -16,6 +16,7 @@ from agent_logic_2.nayka_api import api_service_info
 from .. import shown_context
 from ..llm_doesnt_work_fallback import build_prepare_fallback_answer, join_wrapped_lines
 from . import _common as _common_mod
+from . import _price_by_parse
 from ._biomaterial import mis_synonym_candidates
 from ._common import (
     _get_first_present,
@@ -538,9 +539,20 @@ def _context_subject(raw_query: str) -> tuple[str, bool]:
 
 
 def _names_own_subject(raw_query: str) -> bool:
-    """В вопросе свой предмет: «подготовка к X» / «как сдать X» или услуга по данным МИС."""
+    """В вопросе свой предмет: «подготовка к X» / «как сдать X» или услуга по данным МИС.
 
-    return bool(_PREPARE_ENTITY_RE.search(_normalise_prepare_text(raw_query)) or strong_rows(raw_query, _catalog_rows(None)))
+    Под `price_by_parse = on` (цена, этап 2, Ш1) услуга по данным — сильная фраза разбора этой реплики, а не реплика, срезанная
+    вырезателем правил; разбора нет — реплика как есть (сильна, только если сама — название, синоним или код)."""
+
+    if _PREPARE_ENTITY_RE.search(_normalise_prepare_text(raw_query)):
+        return True
+    if _price_by_parse.enabled():
+        from .. import turn_understanding  # понимание хода импортирует сервисы — импорт на вызове
+
+        parse = turn_understanding.parse_for(raw_query)
+        if parse is not None:
+            return any(item.rows for item in parse.items)
+    return bool(strong_rows(raw_query, _catalog_rows(None)))
 
 
 def _catalog_subject(raw_query: str) -> str:
