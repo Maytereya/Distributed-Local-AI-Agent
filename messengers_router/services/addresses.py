@@ -13,7 +13,7 @@ from agent_logic_2.nayka_api import api_price
 
 from ..policies import handoff_message
 from .. import degradation
-from .. import address_service
+from .. import address_flow, address_service
 from .. import resilience as _R
 from ..service_phrase import extract_service_phrase
 from . import _prices_helpers
@@ -331,6 +331,7 @@ async def address_info(self: "Services", query: str, entities: dict[str, Any]) -
                 "city": str(r.get("city") or "").strip(),
                 "phone": _extract_region_phone(r),
                 "work_time": _extract_region_work_time(r),
+                **address_flow.region_flags(r),  # под `address_branch_flags`: где сдают анализы, ЭКГ, УЗИ
             }
         )
 
