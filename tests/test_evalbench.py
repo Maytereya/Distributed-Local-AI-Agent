@@ -819,6 +819,8 @@ def test_button_verdicts_price_by_labels_rest_by_judge_on_this_answer():
     assert buttons.turn_verdict(_btn_turn("x", "x"), case, {**label, "kind": "context_dependent"}, {}) == ("excluded", "без контекста")
     assert buttons.turn_verdict(_btn_turn("x", "Цена <<PRICE>>"), case, label, {}) == ("fail", "служебный текст")
     assert buttons.turn_verdict(_btn_turn("x", "", outcome="tech_error"), case, label, {}) == ("fail", "сбой")
+    doctor_line = {"amount": 3000, "service_id": None, "name": None, "status": "doctor"}
+    assert buttons.turn_verdict(_btn_turn("x", "Иванов И. И. (Уролог) — 3 000 руб.", pairs=[doctor_line]), case, label, {}) == ("unjudged", None)
 
     addr = {"id": "a", "button": "menu.address", "press": True}
     answer = "ул. Солнечная, 53 — будни 07:00–18:30"

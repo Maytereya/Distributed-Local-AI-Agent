@@ -183,8 +183,11 @@ def turn_verdict(turn: dict[str, Any], case: dict[str, Any], price_label: dict[s
     kind = (price_label or {}).get("kind")
     if topic == "price" and kind == "context_dependent":
         return "excluded", "без контекста"
-    if topic == "price" and kind in ("single", "family", "multi", "absent"):
-        pairs = [PricePair(**p) for p in turn.get("price_pairs") or []]
+    pairs = [PricePair(**p) for p in turn.get("price_pairs") or []]
+    # Цена приёма строкой врача («ФИО (Специальность) — N руб.») к строке прайса не привязана: разметка serviceId её не
+    # видит — чья специальность, решает судья.
+    by_doctor = any(p.status == "doctor" for p in pairs) and not any(p.status == "matched" for p in pairs)
+    if topic == "price" and kind in ("single", "family", "multi", "absent") and not by_doctor:
         verdict = price_verdict(pairs, price_label)
         if verdict in ("correct", "list_hit") or (verdict == "no_price" and kind == "absent"):
             return "success", None
@@ -397,7 +400,7 @@ def main(argv: list[str] | None = None) -> int:
         packets = judge_packets(runs, load_labels(args.labels), judged)
         world = PRIVATE_ROOT / "worlds" / str(runs[0][0].get("world", {}).get("date"))
         args.out.mkdir(parents=True, exist_ok=True)
-        (args.out / "INSTRUCTIONS.md").write_text(JUDGE_INSTRUCTIONS.format(world=world), encoding="utf-8")
+        (args.out / "INSTRUCTIONS.md").write_text(JUDGE_INSTRUCTIONS.replace("{world}", str(world)), encoding="utf-8")
         for k in range(0, len(packets), args.per_file):
             with open(args.out / f"packets_{k // args.per_file:02d}.jsonl", "w", encoding="utf-8") as fh:
                 for row in packets[k : k + args.per_file]:
