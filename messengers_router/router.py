@@ -2695,7 +2695,7 @@ async def _handle_button_new_topic(
     if rule is not None and not rule_defers_topic(rule, user_text):
         return None
     expected = pending_answer.expected_from(state.last_entities)
-    hint = await button_flow.hint(user_text, current, expected[1] if expected is not None else "")
+    hint = await button_flow.hint(user_text, current, button_flow.asked_with_button(current, expected[1] if expected is not None else ""))
     if hint is None:
         return None
     if hint.mixed:

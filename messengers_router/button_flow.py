@@ -230,6 +230,15 @@ def hint_text(leaves: tuple[str, ...], *, tail: bool = False) -> str:
     return f"{head} про {about} — основная информация {where} {buttons}."
 
 
+def asked_with_button(current: str, question: str) -> str:
+    """Нажатая кнопка и вопрос бота — данные выбора подсказки: о теме нажатой кнопки — её пункт, не подсказка."""
+
+    action = button_menu.action_for(current)
+    if action is None or not action.title:
+        return question
+    return f"{action.title}{_where(action)} — {question}" if question else f"{action.title}{_where(action)}"
+
+
 async def hint(text: str, current: str, asked: str) -> Hint | None:
     """Где пациент найдёт ответ на сообщение о другой теме — листья меню по выбору LLM (`HINT_TASK`).
 

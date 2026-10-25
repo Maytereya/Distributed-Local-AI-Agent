@@ -189,3 +189,19 @@ def test_reliable_rule_of_other_topic_answers_itself(mini_prod_world, monkeypatc
     assert off[1]["telemetry"].get("nlu_src") == "rule", off[1]["telemetry"]
     assert (on[1]["text"], on[1]["label"]) == (off[1]["text"], off[1]["label"])
     assert "button_hint" not in on[1]["telemetry"], on[1]["telemetry"]
+
+
+def test_hint_choice_sees_the_pressed_button(mini_prod_world, monkeypatch):  # noqa: F811
+    """Выбор подсказки видит нажатую кнопку (карточка 25.10: без неё вопросы о теме кнопки — «ссылка не открывается» на
+    «Результат не пришёл» — получали подсказку чужого листа): правило 2 промпта выбирает её пункт — и подсказки нет."""
+
+    seen: list[str] = []
+
+    def answer(prompt: str) -> str:
+        seen.append(prompt)
+        return _picks("menu.price.test")
+
+    turns = [_press("menu.price.test"), _REPLY]
+    on = _dialog(mini_prod_world, monkeypatch, turns, switch="on", hint=answer)
+    assert seen and "Цена анализа раздела" in seen[0] and "Какой анализ интересует" in seen[0], seen
+    assert on[1]["telemetry"].get("button_hint") == "none"
