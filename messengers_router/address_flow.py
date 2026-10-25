@@ -174,7 +174,8 @@ async def followup(text: str, branches: list[dict[str, Any]]) -> Followup | None
         choice = None
     outcome = choice.outcome if choice is not None and choice.status is Status.OUTCOME else ""
     picks = tuple(rows[int(i) - 1] for i in (choice.ids if choice is not None else ()) if str(i).isdigit() and 1 <= int(i) <= len(rows))
-    named = tuple(b for b in picks if named_in(text, str(b["address"])))
+    common = _common_words([str(b["address"]) for b in rows])
+    named = tuple(b for b in picks if named_in(text, str(b["address"]), common=common))
     if len(named) < len(picks):
         turn_telemetry.note(address_followup_vetoed=len(picks) - len(named))  # филиал выбран, но в реплике не назван
     picks = named
@@ -187,19 +188,36 @@ async def followup(text: str, branches: list[dict[str, Any]]) -> Followup | None
     return Followup(outcome=outcome, branches=picks)
 
 
-def named_in(text: str, address: str) -> bool:
-    """Выбранный LLM филиал назван в реплике: слово его адреса (от четырёх букв, основа — первые пять) есть в ней. Правило только
-    сужает выбор модели (карточка 25.10: «рядом с метро», «рядом с моим адресом» и пустой выбор давали карточки неназванных
-    филиалов)."""
+def _address_words(address: str) -> list[str]:
+    """Основы слов адреса (от четырёх букв, первые пять)."""
+
+    from .russian_nlu import normalize_ru
+
+    flat = normalize_ru(address or "")
+    for mark in ",.-":
+        flat = flat.replace(mark, " ")
+    return [w[:5] for w in flat.split() if w.isalpha() and len(w) >= 4]
+
+
+def _common_words(addresses: list[str]) -> frozenset[str]:
+    """Основы, которые есть в адресах нескольких филиалов (город, «проспект»), — по ним филиал не назван (по данным, без списка)."""
+
+    counts: dict[str, int] = {}
+    for address in addresses:
+        for stem in set(_address_words(address)):
+            counts[stem] = counts.get(stem, 0) + 1
+    return frozenset(stem for stem, n in counts.items() if n > 2)
+
+
+def named_in(text: str, address: str, *, common: frozenset[str] = frozenset()) -> bool:
+    """Выбранный LLM филиал назван в реплике: основа слова его адреса, которое не общее для многих филиалов, есть в ней. Правило
+    только сужает выбор модели (карточка 25.10: «рядом с метро», «рядом с моим адресом» давали карточки неназванных филиалов, а
+    название города в реплике — карточку филиала, у которого город записан в адресе)."""
 
     from .russian_nlu import normalize_ru
 
     said = normalize_ru(text or "")
-    flat = normalize_ru(address or "")
-    for mark in ",.-":
-        flat = flat.replace(mark, " ")
-    words = [w for w in flat.split() if w.isalpha() and len(w) >= 4]
-    return any(w[:5] in said for w in words)
+    return any(stem in said for stem in _address_words(address) if stem not in common)
 
 
 def _card(branch: dict[str, Any]) -> list[str]:

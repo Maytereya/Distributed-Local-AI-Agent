@@ -140,3 +140,12 @@ def test_branch_not_named_in_the_reply_is_not_carded(mini_prod_world, monkeypatc
     on = _dialog(mini_prod_world, monkeypatch, turns, switch="on", followup=_answer("branch", "ул.Аминева, 29"))
     off = _dialog(mini_prod_world, monkeypatch, turns, switch="off", followup=None)
     assert on[1]["text"] == off[1]["text"] and on[1]["telemetry"].get("address_followup_vetoed") == 1, on[1]["telemetry"]
+
+
+def test_city_word_in_an_address_does_not_name_the_branch():
+    """Карточка 25.10: «в Самаре» называло филиал с «г. Самара» в адресе — слово, общее для многих адресов, филиал не называет."""
+
+    addresses = ["г. Самара, ул. Победы, 126", "г. Самара, ул. Мичурина, 112", "г. Самара, ул. Гагарина, 64", "ул.Аминева, 29"]
+    common = address_flow._common_words(addresses)
+    assert not address_flow.named_in("как работаете в праздники в Самаре?", addresses[0], common=common)
+    assert address_flow.named_in("на Победы 126 в субботу?", addresses[0], common=common)
